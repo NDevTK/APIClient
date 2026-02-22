@@ -32,16 +32,6 @@
   // Signal intercept.js that the relay is listening — replays buffered events
   document.dispatchEvent(new CustomEvent("__uasr_ready"));
 
-  // ─── Frame Registration ───────────────────────────────────────────────────
-  // Self-report this frame's existence to background so the popup can enumerate
-  // available frames for origin-aware request sending. sender.frameId is set by
-  // the browser process (unforgeable). Avoids needing webNavigation permission.
-  chrome.runtime.sendMessage({
-    type: "FRAME_REGISTER",
-    frameUrl: location.href,
-    frameOrigin: location.origin,
-  });
-
   // ─── postMessage Listener ─────────────────────────────────────────────────
   // Runs in isolated world — no main-world wrapper needed. message events are
   // visible here. Stores event.source per origin for reply from console.

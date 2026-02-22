@@ -1043,7 +1043,7 @@ function renderFrameSelector() {
     var f = availableFrames[i];
     var opt = document.createElement("option");
     opt.value = f.frameId;
-    var label = f.frameId === 0 ? "Main frame" : "iframe (" + f.frameId + ")";
+    var label = f.isTop ? "Top frame" : "iframe (" + f.frameId + ")";
     try {
       var u = new URL(f.url);
       label += " \u2014 " + u.hostname;
@@ -1082,7 +1082,6 @@ function renderServiceOriginHint() {
   } catch (_) {}
   var tabOrigin = "";
   try { tabOrigin = new URL(tabUrl).origin; } catch (_) {}
-
   var matchesCurrentTab = false;
   for (var i = 0; i < pageUrls.length; i++) {
     try {
@@ -1090,7 +1089,7 @@ function renderServiceOriginHint() {
     } catch (_) {}
   }
 
-  if (matchesCurrentTab) return; // Current tab already on the right origin
+  if (matchesCurrentTab) return;
 
   // Show hint with the most recent page URL
   var lastUrl = pageUrls[pageUrls.length - 1];

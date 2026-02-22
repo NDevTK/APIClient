@@ -5,7 +5,8 @@
   "description": "API discovery, protocol reverse-engineering, JavaScript security code review, and request export.",
   "permissions": [
     "storage",
-    "offscreen"
+    "offscreen",
+    "webNavigation"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

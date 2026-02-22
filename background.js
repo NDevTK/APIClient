@@ -59,8 +59,33 @@ const state = {
 // Session storage for request logs — survives SW restarts, clears on browser close
 const _sessionSaveTimers = new Map(); // tabId → timeoutId
 const _tabMeta = new Map(); // tabId → { title, url, closed? }
-const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, lastSeen }>
+const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, isTop, lastSeen }>
 const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
+
+// ─── Frame tracking via webNavigation ────────────────────────────────────────
+// Replaces content-script FRAME_REGISTER — authoritative frame data from the
+// browser process, not from potentially cross-origin iframe JS contexts.
+chrome.webNavigation.onCommitted.addListener(function(details) {
+  var tabId = details.tabId;
+  var frameId = details.frameId;
+  if (!_tabFrames.has(tabId)) _tabFrames.set(tabId, new Map());
+  var frMap = _tabFrames.get(tabId);
+  var url = details.url || "";
+  var origin = "";
+  try { origin = new URL(url).origin; } catch (_) {}
+  var isTop = details.parentFrameId === -1;
+  frMap.set(frameId, { url: url, origin: origin, isTop: isTop, lastSeen: Date.now() });
+  // Update _tabMeta for top frames
+  if (isTop && url) {
+    var tm = _tabMeta.get(tabId);
+    if (!tm) {
+      _tabMeta.set(tabId, { title: "Tab " + tabId, url: url });
+    } else {
+      tm.url = url;
+    }
+  }
+  notifyPopup(tabId);
+});
 
 // Cross-script AST analysis: buffer scripts per tab, debounce, concatenate + analyze
 const _scriptBuffers = new Map(); // tabId → { scripts: [{url, code}], timer: null }
@@ -2062,6 +2087,7 @@ async function fetchDiscoveryForService(
 
           const mergedDoc = mergeVirtualParts(unifiedDoc, existingEntry?.doc);
 
+          var _prevDiscovery = tab.discoveryDocs.get(service);
           tab.discoveryDocs.set(service, {
             status: "found",
             doc: mergedDoc,
@@ -2069,6 +2095,8 @@ async function fetchDiscoveryForService(
             method: method || "GET",
             apiKey: apiKey || null,
             fetchedAt: Date.now(),
+            pageUrls: _prevDiscovery?.pageUrls || new Set(),
+            frameOrigins: _prevDiscovery?.frameOrigins || new Set(),
           });
           mergeToGlobal(tab);
 
@@ -2104,10 +2132,13 @@ async function fetchDiscoveryForService(
     await performProbeAndPatch(tabId, service, finalSeedUrl, probeKey);
   } else {
     // If we get here, truly not found — record timestamp for cooldown
+    var _prevDiscoveryNF = tab.discoveryDocs.get(service);
     tab.discoveryDocs.set(service, {
       status: "not_found",
       _triedKeys: triedKeys,
       _failedAt: Date.now(),
+      pageUrls: _prevDiscoveryNF?.pageUrls || new Set(),
+      frameOrigins: _prevDiscoveryNF?.frameOrigins || new Set(),
     });
     mergeToGlobal(tab);
     notifyPopup(tabId);
@@ -2159,6 +2190,7 @@ async function performProbeAndPatch(tabId, service, targetUrl, apiKey) {
         existingDoc,
       );
 
+      var _prevProbed = tab.discoveryDocs.get(service);
       tab.discoveryDocs.set(service, {
         status: "found", // Treat as found so it shows up in UI
         doc: virtualDoc,
@@ -2166,8 +2198,8 @@ async function performProbeAndPatch(tabId, service, targetUrl, apiKey) {
         fetchedAt: Date.now(),
         method: existingDoc ? currentStatus.method || "HYBRID" : "PROBE",
         isVirtual: existingDoc ? currentStatus.isVirtual || false : true,
-        // Note: if we patch a real doc, we don't necessarily mark it full virtual,
-        // but maybe we should track it has probed parts.
+        pageUrls: _prevProbed?.pageUrls || new Set(),
+        frameOrigins: _prevProbed?.frameOrigins || new Set(),
       });
       mergeToGlobal(tab);
       notifyPopup(tabId);
@@ -2771,11 +2803,13 @@ async function handleResponseBody(tabId, msg, frameId) {
   var _svcDocEntry = tab.discoveryDocs.get(service);
   if (_svcDocEntry) {
     if (!_svcDocEntry.pageUrls) _svcDocEntry.pageUrls = new Set();
+    var _svcFrameInfo = frameId != null ? _tabFrames.get(tabId)?.get(frameId) : null;
+    // pageUrls always tracks the top-level page URL
     var _svcMeta = _tabMeta.get(tabId);
     if (_svcMeta?.url) _svcDocEntry.pageUrls.add(_svcMeta.url);
-    if (frameId && frameId !== 0) {
-      var _svcFrameInfo = _tabFrames.get(tabId)?.get(frameId);
-      if (_svcFrameInfo?.origin) {
+    if (_svcFrameInfo && !_svcFrameInfo.isTop) {
+      // Request came from an iframe — record iframe origin separately
+      if (_svcFrameInfo.origin) {
         if (!_svcDocEntry.frameOrigins) _svcDocEntry.frameOrigins = new Set();
         _svcDocEntry.frameOrigins.add(_svcFrameInfo.origin);
       }
@@ -4055,30 +4089,22 @@ function _handleFormSubmit(tabId, msg) {
   notifyPopup(tabId);
 }
 
-// Content scripts handle CONTENT_KEYS, CONTENT_ENDPOINTS, CONTENT_FORMS, CONTENT_FORM_SUBMIT, RESPONSE_BODY, SCRIPT_SOURCE, and FRAME_REGISTER.
+// Content scripts handle CONTENT_KEYS, CONTENT_ENDPOINTS, CONTENT_FORMS, CONTENT_FORM_SUBMIT, RESPONSE_BODY, and SCRIPT_SOURCE.
 // Manifest "matches" already restricts which pages they run on.
 function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
 
-  // FRAME_REGISTER: content script in each frame self-reports its URL/origin.
-  // sender.frameId is set by the browser process (unforgeable by renderers).
-  if (msg.type === "FRAME_REGISTER") {
-    if (!_tabFrames.has(tabId)) _tabFrames.set(tabId, new Map());
-    var _frMap = _tabFrames.get(tabId);
-    var _prevEntry = _frMap.get(sender.frameId);
-    var _newUrl = msg.frameUrl || sender.url || "";
-    var _newOrigin = msg.frameOrigin || sender.origin || "";
-    _frMap.set(sender.frameId, {
-      url: _newUrl,
-      origin: _newOrigin,
-      lastSeen: Date.now(),
-    });
-    // Notify popup when frame list changes (new frame or origin/URL update)
-    if (!_prevEntry || _prevEntry.url !== _newUrl || _prevEntry.origin !== _newOrigin) {
-      notifyPopup(tabId);
+  // Keep _tabMeta up to date — captureTabMeta only runs once and may get an
+  // empty URL if the tab hadn't committed its navigation yet.
+  if (sender.tab.url) {
+    var _tm = _tabMeta.get(tabId);
+    if (!_tm) {
+      _tabMeta.set(tabId, { title: sender.tab.title || ("Tab " + tabId), url: sender.tab.url });
+    } else if (!_tm.url) {
+      _tm.url = sender.tab.url;
+      if (sender.tab.title) _tm.title = sender.tab.title;
     }
-    return;
   }
 
   // RESPONSE_BODY comes from intercept.js via content.js relay
@@ -4195,7 +4221,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       for (const [fid, info] of frames) {
         checks.push(
           chrome.tabs.sendMessage(tabId, { type: "PING" }, { frameId: fid })
-            .then(() => ({ frameId: fid, url: info.url, origin: info.origin, alive: true }))
+            .then(() => ({ frameId: fid, url: info.url, origin: info.origin, isTop: info.isTop, alive: true }))
             .catch(() => ({ frameId: fid, alive: false }))
         );
       }
@@ -4203,7 +4229,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         const alive = [];
         for (var i = 0; i < results.length; i++) {
           if (results[i].alive) {
-            alive.push({ frameId: results[i].frameId, url: results[i].url, origin: results[i].origin });
+            alive.push({ frameId: results[i].frameId, url: results[i].url, origin: results[i].origin, isTop: results[i].isTop });
           } else {
             frames.delete(results[i].frameId);
           }
@@ -4753,6 +4779,8 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
           }
         } else {
           // Store as new discovery doc
+          var _prevTabEntry = tab.discoveryDocs.get(svcName);
+          var _prevGlobalEntry = globalStore.discoveryDocs.get(svcName);
           const entry = {
             status: "found",
             url: sourceUrl,
@@ -4761,6 +4789,8 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
             fetchedAt: Date.now(),
             doc,
             isVirtual: false,
+            pageUrls: _prevTabEntry?.pageUrls || _prevGlobalEntry?.pageUrls || new Set(),
+            frameOrigins: _prevTabEntry?.frameOrigins || _prevGlobalEntry?.frameOrigins || new Set(),
           };
           tab.discoveryDocs.set(svcName, entry);
           globalStore.discoveryDocs.set(svcName, entry);
@@ -4899,7 +4929,6 @@ const CONTENT_TYPES = new Set([
   "CONTENT_FORM_SUBMIT",
   "RESPONSE_BODY",
   "SCRIPT_SOURCE",
-  "FRAME_REGISTER",
 ]);
 
 // Threat model: Content scripts run in web page renderer processes. A compromised
@@ -5935,7 +5964,6 @@ function serializeTabData(tab) {
       mergedDiscovery[k] = { status: v.status };
     }
   }
-
   // Probe results: global base, tab overwrites
   const mergedProbe = {};
   for (const [k, v] of globalStore.probeResults) {
