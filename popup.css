@@ -705,6 +705,116 @@ details summary:hover {
   cursor: not-allowed;
 }
 
+/* Frame selector */
+#send-frame-row {
+  margin-bottom: 8px;
+}
+#send-frame-select {
+  width: 100%;
+  background: #161b22;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 10px;
+  font-family: monospace;
+}
+#send-frame-select:focus {
+  border-color: #58a6ff;
+  outline: none;
+}
+.service-origin-hint {
+  font-size: 10px;
+  color: #8b949e;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.service-origin-open {
+  color: #58a6ff;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 10px;
+}
+.service-origin-open:hover {
+  text-decoration: underline;
+}
+
+/* API Key selector */
+#send-key-section {
+  margin-bottom: 8px;
+}
+#send-key-section summary {
+  color: #484f58;
+  font-size: 10px;
+  cursor: pointer;
+}
+#send-key-badge {
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(88,166,255,0.1);
+  color: #58a6ff;
+}
+.key-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  cursor: pointer;
+  font-size: 10px;
+  color: #c9d1d9;
+}
+.key-option input[type="radio"] {
+  margin: 0;
+}
+.key-option-label {
+  color: #8b949e;
+}
+.key-value-truncated {
+  font-family: monospace;
+  font-size: 10px;
+  color: #f0883e;
+}
+.key-source-badge {
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(139,148,158,0.1);
+  color: #8b949e;
+}
+.key-custom-input {
+  width: 100%;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 10px;
+  font-family: monospace;
+  margin-top: 2px;
+}
+.key-custom-input:focus {
+  border-color: #58a6ff;
+  outline: none;
+}
+.key-inject-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid #21262d;
+  font-size: 10px;
+  color: #8b949e;
+}
+.key-inject-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
 #send-headers-section {
   margin-bottom: 8px;
 }

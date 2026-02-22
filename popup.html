@@ -59,9 +59,24 @@
         </select>
       </div>
 
+      <div id="send-frame-row" class="hidden">
+        <label class="form-section-label">Request Context</label>
+        <select id="send-frame-select"></select>
+        <div id="send-service-origin-hint" class="hidden"></div>
+      </div>
+
+      <details id="send-key-section" class="hidden">
+        <summary>API Key <span id="send-key-badge"></span></summary>
+        <div id="send-key-options"></div>
+        <div class="key-inject-row">
+          <label class="key-inject-label"><input type="radio" name="key-inject" value="header" checked /> Header</label>
+          <label class="key-inject-label"><input type="radio" name="key-inject" value="url" /> URL param</label>
+        </div>
+      </details>
+
       <div id="send-chain-info" class="hidden"></div>
 
-      <details id="send-headers-section">
+      <details id="send-headers-section" class="hidden">
         <summary>Custom Headers</summary>
         <div id="send-headers-list"></div>
         <button id="btn-add-header" class="btn-small" type="button">
@@ -69,7 +84,7 @@
         </button>
       </details>
 
-      <div id="send-body-section">
+      <div id="send-body-section" class="hidden">
         <div id="send-form-fields"></div>
         <textarea
           id="send-raw-body"
@@ -98,7 +113,7 @@
         </div>
       </div>
 
-      <div class="send-actions">
+      <div class="send-actions hidden">
         <button id="btn-send" type="button">Send Request</button>
         <div class="export-row">
           <span class="export-label">Export:</span>

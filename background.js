@@ -59,6 +59,7 @@ const state = {
 // Session storage for request logs — survives SW restarts, clears on browser close
 const _sessionSaveTimers = new Map(); // tabId → timeoutId
 const _tabMeta = new Map(); // tabId → { title, url, closed? }
+const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, lastSeen }>
 const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
 
 // Cross-script AST analysis: buffer scripts per tab, debounce, concatenate + analyze
@@ -321,6 +322,8 @@ function _serializeGlobalStore() {
           apiKey: v.apiKey || null,
           fetchedAt: v.fetchedAt || null,
           doc: v.doc || null,
+          pageUrls: [...(v.pageUrls instanceof Set ? v.pageUrls : v.pageUrls || [])],
+          frameOrigins: [...(v.frameOrigins instanceof Set ? v.frameOrigins : v.frameOrigins || [])],
         },
       ]),
     ),
@@ -350,8 +353,13 @@ function _deserializeIntoGlobalStore(s) {
       globalStore.endpoints.set(k, v);
   }
   if (s.discoveryDocs) {
-    for (const [k, v] of Object.entries(s.discoveryDocs))
-      globalStore.discoveryDocs.set(k, v);
+    for (const [k, v] of Object.entries(s.discoveryDocs)) {
+      globalStore.discoveryDocs.set(k, {
+        ...v,
+        pageUrls: new Set(v.pageUrls || []),
+        frameOrigins: new Set(v.frameOrigins || []),
+      });
+    }
   }
   if (s.probeResults) {
     for (const [k, v] of Object.entries(s.probeResults))
@@ -465,6 +473,12 @@ function mergeToGlobal(tab) {
   }
   for (const [k, v] of tab.discoveryDocs) {
     if (v.status === "found") {
+      // Merge pageUrls and frameOrigins Sets with existing global entry
+      var _existingGDoc = globalStore.discoveryDocs.get(k);
+      var _mergedPageUrls = new Set(_existingGDoc?.pageUrls || []);
+      if (v.pageUrls) for (var _pu of v.pageUrls) _mergedPageUrls.add(_pu);
+      var _mergedFrameOrigins = new Set(_existingGDoc?.frameOrigins || []);
+      if (v.frameOrigins) for (var _fo of v.frameOrigins) _mergedFrameOrigins.add(_fo);
       globalStore.discoveryDocs.set(k, {
         status: v.status,
         url: v.url,
@@ -472,6 +486,8 @@ function mergeToGlobal(tab) {
         apiKey: v.apiKey,
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,
+        pageUrls: _mergedPageUrls,
+        frameOrigins: _mergedFrameOrigins,
       });
     } else if (!globalStore.discoveryDocs.has(k)) {
       globalStore.discoveryDocs.set(k, { status: v.status });
@@ -1836,8 +1852,9 @@ async function sendPageFetch(tabId, url, opts, frameId = 0) {
 
 /**
  * Fetch through a content script on the original tab.
+ * @param {number} frameId — target frame (0 = main frame, >0 = iframe)
  */
-async function pageContextFetch(tabId, url, opts) {
+async function pageContextFetch(tabId, url, opts, frameId) {
   // Validate URL
   try {
     const parsed = new URL(url);
@@ -1848,10 +1865,10 @@ async function pageContextFetch(tabId, url, opts) {
     return { error: "blocked: invalid URL" };
   }
 
-  // Try the original tab (main frame)
+  // Try the original tab's target frame
   if (tabId != null) {
     try {
-      return await sendPageFetch(tabId, url, opts, 0);
+      return await sendPageFetch(tabId, url, opts, frameId ?? 0);
     } catch (_) {}
   }
 
@@ -2414,7 +2431,7 @@ async function probeEndpoint(tabId, endpointKey) {
 
 // ─── Request/Response Handling (from intercept.js via content.js relay) ──────
 
-async function handleResponseBody(tabId, msg) {
+async function handleResponseBody(tabId, msg, frameId) {
   if (!msg.url) return;
   await _globalStoreReady;
 
@@ -2717,6 +2734,7 @@ async function handleResponseBody(tabId, msg) {
     responseBase64: msg.base64Encoded || false,
     mimeType: msg.contentType || "",
     responseHeaders: msg.responseHeaders || {},
+    frameId: frameId ?? 0,
   };
 
   // Update lastSeen on matching endpoint
@@ -2748,6 +2766,21 @@ async function handleResponseBody(tabId, msg) {
   // Learn from request (schema extraction)
   learnFromRequest(tabId, service, entry, headerMap);
   mergeToGlobal(tab);
+
+  // Track which pages/origins this service has been used from
+  var _svcDocEntry = tab.discoveryDocs.get(service);
+  if (_svcDocEntry) {
+    if (!_svcDocEntry.pageUrls) _svcDocEntry.pageUrls = new Set();
+    var _svcMeta = _tabMeta.get(tabId);
+    if (_svcMeta?.url) _svcDocEntry.pageUrls.add(_svcMeta.url);
+    if (frameId && frameId !== 0) {
+      var _svcFrameInfo = _tabFrames.get(tabId)?.get(frameId);
+      if (_svcFrameInfo?.origin) {
+        if (!_svcDocEntry.frameOrigins) _svcDocEntry.frameOrigins = new Set();
+        _svcDocEntry.frameOrigins.add(_svcFrameInfo.origin);
+      }
+    }
+  }
 
   // Decode request body (protobuf/JSPB/JSON)
   const logContentType = contentType || "";
@@ -4022,15 +4055,35 @@ function _handleFormSubmit(tabId, msg) {
   notifyPopup(tabId);
 }
 
-// Content scripts handle CONTENT_KEYS, CONTENT_ENDPOINTS, CONTENT_FORMS, CONTENT_FORM_SUBMIT, RESPONSE_BODY, and SCRIPT_SOURCE.
+// Content scripts handle CONTENT_KEYS, CONTENT_ENDPOINTS, CONTENT_FORMS, CONTENT_FORM_SUBMIT, RESPONSE_BODY, SCRIPT_SOURCE, and FRAME_REGISTER.
 // Manifest "matches" already restricts which pages they run on.
 function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
 
+  // FRAME_REGISTER: content script in each frame self-reports its URL/origin.
+  // sender.frameId is set by the browser process (unforgeable by renderers).
+  if (msg.type === "FRAME_REGISTER") {
+    if (!_tabFrames.has(tabId)) _tabFrames.set(tabId, new Map());
+    var _frMap = _tabFrames.get(tabId);
+    var _prevEntry = _frMap.get(sender.frameId);
+    var _newUrl = msg.frameUrl || sender.url || "";
+    var _newOrigin = msg.frameOrigin || sender.origin || "";
+    _frMap.set(sender.frameId, {
+      url: _newUrl,
+      origin: _newOrigin,
+      lastSeen: Date.now(),
+    });
+    // Notify popup when frame list changes (new frame or origin/URL update)
+    if (!_prevEntry || _prevEntry.url !== _newUrl || _prevEntry.origin !== _newOrigin) {
+      notifyPopup(tabId);
+    }
+    return;
+  }
+
   // RESPONSE_BODY comes from intercept.js via content.js relay
   if (msg.type === "RESPONSE_BODY") {
-    handleResponseBody(tabId, msg);
+    handleResponseBody(tabId, msg, sender.frameId);
     return;
   }
 
@@ -4129,6 +4182,39 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       const tab = tabId != null ? getTab(tabId) : null;
       sendResponse(tab ? serializeTabData(tab) : null);
       return;
+    }
+
+    case "GET_FRAMES": {
+      // Verify each registered frame is still alive before returning
+      const frames = _tabFrames.get(tabId);
+      if (!frames || frames.size === 0) {
+        sendResponse([{ frameId: 0, url: _tabMeta.get(tabId)?.url || "", origin: "" }]);
+        return;
+      }
+      const checks = [];
+      for (const [fid, info] of frames) {
+        checks.push(
+          chrome.tabs.sendMessage(tabId, { type: "PING" }, { frameId: fid })
+            .then(() => ({ frameId: fid, url: info.url, origin: info.origin, alive: true }))
+            .catch(() => ({ frameId: fid, alive: false }))
+        );
+      }
+      Promise.all(checks).then((results) => {
+        const alive = [];
+        for (var i = 0; i < results.length; i++) {
+          if (results[i].alive) {
+            alive.push({ frameId: results[i].frameId, url: results[i].url, origin: results[i].origin });
+          } else {
+            frames.delete(results[i].frameId);
+          }
+        }
+        alive.sort((a, b) => a.frameId - b.frameId);
+        if (alive.length === 0) {
+          alive.push({ frameId: 0, url: _tabMeta.get(tabId)?.url || "", origin: "" });
+        }
+        sendResponse(alive);
+      });
+      return true; // async sendResponse
     }
 
     case "PROBE_ENDPOINT": {
@@ -4714,10 +4800,18 @@ async function buildExportRequest(tabId, msg) {
     headers["Content-Type"] = msg.contentType;
   }
 
-  // API key from endpoint
+  // API key: user override → endpoint → auto
   const tab = getTab(tabId);
   const ep = msg.endpointKey ? tab.endpoints.get(msg.endpointKey) : null;
-  if (ep?.apiKey) {
+  if (msg.apiKeyOverride) {
+    if (!msg.apiKeyOverride.disabled && msg.apiKeyOverride.key) {
+      if (msg.apiKeyOverride.source === "url") {
+        parsedUrl.searchParams.set("key", msg.apiKeyOverride.key);
+      } else {
+        headers["X-Goog-Api-Key"] = msg.apiKeyOverride.key;
+      }
+    }
+  } else if (ep?.apiKey) {
     if (ep.apiKeySource === "url") {
       parsedUrl.searchParams.set("key", ep.apiKey);
     } else {
@@ -4805,6 +4899,7 @@ const CONTENT_TYPES = new Set([
   "CONTENT_FORM_SUBMIT",
   "RESPONSE_BODY",
   "SCRIPT_SOURCE",
+  "FRAME_REGISTER",
 ]);
 
 // Threat model: Content scripts run in web page renderer processes. A compromised
@@ -4844,6 +4939,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
   state.tabs.delete(tabId);
   _wsConnState.delete(tabId);
+  _tabFrames.delete(tabId);
   // Clean up script buffer and cancel pending analysis
   var buf = _scriptBuffers.get(tabId);
   if (buf && buf.timer) clearTimeout(buf.timer);
@@ -5328,14 +5424,27 @@ async function executeSendRequest(tabId, msg) {
     headers["Content-Type"] = msg.contentType;
   }
 
-  // API key: endpoint → service keys → discovery doc key
+  // API key: user override → endpoint → service keys → discovery doc key
   const tab = getTab(tabId);
   const epKey = msg.endpointKey;
   const ep = epKey ? tab.endpoints.get(epKey) : null;
-  let apiKey = ep?.apiKey || null;
-  let apiKeySource = ep?.apiKeySource || "header";
+  let apiKey = null;
+  let apiKeySource = "header";
 
-  if (!apiKey && service) {
+  if (msg.apiKeyOverride) {
+    // User explicitly selected a key (or disabled injection) from the Send panel
+    if (msg.apiKeyOverride.disabled) {
+      apiKey = null; // Skip all auto-selection
+    } else {
+      apiKey = msg.apiKeyOverride.key || null;
+      apiKeySource = msg.apiKeyOverride.source || "header";
+    }
+  } else {
+    apiKey = ep?.apiKey || null;
+    apiKeySource = ep?.apiKeySource || "header";
+  }
+
+  if (!msg.apiKeyOverride && !apiKey && service) {
     const hostname = parsedUrl.hostname;
     const svcKeys = collectKeysForService(tab, service, hostname);
     // Also check globalStore for keys from previous sessions
@@ -5490,6 +5599,7 @@ async function executeSendRequest(tabId, msg) {
         body,
         bodyEncoding,
       },
+      msg.frameId,
     );
   } catch (err) {
     return { error: `fetch_exception: ${err.message}`, timing: Date.now() - startTime };
@@ -5795,6 +5905,8 @@ function serializeTabData(tab) {
         apiKey: v.apiKey || null,
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,
+        pageUrls: [...(v.pageUrls instanceof Set ? v.pageUrls : v.pageUrls || [])],
+        frameOrigins: [...(v.frameOrigins instanceof Set ? v.frameOrigins : v.frameOrigins || [])],
       };
     } else {
       mergedDiscovery[k] = { status: v.status };
@@ -5802,6 +5914,12 @@ function serializeTabData(tab) {
   }
   for (const [k, v] of tab.discoveryDocs) {
     if (v.status === "found") {
+      // Merge pageUrls/frameOrigins from global base if present
+      var _existingMerged = mergedDiscovery[k];
+      var _allPageUrls = new Set(_existingMerged?.pageUrls || []);
+      if (v.pageUrls) for (var _pu of v.pageUrls) _allPageUrls.add(_pu);
+      var _allFrameOrigins = new Set(_existingMerged?.frameOrigins || []);
+      if (v.frameOrigins) for (var _fo of v.frameOrigins) _allFrameOrigins.add(_fo);
       mergedDiscovery[k] = {
         status: v.status,
         url: v.url,
@@ -5810,6 +5928,8 @@ function serializeTabData(tab) {
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,
         isVirtual: v.isVirtual || false,
+        pageUrls: [..._allPageUrls],
+        frameOrigins: [..._allFrameOrigins],
       };
     } else {
       mergedDiscovery[k] = { status: v.status };

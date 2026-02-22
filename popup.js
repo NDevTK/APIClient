@@ -45,6 +45,9 @@ let logSearchQuery = ""; // text filter for request log
 let allTabsData = null; // { tabId: { meta, requestLog } }
 let lastSendResult = null; // Last rendered response for re-render after rename
 let gqlState = { ops: [], batched: false, activeIdx: 0 }; // GraphQL operation state
+let currentFrameId = 0; // Target frame for sending (0 = main frame)
+let availableFrames = []; // Cached frame list for current tab
+let currentKeyOverride = null; // null = auto, { key, source, disabled } for override
 
 // Virtual scroll state for request log
 const _vs = {
@@ -57,9 +60,29 @@ const _vs = {
   rendering: false,  // prevent re-entrant renders
 };
 
+function setSendPanelVisible(visible) {
+  var els = [
+    document.getElementById("send-headers-section"),
+    document.getElementById("send-body-section"),
+    document.querySelector(".send-actions"),
+  ];
+  for (var i = 0; i < els.length; i++) {
+    if (!els[i]) continue;
+    if (visible) {
+      els[i].classList.remove("hidden");
+      els[i].style.display = "";
+    } else {
+      els[i].classList.add("hidden");
+      els[i].style.display = "none";
+    }
+  }
+}
+
 function setBodyMode(mode) {
   currentBodyMode = mode;
   const isConsole = mode === "msgconsole";
+  // Show the body/actions sections whenever a mode is set
+  setSendPanelVisible(true);
   document.getElementById("send-form-fields").style.display =
     mode === "form" ? "block" : "none";
   document.getElementById("send-raw-body").style.display =
@@ -69,6 +92,10 @@ function setBodyMode(mode) {
   document.getElementById("send-ws-console").style.display =
     isConsole ? "block" : "none";
   document.getElementById("send-controls").style.display =
+    isConsole ? "none" : "";
+  document.getElementById("send-frame-row").style.display =
+    isConsole ? "none" : "";
+  document.getElementById("send-key-section").style.display =
     isConsole ? "none" : "";
   document.getElementById("send-headers-section").style.display =
     isConsole ? "none" : "";
@@ -256,6 +283,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     gqlRenderAll();
   });
 
+  // Frame selector
+  document.getElementById("send-frame-select").addEventListener("change", (e) => {
+    currentFrameId = parseInt(e.target.value, 10) || 0;
+  });
+
+  // API key selector: delegate to radio buttons and custom input
+  document.getElementById("send-key-options").addEventListener("change", onKeySelectionChange);
+  document.getElementById("send-key-section").addEventListener("change", (e) => {
+    if (e.target.name === "key-inject") onKeySelectionChange();
+  });
+  document.getElementById("send-key-options").addEventListener("input", (e) => {
+    if (e.target.id === "send-key-custom") onKeySelectionChange();
+  });
+
+  // Service origin hint: "Open" link
+  document.getElementById("send-service-origin-hint").addEventListener("click", (e) => {
+    if (e.target.classList.contains("service-origin-open")) {
+      var url = e.target.dataset.url;
+      if (url) chrome.tabs.create({ url: url });
+    }
+  });
+
   // Export buttons
   document.getElementById("btn-copy-curl").addEventListener("click", () => copyAsFormat("curl"));
   document.getElementById("btn-copy-fetch").addEventListener("click", () => copyAsFormat("fetch"));
@@ -414,6 +463,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         contentType,
         headers,
         body,
+        apiKeyOverride: currentKeyOverride,
       });
     } catch (_) {
       return null;
@@ -649,6 +699,15 @@ async function loadState() {
     type: "GET_STATE",
     tabId: currentTabId,
   });
+  // Fetch available frames for the current tab
+  try {
+    availableFrames = await chrome.runtime.sendMessage({
+      type: "GET_FRAMES",
+      tabId: currentTabId,
+    }) || [];
+  } catch (_) {
+    availableFrames = [];
+  }
   if (logFilter !== "active") {
     await loadRequestLog();
   }
@@ -718,6 +777,7 @@ function render() {
   renderDataPanel();
   renderSecurityPanel();
   renderSendPanel();
+  renderFrameSelector();
   renderResponsePanel();
   populateTabFilter();
 }
@@ -962,6 +1022,201 @@ function renderMethodDropdown() {
   if (prev) select.value = prev;
 }
 
+// ─── Frame Selector ──────────────────────────────────────────────────────────
+
+function renderFrameSelector() {
+  const row = document.getElementById("send-frame-row");
+  const sel = document.getElementById("send-frame-select");
+  if (!row || !sel) return;
+
+  if (availableFrames.length <= 1) {
+    row.classList.add("hidden");
+    currentFrameId = 0;
+    renderServiceOriginHint();
+    return;
+  }
+
+  row.classList.remove("hidden");
+  var prevVal = sel.value;
+  sel.innerHTML = "";
+  for (var i = 0; i < availableFrames.length; i++) {
+    var f = availableFrames[i];
+    var opt = document.createElement("option");
+    opt.value = f.frameId;
+    var label = f.frameId === 0 ? "Main frame" : "iframe (" + f.frameId + ")";
+    try {
+      var u = new URL(f.url);
+      label += " \u2014 " + u.hostname;
+    } catch (_) {
+      if (f.origin) label += " \u2014 " + f.origin;
+    }
+    opt.textContent = label;
+    sel.appendChild(opt);
+  }
+  if (prevVal) sel.value = prevVal;
+  currentFrameId = parseInt(sel.value, 10) || 0;
+  renderServiceOriginHint();
+}
+
+function renderServiceOriginHint() {
+  var hint = document.getElementById("send-service-origin-hint");
+  if (!hint) return;
+  hint.classList.add("hidden");
+  hint.innerHTML = "";
+
+  // Get selected service
+  var epSelect = document.getElementById("send-ep-select");
+  var selectedOpt = epSelect?.options?.[epSelect.selectedIndex];
+  var svc = selectedOpt?.dataset?.svc;
+  if (!svc || !tabData?.discoveryDocs?.[svc]) return;
+
+  var svcData = tabData.discoveryDocs[svc];
+  var pageUrls = svcData.pageUrls || [];
+  if (pageUrls.length === 0) return;
+
+  // Check if any known page URL matches the current tab
+  var tabUrl = "";
+  try {
+    var tabs = availableFrames;
+    if (tabs.length > 0) tabUrl = tabs[0].url;
+  } catch (_) {}
+  var tabOrigin = "";
+  try { tabOrigin = new URL(tabUrl).origin; } catch (_) {}
+
+  var matchesCurrentTab = false;
+  for (var i = 0; i < pageUrls.length; i++) {
+    try {
+      if (new URL(pageUrls[i]).origin === tabOrigin) { matchesCurrentTab = true; break; }
+    } catch (_) {}
+  }
+
+  if (matchesCurrentTab) return; // Current tab already on the right origin
+
+  // Show hint with the most recent page URL
+  var lastUrl = pageUrls[pageUrls.length - 1];
+  var lastHostname = "";
+  try { lastHostname = new URL(lastUrl).hostname; } catch (_) { lastHostname = lastUrl; }
+
+  var frameNote = "";
+  var frameOrigins = svcData.frameOrigins || [];
+  if (frameOrigins.length > 0) {
+    frameNote = " (iframe: " + esc(frameOrigins[frameOrigins.length - 1]) + ")";
+  }
+
+  hint.classList.remove("hidden");
+  hint.innerHTML = '<span class="service-origin-hint">Last used from: ' +
+    esc(lastHostname) + frameNote +
+    ' <a class="service-origin-open" data-url="' + esc(lastUrl) + '">Open \u2197</a></span>';
+}
+
+// ─── API Key Selector ────────────────────────────────────────────────────────
+
+function renderKeySelector() {
+  var section = document.getElementById("send-key-section");
+  var optionsEl = document.getElementById("send-key-options");
+  var badge = document.getElementById("send-key-badge");
+  if (!section || !optionsEl) return;
+
+  // Get selected service and hostname
+  var epSelect = document.getElementById("send-ep-select");
+  var selectedOpt = epSelect?.options?.[epSelect.selectedIndex];
+  var svc = selectedOpt?.dataset?.svc || "";
+  var hostname = "";
+  try { hostname = new URL(currentRequestUrl).hostname; } catch (_) {}
+
+  // Collect matching keys (same logic as collectKeysForService in background)
+  var matchingKeys = [];
+  if (tabData?.apiKeys) {
+    for (var k in tabData.apiKeys) {
+      var kd = tabData.apiKeys[k];
+      var svcMatch = kd.services && kd.services.indexOf(svc) !== -1;
+      var hostMatch = kd.hosts && kd.hosts.indexOf(hostname) !== -1;
+      if (svcMatch || hostMatch) {
+        matchingKeys.push({ key: k, data: kd });
+      }
+    }
+  }
+
+  if (matchingKeys.length === 0) {
+    section.classList.add("hidden");
+    currentKeyOverride = null;
+    return;
+  }
+
+  section.classList.remove("hidden");
+  badge.textContent = matchingKeys.length + " available";
+
+  var html = '';
+
+  // Auto option (default)
+  var autoTruncated = truncateKey(matchingKeys[0].key);
+  html += '<label class="key-option">' +
+    '<input type="radio" name="send-key-select" value="auto" checked /> ' +
+    '<span class="key-option-label">Auto</span> ' +
+    '<span class="key-value-truncated">' + esc(autoTruncated) + '</span>' +
+    '</label>';
+
+  // One option per matching key
+  for (var i = 0; i < matchingKeys.length; i++) {
+    var mk = matchingKeys[i];
+    var truncated = truncateKey(mk.key);
+    var sourceBadge = mk.data.source ? '<span class="key-source-badge">' + esc(mk.data.source) + '</span>' : '';
+    html += '<label class="key-option">' +
+      '<input type="radio" name="send-key-select" value="key-' + i + '" data-key="' + esc(mk.key) + '" /> ' +
+      '<span class="key-value-truncated">' + esc(truncated) + '</span> ' +
+      '<span class="key-option-label">' + esc(mk.data.name || "Key") + '</span> ' +
+      sourceBadge +
+      '</label>';
+  }
+
+  // Custom key option
+  html += '<label class="key-option">' +
+    '<input type="radio" name="send-key-select" value="custom" /> ' +
+    '<span class="key-option-label">Custom</span>' +
+    '</label>' +
+    '<input type="text" class="key-custom-input hidden" id="send-key-custom" placeholder="Paste API key..." />';
+
+  // None option
+  html += '<label class="key-option">' +
+    '<input type="radio" name="send-key-select" value="none" /> ' +
+    '<span class="key-option-label">None (no key injection)</span>' +
+    '</label>';
+
+  optionsEl.innerHTML = html;
+
+  // Reset override to auto
+  currentKeyOverride = null;
+}
+
+function truncateKey(key) {
+  if (!key || key.length <= 16) return key || "";
+  return key.slice(0, 8) + "\u2026" + key.slice(-4);
+}
+
+function onKeySelectionChange() {
+  var selected = document.querySelector('input[name="send-key-select"]:checked');
+  var customInput = document.getElementById("send-key-custom");
+  if (!selected) { currentKeyOverride = null; return; }
+
+  var injectSource = "header";
+  var injectRadio = document.querySelector('input[name="key-inject"]:checked');
+  if (injectRadio) injectSource = injectRadio.value;
+
+  if (customInput) customInput.classList.add("hidden");
+
+  if (selected.value === "auto") {
+    currentKeyOverride = null;
+  } else if (selected.value === "none") {
+    currentKeyOverride = { disabled: true };
+  } else if (selected.value === "custom") {
+    if (customInput) customInput.classList.remove("hidden");
+    var val = customInput ? customInput.value.trim() : "";
+    currentKeyOverride = val ? { key: val, source: injectSource } : null;
+  } else if (selected.dataset.key) {
+    currentKeyOverride = { key: selected.dataset.key, source: injectSource };
+  }
+}
+
 function renderFieldsTable(fields, depth) {
   depth = depth || 0;
   let html = "";
@@ -1049,9 +1304,13 @@ function onSendEndpointSelected() {
     return;
   }
 
-  // Fallback if no matching endpoint found
+  // Fallback if no matching endpoint found — hide everything below the dropdowns
   currentRequestUrl = "";
   currentRequestMethod = "POST";
+  currentSchema = null;
+  setSendPanelVisible(false);
+  document.getElementById("send-frame-row").classList.add("hidden");
+  document.getElementById("send-key-section").classList.add("hidden");
   document.getElementById("send-form-fields").innerHTML =
     '<div class="hint">Select a method to load its schema.</div>';
   renderChainInfo(null);
@@ -1097,6 +1356,8 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
 
     buildFormFields(schema, initialData);
     renderChainInfo(schema.chains);
+    renderKeySelector();
+    renderServiceOriginHint();
   } catch (err) {
     console.error("Error loading virtual schema:", err);
     document.getElementById("send-form-fields").innerHTML =
@@ -1691,6 +1952,8 @@ async function sendRequest() {
     contentType,
     headers,
     body,
+    frameId: currentFrameId,
+    apiKeyOverride: currentKeyOverride,
   };
 
   try {
@@ -3006,6 +3269,16 @@ async function replayRequest(reqId, sourceTabId) {
     return;
   }
   currentReplayRequest = req;
+
+  // Auto-select the frame this request came from (if available)
+  if (req.frameId != null && availableFrames.length > 1) {
+    var _frameMatch = availableFrames.find(function(f) { return f.frameId === req.frameId; });
+    if (_frameMatch) {
+      currentFrameId = req.frameId;
+      var _frameSel = document.getElementById("send-frame-select");
+      if (_frameSel) _frameSel.value = String(req.frameId);
+    }
+  }
 
   // Message console mode: WebSocket or postMessage
   if (req.method === "WEBSOCKET" || req.method === "POSTMESSAGE" || req.method === "MSGCHANNEL") {
