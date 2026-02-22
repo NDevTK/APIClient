@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "API Security Researcher",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "API discovery, protocol reverse-engineering, JavaScript security code review, and request export.",
   "permissions": [
     "storage",

@@ -4534,12 +4534,13 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "WS_SEND_MSG": {
       if (tabId == null) return;
+      var _wsOpts = msg.frameId != null ? { frameId: msg.frameId } : undefined;
       chrome.tabs.sendMessage(tabId, {
         type: "WS_SEND_MSG",
         wsId: msg.channelId,
         data: msg.data,
         binary: msg.binary || false,
-      }).then(() => sendResponse({ ok: true }))
+      }, _wsOpts).then(() => sendResponse({ ok: true }))
         .catch((err) => sendResponse({ error: err.message }));
       return true;
     }
@@ -4565,11 +4566,12 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "PM_SEND_MSG": {
       if (tabId == null) return;
+      var _pmOpts = msg.frameId != null ? { frameId: msg.frameId } : undefined;
       chrome.tabs.sendMessage(tabId, {
         type: "PM_SEND_MSG",
         data: msg.data,
         targetOrigin: msg.targetOrigin,
-      }).then(() => {
+      }, _pmOpts).then(() => {
         // Record sent message in the log entry (intercept.js can't capture outgoing postMessage)
         const tab = getTab(tabId);
         const entry = tab.requestLog.find((r) => r.channelId === msg.channelId && r.method === "POSTMESSAGE");
@@ -4597,11 +4599,12 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "MC_SEND_MSG": {
       if (tabId == null) return;
+      var _mcOpts = msg.frameId != null ? { frameId: msg.frameId } : undefined;
       chrome.tabs.sendMessage(tabId, {
         type: "MC_SEND_MSG",
         channelId: msg.channelId,
         data: msg.data,
-      }).then(() => {
+      }, _mcOpts).then(() => {
         const tab = getTab(tabId);
         const entry = tab.requestLog.find((r) => r.channelId === msg.channelId && r.method === "MSGCHANNEL");
         if (entry) {

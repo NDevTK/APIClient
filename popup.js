@@ -40,6 +40,7 @@ let currentBodyMode = "form"; // "form" | "raw" | "graphql" | "msgconsole"
 let currentChannelId = null;
 let currentChannelType = null; // "WEBSOCKET" | "POSTMESSAGE" | "MSGCHANNEL"
 let currentTargetOrigin = null; // For postMessage send
+let currentChannelFrameId = null; // Frame where the channel lives
 let logFilter = "active"; // "active" | "all" | tabId (number)
 let logSearchQuery = ""; // text filter for request log
 let allTabsData = null; // { tabId: { meta, requestLog } }
@@ -91,8 +92,6 @@ function setBodyMode(mode) {
     mode === "graphql" ? "block" : "none";
   document.getElementById("send-ws-console").style.display =
     isConsole ? "block" : "none";
-  document.getElementById("send-controls").style.display =
-    isConsole ? "none" : "";
   document.getElementById("send-frame-row").style.display =
     isConsole ? "none" : "";
   document.getElementById("send-key-section").style.display =
@@ -1307,9 +1306,19 @@ function onSendEndpointSelected() {
   currentRequestUrl = "";
   currentRequestMethod = "POST";
   currentSchema = null;
+  // Exit console mode if active
+  if (currentBodyMode === "msgconsole") {
+    currentChannelId = null;
+    currentChannelType = null;
+    currentTargetOrigin = null;
+    currentChannelFrameId = null;
+    document.getElementById("send-ws-console").style.display = "none";
+  }
+  currentBodyMode = "form";
   setSendPanelVisible(false);
   document.getElementById("send-frame-row").classList.add("hidden");
   document.getElementById("send-key-section").classList.add("hidden");
+  document.getElementById("send-form-fields").style.display = "block";
   document.getElementById("send-form-fields").innerHTML =
     '<div class="hint">Select a method to load its schema.</div>';
   renderChainInfo(null);
@@ -1980,6 +1989,7 @@ async function initMsgConsole(req) {
   currentChannelType = req.method; // "WEBSOCKET" or "POSTMESSAGE"
   // For PM reply: target is the sourceOrigin (who sent to us, we reply back to them)
   currentTargetOrigin = req.sourceOrigin || null;
+  currentChannelFrameId = req.frameId ?? null;
   setBodyMode("msgconsole");
 
   // Dynamic label based on channel type
@@ -2107,16 +2117,18 @@ async function sendConsoleMessage() {
       msgPayload = {
         type: "PM_SEND_MSG", tabId: currentTabId, channelId: currentChannelId,
         data: data, targetOrigin: currentTargetOrigin || "*",
+        frameId: currentChannelFrameId,
       };
     } else if (currentChannelType === "MSGCHANNEL") {
       msgPayload = {
         type: "MC_SEND_MSG", tabId: currentTabId, channelId: currentChannelId,
-        data: data,
+        data: data, frameId: currentChannelFrameId,
       };
     } else {
       msgPayload = {
         type: "WS_SEND_MSG", tabId: currentTabId,
         channelId: currentChannelId, data: data,
+        frameId: currentChannelFrameId,
       };
     }
     const result = await chrome.runtime.sendMessage(msgPayload);
