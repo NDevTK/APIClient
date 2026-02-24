@@ -21,9 +21,11 @@ var pickerEl = document.getElementById("file-picker");
 var focusBtnEl = document.getElementById("btn-focus");
 
 var _currentUrl = null;
-var _defMap = null;       // { name: line } for click-to-definition
+var _defMap = null;       // { name: line } for click-to-definition (fallback)
+var _refMap = null;       // { line: { name: defLine } } — scope-resolved per-reference
 var _funcMap = null;      // { name: { line, endLine, calls: Set } } — named only
 var _allFuncRanges = null; // [{ line, endLine, calls }] — ALL functions (named + anonymous)
+var _ast = null;           // Saved Babel AST from buildCodeGraph for reuse
 
 // Focus mode state
 var _focusMode = true;    // default: focused
@@ -45,6 +47,67 @@ function escHtml(s) {
   return d.innerHTML;
 }
 
+// ─── Minifier Pattern Decompression (display-only) ──────────────────────────
+
+var _bt = BabelBundle.t;
+
+function _expandMinifiedStatement(stmt) {
+  if (!stmt || stmt.type !== "ExpressionStatement") return [stmt];
+  var expr = stmt.expression;
+  if (expr.type === "SequenceExpression") {
+    return expr.expressions.map(function(e) { return _bt.expressionStatement(e); });
+  }
+  if (expr.type === "LogicalExpression" && expr.operator === "&&") {
+    return [_bt.ifStatement(expr.left, _exprToBlock(expr.right))];
+  }
+  if (expr.type === "LogicalExpression" && expr.operator === "||") {
+    return [_bt.ifStatement(_bt.unaryExpression("!", expr.left), _exprToBlock(expr.right))];
+  }
+  if (expr.type === "ConditionalExpression") {
+    return [_bt.ifStatement(expr.test, _exprToBlock(expr.consequent), _exprToBlock(expr.alternate))];
+  }
+  return [stmt];
+}
+
+function _exprToBlock(expr) {
+  var stmts = expr.type === "SequenceExpression"
+    ? expr.expressions.map(function(e) { return _bt.expressionStatement(e); })
+    : [_bt.expressionStatement(expr)];
+  return _bt.blockStatement(stmts);
+}
+
+// Walk an AST and expand minifier patterns in all statement bodies.
+// Mutates in-place — call on the parsed AST before generate().
+function _decompressAST(ast) {
+  var stack = [ast];
+  while (stack.length > 0) {
+    var cur = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+    if (Array.isArray(cur.body)) {
+      var newBody = [];
+      for (var i = 0; i < cur.body.length; i++) {
+        var expanded = _expandMinifiedStatement(cur.body[i]);
+        for (var j = 0; j < expanded.length; j++) newBody.push(expanded[j]);
+      }
+      cur.body = newBody;
+    }
+    var keys = Object.keys(cur);
+    for (var k = 0; k < keys.length; k++) {
+      if (keys[k] === "type" || keys[k] === "start" || keys[k] === "end" || keys[k] === "loc") continue;
+      var child = cur[keys[k]];
+      if (child && typeof child === "object") {
+        if (Array.isArray(child)) {
+          for (var c = 0; c < child.length; c++) {
+            if (child[c] && typeof child[c] === "object" && child[c].type) stack.push(child[c]);
+          }
+        } else if (child.type) {
+          stack.push(child);
+        }
+      }
+    }
+  }
+}
+
 // ─── Beautify ────────────────────────────────────────────────────────────────
 
 function beautify(rawCode) {
@@ -59,6 +122,9 @@ function beautify(rawCode) {
       console.log("[viewer:beautify] Module parse failed: %s", modErr.message);
       ast = BabelBundle.parse(rawCode, Object.assign({ sourceType: "script" }, parseOpts));
     }
+
+    // Expand minifier patterns (&&, ||, ternary, comma sequences) for readability
+    _decompressAST(ast);
 
     var result = BabelBundle.generate(ast, {
       compact: false,
@@ -241,13 +307,22 @@ function addFindingOverlays(highlightLines, severities) {
 
   if (!highlightLines.length) return;
   preEl.style.position = "relative";
-  var lineHeight = parseFloat(getComputedStyle(codeEl).lineHeight) || 20;
+  var rows = preEl.querySelector(".line-numbers-rows");
+  var fallbackHeight = parseFloat(getComputedStyle(codeEl).lineHeight) || 20;
   var padTop = parseFloat(getComputedStyle(preEl).paddingTop) || 0;
   for (var i = 0; i < highlightLines.length; i++) {
     var div = document.createElement("div");
     div.className = "finding-overlay " + (severities[i] === "high" ? "finding-overlay-high" : "finding-overlay-medium");
-    div.style.top = (padTop + (highlightLines[i] - 1) * lineHeight) + "px";
-    div.style.height = lineHeight + "px";
+    var gs = rows && rows.children[highlightLines[i] - 1];
+    if (gs) {
+      var preRect = preEl.getBoundingClientRect();
+      var gsRect = gs.getBoundingClientRect();
+      div.style.top = (gsRect.top - preRect.top) + "px";
+      div.style.height = gsRect.height + "px";
+    } else {
+      div.style.top = (padTop + (highlightLines[i] - 1) * fallbackHeight) + "px";
+      div.style.height = fallbackHeight + "px";
+    }
     preEl.appendChild(div);
   }
 }
@@ -261,23 +336,25 @@ function scrollToLine(line, highlight) {
     return;
   }
   requestAnimationFrame(function() {
-    var lineHeight = parseFloat(getComputedStyle(codeEl).lineHeight) || 20;
-    var offset = (line - 1) * lineHeight;
+    var rows = preEl.querySelector(".line-numbers-rows");
+    var gutterSpan = rows && rows.children[line - 1];
+    var lineHeight, offset;
+    if (gutterSpan) {
+      // Use actual rendered gutter position for accurate scrolling
+      var preRect = preEl.getBoundingClientRect();
+      var gutterRect = gutterSpan.getBoundingClientRect();
+      offset = gutterRect.top - preRect.top;
+      lineHeight = gutterRect.height;
+    } else {
+      lineHeight = parseFloat(getComputedStyle(codeEl).lineHeight) || 20;
+      offset = (line - 1) * lineHeight;
+    }
     var containerHeight = containerEl.clientHeight;
     var scrollPos = Math.max(0, offset - containerHeight / 3);
     console.log("[viewer:scrollToLine] lineHeight=%d, offset=%d, containerHeight=%d, scrollTop=%d", lineHeight, offset, containerHeight, scrollPos);
     containerEl.scrollTop = scrollPos;
 
     if (highlight) {
-      var prePadTop = parseFloat(getComputedStyle(preEl).paddingTop) || 0;
-      var rows = preEl.querySelector(".line-numbers-rows");
-      var gutterSpan = rows && rows.children[line - 1];
-      var gutterRect = gutterSpan ? gutterSpan.getBoundingClientRect() : null;
-      var preRect = preEl.getBoundingClientRect();
-      console.log("[viewer:highlight] line=%d, offset=%d, prePaddingTop=%d", line, offset, prePadTop);
-      console.log("[viewer:highlight] gutterSpan rect:", gutterRect ? {top: gutterRect.top, height: gutterRect.height} : "null");
-      console.log("[viewer:highlight] preEl rect top=%d, gutterSpan relative top=%s", preRect.top, gutterRect ? (gutterRect.top - preRect.top + containerEl.scrollTop) : "null");
-
       // Clear previous gutter highlight
       var prevGutter = preEl.querySelectorAll(".def-target");
       for (var j = 0; j < prevGutter.length; j++) prevGutter[j].classList.remove("def-target");
@@ -287,16 +364,14 @@ function scrollToLine(line, highlight) {
         gutterSpan.classList.add("def-target");
       }
 
-      // Position overlay highlight (no innerHTML mutation)
+      // Position overlay highlight using gutter span's actual rendered position
       if (!_defHighlightEl) {
         _defHighlightEl = document.createElement("div");
         _defHighlightEl.id = "def-highlight";
         preEl.style.position = "relative";
         preEl.appendChild(_defHighlightEl);
       }
-      var overlayTop = offset + prePadTop;
-      console.log("[viewer:highlight] overlay top=%d (offset=%d + padding=%d), height=%d", overlayTop, offset, prePadTop, lineHeight);
-      _defHighlightEl.style.top = overlayTop + "px";
+      _defHighlightEl.style.top = offset + "px";
       _defHighlightEl.style.height = lineHeight + "px";
       _defHighlightEl.style.display = "block";
     }
@@ -306,99 +381,19 @@ function scrollToLine(line, highlight) {
 // ─── Code Graph ──────────────────────────────────────────────────────────────
 
 // Build code graph from the beautified AST.
-// _funcMap:       named functions only { name: { line, endLine, calls } } — for call graph BFS
-// _defMap:        { name: line } — for click-to-definition
-// _allFuncRanges: ALL function bodies (named + anonymous) — for finding containment
+// Delegates to buildDefinitionMap() from ast.js which uses the same Babel
+// scope system, type tracking, and property resolution as the security analysis.
 function buildCodeGraph(beautifiedCode) {
-  var funcMap = {};
-  var defMap = {};
-  var allRanges = [];
-  try {
-    var ast = BabelBundle.parse(beautifiedCode, {
-      sourceType: "unambiguous",
-      plugins: ["jsx"],
-      errorRecovery: true,
-    });
-
-    // Helper: collect calls within a function path
-    function collectCalls(funcPath) {
-      var calls = new Set();
-      funcPath.traverse({
-        CallExpression: function(inner) {
-          var callee = inner.node.callee;
-          if (callee.type === "Identifier") {
-            calls.add(callee.name);
-          } else if (callee.type === "MemberExpression" && callee.property.type === "Identifier") {
-            calls.add(callee.property.name);
-          }
-        },
-      });
-      return calls;
-    }
-
-    // Helper: register a function body (named or anonymous)
-    function registerFunc(path, name, funcNode) {
-      var loc = funcNode ? funcNode.loc : path.node.loc;
-      if (!loc) return;
-      var entry = {
-        line: loc.start.line,
-        endLine: loc.end.line,
-        calls: collectCalls(path),
-      };
-      allRanges.push(entry);
-      if (name) {
-        funcMap[name] = entry;
-        defMap[name] = loc.start.line;
-      }
-    }
-
-    BabelBundle.traverse(ast, {
-      FunctionDeclaration: function(path) {
-        var name = path.node.id ? path.node.id.name : null;
-        registerFunc(path, name, path.node);
-      },
-      FunctionExpression: function(path) {
-        // Named: var foo = function() {} — handled via VariableDeclarator
-        // Also captures anonymous callbacks, IIFEs, etc.
-        var name = null;
-        if (path.parent.type === "VariableDeclarator" && path.parent.id && path.parent.id.name) {
-          name = path.parent.id.name;
-        } else if (path.parent.type === "AssignmentExpression" && path.parent.left.type === "Identifier") {
-          name = path.parent.left.name;
-        }
-        registerFunc(path, name, path.node);
-      },
-      ArrowFunctionExpression: function(path) {
-        var name = null;
-        if (path.parent.type === "VariableDeclarator" && path.parent.id && path.parent.id.name) {
-          name = path.parent.id.name;
-        } else if (path.parent.type === "AssignmentExpression" && path.parent.left.type === "Identifier") {
-          name = path.parent.left.name;
-        }
-        registerFunc(path, name, path.node);
-      },
-      ClassDeclaration: function(path) {
-        var name = path.node.id ? path.node.id.name : null;
-        registerFunc(path, name, path.node);
-      },
-      ObjectMethod: function(path) {
-        var name = path.node.key && path.node.key.name ? path.node.key.name : null;
-        registerFunc(path, name, path.node);
-      },
-      ClassMethod: function(path) {
-        var name = path.node.key && path.node.key.name ? path.node.key.name : null;
-        registerFunc(path, name, path.node);
-      },
-    });
-  } catch (e) {
-    console.debug("[viewer] Code graph failed:", e.message);
-  }
-  _funcMap = funcMap;
-  _defMap = defMap;
-  _allFuncRanges = allRanges;
-  console.log("[viewer:buildCodeGraph] _defMap entries:", Object.keys(defMap).length, defMap);
-  console.log("[viewer:buildCodeGraph] _funcMap entries:", Object.keys(funcMap).length);
-  console.log("[viewer:buildCodeGraph] _allFuncRanges count:", allRanges.length);
+  var result = buildDefinitionMap(beautifiedCode);
+  _funcMap = result.funcMap;
+  _defMap = result.defMap;
+  _refMap = result.refMap;
+  _allFuncRanges = result.allFuncRanges;
+  _ast = result.ast;
+  console.log("[viewer:buildCodeGraph] defMap:%d refMap:%d funcMap:%d ranges:%d propDefs:%d",
+    Object.keys(result.defMap).length, Object.keys(result.refMap).length,
+    Object.keys(result.funcMap).length, result.allFuncRanges.length,
+    Object.keys(result.propDefs).length);
 }
 
 // ─── Reachability (Focus Mode) ───────────────────────────────────────────────
@@ -640,17 +635,62 @@ function fixLineNumbers(remap) {
 
 // ─── Clickable Function Tokens ───────────────────────────────────────────────
 
+function _resolveDefLine(name, renderedLine) {
+  // Convert rendered line to beautified line (in focused mode, lines are renumbered)
+  var line = renderedLine;
+  if (_focusMode && _lineRemap && _lineRemap.has(renderedLine)) {
+    line = _lineRemap.get(renderedLine);
+  }
+  // Scope-resolved lookup — only trust Babel's scope analysis
+  if (_refMap) {
+    if (_refMap[line] && _refMap[line][name]) return _refMap[line][name];
+    // Scope analysis ran but no binding for this name on this line.
+    // It's a declaration, property access, or unbound global —
+    // flat defMap would link to a random same-named definition.
+    return 0;
+  }
+  // No scope analysis available — fall back to flat defMap
+  if (_defMap && _defMap[name]) return _defMap[name];
+  return 0;
+}
+
+// Build a WeakMap mapping every DOM node (text + element) inside codeEl
+// to its starting line number. Walks in document order counting \n.
+var _nodeLineMap = null;
+function _tagTokenLines() {
+  _nodeLineMap = new WeakMap();
+  var line = 1;
+  var walker = document.createTreeWalker(codeEl, NodeFilter.SHOW_ALL, null);
+  var node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType === 3) { // Text node
+      _nodeLineMap.set(node, line);
+      var text = node.nodeValue;
+      for (var j = 0; j < text.length; j++) {
+        if (text.charCodeAt(j) === 10) line++;
+      }
+    } else if (node.nodeType === 1) { // Element node
+      _nodeLineMap.set(node, line);
+    }
+  }
+}
+
 function attachDefinitionLinks() {
+  // Tag all tokens with line numbers for scope-aware resolution
+  _tagTokenLines();
+
   // 1. Link Prism .token.function spans (identifiers before parens)
   var tokens = codeEl.querySelectorAll("span.token.function");
   var localCount = 0, crossCount = 0, missCount = 0;
   for (var i = 0; i < tokens.length; i++) {
     var span = tokens[i];
     var name = span.textContent;
-    if (_defMap && _defMap[name]) {
+    var tokenLine = (_nodeLineMap && _nodeLineMap.get(span)) || 0;
+    var resolved = _resolveDefLine(name, tokenLine);
+    if (resolved) {
       localCount++;
       span.classList.add("def-local");
-      span.dataset.defLine = _defMap[name];
+      span.dataset.defLine = resolved;
       span.addEventListener("click", onLocalDefClick);
     } else if (name.length > 1) {
       crossCount++;
@@ -662,12 +702,16 @@ function attachDefinitionLinks() {
     }
   }
 
-  // 2. Scan text nodes for bare identifiers that match _defMap
+  // 2. Scan text nodes for bare identifiers resolvable via scope
   //    (Prism doesn't wrap non-call references like `l` in `addEventListener("message", l)`)
-  if (_defMap) {
-    var defNames = Object.keys(_defMap);
-    if (defNames.length > 0) {
-      var pattern = new RegExp("\\b(" + defNames.map(function(n) { return n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|") + ")\\b", "g");
+  {
+    // Collect all names that _refMap knows about (scope-resolved references)
+    var scanNames = {};
+    if (_defMap) { for (var dn in _defMap) scanNames[dn] = 1; }
+    if (_refMap) { for (var rl in _refMap) { for (var rn in _refMap[rl]) scanNames[rn] = 1; } }
+    var scanNameList = Object.keys(scanNames);
+    if (scanNameList.length > 0) {
+      var pattern = new RegExp("\\b(" + scanNameList.map(function(n) { return n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|") + ")\\b", "g");
       var walker = document.createTreeWalker(codeEl, NodeFilter.SHOW_TEXT, null);
       var textNodes = [];
       var node;
@@ -679,15 +723,19 @@ function attachDefinitionLinks() {
         var text = tNode.nodeValue;
         if (!pattern.test(text)) continue;
         pattern.lastIndex = 0;
+        // Look up the text node's line from the WeakMap built by _tagTokenLines
+        var parentLine = (_nodeLineMap && _nodeLineMap.get(tNode)) || 0;
         var frag = document.createDocumentFragment();
         var lastIdx = 0;
         var match;
         while ((match = pattern.exec(text)) !== null) {
+          var matchDefLine = _resolveDefLine(match[1], parentLine);
+          if (!matchDefLine) continue; // no scope-resolved binding — skip
           if (match.index > lastIdx) frag.appendChild(document.createTextNode(text.slice(lastIdx, match.index)));
           var refSpan = document.createElement("span");
           refSpan.className = "token function def-local";
           refSpan.textContent = match[1];
-          refSpan.dataset.defLine = _defMap[match[1]];
+          refSpan.dataset.defLine = matchDefLine;
           refSpan.addEventListener("click", onLocalDefClick);
           frag.appendChild(refSpan);
           localCount++;
@@ -822,8 +870,10 @@ focusBtnEl.addEventListener("click", function() {
 function loadScript(scriptUrl, targetLine) {
   _currentUrl = scriptUrl;
   _defMap = null;
+  _refMap = null;
   _funcMap = null;
   _allFuncRanges = null;
+  _ast = null;
   _fullCode = null;
   _focusedCode = null;
   _lineRemap = null;

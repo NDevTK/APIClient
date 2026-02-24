@@ -10,7 +10,7 @@ new Function(babelCode.replace(/^var BabelBundle/, "globalThis.BabelBundle"))();
 
 // Load ast.js (expects BabelBundle global; expose analyzeJSBundle + extractSourceMapUrl)
 var astCode = fs.readFileSync(__dirname + "/lib/ast.js", "utf8");
-new Function(astCode + "\nglobalThis.analyzeJSBundle = analyzeJSBundle;\nglobalThis.extractSourceMapUrl = extractSourceMapUrl;")();
+new Function(astCode + "\nglobalThis.analyzeJSBundle = analyzeJSBundle;\nglobalThis.extractSourceMapUrl = extractSourceMapUrl;\nglobalThis.buildDefinitionMap = buildDefinitionMap;")();
 
 var passed = 0, failed = 0, total = 0;
 
@@ -32,6 +32,61 @@ function test(name, code, check, forceScript) {
     console.log("  ERROR: " + name + " — " + e.message);
     console.log("    " + e.stack.split("\n").slice(0, 3).join("\n    "));
   }
+}
+
+// Strip leading newline from template literals so line 1 starts at the first code line
+function trimCode(s) { return s.replace(/^\n/, ""); }
+
+function testViewer(name, code, check) {
+  total++;
+  try {
+    var result = buildDefinitionMap(code);
+    var ok = check(result);
+    if (ok) {
+      passed++;
+      console.log("  PASS: " + name);
+    } else {
+      failed++;
+      console.log("  FAIL: " + name);
+      console.log("    refMap:", JSON.stringify(result.refMap));
+      console.log("    defMap:", JSON.stringify(result.defMap));
+      console.log("    propDefs:", JSON.stringify(result.propDefs));
+    }
+  } catch (e) {
+    failed++;
+    console.log("  ERROR: " + name + " — " + e.message);
+    console.log("    " + e.stack.split("\n").slice(0, 3).join("\n    "));
+  }
+}
+
+function testResolve(name, check) {
+  total++;
+  try {
+    var ok = check();
+    if (ok) {
+      passed++;
+      console.log("  PASS: " + name);
+    } else {
+      failed++;
+      console.log("  FAIL: " + name);
+    }
+  } catch (e) {
+    failed++;
+    console.log("  ERROR: " + name + " — " + e.message);
+  }
+}
+
+function resolveDefLine(name, renderedLine, refMap, defMap, focusMode, lineRemap) {
+  var line = renderedLine;
+  if (focusMode && lineRemap && lineRemap.has(renderedLine)) {
+    line = lineRemap.get(renderedLine);
+  }
+  if (refMap) {
+    if (refMap[line] && refMap[line][name]) return refMap[line][name];
+    return 0;
+  }
+  if (defMap && defMap[name]) return defMap[name];
+  return 0;
 }
 
 console.log("\n=== Direct fetch() calls ===\n");
@@ -6275,6 +6330,314 @@ test("V2: shadowed window.location is NOT a taint source", `
   return r.securitySinks.length === 0;
 });
 
+// === PostMessage Origin Sub-classification ===
+console.log("\n=== Security: PostMessage Origin Sub-classification ===\n");
+
+// --- Weak method sub-classification ---
+
+test("postMessage startsWith includes method name and bypass in description", `
+  window.addEventListener("message", function(event) {
+    if (event.origin.startsWith("https://trusted.com")) {
+      document.body.innerHTML = event.data;
+    }
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin" &&
+           p.weakMethod === "startsWith" &&
+           p.description.indexOf("startsWith") !== -1 &&
+           p.description.indexOf("evil.com") !== -1;
+  });
+});
+
+test("postMessage endsWith description explains subdomain risk", `
+  window.addEventListener("message", function(event) {
+    if (event.origin.endsWith(".google.com")) {
+      eval(event.data);
+    }
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin" &&
+           p.weakMethod === "endsWith" &&
+           p.description.indexOf("endsWith") !== -1 &&
+           p.description.indexOf("subdomain") !== -1;
+  });
+});
+
+test("postMessage includes description explains substring risk", `
+  window.addEventListener("message", function(event) {
+    if (event.origin.includes("example")) {
+      document.body.innerHTML = event.data;
+    }
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin" &&
+           p.weakMethod === "includes" &&
+           p.description.indexOf("substring") !== -1;
+  });
+});
+
+test("postMessage indexOf description explains substring risk", `
+  window.addEventListener("message", function(event) {
+    if (event.origin.indexOf("example.com") !== -1) {
+      document.body.innerHTML = event.data;
+    }
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin" &&
+           p.weakMethod === "indexOf" &&
+           p.description.indexOf("substring") !== -1;
+  });
+});
+
+// --- Checked value extraction ---
+
+test("postMessage weak check extracts checked value string", `
+  window.addEventListener("message", function(event) {
+    if (event.origin.startsWith("https://a.com")) {
+      document.body.innerHTML = event.data;
+    }
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin" &&
+           p.checkedValue === "https://a.com";
+  });
+});
+
+test("postMessage weak check with variable arg has null checkedValue", `
+  var prefix = getOriginPrefix();
+  window.addEventListener("message", function(event) {
+    if (event.origin.startsWith(prefix)) {
+      document.body.innerHTML = event.data;
+    }
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin" &&
+           p.checkedValue === null;
+  });
+});
+
+// --- Whitelist/dictionary patterns (strong) ---
+
+test("postMessage Set.has(origin) whitelist → strong (not flagged)", `
+  var allowed = new Set(["https://trusted.com", "https://other.com"]);
+  window.addEventListener("message", function(event) {
+    if (!allowed.has(event.origin)) return;
+    document.body.innerHTML = event.data;
+  });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+test("postMessage array.includes(origin) whitelist → strong (not flagged)", `
+  var allowedOrigins = ["https://trusted.com", "https://other.com"];
+  window.addEventListener("message", function(event) {
+    if (!allowedOrigins.includes(event.origin)) return;
+    document.body.innerHTML = event.data;
+  });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+test("postMessage dict[origin] === true whitelist → strong (not flagged)", `
+  var allowed = { "https://trusted.com": true };
+  window.addEventListener("message", function(event) {
+    if (allowed[event.origin] === true) {
+      document.body.innerHTML = event.data;
+    }
+  });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+test("postMessage origin.includes('str') still weak, not confused with array.includes", `
+  window.addEventListener("message", function(event) {
+    if (event.origin.includes("trusted")) {
+      document.body.innerHTML = event.data;
+    }
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin";
+  });
+});
+
+// --- Whitelist via callee tracing ---
+
+test("postMessage origin passed to function with Set.has → strong", `
+  var allowed = new Set(["https://trusted.com"]);
+  function checkOrigin(o) { return allowed.has(o); }
+  window.addEventListener("message", function(event) {
+    if (!checkOrigin(event.origin)) return;
+    document.body.innerHTML = event.data;
+  });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+test("postMessage origin passed to function with dict[param] === true → strong", `
+  var allowed = { "https://trusted.com": true };
+  function checkOrigin(o) { return allowed[o] === true; }
+  window.addEventListener("message", function(event) {
+    if (!checkOrigin(event.origin)) return;
+    document.body.innerHTML = event.data;
+  });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+// --- Class constructor property tracing ---
+
+test("postMessage class instance c.i(origin) with strong checker → not flagged", `
+  var Zp = class {
+    constructor(a) { this.i = a; }
+  };
+  var c = new Zp(function(o) { return o === "https://trusted.com"; });
+  window.addEventListener("message", function(m) {
+    if (!c.i(m.origin)) return;
+    document.body.innerHTML = m.data;
+  });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+test("postMessage class instance with factory $p pattern → strong", `
+  function $p(origins) {
+    var b = {};
+    origins.forEach(function(c) { b[c] = true; });
+    return function(c) { return b[c] === true; };
+  }
+  var Zp = class { constructor(a) { this.i = a; } };
+  var c = new Zp($p(["https://trusted.com"]));
+  window.addEventListener("message", function(m) {
+    if (!c.i(m.origin)) return;
+    document.body.innerHTML = m.data;
+  });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+test("postMessage class instance with weak checker in factory → weak", `
+  function $w(b) { return function(c) { return c.includes(b); }; }
+  var Zp = class { constructor(a) { this.i = a; } };
+  var c = new Zp($w("trusted"));
+  window.addEventListener("message", function(m) {
+    if (!c.i(m.origin)) return;
+    document.body.innerHTML = m.data;
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin";
+  });
+});
+
+// --- Destructured parameter tracing ---
+
+test("postMessage c.i(origin) where c is destructured param from caller with new Zp → strong", `
+  var Zp = class { constructor(a) { this.i = a; } };
+  function $p(origins) {
+    var b = {};
+    origins.forEach(function(c) { b[c] = true; });
+    return function(c) { return b[c] === true; };
+  }
+  var aq = function({kh: c}) {
+    window.addEventListener("message", function(m) {
+      if (c.i(m.origin)) {
+        document.body.innerHTML = m.data;
+      }
+    });
+  };
+  aq({ kh: new Zp($p(["https://trusted.com"])) });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+test("postMessage c.i(origin) where c is destructured param, direct === check → strong", `
+  var Zp = class { constructor(a) { this.i = a; } };
+  var aq = ({kh: c}) => {
+    window.addEventListener("message", function(m) {
+      if (c.i(m.origin)) {
+        document.body.innerHTML = m.data;
+      }
+    });
+  };
+  aq({ kh: new Zp(function(o) { return o === "https://trusted.com"; }) });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+test("postMessage c.i(origin) where c is destructured param, ternary with new Zp → strong", `
+  var Zp = class { constructor(a) { this.i = a; } };
+  function $p(a) {
+    var b = {};
+    (typeof a === "string" ? [a] : a).forEach(function(c) { b[c] = true; });
+    return function(c) { return b[c] === true; };
+  }
+  var aq = ({kh: c}) => {
+    window.addEventListener("message", function(m) {
+      if (c.i(m.origin)) {
+        document.body.innerHTML = m.data;
+      }
+    });
+  };
+  var origin = "https://trusted.com";
+  aq({ kh: origin instanceof Zp ? origin : new Zp($p(origin)) });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-no-origin" || p.type === "postmessage-weak-origin";
+  });
+});
+
+// --- Regression: severity upgrade still works ---
+
+test("postMessage startsWith with sink → severity upgraded to high", `
+  window.addEventListener("message", function(event) {
+    if (event.origin.startsWith("https://example.com")) {
+      document.body.innerHTML = event.data;
+    }
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin" && p.severity === "high" &&
+           p.description.indexOf("startsWith") !== -1;
+  });
+});
+
+test("postMessage startsWith without sink → stays medium", `
+  window.addEventListener("message", function(event) {
+    if (event.origin.startsWith("https://example.com")) {
+      console.log(event.data);
+    }
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-weak-origin" && p.severity === "medium";
+  });
+});
+
 // === Origin Check Walker (V3) ===
 console.log("\n=== Origin Check Walker (V3) ===\n");
 
@@ -6405,6 +6768,399 @@ test("CFG: partial sanitization (if branch only) remains high", `
   return r.securitySinks.some(function(s) {
     return s.type === "xss" && s.severity === "high";
   });
+});
+
+// =============================================================================
+// Viewer: Scope Resolution
+// =============================================================================
+
+console.log("\n=== Viewer: Scope Resolution ===\n");
+
+testViewer("basic variable reference resolves to declaration", trimCode(`
+var x = 1;
+console.log(x);
+`), function(r) {
+  return r.refMap[2] && r.refMap[2]["x"] === 1;
+});
+
+testViewer("same name in different function scopes resolves to correct scope", trimCode(`
+function a() {
+  var m = 1;
+}
+function b() {
+  var m = 2;
+  console.log(m);
+}
+`), function(r) {
+  return r.refMap[6] && r.refMap[6]["m"] === 5;
+});
+
+testViewer("nested scope shadowing resolves to innermost binding", trimCode(`
+var m = 1;
+function outer() {
+  var m = 2;
+  function inner() {
+    console.log(m);
+  }
+}
+`), function(r) {
+  return r.refMap[5] && r.refMap[5]["m"] === 3;
+});
+
+testViewer("function parameter resolves as binding", trimCode(`
+function handler(c) {
+  console.log(c);
+}
+`), function(r) {
+  return r.refMap[2] && r.refMap[2]["c"] === 1;
+});
+
+testViewer("parameter shadows outer variable — resolves to parameter", trimCode(`
+var c = 1;
+function outer() {
+  function inner(c) {
+    c.toString();
+  }
+}
+`), function(r) {
+  return r.refMap[4] && r.refMap[4]["c"] === 3;
+});
+
+testViewer("unbound global identifier has no refMap entry", trimCode(`
+_.M();
+`), function(r) {
+  return !r.refMap[1] || !r.refMap[1]["_"];
+});
+
+testViewer("self-reference at declaration line is not recorded", trimCode(`
+var x = 1;
+`), function(r) {
+  return !r.refMap[1] || !r.refMap[1]["x"];
+});
+
+// =============================================================================
+// Viewer: Property Definition Tracking
+// =============================================================================
+
+console.log("\n=== Viewer: Property Definition Tracking ===\n");
+
+testViewer("object literal properties tracked in propDefs", trimCode(`
+var obj = {
+  foo: function() {},
+  bar: 42
+};
+`), function(r) {
+  var key = "1:obj";
+  return r.propDefs[key] && r.propDefs[key]["foo"] === 2 && r.propDefs[key]["bar"] === 3;
+});
+
+testViewer("assignment properties tracked in propDefs", trimCode(`
+var obj = {};
+obj.method = function() {};
+obj.value = 42;
+`), function(r) {
+  var key = "1:obj";
+  return r.propDefs[key] && r.propDefs[key]["method"] === 2 && r.propDefs[key]["value"] === 3;
+});
+
+testViewer("prototype assignment tracked under class binding", trimCode(`
+function MyClass() {}
+MyClass.prototype.doIt = function() {};
+`), function(r) {
+  var key = "1:MyClass";
+  return r.propDefs[key] && r.propDefs[key]["doIt"] === 2;
+});
+
+testViewer("string literal keys in object literal tracked", trimCode(`
+var obj = {
+  "hello": 1,
+  "world": 2
+};
+`), function(r) {
+  var key = "1:obj";
+  return r.propDefs[key] && r.propDefs[key]["hello"] === 2 && r.propDefs[key]["world"] === 3;
+});
+
+testViewer("computed property NOT tracked (dynamic key)", trimCode(`
+var obj = {};
+obj[key] = 1;
+`), function(r) {
+  var key = "1:obj";
+  return !r.propDefs[key];
+});
+
+testViewer("properties on unbound global NOT tracked", trimCode(`
+_.foo = 1;
+`), function(r) {
+  return Object.keys(r.propDefs).length === 0;
+});
+
+testViewer("reassignment object literal updates propDefs", trimCode(`
+var obj;
+obj = {
+  alpha: 1,
+  beta: 2
+};
+`), function(r) {
+  var key = "1:obj";
+  return r.propDefs[key] && r.propDefs[key]["alpha"] === 3 && r.propDefs[key]["beta"] === 4;
+});
+
+// =============================================================================
+// Viewer: Property Access Resolution
+// =============================================================================
+
+console.log("\n=== Viewer: Property Access Resolution ===\n");
+
+testViewer("obj.method() with object literal — method resolves to definition", trimCode(`
+var obj = {
+  foo: function() {},
+  bar: 42
+};
+obj.foo();
+obj.bar;
+`), function(r) {
+  return r.refMap[5] && r.refMap[5]["foo"] === 2 &&
+         r.refMap[6] && r.refMap[6]["bar"] === 3;
+});
+
+testViewer("obj.prop with assignment — prop resolves to assignment line", trimCode(`
+var obj = {};
+obj.method = function() {};
+obj.method();
+`), function(r) {
+  return r.refMap[3] && r.refMap[3]["method"] === 2;
+});
+
+testViewer("property on function parameter does NOT resolve (no propDefs)", trimCode(`
+function handler(c) {
+  c.i();
+}
+`), function(r) {
+  var cResolves = r.refMap[2] && r.refMap[2]["c"] === 1;
+  var iMissing = !r.refMap[2] || !r.refMap[2]["i"];
+  return cResolves && iMissing;
+});
+
+testViewer("property on unbound global does NOT resolve", trimCode(`
+_.M();
+`), function(r) {
+  return !r.refMap[1] || !r.refMap[1]["M"];
+});
+
+testViewer("scope-resolved ref takes priority over property resolution", trimCode(`
+var i = 1;
+var obj = { i: 2 };
+var x = i + obj.i;
+`), function(r) {
+  return r.refMap[3] && r.refMap[3]["i"] === 1;
+});
+
+testViewer("object in c.i() resolves via scope (c is object of MemberExpression)", trimCode(`
+var c = {
+  i: function() {}
+};
+c.i();
+`), function(r) {
+  return r.refMap[4] && r.refMap[4]["c"] === 1 && r.refMap[4]["i"] === 2;
+});
+
+testViewer("multiple properties on same object all resolve", trimCode(`
+var svc = {
+  init: function() {},
+  start: function() {},
+  stop: function() {}
+};
+svc.init();
+svc.start();
+svc.stop();
+`), function(r) {
+  return r.refMap[6] && r.refMap[6]["init"] === 2 &&
+         r.refMap[7] && r.refMap[7]["start"] === 3 &&
+         r.refMap[8] && r.refMap[8]["stop"] === 4;
+});
+
+testViewer("chained member expression — only first level resolves", trimCode(`
+var a = {
+  b: { c: 1 }
+};
+a.b.c;
+`), function(r) {
+  var bResolves = r.refMap[4] && r.refMap[4]["b"] === 2;
+  var cMissing = !r.refMap[4] || !r.refMap[4]["c"];
+  return bResolves && cMissing;
+});
+
+// =============================================================================
+// Viewer: Closure-compiled Patterns
+// =============================================================================
+
+console.log("\n=== Viewer: Closure-compiled Patterns ===\n");
+
+testViewer("short names in different scopes resolve independently", trimCode(`
+(function() {
+  var a = function(m) {
+    m.data;
+  };
+  var b = function(m) {
+    m.type;
+  };
+})();
+`), function(r) {
+  var m3 = r.refMap[3] && r.refMap[3]["m"];
+  var m6 = r.refMap[6] && r.refMap[6]["m"];
+  return m3 === 2 && m6 === 5;
+});
+
+testViewer("callback parameter with message event pattern", trimCode(`
+window.addEventListener("message", function(e) {
+  if (e.data.type === "test") {
+    e.data.value;
+  }
+});
+`), function(r) {
+  var e2 = r.refMap[2] && r.refMap[2]["e"] === 1;
+  var e3 = r.refMap[3] && r.refMap[3]["e"] === 1;
+  var dataMissing = !r.refMap[2] || !r.refMap[2]["data"];
+  return e2 && e3 && dataMissing;
+});
+
+testViewer("local object with method called in callback — both resolve", trimCode(`
+var handlers = {
+  onMessage: function(d) {},
+  onError: function(e) {}
+};
+function setup() {
+  handlers.onMessage(data);
+}
+`), function(r) {
+  return r.refMap[6] && r.refMap[6]["handlers"] === 1 && r.refMap[6]["onMessage"] === 2;
+});
+
+testViewer("IIFE with namespaced object pattern", trimCode(`
+var ns = {};
+ns.init = function() {};
+ns.run = function() {};
+ns.init();
+ns.run();
+`), function(r) {
+  return r.refMap[4] && r.refMap[4]["init"] === 2 &&
+         r.refMap[5] && r.refMap[5]["run"] === 3;
+});
+
+testViewer("prototype method — access on class name resolves", trimCode(`
+function Ctor() {}
+Ctor.prototype.method = function() {};
+Ctor.prototype.other = function() {};
+Ctor.method;
+Ctor.other;
+`), function(r) {
+  return r.refMap[4] && r.refMap[4]["method"] === 2 &&
+         r.refMap[5] && r.refMap[5]["other"] === 3;
+});
+
+// =============================================================================
+// Viewer: _resolveDefLine
+// =============================================================================
+
+console.log("\n=== Viewer: _resolveDefLine ===\n");
+
+testResolve("scope-resolved lookup returns correct line", function() {
+  var refMap = { 10: { "x": 3 } };
+  return resolveDefLine("x", 10, refMap, {}, false, null) === 3;
+});
+
+testResolve("returns 0 when name not in refMap for that line", function() {
+  var refMap = { 10: { "x": 3 } };
+  return resolveDefLine("y", 10, refMap, { "y": 5 }, false, null) === 0;
+});
+
+testResolve("returns 0 when line not in refMap at all", function() {
+  var refMap = { 10: { "x": 3 } };
+  return resolveDefLine("x", 20, refMap, { "x": 5 }, false, null) === 0;
+});
+
+testResolve("falls back to defMap when refMap is null", function() {
+  return resolveDefLine("foo", 10, null, { "foo": 7 }, false, null) === 7;
+});
+
+testResolve("focused mode remaps rendered line to beautified line", function() {
+  var refMap = { 100: { "x": 50 } };
+  var remap = new Map();
+  remap.set(5, 100);
+  return resolveDefLine("x", 5, refMap, {}, true, remap) === 50;
+});
+
+testResolve("focused mode — unmapped line uses rendered line", function() {
+  var refMap = { 5: { "x": 1 } };
+  var remap = new Map();
+  remap.set(3, 99);
+  return resolveDefLine("x", 5, refMap, {}, true, remap) === 1;
+});
+
+testResolve("does NOT fall back to defMap when refMap exists", function() {
+  var refMap = {};
+  return resolveDefLine("foo", 10, refMap, { "foo": 7 }, false, null) === 0;
+});
+
+// =============================================================================
+// Viewer: Edge Cases
+// =============================================================================
+
+console.log("\n=== Viewer: Edge Cases ===\n");
+
+testViewer("property defined after access — still resolves (same traversal)", trimCode(`
+var obj = {};
+obj.late();
+obj.late = function() {};
+`), function(r) {
+  return r.refMap[2] && r.refMap[2]["late"] === 3;
+});
+
+testViewer("same property name on different objects — no cross-pollution", trimCode(`
+var a = { x: 1 };
+var b = { x: 2 };
+a.x;
+b.x;
+`), function(r) {
+  var ax = r.refMap[3] && r.refMap[3]["x"];
+  var bx = r.refMap[4] && r.refMap[4]["x"];
+  return ax === 1 && bx === 2;
+});
+
+testViewer("arrow function property in object literal", trimCode(`
+var api = {
+  fetch: () => {},
+  parse: () => {}
+};
+api.fetch();
+api.parse();
+`), function(r) {
+  return r.refMap[5] && r.refMap[5]["fetch"] === 2 &&
+         r.refMap[6] && r.refMap[6]["parse"] === 3;
+});
+
+testViewer("mixed assignment and literal properties", trimCode(`
+var svc = {
+  a: 1
+};
+svc.b = 2;
+svc.a;
+svc.b;
+`), function(r) {
+  return r.refMap[5] && r.refMap[5]["a"] === 2 &&
+         r.refMap[6] && r.refMap[6]["b"] === 4;
+});
+
+testViewer("nested function — inner param same name as outer var", trimCode(`
+var data = {};
+data.handler = function(data) {
+  data.process();
+};
+data.handler();
+`), function(r) {
+  var dataRef = r.refMap[3] && r.refMap[3]["data"];
+  return dataRef === 2;
 });
 
 // ── Summary ──
