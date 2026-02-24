@@ -3017,6 +3017,36 @@ function _findScriptForLine(line, scriptOffsets) {
   return scriptOffsets[0];
 }
 
+// Build cross-file definition index from combined AST propDefs+defMap.
+// Maps property/function names to {sourceUrl, line} using scriptOffsets
+// to convert combined-code lines back to per-script lines.
+function _buildCrossDefs(buf, analysis, scriptOffsets) {
+  if (!buf || !scriptOffsets || !scriptOffsets.length) return;
+  var crossDefs = {}; // { name: { sourceUrl, line } }
+  // propDefs: { "defLine:objName": { propName: propDefLine } }
+  if (analysis.propDefs) {
+    for (var pk in analysis.propDefs) {
+      var props = analysis.propDefs[pk];
+      for (var pn in props) {
+        if (!crossDefs[pn]) {
+          var info = _findScriptForLine(props[pn], scriptOffsets);
+          crossDefs[pn] = { sourceUrl: info.url, line: props[pn] - info.lineStart + 1 };
+        }
+      }
+    }
+  }
+  // defMap: { name: line } — top-level function/var/class
+  if (analysis.defMap) {
+    for (var dn in analysis.defMap) {
+      if (!crossDefs[dn]) {
+        var dInfo = _findScriptForLine(analysis.defMap[dn], scriptOffsets);
+        crossDefs[dn] = { sourceUrl: dInfo.url, line: analysis.defMap[dn] - dInfo.lineStart + 1 };
+      }
+    }
+  }
+  buf.crossDefs = crossDefs;
+}
+
 // Compare new security findings against globalStore to mark as new/existing/fixed
 function _markSecurityFindingChanges(scriptUrl, findings) {
   var prev = globalStore.securityFindings.get(scriptUrl);
@@ -3073,6 +3103,9 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
   var meta = _tabMeta.get(tabId);
   if (meta && meta.url) tabUrl = meta.url;
   else if (buf && buf.pageUrl) tabUrl = buf.pageUrl;
+
+  // Build cross-file definition index from cached propDefs+defMap
+  _buildCrossDefs(buf, analysis, scriptOffsets);
 
   var hasFindings = analysis.protoEnums.length || analysis.protoFieldMaps.length ||
     analysis.fetchCallSites.length || analysis.sourceMapUrl ||
@@ -3264,6 +3297,9 @@ async function _analyzeCombinedScripts(tabId) {
     });
     scheduleSave();
   }
+
+  // Build cross-file definition index from combined propDefs+defMap
+  _buildCrossDefs(buf, analysis, scriptOffsets);
 
   if (analysis.resolverErrors && analysis.resolverErrors.length > 0) {
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
@@ -4443,72 +4479,10 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return;
     }
 
-    case "FIND_DEFINITION": {
-      var _fdName = msg.name;
-      var _fdExclude = msg.excludeUrl || "";
-      if (!_fdName) { sendResponse(null); return; }
-
-      // Escape regex special chars in the function name
-      var _fdEsc = _fdName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      var _fdPat = new RegExp("(?:function\\s+" + _fdEsc + "\\s*\\(|(?:var|let|const|class)\\s+" + _fdEsc + "\\b)");
-
-      // Search script buffers first (in-memory, fast)
-      var _fdBuf = _scriptBuffers.get(tabId);
-      if (_fdBuf) {
-        for (var _fdi = 0; _fdi < _fdBuf.scripts.length; _fdi++) {
-          var _fdEntry = _fdBuf.scripts[_fdi];
-          if (_fdEntry.url === _fdExclude || !_fdEntry.code) continue;
-          var _fdMatch = _fdPat.exec(_fdEntry.code);
-          if (_fdMatch) {
-            var _fdLine = _fdEntry.code.substring(0, _fdMatch.index).split("\n").length;
-            sendResponse({ sourceUrl: _fdEntry.url, line: _fdLine });
-            return;
-          }
-        }
-      }
-
-      // Fallback: collect script URLs from findings, fetch on-demand
-      var _fdUrls = new Set();
-      var _fdTab = tabId != null ? getTab(tabId) : null;
-      if (_fdTab) {
-        var _fdFindings = mergedSecurityFindings(_fdTab);
-        for (var _fdfi = 0; _fdfi < _fdFindings.length; _fdfi++) {
-          if (_fdFindings[_fdfi].sourceUrl) _fdUrls.add(_fdFindings[_fdfi].sourceUrl);
-        }
-      }
-      for (var [_fdKey] of globalStore.securityFindings) {
-        if (_fdKey && !_fdKey.startsWith("unknown_")) _fdUrls.add(_fdKey);
-      }
-      // Remove already-searched buffer URLs and excluded URL
-      if (_fdBuf) {
-        for (var _fdb = 0; _fdb < _fdBuf.scripts.length; _fdb++) {
-          _fdUrls.delete(_fdBuf.scripts[_fdb].url);
-        }
-      }
-      _fdUrls.delete(_fdExclude);
-
-      if (_fdUrls.size === 0) { sendResponse(null); return; }
-
-      // Fetch each script URL and search for the definition
-      var _fdArr = [..._fdUrls];
-      (function _fdSearch(idx) {
-        if (idx >= _fdArr.length) { sendResponse(null); return; }
-        fetch(_fdArr[idx]).then(function(r) {
-          if (!r.ok) throw new Error("not ok");
-          return r.text();
-        }).then(function(code) {
-          var m = _fdPat.exec(code);
-          if (m) {
-            var line = code.substring(0, m.index).split("\n").length;
-            sendResponse({ sourceUrl: _fdArr[idx], line: line });
-          } else {
-            _fdSearch(idx + 1);
-          }
-        }).catch(function() {
-          _fdSearch(idx + 1);
-        });
-      })(0);
-      return true; // async sendResponse
+    case "GET_CROSS_DEFS": {
+      var _cdBuf = _scriptBuffers.get(tabId);
+      sendResponse(_cdBuf && _cdBuf.crossDefs || null);
+      return;
     }
 
     case "GET_ENDPOINT_SCHEMA": {

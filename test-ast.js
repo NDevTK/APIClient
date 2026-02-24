@@ -4864,14 +4864,24 @@ test("Object.assign with multiple sources, one tainted → flagged", `
   });
 });
 
+test("Object.assign with history.state → NOT flagged (same-origin only)", `
+  var h = history.state;
+  h = Object.assign({}, h, { lfId: "abc" });
+  history.pushState(h, "", "");
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
 // ── New Taint Sources ──
 console.log("\n=== Security: New Taint Sources ===\n");
 
-test("history.state → innerHTML → XSS", `
+test("history.state → innerHTML → NOT flagged (same-origin only, not attacker-controlled)", `
   var title = history.state;
   document.getElementById("header").innerHTML = title;
 `, function(r) {
-  return r.securitySinks.some(function(s) {
+  return !r.securitySinks.some(function(s) {
     return s.type === "xss" && s.sink === "innerHTML" && s.source === "history.state";
   });
 });
@@ -4894,11 +4904,11 @@ test("document.title → eval → code injection", `
   });
 });
 
-test("history.state → location.href → redirect", `
+test("history.state → location.href → NOT flagged (same-origin only)", `
   var state = history.state;
   location.href = state;
 `, function(r) {
-  return r.securitySinks.some(function(s) {
+  return !r.securitySinks.some(function(s) {
     return s.type === "redirect" && s.source === "history.state";
   });
 });
@@ -7161,6 +7171,22 @@ data.handler();
 `), function(r) {
   var dataRef = r.refMap[3] && r.refMap[3]["data"];
   return dataRef === 2;
+});
+
+testViewer("arrow param call NOT in funcMap calls (scope-aware collectCalls)", trimCode(`
+function b() { return 1; }
+var p = new Promise(b => {
+  b(42);
+});
+`), function(r) {
+  // funcMap["b"] should be the outer function b at line 1
+  if (!r.funcMap["b"] || r.funcMap["b"].line !== 1) return false;
+  // The arrow b => { b(42) } should NOT have "b" in its calls
+  // because b is a parameter binding, not a named function
+  var arrowRange = r.allFuncRanges.find(function(fr) {
+    return fr.line >= 2 && fr.calls && !fr.calls.has("b");
+  });
+  return !!arrowRange;
 });
 
 // ── Summary ──

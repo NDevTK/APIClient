@@ -25,6 +25,7 @@ var _defMap = null;       // { name: line } for click-to-definition (fallback)
 var _refMap = null;       // { line: { name: defLine } } — scope-resolved per-reference
 var _funcMap = null;      // { name: { line, endLine, calls: Set } } — named only
 var _allFuncRanges = null; // [{ line, endLine, calls }] — ALL functions (named + anonymous)
+var _propDefs = null;     // { "defLine:name": { prop: line } } — property definitions
 var _ast = null;           // Saved Babel AST from buildCodeGraph for reuse
 
 // Focus mode state
@@ -35,6 +36,7 @@ var _lineRemap = null;    // Map<focusedLine, originalBeautifiedLine>
 var _mappedFindings = null;
 var _mappedTarget = null;
 var _hasFocusableFindings = false;
+var _highlightTarget = false;  // true when cross-file navigation should highlight the target line
 
 function showMessage(text, isError) {
   containerEl.innerHTML = '<div class="viewer-message' + (isError ? ' viewer-error' : '') + '">' +
@@ -388,6 +390,7 @@ function buildCodeGraph(beautifiedCode) {
   _funcMap = result.funcMap;
   _defMap = result.defMap;
   _refMap = result.refMap;
+  _propDefs = result.propDefs;
   _allFuncRanges = result.allFuncRanges;
   _ast = result.ast;
   console.log("[viewer:buildCodeGraph] defMap:%d refMap:%d funcMap:%d ranges:%d propDefs:%d",
@@ -612,8 +615,8 @@ function renderCode(code, remap) {
   // Attach definition links
   attachDefinitionLinks();
 
-  // Scroll
-  scrollToLine(scrollTarget || _mappedTarget);
+  // Scroll (highlight the target line for cross-file definition navigation)
+  scrollToLine(scrollTarget || _mappedTarget, _highlightTarget);
 }
 
 function fixLineNumbers(remap) {
@@ -746,6 +749,48 @@ function attachDefinitionLinks() {
       }
     }
   }
+
+  // 3. Scan .token.class-name spans for member expression properties (e.g. _.mh in "new _.mh(...)")
+  //    Prism wraps "_.mh" after "new" as a single class-name token with "." as inner punctuation.
+  //    The property name (last segment after ".") needs a cross-file click handler.
+  var classTokens = codeEl.querySelectorAll("span.token.class-name");
+  for (var ci = 0; ci < classTokens.length; ci++) {
+    var ct = classTokens[ci];
+    // Must contain at least one dot punctuation (member expression)
+    var dots = ct.querySelectorAll("span.token.punctuation");
+    var hasDot = false;
+    for (var di = 0; di < dots.length; di++) {
+      if (dots[di].textContent === ".") { hasDot = true; break; }
+    }
+    if (!hasDot) continue;
+    // The property name is the last child text node
+    var lastChild = ct.lastChild;
+    if (!lastChild || lastChild.nodeType !== 3) continue; // must be a text node
+    var propName = lastChild.nodeValue.trim();
+    if (!propName || propName.length <= 1) continue;
+    // Check local resolution first
+    var ctLine = (_nodeLineMap && _nodeLineMap.get(ct)) || 0;
+    var ctResolved = _resolveDefLine(propName, ctLine);
+    if (ctResolved) {
+      // Wrap as local def link
+      var localSpan = document.createElement("span");
+      localSpan.className = "token function def-local";
+      localSpan.textContent = propName;
+      localSpan.dataset.defLine = ctResolved;
+      localSpan.addEventListener("click", onLocalDefClick);
+      ct.replaceChild(localSpan, lastChild);
+      localCount++;
+    } else {
+      // Wrap as cross-file def link
+      var crossSpan = document.createElement("span");
+      crossSpan.className = "token function def-cross";
+      crossSpan.textContent = propName;
+      crossSpan.dataset.defName = propName;
+      crossSpan.addEventListener("click", onCrossDefClick);
+      ct.replaceChild(crossSpan, lastChild);
+      crossCount++;
+    }
+  }
 }
 
 function onLocalDefClick(e) {
@@ -789,15 +834,12 @@ function onCrossDefClick(e) {
   var name = span.dataset.defName;
   if (!name) return;
   span.classList.add("def-searching");
-  chrome.runtime.sendMessage({
-    type: "FIND_DEFINITION",
-    tabId: tabId,
-    name: name,
-    excludeUrl: _currentUrl,
-  }, function(result) {
+
+  // Look up cross-file definition from the combined AST analysis
+  chrome.runtime.sendMessage({ type: "GET_CROSS_DEFS", tabId: tabId }, function(crossDefs) {
     span.classList.remove("def-searching");
-    if (result && result.sourceUrl) {
-      loadScript(result.sourceUrl, result.line || 0);
+    if (crossDefs && crossDefs[name] && crossDefs[name].sourceUrl) {
+      loadScript(crossDefs[name].sourceUrl, crossDefs[name].line || 0, name);
     }
   });
 }
@@ -867,11 +909,12 @@ focusBtnEl.addEventListener("click", function() {
 
 // ─── Main Load ───────────────────────────────────────────────────────────────
 
-function loadScript(scriptUrl, targetLine) {
+function loadScript(scriptUrl, targetLine, crossDefName) {
   _currentUrl = scriptUrl;
   _defMap = null;
   _refMap = null;
   _funcMap = null;
+  _propDefs = null;
   _allFuncRanges = null;
   _ast = null;
   _fullCode = null;
@@ -880,6 +923,7 @@ function loadScript(scriptUrl, targetLine) {
   _mappedFindings = null;
   _mappedTarget = null;
   _hasFocusableFindings = false;
+  _highlightTarget = !!crossDefName;
 
   // Update UI
   urlEl.textContent = scriptUrl;
@@ -962,6 +1006,22 @@ function loadScript(scriptUrl, targetLine) {
 
     // Build code graph (definitions + call references)
     buildCodeGraph(beautifiedCode);
+
+    // Cross-file: resolve definition line from AST propDefs instead of regex line
+    if (crossDefName && _propDefs) {
+      for (var pdKey in _propDefs) {
+        if (_propDefs[pdKey][crossDefName]) {
+          _mappedTarget = _propDefs[pdKey][crossDefName];
+          console.log("[viewer:loadScript] AST resolved '%s' via propDefs[%s] → beautified line %d", crossDefName, pdKey, _mappedTarget);
+          break;
+        }
+      }
+      // Fallback: check defMap (for top-level function/var/class definitions)
+      if (!_mappedTarget && _defMap && _defMap[crossDefName]) {
+        _mappedTarget = _defMap[crossDefName];
+        console.log("[viewer:loadScript] AST resolved '%s' via defMap → beautified line %d", crossDefName, _mappedTarget);
+      }
+    }
 
     // Build focused view
     var relevantRanges = buildRelevantRanges(_mappedFindings);

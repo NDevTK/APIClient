@@ -12,6 +12,12 @@ onmessage = function(e) {
   if (msg.type === "AST_ANALYZE") {
     try {
       var result = analyzeJSBundle(msg.code, msg.sourceUrl, msg.forceScript);
+      // Also build definition map for cross-file click-to-definition
+      try {
+        var graph = buildDefinitionMap(msg.code);
+        result.propDefs = graph.propDefs;
+        result.defMap = graph.defMap;
+      } catch (_) { /* definition map is optional — don't fail the analysis */ }
       response = { success: true, result: result };
     } catch (err) {
       response = { success: false, error: err.message, stack: err.stack };
