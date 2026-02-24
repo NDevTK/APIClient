@@ -820,8 +820,7 @@ function renderDataPanel() {
       const pageUrls = info.pageUrls || [];
       if (pageUrls.length) {
         html += `<div class="card-meta card-meta-dim">${pageUrls.length === 1 ? "Page" : "Pages"}: ${[...pageUrls].map((u) => {
-          var name = u.split("/").pop().split("?")[0] || u;
-          return `<span title="${esc(u)}">${esc(name)}</span>`;
+          return `<span title="${esc(u)}">${esc(_shortUrl(u))}</span>`;
         }).join(", ")}</div>`;
       }
       html += `</div>`;
@@ -852,7 +851,7 @@ function renderSecurityPanel() {
   var allItems = [];
   for (var fi = 0; fi < findings.length; fi++) {
     var f = findings[fi];
-    var srcLabel = f.sourceUrl ? (f.sourceUrl.split("/").pop().split("?")[0] || f.sourceUrl) : "(unknown)";
+    var srcLabel = f.sourceUrl ? _shortUrl(f.sourceUrl) : "(unknown)";
     for (var si = 0; si < (f.securitySinks || []).length; si++) {
       var s = f.securitySinks[si];
       allItems.push({ kind: "sink", item: s, sourceUrl: f.sourceUrl, srcLabel: srcLabel, pageUrl: f.pageUrl });
@@ -894,8 +893,7 @@ function renderSecurityPanel() {
       ? '<a href="' + esc(entry.sourceUrl) + '" target="_blank" title="' + esc(entry.sourceUrl) + '">' + esc(entry.srcLabel) + '</a>'
       : esc(entry.srcLabel);
     if (entry.pageUrl && entry.pageUrl !== entry.sourceUrl) {
-      var pageName = entry.pageUrl.split("/").pop().split("?")[0] || entry.pageUrl;
-      srcLink += ' <span class="page-context" title="' + esc(entry.pageUrl) + '">in ' + esc(pageName) + '</span>';
+      srcLink += ' <span class="page-context" title="' + esc(entry.pageUrl) + '">in ' + esc(_shortUrl(entry.pageUrl)) + '</span>';
     }
 
     if (entry.kind === "sink") {
@@ -2523,6 +2521,18 @@ async function importOpenApiSpec(e) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function _shortUrl(u) {
+  try {
+    var parsed = new URL(u);
+    var path = parsed.pathname.replace(/\/$/, "");
+    var file = path.split("/").pop();
+    if (!file) return parsed.hostname;
+    return parsed.hostname + "/" + file;
+  } catch (_) {
+    return u;
+  }
+}
 
 function esc(s) {
   if (s == null) return "";
