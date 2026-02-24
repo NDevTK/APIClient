@@ -641,16 +641,14 @@ function fixLineNumbers(remap) {
 // ─── Clickable Function Tokens ───────────────────────────────────────────────
 
 function attachDefinitionLinks() {
+  // 1. Link Prism .token.function spans (identifiers before parens)
   var tokens = codeEl.querySelectorAll("span.token.function");
-  console.log("[viewer:attachDefLinks] Total .token.function spans:", tokens.length);
-  console.log("[viewer:attachDefLinks] _defMap available:", !!_defMap, _defMap ? Object.keys(_defMap).length + " entries" : "null");
   var localCount = 0, crossCount = 0, missCount = 0;
   for (var i = 0; i < tokens.length; i++) {
     var span = tokens[i];
     var name = span.textContent;
     if (_defMap && _defMap[name]) {
       localCount++;
-      console.log("[viewer:attachDefLinks] LOCAL match: '%s' → line %d", name, _defMap[name]);
       span.classList.add("def-local");
       span.dataset.defLine = _defMap[name];
       span.addEventListener("click", onLocalDefClick);
@@ -663,7 +661,43 @@ function attachDefinitionLinks() {
       missCount++;
     }
   }
-  console.log("[viewer:attachDefLinks] Summary: %d local, %d cross, %d skipped", localCount, crossCount, missCount);
+
+  // 2. Scan text nodes for bare identifiers that match _defMap
+  //    (Prism doesn't wrap non-call references like `l` in `addEventListener("message", l)`)
+  if (_defMap) {
+    var defNames = Object.keys(_defMap);
+    if (defNames.length > 0) {
+      var pattern = new RegExp("\\b(" + defNames.map(function(n) { return n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|") + ")\\b", "g");
+      var walker = document.createTreeWalker(codeEl, NodeFilter.SHOW_TEXT, null);
+      var textNodes = [];
+      var node;
+      while ((node = walker.nextNode())) textNodes.push(node);
+      for (var ti = 0; ti < textNodes.length; ti++) {
+        var tNode = textNodes[ti];
+        // Skip if already inside a def-local/def-cross span
+        if (tNode.parentElement && (tNode.parentElement.classList.contains("def-local") || tNode.parentElement.classList.contains("def-cross"))) continue;
+        var text = tNode.nodeValue;
+        if (!pattern.test(text)) continue;
+        pattern.lastIndex = 0;
+        var frag = document.createDocumentFragment();
+        var lastIdx = 0;
+        var match;
+        while ((match = pattern.exec(text)) !== null) {
+          if (match.index > lastIdx) frag.appendChild(document.createTextNode(text.slice(lastIdx, match.index)));
+          var refSpan = document.createElement("span");
+          refSpan.className = "token function def-local";
+          refSpan.textContent = match[1];
+          refSpan.dataset.defLine = _defMap[match[1]];
+          refSpan.addEventListener("click", onLocalDefClick);
+          frag.appendChild(refSpan);
+          localCount++;
+          lastIdx = pattern.lastIndex;
+        }
+        if (lastIdx < text.length) frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+        if (lastIdx > 0) tNode.parentNode.replaceChild(frag, tNode);
+      }
+    }
+  }
 }
 
 function onLocalDefClick(e) {
