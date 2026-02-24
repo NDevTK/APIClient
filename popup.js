@@ -2526,9 +2526,8 @@ function _shortUrl(u) {
   try {
     var parsed = new URL(u);
     var path = parsed.pathname.replace(/\/$/, "");
-    var file = path.split("/").pop();
-    if (!file) return parsed.hostname;
-    return parsed.hostname + "/" + file;
+    if (!path) return parsed.hostname;
+    return parsed.hostname + path;
   } catch (_) {
     return u;
   }
