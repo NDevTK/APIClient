@@ -5,7 +5,7 @@ require('esbuild').build({
   format: 'iife',
   globalName: 'BabelBundle',
   platform: 'browser',
-  define: { 'process.env.BABEL_TYPES_8_BREAKING': 'false' },
+  define: { 'process.env.BABEL_TYPES_8_BREAKING': 'true' },
 }).then(() => {
   console.log('Babel bundle built successfully');
 }).catch((e) => {
