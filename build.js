@@ -1,7 +1,7 @@
 require('esbuild').build({
   entryPoints: ['lib/babel-bundle-entry.js'],
   bundle: true,
-  outfile: 'lib/babel-bundle.js',
+  outfile: 'extension/lib/babel-bundle.js',
   format: 'iife',
   globalName: 'BabelBundle',
   platform: 'browser',

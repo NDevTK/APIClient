@@ -5,7 +5,7 @@ var fs = require("fs");
 
 // ─── Load Libraries ─────────────────────────────────────────────────────────
 
-var protobufCode = fs.readFileSync(__dirname + "/lib/protobuf.js", "utf8");
+var protobufCode = fs.readFileSync(__dirname + "/extension/lib/protobuf.js", "utf8");
 new Function(protobufCode
   + "\nglobalThis.uint8ToBase64 = uint8ToBase64;"
   + "\nglobalThis.base64ToUint8 = base64ToUint8;"
@@ -28,7 +28,7 @@ new Function(protobufCode
   + "\nglobalThis.pbTag = pbTag;"
 )();
 
-var discoveryCode = fs.readFileSync(__dirname + "/lib/discovery.js", "utf8");
+var discoveryCode = fs.readFileSync(__dirname + "/extension/lib/discovery.js", "utf8");
 new Function(discoveryCode
   + "\nglobalThis.parseBatchExecuteRequest = parseBatchExecuteRequest;"
   + "\nglobalThis.parseBatchExecuteResponse = parseBatchExecuteResponse;"
@@ -55,7 +55,7 @@ new Function(discoveryCode
   + "\nglobalThis.resolveDiscoverySchema = resolveDiscoverySchema;"
 )();
 
-var statsCode = fs.readFileSync(__dirname + "/lib/stats.js", "utf8");
+var statsCode = fs.readFileSync(__dirname + "/extension/lib/stats.js", "utf8");
 new Function(statsCode
   + "\nglobalThis.createParamStats = createParamStats;"
   + "\nglobalThis.updateParamStats = updateParamStats;"
@@ -68,7 +68,7 @@ new Function(statsCode
   + "\nglobalThis.mergeParamStats = mergeParamStats;"
 )();
 
-var chainsCode = fs.readFileSync(__dirname + "/lib/chains.js", "utf8");
+var chainsCode = fs.readFileSync(__dirname + "/extension/lib/chains.js", "utf8");
 new Function(chainsCode
   + "\nglobalThis.createValueIndex = createValueIndex;"
   + "\nglobalThis.indexResponseValues = indexResponseValues;"

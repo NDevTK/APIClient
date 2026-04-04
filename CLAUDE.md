@@ -29,19 +29,19 @@ A Chrome Extension (MV3) for API discovery, protocol reverse-engineering (Protob
 
 | File | Role |
 |------|------|
-| `manifest.json` | MV3 manifest. Permissions: `storage`, `offscreen`. Host permissions: `<all_urls>`. |
-| `intercept.js` | Main-world content script. Wraps `fetch`/`XHR`/`WebSocket`/`EventSource`, captures request headers+body and response headers+body. Emits `__uasr_resp` CustomEvent. Single capture point for all network data. |
-| `content.js` | Isolated-world content script. DOM key/endpoint scanning, `PAGE_FETCH` relay for session-aware requests, `__uasr_resp` event relay to background. |
-| `background.js` | Service worker. Request interception, key extraction, schema learning, request export builder, OpenAPI export/import, session storage, message routing. |
-| `popup.js` | Popup controller. Tab rendering, service filter, cross-tab log filtering, replay, export (curl/fetch/Python/OpenAPI). |
-| `popup.html` | Popup markup. |
-| `popup.css` | Popup styles. |
-| `lib/discovery.js` | Protocol parsers (batchexecute, async chunked, gRPC-Web, GraphQL, SSE, NDJSON, multipart), OpenAPI bidirectional conversion. |
-| `lib/protobuf.js` | Protobuf wire-format codec, JSPB decoder, recursive base64 key scanning. |
-| `lib/req2proto.js` | Error-based schema probing engine. |
-| `lib/ast.js` | AST-based JS bundle analysis. Babel parser + traverse with scope-aware inter-procedural tracing. Extracts fetch call sites, proto field maps, enums, value constraints. Security code review: DOM XSS sinks, dangerous patterns (eval, postMessage, prototype pollution, open redirect), taint source tracking. |
-| `lib/sourcemap.js` | Source map recovery. Babel parser with TypeScript plugin extracts interfaces, enums, type aliases from original sources. |
-| `lib/babel-bundle.js` | Bundled Babel runtime (parser, traverse, types). Built by `node build.js` via esbuild. |
+| `extension/manifest.json` | MV3 manifest. Permissions: `storage`, `offscreen`. Host permissions: `<all_urls>`. |
+| `extension/intercept.js` | Main-world content script. Wraps `fetch`/`XHR`/`WebSocket`/`EventSource`, captures request headers+body and response headers+body. Emits `__uasr_resp` CustomEvent. Single capture point for all network data. |
+| `extension/content.js` | Isolated-world content script. DOM key/endpoint scanning, `PAGE_FETCH` relay for session-aware requests, `__uasr_resp` event relay to background. |
+| `extension/background.js` | Service worker. Request interception, key extraction, schema learning, request export builder, OpenAPI export/import, session storage, message routing. |
+| `extension/popup.js` | Popup controller. Tab rendering, service filter, cross-tab log filtering, replay, export (curl/fetch/Python/OpenAPI). |
+| `extension/popup.html` | Popup markup. |
+| `extension/popup.css` | Popup styles. |
+| `extension/lib/discovery.js` | Protocol parsers (batchexecute, async chunked, gRPC-Web, GraphQL, SSE, NDJSON, multipart), OpenAPI bidirectional conversion. |
+| `extension/lib/protobuf.js` | Protobuf wire-format codec, JSPB decoder, recursive base64 key scanning. |
+| `extension/lib/req2proto.js` | Error-based schema probing engine. |
+| `extension/lib/ast.js` | AST-based JS bundle analysis. Babel parser + traverse with scope-aware inter-procedural tracing. Extracts fetch call sites, proto field maps, enums, value constraints. Security code review: DOM XSS sinks, dangerous patterns (eval, postMessage, prototype pollution, open redirect), taint source tracking. |
+| `extension/lib/sourcemap.js` | Source map recovery. Babel parser with TypeScript plugin extracts interfaces, enums, type aliases from original sources. |
+| `extension/lib/babel-bundle.js` | Bundled Babel runtime (parser, traverse, types). Built by `node build.js` via esbuild. |
 | `build.js` | esbuild config for bundling Babel into an IIFE for the service worker. |
 
 ## AST Analysis Policy

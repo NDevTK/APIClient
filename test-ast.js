@@ -4,12 +4,12 @@
 var fs = require("fs");
 
 // Load Babel bundle (IIFE: var BabelBundle = (() => {...})())
-var babelCode = fs.readFileSync(__dirname + "/lib/babel-bundle.js", "utf8");
+var babelCode = fs.readFileSync(__dirname + "/extension/lib/babel-bundle.js", "utf8");
 // Replace var declaration with globalThis assignment so it's accessible outside new Function
 new Function(babelCode.replace(/^var BabelBundle/, "globalThis.BabelBundle"))();
 
 // Load ast.js (expects BabelBundle global; expose analyzeJSBundle + extractSourceMapUrl)
-var astCode = fs.readFileSync(__dirname + "/lib/ast.js", "utf8");
+var astCode = fs.readFileSync(__dirname + "/extension/lib/ast.js", "utf8");
 new Function(astCode + "\nglobalThis.analyzeJSBundle = analyzeJSBundle;\nglobalThis.extractSourceMapUrl = extractSourceMapUrl;\nglobalThis.buildDefinitionMap = buildDefinitionMap;")();
 
 var passed = 0, failed = 0, total = 0;
