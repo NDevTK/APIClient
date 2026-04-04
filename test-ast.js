@@ -3650,6 +3650,38 @@ test("self.location.assign(literal) → not flagged", `
   });
 });
 
+test("location.href = location.href (self-assignment reload) → not flagged", `
+  location.href = location.href;
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "redirect";
+  });
+});
+
+test("window.location.href = window.location.href → not flagged", `
+  window.location.href = window.location.href;
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "redirect";
+  });
+});
+
+test("document.location = document.location → not flagged", `
+  document.location = document.location;
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "redirect";
+  });
+});
+
+test("location.href = location.search (different property) → still flagged", `
+  location.href = location.search;
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href";
+  });
+});
+
 // -- Untested redirect assignment sinks --
 
 test("location.pathname = tainted → redirect detected", `

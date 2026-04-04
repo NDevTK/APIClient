@@ -110,6 +110,75 @@ function _decompressAST(ast) {
   }
 }
 
+// ─── HTML Script Extraction ─────────────────────────────────────────────────
+
+// Detect HTML and extract inline <script> blocks, matching background.js's
+// combined-code concatenation (joined with ";\n").  Findings for inline scripts
+// reference line numbers in that combined JS, so we must reproduce the same
+// text the AST analyzed.  Returns { code, htmlLineMap } where htmlLineMap maps
+// combined-JS line numbers → original HTML line numbers (null if not HTML).
+function extractScriptsFromHTML(rawCode) {
+  // Quick check: does this look like HTML?
+  var trimmed = rawCode.trimStart();
+  if (trimmed.charAt(0) !== "<") return null;
+  var lower = trimmed.substring(0, 100).toLowerCase();
+  if (!(lower.startsWith("<!doctype") || lower.startsWith("<html") || lower.startsWith("<head") || lower.startsWith("<body") || lower.includes("<script")))
+    return null;
+
+  // Extract <script> blocks (no src attribute = inline)
+  var scripts = [];
+  var re = /<script(?:\s[^>]*)?>|<\/script\s*>/gi;
+  var match;
+  var opens = [];  // stack of {index, hasSrc, lineStart}
+  while ((match = re.exec(rawCode)) !== null) {
+    var tag = match[0].toLowerCase();
+    if (tag.startsWith("</")) {
+      if (opens.length > 0) {
+        var open = opens.pop();
+        if (!open.hasSrc) {
+          var code = rawCode.substring(open.contentStart, match.index);
+          if (code.trim().length >= 10) {
+            scripts.push({ code: code, htmlLine: open.lineStart });
+          }
+        }
+      }
+    } else {
+      var hasSrc = /\ssrc\s*=/i.test(match[0]);
+      // Count newlines up to the content start to get the HTML line number
+      var contentStart = match.index + match[0].length;
+      var lineNum = 1;
+      for (var i = 0; i < contentStart; i++) {
+        if (rawCode.charCodeAt(i) === 10) lineNum++;
+      }
+      opens.push({ contentStart: contentStart, hasSrc: hasSrc, lineStart: lineNum });
+    }
+  }
+
+  if (scripts.length === 0) return null;
+
+  // Join with ";\n" (same as _analyzeCombinedScripts in background.js)
+  var combined = "";
+  var htmlLineMap = {}; // combinedLine → htmlLine
+  var combinedLine = 1;
+  for (var si = 0; si < scripts.length; si++) {
+    if (si > 0) { combined += ";\n"; combinedLine++; }
+    var htmlLine = scripts[si].htmlLine;
+    var scriptCode = scripts[si].code;
+    for (var ci = 0; ci < scriptCode.length; ci++) {
+      if (ci === 0 || scriptCode.charCodeAt(ci - 1) === 10) {
+        htmlLineMap[combinedLine] = htmlLine;
+      }
+      if (scriptCode.charCodeAt(ci) === 10) {
+        combinedLine++;
+        htmlLine++;
+      }
+    }
+    combined += scriptCode;
+  }
+
+  return { code: combined, htmlLineMap: htmlLineMap };
+}
+
 // ─── Beautify ────────────────────────────────────────────────────────────────
 
 function beautify(rawCode) {
@@ -429,6 +498,10 @@ function buildRelevantRanges(mappedFindings) {
       if (best.calls) {
         best.calls.forEach(function(c) { seedNames.add(c); });
       }
+    } else {
+      // Top-level finding (not inside any function) — include the finding line
+      // directly so it appears in the focused view.
+      seedRanges.push([fLine, fLine]);
     }
   }
 
@@ -986,6 +1059,14 @@ function loadScript(scriptUrl, targetLine, crossDefName) {
       if (highCount > 0) {
         statusEl.innerHTML += ' <span class="badge badge-high">' + highCount + ' high</span>';
       }
+    }
+
+    // If the source is HTML, extract inline <script> blocks to match the
+    // combined JS that background.js analyzed (findings reference those lines).
+    var htmlExtract = extractScriptsFromHTML(rawCode);
+    if (htmlExtract) {
+      rawCode = htmlExtract.code;
+      console.log("[viewer:loadScript] Extracted %d chars of inline JS from HTML", rawCode.length);
     }
 
     // Beautify
