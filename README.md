@@ -172,7 +172,3 @@ GlobalStore uses IndexedDB (inaccessible to content scripts) instead of `chrome.
 node test-ast.js    # 560 tests — AST engine
 node test-lib.js    # 180 tests — protobuf, discovery, stats, chains
 ```
-
-## License
-
-MIT
