@@ -819,7 +819,8 @@ function renderDataPanel() {
       }
       const pageUrls = info.pageUrls || [];
       if (pageUrls.length) {
-        html += `<div class="card-meta card-meta-dim">${pageUrls.length === 1 ? "Page" : "Pages"}: ${[...pageUrls].map((u) => {
+        html += `<div class="card-meta">${pageUrls.length === 1 ? "Page" : "Pages"}: ${[...pageUrls].map((u) => {
+          if (/^https?:\/\//i.test(u)) return `<a href="${esc(u)}" target="_blank" title="${esc(u)}">${esc(_shortUrl(u))}</a>`;
           return `<span title="${esc(u)}">${esc(_shortUrl(u))}</span>`;
         }).join(", ")}</div>`;
       }
@@ -889,7 +890,7 @@ function renderSecurityPanel() {
         '"><code class="language-javascript">' + esc(item.codeContext) + '</code></pre>'
       : '';
 
-    var srcLink = entry.sourceUrl
+    var srcLink = entry.sourceUrl && /^https?:\/\//i.test(entry.sourceUrl)
       ? '<a href="' + esc(entry.sourceUrl) + '" target="_blank" title="' + esc(entry.sourceUrl) + '">' + esc(entry.srcLabel) + '</a>'
       : esc(entry.srcLabel);
     if (entry.pageUrl && entry.pageUrl !== entry.sourceUrl) {
