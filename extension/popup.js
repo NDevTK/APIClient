@@ -36,7 +36,12 @@ let currentSchema = null;
 let currentRequestUrl = "";
 let currentRequestMethod = "POST";
 let currentContentType = "application/json";
-let currentBodyMode = "form"; // "form" | "raw" | "graphql" | "msgconsole"
+let currentBodyMode = "form"; // "form" | "raw" | "graphql" | "multipart" | "msgconsole"
+// mpState: when currentBodyMode === "multipart", tracks one editor per part.
+// Each part: { partNumber, method, path, headers{}, contentType, bodyEditor }
+// where bodyEditor is { kind: "json" | "graphql" | "form-urlencoded" | "raw", value, meta? }.
+// Reassembled into a multipart/mixed envelope on Send.
+let mpState = { boundary: null, parts: [] };
 let currentChannelId = null;
 let currentChannelType = null; // "WEBSOCKET" | "POSTMESSAGE" | "MSGCHANNEL"
 let currentTargetOrigin = null; // For postMessage send
@@ -90,6 +95,8 @@ function setBodyMode(mode) {
     mode === "raw" ? "block" : "none";
   document.getElementById("send-graphql-fields").style.display =
     mode === "graphql" ? "block" : "none";
+  const mpEl = document.getElementById("send-multipart-fields");
+  if (mpEl) mpEl.style.display = mode === "multipart" ? "block" : "none";
   document.getElementById("send-ws-console").style.display =
     isConsole ? "block" : "none";
   document.getElementById("send-frame-row").style.display =
@@ -223,6 +230,303 @@ function gqlClear() {
   gqlRenderAll();
 }
 
+// ─── Multipart Editor ────────────────────────────────────────────────────────
+//
+// Renders one contextual editor per sub-part of a captured multipart request.
+// Each part's body editor is chosen by its sub-Content-Type:
+//   application/json            → JSON textarea with parse/format feedback
+//   application/graphql OR body parses as GraphQL → GraphQL composer snippet
+//   application/x-www-form-urlencoded → URL-encoded key/value list
+//   anything else               → raw textarea, labeled with the sub-CT so
+//                                  the user knows what they're editing
+//
+// Reassembly happens on Send via buildExportRequest with body.mode="multipart".
+// Structure is preserved: N input parts → N output parts, each encoded per
+// its chosen editor. No information is silently lost.
+
+function mpClassifyPartBody(ct, bodyText) {
+  const lct = (ct || "").toLowerCase();
+  if (lct.includes("graphql") || lct.includes("application/json")) {
+    // Distinguish JSON-GraphQL from plain JSON by probing for op structure.
+    if (lct.includes("graphql")) return "graphql";
+    const parsed = typeof parseGraphQLRequest === "function" ? parseGraphQLRequest(bodyText) : null;
+    if (parsed && parsed.operations && parsed.operations.length) return "graphql";
+    return "json";
+  }
+  if (lct.includes("application/x-www-form-urlencoded")) return "form-urlencoded";
+  return "raw";
+}
+
+function mpLoadFromCapturedRequest(req) {
+  // req.rawBodyB64 is the captured multipart envelope; req.contentType/mimeType
+  // has the boundary. parseMultipartBatchRequest splits and returns per-part
+  // { method, path, headers, body, contentId } — but that parser is tuned for
+  // the Google batch "application/http" subtype. For generic multipart we
+  // fall back to a simple split on the boundary.
+  const ct = req.contentType || req.mimeType || "";
+  if (!req.rawBodyB64) return false;
+  let text;
+  try { text = new TextDecoder().decode(base64ToUint8(req.rawBodyB64)); }
+  catch (_) { return false; }
+  const bm = ct.match(/boundary=["']?([^"';\s]+)/i);
+  if (!bm) return false;
+  const boundary = bm[1];
+
+  // Try the batch-aware parser first.
+  const batchParts = (typeof parseMultipartBatchRequest === "function")
+    ? parseMultipartBatchRequest(text, ct)
+    : null;
+
+  const parts = [];
+  if (batchParts && batchParts.length) {
+    for (let i = 0; i < batchParts.length; i++) {
+      const bp = batchParts[i];
+      const partCt = bp.headers["content-type"] || "application/octet-stream";
+      const kind = mpClassifyPartBody(partCt, bp.body);
+      parts.push({
+        partNumber: i + 1,
+        method: bp.method,
+        path: bp.path,
+        contentType: partCt,
+        extraHeaders: { ...bp.headers },
+        contentId: bp.contentId || null,
+        editor: { kind, value: bp.body, meta: null },
+      });
+    }
+  } else {
+    // Generic multipart split: each section between "--boundary" markers.
+    const raw = text.split("--" + boundary);
+    let idx = 0;
+    for (const segment of raw) {
+      const t = segment.trim();
+      if (!t || t === "--") continue;
+      // Header/body split on blank line.
+      const sep = t.search(/\r?\n\r?\n/);
+      const headerBlock = sep >= 0 ? t.slice(0, sep) : t;
+      const bodyBlock = sep >= 0 ? t.slice(sep).replace(/^[\r\n]+/, "") : "";
+      const headers = {};
+      for (const line of headerBlock.split(/\r?\n/)) {
+        const ci = line.indexOf(":");
+        if (ci > 0) headers[line.slice(0, ci).trim().toLowerCase()] = line.slice(ci + 1).trim();
+      }
+      const partCt = headers["content-type"] || "application/octet-stream";
+      const kind = mpClassifyPartBody(partCt, bodyBlock);
+      parts.push({
+        partNumber: ++idx,
+        method: null,
+        path: null,
+        contentType: partCt,
+        extraHeaders: headers,
+        contentId: null,
+        editor: { kind, value: bodyBlock, meta: null },
+      });
+    }
+  }
+
+  mpState = { boundary, parts };
+  mpRenderAll();
+  return parts.length > 0;
+}
+
+function mpRenderAll() {
+  const container = document.getElementById("mp-parts-container");
+  const info = document.getElementById("mp-boundary-info");
+  if (!container) return;
+  container.innerHTML = "";
+  if (info) info.textContent = mpState.parts.length + " part" + (mpState.parts.length === 1 ? "" : "s") + " · boundary=" + (mpState.boundary || "auto");
+
+  for (let i = 0; i < mpState.parts.length; i++) {
+    container.appendChild(mpRenderPart(i));
+  }
+}
+
+function mpRenderPart(index) {
+  const p = mpState.parts[index];
+  const card = document.createElement("div");
+  card.className = "mp-part-card";
+
+  // Heading: part number, method+path if any, remove button
+  const head = document.createElement("div");
+  head.className = "mp-part-head";
+  head.innerHTML =
+    '<span class="mp-part-num">Part ' + esc(String(p.partNumber)) + '</span>' +
+    (p.method ? ' <span class="badge">' + esc(p.method) + ' ' + esc(p.path || "") + '</span>' : '') +
+    ' <span class="mp-part-kind">[' + esc(p.editor.kind) + ']</span>';
+  const del = document.createElement("button");
+  del.className = "btn-small mp-part-del";
+  del.type = "button";
+  del.textContent = "Remove";
+  del.onclick = () => { mpState.parts.splice(index, 1); mpRenderAll(); };
+  head.appendChild(del);
+  card.appendChild(head);
+
+  // Sub Content-Type input (editable — lets user switch editor kind)
+  const ctRow = document.createElement("div");
+  ctRow.className = "mp-ct-row";
+  ctRow.innerHTML = '<label>Content-Type</label>';
+  const ctInput = document.createElement("input");
+  ctInput.type = "text";
+  ctInput.value = p.contentType;
+  ctInput.oninput = () => {
+    p.contentType = ctInput.value;
+    p.editor.kind = mpClassifyPartBody(p.contentType, p.editor.value);
+    // Re-render just this card to refresh the kind label.
+    card.replaceWith(mpRenderPart(index));
+  };
+  ctRow.appendChild(ctInput);
+  card.appendChild(ctRow);
+
+  // Body editor for this part.
+  const editorWrap = document.createElement("div");
+  editorWrap.className = "mp-editor-" + p.editor.kind;
+  if (p.editor.kind === "json") {
+    editorWrap.appendChild(mpJsonEditor(p));
+  } else if (p.editor.kind === "graphql") {
+    editorWrap.appendChild(mpGraphqlEditor(p));
+  } else if (p.editor.kind === "form-urlencoded") {
+    editorWrap.appendChild(mpFormUrlEncodedEditor(p));
+  } else {
+    editorWrap.appendChild(mpRawEditor(p));
+  }
+  card.appendChild(editorWrap);
+
+  return card;
+}
+
+function mpJsonEditor(part) {
+  const wrap = document.createElement("div");
+  const ta = document.createElement("textarea");
+  ta.className = "mp-json-editor";
+  ta.rows = 6;
+  // Pretty-print on load if valid JSON.
+  try {
+    const obj = JSON.parse(part.editor.value || "null");
+    ta.value = JSON.stringify(obj, null, 2);
+  } catch (_) { ta.value = part.editor.value || ""; }
+  const status = document.createElement("span");
+  status.className = "mp-json-status";
+  status.textContent = "valid JSON";
+  ta.oninput = () => {
+    part.editor.value = ta.value;
+    try { JSON.parse(ta.value); status.textContent = "valid JSON"; status.classList.remove("mp-invalid"); }
+    catch (e) { status.textContent = "invalid: " + e.message; status.classList.add("mp-invalid"); }
+  };
+  wrap.appendChild(ta);
+  wrap.appendChild(status);
+  return wrap;
+}
+
+function mpGraphqlEditor(part) {
+  const wrap = document.createElement("div");
+  // Parse current value as GraphQL envelope to split query/variables/operationName.
+  let parsed = null;
+  try { parsed = parseGraphQLRequest(part.editor.value || "{}"); } catch (_) {}
+  const op = parsed?.operations?.[0] || { query: part.editor.value || "", variables: null, operationName: null };
+
+  function field(label, value, rows) {
+    const row = document.createElement("div");
+    row.className = "mp-gql-field";
+    const lab = document.createElement("label"); lab.textContent = label;
+    const ta = document.createElement("textarea");
+    ta.rows = rows || 3;
+    ta.value = value || "";
+    ta.dataset.mpGqlField = label;
+    ta.oninput = () => serialize();
+    row.appendChild(lab); row.appendChild(ta);
+    return row;
+  }
+  const qRow = field("query", op.query, 6);
+  const vRow = field("variables (JSON)", op.variables ? JSON.stringify(op.variables, null, 2) : "", 4);
+  const nRow = field("operationName", op.operationName || "", 1);
+  wrap.appendChild(qRow); wrap.appendChild(vRow); wrap.appendChild(nRow);
+
+  function serialize() {
+    const q = wrap.querySelector("[data-mp-gql-field='query']").value;
+    const v = wrap.querySelector("[data-mp-gql-field='variables (JSON)']").value;
+    const n = wrap.querySelector("[data-mp-gql-field='operationName']").value;
+    const out = { query: q };
+    if (v.trim()) {
+      try { out.variables = JSON.parse(v); }
+      catch (_) { /* leave raw; user sees red status elsewhere */ out.variables = v; }
+    }
+    if (n.trim()) out.operationName = n;
+    part.editor.value = JSON.stringify(out, null, 2);
+  }
+  serialize(); // initial sync
+  return wrap;
+}
+
+function mpFormUrlEncodedEditor(part) {
+  const wrap = document.createElement("div");
+  wrap.className = "mp-fue-editor";
+  const params = new URLSearchParams(part.editor.value || "");
+  function serialize() {
+    const out = new URLSearchParams();
+    for (const row of wrap.querySelectorAll(".mp-fue-row")) {
+      const k = row.querySelector("[data-mp-fue=key]").value;
+      const v = row.querySelector("[data-mp-fue=value]").value;
+      if (k) out.append(k, v);
+    }
+    part.editor.value = out.toString();
+  }
+  function addRow(k, v) {
+    const row = document.createElement("div"); row.className = "mp-fue-row";
+    const ki = document.createElement("input"); ki.dataset.mpFue = "key"; ki.value = k;
+    const vi = document.createElement("input"); vi.dataset.mpFue = "value"; vi.value = v;
+    const rm = document.createElement("button"); rm.type = "button"; rm.className = "btn-small"; rm.textContent = "×";
+    rm.onclick = () => { row.remove(); serialize(); };
+    ki.oninput = serialize; vi.oninput = serialize;
+    row.appendChild(ki); row.appendChild(vi); row.appendChild(rm);
+    wrap.appendChild(row);
+  }
+  for (const [k, v] of params) addRow(k, v);
+  const addBtn = document.createElement("button");
+  addBtn.type = "button"; addBtn.className = "btn-small"; addBtn.textContent = "+ Pair";
+  addBtn.onclick = () => { addRow("", ""); };
+  wrap.appendChild(addBtn);
+  return wrap;
+}
+
+function mpRawEditor(part) {
+  const wrap = document.createElement("div");
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = "No typed editor for Content-Type " + part.contentType + "; editing as raw text.";
+  const ta = document.createElement("textarea");
+  ta.rows = 6;
+  ta.value = part.editor.value || "";
+  ta.oninput = () => { part.editor.value = ta.value; };
+  wrap.appendChild(hint);
+  wrap.appendChild(ta);
+  return wrap;
+}
+
+// Serialize mpState into the payload buildExportRequest expects for
+// body.mode = "multipart". The background.js handler encodes the envelope
+// with a fresh boundary.
+function mpCollectBody() {
+  return {
+    mode: "multipart",
+    parts: mpState.parts.map(p => ({
+      contentType: p.contentType,
+      method: p.method,
+      path: p.path,
+      extraHeaders: p.extraHeaders || {},
+      contentId: p.contentId,
+      body: p.editor.value,
+      kind: p.editor.kind,
+    })),
+  };
+}
+
+function mpClear() {
+  mpState = { boundary: null, parts: [] };
+  const container = document.getElementById("mp-parts-container");
+  if (container) container.innerHTML = "";
+  const info = document.getElementById("mp-boundary-info");
+  if (info) info.textContent = "";
+}
+
 // ─── Init ────────────────────────────────────────────────────────────────────
 
 let renderTimer = null;
@@ -281,6 +585,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     gqlState.activeIdx = gqlState.ops.length - 1;
     gqlRenderAll();
   });
+  const btnAddPart = document.getElementById("btn-mp-add-part");
+  if (btnAddPart) {
+    btnAddPart.addEventListener("click", () => {
+      const num = (mpState.parts[mpState.parts.length - 1]?.partNumber || 0) + 1;
+      mpState.parts.push({
+        partNumber: num,
+        method: null,
+        path: null,
+        contentType: "application/json",
+        extraHeaders: {},
+        contentId: null,
+        editor: { kind: "json", value: "{}", meta: null },
+      });
+      mpRenderAll();
+    });
+  }
 
   // Frame selector
   document.getElementById("send-frame-select").addEventListener("change", (e) => {
@@ -443,6 +763,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         operations: gqlCollectAllOps(),
         batched: gqlState.batched,
       };
+    } else if (bodyMode === "multipart") {
+      body = mpCollectBody();
     } else {
       body = {
         mode: "raw",
@@ -1936,6 +2258,8 @@ async function sendRequest() {
       batched: gqlState.batched,
       frameId: currentReplayRequest?.frameId,
     };
+  } else if (bodyMode === "multipart") {
+    body = { ...mpCollectBody(), frameId: currentReplayRequest?.frameId };
   } else {
     body = {
       mode: "raw",
@@ -3460,7 +3784,21 @@ async function replayRequest(reqId, sourceTabId) {
 
   // Auto-determine body mode
   let gqlDetected = false;
-  if (isGraphQLUrl(req.url) && req.rawBodyB64) {
+  let mpDetected = false;
+
+  // Multipart has precedence when the captured body's content-type is
+  // multipart/*. Each sub-part gets its own contextual editor; the flat
+  // form builder can only express one part so we must bypass it.
+  const reqCt = req.contentType || req.mimeType || "";
+  if (reqCt.toLowerCase().startsWith("multipart/") && req.rawBodyB64) {
+    if (mpLoadFromCapturedRequest(req)) {
+      mpDetected = true;
+      setBodyMode("multipart");
+      gqlClear();
+    }
+  }
+
+  if (!mpDetected && isGraphQLUrl(req.url) && req.rawBodyB64) {
     try {
       const bytes = base64ToUint8(req.rawBodyB64);
       const text = new TextDecoder().decode(bytes);
@@ -3472,10 +3810,11 @@ async function replayRequest(reqId, sourceTabId) {
       }
     } catch (_) {}
   }
-  if (!gqlDetected) {
+  if (!gqlDetected && !mpDetected) {
     // Form mode if schema was loaded, otherwise raw
     setBodyMode(currentSchema ? "form" : "raw");
     gqlClear();
+    mpClear();
   }
   // Add headers (filtering out Content-Type which is auto-determined)
   const headersList = document.getElementById("send-headers-list");

@@ -1055,9 +1055,17 @@ function loadScript(scriptUrl, targetLine, crossDefName) {
     statusEl.textContent = rawCode.length.toLocaleString() + " chars";
     if (findingLines.length > 0) {
       var highCount = findingLines.filter(function(f) { return f.severity === "high"; }).length;
-      statusEl.innerHTML += ' <span class="badge badge-count">' + findingLines.length + ' findings</span>';
+      statusEl.appendChild(document.createTextNode(" "));
+      var countBadge = document.createElement("span");
+      countBadge.className = "badge badge-count";
+      countBadge.textContent = findingLines.length + " findings";
+      statusEl.appendChild(countBadge);
       if (highCount > 0) {
-        statusEl.innerHTML += ' <span class="badge badge-high">' + highCount + ' high</span>';
+        statusEl.appendChild(document.createTextNode(" "));
+        var highBadge = document.createElement("span");
+        highBadge.className = "badge badge-high";
+        highBadge.textContent = highCount + " high";
+        statusEl.appendChild(highBadge);
       }
     }
 

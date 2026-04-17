@@ -9,18 +9,24 @@
 
   const EVENT_NAME = "__uasr_resp";
 
+  // Decide whether to read a body as bytes (base64 for transport) vs. text.
+  // background.js later uses body magic bytes to classify asset vs API, so
+  // media/fonts/archives must reach the service worker uncorrupted — reading
+  // them via Response.text() decodes as UTF-8 and destroys non-ASCII bytes.
   function isBinary(ct) {
     if (!ct) return false;
-    const l = ct.toLowerCase();
+    const l = ct.toLowerCase().split(";")[0].trim();
+    // Explicit text families — decode as text.
+    if (l.startsWith("text/")) return false;
     if (l.includes("json")) return false;
-    if (l.includes("text")) return false;
-    if (l.includes("javascript")) return false;
-    return (
-      l.includes("protobuf") ||
-      l.includes("proto") ||
-      l.includes("grpc") ||
-      l.includes("octet-stream")
-    );
+    if (l.includes("xml")) return false;
+    if (l.includes("javascript") || l.includes("ecmascript")) return false;
+    if (l === "application/x-www-form-urlencoded") return false;
+    if (l === "application/x-component") return false;
+    // Anything not known to be text — capture as bytes. Covers image/video/
+    // audio/font/model/*, application/pdf|zip|gzip|wasm|octet-stream|x-protobuf|
+    // grpc[-web]*, and unknown types.
+    return true;
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────

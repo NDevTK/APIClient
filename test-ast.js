@@ -3319,21 +3319,36 @@ test("Taint preserved through decodeURI wrapper", `
   });
 });
 
-test("innerHTML via location.origin taint source", `
+// location.origin / .hostname / .protocol are SERVER-set (scheme+host+port
+// of the currently-served page), not attacker-controlled. They must not
+// promote a sink to HIGH severity.
+test("location.origin is NOT user-controlled (server-set)", `
   var origin = location.origin;
   document.body.innerHTML = "<a href='" + origin + "'>Link</a>";
 `, function(r) {
-  return r.securitySinks.some(function(s) {
-    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high" && s.source === "location.origin";
+  // innerHTML sink may still fire as MEDIUM/LOW but MUST NOT be HIGH with
+  // location.origin recorded as user-controlled source.
+  return !r.securitySinks.some(function(s) {
+    return s.sink === "innerHTML" && s.severity === "high" && s.source === "location.origin";
   });
 });
 
-test("location.hostname as taint source → redirect via assign", `
+test("location.hostname is NOT user-controlled", `
   var host = location.hostname;
   location.assign("https://" + host + "/callback");
 `, function(r) {
-  return r.securitySinks.some(function(s) {
-    return s.type === "redirect" && s.sink === "location.assign" && s.severity === "high" && s.source === "location.hostname";
+  return !r.securitySinks.some(function(s) {
+    return s.severity === "high" && s.source === "location.hostname";
+  });
+});
+
+test("new URL(x, location.origin) for same-origin fetch is safe", `
+  var e = new URL(this.paginationSrc, window.location.origin);
+  fetch(e);
+`, function(r) {
+  // Must not flag as HIGH request-forgery just because location.origin is in the chain.
+  return !r.securitySinks.some(function(s) {
+    return s.type === "request-forgery" && s.severity === "high" && (s.source === "location.origin" || s.source === "location.hostname");
   });
 });
 
@@ -3702,14 +3717,30 @@ test("location.search = tainted → redirect detected", `
   });
 });
 
-// -- Untested taint source --
-
-test("location.protocol as taint source → innerHTML", `
+test("location.protocol is NOT user-controlled", `
   var proto = location.protocol;
   document.body.innerHTML = proto;
 `, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.severity === "high" && s.source === "location.protocol";
+  });
+});
+
+test("location.hash IS user-controlled (attacker picks the link)", `
+  var h = location.hash;
+  document.body.innerHTML = h;
+`, function(r) {
   return r.securitySinks.some(function(s) {
-    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high" && s.source === "location.protocol";
+    return s.type === "xss" && s.severity === "high" && s.source === "location.hash";
+  });
+});
+
+test("location.search IS user-controlled", `
+  var s = location.search;
+  document.body.innerHTML = s;
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" && s.source === "location.search";
   });
 });
 

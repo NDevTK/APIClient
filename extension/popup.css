@@ -1484,3 +1484,33 @@ details summary:hover {
 .f-name[data-indent="6"] { padding-left: 96px; }
 .f-name[data-indent="7"] { padding-left: 112px; }
 .f-name[data-indent="8"] { padding-left: 128px; }
+
+/* Multipart editor */
+#send-multipart-fields { display: flex; flex-direction: column; gap: 8px; }
+.mp-header { display: flex; justify-content: space-between; align-items: baseline; }
+.mp-boundary-info { font-size: 11px; color: #8b949e; font-family: monospace; }
+.mp-part-card {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px;
+  background: #161b22;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mp-part-head { display: flex; align-items: center; gap: 8px; }
+.mp-part-num { font-weight: 600; color: #c9d1d9; }
+.mp-part-kind { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+.mp-part-del { margin-left: auto; }
+.mp-ct-row { display: flex; gap: 6px; align-items: center; }
+.mp-ct-row input { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 4px 6px; border-radius: 4px; font-family: monospace; font-size: 12px; }
+.mp-json-editor { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; font-family: monospace; font-size: 12px; padding: 6px; border-radius: 4px; }
+.mp-json-status { font-size: 11px; color: #3fb950; }
+.mp-json-status.mp-invalid { color: #f85149; }
+.mp-gql-field { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.mp-gql-field label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+.mp-gql-field textarea { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; font-family: monospace; font-size: 12px; padding: 6px; border-radius: 4px; }
+.mp-fue-editor { display: flex; flex-direction: column; gap: 4px; }
+.mp-fue-row { display: flex; gap: 4px; }
+.mp-fue-row input { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 4px 6px; border-radius: 4px; font-size: 12px; font-family: monospace; }
+.mp-editor-raw textarea { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; font-family: monospace; font-size: 12px; padding: 6px; border-radius: 4px; }

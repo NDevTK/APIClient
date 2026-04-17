@@ -53,6 +53,9 @@ new Function(discoveryCode
   + "\nglobalThis.buildDiscoveryUrls = buildDiscoveryUrls;"
   + "\nglobalThis.findMethodById = findMethodById;"
   + "\nglobalThis.resolveDiscoverySchema = resolveDiscoverySchema;"
+  + "\nglobalThis.sniffBinaryMagic = sniffBinaryMagic;"
+  + "\nglobalThis.classifyResponseAsset = classifyResponseAsset;"
+  + "\nglobalThis.deriveGraphQLMethodName = deriveGraphQLMethodName;"
 )();
 
 var statsCode = fs.readFileSync(__dirname + "/extension/lib/stats.js", "utf8");
@@ -1681,6 +1684,247 @@ test("mergeChainLinks — initializes empty structure from null", function() {
   var result = mergeChainLinks(null, []);
   return Array.isArray(result.incoming) && Array.isArray(result.outgoing) &&
     result.incoming.length === 0 && result.outgoing.length === 0;
+});
+
+// ─── Content-based response classification ─────────────────────────────────
+//
+// Locks in the behaviour of classifyResponseAsset / sniffBinaryMagic so that
+// binary-media detection remains purely content-driven. No URL extension or
+// content-type enters these tests.
+
+function _b64(bytes) { return uint8ToBase64(new Uint8Array(bytes)); }
+
+test("sniffBinaryMagic — PNG header", function() {
+  return sniffBinaryMagic(new Uint8Array([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])) === "image/png";
+});
+test("sniffBinaryMagic — JPEG header", function() {
+  return sniffBinaryMagic(new Uint8Array([0xff,0xd8,0xff,0xe0])) === "image/jpeg";
+});
+test("sniffBinaryMagic — WEBP in RIFF", function() {
+  return sniffBinaryMagic(new Uint8Array([0x52,0x49,0x46,0x46,0x24,0x00,0x00,0x00,0x57,0x45,0x42,0x50])) === "image/webp";
+});
+test("sniffBinaryMagic — WOFF2", function() {
+  return sniffBinaryMagic(new Uint8Array([0x77,0x4f,0x46,0x32,0x00,0x00])) === "font/woff2";
+});
+test("sniffBinaryMagic — glTF binary (.glb)", function() {
+  return sniffBinaryMagic(new Uint8Array([0x67,0x6c,0x54,0x46,0x02,0x00,0x00,0x00])) === "model/gltf-binary";
+});
+test("sniffBinaryMagic — MP4 ftyp box", function() {
+  return sniffBinaryMagic(new Uint8Array([0x00,0x00,0x00,0x20,0x66,0x74,0x79,0x70])) === "video/mp4";
+});
+test("sniffBinaryMagic — WASM magic", function() {
+  return sniffBinaryMagic(new Uint8Array([0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00])) === "application/wasm";
+});
+test("sniffBinaryMagic — gzip", function() {
+  return sniffBinaryMagic(new Uint8Array([0x1f,0x8b,0x08,0x00])) === "application/gzip";
+});
+test("sniffBinaryMagic — zip", function() {
+  return sniffBinaryMagic(new Uint8Array([0x50,0x4b,0x03,0x04])) === "application/zip";
+});
+test("sniffBinaryMagic — MP3 ID3v2", function() {
+  return sniffBinaryMagic(new Uint8Array([0x49,0x44,0x33,0x04])) === "audio/mpeg";
+});
+test("sniffBinaryMagic — JSON opening brace is NOT binary", function() {
+  return sniffBinaryMagic(new Uint8Array([0x7b,0x22,0x61,0x22])) === null;
+});
+test("sniffBinaryMagic — HTML doctype is NOT binary", function() {
+  return sniffBinaryMagic(new Uint8Array([0x3c,0x21,0x44,0x4f,0x43,0x54])) === null;
+});
+
+test("classifyResponseAsset — empty body → empty (fire-and-forget API)", function() {
+  var r = classifyResponseAsset(null, false);
+  return r.kind === "empty" && r.label === null;
+});
+test("classifyResponseAsset — empty string → empty", function() {
+  var r = classifyResponseAsset("", false);
+  return r.kind === "empty";
+});
+test("classifyResponseAsset — base64 PNG → asset image/png", function() {
+  var r = classifyResponseAsset(_b64([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]), true);
+  return r.kind === "asset" && r.label === "image/png";
+});
+test("classifyResponseAsset — base64 JPEG → asset image/jpeg", function() {
+  var r = classifyResponseAsset(_b64([0xff,0xd8,0xff,0xe0,0x00,0x10]), true);
+  return r.kind === "asset" && r.label === "image/jpeg";
+});
+test("classifyResponseAsset — base64 glTF → asset model/gltf-binary", function() {
+  var r = classifyResponseAsset(_b64([0x67,0x6c,0x54,0x46,0x02,0x00,0x00,0x00]), true);
+  return r.kind === "asset" && r.label === "model/gltf-binary";
+});
+test("classifyResponseAsset — base64 WOFF2 → asset font/woff2", function() {
+  var r = classifyResponseAsset(_b64([0x77,0x4f,0x46,0x32,0x00]), true);
+  return r.kind === "asset" && r.label === "font/woff2";
+});
+test("classifyResponseAsset — base64 protobuf-like (no magic) → api binary-structured", function() {
+  // Protobuf-style varint field tag (field=1, wire=2, length=5) + 5 bytes
+  var r = classifyResponseAsset(_b64([0x0a,0x05,0x68,0x65,0x6c,0x6c,0x6f]), true);
+  return r.kind === "api" && r.label === "binary-structured";
+});
+test("classifyResponseAsset — JSON string → api", function() {
+  var r = classifyResponseAsset('{"id":42,"name":"ok"}', false);
+  return r.kind === "api" && r.label === null;
+});
+test("classifyResponseAsset — HTML fragment → api (may carry dynamic data)", function() {
+  var r = classifyResponseAsset('<faceplate-loader src="..."></faceplate-loader>', false);
+  return r.kind === "api";
+});
+test("classifyResponseAsset — RSC stream → api", function() {
+  var r = classifyResponseAsset('1:"$Sreact.fragment"\n2:I[247862,["/chunk.js"],"default"]', false);
+  return r.kind === "api";
+});
+test("classifyResponseAsset — text body whose LEADING bytes happen to be PNG → asset", function() {
+  // Misconfigured CDN: response served with text content-type but body really is PNG.
+  // Synthesized by charCode'ing the PNG magic bytes into a string.
+  var s = String.fromCharCode(0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00);
+  var r = classifyResponseAsset(s, false);
+  return r.kind === "asset" && r.label === "image/png";
+});
+test("classifyResponseAsset — URL path ending in .png but body is JSON → api (not asset)", function() {
+  // User's core case: an API endpoint whose URL has a static-looking extension
+  // but which returns JSON metadata. The classifier must NOT be fooled — it
+  // only looks at bytes, not URL.
+  var r = classifyResponseAsset('{"user":42,"avatarUrl":"https://..."}', false);
+  return r.kind === "api";
+});
+test("classifyResponseAsset — .glb URL returning text JSON → still api", function() {
+  var r = classifyResponseAsset('{"scene":{"nodes":[]}}', false);
+  return r.kind === "api";
+});
+
+// ─── GraphQL method naming ─────────────────────────────────────────────────
+//
+// Locks in the operationName-first name derivation so every op on a
+// /graphql endpoint gets its own method signature instead of collapsing
+// under a URL-derived "root" or "graphql" name.
+
+test("deriveGraphQLMethodName — explicit operationName wins", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "query GetUser($id: ID!) { user(id: $id) { name } }",
+    operationName: "GetUser",
+    variables: { id: "42" }
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "GetUser";
+});
+
+test("deriveGraphQLMethodName — named query without operationName field", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "query ListPosts { posts { id title } }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "ListPosts";
+});
+
+test("deriveGraphQLMethodName — named mutation", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "mutation CreateComment($input: CommentInput!) { createComment(input: $input) { id } }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "CreateComment";
+});
+
+test("deriveGraphQLMethodName — named subscription", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "subscription OnMessage { messageAdded { id body } }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "OnMessage";
+});
+
+test("deriveGraphQLMethodName — anonymous query falls back to root field", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "query { viewer { id name } }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "viewer";
+});
+
+test("deriveGraphQLMethodName — shorthand anonymous query", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "{ me { id } }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "me";
+});
+
+test("deriveGraphQLMethodName — aliased root field uses the underlying field name", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "query { myAlias: getUser(id: 1) { name } }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "getUser";
+});
+
+test("deriveGraphQLMethodName — query with leading comment", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "# fetch the logged-in user\nquery Me { me { id } }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "Me";
+});
+
+test("deriveGraphQLMethodName — query with directives on operation", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "query FetchPosts @cached(ttl: 60) { posts { id } }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "FetchPosts";
+});
+
+test("deriveGraphQLMethodName — rejects operationName with spaces (server would 400)", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    query: "query { foo }",
+    operationName: "not valid"
+  })).operations[0];
+  // Should fall back to root field, not the invalid name.
+  return deriveGraphQLMethodName(op) === "foo";
+});
+
+test("deriveGraphQLMethodName — reddit-style nested query extracts op", function() {
+  // Similar shape to what www.reddit.com/svc/shreddit/graphql sends.
+  var op = parseGraphQLRequest(JSON.stringify({
+    operationName: "FeedPostsByPopular",
+    variables: { after: null, pageSize: 3 },
+    query: "query FeedPostsByPopular($after: String, $pageSize: Int!) { popularFeed(after: $after, first: $pageSize) { edges { node { id } } } }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "FeedPostsByPopular";
+});
+
+test("deriveGraphQLMethodName — null input returns null", function() {
+  return deriveGraphQLMethodName(null) === null;
+});
+
+test("deriveGraphQLMethodName — Reddit-style persisted envelope {operation: Name}", function() {
+  // Observed on reddit's /svc/shreddit/graphql: no query text, their server
+  // maps `operation` to a stored doc. `operation` IS the canonical name.
+  var op = parseGraphQLRequest(JSON.stringify({
+    operation: "CreateCaptchaToken",
+    variables: { input: { token: "..." } }
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "CreateCaptchaToken";
+});
+
+test("deriveGraphQLMethodName — Apollo APQ (persistedQuery, operationName wins)", function() {
+  var parsed = parseGraphQLRequest(JSON.stringify({
+    operationName: "GetHomepage",
+    variables: { locale: "en" },
+    extensions: { persistedQuery: { version: 1, sha256Hash: "abc123def456" } }
+  }));
+  return parsed && parsed.operations.length === 1 &&
+    deriveGraphQLMethodName(parsed.operations[0]) === "GetHomepage";
+});
+
+test("deriveGraphQLMethodName — explicit operationName beats operation field", function() {
+  // If both are present, the spec-compliant operationName wins.
+  var op = parseGraphQLRequest(JSON.stringify({
+    operationName: "OfficialName",
+    operation: "LegacyName",
+    query: "query OfficialName { foo }"
+  })).operations[0];
+  return deriveGraphQLMethodName(op) === "OfficialName";
+});
+
+test("deriveGraphQLMethodName — Reddit-style with invalid operation name falls through", function() {
+  var op = parseGraphQLRequest(JSON.stringify({
+    operation: "Not A Valid Name",
+    variables: {}
+  }));
+  // Should have returned null from _parseGqlOp, meaning operations parse returns null
+  // but hasRedditOp fires because op is a string. It passes _parseGqlOp,
+  // but _isValidGqlName will fail → we check that we don't return the garbage name.
+  if (!op || !op.operations.length) return true; // acceptable
+  return deriveGraphQLMethodName(op.operations[0]) !== "Not A Valid Name";
 });
 
 // ─── Summary ────────────────────────────────────────────────────────────────

@@ -6277,12 +6277,27 @@ var _sourceLines = null; // lazily split from _sourceCode
 // Each pattern: { obj: base object name, props: { propName: 1, ... } }
 // Roots: these object names must be unbound globals (verified via scope).
 // "window" and "self" prefixes are normalized (stripped) before matching.
+// Taint sources the attacker can influence:
+// - location.hash/search/href/pathname: attacker controls these by choosing
+//   the link the victim clicks or the URL they navigate to.
+// - location.hostname/origin/protocol: server-controlled (scheme+host+port is
+//   fixed per page). Treating them as user-controlled produced widespread
+//   FPs (e.g. `new URL(x, location.origin)` for same-origin fetch).
+// - document.title/domain: writable by page JS, but their source is the page
+//   itself — not directly an attacker vector unless the title has already
+//   been set from a tainted source (which the tracer handles transitively).
 var _TAINT_PATTERNS = [
-  { obj: "location", props: { "hash":1, "search":1, "href":1, "pathname":1, "hostname":1, "origin":1, "protocol":1 } },
+  { obj: "location", props: { "hash":1, "search":1, "href":1, "pathname":1 } },
   { obj: "document", props: { "referrer":1, "URL":1, "documentURI":1, "baseURI":1, "URLUnencoded":1, "cookie":1, "domain":1, "title":1 } },
   { obj: "window", props: { "name":1, "location":1 } },
   { obj: "event", props: { "data":1 } },
 ];
+
+// Properties of `location` that are server-set and NOT attacker-controlled.
+// Static access to these (`location.origin`) must not be tainted, but
+// computed access (`location[x]`) is still suspicious because `x` may select
+// a tainted prop.
+var _LOCATION_SAFE_PROPS = { "origin":1, "hostname":1, "host":1, "protocol":1, "port":1, "ancestorOrigins":1 };
 
 // Scope-aware taint source classification using structural AST matching.
 // Replaces _describeNode() + _TAINT_SOURCES string lookup.
@@ -6452,10 +6467,20 @@ function _traceValueSourceInner(path, node) {
     if (taintMatch) {
       return { sourceType: "user-controlled", source: taintMatch, sourceLoc: nodeLoc };
     }
-    // Bare location object access (computed or any property) — still user-controlled
-    if (_t.isIdentifier(node.object, { name: "location" }) && !path.scope.getBinding("location")) {
-      return { sourceType: "user-controlled", source: "location." + (_t.isIdentifier(node.property) ? node.property.name : "*"), sourceLoc: nodeLoc };
+    // Static access to a known-safe location prop (origin/hostname/protocol)
+    // is server-controlled — treat as literal-ish so callers don't promote
+    // it to HIGH. Falls through to dynamic for anything else.
+    if (_t.isIdentifier(node.object, { name: "location" }) && !path.scope.getBinding("location") &&
+        _t.isIdentifier(node.property) && _LOCATION_SAFE_PROPS[node.property.name]) {
+      return { sourceType: "literal", source: null };
     }
+  }
+  // Computed location access: `location[x]` where x may select a tainted
+  // prop. Safest: classify dynamic; the sink severity will be MEDIUM, not
+  // HIGH, unless the computed key itself traces to user-controlled data.
+  if (_t.isMemberExpression(node) && node.computed &&
+      _t.isIdentifier(node.object, { name: "location" }) && !path.scope.getBinding("location")) {
+    return { sourceType: "dynamic", source: null };
   }
 
   // Object property access: cfg.redirectUrl → resolve to the property value in the initializer

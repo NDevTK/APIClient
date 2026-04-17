@@ -1,1 +1,4 @@
 node_modules/
+testing/profile/
+testing/reports/
+extension.crx

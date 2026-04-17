@@ -7,7 +7,12 @@
     "lib": "lib"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "harness": "node testing/harness.js",
+    "classify": "node testing/classify.js",
+    "codec": "node testing/suites/codec.js",
+    "replay": "node testing/suites/replay.js",
+    "ui": "node testing/suites/ui.js"
   },
   "repository": {
     "type": "git",
@@ -29,6 +34,7 @@
     "prismjs": "^1.30.0"
   },
   "devDependencies": {
-    "esbuild": "^0.27.3"
+    "esbuild": "^0.27.3",
+    "puppeteer": "^23.0.0"
   }
 }

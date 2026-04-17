@@ -1297,13 +1297,83 @@ function isNDJSON(contentType) {
  */
 function _parseGqlOp(obj) {
   if (!obj || typeof obj !== "object") return null;
-  if (!obj.query && !obj.mutation) return null;
+  // Standard GraphQL over HTTP: { query, operationName?, variables? }
+  // Apollo APQ (persisted query, no query sent): { operationName, extensions: { persistedQuery: { sha256Hash } } }
+  // Reddit-style persisted: { operation: "Name", variables, ... } (their `operation` field IS the name — server maps to stored doc)
+  var hasQuery = !!(obj.query || obj.mutation);
+  var hasPersisted = obj.extensions && obj.extensions.persistedQuery;
+  var hasRedditOp = typeof obj.operation === "string" && obj.operation.length > 0;
+  if (!hasQuery && !hasPersisted && !hasRedditOp) return null;
   return {
     query: obj.query || obj.mutation || "",
     variables: obj.variables || null,
     operationName: obj.operationName || null,
+    // Reddit-style persisted-operation name. Treated as an alternative
+    // source of truth in deriveGraphQLMethodName.
+    operation: hasRedditOp ? obj.operation : null,
     extensions: obj.extensions || null,
   };
+}
+
+// Resolve a method name from a parsed GraphQL operation.
+//
+// Preference order (most-specific wins):
+//   1. Explicit `operationName` field in the request JSON.
+//   2. Named operation declaration in the query text:
+//        `query Foo { ... }` / `mutation Foo { ... }` / `subscription Foo { ... }`
+//   3. First root field in an anonymous op: `{ getUser(id: 1) { ... } }` → getUser.
+//   4. `anonymous_<operationType>` fallback.
+//
+// Strips whitespace/comment noise before matching. This is a structural scan
+// over GraphQL syntax, not user JS, so string matching on the grammar is
+// safe here (GraphQL has a fixed, simple surface). An operationName with
+// spaces or other invalid identifier characters is rejected — a server
+// would reject it too, so we don't want to propagate it as a method name.
+function _stripGqlNoise(q) {
+  if (typeof q !== "string") return "";
+  // Strip # line comments and then collapse whitespace.
+  return q
+    .replace(/#[^\n]*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function _isValidGqlName(s) {
+  return typeof s === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+}
+function deriveGraphQLMethodName(op) {
+  if (!op) return null;
+  if (op.operationName && _isValidGqlName(op.operationName)) {
+    return op.operationName;
+  }
+  // Reddit-style persisted-operation envelope: `{operation: "Name", ...}`.
+  // Their shreddit backend maps the name to a stored GraphQL doc server-side,
+  // so the client never sends the query text. `operation` is still the
+  // canonical name we want to key methods under.
+  if (op.operation && _isValidGqlName(op.operation)) {
+    return op.operation;
+  }
+  var q = _stripGqlNoise(op.query);
+  if (!q) return null;
+  // Match `query|mutation|subscription <Name>` at the head of the document.
+  // The name is followed by either `(` (variables), `@` (directive), or `{`.
+  var m = q.match(/^(query|mutation|subscription)\s+([A-Za-z_][A-Za-z0-9_]*)\s*[({@]/);
+  if (m) return m[2];
+  // Anonymous operation — find the first selection in the top-level `{ ... }`.
+  // Skip a leading operation-type keyword (`query`, `mutation`, `subscription`)
+  // if present but unnamed.
+  var head = q.replace(/^(query|mutation|subscription)\s*/, "");
+  var braceIdx = head.indexOf("{");
+  if (braceIdx === -1) return null;
+  // Scan forward after the brace for the first identifier token.
+  var after = head.slice(braceIdx + 1).trim();
+  // Strip optional alias: `aliasName:` → ""
+  var aliasMatch = after.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*/);
+  if (aliasMatch) after = after.slice(aliasMatch[0].length).trim();
+  var firstMatch = after.match(/^([A-Za-z_][A-Za-z0-9_]*)/);
+  if (firstMatch) return firstMatch[1];
+  // Truly anonymous and no root field readable — stamp the operation type.
+  var opType = (q.match(/^(query|mutation|subscription)\b/) || [])[1];
+  return opType ? "anonymous_" + opType : null;
 }
 
 /**
@@ -1788,4 +1858,90 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
   walkResources(doc.resources, "");
 
   return spec;
+}
+
+// ─── Content-based asset classification ──────────────────────────────────────
+//
+// Decide whether a captured response body is binary media (image, video,
+// font, archive, 3d model, wasm) purely from magic bytes — no URL extension,
+// no content-type. An API endpoint that returns a PNG is still an API
+// (its URL/query/auth are meaningful); this classifier only decides whether
+// to attempt structured-schema extraction from the response body. Binary
+// media has no JSON/protobuf schema to learn, so we skip response parsing
+// and annotate the method entry with the detected media type.
+//
+// Nothing is hidden from the user — every captured response appears in the
+// log with its _assetKind / _assetLabel so a signed-URL photo endpoint,
+// avatar API, or CDN asset is all visible. The classifier just prevents the
+// extension from synthesizing a response schema from random bytes.
+//
+// Sniff magic bytes on a Uint8Array. Returns a MIME-like label or null.
+function sniffBinaryMagic(bytes) {
+  if (!bytes || bytes.length < 2) return null;
+  var b = bytes;
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length >= 6 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return "image/gif";
+  if (b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return "image/webp";
+  if (b.length >= 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return "application/pdf";
+  if (b.length >= 4 && b[0] === 0x77 && b[1] === 0x4f && b[2] === 0x46 && b[3] === 0x46) return "font/woff";
+  if (b.length >= 4 && b[0] === 0x77 && b[1] === 0x4f && b[2] === 0x46 && b[3] === 0x32) return "font/woff2";
+  if (b.length >= 4 && b[0] === 0x00 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) return "font/ttf";
+  if (b.length >= 4 && b[0] === 0x4f && b[1] === 0x54 && b[2] === 0x54 && b[3] === 0x4f) return "font/otf";
+  if (b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b) return "application/gzip";
+  if (b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04) return "application/zip";
+  if (b.length >= 4 && b[0] === 0x25 && b[1] === 0x21 && b[2] === 0x50 && b[3] === 0x53) return "application/postscript";
+  if (b.length >= 4 && b[0] === 0x00 && b[1] === 0x61 && b[2] === 0x73 && b[3] === 0x6d) return "application/wasm";
+  // MP4 / QuickTime: bytes 4..7 are "ftyp"
+  if (b.length >= 8 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return "video/mp4";
+  if (b.length >= 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "video/webm";
+  // glTF (.glb) — little-endian "glTF" magic
+  if (b.length >= 4 && b[0] === 0x67 && b[1] === 0x6c && b[2] === 0x54 && b[3] === 0x46) return "model/gltf-binary";
+  // RIFF container (wav/avi) — webp already matched above
+  if (b.length >= 4 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) return "application/octet-stream";
+  // ID3/MP3
+  if (b.length >= 3 && b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return "audio/mpeg";
+  // OGG
+  if (b.length >= 4 && b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return "audio/ogg";
+  return null;
+}
+
+// Classify the response body. Returns { kind, label }:
+//   "asset"   → binary media; skip RESPONSE-body schema extraction (request
+//                still learned as normal). label is the sniffed MIME.
+//   "empty"   → no body captured; learn as a fire-and-forget API (204-style).
+//   "api"     → structured or text body; learn normally.
+function classifyResponseAsset(responseBody, responseBase64) {
+  if (responseBody == null || responseBody === "") {
+    return { kind: "empty", label: null };
+  }
+  if (responseBase64) {
+    var bytes;
+    try { bytes = base64ToUint8(responseBody); }
+    catch (_) { return { kind: "api", label: null }; }
+    if (bytes.length === 0) return { kind: "empty", label: null };
+    var magic = sniffBinaryMagic(bytes);
+    if (magic) return { kind: "asset", label: magic };
+    // Base64 bytes with no magic match: could be protobuf, gRPC-Web, or any
+    // structured binary format. These have schemas; don't skip learning.
+    return { kind: "api", label: "binary-structured" };
+  }
+  // Text body. Still sniff — some servers send misleading content-types and
+  // intercept.js may capture a body that is actually binary (rare but real).
+  // Only sniff the head to stay cheap.
+  var probe = responseBody.length > 64 ? responseBody.slice(0, 64) : responseBody;
+  var textBytes = new Uint8Array(probe.length);
+  for (var i = 0; i < probe.length; i++) textBytes[i] = probe.charCodeAt(i) & 0xff;
+  var magicText = sniffBinaryMagic(textBytes);
+  if (magicText) return { kind: "asset", label: magicText };
+  return { kind: "api", label: null };
+}
+
+// Explicit self-binding for SW global scope — some extension loader configs
+// don't hoist late function declarations into `self` reliably; attach so
+// background.js can call them via importScripts.
+if (typeof self !== "undefined") {
+  self.sniffBinaryMagic = sniffBinaryMagic;
+  self.classifyResponseAsset = classifyResponseAsset;
+  self.deriveGraphQLMethodName = deriveGraphQLMethodName;
 }

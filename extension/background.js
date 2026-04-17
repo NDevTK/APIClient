@@ -120,85 +120,87 @@ const KEY_PATTERNS = [
 
 // ─── batchexecute Decoding ──────────────────────────────────────────────────
 
-function extractKeysFromText(tabId, text, sourceUrl, sourceContext, depth = 0) {
-  if (!text || depth > 3) return; // Prevent infinite recursion
+function extractKeysFromText(tabId, text, sourceUrl, sourceContext) {
+  if (!text) return;
   const tab = getTab(tabId);
   const url = sourceUrl ? new URL(sourceUrl) : null;
   const service = url ? extractInterfaceName(url) : "unknown";
 
-  // 1. Scan for direct key matches
-  for (const pattern of KEY_PATTERNS) {
-    pattern.re.lastIndex = 0;
-    let m;
-    while ((m = pattern.re.exec(text)) !== null) {
-      const key = m[1] || m[0];
-      if (key.length < 10) continue;
-
-      if (!tab.apiKeys.has(key)) {
-        tab.apiKeys.set(key, {
-          name: pattern.name,
-          origin: url ? url.origin : null,
-          referer: url ? url.href : null,
-          source: sourceContext || "network",
-          firstSeen: Date.now(),
-          lastSeen: Date.now(),
-          services: new Set(),
-          hosts: new Set(),
-          endpoints: new Set(),
-          pageUrls: new Set(),
-          requestCount: 0,
-        });
-      }
-
-      const keyData = tab.apiKeys.get(key);
-      keyData.lastSeen = Date.now();
-      if (url) {
-        keyData.services.add(service);
-        keyData.hosts.add(url.hostname);
-        keyData.endpoints.add(`${url.hostname}${url.pathname}`);
-      }
-      // Track which page this key was found on
-      const _keyMeta = _tabMeta.get(tabId);
-      if (_keyMeta && _keyMeta.url) keyData.pageUrls.add(_keyMeta.url);
-      if (!keyData.pageUrls) keyData.pageUrls = new Set();
-    }
-  }
-
-  // 2. Scan for base64 blobs that might contain hidden keys
-  // Heuristic: looking for strings 20-2000 chars that look like base64.
-  // Cap at 2000 to avoid decoding huge binary blobs (images, protobuf payloads).
-  // Also limit to first 50 matches per text to bound CPU time.
+  // Iterative BFS over nested base64 payloads. `visited` dedupes both the
+  // input text and every decoded printable string, so a cycle (same bytes
+  // reappearing at a deeper level) terminates without dropping new data.
+  const visited = new Set();
+  const queue = [{ text, context: sourceContext || "network" }];
   const B64_RE = /[a-zA-Z0-9+/]{20,2000}=*/g;
-  let b64m;
-  let b64Count = 0;
-  while ((b64m = B64_RE.exec(text)) !== null && b64Count < 50) {
-    b64Count++;
-    const candidate = b64m[0];
-    try {
-      // Don't try to decode if it's already a known key to avoid loops
-      if (tab.apiKeys.has(candidate)) continue;
 
-      // Ensure proper padding for atob
-      const padded =
-        candidate.length % 4 === 0
-          ? candidate
-          : candidate + "=".repeat(4 - (candidate.length % 4));
-      const decoded = atob(padded);
+  while (queue.length > 0) {
+    const { text: currentText, context } = queue.shift();
+    if (visited.has(currentText)) continue;
+    visited.add(currentText);
 
-      // Heuristic: If it looks like printable text or JSON, scan it recursively
-      // Filter out non-printable garbage to avoid regex hangs
-      const printable = decoded.replace(/[^\x20-\x7E\t\n\r]/g, "");
-      if (printable.length > 10) {
-        extractKeysFromText(
-          tabId,
-          printable,
-          sourceUrl,
-          sourceContext + " > b64",
-          depth + 1,
-        );
+    // 1. Scan for direct key matches
+    for (const pattern of KEY_PATTERNS) {
+      pattern.re.lastIndex = 0;
+      let m;
+      while ((m = pattern.re.exec(currentText)) !== null) {
+        const key = m[1] || m[0];
+        if (key.length < 10) continue;
+
+        if (!tab.apiKeys.has(key)) {
+          tab.apiKeys.set(key, {
+            name: pattern.name,
+            origin: url ? url.origin : null,
+            referer: url ? url.href : null,
+            source: context,
+            firstSeen: Date.now(),
+            lastSeen: Date.now(),
+            services: new Set(),
+            hosts: new Set(),
+            endpoints: new Set(),
+            pageUrls: new Set(),
+            requestCount: 0,
+          });
+        }
+
+        const keyData = tab.apiKeys.get(key);
+        keyData.lastSeen = Date.now();
+        if (url) {
+          keyData.services.add(service);
+          keyData.hosts.add(url.hostname);
+          keyData.endpoints.add(`${url.hostname}${url.pathname}`);
+        }
+        const _keyMeta = _tabMeta.get(tabId);
+        if (_keyMeta && _keyMeta.url) keyData.pageUrls.add(_keyMeta.url);
+        if (!keyData.pageUrls) keyData.pageUrls = new Set();
       }
-    } catch (e) {
-      // Not valid base64, ignore
+    }
+
+    // 2. Scan for base64 blobs that might contain hidden keys.
+    // Cap at 2000 chars to avoid decoding huge binary blobs (images, protobuf
+    // payloads). Limit to first 50 matches per text to bound CPU time.
+    B64_RE.lastIndex = 0;
+    let b64m;
+    let b64Count = 0;
+    while ((b64m = B64_RE.exec(currentText)) !== null && b64Count < 50) {
+      b64Count++;
+      const candidate = b64m[0];
+      try {
+        if (tab.apiKeys.has(candidate)) continue;
+
+        const padded =
+          candidate.length % 4 === 0
+            ? candidate
+            : candidate + "=".repeat(4 - (candidate.length % 4));
+        const decoded = atob(padded);
+
+        // Filter out non-printable garbage to avoid regex hangs
+        const printable = decoded.replace(/[^\x20-\x7E\t\n\r]/g, "");
+        if (printable.length > 10 && !visited.has(printable)) {
+          queue.push({ text: printable, context: context + " > b64" });
+        }
+      } catch (e) {
+        // Not valid base64, ignore
+      }
     }
   }
 }
@@ -774,7 +776,18 @@ function looksLikeDynamicSegment(s) {
   return false;
 }
 
-function calculateMethodMetadata(urlObj, interfaceName) {
+function calculateMethodMetadata(urlObj, interfaceName, hint) {
+  // Explicit hint (e.g. GraphQL operationName) takes precedence over URL.
+  // A GraphQL endpoint at /svc/shreddit/graphql serves dozens of distinct
+  // operations (GetUser, CreatePost, …). Without the hint every op would
+  // collapse to one URL-derived name; with the hint each gets its own
+  // method entry keyed by operationName.
+  if (hint && typeof hint === "string" && hint.length > 0) {
+    return {
+      methodName: hint,
+      methodId: `${interfaceName.replace(/\//g, ".")}.${hint}`,
+    };
+  }
   // batchexecute: use first rpcid from URL param (individual calls registered by learnFromRequest)
   if (urlObj.pathname.includes("batchexecute")) {
     const rpcids = urlObj.searchParams.get("rpcids") || "batch";
@@ -854,7 +867,23 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
   const doc = docEntry.doc;
   if (!doc.resources.learned) doc.resources.learned = { methods: {} };
 
-  const { methodName: baseMethodName } = calculateMethodMetadata(url, interfaceName);
+  // GraphQL: method name = operationName (or first root field). Every op on
+  // a /graphql endpoint is its own method entry. Detect by parsing the
+  // request body — we don't rely on URL containing "graphql" alone.
+  let _nameHint = null;
+  if (entry.rawBodyB64) {
+    try {
+      const _bodyText = new TextDecoder().decode(base64ToUint8(entry.rawBodyB64));
+      const _gql = parseGraphQLRequest(_bodyText);
+      if (_gql && _gql.operations && _gql.operations.length > 0) {
+        // Batched: name from first op; other ops registered separately would
+        // need splitting at the call site — left as one method for now.
+        _nameHint = deriveGraphQLMethodName(_gql.operations[0]);
+      }
+    } catch (_) {}
+  }
+
+  const { methodName: baseMethodName } = calculateMethodMetadata(url, interfaceName, _nameHint);
   const qualifiedName = method.toLowerCase() + "_" + baseMethodName;
 
   // If this method was already probed with richer schema, update it there instead
@@ -2705,8 +2734,11 @@ async function handleResponseBody(tabId, msg, frameId) {
   if (url.hash.includes("_uasr_send")) return;
   if (url.hash.includes("_internal_probe")) return;
 
-  // Filter static assets fetched via fetch() (SVG icons, fonts, etc.)
-  if (/\.(css|png|jpe?g|gif|svg|ico|woff2?|ttf|eot|mp[34]|webm|webp)(\?|$)/i.test(url.pathname)) return;
+  // Static-asset filtering is now CONTENT-based (see classifyResponseAsset
+  // below). URL extensions do not decide API-vs-asset here — an API endpoint
+  // at /users/42/avatar.png that returns JSON metadata is still an API, and
+  // a dynamic endpoint like /models/duck.glb returning a binary 3D model is
+  // still an asset. The body's magic bytes are the source of truth.
 
   // Filter telemetry/tracking noise
   const noisePaths = ["/gen_204", "/client_204", "/jserror", "/ulog", "/log", "/error", "/collect"];
@@ -2792,11 +2824,58 @@ async function handleResponseBody(tabId, msg, frameId) {
     if (textBody) extractKeysFromText(tabId, textBody, msg.url, "response_body");
   }
 
+  // Classify the captured response purely by magic bytes (no URL extension,
+  // no content-type). Three buckets result:
+  //   structured API → full learning (schema, methods, discovery probe)
+  //   image API     → learn URL + request body + auth; skip response schema;
+  //                    create method entry (user can inspect/replay)
+  //   boring asset  → log + key-extract + endpoint tracking ONLY; no method
+  //                    entry, no discovery probe, no response schema
+  //
+  // "Boring" = static asset with zero dynamic signals. Any one of (query
+  // string, auth header, request body, non-GET) promotes it to image API.
+  // Keeps a signed-URL photo or avatar-generation endpoint visible as an
+  // API while preventing 124 synthetic "methods" for HLS video segments
+  // or a hash-busted CDN .glb file polluting the discovery doc.
+  //
+  // Nothing is ever hidden from the log — every request, including boring
+  // CDN fetches, is captured and surfaced to the user. The bucket only
+  // decides how much schema to synthesize around it.
+  const _assetClass = classifyResponseAsset(msg.body, msg.base64Encoded);
+  entry._assetKind = _assetClass.kind;     // "asset" | "empty" | "api"
+  entry._assetLabel = _assetClass.label;   // e.g. "image/png" when asset
+  const _isAsset = _assetClass.kind === "asset";
+  const _isBoringFetch = _isAsset &&
+    msg.method === "GET" &&
+    !url.search &&
+    !rawBodyB64 &&
+    !authorization &&
+    !cookie &&
+    !apiKey;
+  entry._boring = _isBoringFetch;
+
   // Snapshot discovery status before learnFromRequest (which creates a virtual doc)
   const preLearnDiscovery = tab.discoveryDocs.get(service);
 
-  // Learn from request (schema extraction)
-  learnFromRequest(tabId, service, entry, headerMap);
+  // Learn from request — skipped only for "boring" fetches. Image APIs
+  // (any dynamic signal present) still learn URL + request body + auth so
+  // they can be replayed and inspected.
+  if (!_isBoringFetch) {
+    learnFromRequest(tabId, service, entry, headerMap);
+
+    // If the response was binary media (and it's a real endpoint), annotate
+    // the method entry with the detected media type so the consumer knows
+    // not to expect a JSON/protobuf response schema.
+    if (_isAsset && entry.methodId) {
+      const _mid = entry.methodId;
+      const _methodName = _mid.slice(_mid.lastIndexOf(".") + 1);
+      const _methods = tab.discoveryDocs.get(service)?.doc?.resources?.learned?.methods;
+      if (_methods && _methods[_methodName]) {
+        _methods[_methodName]._responseKind = "asset";
+        _methods[_methodName]._responseLabel = _assetClass.label;
+      }
+    }
+  }
   mergeToGlobal(tab);
 
   // Track which pages/origins this service has been used from
@@ -2867,8 +2946,8 @@ async function handleResponseBody(tabId, msg, frameId) {
     } catch (_) {}
   }
 
-  // Protobuf probing trigger
-  if (isProtobuf && msg.method === "POST") {
+  // Protobuf probing trigger — skip for boring asset fetches.
+  if (!_isBoringFetch && isProtobuf && msg.method === "POST") {
     const discoveryStatus = tab.discoveryDocs.get(service);
     const doc = discoveryStatus?.doc;
     const match = doc ? findDiscoveryMethod(doc, url.pathname, msg.method) : null;
@@ -2881,10 +2960,11 @@ async function handleResponseBody(tabId, msg, frameId) {
     }
   }
 
-  // Automatic background discovery (use pre-learn snapshot to avoid virtual doc blocking)
+  // Automatic background discovery — skip for boring fetches. Probing
+  // /.well-known/openapi.json on a CDN is wasted traffic.
   const notFoundCooldown = preLearnDiscovery?.status === "not_found" &&
     preLearnDiscovery._failedAt && (Date.now() - preLearnDiscovery._failedAt < 300000);
-  if (!notFoundCooldown && (!preLearnDiscovery || preLearnDiscovery.status === "not_found")) {
+  if (!_isBoringFetch && !notFoundCooldown && (!preLearnDiscovery || preLearnDiscovery.status === "not_found")) {
     const discoveryStatus = tab.discoveryDocs.get(service);
     if (discoveryStatus) {
       discoveryStatus.status = "pending";
@@ -2917,8 +2997,8 @@ async function handleResponseBody(tabId, msg, frameId) {
   tab.requestLog.unshift(entry);
   if (tab.requestLog.length > 50) tab.requestLog.pop();
 
-  // Learn from response
-  if (entry.responseBody) {
+  // Learn from response — skip for static assets.
+  if (entry.responseBody && !_isAsset) {
     learnFromResponse(tabId, service, entry);
   }
 
@@ -4839,7 +4919,36 @@ async function buildExportRequest(tabId, msg) {
       return docEntry.doc.resources?.learned?.methods?.[mName];
     })();
 
-    if (_exportBatchMethod?._batchPart && msg.body.mode === "form") {
+    if (msg.body.mode === "multipart" && Array.isArray(msg.body.parts)) {
+      // Generic multipart reassembly: N editable parts → multipart envelope
+      // with a fresh boundary. Each part carries its own Content-Type chosen
+      // by the user in the per-part editor. No data is dropped even when
+      // sub-parts use different formats (JSON, GraphQL, form-urlencoded,
+      // raw) — the contextual editor produced the body string already.
+      const boundary = "uasr_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+      const sections = msg.body.parts.map((p) => {
+        const h = ["Content-Type: " + (p.contentType || "application/octet-stream")];
+        if (p.contentId) h.push("Content-ID: <" + p.contentId + ">");
+        if (p.extraHeaders) {
+          for (const [hk, hv] of Object.entries(p.extraHeaders)) {
+            const lk = hk.toLowerCase();
+            if (lk === "content-type" || lk === "content-id") continue;
+            h.push(hk + ": " + hv);
+          }
+        }
+        // If the part represents an embedded HTTP sub-request (Google batch
+        // pattern: `application/http` parts), keep the embedded request line.
+        // Otherwise the part body is raw and we just attach it.
+        let sectionBody = p.body || "";
+        if ((p.contentType || "").toLowerCase().startsWith("application/http") && p.method && p.path) {
+          sectionBody = p.method + " " + p.path + " HTTP/1.1\r\n" +
+            "Content-Type: application/json\r\n\r\n" + sectionBody;
+        }
+        return h.join("\r\n") + "\r\n\r\n" + sectionBody;
+      });
+      body = "--" + boundary + "\r\n" + sections.join("\r\n--" + boundary + "\r\n") + "\r\n--" + boundary + "--";
+      headers["Content-Type"] = "multipart/mixed; boundary=" + boundary;
+    } else if (_exportBatchMethod?._batchPart && msg.body.mode === "form") {
       const fields = msg.body.formData?.fields || [];
       const jsonBody = JSON.stringify(encodeFormToJson(fields));
       const partPath = _exportBatchMethod.path;
