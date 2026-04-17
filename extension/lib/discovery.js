@@ -411,15 +411,18 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
     const pathParams = pathDef.parameters || [];
 
     for (const [method, opDef] of Object.entries(pathDef)) {
+      // OpenAPI's spec-defined verbs: get/put/post/delete/options/head/patch/trace.
+      // The previous restriction to 5 silently dropped HEAD/OPTIONS/TRACE
+      // methods on import, causing method count drift on roundtrip.
       if (
-        !["get", "post", "put", "delete", "patch"].includes(
+        !["get", "post", "put", "delete", "patch", "head", "options", "trace"].includes(
           method.toLowerCase(),
         )
       ) {
         continue;
       }
 
-      const methodName =
+      let methodName =
         opDef.operationId ||
         `${method.toLowerCase()}_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
 
@@ -432,10 +435,26 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
       if (!doc.resources[resourceName]) {
         doc.resources[resourceName] = { methods: {} };
       }
+      // Two ops can share an operationId but differ by HTTP verb (e.g. a
+      // probed POST and learned GET against the same /path). Qualify with
+      // the verb when a name collision would otherwise drop an entry.
+      if (doc.resources[resourceName].methods[methodName]) {
+        methodName = method.toLowerCase() + "_" + methodName;
+      }
 
+      // If the export added an x-operation discriminator to disambiguate
+      // multiple ops on the same (path, verb), prefer x-original-path so
+      // the resulting discovery doc keeps the real URL path.
+      let realPath;
+      if (opDef["x-original-path"]) {
+        realPath = opDef["x-original-path"];
+      } else {
+        // Strip any `?x-operation=…` synthetic suffix from the path.
+        realPath = path.replace(/[?&]x-operation=[^&]*/g, "").replace(/\?$/, "");
+      }
       const m = {
         id: methodName,
-        path: path.startsWith("/") ? path.substring(1) : path,
+        path: realPath.startsWith("/") ? realPath.substring(1) : realPath,
         httpMethod: method.toUpperCase(),
         description: opDef.description || opDef.summary || "",
         parameters: {},
@@ -1449,7 +1468,21 @@ function parseGraphQLResponse(bodyText) {
  * @returns {boolean}
  */
 function isGraphQLUrl(url) {
-  return /graphql/i.test(url);
+  if (!url) return false;
+  // Path/host tokens that real-world GraphQL endpoints actually use.
+  // Observed during the harness audit:
+  //   /graphql, /api/graphql, /svc/shreddit/graphql (reddit), /dml/graphql (booking)
+  //   gql-fed.reddit.com (hostname uses `gql-` prefix with no "graphql")
+  //   shopify, github etc. tend to use /graphql explicitly.
+  if (/graphql/i.test(url)) return true;
+  try {
+    var u = new URL(url);
+    // Hostname-level indicators.
+    if (/\bgql(-|\.|$)/i.test(u.hostname)) return true;
+    // Path-level indicators beyond plain "graphql".
+    if (/\/gql(\/|\?|$)/i.test(u.pathname)) return true;
+  } catch (_) {}
+  return false;
 }
 
 // ─── Multipart Batch Response Parser ────────────────────────────────────────
@@ -1765,10 +1798,22 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
     if (!resources) return;
     for (const [rName, resource] of Object.entries(resources)) {
       if (resource.methods) {
-        for (const [, method] of Object.entries(resource.methods)) {
-          const path = "/" + (method.path || "").replace(/^\/?/, "");
+        for (const [methodName, method] of Object.entries(resource.methods)) {
+          const basePath = "/" + (method.path || "").replace(/^\/?/, "");
           const httpMethod = (method.httpMethod || "POST").toLowerCase();
 
+          // OpenAPI 3.x allows only one operation per (path, verb). Multiple
+          // GraphQL operations share the same POST /graphql path, as do
+          // many RPC-style endpoints (batchexecute, gRPC-Web). Synthesize a
+          // unique path-level discriminator so every learned method gets
+          // its own OpenAPI entry. Readers that don't care about the
+          // discriminator still see the real path via `x-original-path`.
+          let path = basePath;
+          const existing = spec.paths[path] && spec.paths[path][httpMethod];
+          if (existing && existing.operationId !== method.id) {
+            // Collision — suffix with the method's logical name.
+            path = basePath + (basePath.includes("?") ? "&" : "?") + "x-operation=" + encodeURIComponent(methodName);
+          }
           if (!spec.paths[path]) spec.paths[path] = {};
 
           const operation = {
@@ -1846,6 +1891,10 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
 
           if (!operation.parameters.length) delete operation.parameters;
 
+          // Preserve the original path so importers can roundtrip back
+          // without the x-operation discriminator.
+          if (path !== basePath) operation["x-original-path"] = basePath;
+
           spec.paths[path][httpMethod] = operation;
         }
       }
@@ -1911,6 +1960,31 @@ function sniffBinaryMagic(bytes) {
 //                still learned as normal). label is the sniffed MIME.
 //   "empty"   → no body captured; learn as a fire-and-forget API (204-style).
 //   "api"     → structured or text body; learn normally.
+// Text-format asset signatures (SVG, plain CSS from CDN, etc.). SVG in
+// particular is text but structurally a static image — icon CDNs like
+// fonts.gstatic.com serve thousands of per-icon GET responses that
+// shouldn't populate the discovery doc. Sniff on leading bytes only.
+function _sniffTextAssetSignature(text) {
+  if (!text) return null;
+  var head = text.trimStart();
+  var t = head.slice(0, 512);
+  var lower = t.toLowerCase();
+  // HLS playlist — literal "#EXTM3U" on the first line.
+  if (head.startsWith("#EXTM3U")) return "application/vnd.apple.mpegurl";
+  // WebVTT subtitles — "WEBVTT" header line.
+  if (head.startsWith("WEBVTT")) return "text/vtt";
+  if (lower.startsWith("<?xml") && /<svg\b/.test(lower)) return "image/svg+xml";
+  if (lower.startsWith("<svg")) return "image/svg+xml";
+  // DASH manifest — XML with <MPD as root element.
+  if (lower.startsWith("<?xml") && /<mpd\b/.test(lower)) return "application/dash+xml";
+  // SMIL / SRT — some streamers use these.
+  if (lower.startsWith("<?xml") && /<smil\b/.test(lower)) return "application/smil+xml";
+  // Plain CSS (CDN icon fonts often ship CSS with @font-face rules).
+  // Require a @-rule at the head to avoid matching HTML with inline <style>.
+  if (/^@(font-face|import|charset|media|keyframes|supports)\b/.test(t)) return "text/css";
+  return null;
+}
+
 function classifyResponseAsset(responseBody, responseBase64) {
   if (responseBody == null || responseBody === "") {
     return { kind: "empty", label: null };
@@ -1922,13 +1996,25 @@ function classifyResponseAsset(responseBody, responseBase64) {
     if (bytes.length === 0) return { kind: "empty", label: null };
     var magic = sniffBinaryMagic(bytes);
     if (magic) return { kind: "asset", label: magic };
+    // If the base64 decodes to printable text, run the text-asset sniff
+    // too — misconfigured CDNs occasionally serve SVG as application/
+    // octet-stream, triggering binary capture.
+    try {
+      var decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      if (decoded) {
+        var textMagic = _sniffTextAssetSignature(decoded);
+        if (textMagic) return { kind: "asset", label: textMagic };
+      }
+    } catch (_) {}
     // Base64 bytes with no magic match: could be protobuf, gRPC-Web, or any
     // structured binary format. These have schemas; don't skip learning.
     return { kind: "api", label: "binary-structured" };
   }
-  // Text body. Still sniff — some servers send misleading content-types and
-  // intercept.js may capture a body that is actually binary (rare but real).
-  // Only sniff the head to stay cheap.
+  // Text body. Sniff text-format assets first (SVG, pure CSS).
+  var textAsset = _sniffTextAssetSignature(responseBody);
+  if (textAsset) return { kind: "asset", label: textAsset };
+  // Also run the binary sniff on raw bytes — servers sometimes ship
+  // binary under a text content-type, which intercept captures as text.
   var probe = responseBody.length > 64 ? responseBody.slice(0, 64) : responseBody;
   var textBytes = new Uint8Array(probe.length);
   for (var i = 0; i < probe.length; i++) textBytes[i] = probe.charCodeAt(i) & 0xff;
@@ -1944,4 +2030,129 @@ if (typeof self !== "undefined") {
   self.sniffBinaryMagic = sniffBinaryMagic;
   self.classifyResponseAsset = classifyResponseAsset;
   self.deriveGraphQLMethodName = deriveGraphQLMethodName;
+}
+
+// ─── React Server Components (RSC) ─────────────────────────────────────────
+//
+// Next.js apps (Vercel, many modern SSR sites) stream RSC payloads with
+// Content-Type `text/x-component`. Format is line-framed:
+//
+//    <id>:<payload>\n
+//    <id>:<payload>\n
+//    ...
+//
+// Where <id> is a hex integer and <payload> is one of:
+//
+//    I[moduleId, [chunks], exportName]       — module import reference
+//    HL["href", ...]                          — preload link hint
+//    E[errorId, "message"]                    — error
+//    T<length>,<text>                         — text segment
+//    S<id>:<name>                             — symbol reference ($Sreact.fragment)
+//    <JSON>                                   — element tree or plain value
+//
+// Spec discussion: reactwg/server-components#5. Treated by the extension as
+// a first-class protocol so schemas are learned from the JSON-tree rows
+// instead of being garbage-merged as if the entire payload were one JSON
+// body.
+
+function isRSC(contentType) {
+  if (!contentType) return false;
+  const ct = contentType.toLowerCase().split(";")[0].trim();
+  return ct === "text/x-component" || ct === "application/x-component";
+}
+
+// Quick body-sniff for RSC. Used when the server sends a generic
+// Content-Type but the body clearly matches the line-framed shape.
+function looksLikeRSC(bodyText) {
+  if (!bodyText || typeof bodyText !== "string") return false;
+  const head = bodyText.slice(0, 512);
+  // First line must look like `<hex>:<payload>`.
+  const m = head.match(/^[0-9a-f]+:/);
+  if (!m) return false;
+  // Second line should also match (helps avoid JSON `{"1":...}` false positives).
+  const lines = head.split(/\r?\n/);
+  if (lines.length < 2) return false;
+  return /^[0-9a-f]+:/.test(lines[1]) || lines[1].length === 0;
+}
+
+// Parse one RSC row's payload into a typed record. Returns
+// { type, value, raw } where type is one of:
+//   "module" | "hint" | "error" | "text" | "symbol" | "json" | "unknown"
+function _parseRSCPayload(payload) {
+  if (typeof payload !== "string") return { type: "unknown", value: null, raw: payload };
+  const p = payload;
+  if (p.startsWith("I[")) {
+    // I[moduleId, [chunks], exportName]
+    try { return { type: "module", value: JSON.parse(p.slice(1)), raw: p }; }
+    catch (_) { return { type: "module", value: null, raw: p }; }
+  }
+  if (p.startsWith("HL[")) {
+    try { return { type: "hint", value: JSON.parse(p.slice(2)), raw: p }; }
+    catch (_) { return { type: "hint", value: null, raw: p }; }
+  }
+  if (p.startsWith("E[")) {
+    try { return { type: "error", value: JSON.parse(p.slice(1)), raw: p }; }
+    catch (_) { return { type: "error", value: null, raw: p }; }
+  }
+  if (p.length >= 2 && p[0] === "T" && /[0-9]/.test(p[1])) {
+    // T<hexLen>,<text>
+    const commaIdx = p.indexOf(",");
+    if (commaIdx > 0) {
+      const hex = p.slice(1, commaIdx);
+      if (/^[0-9a-f]+$/i.test(hex)) {
+        return { type: "text", value: p.slice(commaIdx + 1), raw: p, length: parseInt(hex, 16) };
+      }
+    }
+  }
+  if (p.startsWith("\"$S") && p.endsWith("\"")) {
+    return { type: "symbol", value: p.slice(3, -1), raw: p };
+  }
+  // Fall through: attempt JSON parse.
+  try {
+    const v = JSON.parse(p);
+    return { type: "json", value: v, raw: p };
+  } catch (_) {
+    return { type: "unknown", value: null, raw: p };
+  }
+}
+
+// Parse an RSC stream body.
+// Returns { rows: [{id, type, value, raw, length?}], modules: [{moduleId, chunks, exportName}] }
+// or null if the body isn't parseable as RSC.
+function parseRSC(bodyText) {
+  if (!bodyText || typeof bodyText !== "string") return null;
+  if (!isRSC("text/x-component") && !looksLikeRSC(bodyText)) {
+    // Caller will typically check isRSC(contentType) first; the second guard
+    // is there for callers that feed us sniffed bodies.
+  }
+  const lines = bodyText.split(/\r?\n/);
+  const rows = [];
+  const modules = [];
+  for (const line of lines) {
+    if (!line) continue;
+    const colon = line.indexOf(":");
+    if (colon <= 0) continue;
+    const idStr = line.slice(0, colon);
+    if (!/^[0-9a-f]+$/i.test(idStr)) continue;
+    const payload = line.slice(colon + 1);
+    const parsed = _parseRSCPayload(payload);
+    const row = { id: idStr, ...parsed };
+    rows.push(row);
+    if (parsed.type === "module" && Array.isArray(parsed.value)) {
+      // [moduleId, [chunks], exportName]
+      modules.push({
+        moduleId: parsed.value[0],
+        chunks: parsed.value[1] || [],
+        exportName: parsed.value[2] || null,
+      });
+    }
+  }
+  if (rows.length === 0) return null;
+  return { rows, modules };
+}
+
+if (typeof self !== "undefined") {
+  self.isRSC = isRSC;
+  self.looksLikeRSC = looksLikeRSC;
+  self.parseRSC = parseRSC;
 }

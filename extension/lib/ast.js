@@ -6587,6 +6587,15 @@ function _traceValueSourceInner(path, node) {
         if (_destrParent && _destrParent.node.init) {
           return _traceValueSource(_destrParent.get("init"));
         }
+        // Destructuring in for-of/for-in head: `for (const {data} of events)`
+        // — VariableDeclarator has no .init; the iterated expression lives
+        // on the enclosing ForOfStatement's .right.
+        if (_destrParent && !_destrParent.node.init) {
+          var _forOwner = _destrParent.parentPath && _destrParent.parentPath.parentPath;
+          if (_forOwner && (_t.isForOfStatement(_forOwner.node) || _t.isForInStatement(_forOwner.node))) {
+            return _traceValueSource(_forOwner.get("right"));
+          }
+        }
       }
       // Destructured array element: const [a, b] = arr → trace back to the array
       if (_t.isArrayPattern(binding.path.parent)) {
@@ -6596,6 +6605,16 @@ function _traceValueSourceInner(path, node) {
         }
         if (_arrDestrParent && _arrDestrParent.node.init) {
           return _traceValueSource(_arrDestrParent.get("init"));
+        }
+        // `for (const [k, v] of URLSearchParams)` — the key AND value
+        // inherit taint from the iterated source. The URLSearchParams
+        // itself was constructed from location.search (user-controlled),
+        // so both k and v must trace back to that source.
+        if (_arrDestrParent && !_arrDestrParent.node.init) {
+          var _forOwner2 = _arrDestrParent.parentPath && _arrDestrParent.parentPath.parentPath;
+          if (_forOwner2 && (_t.isForOfStatement(_forOwner2.node) || _t.isForInStatement(_forOwner2.node))) {
+            return _traceValueSource(_forOwner2.get("right"));
+          }
         }
       }
       // Function parameter — check callers for user-controlled values

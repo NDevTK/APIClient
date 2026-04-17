@@ -83,7 +83,18 @@ const PE_SELECT_METHOD = (value) => {
 };
 
 const PE_INSPECT_SEND_PANEL = () => {
-  const vis = el => el && !el.classList.contains("hidden") && el.offsetParent !== null;
+  // setBodyMode() flips inline style.display; a child can be
+  // display:block while an ancestor panel is display:none. offsetParent
+  // returns null for position:fixed too, which is fragile — so check the
+  // own-element computed display.
+  const vis = el => {
+    if (!el) return false;
+    if (el.classList.contains("hidden")) return false;
+    const cs = window.getComputedStyle(el);
+    return cs.display !== "none" && cs.visibility !== "hidden";
+  };
+  const _bodyMode = window.currentBodyMode || null;
+  const _url = window.currentRequestUrl || null;
   const formFields = document.querySelector("#send-form-fields");
   const rawBody = document.querySelector("#send-raw-body");
   const gqlFields = document.querySelector("#send-graphql-fields");
@@ -112,6 +123,10 @@ const PE_INSPECT_SEND_PANEL = () => {
       graphql: vis(gqlFields),
       wsConsole: vis(wsConsole),
     },
+    // Also expose the JS-side state directly — UI rendering and JS mode
+    // tracking should agree. Differences reveal a bug.
+    jsMode: _bodyMode,
+    jsUrl: _url,
     formInputCount,
     gqlOpTabs,
     rawBodyTextLen: rawBody ? rawBody.value.length : 0,

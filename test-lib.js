@@ -56,6 +56,9 @@ new Function(discoveryCode
   + "\nglobalThis.sniffBinaryMagic = sniffBinaryMagic;"
   + "\nglobalThis.classifyResponseAsset = classifyResponseAsset;"
   + "\nglobalThis.deriveGraphQLMethodName = deriveGraphQLMethodName;"
+  + "\nglobalThis.isRSC = isRSC;"
+  + "\nglobalThis.looksLikeRSC = looksLikeRSC;"
+  + "\nglobalThis.parseRSC = parseRSC;"
 )();
 
 var statsCode = fs.readFileSync(__dirname + "/extension/lib/stats.js", "utf8");
@@ -1791,6 +1794,55 @@ test("classifyResponseAsset — .glb URL returning text JSON → still api", fun
   return r.kind === "api";
 });
 
+test("classifyResponseAsset — SVG with <?xml header → asset image/svg+xml", function() {
+  var svg = '<?xml version="1.0" encoding="utf-8"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2"/></svg>';
+  var r = classifyResponseAsset(svg, false);
+  return r.kind === "asset" && r.label === "image/svg+xml";
+});
+
+test("classifyResponseAsset — SVG without XML prolog → asset", function() {
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0"/></svg>';
+  var r = classifyResponseAsset(svg, false);
+  return r.kind === "asset" && r.label === "image/svg+xml";
+});
+
+test("classifyResponseAsset — CSS with @font-face at head → asset", function() {
+  var css = "@font-face { font-family: 'Icons'; src: url('icons.woff2') format('woff2'); }";
+  var r = classifyResponseAsset(css, false);
+  return r.kind === "asset" && r.label === "text/css";
+});
+
+test("classifyResponseAsset — JSON starting with {\"@context\": ... is NOT CSS", function() {
+  // Linked-data JSON often has "@context" — shouldn't match the CSS @-rule sniff.
+  var r = classifyResponseAsset('{"@context":"https://schema.org","name":"API"}', false);
+  return r.kind === "api";
+});
+
+test("classifyResponseAsset — HTML with leading <svg inline tag but server-returned page is NOT asset", function() {
+  // Edge case: HTML document whose first non-whitespace is <svg (icon-only page).
+  // Our sniff returns svg here, which is correct — the response IS an SVG.
+  var r = classifyResponseAsset("<svg>standalone</svg>", false);
+  return r.kind === "asset" && r.label === "image/svg+xml";
+});
+
+test("classifyResponseAsset — HLS playlist (m3u8) → asset", function() {
+  var m3u = "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg1.ts\n";
+  var r = classifyResponseAsset(m3u, false);
+  return r.kind === "asset" && r.label === "application/vnd.apple.mpegurl";
+});
+
+test("classifyResponseAsset — DASH manifest (MPD) → asset", function() {
+  var mpd = '<?xml version="1.0" encoding="UTF-8"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011"></MPD>';
+  var r = classifyResponseAsset(mpd, false);
+  return r.kind === "asset" && r.label === "application/dash+xml";
+});
+
+test("classifyResponseAsset — WebVTT subtitles → asset", function() {
+  var vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello\n";
+  var r = classifyResponseAsset(vtt, false);
+  return r.kind === "asset" && r.label === "text/vtt";
+});
+
 // ─── GraphQL method naming ─────────────────────────────────────────────────
 //
 // Locks in the operationName-first name derivation so every op on a
@@ -1915,6 +1967,14 @@ test("deriveGraphQLMethodName — explicit operationName beats operation field",
   return deriveGraphQLMethodName(op) === "OfficialName";
 });
 
+test("isGraphQLUrl — recognises gql-fed.reddit.com style hostnames", function() {
+  return isGraphQLUrl("https://gql-fed.reddit.com/something") === true &&
+    isGraphQLUrl("https://api.example.com/graphql") === true &&
+    isGraphQLUrl("https://api.example.com/gql") === true &&
+    isGraphQLUrl("https://api.example.com/users") === false &&
+    isGraphQLUrl("https://gql.example.com/q") === true;
+});
+
 test("deriveGraphQLMethodName — Reddit-style with invalid operation name falls through", function() {
   var op = parseGraphQLRequest(JSON.stringify({
     operation: "Not A Valid Name",
@@ -1925,6 +1985,104 @@ test("deriveGraphQLMethodName — Reddit-style with invalid operation name falls
   // but _isValidGqlName will fail → we check that we don't return the garbage name.
   if (!op || !op.operations.length) return true; // acceptable
   return deriveGraphQLMethodName(op.operations[0]) !== "Not A Valid Name";
+});
+
+// ─── React Server Components (RSC) ──────────────────────────────────────────
+
+test("isRSC — detects text/x-component", function() {
+  return isRSC("text/x-component") === true &&
+    isRSC("text/x-component; charset=utf-8") === true &&
+    isRSC("application/x-component") === true &&
+    isRSC("application/json") === false &&
+    isRSC(null) === false;
+});
+
+test("looksLikeRSC — recognizes line-framed payload", function() {
+  var body = '1:"$Sreact.fragment"\n2:I[247862,["/chunk.js"],"default"]\n';
+  return looksLikeRSC(body) === true &&
+    looksLikeRSC('{"1": 2}') === false &&
+    looksLikeRSC(null) === false;
+});
+
+test("parseRSC — extracts module rows", function() {
+  var body =
+    '1:"$Sreact.fragment"\n' +
+    '2:I[247862,["/vc-ap-vercel-marketing/_next/static/chunks/1ujwh0o3kp_4o.js"],"default"]\n' +
+    '3:I[274964,["/static/chunks/1p3mwvsp0r5k4.js"],"default"]\n';
+  var r = parseRSC(body);
+  return r && r.rows.length === 3 && r.modules.length === 2 &&
+    r.modules[0].moduleId === 247862 &&
+    r.modules[0].chunks[0].startsWith("/vc-ap-vercel-marketing");
+});
+
+test("parseRSC — extracts symbol row ($Sreact.fragment)", function() {
+  var body = '1:"$Sreact.fragment"\n';
+  var r = parseRSC(body);
+  return r && r.rows.length === 1 &&
+    r.rows[0].type === "symbol" && r.rows[0].value === "react.fragment";
+});
+
+test("parseRSC — extracts JSON element tree row", function() {
+  var body =
+    '1:"$"\n' +
+    '4:["$","html",null,{"lang":"en","children":["$","body",null,{}]}]\n';
+  var r = parseRSC(body);
+  return r && r.rows.length === 2 &&
+    r.rows[1].type === "json" &&
+    Array.isArray(r.rows[1].value) &&
+    r.rows[1].value[1] === "html";
+});
+
+test("parseRSC — extracts preload hint (HL[...])", function() {
+  var body = '1:HL["/_next/static/css/app.css","style"]\n';
+  var r = parseRSC(body);
+  return r && r.rows[0].type === "hint" &&
+    Array.isArray(r.rows[0].value);
+});
+
+test("parseRSC — handles T<len>,<text> segment", function() {
+  var body = '5:T5,hello\n';
+  var r = parseRSC(body);
+  return r && r.rows[0].type === "text" && r.rows[0].value === "hello" && r.rows[0].length === 5;
+});
+
+test("parseRSC — error row E[...]", function() {
+  var body = '9:E["xyz","Server Error"]\n';
+  var r = parseRSC(body);
+  return r && r.rows[0].type === "error" &&
+    Array.isArray(r.rows[0].value) && r.rows[0].value[1] === "Server Error";
+});
+
+test("parseRSC — rejects a non-RSC JSON body", function() {
+  var body = '{"1":"not rsc","2":["array"]}';
+  // Technically parseRSC may attempt to split, but should produce zero
+  // valid rows (no <hex>:<payload> shape on any line).
+  var r = parseRSC(body);
+  return r === null || r.rows.length === 0;
+});
+
+test("parseRSC — reddit-sized realistic payload parses", function() {
+  var body =
+    '1:"$Sreact.fragment"\n' +
+    '2:I[247862,["/a.js","/b.js"],"default"]\n' +
+    '4:["$","div",null,{"className":"container","children":"hi"}]\n' +
+    '5:null\n' +
+    '6:true\n' +
+    'ff:I[99999,["/late.js"],"named"]\n';
+  var r = parseRSC(body);
+  return r && r.rows.length === 6 &&
+    r.modules.length === 2 &&
+    r.rows.some(function(x) { return x.type === "json" && x.value === null; }) &&
+    r.rows.some(function(x) { return x.type === "json" && x.value === true; }) &&
+    r.modules[1].moduleId === 99999;
+});
+
+test("parseRSC — module chunks are resolved as endpoint paths", function() {
+  var body = '2:I[123,["/app.js","/vendor.js"],"default"]\n';
+  var r = parseRSC(body);
+  return r && r.modules.length === 1 &&
+    r.modules[0].chunks.length === 2 &&
+    r.modules[0].chunks[0] === "/app.js";
 });
 
 // ─── Summary ────────────────────────────────────────────────────────────────

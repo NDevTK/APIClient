@@ -117,7 +117,20 @@ function gqlBuildOpPanel(idx, op) {
   const div = document.createElement("div");
   div.className = "gql-op-panel" + (idx === gqlState.activeIdx ? " active" : "");
   div.dataset.gqlIdx = idx;
+  // Persisted-operation envelopes (Reddit `{operation}`, Apollo APQ
+  // `{extensions.persistedQuery}`) don't ship the query text. Show a
+  // dedicated "Persisted Operation" field so the user can see + edit it
+  // without the Query textarea looking empty/broken.
+  const persistedHint = op.operation
+    ? `<div class="gql-persisted-hint">Persisted operation — query text is resolved server-side.</div>`
+    : "";
+  const operationFieldHtml = op.operation
+    ? `<div class="gql-field-label">Persisted Operation</div>` +
+      `<input type="text" class="gql-operation" value="${esc(op.operation || "")}">`
+    : "";
   div.innerHTML =
+    persistedHint +
+    operationFieldHtml +
     `<div class="gql-field-label">Query</div>` +
     `<textarea class="gql-query" placeholder="query { user(id: 1) { name email } }" rows="4">${esc(op.query || "")}</textarea>` +
     `<div class="gql-field-label">Variables (JSON)</div>` +
@@ -186,6 +199,8 @@ function gqlSaveCurrentOp() {
   const varsText = panel.querySelector(".gql-variables").value;
   op.variables = varsText || null;
   op.operationName = panel.querySelector(".gql-opname").value || null;
+  const opInput = panel.querySelector(".gql-operation");
+  if (opInput) op.operation = opInput.value || null;
   const extText = panel.querySelector(".gql-extensions").value;
   try { op.extensions = extText ? JSON.parse(extText) : null; } catch (_) { op.extensions = extText || null; }
 }
@@ -196,6 +211,7 @@ function gqlCollectAllOps() {
     query: op.query || "",
     variables: op.variables || null,
     operationName: op.operationName || null,
+    operation: op.operation || null,
     extensions: op.extensions || null,
   }));
 }

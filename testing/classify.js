@@ -42,8 +42,15 @@ function parseArgs(argv) {
 
 async function pickLatestRun() {
   const entries = await fsp.readdir(REPORTS_DIR, { withFileTypes: true });
-  const dirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
-  if (!dirs.length) throw new Error("no reports found. run `npm run harness` first.");
+  // Only consider harness run dirs — their names are pure ISO timestamps
+  // (e.g. "2026-04-17T01-47-06-704Z"). Suite output dirs are prefixed
+  // ("ui-...", "replay-...") and should not be picked as the latest.
+  const harnessRe = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
+  const dirs = entries
+    .filter(e => e.isDirectory() && harnessRe.test(e.name))
+    .map(e => e.name)
+    .sort();
+  if (!dirs.length) throw new Error("no harness reports found. run `npm run harness` first.");
   return path.join(REPORTS_DIR, dirs[dirs.length - 1]);
 }
 
@@ -96,8 +103,10 @@ function sniffText(buf) {
 }
 
 function tryJSON(text) {
-  const t = text.trim();
+  let t = text.trim();
   if (!t) return null;
+  // Google XSSI prefix: `)]}'` on its own leading line. Strip before parse.
+  if (t.startsWith(")]}'")) t = t.replace(/^\)\]\}'[\r\n]*/, "").trim();
   if (t[0] !== "{" && t[0] !== "[" && t[0] !== '"') return null;
   try { return JSON.parse(t); } catch { return null; }
 }
@@ -128,6 +137,25 @@ function looksLikeHTML(text) {
   // HTML fragments: starts with a tag (Reddit returns <faceplate-loader> etc).
   if (/^<[a-z][a-z0-9-]*[\s>]/i.test(t)) return true;
   return /<head[\s>]/.test(t.slice(0, 2000));
+}
+
+// React Server Components streaming payload. Line-framed `<hex>:<payload>`
+// where <hex> is the row id and <payload> is one of I[...]/HL[...]/T<len>,.../etc.
+// Next.js apps emit this with Content-Type `text/x-component` — the response
+// IS an API in the functional sense (dynamic, varies by route), just not
+// standard JSON. Treating it as static CSS (regex brace-match) is a
+// classifier bug we hit on vercel + every other Next app.
+function looksLikeRSC(text) {
+  if (!text) return false;
+  const lines = text.split("\n", 3);
+  if (lines.length < 1) return false;
+  // First two non-empty lines must match `<hex>:<payload>`.
+  let matched = 0;
+  for (const line of lines) {
+    if (!line) continue;
+    if (/^[0-9a-f]+:/.test(line)) matched++;
+  }
+  return matched >= 1 && /^[0-9a-f]+:/.test(lines[0]);
 }
 
 function looksLikeJS(text) {
@@ -195,6 +223,7 @@ function classifyBody(entry) {
   }
   if (looksLikeNDJSON(text)) return { label: "api", kind: "ndjson", why: "ndjson-lines", confidence: 0.9 };
   if (looksLikeSSE(text)) return { label: "api", kind: "sse", why: "sse-frames", confidence: 0.9 };
+  if (looksLikeRSC(text)) return { label: "api", kind: "rsc", why: "react-server-components", confidence: 0.95 };
   if (looksLikeHTML(text)) return { label: "static", kind: "html", why: "html-doctype", confidence: 0.95 };
   if (looksLikeJS(text)) return { label: "static", kind: "js", why: "js-module-shape", confidence: 0.85 };
   if (looksLikeCSS(text)) return { label: "static", kind: "css", why: "css-rules", confidence: 0.85 };

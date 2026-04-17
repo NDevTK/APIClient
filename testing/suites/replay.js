@@ -351,11 +351,18 @@ async function run() {
         }
         const decoded = decodeBody(buildOut.result, contentType);
 
-        // Value roundtrip: for JSON bodies, check that every top-level field
-        // name we synthesized survived the encoder → decoder round-trip. A
-        // mismatch means the encoder dropped or renamed a field.
+        // Value roundtrip: for JSON bodies with NAMED fields, check that
+        // every top-level field name we synthesized survived the encoder →
+        // decoder round-trip. JSPB / batchexecute encode body as a numeric
+        // array — field names don't apply, so we skip the name comparison.
         let valueRoundtrip = null;
-        if (decoded.ok && decoded.decoded && typeof decoded.decoded === "object" && !Array.isArray(decoded.decoded)) {
+        const looksJspb = decoded.decoded
+          && (
+            (typeof decoded.decoded === "object" && "f.req" in (decoded.decoded || {}))
+            || Array.isArray(decoded.decoded)
+          );
+        const looksFieldN = fields.some(f => /^field\d+$/.test(f.name));
+        if (decoded.ok && decoded.decoded && typeof decoded.decoded === "object" && !Array.isArray(decoded.decoded) && !looksJspb && !looksFieldN) {
           const bodyFieldNames = fields
             .filter(f => f.location !== "query")
             .map(f => f.name);
@@ -367,6 +374,8 @@ async function run() {
             decodedFields: decodedKeys.length,
             missing,
           };
+        } else if (looksJspb || looksFieldN) {
+          valueRoundtrip = { ok: true, detail: "JSPB / numeric-field encoding — name roundtrip not applicable" };
         }
 
         results.push({

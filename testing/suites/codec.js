@@ -58,8 +58,14 @@ function parseArgs(argv) {
 }
 async function pickLatestRun() {
   const entries = await fsp.readdir(REPORTS_DIR, { withFileTypes: true });
-  const dirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
-  if (!dirs.length) throw new Error("no reports found — run `npm run harness` first.");
+  // Harness dirs use pure ISO timestamps; suite dirs have a prefix. Filter
+  // so suite outputs don't steal "latest" from an actual harness run.
+  const harnessRe = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
+  const dirs = entries
+    .filter(e => e.isDirectory() && harnessRe.test(e.name))
+    .map(e => e.name)
+    .sort();
+  if (!dirs.length) throw new Error("no harness reports found — run `npm run harness` first.");
   return path.join(REPORTS_DIR, dirs[dirs.length - 1]);
 }
 
@@ -155,9 +161,21 @@ function runGrpcWebRoundtrip(entry) {
 // behavioral equivalence).
 function runJsonRoundtrip(entry) {
   const text = entryBodyText(entry, "response");
-  if (!text) return { ok: false, detail: "no body text" };
+  // Empty response bodies (analytics beacons, 204-style) aren't a roundtrip
+  // concern — no payload to encode/decode. Skip rather than fail.
+  if (!text || !text.trim()) return { ok: true, detail: "empty body (no roundtrip needed)" };
+  // Strip Google XSSI prefix (`)]}'`) before parse — common on Google and
+  // GitLab snowplow endpoints. The extension's parser also strips this.
+  let cleaned = text;
+  if (cleaned.trimStart().startsWith(")]}'")) {
+    cleaned = cleaned.replace(/^[\s]*\)\]\}'[\r\n]*/, "");
+  }
+  // "ok"/"true"/"null" confirmation responses aren't JSON-roundtrip-worthy.
+  if (/^(ok|OK|true|false|null)\s*$/.test(cleaned.trim())) {
+    return { ok: true, detail: "scalar confirmation body (not JSON object)" };
+  }
   let obj;
-  try { obj = JSON.parse(text); }
+  try { obj = JSON.parse(cleaned); }
   catch (e) { return { ok: false, detail: "JSON.parse threw: " + e.message }; }
   if (obj == null) return { ok: true, detail: "null payload" };
   let re;
@@ -171,24 +189,28 @@ function runJsonRoundtrip(entry) {
 // check operations match.
 function runGraphQLRoundtrip(entry) {
   const text = entryBodyText(entry, "request");
-  if (!text) return { ok: false, detail: "no request body" };
+  // GET requests to GraphQL endpoints (Apollo APQ with query-string variables)
+  // carry no request body — roundtripping isn't applicable. Treat as a skip,
+  // not a failure.
+  if (!text) return { ok: true, detail: "no request body (GET/APQ style — skipped)" };
   const parsed = parseGraphQLRequest(text);
   if (!parsed) return { ok: false, detail: "parseGraphQLRequest returned null" };
   if (!parsed.operations.length) return { ok: false, detail: "no operations parsed" };
   // Reconstruct a normalized envelope from parsed ops, then reparse.
+  // Preserve the non-standard `operation` field (Reddit persisted queries)
+  // and `extensions.persistedQuery` (Apollo APQ) so reparse succeeds.
+  const rebuildOp = (op) => {
+    const out = {};
+    if (op.query) out.query = op.query;
+    if (op.variables) out.variables = op.variables;
+    if (op.operationName) out.operationName = op.operationName;
+    if (op.operation) out.operation = op.operation;
+    if (op.extensions) out.extensions = op.extensions;
+    return out;
+  };
   const rebuilt = parsed.batched
-    ? parsed.operations.map(op => ({
-        query: op.query,
-        variables: op.variables,
-        operationName: op.operationName,
-      }))
-    : (() => {
-        const op = parsed.operations[0];
-        const out = { query: op.query };
-        if (op.variables) out.variables = op.variables;
-        if (op.operationName) out.operationName = op.operationName;
-        return out;
-      })();
+    ? parsed.operations.map(rebuildOp)
+    : rebuildOp(parsed.operations[0]);
   const reparsed = parseGraphQLRequest(JSON.stringify(rebuilt));
   if (!reparsed) return { ok: false, detail: "reparse returned null" };
   if (reparsed.operations.length !== parsed.operations.length) {
@@ -296,15 +318,38 @@ function runOpenApiRoundtripOnDump(dump) {
   return results;
 }
 
+// Count methods, deduping by (path|verb|id). A service that lists the same
+// method in both `learned` and `probed` buckets is one logical operation —
+// the OpenAPI exporter correctly collapses them. Counting by (bucket,name)
+// treats that as 2→1 drift which is actually a correct roundtrip.
 function countMethods(doc) {
-  let n = 0;
+  const seen = new Set();
   if (doc.resources) {
     for (const b of Object.values(doc.resources)) {
-      if (b && b.methods) n += Object.keys(b.methods).length;
+      if (!b || !b.methods) continue;
+      for (const [name, m] of Object.entries(b.methods)) {
+        const key = (m.id || name) + "|" + (m.path || "") + "|" + (m.httpMethod || "POST");
+        seen.add(key);
+      }
     }
   }
-  if (doc.methods) n += Object.keys(doc.methods).length;
-  return n;
+  if (doc.methods) {
+    for (const [name, m] of Object.entries(doc.methods)) {
+      const key = (m.id || name) + "|" + (m.path || "") + "|" + (m.httpMethod || "POST");
+      seen.add(key);
+    }
+  }
+  if (doc.paths) {
+    for (const [p, verbs] of Object.entries(doc.paths)) {
+      if (!verbs || typeof verbs !== "object") continue;
+      for (const [verb, op] of Object.entries(verbs)) {
+        if (!op || !op.operationId) continue;
+        const key = op.operationId + "|" + p + "|" + verb.toUpperCase();
+        seen.add(key);
+      }
+    }
+  }
+  return seen.size;
 }
 
 // ─── Per-site driver ────────────────────────────────────────────────────────

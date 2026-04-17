@@ -56,6 +56,19 @@ const state = {
   tabs: new Map(),
 };
 
+// Maximum entries retained per tab in the live request log. When exceeded,
+// the oldest entries are evicted. Complex sites (LinkedIn, Booking, Figma,
+// Vercel, Discord, Spotify) saturated the previous 50-entry cap in under a
+// minute of browsing, silently dropping real traffic. 500 keeps per-tab
+// memory bounded while leaving enough headroom to capture a real session.
+// The per-service schemas still persist to globalStore independent of this
+// cap, so evicted log entries don't undo learning — only the request-log
+// replay view loses them.
+const MAX_REQUEST_LOG_ENTRIES = 500;
+function _trimRequestLog(tab) {
+  while (tab.requestLog.length > MAX_REQUEST_LOG_ENTRIES) tab.requestLog.pop();
+}
+
 // Session storage for request logs — survives SW restarts, clears on browser close
 const _sessionSaveTimers = new Map(); // tabId → timeoutId
 const _tabMeta = new Map(); // tabId → { title, url, closed? }
@@ -1482,6 +1495,53 @@ function learnFromResponse(tabId, interfaceName, entry) {
         }
       }
     } catch (e) {}
+  } else if (isRSC(mimeType) || (mimeType === "" && looksLikeRSC(textBody))) {
+    // React Server Components stream: line-framed `<id>:<payload>`. Each
+    // json-typed row carries structured data; module-typed rows catalog
+    // imported JS bundles (real endpoints the page will fetch). We learn
+    // the shape of json rows (merged into one response schema) and record
+    // module URLs so they show up in the endpoints list.
+    try {
+      const rsc = parseRSC(textBody);
+      if (rsc && rsc.rows.length) {
+        const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Response`;
+        targetM.response = { $ref: schemaName };
+        for (const row of rsc.rows) {
+          if (row.type === "json" && row.value && typeof row.value === "object") {
+            const newSchema = generateSchemaFromJson(row.value, schemaName, doc.schemas);
+            mergeSchemaInto(doc, schemaName, newSchema);
+          }
+          if (row.type === "error" && Array.isArray(row.value) && typeof row.value[1] === "string") {
+            extractKeysFromText(tabId, row.value[1], entry.url, "rsc_error");
+          }
+        }
+        // Register module chunks as endpoints so the user sees the JS
+        // bundles the page will fetch for this route. Same pattern as
+        // AST-discovered call sites.
+        try {
+          for (const mod of rsc.modules) {
+            if (!Array.isArray(mod.chunks)) continue;
+            for (const chunk of mod.chunks) {
+              if (typeof chunk !== "string" || !chunk.startsWith("/")) continue;
+              const chunkHost = url.host;
+              const epKey = `RSC GET ${chunkHost}${chunk}`;
+              if (!tab.endpoints.has(epKey)) {
+                tab.endpoints.set(epKey, {
+                  url: url.origin + chunk,
+                  method: "GET",
+                  host: chunkHost,
+                  path: chunk,
+                  service: interfaceName,
+                  source: "rsc_module",
+                  pageUrl: entry.url,
+                  firstSeen: Date.now(),
+                });
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
   } else if (isGraphQLUrl(url.href) && mimeType.includes("json")) {
     // GraphQL response: extract data/errors structure
     try {
@@ -1510,6 +1570,13 @@ function learnFromResponse(tabId, interfaceName, entry) {
         if (!_lrJsonp) throw new Error("not JSONP");
         _lrText = _lrJsonp;
       }
+      // Strip Google XSSI prefix if present. Many Google (and now GitLab
+      // snowplow, others) endpoints prepend `)]}'\n` to prevent <script>
+      // JSON hijacking. JSON.parse would fail without this.
+      if (_lrText.startsWith(")]}'")) _lrText = _lrText.replace(/^\)\]\}'[\r\n]*/, "");
+      // Plain "ok" / "OK" confirmations aren't JSON — avoid learning a
+      // schema from them.
+      if (/^(ok|OK|true|false|null)\s*$/.test(_lrText)) throw new Error("non-object response");
       const json = JSON.parse(_lrText);
       const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Response`;
       targetM.response = { $ref: schemaName };
@@ -2521,7 +2588,7 @@ async function handleResponseBody(tabId, msg, frameId) {
         messages: [],
       };
       tab.requestLog.unshift(entry);
-      if (tab.requestLog.length > 50) tab.requestLog.pop();
+      _trimRequestLog(tab);
       conns.set(channelId, { url: msg.url, readyState: 1, entryId: entry.id });
       scheduleSessionSave(tabId);
       notifyPopup(tabId);
@@ -2566,7 +2633,7 @@ async function handleResponseBody(tabId, msg, frameId) {
         messages: [],
       };
       tab.requestLog.unshift(entry);
-      if (tab.requestLog.length > 50) tab.requestLog.pop();
+      _trimRequestLog(tab);
       conns.set(channelId, { url: msg.url, readyState: 1, entryId: entry.id });
     }
 
@@ -2614,7 +2681,7 @@ async function handleResponseBody(tabId, msg, frameId) {
         messages: [],
       };
       tab.requestLog.unshift(entry);
-      if (tab.requestLog.length > 50) tab.requestLog.pop();
+      _trimRequestLog(tab);
     }
 
     entry.messages.push({
@@ -2654,7 +2721,7 @@ async function handleResponseBody(tabId, msg, frameId) {
         messages: [],
       };
       tab.requestLog.unshift(entry);
-      if (tab.requestLog.length > 50) tab.requestLog.pop();
+      _trimRequestLog(tab);
     }
     scheduleSessionSave(tabId);
     notifyPopup(tabId);
@@ -2679,7 +2746,7 @@ async function handleResponseBody(tabId, msg, frameId) {
         messages: [],
       };
       tab.requestLog.unshift(entry);
-      if (tab.requestLog.length > 50) tab.requestLog.pop();
+      _trimRequestLog(tab);
     }
     entry.messages.push({
       dir: "recv",
@@ -2716,7 +2783,7 @@ async function handleResponseBody(tabId, msg, frameId) {
       responseHeaders: msg.responseHeaders || {},
     };
     tab.requestLog.unshift(entry);
-    if (tab.requestLog.length > 50) tab.requestLog.pop();
+    _trimRequestLog(tab);
     if (msg.body) {
       extractKeysFromText(tabId, msg.body, msg.url, "response_body");
     }
@@ -2995,7 +3062,7 @@ async function handleResponseBody(tabId, msg, frameId) {
 
   // Add to request log
   tab.requestLog.unshift(entry);
-  if (tab.requestLog.length > 50) tab.requestLog.pop();
+  _trimRequestLog(tab);
 
   // Learn from response — skip for static assets.
   if (entry.responseBody && !_isAsset) {
@@ -3162,7 +3229,10 @@ function _markSecurityFindingChanges(scriptUrl, findings) {
 // Replay a cached AST analysis result — mirrors the post-analysis flow in
 // _analyzeCombinedScripts() but skips the offscreen worker entirely.
 function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
-  // Clear previous AST-derived endpoints
+  // Clear previous AST-derived endpoints only. _astResults and
+  // _securityFindings are swapped in atomically below (see the same
+  // rationale in _analyzeCombinedScripts above): consumers should never
+  // see an empty-but-transient state.
   var keysToDelete = [];
   tab.endpoints.forEach(function(val, key) {
     if (key.startsWith("AST ") || key.startsWith("AST DYN ")) {
@@ -3172,8 +3242,6 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
   for (var di = 0; di < keysToDelete.length; di++) {
     tab.endpoints.delete(keysToDelete[di]);
   }
-  tab._astResults = [];
-  tab._securityFindings = [];
 
   var analysis = JSON.parse(JSON.stringify(cached.result)); // deep copy
   var scriptOffsets = cached.scriptOffsets || [];
@@ -3196,10 +3264,11 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
 
   if (hasFindings) {
     analysis._securityMerged = true;
-    tab._astResults.push(analysis);
-    mergeASTResultsIntoVDD(tab, [analysis], tabId);
 
-    // Split security findings by source script
+    // Build the new security-findings list in a LOCAL array first, then
+    // swap it into tab._securityFindings atomically once fully populated.
+    // Same rationale as tab._astResults: no transient empty window.
+    var newSecurityFindings = [];
     var secSinks = analysis.securitySinks || [];
     var dangerousPats = analysis.dangerousPatterns || [];
     if (secSinks.length || dangerousPats.length) {
@@ -3232,10 +3301,9 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
         }
         byScript[pKey].patterns.push(adjustedPat);
       }
-      if (!tab._securityFindings) tab._securityFindings = [];
       for (var sUrl in byScript) {
         _markSecurityFindingChanges(sUrl, byScript[sUrl]);
-        tab._securityFindings.push({
+        newSecurityFindings.push({
           sourceUrl: sUrl,
           pageUrl: tabUrl,
           securitySinks: byScript[sUrl].sinks,
@@ -3244,6 +3312,11 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
         });
       }
     }
+    // Atomic swap for both state slots — a concurrent reader sees either
+    // the previous (valid) analysis or this one, never an empty interim.
+    tab._astResults = [analysis];
+    tab._securityFindings = newSecurityFindings;
+    mergeASTResultsIntoVDD(tab, [analysis], tabId);
 
     mergeToGlobal(tab);
     notifyPopup(tabId);
@@ -3308,7 +3381,14 @@ async function _analyzeCombinedScripts(tabId) {
       tabId, scripts.length, cacheKey.slice(0, 16));
   }
 
-  // Clear previous AST-derived endpoints (in case of re-analysis due to late scripts)
+  // DO NOT reset tab._astResults / tab._securityFindings here. Clearing
+  // them at the start of analysis creates a visible "empty" window for
+  // consumers (popup, harness, test suites) that poll during the async
+  // sendToOffscreen() await below. Instead, we build the new results into
+  // local variables and swap them into the tab atomically AFTER the
+  // offscreen worker returns successfully. Endpoints are AST-derived too
+  // but the popup tolerates staleness there — safe to clear them up-front
+  // to avoid double-registration when a late script triggers re-analysis.
   var keysToDelete = [];
   tab.endpoints.forEach(function(val, key) {
     if (key.startsWith("AST ") || key.startsWith("AST DYN ")) {
@@ -3318,8 +3398,6 @@ async function _analyzeCombinedScripts(tabId) {
   for (var di = 0; di < keysToDelete.length; di++) {
     tab.endpoints.delete(keysToDelete[di]);
   }
-  tab._astResults = [];
-  tab._securityFindings = [];
 
   // Concatenate all scripts with semicolons (safe delimiter for script mode)
   // Track line offsets for per-script finding attribution
@@ -3407,10 +3485,10 @@ async function _analyzeCombinedScripts(tabId) {
     // Pre-empt mergeASTResultsIntoVDD's security merge — we split findings per-script below
     analysis._securityMerged = true;
 
-    tab._astResults.push(analysis);
-    mergeASTResultsIntoVDD(tab, [analysis], tabId);
-
-    // Split security findings by source script using line offsets
+    // Build security findings locally, then swap into tab._* slots atomically.
+    // Matches the visibility-preserving pattern in _replayCachedAST above:
+    // consumers never see an empty-but-populating state.
+    var newSecurityFindings = [];
     var secSinks = analysis.securitySinks || [];
     var dangerousPats = analysis.dangerousPatterns || [];
     if (secSinks.length || dangerousPats.length) {
@@ -3445,11 +3523,10 @@ async function _analyzeCombinedScripts(tabId) {
         }
         byScript[pKey].patterns.push(adjustedPat);
       }
-      if (!tab._securityFindings) tab._securityFindings = [];
       for (var sUrl in byScript) {
         // Mark findings as new/existing by comparing against globalStore
         _markSecurityFindingChanges(sUrl, byScript[sUrl]);
-        tab._securityFindings.push({
+        newSecurityFindings.push({
           sourceUrl: sUrl,
           pageUrl: tabUrl,
           securitySinks: byScript[sUrl].sinks,
@@ -3460,6 +3537,10 @@ async function _analyzeCombinedScripts(tabId) {
       console.debug("[AST:combined] Split security findings across %d scripts for tab=%d",
         Object.keys(byScript).length, tabId);
     }
+    // Atomic swap — never show consumers an empty interim.
+    tab._astResults = [analysis];
+    tab._securityFindings = newSecurityFindings;
+    mergeASTResultsIntoVDD(tab, [analysis], tabId);
 
     mergeToGlobal(tab);
     notifyPopup(tabId);
@@ -5273,6 +5354,22 @@ function resolveEndpointSchema(tabId, endpointKey, service, methodId) {
 function encodeGraphQLBody(bodyMsg) {
   const ops = bodyMsg.operations || [];
   const encode = (op) => {
+    // Reddit-style persisted-operation envelope: the server maps `operation`
+    // to a stored query doc. No query text goes over the wire. We emit the
+    // exact shape the server expects instead of forcing a spec-compliant
+    // `{query}` envelope that reddit's backend would reject.
+    if (op.operation && !op.query) {
+      const obj = { operation: op.operation };
+      if (op.variables) {
+        try { obj.variables = typeof op.variables === "string" ? JSON.parse(op.variables) : op.variables; }
+        catch (_) { obj.variables = op.variables; }
+      }
+      if (op.extensions) {
+        try { obj.extensions = typeof op.extensions === "string" ? JSON.parse(op.extensions) : op.extensions; }
+        catch (_) { obj.extensions = op.extensions; }
+      }
+      return obj;
+    }
     const obj = { query: op.query || "" };
     if (op.variables) {
       try { obj.variables = typeof op.variables === "string" ? JSON.parse(op.variables) : op.variables; }
@@ -5292,10 +5389,16 @@ function encodeGraphQLBody(bodyMsg) {
 function encodeFormToJson(fields) {
   const obj = {};
   for (const f of fields) {
+    // Explicit message/object fields always appear in the output even with
+    // no children set — `{variables: {}}` for GraphQL, empty nested protos,
+    // etc. Previously these were silently dropped, which lost structure on
+    // round-trip and sometimes caused servers to reject the request.
+    if (f.type === "message" || f.type === "object") {
+      obj[f.name] = f.children?.length ? encodeFormToJson(f.children) : {};
+      continue;
+    }
     if (f.value == null && !f.children?.length) continue;
-    if (f.type === "message" && f.children?.length) {
-      obj[f.name] = encodeFormToJson(f.children);
-    } else if (f.label === "repeated" && Array.isArray(f.value)) {
+    if (f.label === "repeated" && Array.isArray(f.value)) {
       obj[f.name] = f.value.map((v) => coerceValue(v, f.type));
     } else {
       obj[f.name] = coerceValue(f.value, f.type);

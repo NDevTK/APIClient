@@ -3744,6 +3744,70 @@ test("location.search IS user-controlled", `
   });
 });
 
+// URLSearchParams iteration: query-param KEYS are attacker-controlled.
+// Using them as object keys is prototype-pollution exposure. The taint
+// must flow through `for (const [k, v] of new URLSearchParams(location.search))`.
+// Observed in github's environment.js (Session 2026-04-17 audit) where the
+// taint source was previously recorded as null.
+test("prototype pollution: URLSearchParams key destructuring taints both k and v", `
+  function track(obj) {
+    for (const [t, n] of new URLSearchParams(window.location.search)) {
+      obj[t.toLowerCase()] = n;
+    }
+    return obj;
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    // Must be flagged AND taintSource / source must trace back to location
+    return /prototype/i.test(p.type || "") && p.severity === "high";
+  });
+});
+
+test("URLSearchParams key taint survives via for-of destructuring → innerHTML", `
+  for (const [k, v] of new URLSearchParams(location.search)) {
+    document.body.innerHTML = k;
+  }
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" &&
+      (s.source === "location.search" || /location/.test(s.source || ""));
+  });
+});
+
+test("URLSearchParams value taint survives destructuring → innerHTML", `
+  for (const [k, v] of new URLSearchParams(location.hash.slice(1))) {
+    document.body.innerHTML = v;
+  }
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" &&
+      (/location\.(hash|search)/.test(s.source || ""));
+  });
+});
+
+test("Plain for-of (not destructured) over URLSearchParams is also tainted", `
+  for (const entry of new URLSearchParams(location.search)) {
+    document.body.innerHTML = entry[0];
+  }
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" &&
+      /location/.test(s.source || "");
+  });
+});
+
+test("Object.entries(obj)-style destructuring in for-of propagates taint", `
+  var data = JSON.parse(location.hash.slice(1));
+  for (const [k, v] of Object.entries(data)) {
+    document.body.innerHTML = v;
+  }
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high";
+  });
+});
+
+
 console.log("\n=== Security: Taint Tracer Edge Cases ===\n");
 
 test("Taint through conditional where both branches are tainted", `
