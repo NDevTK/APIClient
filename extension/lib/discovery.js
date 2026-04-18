@@ -478,6 +478,7 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
 
       // Request body
       let reqSchema = null;
+      let reqIsFormEncoded = false;
       if (!isSwagger2 && opDef.requestBody?.content) {
         // OAS 3.x: try JSON first, then form types, then any available
         const content = opDef.requestBody.content;
@@ -489,17 +490,44 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
         for (const ct of preferred) {
           if (content[ct]?.schema) {
             reqSchema = content[ct].schema;
+            reqIsFormEncoded = ct !== "application/json";
             break;
           }
         }
         if (!reqSchema) {
           const firstKey = Object.keys(content)[0];
-          if (firstKey) reqSchema = content[firstKey]?.schema;
+          if (firstKey) {
+            reqSchema = content[firstKey]?.schema;
+            reqIsFormEncoded = firstKey !== "application/json";
+          }
         }
       } else if (isSwagger2) {
         // Swagger 2.0: body parameter
         const bodyParam = allParams.find((p) => p.in === "body");
         if (bodyParam?.schema) reqSchema = bodyParam.schema;
+      }
+
+      // Form-urlencoded / multipart requestBody: restore properties as
+      // body parameters so the learned discovery doc retains them in
+      // m.parameters (which is what strict roundtrip + popup rendering
+      // rely on). Without this, a form-POST method loses its field list
+      // on IMPORT because the import only produces a schema ref.
+      if (reqSchema && reqIsFormEncoded && !reqSchema.$ref && reqSchema.properties) {
+        const requiredSet = new Set(reqSchema.required || []);
+        const fieldNums = reqSchema["x-field-numbers"] || {};
+        for (const [fName, fDef] of Object.entries(reqSchema.properties)) {
+          if (m.parameters[fName]) continue; // don't clobber a named param
+          m.parameters[fName] = {
+            type: fDef.type || "string",
+            location: "body",
+            required: requiredSet.has(fName),
+            description: fDef.description || "",
+            enum: fDef.enum || null,
+          };
+          if (fieldNums[fName] != null) m.parameters[fName].number = fieldNums[fName];
+        }
+        // Restored inline — don't also create a synthetic request schema.
+        reqSchema = null;
       }
 
       if (reqSchema) {
@@ -831,6 +859,26 @@ function mapDiscoveryProperty(doc, name, prop, requiredList, depth, visited) {
         depth,
         new Set(visited),
       );
+    } else if (prop.items.type === "object" && prop.items.properties) {
+      // Inline array-of-objects — recurse into the item's properties so
+      // the form renderer gets a real children tree. Previously we only
+      // kept the type hint, which left the UI with no sub-fields and the
+      // encoder with nothing to walk, corrupting byte-roundtrip (e.g.
+      // statsigapi `events:[{...}]` rebuilt as `events:["<string>"]`).
+      field.type = "message";
+      field.children = [];
+      var arrRequired = prop.items.required || [];
+      for (var ipn in prop.items.properties) {
+        var arrChild = mapDiscoveryProperty(
+          doc,
+          ipn,
+          prop.items.properties[ipn],
+          arrRequired,
+          depth - 1,
+          new Set(visited),
+        );
+        if (arrChild) field.children.push(arrChild);
+      }
     } else {
       field.type = mapJsonSchemaType(prop.items);
     }
@@ -1323,14 +1371,26 @@ function _parseGqlOp(obj) {
   var hasPersisted = obj.extensions && obj.extensions.persistedQuery;
   var hasRedditOp = typeof obj.operation === "string" && obj.operation.length > 0;
   if (!hasQuery && !hasPersisted && !hasRedditOp) return null;
+  // Preserve any extra top-level fields (csrf_token, clientId, rid, etc.) so
+  // byte-roundtrip through the GraphQL encoder stays faithful. Without this,
+  // Reddit's envelope ({operation, variables, csrf_token}) rebuilt as just
+  // {operation, variables} — a silent authentication stripping the server
+  // rejects. Known fields are popped from the extras bag.
+  var standard = { query: 1, mutation: 1, variables: 1, operationName: 1, operation: 1, extensions: 1 };
+  var extra = null;
+  for (var k in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, k) && !standard[k]) {
+      if (!extra) extra = {};
+      extra[k] = obj[k];
+    }
+  }
   return {
     query: obj.query || obj.mutation || "",
     variables: obj.variables || null,
     operationName: obj.operationName || null,
-    // Reddit-style persisted-operation name. Treated as an alternative
-    // source of truth in deriveGraphQLMethodName.
     operation: hasRedditOp ? obj.operation : null,
     extensions: obj.extensions || null,
+    extra: extra,
   };
 }
 
@@ -1751,6 +1811,11 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
       title: doc.title || serviceName,
       description: doc.description || "Exported from UASR",
       version: doc.version || "v1",
+      // Preserve the internal service key (hostname + path prefix) so
+      // roundtrip import keys back to the SAME service. The import-side
+      // fallback derives hostname-only from servers[0].url, which loses
+      // path-prefixed keys like "www.google.com/MapsWizUi".
+      "x-service-key": serviceName,
     },
     servers: [{ url: doc.rootUrl || doc.baseUrl || "https://" + serviceName }],
     paths: {},
@@ -1823,7 +1888,13 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
             responses: { "200": { description: "OK" } },
           };
 
-          // Parameters
+          // Parameters. OpenAPI 3.0 `in` accepts only query/header/path/cookie;
+          // form-body params (location:"body" learned from form-urlencoded
+          // POSTs) must live in requestBody instead or the import path will
+          // silently drop them.
+          const formBodyProps = {};
+          const formBodyRequired = [];
+          const formBodyFieldNumbers = {};
           if (method.parameters) {
             for (const [pName, pDef] of Object.entries(method.parameters)) {
               const paramName = pDef.name || pName;
@@ -1834,9 +1905,17 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
                 ...(pDef._defaultValue != null ? { default: pDef._defaultValue } : {}),
                 ...(pDef._range ? { minimum: pDef._range.min, maximum: pDef._range.max } : {}),
               };
+              const loc = pDef.location || "query";
+              if (loc === "body" || loc === "form" || loc === "formData") {
+                // Form-body params → accumulate into requestBody schema.
+                formBodyProps[paramName] = paramSchema;
+                if (pDef.required) formBodyRequired.push(paramName);
+                if (pDef.number) formBodyFieldNumbers[paramName] = pDef.number;
+                continue;
+              }
               const param = {
                 name: paramName,
-                in: pDef.location || "query",
+                in: loc,
                 required: !!pDef.required,
                 description: pDef.description || "",
                 schema: paramSchema,
@@ -1847,13 +1926,27 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
             }
           }
 
-          // Request body
+          // Request body: prefer schema $ref; otherwise, synthesize a
+          // form-urlencoded schema from accumulated body params so a
+          // roundtrip through import can recover them.
           if (method.request?.$ref && doc.schemas?.[method.request.$ref]) {
             const ct = "application/json";
             operation.requestBody = {
               content: {
                 [ct]: { schema: { $ref: "#/components/schemas/" + method.request.$ref } },
               },
+            };
+          } else if (Object.keys(formBodyProps).length > 0) {
+            const schema = {
+              type: "object",
+              properties: formBodyProps,
+            };
+            if (formBodyRequired.length) schema.required = formBodyRequired;
+            if (Object.keys(formBodyFieldNumbers).length) {
+              schema["x-field-numbers"] = formBodyFieldNumbers;
+            }
+            operation.requestBody = {
+              content: { "application/x-www-form-urlencoded": { schema } },
             };
           }
 
@@ -1889,11 +1982,46 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
             }
           }
 
-          if (!operation.parameters.length) delete operation.parameters;
-
           // Preserve the original path so importers can roundtrip back
           // without the x-operation discriminator.
           if (path !== basePath) operation["x-original-path"] = basePath;
+
+          // When multiple discovery buckets carry the same method id
+          // (learned.X and probed.X for the same endpoint) the second
+          // write would overwrite the first and lose its parameters.
+          // Instead, MERGE: union parameters by name, prefer non-empty
+          // fields, keep request/response schema when either bucket has
+          // one. This preserves the information from both sources.
+          const priorOp = spec.paths[path][httpMethod];
+          if (priorOp && priorOp.operationId === operation.operationId) {
+            // Merge params
+            const mergedParams = [];
+            const seenParamNames = new Set();
+            for (const src of [priorOp.parameters || [], operation.parameters]) {
+              for (const p of src) {
+                if (!seenParamNames.has(p.name)) {
+                  seenParamNames.add(p.name);
+                  mergedParams.push(p);
+                }
+              }
+            }
+            operation.parameters = mergedParams;
+            // Prefer prior description if new is empty.
+            if (!operation.description && priorOp.description) {
+              operation.description = priorOp.description;
+            }
+            // Keep requestBody/responses where present.
+            if (!operation.requestBody && priorOp.requestBody) operation.requestBody = priorOp.requestBody;
+            if (priorOp.responses) {
+              operation.responses = Object.assign({}, priorOp.responses, operation.responses);
+            }
+            // Preserve x-data-chains if prior had them
+            if (!operation["x-data-chains"] && priorOp["x-data-chains"]) {
+              operation["x-data-chains"] = priorOp["x-data-chains"];
+            }
+          }
+
+          if (!operation.parameters.length) delete operation.parameters;
 
           spec.paths[path][httpMethod] = operation;
         }

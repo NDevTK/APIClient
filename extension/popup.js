@@ -42,6 +42,12 @@ let currentBodyMode = "form"; // "form" | "raw" | "graphql" | "multipart" | "msg
 // where bodyEditor is { kind: "json" | "graphql" | "form-urlencoded" | "raw", value, meta? }.
 // Reassembled into a multipart/mixed envelope on Send.
 let mpState = { boundary: null, parts: [] };
+// Tab ID for the currently-open Message Console channel. Initially null.
+// Set when initMsgConsole() opens a captured WS/PM/MC entry — the channel
+// lives in the TAB THAT CAPTURED IT, which may be different from the
+// popup's own tab (`currentTabId`) when browsing cross-tab logs. All
+// PM_GET_STATUS / MC_SEND_MSG / WS_SEND_MSG calls route through this tab.
+let currentChannelTabId = null;
 let currentChannelId = null;
 let currentChannelType = null; // "WEBSOCKET" | "POSTMESSAGE" | "MSGCHANNEL"
 let currentTargetOrigin = null; // For postMessage send
@@ -89,16 +95,29 @@ function setBodyMode(mode) {
   const isConsole = mode === "msgconsole";
   // Show the body/actions sections whenever a mode is set
   setSendPanelVisible(true);
-  document.getElementById("send-form-fields").style.display =
-    mode === "form" ? "block" : "none";
-  document.getElementById("send-raw-body").style.display =
-    mode === "raw" ? "block" : "none";
-  document.getElementById("send-graphql-fields").style.display =
-    mode === "graphql" ? "block" : "none";
-  const mpEl = document.getElementById("send-multipart-fields");
-  if (mpEl) mpEl.style.display = mode === "multipart" ? "block" : "none";
-  document.getElementById("send-ws-console").style.display =
-    isConsole ? "block" : "none";
+  // Toggle each mode panel by BOTH class and inline display. The initial
+  // HTML marks these panels with class="hidden" for the static default;
+  // leaving the class in place while only flipping `style.display` is
+  // inconsistent state that breaks class-based visibility checks. Keep
+  // class and display in sync.
+  const panels = [
+    ["send-form-fields", mode === "form"],
+    ["send-raw-body", mode === "raw"],
+    ["send-graphql-fields", mode === "graphql"],
+    ["send-multipart-fields", mode === "multipart"],
+    ["send-ws-console", isConsole],
+  ];
+  for (const [id, active] of panels) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (active) {
+      el.classList.remove("hidden");
+      el.style.display = "block";
+    } else {
+      el.classList.add("hidden");
+      el.style.display = "none";
+    }
+  }
   document.getElementById("send-frame-row").style.display =
     isConsole ? "none" : "";
   document.getElementById("send-key-section").style.display =
@@ -128,19 +147,164 @@ function gqlBuildOpPanel(idx, op) {
     ? `<div class="gql-field-label">Persisted Operation</div>` +
       `<input type="text" class="gql-operation" value="${esc(op.operation || "")}">`
     : "";
+  const varsRaw = op.variables ? (typeof op.variables === "string" ? op.variables : JSON.stringify(op.variables, null, 2)) : "";
   div.innerHTML =
     persistedHint +
     operationFieldHtml +
     `<div class="gql-field-label">Query</div>` +
     `<textarea class="gql-query" placeholder="query { user(id: 1) { name email } }" rows="4">${esc(op.query || "")}</textarea>` +
-    `<div class="gql-field-label">Variables (JSON)</div>` +
-    `<textarea class="gql-variables" placeholder='{"id": 1}' rows="2">${esc(op.variables ? (typeof op.variables === "string" ? op.variables : JSON.stringify(op.variables, null, 2)) : "")}</textarea>` +
+    `<div class="gql-field-label">Variables</div>` +
+    // Tree container is the authoritative editor. The raw textarea below
+    // stays in sync so callers (and existing gqlSaveCurrentOp path) can
+    // still read it, and power users can flip it open to edit raw JSON.
+    `<div class="gql-variables-tree" data-gql-idx="${idx}"></div>` +
+    `<details class="gql-variables-raw"><summary>Raw JSON</summary>` +
+    `<textarea class="gql-variables" placeholder='{"id": 1}' rows="3">${esc(varsRaw)}</textarea>` +
+    `</details>` +
     `<div class="gql-field-label">Operation Name</div>` +
     `<input type="text" class="gql-opname" placeholder="(optional)" value="${esc(op.operationName || "")}">` +
     `<details class="gql-extensions-toggle"><summary>Extensions</summary>` +
     `<textarea class="gql-extensions" placeholder='{"persistedQuery": {...}}' rows="2">${esc(op.extensions ? (typeof op.extensions === "string" ? op.extensions : JSON.stringify(op.extensions, null, 2)) : "")}</textarea>` +
     `</details>`;
+
+  // Populate the contextual tree editor. Uses the same form-field
+  // infrastructure the regular body uses, so we get:
+  //   - typed inputs (number / bool / string / nested object / array)
+  //   - rename buttons per field (alias persisted via RENAME_FIELD)
+  //   - AST-value chips and badge bar when applicable
+  queueMicrotask(() => { gqlRenderVariablesTree(div, op); });
   return div;
+}
+
+// Translate a parsed variables object into a tree of form-fields mounted
+// inside `.gql-variables-tree`. Applies persisted aliases from the
+// service's discovery doc (schema namespace: `__gqlVars_<operation>`).
+function gqlRenderVariablesTree(panelDiv, op) {
+  const container = panelDiv.querySelector(".gql-variables-tree");
+  if (!container) return;
+  container.innerHTML = "";
+
+  let parsed = null;
+  if (op.variables != null) {
+    if (typeof op.variables === "string") {
+      try { parsed = JSON.parse(op.variables); } catch (_) { parsed = null; }
+    } else {
+      parsed = op.variables;
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    container.innerHTML = '<div class="hint">Variables are not a JSON object — edit via Raw JSON below.</div>';
+    return;
+  }
+
+  // Resolve service + alias schema.
+  const epSel = document.getElementById("send-ep-select");
+  const selectedOpt = epSel?.options?.[epSel.selectedIndex];
+  const svc = selectedOpt?.dataset?.svc || null;
+  const opName = op.operationName || op.operation || "root";
+  const schemaName = "__gqlVars_" + opName;
+  let aliasProps = null;
+  if (svc && tabData?.discoveryDocs?.[svc]?.doc?.schemas?.[schemaName]?.properties) {
+    aliasProps = tabData.discoveryDocs[svc].doc.schemas[schemaName].properties;
+  }
+
+  // Aliases are keyed by the field's LOCAL wire name — the rename button
+  // captures the wrapper's data-name as the fieldKey. Display-only alias:
+  // mutate `displayName` (rendered in the label) and flag `customName`,
+  // but leave `name` (the wire key used for JSON serialisation and
+  // rendered/drift dedup) untouched so the outgoing body stays valid.
+  function applyAliases(fieldDef) {
+    fieldDef.parentSchema = schemaName;
+    if (aliasProps?.[fieldDef.name]?.customName && aliasProps[fieldDef.name].name) {
+      fieldDef.displayName = aliasProps[fieldDef.name].name;
+      fieldDef.customName = true;
+    }
+    if (Array.isArray(fieldDef.children)) {
+      for (const c of fieldDef.children) applyAliases(c);
+    }
+  }
+
+  for (const [key, value] of Object.entries(parsed)) {
+    const fieldDef = synthesizeFieldDefFromValue(key, value);
+    applyAliases(fieldDef);
+    container.appendChild(createFieldInput(key, fieldDef, "body", 0, value));
+  }
+
+  // Keep the raw textarea synced whenever the tree changes — the existing
+  // gqlSaveCurrentOp + server-send path reads from the textarea, and a
+  // user toggling the Raw JSON details should always see the current tree
+  // state there.
+  container.addEventListener("input", () => { gqlSyncVariablesFromTree(panelDiv); });
+  container.addEventListener("change", () => { gqlSyncVariablesFromTree(panelDiv); });
+
+  // And go the other way: when the user edits the Raw JSON textarea,
+  // re-parse it and rebuild the tree so the contextual editor matches.
+  // Debounced so we don't thrash on every keystroke.
+  const textarea = panelDiv.querySelector(".gql-variables");
+  if (textarea && !textarea.dataset.gqlSyncAttached) {
+    textarea.dataset.gqlSyncAttached = "1";
+    let timer = null;
+    const rebuild = () => {
+      try {
+        const parsed = JSON.parse(textarea.value || "null");
+        const op = gqlState.ops[gqlState.activeIdx];
+        if (!op) return;
+        op.variables = parsed;
+        gqlRenderVariablesTree(panelDiv, op);
+      } catch (_) { /* invalid JSON — leave tree as-is */ }
+    };
+    textarea.addEventListener("input", () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(rebuild, 400);
+    });
+  }
+}
+
+// Walk the tree and produce a JSON object; write it to the sibling
+// `.gql-variables` textarea so existing collection reads a current value.
+// `encodeFormToJson` lives in background.js (SW scope); the popup has to
+// translate the form-field tree locally.
+function gqlFieldTreeToJson(fields) {
+  const obj = {};
+  for (const f of fields || []) {
+    if (f.type === "object" || f.type === "message") {
+      if (f.label === "repeated") {
+        if (Array.isArray(f.value)) {
+          obj[f.name] = f.value.map(v => (v && typeof v === "object" && Array.isArray(v.children)) ? gqlFieldTreeToJson(v.children) : v);
+        } else if (Array.isArray(f.children)) {
+          obj[f.name] = f.children.map(c => Array.isArray(c.children) ? gqlFieldTreeToJson(c.children) : c.value);
+        } else obj[f.name] = [];
+        continue;
+      }
+      obj[f.name] = Array.isArray(f.children) && f.children.length
+        ? gqlFieldTreeToJson(f.children)
+        : (f.value && typeof f.value === "object" ? f.value : {});
+      continue;
+    }
+    if (f.label === "repeated" && Array.isArray(f.value)) { obj[f.name] = f.value.slice(); continue; }
+    if (f.value == null && !f.children?.length) continue;
+    if (f.type === "bool" || f.type === "boolean") { obj[f.name] = f.value === true || f.value === "true"; continue; }
+    if (f.type === "number" || f.type === "int32" || f.type === "int64" || f.type === "uint32" || f.type === "uint64" ||
+        f.type === "double" || f.type === "float" || f.type === "sint32" || f.type === "sint64") {
+      obj[f.name] = typeof f.value === "number" ? f.value : Number(f.value);
+      continue;
+    }
+    obj[f.name] = f.value;
+  }
+  return obj;
+}
+
+function gqlSyncVariablesFromTree(panelDiv) {
+  const container = panelDiv.querySelector(".gql-variables-tree");
+  const textarea = panelDiv.querySelector(".gql-variables");
+  if (!container || !textarea) return;
+  const fields = [];
+  for (const w of container.querySelectorAll(":scope > .form-field")) {
+    const r = collectSingleField(w);
+    if (r) fields.push(r);
+  }
+  const obj = gqlFieldTreeToJson(fields);
+  try { textarea.value = JSON.stringify(obj, null, 2); } catch (_) {}
 }
 
 function gqlRenderTabs() {
@@ -213,6 +377,10 @@ function gqlCollectAllOps() {
     operationName: op.operationName || null,
     operation: op.operation || null,
     extensions: op.extensions || null,
+    // Arbitrary top-level keys captured by _parseGqlOp (csrf_token,
+    // clientId, rid, etc.). Passed through untouched so rebuild emits the
+    // original envelope shape.
+    extra: op.extra || null,
   }));
 }
 
@@ -687,14 +855,29 @@ document.addEventListener("DOMContentLoaded", async () => {
         const methodId = select.dataset.discoveryId; // This is the ID of the selected method/endpoint
         const url = currentRequestUrl;
 
-        // Preserve current form data
-        const currentData = formValuesToInitialData(collectFormValues());
+        // Rename targeting the GraphQL-variables schema keeps the wire key
+        // intact — alias is display-only. The regular form path below
+        // rebuilds the whole body form, which would blow away the current
+        // tree state; for GQL we just re-render the active op panel.
+        const isGqlVarsRename = typeof schema === "string" && schema.startsWith("__gqlVars_");
+
+        // Snapshot GQL op state BEFORE the await below — STATE_UPDATED
+        // listeners, render() calls, or content script lifecycles can
+        // mutate gqlState mid-await and we'd otherwise re-render from
+        // empty defaults.
+        const savedGqlOp = isGqlVarsRename && gqlState.ops[gqlState.activeIdx]
+          ? JSON.parse(JSON.stringify(gqlState.ops[gqlState.activeIdx]))
+          : null;
+
+        const currentData = isGqlVarsRename
+          ? null
+          : formValuesToInitialData(collectFormValues());
 
         await chrome.runtime.sendMessage({
           type: "RENAME_FIELD",
           tabId: currentTabId,
           service: svc,
-          methodId, // Crucial for reliable lookup
+          methodId,
           schemaName: schema,
           fieldKey: key,
           newName,
@@ -707,14 +890,29 @@ document.addEventListener("DOMContentLoaded", async () => {
           tabId: currentTabId,
         });
 
-        // Reload form to reflect change, preserving current body mode
-        const savedBodyMode = currentBodyMode;
-        await loadVirtualSchema(svc, select.dataset.discoveryId, currentData);
-        if (currentBodyMode !== savedBodyMode) setBodyMode(savedBodyMode);
-        // Re-render response tree so renamed field is immediately visible
-        if (lastSendResult) {
-          delete lastSendResult.discovery; // Clear stale snapshot so tabData is used
-          renderResponse(lastSendResult);
+        if (isGqlVarsRename) {
+          // Restore the snapshot if something clobbered gqlState during
+          // the await, then rebuild the full op panel so rename surfaces
+          // everywhere (Query, Persisted Operation, Variables tree).
+          if (savedGqlOp) {
+            if (gqlState.ops.length === 0) {
+              gqlState.ops = [savedGqlOp];
+              gqlState.activeIdx = 0;
+            } else {
+              gqlState.ops[gqlState.activeIdx] = savedGqlOp;
+            }
+          }
+          gqlRenderAll();
+        } else {
+          // Reload form to reflect change, preserving current body mode
+          const savedBodyMode = currentBodyMode;
+          await loadVirtualSchema(svc, select.dataset.discoveryId, currentData);
+          if (currentBodyMode !== savedBodyMode) setBodyMode(savedBodyMode);
+          // Re-render response tree so renamed field is immediately visible
+          if (lastSendResult) {
+            delete lastSendResult.discovery;
+            renderResponse(lastSendResult);
+          }
         }
       }
     }
@@ -1836,7 +2034,14 @@ function buildFormFields(schema, initialData = null) {
       ? `Request Body (${esc(schema.requestBody.schemaName)})`
       : "Request Body";
     section.innerHTML = `<div class="form-section-label">${label}</div>`;
+    const renderedTop = new Set();
     for (const field of schema.requestBody.fields) {
+      renderedTop.add(field.name);
+      // A JSPB body's initialData is keyed by FIELD NUMBER (the protobuf
+      // tree produces `map[node.field]`). Claim that number as well, so
+      // the drift loop below doesn't re-render the same field under its
+      // numeric key as a second anonymous entry next to the named one.
+      if (field.number != null) renderedTop.add(String(field.number));
       const fieldVal = initialData
         ? (initialData[field.number] ?? initialData[field.name] ?? null)
         : null;
@@ -1849,6 +2054,28 @@ function buildFormFields(schema, initialData = null) {
           fieldVal,
         ),
       );
+    }
+    // Top-level schema drift: fields present in the captured body but
+    // not in the learned schema still need to reach the outgoing request.
+    // Without this, anything the extension hasn't learned yet gets
+    // silently stripped on replay — which is the opposite of what the
+    // user wants when they hit Send.
+    if (initialData && typeof initialData === "object" && !Array.isArray(initialData)) {
+      for (const [k, v] of Object.entries(initialData)) {
+        if (renderedTop.has(k)) continue;
+        // initialData may include path/query params keyed by string — skip
+        // keys that match any URL parameter definition.
+        if (schema.parameters && schema.parameters[k]) continue;
+        section.appendChild(
+          createFieldInput(
+            k,
+            synthesizeFieldDefFromValue(k, v),
+            "body",
+            0,
+            v,
+          ),
+        );
+      }
     }
     container.appendChild(section);
   }
@@ -1865,6 +2092,43 @@ function buildFormFields(schema, initialData = null) {
       document.getElementById("send-raw-body").style.display = "block";
     }
   }
+}
+
+// Build a field descriptor from a captured value when no schema field
+// exists. Lets the form render + collect every JSON property, not just
+// the ones the extension has already learned. Scalars get typed by their
+// JS type; objects become `type: "object"`; arrays become `label: "repeated"`.
+function synthesizeFieldDefFromValue(name, value) {
+  const base = { name, number: null, required: false, description: null, label: "optional", messageType: null, children: null };
+  if (value === null || value === undefined) return { ...base, type: "string" };
+  if (Array.isArray(value)) {
+    const firstObj = value.find(v => v && typeof v === "object" && !Array.isArray(v));
+    if (firstObj) {
+      // Array of objects — synthesize children from the first-seen keys
+      // so every item editor renders the same fields.
+      return {
+        ...base,
+        type: "object",
+        label: "repeated",
+        children: Object.entries(firstObj).map(([k, v]) => synthesizeFieldDefFromValue(k, v)),
+      };
+    }
+    const itemType = value.length ? typeOfScalar(value[0]) : "string";
+    return { ...base, type: itemType, label: "repeated" };
+  }
+  if (typeof value === "object") {
+    return {
+      ...base,
+      type: "object",
+      children: Object.entries(value).map(([k, v]) => synthesizeFieldDefFromValue(k, v)),
+    };
+  }
+  return { ...base, type: typeOfScalar(value) };
+}
+function typeOfScalar(v) {
+  if (typeof v === "number") return Number.isInteger(v) ? "int64" : "double";
+  if (typeof v === "boolean") return "bool";
+  return "string";
 }
 
 function createFieldInput(
@@ -1886,11 +2150,18 @@ function createFieldInput(
   if (fieldDef.location) wrapper.dataset.location = fieldDef.location;
 
   const labelEl = el("label", "form-field-label");
-  const displayName = fieldDef.name || name;
+  // `displayName` is the rendered label only — an explicit `displayName`
+  // override (used by the GraphQL variables tree to render aliases while
+  // keeping the wire key intact) wins, then the fieldDef's own custom
+  // name, then the caller's positional `name`.
+  const displayName = fieldDef.displayName || fieldDef.name || name;
   let labelHtml = `<span class="field-name">${esc(displayName)}</span>`;
 
-  // Add rename button for learned/indexed fields or parameters
-  if (fieldDef.number || name.startsWith("field") || category === "param") {
+  // Add rename button for learned/indexed fields, parameters, or any
+  // field where a caller has explicitly opted in by setting parentSchema
+  // to a non-empty value (used by the GraphQL variables tree to persist
+  // per-operation aliases under `__gqlVars_<op>`).
+  if (fieldDef.number || name.startsWith("field") || category === "param" || (fieldDef.parentSchema && fieldDef.parentSchema !== "params")) {
     labelHtml += ` <span class="btn-rename" title="Rename field" data-schema="${esc(fieldDef.parentSchema || "params")}" data-key="${esc(name)}">✎</span>`;
   }
 
@@ -1941,7 +2212,79 @@ function createFieldInput(
     wrapper.appendChild(valHint);
   }
 
-  if (fieldDef.type === "message" && fieldDef.children?.length) {
+  if (fieldDef.label === "repeated" && (fieldDef.type === "message" || fieldDef.type === "object")) {
+    // Repeated message / array of objects — render each captured item as its
+    // own collapsible message sub-editor. Without this, arrays like
+    // `events: [{ts: 1, kind: "x"}, {ts: 2, kind: "y"}]` had no UI at all
+    // and the popup fell back to the raw textarea, defeating the form
+    // editor. Matches the encodeFormToJson repeated-message path.
+    const listContainer = el("div", "form-repeated-list form-repeated-message-list");
+    listContainer.dataset.fieldType = fieldDef.type;
+
+    const buildItem = (itemValue) => {
+      const itemWrapper = el("div", "form-repeated-item form-message-group");
+      const summary = document.createElement("div");
+      summary.className = "form-repeated-item-summary";
+      summary.textContent = (fieldDef.messageType || fieldDef.name || "item");
+      const removeBtn = el("button", "btn-small");
+      removeBtn.textContent = "×";
+      removeBtn.type = "button";
+      removeBtn.title = "Remove item";
+      removeBtn.addEventListener("click", () => itemWrapper.remove());
+      summary.appendChild(removeBtn);
+      itemWrapper.appendChild(summary);
+
+      const childContainer = el("div", "form-message-children");
+      const schemaChildren = fieldDef.children || [];
+      const rendered = new Set();
+      for (const child of schemaChildren) {
+        rendered.add(child.name);
+        if (child.number != null) rendered.add(String(child.number));
+        const childVal = itemValue && typeof itemValue === "object"
+          ? (itemValue[child.name] ?? itemValue[child.number] ?? null)
+          : null;
+        childContainer.appendChild(
+          createFieldInput(
+            child.name,
+            { ...child, parentSchema: fieldDef.messageType || fieldDef.parentSchema },
+            category,
+            depth + 1,
+            childVal,
+          ),
+        );
+      }
+      // Union with the captured item's own keys — heterogeneous arrays
+      // (e.g. statsigapi events where only SOME items carry `value`) have
+      // first-seen schema drift; without this, per-item extras get
+      // silently dropped on rebuild.
+      if (itemValue && typeof itemValue === "object" && !Array.isArray(itemValue)) {
+        for (const [k, v] of Object.entries(itemValue)) {
+          if (rendered.has(k)) continue;
+          childContainer.appendChild(
+            createFieldInput(
+              k,
+              synthesizeFieldDefFromValue(k, v),
+              category,
+              depth + 1,
+              v,
+            ),
+          );
+        }
+      }
+      itemWrapper.appendChild(childContainer);
+      return itemWrapper;
+    };
+
+    const items = Array.isArray(initialValue) ? initialValue : [];
+    for (const it of items) listContainer.appendChild(buildItem(it));
+    wrapper.appendChild(listContainer);
+
+    const addBtn = el("button", "btn-small");
+    addBtn.textContent = "+ Add item";
+    addBtn.type = "button";
+    addBtn.addEventListener("click", () => listContainer.appendChild(buildItem(null)));
+    wrapper.appendChild(addBtn);
+  } else if ((fieldDef.type === "message" || fieldDef.type === "object") && fieldDef.children?.length) {
     const details = document.createElement("details");
     details.open = initialValue !== null || depth < 1;
     details.className = "form-message-group";
@@ -1950,14 +2293,21 @@ function createFieldInput(
     details.appendChild(summary);
 
     const childContainer = el("div", "form-message-children");
+    const rendered = new Set();
+    const inheritedSchema = fieldDef.messageType || fieldDef.parentSchema;
     for (const child of fieldDef.children) {
-      const childVal = initialValue ? initialValue[child.number] : null;
+      // Prefer by name (JSON) and fall back to number (JSPB / protobuf).
+      rendered.add(child.name);
+      if (child.number != null) rendered.add(String(child.number));
+      const childVal = initialValue
+        ? (initialValue[child.name] ?? initialValue[child.number] ?? null)
+        : null;
       childContainer.appendChild(
         createFieldInput(
           child.name,
           {
             ...child,
-            parentSchema: fieldDef.messageType || fieldDef.parentSchema,
+            parentSchema: inheritedSchema,
           },
           category,
           depth + 1,
@@ -1965,8 +2315,62 @@ function createFieldInput(
         ),
       );
     }
+    // Schema drift: render fields present in the captured value but not
+    // in the learned schema, so roundtrip doesn't silently drop them.
+    // Propagate parentSchema so drift-synthesised children also get the
+    // rename button when the parent opted in (e.g. GraphQL variables).
+    if (initialValue && typeof initialValue === "object" && !Array.isArray(initialValue)) {
+      for (const [k, v] of Object.entries(initialValue)) {
+        if (rendered.has(k)) continue;
+        const synthDef = synthesizeFieldDefFromValue(k, v);
+        if (inheritedSchema) synthDef.parentSchema = inheritedSchema;
+        childContainer.appendChild(
+          createFieldInput(
+            k,
+            synthDef,
+            category,
+            depth + 1,
+            v,
+          ),
+        );
+      }
+    }
     details.appendChild(childContainer);
     wrapper.appendChild(details);
+  } else if (fieldDef.type === "message" || fieldDef.type === "object") {
+    // Message-shaped field with no known children — happens when a
+    // captured JSON body has a nested object the schema didn't learn
+    // yet (e.g. `{extensions: {persistedQuery: {sha256Hash: "…"}}}`).
+    // Synthesize children from the captured value's own keys so the
+    // form can display and collect every field.
+    if (initialValue && typeof initialValue === "object" && !Array.isArray(initialValue)) {
+      const details = document.createElement("details");
+      details.open = depth < 1;
+      details.className = "form-message-group";
+      const summary = document.createElement("summary");
+      summary.textContent = fieldDef.name || "object";
+      details.appendChild(summary);
+      const childContainer = el("div", "form-message-children");
+      const inheritedSchema = fieldDef.messageType || fieldDef.parentSchema;
+      for (const [k, v] of Object.entries(initialValue)) {
+        const synthDef = synthesizeFieldDefFromValue(k, v);
+        if (inheritedSchema) synthDef.parentSchema = inheritedSchema;
+        childContainer.appendChild(
+          createFieldInput(
+            k,
+            synthDef,
+            category,
+            depth + 1,
+            v,
+          ),
+        );
+      }
+      details.appendChild(childContainer);
+      wrapper.appendChild(details);
+    } else {
+      // No captured value and no schema — empty object placeholder.
+      wrapper.appendChild(createSingleInput({ type: "string" }, ""));
+    }
   } else if (fieldDef.label === "repeated" && fieldDef.type !== "message") {
     const listContainer = el("div", "form-repeated-list");
     listContainer.dataset.fieldType = fieldDef.type;
@@ -2137,7 +2541,29 @@ function collectSingleField(wrapper) {
     : null;
   const label = wrapper.dataset.label || "optional";
 
-  if (type === "message") {
+  // Repeated message (array of objects) — collect each item's children
+  // tree. Must be checked BEFORE the scalar `label === "repeated"` branch
+  // so the right list container gets walked.
+  if (label === "repeated" && (type === "message" || type === "object")) {
+    const list = wrapper.querySelector(":scope > .form-repeated-list.form-repeated-message-list");
+    if (!list) return null;
+    const items = [];
+    for (const itemEl of list.querySelectorAll(":scope > .form-repeated-item")) {
+      const childContainer = itemEl.querySelector(":scope > .form-message-children");
+      const children = [];
+      if (childContainer) {
+        for (const child of childContainer.querySelectorAll(":scope > .form-field")) {
+          const cv = collectSingleField(child);
+          if (cv) children.push(cv);
+        }
+      }
+      items.push({ children });
+    }
+    if (!items.length) return null;
+    return { name, type, number, label, value: items, children: null };
+  }
+
+  if (type === "message" || type === "object") {
     const childContainer = wrapper.querySelector(
       ":scope > .form-message-group > .form-message-children",
     );
@@ -2288,9 +2714,22 @@ async function sendRequest() {
   const sel = document.getElementById("send-ep-select");
   const selectedOpt = sel.options[sel.selectedIndex];
 
+  // Route the SEND through the tab+frame that originally captured this
+  // request when available. The popup's own active tab has different
+  // cookies, CORS origin, and iframe tree — firing there silently breaks
+  // cross-tab replay (requests against site B from a popup opened on site
+  // A) and iframe-captured requests. Matches the routing already used for
+  // WebSocket/postMessage consoles (currentChannelTabId).
+  const replayTabId = currentReplayRequest?._tabId != null
+    ? currentReplayRequest._tabId
+    : currentTabId;
+  const replayFrameId = currentReplayRequest?.frameId != null
+    ? currentReplayRequest.frameId
+    : currentFrameId;
+
   const msg = {
     type: "SEND_REQUEST",
-    tabId: currentTabId,
+    tabId: replayTabId,
     endpointKey: epKey,
     service: selectedOpt?.dataset?.svc,
     methodId: selectedOpt?.dataset?.discoveryId,
@@ -2299,7 +2738,7 @@ async function sendRequest() {
     contentType,
     headers,
     body,
-    frameId: currentFrameId,
+    frameId: replayFrameId,
     apiKeyOverride: currentKeyOverride,
   };
 
@@ -2329,6 +2768,11 @@ async function initMsgConsole(req) {
   // For PM reply: target is the sourceOrigin (who sent to us, we reply back to them)
   currentTargetOrigin = req.sourceOrigin || null;
   currentChannelFrameId = req.frameId ?? null;
+  // Bind the channel to the tab that captured it. When logFilter=="all"
+  // or we're viewing a closed-tab log, `req._tabId` is set to the origin
+  // tab during log flattening. Default back to currentTabId when missing
+  // (same-tab log view).
+  currentChannelTabId = (req._tabId != null) ? req._tabId : currentTabId;
   setBodyMode("msgconsole");
 
   // Dynamic label based on channel type
@@ -2412,8 +2856,9 @@ async function refreshMsgConsole() {
   const statusType = currentChannelType === "POSTMESSAGE" ? "PM_GET_STATUS"
     : currentChannelType === "MSGCHANNEL" ? "MC_GET_STATUS" : "WS_GET_STATUS";
   try {
+    const routedTab = currentChannelTabId != null ? currentChannelTabId : currentTabId;
     const result = await chrome.runtime.sendMessage({
-      type: statusType, tabId: currentTabId, channelId: currentChannelId,
+      type: statusType, tabId: routedTab, channelId: currentChannelId,
     });
 
     if (currentChannelType === "POSTMESSAGE" || currentChannelType === "MSGCHANNEL") {
@@ -2451,21 +2896,23 @@ async function sendConsoleMessage() {
   sendBtn.disabled = true;
   sendBtn.textContent = "Sending...";
   try {
+    // Route through the channel's OWN tab (captured) not the popup's tab.
+    const routedTab = currentChannelTabId != null ? currentChannelTabId : currentTabId;
     let msgPayload;
     if (currentChannelType === "POSTMESSAGE") {
       msgPayload = {
-        type: "PM_SEND_MSG", tabId: currentTabId, channelId: currentChannelId,
+        type: "PM_SEND_MSG", tabId: routedTab, channelId: currentChannelId,
         data: data, targetOrigin: currentTargetOrigin || "*",
         frameId: currentChannelFrameId,
       };
     } else if (currentChannelType === "MSGCHANNEL") {
       msgPayload = {
-        type: "MC_SEND_MSG", tabId: currentTabId, channelId: currentChannelId,
+        type: "MC_SEND_MSG", tabId: routedTab, channelId: currentChannelId,
         data: data, frameId: currentChannelFrameId,
       };
     } else {
       msgPayload = {
-        type: "WS_SEND_MSG", tabId: currentTabId,
+        type: "WS_SEND_MSG", tabId: routedTab,
         channelId: currentChannelId, data: data,
         frameId: currentChannelFrameId,
       };
@@ -3629,6 +4076,13 @@ async function replayRequest(reqId, sourceTabId) {
     console.error(`[Replay] Request ${reqId} not found in log`);
     return;
   }
+  // Stamp the origin tab so downstream sendRequest routes through it.
+  // requestLog entries inside allTabsData are NOT pre-annotated — only the
+  // flattened view in renderResponsePanel adds _tabId. Without this stamp,
+  // currentReplayRequest._tabId is undefined and Send falls back to the
+  // popup's own active tab, silently sending cross-tab replays to the
+  // wrong origin.
+  if (sourceTabId != null && req._tabId == null) req._tabId = sourceTabId;
   currentReplayRequest = req;
 
   // Auto-select the frame this request came from (if available)
@@ -3643,6 +4097,12 @@ async function replayRequest(reqId, sourceTabId) {
 
   // Message console mode: WebSocket or postMessage
   if (req.method === "WEBSOCKET" || req.method === "POSTMESSAGE" || req.method === "MSGCHANNEL") {
+    // Ensure the captured channel's origin tab is propagated — the click
+    // path reaches here with the sourceTabId argument, which is what
+    // initMsgConsole needs to route all subsequent SW calls correctly.
+    // Without this, the popup's own tab id would be used, and the SW
+    // couldn't find the captured entry.
+    if (sourceTabId != null && req._tabId == null) req._tabId = sourceTabId;
     await initMsgConsole(req);
     document.querySelector(".tab[data-panel='send']").click();
     return;

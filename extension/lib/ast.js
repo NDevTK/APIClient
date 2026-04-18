@@ -6474,6 +6474,18 @@ function _traceValueSourceInner(path, node) {
         _t.isIdentifier(node.property) && _LOCATION_SAFE_PROPS[node.property.name]) {
       return { sourceType: "literal", source: null };
     }
+    // `window.location.<safe-prop>` / `self.location.<safe-prop>`: same as
+    // above but through the global prefix. Without this branch, patterns
+    // like `new URL(x, window.location.origin)` (standard same-origin
+    // idiom) get flagged HIGH. Observed on github's showMore paginator.
+    if (_t.isMemberExpression(node.object) && !node.object.computed &&
+        _t.isIdentifier(node.object.object) &&
+        (node.object.object.name === "window" || node.object.object.name === "self") &&
+        !path.scope.getBinding(node.object.object.name) &&
+        _t.isIdentifier(node.object.property, { name: "location" }) &&
+        _t.isIdentifier(node.property) && _LOCATION_SAFE_PROPS[node.property.name]) {
+      return { sourceType: "literal", source: null };
+    }
   }
   // Computed location access: `location[x]` where x may select a tainted
   // prop. Safest: classify dynamic; the sink severity will be MEDIUM, not
@@ -6669,7 +6681,17 @@ function _traceValueSourceInner(path, node) {
               if (_ITERATION_METHODS[_iterMethod] || _iterMethod === "then" || _iterMethod === "catch") {
                 // V4: Check if the callee object has a known non-iterable type
                 var _iterObjType = _getTrackedType(_iterParent.get("callee.object"), _iterParent.node.callee.object);
-                if (!(_ITERATION_METHODS[_iterMethod] && _iterObjType && _NON_ITERABLE_TYPES[_iterObjType])) {
+                // For .then(fn): break taint propagation when the Promise
+                // was produced by a network call (fetch/Request/XHR). The
+                // resolved value is the SERVER'S response, not the URL
+                // that was requested — even if the URL came from a tainted
+                // source, the server's response bytes are server-controlled.
+                // Reflected XSS via server echo is a server-side bug, not
+                // a client-side DOM-XSS sink the AST should flag HIGH.
+                if ((_iterMethod === "then" || _iterMethod === "catch") &&
+                    _isNetworkProducingCall(_iterParent.get("callee.object"))) {
+                  // skip — resolved value is server-controlled
+                } else if (!(_ITERATION_METHODS[_iterMethod] && _iterObjType && _NON_ITERABLE_TYPES[_iterObjType])) {
                   var _iterObjSrc = _traceValueSource(_iterParent.get("callee.object"));
                   if (_iterObjSrc.sourceType === "user-controlled") return _iterObjSrc;
                 }
@@ -6689,7 +6711,11 @@ function _traceValueSourceInner(path, node) {
                   if (_ITERATION_METHODS[_irMethod] || _irMethod === "then" || _irMethod === "catch") {
                     // V4: Check if the callee object has a known non-iterable type
                     var _irObjType = _getTrackedType(_irParent.get("callee.object"), _irParent.node.callee.object);
-                    if (!(_ITERATION_METHODS[_irMethod] && _irObjType && _NON_ITERABLE_TYPES[_irObjType])) {
+                    // Same network-response taint-break as the direct branch above.
+                    if ((_irMethod === "then" || _irMethod === "catch") &&
+                        _isNetworkProducingCall(_irParent.get("callee.object"))) {
+                      // skip — resolved value is server-controlled
+                    } else if (!(_ITERATION_METHODS[_irMethod] && _irObjType && _NON_ITERABLE_TYPES[_irObjType])) {
                       var _irObjSrc = _traceValueSource(_irParent.get("callee.object"));
                       if (_irObjSrc.sourceType === "user-controlled") return _irObjSrc;
                     }
@@ -6735,7 +6761,14 @@ function _traceValueSourceInner(path, node) {
                      _t.isIdentifier(_aeCal.property, { name: "addEventListener" })) ||
                     (_t.isIdentifier(_aeCal, { name: "addEventListener" }) &&
                      !funcPath.scope.getBinding("addEventListener"))) {
-                  _isMsgHandler = true;
+                  // ONLY treat as a cross-origin postMessage listener when
+                  // the receiver could be cross-origin. BroadcastChannel,
+                  // Worker, SharedWorker, MessageChannel, EventSource are
+                  // all same-origin-by-spec — their "message" events never
+                  // carry cross-origin data, so origin checks don't apply.
+                  if (_isCrossOriginMsgReceiver(_aeCal, _mhParent)) {
+                    _isMsgHandler = true;
+                  }
                 }
               }
             }
@@ -6774,7 +6807,9 @@ function _traceValueSourceInner(path, node) {
                                _t.isIdentifier(_mhOuterCallee.property, { name: "addEventListener" })) ||
                               (_t.isIdentifier(_mhOuterCallee, { name: "addEventListener" }) &&
                                !_mhCallParent.scope.getBinding("addEventListener"))) {
-                            _isMsgHandler = true;
+                            if (_isCrossOriginMsgReceiver(_mhOuterCallee, _mhCallParent)) {
+                              _isMsgHandler = true;
+                            }
                           }
                         }
                       }
@@ -6985,6 +7020,255 @@ function _pushDangerous(result, node, type, description, severity, src) {
     severity: severity, codeContext: _extractCodeContext(node, src),
   });
 }
+
+// Does this CallExpression path produce a Promise whose resolved value is a
+// server-controlled response where the SERVER'S ORIGIN cannot be chosen
+// by an attacker? If yes, taint doesn't propagate from the URL argument
+// to the `.then(response)` callback — the response bytes come from YOUR
+// server (reflected XSS is a server-side bug, not a client DOM sink).
+//
+// If NO — i.e. the URL's origin could be attacker-controlled (e.g.
+// `fetch(location.hash)`, `fetch(attackerInput)`) — taint MUST propagate
+// because the attacker can host the response on their own server.
+//
+// Conservative default: return false (keep taint) unless we can prove the
+// fetch target is same-origin.
+function _isNetworkProducingCall(callPath) {
+  if (!callPath || !callPath.node) return false;
+  var node = callPath.node;
+  if (!_t.isCallExpression(node)) return false;
+  var callee = node.callee;
+
+  // Direct `fetch(urlArg)` / `window.fetch(urlArg)` etc.: only break taint
+  // when the URL argument is provably same-origin.
+  var isBareFetch = _t.isIdentifier(callee, { name: "fetch" }) && !callPath.scope.getBinding("fetch");
+  var isScopedFetch = _t.isMemberExpression(callee) && !callee.computed &&
+    _t.isIdentifier(callee.property, { name: "fetch" }) &&
+    _t.isIdentifier(callee.object) &&
+    (callee.object.name === "window" || callee.object.name === "self" || callee.object.name === "globalThis") &&
+    !callPath.scope.getBinding(callee.object.name);
+  if (isBareFetch || isScopedFetch) {
+    if (node.arguments.length === 0) return false;
+    return _isSameOriginFetchTarget(callPath.get("arguments.0"));
+  }
+
+  // Chained `fetch(...).then(...)` / `.then().then(...)` / `fetch(...).catch(...)`:
+  // walk the prefix chain down to a root fetch and check its URL. Each
+  // intermediate `.then(r => r.text())` preserves the server-origin
+  // constraint — if the root fetch was same-origin, the response body at
+  // any .then depth is still same-origin-served.
+  if (_t.isMemberExpression(callee) && !callee.computed && _t.isIdentifier(callee.property)) {
+    var m = callee.property.name;
+    if (m === "then" || m === "catch" || m === "finally") {
+      return _isNetworkProducingCall(callPath.get("callee.object"));
+    }
+    // Response-reader methods (resp.json(), resp.text(), etc.). These are
+    // called on a Response object passed into a .then(r => ...). Whether
+    // this "produces" same-origin content depends on the original fetch,
+    // not visible from here. Conservative: return false (keep taint).
+    if (m === "json" || m === "text" || m === "blob" || m === "arrayBuffer" || m === "formData") {
+      return false;
+    }
+  }
+  return false;
+}
+
+// Does the URL argument to fetch() provably target a same-origin resource?
+// Returns true only when we can statically determine the target origin is
+// the page's own origin (so the response is under the page's trust). Any
+// uncertainty → return false so taint keeps propagating (safe default).
+//
+// Recognized same-origin shapes:
+//   "/absolute/path" or "./relative" or "relative" string literals without scheme
+//   `/path-with-${tainted-segments}` — path is relative
+//   new URL(x, location.origin) / new URL(x, window.location.origin) / new URL(x, self.location.origin)
+//   new URL(x, document.baseURI) where base is same-origin (rely on server-set base tag)
+//   URL identifier that resolves to one of the above
+function _isSameOriginFetchTarget(argPath) {
+  if (!argPath || !argPath.node) return false;
+  var node = argPath.node;
+
+  // String literal — same-origin only if NOT absolute and NOT protocol-relative.
+  if (_t.isStringLiteral(node)) {
+    var v = node.value;
+    if (/^https?:/i.test(v)) return false;              // absolute URL → foreign origin possible
+    if (v.startsWith("//")) return false;               // protocol-relative → foreign origin
+    return true;                                        // path-only
+  }
+
+  // Template literal: first quasi determines the prefix.
+  if (_t.isTemplateLiteral(node)) {
+    var quasis = node.quasis;
+    if (!quasis.length) return false;
+    var head = (quasis[0] && quasis[0].value && quasis[0].value.raw) || "";
+    if (/^https?:/i.test(head)) return false;
+    if (head.startsWith("//")) return false;
+    if (head.startsWith("/") || head.startsWith("./") || head.startsWith("../")) return true;
+    // Starts with `${expr}...` — can't tell what expr resolves to.
+    if (head === "") return false;
+    // Non-absolute relative path
+    return true;
+  }
+
+  // `new URL(input, base)` — same-origin iff the BASE is a known same-origin
+  // AND the INPUT doesn't override the base origin (absolute / protocol-
+  // relative strings override). For safety, require the input to be
+  // path-only if we can see it; otherwise rely solely on the base.
+  if (_t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URL" }) &&
+      !argPath.scope.getBinding("URL") && node.arguments.length >= 2) {
+    var baseArg = node.arguments[1];
+    if (_isSameOriginBaseExpr(baseArg, argPath.scope)) {
+      // If the input is a known-relative string, definitely same-origin.
+      var inputArg = node.arguments[0];
+      if (_t.isStringLiteral(inputArg) && !/^https?:/i.test(inputArg.value) && !inputArg.value.startsWith("//")) {
+        return true;
+      }
+      // Input could be absolute — but fetch's RESOLVED URL is what matters.
+      // new URL("https://evil.com", location.origin) resolves to https://evil.com.
+      // Conservative: only same-origin when we can see the input is relative.
+      if (_t.isTemplateLiteral(inputArg)) {
+        var qs = inputArg.quasis;
+        var ihead = (qs[0] && qs[0].value && qs[0].value.raw) || "";
+        if (!/^https?:/i.test(ihead) && !ihead.startsWith("//") && ihead !== "") return true;
+      }
+      return false;
+    }
+  }
+
+  // Identifier — resolve to init.
+  if (_t.isIdentifier(node)) {
+    var b = argPath.scope.getBinding(node.name);
+    if (b && b.path.isVariableDeclarator() && b.path.node.init) {
+      return _isSameOriginFetchTarget(b.path.get("init"));
+    }
+    return false;
+  }
+
+  // Binary `+` concatenation: `"/api?" + tainted` — walk left-most descendant
+  // and check its string prefix. If the leftmost leaf is a same-origin
+  // relative-path literal, the whole expression targets same-origin.
+  // Use an iterative walker (no recursion on chainable + nodes) per
+  // CLAUDE.md rules.
+  if (_t.isBinaryExpression(node) && node.operator === "+") {
+    var leftmost = node;
+    while (_t.isBinaryExpression(leftmost) && leftmost.operator === "+") {
+      leftmost = leftmost.left;
+    }
+    if (_t.isStringLiteral(leftmost)) {
+      var lv = leftmost.value;
+      if (/^https?:/i.test(lv)) return false;
+      if (lv.startsWith("//")) return false;
+      if (lv.startsWith("/") || lv.startsWith("./") || lv.startsWith("../")) return true;
+      // Empty prefix or leading-identifier prefix — can't prove same-origin.
+      return false;
+    }
+    return false;
+  }
+
+  // Call expression like `someUrl.toString()` where someUrl is a URL we
+  // know is same-origin — walk into the callee's object.
+  if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) &&
+      !node.callee.computed && _t.isIdentifier(node.callee.property, { name: "toString" })) {
+    return _isSameOriginFetchTarget(argPath.get("callee.object"));
+  }
+
+  // Member expression like `URL_CONST.toString()` on a URL we can resolve — skip.
+  return false;
+}
+
+// Base argument to new URL(...) — is it a known same-origin value?
+// Recognizes: location.origin, location.href, window.location.origin/href,
+// self.location.origin/href, document.baseURI, document.URL.
+function _isSameOriginBaseExpr(node, scope) {
+  if (!node) return false;
+  // `location.origin` / `location.href` / `location.toString()`.
+  if (_t.isMemberExpression(node) && !node.computed &&
+      _t.isIdentifier(node.object, { name: "location" }) &&
+      scope && !scope.getBinding("location")) {
+    return _isSameOriginLocationProp(node.property);
+  }
+  // `window.location.origin`, `self.location.origin`, `globalThis.location.origin`.
+  if (_t.isMemberExpression(node) && !node.computed &&
+      _t.isMemberExpression(node.object) && !node.object.computed &&
+      _t.isIdentifier(node.object.object) &&
+      (node.object.object.name === "window" || node.object.object.name === "self" || node.object.object.name === "globalThis") &&
+      scope && !scope.getBinding(node.object.object.name) &&
+      _t.isIdentifier(node.object.property, { name: "location" })) {
+    return _isSameOriginLocationProp(node.property);
+  }
+  // `document.baseURI` / `document.URL` — reflect current page's URL.
+  if (_t.isMemberExpression(node) && !node.computed &&
+      _t.isIdentifier(node.object, { name: "document" }) &&
+      scope && !scope.getBinding("document") &&
+      _t.isIdentifier(node.property) &&
+      (node.property.name === "baseURI" || node.property.name === "URL" || node.property.name === "documentURI")) {
+    return true;
+  }
+  return false;
+}
+
+function _isSameOriginLocationProp(propNode) {
+  if (!_t.isIdentifier(propNode)) return false;
+  var name = propNode.name;
+  // origin/host/hostname/protocol/port: all reflect the current page origin.
+  // href/pathname: contain current origin too, plus path. Still same-origin base.
+  return name === "origin" || name === "href" || name === "host" ||
+         name === "hostname" || name === "protocol" || name === "port" ||
+         name === "pathname" || name === "toString";
+}
+
+// Same-origin-by-spec channels — their "message" events never carry data
+// from a different origin, so the usual `event.origin` check doesn't
+// apply. Observed as FP class on github (BroadcastChannel listeners).
+var _SAME_ORIGIN_CHANNEL_CONSTRUCTORS = {
+  "BroadcastChannel": 1,
+  "Worker": 1,
+  "SharedWorker": 1,
+  "MessageChannel": 1,
+  // NOTE: MessagePort messages CAN come from another origin (the port was
+  // transferred across postMessage). Intentionally NOT in this list.
+  "EventSource": 1,
+};
+
+// Given a bare addEventListener callee — typically `<receiver>.addEventListener`
+// or a bare `addEventListener` — decide whether the receiver is a possibly
+// cross-origin window/frame. Cross-origin listeners SHOULD be checking
+// event.origin; same-origin-only receivers (BroadcastChannel, Worker,
+// SharedWorker, MessageChannel, EventSource) do not need it.
+//
+// Returns true when the receiver is (or could be) a cross-origin window,
+// false when it's provably a same-origin-only channel.
+function _isCrossOriginMsgReceiver(callee, callPath) {
+  // Bare `addEventListener` call at global scope — that's window.addEventListener.
+  if (_t.isIdentifier(callee)) return true;
+  if (!_t.isMemberExpression(callee)) return false;
+  var receiver = callee.object;
+  // `window.addEventListener`, `self.addEventListener`, etc.
+  if (_t.isIdentifier(receiver)) {
+    var name = receiver.name;
+    if (_SAME_ORIGIN_CHANNEL_CONSTRUCTORS[name]) return false;
+    // Cross-origin-capable globals.
+    if (name === "window" || name === "self" || name === "globalThis" ||
+        name === "top" || name === "parent" || name === "opener") return true;
+    // Resolve the binding — if it traces to a same-origin-only constructor,
+    // skip. Otherwise conservatively assume cross-origin (e.g. a stored
+    // reference to parent frame).
+    var tracked = _getTrackedType(callPath, receiver);
+    if (tracked && _SAME_ORIGIN_CHANNEL_CONSTRUCTORS[tracked]) return false;
+    return true;
+  }
+  // `new BroadcastChannel("x").addEventListener(...)` and similar — the
+  // receiver is a NewExpression whose constructor we can inspect.
+  if (_t.isNewExpression(receiver) && _t.isIdentifier(receiver.callee) &&
+      !callPath.scope.getBinding(receiver.callee.name) &&
+      _SAME_ORIGIN_CHANNEL_CONSTRUCTORS[receiver.callee.name]) {
+    return false;
+  }
+  // `window.frames[N].addEventListener(...)`, `iframe.contentWindow.addEventListener(...)`,
+  // `somePort.addEventListener(...)`, etc. — conservatively flag.
+  return true;
+}
+
 
 // Check if an AST node refers to the global location object:
 // location, window.location, self.location, document.location
@@ -7314,17 +7598,130 @@ function _processReactDangerousHTML(path, result) {
   }
 }
 
+// Is `path` an expression whose value is an object with attacker-chosen
+// KEYS (as opposed to merely attacker-chosen values)? Prototype pollution
+// via `Object.assign(target, source)` requires keys the attacker can set
+// to e.g. `"__proto__"` or `"constructor.prototype.*"`, so a string
+// source, a matched-params object whose keys come from route declarations,
+// or any function-call result whose shape is controlled by the callee is
+// NOT a real vector.
+//
+// Flag only on structures that literally build objects from arbitrary
+// user input:
+//   - JSON.parse(taintedString)
+//   - Object.fromEntries(taintedPairsIterable)
+//   - structuredClone(<arbitrary-key-source>)
+//   - Object.assign({}, …arbitrary-key-source…)
+//   - Spread/rest of any of the above (`{ ...JSON.parse(x) }`)
+//   - ObjectExpression with a computed key whose source is user-controlled
+//   - MemberExpression whose root object is arbitrary-key (e.g. JSON.parse
+//     result then `.nested`)
+//
+// Implementation is iterative with a visited set so deep spread/chain
+// expressions can't stack-overflow (matches the CLAUDE.md AST policy),
+// and follows variable chains across multiple scope hops rather than
+// stopping at the first binding.
+function _isArbitraryKeyObjectSource(path) {
+  if (!path || !path.node) return false;
+  var stack = [path];
+  var visited = new Set();
+  while (stack.length) {
+    var p = stack.pop();
+    if (!p || !p.node) continue;
+    if (visited.has(p.node)) continue;
+    visited.add(p.node);
+    var n = p.node;
+
+    // Identifier: follow the scope binding chain. Initializer of the
+    // VariableDeclarator inherits the classification; loop to absorb
+    // `var a = x; var b = a; var c = b;` chains.
+    if (_t.isIdentifier(n)) {
+      var binding = p.scope.getBinding(n.name);
+      if (binding && binding.path && binding.path.isVariableDeclarator() && binding.path.node.init) {
+        stack.push(binding.path.get("init"));
+      }
+      continue;
+    }
+
+    // MemberExpression: `.x` / `[y]`. If the root object is arbitrary-key,
+    // then any property access on it is also arbitrary-key — `data.user`
+    // where `data = JSON.parse(t)` still carries the attacker's ability
+    // to name keys in the nested structure.
+    if (_t.isMemberExpression(n)) {
+      stack.push(p.get("object"));
+      continue;
+    }
+
+    // ObjectExpression: fixed keys unless a computed key is tainted or a
+    // spread element carries an arbitrary-key source.
+    if (_t.isObjectExpression(n)) {
+      for (var i = 0; i < n.properties.length; i++) {
+        var prop = n.properties[i];
+        if (_t.isSpreadElement(prop)) {
+          stack.push(p.get("properties." + i + ".argument"));
+        } else if (_t.isObjectProperty(prop) && prop.computed) {
+          var keySrc = _traceValueSource(p.get("properties." + i + ".key"), 0);
+          if (keySrc.sourceType === "user-controlled") return true;
+        }
+      }
+      continue;
+    }
+
+    if (_t.isCallExpression(n)) {
+      var callee = n.callee;
+      var jsonParse = _t.isMemberExpression(callee) && !callee.computed &&
+        _t.isIdentifier(callee.property, { name: "parse" }) &&
+        _t.isIdentifier(callee.object, { name: "JSON" }) && !p.scope.getBinding("JSON");
+      if (jsonParse && n.arguments.length >= 1) {
+        var argSrc = _traceValueSource(p.get("arguments.0"), 0);
+        if (argSrc.sourceType === "user-controlled") return true;
+        continue;
+      }
+      var objFromEntries = _t.isMemberExpression(callee) && !callee.computed &&
+        _t.isIdentifier(callee.property, { name: "fromEntries" }) &&
+        _t.isIdentifier(callee.object, { name: "Object" }) && !p.scope.getBinding("Object");
+      if (objFromEntries && n.arguments.length >= 1) {
+        var feSrc = _traceValueSource(p.get("arguments.0"), 0);
+        if (feSrc.sourceType === "user-controlled") return true;
+        continue;
+      }
+      var structuredCloneCall =
+        _t.isIdentifier(callee, { name: "structuredClone" }) && !p.scope.getBinding("structuredClone");
+      if (structuredCloneCall && n.arguments.length >= 1) {
+        stack.push(p.get("arguments.0"));
+        continue;
+      }
+      var objAssignCall = _t.isMemberExpression(callee) && !callee.computed &&
+        _t.isIdentifier(callee.property, { name: "assign" }) &&
+        _t.isIdentifier(callee.object, { name: "Object" }) && !p.scope.getBinding("Object");
+      if (objAssignCall) {
+        for (var oa = 1; oa < n.arguments.length; oa++) stack.push(p.get("arguments." + oa));
+        continue;
+      }
+    }
+  }
+  return false;
+}
+
 // ─── Security Analysis: Dangerous Pattern Detection ─────────────────────────
 
 function _processDangerousPattern(path, result) {
   var node = path.node;
   var callee = node.callee;
 
-  // addEventListener("message", handler) — classify origin check
-  if (_t.isMemberExpression(callee) && _t.isIdentifier(callee.property, { name: "addEventListener" }) &&
+  // addEventListener("message", handler) — classify origin check.
+  // Only flag when the receiver is a possibly cross-origin window — skip
+  // BroadcastChannel, Worker, SharedWorker, MessageChannel, EventSource
+  // which are same-origin-by-spec and don't carry cross-origin messages.
+  var _isMsgAddListener =
+    (_t.isMemberExpression(callee) && _t.isIdentifier(callee.property, { name: "addEventListener" })) ||
+    (_t.isIdentifier(callee, { name: "addEventListener" }) && !path.scope.getBinding("addEventListener"));
+  if (_isMsgAddListener &&
       node.arguments.length >= 2 && _t.isStringLiteral(node.arguments[0], { value: "message" })) {
-    var handlerFuncPath = _resolveHandlerFunc(path.get("arguments.1"));
-    if (handlerFuncPath && handlerFuncPath.node.body) _classifyAndReportMessageHandler(handlerFuncPath, node, result);
+    if (_isCrossOriginMsgReceiver(callee, path)) {
+      var handlerFuncPath = _resolveHandlerFunc(path.get("arguments.1"));
+      if (handlerFuncPath && handlerFuncPath.node.body) _classifyAndReportMessageHandler(handlerFuncPath, node, result);
+    }
     return;
   }
 
@@ -7361,14 +7758,24 @@ function _processDangerousPattern(path, result) {
     return;
   }
 
-  // Object.assign(target, userControlledSource) — prototype pollution via merge
+  // Object.assign(target, userControlledSource) — prototype pollution via merge.
+  // Only a real problem when the source's KEY SET can be attacker-chosen:
+  // a string like `location.hash` or a router-matched `.params` whose key
+  // names come from route declarations isn't a proto-pollution vector —
+  // Object.assign over a string enumerates numeric indices ("0", "1", …)
+  // which can't alias `__proto__`, and a matched-params object only
+  // carries the declared param names as keys, never `__proto__` from a
+  // URL value. Narrow to sources whose structure actually admits arbitrary
+  // attacker-chosen keys: JSON.parse(tainted), Object.fromEntries(tainted),
+  // or a spread/destructure from one of those.
   if (_t.isMemberExpression(callee) && !callee.computed &&
       _t.isIdentifier(callee.property, { name: "assign" }) &&
       _t.isIdentifier(callee.object, { name: "Object" }) && !path.scope.getBinding("Object") &&
       node.arguments.length >= 2) {
     for (var _oaI = 1; _oaI < node.arguments.length; _oaI++) {
-      var _oaSrc = _traceValueSource(path.get("arguments." + _oaI), 0);
-      if (_oaSrc.sourceType === "user-controlled") {
+      var _oaArgPath = path.get("arguments." + _oaI);
+      if (_isArbitraryKeyObjectSource(_oaArgPath)) {
+        var _oaSrc = _traceValueSource(_oaArgPath, 0);
         _pushDangerous(result, node, "prototype-pollution-merge", "Object.assign with user-controlled source object", "medium", _oaSrc);
         break;
       }
@@ -7992,10 +8399,93 @@ function _processDangerousAssignment(path, result) {
     if (!_t.isStringLiteral(keyNode) && !_t.isNumericLiteral(keyNode)) {
       var keySource = _traceValueSource(path.get("left.property"), 0);
       if (keySource.sourceType === "user-controlled") {
-        _pushDangerous(result, node, "prototype-pollution", "Dynamic property assignment with user-controlled key", "high", keySource);
+        // An ancestor allowlist guard with a non-tainted collection
+        // dominates the sink → downgrade to "info". See _checkKeyValidation
+        // for the safety requirements enforced (scope-aware identifier
+        // matching + collection-purity check).
+        var keyValidated = false;
+        try { keyValidated = _checkKeyValidation(path, keyNode); }
+        catch (e) { _resolver.collectError(e, "checkKeyValidation"); }
+
+        // Severity depends on BOTH the key (already user-controlled) AND
+        // the value shape. Per ES spec:
+        //   obj["__proto__"] = <primitive>  → NO-OP (spec-defined)
+        //   obj["__proto__"] = <object>     → prototype is replaced (real pollution)
+        // Setting `hasOwnProperty` / `constructor` to a primitive only
+        // shadows the own property locally — it does NOT mutate
+        // Object.prototype and doesn't affect other objects. That's a
+        // functional/availability concern (downstream `obj.hasOwnProperty(x)`
+        // breaks) requiring an attack chain; severity MEDIUM.
+        //
+        // Nested assignments (`obj[k1][k2] = v`) bypass this — the outer
+        // access returns a proto-link-bearing object regardless of the
+        // value shape — so we promote those to HIGH.
+        var valueShape = _classifyAssignmentValueShape(path.get("right"));
+        var isNested = _t.isMemberExpression(path.parent) || _t.isMemberExpression(left.object) && left.object.computed;
+        var severity, description;
+        if (keyValidated) {
+          severity = "info";
+          description = "Dynamic property assignment, key validated against non-tainted allowlist";
+        } else if (valueShape === "object" || isNested) {
+          severity = "high";
+          description = "Dynamic property assignment with user-controlled key (object value — prototype pollution)";
+        } else {
+          severity = "medium";
+          description = "Dynamic property assignment with user-controlled key (primitive value — local shadowing only, needs attack chain)";
+        }
+        _pushDangerous(result, node, "prototype-pollution", description, severity, keySource);
       }
     }
   }
+}
+
+// Classify the shape of a value being assigned. "object" means an object,
+// array, or something that traces to an object/array/JSON.parse result.
+// "primitive" means string/number/boolean/null literal or a call like
+// `x.split(..)[1]` which yields a primitive element. "unknown" when we
+// can't tell — conservative: treat as "object" so severity stays HIGH.
+function _classifyAssignmentValueShape(rightPath) {
+  if (!rightPath || !rightPath.node) return "unknown";
+  var node = rightPath.node;
+  if (_t.isStringLiteral(node) || _t.isNumericLiteral(node) ||
+      _t.isBooleanLiteral(node) || _t.isNullLiteral(node) ||
+      _t.isTemplateLiteral(node)) return "primitive";
+  if (_t.isObjectExpression(node) || _t.isArrayExpression(node)) return "object";
+  // new Object(), new Array(), JSON.parse(…) — object-valued.
+  if (_t.isNewExpression(node) && _t.isIdentifier(node.callee) &&
+      !rightPath.scope.getBinding(node.callee.name) &&
+      (node.callee.name === "Object" || node.callee.name === "Array" ||
+       node.callee.name === "Set" || node.callee.name === "Map")) return "object";
+  if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) && !node.callee.computed &&
+      _t.isIdentifier(node.callee.object) && _t.isIdentifier(node.callee.property)) {
+    var obj = node.callee.object.name;
+    var meth = node.callee.property.name;
+    if (obj === "JSON" && meth === "parse" && !rightPath.scope.getBinding("JSON")) return "object";
+    if (obj === "Object" && (meth === "assign" || meth === "create" || meth === "fromEntries") &&
+        !rightPath.scope.getBinding("Object")) return "object";
+    // `x.split(...)[n]` — primitive (string slice).
+    if (meth === "toString" || meth === "toLowerCase" || meth === "toUpperCase" || meth === "trim") {
+      return "primitive";
+    }
+  }
+  // Member access with numeric or literal index into a split/slice result
+  // typically yields a primitive string element. Conservative fallback:
+  // treat as string primitive when the chain is `<call>[<numeric>]`.
+  if (_t.isMemberExpression(node) && _t.isNumericLiteral(node.property) &&
+      _t.isCallExpression(node.object) && _t.isMemberExpression(node.object.callee) &&
+      _t.isIdentifier(node.object.callee.property)) {
+    var splitMeth = node.object.callee.property.name;
+    if (splitMeth === "split" || splitMeth === "match" || splitMeth === "slice") return "primitive";
+  }
+  // Identifier — resolve binding and recurse on its init expression.
+  if (_t.isIdentifier(node)) {
+    var b = rightPath.scope.getBinding(node.name);
+    if (b && b.path.isVariableDeclarator() && b.path.node.init) {
+      return _classifyAssignmentValueShape(b.path.get("init"));
+    }
+    return "unknown";
+  }
+  return "unknown";
 }
 
 // ─── Proto Field Detection ──────────────────────────────────────────────────
@@ -8336,76 +8826,253 @@ function _exprContainsSanitizer(exprPath) {
 
 // Build a basic-block CFG from a function body path (BlockStatement)
 // Stores statement paths (not raw nodes) so sanitizer detection can use scope.
+// Build a basic-block CFG from a function body path (BlockStatement).
+//
+// Iterative (queue-based) to stay safe on deeply nested control flow —
+// minified bundles can have 10k+ nested blocks, which would overflow the
+// native call stack if we recursed (per CLAUDE.md: no recursive AST walks
+// on chainable structures).
+//
+// Handles: linear sequences, IfStatement, ForStatement, ForInStatement,
+// ForOfStatement, WhileStatement, DoWhileStatement, TryStatement (with
+// optional handler/finalizer), SwitchStatement (each case treated as a
+// linear body from the test block).  Other statement types become opaque
+// single blocks — their control flow is a simple pass-through.
+//
+// Block semantics preserved for backward compatibility with existing
+// sanitizer tests:
+//   • Each statement still occupies its own block.
+//   • If-consequent / if-alternate / loop-body / try-block / catch-body /
+//     finalizer each form a nested linear sequence, connected to the
+//     appropriate join block.
+//   • Loop back-edges point body-exit → loop-header, so DFS from entry
+//     still terminates via visited[].
 function _buildCFG(bodyPath) {
-  if (!bodyPath || !bodyPath.node || !Array.isArray(bodyPath.node.body)) return null;
+  if (!bodyPath || !bodyPath.node) return null;
+  if (!_t.isBlockStatement(bodyPath.node)) return null;
+
   var blockId = 0;
   var blocks = {};
-  var stmts = bodyPath.node.body;
-
   function makeBlock(stmtPaths) {
     var id = blockId++;
     blocks[id] = { id: id, stmts: stmtPaths || [], succs: [], preds: [] };
     return id;
   }
-
-  // Simple linear CFG: one block per statement (sufficient for sanitizer-before-sink)
-  var entryId = makeBlock([]);
-  var prevId = entryId;
-  for (var i = 0; i < stmts.length; i++) {
-    var stmt = stmts[i];
-    var stmtPath = bodyPath.get("body." + i);
-    var bid = makeBlock([stmtPath]);
-    blocks[prevId].succs.push(bid);
-    blocks[bid].preds.push(prevId);
-
-    if (_t.isIfStatement(stmt)) {
-      // If statement: consequent and alternate branches
-      var joinId = makeBlock([]);
-      // consequent branch
-      var consId = makeBlock(stmt.consequent ? [stmtPath.get("consequent")] : []);
-      blocks[bid].succs.push(consId);
-      blocks[consId].preds.push(bid);
-      blocks[consId].succs.push(joinId);
-      blocks[joinId].preds.push(consId);
-      // alternate branch
-      if (stmt.alternate) {
-        var altId = makeBlock([stmtPath.get("alternate")]);
-        blocks[bid].succs.push(altId);
-        blocks[altId].preds.push(bid);
-        blocks[altId].succs.push(joinId);
-        blocks[joinId].preds.push(altId);
-      } else {
-        // No else: direct edge from if-block to join
-        blocks[bid].succs.push(joinId);
-        blocks[joinId].preds.push(bid);
-      }
-      prevId = joinId;
-    } else {
-      prevId = bid;
-    }
+  function link(from, to) {
+    if (from == null || to == null) return;
+    blocks[from].succs.push(to);
+    blocks[to].preds.push(from);
   }
+
+  var entryId = makeBlock([]);
   var exitId = makeBlock([]);
-  blocks[prevId].succs.push(exitId);
-  blocks[exitId].preds.push(prevId);
+
+  // Work queue of statement-sequences to expand. Each scope:
+  //   { parentPath: Path (BlockStatement or wrapping one stmt),
+  //     stmts:      [{path, node}] — ordered statements to process,
+  //     entry:      block id to continue from at start,
+  //     exit:       block id to connect to after the last statement }
+  //
+  // For a single-statement body (e.g. `if (x) doThing();` with no braces),
+  // we synthesize a scope with a one-element `stmts`. This keeps the
+  // algorithm uniform.
+  function seqFromBody(blockStmtPath) {
+    var body = blockStmtPath.node.body;
+    var out = [];
+    for (var i = 0; i < body.length; i++) {
+      out.push({ path: blockStmtPath.get("body." + i), node: body[i] });
+    }
+    return out;
+  }
+  function seqFromSingle(stmtPath) {
+    return [{ path: stmtPath, node: stmtPath.node }];
+  }
+  function seqFromMaybeBlock(stmtPath) {
+    return _t.isBlockStatement(stmtPath.node) ? seqFromBody(stmtPath) : seqFromSingle(stmtPath);
+  }
+
+  var queue = [{
+    stmts: seqFromBody(bodyPath),
+    entry: entryId,
+    exit: exitId,
+  }];
+
+  while (queue.length > 0) {
+    var scope = queue.shift();
+    var prev = scope.entry;
+
+    for (var i = 0; i < scope.stmts.length; i++) {
+      var item = scope.stmts[i];
+      var stmtPath = item.path;
+      var stmt = item.node;
+      var bid = makeBlock([stmtPath]);
+      link(prev, bid);
+
+      if (_t.isIfStatement(stmt)) {
+        var joinId = makeBlock([]);
+        // Consequent.
+        if (stmt.consequent) {
+          var consPath = stmtPath.get("consequent");
+          var consEntry = makeBlock([]);
+          // Tag the consequent-entry block with the IfStatement that gates
+          // it. _findKeyValidatorBlocks uses this to mark only the branch
+          // reached BECAUSE of the test, not the if-statement block itself
+          // (which a sibling statement after the if would also pass through).
+          blocks[consEntry]._gatedByTestOf = stmtPath;
+          link(bid, consEntry);
+          queue.push({ stmts: seqFromMaybeBlock(consPath), entry: consEntry, exit: joinId });
+        } else {
+          link(bid, joinId);
+        }
+        // Alternate (else).
+        if (stmt.alternate) {
+          var altPath = stmtPath.get("alternate");
+          var altEntry = makeBlock([]);
+          // Tag with the NEGATED test — the alternate is entered iff the
+          // test was false. For key-validation this never downgrades
+          // (validator returning false doesn't sanitize), so we don't
+          // flag alternate branches as validator blocks.
+          link(bid, altEntry);
+          queue.push({ stmts: seqFromMaybeBlock(altPath), entry: altEntry, exit: joinId });
+        } else {
+          link(bid, joinId);
+        }
+        prev = joinId;
+        continue;
+      }
+
+      if (_t.isForStatement(stmt) || _t.isForInStatement(stmt) || _t.isForOfStatement(stmt) ||
+          _t.isWhileStatement(stmt) || _t.isDoWhileStatement(stmt)) {
+        // Header block = `bid`. It contains the loop statement itself; the
+        // loop test expression is reachable as bid.stmts[0].get('test'),
+        // which is exactly what _stmtContainsSanitizer inspects for loop
+        // heads.
+        var loopJoinId = makeBlock([]);
+        // Header may directly reach join (empty iterable / false test).
+        link(bid, loopJoinId);
+        if (stmt.body) {
+          var bodyPath2 = stmtPath.get("body");
+          var bodyEntry = makeBlock([]);
+          link(bid, bodyEntry);
+          // body exit loops back to header — creates a cycle but DFS visit
+          // tracking prevents infinite traversal.
+          queue.push({ stmts: seqFromMaybeBlock(bodyPath2), entry: bodyEntry, exit: bid });
+        }
+        prev = loopJoinId;
+        continue;
+      }
+
+      if (_t.isTryStatement(stmt)) {
+        var tryJoinId = makeBlock([]);
+        // Try body.
+        var tryEntry = makeBlock([]);
+        link(bid, tryEntry);
+        queue.push({ stmts: seqFromBody(stmtPath.get("block")), entry: tryEntry, exit: tryJoinId });
+        // Catch body — reachable directly from the try header (conservatively
+        // assume any statement in the try can throw).
+        if (stmt.handler) {
+          var catchEntry = makeBlock([]);
+          link(bid, catchEntry);
+          queue.push({
+            stmts: seqFromBody(stmtPath.get("handler.body")),
+            entry: catchEntry,
+            exit: tryJoinId,
+          });
+        }
+        // Finalizer runs after try/catch; continuation flows through it.
+        if (stmt.finalizer) {
+          var finEntry = makeBlock([]);
+          link(tryJoinId, finEntry);
+          var postFinId = makeBlock([]);
+          queue.push({
+            stmts: seqFromBody(stmtPath.get("finalizer")),
+            entry: finEntry,
+            exit: postFinId,
+          });
+          prev = postFinId;
+        } else {
+          prev = tryJoinId;
+        }
+        continue;
+      }
+
+      if (_t.isSwitchStatement(stmt)) {
+        // Header = `bid` (holds the discriminant). Each case body is a
+        // linear sequence. Fall-through is modeled by linking case i's
+        // body-exit to case i+1's body-entry. A `break` in source would
+        // ideally redirect to switchJoinId, but since we don't track
+        // break semantics we conservatively also link body-exit to
+        // switchJoinId so reachability analyses don't miss the join.
+        var switchJoinId = makeBlock([]);
+        var prevCaseExit = null;
+        var cases = stmt.cases || [];
+        for (var ci = 0; ci < cases.length; ci++) {
+          var casePath = stmtPath.get("cases." + ci);
+          var caseEntry = makeBlock([]);
+          link(bid, caseEntry);
+          if (prevCaseExit != null) link(prevCaseExit, caseEntry);
+          // Build statement list from the case's consequents.
+          var caseStmts = [];
+          for (var cj = 0; cj < (casePath.node.consequent || []).length; cj++) {
+            caseStmts.push({ path: casePath.get("consequent." + cj), node: casePath.node.consequent[cj] });
+          }
+          var caseExit = makeBlock([]);
+          queue.push({ stmts: caseStmts, entry: caseEntry, exit: caseExit });
+          link(caseExit, switchJoinId);
+          prevCaseExit = caseExit;
+        }
+        // If no case matches (no default), switch directly to join.
+        link(bid, switchJoinId);
+        prev = switchJoinId;
+        continue;
+      }
+
+      // Default: opaque block, pass through.
+      prev = bid;
+    }
+
+    // Connect the last statement block (or the scope entry if empty) to
+    // the scope exit.
+    link(prev, scope.exit);
+  }
 
   return { blocks: blocks, entry: entryId, exit: exitId };
 }
 
-// Find which block contains a statement at a given line
+// Find which block contains a statement at a given line. When several blocks
+// contain the line (e.g. `if (x) assign();` puts both the IfStatement and
+// the inner ExpressionStatement on the same source line but in different
+// CFG blocks), prefer the block with the TIGHTEST line range — that's the
+// innermost statement and the one that actually contains the sink. Ties
+// broken by preferring non-compound statements (leaf > container), since
+// a leaf statement is what physically executes at the sink.
 function _findBlockForLine(cfg, line) {
   if (!cfg) return -1;
+  var best = -1;
+  var bestSpan = Infinity;
+  var bestIsLeaf = false;
   var keys = Object.keys(cfg.blocks);
   for (var i = 0; i < keys.length; i++) {
     var blk = cfg.blocks[keys[i]];
     for (var j = 0; j < blk.stmts.length; j++) {
       var s = blk.stmts[j];
       var sNode = s && s.node ? s.node : s;
-      if (sNode && sNode.loc) {
-        if (sNode.loc.start.line <= line && sNode.loc.end.line >= line) return blk.id;
+      if (!sNode || !sNode.loc) continue;
+      if (!(sNode.loc.start.line <= line && sNode.loc.end.line >= line)) continue;
+      var span = sNode.loc.end.line - sNode.loc.start.line;
+      var isLeaf = !_t.isIfStatement(sNode) && !_t.isForStatement(sNode) &&
+                   !_t.isForInStatement(sNode) && !_t.isForOfStatement(sNode) &&
+                   !_t.isWhileStatement(sNode) && !_t.isDoWhileStatement(sNode) &&
+                   !_t.isTryStatement(sNode) && !_t.isSwitchStatement(sNode) &&
+                   !_t.isBlockStatement(sNode);
+      if (span < bestSpan || (span === bestSpan && isLeaf && !bestIsLeaf)) {
+        best = blk.id;
+        bestSpan = span;
+        bestIsLeaf = isLeaf;
       }
     }
   }
-  return -1;
+  return best;
 }
 
 // Find all blocks that contain sanitizer calls
@@ -8456,6 +9123,180 @@ function _hasSanitizerOnAllPaths(cfg, sinkBlockId, sanitizerBlocks) {
   visited[cfg.entry] = true;
   dfs(cfg.entry, visited, !!sanitizerBlocks[cfg.entry]);
   return found && allSanitized;
+}
+
+// ─── Allowlist-key validation (for prototype-pollution downgrade) ──────────
+//
+// Same CFG infrastructure as _checkSanitization, but with validator
+// blocks identified by a predicate that matches the sink's dynamic key.
+// Uses `_buildCFG` + `_hasSanitizerOnAllPaths` unchanged; only the block
+// matcher differs.
+//
+// Requirements enforced:
+//   1. Argument of `.includes(X)` / `.has(X)` / `X in coll` must resolve
+//      to the same binding as the sink's dynamic key, via scope.getBinding
+//      (not string-name comparison).
+//   2. Receiver (collection) must NOT trace back to user-controlled data
+//      per _traceValueSource — a tainted allowlist isn't sanitization.
+//   3. Only recognized predicates count: `.includes`, `.has`,
+//      `.hasOwnProperty`, and the `in` operator. Avoids false "sanitized"
+//      on `.indexOf()` without `>= 0`, `Array.from()`, etc.
+
+function _keyNodeToIdentifierName(keyNode) {
+  if (_t.isIdentifier(keyNode)) return keyNode.name;
+  // Sink key can be a call like `k.toLowerCase()` or `k.trim()` — underlying
+  // binding is the callee's object.
+  if (_t.isCallExpression(keyNode) && _t.isMemberExpression(keyNode.callee) &&
+      !keyNode.callee.computed && _t.isIdentifier(keyNode.callee.object)) {
+    return keyNode.callee.object.name;
+  }
+  return null;
+}
+
+function _keyArgMatches(argExpr, argPath, keyIdent, keyBinding) {
+  if (!argExpr) return false;
+  var name;
+  if (_t.isIdentifier(argExpr)) {
+    name = argExpr.name;
+  } else if (_t.isCallExpression(argExpr) && _t.isMemberExpression(argExpr.callee) &&
+             !argExpr.callee.computed && _t.isIdentifier(argExpr.callee.object)) {
+    name = argExpr.callee.object.name;
+  } else {
+    return false;
+  }
+  if (name !== keyIdent) return false;
+  // Scope-aware binding comparison: the validator's identifier must resolve
+  // to the same binding as the sink's key. Prevents shadowing FPs.
+  if (keyBinding && argPath && argPath.scope) {
+    var argBinding = argPath.scope.getBinding(name);
+    if (argBinding) return argBinding === keyBinding;
+  }
+  // If either binding is unavailable, fall back to name equality (rare —
+  // but don't crash on unbound locals).
+  return true;
+}
+
+// Does `testPath` validate the sink's key against a non-tainted collection?
+function _testValidatesKey(testPath, keyIdent, keyBinding) {
+  if (!testPath || !testPath.node) return false;
+  var found = false;
+  function matchesOne(subPath) {
+    if (found || !subPath || !subPath.node) return;
+    var n = subPath.node;
+    // `key in collection`
+    if (_t.isBinaryExpression(n) && n.operator === "in") {
+      if (_keyArgMatches(n.left, subPath.get("left"), keyIdent, keyBinding)) {
+        var srcIn = _traceValueSource(subPath.get("right"));
+        if (srcIn.sourceType !== "user-controlled") { found = true; return; }
+      }
+    }
+    // `collection.<validator>(key)`
+    if (_t.isCallExpression(n) && _t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.property)) {
+      var m = n.callee.property.name;
+      if (m === "includes" || m === "has" || m === "hasOwnProperty") {
+        var arg = n.arguments[0];
+        if (arg) {
+          var argPath = subPath.get("arguments.0");
+          if (_keyArgMatches(arg, argPath, keyIdent, keyBinding)) {
+            var srcColl = _traceValueSource(subPath.get("callee.object"));
+            if (srcColl.sourceType !== "user-controlled") { found = true; return; }
+          }
+        }
+      }
+    }
+  }
+  matchesOne(testPath);
+  if (found) return true;
+  testPath.traverse({
+    LogicalExpression: function(p) {
+      if (found) { p.stop(); return; }
+      matchesOne(p.get("left"));
+      if (!found) matchesOne(p.get("right"));
+      if (found) p.stop();
+    },
+    CallExpression: function(p) { if (found) { p.stop(); return; } matchesOne(p); if (found) p.stop(); },
+    BinaryExpression: function(p) { if (found) { p.stop(); return; } matchesOne(p); if (found) p.stop(); },
+  });
+  return found;
+}
+
+// Mark a block as a validator if it's the consequent-entry of an
+// IfStatement whose test validates the sink's key. Only consequent
+// branches count — the if-block itself is shared by paths that bypass
+// the consequent (e.g. statements after the if), so treating the if-block
+// as a validator would incorrectly whitelist unvalidated sinks.
+function _findKeyValidatorBlocks(cfg, keyIdent, keyBinding) {
+  var out = {};
+  if (!cfg) return out;
+  var keys = Object.keys(cfg.blocks);
+  for (var i = 0; i < keys.length; i++) {
+    var blk = cfg.blocks[keys[i]];
+    var gate = blk._gatedByTestOf;
+    if (gate && gate.node && _t.isIfStatement(gate.node) &&
+        _testValidatesKey(gate.get("test"), keyIdent, keyBinding)) {
+      out[blk.id] = true;
+    }
+  }
+  return out;
+}
+
+// Inline short-circuit check: is the sink's expression positioned as the
+// RHS of a `&&` (or consequent arm of `?:`) whose test validates the key?
+// JavaScript's short-circuit semantics guarantee the sink won't evaluate
+// unless the test passed — so this is true sanitization even though the
+// CFG puts both in one block.
+function _isInlineShortCircuitGuarded(sinkPath, keyIdent, keyBinding) {
+  var cur = sinkPath;
+  while (cur && cur.parentPath) {
+    var parent = cur.parentPath;
+    var p = parent.node;
+    // Stop walking once we leave the expression context.
+    if (_t.isStatement(p) && !_t.isExpressionStatement(p)) return false;
+    // `TEST && (sink)` — sink is on the right of &&
+    if (_t.isLogicalExpression(p) && p.operator === "&&" && p.right === cur.node) {
+      if (_testValidatesKey(parent.get("left"), keyIdent, keyBinding)) return true;
+    }
+    // `TEST ? sink : fallback` — sink is in consequent
+    if (_t.isConditionalExpression(p) && p.consequent === cur.node) {
+      if (_testValidatesKey(parent.get("test"), keyIdent, keyBinding)) return true;
+    }
+    cur = parent;
+  }
+  return false;
+}
+
+// Check if every control-flow path from the function entry to the sink's
+// block passes through a block that validates the sink's key against a
+// non-tainted allowlist. Uses the same _hasSanitizerOnAllPaths engine as
+// the existing sanitizer analysis, with one fix-up: when the validator is
+// inline with the sink (`validator && sink`), short-circuit semantics
+// cover it even though both share a CFG block.
+function _checkKeyValidation(sinkPath, keyNode) {
+  var keyIdent = _keyNodeToIdentifierName(keyNode);
+  if (!keyIdent) return false;
+  var keyBinding = sinkPath.scope.getBinding(keyIdent);
+
+  // Fast path: inline `validator && sink` / `validator ? sink : …` — the
+  // validator is literally an operand of the same expression that
+  // contains the sink, so short-circuit evaluation dominates the sink.
+  if (_isInlineShortCircuitGuarded(sinkPath, keyIdent, keyBinding)) return true;
+
+  // Slower path: validator is in an earlier statement. Use the shared
+  // CFG + _hasSanitizerOnAllPaths engine.
+  var funcPath = sinkPath.getFunctionParent();
+  if (!funcPath) return false;
+  var bodyPath = funcPath.get("body");
+  if (!bodyPath.isBlockStatement()) return false;
+  var cfg = _buildCFG(bodyPath);
+  if (!cfg) return false;
+  var validatorBlocks = _findKeyValidatorBlocks(cfg, keyIdent, keyBinding);
+  if (Object.keys(validatorBlocks).length === 0) return false;
+  var sinkLine = sinkPath.node.loc ? sinkPath.node.loc.start.line : -1;
+  if (sinkLine === -1) return false;
+  var sinkBlockId = _findBlockForLine(cfg, sinkLine);
+  if (sinkBlockId === -1) return false;
+  return _hasSanitizerOnAllPaths(cfg, sinkBlockId, validatorBlocks);
 }
 
 // Check if the sink at the given path is sanitized on all control flow paths

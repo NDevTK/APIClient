@@ -2599,14 +2599,60 @@ test("postMessage listener WITH origin check → not flagged", `
   });
 });
 
-test("Prototype pollution: obj[user-controlled key] → flagged", `
+test("Prototype pollution: obj[user-controlled key] = primitive → MEDIUM (local shadowing, needs attack chain)", `
   var key = location.hash.slice(1);
   var obj = {};
   obj[key] = "pwned";
 `, function(r) {
+  // Primitive value means `obj["__proto__"] = string` is a spec no-op and
+  // `obj["hasOwnProperty"] = string` only shadows locally. Real prototype
+  // pollution requires an object value. Severity MEDIUM reflects local-
+  // shadowing availability risk that requires an attack chain.
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution" && p.severity === "medium";
+  });
+});
+
+test("Prototype pollution: obj[user-controlled key] = OBJECT → HIGH (real pollution)", `
+  var key = location.hash.slice(1);
+  var obj = {};
+  obj[key] = { evil: true };
+`, function(r) {
   return r.dangerousPatterns.some(function(p) {
     return p.type === "prototype-pollution" && p.severity === "high";
   });
+});
+
+test("Prototype pollution: obj[user-controlled] = JSON.parse(...) → HIGH", `
+  var key = location.hash.slice(1);
+  var payload = JSON.parse(location.search.slice(1));
+  var obj = {};
+  obj[key] = payload;
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution" && p.severity === "high";
+  });
+});
+
+test("Prototype pollution: cookie parser pattern (primitive value) → MEDIUM not HIGH", `
+  function parseCookies(cookieString) {
+    var aCookies = {};
+    var pairs = cookieString.split(";");
+    for (var i = 0; i < pairs.length; i++) {
+      var parts = pairs[i].split("=");
+      aCookies[parts[0]] = parts[1];
+    }
+    return aCookies;
+  }
+  parseCookies(document.cookie);
+`, function(r) {
+  var patterns = (r.dangerousPatterns || []).filter(function(p) {
+    return p.type === "prototype-pollution";
+  });
+  // Must flag (user-controlled key) but as MEDIUM (primitive value).
+  // obj["__proto__"] = string is a spec no-op; this isn't real pollution.
+  return patterns.some(function(p) { return p.severity === "medium"; }) &&
+         !patterns.some(function(p) { return p.severity === "high"; });
 });
 
 test("RegExp with user-controlled pattern → flagged as ReDoS risk", `
@@ -3348,7 +3394,140 @@ test("new URL(x, location.origin) for same-origin fetch is safe", `
 `, function(r) {
   // Must not flag as HIGH request-forgery just because location.origin is in the chain.
   return !r.securitySinks.some(function(s) {
-    return s.type === "request-forgery" && s.severity === "high" && (s.source === "location.origin" || s.source === "location.hostname");
+    return s.type === "request-forgery" && s.severity === "high" && (s.source === "location.origin" || s.source === "location.hostname" || s.source === "window.location");
+  });
+});
+
+test("github showMore pattern: new URL + searchParams + fetch is NOT flagged HIGH", `
+  async function showMore() {
+    let e = new URL(this.paginationSrc, window.location.origin);
+    this.currentPage++;
+    e.searchParams.append("page", this.currentPage.toString());
+    let i = await fetch(e);
+    return i.text();
+  }
+`, function(r) {
+  // The paginator is the most common FP we hit on github. Must not flag HIGH.
+  return !r.securitySinks.some(function(s) {
+    return s.type === "request-forgery" && s.severity === "high";
+  });
+});
+
+// ── Fetch-response taint boundary ─────────────────────────────────────────
+// Break taint through .then() only when we can prove the fetch target is
+// SAME-ORIGIN (attacker can influence path/query but not server). If the
+// URL's origin could be attacker-chosen, they serve the response — taint
+// propagates through the response body.
+
+test("fetch(SAME-ORIGIN url with tainted query).then(...) breaks taint", `
+  function search(q) {
+    var url = new URL("/api/search", location.origin);
+    url.searchParams.set("q", location.hash.slice(1));
+    fetch(url).then(r => r.text()).then(html => {
+      document.getElementById("results").innerHTML = html;
+    });
+  }
+`, function(r) {
+  // Base is location.origin, input "/api/search" is relative, overall URL
+  // targets the page's own server. Response is server-controlled.
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" && /location/.test(s.source || "");
+  });
+});
+
+test("fetch('/api?' + tainted) is same-origin, taint breaks", `
+  window.fetch("/api?" + location.search).then(r => r.json()).then(data => {
+    document.body.innerHTML = data.html;
+  });
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" && /location/.test(s.source || "");
+  });
+});
+
+// DANGEROUS: fetch(attacker-controlled URL) — response IS attacker-controlled.
+test("fetch(location.hash) — attacker picks origin — taint PROPAGATES (HIGH)", `
+  fetch(location.hash.slice(1)).then(r => r.text()).then(html => {
+    document.body.innerHTML = html;
+  });
+`, function(r) {
+  // location.hash could be `https://evil.com/payload` — attacker controls
+  // the whole URL including origin, so the response is attacker-controlled.
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" && /location/.test(s.source || "");
+  });
+});
+
+test("fetch(location.href) — attacker controls href — taint PROPAGATES", `
+  fetch(location.href).then(r => r.text()).then(html => {
+    document.body.innerHTML = html;
+  });
+`, function(r) {
+  // Note: location.href string passed directly is taken at face value —
+  // if the attacker can navigate victim to any URL, they control the full
+  // fetch target. We conservatively treat this as attacker-controlled.
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" && /location/.test(s.source || "");
+  });
+});
+
+test("fetch('//evil.com/' + tainted) — protocol-relative — taint PROPAGATES", `
+  fetch("//" + location.hash.slice(1)).then(r => r.text()).then(html => {
+    document.body.innerHTML = html;
+  });
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high";
+  });
+});
+
+// SAFETY: a direct assignment `innerHTML = location.hash` STILL fires.
+test("direct innerHTML = location.hash without fetch in between IS flagged", `
+  document.body.innerHTML = location.hash;
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" && s.source === "location.hash";
+  });
+});
+
+// SAFETY: if data goes URL → fetch → innerHTML but the URL was NEVER
+// tainted, the finding should not fire at all. (Check: no HIGH from this.)
+test("fetch(literal-url).then(innerHTML) is not flagged", `
+  fetch("/api/safe").then(r => r.text()).then(html => document.body.innerHTML = html);
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.severity === "high";
+  });
+});
+
+test("new URL(absolute-string, location.origin) does NOT break taint (input overrides base)", `
+  fetch(new URL(location.hash.slice(1), location.origin)).then(r => r.text()).then(html => {
+    document.body.innerHTML = html;
+  });
+`, function(r) {
+  // Even though the base is same-origin, if location.hash = "https://evil.com/x",
+  // new URL("https://evil.com/x", location.origin) === "https://evil.com/x"
+  // — the input overrides the base. We can't prove same-origin here.
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high";
+  });
+});
+
+test("template-literal fetch(`/api?q=${tainted}`) IS same-origin", `
+  fetch(\`/api?q=\${location.search}\`).then(r => r.text()).then(html => {
+    document.body.innerHTML = html;
+  });
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.severity === "high" && /location/.test(s.source || "");
+  });
+});
+
+test("self.location.protocol inside fetch base is safe", `
+  fetch(new URL("/api", self.location.protocol + "//" + self.location.hostname));
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.severity === "high" && (s.source === "self.location" || s.source === "location.protocol" || s.source === "location.hostname");
   });
 });
 
@@ -3757,11 +3936,441 @@ test("prototype pollution: URLSearchParams key destructuring taints both k and v
     return obj;
   }
 `, function(r) {
+  // Value `n` is a URLSearchParams string entry → primitive → MEDIUM per
+  // value-shape analysis (no object-level prototype pollution possible).
+  // Test intent: taint flows through destructuring AND a finding is made.
   return (r.dangerousPatterns || []).some(function(p) {
-    // Must be flagged AND taintSource / source must trace back to location
-    return /prototype/i.test(p.type || "") && p.severity === "high";
+    return /prototype/i.test(p.type || "") && p.severity !== "info";
   });
 });
+
+// ── Allowlist-key validation downgrade ──────────────────────────────────
+// Proper implementation using CFG-equivalent AST ancestor dominator check
+// with scope-aware identifier matching + collection-purity verification.
+
+test("prototype pollution: static Array allowlist guard → INFO (downgrade)", `
+  function track(t) {
+    const ALLOWED = ["utm_source", "utm_medium", "ref"];
+    for (const [e, r] of new URLSearchParams(window.location.search)) {
+      ALLOWED.includes(e.toLowerCase()) && (t[e] = r);
+    }
+    return t;
+  }
+`, function(r) {
+  var patterns = r.dangerousPatterns || [];
+  var hasInfo = patterns.some(function(p) { return /prototype-pollution/.test(p.type) && p.severity === "info"; });
+  var hasHigh = patterns.some(function(p) { return /prototype-pollution/.test(p.type) && p.severity !== "info"; });
+  return hasInfo && !hasHigh;
+});
+
+test("prototype pollution: if + Set.has allowlist → INFO", `
+  function track(obj) {
+    const allowed = new Set(["a", "b", "c"]);
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (allowed.has(k)) obj[k] = v;
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity === "info";
+  });
+});
+
+test("prototype pollution: `key in obj` allowlist → INFO", `
+  function track(out) {
+    const allowed = { a: 1, b: 2 };
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (k in allowed) out[k] = v;
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity === "info";
+  });
+});
+
+test("prototype pollution: ternary + .includes allowlist → INFO", `
+  function track(t) {
+    const ALLOWED = ["x", "y"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      ALLOWED.includes(k) ? (t[k] = v) : null;
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity === "info";
+  });
+});
+
+test("prototype pollution: NO guard stays HIGH", `
+  function track(obj) {
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      obj[k] = v;
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+// SAFETY: a tainted allowlist doesn't sanitize — the attacker chose what's allowed.
+test("prototype pollution: allowlist ITSELF tainted → stays HIGH", `
+  function track(obj) {
+    const tainted = JSON.parse(location.hash.slice(1)).allowedKeys;
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (tainted.includes(k)) obj[k] = v;
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+// SAFETY: the allowlist guard tests a DIFFERENT identifier than the sink key.
+test("prototype pollution: guard tests a different identifier → stays HIGH", `
+  function track(obj) {
+    const ALLOWED = ["a","b"];
+    const unrelatedFlag = "a";
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (ALLOWED.includes(unrelatedFlag)) obj[k] = v;
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+// SAFETY: guard is BEFORE the sink but not dominating it.
+test("prototype pollution: guard not dominating sink → stays HIGH", `
+  function track(obj) {
+    const ALLOWED = ["a","b"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (ALLOWED.includes(k)) { /* noop */ }
+      obj[k] = v; // assignment is OUTSIDE the consequent
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+// SAFETY: else branch is NOT dominated by the validator.
+test("prototype pollution: assignment in else branch → stays HIGH", `
+  function track(obj) {
+    const ALLOWED = ["a"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (ALLOWED.includes(k)) {
+        // safe path
+      } else {
+        obj[k] = v;  // unvalidated
+      }
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+test("prototype pollution: allowlist + indexOf-style DOES NOT downgrade (not a predicate)", `
+  function track(obj) {
+    const arr = ["a","b"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (arr.indexOf(k) >= 0) obj[k] = v;
+    }
+  }
+`, function(r) {
+  // indexOf isn't in our validator allowlist — conservative: stays HIGH.
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+// ── CFG imprecision safety: direction-of-error must be safe (no false
+// downgrades). Each test constructs a control-flow shape the CFG handles
+// imprecisely and asserts the sink stays HIGH when there's no true
+// dominating validator, even if a validator exists somewhere in the function.
+
+test("CFG imprecision: validator inside switch case ≠ dominator for case fall-through", `
+  function track(obj) {
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      switch (k) {
+        case "explicit":
+          obj[k] = v;  // no validator — switch-match is NOT an allowlist test
+          break;
+        default:
+          obj[k] = v;
+      }
+    }
+  }
+`, function(r) {
+  // switch-case matching doesn't match .includes/.has/in — validator detector
+  // won't mark these blocks as validators — sink stays HIGH.
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+test("CFG imprecision: early return inside validated branch doesn't expose later sink", `
+  function track(obj) {
+    const ALLOWED = ["x"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (ALLOWED.includes(k)) {
+        obj[k] = v;   // VALIDATED → info
+        return;
+      }
+      obj[k] = v;     // UNVALIDATED (after the early-return guard fails) → HIGH
+    }
+  }
+`, function(r) {
+  var patterns = r.dangerousPatterns || [];
+  var hasHigh = patterns.some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+  var hasInfo = patterns.some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity === "info";
+  });
+  // Must see BOTH findings, each at the correct severity.
+  return hasHigh && hasInfo;
+});
+
+test("CFG imprecision: throw inside validated branch doesn't relax later sink", `
+  function track(obj) {
+    const ALLOWED = ["x"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (ALLOWED.includes(k)) {
+        throw new Error(k);
+      }
+      obj[k] = v;  // UNVALIDATED path — stays HIGH
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+test("CFG imprecision: nested if — outer validator dominates inner sink", `
+  function track(obj) {
+    const ALLOWED = ["a"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (ALLOWED.includes(k)) {
+        if (v.length > 0) {
+          obj[k] = v;  // outer validator dominates — should be INFO
+        }
+      }
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity === "info";
+  });
+});
+
+test("CFG imprecision: two separate guards where BOTH branches contain a sink", `
+  function track(obj) {
+    const A = ["a"];
+    const B = ["b"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (A.includes(k)) {
+        obj[k] = v;  // validated
+      } else if (B.includes(k)) {
+        obj[k] = v;  // validated
+      }
+    }
+  }
+`, function(r) {
+  // Both assignments are inside validated consequents — BOTH should be INFO,
+  // not HIGH.
+  var highs = (r.dangerousPatterns || []).filter(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+  var infos = (r.dangerousPatterns || []).filter(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity === "info";
+  });
+  return highs.length === 0 && infos.length >= 1;
+});
+
+test("CFG imprecision: try/catch — sink in try after validator is INFO", `
+  function track(obj) {
+    const ALLOWED = ["k"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (ALLOWED.includes(k)) {
+        try {
+          obj[k] = v;  // validator dominates via try-entry → INFO
+        } catch (e) {}
+      }
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity === "info";
+  });
+});
+
+test("CFG imprecision: validator in catch does NOT cover sink in try", `
+  function track(obj) {
+    const ALLOWED = ["k"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      try {
+        obj[k] = v;   // UNVALIDATED — try-entry is reached before catch
+      } catch (e) {
+        if (ALLOWED.includes(k)) obj[k] = v;  // this one is validated (info)
+      }
+    }
+  }
+`, function(r) {
+  var patterns = r.dangerousPatterns || [];
+  // Must have at least one HIGH (the try-block sink).
+  return patterns.some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+test("CFG imprecision: validator in finally does NOT cover sink in try", `
+  function track(obj) {
+    const ALLOWED = ["k"];
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      try {
+        obj[k] = v;
+      } finally {
+        // Finally runs AFTER try — validator here can't retroactively sanitize
+        // the already-executed try sink.
+        ALLOWED.includes(k);
+      }
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+test("CFG imprecision: while loop body — validator inside loop body", `
+  function track(obj) {
+    const ALLOWED = ["a"];
+    let i = 0;
+    const params = new URLSearchParams(location.search);
+    const entries = [...params];
+    while (i < entries.length) {
+      const [k, v] = entries[i];
+      if (ALLOWED.includes(k)) {
+        obj[k] = v;  // validated, in while body
+      }
+      i++;
+    }
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity === "info";
+  });
+});
+
+test("CFG imprecision: do-while sink without validator stays HIGH", `
+  function track(obj) {
+    let i = 0;
+    const entries = [...new URLSearchParams(location.search)];
+    do {
+      const [k, v] = entries[i];
+      obj[k] = v;  // no validator
+      i++;
+    } while (i < entries.length);
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return /prototype-pollution/.test(p.type) && p.severity !== "info";
+  });
+});
+
+// ── Message-listener receiver discrimination ──────────────────────────────
+// BroadcastChannel, Worker, SharedWorker, MessageChannel, EventSource are
+// all same-origin-by-spec. Their "message" events never carry cross-origin
+// data, so the usual event.origin check doesn't apply — flagging them as
+// "postmessage-no-origin" is a false positive.
+
+test("BroadcastChannel message listener is NOT flagged as postmessage-no-origin", `
+  const chan = new BroadcastChannel("my-channel");
+  chan.addEventListener("message", (ev) => {
+    document.body.innerHTML = ev.data.html;
+  });
+`, function(r) {
+  return !(r.dangerousPatterns || []).some(function(p) {
+    return /postmessage-no-origin|postmessage-weak/i.test(p.type);
+  });
+});
+
+test("inline new BroadcastChannel().addEventListener is NOT flagged", `
+  new BroadcastChannel("shared-worker-error").addEventListener("message", e => {
+    console.log(e.data.error);
+  });
+`, function(r) {
+  return !(r.dangerousPatterns || []).some(function(p) {
+    return /postmessage-no-origin|postmessage-weak/i.test(p.type);
+  });
+});
+
+test("Worker.addEventListener is NOT flagged (same-origin worker)", `
+  const w = new Worker("./worker.js");
+  w.addEventListener("message", (e) => {
+    document.body.textContent = e.data;
+  });
+`, function(r) {
+  return !(r.dangerousPatterns || []).some(function(p) {
+    return /postmessage-no-origin|postmessage-weak/i.test(p.type);
+  });
+});
+
+test("EventSource.addEventListener is NOT flagged", `
+  const es = new EventSource("/stream");
+  es.addEventListener("message", (e) => {
+    render(e.data);
+  });
+`, function(r) {
+  return !(r.dangerousPatterns || []).some(function(p) {
+    return /postmessage-no-origin|postmessage-weak/i.test(p.type);
+  });
+});
+
+// SAFETY: window listener WITHOUT origin check is still flagged.
+test("window.addEventListener('message', ...) without origin check IS flagged", `
+  window.addEventListener("message", (e) => {
+    document.body.innerHTML = e.data.html;
+  });
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return p.type === "postmessage-no-origin";
+  });
+});
+
+test("bare addEventListener('message', ...) at global scope IS flagged", `
+  addEventListener("message", (e) => {
+    document.body.innerHTML = e.data.html;
+  });
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return p.type === "postmessage-no-origin";
+  });
+});
+
+test("MessagePort.addEventListener — cross-origin-capable, still flagged", `
+  function handlePort(port) {
+    port.addEventListener("message", (e) => {
+      document.body.innerHTML = e.data;
+    });
+  }
+`, function(r) {
+  // MessagePort can carry cross-origin data when transferred via postMessage.
+  // We only whitelist constructor-typed BroadcastChannel/Worker/etc, not
+  // arbitrary identifiers named like port/channel — conservative.
+  return (r.dangerousPatterns || []).some(function(p) {
+    return p.type === "postmessage-no-origin";
+  });
+});
+
 
 test("URLSearchParams key taint survives via for-of destructuring → innerHTML", `
   for (const [k, v] of new URLSearchParams(location.search)) {
@@ -4961,13 +5570,39 @@ test("Reflect.set with literal key → NOT flagged", `
   });
 });
 
-test("Object.assign with user-controlled source → prototype-pollution-merge", `
-  var userInput = location.hash.slice(1);
+test("Object.assign with JSON.parse(tainted) → prototype-pollution-merge", `
+  var userInput = JSON.parse(location.hash.slice(1));
   var config = {};
   Object.assign(config, userInput);
 `, function(r) {
   return r.dangerousPatterns.some(function(p) {
     return p.type === "prototype-pollution-merge" && p.severity === "medium";
+  });
+});
+
+test("Object.assign with tainted STRING (not object with open keys) → NOT flagged", `
+  var userInput = location.hash.slice(1);
+  var config = {};
+  Object.assign(config, userInput);
+`, function(r) {
+  // Object.assign over a string enumerates numeric indices only — can't
+  // set __proto__ or any non-numeric key, so this is not a real vector.
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with fresh locals + function-result .params (route matcher) → NOT flagged", `
+  function matchRoute(r, url) { return { params: { id: "1" } }; }
+  var c = matchRoute(route, location.pathname);
+  var n = {};
+  Object.assign(n, c.params);
+`, function(r) {
+  // react-router-style pattern: c.params keys are declared route names,
+  // not attacker-chosen. Values may come from the URL but Object.assign
+  // only cares about keys for proto pollution.
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
   });
 });
 
@@ -4980,13 +5615,148 @@ test("Object.assign with literal source → NOT flagged", `
   });
 });
 
-test("Object.assign with multiple sources, one tainted → flagged", `
+test("Object.assign with multiple sources, one is JSON.parse(tainted) → flagged", `
   var defaults = { theme: "light" };
-  var overrides = location.hash.slice(1);
+  var overrides = JSON.parse(location.hash.slice(1));
   var config = {};
   Object.assign(config, defaults, overrides);
 `, function(r) {
   return r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with Object.fromEntries(tainted URLSearchParams) → flagged", `
+  var overrides = Object.fromEntries(new URLSearchParams(location.search));
+  Object.assign({}, overrides);
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with variable chain from JSON.parse(tainted) → flagged", `
+  var raw = JSON.parse(location.hash.slice(1));
+  var mid = raw;
+  var overrides = mid;
+  Object.assign({}, overrides);
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with variable chain from LITERAL → NOT flagged", `
+  var raw = JSON.parse('{"x":1}');
+  var mid = raw;
+  var overrides = mid;
+  Object.assign({}, overrides);
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with MemberExpression off JSON.parse(tainted) → flagged", `
+  var data = JSON.parse(location.hash.slice(1));
+  Object.assign({}, data.nested);
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with MemberExpression off SAFE parent → NOT flagged", `
+  var data = { nested: { a: 1 } };
+  Object.assign({}, data.nested);
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with structuredClone(JSON.parse(tainted)) → flagged", `
+  var clone = structuredClone(JSON.parse(location.hash.slice(1)));
+  Object.assign({}, clone);
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with structuredClone of SAFE source → NOT flagged", `
+  var clone = structuredClone({ a: 1 });
+  Object.assign({}, clone);
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with object literal + computed key tainted → flagged", `
+  var key = location.hash.slice(1);
+  Object.assign({}, { [key]: 1 });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with object literal + computed key safe → NOT flagged", `
+  var key = "theme";
+  Object.assign({}, { [key]: "light" });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with spread of JSON.parse(tainted) in object literal → flagged", `
+  Object.assign({}, { a: 1, ...JSON.parse(location.hash.slice(1)) });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with spread of LITERAL in object literal → NOT flagged", `
+  var base = { a: 1 };
+  Object.assign({}, { b: 2, ...base });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with Object.fromEntries of UNTAINTED iterable → NOT flagged", `
+  var entries = [["a", 1], ["b", 2]];
+  Object.assign({}, Object.fromEntries(entries));
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with shadowed Object binding → NOT flagged (not our assign)", `
+  function f(Object) {
+    Object.assign({}, JSON.parse(location.hash.slice(1)));
+  }
+`, function(r) {
+  // The Object here is a local parameter, not the global — so the call
+  // is not the real Object.assign and shouldn't trigger our detector.
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "prototype-pollution-merge";
+  });
+});
+
+test("Object.assign with shadowed JSON binding → NOT flagged (not real JSON.parse)", `
+  function f(JSON) {
+    Object.assign({}, JSON.parse(location.hash.slice(1)));
+  }
+`, function(r) {
+  // JSON is shadowed by a parameter — the .parse call isn't the global
+  // JSON.parse, so the source can't be classified as arbitrary-key.
+  return !r.dangerousPatterns.some(function(p) {
     return p.type === "prototype-pollution-merge";
   });
 });

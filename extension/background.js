@@ -688,6 +688,29 @@ function extractInterfaceName(urlObj) {
     }
   }
 
+  // Google Boq pattern: /_/<ServiceName>/<method>... where <ServiceName> is
+  // an UpperCamelCase identifier. Covers ConsentUi, OneGoogleBar, etc., even
+  // when the URL does not mention batchexecute. Restricted to Google-ish
+  // hosts to avoid matching unrelated `_` path segments elsewhere.
+  if (
+    segments.length >= 2 &&
+    segments[0] === "_" &&
+    /^[A-Z][A-Za-z0-9]{2,}$/.test(segments[1]) &&
+    (hostname.endsWith(".google.com") || hostname.endsWith(".googleapis.com"))
+  ) {
+    return hostname + "/" + segments[1];
+  }
+
+  // gRPC-over-HTTP $rpc/ paths: the package+service identifies the gRPC
+  // service and must not collapse to bare hostname, which would fold every
+  // method across every gRPC service on that host into one bucket.
+  // Matched before the googleapis short-name so each gRPC service on a
+  // `*-pa.clients6.google.com` host gets its own bucket.
+  const rpcInfo = parseRpcPath(urlObj.pathname);
+  if (rpcInfo) {
+    return hostname + "/$rpc/" + rpcInfo.grpcFullService;
+  }
+
   // Special handling for Google API hosts
   if (
     hostname.endsWith(".googleapis.com") ||
@@ -2274,6 +2297,13 @@ async function performProbeAndPatch(tabId, service, targetUrl, apiKey) {
     });
 
     if (probeResult && probeResult.fields) {
+      // Save raw probe result for observability. Previously only the
+      // UI-triggered on-demand probe stored into tab.probeResults — the
+      // auto-probe kept its output only in the synthesized virtual doc,
+      // so consumers auditing "what did probing learn" saw an empty map.
+      // Keyed by service::url so repeat probes overwrite cleanly.
+      tab.probeResults.set(`auto:${service}::${targetUrl}`, probeResult);
+
       // Convert probe result to a "Virtual" Discovery Doc
       // Merge with existing if available
       const currentStatus = tab.discoveryDocs.get(service);
@@ -2795,6 +2825,11 @@ async function handleResponseBody(tabId, msg, frameId) {
 
   // ─── HTTP (fetch / XHR): unified request + response ─────────────────────
 
+  // Non-network URL schemes. Page-local blobs/data URIs go through fetch()
+  // but produce an empty hostname, which breaks service grouping ("" bucket)
+  // and isn't reverse-engineerable API traffic.
+  if (/^(blob|data|file|chrome(-extension)?|about):/i.test(msg.url)) return;
+
   const url = new URL(msg.url);
 
   // Filter internal extension requests
@@ -2820,10 +2855,12 @@ async function handleResponseBody(tabId, msg, frameId) {
   // Build request header map from intercept.js capture
   const headerMap = msg.requestHeaders || {};
 
-  // Key scanning: URL + request headers
+  // Key scanning: URL + request headers. Record the SPECIFIC header name
+  // (lowercased) so on replay we can re-emit the key in the same location
+  // instead of defaulting to X-Goog-Api-Key on every non-Google host.
   extractKeysFromText(tabId, msg.url, msg.url, "url");
   for (const [k, v] of Object.entries(headerMap)) {
-    extractKeysFromText(tabId, `${k}: ${v}`, msg.url, "header");
+    extractKeysFromText(tabId, `${k}: ${v}`, msg.url, "header:" + k.toLowerCase());
   }
 
   // Extract key header values
@@ -4877,9 +4914,19 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
           sendResponse({ error: "Swagger 2.0 is not supported. Please convert to OpenAPI 3.x first." });
           return;
         }
-        // Determine service name from server URL or info.title
+        // Determine service name. Prefer the original internal key when
+        // it was preserved via the `x-service-key` vendor extension on
+        // export — otherwise a UASR-exported spec for a path-prefixed
+        // service like "www.google.com/MapsWizUi" would import back
+        // under the hostname-only "www.google.com", silently merging
+        // unrelated services. Fall back to hostname (for specs from
+        // other tools) and finally to info.title.
         let svcName;
-        if (spec.servers?.[0]?.url) {
+        if (spec.info && typeof spec.info["x-service-key"] === "string" &&
+            spec.info["x-service-key"].length > 0) {
+          svcName = spec.info["x-service-key"];
+        }
+        if (!svcName && spec.servers?.[0]?.url) {
           try {
             svcName = new URL(spec.servers[0].url).hostname;
           } catch (_) {}
@@ -5063,15 +5110,39 @@ async function buildExportRequest(tabId, msg) {
         const pbBytes = encodeFormToProtobuf(fields);
         const framed = encodeGrpcWebFrame(pbBytes);
         body = uint8ToBase64(framed);
-      } else if (msg.contentType === "application/x-protobuf") {
+      } else if (
+        msg.contentType === "application/x-protobuf" ||
+        msg.contentType === "application/x-protobuffer" ||
+        msg.contentType === "application/protobuf" ||
+        msg.contentType === "application/vnd.google.protobuf"
+      ) {
+        // `application/x-protobuffer` is Google reCAPTCHA's non-standard
+        // spelling — without handling it explicitly the body falls through
+        // to JSON, which turns the protobuf field tree into
+        // `{"field1":[byte,byte,...]}` gibberish.
         const encoded = encodeFormToProtobuf(fields);
         body = uint8ToBase64(encoded);
       } else if (msg.contentType === "application/json+protobuf") {
         body = JSON.stringify(encodeFormToJspb(fields));
       } else if (msg.contentType?.startsWith("application/x-www-form-urlencoded")) {
-        const argsArray = encodeFormToJspb(fields);
+        // Standard form-urlencoded: each field is its own key=value pair.
+        // The batchexecute `f.req` envelope is only correct for
+        // `/batchexecute` URLs (handled above at the URL-match branch); it
+        // must not be applied to plain form POSTs like recaptcha/userverify
+        // or analytics beacons, which would collapse every field into a
+        // single `f.req=[…]` key and lose all the original values.
         const params = new URLSearchParams();
-        params.set("f.req", JSON.stringify(argsArray));
+        for (const f of fields) {
+          if (f.value == null) continue;
+          const v = f.value;
+          if (f.label === "repeated" && Array.isArray(v)) {
+            for (const item of v) params.append(f.name, String(item));
+          } else if (typeof v === "object") {
+            params.append(f.name, JSON.stringify(v));
+          } else {
+            params.append(f.name, String(v));
+          }
+        }
         body = params.toString();
       } else {
         body = JSON.stringify(encodeFormToJson(fields));
@@ -5358,8 +5429,9 @@ function encodeGraphQLBody(bodyMsg) {
     // to a stored query doc. No query text goes over the wire. We emit the
     // exact shape the server expects instead of forcing a spec-compliant
     // `{query}` envelope that reddit's backend would reject.
+    let obj;
     if (op.operation && !op.query) {
-      const obj = { operation: op.operation };
+      obj = { operation: op.operation };
       if (op.variables) {
         try { obj.variables = typeof op.variables === "string" ? JSON.parse(op.variables) : op.variables; }
         catch (_) { obj.variables = op.variables; }
@@ -5368,17 +5440,25 @@ function encodeGraphQLBody(bodyMsg) {
         try { obj.extensions = typeof op.extensions === "string" ? JSON.parse(op.extensions) : op.extensions; }
         catch (_) { obj.extensions = op.extensions; }
       }
-      return obj;
+    } else {
+      obj = { query: op.query || "" };
+      if (op.variables) {
+        try { obj.variables = typeof op.variables === "string" ? JSON.parse(op.variables) : op.variables; }
+        catch (_) { obj.variables = op.variables; }
+      }
+      if (op.operationName) obj.operationName = op.operationName;
+      if (op.extensions) {
+        try { obj.extensions = typeof op.extensions === "string" ? JSON.parse(op.extensions) : op.extensions; }
+        catch (_) { obj.extensions = op.extensions; }
+      }
     }
-    const obj = { query: op.query || "" };
-    if (op.variables) {
-      try { obj.variables = typeof op.variables === "string" ? JSON.parse(op.variables) : op.variables; }
-      catch (_) { obj.variables = op.variables; }
-    }
-    if (op.operationName) obj.operationName = op.operationName;
-    if (op.extensions) {
-      try { obj.extensions = typeof op.extensions === "string" ? JSON.parse(op.extensions) : op.extensions; }
-      catch (_) { obj.extensions = op.extensions; }
+    // Attach any extra top-level fields preserved from the captured
+    // envelope (csrf_token, clientId, rid, ...). Existing standard keys
+    // win if a collision happens.
+    if (op.extra && typeof op.extra === "object") {
+      for (const k in op.extra) {
+        if (!(k in obj)) obj[k] = op.extra[k];
+      }
     }
     return obj;
   };
@@ -5389,20 +5469,51 @@ function encodeGraphQLBody(bodyMsg) {
 function encodeFormToJson(fields) {
   const obj = {};
   for (const f of fields) {
-    // Explicit message/object fields always appear in the output even with
-    // no children set — `{variables: {}}` for GraphQL, empty nested protos,
-    // etc. Previously these were silently dropped, which lost structure on
-    // round-trip and sometimes caused servers to reject the request.
-    if (f.type === "message" || f.type === "object") {
-      obj[f.name] = f.children?.length ? encodeFormToJson(f.children) : {};
+    const isObj = f.type === "message" || f.type === "object";
+
+    // Repeated fields — both scalar arrays and arrays of objects must
+    // roundtrip. Items may carry their own `children` tree (built by the
+    // repeated-message renderer) OR be raw objects/scalars from replay
+    // initialData. Handle both.
+    if (f.label === "repeated") {
+      let list;
+      if (Array.isArray(f.value)) {
+        list = f.value.map((v) => {
+          if (v && typeof v === "object" && !Array.isArray(v) && Array.isArray(v.children)) {
+            return encodeFormToJson(v.children);
+          }
+          return isObj ? v : coerceValue(v, f.type);
+        });
+      } else if (Array.isArray(f.children)) {
+        // Children as a list of message instances — each item is a
+        // sub-field whose own children describe one array element.
+        list = f.children.map((item) =>
+          Array.isArray(item.children) ? encodeFormToJson(item.children) : coerceValue(item.value, f.type),
+        );
+      } else {
+        list = [];
+      }
+      obj[f.name] = list;
       continue;
     }
-    if (f.value == null && !f.children?.length) continue;
-    if (f.label === "repeated" && Array.isArray(f.value)) {
-      obj[f.name] = f.value.map((v) => coerceValue(v, f.type));
-    } else {
-      obj[f.name] = coerceValue(f.value, f.type);
+
+    if (isObj) {
+      // Message/object: prefer children tree; fall back to raw value when
+      // the caller has a parsed object but no tree (e.g. replay auto-fill
+      // from captured JSON). Always surface the field even when empty so
+      // servers see `{variables: {}}` rather than dropping it.
+      if (Array.isArray(f.children) && f.children.length) {
+        obj[f.name] = encodeFormToJson(f.children);
+      } else if (f.value && typeof f.value === "object" && !Array.isArray(f.value)) {
+        obj[f.name] = f.value;
+      } else {
+        obj[f.name] = {};
+      }
+      continue;
     }
+
+    if (f.value == null && !f.children?.length) continue;
+    obj[f.name] = coerceValue(f.value, f.type);
   }
   return obj;
 }
@@ -5584,12 +5695,13 @@ function encodeSinglePbFieldRaw(type, value) {
 
 function coerceValue(value, type) {
   if (value == null) return null;
-  if (type === "bool") return value === true || value === "true";
+  if (type === "bool" || type === "boolean") return value === true || value === "true";
   if (type === "enum") {
     var n = Number(value);
     return isNaN(n) ? String(value) : n;
   }
   if (
+    type === "number" ||
     [
       "int32",
       "int64",
@@ -5605,8 +5717,14 @@ function coerceValue(value, type) {
       "sfixed64",
     ].includes(type)
   ) {
-    return Number(value);
+    // Already a number? Preserve exactly — `Number(42)` → 42, but
+    // `Number("42")` also → 42 and crucially `String(42)` would emit `"42"`
+    // which breaks JSON byte-equivalence.
+    return typeof value === "number" ? value : Number(value);
   }
+  // Numeric-typed JSON values without an explicit scalar-typed field still
+  // need to stay numbers. Same for booleans and null-ish passthroughs.
+  if (typeof value === "number" || typeof value === "boolean") return value;
   return String(value);
 }
 
@@ -5696,6 +5814,18 @@ async function executeSendRequest(tabId, msg) {
       } else {
         apiKey = svcKeys[0];
       }
+      // Look up the actual location (url vs specific header name) the key
+      // was originally observed in — keys captured from
+      // `X-Goog-Api-Key` shouldn't be re-emitted as Google-branded
+      // headers against non-Google targets like statsigapi.
+      if (apiKey) {
+        var _skStoredData = tab.apiKeys.get(apiKey) || globalStore.apiKeys.get(apiKey);
+        if (_skStoredData && _skStoredData.source) {
+          apiKeySource = _skStoredData.source;
+        } else {
+          apiKeySource = null; // unknown origin — don't guess a header name
+        }
+      }
     }
     // Fall back to discovery doc's key
     if (!apiKey) {
@@ -5708,11 +5838,22 @@ async function executeSendRequest(tabId, msg) {
   const hasKeyHeader = headers["X-Goog-Api-Key"] || headers["x-goog-api-key"];
   const hasKeyParam = parsedUrl.searchParams.has("key");
   if (apiKey && !hasKeyHeader && !hasKeyParam) {
+    // apiKeySource carries either "url", "header:<name>", or a legacy
+    // "header" (no name). Only inject when we know the exact location —
+    // silently defaulting to X-Goog-Api-Key for arbitrary third-party
+    // hosts pollutes their requests with a Google-branded header that
+    // the server doesn't recognize. Fall back to X-Goog-Api-Key only for
+    // Google-ish hostnames where it is the genuine convention.
     if (apiKeySource === "url") {
       parsedUrl.searchParams.set("key", apiKey);
-    } else {
+    } else if (typeof apiKeySource === "string" && apiKeySource.startsWith("header:")) {
+      var _hdrName = apiKeySource.slice("header:".length);
+      headers[_hdrName] = apiKey;
+    } else if (/\.google(?:apis)?\.com$/i.test(parsedUrl.hostname) || /\.clients6\.google\.com$/i.test(parsedUrl.hostname)) {
       headers["X-Goog-Api-Key"] = apiKey;
     }
+    // Otherwise skip auto-attach — let the user pick explicitly via the
+    // Send panel's key selector if they want to try a specific key.
   }
 
   const url = parsedUrl.toString();
