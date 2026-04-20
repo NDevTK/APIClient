@@ -22,6 +22,22 @@ var _sourceCode = null;  // original source text for code context extraction
 var _globalCallerCache = {};  // key → [innerPath, ...] — caches _traverseGlobalCallers results
 var _typeEnv = {};  // scopeUid:varName → type string — lightweight deterministic type tracking
 
+// Structural-def state, populated during analyzeJSBundle's traversal so
+// the viewer's AST_BUILD_DEFINITION_MAP only needs the `refMap` pass
+// (scope-resolved identifier references). Previously these were built by
+// a separate `buildDefinitionMap` traversal that duplicated most of
+// analyze's visitor work on the same 6 MB AST — ~40 s of wasted walk per
+// bundle on real github. Collecting in-line lets us reuse Babel's
+// already-computed scopes instead of making a second traversal rebuild
+// them from scratch.
+var _defMap = null;         // { name: line }
+var _propDefs = null;       // { "defLine:name": { propName: propDefLine } }
+var _funcMap = null;        // { name: { line, endLine, calls: Set } }
+var _allFuncRanges = null;  // [{ line, endLine, calls: Set }]
+var _pendingProps = null;   // [{ refLine, propName, ownerKey, binding }]
+var _funcStack = null;      // enter/exit stack for attributing calls to the
+                            // innermost enclosing function (call-graph)
+
 // ── Resolver ─────────────────────────────────────────────────────────────────
 // Manages cycle detection, error collection, and caching for value resolution.
 // Created fresh for each analyzeJSBundle() call.
@@ -215,12 +231,47 @@ function _findParamIndex(params, name) {
 }
 
 // Build a fetch call site object with standard schema.
+// Tell _buildFetchSite when the URL it was given came from a pure
+// StringLiteral in source (no interpolations). Only in that case can
+// we safely treat the embedded query values as AST-observed literals —
+// a TemplateLiteral's rendered form contains `{name}` placeholders
+// that would otherwise be mistaken for real values.
 function _buildFetchSite(url, method, headers, type, params, opts) {
   var site = { url: url, method: method, headers: headers || {}, type: type };
-  if (params && params.length > 0) site.params = params;
+  // If the URL was a pure StringLiteral (caller passed
+  // opts.urlIsLiteral === true), lift its query-string key/value
+  // pairs into `params` as AST-observed constraints. This is a
+  // legitimate JS-derived signal (the author wrote `?q=hello` in
+  // their source, so "hello" is a known-valid value for `q`) and
+  // gives the Send form a prefill with AST provenance. We do NOT
+  // perform this extraction for template-derived URLs — those carry
+  // `{name}` placeholders for unresolved expressions and we'd
+  // misattribute the placeholder as a real value.
+  var extracted = params && params.slice ? params.slice() : (params ? params.slice() : []);
+  if (opts && opts.urlIsLiteral && typeof url === "string" && url.length > 0 && url.indexOf("?") >= 0) {
+    try {
+      var parsed = url.match(/^[a-z][a-z0-9+.-]*:/i) ? new URL(url) : new URL(url, "https://_ast_placeholder/");
+      if (parsed && parsed.searchParams && typeof parsed.searchParams.entries === "function") {
+        var present = {};
+        for (var i = 0; i < extracted.length; i++) {
+          if (extracted[i] && extracted[i].name && extracted[i].location !== "body") {
+            present[extracted[i].name] = true;
+          }
+        }
+        for (var kv of parsed.searchParams.entries()) {
+          var pname = kv[0], pval = kv[1];
+          if (present[pname]) continue;
+          if (!pval) continue; // empty values aren't useful examples
+          extracted.push({ name: pname, location: "query", required: true, validValues: [pval] });
+        }
+      }
+    } catch (_) {}
+  }
+  if (extracted && extracted.length > 0) site.params = extracted;
   if (opts) {
     if (opts.enclosingFunction) site.enclosingFunction = opts.enclosingFunction;
     if (opts.responseType) site.responseType = opts.responseType;
+    if (opts.loc) site.loc = opts.loc;
   }
   return site;
 }
@@ -262,6 +313,14 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
   _typeEnv = {};
   _sourceCode = code;
   _sourceLines = null;
+  // Structural-def state — populated by pre-pass visitors; exposed on the
+  // result so buildDefinitionMap's lazy call doesn't rebuild them.
+  _defMap = {};
+  _propDefs = {};
+  _funcMap = {};
+  _allFuncRanges = [];
+  _pendingProps = [];
+  _funcStack = [];
 
   var result = {
     sourceUrl: sourceUrl,
@@ -292,14 +351,69 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
   }
 
   // Pre-pass: collect global assignments and window aliases before main analysis
-  // so that sink tracing can resolve global aliases (e.g., window.jQuery = lib)
+  // so that sink tracing can resolve global aliases (e.g., window.jQuery = lib),
+  // and — since we already walk every node — populate the structural-def
+  // indices (defMap/propDefs/funcMap/allFuncRanges/pendingProps) that the
+  // source viewer needs. Bundling this into the pre-pass reuses Babel's
+  // already-computed scopes instead of paying for a second full traversal
+  // in a separate buildDefinitionMap pass.
   try {
   _babelTraverse(ast, {
+    FunctionDeclaration: {
+      enter: function(path) {
+        _funcStack.push(_registerFunc(path, path.node.id ? path.node.id.name : null, path.node));
+      },
+      exit: function() { _funcStack.pop(); },
+    },
+    FunctionExpression: {
+      enter: function(path) {
+        var name = null;
+        if (path.parent.type === "VariableDeclarator" && path.parent.id && path.parent.id.name)
+          name = path.parent.id.name;
+        else if (path.parent.type === "AssignmentExpression" && path.parent.left.type === "Identifier")
+          name = path.parent.left.name;
+        _funcStack.push(_registerFunc(path, name, path.node));
+      },
+      exit: function() { _funcStack.pop(); },
+    },
+    ArrowFunctionExpression: {
+      enter: function(path) {
+        var name = null;
+        if (path.parent.type === "VariableDeclarator" && path.parent.id && path.parent.id.name)
+          name = path.parent.id.name;
+        else if (path.parent.type === "AssignmentExpression" && path.parent.left.type === "Identifier")
+          name = path.parent.left.name;
+        _funcStack.push(_registerFunc(path, name, path.node));
+      },
+      exit: function() { _funcStack.pop(); },
+    },
+    ClassDeclaration: function(path) {
+      _registerFunc(path, path.node.id ? path.node.id.name : null, path.node);
+    },
+    ObjectMethod: {
+      enter: function(path) {
+        _funcStack.push(_registerFunc(path, path.node.key && path.node.key.name ? path.node.key.name : null, path.node));
+      },
+      exit: function() { _funcStack.pop(); },
+    },
+    ClassMethod: {
+      enter: function(path) {
+        var name = path.node.key && path.node.key.name ? path.node.key.name : null;
+        _funcStack.push(_registerFunc(path, name, path.node));
+        _registerClassMethodProp(path, name);
+      },
+      exit: function() { _funcStack.pop(); },
+    },
     CallExpression: function(path) {
       _processIIFE(path);
+      _trackCallForCallGraph(path);
+    },
+    MemberExpression: function(path) {
+      _trackMemberPropAccess(path);
     },
     AssignmentExpression: function(path) {
       _trackGlobalAssignment(path);
+      _collectPropDefsFromAssignment(path);
     },
     // Track ESM exports as global-like bindings: export { k as default, ... }
     ExportNamedDeclaration: function(path) {
@@ -320,9 +434,11 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
         _stats.globalAssignments++;
       }
     },
-    // Populate type tracker for deterministic constructor/literal types
+    // Populate type tracker for deterministic constructor/literal types AND
+    // capture object-literal property definitions.
     VariableDeclarator: function(path) {
       _trackTypeFromDeclarator(path);
+      _collectPropDefsFromVarDecl(path);
     },
   });
   } catch (_prePassErr) {
@@ -527,6 +643,42 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
   _globalAssignments = {};
   _windowAliases = new Set();
   _resolver = null;
+
+  // Attach structural-def indices collected during the pre-pass so the
+  // viewer's lazy AST_BUILD_DEFINITION_MAP only needs to add `refMap`
+  // (scope-resolved identifier references — the expensive Identifier-
+  // visitor pass). Serialise `calls` as a plain array so structured
+  // clone across the worker boundary works.
+  result.defMap = _defMap;
+  result.propDefs = _propDefs;
+  result.funcMap = {};
+  for (var _fmName in _funcMap) {
+    var _fmEntry = _funcMap[_fmName];
+    result.funcMap[_fmName] = { line: _fmEntry.line, endLine: _fmEntry.endLine, calls: Array.from(_fmEntry.calls) };
+  }
+  result.allFuncRanges = _allFuncRanges.map(function (e) {
+    return { line: e.line, endLine: e.endLine, calls: Array.from(e.calls) };
+  });
+  // pendingProps is populated by the pre-pass for possible future
+  // viewer refMap resolution, but no current consumer reads it off the
+  // result (the viewer's AST_BUILD_DEFINITION_MAP does its own pass).
+  // On a 6 MB bundle this list grows to hundreds of thousands of
+  // entries, so serialising it via structured-clone postMessage costs
+  // real wall-time for a value nobody uses. Skip the export; if a
+  // consumer ever needs it, re-enable the .map() projection here.
+  _defMap = null;
+  _propDefs = null;
+  _funcMap = null;
+  _allFuncRanges = null;
+  _pendingProps = null;
+  _funcStack = null;
+
+  // Expose the parsed AST so callers that want to run a second pass
+  // (e.g. buildDefinitionMap for the click-to-definition viewer) can
+  // reuse it without re-parsing the whole bundle. Parsing a 6 MB
+  // minified bundle is the dominant cost of the AST pipeline; halving
+  // it pays for the cross-pass carry.
+  result._ast = ast;
   return result;
 }
 
@@ -1397,10 +1549,17 @@ function _traceWrapperFunction(callPath, funcPath, funcBinding, result) {
 
   // Build call sites using the sink info + resolved parameter values
   var urls = [];
+  // Track whether the URL source was a pure StringLiteral — only in
+  // that case can downstream extractors safely treat the URL's query
+  // values as author-written literals (vs. resolver-rendered
+  // placeholders like `{x}` produced when a template expression
+  // couldn't be resolved to a concrete value).
+  var urlsFromLiteral = false;
   if (sinkInfo.urlParamName && paramBindings[sinkInfo.urlParamName]) {
     urls = paramBindings[sinkInfo.urlParamName];
   } else if (sinkInfo.urlLiteral) {
     urls = [sinkInfo.urlLiteral];
+    urlsFromLiteral = true;
   } else if (sinkInfo.urlMemberExpr && paramArgPaths[sinkInfo.urlMemberExpr.obj]) {
     // URL is opts.url — extract .url property from the caller's object argument
     urls = _resolvePropertyFromArg(paramArgPaths[sinkInfo.urlMemberExpr.obj], sinkInfo.urlMemberExpr.prop, 1);
@@ -1494,8 +1653,9 @@ function _traceWrapperFunction(callPath, funcPath, funcBinding, result) {
     }
   }
 
+  var _callLoc = _nodeLoc(callPath.node);
   for (var u = 0; u < urls.length; u++) {
-    result.fetchCallSites.push(_buildFetchSite(urls[u], method, sinkInfo.headers, "fetch", allParams, { enclosingFunction: callerName }));
+    result.fetchCallSites.push(_buildFetchSite(urls[u], method, sinkInfo.headers, "fetch", allParams, { enclosingFunction: callerName, urlIsLiteral: urlsFromLiteral, loc: _callLoc }));
     console.debug("[AST:fetch] traced %s %s via %s()", method, urls[u],
       (funcBinding ? funcBinding.identifier.name : _describeNode(callPath.node.callee)) || "?");
   }
@@ -1926,6 +2086,12 @@ var _TYPED_CONSTRUCTORS = {
   "ReadableStream": "ReadableStream", "WritableStream": "WritableStream",
   "AbortController": "AbortController", "MutationObserver": "MutationObserver",
   "IntersectionObserver": "IntersectionObserver", "ResizeObserver": "ResizeObserver",
+  // Collections. Distinct from URLSearchParams/Headers — their stored
+  // values are independent of the keys, so `.get(taintedKey)` doesn't
+  // return attacker-content unless `.set(taintedKey, attackerValue)`
+  // also happened. Used by the method-call dim projection to skip
+  // key-origin upgrade when the receiver is a Map/Set/Weak*.
+  "Map": "Map", "Set": "Set", "WeakMap": "WeakMap", "WeakSet": "WeakSet",
 };
 
 function _setType(scope, name, type) {
@@ -1938,11 +2104,23 @@ function _getType(scope, name) {
 
 // Resolve the tracked type for a node. For Identifiers, looks up binding scope.
 // For NewExpressions/ArrayExpressions, returns the type directly.
+//
+// For Identifiers with no pre-recorded type (e.g. `let url` without init
+// that gets assigned later in each branch of an if/else), fall back to
+// inspecting the binding's init + constantViolations. Only infers a type
+// when EVERY assignment produces the same `_TYPED_CONSTRUCTORS` match —
+// conservative so branch-divergent types (`x = new URL(); x = someString`)
+// stay untyped. Pattern seen in github's approvedHandler:
+//   let url
+//   if (token) url = new URL(path, origin); else url = new URL('', href);
+//   location.assign(url);
 function _getTrackedType(path, node) {
   if (_t.isIdentifier(node)) {
     var binding = path.scope.getBinding(node.name);
-    if (binding) return _getType(binding.scope, node.name) || null;
-    return null;
+    if (!binding) return null;
+    var stored = _getType(binding.scope, node.name);
+    if (stored) return stored;
+    return _inferTypeFromAssignments(binding);
   }
   if (_t.isNewExpression(node) && _t.isIdentifier(node.callee) && !path.scope.getBinding(node.callee.name)) {
     return _TYPED_CONSTRUCTORS[node.callee.name] || null;
@@ -1951,7 +2129,261 @@ function _getTrackedType(path, node) {
   return null;
 }
 
+function _inferTypeFromAssignments(binding) {
+  if (!binding) return null;
+  // Cache the inferred type on the binding itself so repeat
+  // `_getTrackedType(path, x)` calls don't re-walk the same
+  // constantViolations list. Heavy minified bundles reassign a
+  // variable dozens of times; without this cache, every receiver-
+  // type check on x pays O(reassignments × violation-depth) scope
+  // walks — enough to stall the service worker on a 5MB bundle.
+  // Sentinel __INFER_NONE__ distinguishes "cached: not inferable"
+  // from "not yet computed" (cachedType === undefined).
+  if (binding.__inferredType !== undefined) {
+    return binding.__inferredType === "__INFER_NONE__" ? null : binding.__inferredType;
+  }
+  var inferred = null;
+  // Recursive expr→type resolver: handles NewExpression, ArrayExpression,
+  // ConditionalExpression branches (minifiers turn `if/else` reassign
+  // blocks into `x = cond ? A : B`), and LogicalExpression branches.
+  var _typeOfExpr = function (expr) {
+    if (!expr) return null;
+    if (_t.isNewExpression(expr) && _t.isIdentifier(expr.callee)) {
+      return _TYPED_CONSTRUCTORS[expr.callee.name] || null;
+    }
+    if (_t.isArrayExpression(expr)) return "Array";
+    if (_t.isConditionalExpression(expr)) {
+      var tc = _typeOfExpr(expr.consequent);
+      var ta = _typeOfExpr(expr.alternate);
+      if (tc && tc === ta) return tc;
+      return null;
+    }
+    if (_t.isLogicalExpression(expr)) {
+      var tl = _typeOfExpr(expr.left);
+      var tr = _typeOfExpr(expr.right);
+      if (tl && tl === tr) return tl;
+      return null;
+    }
+    if (_t.isAssignmentExpression(expr) && expr.operator === "=") {
+      return _typeOfExpr(expr.right);
+    }
+    return null;
+  };
+  var _cacheResult = function (val) {
+    binding.__inferredType = val == null ? "__INFER_NONE__" : val;
+    return val;
+  };
+  // VariableDeclarator's own init is one possible source.
+  if (binding.path && binding.path.isVariableDeclarator() && binding.path.node.init) {
+    var initType = _typeOfExpr(binding.path.node.init);
+    if (!initType) return _cacheResult(null);
+    inferred = initType;
+  }
+  var viols = binding.constantViolations || [];
+  for (var vi = 0; vi < viols.length; vi++) {
+    var v = viols[vi];
+    if (!v || !v.isAssignmentExpression || !v.isAssignmentExpression()) return _cacheResult(null);
+    if (v.node.operator !== "=") return _cacheResult(null);
+    var rhsType = _typeOfExpr(v.node.right);
+    if (!rhsType) return _cacheResult(null);
+    if (inferred && inferred !== rhsType) return _cacheResult(null);
+    inferred = rhsType;
+  }
+  return _cacheResult(inferred);
+}
+
 // Populate type from a VariableDeclarator: var x = new XMLHttpRequest() → type "XMLHttpRequest"
+// Register a function (named or anonymous) in the structural-def maps.
+// Returns the entry added to _allFuncRanges so enter/exit visitors can
+// push it onto the function stack for call-graph attribution. Anon
+// functions are still range-tracked (finding.callers needs them) but
+// don't appear in the named defMap/funcMap.
+function _registerFunc(path, name, funcNode) {
+  var loc = funcNode ? funcNode.loc : path.node.loc;
+  if (!loc) return null;
+  var entry = { line: loc.start.line, endLine: loc.end.line, calls: new Set() };
+  _allFuncRanges.push(entry);
+  if (name) {
+    _funcMap[name] = entry;
+    _defMap[name] = loc.start.line;
+  }
+  return entry;
+}
+
+// Record a class method as a property of the class binding, so viewer
+// click-to-definition on `new Cls(...).method` can jump to the method.
+function _registerClassMethodProp(path, methodName) {
+  if (!methodName) return;
+  var classBody = path.parentPath;
+  var classNode = classBody ? classBody.parentPath : null;
+  if (!classNode || !classNode.node.id || !_t.isIdentifier(classNode.node.id)) return;
+  var cbinding = classNode.scope.getBinding(classNode.node.id.name);
+  if (!cbinding || !cbinding.identifier || !cbinding.identifier.loc) return;
+  var ckey = cbinding.identifier.loc.start.line + ":" + classNode.node.id.name;
+  if (!_propDefs[ckey]) _propDefs[ckey] = {};
+  _propDefs[ckey][methodName] = path.node.loc ? path.node.loc.start.line : 0;
+}
+
+// Extract property-definition records from a VariableDeclarator whose
+// init is an ObjectExpression. Captures `var obj = { foo: fn, bar: 42 }`
+// so clicking `obj.foo` in the viewer jumps to the `foo:` line.
+function _collectPropDefsFromVarDecl(path) {
+  var node = path.node;
+  if (!_t.isIdentifier(node.id) || !_t.isObjectExpression(node.init)) return;
+  var props = node.init.properties;
+  if (!props.length) return;
+  var ownerBinding = path.scope.getBinding(node.id.name);
+  if (!ownerBinding || !ownerBinding.identifier || !ownerBinding.identifier.loc) return;
+  var okey = ownerBinding.identifier.loc.start.line + ":" + node.id.name;
+  if (!_propDefs[okey]) _propDefs[okey] = {};
+  for (var pi = 0; pi < props.length; pi++) {
+    var p = props[pi];
+    if (p.computed || !p.key) continue;
+    var pname = _t.isIdentifier(p.key) ? p.key.name : (_t.isStringLiteral(p.key) ? p.key.value : null);
+    if (pname && p.key.loc) _propDefs[okey][pname] = p.key.loc.start.line;
+  }
+}
+
+// Extract property-definition records from an AssignmentExpression.
+// Handles three shapes:
+//   obj.prop = value           — direct prop assignment
+//   Cls.prototype.method = fn  — prototype chain
+//   this.prop = value          — attributed to enclosing class/fn
+//   obj = { prop: value }      — whole-object replacement
+function _collectPropDefsFromAssignment(path) {
+  var left = path.node.left;
+  if (!left) return;
+  // this.prop = value inside a class method / constructor function
+  if (_t.isMemberExpression(left) && !left.computed &&
+      _t.isThisExpression(left.object) && _t.isIdentifier(left.property)) {
+    _collectThisPropAssignment(path, left);
+  }
+  // obj = { prop: value } — identifier LHS with object literal RHS
+  if (_t.isIdentifier(left) && _t.isObjectExpression(path.node.right)) {
+    var oprops = path.node.right.properties;
+    if (oprops.length) {
+      var olbinding = path.scope.getBinding(left.name);
+      if (olbinding && olbinding.identifier && olbinding.identifier.loc) {
+        var olkey = olbinding.identifier.loc.start.line + ":" + left.name;
+        if (!_propDefs[olkey]) _propDefs[olkey] = {};
+        for (var oi = 0; oi < oprops.length; oi++) {
+          var op = oprops[oi];
+          if (op.computed || !op.key) continue;
+          var opname = _t.isIdentifier(op.key) ? op.key.name : (_t.isStringLiteral(op.key) ? op.key.value : null);
+          if (opname && op.key.loc) _propDefs[olkey][opname] = op.key.loc.start.line;
+        }
+      }
+    }
+  }
+  if (!_t.isMemberExpression(left) || left.computed) return;
+  if (!_t.isIdentifier(left.property)) return;
+  var propName = left.property.name;
+  var propLine = left.property.loc ? left.property.loc.start.line : 0;
+  if (!propLine) return;
+  if (_t.isIdentifier(left.object)) {
+    var abinding = path.scope.getBinding(left.object.name);
+    if (abinding && abinding.identifier && abinding.identifier.loc) {
+      var akey = abinding.identifier.loc.start.line + ":" + left.object.name;
+      if (!_propDefs[akey]) _propDefs[akey] = {};
+      _propDefs[akey][propName] = propLine;
+    }
+  } else if (_t.isMemberExpression(left.object) && !left.object.computed &&
+             _t.isIdentifier(left.object.property, { name: "prototype" }) &&
+             _t.isIdentifier(left.object.object)) {
+    var pbinding = path.scope.getBinding(left.object.object.name);
+    if (pbinding && pbinding.identifier && pbinding.identifier.loc) {
+      var pkey = pbinding.identifier.loc.start.line + ":" + left.object.object.name;
+      if (!_propDefs[pkey]) _propDefs[pkey] = {};
+      _propDefs[pkey][propName] = propLine;
+    }
+  }
+}
+
+// Attribute `this.prop = value` to the enclosing class (for class methods)
+// or the enclosing named function (for ES5-style `function Foo() { this.x=… }`
+// constructors). Matches the buildDefinitionMap legacy behaviour exactly.
+function _collectThisPropAssignment(path, left) {
+  var thisPropName = left.property.name;
+  var thisPropLine = left.property.loc ? left.property.loc.start.line : 0;
+  if (!thisPropLine) return;
+  var enclosing = path.getFunctionParent();
+  if (!enclosing) return;
+  var classOrFunc = null;
+  if (enclosing.node.type === "ClassMethod" && enclosing.node.kind === "constructor") {
+    var cbody = enclosing.parentPath;
+    classOrFunc = cbody ? cbody.parentPath : null;
+  }
+  if (!classOrFunc) {
+    if (enclosing.node.type === "FunctionDeclaration" && enclosing.node.id) {
+      classOrFunc = enclosing;
+    } else if (enclosing.node.type === "FunctionExpression") {
+      if (enclosing.parent.type === "VariableDeclarator" && _t.isIdentifier(enclosing.parent.id)) {
+        classOrFunc = enclosing.parentPath.parentPath ? enclosing.parentPath : enclosing;
+      } else if (enclosing.parent.type === "AssignmentExpression" && _t.isIdentifier(enclosing.parent.left)) {
+        classOrFunc = enclosing.parentPath;
+      }
+    }
+  }
+  if (!classOrFunc) return;
+  var ctorName = null;
+  var ctorNode = classOrFunc.node;
+  if (ctorNode.type === "ClassDeclaration" || ctorNode.type === "ClassExpression") {
+    if (ctorNode.id && _t.isIdentifier(ctorNode.id)) ctorName = ctorNode.id.name;
+    else if (classOrFunc.parent.type === "VariableDeclarator" && _t.isIdentifier(classOrFunc.parent.id)) ctorName = classOrFunc.parent.id.name;
+    else if (classOrFunc.parent.type === "AssignmentExpression" && _t.isIdentifier(classOrFunc.parent.left)) ctorName = classOrFunc.parent.left.name;
+  } else if (ctorNode.type === "FunctionDeclaration" && ctorNode.id) {
+    ctorName = ctorNode.id.name;
+  } else if (ctorNode.type === "VariableDeclaration") {
+    var decl = ctorNode.declarations && ctorNode.declarations[0];
+    if (decl && _t.isIdentifier(decl.id)) ctorName = decl.id.name;
+  } else if (ctorNode.type === "AssignmentExpression" && _t.isIdentifier(ctorNode.left)) {
+    ctorName = ctorNode.left.name;
+  }
+  if (!ctorName) return;
+  var ctorBinding = path.scope.getBinding(ctorName);
+  if (!ctorBinding || !ctorBinding.identifier || !ctorBinding.identifier.loc) return;
+  var ctorKey = ctorBinding.identifier.loc.start.line + ":" + ctorName;
+  if (!_propDefs[ctorKey]) _propDefs[ctorKey] = {};
+  if (!_propDefs[ctorKey][thisPropName]) _propDefs[ctorKey][thisPropName] = thisPropLine;
+}
+
+// Attribute a CallExpression to the innermost enclosing function on the
+// visitor stack (so finding.callers can show "this function calls X").
+// Scope-aware filter preserves the old behaviour: parameters named like
+// functions don't count — only real function-valued bindings.
+function _trackCallForCallGraph(inner) {
+  if (!_funcStack.length) return;
+  var top = _funcStack[_funcStack.length - 1];
+  if (!top) return;
+  var callee = inner.node.callee;
+  if (_t.isIdentifier(callee)) {
+    var binding = inner.scope.getBinding(callee.name);
+    if (!binding || _t.isFunctionDeclaration(binding.path.node) ||
+        (binding.path.isVariableDeclarator() && binding.path.node.init &&
+         _t.isFunction(binding.path.node.init)) ||
+        (binding.path.isAssignmentExpression && binding.constantViolations &&
+         binding.constantViolations.some(function(cv) { return cv.isAssignmentExpression() && _t.isFunction(cv.node.right); })))
+      top.calls.add(callee.name);
+  } else if (_t.isMemberExpression(callee) && _t.isIdentifier(callee.property)) {
+    top.calls.add(callee.property.name);
+  }
+}
+
+// Record a pending property-access for later resolution against _propDefs.
+// Queued during the pre-pass; flushed after the pre-pass completes so
+// every propDef (including those from later assignments) is visible.
+function _trackMemberPropAccess(path) {
+  if (path.node.computed) return;
+  var prop = path.node.property;
+  if (!prop || !_t.isIdentifier(prop) || !prop.loc) return;
+  var obj = path.node.object;
+  if (!_t.isIdentifier(obj)) return;
+  var mbinding = path.scope.getBinding(obj.name);
+  if (!mbinding || !mbinding.identifier || !mbinding.identifier.loc) return;
+  var ownerKey = mbinding.identifier.loc.start.line + ":" + obj.name;
+  _pendingProps.push({ refLine: prop.loc.start.line, propName: prop.name, ownerKey: ownerKey, binding: mbinding });
+}
+
 function _trackTypeFromDeclarator(path) {
   var node = path.node;
   if (!_t.isIdentifier(node.id) || !node.init) return;
@@ -2248,6 +2680,12 @@ function _extractFetchCall(path, result, type) {
   // ── Resolve URL (may produce multiple values via inter-procedural tracing) ──
   var urlArgPath = path.get("arguments.0");
   var urls = _resolveAllValues(urlArgPath, 0);
+  // The URL came from a pure StringLiteral iff the first argument
+  // node IS a StringLiteral. Knowing this at the source-node level
+  // lets _buildFetchSite's query-string extractor trust the URL's
+  // embedded values (no interpolations, no placeholders to confuse
+  // with real literals).
+  var urlFromLiteral = _t.isStringLiteral(args[0]);
 
   // Template literal with interpolations → keep as URL template
   if (urls.length === 0 && _t.isTemplateLiteral(args[0]) && args[0].expressions.length > 0) {
@@ -2602,7 +3040,7 @@ function _extractFetchCall(path, result, type) {
   // ── Create call sites (with per-caller method pairing) ──
   for (var u = 0; u < urls.length; u++) {
     var siteMethod = httpMethods && u < httpMethods.length ? httpMethods[u] : (httpMethod || "GET");
-    result.fetchCallSites.push(_buildFetchSite(urls[u], siteMethod, headers, type, params, { enclosingFunction: funcInfo ? funcInfo.name : undefined, responseType: responseType }));
+    result.fetchCallSites.push(_buildFetchSite(urls[u], siteMethod, headers, type, params, { enclosingFunction: funcInfo ? funcInfo.name : undefined, responseType: responseType, urlIsLiteral: urlFromLiteral }));
   }
 
   if (urls.length > 0) {
@@ -2890,6 +3328,51 @@ function _resolveAllValues(path, depth) {
                   assignNode.left === refParent) {
                 var rhsVals = _resolveAllValues(refs[ri].parentPath.parentPath.get("right"), depth + 1);
                 if (rhsVals.length > 0) return rhsVals;
+              }
+            }
+          }
+
+          // TypeScript-compiled enum / namespace pattern:
+          //   !function(e){ e.Login = "..."; e.Logout = "..."; }(X || (X = {}));
+          // Assignments are on the IIFE PARAMETER, not on X directly, so
+          // the loop above won't find them. Walk X's referencePaths looking
+          // for a reference inside a LogicalExpression that is a CallExpression
+          // argument, then scan that function body for `e.propName = literal`.
+          for (var rj = 0; rj < refs.length; rj++) {
+            var ref = refs[rj];
+            var hops = 0;
+            while (ref && hops < 4 && !_t.isLogicalExpression(ref.node)) { ref = ref.parentPath; hops++; }
+            if (!ref || !_t.isLogicalExpression(ref.node)) continue;
+            var callArg = ref.parentPath;
+            if (!callArg || !callArg.isCallExpression()) continue;
+            var argIdx = -1;
+            for (var ai = 0; ai < callArg.node.arguments.length; ai++) {
+              if (callArg.node.arguments[ai] === ref.node) { argIdx = ai; break; }
+            }
+            if (argIdx < 0) continue;
+            var callFn = callArg.node.callee;
+            if (!_t.isFunctionExpression(callFn) && !_t.isArrowFunctionExpression(callFn)) continue;
+            if (argIdx >= callFn.params.length) continue;
+            var paramId = callFn.params[argIdx];
+            if (!_t.isIdentifier(paramId)) continue;
+            var body = callFn.body;
+            var stmts = _t.isBlockStatement(body) ? body.body : [body];
+            for (var si = 0; si < stmts.length; si++) {
+              var st = stmts[si];
+              var expr = _t.isExpressionStatement(st) ? st.expression : st;
+              var seq = _t.isSequenceExpression(expr) ? expr.expressions : [expr];
+              for (var ei = 0; ei < seq.length; ei++) {
+                var expr2 = seq[ei];
+                if (!expr2 || !_t.isAssignmentExpression(expr2) || expr2.operator !== "=") continue;
+                var lhs = expr2.left;
+                if (!_t.isMemberExpression(lhs) || lhs.computed) continue;
+                if (!_t.isIdentifier(lhs.object, { name: paramId.name })) continue;
+                if (!_t.isIdentifier(lhs.property, { name: propName })) continue;
+                if (_t.isStringLiteral(expr2.right)) return [expr2.right.value];
+                if (_t.isNumericLiteral(expr2.right)) return [String(expr2.right.value)];
+                if (_t.isTemplateLiteral(expr2.right) && expr2.right.expressions.length === 0 && expr2.right.quasis.length === 1) {
+                  return [expr2.right.quasis[0].value.cooked || expr2.right.quasis[0].value.raw];
+                }
               }
             }
           }
@@ -6213,6 +6696,31 @@ function _flattenLogicalChain(node, out) {
 
 // Extract a line range from the source code by line numbers (1-based).
 // Returns trimmed lines joined by newline, each capped at 120 chars.
+// Cut a ~140-char window centred on (line, column) from _sourceCode,
+// whitespace-collapsed and elided with "…" on both sides when truncated.
+// Attached to each taint-path hop so UI consumers (popup, harness) can
+// display inline code at every step without needing to re-fetch and
+// seek the source. Minified bundles have one giant line each — the
+// column is what matters, not the line number.
+function _snippetAtLoc(loc) {
+  if (!_sourceCode || !loc) return null;
+  if (!_sourceLines) _sourceLines = _sourceCode.split("\n");
+  var lineIdx = (loc.line || 1) - 1;
+  if (lineIdx < 0 || lineIdx >= _sourceLines.length) return null;
+  // Compute absolute offset for this (line, column) so we can slice
+  // across newlines cleanly without special-casing.
+  var offset = 0;
+  for (var i = 0; i < lineIdx; i++) offset += _sourceLines[i].length + 1;
+  offset += (loc.column || 0);
+  if (offset < 0 || offset >= _sourceCode.length) return null;
+  var start = Math.max(0, offset - 70);
+  var end = Math.min(_sourceCode.length, offset + 70);
+  var snip = _sourceCode.slice(start, end).replace(/\s+/g, " ");
+  if (start > 0) snip = "\u2026" + snip;
+  if (end < _sourceCode.length) snip = snip + "\u2026";
+  return snip;
+}
+
 function _extractLines(fromLine, toLine, column) {
   if (!_sourceCode || !fromLine || !toLine) return null;
   if (!_sourceLines) {
@@ -6303,12 +6811,16 @@ var _LOCATION_SAFE_PROPS = { "origin":1, "hostname":1, "host":1, "protocol":1, "
 // Replaces _describeNode() + _TAINT_SOURCES string lookup.
 // Returns taint source string (e.g., "location.hash") if matched, or null.
 function _matchTaintSource(path, node) {
-  if (!_t.isMemberExpression(node) || node.computed) return null;
+  // Accept both `.` and optional-chained `?.` access — they're
+  // semantically equivalent as taint sources; the only difference is
+  // short-circuit on nullish.
+  if ((!_t.isMemberExpression(node) && !_t.isOptionalMemberExpression(node)) || node.computed) return null;
 
   // Collect the member chain as AST property names: [root, prop1, prop2, ...]
   var chain = [];
   var current = node;
-  while (_t.isMemberExpression(current) && !current.computed && _t.isIdentifier(current.property)) {
+  while ((_t.isMemberExpression(current) || _t.isOptionalMemberExpression(current)) &&
+         !current.computed && _t.isIdentifier(current.property)) {
     chain.unshift(current.property.name);
     current = current.object;
   }
@@ -6319,10 +6831,20 @@ function _matchTaintSource(path, node) {
   if (path.scope.getBinding(rootName)) return null;
 
   // Normalize: strip "window." or "self." prefix if root is the global window/self
+  // Canonicalize so `window.location.href`, `self.location.href`, and
+  // `location.href` all produce the SAME source name. This removes any
+  // need for callers (e.g. `_dimsForSource`) to carry aliases for each
+  // alternative root. Without normalization, `window.location` would
+  // produce obj="window", prop="location" — a different source name
+  // than bare `location`, breaking downstream dim lookups.
   var objName, propName;
   if ((rootName === "window" || rootName === "self") && chain.length >= 2) {
     objName = chain[0];
     propName = chain[1];
+  } else if ((rootName === "window" || rootName === "self") && chain.length === 1 && chain[0] === "location") {
+    // `window.location` or `self.location` (no further property) — same
+    // runtime object as bare `location`; canonicalize source name.
+    return "location";
   } else if (chain.length >= 1) {
     objName = rootName;
     propName = chain[0];
@@ -6341,11 +6863,193 @@ function _matchTaintSource(path, node) {
 }
 
 // Lightweight taint tracker: classifies where a value originates.
-// Returns { sourceType: "user-controlled"|"dynamic"|"literal", source: string|null, sourceLoc?: { line, column } }
-// sourceLoc records where the user-controlled source was found (for source-to-sink context).
+// Returns { sourceType: "user-controlled"|"dynamic"|"literal", source: string|null,
+//          sourceLoc?: { line, column }, taintPath?: [{ kind, desc, at }],
+//          dimensions?: { origin, path, query, hash, content } }
+// taintPath records each hop from the sink back to the taint source — e.g.
+//   [ {kind:"source",       desc:"location.hash", at:{line,column}},
+//     {kind:"method-call",  desc:".split",        at:{line,column}},
+//     {kind:"binding",      desc:"parts",         at:{line,column}},
+//     {kind:"call-arg",     desc:"arg 0",         at:{line,column}} ]
+// so a reviewer can judge WHY the classifier thinks a value is user-controlled
+// without re-parsing the minified script by hand.
+//
+// DIMENSIONS — which parts of a URL-like value are attacker-controllable.
+// Set at the source (location.hash → hash+content; location.href → all) and
+// refined at URL operations (new URL, .origin, .pathname, .search, .hash).
+// Sinks ask dimension-specific questions: request-forgery:fetch cares about
+// `origin` (attacker redirecting the request), redirect:href cares about any
+// URL dim (attacker picks where the user goes), xss:innerHTML cares about
+// `content` (string reaches the HTML parser). This distinguishes the common
+// `new URL(src, location.href)` FP — location.href contributes origin:true
+// via the BASE, but the resulting URL's origin is still the PAGE'S own
+// origin (base.origin) unless the input is absolute. When input isn't
+// user-controlled, origin-attacker-control can't happen.
+//
+// sourceLoc records where the taint source was found (for source-to-sink context).
 // Uses a visited-node set instead of depth limits to prevent infinite recursion while
 // allowing unlimited tracing depth through variable chains, function params, and object properties.
 var _taintVisited = null;
+
+// Dimension-set constructors used across the module so the shape stays
+// consistent. Omitted properties are treated as false — we never rely on
+// boolean-undefined differentiation.
+function _tvsDims(o) {
+  return {
+    origin: !!(o && o.origin),
+    path: !!(o && o.path),
+    query: !!(o && o.query),
+    hash: !!(o && o.hash),
+    content: !!(o && o.content),
+  };
+}
+function _tvsDimsAll() { return _tvsDims({ origin: true, path: true, query: true, hash: true, content: true }); }
+function _tvsDimsContent() { return _tvsDims({ content: true }); }
+function _tvsDimsUnion(a, b) {
+  if (!a) return b ? _tvsDims(b) : _tvsDimsContent();
+  if (!b) return _tvsDims(a);
+  return _tvsDims({
+    origin: a.origin || b.origin,
+    path: a.path || b.path,
+    query: a.query || b.query,
+    hash: a.hash || b.hash,
+    content: a.content || b.content,
+  });
+}
+
+// Build a user-controlled result with a single-hop taintPath rooted at the
+// taint source. Every direct taint-source emission in _traceValueSourceInner
+// goes through this, so downstream reviewers see where the taint starts.
+// `dims` declares which parts of the value are attacker-controllable; when
+// omitted, defaults to content-only (conservative for non-URL sources).
+function _tvsSource(source, loc, dims) {
+  var d = dims ? _tvsDims(dims) : _tvsDimsContent();
+  var hop = { kind: "source", desc: String(source), at: loc || null, dims: d };
+  var code = _snippetAtLoc(loc);
+  if (code) hop.code = code;
+  return {
+    sourceType: "user-controlled",
+    source: source,
+    sourceLoc: loc || null,
+    taintPath: [hop],
+    dimensions: d,
+  };
+}
+
+// Propagate a sub-trace one hop outward. `kind` classifies the hop
+// (binding | member | call-arg | template-expr | concat | ...), `desc` is a
+// short human label (variable name, property accessed, etc.), `at` is where
+// the hop node itself sits. The sub-trace's existing taintPath is preserved
+// (innermost hops already recorded) and the new hop is appended at the end,
+// so the final path reads source → ... → sink (outermost).
+// Dimensions pass through by default; URL-aware sites call _tvsHopDims to
+// restrict or transform them. Each hop records its dimensions-out so a
+// reviewer reading the taint chain can see WHERE origin flipped from
+// false to true (e.g. `.slice(1)` on location.hash strips the "#"
+// structural prefix). When the change is non-trivial, the hop also
+// records `dimsBefore` for side-by-side comparison.
+function _tvsHop(sub, kind, desc, at) {
+  if (!sub || sub.sourceType !== "user-controlled") return sub;
+  var prior = sub.taintPath || [];
+  var newPath = new Array(prior.length + 1);
+  for (var _tpi = 0; _tpi < prior.length; _tpi++) newPath[_tpi] = prior[_tpi];
+  var outDims = sub.dimensions ? _tvsDims(sub.dimensions) : _tvsDimsContent();
+  var hop = {
+    kind: kind,
+    desc: desc == null ? "" : String(desc),
+    at: at || null,
+    dims: outDims,
+  };
+  // Attach a code snippet captured from the bundle at this hop's position
+  // so UI consumers (popup taint-path accordion, harness finding command)
+  // can display what the code actually does at every step without needing
+  // to re-fetch the source. The sink-level codeContext only shows the
+  // innermost sink; intermediate transforms are where the dim transitions
+  // happen and are the hardest to judge without inline code.
+  var code = _snippetAtLoc(at);
+  if (code) hop.code = code;
+  newPath[prior.length] = hop;
+  return {
+    sourceType: sub.sourceType,
+    source: sub.source,
+    sourceLoc: sub.sourceLoc,
+    taintPath: newPath,
+    dimensions: outDims,
+  };
+}
+
+// Same as _tvsHop but replaces the dimensions on the way out. Records
+// both before and after on the hop so reviewers see the transition.
+function _tvsHopDims(sub, kind, desc, at, dims) {
+  var h = _tvsHop(sub, kind, desc, at);
+  if (!h || h.sourceType !== "user-controlled") return h;
+  var newDims = _tvsDims(dims || { content: true });
+  var oldDims = sub && sub.dimensions ? _tvsDims(sub.dimensions) : null;
+  h.dimensions = newDims;
+  var lastHop = h.taintPath[h.taintPath.length - 1];
+  lastHop.dims = newDims;
+  // Record `dimsBefore` only when it differs — keeps small cases clean.
+  if (oldDims && _dimsDiffer(oldDims, newDims)) lastHop.dimsBefore = oldDims;
+  return h;
+}
+
+function _dimsDiffer(a, b) {
+  if (!a || !b) return !!(a || b);
+  return a.origin !== b.origin || a.path !== b.path || a.query !== b.query ||
+         a.hash !== b.hash || a.content !== b.content;
+}
+
+// Source-name → dimensions. These are facts about what each browser
+// taint source intrinsically carries. The taint source's name comes
+// from _matchTaintSource's pattern table and is the canonical form
+// (`location.href`, `window.name`, `event.data`, etc.).
+//
+// The `origin` dim captures: attacker can cause a fetch() of this value
+// to resolve to a CROSS-origin target. It is NOT the same as "attacker
+// picked the URL the victim visits" — location.href is always the
+// current origin, and fetch(location.href) is a same-origin request
+// regardless of which URL the attacker lured the victim to.
+function _dimsForSource(srcName) {
+  switch (srcName) {
+    case "location":
+    case "location.href":
+    case "document.URL":
+    case "document.documentURI":
+      // Full URL of the current page. Its origin portion IS the current
+      // origin (browser guarantee) — fetch(location.href) is same-origin.
+      // Path/query/hash portions are attacker-influenced (user's URL).
+      return { path: true, query: true, hash: true, content: true };
+    case "location.origin":
+    case "location.host":
+    case "location.hostname":
+    case "location.port":
+    case "location.protocol":
+    case "document.domain":
+      // These are the current origin/parts-of-origin. fetch(location.origin)
+      // is same-origin. Value is content for concatenation purposes.
+      return { content: true };
+    case "location.pathname":
+      return { path: true, content: true };
+    case "location.search":
+      return { query: true, content: true };
+    case "location.hash":
+      return { hash: true, content: true };
+    case "document.referrer":
+      // Referring page's URL. Attacker can host a site with a link here,
+      // so the entire URL (including origin) is attacker-controlled. Browsers
+      // strip the fragment from Referer per RFC — no hash dim.
+      return { origin: true, path: true, query: true, content: true };
+    case "document.baseURI":
+      // Controlled by <base href="…">. Attacker can inject/set this tag
+      // if they have any DOM write; origin is attacker-controllable.
+      return { origin: true, path: true, content: true };
+    default:
+      // event.data, window.name, document.cookie, storage.getItem, etc.
+      // Free-form attacker-supplied string. When used as a fetch URL,
+      // the attacker can specify ANY URL including any origin/scheme.
+      return { origin: true, content: true };
+  }
+}
 function _traceValueSource(path, _unused) {
   if (!path || !path.node) return { sourceType: "dynamic", source: null };
   var node = path.node;
@@ -6461,11 +7165,26 @@ function _traceValueSourceInner(path, node) {
     return { sourceType: "literal", source: null };
   }
 
-  // MemberExpression: check against known user-controlled sources using structural AST matching
-  if (_t.isMemberExpression(node) && !node.computed) {
+  // MemberExpression: check against known user-controlled sources using structural AST matching.
+  // Also matches OptionalMemberExpression (`a?.b`) — same taint semantics.
+  if ((_t.isMemberExpression(node) || _t.isOptionalMemberExpression(node)) && !node.computed) {
     var taintMatch = _matchTaintSource(path, node);
     if (taintMatch) {
-      return { sourceType: "user-controlled", source: taintMatch, sourceLoc: nodeLoc };
+      // Source-specific dimensions. Fact-based, not heuristic: each
+      // source intrinsically carries specific parts of a URL.
+      //   location.href        → whole URL (user navigates, picks all parts)
+      //   location.origin/host → just origin
+      //   location.pathname    → just path
+      //   location.search      → just query
+      //   location.hash        → just hash
+      //   document.referrer    → origin+path+query (browsers strip hash from referer)
+      //   document.URL         → whole URL (same as location.href semantics)
+      //   document.cookie      → content-only (not URL-shaped)
+      //   document.domain      → origin only
+      //   window.name          → content-only (string bag)
+      //   event.data           → content-only
+      //   storage.getItem      → content-only
+      return _tvsSource(taintMatch, nodeLoc, _dimsForSource(taintMatch));
     }
     // Static access to a known-safe location prop (origin/hostname/protocol)
     // is server-controlled — treat as literal-ish so callers don't promote
@@ -6510,7 +7229,7 @@ function _traceValueSourceInner(path, node) {
                 ((_t.isIdentifier(objProps[oi].key) && objProps[oi].key.name === objPropName) ||
                  (_t.isStringLiteral(objProps[oi].key) && objProps[oi].key.value === objPropName))) {
               var propValSource = _traceValueSource(objBinding.path.get("init.properties." + oi + ".value"));
-              if (propValSource.sourceType === "user-controlled") return propValSource;
+              if (propValSource.sourceType === "user-controlled") return _tvsHop(propValSource, "obj-prop", "." + objPropName, nodeLoc);
             }
           }
         }
@@ -6534,7 +7253,7 @@ function _traceValueSourceInner(path, node) {
                       ((_t.isIdentifier(_oaSrcProps[_oaSPI].key) && _oaSrcProps[_oaSPI].key.name === objPropName) ||
                        (_t.isStringLiteral(_oaSrcProps[_oaSPI].key) && _oaSrcProps[_oaSPI].key.value === objPropName))) {
                     var _oaPropSrc = _traceValueSource(_oaSrcBind.path.get("init.properties." + _oaSPI + ".value"));
-                    if (_oaPropSrc.sourceType === "user-controlled") return _oaPropSrc;
+                    if (_oaPropSrc.sourceType === "user-controlled") return _tvsHop(_oaPropSrc, "obj-assign-prop", "." + objPropName + " (via Object.assign)", nodeLoc);
                   }
                 }
               }
@@ -6546,7 +7265,7 @@ function _traceValueSourceInner(path, node) {
                     ((_t.isIdentifier(_oaSrcArg.properties[_oaInlI].key) && _oaSrcArg.properties[_oaInlI].key.name === objPropName) ||
                      (_t.isStringLiteral(_oaSrcArg.properties[_oaInlI].key) && _oaSrcArg.properties[_oaInlI].key.value === objPropName))) {
                   var _oaInlSrc = _traceValueSource(objBinding.path.get("init.arguments." + _oaPI + ".properties." + _oaInlI + ".value"));
-                  if (_oaInlSrc.sourceType === "user-controlled") return _oaInlSrc;
+                  if (_oaInlSrc.sourceType === "user-controlled") return _tvsHop(_oaInlSrc, "obj-assign-prop", "." + objPropName + " (via Object.assign inline)", nodeLoc);
                 }
               }
             }
@@ -6559,25 +7278,98 @@ function _traceValueSourceInner(path, node) {
   // Non-computed MemberExpression: trace through deep property chains.
   // Handles patterns like doc.body.innerHTML where doc comes from a tainted source
   // (e.g., DOMParser().parseFromString(tainted)). Taint propagates through property access.
-  if (_t.isMemberExpression(node) && !node.computed) {
+  // Optional-chained (`a?.b`) is a distinct AST node (OptionalMemberExpression)
+  // in Babel but semantically equivalent for taint — handle both.
+  if ((_t.isMemberExpression(node) || _t.isOptionalMemberExpression(node)) && !node.computed) {
     var _deepObjSource = _traceValueSource(path.get("object"));
-    if (_deepObjSource.sourceType === "user-controlled") return _deepObjSource;
+    if (_deepObjSource.sourceType === "user-controlled") {
+      var _deepPropName = _t.isIdentifier(node.property) ? node.property.name : "?";
+      // URL-object property projections narrow dimensions. The object
+      // here is whatever _deepObjSource describes; the property access
+      // pulls a specific part of it.
+      //   url.origin → origin dim only (as content, the stringified origin)
+      //   url.host/hostname/port/protocol → origin dim
+      //   url.pathname → path dim
+      //   url.search → query dim (the "?..." string)
+      //   url.hash → hash dim ("#..." string)
+      //   url.href / url.toString() → union of all dims (full string)
+      //   url.searchParams → query dim (USP object carries query content)
+      // Non-URL property accesses default to pass-through (same dims
+      // as the source). We don't try to detect "is this actually a URL
+      // object?" — if the source's dimensions include URL parts, these
+      // projections still apply; if the source is a non-URL object, the
+      // projections happen to pass through whatever content dim it has,
+      // which is correct by default.
+      var _srcDims = _deepObjSource.dimensions || _tvsDimsContent();
+      var _projDims = null;
+      switch (_deepPropName) {
+        case "origin": case "host": case "hostname": case "protocol": case "port":
+          _projDims = { origin: _srcDims.origin, content: _srcDims.origin };
+          break;
+        case "pathname":
+          _projDims = { path: _srcDims.path, content: _srcDims.path };
+          break;
+        case "search": case "searchParams":
+          _projDims = { query: _srcDims.query, content: _srcDims.query };
+          break;
+        case "hash":
+          _projDims = { hash: _srcDims.hash, content: _srcDims.hash };
+          break;
+        case "href":
+          // href is the full serialization — includes all parts.
+          _projDims = _srcDims;
+          break;
+      }
+      if (_projDims) {
+        return _tvsHopDims(_deepObjSource, "member", "." + _deepPropName, nodeLoc, _projDims);
+      }
+      return _tvsHop(_deepObjSource, "member", "." + _deepPropName, nodeLoc);
+    }
   }
 
   // Computed MemberExpression: taintedArray[i], tainted.split("=")[1], etc.
   // Taint propagates through indexed access on tainted objects.
-  if (_t.isMemberExpression(node) && node.computed) {
+  if ((_t.isMemberExpression(node) || _t.isOptionalMemberExpression(node)) && node.computed) {
     var compObjSource = _traceValueSource(path.get("object"));
-    if (compObjSource.sourceType === "user-controlled") return compObjSource;
+    if (compObjSource.sourceType === "user-controlled") return _tvsHop(compObjSource, "member-computed", "[…]", nodeLoc);
   }
 
   // Identifier: resolve via scope binding
   if (_t.isIdentifier(node)) {
     var binding = path.scope.getBinding(node.name);
     if (binding) {
-      // Variable initializer
+      // Variable initializer. When the binding is NOT constant, the
+      // initializer alone doesn't capture the final value at the sink —
+      // follow Babel's `constantViolations` list (each entry is an
+      // AssignmentExpression path where the var was reassigned) and
+      // short-circuit on any user-controlled reassignment. Handles:
+      //   let x = "safe"; x = location.hash; sink(x);
       if (binding.path.isVariableDeclarator() && binding.path.node.init) {
-        return _traceValueSource(binding.path.get("init"));
+        var initSrc = _traceValueSource(binding.path.get("init"));
+        if (initSrc.sourceType === "user-controlled") return _tvsHop(initSrc, "binding", node.name, nodeLoc);
+        if (binding.constantViolations && binding.constantViolations.length > 0) {
+          for (var _cvi = 0; _cvi < binding.constantViolations.length; _cvi++) {
+            var _cvPath = binding.constantViolations[_cvi];
+            // AssignmentExpression: `x = tainted` — trace the right-hand side.
+            if (_cvPath && _cvPath.isAssignmentExpression()) {
+              var _cvSrc = _traceValueSource(_cvPath.get("right"));
+              if (_cvSrc.sourceType === "user-controlled") return _tvsHop(_cvSrc, "reassign", node.name, nodeLoc);
+            }
+          }
+        }
+        return initSrc;
+      }
+      // Uninitialised declaration: `let x; x = tainted; sink(x)`. The
+      // VariableDeclarator has no init but reassignments still matter.
+      if (binding.path.isVariableDeclarator() && !binding.path.node.init &&
+          binding.constantViolations && binding.constantViolations.length > 0) {
+        for (var _cvni = 0; _cvni < binding.constantViolations.length; _cvni++) {
+          var _cvnPath = binding.constantViolations[_cvni];
+          if (_cvnPath && _cvnPath.isAssignmentExpression()) {
+            var _cvnSrc = _traceValueSource(_cvnPath.get("right"));
+            if (_cvnSrc.sourceType === "user-controlled") return _tvsHop(_cvnSrc, "reassign-uninit", node.name, nodeLoc);
+          }
+        }
       }
       // For-in/for-of loop variable: for (var key in obj) → key is user-controlled if obj is.
       // Critical for detecting prototype pollution in recursive merge functions.
@@ -6585,7 +7377,7 @@ function _traceValueSourceInner(path, node) {
         var _forParent = binding.path.parentPath && binding.path.parentPath.parentPath;
         if (_forParent && (_t.isForInStatement(_forParent.node) || _t.isForOfStatement(_forParent.node)) &&
             _forParent.node.left === binding.path.parent) {
-          return _traceValueSource(_forParent.get("right"));
+          return _tvsHop(_traceValueSource(_forParent.get("right")), "for-iter", "iterates " + node.name, nodeLoc);
         }
       }
       // Destructured property: const { data } = event → trace back to the parent object.
@@ -6597,7 +7389,7 @@ function _traceValueSourceInner(path, node) {
           _destrParent = _destrParent.parentPath;
         }
         if (_destrParent && _destrParent.node.init) {
-          return _traceValueSource(_destrParent.get("init"));
+          return _tvsHop(_traceValueSource(_destrParent.get("init")), "destructure-obj", "{" + node.name + "}", nodeLoc);
         }
         // Destructuring in for-of/for-in head: `for (const {data} of events)`
         // — VariableDeclarator has no .init; the iterated expression lives
@@ -6605,7 +7397,7 @@ function _traceValueSourceInner(path, node) {
         if (_destrParent && !_destrParent.node.init) {
           var _forOwner = _destrParent.parentPath && _destrParent.parentPath.parentPath;
           if (_forOwner && (_t.isForOfStatement(_forOwner.node) || _t.isForInStatement(_forOwner.node))) {
-            return _traceValueSource(_forOwner.get("right"));
+            return _tvsHop(_traceValueSource(_forOwner.get("right")), "destructure-obj-for", "{" + node.name + "} of …", nodeLoc);
           }
         }
       }
@@ -6616,7 +7408,7 @@ function _traceValueSourceInner(path, node) {
           _arrDestrParent = _arrDestrParent.parentPath;
         }
         if (_arrDestrParent && _arrDestrParent.node.init) {
-          return _traceValueSource(_arrDestrParent.get("init"));
+          return _tvsHop(_traceValueSource(_arrDestrParent.get("init")), "destructure-arr", "[…" + node.name + "…]", nodeLoc);
         }
         // `for (const [k, v] of URLSearchParams)` — the key AND value
         // inherit taint from the iterated source. The URLSearchParams
@@ -6625,7 +7417,7 @@ function _traceValueSourceInner(path, node) {
         if (_arrDestrParent && !_arrDestrParent.node.init) {
           var _forOwner2 = _arrDestrParent.parentPath && _arrDestrParent.parentPath.parentPath;
           if (_forOwner2 && (_t.isForOfStatement(_forOwner2.node) || _t.isForInStatement(_forOwner2.node))) {
-            return _traceValueSource(_forOwner2.get("right"));
+            return _tvsHop(_traceValueSource(_forOwner2.get("right")), "destructure-arr-for", "[…" + node.name + "…] of …", nodeLoc);
           }
         }
       }
@@ -6658,13 +7450,13 @@ function _traceValueSourceInner(path, node) {
           if (_iifeParent && _t.isCallExpression(_iifeParent.node) && _iifeParent.node.callee === funcPath.node &&
               paramIdx < _iifeParent.node.arguments.length) {
             var _iifeArgSrc = _traceValueSource(_iifeParent.get("arguments." + paramIdx));
-            if (_iifeArgSrc.sourceType === "user-controlled") return _iifeArgSrc;
+            if (_iifeArgSrc.sourceType === "user-controlled") return _tvsHop(_iifeArgSrc, "param-iife", "param " + node.name + " @ arg " + paramIdx, nodeLoc);
           }
           var callerArgs = _findFunctionCallerArgs(funcPath);
           for (var ci = 0; ci < callerArgs.length; ci++) {
             if (paramIdx < callerArgs[ci].length) {
               var argSource = _traceValueSource(callerArgs[ci][paramIdx]);
-              if (argSource.sourceType === "user-controlled") return argSource;
+              if (argSource.sourceType === "user-controlled") return _tvsHop(argSource, "param-caller", "param " + node.name + " @ arg " + paramIdx, nodeLoc);
             }
           }
           // Array iteration callback: arr.forEach(fn), arr.map(fn), etc.
@@ -6693,7 +7485,7 @@ function _traceValueSourceInner(path, node) {
                   // skip — resolved value is server-controlled
                 } else if (!(_ITERATION_METHODS[_iterMethod] && _iterObjType && _NON_ITERABLE_TYPES[_iterObjType])) {
                   var _iterObjSrc = _traceValueSource(_iterParent.get("callee.object"));
-                  if (_iterObjSrc.sourceType === "user-controlled") return _iterObjSrc;
+                  if (_iterObjSrc.sourceType === "user-controlled") return _tvsHop(_iterObjSrc, "iter-callback", "." + _iterMethod + " element", nodeLoc);
                 }
               }
             }
@@ -6717,7 +7509,7 @@ function _traceValueSourceInner(path, node) {
                       // skip — resolved value is server-controlled
                     } else if (!(_ITERATION_METHODS[_irMethod] && _irObjType && _NON_ITERABLE_TYPES[_irObjType])) {
                       var _irObjSrc = _traceValueSource(_irParent.get("callee.object"));
-                      if (_irObjSrc.sourceType === "user-controlled") return _irObjSrc;
+                      if (_irObjSrc.sourceType === "user-controlled") return _tvsHop(_irObjSrc, "iter-callback-ref", "." + _irMethod + " element (via ref)", nodeLoc);
                     }
                   }
                 }
@@ -6739,7 +7531,7 @@ function _traceValueSourceInner(path, node) {
                 var _redObjType = _getTrackedType(_redParent.get("callee.object"), _redParent.node.callee.object);
                 if (!(_redObjType && _NON_ITERABLE_TYPES[_redObjType])) {
                   var _redObjSrc = _traceValueSource(_redParent.get("callee.object"));
-                  if (_redObjSrc.sourceType === "user-controlled") return _redObjSrc;
+                  if (_redObjSrc.sourceType === "user-controlled") return _tvsHop(_redObjSrc, "reduce-element", "." + _redMethod + " element", nodeLoc);
                 }
               }
             }
@@ -6827,75 +7619,169 @@ function _traceValueSourceInner(path, node) {
               }
             }
           }
+          // Named-handler pattern: `var h = function(msg) {...};
+          // addEventListener("message", h)`. The function expression's
+          // parent is a VariableDeclarator or AssignmentExpression — walk
+          // its references to find an addEventListener("message", h) or
+          // onmessage = h call.
+          if (!_isMsgHandler && _mhParent) {
+            var _namedBinding = null;
+            if (_mhParent.isVariableDeclarator() && _t.isIdentifier(_mhParent.node.id)) {
+              _namedBinding = _mhParent.scope.getBinding(_mhParent.node.id.name);
+            } else if (_mhParent.isAssignmentExpression() && _t.isIdentifier(_mhParent.node.left) &&
+                       _mhParent.node.right === funcPath.node) {
+              _namedBinding = _mhParent.scope.getBinding(_mhParent.node.left.name);
+            }
+            if (_namedBinding) {
+              var _nbRefs = _namedBinding.referencePaths || [];
+              for (var _nbri = 0; _nbri < _nbRefs.length && !_isMsgHandler; _nbri++) {
+                var _nbRef = _nbRefs[_nbri];
+                var _nbRefP = _nbRef.parentPath;
+                if (!_nbRefP) continue;
+                // addEventListener("message", h)
+                if (_nbRefP.isCallExpression() && _nbRefP.node.arguments.length >= 2 &&
+                    _nbRefP.node.arguments[1] === _nbRef.node &&
+                    _t.isStringLiteral(_nbRefP.node.arguments[0], { value: "message" })) {
+                  var _nbCal = _nbRefP.node.callee;
+                  if ((_t.isMemberExpression(_nbCal) && !_nbCal.computed &&
+                       _t.isIdentifier(_nbCal.property, { name: "addEventListener" })) ||
+                      (_t.isIdentifier(_nbCal, { name: "addEventListener" }) &&
+                       !_nbRefP.scope.getBinding("addEventListener"))) {
+                    if (_isCrossOriginMsgReceiver(_nbCal, _nbRefP)) _isMsgHandler = true;
+                  }
+                }
+                // target.onmessage = h
+                if (_nbRefP.isAssignmentExpression() && _nbRefP.node.right === _nbRef.node) {
+                  var _nbOmL = _nbRefP.node.left;
+                  if (_t.isMemberExpression(_nbOmL) && !_nbOmL.computed &&
+                      _t.isIdentifier(_nbOmL.property, { name: "onmessage" })) {
+                    _isMsgHandler = true;
+                  }
+                }
+              }
+            }
+          }
           if (_isMsgHandler) {
-            return { sourceType: "user-controlled", source: "event.data", sourceLoc: nodeLoc };
+            return _tvsSource("event.data", nodeLoc, _dimsForSource("event.data"));
           }
         }
         return { sourceType: "dynamic", source: null };
       }
     }
     // Bare `location` identifier (unbound) — the location object itself is user-controlled
-    if (node.name === "location") return { sourceType: "user-controlled", source: "location", sourceLoc: nodeLoc };
+    if (node.name === "location") return _tvsSource("location", nodeLoc, _dimsForSource("location"));
     // Unresolvable identifier
     return { sourceType: "dynamic", source: null };
   }
 
-  // Template literal with expressions — check if any expression is user-controlled
+  // Template literal with expressions — check if any expression is
+  // user-controlled. If the first quasi is a same-origin-relative
+  // literal (e.g. `/api/${t}`), strip origin dim from the propagated
+  // hop — the URL's origin is locked by the leading literal.
   if (_t.isTemplateLiteral(node)) {
+    var _tmplStripsOrigin = false;
+    var _q0 = node.quasis && node.quasis[0];
+    var _q0Raw = _q0 && _q0.value ? _q0.value.raw : "";
+    if (_q0Raw && !/^https?:/i.test(_q0Raw) && !_q0Raw.startsWith("//") &&
+        (_q0Raw.startsWith("/") || _q0Raw.startsWith("./") || _q0Raw.startsWith("../"))) {
+      _tmplStripsOrigin = true;
+    }
     for (var ti = 0; ti < node.expressions.length; ti++) {
       var exprSource = _traceValueSource(path.get("expressions." + ti));
-      if (exprSource.sourceType === "user-controlled") return exprSource;
+      if (exprSource.sourceType === "user-controlled") {
+        var _hopT = _tvsHop(exprSource, "template-interp", "`…${" + ti + "}…`", nodeLoc);
+        if (_tmplStripsOrigin && _hopT && _hopT.dimensions) {
+          _hopT.dimensions = _tvsDims({ path: _hopT.dimensions.path, query: _hopT.dimensions.query, hash: _hopT.dimensions.hash, content: true });
+        }
+        return _hopT;
+      }
     }
     return node.expressions.length > 0 ? { sourceType: "dynamic", source: null } : { sourceType: "literal", source: null };
   }
 
-  // Binary expression (string concat): check both sides
+  // TaggedTemplateExpression: `tag\`…${expr}…\`` — the tag function may
+  // transform its input, but for taint purposes we assume pass-through.
+  // Any tainted interpolation propagates. The classic example is
+  // `String.raw\`…${tainted}…\`` which literally concatenates the raw
+  // expression value. User tags (html\`…\`, gql\`…\`, etc.) could in
+  // theory sanitise, but we can't prove that without reading the tag —
+  // conservative propagation is the safer default.
+  if (_t.isTaggedTemplateExpression(node)) {
+    var _quasiPath = path.get("quasi");
+    for (var _tti = 0; _tti < node.quasi.expressions.length; _tti++) {
+      var _ttExprSrc = _traceValueSource(_quasiPath.get("expressions." + _tti));
+      if (_ttExprSrc.sourceType === "user-controlled") return _tvsHop(_ttExprSrc, "tagged-template", "tag`…${" + _tti + "}…`", nodeLoc);
+    }
+  }
+
+  // Binary expression (string concat): check both sides. The origin
+  // dim of a concatenation reflects the LEFTMOST POSITION's control —
+  // the browser URL parser resolves based on the prefix. If the
+  // leftmost leaf of a `+` chain is a same-origin-relative literal
+  // ("/path", "./x", "../x"), the fetch origin is locked to same-origin
+  // regardless of what the attacker appends on the right; strip origin
+  // dim on the propagated hop.
   if (_t.isBinaryExpression(node) && node.operator === "+") {
     var leftSource = _traceValueSource(path.get("left"));
-    if (leftSource.sourceType === "user-controlled") return leftSource;
+    var _concatStripsOrigin = _leftmostLiteralIsSameOriginPrefix(path);
+    if (leftSource.sourceType === "user-controlled") {
+      var _hopL = _tvsHop(leftSource, "concat-left", "… + …", nodeLoc);
+      if (_concatStripsOrigin && _hopL && _hopL.dimensions) {
+        _hopL.dimensions = _tvsDims({ path: _hopL.dimensions.path, query: _hopL.dimensions.query, hash: _hopL.dimensions.hash, content: true });
+      }
+      return _hopL;
+    }
     var rightSource = _traceValueSource(path.get("right"));
-    if (rightSource.sourceType === "user-controlled") return rightSource;
+    if (rightSource.sourceType === "user-controlled") {
+      var _hopR = _tvsHop(rightSource, "concat-right", "… + …", nodeLoc);
+      if (_concatStripsOrigin && _hopR && _hopR.dimensions) {
+        _hopR.dimensions = _tvsDims({ path: _hopR.dimensions.path, query: _hopR.dimensions.query, hash: _hopR.dimensions.hash, content: true });
+      }
+      return _hopR;
+    }
     return { sourceType: "dynamic", source: null };
   }
 
   // Conditional: check both branches
   if (_t.isConditionalExpression(node)) {
     var consSource = _traceValueSource(path.get("consequent"));
-    if (consSource.sourceType === "user-controlled") return consSource;
+    if (consSource.sourceType === "user-controlled") return _tvsHop(consSource, "ternary-then", "? … : _", nodeLoc);
     var altSource = _traceValueSource(path.get("alternate"));
-    if (altSource.sourceType === "user-controlled") return altSource;
+    if (altSource.sourceType === "user-controlled") return _tvsHop(altSource, "ternary-else", "? _ : …", nodeLoc);
   }
 
   // Logical expression (||, &&, ??): taint propagates through either side.
   // Common pattern: var url = params.get("url") || "/default"
   if (_t.isLogicalExpression(node)) {
     var _logLeft = _traceValueSource(path.get("left"));
-    if (_logLeft.sourceType === "user-controlled") return _logLeft;
+    if (_logLeft.sourceType === "user-controlled") return _tvsHop(_logLeft, "logical-left", "… " + node.operator + " …", nodeLoc);
     var _logRight = _traceValueSource(path.get("right"));
-    if (_logRight.sourceType === "user-controlled") return _logRight;
+    if (_logRight.sourceType === "user-controlled") return _tvsHop(_logRight, "logical-right", "… " + node.operator + " …", nodeLoc);
   }
 
   // Sequence expression (comma operator): value is the last expression.
   // Common pattern: (0, eval)(tainted) — indirect eval
   if (_t.isSequenceExpression(node) && node.expressions.length > 0) {
     var _lastIdx = node.expressions.length - 1;
-    return _traceValueSource(path.get("expressions." + _lastIdx));
+    return _tvsHop(_traceValueSource(path.get("expressions." + _lastIdx)), "sequence", "(_, …)", nodeLoc);
   }
 
   // AwaitExpression: taint propagates through await.
   // const data = await response.json() where response is tainted
   if (_t.isAwaitExpression(node)) {
-    return _traceValueSource(path.get("argument"));
+    return _tvsHop(_traceValueSource(path.get("argument")), "await", "await …", nodeLoc);
   }
 
   // SpreadElement: taint propagates through spread.
   // [...tainted] or fn(...tainted)
   if (_t.isSpreadElement(node)) {
-    return _traceValueSource(path.get("argument"));
+    return _tvsHop(_traceValueSource(path.get("argument")), "spread", "…value", nodeLoc);
   }
 
-  // Call expression — check if it's a wrapper around a taint source
-  if (_t.isCallExpression(node)) {
+  // Call expression — check if it's a wrapper around a taint source.
+  // Optional-chained calls (`f?.(...)`) are OptionalCallExpression in
+  // Babel — they behave identically for taint purposes, handle both.
+  if (_t.isCallExpression(node) || _t.isOptionalCallExpression(node)) {
     // localStorage.getItem() / sessionStorage.getItem() — persistent DOM XSS sources.
     // Same-origin write requirement, but a recognized vulnerability class (stored DOM XSS).
     if (_t.isMemberExpression(node.callee) && !node.callee.computed &&
@@ -6903,13 +7789,103 @@ function _traceValueSourceInner(path, node) {
       var _storObj = node.callee.object;
       if ((_t.isIdentifier(_storObj, { name: "localStorage" }) && !path.scope.getBinding("localStorage")) ||
           (_t.isIdentifier(_storObj, { name: "sessionStorage" }) && !path.scope.getBinding("sessionStorage"))) {
-        return { sourceType: "user-controlled", source: _storObj.name + ".getItem", sourceLoc: nodeLoc };
+        return _tvsSource(_storObj.name + ".getItem", nodeLoc, _dimsForSource(_storObj.name + ".getItem"));
       }
     }
     // Method calls on tainted objects: tainted.slice(), tainted.substring(), tainted.trim(), etc.
-    if (_t.isMemberExpression(node.callee) && !node.callee.computed) {
+    // Also covers optional-chained method calls: `tainted?.slice(1)` — the
+    // callee is an OptionalMemberExpression but propagation is identical.
+    if ((_t.isMemberExpression(node.callee) || _t.isOptionalMemberExpression(node.callee)) && !node.callee.computed) {
       var callObjSource = _traceValueSource(path.get("callee.object"));
-      if (callObjSource.sourceType === "user-controlled") return callObjSource;
+      if (callObjSource.sourceType === "user-controlled") {
+        var _callMethodName = _t.isIdentifier(node.callee.property) ? node.callee.property.name : "?";
+        // Record the first literal argument alongside the method name
+        // so downstream tools can see exactly which key was looked up
+        // (e.g. `.get("q")`). This is the AST's observation of the
+        // real param name — downstream probes use it directly, no
+        // guessing about param names.
+        var _argLit = null;
+        if (node.arguments.length > 0) {
+          var _a0 = node.arguments[0];
+          if (_t.isStringLiteral(_a0)) _argLit = _a0.value;
+          else if (_t.isTemplateLiteral(_a0) && _a0.expressions.length === 0 && _a0.quasis.length === 1) _argLit = _a0.quasis[0].value.cooked;
+        }
+        var _hopDesc = "." + _callMethodName + "(" + (_argLit !== null ? JSON.stringify(_argLit) : "") + ")";
+        // Method-call dim projection, driven by ECMAScript semantics of
+        // standard string / URL methods — NOT by a blanket "all methods
+        // strip the prefix" assumption. URL-part sources (location.hash/
+        // search/pathname) carry a browser-enforced structural prefix
+        // ("#"/"?"/"/") that keeps fetch same-origin. Whether a method
+        // preserves that prefix is a FACT about the method's spec:
+        //
+        //   PREFIX-PRESERVING (dims pass through, no origin upgrade):
+        //     - toString, valueOf             — identity on strings
+        //     - toLowerCase, toUpperCase      — case only; "#"→"#"
+        //     - normalize                     — Unicode; "#" unchanged
+        //     - trim, trimStart, trimEnd      — strips whitespace only
+        //                                       (location.hash can't start
+        //                                       with whitespace — browser
+        //                                       guarantees leading "#")
+        //     - slice(0, …) / substring(0, …) / substr(0, …)
+        //                                     — when literal arg 0, the
+        //                                       start is preserved
+        //
+        //   EXTRACTION (URL-part → free-form content, upgrades origin if
+        //   source had a URL-part dim):
+        //     - get/getAll/has    — URLSearchParams / Headers / Map pull
+        //     - slice/substring/substr with literal N>0  — strips N chars
+        //     - at(N)                   — with literal N, returns char N
+        //
+        //   UNKNOWN (conservative: treat as prefix-stripping):
+        //     - everything else (.replace, .split, .match, custom methods,
+        //       slice with dynamic offset, …). Errs toward flagging real
+        //       issues; non-URL sources don't have URL-part dims so this
+        //       over-generalisation is a no-op for them anyway.
+        var _sdM = callObjSource.dimensions || _tvsDimsContent();
+        var _hasUrlPartDim = !!(_sdM.hash || _sdM.query || _sdM.path);
+        var _mcProjDims;
+        var _isPrefixPreservingName =
+          _callMethodName === "toString" || _callMethodName === "valueOf" ||
+          _callMethodName === "toLowerCase" || _callMethodName === "toUpperCase" ||
+          _callMethodName === "normalize" ||
+          _callMethodName === "trim" || _callMethodName === "trimStart" || _callMethodName === "trimEnd";
+        // For slice-family methods, check if the FIRST arg is literal 0.
+        var _isSliceFamily =
+          _callMethodName === "slice" || _callMethodName === "substring" || _callMethodName === "substr";
+        var _sliceStartZero = _isSliceFamily && node.arguments.length >= 1 &&
+          _t.isNumericLiteral(node.arguments[0]) && node.arguments[0].value === 0;
+        // Map/Set/WeakMap/WeakSet are handled upstream in the call-arg
+        // propagation branch — `bfCache.get(tainted)` doesn't taint the
+        // result when the receiver is a tracked collection. This block
+        // only runs with a user-controlled receiver, so there's no need
+        // to re-check type here.
+        if (_isPrefixPreservingName || _sliceStartZero) {
+          _mcProjDims = {
+            origin: _sdM.origin, path: _sdM.path, query: _sdM.query, hash: _sdM.hash,
+            content: _sdM.origin || _sdM.path || _sdM.query || _sdM.hash || _sdM.content,
+          };
+        } else if (_callMethodName === "get" || _callMethodName === "getAll" || _callMethodName === "has") {
+          // URLSearchParams / Headers pull — the URL-part structure
+          // doesn't survive the extraction; a single value is attacker-
+          // controlled free-form content.
+          _mcProjDims = { origin: _sdM.origin || _hasUrlPartDim, content: true };
+        } else {
+          // Prefix-stripping (slice(N>0), substring, substr, replace,
+          // split, at, match, …) or unknown method. URL-part dims lost;
+          // origin upgrades when source had a URL-part dim.
+          _mcProjDims = { origin: _sdM.origin || _hasUrlPartDim, content: true };
+        }
+        var _hop = _mcProjDims
+          ? _tvsHopDims(callObjSource, "method-call", _hopDesc, nodeLoc, _mcProjDims)
+          : _tvsHop(callObjSource, "method-call", _hopDesc, nodeLoc);
+        if (_argLit !== null && _hop && _hop.taintPath && _hop.taintPath.length) {
+          // Also attach the raw literal as a structured field so tools
+          // don't have to parse the desc string.
+          _hop.taintPath[_hop.taintPath.length - 1].arg = _argLit;
+          _hop.taintPath[_hop.taintPath.length - 1].method = _callMethodName;
+        }
+        return _hop;
+      }
     }
     // Object.assign(target, ...sources) / Object.create — taint propagates from any source arg.
     // This handles var merged = Object.assign({}, taintedConfig) where the tainted data is in arg 1+.
@@ -6919,13 +7895,46 @@ function _traceValueSourceInner(path, node) {
         node.arguments.length >= 2) {
       for (var _oaIdx = 0; _oaIdx < node.arguments.length; _oaIdx++) {
         var _oaArgSrc = _traceValueSource(path.get("arguments." + _oaIdx));
-        if (_oaArgSrc.sourceType === "user-controlled") return _oaArgSrc;
+        if (_oaArgSrc.sourceType === "user-controlled") return _tvsHop(_oaArgSrc, "object-assign-arg", "Object.assign arg " + _oaIdx, nodeLoc);
       }
     }
     // decodeURIComponent(location.hash), atob(location.search), etc.
     if (node.arguments.length > 0) {
-      var argSource = _traceValueSource(path.get("arguments.0"));
-      if (argSource.sourceType === "user-controlled") return argSource;
+      // `.get(taintedKey)` / `.has(taintedKey)` — the attacker-control
+      // of the KEY doesn't imply attacker-control of the looked-up
+      // VALUE. URLSearchParams/Headers/Request/Response are the
+      // exception: their lookups surface the URL query / header map /
+      // body — content the attacker CAN inject. Everything else
+      // (Map/Set/WeakMap/WeakSet, or custom collection classes like
+      // github's LRU `bfCache`) stores values independent of the key,
+      // so propagating key-taint to the value is a false positive by
+      // default. Flip to propagate-ONLY-on-URL-like-receivers, matching
+      // the semantics of what the key-value relationship actually is.
+      if (_t.isMemberExpression(node.callee) && !node.callee.computed &&
+          _t.isIdentifier(node.callee.property) &&
+          (node.callee.property.name === "get" || node.callee.property.name === "has")) {
+        var _ccmRecvType = _getTrackedType(path, node.callee.object);
+        var _isUrlLikeLookup = _ccmRecvType === "URLSearchParams" ||
+          _ccmRecvType === "Headers" || _ccmRecvType === "Request" || _ccmRecvType === "Response";
+        if (_isUrlLikeLookup) {
+          var argSource = _traceValueSource(path.get("arguments.0"));
+          if (argSource.sourceType === "user-controlled") {
+            var _callCalleeName = "." + node.callee.property.name + "()";
+            return _tvsHop(argSource, "call-arg", _callCalleeName + " arg 0", nodeLoc);
+          }
+        }
+        // else: collection-lookup or unknown type — don't propagate key
+        // taint; fall through so function-return / inter-procedural
+        // branches below still run (in case the stored value is itself
+        // traceable to a user-controlled source through another flow).
+      } else {
+        var argSource = _traceValueSource(path.get("arguments.0"));
+        if (argSource.sourceType === "user-controlled") {
+          var _callCalleeName = _t.isIdentifier(node.callee) ? node.callee.name + "()" :
+            (_t.isMemberExpression(node.callee) && _t.isIdentifier(node.callee.property) ? "." + node.callee.property.name + "()" : "call()");
+          return _tvsHop(argSource, "call-arg", _callCalleeName + " arg 0", nodeLoc);
+        }
+      }
     }
     // Resolve function return value: buildApiUrl("x") → trace return statement in body
     var _calleeNode = node.callee;
@@ -6943,16 +7952,90 @@ function _traceValueSourceInner(path, node) {
     }
     if (_calleeFuncPath && _calleeFuncPath.node.body && _t.isBlockStatement(_calleeFuncPath.node.body)) {
       var _retResult = _traceReturnsInBlock(_calleeFuncPath.get("body"));
-      if (_retResult && _retResult.sourceType === "user-controlled") return _retResult;
+      if (_retResult && _retResult.sourceType === "user-controlled") {
+        var _retCalleeName = _t.isIdentifier(_calleeNode) ? _calleeNode.name + "()" : "call()";
+        return _tvsHop(_retResult, "function-return", "return of " + _retCalleeName, nodeLoc);
+      }
     }
+  }
+
+  // `new URL(input, base?)` — dimension-aware handling.
+  //
+  // The output URL is an object whose ORIGIN comes from:
+  //   • `input` if it's absolute (http://… or //…)
+  //   • `base` otherwise (relative-input resolves against base.origin)
+  // And whose PATH/QUERY/HASH always come from `input` (the base's
+  // path is replaced unless input is purely a fragment/query suffix —
+  // we treat input as controlling path/query/hash in all cases for
+  // the safer-than-sound direction).
+  //
+  // This matters because `new URL(this.container.src, location.href)`
+  // in real code (remote-input-element, auto-complete-element) pulls
+  // ORIGIN from location.href (same-origin / user-navigated) and
+  // PATH/QUERY/HASH from the DOM attribute (author-controlled). A
+  // downstream fetch sees a URL whose origin is NOT attacker-picked
+  // (because location.href only reflects wherever the user navigated,
+  // which is same-origin from this page's perspective) unless the
+  // input is ALSO attacker-controlled AND could be absolute.
+  if (_t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URL" }) &&
+      !path.scope.getBinding("URL") && node.arguments.length >= 1) {
+    var _urlInputPath = path.get("arguments.0");
+    var _urlInputNode = node.arguments[0];
+    var _urlBasePath = node.arguments.length >= 2 ? path.get("arguments.1") : null;
+    var _urlInputSrc = _traceValueSource(_urlInputPath);
+    var _urlBaseSrc = _urlBasePath ? _traceValueSource(_urlBasePath) : null;
+
+    // Detect if input is known-relative (literal starting with /, ./, ../,
+    // or relative-prefixed template). Relative input → origin from base;
+    // absolute / unknown input → origin could come from either.
+    var _urlInputIsRelative =
+      (_t.isStringLiteral(_urlInputNode) &&
+        !/^https?:/i.test(_urlInputNode.value) &&
+        !_urlInputNode.value.startsWith("//")) ||
+      (_t.isTemplateLiteral(_urlInputNode) && (function () {
+        var q = _urlInputNode.quasis;
+        var h = (q[0] && q[0].value && q[0].value.raw) || "";
+        return h !== "" && !/^https?:/i.test(h) && !h.startsWith("//");
+      })());
+
+    // Build the output URL object's dimensions from the pieces.
+    var _inputDims = _urlInputSrc && _urlInputSrc.dimensions ? _urlInputSrc.dimensions : null;
+    var _baseDims = _urlBaseSrc && _urlBaseSrc.dimensions ? _urlBaseSrc.dimensions : null;
+    // Path/query/hash come from INPUT (whatever it controls).
+    // The `content` stringification of a URL combines all dims — so
+    // content-attacker means: either input content OR (when base
+    // origin is attacker-controllable AND input is relative) base origin.
+    var _outDims = {
+      origin: _urlInputIsRelative
+        ? !!(_baseDims && _baseDims.origin)
+        : !!((_inputDims && _inputDims.origin) || (_baseDims && _baseDims.origin && !_urlInputIsRelative && !_urlInputSrc)),
+      path: !!(_inputDims && _inputDims.path),
+      query: !!(_inputDims && _inputDims.query),
+      hash: !!(_inputDims && _inputDims.hash),
+      content: !!((_inputDims && _inputDims.content) || (_baseDims && _baseDims.content && _urlInputIsRelative)),
+    };
+    // If EITHER input or base is user-controlled, the URL is tainted.
+    // Pick the inner hop based on which arg carries the taint.
+    if (_urlInputSrc && _urlInputSrc.sourceType === "user-controlled") {
+      var h1 = _tvsHop(_urlInputSrc, "new-url-input", "new URL(input, …)", nodeLoc);
+      if (h1) h1.dimensions = _tvsDims(_outDims);
+      return h1;
+    }
+    if (_urlBaseSrc && _urlBaseSrc.sourceType === "user-controlled") {
+      var h2 = _tvsHop(_urlBaseSrc, "new-url-base", "new URL(_, base)", nodeLoc);
+      if (h2) h2.dimensions = _tvsDims(_outDims);
+      return h2;
+    }
+    // Neither arg tainted → not user-controlled; fall through.
   }
 
   // NewExpression: taint propagates through constructor arguments.
   // new URLSearchParams(tainted), new URL(tainted), new Blob([tainted]) etc.
   if (_t.isNewExpression(node) && node.arguments.length > 0) {
+    var _newCalleeName = _t.isIdentifier(node.callee) ? node.callee.name : "ctor";
     for (var _ni = 0; _ni < node.arguments.length; _ni++) {
       var _nArgSrc = _traceValueSource(path.get("arguments." + _ni));
-      if (_nArgSrc.sourceType === "user-controlled") return _nArgSrc;
+      if (_nArgSrc.sourceType === "user-controlled") return _tvsHop(_nArgSrc, "new-arg", "new " + _newCalleeName + " arg " + _ni, nodeLoc);
     }
   }
 
@@ -6962,7 +8045,7 @@ function _traceValueSourceInner(path, node) {
     for (var _ai = 0; _ai < node.elements.length; _ai++) {
       if (node.elements[_ai]) {
         var _aElSrc = _traceValueSource(path.get("elements." + _ai));
-        if (_aElSrc.sourceType === "user-controlled") return _aElSrc;
+        if (_aElSrc.sourceType === "user-controlled") return _tvsHop(_aElSrc, "array-elem", "[…" + _ai + "…]", nodeLoc);
       }
     }
   }
@@ -6974,18 +8057,22 @@ function _traceValueSourceInner(path, node) {
       var _opProp = node.properties[_opi];
       if (_t.isObjectProperty(_opProp)) {
         var _opValSrc = _traceValueSource(path.get("properties." + _opi + ".value"));
-        if (_opValSrc.sourceType === "user-controlled") return _opValSrc;
+        if (_opValSrc.sourceType === "user-controlled") {
+          var _opPropKey = _t.isIdentifier(_opProp.key) ? _opProp.key.name :
+            _t.isStringLiteral(_opProp.key) ? _opProp.key.value : "?";
+          return _tvsHop(_opValSrc, "obj-prop-value", "{" + _opPropKey + ": …}", nodeLoc);
+        }
       }
       if (_t.isSpreadElement(_opProp)) {
         var _opSpreadSrc = _traceValueSource(path.get("properties." + _opi + ".argument"));
-        if (_opSpreadSrc.sourceType === "user-controlled") return _opSpreadSrc;
+        if (_opSpreadSrc.sourceType === "user-controlled") return _tvsHop(_opSpreadSrc, "obj-spread", "{...…}", nodeLoc);
       }
     }
   }
 
   // Assignment expression: check right side
   if (_t.isAssignmentExpression(node)) {
-    return _traceValueSource(path.get("right"));
+    return _tvsHop(_traceValueSource(path.get("right")), "assignment-rhs", "lhs = …", nodeLoc);
   }
 
   return { sourceType: "dynamic", source: null };
@@ -6997,28 +8084,452 @@ function _nodeLoc(n) {
   return { line: n.loc ? n.loc.start.line : 0, column: n.loc ? n.loc.start.column : 0 };
 }
 
-function _pushSink(result, node, type, sink, src, path) {
+// Does this right-hand-side expression guarantee that any taint flowing
+// through it only reaches the URL's query or fragment portion (never the
+// scheme, host, or path)? Two common patterns:
+//
+//   location.href = `https://example.com/path?${taintedQuery}`
+//   window.location.href = `${untaintedPermalink}?${taintedQuery}`
+//
+// The URL parser locks the scheme+authority+path as soon as it sees the
+// first `?` or `#`; characters after can't upgrade the result to a
+// `javascript:` URL or redirect to a different origin. Walk the template
+// literal: track whether we've crossed a `?` or `#` delimiter in the
+// static text, and for every interpolation BEFORE the delimiter require
+// that its source is NOT user-controlled. Interpolations AFTER the
+// delimiter can be freely tainted.
+function _taintFlowsOnlyIntoUrlQueryOrHash(valuePath) {
+  if (!valuePath || !valuePath.node) return false;
+  var node = valuePath.node;
+  if (!_t.isTemplateLiteral(node)) return false;
+  if (!node.quasis || node.quasis.length === 0) return false;
+  // A template literal has N quasis interleaved with N-1 expressions:
+  //   `q0${e0}q1${e1}q2` → [q0, q1, q2] and [e0, e1]
+  var crossedDelim = /[?#]/.test((node.quasis[0].value && node.quasis[0].value.raw) || "");
+  for (var i = 0; i < (node.expressions || []).length; i++) {
+    if (!crossedDelim) {
+      // This interpolation lands BEFORE any `?`/`#` — if it's tainted the
+      // attacker can reach scheme/host/path. Refuse the downgrade.
+      var exprSrc = _traceValueSource(valuePath.get("expressions." + i), 0);
+      if (exprSrc.sourceType === "user-controlled") return false;
+    }
+    var quasiRaw = (node.quasis[i + 1] && node.quasis[i + 1].value && node.quasis[i + 1].value.raw) || "";
+    if (!crossedDelim && /[?#]/.test(quasiRaw)) crossedDelim = true;
+  }
+  // Only honour the downgrade if a delimiter was eventually seen — a
+  // template that never hits `?`/`#` could be a full-URL taint sink.
+  return crossedDelim;
+}
+
+// For a Binary+ node, walk the leftmost chain to find the leftmost
+// leaf. If it's a same-origin-relative string literal (starts with "/"
+// but not "//", or "./" / "../"), the concatenation's origin dim is
+// LOCKED to same-origin by URL-parser structure. Used by the Binary+
+// dim-propagation rule to strip origin from propagated dims.
+function _leftmostLiteralIsSameOriginPrefix(binPath) {
+  if (!binPath || !binPath.node) return false;
+  var n = binPath.node;
+  // Iteratively walk down the `left` chain while it stays a Binary+.
+  while (_t.isBinaryExpression(n) && n.operator === "+") { n = n.left; }
+  if (!_t.isStringLiteral(n)) return false;
+  var v = n.value;
+  if (!v) return false;
+  if (/^https?:/i.test(v)) return false;            // absolute URL literal — different origin possible
+  if (v.startsWith("//")) return false;             // protocol-relative — different origin possible
+  if (v.startsWith("/") || v.startsWith("./") || v.startsWith("../")) return true;
+  return false;                                     // arbitrary text prefix — can't prove same-origin
+}
+
+// Dim-based downgrade check: a taint whose dims still carry a URL-part
+// marker (`hash`/`query`/`path`) AND has `origin=false` is structurally
+// confined to that URL part. Returns true for sources like
+// `location.hash` used without `.slice(1)` — still carries its "#"
+// delimiter — but false for `location.hash.slice(1)` (origin upgraded by
+// prefix-strip) or plain content (hash/query/path dims all false).
+function _dimsRetainUrlPartNoOrigin(src) {
+  if (!src || !src.dimensions) return false;
+  var d = src.dimensions;
+  if (d.origin) return false;
+  return !!(d.hash || d.query || d.path);
+}
+
+// Walk a value expression looking for a "current-origin lock" prefix in
+// LEFTMOST position of a Binary+ chain. The URL parser consumes `+`
+// concatenations left-to-right; if the leftmost leaf resolves to a
+// browser-validated whole-URL read (`location.origin`,
+// `window.location.href`, `document.URL`, etc.), the assembled string's
+// scheme+host are pinned to the current page regardless of what's
+// appended on the right.
+//
+// Templates are handled by the separate `_taintFlowsOnlyIntoUrlQueryOrHash`
+// downgrade path (string-literal prefix → MEDIUM, not suppress), so this
+// walker intentionally stops at Binary+ chains and identifier bindings —
+// it doesn't recurse into TemplateLiteral quasis.
+function _valueHasSameOriginPrefix(valuePath, visited) {
+  if (!valuePath || !valuePath.node) return false;
+  visited = visited || new Set();
+  var node = valuePath.node;
+  if (visited.has(node)) return false;
+  visited.add(node);
+  var scope = valuePath.scope;
+  if (_t.isBinaryExpression(node) && node.operator === "+") {
+    return _valueHasSameOriginPrefix(valuePath.get("left"), visited);
+  }
+  if (_t.isIdentifier(node)) {
+    var binding = scope.getBinding(node.name);
+    if (binding && binding.path && binding.path.isVariableDeclarator() && binding.path.node.init) {
+      return _valueHasSameOriginPrefix(binding.path.get("init"), visited);
+    }
+    return false;
+  }
+  return _isSameOriginBaseExpr(node, scope);
+}
+
+function _pushSink(result, node, type, sink, src, path, options) {
+  // Dimensional gate for sinks whose attack vector requires attacker
+  // control of the URL scheme. If the taint's `origin` dim is false
+  // (e.g. `new URL(x, location.href).toString()` locks the scheme
+  // to same-origin), the attacker cannot inject `javascript:` and
+  // the finding is a false positive.
+  //   request-forgery:*           — cross-origin fetch/beacon/XHR
+  //   xss:setAttribute:href/src/action/formaction  — javascript: attr
+  //   xss:href / xss:src / xss:action   — direct property assignment
+  // Redirect sinks retain the separate `_taintFlowsOnlyIntoUrlQueryOrHash`
+  // severity-downgrade path (they report medium rather than suppress
+  // because reflected query content on a same-origin redirect is still
+  // a signal worth surfacing).
+  if (src && src.dimensions && !src.dimensions.origin) {
+    const _schemeSink =
+      type === "request-forgery" ||
+      (type === "xss" && (
+        sink === "setAttribute:href" || sink === "setAttribute:src" ||
+        sink === "setAttribute:action" || sink === "setAttribute:formaction" ||
+        sink === "href" || sink === "src" || sink === "action"
+      ));
+    if (_schemeSink) return;
+  }
+  // All-dims-false: the attacker-reach label survived but EVERY dim
+  // got stripped along the way (e.g. `new URL(location.href).protocol`
+  // reads a static scheme string — no user-content at all). A value
+  // with no dims carries no attacker control; flagging it produces
+  // a sink finding no reviewer can act on. Real-world FP: react-router
+  // RSCErrorHandler 20-hop chain through `.protocol`/`.pathname`.
+  if (src && src.dimensions) {
+    var _d = src.dimensions;
+    if (!_d.origin && !_d.path && !_d.query && !_d.hash && !_d.content) return;
+  }
   var severity = "high";
   var sanitized = false;
+  var sanitizerReport = null;
   if (path) {
     try {
       sanitized = _checkSanitization(path);
       if (sanitized) severity = "info";
     } catch (e) { _resolver.collectError(e, "checkSanitization"); }
+    try {
+      sanitizerReport = _buildSanitizerReport(path);
+    } catch (e) { _resolver.collectError(e, "sanitizerReport"); }
   }
-  result.securitySinks.push({
+  // An explicit severity override (e.g. redirect where taint provably
+  // flows only into the URL's query/hash portion — scheme locked to an
+  // untainted prefix) wins as long as the call isn't already sanitized.
+  // Sanitised paths stay "info" since that signals a verified mitigation.
+  var notes = null;
+  if (!sanitized && options) {
+    if (options.severity) severity = options.severity;
+    if (options.notes) notes = options.notes;
+  }
+  var entry = {
     type: type, sink: sink, location: _nodeLoc(node),
     sourceType: src.sourceType, source: src.source, severity: severity,
     sanitized: sanitized,
     codeContext: _extractCodeContext(node, src),
-  });
+  };
+  // Receiver type at the sink: helps reviewers tell `d.innerHTML = html`
+  // on a `document.getElementById()` Element (real XSS) from the same
+  // shape on an unknown object. Derived structurally from the sink's
+  // AST node — AssignmentExpression's left.object or CallExpression's
+  // callee.object — using the same `_getTrackedType` used by sink-
+  // detection skips. `null` means no tracked type was inferred (most
+  // common; reviewer still needs to check the binding).
+  if (path) {
+    try {
+      var _rcvNode = null;
+      var _sinkNode = path.node;
+      if (_t.isAssignmentExpression(_sinkNode) && _t.isMemberExpression(_sinkNode.left)) {
+        _rcvNode = _sinkNode.left.object;
+      } else if (_t.isCallExpression(_sinkNode) && _t.isMemberExpression(_sinkNode.callee)) {
+        _rcvNode = _sinkNode.callee.object;
+      }
+      if (_rcvNode) {
+        var _rcvType = _getTrackedType(path, _rcvNode);
+        if (_rcvType) entry.receiverType = _rcvType;
+      }
+    } catch (e) { _resolver.collectError(e, "receiverType"); }
+  }
+  if (src.taintPath && src.taintPath.length > 0) entry.taintPath = src.taintPath;
+  if (sanitizerReport && sanitizerReport.candidates.length > 0) entry.sanitizerReport = sanitizerReport;
+  if (notes) entry.notes = notes;
+  if (path && src.sourceType === "user-controlled") {
+    try {
+      var precs = _collectSinkPreconditions(path, src);
+      if (precs.length) entry.preconditions = precs;
+    } catch (e) { _resolver.collectError(e, "collectSinkPreconditions"); }
+  }
+  result.securitySinks.push(entry);
+}
+
+// Walk up from the sink path looking for gating guards. Three guard
+// shapes are recognised — all express "the attacker's value at path X
+// must equal literal Y for execution to reach the sink":
+//   1. `if (<guard>) { … sink … }`  — guard in test, sink in consequent.
+//   2. `switch (<disc>) { case Y: … sink … }`  — sink in that case arm.
+//   3. Early-return guard: within the sink's enclosing function, a
+//      preceding `if (<disc> !== Y) return` (or `throw`) equivalently
+//      pins <disc> to Y on the flow that reaches the sink.
+// The recorded path is {path, op, value}; path is the property chain
+// from the taint root (matching the harness's fieldPath convention).
+function _collectSinkPreconditions(sinkPath, sinkSrc) {
+  var out = [];
+  // Walk all ancestors in the current function AND cross function
+  // boundaries via caller sites (inter-procedural). Performance comes
+  // from memoising `_memberChainFromSameSource` — which re-runs
+  // `_traceValueSource` on each guard's test LHS — inside a single
+  // sink-level cache, not from truncating the walk.
+  var gateCache = _taintGateCacheForSink();
+  _walkGuardsFromPath(sinkPath, sinkSrc, out, gateCache, new Set());
+  return out;
+}
+
+function _taintGateCacheForSink() {
+  // {nodeKey: {chain|null}}  cache for _memberChainFromSameSource.
+  // Skipped-result is `null` (node traced but wasn't from same source);
+  // `undefined` = not-yet-computed. The explicit null check avoids
+  // recomputing on every precondition scan within one sink.
+  return Object.create(null);
+}
+
+// Walk ancestors of `start`, collecting gates. When we hit a function
+// boundary, use binding.referencePaths to find ALL call sites and
+// recurse the walk from each call site. Cycle-detection via
+// `visitedFns` (set of Function path nodes we've already expanded).
+function _walkGuardsFromPath(start, sinkSrc, out, gateCache, visitedFns) {
+  var ancestor = start;
+  while (ancestor) {
+    var parent = ancestor.parentPath;
+    if (!parent) return;
+    // Shape 1: IfStatement whose consequent contains the sink.
+    if (parent.isIfStatement() && parent.node.consequent &&
+        (parent.node.consequent === ancestor.node ||
+         _nodeContains(parent.node.consequent, ancestor.node))) {
+      _collectEqualities(parent.get("test"), sinkSrc, out, gateCache);
+    } else if (parent.isConditionalExpression() && parent.node.consequent === ancestor.node) {
+      _collectEqualities(parent.get("test"), sinkSrc, out, gateCache);
+    }
+    // Shape 2: SwitchCase whose body contains the sink.
+    if (parent.isSwitchCase() && parent.node.test) {
+      var caseLit = _asLiteralValue(parent.node.test);
+      if (caseLit !== undefined && caseLit !== null) {
+        var sw = parent.parentPath;
+        if (sw && sw.isSwitchStatement()) {
+          var chain = _memberChainFromSameSourceCached(sw.get("discriminant"), sinkSrc, gateCache);
+          if (chain) out.push({ path: chain, op: "===", value: caseLit });
+        }
+      }
+    }
+    // Shape 3: early-return gate inside the enclosing block.
+    if (parent.isBlockStatement() && Array.isArray(parent.node.body)) {
+      for (var ri = 0; ri < parent.node.body.length; ri++) {
+        var stmt = parent.node.body[ri];
+        if (stmt === ancestor.node) break;
+        _extractEarlyReturnGate(parent.get("body." + ri), sinkSrc, out, gateCache);
+      }
+    }
+    // Inter-procedural: when we cross a function boundary, recurse from
+    // each caller. This captures `if (cond) makeRequest(...)` style
+    // gates even when the sink lives deep inside makeRequest.
+    if (parent.isFunction()) {
+      var fnKey = parent.node.start + ":" + parent.node.end;
+      if (visitedFns.has(fnKey)) return;        // cycle — stop
+      visitedFns.add(fnKey);
+      var refs = _callerReferencePaths(parent);
+      for (var ci = 0; ci < refs.length; ci++) {
+        // The caller is an Identifier reference; walk from the
+        // CallExpression that consumed it (or from the reference itself
+        // when no call wraps it — shouldn't happen for resolved calls).
+        var callPath = refs[ci].findParent(function(p) { return p.isCallExpression(); });
+        _walkGuardsFromPath(callPath || refs[ci], sinkSrc, out, gateCache, visitedFns);
+      }
+      return;                                    // caller sites handle everything above the function
+    }
+    ancestor = parent;
+  }
+}
+
+// Resolve the callers of a function path. Handles FunctionDeclaration,
+// and function expressions assigned to `var/let/const` or to object
+// properties. Returns an array of Identifier reference paths.
+function _callerReferencePaths(fnPath) {
+  var refs = [];
+  if (!fnPath) return refs;
+  var binding = null;
+  var n = fnPath.node;
+  if (_t.isFunctionDeclaration(n) && _t.isIdentifier(n.id)) {
+    binding = fnPath.scope.getBinding(n.id.name);
+  } else if (fnPath.parentPath) {
+    var pp = fnPath.parentPath;
+    if (pp.isVariableDeclarator() && _t.isIdentifier(pp.node.id)) {
+      binding = pp.scope.getBinding(pp.node.id.name);
+    } else if (pp.isAssignmentExpression() && _t.isIdentifier(pp.node.left)) {
+      binding = pp.scope.getBinding(pp.node.left.name);
+    }
+  }
+  if (binding && Array.isArray(binding.referencePaths)) {
+    for (var i = 0; i < binding.referencePaths.length; i++) refs.push(binding.referencePaths[i]);
+  }
+  return refs;
+}
+
+// `if (<lhs> !== 'Y') return;`  pins <lhs> to 'Y' on the fall-through.
+// Also handles throw / continue / break as terminators.
+function _extractEarlyReturnGate(stmtPath, sinkSrc, out, gateCache) {
+  if (!stmtPath || !stmtPath.isIfStatement()) return;
+  var node = stmtPath.node;
+  // The consequent must be a hard exit (return/throw) — otherwise the
+  // fall-through doesn't pin anything.
+  var cons = node.consequent;
+  if (!cons) return;
+  var consIsExit = false;
+  if (_t.isReturnStatement(cons) || _t.isThrowStatement(cons)) consIsExit = true;
+  else if (_t.isBlockStatement(cons) && cons.body.length >= 1) {
+    var last = cons.body[cons.body.length - 1];
+    if (_t.isReturnStatement(last) || _t.isThrowStatement(last)) consIsExit = true;
+  }
+  if (!consIsExit) return;
+  var test = node.test;
+  if (!test) return;
+  // Invert the test — `!== 'Y'` on the exit branch ↔ `=== 'Y'` on fall-through.
+  if (_t.isBinaryExpression(test) && (test.operator === "!==" || test.operator === "!=")) {
+    var leftLit = _asLiteralValue(test.left);
+    var rightLit = _asLiteralValue(test.right);
+    var memberPath = null; var literalValue;
+    if (leftLit === undefined && rightLit !== undefined) { memberPath = stmtPath.get("test.left"); literalValue = rightLit; }
+    else if (rightLit === undefined && leftLit !== undefined) { memberPath = stmtPath.get("test.right"); literalValue = leftLit; }
+    else return;
+    var chain = _memberChainFromSameSourceCached(memberPath, sinkSrc, gateCache);
+    if (chain) out.push({ path: chain, op: "===", value: literalValue });
+  }
+  // `if (!X) return` — only tells us X is truthy, no specific value.
+  // Skip: a truthy precondition doesn't pin the probe payload.
+}
+
+// Cache wrapper. The uncached variant re-runs _traceValueSource on
+// every guard's test expression — one sink inside nested blocks with
+// many preceding-sibling gates can generate 100s of redundant traces.
+// Keyed by start:end position of the guard LHS + the source name.
+function _memberChainFromSameSourceCached(memPath, sinkSrc, gateCache) {
+  if (!gateCache || !memPath || !memPath.node) return _memberChainFromSameSource(memPath, sinkSrc);
+  var n = memPath.node;
+  if (n.start == null || n.end == null) return _memberChainFromSameSource(memPath, sinkSrc);
+  var key = n.start + ":" + n.end + "|" + (sinkSrc && sinkSrc.source ? sinkSrc.source : "");
+  if (key in gateCache) return gateCache[key];
+  var chain = _memberChainFromSameSource(memPath, sinkSrc);
+  gateCache[key] = chain;
+  return chain;
+}
+
+function _nodeContains(outer, target) {
+  if (!outer || !target) return false;
+  if (outer === target) return true;
+  if (target.start == null || outer.start == null) return false;
+  return target.start >= outer.start && target.end <= outer.end;
+}
+
+// test can be BinaryExpression (`===`, `==`, `!==`, `!=`) or
+// LogicalExpression (`&&`). Recurse into && to collect conjuncts.
+function _collectEqualities(testPath, sinkSrc, out, gateCache) {
+  if (!testPath || !testPath.node) return;
+  var n = testPath.node;
+  if (_t.isLogicalExpression(n) && n.operator === "&&") {
+    _collectEqualities(testPath.get("left"), sinkSrc, out, gateCache);
+    _collectEqualities(testPath.get("right"), sinkSrc, out, gateCache);
+    return;
+  }
+  if (_t.isBinaryExpression(n) && (n.operator === "===" || n.operator === "==" ||
+      n.operator === "!==" || n.operator === "!=")) {
+    // Only record equality preconditions (`===`/`==`). Inequalities
+    // don't pin the probe to a single value so they aren't usable.
+    if (n.operator !== "===" && n.operator !== "==") return;
+    var leftLit = _asLiteralValue(n.left);
+    var rightLit = _asLiteralValue(n.right);
+    var memberPath = null; var literalValue;
+    if (leftLit === undefined && rightLit !== undefined) { memberPath = testPath.get("left"); literalValue = rightLit; }
+    else if (rightLit === undefined && leftLit !== undefined) { memberPath = testPath.get("right"); literalValue = leftLit; }
+    else return;
+    var memChain = _memberChainFromSameSourceCached(memberPath, sinkSrc, gateCache);
+    if (memChain) out.push({ path: memChain, op: "===", value: literalValue });
+  }
+}
+
+// Returns the literal value, or `undefined` if the node isn't a literal.
+// (Can't use `null` as sentinel because `null` is a valid literal value.)
+function _asLiteralValue(node) {
+  if (!node) return undefined;
+  if (_t.isStringLiteral(node) || _t.isNumericLiteral(node) || _t.isBooleanLiteral(node)) return node.value;
+  if (_t.isNullLiteral(node)) return null;
+  if (_t.isTemplateLiteral(node) && node.expressions.length === 0 && node.quasis.length === 1) {
+    return node.quasis[0].value.cooked;
+  }
+  return undefined;
+}
+
+// Resolve a member-expression chain like `msg.data.action` back to the
+// SAME source as sinkSrc (source name match). Returns the property
+// name chain after stripping the `.data` hop for MessageEvent sources,
+// so callers can merge it with the probe's fieldPath-style wrapping.
+function _memberChainFromSameSource(memPath, sinkSrc) {
+  if (!memPath || !memPath.node) return null;
+  // Follow Identifier bindings first: `let action = msg.data.action` →
+  // trace via _traceValueSource so we get the full original chain.
+  var tvs;
+  try { tvs = _traceValueSource(memPath); }
+  catch (_) { return null; }
+  if (!tvs || tvs.sourceType !== "user-controlled") return null;
+  if (tvs.source !== sinkSrc.source) return null;
+  // Walk the taintPath's member hops to reconstruct the chain.
+  var chain = [];
+  var tp = tvs.taintPath || [];
+  for (var i = 0; i < tp.length; i++) {
+    if (tp[i].kind !== "member") continue;
+    var nm = String(tp[i].desc || "").replace(/^\./, "");
+    if (!nm || nm === "?") continue;
+    // Drop the implicit `.data` hop on MessageEvent sources — matches
+    // the probe's field-path stripping in the harness extractor.
+    if (chain.length === 0 && nm === "data" && /event\.data/.test(sinkSrc.source || "")) continue;
+    chain.push(nm);
+  }
+  return chain.length ? chain : null;
 }
 
 function _pushDangerous(result, node, type, description, severity, src) {
-  result.dangerousPatterns.push({
+  // All-dims-false gate: same as _pushSink. The "user-controlled"
+  // label can survive a chain that strips every dim along the way
+  // (e.g. `Object.entries(reactRouterResult)` where the result object
+  // came from a server-side function whose output is just `{type:
+  // "error", error: e}` and dims got reset). Flagging produces an
+  // unactionable HIGH that the reviewer can't trace back to anything
+  // attacker-controllable. Real-world FP: 110-hop react-router proto-
+  // pollution chains where dims=={none} at the sink.
+  if (src && src.dimensions) {
+    var _d = src.dimensions;
+    if (!_d.origin && !_d.path && !_d.query && !_d.hash && !_d.content) return;
+  }
+  var entry = {
     type: type, description: description, location: _nodeLoc(node),
     severity: severity, codeContext: _extractCodeContext(node, src),
-  });
+  };
+  if (src && src.taintPath && src.taintPath.length > 0) entry.taintPath = src.taintPath;
+  result.dangerousPatterns.push(entry);
 }
 
 // Does this CallExpression path produce a Promise whose resolved value is a
@@ -7112,20 +8623,18 @@ function _isSameOriginFetchTarget(argPath) {
 
   // `new URL(input, base)` — same-origin iff the BASE is a known same-origin
   // AND the INPUT doesn't override the base origin (absolute / protocol-
-  // relative strings override). For safety, require the input to be
-  // path-only if we can see it; otherwise rely solely on the base.
+  // relative strings override). Only recognize the input-is-safe case
+  // when we can see it's a relative literal or relative-prefixed template.
+  // Deeper question of "can attacker control origin" is answered by the
+  // dimensional taint model at the sink layer, not here.
   if (_t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URL" }) &&
       !argPath.scope.getBinding("URL") && node.arguments.length >= 2) {
     var baseArg = node.arguments[1];
     if (_isSameOriginBaseExpr(baseArg, argPath.scope)) {
-      // If the input is a known-relative string, definitely same-origin.
       var inputArg = node.arguments[0];
       if (_t.isStringLiteral(inputArg) && !/^https?:/i.test(inputArg.value) && !inputArg.value.startsWith("//")) {
         return true;
       }
-      // Input could be absolute — but fetch's RESOLVED URL is what matters.
-      // new URL("https://evil.com", location.origin) resolves to https://evil.com.
-      // Conservative: only same-origin when we can see the input is relative.
       if (_t.isTemplateLiteral(inputArg)) {
         var qs = inputArg.quasis;
         var ihead = (qs[0] && qs[0].value && qs[0].value.raw) || "";
@@ -7323,8 +8832,22 @@ function _processSecurityAssignSink(path, result) {
     sinkType = "xss";
   }
 
-  // URL property sinks: href, src, action — XSS unless on location (which is redirect)
+  // URL property sinks: href, src, action — XSS unless on location
+  // (which is redirect). Skip entirely when the target is a tracked
+  // URL / URLSearchParams / Headers / Request / Response object —
+  // `e.href = x` on a URL object just mutates the object's href
+  // property (no navigation, no execution). Only navigable elements
+  // (HTMLAnchorElement, Location, window) take .href-assignment as
+  // an actionable navigate. Since we can't tell those apart from
+  // HTMLElement at AST time, the safe discriminator is: skip known
+  // non-navigable types.
   if (!sinkType && (propName === "href" || propName === "src" || propName === "action")) {
+    var _lhsType = _getTrackedType(path, left.object);
+    if (_lhsType === "URL" || _lhsType === "URLSearchParams" ||
+        _lhsType === "Headers" || _lhsType === "Request" ||
+        _lhsType === "Response" || _lhsType === "FormData") {
+      return;
+    }
     sinkType = _isLoc ? "redirect" : "xss";
   }
 
@@ -7353,10 +8876,33 @@ function _processSecurityAssignSink(path, result) {
   // document.location = document.location) is a page reload, not an open redirect.
   if (sinkType === "redirect") {
     var right = node.right;
-    // location.href = location.href (or .hash, .pathname, etc.)
-    if (_isLoc && _t.isMemberExpression(right) && !right.computed &&
-        _t.isIdentifier(right.property, { name: propName }) &&
-        _isLocationObject(right.object, path)) return;
+    // Helper: does this subexpression match the left-hand location property?
+    // (e.g. `location.href` matches assignment target `location.href`)
+    var _matchesSelfLocationProp = function (expr) {
+      return _t.isMemberExpression(expr) && !expr.computed &&
+        _t.isIdentifier(expr.property, { name: propName }) &&
+        _isLocationObject(expr.object, path);
+    };
+    // location.href = location.href
+    if (_isLoc && _matchesSelfLocationProp(right)) return;
+    // location.href = X || location.href  /  ?? / &&  — fallback forms.
+    // When the LEFT operand of a logical expression isn't traced to an
+    // attacker source, the only way the right operand's value reaches
+    // the sink is by the left being falsy/nullish. That reduces the
+    // assignment to `location.href = location.href` — a reload, not
+    // a redirect with attacker content. Only self-cancelling when one
+    // operand matches the assignment target AND the other isn't
+    // user-controlled.
+    if (_isLoc && _t.isLogicalExpression(right)) {
+      try {
+        var _rLeft = _traceValueSource(path.get("right.left"), 0);
+        var _rRight = _traceValueSource(path.get("right.right"), 0);
+        var _rLeftMatches = _matchesSelfLocationProp(right.left);
+        var _rRightMatches = _matchesSelfLocationProp(right.right);
+        if (_rLeftMatches && _rRight.sourceType !== "user-controlled") return;
+        if (_rRightMatches && _rLeft.sourceType !== "user-controlled") return;
+      } catch (_) {}
+    }
     // document.location = document.location / window.location = window.location
     if (propName === "location" && _t.isMemberExpression(right) && !right.computed &&
         _t.isIdentifier(right.property, { name: "location" }) &&
@@ -7364,7 +8910,30 @@ function _processSecurityAssignSink(path, result) {
         !path.scope.getBinding(right.object.name)) return;
   }
 
-  _pushSink(result, node, sinkType, propName, valueSource, path);
+  // Reload-shaped redirect: RHS is a Binary+ concat whose leftmost leaf
+  // is a browser-validated current-origin read (`location.origin`,
+  // `window.location.origin`, `document.URL`, etc.). The URL parser
+  // resolves the whole concat against that prefix — result is same-
+  // origin, same-scheme. Right-side `location.pathname`/`search`/`hash`
+  // reads only add current-page components, producing a reload rather
+  // than a redirect. Real-world FP: Reddit _redirect pattern
+  // `window.location.origin + window.location.pathname` assigned to
+  // `window.location.href`.
+  if (sinkType === "redirect" && _valueHasSameOriginPrefix(path.get("right"))) return;
+
+  var pushOptions = null;
+  if (sinkType === "redirect" && _taintFlowsOnlyIntoUrlQueryOrHash(path.get("right"))) {
+    pushOptions = { severity: "medium", notes: "taint flows only into query/hash of an untainted URL prefix — scheme locked" };
+  } else if (sinkType === "redirect" && _dimsRetainUrlPartNoOrigin(valueSource)) {
+    // Dim-based downgrade: source is `location.hash`/`location.search`/
+    // `location.pathname` used WITHOUT prefix-strip (still carries its
+    // "#"/"?"/"/" structural marker). Concat with any untainted prefix
+    // puts taint in the hash/query/path portion of an untainted URL —
+    // scheme + host locked by URL parser structure. Real-world FP:
+    // github permalink.ts `target.href + location.hash` → location.href.
+    pushOptions = { severity: "medium", notes: "taint source retains URL-part structural prefix — taint can't reach scheme/host" };
+  }
+  _pushSink(result, node, sinkType, propName, valueSource, path, pushOptions);
 }
 
 // Table-driven global identifier sinks: name → { type, sink }
@@ -7397,7 +8966,12 @@ function _processSecurityCallSink(path, result) {
     var _gSink = _GLOBAL_CALL_SINKS[callee.name];
     if (_gSink && !path.scope.getBinding(callee.name)) {
       var _gSrc = _traceValueSource(path.get("arguments.0"), 0);
-      if (_gSrc.sourceType === "user-controlled") _pushSink(result, node, _gSink.type, _gSink.sink, _gSrc, path);
+      if (_gSrc.sourceType === "user-controlled") {
+        var _gOpts = (_gSink.type === "redirect" && _taintFlowsOnlyIntoUrlQueryOrHash(path.get("arguments.0")))
+          ? { severity: "medium", notes: "taint flows only into query/hash of an untainted URL prefix — scheme locked" }
+          : null;
+        _pushSink(result, node, _gSink.type, _gSink.sink, _gSrc, path, _gOpts);
+      }
       return;
     }
   }
@@ -7431,7 +9005,12 @@ function _processSecurityCallSink(path, result) {
                  (_t.isIdentifier(callee.object, { name: "self" }) && !path.scope.getBinding("self"));
     if (_isWin) {
       var _woSrc2 = _traceValueSource(path.get("arguments.0"), 0);
-      if (_woSrc2.sourceType === "user-controlled") _pushSink(result, node, "redirect", "window.open", _woSrc2, path);
+      if (_woSrc2.sourceType === "user-controlled") {
+        var _woOpts = _taintFlowsOnlyIntoUrlQueryOrHash(path.get("arguments.0"))
+          ? { severity: "medium", notes: "taint flows only into query/hash of an untainted URL prefix — scheme locked" }
+          : null;
+        _pushSink(result, node, "redirect", "window.open", _woSrc2, path, _woOpts);
+      }
       return;
     }
   }
@@ -7473,9 +9052,18 @@ function _processSecurityCallSink(path, result) {
   }
 
   // jQuery DOM manipulation: .html(), .append(), .prepend(), .after(), .before(), .replaceWith()
+  // Skip when the receiver is a tracked non-DOM type — `.append()` is also
+  // a method on FormData, URLSearchParams, and Headers (key/value push,
+  // not HTML injection). Receiver type check matches the `href`/`src`
+  // assign sink skip (8296-8301). Real-world FP: react-router builds a
+  // FormData via `t.append(r, a)` inside a submission helper.
   if ((methName === "html" || methName === "append" || methName === "prepend" ||
        methName === "after" || methName === "before" || methName === "replaceWith") &&
       node.arguments.length > 0) {
+    var _jqReceiverType = _getTrackedType(path, callee.object);
+    if (_jqReceiverType === "FormData" || _jqReceiverType === "URLSearchParams" ||
+        _jqReceiverType === "Headers" || _jqReceiverType === "Request" ||
+        _jqReceiverType === "Response" || _jqReceiverType === "URL") return;
     var _jqSrc = _traceValueSource(path.get("arguments.0"), 0);
     if (_jqSrc.sourceType === "user-controlled") _pushSink(result, node, "xss", "." + methName, _jqSrc, path);
     return;
@@ -7493,22 +9081,29 @@ function _processSecurityCallSink(path, result) {
     return;
   }
 
-  // navigator.sendBeacon(url, data) — request forgery / data exfiltration
+  // navigator.sendBeacon(url, data) — request forgery / data exfiltration.
+  // Dim gate applied by _pushSink (suppresses when !dims.origin).
   if (methName === "sendBeacon" && node.arguments.length > 0 &&
       _t.isIdentifier(callee.object, { name: "navigator" }) && !path.scope.getBinding("navigator")) {
     var _sbSrc = _traceValueSource(path.get("arguments.0"), 0);
-    if (_sbSrc.sourceType === "user-controlled") _pushSink(result, node, "request-forgery", "navigator.sendBeacon", _sbSrc, path);
+    if (_sbSrc.sourceType === "user-controlled") {
+      _pushSink(result, node, "request-forgery", "navigator.sendBeacon", _sbSrc, path);
+    }
     return;
   }
 
-  // XMLHttpRequest.open(method, url) — request forgery via user-controlled URL
+  // XMLHttpRequest.open(method, url) — request forgery via user-controlled URL.
+  // Origin-dim check: same rule as fetch — only an attacker-controlled
+  // ORIGIN redirects the request to a different server.
   if (methName === "open" && node.arguments.length >= 2) {
     // Exclude window.open / self.open (handled above as redirect)
     var _isXhrOpen = !(_t.isIdentifier(callee.object, { name: "window" }) && !path.scope.getBinding("window")) &&
                      !(_t.isIdentifier(callee.object, { name: "self" }) && !path.scope.getBinding("self"));
     if (_isXhrOpen) {
       var _xhrUrlSrc = _traceValueSource(path.get("arguments.1"), 0);
-      if (_xhrUrlSrc.sourceType === "user-controlled") _pushSink(result, node, "request-forgery", "XMLHttpRequest.open", _xhrUrlSrc, path);
+      if (_xhrUrlSrc.sourceType === "user-controlled") {
+        _pushSink(result, node, "request-forgery", "XMLHttpRequest.open", _xhrUrlSrc, path);
+      }
     }
     return;
   }
@@ -7528,9 +9123,35 @@ function _processSecurityCallSink(path, result) {
   // location.assign(value) / location.replace(value) — open redirect
   if ((methName === "assign" || methName === "replace") && node.arguments.length > 0) {
     if (!_isLocationObject(callee.object, path)) return;
-    var locSource = _traceValueSource(path.get("arguments.0"), 0);
+    var _locArgPath = path.get("arguments.0");
+    var locSource = _traceValueSource(_locArgPath, 0);
     if (locSource.sourceType !== "user-controlled") return;
-    _pushSink(result, node, "redirect", "location." + methName, locSource, path);
+    // URL-object argument whose construction reads a browser-validated
+    // whole-URL source (`new URL(location.href); t.searchParams.set(k,v);
+    // location.assign(t)`) has a scheme and host the browser already
+    // constrained to the current origin. `.searchParams`/`.search`/`.hash`/
+    // `.pathname` mutations can't drive cross-origin navigation, and
+    // origin-modifying assignments (`.host`/`.protocol`/`.href`) would be
+    // their own AssignmentExpression taint finding. Reddit devvit playtest
+    // "Reloading" case produced an HIGH FP here before this suppression.
+    var _argType = _getTrackedType(_locArgPath, _locArgPath.node);
+    if (_argType === "URL" && (
+          locSource.source === "location" ||
+          locSource.source === "location.href" ||
+          locSource.source === "document.URL" ||
+          locSource.source === "document.documentURI")) {
+      return;
+    }
+    // Reload-shaped redirect: see _valueHasSameOriginPrefix. Same pattern
+    // for call-form (`location.assign(location.origin + location.pathname)`).
+    if (_valueHasSameOriginPrefix(_locArgPath)) return;
+    var locOpts = null;
+    if (_taintFlowsOnlyIntoUrlQueryOrHash(_locArgPath)) {
+      locOpts = { severity: "medium", notes: "taint flows only into query/hash of an untainted URL prefix — scheme locked" };
+    } else if (_dimsRetainUrlPartNoOrigin(locSource)) {
+      locOpts = { severity: "medium", notes: "taint source retains URL-part structural prefix — taint can't reach scheme/host" };
+    }
+    _pushSink(result, node, "redirect", "location." + methName, locSource, path, locOpts);
   }
 }
 
@@ -7621,8 +9242,13 @@ function _processReactDangerousHTML(path, result) {
 // expressions can't stack-overflow (matches the CLAUDE.md AST policy),
 // and follows variable chains across multiple scope hops rather than
 // stopping at the first binding.
+// Returns null when the path is NOT an arbitrary-key source, or a
+// user-controlled source trace ({ sourceType, source, sourceLoc, taintPath })
+// when it is. The trace points at the taint source that made the shape
+// arbitrary — caller can then pass it directly to _pushDangerous so the
+// finding carries the full taint chain, not just "some key was tainted".
 function _isArbitraryKeyObjectSource(path) {
-  if (!path || !path.node) return false;
+  if (!path || !path.node) return null;
   var stack = [path];
   var visited = new Set();
   while (stack.length) {
@@ -7661,7 +9287,9 @@ function _isArbitraryKeyObjectSource(path) {
           stack.push(p.get("properties." + i + ".argument"));
         } else if (_t.isObjectProperty(prop) && prop.computed) {
           var keySrc = _traceValueSource(p.get("properties." + i + ".key"), 0);
-          if (keySrc.sourceType === "user-controlled") return true;
+          if (keySrc.sourceType === "user-controlled") {
+            return _tvsHop(keySrc, "computed-key", "{[key]: v} — key is user-controlled", n.loc ? { line: n.loc.start.line, column: n.loc.start.column } : null);
+          }
         }
       }
       continue;
@@ -7674,7 +9302,9 @@ function _isArbitraryKeyObjectSource(path) {
         _t.isIdentifier(callee.object, { name: "JSON" }) && !p.scope.getBinding("JSON");
       if (jsonParse && n.arguments.length >= 1) {
         var argSrc = _traceValueSource(p.get("arguments.0"), 0);
-        if (argSrc.sourceType === "user-controlled") return true;
+        if (argSrc.sourceType === "user-controlled") {
+          return _tvsHop(argSrc, "json-parse", "JSON.parse(…)", n.loc ? { line: n.loc.start.line, column: n.loc.start.column } : null);
+        }
         continue;
       }
       var objFromEntries = _t.isMemberExpression(callee) && !callee.computed &&
@@ -7682,7 +9312,9 @@ function _isArbitraryKeyObjectSource(path) {
         _t.isIdentifier(callee.object, { name: "Object" }) && !p.scope.getBinding("Object");
       if (objFromEntries && n.arguments.length >= 1) {
         var feSrc = _traceValueSource(p.get("arguments.0"), 0);
-        if (feSrc.sourceType === "user-controlled") return true;
+        if (feSrc.sourceType === "user-controlled") {
+          return _tvsHop(feSrc, "object-fromEntries", "Object.fromEntries(…)", n.loc ? { line: n.loc.start.line, column: n.loc.start.column } : null);
+        }
         continue;
       }
       var structuredCloneCall =
@@ -7700,7 +9332,7 @@ function _isArbitraryKeyObjectSource(path) {
       }
     }
   }
-  return false;
+  return null;
 }
 
 // ─── Security Analysis: Dangerous Pattern Detection ─────────────────────────
@@ -7774,8 +9406,8 @@ function _processDangerousPattern(path, result) {
       node.arguments.length >= 2) {
     for (var _oaI = 1; _oaI < node.arguments.length; _oaI++) {
       var _oaArgPath = path.get("arguments." + _oaI);
-      if (_isArbitraryKeyObjectSource(_oaArgPath)) {
-        var _oaSrc = _traceValueSource(_oaArgPath, 0);
+      var _oaSrc = _isArbitraryKeyObjectSource(_oaArgPath);
+      if (_oaSrc) {
         _pushDangerous(result, node, "prototype-pollution-merge", "Object.assign with user-controlled source object", "medium", _oaSrc);
         break;
       }
@@ -8730,13 +10362,21 @@ function _describeNode(node) {
 // ─── CFG Builder + Sanitizer Path Analysis ──────────────────────────────────
 
 // Known sanitizer globals — calling these on tainted data neutralizes it
-var _SANITIZER_GLOBALS = { "encodeURIComponent":1, "encodeURI":1, "parseInt":1, "parseFloat":1, "escape":1, "btoa":1 };
+// Use Object.create(null) so prototype methods like toString /
+// hasOwnProperty / valueOf don't shadow-match the sanitizer set. An
+// earlier implementation used plain object literals which made
+// `_SANITIZER_METHODS["toString"]` truthy (inherited prototype
+// function), silently downgrading real XSS findings where the taint
+// chain passed through `.toString()` (observed on the GitHub
+// remote-input-element bundle).
+var _SANITIZER_GLOBALS = Object.assign(Object.create(null),
+  { "encodeURIComponent":1, "encodeURI":1, "parseInt":1, "parseFloat":1, "escape":1, "btoa":1 });
 
 // Known sanitizer methods — obj.sanitize(), obj.encode(), DOMPurify.sanitize()
-var _SANITIZER_METHODS = { "sanitize":1, "encode":1 };
+var _SANITIZER_METHODS = Object.assign(Object.create(null), { "sanitize":1, "encode":1 });
 
 // Known sanitizer objects — DOMPurify.sanitize()
-var _SANITIZER_OBJECTS = { "DOMPurify":1 };
+var _SANITIZER_OBJECTS = Object.assign(Object.create(null), { "DOMPurify":1 });
 
 // Check if a single call expression node is a known sanitizer.
 // When a path is provided, verifies that sanitizer globals aren't shadowed by local bindings.
@@ -9325,6 +10965,121 @@ function _checkSanitization(path) {
   return _hasSanitizerOnAllPaths(cfg, sinkBlockId, sanitizerBlocks);
 }
 
+// Return a per-call classification for the sanitizer decision the
+// analyzer just made. This extends _isSanitizerCall's boolean with a
+// short label + the reason the call was accepted or rejected, so a
+// finding auditor can see WHICH calls the classifier considered and
+// WHY each was or wasn't treated as a sanitizer.
+//
+// Returns null for a call that isn't a sanitizer candidate at all
+// (i.e., the call's shape doesn't even resemble the sanitizer set —
+// most calls in real code fall here, so we don't flood the output).
+function _classifySanitizerCall(node, path) {
+  if (!_t.isCallExpression(node)) return null;
+  var callee = node.callee;
+  if (_t.isIdentifier(callee)) {
+    if (!_SANITIZER_GLOBALS[callee.name]) return null;
+    var shadowed = !!(path && path.scope && path.scope.getBinding(callee.name));
+    return {
+      label: callee.name + "()",
+      matched: !shadowed,
+      matchReason: shadowed
+        ? "'" + callee.name + "' is a known sanitizer global but shadowed in this scope — can't verify behavior"
+        : "known sanitizer global '" + callee.name + "' (unbound — real global)",
+    };
+  }
+  if (_t.isMemberExpression(callee) && !callee.computed && _t.isIdentifier(callee.property)) {
+    var methodName = callee.property.name;
+    var methodKnown = !!_SANITIZER_METHODS[methodName];
+    var objIsIdent = _t.isIdentifier(callee.object);
+    var objName = objIsIdent ? callee.object.name : null;
+    var objKnown = objIsIdent && !!_SANITIZER_OBJECTS[objName];
+    if (methodKnown && objKnown) {
+      var shadowedObj = !!(path && path.scope && path.scope.getBinding(objName));
+      return {
+        label: objName + "." + methodName + "()",
+        matched: !shadowedObj,
+        matchReason: shadowedObj
+          ? "object '" + objName + "' is a known sanitizer but shadowed — can't verify this call is the real one"
+          : "known sanitizer method '" + methodName + "' on known object '" + objName + "'",
+      };
+    }
+    if (methodKnown) {
+      return {
+        label: (objName || "<expr>") + "." + methodName + "()",
+        matched: true,
+        matchReason: "method name '" + methodName + "' is in the known-sanitizer-method set (object not verified)",
+      };
+    }
+    if (objKnown) {
+      var shadowedObj2 = !!(path && path.scope && path.scope.getBinding(objName));
+      return {
+        label: objName + "." + methodName + "()",
+        matched: !shadowedObj2,
+        matchReason: shadowedObj2
+          ? "sanitizer object '" + objName + "' is shadowed — can't verify"
+          : "any method call on known sanitizer object '" + objName + "'",
+      };
+    }
+  }
+  return null;
+}
+
+// Build a structured audit report for the sanitizer decision around a
+// sink. Every recognised sanitizer-shaped call in the enclosing function
+// is recorded with its match verdict, match reason, and whether the call
+// dominates the sink (on every path from entry to sink block). Surfaced
+// on the finding so an auditor can see the classifier's work without
+// reading the minified source.
+function _buildSanitizerReport(sinkPath) {
+  var funcPath = sinkPath.getFunctionParent();
+  if (!funcPath) return { decision: "no-function-scope", candidates: [] };
+  if (!_t.isBlockStatement(funcPath.node.body)) return { decision: "no-block-body", candidates: [] };
+  var bodyPath = funcPath.get("body");
+  var candidates = [];
+  try {
+    bodyPath.traverse({
+      CallExpression: function(p) {
+        var c = _classifySanitizerCall(p.node, p);
+        if (!c) return;
+        candidates.push({
+          label: c.label,
+          loc: p.node.loc ? { line: p.node.loc.start.line, column: p.node.loc.start.column } : null,
+          matched: c.matched,
+          matchReason: c.matchReason,
+          onPath: null,
+        });
+      },
+    });
+  } catch (e) { _resolver.collectError(e, "sanitizerReport-traverse"); }
+  if (candidates.length === 0) return { decision: "no-candidates", candidates: [] };
+
+  // Compute on-path: is this candidate's block visited by every path
+  // from entry to the sink's block? A sanitizer that only fires in one
+  // branch (if/else) doesn't sanitize the sink — it must dominate.
+  var cfg = _buildCFG(bodyPath);
+  var anyMatchedOnPath = false;
+  if (cfg) {
+    var sinkLine = sinkPath.node.loc ? sinkPath.node.loc.start.line : -1;
+    var sinkBlockId = sinkLine !== -1 ? _findBlockForLine(cfg, sinkLine) : -1;
+    if (sinkBlockId !== -1) {
+      for (var i = 0; i < candidates.length; i++) {
+        var c = candidates[i];
+        if (!c.matched || !c.loc) { c.onPath = false; continue; }
+        var candBlockId = _findBlockForLine(cfg, c.loc.line);
+        if (candBlockId === -1) { c.onPath = false; continue; }
+        var singleton = {}; singleton[candBlockId] = true;
+        c.onPath = _hasSanitizerOnAllPaths(cfg, sinkBlockId, singleton);
+        if (c.onPath) anyMatchedOnPath = true;
+      }
+    }
+  }
+  return {
+    decision: anyMatchedOnPath ? "fires-on-all-paths" : "missing-on-some-paths",
+    candidates: candidates,
+  };
+}
+
 function extractSourceMapUrl(code) {
   var tail = code.length > 500 ? code.slice(-500) : code;
   var marker = "sourceMappingURL=";
@@ -9342,9 +11097,23 @@ function extractSourceMapUrl(code) {
 // scope system and type tracking as analyzeJSBundle.
 // Returns { defMap, refMap, funcMap, allFuncRanges, ast }.
 
-function buildDefinitionMap(code) {
+// buildDefinitionMap takes an optional third `opts.mode` arg:
+//   "full"    — build defMap + refMap + funcMap + allFuncRanges + propDefs.
+//               Needs the Identifier visitor which calls
+//               path.scope.getBinding() on every identifier — millions
+//               of scope walks on a minified 5 MB bundle. Only the
+//               source-viewer (click-to-definition) consumes refMap, so
+//               pay this cost on demand.
+//   "defOnly" — build defMap + propDefs only (the eager-path consumers).
+//               Skips the Identifier visitor entirely, saving ~24 s on
+//               real github's combined react-core bundle. Used by
+//               AST_ANALYZE's eager buildDefinitionMap companion call.
+function buildDefinitionMap(code, preParsedAst, opts) {
   // Reset per-analysis type state (shared with analyzeJSBundle)
   _typeEnv = {};
+
+  var mode = (opts && opts.mode) || "full";
+  var collectRefs = mode === "full";
 
   var defMap = {};         // { name: line } — named function/variable definitions
   var refMap = {};         // { refLine: { name: defLine } } — scope-resolved per-reference
@@ -9352,76 +11121,103 @@ function buildDefinitionMap(code) {
   var allFuncRanges = [];  // [{ line, endLine, calls }] — all functions (named + anon)
   var propDefs = {};       // { "defLine:name" → { propName: propDefLine } } — property definitions
   var pendingProps = [];   // [{ refLine, propName, ownerKey }] — deferred property accesses
-  var ast = null;
+  var ast = preParsedAst || null;
 
-  try {
-    ast = _babelParse(code, { sourceType: "unambiguous", plugins: ["jsx"], errorRecovery: true });
-  } catch (e) {
-    return { defMap: defMap, refMap: refMap, funcMap: funcMap, allFuncRanges: allFuncRanges, propDefs: propDefs, ast: null };
+  var _bdmParseT0 = Date.now();
+  if (!ast) {
+    try {
+      ast = _babelParse(code, { sourceType: "unambiguous", plugins: ["jsx"], errorRecovery: true });
+    } catch (e) {
+      return { defMap: defMap, refMap: refMap, funcMap: funcMap, allFuncRanges: allFuncRanges, propDefs: propDefs, ast: null };
+    }
   }
+  var _bdmParseMs = Date.now() - _bdmParseT0;
+  var _bdmTraverseT0 = Date.now();
 
-  function collectCalls(funcPath) {
-    var calls = new Set();
-    funcPath.traverse({
-      CallExpression: function(inner) {
-        var callee = inner.node.callee;
-        if (_t.isIdentifier(callee)) {
-          // Only include if the binding is a function declaration/expression (not a parameter)
-          var binding = inner.scope.getBinding(callee.name);
-          if (!binding || _t.isFunctionDeclaration(binding.path.node) ||
-              (binding.path.isVariableDeclarator() && binding.path.node.init &&
-               _t.isFunction(binding.path.node.init)) ||
-              (binding.path.isAssignmentExpression && binding.constantViolations &&
-               binding.constantViolations.some(function(cv) { return cv.isAssignmentExpression() && _t.isFunction(cv.node.right); })))
-            calls.add(callee.name);
-        } else if (_t.isMemberExpression(callee) && _t.isIdentifier(callee.property))
-          calls.add(callee.property.name);
-      },
-    });
-    return calls;
-  }
-
+  // Function stack for call-graph collection. Previously, each function's
+  // calls were gathered via `funcPath.traverse(...)` — a sub-tree walk per
+  // function. On a 6.5MB minified bundle with thousands of nested
+  // functions, this is quadratic: the same inner node gets visited once
+  // per ancestor function. Cost on real github main page: ~36s of the
+  // ~45s full AST pass. The single-traversal version below walks each
+  // node ONCE and attributes CallExpressions to the top of an explicit
+  // function stack — linear in AST size.
+  var _funcStack = [];
   function registerFunc(path, name, funcNode) {
     var loc = funcNode ? funcNode.loc : path.node.loc;
-    if (!loc) return;
-    var entry = { line: loc.start.line, endLine: loc.end.line, calls: collectCalls(path) };
+    if (!loc) return null;
+    var entry = { line: loc.start.line, endLine: loc.end.line, calls: new Set() };
     allFuncRanges.push(entry);
     if (name) {
       funcMap[name] = entry;
       defMap[name] = loc.start.line;
     }
+    return entry;
   }
 
   try {
   _babelTraverse(ast, {
-    FunctionDeclaration: function(path) {
-      registerFunc(path, path.node.id ? path.node.id.name : null, path.node);
+    FunctionDeclaration: {
+      enter: function(path) {
+        _funcStack.push(registerFunc(path, path.node.id ? path.node.id.name : null, path.node));
+      },
+      exit: function() { _funcStack.pop(); },
     },
-    FunctionExpression: function(path) {
-      var name = null;
-      if (path.parent.type === "VariableDeclarator" && path.parent.id && path.parent.id.name)
-        name = path.parent.id.name;
-      else if (path.parent.type === "AssignmentExpression" && path.parent.left.type === "Identifier")
-        name = path.parent.left.name;
-      registerFunc(path, name, path.node);
+    FunctionExpression: {
+      enter: function(path) {
+        var name = null;
+        if (path.parent.type === "VariableDeclarator" && path.parent.id && path.parent.id.name)
+          name = path.parent.id.name;
+        else if (path.parent.type === "AssignmentExpression" && path.parent.left.type === "Identifier")
+          name = path.parent.left.name;
+        _funcStack.push(registerFunc(path, name, path.node));
+      },
+      exit: function() { _funcStack.pop(); },
     },
-    ArrowFunctionExpression: function(path) {
-      var name = null;
-      if (path.parent.type === "VariableDeclarator" && path.parent.id && path.parent.id.name)
-        name = path.parent.id.name;
-      else if (path.parent.type === "AssignmentExpression" && path.parent.left.type === "Identifier")
-        name = path.parent.left.name;
-      registerFunc(path, name, path.node);
+    ArrowFunctionExpression: {
+      enter: function(path) {
+        var name = null;
+        if (path.parent.type === "VariableDeclarator" && path.parent.id && path.parent.id.name)
+          name = path.parent.id.name;
+        else if (path.parent.type === "AssignmentExpression" && path.parent.left.type === "Identifier")
+          name = path.parent.left.name;
+        _funcStack.push(registerFunc(path, name, path.node));
+      },
+      exit: function() { _funcStack.pop(); },
     },
     ClassDeclaration: function(path) {
       registerFunc(path, path.node.id ? path.node.id.name : null, path.node);
     },
-    ObjectMethod: function(path) {
-      registerFunc(path, path.node.key && path.node.key.name ? path.node.key.name : null, path.node);
+    ObjectMethod: {
+      enter: function(path) {
+        _funcStack.push(registerFunc(path, path.node.key && path.node.key.name ? path.node.key.name : null, path.node));
+      },
+      exit: function() { _funcStack.pop(); },
     },
-    ClassMethod: function(path) {
+    // CallExpression: attribute each call to the innermost enclosing
+    // function. Scope-aware binding check preserves the previous filter
+    // (parameters don't count as callable targets).
+    CallExpression: function(inner) {
+      if (!_funcStack.length) return;
+      var top = _funcStack[_funcStack.length - 1];
+      if (!top) return;
+      var callee = inner.node.callee;
+      if (_t.isIdentifier(callee)) {
+        var binding = inner.scope.getBinding(callee.name);
+        if (!binding || _t.isFunctionDeclaration(binding.path.node) ||
+            (binding.path.isVariableDeclarator() && binding.path.node.init &&
+             _t.isFunction(binding.path.node.init)) ||
+            (binding.path.isAssignmentExpression && binding.constantViolations &&
+             binding.constantViolations.some(function(cv) { return cv.isAssignmentExpression() && _t.isFunction(cv.node.right); })))
+          top.calls.add(callee.name);
+      } else if (_t.isMemberExpression(callee) && _t.isIdentifier(callee.property)) {
+        top.calls.add(callee.property.name);
+      }
+    },
+    ClassMethod: {
+      enter: function(path) {
       var name = path.node.key && path.node.key.name ? path.node.key.name : null;
-      registerFunc(path, name, path.node);
+      _funcStack.push(registerFunc(path, name, path.node));
       // Track class methods as properties of the class binding
       if (name) {
         var classBody = path.parentPath;
@@ -9435,6 +11231,8 @@ function buildDefinitionMap(code) {
           }
         }
       }
+      },
+      exit: function() { _funcStack.pop(); },
     },
     // Populate type tracker: var x = new XMLHttpRequest() → "XMLHttpRequest"
     VariableDeclarator: function(path) {
@@ -9570,8 +11368,14 @@ function buildDefinitionMap(code) {
       var ownerKey = mbinding.identifier.loc.start.line + ":" + obj.name;
       pendingProps.push({ refLine: prop.loc.start.line, propName: prop.name, ownerKey: ownerKey, binding: mbinding });
     },
-    // Scope-resolved identifier references
+    // Scope-resolved identifier references. This visitor is the main
+    // cost of a "full" build (~24 s on a 5 MB minified bundle) because
+    // path.scope.getBinding() walks the scope chain on every identifier.
+    // Skip it entirely in "defOnly" mode — only the viewer consumes
+    // refMap, so the caller passes mode:"full" when the viewer actually
+    // asks for it.
     Identifier: function(path) {
+      if (!collectRefs) return;
       if (!path.node.loc) return;
       var name = path.node.name;
       // Skip property keys and object literal keys
@@ -9762,6 +11566,7 @@ function buildDefinitionMap(code) {
     }
   }
 
+  var _bdmTraverseMs = Date.now() - _bdmTraverseT0;
   return {
     defMap: defMap,
     refMap: refMap,
@@ -9769,5 +11574,6 @@ function buildDefinitionMap(code) {
     allFuncRanges: allFuncRanges,
     propDefs: propDefs,
     ast: ast,
+    _timings: { parseMs: _bdmParseMs, traverseMs: _bdmTraverseMs },
   };
 }

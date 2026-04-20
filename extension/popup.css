@@ -168,6 +168,193 @@ nav {
   opacity: 0.6;
 }
 
+/* Service grouping rule — why the selected service name was chosen */
+.service-grouping {
+  font-size: 10px;
+  color: #8b949e;
+  padding: 2px 4px 6px;
+  min-height: 14px;
+}
+.service-grouping:empty { display: none; }
+.service-grouping code {
+  font-size: 10px;
+  background: #1c2128;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #79c0ff;
+}
+.grouping-label { color: #484f58; }
+.grouping-matched { margin-left: 8px; color: #8b949e; }
+.grouping-first {
+  margin-top: 2px;
+  color: #6e7681;
+  font-size: 9px;
+  word-break: break-all;
+}
+
+/* Per-finding probe row — Verify button + inline result area */
+.probe-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #21262d;
+}
+.probe-btn {
+  background: #1c2128;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  border-radius: 4px;
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.probe-btn:hover:not(:disabled) {
+  border-color: #58a6ff;
+  color: #58a6ff;
+}
+.probe-btn:disabled { opacity: 0.5; cursor: default; }
+.probe-hint {
+  font-size: 10px;
+  color: #484f58;
+}
+.probe-na {
+  font-size: 10px;
+  color: #6e7681;
+  font-style: italic;
+}
+.probe-result {
+  flex-basis: 100%;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  border-left: 2px solid transparent;
+}
+.probe-result:empty { display: none; }
+.probe-running {
+  background: #1c2128;
+  color: #8b949e;
+  border-left-color: #58a6ff;
+}
+.probe-miss {
+  background: #13221b;
+  color: #7ee787;
+  border-left-color: #3fb950;
+}
+.probe-err {
+  background: #281b1e;
+  color: #ff7b72;
+  border-left-color: #f85149;
+}
+.probe-hit {
+  background: #2a1a0e;
+  color: #ffa657;
+  border-left-color: #db6d28;
+}
+.probe-hit-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.probe-hits {
+  margin: 0;
+  padding-left: 16px;
+}
+.probe-hits li { margin-bottom: 4px; }
+.probe-hits-dim {
+  opacity: 0.75;
+  margin-top: 4px;
+}
+.probe-hit-subhead {
+  font-size: 10px;
+  color: #8b949e;
+  margin-top: 6px;
+}
+.probe-hint-detail {
+  font-size: 10px;
+  color: #8b949e;
+  margin-top: 2px;
+}
+
+/* Taint path / sanitizer report collapsible details on finding cards */
+.taint-details {
+  margin-top: 6px;
+  font-size: 11px;
+}
+.taint-details summary {
+  cursor: pointer;
+  color: #8b949e;
+  font-size: 10px;
+  padding: 2px 0;
+}
+.taint-details summary:hover {
+  color: #c9d1d9;
+}
+.taint-details[open] summary {
+  color: #c9d1d9;
+}
+.taint-hops {
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  font-size: 10px;
+  color: #c9d1d9;
+  margin: 4px 0 4px 16px;
+  padding-left: 16px;
+}
+.taint-hops li {
+  margin: 2px 0;
+  line-height: 1.5;
+}
+.taint-hops code {
+  color: #79c0ff;
+  background: none;
+  padding: 0;
+}
+.hop-at {
+  color: #6e7681;
+  font-size: 9px;
+  margin-left: 4px;
+}
+.hop-snippet {
+  margin: 2px 0 0 0;
+  padding: 4px 6px;
+  background: #161b22;
+  border-left: 2px solid #30363d;
+  border-radius: 3px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.hop-snippet code {
+  color: #c9d1d9 !important;
+  font-size: 10px;
+}
+.san-verdict {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.san-match { color: #3fb950; }
+.san-branch { color: #d29922; }
+.san-reject { color: #f85149; }
+.san-reason {
+  color: #8b949e;
+  font-style: italic;
+  margin-left: 12px;
+  font-size: 9px;
+}
+.probe-hit-url {
+  font-size: 10px;
+  color: #8b949e;
+}
+.probe-hit-val {
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  font-size: 10px;
+  color: #f0883e;
+  word-break: break-all;
+  display: inline-block;
+  margin-top: 2px;
+}
+
 pre.code-context {
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
   font-size: 11px;
@@ -994,6 +1181,7 @@ details summary:hover {
 .badge-enum-detected { color: #7ee787; background: rgba(126,231,135,0.1); }
 .badge-default { color: #79c0ff; background: rgba(121,192,255,0.1); }
 .badge-range { color: #d2a8ff; background: rgba(210,168,255,0.1); }
+.badge-prefill { color: #7ee787; background: rgba(126,231,135,0.1); }
 .badge-format { color: #f0883e; background: rgba(240,136,62,0.1); }
 
 /* Chain info */

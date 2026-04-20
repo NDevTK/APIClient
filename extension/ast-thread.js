@@ -11,14 +11,36 @@ onmessage = function(e) {
 
   if (msg.type === "AST_ANALYZE") {
     try {
+      var _t0 = Date.now();
       var result = analyzeJSBundle(msg.code, msg.sourceUrl, msg.forceScript);
-      // Also build definition map for cross-file click-to-definition
-      try {
-        var graph = buildDefinitionMap(msg.code);
-        result.propDefs = graph.propDefs;
-        result.defMap = graph.defMap;
-      } catch (_) { /* definition map is optional — don't fail the analysis */ }
+      var _t1 = Date.now();
+      // The click-to-definition index (buildDefinitionMap) is NOT built
+      // here — it's built on demand by AST_BUILD_DEFINITION_MAP when the
+      // source viewer actually opens. Inlining it costs ~40 s of AST
+      // traverse on a 6 MB bundle on real github, and only the viewer
+      // consumes the output. The perf work that lets us ship that cost
+      // elsewhere (parse reuse, single-traverse call graph, defOnly
+      // mode) means the on-demand path is fast enough to pay at
+      // viewer-open time, not page-load time. Strip the internal AST
+      // handle so structured-clone doesn't trip on circular parent refs.
+      delete result._ast;
+      result._timings = {
+        analyzeMs: _t1 - _t0,
+        codeChars: msg.code ? msg.code.length : 0,
+      };
       response = { success: true, result: result };
+    } catch (err) {
+      response = { success: false, error: err.message, stack: err.stack };
+    }
+  } else if (msg.type === "AST_BUILD_DEFINITION_MAP") {
+    // Build click-to-definition index for the source viewer. Called on
+    // demand when the viewer first requests a cross-ref lookup. Uses
+    // "full" mode so refMap (scope-resolved identifier references) is
+    // populated alongside defMap/propDefs — the viewer's click handler
+    // needs refMap to jump from a usage to its declaration.
+    try {
+      var graph = buildDefinitionMap(msg.code, null, { mode: "full" });
+      response = { success: true, result: { propDefs: graph.propDefs, defMap: graph.defMap, refMap: graph.refMap, funcMap: graph.funcMap, allFuncRanges: graph.allFuncRanges } };
     } catch (err) {
       response = { success: false, error: err.message, stack: err.stack };
     }

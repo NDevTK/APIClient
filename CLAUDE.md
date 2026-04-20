@@ -1,8 +1,29 @@
 # API Security Researcher - Development Guide
 
+Work autonomously and continuously balance all tasks based on what's the most productive with no mocking allowed
+
 ## Project Overview
 
 A Chrome Extension (MV3) for API discovery, protocol reverse-engineering (Protobuf/JSPB/JSON/gRPC-Web/GraphQL/SSE/NDJSON), JavaScript security code review, and security testing across all websites.
+
+Example tasks:
+  Learning API Schema from network and javascript
+  Learning usable values for each item in schema via network and advanced javascript analysis
+  Security issue detection on real websites
+  Service grouping quality
+  API vs boring static resource quality
+  Real execution cross-origin exploitability probe (Even complex ones)
+  Interacting with real and complex server APIs
+  Research real websites and how they work avoiding symthic data
+  Look at websites own javascript and improve what we are learning
+  Verifying and reviewing and quality of outputs
+  Review what gets shown in UI
+  Review each findings by looking at the real javascript and following the code flow
+  Improve context provided by Interactive tooling
+  Test performance on websites
+  Ensuring code is based on facts and proper analysis not guesses or hardcoded heuristics
+  Improve harness review tooling with better context (instead of guessing)
+
 
 ## Core Architecture
 

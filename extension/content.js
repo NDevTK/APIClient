@@ -32,6 +32,19 @@
   // Signal intercept.js that the relay is listening — replays buffered events
   document.dispatchEvent(new CustomEvent("__uasr_ready"));
 
+  // Exploit-probe hit relay: when the page's intercept.js detects a
+  // URL-bound probe marker and wraps a sink, each hit fires as a
+  // CustomEvent. Forward to background so the active probe session can
+  // correlate. Background gates on the allow-list, so spoofed events
+  // from the page can at worst submit noise to that session's hits —
+  // they cannot read other tabs' data.
+  document.addEventListener("__uasr_probe_hit", (e) => {
+    if (!e.detail) return;
+    try {
+      chrome.runtime.sendMessage({ type: "PROBE_HIT", hit: e.detail });
+    } catch (_) {}
+  });
+
   // ─── postMessage Listener ─────────────────────────────────────────────────
   // Runs in isolated world — no main-world wrapper needed. message events are
   // visible here. Stores event.source per origin for reply from console.

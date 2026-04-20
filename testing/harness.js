@@ -37,6 +37,9 @@ const fs = require("fs");
 const fsp = fs.promises;
 const net = require("net");
 const http = require("http");
+const https = require("https");
+const crypto = require("crypto");
+const zlib = require("zlib");
 const { spawn } = require("child_process");
 const puppeteer = require("puppeteer");
 
@@ -44,13 +47,87 @@ const ROOT = path.resolve(__dirname, "..");
 const EXT_DIR = path.join(ROOT, "extension");
 const PROFILE_DIR = path.join(__dirname, "profile");
 const DUMP_DIR = path.join(__dirname, "harness-dumps");
+const SNAP_DIR = path.join(__dirname, "finding-snapshots");
 const LOCK_FILE = path.join(__dirname, "harness.lock");
 const DEFAULT_PORT = 9337;
+
+// Stable finding identifier so the same vulnerability can be tracked
+// across reloads and classifier changes. Hash includes the source URL,
+// location, and classifier output so two findings for different patterns
+// at the same line can't collide. Short hex prefix is enough to be
+// unique across a session and human-typeable.
+function computeFindingId(f) {
+  const line = f.location?.line ?? f.loc?.start?.line ?? "?";
+  const col = f.location?.column ?? f.loc?.start?.column ?? "?";
+  const kind = f.category === "sink"
+    ? `${f.type || "?"}:${f.sink || "?"}`
+    : `${f.type || "pattern"}`;
+  const key = `${f.sourceUrl || "(inline)"}|L${line}:C${col}|${f.category}|${kind}`;
+  return crypto.createHash("sha1").update(key).digest("hex").slice(0, 10);
+}
+
+// Fetch a script URL via Node (no browser). Handles Content-Encoding
+// (brotli / gzip / deflate) — default https.get gives us the COMPRESSED
+// bytes, so Figma's `.br` bundles come back as gibberish unless we
+// decompress. Returns the decoded text on success; returns null on HTTP
+// error so callers can fall back to page-context fetch.
+function fetchDecoded(url, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith("https:") ? https : http;
+    const req = client.get(url, {
+      headers: {
+        // Some CDNs insist on an Accept-Encoding to send raw — we want
+        // them to compress so our decompressor path is exercised, but
+        // also accept identity for servers that ignore the header.
+        "Accept-Encoding": "br, gzip, deflate, identity",
+        "User-Agent": "api-security-researcher-harness/1.0",
+      },
+    }, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        const next = new URL(res.headers.location, url).href;
+        fetchDecoded(next, timeoutMs).then(resolve, reject);
+        return;
+      }
+      if (!res.statusCode || res.statusCode >= 400) {
+        res.resume();
+        reject(new Error(`HTTP ${res.statusCode} on ${url}`));
+        return;
+      }
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        const buf = Buffer.concat(chunks);
+        const enc = (res.headers["content-encoding"] || "").toLowerCase();
+        try {
+          let out;
+          if (enc === "br") out = zlib.brotliDecompressSync(buf);
+          else if (enc === "gzip") out = zlib.gunzipSync(buf);
+          else if (enc === "deflate") out = zlib.inflateSync(buf);
+          else out = buf;
+          resolve(out.toString("utf8"));
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(new Error("timeout")); });
+  });
+}
 
 function log(...args) { console.log(...args); }
 function err(...args) { console.error(...args); }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function short(s, n) { s = String(s == null ? "" : s); return s.length > n ? s.slice(0, n) + "…" : s; }
+function _joinUrl(origin, path) {
+  const o = origin == null ? "" : String(origin);
+  const p = path == null ? "" : String(path);
+  if (!o) return p;
+  if (!p) return o;
+  // Ensure exactly one slash between origin and path.
+  const oTrim = o.endsWith("/") ? o.slice(0, -1) : o;
+  const pLead = p.startsWith("/") ? p : "/" + p;
+  return oTrim + pLead;
+}
 function labelScript(url) {
   if (!url) return "(inline)";
   if (url.startsWith("data:")) {
@@ -382,6 +459,7 @@ async function cmdScripts(args) {
             secSinks: (r.securitySinks || []).length,
             dangerous: (r.dangerousPatterns || []).length,
             sourceMap: r.sourceMapUrl || null,
+            timings: r._analysisTimings || tab._lastAstTimings || null,
           });
         }
       }
@@ -391,7 +469,10 @@ async function cmdScripts(args) {
     log(`${out.length} scripts analysed:`);
     out.forEach((r, i) => {
       if (filter && !r.url.includes(filter)) return;
-      log(`${String(i).padStart(3)}  tab=${r.tabId} sink=${r.secSinks} danger=${r.dangerous} fetch=${r.fetchSites} fieldMaps=${r.protoFieldMaps} enums=${r.protoEnums} ${r.sourceMap ? "[srcmap]" : ""}  ${labelScript(r.url)}`);
+      const timings = r.timings
+        ? `  [analyze=${r.timings.analyzeMs}ms chars=${r.timings.codeChars}]`
+        : "";
+      log(`${String(i).padStart(3)}  tab=${r.tabId} sink=${r.secSinks} danger=${r.dangerous} fetch=${r.fetchSites} fieldMaps=${r.protoFieldMaps} enums=${r.protoEnums} ${r.sourceMap ? "[srcmap]" : ""}  ${labelScript(r.url)}${timings}`);
     });
   });
 }
@@ -621,35 +702,98 @@ async function cmdFindings(args) {
       if (filterKind && !kind.toLowerCase().includes(filterKind.toLowerCase())) return;
       const line = f.location?.line ?? f.loc?.start?.line ?? "?";
       const desc = f.description || (f.category === "sink" ? `${f.sourceType}→${f.sink}` : "");
-      log(`${String(i).padStart(3)} [${f.severity || "?"}] ${f.category}/${kind} L${line}  ${short(desc, 140)}`);
-      log(`      ${labelScript(f.sourceUrl)}`);
+      const id = computeFindingId(f);
+      log(`${id}  #${String(i).padStart(3)} [${f.severity || "?"}] ${f.category}/${kind} L${line}  ${short(desc, 140)}`);
+      log(`           ${labelScript(f.sourceUrl)}`);
     });
   });
 }
 
 async function cmdFinding(args) {
-  const idx = Number(args[0]);
-  if (Number.isNaN(idx)) throw new Error("usage: finding <index>");
+  const arg = args[0];
+  if (!arg) throw new Error("usage: finding <id|index>");
   await withBrowser(async (browser) => {
-    const f = await evalSW(browser, `
+    const rows = await evalSW(browser, `
       const out = [];
       for (const [sourceUrl, v] of globalStore.securityFindings) {
         for (const s of (v.securitySinks || [])) out.push({sourceUrl, category: "sink", ...s});
         for (const s of (v.dangerousPatterns || [])) out.push({sourceUrl, category: "dangerous", ...s});
       }
-      return out[${idx}] || null;
+      return out;
     `);
-    if (!f) { err("no such finding"); return; }
+    if (!rows || rows.length === 0) { err("no findings"); return; }
+    // Accept either a numeric index (legacy, unstable across reloads) or
+    // the stable ID shown by `findings`. Prefer ID when ambiguous.
+    let f = null;
+    const asIdx = Number(arg);
+    if (!Number.isNaN(asIdx) && asIdx >= 0 && asIdx < rows.length && arg.length < 6) {
+      f = rows[asIdx];
+    } else {
+      f = rows.find(r => computeFindingId(r) === arg) || null;
+    }
+    if (!f) { err("no such finding (id or index not found)"); return; }
     const line = f.location?.line ?? f.loc?.start?.line ?? null;
     const col = f.location?.column ?? f.loc?.start?.column ?? null;
+
+    // Fetch raw source once — we reuse it for the minified snippet, the
+    // sourcemap lookup (taintPath annotation), and the enclosing-function
+    // print. Prefer Node fetch (handles brotli); fall back to page fetch
+    // for credentialed scripts.
+    let src = null;
+    if (f.sourceUrl && !f.sourceUrl.startsWith("data:") && line) {
+      try { src = await fetchDecoded(f.sourceUrl); }
+      catch (e) {
+        const pages = await browser.pages();
+        let fetchFrom = null;
+        try {
+          const scriptOrigin = new URL(f.sourceUrl).origin;
+          fetchFrom = pages.find(pp => { try { return new URL(pp.url()).origin === scriptOrigin; } catch { return false; } });
+        } catch {}
+        if (!fetchFrom) fetchFrom = await getActivePage(browser);
+        if (fetchFrom) {
+          const pageSrc = await fetchFrom.evaluate(async (u) => {
+            try { const r = await fetch(u, { credentials: "include" }); return await r.text(); } catch (e2) { return "__ERR__" + e2.message; }
+          }, f.sourceUrl);
+          src = pageSrc.startsWith("__ERR__") ? null : pageSrc;
+        }
+      }
+    } else if (f.sourceUrl?.startsWith("data:") && line) {
+      try {
+        const u = new URL(f.sourceUrl);
+        src = decodeURIComponent(u.pathname.split(",").slice(1).join(","));
+      } catch {}
+    }
+
+    // Resolve the sourcemap once (may be null for unmapped bundles or
+    // inline scripts). Used for finding-location and each taintPath hop.
+    let smap = null;
+    if (src && f.sourceUrl && !f.sourceUrl.startsWith("data:")) {
+      try { smap = await resolveSourceMap(f.sourceUrl, src); } catch {}
+    }
+    const resolveOrig = (lineN, colN) => {
+      if (!smap || !smap.consumer || lineN == null || colN == null) return null;
+      try {
+        const o = smap.consumer.originalPositionFor({ line: lineN, column: colN });
+        if (o && o.source) return o;
+      } catch {}
+      return null;
+    };
+
+    log(`findingId: ${computeFindingId(f)}`);
     const kind = f.category === "sink"
       ? `${f.type || "?"} → ${f.sink || "?"}`
       : `${f.type || "pattern"}`;
     log(`[${f.severity || "?"}] ${f.category} / ${kind}`);
     log(`  source: ${labelScript(f.sourceUrl)}`);
-    log(`  location: L${line ?? "?"} col ${col ?? "?"}`);
+    const origFinding = resolveOrig(line, col);
+    if (origFinding) {
+      log(`  location: minified L${line ?? "?"}:C${col ?? "?"}  →  ${origFinding.source} L${origFinding.line}:C${origFinding.column}${origFinding.name ? "  (symbol: " + origFinding.name + ")" : ""}`);
+    } else {
+      log(`  location: L${line ?? "?"} col ${col ?? "?"}`);
+    }
     if (f.category === "sink") {
       log(`  sourceType: ${f.sourceType || "?"}  source: ${short(f.source || "-", 200)}`);
+      if (f.receiverType) log(`  receiverType: ${f.receiverType}  (sink object's tracked type — e.g. Element ⇒ real DOM sink, FormData/URL ⇒ not a DOM sink)`);
       log(`  sanitized: ${!!f.sanitized}`);
     }
     if (f.description) log(`  description: ${f.description}`);
@@ -659,84 +803,1457 @@ async function cmdFinding(args) {
       for (const l of ctx.split("\n").slice(0, 10)) log(`    ${l}`);
     }
 
-    // Fetch the raw script. Try the page matching the script's origin
-    // first so CORS cookies/headers are native; fall back to Node fetch.
-    const pages = await browser.pages();
-    let fetchFrom = null;
-    try {
-      const scriptOrigin = new URL(f.sourceUrl).origin;
-      fetchFrom = pages.find(p => { try { return new URL(p.url()).origin === scriptOrigin; } catch { return false; } });
-    } catch {}
-    if (!fetchFrom) fetchFrom = await getActivePage(browser);
-    if (f.sourceUrl && !f.sourceUrl.startsWith("data:") && line) {
-      let src = await fetchFrom.evaluate(async (u) => {
-        try { const r = await fetch(u, { credentials: "include" }); return await r.text(); } catch (e) { return "__ERR__" + e.message; }
-      }, f.sourceUrl);
-      // Node fallback (no credentials needed for public script URLs).
-      if (src.startsWith("__ERR__")) {
-        try {
-          const resp = await new Promise((resolve, reject) => {
-            const req = require("https").get(f.sourceUrl, res => {
-              let data = []; res.on("data", c => data.push(c)); res.on("end", () => resolve(Buffer.concat(data).toString("utf8")));
-            });
-            req.on("error", reject); req.setTimeout(10000, () => req.destroy(new Error("timeout")));
-          });
-          src = resp;
-        } catch (e) { src = "__ERR__" + e.message; }
+    // Taint path, now with each hop source-map-resolved when possible.
+    // Reviewers read top-to-bottom: source → … → sink. Original file/line
+    // lets them jump directly to the real TS/JS instead of squinting at
+    // minified columns.
+    //
+    // Per-hop code snippet: cut a ~140-char window around each hop's
+    // (line, column) from the minified source so a reviewer can see
+    // the surrounding syntax without having to run `finding.map` on
+    // every hop. Transformations (method-call / concat / new-url-*)
+    // and function boundaries (param-caller / call-arg / function-
+    // return) are where taint changes shape — having the code inline
+    // is what lets the agent judge "is dim-origin upgrading here
+    // actually reachable?" without 20 extra tool calls. Uses the same
+    // `src` already fetched for the top-level codeContext.
+    if (Array.isArray(f.taintPath) && f.taintPath.length) {
+      let lineStarts = null;
+      if (src) {
+        lineStarts = [0];
+        for (let i = 0; i < src.length; i++) if (src.charCodeAt(i) === 10) lineStarts.push(i + 1);
       }
-      if (!src.startsWith("__ERR__")) {
-        const lines = src.split("\n");
-        const targetLine = lines[line - 1] || "";
-        // Minified bundles have one giant line. A line number alone is
-        // useless — slice around the column so we actually see the
-        // finding's region.
-        if (targetLine.length > 500 && col != null) {
-          const radius = 200;
-          const cStart = Math.max(0, col - radius);
-          const cEnd = Math.min(targetLine.length, col + radius);
-          const snippet = targetLine.slice(cStart, cEnd);
-          const relCol = col - cStart;
-          log(`\n  raw JS L${line} col ${col}  [±${radius} chars]`);
-          log(`     ${snippet}`);
-          log(`     ${" ".repeat(relCol)}^`);
-        } else {
-          const start = Math.max(0, line - 11);
-          const end = Math.min(lines.length, line + 10);
-          log(`\n  raw JS L${start + 1}..L${end}:`);
-          for (let i = start; i < end; i++) {
-            const marker = (i + 1 === line) ? ">>" : "  ";
-            log(`  ${marker} ${String(i + 1).padStart(5)}  ${lines[i].slice(0, 240)}`);
+      const snippetAt = (line, column) => {
+        if (!src || !lineStarts || line == null || column == null) return null;
+        const lineIdx = line - 1;
+        if (lineIdx < 0 || lineIdx >= lineStarts.length) return null;
+        const absOffset = lineStarts[lineIdx] + column;
+        if (absOffset < 0 || absOffset >= src.length) return null;
+        const start = Math.max(0, absOffset - 70);
+        const end = Math.min(src.length, absOffset + 70);
+        let snippet = src.slice(start, end).replace(/\s+/g, " ");
+        if (start > 0) snippet = "…" + snippet;
+        if (end < src.length) snippet = snippet + "…";
+        return snippet;
+      };
+      log(`  taintPath (${f.taintPath.length} hops):`);
+      f.taintPath.forEach((h, i) => {
+        const atMin = h.at ? `min L${h.at.line}:C${h.at.column}` : "?";
+        const o = h.at ? resolveOrig(h.at.line, h.at.column) : null;
+        const atOrig = o ? `  →  ${o.source}:L${o.line}:C${o.column}${o.name ? " (" + o.name + ")" : ""}` : "";
+        // Dim transition annotation — reviewer needs to see WHERE origin
+        // becomes attacker-controlled. If this hop changed dims, show the
+        // before→after mask alongside the hop.
+        let dimAnn = "";
+        if (h.dims) {
+          const setKeys = Object.keys(h.dims).filter(k => h.dims[k]);
+          const d = setKeys.length ? setKeys.join(",") : "none";
+          if (h.dimsBefore) {
+            const bef = Object.keys(h.dimsBefore).filter(k => h.dimsBefore[k]).join(",") || "none";
+            dimAnn = `  dims: {${bef}} → {${d}}`;
+          } else {
+            dimAnn = `  dims={${d}}`;
           }
         }
-      } else {
-        err(`  (couldn't fetch source: ${src})`);
-      }
-    } else if (f.sourceUrl?.startsWith("data:") && line) {
-      // Inline data-URL script — decode and slice around the column.
+        log(`    ${String(i).padStart(2)}. [${h.kind || "?"}]  ${h.desc || ""}  @${atMin}${atOrig}${dimAnn}`);
+        // Prefer the snippet baked into the finding by the AST analyzer
+        // (it has the whole bundle and writes one snippet per hop at
+        // emit time). Fall back to cutting from the locally-fetched
+        // source for findings produced before the snippet-on-hop change
+        // landed, or when the bundle fetch failed.
+        const snip = (h.code && String(h.code)) || (h.at ? snippetAt(h.at.line, h.at.column) : null);
+        if (snip) log(`        ${snip}`);
+      });
+    }
+    if (f.sanitizerReport && Array.isArray(f.sanitizerReport.candidates) && f.sanitizerReport.candidates.length) {
+      const sr = f.sanitizerReport;
+      log(`  sanitizerReport: ${sr.decision}  (${sr.candidates.length} sanitizer-shaped calls in scope)`);
+      sr.candidates.forEach((c, i) => {
+        const at = c.loc ? `L${c.loc.line}:C${c.loc.column}` : "?";
+        const verdict = c.matched ? (c.onPath ? "matched, on-path" : "matched, branch-only") : "rejected";
+        log(`    ${String(i).padStart(2)}. ${c.label}  @${at}  [${verdict}]`);
+        log(`        ${c.matchReason}`);
+      });
+    }
+    // Preconditions: guards the AST detected between source and sink.
+    // Each entry pins an attacker-visible field to a literal value.
+    if (Array.isArray(f.preconditions) && f.preconditions.length) {
+      log(`  preconditions (${f.preconditions.length}): sink reachable only when`);
+      f.preconditions.forEach((p, i) => {
+        const pathLabel = Array.isArray(p.path) && p.path.length ? p.path.map(JSON.stringify).join(".") : "<root>";
+        log(`    ${String(i).padStart(2)}. ${pathLabel} ${p.op} ${JSON.stringify(p.value)}`);
+      });
+    }
+
+    // Enclosing function from ORIGINAL source (via sourcemap). Gives the
+    // reviewer the readable, un-minified code around the sink — which is
+    // almost always what they want to judge the taint chain. Gated to
+    // <120 lines so we don't dump giant classes; anything bigger, fall
+    // back to finding.func.
+    let enclosingPrinted = false;
+    if (src && line != null && origFinding) {
       try {
-        const u = new URL(f.sourceUrl);
-        const body = decodeURIComponent(u.pathname.split(",").slice(1).join(","));
-        const lines = body.split("\n");
-        const targetLine = lines[line - 1] || "";
-        if (targetLine.length > 500 && col != null) {
-          const radius = 200;
-          const cStart = Math.max(0, col - radius);
-          const cEnd = Math.min(targetLine.length, col + radius);
-          const snippet = targetLine.slice(cStart, cEnd);
-          const relCol = col - cStart;
-          log(`\n  inline L${line} col ${col}  [±${radius} chars]`);
-          log(`     ${snippet}`);
-          log(`     ${" ".repeat(relCol)}^`);
-        } else {
-          const start = Math.max(0, line - 11);
-          const end = Math.min(lines.length, line + 10);
-          log(`\n  inline L${start + 1}..L${end}:`);
-          for (let i = start; i < end; i++) {
-            const marker = (i + 1 === line) ? ">>" : "  ";
-            log(`  ${marker} ${String(i + 1).padStart(5)}  ${lines[i].slice(0, 240)}`);
+        const content = smap && smap.consumer ? smap.consumer.sourceContentFor(origFinding.source, true) : null;
+        if (content) {
+          const ast = parseForAnalysis(content);
+          const fn = findEnclosingFunction(ast, origFinding.line, origFinding.column || 0);
+          if (fn && fn.loc) {
+            const spanLines = fn.loc.end.line - fn.loc.start.line + 1;
+            if (spanLines <= 120) {
+              const lines = content.split("\n");
+              const label = fn.type + (fn.id && fn.id.name ? " " + fn.id.name : "");
+              log(`\n  enclosing ${label}  (${origFinding.source}  L${fn.loc.start.line}..L${fn.loc.end.line}):`);
+              for (let i = fn.loc.start.line - 1; i < fn.loc.end.line && i < lines.length; i++) {
+                const marker = (i + 1 === origFinding.line) ? ">>" : "  ";
+                log(`  ${marker} ${String(i + 1).padStart(5)}  ${lines[i] ?? ""}`);
+              }
+              enclosingPrinted = true;
+            } else {
+              log(`\n  enclosing ${fn.type} spans ${spanLines} lines — too large to inline; run: finding.func ${computeFindingId(f)}`);
+            }
           }
         }
-      } catch (e) { err("  (couldn't decode inline source: " + e.message + ")"); }
+      } catch (e) { /* parse errors are fine — fall through to raw */ }
+    }
+    try { if (smap && smap.consumer && smap.consumer.destroy) smap.consumer.destroy(); } catch {}
+
+    // Raw (minified) snippet. Still print it so the reviewer can see
+    // the exact byte sequence the analyzer processed — useful when the
+    // source-mapped view looks odd (rare bundler rewriting).
+    if (src && line != null) {
+      const lines = src.split("\n");
+      const targetLine = lines[line - 1] || "";
+      if (targetLine.length > 500 && col != null) {
+        const radius = 200;
+        const cStart = Math.max(0, col - radius);
+        const cEnd = Math.min(targetLine.length, col + radius);
+        const snippet = targetLine.slice(cStart, cEnd);
+        const relCol = col - cStart;
+        log(`\n  raw JS (minified) L${line} col ${col}  [±${radius} chars]`);
+        log(`     ${snippet}`);
+        log(`     ${" ".repeat(relCol)}^`);
+      } else if (!enclosingPrinted) {
+        const start = Math.max(0, line - 11);
+        const end = Math.min(lines.length, line + 10);
+        log(`\n  raw JS L${start + 1}..L${end}:`);
+        for (let i = start; i < end; i++) {
+          const marker = (i + 1 === line) ? ">>" : "  ";
+          log(`  ${marker} ${String(i + 1).padStart(5)}  ${lines[i].slice(0, 240)}`);
+        }
+      }
+    } else if (f.sourceUrl && !f.sourceUrl.startsWith("data:") && line) {
+      err(`  (couldn't fetch source for ${f.sourceUrl})`);
+    }
+  });
+}
+
+// Read all current findings, flattened, so snapshot + diff see the same
+// shape as `findings` / `finding`. Keyed by stable ID so fix verification
+// can line up "before" and "after" even when arrays reorder.
+async function collectFindings(browser) {
+  const rows = await evalSW(browser, `
+    const out = [];
+    for (const [sourceUrl, v] of globalStore.securityFindings) {
+      for (const s of (v.securitySinks || [])) out.push({sourceUrl, category: "sink", ...s});
+      for (const s of (v.dangerousPatterns || [])) out.push({sourceUrl, category: "dangerous", ...s});
+    }
+    return out;
+  `);
+  const byId = {};
+  for (const f of rows) {
+    const id = computeFindingId(f);
+    const line = f.location?.line ?? f.loc?.start?.line ?? null;
+    const col = f.location?.column ?? f.loc?.start?.column ?? null;
+    // Keep the record small but keep enough to audit a fix later:
+    // - kind identity (type/sink/sourceType)
+    // - severity + sanitized (these are the main things a classifier
+    //   change flips)
+    // - codeContext (AST's surrounding source snippet — stable enough
+    //   to diff even if column drifts)
+    byId[id] = {
+      id,
+      sourceUrl: f.sourceUrl || null,
+      category: f.category,
+      type: f.type || null,
+      sink: f.sink || null,
+      sourceType: f.sourceType || null,
+      severity: f.severity || null,
+      sanitized: !!f.sanitized,
+      line, col,
+      description: f.description || null,
+      source: f.source || null,
+      codeContext: f.codeContext ? String(f.codeContext).slice(0, 400) : null,
+      taintPath: Array.isArray(f.taintPath) ? f.taintPath : null,
+      sanitizerReport: f.sanitizerReport && Array.isArray(f.sanitizerReport.candidates) ? f.sanitizerReport : null,
+      preconditions: Array.isArray(f.preconditions) ? f.preconditions : null,
+    };
+  }
+  return byId;
+}
+
+// Recover a sourcemap for a minified script: read the `//# sourceMappingURL`
+// trailer, resolve it (absolute / relative / data: URL), decode, and hand
+// back a `SourceMapConsumer`. Returns null when the script has no map or
+// the map can't be fetched/parsed — caller falls back to minified view.
+async function resolveSourceMap(scriptUrl, scriptText) {
+  const m = scriptText.match(/\/\/[#@]\s*sourceMappingURL\s*=\s*([^\s'"]+)/);
+  if (!m) return null;
+  const ref = m[1].trim();
+  let rawJson = null;
+  try {
+    if (ref.startsWith("data:")) {
+      const comma = ref.indexOf(",");
+      const meta = ref.slice(5, comma); // after "data:"
+      const payload = ref.slice(comma + 1);
+      if (meta.includes("base64")) rawJson = Buffer.from(payload, "base64").toString("utf8");
+      else rawJson = decodeURIComponent(payload);
+    } else {
+      const absUrl = new URL(ref, scriptUrl).href;
+      rawJson = await fetchDecoded(absUrl);
+    }
+  } catch (e) {
+    err(`  (sourcemap fetch failed: ${e.message})`);
+    return null;
+  }
+  try {
+    const { SourceMapConsumer } = require("source-map");
+    const parsed = JSON.parse(rawJson);
+    return { consumer: new SourceMapConsumer(parsed), raw: parsed };
+  } catch (e) {
+    err(`  (sourcemap parse failed: ${e.message})`);
+    return null;
+  }
+}
+
+async function cmdFindingMap(args) {
+  const arg = args[0];
+  if (!arg) throw new Error("usage: finding.map <id|index>");
+  await withBrowser(async (browser) => {
+    const byId = await collectFindings(browser);
+    const rows = Object.values(byId);
+    let f = null;
+    const asIdx = Number(arg);
+    if (!Number.isNaN(asIdx) && asIdx >= 0 && asIdx < rows.length && arg.length < 6) f = rows[asIdx];
+    else f = byId[arg] || null;
+    if (!f) { err("no such finding"); return; }
+    const line = f.line, col = f.col;
+    if (!f.sourceUrl || f.sourceUrl.startsWith("data:") || line == null) {
+      err("  (finding has no external script / no line info — can't source-map)");
+      return;
+    }
+    log(`findingId: ${f.id}  ${labelScript(f.sourceUrl)}  min L${line}:C${col ?? "?"}`);
+    let src;
+    try { src = await fetchDecoded(f.sourceUrl); }
+    catch (e) { err(`  (script fetch failed: ${e.message})`); return; }
+    const resolved = await resolveSourceMap(f.sourceUrl, src);
+    if (!resolved) { log("  (no sourcemap for this script)"); return; }
+    const { consumer } = resolved;
+    // Babel stores `loc.start.column` 0-based; source-map expects the same.
+    const orig = consumer.originalPositionFor({ line, column: col ?? 0 });
+    if (!orig || !orig.source) {
+      log("  (mapping returned no original position — column may fall in an unmapped region)");
+      try { consumer.destroy && consumer.destroy(); } catch {}
+      return;
+    }
+    log(`\n  original: ${orig.source}  L${orig.line}:C${orig.column}${orig.name ? `  (symbol: ${orig.name})` : ""}`);
+    // Print ±15 lines of the original source around the mapped line if
+    // the map embedded `sourcesContent`. Most modern bundlers do.
+    let content = null;
+    try { content = consumer.sourceContentFor(orig.source, true); } catch {}
+    if (!content) {
+      log("  (sourcesContent not embedded — can't show surrounding source)");
+    } else {
+      const lines = content.split("\n");
+      const start = Math.max(0, orig.line - 16);
+      const end = Math.min(lines.length, orig.line + 15);
+      log(`\n  original source L${start + 1}..L${end}:`);
+      for (let i = start; i < end; i++) {
+        const marker = (i + 1 === orig.line) ? ">>" : "  ";
+        log(`  ${marker} ${String(i + 1).padStart(5)}  ${lines[i].slice(0, 240)}`);
+      }
+    }
+    try { consumer.destroy && consumer.destroy(); } catch {}
+  });
+}
+
+// Parse `code` with Babel's parser accepting TS/JSX/class fields. Error
+// recovery is on because CDN bundles sometimes contain stage-N syntax
+// that the current parser build doesn't fully understand — we still want
+// a mostly-complete AST to walk.
+function parseForAnalysis(code) {
+  const parser = require("@babel/parser");
+  return parser.parse(code, {
+    sourceType: "unambiguous",
+    allowReturnOutsideFunction: true,
+    allowAwaitOutsideFunction: true,
+    allowImportExportEverywhere: true,
+    errorRecovery: true,
+    plugins: ["typescript", "jsx", "decorators-legacy", "classProperties", "classPrivateProperties", "classPrivateMethods", "topLevelAwait"],
+  });
+}
+
+// Collect ALL function-like ancestors whose source span contains (line, col).
+// `line` 1-based, `col` 0-based. Returned in order from outermost to
+// innermost so callers can pick a nesting depth (0 = innermost, 1 = next
+// enclosing, …). Useful when the innermost function fails to reproduce a
+// finding and we need to widen the scope until it does.
+function findEnclosingFunctions(ast, line, col) {
+  const traverse = require("@babel/traverse").default || require("@babel/traverse");
+  const FUNC_TYPES = new Set([
+    "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+    "ObjectMethod", "ClassMethod", "ClassPrivateMethod",
+  ]);
+  const hits = [];
+  const inside = (loc) => {
+    if (!loc) return false;
+    const s = loc.start, e = loc.end;
+    if (line < s.line || line > e.line) return false;
+    if (line === s.line && col < s.column) return false;
+    if (line === e.line && col > e.column) return false;
+    return true;
+  };
+  traverse(ast, {
+    enter(p) {
+      if (!FUNC_TYPES.has(p.node.type)) return;
+      if (!inside(p.node.loc)) { p.skip(); return; }
+      hits.push(p.node);
+    },
+  });
+  // Traverse enters parents before children → already outermost-first.
+  return hits;
+}
+function findEnclosingFunction(ast, line, col) {
+  const all = findEnclosingFunctions(ast, line, col);
+  return all.length ? all[all.length - 1] : null;
+}
+
+async function cmdFindingFunc(args) {
+  const arg = args[0];
+  if (!arg) throw new Error("usage: finding.func <id|index>");
+  await withBrowser(async (browser) => {
+    const byId = await collectFindings(browser);
+    const rows = Object.values(byId);
+    let f = null;
+    const asIdx = Number(arg);
+    if (!Number.isNaN(asIdx) && asIdx >= 0 && asIdx < rows.length && arg.length < 6) f = rows[asIdx];
+    else f = byId[arg] || null;
+    if (!f) { err("no such finding"); return; }
+    if (!f.sourceUrl || f.sourceUrl.startsWith("data:") || f.line == null) { err("  (no external script with line info)"); return; }
+    let src;
+    try { src = await fetchDecoded(f.sourceUrl); }
+    catch (e) { err(`  (script fetch failed: ${e.message})`); return; }
+
+    // Prefer original source via sourcemap — minified bundles are one
+    // giant line, which makes "enclosing function" about as useful as the
+    // whole file. If the map embeds sourcesContent, walk *that*.
+    let analysisSrc = src;
+    let analysisLine = f.line;
+    let analysisCol = f.col ?? 0;
+    let originalFile = f.sourceUrl;
+    const resolved = await resolveSourceMap(f.sourceUrl, src);
+    if (resolved) {
+      const orig = resolved.consumer.originalPositionFor({ line: f.line, column: f.col ?? 0 });
+      let content = null;
+      try { content = orig && orig.source ? resolved.consumer.sourceContentFor(orig.source, true) : null; } catch {}
+      if (orig && orig.source && content) {
+        analysisSrc = content;
+        analysisLine = orig.line;
+        analysisCol = orig.column;
+        originalFile = orig.source;
+      }
+      try { resolved.consumer.destroy && resolved.consumer.destroy(); } catch {}
+    }
+
+    log(`findingId: ${f.id}  ${originalFile}  L${analysisLine}:C${analysisCol}`);
+    let ast;
+    try { ast = parseForAnalysis(analysisSrc); }
+    catch (e) { err(`  (parse failed: ${e.message})`); return; }
+    const fn = findEnclosingFunction(ast, analysisLine, analysisCol);
+    if (!fn) { log("  (no enclosing function — point is at top-level)"); return; }
+    const { start, end } = fn.loc;
+    const idTxt = fn.type === "FunctionDeclaration" && fn.id ? ` ${fn.id.name}` : "";
+    log(`\n  enclosing ${fn.type}${idTxt}  L${start.line}:C${start.column}..L${end.line}:C${end.column}`);
+    const lines = analysisSrc.split("\n");
+    const first = start.line, last = end.line;
+    const limit = 120;
+    const spanEnd = Math.min(last, first + limit - 1);
+    for (let i = first - 1; i < spanEnd; i++) {
+      const n = i + 1;
+      const marker = (n === analysisLine) ? ">>" : "  ";
+      log(`  ${marker} ${String(n).padStart(5)}  ${lines[i] ?? ""}`);
+    }
+    if (spanEnd < last) log(`  … (${last - spanEnd} more lines)`);
+  });
+}
+
+// Run the real extension analyzer on a supplied code blob (no tab, no
+// globalStore write — we route through the offscreen AST worker). The
+// point is to rerun a classifier over isolated code so a FP can be
+// reproduced without fetching the whole bundle each time.
+async function runAstAnalyzer(browser, code, sourceUrl) {
+  const res = await evalSW(browser,
+    `return await sendToOffscreen({ type: "AST_ANALYZE", code: arg.code, sourceUrl: arg.sourceUrl });`,
+    { code, sourceUrl: sourceUrl || "probe://inline" });
+  if (!res) throw new Error("no response from offscreen");
+  if (!res.success) throw new Error(`offscreen AST_ANALYZE failed: ${res.error || "(no error)"}`);
+  return res.result;
+}
+
+function printAstProbeResult(r) {
+  const sinks = r.securitySinks || [];
+  const dang = r.dangerousPatterns || [];
+  log(`  sinks: ${sinks.length}  dangerousPatterns: ${dang.length}  fetchSites: ${(r.fetchCallSites || []).length}`);
+  for (const s of sinks) {
+    const line = s.location?.line ?? "?";
+    const col = s.location?.column ?? "?";
+    log(`    [${s.severity}] sink/${s.type}:${s.sink}  L${line}:C${col}  sourceType=${s.sourceType}  sanitized=${!!s.sanitized}`);
+    if (s.description) log(`        ${short(s.description, 160)}`);
+    if (s.codeContext) log(`        ${short(String(s.codeContext).replace(/\s+/g, " "), 160)}`);
+  }
+  for (const d of dang) {
+    const line = d.location?.line ?? "?";
+    const col = d.location?.column ?? "?";
+    log(`    [${d.severity}] danger/${d.type}  L${line}:C${col}`);
+    if (d.description) log(`        ${short(d.description, 160)}`);
+    if (d.codeContext) log(`        ${short(String(d.codeContext).replace(/\s+/g, " "), 160)}`);
+  }
+}
+
+async function cmdAstProbe(rest) {
+  const { positional, flags } = parseArgs(rest);
+  let code = null;
+  let sourceUrl = flags.source || null;
+  if (flags.inline) code = String(flags.inline);
+  else if (positional[0]) {
+    code = await fsp.readFile(positional[0], "utf8");
+    sourceUrl = sourceUrl || `probe://${path.basename(positional[0])}`;
+  }
+  if (!code) throw new Error("usage: ast.probe <file> | --inline <snippet>");
+  await withBrowser(async (browser) => {
+    const r = await runAstAnalyzer(browser, code, sourceUrl);
+    log(`probe: ${sourceUrl || "(inline)"}  (${code.length} chars)`);
+    printAstProbeResult(r);
+  });
+}
+
+// Isolate a single finding's enclosing function (source-map resolved when
+// available), wrap it minimally, and rerun the analyzer. If the same
+// classifier fires on the isolated function body, the decision is local
+// to that function's structure — a pure classifier change will flip it.
+// If it doesn't fire, the signal depends on surrounding scope (imports,
+// globals, inter-procedural tracing) and the classifier change needs a
+// wider reproducer.
+async function cmdAstProbeFinding(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const arg = positional[0];
+  if (!arg) throw new Error("usage: ast.probe.finding <id|index> [--raw]");
+  // --raw probes the ORIGINAL minified bundle (matches what the real
+  // analyzer saw). Default is source-mapped TS/original, which is easier
+  // to read but has different identifier names and shape — a useful
+  // comparison point but not the same input as the live classifier.
+  const useRaw = !!flags.raw;
+  await withBrowser(async (browser) => {
+    const byId = await collectFindings(browser);
+    const rows = Object.values(byId);
+    let f = null;
+    const asIdx = Number(arg);
+    if (!Number.isNaN(asIdx) && asIdx >= 0 && asIdx < rows.length && arg.length < 6) f = rows[asIdx];
+    else f = byId[arg] || null;
+    if (!f) { err("no such finding"); return; }
+    if (!f.sourceUrl || f.sourceUrl.startsWith("data:") || f.line == null) { err("  (no external script / line info)"); return; }
+    let src;
+    try { src = await fetchDecoded(f.sourceUrl); }
+    catch (e) { err(`  (script fetch failed: ${e.message})`); return; }
+    let analysisSrc = src, analysisLine = f.line, analysisCol = f.col ?? 0, originalFile = f.sourceUrl;
+    if (!useRaw) {
+      const resolved = await resolveSourceMap(f.sourceUrl, src);
+      if (resolved) {
+        const orig = resolved.consumer.originalPositionFor({ line: f.line, column: f.col ?? 0 });
+        let content = null;
+        try { content = orig && orig.source ? resolved.consumer.sourceContentFor(orig.source, true) : null; } catch {}
+        if (orig && orig.source && content) {
+          analysisSrc = content; analysisLine = orig.line; analysisCol = orig.column; originalFile = orig.source;
+        }
+        try { resolved.consumer.destroy && resolved.consumer.destroy(); } catch {}
+      }
+    }
+    let ast;
+    try { ast = parseForAnalysis(analysisSrc); }
+    catch (e) { err(`  (parse failed: ${e.message})`); return; }
+    const ancestors = findEnclosingFunctions(ast, analysisLine, analysisCol);
+    if (!ancestors.length) { err("  (no enclosing function — can't isolate)"); return; }
+    // depth = 0 → innermost; depth = N → Nth outer. --depth=all picks outermost.
+    const depthSpec = flags.depth;
+    let depthIdx = 0;
+    if (depthSpec === "all" || depthSpec === "outer") depthIdx = ancestors.length - 1;
+    else if (depthSpec != null) {
+      const n = Number(depthSpec);
+      depthIdx = Math.min(ancestors.length - 1, Math.max(0, Number.isNaN(n) ? 0 : n));
+    }
+    const fn = ancestors[ancestors.length - 1 - depthIdx];
+    log(`  enclosing chain (${ancestors.length}): ` + ancestors.map(a => `${a.type}@L${a.loc.start.line}:C${a.loc.start.column}`).reverse().join(" ← "));
+    log(`  probing depth=${depthIdx} (${fn.type} L${fn.loc.start.line}:C${fn.loc.start.column})`);
+    const lines = analysisSrc.split("\n");
+    // Slice by (line,col) bounds. Babel loc is line=1-based, col=0-based.
+    const segStart = fn.loc.start, segEnd = fn.loc.end;
+    const sliced = lines.slice(segStart.line - 1, segEnd.line);
+    if (sliced.length === 0) { err("  (empty slice)"); return; }
+    sliced[0] = sliced[0].slice(segStart.column);
+    sliced[sliced.length - 1] = sliced[sliced.length - 1].slice(0, segEnd.line === segStart.line ? segEnd.column - segStart.column : segEnd.column);
+    let body = sliced.join("\n");
+    // Arrow/function expressions aren't valid at top level on their own.
+    // Wrap so the analyzer sees it as an expression statement.
+    if (fn.type !== "FunctionDeclaration") body = `(${body});`;
+    log(`findingId: ${f.id}  ${originalFile}  ${fn.type}  L${segStart.line}:C${segStart.column}..L${segEnd.line}:C${segEnd.column}`);
+    log(`  isolated body size: ${body.length} chars`);
+    const r = await runAstAnalyzer(browser, body, `probe://finding-${f.id}`);
+    printAstProbeResult(r);
+    // Tell the user whether the same-type classifier fired on the isolated slice.
+    const kind = f.category === "sink" ? `${f.type}:${f.sink}` : f.type;
+    const same = (r.securitySinks || []).some(s => `${s.type}:${s.sink}` === kind) ||
+                 (r.dangerousPatterns || []).some(d => d.type === f.type);
+    log(`\n  → same-kind classifier ${same ? "FIRED" : "did NOT fire"} on isolated function body`);
+    log(`     ${same ? "  (verdict: decision is local to this function — fix here)" : "  (verdict: signal needs surrounding scope — trace inter-procedural context)"}`);
+  });
+}
+
+// Find the Path wrapping a specific raw node — Babel's traverse API gives
+// us paths, but `findEnclosingFunctions` returns raw nodes (so the
+// enclosing chain can be computed without re-traversing). To use scope
+// and referencePaths we need the Path, so re-traverse and match on node
+// identity.
+function findPathForNode(ast, target) {
+  const traverse = require("@babel/traverse").default || require("@babel/traverse");
+  let out = null;
+  traverse(ast, {
+    enter(p) { if (p.node === target) { out = p; p.stop(); } },
+  });
+  return out;
+}
+
+// Resolve a function node to the binding under which it is callable —
+// FunctionDeclaration by its own name, or a VariableDeclarator/
+// AssignmentExpression where the function is the initializer. Returns
+// null when the function has no externally-callable binding (anonymous
+// callback, inline IIFE, object-method — those need different handling).
+function resolveFunctionCallBinding(fnPath) {
+  const t = require("@babel/types");
+  if (fnPath.isFunctionDeclaration() && fnPath.node.id) {
+    const name = fnPath.node.id.name;
+    const scope = fnPath.scope.parent || fnPath.scope;
+    return { kind: "named-function", name, binding: scope.getBinding(name) };
+  }
+  const parent = fnPath.parentPath;
+  if (parent && parent.isVariableDeclarator() && parent.node.id && t.isIdentifier(parent.node.id)) {
+    const name = parent.node.id.name;
+    return { kind: "var-bound", name, binding: parent.scope.getBinding(name) };
+  }
+  if (parent && parent.isAssignmentExpression() && parent.node.right === fnPath.node) {
+    const left = parent.node.left;
+    if (t.isIdentifier(left)) {
+      return { kind: "assigned", name: left.name, binding: parent.scope.getBinding(left.name) };
+    }
+    if (t.isMemberExpression(left) && !left.computed && t.isIdentifier(left.property)) {
+      return { kind: "member-assigned", name: left.property.name, binding: null };
+    }
+  }
+  if (parent && parent.isObjectProperty() && parent.node.value === fnPath.node) {
+    const k = parent.node.key;
+    if (t.isIdentifier(k)) return { kind: "obj-property", name: k.name, binding: null };
+    if (t.isStringLiteral(k)) return { kind: "obj-property", name: k.value, binding: null };
+  }
+  if (fnPath.isObjectMethod() || fnPath.isClassMethod()) {
+    const k = fnPath.node.key;
+    const t2 = require("@babel/types");
+    if (t2.isIdentifier(k)) return { kind: "method", name: k.name, binding: null };
+    if (t2.isStringLiteral(k)) return { kind: "method", name: k.value, binding: null };
+  }
+  return null;
+}
+
+// Walk every reference of a binding and keep only the ones used as call
+// targets (fn(...) or fn?.(...)). Each entry carries the full argument
+// array so the caller can inspect the value flowing into the parameter
+// we care about.
+function findCallSitesFromBinding(binding) {
+  const sites = [];
+  if (!binding || !binding.referencePaths) return sites;
+  for (const ref of binding.referencePaths) {
+    const parent = ref.parentPath;
+    if (!parent) continue;
+    if ((parent.isCallExpression() || parent.isOptionalCallExpression()) && parent.node.callee === ref.node) {
+      sites.push(parent);
+    }
+  }
+  return sites;
+}
+
+// Structural fallback for methods: `obj.foo(...)` where we only know the
+// method name. This is imprecise — we can't tell which object without
+// more analysis — but it's the best we can do for ObjectMethod /
+// ClassMethod / MemberExpression-assigned handlers, and often narrows
+// the audit target enough to be useful.
+function findCallSitesByMethodName(ast, methodName) {
+  const traverse = require("@babel/traverse").default || require("@babel/traverse");
+  const t = require("@babel/types");
+  const sites = [];
+  traverse(ast, {
+    enter(p) {
+      if (!(p.isCallExpression() || p.isOptionalCallExpression())) return;
+      const c = p.node.callee;
+      if ((t.isMemberExpression(c) || t.isOptionalMemberExpression(c)) && !c.computed &&
+          t.isIdentifier(c.property, { name: methodName })) {
+        sites.push(p);
+      }
+    },
+  });
+  return sites;
+}
+
+// Slice raw source by Babel loc without re-walking the AST. Babel's loc
+// uses 1-based lines + 0-based columns. Single-line slices are common
+// on minified bundles, so we optimise for that path.
+function sliceByLoc(src, loc, maxLen) {
+  if (!loc) return "";
+  const lines = src.split("\n");
+  const startLine = loc.start.line, endLine = loc.end.line;
+  if (startLine === endLine) {
+    const line = lines[startLine - 1] || "";
+    const slice = line.slice(loc.start.column, loc.end.column);
+    return maxLen ? slice.slice(0, maxLen) : slice;
+  }
+  let out = (lines[startLine - 1] || "").slice(loc.start.column);
+  for (let i = startLine; i < endLine - 1 && i < lines.length; i++) out += "\n" + lines[i];
+  if (endLine - 1 < lines.length) out += "\n" + (lines[endLine - 1] || "").slice(0, loc.end.column);
+  return maxLen ? out.slice(0, maxLen) : out;
+}
+
+async function cmdFindingCallers(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const arg = positional[0];
+  if (!arg) throw new Error("usage: finding.callers <id|index> [--arg N] [--depth K] [--max-len N]");
+  const focusArg = flags.arg != null ? Number(flags.arg) : null;
+  const depthSpec = flags.depth != null ? Number(flags.depth) : null;
+  const maxLen = flags["max-len"] != null ? Number(flags["max-len"]) : 200;
+  await withBrowser(async (browser) => {
+    const byId = await collectFindings(browser);
+    const rows = Object.values(byId);
+    let f = null;
+    const asIdx = Number(arg);
+    if (!Number.isNaN(asIdx) && asIdx >= 0 && asIdx < rows.length && arg.length < 6) f = rows[asIdx];
+    else f = byId[arg] || null;
+    if (!f) { err("no such finding"); return; }
+    if (!f.sourceUrl || f.sourceUrl.startsWith("data:") || f.line == null) {
+      err("  (no external script / line info — caller discovery needs scope on raw bundle)");
+      return;
+    }
+
+    // Always operate on the raw bundle the analyzer actually saw —
+    // source-mapped lookup is for human readability, but scope +
+    // reference paths have to match what the classifier traversed.
+    let src;
+    try { src = await fetchDecoded(f.sourceUrl); }
+    catch (e) { err(`  (script fetch failed: ${e.message})`); return; }
+    let ast;
+    try { ast = parseForAnalysis(src); }
+    catch (e) { err(`  (parse failed: ${e.message})`); return; }
+
+    // Surface the inter-procedural hops from the taint path. Each
+    // param-caller / param-iife hop pinpoints a function boundary the
+    // classifier crossed — those are the ones worth auditing.
+    const paramHops = Array.isArray(f.taintPath)
+      ? f.taintPath.filter(h => h.kind === "param-caller" || h.kind === "param-iife")
+      : [];
+    log(`findingId: ${f.id}  ${labelScript(f.sourceUrl)}`);
+    if (paramHops.length) {
+      log(`  taint path crossed ${paramHops.length} function boundaries (param hops):`);
+      paramHops.forEach((h, i) => {
+        const at = h.at ? `L${h.at.line}:C${h.at.column}` : "?";
+        log(`    ${i}. [${h.kind}]  ${h.desc}  @${at}`);
+      });
+    } else {
+      log(`  (no param-caller hops in taint path — finding is local to one function)`);
+    }
+
+    // Enclosing functions give us a callable-function set to probe. We
+    // walk outer → inner so the user sees outermost contextual scope
+    // first (where inter-procedural tracing usually starts).
+    const ancestors = findEnclosingFunctions(ast, f.line, f.col || 0);
+    if (!ancestors.length) { err("  (no enclosing function — point is top-level)"); return; }
+
+    let depths;
+    if (depthSpec != null) depths = [Math.min(ancestors.length - 1, Math.max(0, depthSpec))];
+    else depths = ancestors.map((_, i) => ancestors.length - 1 - i); // outer to inner
+
+    let anyShown = false;
+    for (const d of depths) {
+      const fnNode = ancestors[ancestors.length - 1 - d];
+      const fnPath = findPathForNode(ast, fnNode);
+      if (!fnPath) continue;
+      const resolved = resolveFunctionCallBinding(fnPath);
+      const header = `\n  depth ${d}  ${fnNode.type}${fnNode.id ? " " + fnNode.id.name : ""}  L${fnNode.loc.start.line}:C${fnNode.loc.start.column}..L${fnNode.loc.end.line}:C${fnNode.loc.end.column}`;
+      if (!resolved) {
+        log(`${header}  (no externally-resolvable binding — inline callback / IIFE)`);
+        continue;
+      }
+      let sites;
+      let method;
+      if (resolved.binding) {
+        sites = findCallSitesFromBinding(resolved.binding);
+        method = `binding "${resolved.name}" (${resolved.kind}) → ${resolved.binding.referencePaths.length} refs`;
+      } else if (resolved.kind === "method" || resolved.kind === "obj-property" || resolved.kind === "member-assigned") {
+        sites = findCallSitesByMethodName(ast, resolved.name);
+        method = `structural search .${resolved.name}(…) — includes false positives from other objects`;
+      } else {
+        sites = [];
+        method = `unresolved (${resolved.kind})`;
+      }
+      log(`${header}`);
+      log(`    name:    ${resolved.name}  (${resolved.kind})`);
+      log(`    method:  ${method}`);
+      log(`    callers: ${sites.length}`);
+      if (!sites.length) continue;
+      anyShown = true;
+      const shownMax = 25;
+      for (let ci = 0; ci < Math.min(sites.length, shownMax); ci++) {
+        const callPath = sites[ci];
+        const callNode = callPath.node;
+        const callLoc = callNode.loc;
+        log(`      @ L${callLoc.start.line}:C${callLoc.start.column}`);
+        const args = callNode.arguments || [];
+        for (let ai = 0; ai < args.length; ai++) {
+          if (focusArg != null && ai !== focusArg) continue;
+          const argNode = args[ai];
+          const snippet = argNode && argNode.loc ? sliceByLoc(src, argNode.loc, maxLen) : "?";
+          log(`        arg ${ai}: ${snippet}`);
+        }
+      }
+      if (sites.length > shownMax) log(`      … and ${sites.length - shownMax} more (re-run with --depth ${d} to widen)`);
+    }
+    if (!anyShown) log(`\n  (no resolvable callers across ancestors — function is only called anonymously)`);
+  });
+}
+
+// Classify a finding's taint source into a probe strategy the
+// extension knows how to run. Same mapping the SW's EXPLOIT_PROBE
+// handler uses (no strategy = unsupported source type).
+function classifyProbeStrategy(finding) {
+  const src = finding && finding.source ? String(finding.source) : "";
+  if (!src) return null;
+
+  // Strategy picked primarily from source, but for `location` sources
+  // the actual attack vector depends on which URL dimension the code
+  // extracts. Inspect the taint path for a discriminating hop:
+  //   .hash → hash strategy
+  //   .search / .searchParams / .get(paramName) → search
+  //   .pathname → pathname
+  // This is a FACT about which path the code takes, not a guess.
+  const tp = Array.isArray(finding && finding.taintPath) ? finding.taintPath : [];
+  let pathHasHash = false, pathHasSearch = false, pathHasPathname = false;
+  let getParamArg = null;
+  for (const h of tp) {
+    if (!h) continue;
+    const d = String(h.desc || "");
+    if (h.kind === "member") {
+      if (d === ".hash") pathHasHash = true;
+      else if (d === ".search" || d === ".searchParams") pathHasSearch = true;
+      else if (d === ".pathname") pathHasPathname = true;
+    }
+    // URLSearchParams / URL .get("name") — the "name" argument is the
+    // exact query-string key the handler reads. Captured as hop.arg.
+    if (h.kind === "method-call" && (h.method === "get" || /\.get\("/.test(d)) && typeof h.arg === "string") {
+      getParamArg = h.arg;
+      pathHasSearch = true;
+    }
+  }
+
+  if (src === "location.hash" || /location\.hash/i.test(src)) return { kind: "hash", sourceName: src };
+  if (src === "location.search" || /location\.search/i.test(src)) return { kind: "search", sourceName: src };
+  if (src === "location.pathname") return { kind: "pathname", sourceName: src };
+  if (src === "event.data" || /postMessage|event\.data/i.test(src)) return { kind: "postmessage", sourceName: src };
+
+  // `location` / `location.href` — pick strategy from taint path dims.
+  if (src === "location.href" || /location\.href/i.test(src) || src === "location") {
+    if (pathHasSearch) return { kind: "search", sourceName: src || "location", paramName: getParamArg };
+    if (pathHasHash) return { kind: "hash", sourceName: src || "location" };
+    if (pathHasPathname) return { kind: "pathname", sourceName: src || "location" };
+    // No discriminating hop — default to hash (most common DOM-XSS vector).
+    return { kind: "hash", sourceName: src || "location" };
+  }
+  return null;
+}
+
+// finding.view — open the source viewer for a specific finding, wait for
+// the tree-shaken focused view to render, and report its size. Lets the
+// agent reviewer verify the focused slice captures the relevant code
+// without manually opening the viewer tab. Prints:
+//   • total beautified lines in the original bundle
+//   • focused-view line count (after tree-shake)
+//   • reduction ratio (how aggressive the tree-shake was)
+//   • the function ranges in the focused view
+//   • a preview of the focused code (first N lines)
+async function cmdFindingView(args) {
+  const arg = args[0];
+  if (!arg) throw new Error("usage: finding.view <id|index> [--preview N]");
+  const rest = args.slice(1);
+  let previewN = 40;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--preview" && i + 1 < rest.length) previewN = Number(rest[i + 1]) || previewN;
+  }
+  await withBrowser(async (browser) => {
+    const byId = await collectFindings(browser);
+    const rows = Object.values(byId);
+    let f = null;
+    const asIdx = Number(arg);
+    if (!Number.isNaN(asIdx) && asIdx >= 0 && asIdx < rows.length && arg.length < 6) f = rows[asIdx];
+    else f = byId[arg] || null;
+    if (!f) { err("no such finding"); return; }
+    if (!f.sourceUrl || f.sourceUrl.startsWith("data:") || f.line == null) {
+      err("  (finding has no external script / line info — viewer needs both)");
+      return;
+    }
+    // Finding's sourceUrl may be a source-map-resolved path (e.g.
+    // "node_modules/@github/remote-input-element/dist/index.js") that
+    // isn't HTTP-fetchable. The viewer's GET_SCRIPT_SOURCE resolves
+    // such paths by scanning buffered bundle sourcemaps for a match —
+    // use that lookup here so the URL we open works the same way as
+    // a popup-click would.
+    let viewerSourceUrl = f.sourceUrl;
+    if (!/^https?:\/\//i.test(f.sourceUrl)) {
+      const mapped = await evalSW(browser, `
+        for (const [tid, tab] of state.tabs.entries()) {
+          const merged = (typeof mergedSecurityFindings === "function") ? mergedSecurityFindings(tab) : [];
+          for (const m of merged) {
+            if (m.sourceUrl && /^https?:\\/\\//i.test(m.sourceUrl)) {
+              const sinks = m.securitySinks || [];
+              const pats = m.dangerousPatterns || [];
+              const all = [...sinks, ...pats];
+              for (const s of all) {
+                if (s.location && s.location.line === arg.line && s.location.column === arg.col && s.type === arg.type && s.sink === arg.sink) {
+                  return m.sourceUrl;
+                }
+              }
+            }
+          }
+        }
+        return null;
+      `, { line: f.line, col: f.col, type: f.type, sink: f.sink });
+      if (!mapped) {
+        err(`  (finding's sourceUrl "${f.sourceUrl}" is a source-mapped path and no sibling HTTP-hosted finding has the same sink at L${f.line}:C${f.col})`);
+        return;
+      }
+      viewerSourceUrl = mapped;
+    }
+    const extId = await getExtId(browser);
+    const tabId = await evalSW(browser, `
+      for (const [tid, tab] of state.tabs.entries()) {
+        const merged = (typeof mergedSecurityFindings === "function") ? mergedSecurityFindings(tab) : [];
+        if (merged.some(e => e.sourceUrl === arg)) return tid;
+      }
+      return 0;
+    `, viewerSourceUrl);
+    const colPart = f.col != null ? `&col=${f.col}` : "";
+    const url = `chrome-extension://${extId}/viewer.html?sourceUrl=${encodeURIComponent(viewerSourceUrl)}&line=${f.line}${colPart}&tabId=${tabId || 0}`;
+    const page = await browser.newPage();
+    try {
+      // viewer opens its own resources async (fetch bundle, parse, beautify,
+      // render) — domcontentloaded fires almost immediately; timeout here
+      // only protects against the `goto` call itself hanging. Bump to 30 s
+      // for slow bundles; the deadline loop below enforces the real
+      // render-completion deadline.
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      // Wait until viewer either renders a <code> with text or shows an
+      // error message. 20s covers the worst case of re-fetching a big
+      // bundle + beautify + focus-range compute.
+      const deadline = Date.now() + 20000;
+      let state = null;
+      while (Date.now() < deadline) {
+        state = await page.evaluate(() => {
+          const code = document.getElementById("code-output");
+          const text = code ? code.textContent : "";
+          return {
+            textLen: text.length,
+            hasFocus: !!document.getElementById("btn-focus") &&
+                      document.getElementById("btn-focus").textContent.includes("Focus"),
+            text: text.length > 0 ? text : null,
+            statusText: (document.getElementById("status") || {}).textContent || "",
+          };
+        });
+        if (state.textLen > 0) break;
+        await sleep(300);
+      }
+      if (!state || state.textLen === 0) { err("  (viewer did not render within 20 s)"); return; }
+      const rendered = state.text || "";
+      const renderedLines = rendered.split("\n").length;
+      // Button label convention in viewer.js: "Focus" while FOCUSED
+      // (clicking un-focuses to Full), "Full" while full (clicking
+      // focuses). Toggle it once to get the full-code line count.
+      const initialBtnText = await page.evaluate(() => {
+        const btn = document.getElementById("btn-focus");
+        return btn ? btn.textContent.trim() : null;
+      });
+      if (initialBtnText === "Focus") {
+        // Currently in focused mode — click to see full.
+        await page.evaluate(() => document.getElementById("btn-focus").click());
+      }
+      await sleep(600);
+      const full = await page.evaluate(() => {
+        const code = document.getElementById("code-output");
+        return code ? code.textContent : "";
+      });
+      const fullLines = full.split("\n").length;
+      // Restore focused mode so the preview below matches what the
+      // reviewer would see after clicking through from the popup.
+      const afterToggleText = await page.evaluate(() => {
+        const btn = document.getElementById("btn-focus");
+        return btn ? btn.textContent.trim() : null;
+      });
+      if (afterToggleText === "Full") {
+        await page.evaluate(() => document.getElementById("btn-focus").click());
+        await sleep(400);
+      }
+      log(`findingId: ${f.id}  ${f.sourceUrl}  L${f.line}:C${f.col}`);
+      log(`  viewer URL: ${url}`);
+      log(`  full beautified code: ${fullLines.toLocaleString()} lines`);
+      log(`  focused code:         ${renderedLines.toLocaleString()} lines` +
+          (fullLines > 0 ? `  (${(100 * renderedLines / fullLines).toFixed(1)}% — ${fullLines - renderedLines} lines hidden)` : ""));
+      // Summarise the range structure — how many contiguous blocks the
+      // focus carved out. Each "lines hidden" separator marks a gap
+      // between ranges.
+      const gapCount = (rendered.match(/\u00b7\u00b7\u00b7 \d+ lines hidden \u00b7\u00b7\u00b7/g) || []).length;
+      log(`  focus ranges:         ${gapCount + 1} contiguous blocks (${gapCount} gap separators)`);
+      if (state.statusText) log(`  status bar: ${state.statusText}`);
+      if (previewN > 0) {
+        log(`\n  focused preview (first ${previewN} lines):`);
+        rendered.split("\n").slice(0, previewN).forEach((l, i) => {
+          log(`  ${String(i + 1).padStart(4)}  ${l.length > 200 ? l.slice(0, 200) + "…" : l}`);
+        });
+      }
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+}
+
+async function cmdFindingExploit(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const arg = positional[0];
+  if (!arg) throw new Error("usage: finding.exploit <id|index> [--page-url <url>] [--wait <ms>] [--param <name>]");
+  const pageUrlOverride = flags["page-url"] || null;
+  const waitMs = flags.wait != null ? Number(flags.wait) : 5000;
+  const paramOverride = flags.param || null;
+  await withBrowser(async (browser) => {
+    const byId = await collectFindings(browser);
+    const rows = Object.values(byId);
+    let f = null;
+    const asIdx = Number(arg);
+    if (!Number.isNaN(asIdx) && asIdx >= 0 && asIdx < rows.length && arg.length < 6) f = rows[asIdx];
+    else f = byId[arg] || null;
+    if (!f) { err("no such finding"); return; }
+
+    const strategy = classifyProbeStrategy(f);
+    if (!strategy) {
+      err(`  (no probe strategy yet for source "${f.source || f.sourceType}" — supported: location.hash/search/href/pathname + event.data postmessage)`);
+      return;
+    }
+
+    // Harness doesn't run the probe itself — orchestration lives in
+    // the extension so the exact same code runs when the user clicks
+    // the popup "Verify" button. Harness is a thin dispatcher:
+    // classify, send, print.
+    //
+    // pageUrl resolution:
+    //   1. --page-url explicit override from reviewer
+    //   2. the finding's own recorded pageUrl (the page where the
+    //      extension observed this finding at analysis time)
+    //   3. if neither — refuse; we never guess which tab to probe
+    let pageUrl = pageUrlOverride;
+    if (!pageUrl) {
+      // Pull the finding's observed pageUrl from the SW's store.
+      pageUrl = await evalSW(browser, `
+        const e = globalStore.securityFindings.get(arg.sourceUrl);
+        return e && e.pageUrl ? e.pageUrl : null;
+      `, { sourceUrl: f.sourceUrl });
+    }
+    if (!pageUrl) {
+      err(`  (no pageUrl — finding's sourceUrl has no recorded observation page. Use --page-url <https://…> after reading the code.)`);
+      return;
+    }
+
+    log(`findingId: ${f.id}`);
+    log(`  strategy:  ${strategy.kind}  (source: ${strategy.sourceName})`);
+    log(`  pageUrl:   ${pageUrl}`);
+
+    // For search strategy, derive the exact param name the AST
+    // observed the page reading (e.g. `.get("q")` → "q"). We DON'T
+    // guess from a common-names list — the finding's own taint path
+    // already knows which key the sink traced back to. Reviewer can
+    // override with --param when they've audited the code themselves.
+    let paramName = paramOverride;
+    if (strategy.kind === "search" && !paramName) {
+      if (Array.isArray(f.taintPath)) {
+        for (const h of f.taintPath) {
+          if (h.kind === "method-call" && typeof h.arg === "string" && h.arg.length > 0) { paramName = h.arg; break; }
+        }
+      }
+      if (!paramName) {
+        err(`  (can't derive paramName for search strategy from finding's taint path —`);
+        err(`   the AST didn't observe a .get("…") / .has("…") call on the tainted URLSearchParams.`);
+        err(`   Re-run with --param <name> after reading the code at the finding's location.)`);
+        return;
+      }
+      log(`  paramName: ${JSON.stringify(paramName)}  (from taint path's method-call hop)`);
+    } else if (paramName) {
+      log(`  paramName: ${JSON.stringify(paramName)}  (reviewer-supplied --param)`);
+    }
+
+    // For postmessage strategy, derive the field path the handler
+    // reads from message.data. Walk the taint path from the source
+    // outward, collecting [member] hop names (other hop kinds are
+    // intermediaries we ignore for shape). The first ".data" hop
+    // after an event.data source is the implicit MessageEvent.data
+    // access — skip it, since our payload IS what event.data becomes.
+    // This is the AST's direct observation of which fields the sink
+    // reads, NOT a guess about common shapes.
+    let fieldPath = null;
+    // decoders: the taint path may traverse string-decode calls between
+    // the source and the sink (JSON.parse, unescape, decodeURIComponent,
+    // atob, …). The probe must apply the matching ENCODER to its payload
+    // in the opposite order so the handler's decoder chain yields the
+    // shaped structure back. Recorded in source-to-sink order; probe
+    // applies in sink-to-source order (i.e. reverse) when wrapping.
+    const decoders = [];
+    if (strategy.kind === "postmessage") {
+      fieldPath = [];
+      if (Array.isArray(f.taintPath)) {
+        let sawSource = false;
+        for (const h of f.taintPath) {
+          if (h.kind === "source") { sawSource = true; continue; }
+          if (!sawSource) continue;
+          if (h.kind === "call-arg") {
+            const d = String(h.desc || "");
+            if (/\.parse\(\)/.test(d)) { decoders.push("json"); continue; }
+            if (/^unescape\(\)/.test(d)) { decoders.push("escape"); continue; }
+            if (/^decodeURIComponent\(\)/.test(d)) { decoders.push("uri-component"); continue; }
+            if (/^decodeURI\(\)/.test(d)) { decoders.push("uri"); continue; }
+            if (/^atob\(\)/.test(d)) { decoders.push("base64"); continue; }
+          }
+          if (h.kind !== "member") continue;
+          const name = String(h.desc || "").replace(/^\./, "");
+          if (!name || name === "?") continue;
+          // Drop the implicit `.data` hop on the MessageEvent —
+          // postMessage delivers data AS event.data, so our payload
+          // is event.data by construction; don't wrap it in another
+          // {data:…} layer.
+          if (fieldPath.length === 0 && name === "data" && /event\.data/.test(f.source || "")) continue;
+          fieldPath.push(name);
+        }
+      }
+      const decodersLabel = decoders.length ? `, decoders: ${decoders.join("→")}` : "";
+      if (fieldPath.length) {
+        log(`  fieldPath: ${fieldPath.map(JSON.stringify).join(" → ")}  (from taint path's member hops${decodersLabel})`);
+      } else {
+        log(`  fieldPath: (empty — handler reads event.data directly as a string${decodersLabel})`);
+      }
+    }
+
+    // Drive the same start/poll path the popup uses — same orchestration
+    // code runs regardless of caller, so a bug in harness-surface is
+    // also a bug in the popup button and vice versa.
+    const start = await evalSW(browser, `
+      return startExploitProbe({
+        strategy: arg.strategy,
+        pageUrl: arg.pageUrl,
+        sourceUrl: arg.sourceUrl,
+        waitMs: arg.waitMs,
+        findingId: arg.findingId,
+        paramName: arg.paramName,
+        fieldPath: arg.fieldPath,
+        sinkType: arg.sinkType,
+        sinkName: arg.sinkName,
+        decoders: arg.decoders,
+        preconditions: arg.preconditions,
+      });
+    `, { strategy: strategy.kind, pageUrl, sourceUrl: f.sourceUrl, waitMs, findingId: f.id, paramName, fieldPath, sinkType: f.type || null, sinkName: f.sink || null, decoders, preconditions: Array.isArray(f.preconditions) ? f.preconditions : null });
+    if (!start || !start.marker) { err(`  (start failed: ${JSON.stringify(start)})`); return; }
+    log(`  sessionId: ${start.marker}  (running…)`);
+
+    // Poll status until done. Observation window is waitMs + overhead
+    // (postmessage strategy needs ~4s extra for attacker→target hop).
+    const maxWait = waitMs + (strategy.kind === "postmessage" ? 9000 : 3000);
+    const pollInterval = 500;
+    const deadline = Date.now() + maxWait;
+    let status;
+    while (Date.now() < deadline) {
+      status = await evalSW(browser, `
+        const s = _probeSessions.get(arg.m);
+        return s ? { status: s.status, hits: s.hits.slice(), executed: s.executed || null, error: s.error, strategy: s.strategy, pageUrl: s.pageUrl, marker: s.marker } : null;
+      `, { m: start.marker });
+      if (status && (status.status === "done" || status.status === "error")) break;
+      await sleep(pollInterval);
+    }
+    if (!status) { err(`  (session vanished before poll completed)`); return; }
+    if (status.error) { err(`  probe error: ${status.error}`); return; }
+
+    const hits = Array.isArray(status.hits) ? status.hits : [];
+    const executed = status.executed || null;
+
+    if (!hits.length && !executed) {
+      log(`\n  RESULT: no sink observed and no payload executed (marker "${start.marker}")`);
+      log(`  VERDICT: NOT REPRODUCED — may require user interaction, specific DOM state, or a handler shape the payload didn't match.`);
+      return;
+    }
+
+    if (hits.length) {
+      log(`\n  TAINT REACH (${hits.length} sink call with attacker marker):`);
+      hits.forEach((h, i) => {
+        log(`    ${i}. [${h.sink}]  url=${short(h.url || "?", 100)}`);
+        log(`       value: ${short(h.value || "", 300)}`);
+      });
+    } else {
+      log(`\n  TAINT REACH: none recorded by intercept.js wrappers.`);
+    }
+
+    if (executed) {
+      const vectorDescriptions = {
+        html: "img onerror fired (inline handler ran)",
+        svg: "svg onload fired (inline handler ran)",
+        js: "eval/Function ran the JS payload",
+        href: "javascript: URL navigation ran the payload",
+        dom: "DOM parsed the <div> (HTML parsing confirmed; CSP-tolerant signal)",
+      };
+      const firedKeys = Object.keys(executed).filter(k => executed[k]);
+      const activeExec = firedKeys.some(k => k !== "dom"); // inline handler ran
+      const parsedOnly = firedKeys.length && !activeExec;  // dom only
+      log(`\n  EXECUTION CONFIRMED — target interpreted the payload:`);
+      for (const v of firedKeys) {
+        log(`    ${v}: ${new Date(executed[v]).toISOString()}  — ${vectorDescriptions[v] || "unknown vector"}`);
+      }
+      if (activeExec) {
+        log(`\n  VERDICT: REAL EXPLOIT — attacker input was parsed AND an inline handler executed.`);
+      } else if (parsedOnly) {
+        log(`\n  VERDICT: HTML PARSING CONFIRMED — attacker input was parsed as HTML (the <div> landed in the DOM).`);
+        log(`  The target's CSP appears to block inline event handlers, so the onerror/onload vectors did not fire.`);
+        log(`  A CSP-bypass payload (MathML / iframe srcdoc / DOM clobbering) might still achieve script execution on this target.`);
+      }
+    } else if (hits.length) {
+      log(`\n  EXECUTION: none — the payload reached a sink but was not parsed as HTML / evaluated as JS.`);
+      log(`  VERDICT: TAINT REACH ONLY — likely the sink received the marker as a plain string (e.g. innerText, or a sanitizer stripped active content before innerHTML).`);
+    }
+  });
+}
+
+async function cmdAuditSchema(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const svcName = positional[0];
+  const minObs = flags["min-obs"] != null ? Number(flags["min-obs"]) : 1;
+  const showWorst = flags["show-worst"] != null ? Number(flags["show-worst"]) : 5;
+  if (!svcName) throw new Error("usage: audit.schema <service> [--min-obs N] [--show-worst N]");
+  await withBrowser(async (browser) => {
+    const data = await evalSW(browser, `
+      const e = globalStore.discoveryDocs.get(${JSON.stringify(svcName)});
+      if (!e || !e.doc) return { error: "service not found" };
+      const doc = e.doc;
+      const methods = [];
+      for (const [bName, bObj] of Object.entries(doc.resources || {})) {
+        for (const [mName, m] of Object.entries(bObj.methods || {})) {
+          methods.push({
+            id: m.id,
+            bucketName: bName + "/" + mName,
+            httpMethod: m.httpMethod,
+            origin: m.origin,
+            path: m.path,
+            requestCount: m._stats?.requestCount || 0,
+            paramCount: Object.keys(m.parameters || {}).length,
+            requestRef: m.request?.$ref || null,
+            responseRef: m.response?.$ref || null,
+            parameters: m.parameters || {},
+            bodyFieldStatKeys: Object.keys(m._stats?.bodyFields || {}),
+          });
+        }
+      }
+      return { schemas: doc.schemas, methods };
+    `);
+    if (data.error) { err(data.error); return; }
+
+    // Per-method readiness rollup. Leaves are counted across params + body.
+    const rows = [];
+    for (const m of data.methods) {
+      if (m.requestCount < minObs) continue;
+      const paramProv = Object.create(null);
+      let paramLeaves = 0;
+      let paramRequiredGaps = 0;
+      for (const [pName, pDef] of Object.entries(m.parameters)) {
+        paramLeaves++;
+        const prov = pDef._exampleValueSource || "none";
+        paramProv[prov] = (paramProv[prov] || 0) + 1;
+        if (pDef.required && !pDef._exampleValueSource) paramRequiredGaps++;
+      }
+      const bodySum = m.requestRef
+        ? _summariseProvenance(data.schemas[m.requestRef], { schemas: data.schemas })
+        : { byProvenance: {}, leaves: [], gaps: [] };
+      const combined = Object.assign(Object.create(null), paramProv);
+      for (const [k, v] of Object.entries(bodySum.byProvenance)) combined[k] = (combined[k] || 0) + v;
+      const totalLeaves = paramLeaves + bodySum.leaves.length;
+      const realLeaves = (combined["observed-default"] || 0) + (combined["observed-top"] || 0) +
+                        (combined["ast-constraint"] || 0) + (combined["enum"] || 0);
+      const synthLeaves = (combined["format-synth"] || 0) + (combined["range-min"] || 0);
+      const typeDefLeaves = combined["type-default"] || 0;
+      const unsourcedLeaves = combined["none"] || 0;
+      rows.push({
+        id: m.id,
+        httpMethod: m.httpMethod,
+        requestCount: m.requestCount,
+        totalLeaves,
+        paramLeaves,
+        bodyLeaves: bodySum.leaves.length,
+        realLeaves,
+        synthLeaves,
+        typeDefLeaves,
+        unsourcedLeaves,
+        requiredGaps: paramRequiredGaps + bodySum.gaps.length,
+        bodyFieldStatKeys: m.bodyFieldStatKeys.length,
+        realPct: totalLeaves ? realLeaves / totalLeaves : 0,
+        combined,
+      });
+    }
+    if (!rows.length) { log(`no methods in ${svcName} with requestCount >= ${minObs}`); return; }
+
+    // Service-wide aggregate
+    const totalLeaves = rows.reduce((s, r) => s + r.totalLeaves, 0);
+    const realLeaves = rows.reduce((s, r) => s + r.realLeaves, 0);
+    const synthLeaves = rows.reduce((s, r) => s + r.synthLeaves, 0);
+    const typeDefLeaves = rows.reduce((s, r) => s + r.typeDefLeaves, 0);
+    const unsourcedLeaves = rows.reduce((s, r) => s + r.unsourcedLeaves, 0);
+    const requiredGaps = rows.reduce((s, r) => s + r.requiredGaps, 0);
+
+    log(`audit.schema: ${svcName}  ${rows.length}/${data.methods.length} methods meet min-obs=${minObs}`);
+    log(`\n  service-wide readiness:`);
+    log(`    total leaves: ${totalLeaves}`);
+    log(`    real observations: ${realLeaves}  (${totalLeaves ? Math.round(realLeaves/totalLeaves*100) : 0}%)`);
+    log(`    synthesized:        ${synthLeaves}  (${totalLeaves ? Math.round(synthLeaves/totalLeaves*100) : 0}%)`);
+    log(`    type-default:       ${typeDefLeaves}  (${totalLeaves ? Math.round(typeDefLeaves/totalLeaves*100) : 0}%)`);
+    log(`    unsourced:          ${unsourcedLeaves}  (${totalLeaves ? Math.round(unsourcedLeaves/totalLeaves*100) : 0}%)`);
+    log(`    required gaps:      ${requiredGaps}  (required fields with NO example → verify will fail auth/validation)`);
+
+    // Per-method summary, sorted by readiness ASC so worst methods float up
+    rows.sort((a, b) => a.realPct - b.realPct);
+    log(`\n  per-method readiness (sorted worst-first):`);
+    log(`    ${"method".padEnd(60)} ${"HTTP".padEnd(5)} ${"rc".padStart(5)} ${"leaves".padStart(7)} ${"real%".padStart(6)}  ${"gaps".padStart(5)}  ${"body".padStart(5)}`);
+    for (const r of rows.slice(0, 40)) {
+      const pct = Math.round(r.realPct * 100);
+      log(`    ${short(r.id, 60).padEnd(60)} ${(r.httpMethod||"?").padEnd(5)} ${String(r.requestCount).padStart(5)} ${String(r.totalLeaves).padStart(7)} ${String(pct + "%").padStart(6)}  ${String(r.requiredGaps).padStart(5)}  ${String(r.bodyLeaves).padStart(5)}`);
+    }
+    if (rows.length > 40) log(`    … +${rows.length - 40} more`);
+
+    // Drill into worst N — show top-gap methods with their provenance histogram
+    log(`\n  worst ${Math.min(showWorst, rows.length)} methods (most gaps or lowest readiness):`);
+    for (const r of rows.slice(0, showWorst)) {
+      log(`\n    ${r.id}  (rc=${r.requestCount}, ${r.totalLeaves} leaves, ${Math.round(r.realPct*100)}% real)`);
+      for (const [src, n] of Object.entries(r.combined).sort((a, b) => b[1] - a[1])) {
+        log(`      ${String(n).padStart(4)}  ${src}`);
+      }
+      if (r.requiredGaps) log(`      ${r.requiredGaps} required fields with no example`);
+      if (r.bodyFieldStatKeys && r.bodyLeaves > 0 && r.bodyFieldStatKeys === 0) {
+        log(`      (body schema present but m._stats.bodyFields is empty — method captured before JSON decode, or body never observed)`);
+      }
+    }
+  });
+}
+
+async function cmdAuditSinks(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const substr = positional[0] || null;
+  const showPerKind = flags.show != null ? Number(flags.show) : 4;
+  const missedOnly = flags["missed-only"] === true;
+  const contextChars = flags.context != null ? Number(flags.context) : 140;
+  await withBrowser(async (browser) => {
+    // Pull every (scriptUrl, findings-by-line) map so we can cross-check
+    // in a single SW roundtrip. Line-grained index is enough for MVP;
+    // column-grained would help distinguish two sinks on the same
+    // minified line but is easy to add later.
+    const scriptIndex = await evalSW(browser, `
+      const out = [];
+      for (const [url, v] of globalStore.securityFindings) {
+        const byLine = {};
+        const record = (s, category) => {
+          const line = s.location?.line;
+          if (line == null) return;
+          const tag = category === "sink" ? (s.type + ":" + s.sink) : s.type;
+          (byLine[line] = byLine[line] || []).push(tag);
+        };
+        for (const s of (v.securitySinks || [])) record(s, "sink");
+        for (const s of (v.dangerousPatterns || [])) record(s, "dangerous");
+        out.push({ url, byLine, findingCount: (v.securitySinks||[]).length + (v.dangerousPatterns||[]).length });
+      }
+      return out;
+    `);
+    const filtered = substr ? scriptIndex.filter(s => s.url.toLowerCase().includes(substr.toLowerCase())) : scriptIndex;
+    if (!filtered.length) { log("no AST-analyzed scripts match"); return; }
+
+    const aggregate = Object.create(null);
+    for (const p of SINK_GREP_PATTERNS) aggregate[p.name] = { grep: 0, covered: 0, missed: 0, samples: [] };
+    let scriptsScanned = 0, scriptsSkipped = 0;
+
+    for (const script of filtered) {
+      if (script.url.startsWith("data:")) { scriptsSkipped++; continue; }
+      let src;
+      try { src = await fetchDecoded(script.url); }
+      catch (e) { scriptsSkipped++; continue; }
+      scriptsScanned++;
+      const lineStarts = _buildLineStarts(src);
+      for (const pat of SINK_GREP_PATTERNS) {
+        pat.re.lastIndex = 0;
+        let match;
+        while ((match = pat.re.exec(src)) !== null) {
+          // Pre-filter known-safe patterns per sink type. For HTML-writing
+          // sinks, empty-string RHS (`el.innerHTML = ""`) is a DOM reset,
+          // not content injection — the AST correctly ignores it, and
+          // surfacing it here makes reviewers sift through inert noise
+          // on first pass. The grep regex captures `.innerHTML =` plus
+          // one non-`=` char; that char is the first RHS char (`"`, `'`,
+          // or `\``). If the next char is the matching closing quote,
+          // the RHS is an empty-string literal — not an XSS vector.
+          if (pat.name === "innerHTML=" || pat.name === "outerHTML=") {
+            const lastCh = src[match.index + match[0].length - 1];
+            if (lastCh === '"' || lastCh === "'" || lastCh === "`") {
+              const nextCh = src[match.index + match[0].length];
+              if (nextCh === lastCh) continue;
+            }
+          }
+          aggregate[pat.name].grep++;
+          const pos = _offsetToLineCol(lineStarts, match.index);
+          const findingsHere = script.byLine[pos.line] || [];
+          const covered = findingsHere.some(tag => pat.astTags.includes(tag));
+          if (covered) {
+            aggregate[pat.name].covered++;
+          } else {
+            aggregate[pat.name].missed++;
+            if (aggregate[pat.name].samples.length < showPerKind) {
+              const half = Math.floor(contextChars / 2);
+              const start = Math.max(0, match.index - half);
+              const end = Math.min(src.length, match.index + half);
+              const snippet = src.slice(start, end).replace(/\s+/g, " ");
+              aggregate[pat.name].samples.push({
+                url: script.url,
+                line: pos.line,
+                column: pos.column,
+                snippet,
+                findingsOnLine: findingsHere,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    log(`audit.sinks: scanned ${scriptsScanned} AST-analyzed scripts (${scriptsSkipped} skipped — data-url or fetch-failed)${substr ? "  [filter: " + substr + "]" : ""}`);
+    log(`\n  per-pattern counts (each grep-match either matches an AST finding on the same line, or is unexplained — unexplained hits are candidates to read):`);
+    const keys = Object.keys(aggregate).sort((a, b) => (aggregate[b].grep) - (aggregate[a].grep));
+    for (const k of keys) {
+      const a = aggregate[k];
+      if (a.grep === 0) continue;
+      log(`    ${k.padEnd(25)} grep=${String(a.grep).padStart(5)}  ast-flagged=${String(a.covered).padStart(5)}  unexplained=${String(a.missed).padStart(5)}`);
+    }
+
+    log(`\n  unexplained grep-matches to read (up to ${showPerKind} per pattern). Each is EITHER a missed FP — go read the surrounding source to decide.`);
+    log(`  Use: finding <id> for an AST finding on the same line, or script <url> for the raw JS around a specific location.`);
+    for (const k of keys) {
+      const a = aggregate[k];
+      if (a.missed === 0) continue;
+      if (missedOnly && a.samples.length === 0) continue;
+      log(`\n  ${k}  (${a.missed} unexplained):`);
+      for (const s of a.samples) {
+        log(`    ${s.url}`);
+        log(`      L${s.line}:C${s.column}${s.findingsOnLine.length ? "   (other AST findings on this line: " + s.findingsOnLine.join(", ") + ")" : ""}`);
+        log(`      …${s.snippet}…`);
+      }
+    }
+  });
+}
+
+async function cmdFindingSnapshot(args) {
+  const name = args[0];
+  if (!name) throw new Error("usage: finding.snapshot <name>");
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new Error("snapshot name must be [A-Za-z0-9_.-]+");
+  await fsp.mkdir(SNAP_DIR, { recursive: true });
+  await withBrowser(async (browser) => {
+    const byId = await collectFindings(browser);
+    const payload = {
+      name,
+      createdAt: new Date().toISOString(),
+      count: Object.keys(byId).length,
+      findings: byId,
+    };
+    const out = path.join(SNAP_DIR, `${name}.json`);
+    await fsp.writeFile(out, JSON.stringify(payload, null, 2), "utf8");
+    log(`wrote ${payload.count} findings → ${out}`);
+  });
+}
+
+// Diff current findings against a named snapshot. Groups by stable ID so
+// "added" means genuinely new (not just a reordered array index), and
+// "removed" means the specific (sourceUrl,line,col,kind) tuple stopped
+// firing. Severity / sanitized / description flips for same ID surface
+// under "changed" — that's the signal a classifier refinement landed.
+async function cmdFindingDiff(args) {
+  const name = args[0];
+  if (!name) throw new Error("usage: finding.diff <name>");
+  const file = path.join(SNAP_DIR, `${name}.json`);
+  let prior;
+  try { prior = JSON.parse(await fsp.readFile(file, "utf8")); }
+  catch (e) { throw new Error(`can't read snapshot ${file}: ${e.message}`); }
+  await withBrowser(async (browser) => {
+    const current = await collectFindings(browser);
+    const priorIds = new Set(Object.keys(prior.findings || {}));
+    const currIds = new Set(Object.keys(current));
+    const added = [...currIds].filter(id => !priorIds.has(id)).sort();
+    const removed = [...priorIds].filter(id => !currIds.has(id)).sort();
+    const shared = [...currIds].filter(id => priorIds.has(id));
+    const changed = [];
+    for (const id of shared) {
+      const a = prior.findings[id], b = current[id];
+      const diffs = [];
+      for (const k of ["severity", "sanitized", "type", "sink", "sourceType", "description", "line", "col"]) {
+        if (a[k] !== b[k]) diffs.push(`${k}: ${JSON.stringify(a[k])} → ${JSON.stringify(b[k])}`);
+      }
+      // Taint-path delta: compare hop kinds as a sequence. A classifier
+      // change that keeps the same verdict but takes a different route is
+      // still a behavior change worth flagging — e.g. fewer hops usually
+      // means the tracer bailed out early on some branch.
+      const aHops = (a.taintPath || []).map(h => h.kind).join("→") || "(none)";
+      const bHops = (b.taintPath || []).map(h => h.kind).join("→") || "(none)";
+      if (aHops !== bHops) diffs.push(`taintPath: ${aHops} → ${bHops}`);
+      if (diffs.length) changed.push({ id, b, diffs });
+    }
+    log(`snapshot: ${name}  (${prior.count} findings @ ${prior.createdAt})`);
+    log(`current:  ${Object.keys(current).length} findings @ ${new Date().toISOString()}`);
+    log(`+${added.length} added  -${removed.length} removed  ~${changed.length} changed  =${shared.length - changed.length} unchanged`);
+    if (added.length) {
+      log(`\nADDED (new findings — classifier got broader, or new code loaded):`);
+      for (const id of added) {
+        const f = current[id];
+        log(`  ${id}  [${f.severity}] ${f.category}/${f.type || "?"}${f.sink ? ":" + f.sink : ""}  L${f.line ?? "?"}`);
+        log(`           ${labelScript(f.sourceUrl)}`);
+        if (f.description) log(`           ${short(f.description, 140)}`);
+      }
+    }
+    if (removed.length) {
+      log(`\nREMOVED (no longer firing — classifier got narrower, or script gone):`);
+      for (const id of removed) {
+        const f = prior.findings[id];
+        log(`  ${id}  [${f.severity}] ${f.category}/${f.type || "?"}${f.sink ? ":" + f.sink : ""}  L${f.line ?? "?"}`);
+        log(`           ${labelScript(f.sourceUrl)}`);
+        if (f.description) log(`           ${short(f.description, 140)}`);
+      }
+    }
+    if (changed.length) {
+      log(`\nCHANGED (same location, classifier output differs):`);
+      for (const c of changed) {
+        log(`  ${c.id}  [${c.b.severity}] ${c.b.category}/${c.b.type || "?"}${c.b.sink ? ":" + c.b.sink : ""}  L${c.b.line ?? "?"}`);
+        log(`           ${labelScript(c.b.sourceUrl)}`);
+        for (const d of c.diffs) log(`           ${d}`);
+      }
     }
   });
 }
@@ -751,6 +2268,16 @@ async function cmdLogs(rest) {
   const method = flags.method ? String(flags.method).toUpperCase() : null;
   const status = flags.status ? String(flags.status) : null;
   const onlyBodies = flags["with-body"] === true;
+  // Filter by the extension's content-based asset classification (api /
+  // asset / empty / unknown). Used to audit the classifier's decisions —
+  // `logs --kind asset` lists every request the extension treated as a
+  // static resource so the reviewer can spot false-positives (e.g. a
+  // JSON API incorrectly bucketed because of a binary-looking magic
+  // byte). `logs --boring` narrows further to boring-asset requests
+  // (asset + GET + no query + no body + no auth) — the tier that gets
+  // zero schema synthesis.
+  const kind = flags.kind || null;
+  const boringOnly = flags.boring === true;
   const limit = flags.limit ? Number(flags.limit) : 0;
   await withBrowser(async (browser) => {
     const rows = await evalSW(browser, `
@@ -764,6 +2291,9 @@ async function cmdLogs(rest) {
             bodyLen: r.rawBodyB64 ? r.rawBodyB64.length : 0,
             respLen: r.responseBody ? r.responseBody.length : 0,
             timestamp: r.timestamp,
+            assetKind: r._assetKind || null,
+            assetLabel: r._assetLabel || null,
+            boring: !!r._boring,
           });
         }
       }
@@ -780,10 +2310,18 @@ async function cmdLogs(rest) {
       if (method && r.method !== method) continue;
       if (status && String(r.status) !== status) continue;
       if (onlyBodies && r.bodyLen === 0) continue;
+      if (kind && r.assetKind !== kind) continue;
+      if (boringOnly && !r.boring) continue;
       if (limit && shown >= limit) break;
       shown++;
+      // Classification badge: "asset:image/png" means body magic bytes
+      // identified it as a PNG; "api" means structured; "boring" is
+      // only set when additionally GET + no query + no body + no auth.
+      const classTag = r.assetKind
+        ? (r.boring ? "boring " : "") + r.assetKind + (r.assetLabel ? ":" + r.assetLabel : "")
+        : "?";
       log(`${r.id}  [${r.status}] ${r.method.padEnd(6)} ${short(r.url, 100)}`);
-      log(`      svc=${r.service} method=${r.methodId || "-"}  ct=${r.ct}  body=${r.bodyLen}B  resp=${r.respLen}B`);
+      log(`      svc=${r.service} method=${r.methodId || "-"}  ct=${r.ct}  body=${r.bodyLen}B  resp=${r.respLen}B  class=${classTag}`);
     }
     if (shown === 0) log(`(no match among ${rows.length} captured requests)`);
   });
@@ -1026,17 +2564,54 @@ async function cmdServices(args) {
       const out = [];
       for (const [svc, e] of globalStore.discoveryDocs) {
         if (e.status !== "found" || !e.doc) continue;
+        // Tag each method with its bucket name (learned / probed /
+        // static / ...) so the reviewer can see when the SAME method
+        // id exists in multiple buckets. Without the bucket prefix,
+        // duplicate-looking rows like "svc_shreddit_events" are
+        // actually distinct records from different discovery paths.
         const methods = [];
-        for (const bObj of Object.values(e.doc.resources || {})) {
-          for (const m of Object.values(bObj.methods || {})) methods.push(m);
+        for (const [bName, bObj] of Object.entries(e.doc.resources || {})) {
+          for (const [mName, m] of Object.entries(bObj.methods || {})) {
+            methods.push({ ...m, _bucket: bName, _localName: mName });
+          }
         }
-        out.push({ svc, isVirtual: !!e.isVirtual, title: e.doc.title, methodCount: methods.length, sampleMethods: methods.slice(0, 3).map(m => m.id) });
+        // Backfill grouping for entries created before .grouping was
+        // stored. The classifier is deterministic — running it on the
+        // stored method URL reproduces exactly the rule that fired at
+        // creation time. We mark the result as backfilled so readers
+        // know firstUrl is a SAMPLE URL, not the original first.
+        // Joins origin+path tolerantly — method.path may or may not
+        // have a leading slash; naive concat produces invalid URLs.
+        let grouping = e.grouping || null;
+        if (!grouping && methods.length && methods[0].origin) {
+          try {
+            let origin = String(methods[0].origin);
+            while (origin.endsWith("/")) origin = origin.slice(0, -1);
+            const pathPart = String(methods[0].path || "/");
+            const sampleUrl = new URL(origin + (pathPart.startsWith("/") ? "" : "/") + pathPart);
+            const c = classifyInterface(sampleUrl);
+            grouping = { rule: c.rule, matched: c.matched, firstUrl: sampleUrl.href, backfilled: true };
+          } catch (_) {}
+        }
+        out.push({
+          svc, isVirtual: !!e.isVirtual, title: e.doc.title,
+          methodCount: methods.length,
+          sampleMethods: methods.slice(0, 3).map(m => (m._bucket || "?") + "/" + (m._localName || m.id)),
+          grouping,
+        });
       }
       return out;
     `);
     for (const r of rows) {
       if (filter && !r.svc.includes(filter)) continue;
-      log(`${r.svc}   methods=${r.methodCount}${r.isVirtual ? " (virtual)" : ""}`);
+      // Each service row shows the grouping rule so a reviewer can
+      // see at a glance why requests ended up in this bucket —
+      // `path-keyword: api` vs `grpc-over-http` vs `hostname-fallback`
+      // are very different confidence levels.
+      const ruleTag = r.grouping
+        ? ` [${r.grouping.rule}${r.grouping.matched ? ": " + r.grouping.matched : ""}${r.grouping.backfilled ? " (backfill)" : ""}]`
+        : "";
+      log(`${r.svc}   methods=${r.methodCount}${r.isVirtual ? " (virtual)" : ""}${ruleTag}`);
       for (const m of r.sampleMethods) log(`    ${m}`);
     }
   });
@@ -1084,6 +2659,10 @@ async function cmdService(rest) {
             scopes: m.scopes || [],
             params: paramList,
             requestCount: m._stats?.requestCount || 0,
+            _responseKind: m._responseKind || null,    // "asset" when magic bytes confirmed static
+            _responseLabel: m._responseLabel || null,  // e.g. "image/png"
+            _astInferred: !!m._astInferred,            // registered only from AST (no live traffic)
+            _astCallSites: Array.isArray(m._astCallSites) ? m._astCallSites.slice() : [],
           });
         }
       }
@@ -1112,6 +2691,49 @@ async function cmdService(rest) {
       for (const [k, data] of globalStore.apiKeys) {
         if (data.services?.has(${JSON.stringify(name)})) keys.push({ key: k, source: data.source, name: data.name });
       }
+      // Backfill grouping for entries created before .grouping was
+      // stored; classifier is deterministic so rerunning on a sample
+      // method URL reproduces the original rule exactly. backfilled:true
+      // flags that firstUrl is a sample, not the real first.
+      let grouping = e.grouping || null;
+      if (!grouping && methods.length && methods[0].origin) {
+        try {
+          let origin = String(methods[0].origin);
+          while (origin.endsWith("/")) origin = origin.slice(0, -1);
+          const pathPart = String(methods[0].path || "/");
+          const sampleUrl = new URL(origin + (pathPart.startsWith("/") ? "" : "/") + pathPart);
+          const c = classifyInterface(sampleUrl);
+          grouping = { rule: c.rule, matched: c.matched, firstUrl: sampleUrl.href, backfilled: true };
+        } catch (_) {}
+      }
+      // Walk every tab's requestLog and pull entries for THIS service.
+      // Gives the reviewer a factual basis for judging grouping quality:
+      // 50 GET requests with no body, all image/png, means hostname-
+      // fallback is sweeping assets into one bucket. A handful of POST
+      // requests with JSON bodies looks like a real API boundary.
+      const urlDist = {};                    // url → count
+      const assetBreakdown = { asset: 0, api: 0, empty: 0, unknown: 0 };
+      const methodBreakdown = {};
+      const ctBreakdown = {};
+      let totalObserved = 0;
+      for (const [, tab] of state.tabs) {
+        for (const r of (tab.requestLog || [])) {
+          if (r.service !== ${JSON.stringify(name)}) continue;
+          totalObserved++;
+          urlDist[r.url] = (urlDist[r.url] || 0) + 1;
+          const kind = r._assetKind || "unknown";
+          assetBreakdown[kind] = (assetBreakdown[kind] || 0) + 1;
+          methodBreakdown[r.method] = (methodBreakdown[r.method] || 0) + 1;
+          const ct = (r.contentType || "").split(";")[0].trim() || "(none)";
+          ctBreakdown[ct] = (ctBreakdown[ct] || 0) + 1;
+        }
+      }
+      // Top distinct URLs (sorted by frequency, then alphabetically) —
+      // a scannable snapshot of what's actually in this bucket.
+      const topUrls = Object.entries(urlDist)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 12)
+        .map(([url, count]) => ({ url, count }));
       return {
         svc: ${JSON.stringify(name)},
         title: doc.title,
@@ -1119,9 +2741,18 @@ async function cmdService(rest) {
         method: e.method,
         url: e.url,
         rootUrl: doc.rootUrl,
+        grouping,
         methods,
         schemas,
         keys,
+        quality: {
+          totalObserved,
+          distinctUrls: Object.keys(urlDist).length,
+          assetBreakdown,
+          methodBreakdown,
+          ctBreakdown,
+          topUrls,
+        },
       };
     `);
     if (!data) { err("no such service"); return; }
@@ -1129,13 +2760,79 @@ async function cmdService(rest) {
     log(`  title: ${data.title || "-"}`);
     log(`  root: ${data.rootUrl || "-"}`);
     log(`  discovered via: ${data.method || "-"}${data.url ? " " + short(data.url, 80) : ""}`);
+    // Show the reviewer exactly which URL-structure rule produced
+    // this service name, and the first URL that triggered it. Lets
+    // them judge whether the grouping is over-broad (e.g. hostname-
+    // fallback on a site with many distinct APIs) or correctly tight.
+    if (data.grouping) {
+      const tag = data.grouping.backfilled ? " (backfilled from sample URL — service was captured before grouping was tracked)" : "";
+      log(`  grouping: rule="${data.grouping.rule}"  matched="${data.grouping.matched || ""}"${tag}`);
+      if (data.grouping.firstUrl) log(`    ${data.grouping.backfilled ? "sample URL" : "first request"}: ${data.grouping.firstUrl}`);
+    }
     log(`  api keys known for this service: ${data.keys.length}`);
     for (const k of data.keys) log(`    ${short(k.key, 40)} (source=${k.source || "-"})`);
 
+    // Grouping-quality readout: raw counts of what actually landed in
+    // this service bucket. Mixed asset/api splits or a hostname-
+    // fallback grouping with many distinct URLs is a signal that the
+    // grouping may be over-broad and worth splitting manually.
+    const q = data.quality || {};
+    if (q.totalObserved) {
+      log(`\n  bucket quality  (${q.totalObserved} requests across ${q.distinctUrls} distinct URLs):`);
+      const ab = q.assetBreakdown || {};
+      const mb = q.methodBreakdown || {};
+      const cb = q.ctBreakdown || {};
+      const assetBits = Object.entries(ab).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(", ");
+      const methodBits = Object.entries(mb).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(", ");
+      log(`    classification: ${assetBits || "(none)"}`);
+      log(`    methods:        ${methodBits || "(none)"}`);
+      log(`    content-types:  ${Object.entries(cb).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k}=${v}`).join(", ")}`);
+      if (q.topUrls && q.topUrls.length) {
+        log(`    top URLs:`);
+        for (const u of q.topUrls) log(`      ${String(u.count).padStart(4)}× ${short(u.url, 110)}`);
+      }
+      // Flag likely mis-groupings: hostname-fallback + lots of asset
+      // traffic = the bucket is catching CDN static resources under
+      // the same name as the real API. Surface it without scoring it.
+      if (data.grouping && data.grouping.rule === "hostname-fallback" && ab.asset > 0 && ab.api > 0) {
+        log(`    note: this hostname-fallback bucket mixes ${ab.asset} asset(s) with ${ab.api} API call(s) — consider whether some URLs should live in a tighter service.`);
+      }
+    } else {
+      log(`\n  bucket quality: no captured requests in this session yet`);
+    }
+
     log(`\n  methods (${data.methods.length}):`);
     for (const m of data.methods) {
-      log(`    ${m.httpMethod} ${m.origin || ""}/${m.path || ""}  [${m.bucket}/${m.name}]`);
+      // Discovery-source tag. Reviewer's primary focus is AST-derived
+      // methods; live-only is legit too but less interesting for code
+      // review; asset is noise.
+      //   [ast]       discovered from source code, not yet exercised
+      //   [ast+live]  found by both AST and real traffic
+      //   [live]      real traffic only (e.g. traffic from non-analysed code)
+      //   [asset:X]   response magic-byte-confirmed static
+      let kindTag = "";
+      if (m._responseKind === "asset") {
+        kindTag = `  [response=asset${m._responseLabel ? ":" + m._responseLabel : ""}]`;
+      } else {
+        const hasAst = !!m._astInferred;
+        const hasLive = !!m.requestCount;
+        if (hasAst && hasLive) kindTag = "  [ast+live]";
+        else if (hasAst) kindTag = "  [ast]";
+        else if (hasLive) kindTag = "  [live]";
+      }
+      log(`    ${m.httpMethod} ${m.origin || ""}/${m.path || ""}  [${m.bucket}/${m.name}]${kindTag}`);
       log(`      id=${m.id}  reqCount=${m.requestCount}  req=${m.requestRef || "-"}  resp=${m.responseRef || "-"}  ct=${(m.contentTypes||[]).join(",") || "-"}`);
+      // AST call sites: where in the bundle each method was discovered.
+      // Reviewer uses this to jump directly to the source code — the
+      // method card's reason-for-existence, not just its shape.
+      if (Array.isArray(m._astCallSites) && m._astCallSites.length) {
+        for (const cs of m._astCallSites.slice(0, 3)) {
+          const loc = cs.line != null ? `L${cs.line}:C${cs.column ?? "?"}` : "?";
+          const enc = cs.enclosingFunction ? `  ${cs.enclosingFunction}()` : "";
+          log(`      ast-site: ${cs.script || "?"}  @${loc}${enc}`);
+        }
+        if (m._astCallSites.length > 3) log(`      ast-site: … +${m._astCallSites.length - 3} more`);
+      }
       if (m.description) log(`      description: ${short(m.description, 160)}`);
       if (m.scopes?.length) log(`      scopes: ${m.scopes.join(", ")}`);
       for (const p of m.params) {
@@ -1162,6 +2859,683 @@ async function cmdService(rest) {
       }
     } else if (Object.keys(data.schemas).length) {
       log(`\n  schemas: ${Object.keys(data.schemas).length} (use --full for details)`);
+    }
+  });
+}
+
+// Recursively materialize a schema's example values into a JSON-shaped
+// object. `doc` is needed to resolve $refs; visited guards recursive
+// types. Leaf fields fall back to pickExampleValue's type-default if no
+// stored _exampleValue exists yet (e.g. the field was never observed).
+function materializeSchemaExample(schema, doc, visited) {
+  if (!schema) return null;
+  if (schema.$ref) {
+    if (visited.has(schema.$ref)) return null;
+    visited.add(schema.$ref);
+    const resolved = doc.schemas && doc.schemas[schema.$ref];
+    const res = materializeSchemaExample(resolved, doc, visited);
+    visited.delete(schema.$ref);
+    return res;
+  }
+  if (schema.type === "array" || schema.label === "repeated") {
+    if (schema.items && schema.items.$ref) {
+      const inner = materializeSchemaExample(schema.items, doc, visited);
+      return inner == null ? [] : [inner];
+    }
+    if (schema._exampleValue !== undefined) return [schema._exampleValue];
+    return [];
+  }
+  if (schema.properties && Object.keys(schema.properties).length) {
+    const out = {};
+    for (const [k, def] of Object.entries(schema.properties)) {
+      const val = materializeSchemaExample(def, doc, visited);
+      // Omit null leaves (no signal, no observations) so the request
+      // stays minimal. Caller can manually force-include when testing
+      // required/optional boundaries.
+      if (val !== null && val !== undefined) out[k] = val;
+    }
+    return out;
+  }
+  if (schema._exampleValue !== undefined) return schema._exampleValue;
+  return null;
+}
+
+// Compare a server response against a learned response schema. Returns
+// counts + lists of shape mismatches. Conservative — only notes:
+//   - schema-declared fields missing in response
+//   - response fields not in schema (potential drift)
+//   - scalar type mismatches at declared fields
+// Does NOT fail on missing fields (could be optional) or on drift alone;
+// those are surfaced as informational diffs.
+function diffResponseAgainstSchema(response, schema, doc, path, out, visited) {
+  path = path || "";
+  out = out || { missing: [], extra: [], typeMismatches: [] };
+  visited = visited || new Set();
+  if (!schema) return out;
+  if (schema.$ref) {
+    if (visited.has(schema.$ref)) return out;
+    visited.add(schema.$ref);
+    diffResponseAgainstSchema(response, doc.schemas[schema.$ref], doc, path, out, visited);
+    visited.delete(schema.$ref);
+    return out;
+  }
+  if (schema.type === "array") {
+    if (!Array.isArray(response)) {
+      if (response != null) out.typeMismatches.push({ path, expected: "array", got: typeof response });
+      return out;
+    }
+    if (schema.items && response.length) {
+      diffResponseAgainstSchema(response[0], schema.items, doc, path + "[0]", out, visited);
+    }
+    return out;
+  }
+  if (schema.properties) {
+    if (response == null || typeof response !== "object" || Array.isArray(response)) {
+      out.typeMismatches.push({ path, expected: "object", got: response === null ? "null" : Array.isArray(response) ? "array" : typeof response });
+      return out;
+    }
+    for (const [k, def] of Object.entries(schema.properties)) {
+      const sub = path ? path + "." + k : k;
+      if (!(k in response)) { out.missing.push(sub); continue; }
+      diffResponseAgainstSchema(response[k], def, doc, sub, out, visited);
+    }
+    // Drift: response keys not in schema
+    for (const rk of Object.keys(response)) {
+      if (!schema.properties[rk]) out.extra.push(path ? path + "." + rk : rk);
+    }
+    return out;
+  }
+  // Scalar leaf: compare declared type vs typeof
+  const declared = schema.type;
+  if (declared && response != null) {
+    const got = typeof response;
+    const numeric = /^(int|uint|sint|float|double|fixed|sfixed|number|integer)/.test(declared);
+    const isBool = declared === "bool" || declared === "boolean";
+    if (declared === "string" && got !== "string") out.typeMismatches.push({ path, expected: declared, got });
+    else if (numeric && got !== "number") out.typeMismatches.push({ path, expected: declared, got });
+    else if (isBool && got !== "boolean") out.typeMismatches.push({ path, expected: declared, got });
+  }
+  return out;
+}
+
+// Walk a schema and count example-value provenance per leaf. Also
+// surfaces "gaps": required leaves that have NO example value (the
+// verifier will send null/default for these — often the reason for
+// 4xx/5xx responses during verify).
+function _summariseProvenance(schema, doc, out, visited, path, depth) {
+  out = out || {
+    byProvenance: Object.create(null),
+    leaves: [],
+    gaps: [],
+  };
+  visited = visited || new Set();
+  path = path || "";
+  depth = depth || 0;
+  if (!schema || depth > 32) return out;
+  if (schema.$ref) {
+    if (visited.has(schema.$ref)) return out;
+    visited.add(schema.$ref);
+    _summariseProvenance(doc.schemas && doc.schemas[schema.$ref], doc, out, visited, path, depth + 1);
+    visited.delete(schema.$ref);
+    return out;
+  }
+  if (schema.type === "array" && schema.items) {
+    _summariseProvenance(schema.items, doc, out, visited, path + "[]", depth + 1);
+    return out;
+  }
+  if (schema.properties && Object.keys(schema.properties).length) {
+    for (const [k, def] of Object.entries(schema.properties)) {
+      _summariseProvenance(def, doc, out, visited, path ? path + "." + k : k, depth + 1);
+    }
+    return out;
+  }
+  // Leaf
+  const prov = schema._exampleValueSource || "none";
+  out.byProvenance[prov] = (out.byProvenance[prov] || 0) + 1;
+  out.leaves.push({
+    path: path || "(root)",
+    type: schema.type || schema.$ref || "?",
+    value: schema._exampleValue,
+    source: prov,
+    confidence: schema._exampleConfidence || null,
+  });
+  if (schema.required && !schema._exampleValueSource) {
+    out.gaps.push({ path: path || "(root)", type: schema.type || "?" });
+  }
+  return out;
+}
+
+// Regex patterns for sinks we expect the AST to catch. Cross-checking
+// grep-found match positions against AST-found finding positions is the
+// single best way to surface BOTH parser-miss (AST didn't reach the
+// code) AND classifier-miss (AST reached it but didn't flag). Every new
+// classifier should have a corresponding entry here so audits stay
+// honest as coverage grows.
+//
+// Patterns intentionally permissive — we WANT false positives at this
+// layer so they show up as "unexplained" and the reviewer can decide
+// whether each was a real miss, a legitimate suppression, or a pattern
+// the grep shouldn't have matched.
+const SINK_GREP_PATTERNS = [
+  { name: "innerHTML=",         re: /\.innerHTML\s*=\s*[^=]/g,      astTags: ["xss:innerHTML"] },
+  { name: "outerHTML=",         re: /\.outerHTML\s*=\s*[^=]/g,      astTags: ["xss:outerHTML"] },
+  { name: "insertAdjacentHTML", re: /\.insertAdjacentHTML\s*\(/g,   astTags: ["xss:insertAdjacentHTML", "xss:.insertAdjacentHTML"] },
+  { name: "document.write",     re: /\bdocument\.write(?:ln)?\s*\(/g, astTags: ["xss:document.write", "xss:document.writeln"] },
+  { name: "eval(",              re: /(?<![.\w])eval\s*\(/g,         astTags: ["code-exec:eval"] },
+  { name: "new Function(",      re: /\bnew\s+Function\s*\(/g,       astTags: ["code-exec:Function"] },
+  { name: "setTimeout-string",  re: /\bsetTimeout\s*\(\s*['"`]/g,   astTags: ["code-exec:setTimeout"] },
+  { name: "setInterval-string", re: /\bsetInterval\s*\(\s*['"`]/g,  astTags: ["code-exec:setInterval"] },
+  { name: "location.href=",     re: /\blocation\.href\s*=\s*[^=]/g, astTags: ["redirect:href"] },
+  { name: ".href= (element)",   re: /(?<!location)\.href\s*=\s*[^=]/g, astTags: ["redirect:href"] },
+  { name: "location.assign(",   re: /\blocation\.assign\s*\(/g,     astTags: ["redirect:location.assign"] },
+  { name: "location.replace(",  re: /\blocation\.replace\s*\(/g,    astTags: ["redirect:location.replace"] },
+  { name: "postMessage(",       re: /\.postMessage\s*\(/g,          astTags: ["postmessage-wildcard-target"] },
+  { name: "fetch(",             re: /(?<![.\w])fetch\s*\(/g,        astTags: ["request-forgery:fetch"] },
+];
+
+// Precompute newline offsets once per source so each match's line/col
+// lookup is O(log n). Caller owns the `starts` array and threads it
+// through — no global cache (strings aren't valid WeakMap keys).
+function _buildLineStarts(src) {
+  const starts = [0];
+  for (let i = 0; i < src.length; i++) if (src.charCodeAt(i) === 10) starts.push(i + 1);
+  return starts;
+}
+function _offsetToLineCol(starts, offset) {
+  let lo = 0, hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (starts[mid] <= offset) lo = mid; else hi = mid - 1;
+  }
+  return { line: lo + 1, column: offset - starts[lo] };
+}
+
+// Normalise origin + path into a real URL. origin may or may not end in
+// a slash; path may or may not start with one — callers mixed the
+// conventions early on, so the builder has to be lenient.
+function _joinOriginPath(origin, path) {
+  const o = String(origin || "").replace(/\/+$/, "");
+  const p = String(path || "/");
+  return o + (p.startsWith("/") ? "" : "/") + p;
+}
+
+async function cmdSchemaReview(rest) {
+  const { positional } = parseArgs(rest);
+  const svcName = positional[0];
+  const methodIdArg = positional[1];
+  if (!svcName || !methodIdArg) throw new Error("usage: schema.review <service> <methodId|methodName>");
+  await withBrowser(async (browser) => {
+    const plan = await evalSW(browser, `
+      const e = globalStore.discoveryDocs.get(${JSON.stringify(svcName)});
+      if (!e || !e.doc) return { error: "service not found" };
+      const doc = e.doc;
+      let match = null, bucket = null;
+      for (const [bName, bObj] of Object.entries(doc.resources || {})) {
+        for (const [mName, m] of Object.entries(bObj.methods || {})) {
+          if (m.id === ${JSON.stringify(methodIdArg)} || mName === ${JSON.stringify(methodIdArg)}) {
+            match = m; bucket = bName; break;
+          }
+        }
+        if (match) break;
+      }
+      if (!match) return { error: "method not found" };
+      return {
+        bucket,
+        method: {
+          id: match.id, httpMethod: match.httpMethod, origin: match.origin, path: match.path,
+          description: match.description || null, contentTypes: match.contentTypes || [],
+          requestRef: match.request?.$ref || null, responseRef: match.response?.$ref || null,
+          parameters: match.parameters || {},
+        },
+        schemas: doc.schemas,
+        stats: match._stats,
+      };
+    `);
+    if (plan.error) { err(plan.error); return; }
+    const m = plan.method;
+    log(`schema.review: ${m.httpMethod} ${m.id}`);
+    log(`  endpoint: ${_joinOriginPath(m.origin, m.path)}`);
+    if (m.description) log(`  description: ${short(m.description, 180)}`);
+    log(`  request schema:  ${m.requestRef || "(none)"}`);
+    log(`  response schema: ${m.responseRef || "(none)"}`);
+
+    // Params provenance summary
+    const paramSummary = Object.create(null);
+    const paramLeaves = [];
+    const paramGaps = [];
+    for (const [pName, pDef] of Object.entries(m.parameters)) {
+      const prov = pDef._exampleValueSource || "none";
+      paramSummary[prov] = (paramSummary[prov] || 0) + 1;
+      paramLeaves.push({ name: pName, loc: pDef.location, type: pDef.type, value: pDef._exampleValue, source: prov, confidence: pDef._exampleConfidence });
+      if (pDef.required && !pDef._exampleValueSource) paramGaps.push({ name: pName, type: pDef.type });
+    }
+
+    // Body provenance summary
+    const bodySum = m.requestRef
+      ? _summariseProvenance(plan.schemas[m.requestRef], { schemas: plan.schemas })
+      : { byProvenance: {}, leaves: [], gaps: [] };
+
+    // Combine provenance counts for a one-line readiness snapshot
+    const combined = Object.create(null);
+    for (const [k, v] of Object.entries(paramSummary)) combined[k] = (combined[k] || 0) + v;
+    for (const [k, v] of Object.entries(bodySum.byProvenance)) combined[k] = (combined[k] || 0) + v;
+    const total = Object.values(combined).reduce((a, b) => a + b, 0);
+    const real = (combined["observed-default"] || 0) + (combined["observed-top"] || 0) + (combined["ast-constraint"] || 0) + (combined["enum"] || 0);
+    const synth = (combined["format-synth"] || 0) + (combined["range-min"] || 0);
+    const typeDef = combined["type-default"] || 0;
+    const none = combined["none"] || 0;
+    log(`\n  readiness: ${total} leaves total — ${real} real observations, ${synth} synthesized, ${typeDef} type-default, ${none} unsourced`);
+    log(`  by provenance:`);
+    for (const [k, v] of Object.entries(combined).sort((a, b) => b[1] - a[1])) log(`    ${v.toString().padStart(4)}  ${k}`);
+
+    // Parameters tree
+    if (paramLeaves.length) {
+      log(`\n  parameters (${paramLeaves.length}):`);
+      for (const p of paramLeaves) {
+        const conf = p.confidence != null ? `  (dom ${Math.round(p.confidence * 100)}%)` : "";
+        log(`    · ${p.name} @${p.loc} (${p.type})  = ${JSON.stringify(p.value)}  [${p.source}]${conf}`);
+      }
+    }
+
+    // Body tree (schema leaves with example values + provenance)
+    if (bodySum.leaves.length) {
+      log(`\n  body leaves (${bodySum.leaves.length}):`);
+      const shown = bodySum.leaves.slice(0, 120);
+      for (const leaf of shown) {
+        const conf = leaf.confidence != null ? `  (dom ${Math.round(leaf.confidence * 100)}%)` : "";
+        log(`    · ${leaf.path} (${leaf.type})  = ${JSON.stringify(leaf.value)}  [${leaf.source}]${conf}`);
+      }
+      if (bodySum.leaves.length > 120) log(`    … +${bodySum.leaves.length - 120} more`);
+    }
+
+    const totalGaps = paramGaps.length + bodySum.gaps.length;
+    if (totalGaps) {
+      log(`\n  GAPS (required fields with no example — verify will fall back to empty/null):`);
+      for (const g of paramGaps) log(`    · param ${g.name} (${g.type})`);
+      for (const g of bodySum.gaps) log(`    · body  ${g.path} (${g.type})`);
+    }
+
+    // Preview the ready-to-send request (same logic as schema.verify)
+    try {
+      const url = new URL(_joinOriginPath(m.origin, m.path));
+      for (const [pName, pDef] of Object.entries(m.parameters)) {
+        if (pDef.location !== "query" || pDef._exampleValue == null) continue;
+        url.searchParams.set(pName, String(pDef._exampleValue));
+      }
+      log(`\n  PREVIEW:`);
+      log(`    ${m.httpMethod} ${url.href}`);
+      if (m.requestRef) {
+        const materialized = materializeSchemaExample(plan.schemas[m.requestRef], { schemas: plan.schemas }, new Set([m.requestRef]));
+        log(`    body: ${short(JSON.stringify(materialized), 600)}`);
+      }
+      log(`\n  To send this for real and diff the response, run:`);
+      log(`    node testing/harness.js schema.verify ${JSON.stringify(svcName)} ${m.id.split(".").pop()}`);
+    } catch (e) { err(`  preview error: ${e.message}`); }
+  });
+}
+
+async function cmdSchemaVerify(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const svcName = positional[0];
+  const methodIdArg = positional[1];
+  if (!svcName || !methodIdArg) throw new Error("usage: schema.verify <service> <methodId|methodName>");
+  await withBrowser(async (browser) => {
+    const plan = await evalSW(browser, `
+      const e = globalStore.discoveryDocs.get(${JSON.stringify(svcName)});
+      if (!e || !e.doc) return { error: "service not found" };
+      const doc = e.doc;
+      let match = null;
+      for (const [bName, bObj] of Object.entries(doc.resources || {})) {
+        for (const [mName, m] of Object.entries(bObj.methods || {})) {
+          if (m.id === ${JSON.stringify(methodIdArg)} || mName === ${JSON.stringify(methodIdArg)}) { match = m; break; }
+        }
+        if (match) break;
+      }
+      if (!match) return { error: "method not found" };
+      return {
+        method: {
+          httpMethod: match.httpMethod,
+          origin: match.origin,
+          path: match.path,
+          contentTypes: match.contentTypes || [],
+          parameters: match.parameters,
+          requestRef: match.request?.$ref || null,
+          responseRef: match.response?.$ref || null,
+          id: match.id,
+        },
+        schemas: doc.schemas,
+        stats: match._stats,
+      };
+    `);
+    if (plan.error) { err(plan.error); return; }
+    const m = plan.method;
+    const contentType = (m.contentTypes || [])[0] || "application/json";
+    const isGet = m.httpMethod === "GET" || m.httpMethod === "HEAD";
+    const supportsVerify = isGet || /json/.test(contentType);
+    if (!supportsVerify) {
+      err(`  (schema.verify MVP only handles GET and JSON POST — this method uses ${contentType})`);
+      return;
+    }
+
+    // Build URL + query params from parameter example values.
+    let url;
+    try { url = new URL(_joinOriginPath(m.origin, m.path)); }
+    catch (e) { err(`  invalid origin+path: ${m.origin} + ${m.path} (${e.message})`); return; }
+    const paramReport = [];
+    for (const [pName, pDef] of Object.entries(m.parameters || {})) {
+      if (pDef.location !== "query") continue;
+      const v = pDef._exampleValue;
+      const src = pDef._exampleValueSource || "none";
+      if (v !== undefined && v !== null) {
+        url.searchParams.set(pName, String(v));
+        paramReport.push({ name: pName, value: v, source: src });
+      }
+    }
+
+    // Build body if JSON POST
+    let body = null;
+    if (!isGet && m.requestRef) {
+      const rootSchema = plan.schemas[m.requestRef];
+      const materialized = materializeSchemaExample(rootSchema, { schemas: plan.schemas }, new Set([m.requestRef]));
+      if (materialized) body = JSON.stringify(materialized);
+    }
+
+    log(`verify: ${m.httpMethod} ${url.href}`);
+    log(`  method: ${m.id}`);
+    log(`  contentType (request): ${contentType}`);
+    log(`  responseRef: ${m.responseRef || "-"}`);
+    if (paramReport.length) {
+      log(`  query params from exampleValues:`);
+      for (const p of paramReport) log(`    ${p.name} = ${JSON.stringify(p.value)}  [${p.source}]`);
+    }
+    if (body) log(`  body: ${short(body, 400)}`);
+
+    // Send via the live page's fetch so cookies/auth are native. The
+    // target page must be open; if not, navigate first.
+    const page = await getActivePage(browser);
+    if (!page) { err("  (no active page — navigate to the service's origin first)"); return; }
+    const wantOrigin = new URL(url.href).origin;
+    const pageOrigin = new URL(page.url()).origin;
+    if (pageOrigin !== wantOrigin) {
+      log(`  navigating: ${pageOrigin} → ${wantOrigin}`);
+      await page.goto(wantOrigin, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(e => err(`  (nav warn: ${e.message})`));
+    }
+
+    const fetchInit = {
+      method: m.httpMethod,
+      headers: !isGet ? { "Content-Type": contentType } : {},
+      credentials: "include",
+    };
+    if (body) fetchInit.body = body;
+    const result = await page.evaluate(async (u, init) => {
+      try {
+        const r = await fetch(u, init);
+        const txt = await r.text();
+        return { status: r.status, ok: r.ok, length: txt.length, text: txt.slice(0, 4000) };
+      } catch (e) { return { error: e.message }; }
+    }, url.href, fetchInit);
+
+    if (result.error) { err(`  fetch error: ${result.error}`); return; }
+    log(`\n  RESPONSE: HTTP ${result.status}  ${result.length}B${result.length > 4000 ? " (truncated)" : ""}`);
+
+    // Parse JSON response if possible, diff against learned schema
+    let respJson = null;
+    try { respJson = JSON.parse(result.text); } catch {}
+    if (respJson === null) {
+      log(`  (response is not JSON or was truncated mid-parse — body below)`);
+      log(`  body: ${short(result.text, 400)}`);
+      return;
+    }
+    log(`  parsed: ${typeof respJson === "object" ? (Array.isArray(respJson) ? `array[${respJson.length}]` : `object with ${Object.keys(respJson).length} keys`) : typeof respJson}`);
+    if (!m.responseRef) { log(`  (no learned response schema to diff against)`); log(`  sample: ${short(JSON.stringify(respJson), 400)}`); return; }
+    const rootResp = plan.schemas[m.responseRef];
+    if (!rootResp) { err(`  (response schema ${m.responseRef} not found)`); return; }
+    const diff = diffResponseAgainstSchema(respJson, rootResp, { schemas: plan.schemas });
+    log(`\n  SCHEMA DIFF against ${m.responseRef}:`);
+    log(`    missing from response: ${diff.missing.length}${diff.missing.length ? "  (" + diff.missing.slice(0, 10).join(", ") + (diff.missing.length > 10 ? ", …" : "") + ")" : ""}`);
+    log(`    drift (new fields in response): ${diff.extra.length}${diff.extra.length ? "  (" + diff.extra.slice(0, 10).join(", ") + (diff.extra.length > 10 ? ", …" : "") + ")" : ""}`);
+    log(`    type mismatches: ${diff.typeMismatches.length}`);
+    for (const tm of diff.typeMismatches.slice(0, 10)) log(`      ${tm.path}: expected ${tm.expected}, got ${tm.got}`);
+    const verdict = result.ok && diff.missing.length === 0 && diff.typeMismatches.length === 0
+      ? (diff.extra.length === 0 ? "exact-match" : "schema is stale (new fields in response)")
+      : result.ok
+        ? "partial-match"
+        : "error-response (check auth/CSRF, or this method genuinely requires a real session)";
+    log(`  verdict: ${verdict}`);
+  });
+}
+
+// Format a values-frequency map as a compact top-N list with counts.
+// Long values are truncated so the output stays within terminal width.
+function _fmtTopValues(valuesMap, n, strLen) {
+  if (!valuesMap || typeof valuesMap !== "object") return "(none)";
+  const entries = Object.entries(valuesMap).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return "(none)";
+  const take = entries.slice(0, n || 5);
+  return take.map(([v, c]) => `${JSON.stringify(v).slice(0, strLen || 60)}×${c}`).join(", ")
+    + (entries.length > (n || 5) ? `  (+${entries.length - (n || 5)} more)` : "");
+}
+
+// Non-zero format hints as "uri:12, email:3" — silent when all are zero.
+function _fmtFormatHints(hints) {
+  if (!hints || typeof hints !== "object") return null;
+  const nonZero = Object.entries(hints).filter(([, v]) => v > 0);
+  if (!nonZero.length) return null;
+  return nonZero.map(([k, v]) => `${k}:${v}`).join(", ");
+}
+
+async function cmdMethod(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const svcName = positional[0];
+  const methodIdArg = positional[1];
+  if (!svcName || !methodIdArg) throw new Error("usage: method <service> <methodId|methodName>");
+  const topN = flags.top != null ? Number(flags.top) : 5;
+  await withBrowser(async (browser) => {
+    const data = await evalSW(browser, `
+      const e = globalStore.discoveryDocs.get(${JSON.stringify(svcName)});
+      if (!e || !e.doc) return null;
+      const doc = e.doc;
+      let match = null;
+      for (const [bName, bObj] of Object.entries(doc.resources || {})) {
+        for (const [mName, m] of Object.entries(bObj.methods || {})) {
+          if (m.id === ${JSON.stringify(methodIdArg)} || mName === ${JSON.stringify(methodIdArg)}) {
+            match = { bucket: bName, name: mName, method: m };
+            break;
+          }
+        }
+        if (match) break;
+      }
+      if (!match) return null;
+      const m = match.method;
+      const stats = m._stats || { requestCount: 0, params: {}, bodyFields: {} };
+
+      // Flatten the request body schema via $ref + children recursion —
+      // callers want a flat map of dot-path → field def so we can join
+      // with stats.bodyFields lookups.
+      function flattenSchema(ref, visited) {
+        const out = [];
+        if (!ref || visited.has(ref)) return out;
+        visited.add(ref);
+        const sch = doc.schemas?.[ref];
+        if (!sch) return out;
+        function walk(parentPath, props) {
+          if (!props) return;
+          for (const [k, def] of Object.entries(props)) {
+            const dotPath = parentPath ? parentPath + "." + k : k;
+            out.push({
+              dotPath,
+              wireKey: k,
+              alias: def.customName && def.name ? def.name : null,
+              type: def.type || def.$ref || "?",
+              number: def.number ?? null,
+              label: def.label || null,
+              enum: def.enum || null,
+              description: def.description || null,
+              _detectedEnum: !!def._detectedEnum,
+              _defaultValue: def._defaultValue ?? null,
+              _defaultConfidence: def._defaultConfidence ?? null,
+              _requiredConfidence: def._requiredConfidence ?? null,
+              _range: def._range || null,
+              _astValidValues: def._astValidValues || null,
+              _exampleValue: def._exampleValue === undefined ? null : def._exampleValue,
+              _exampleValueSource: def._exampleValueSource || null,
+              _exampleConfidence: def._exampleConfidence ?? null,
+              format: def.format || null,
+            });
+            if (def.$ref) {
+              const sub = flattenSchema(def.$ref, visited);
+              for (const s of sub) out.push({ ...s, dotPath: dotPath + "." + s.dotPath });
+            } else if (def.type === "array" && def.items && def.items.$ref) {
+              const sub = flattenSchema(def.items.$ref, visited);
+              for (const s of sub) out.push({ ...s, dotPath: dotPath + "[]." + s.dotPath });
+            } else if (def.properties) {
+              walk(dotPath, def.properties);
+            }
+          }
+        }
+        walk("", sch.properties || {});
+        return out;
+      }
+      const bodyFields = m.request?.$ref ? flattenSchema(m.request.$ref, new Set()) : [];
+
+      const paramStats = stats.params || {};
+      const bodyFieldStats = stats.bodyFields || {};
+      const out = {
+        svc: ${JSON.stringify(svcName)},
+        bucket: match.bucket,
+        name: match.name,
+        method: {
+          id: m.id,
+          httpMethod: m.httpMethod,
+          origin: m.origin,
+          path: m.path,
+          description: m.description || null,
+          requestRef: m.request?.$ref || null,
+          responseRef: m.response?.$ref || null,
+          contentTypes: m.contentTypes || [],
+        },
+        requestCount: stats.requestCount || 0,
+        parameters: Object.entries(m.parameters || {}).map(([pName, pDef]) => ({
+          name: pDef.name || pName,
+          type: pDef.type || "?",
+          location: pDef.location || "?",
+          required: !!pDef.required,
+          enum: pDef.enum || null,
+          format: pDef.format || null,
+          _detectedEnum: !!pDef._detectedEnum,
+          _defaultValue: pDef._defaultValue ?? null,
+          _defaultConfidence: pDef._defaultConfidence ?? null,
+          _requiredConfidence: pDef._requiredConfidence ?? null,
+          _range: pDef._range || null,
+          _astValidValues: pDef._astValidValues || null,
+          _exampleValue: pDef._exampleValue === undefined ? null : pDef._exampleValue,
+          _exampleValueSource: pDef._exampleValueSource || null,
+          _exampleConfidence: pDef._exampleConfidence ?? null,
+          stats: paramStats[pName] || null,
+        })),
+        bodyFields: bodyFields.map(bf => ({
+          ...bf,
+          stats: bodyFieldStats[bf.dotPath] || null,
+        })),
+        orphanBodyFields: Object.keys(bodyFieldStats).filter(k => !bodyFields.some(bf => bf.dotPath === k)).map(k => ({
+          dotPath: k,
+          stats: bodyFieldStats[k],
+        })),
+        correlations: stats.correlations || [],
+      };
+      return out;
+    `);
+    if (!data) { err("no such service or method"); return; }
+    log(`${data.svc}  ${data.method.httpMethod} ${_joinUrl(data.method.origin, data.method.path)}`);
+    log(`  id: ${data.method.id}  bucket/name: ${data.bucket}/${data.name}`);
+    log(`  requestCount: ${data.requestCount}`);
+    if (data.method.description) log(`  description: ${short(data.method.description, 200)}`);
+    log(`  req=${data.method.requestRef || "-"}  resp=${data.method.responseRef || "-"}  ct=${(data.method.contentTypes||[]).join(",") || "-"}`);
+
+    log(`\n  parameters (${data.parameters.length}):`);
+    for (const p of data.parameters) {
+      const head = [p.name + ":", p.type, "@" + p.location];
+      if (p.required) head.push("[required]");
+      if (p.format) head.push("[fmt:" + p.format + "]");
+      log(`    · ${head.join(" ")}`);
+      if (p.stats) {
+        log(`        observed: ${p.stats.observedCount}/${data.requestCount}` +
+            (p._requiredConfidence != null ? ` (${Math.round(p._requiredConfidence * 100)}%)` : ""));
+        log(`        topValues: ${_fmtTopValues(p.stats.values, topN)}`);
+        const hints = _fmtFormatHints(p.stats.formatHints);
+        if (hints) log(`        formatHints: ${hints}`);
+        if (p.stats.numericRange) log(`        numericRange: [${p.stats.numericRange.min} .. ${p.stats.numericRange.max}]`);
+      } else {
+        log(`        (no observed stats — never captured in traffic)`);
+      }
+      if (p._defaultValue != null) {
+        // _defaultConfidence = dominant-count / observedCount (how dominant
+        // the value is among present observations)
+        // _requiredConfidence = observedCount / requestCount (how often the
+        // parameter is present at all)
+        // Both matter: a "default" at 100% dominance but 20% presence is
+        // still meaningful — when the caller DOES pass this param, they
+        // pass the same value — but it's also an OPTIONAL param.
+        const dc = p._defaultConfidence != null ? Math.round(p._defaultConfidence * 100) + "%" : "?";
+        const rc = p._requiredConfidence != null ? Math.round(p._requiredConfidence * 100) + "%" : "?";
+        log(`        picked default: ${JSON.stringify(p._defaultValue)}  (dominance ${dc} of observations, present in ${rc} of requests)`);
+      }
+      if (p._exampleValueSource) {
+        const suf = p._exampleConfidence != null ? `  (dominance ${Math.round(p._exampleConfidence * 100)}%)` : "";
+        log(`        exampleValue: ${JSON.stringify(p._exampleValue)}  [source: ${p._exampleValueSource}]${suf}`);
+      }
+      if (Array.isArray(p._astValidValues) && p._astValidValues.length) {
+        log(`        ast values: ${p._astValidValues.slice(0, 8).map(v => JSON.stringify(v)).join(", ")}${p._astValidValues.length > 8 ? "  (+" + (p._astValidValues.length - 8) + " more)" : ""}`);
+      }
+      if (Array.isArray(p.enum) && p.enum.length) {
+        log(`        enum: ${p.enum.slice(0, 8).map(v => JSON.stringify(v)).join(", ")}${p.enum.length > 8 ? "  (+" + (p.enum.length - 8) + " more)" : ""}`);
+      }
+    }
+
+    log(`\n  body fields (${data.bodyFields.length} declared in schema):`);
+    for (const bf of data.bodyFields.slice(0, 100)) {
+      const head = [bf.dotPath + ":", bf.type];
+      if (bf.number != null) head.push("#" + bf.number);
+      if (bf.label) head.push(bf.label);
+      if (bf.alias) head.push("(alias: " + JSON.stringify(bf.alias) + ")");
+      log(`    · ${head.join(" ")}`);
+      if (bf.stats) {
+        log(`        observed: ${bf.stats.observedCount}/${data.requestCount}`);
+        log(`        topValues: ${_fmtTopValues(bf.stats.values, topN)}`);
+        const hints = _fmtFormatHints(bf.stats.formatHints);
+        if (hints) log(`        formatHints: ${hints}`);
+        if (bf.stats.numericRange) log(`        numericRange: [${bf.stats.numericRange.min} .. ${bf.stats.numericRange.max}]`);
+      } else {
+        log(`        (no observed stats for this body field — schema present but traffic uncovered it)`);
+      }
+      if (bf._defaultValue != null) log(`        schema default: ${JSON.stringify(bf._defaultValue)}`);
+      if (bf._exampleValueSource) {
+        const suf = bf._exampleConfidence != null ? `  (dominance ${Math.round(bf._exampleConfidence * 100)}%)` : "";
+        log(`        exampleValue: ${JSON.stringify(bf._exampleValue)}  [source: ${bf._exampleValueSource}]${suf}`);
+      }
+      if (Array.isArray(bf._astValidValues) && bf._astValidValues.length) {
+        log(`        ast values: ${bf._astValidValues.slice(0, 8).map(v => JSON.stringify(v)).join(", ")}`);
+      }
+      if (Array.isArray(bf.enum) && bf.enum.length) {
+        log(`        enum: ${bf.enum.slice(0, 8).map(v => JSON.stringify(v)).join(", ")}`);
+      }
+    }
+    if (data.bodyFields.length > 100) log(`    … (+${data.bodyFields.length - 100} more body fields)`);
+
+    if (data.orphanBodyFields.length) {
+      log(`\n  orphan body-field stats (${data.orphanBodyFields.length}) — observed in traffic but NOT attached to the declared schema (Phase 5c gap):`);
+      for (const of_ of data.orphanBodyFields.slice(0, 30)) {
+        log(`    · ${of_.dotPath}`);
+        log(`        observed: ${of_.stats.observedCount}  topValues: ${_fmtTopValues(of_.stats.values, topN)}`);
+      }
+      if (data.orphanBodyFields.length > 30) log(`    … (+${data.orphanBodyFields.length - 30} more orphan stats)`);
+    }
+
+    if (data.correlations.length) {
+      log(`\n  correlations (${data.correlations.length}):`);
+      for (const c of data.correlations.slice(0, 10)) {
+        log(`    ${c.paramA} ↔ ${c.paramB}  (confidence ${Math.round(c.confidence * 100)}%)`);
+      }
     }
   });
 }
@@ -1644,9 +4018,14 @@ async function cmdPopupResponse(rest) {
 async function cmdPage(args) {
   const expr = args.join(" ");
   if (!expr) throw new Error("usage: page <js-expression>");
+  // Auto-wrap a bare expression as `return <expr>` so `page "location.href"`
+  // works like a REPL. Explicit statements (containing `return`, `;`, or
+  // block braces at top level) are passed through as-is for multi-step
+  // scripts like `var a = 1; return a + 2`.
+  const body = /(^|\s)return\s|;|\{/.test(expr) ? expr : "return (" + expr + ");";
   await withBrowser(async (browser) => {
     const page = await getActivePage(browser);
-    const out = await page.evaluate(new Function("return (async () => { " + expr + " })()"));
+    const out = await page.evaluate(new Function("return (async () => { " + body + " })()"));
     log(JSON.stringify(out, null, 2));
   });
 }
@@ -1699,10 +4078,39 @@ harness commands
                                capture pipeline runs with the current AST code
   ast.clear                    drop all AST results + security findings + script cache
 
-  findings [substring]         security findings (sinks + dangerous patterns)
-  finding <index>              one finding + column-aware raw JS snippet
+  findings [substring]         security findings (sinks + dangerous patterns) — prefixed with stable ID
+  finding <id|index>           one finding + column-aware raw JS snippet (Brotli-aware Node fetch)
+  finding.snapshot <name>      save current findings keyed by stable ID → testing/finding-snapshots/<name>.json
+  finding.diff <name>          compare current findings to snapshot; shows added / removed / severity-flipped
+  finding.map <id|index>       resolve minified line/col through //# sourceMappingURL; print original source
+  finding.func <id|index>      same + Babel-parse the resolved source, print the full enclosing function
+  finding.callers <id|index> [--arg N] [--depth K] [--max-len N]
+                               list call sites of each enclosing function + their arguments; highlights
+                               which function boundaries the taint path crossed (param-caller hops)
+  finding.exploit <id|index> [--page-url <url>] [--wait <ms>]
+                               install a DOM/fetch/XHR/eval probe, navigate with a unique marker in
+                               the hash/query, and report whether the marker actually reached a sink.
+                               Proves exploitability end-to-end for location.hash/search/href sources.
+  finding.view <id|index> [--preview N]
+                               open the source viewer for this finding, let it tree-shake to the
+                               functions the taint path crosses, and report focused-vs-full line
+                               counts + a short preview. Verifies the viewer's per-finding focus
+                               actually collapses a multi-MB bundle to the relevant slice.
+  ast.probe <file>|--inline <code> [--source <url>]
+                               run the extension's real AST analyzer on an arbitrary code blob
+  ast.probe.finding <id|index> [--raw] [--depth <N|outer>]
+                               isolate enclosing function, rerun analyzer, report whether the
+                               same-kind classifier still fires. --raw probes the minified
+                               bundle (matches live analyzer input); default probes source-mapped
+                               original (readable but different identifier names). --depth 0 =
+                               innermost (default), N = Nth outer function, outer = outermost.
 
   logs [filter] [--service=X] [--host=X] [--ct=X] [--method=X] [--status=N] [--with-body] [--limit=N]
+                               [--kind api|asset|empty] [--boring]
+                               --kind filters by the content-based asset classification (magic
+                               bytes from body); --boring narrows to the static-resource tier
+                               (asset + GET + no query + no body + no auth) \u2014 audit view for
+                               whether the classifier got it right.
   log <reqId> [--decoded] [--save <dir>] [--full]
                                one request. --decoded runs the extension's parsers
                                (batchexecute/JSPB/protobuf/gRPC-Web/GraphQL/SSE/NDJSON/multipart).
@@ -1711,6 +4119,30 @@ harness commands
   keys                         API key registry
   services [substring]         service list (name, method count, samples)
   service <name> [--full]      drill-down: methods, params with AST badges, schemas, keys
+  method <service> <id|name> [--top N]
+                               per-field stats (params + body tree): observedCount, top values,
+                               formatHints, numericRange, AST values, picked default + provenance.
+                               Surfaces orphan body-field stats that Phase 5c will attach.
+  schema.verify <service> <id|name>
+                               build a request from the learned exampleValues and send it through
+                               the active page (credentialed). Diffs the response against the learned
+                               response schema: missing fields / drift / type mismatches. MVP covers
+                               GET + JSON POST.
+  schema.review <service> <id|name>
+                               scannable readiness view: schema tree with each leaf's example value
+                               and provenance tag, gap list (required fields with no observation),
+                               provenance counts, and a PREVIEW of the ready-to-send request.
+
+  audit.sinks [substr] [--show N] [--missed-only] [--context N]
+                               regex-grep every AST-analyzed script for known sink patterns
+                               (innerHTML=, eval(, location.href=, etc.) and list grep-matches
+                               that have no AST finding on the same line — each one is a site
+                               to read and decide whether the AST correctly ignored it or missed
+                               something.
+  audit.schema <service> [--min-obs N] [--show-worst N]
+                               service-wide schema readiness: per-method % fields with real
+                               observations, required-field gaps, provenance histogram,
+                               worst-methods drill-down.
 
   popup                        open popup page, switch filter=all
   popup.select <reqId>         replay(reqId, tabId) — refreshes allTabsData first
@@ -1736,8 +4168,16 @@ const CMDS = {
   scripts: cmdScripts, script: cmdScript, ast: cmdAst,
   "ast.rerun": cmdAstRerun, "ast.clear": cmdAstClear,
   findings: cmdFindings, finding: cmdFinding,
+  "finding.snapshot": cmdFindingSnapshot, "finding.diff": cmdFindingDiff,
+  "finding.map": cmdFindingMap, "finding.func": cmdFindingFunc,
+  "finding.callers": cmdFindingCallers,
+  "finding.exploit": cmdFindingExploit,
+  "finding.view": cmdFindingView,
+  "ast.probe": cmdAstProbe, "ast.probe.finding": cmdAstProbeFinding,
   logs: cmdLogs, log: cmdLog,
   keys: cmdKeys, services: cmdServices, service: cmdService,
+  method: cmdMethod, "schema.verify": cmdSchemaVerify, "schema.review": cmdSchemaReview,
+  "audit.sinks": cmdAuditSinks, "audit.schema": cmdAuditSchema,
   popup: cmdPopup,
   "popup.select": cmdPopupSelect,
   "popup.form": cmdPopupForm,

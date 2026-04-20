@@ -191,6 +191,134 @@ function detectCorrelations(methodStats) {
   return correlations.slice(0, 20);
 }
 
+// Convert a string observation back to the field's declared type when the
+// type is numeric or boolean. Observations are always stored as strings
+// (for dedup), but when we present an "example value" to the user or to
+// the request builder, we want a properly-typed value so
+// encodeFormToJson/encodeFormToJspb don't double-quote numbers, etc.
+function _coerceToFieldType(value, type) {
+  if (value == null) return value;
+  if (!type) return value;
+  if (type === "boolean" || type === "bool") {
+    if (value === true || value === false) return value;
+    if (value === "true") return true;
+    if (value === "false") return false;
+    return value;
+  }
+  if (type === "number" || type === "integer" ||
+      type === "int32" || type === "int64" || type === "uint32" || type === "uint64" ||
+      type === "sint32" || type === "sint64" || type === "double" || type === "float" ||
+      type === "fixed32" || type === "fixed64" || type === "sfixed32" || type === "sfixed64") {
+    if (typeof value === "number") return value;
+    const n = Number(value);
+    return Number.isNaN(n) ? value : n;
+  }
+  return value;
+}
+
+// The canonical type-default for a field with no other signal. Used as
+// the last-resort fallback in pickExampleValue — a reviewer can tell
+// from `source: "type-default"` that the extension is guessing.
+function _typeDefault(type) {
+  if (!type) return "";
+  switch (type) {
+    case "string": case "bytes": case "enum": return "";
+    case "number": case "integer":
+    case "int32": case "int64": case "uint32": case "uint64":
+    case "sint32": case "sint64": case "double": case "float":
+    case "fixed32": case "fixed64": case "sfixed32": case "sfixed64":
+      return 0;
+    case "boolean": case "bool": return false;
+    case "array": return [];
+    case "object": return {};
+    default: return "";
+  }
+}
+
+// Format-to-example synthesis. Used only when no observed or AST value
+// exists. Values are deliberately recognizable-dummy so the user (and
+// the server, during verification) can tell this was synthesized.
+function _syntheticForFormat(format) {
+  switch (format) {
+    case "uuid": return "00000000-0000-0000-0000-000000000000";
+    case "email": return "example@example.com";
+    case "uri": return "https://example.com/";
+    case "date-time": return new Date(0).toISOString();
+    case "integer": return 0;
+    default: return null;
+  }
+}
+
+// Return ONE example value for a field, with provenance, so the UI and
+// request-builder can always present a usable value. Priority is
+// observed-facts → AST-facts → declared-schema → synthesis:
+//   1. "observed-default" — stats distribution was dominant enough for
+//      analyzeDefault() to fire (>=80% of observations).
+//   2. "observed-top"     — most-frequent observed value, even at low
+//      dominance. Beats declared enum because real traffic that got
+//      through the server is a stronger signal than spec-declared
+//      order (enum[0] is usually alphabetical or author-convention,
+//      not "the value most likely to succeed").
+//   3. "ast-constraint"   — _astValidValues from AST (switch/case,
+//      .includes, equality chains). Facts about the client's code,
+//      but may list values the server never actually receives.
+//   4. "enum"             — first declared enum value.
+//   5. "format-synth"     — a dummy value matching the detected format.
+//   6. "range-min"        — lowest end of numericRange.
+//   7. "type-default"     — empty string / 0 / false / [] / {}.
+//
+// The `source` label is attached so a reviewer can see WHY this value
+// was chosen and judge whether the classifier's claim is load-bearing
+// on real traffic or synthesized defaults.
+function pickExampleValue(field, stats) {
+  const type = field && field.type ? field.type : null;
+
+  // 1. observed-default — analyzeDefault already accepted this
+  if (field && field._defaultValue != null) {
+    return {
+      value: _coerceToFieldType(field._defaultValue, type),
+      source: "observed-default",
+      confidence: field._defaultConfidence || null,
+    };
+  }
+  // 2. observed-top — most frequent observed value. Wins over declared
+  //    enum because a value that actually shipped through the server
+  //    is a stronger signal than spec-declared order.
+  if (stats && stats.values) {
+    const keys = Object.keys(stats.values);
+    if (keys.length) {
+      let top = keys[0];
+      let topCount = stats.values[top];
+      for (let i = 1; i < keys.length; i++) {
+        if (stats.values[keys[i]] > topCount) { top = keys[i]; topCount = stats.values[keys[i]]; }
+      }
+      return {
+        value: _coerceToFieldType(top, type),
+        source: "observed-top",
+        confidence: stats.observedCount ? topCount / stats.observedCount : null,
+      };
+    }
+  }
+  // 3. ast-constraint — switch cases, includes() arguments, literal chains
+  if (field && Array.isArray(field._astValidValues) && field._astValidValues.length) {
+    return { value: field._astValidValues[0], source: "ast-constraint" };
+  }
+  // 4. enum — declared enum OR detected enum
+  if (field && Array.isArray(field.enum) && field.enum.length) {
+    return { value: _coerceToFieldType(field.enum[0], type), source: "enum" };
+  }
+  // 5. format-synth — from field.format or from stats' dominant hint
+  const fmt = (field && field.format) || (stats ? analyzeFormat(stats) : null);
+  const syn = _syntheticForFormat(fmt);
+  if (syn != null) return { value: syn, source: "format-synth", format: fmt };
+  // 6. range-min — numeric ranges give us a valid small number
+  if (stats && stats.numericRange && typeof stats.numericRange.min === "number") {
+    return { value: stats.numericRange.min, source: "range-min" };
+  }
+  // 7. type-default
+  return { value: _typeDefault(type), source: "type-default" };
+}
+
 function mergeParamStats(a, b) {
   if (!a) return b;
   if (!b) return a;

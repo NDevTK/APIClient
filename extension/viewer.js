@@ -327,6 +327,10 @@ function mapLine(originalLine, lineMap, colMap, originalCol) {
   return originalLine;
 }
 
+// Sink-location-only list for the status-bar count + gutter markers.
+// The focused view uses collectFocusSeedLines (which also includes
+// taintPath hops) — keeping these separate so the "N findings" badge
+// doesn't inflate by a factor of taintPath length.
 function collectFindingLines(findings) {
   var lines = [];
   if (!findings) return lines;
@@ -344,6 +348,52 @@ function collectFindingLines(findings) {
         lines.push({ line: patterns[di].location.line, col: patterns[di].location.column, severity: patterns[di].severity || "medium" });
       }
     }
+  }
+  return lines;
+}
+
+// Seed lines for the focused (tree-shaken) view. Includes sink locations,
+// every taintPath hop (so each function the taint CROSSES lands in the
+// focused slice, not just the sink's function), and sanitizer/
+// precondition locations.
+//
+// When `filterTargetLine` is supplied (viewer opened from clicking a
+// specific finding), only that ONE finding's seeds are returned — the
+// reviewer asked for a focused context on that particular flow, not
+// every finding on the script.
+function collectFocusSeedLines(findings, filterTargetLine, filterTargetCol) {
+  var lines = [];
+  if (!findings) return lines;
+  var wantOne = typeof filterTargetLine === "number" && filterTargetLine > 0;
+  var pushAll = function (item, severity) {
+    if (wantOne) {
+      if (!item.location) return;
+      if (item.location.line !== filterTargetLine) return;
+      if (filterTargetCol != null && item.location.column != null &&
+          item.location.column !== filterTargetCol) return;
+    }
+    if (item.location) lines.push({ line: item.location.line, col: item.location.column, severity: severity });
+    var hops = Array.isArray(item.taintPath) ? item.taintPath : [];
+    for (var hi = 0; hi < hops.length; hi++) {
+      var h = hops[hi];
+      if (h && h.at && typeof h.at.line === "number") {
+        lines.push({ line: h.at.line, col: h.at.column, severity: severity });
+      }
+    }
+    var srep = item.sanitizerReport && Array.isArray(item.sanitizerReport.candidates) ? item.sanitizerReport.candidates : [];
+    for (var ci = 0; ci < srep.length; ci++) {
+      var c = srep[ci];
+      if (c && c.loc && typeof c.loc.line === "number") {
+        lines.push({ line: c.loc.line, col: c.loc.column, severity: severity });
+      }
+    }
+  };
+  for (var fi = 0; fi < findings.length; fi++) {
+    var f = findings[fi];
+    var sinks = f.securitySinks || [];
+    var patterns = f.dangerousPatterns || [];
+    for (var si = 0; si < sinks.length; si++) pushAll(sinks[si], sinks[si].severity || "high");
+    for (var di = 0; di < patterns.length; di++) pushAll(patterns[di], patterns[di].severity || "medium");
   }
   return lines;
 }
@@ -474,8 +524,14 @@ function buildCodeGraph(beautifiedCode) {
 // Uses _allFuncRanges for containment (any function, named or not),
 // then BFS through _funcMap (named only) for call-graph expansion.
 // Returns array of [startLine, endLine] ranges, or null.
-function buildRelevantRanges(mappedFindings) {
+function buildRelevantRanges(mappedFindings, opts) {
   if (!_allFuncRanges || !mappedFindings || !mappedFindings.length) return null;
+  // BFS depth for callee expansion. Defaults to 2 — when seeds already
+  // include every taintPath hop (the AST-traced chain), BFS-ing 10 deep
+  // from each seed buries the reviewer under unrelated framework calls.
+  // Hops already tell us which functions the taint crossed; callee
+  // expansion is just a contextual "what does this call reach" bonus.
+  var bfsDepth = (opts && typeof opts.bfsDepth === "number") ? opts.bfsDepth : 2;
 
   // Seed: find the innermost function containing each finding line
   var seedRanges = []; // direct ranges from containment
@@ -507,7 +563,7 @@ function buildRelevantRanges(mappedFindings) {
 
   if (seedRanges.length === 0) return null;
 
-  // BFS through named call graph
+  // BFS through named call graph — shallow by default (see bfsDepth note).
   var visitedNames = new Set();
   var queue = [];
   seedNames.forEach(function(s) {
@@ -518,7 +574,7 @@ function buildRelevantRanges(mappedFindings) {
   });
   while (queue.length > 0) {
     var item = queue.shift();
-    if (item.depth >= 10) continue;
+    if (item.depth >= bfsDepth) continue;
     var func = _funcMap[item.name];
     if (!func || !func.calls) continue;
     func.calls.forEach(function(callee) {
@@ -982,7 +1038,7 @@ focusBtnEl.addEventListener("click", function() {
 
 // ─── Main Load ───────────────────────────────────────────────────────────────
 
-function loadScript(scriptUrl, targetLine, crossDefName) {
+function loadScript(scriptUrl, targetLine, crossDefName, targetCol) {
   _currentUrl = scriptUrl;
   _defMap = null;
   _refMap = null;
@@ -1112,8 +1168,20 @@ function loadScript(scriptUrl, targetLine, crossDefName) {
       }
     }
 
-    // Build focused view
-    var relevantRanges = buildRelevantRanges(_mappedFindings);
+    // Build focused view. Seeds include the sink location AND every
+    // taintPath hop (so every function the taint crosses lands in the
+    // focused slice), plus sanitizer/precondition locations. If the
+    // viewer was opened for a specific finding (targetLine + targetCol
+    // set), seeds filter to ONLY that finding — per-finding tree-shake.
+    // Column matching is essential on minified bundles where every
+    // sink lives on the same line (L6 of react-core has ~20 sinks).
+    // Otherwise the union of all findings on the script is kept
+    // (overview mode).
+    var focusSeeds = collectFocusSeedLines(findings, targetLine || null, targetCol != null ? targetCol : null);
+    var mappedSeeds = focusSeeds.map(function (fSeed) {
+      return { line: mapLine(fSeed.line, lineMap, colMap, fSeed.col), severity: fSeed.severity };
+    });
+    var relevantRanges = buildRelevantRanges(mappedSeeds);
     if (relevantRanges && relevantRanges.length > 0) {
       var focused = buildFocusedCode(beautifiedCode, relevantRanges);
       if (focused) {
@@ -1138,12 +1206,14 @@ function loadScript(scriptUrl, targetLine, crossDefName) {
 
 var initialUrl = params.get("sourceUrl");
 var initialLine = parseInt(params.get("line"), 10) || 0;
+var _colParam = params.get("col");
+var initialCol = _colParam != null ? parseInt(_colParam, 10) : null;
 
 if (!initialUrl) {
   urlEl.textContent = "(no source URL)";
   showMessage("No source URL provided.");
 } else {
-  loadScript(initialUrl, initialLine);
+  loadScript(initialUrl, initialLine, null, initialCol);
   initFilePicker();
 }
 

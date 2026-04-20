@@ -2568,6 +2568,393 @@ test("Open redirect: location.assign with user value → high severity", `
   });
 });
 
+// ── Redirect severity: scheme-locked via query/hash-only taint ──
+
+test("Open redirect: template literal with taint only in query → MEDIUM (scheme locked)", `
+  var t = location.search.slice(1);
+  location.href = \`https://example.com/path?\${t}\`;
+`, function(r) {
+  // Prefix "https://example.com/path?" locks the scheme+host+path; taint
+  // only flows into the query portion, which can't produce a javascript:
+  // URL or redirect to another origin.
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "medium" &&
+           /query\/hash/.test(s.notes || "");
+  });
+});
+
+test("Open redirect: template literal with taint only in hash → MEDIUM (scheme locked)", `
+  var t = location.hash.slice(1);
+  location.href = \`/dashboard#\${t}\`;
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "medium";
+  });
+});
+
+test("Open redirect: Reddit-style `${untaintedPermalink}?${taintedQuery}` → MEDIUM", `
+  class PostCard {
+    redirectToPDP(e) {
+      var t = new URLSearchParams(location.search);
+      t.set(e, "true");
+      location.href = \`\${this.permalink}?\${t}\`;
+    }
+  }
+`, function(r) {
+  // Reddit's redirectToPDP pattern: first interpolation is an untainted
+  // class property, then literal "?", then a tainted query. The walker
+  // must prove the pre-delimiter interpolation isn't user-controlled
+  // before honouring the downgrade.
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "medium";
+  });
+});
+
+test("Open redirect: tainted untaintedPrefix-interpolation before `?` → HIGH (can reach host)", `
+  var host = location.hash.slice(1);
+  location.href = \`\${host}?\${location.search}\`;
+`, function(r) {
+  // First interpolation is tainted AND lands before any ?/#, so the
+  // attacker can rewrite the host portion. Stays HIGH.
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "high";
+  });
+});
+
+test("Open redirect: template literal with taint in PATH (no ? or # yet) → still HIGH", `
+  var t = location.hash.slice(1);
+  location.href = \`https://example.com/\${t}\`;
+`, function(r) {
+  // The first quasi "https://example.com/" has no ?/#, so taint can reach
+  // the path — even though scheme is locked, this stays HIGH because the
+  // helper's job is to only downgrade provable query/hash-only flows.
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "high";
+  });
+});
+
+test("Open redirect: template literal where taint reaches scheme → HIGH", `
+  var scheme = location.hash.slice(1);
+  location.href = \`\${scheme}://example.com/?ok=1\`;
+`, function(r) {
+  // First quasi is empty (interpolation is at position 0) — no ?/# in it,
+  // so taint can reach the scheme. Classic javascript: XSS vector.
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "high";
+  });
+});
+
+test("Open redirect: location.assign with query-only taint → MEDIUM", `
+  var t = location.search.slice(1);
+  location.assign(\`/results?q=\${t}\`);
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "location.assign" && s.severity === "medium";
+  });
+});
+
+test("Open redirect: location.replace with full-URL taint → still HIGH", `
+  var target = location.hash.slice(1);
+  location.replace(target);
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "location.replace" && s.severity === "high";
+  });
+});
+
+// Reddit devvit playtest "Reloading" pattern: build URL from current
+// location.href, mutate searchParams, navigate. Scheme + host come from
+// location.href (browser-validated current origin) — searchParams.set
+// can't change them. Must NOT flag redirect.
+test("Open redirect: new URL(location.href) + searchParams.set + location.assign → suppressed", `
+  function reload(value) {
+    const t = new URL(location.href);
+    t.searchParams.set("st", value);
+    location.assign(t);
+  }
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "redirect" && (s.sink === "location.assign" || s.sink === "location.replace");
+  });
+});
+
+// Polarity check for the above: URL object built from a free-form
+// source (location.hash content can be a full URL including
+// "javascript:alert(1)") — must still flag.
+test("Open redirect: new URL(location.hash) + location.assign → still HIGH", `
+  const t = new URL(location.hash.slice(1));
+  location.assign(t);
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "location.assign" && s.severity === "high";
+  });
+});
+
+// Reddit _redirect pattern: `e = location.origin + location.pathname;
+// window.location.href = e`. Assembled URL begins with the browser-
+// validated current origin, so the assignment is a same-origin same-path
+// reload without query. Must NOT flag.
+test("Open redirect: location.origin + location.pathname → location.href (reload) → suppressed", `
+  function _redirect() {
+    setTimeout(() => {
+      const e = window.location.origin + window.location.pathname;
+      window.location.href = e;
+    }, 1000);
+  }
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "redirect";
+  });
+});
+
+// Polarity: same shape but leftmost isn't a browser-validated origin —
+// a plain string variable from user input. Must still flag.
+test("Open redirect: tainted + location.pathname → location.href → HIGH", `
+  function bad() {
+    const host = location.hash.slice(1);
+    window.location.href = host + window.location.pathname;
+  }
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "high";
+  });
+});
+
+// Same reload pattern, call-form: location.assign(origin + pathname).
+test("Open redirect: location.assign(location.origin + location.pathname) (reload) → suppressed", `
+  location.assign(window.location.origin + window.location.pathname);
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "redirect";
+  });
+});
+
+// github's approvedHandler pattern: `let url` declared uninitialised,
+// then assigned `new URL(..., location.origin)` in each branch of an
+// if/else, with `url.searchParams.set(...)` mutations before
+// `location.assign(url)`. The URL object's origin is pinned to current
+// page, searchParams mutation can't change it. Type inference through
+// reassignments makes this suppressible.
+test("Open redirect: let url; branches assign new URL(...); location.assign(url) → suppressed", `
+  function approvedHandler(token) {
+    let url;
+    if (token) {
+      url = new URL('password_reset/' + encodeURIComponent(token), window.location.origin);
+    } else {
+      url = new URL('', window.location.href);
+    }
+    url.searchParams.set('redirect', 'true');
+    window.location.assign(url);
+  }
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "redirect";
+  });
+});
+
+// Polarity: ONE branch assigns a URL, the OTHER assigns a plain string.
+// Type inference must NOT commit to URL — the string branch could carry
+// an attacker-chosen origin. Must still flag HIGH.
+test("Open redirect: branches assign URL vs string; location.assign(url) → HIGH", `
+  function maybeUrl(token) {
+    let url;
+    if (token) {
+      url = new URL('', window.location.href);
+    } else {
+      url = location.hash.slice(1);
+    }
+    window.location.assign(url);
+  }
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.severity === "high";
+  });
+});
+
+// github permalink.ts pattern: `target.href + window.location.hash`
+// assigned to `window.location.href`. location.hash (unsliced) still
+// carries its "#" structural marker — the concat result puts taint in
+// the hash portion of target.href (whatever origin that is) so scheme
+// + host can't be forced by the attacker. Must downgrade to MEDIUM.
+test("Open redirect: anchor.href + location.hash → location.href → MEDIUM", `
+  on('click', '.js-permalink-shortcut', function (event) {
+    var target = event.currentTarget;
+    window.location.href = target.href + window.location.hash;
+  });
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "medium";
+  });
+});
+
+// Polarity: same RHS shape but location.hash.slice(1) — prefix strip
+// upgrades origin dim, taint is now free-form content. Must stay HIGH.
+test("Open redirect: anchor.href + location.hash.slice(1) → location.href → HIGH", `
+  function onClick(event) {
+    var target = event.currentTarget;
+    window.location.href = target.href + window.location.hash.slice(1);
+  }
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "high";
+  });
+});
+
+// All-dims-stripped: `new URL(location.href).protocol` is a static
+// scheme string — dim propagation strips origin/path/query/hash and
+// there's no content contribution. Sink must NOT fire. Real-world FP:
+// react-router RSCErrorHandler 20-hop chain concluding at
+// `window.location.href = n.absoluteURL || n.to` where n.absoluteURL's
+// dim-trail ends at `.protocol`.
+test("Open redirect: new URL(location.href).protocol → href → suppressed", `
+  function navigate() {
+    var scheme = new URL(location.href).protocol;
+    window.location.href = scheme + "//example.com/";
+  }
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "redirect";
+  });
+});
+
+// Map.get(tainted) returns the VALUE stored in the map — independent
+// of the key's taint. Propagating key-origin to the value produced
+// widespread FPs (github turbo's bfCache.get(location.href) pattern).
+test("xss:.replaceWith: bfCache.get(location.href).entries() → element.replaceWith(t) → suppressed", `
+  var bfCache = new Map();
+  bfCache.set("x", document.createElement("div"));
+  function restore() {
+    var cache = bfCache.get(window.location.href);
+    if (cache) for (var [k, el] of cache.entries()) {
+      var target = document.getElementById(k);
+      if (target) target.replaceWith(el);
+    }
+  }
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === ".replaceWith" && s.severity === "high";
+  });
+});
+
+// Polarity: a real URLSearchParams.entries() iteration DOES surface
+// attacker-content as the iterated value. The receiver-type gate
+// must not suppress THIS case.
+test("xss:.replaceWith: URLSearchParams(location.search).entries() → el.replaceWith(v) → HIGH", `
+  function applyParams() {
+    var params = new URLSearchParams(location.search);
+    for (var [k, v] of params.entries()) {
+      var target = document.getElementById(k);
+      if (target) target.replaceWith(v);
+    }
+  }
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === ".replaceWith" && s.severity === "high";
+  });
+});
+
+// dangerousPatterns now respects the all-dims-false gate, the same
+// one _pushSink uses. A 110-hop chain through framework code that
+// strips every dim along the way (e.g. `Object.entries(serverResult)`
+// where dims hit {none}) shouldn't surface a HIGH proto-pollution
+// finding the reviewer can't act on.
+test("proto-pollution: all-dims-false key → suppressed", `
+  function build(input) {
+    var protocol = new URL(input).protocol;
+    var routes = ["/a", "/b", "/c"];
+    var out = {};
+    for (var key of routes) {
+      out[protocol + key] = { value: 1 };
+    }
+    return out;
+  }
+  build(window.location.href);
+`, function(r) {
+  // protocol/key concat strips all dims; no real attacker-controlled
+  // key reaches the dynamic property assignment.
+  return !r.dangerousPatterns.some(function(d) {
+    return d.type === "prototype-pollution" && d.severity === "high";
+  });
+});
+
+// Polarity: a key actually built from attacker content stays HIGH.
+test("proto-pollution: attacker-content key → HIGH", `
+  function risky() {
+    var key = location.hash.slice(1);
+    var out = {};
+    out[key] = { value: 1 };
+    return out;
+  }
+`, function(r) {
+  return r.dangerousPatterns.some(function(d) {
+    return d.type === "prototype-pollution" && d.severity === "high";
+  });
+});
+
+// FormData.append / URLSearchParams.append / Headers.append are NOT DOM
+// XSS sinks. Real-world FP: react-router copies form entries via
+// `t.append(r, a)` on a FormData receiver. Must NOT flag xss:.append.
+test("xss:.append: FormData.append(key, taintedValue) → not flagged", `
+  function buildForm(src) {
+    var t = new FormData();
+    for (let [r, a] of src.entries()) {
+      t.append(r, typeof a === "string" ? a : a.name);
+    }
+    return t;
+  }
+  buildForm(new URLSearchParams(location.search));
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === ".append";
+  });
+});
+
+// Polarity: real DOM `.append(tainted)` on a tracked Element must still fire.
+test("xss:.append: element.append(tainted) → flagged", `
+  function render(src) {
+    var el = document.getElementById("root");
+    el.append(src);
+  }
+  render(location.hash.slice(1));
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === ".append";
+  });
+});
+
+test("Open redirect: window.open with query-only taint → MEDIUM", `
+  var t = location.search.slice(1);
+  window.open(\`https://example.com/#\${t}\`);
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "window.open" && s.severity === "medium";
+  });
+});
+
+test("Open redirect: window.open with full-URL taint → HIGH", `
+  var t = location.hash.slice(1);
+  window.open(t);
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "window.open" && s.severity === "high";
+  });
+});
+
+test("Open redirect: sanitized scheme-locked assignment — sanitizer takes priority over scheme-lock", `
+  var t = location.hash.slice(1);
+  location.href = \`/path?\${encodeURIComponent(t)}\`;
+`, function(r) {
+  // If sanitisation is detected it should stay INFO; if not, the scheme-
+  // lock applies and we get MEDIUM. Either outcome is acceptable as long
+  // as we don't land on HIGH — the scheme-locked flow is not a full XSS
+  // vector, and a sanitised one shouldn't be promoted back up by the
+  // scheme-lock override either.
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" &&
+           (s.severity === "info" || s.severity === "medium");
+  });
+});
+
 console.log("\n=== Security: Dangerous Pattern Detection ===\n");
 
 test("new Function with dynamic arg → not flagged (not user-controlled)", `
@@ -3248,6 +3635,154 @@ test("Taint through assignment expression (x = tainted) used in sink", `
   });
 });
 
+test("Reassignment: let safe → tainted, used in sink → flagged", `
+  let x = "safe";
+  x = location.hash.slice(1);
+  document.body.innerHTML = x;
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high" &&
+           s.source === "location.hash";
+  });
+});
+
+test("Reassignment: let safe → safe (no taint introduced) → NOT flagged", `
+  let x = "safe";
+  x = "still safe";
+  document.body.innerHTML = x;
+`, function(r) {
+  // Both the initial value and the reassignment are literal. The new
+  // constantViolations walker should see both as literal and not
+  // promote the sink to user-controlled.
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.sourceType === "user-controlled";
+  });
+});
+
+test("Reassignment: uninitialised let, reassigned to tainted → flagged", `
+  let x;
+  x = location.search.slice(1);
+  document.body.innerHTML = x;
+`, function(r) {
+  // VariableDeclarator with no init, only constantViolations — the
+  // walker's second branch must cover this shape too.
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high" &&
+           s.source === "location.search";
+  });
+});
+
+test("Reassignment: uninitialised let, reassigned to literal only → NOT flagged", `
+  let x;
+  x = "hardcoded";
+  document.body.innerHTML = x;
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.sourceType === "user-controlled";
+  });
+});
+
+test("Reassignment: tainted init, overwritten by literal → still flagged (any-tainted-path is user-controlled)", `
+  let x = location.hash.slice(1);
+  x = "overwritten";
+  document.body.innerHTML = x;
+`, function(r) {
+  // Deliberate over-taint: the walker returns the first user-controlled
+  // source found (init OR a violation). We don't path-sensitivity-check
+  // which reassignment is live at the sink — that would require full CFG
+  // reaching-definitions analysis. Over-tainting here is the safe side.
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high";
+  });
+});
+
+test("Reassignment: multiple reassigns, any one tainted → flagged", `
+  let x = "a";
+  x = "b";
+  x = location.hash;
+  x = "c";
+  document.body.innerHTML = x;
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high" &&
+           s.source === "location.hash";
+  });
+});
+
+test("TaggedTemplateExpression with tainted interpolation → flagged", `
+  var t = location.hash.slice(1);
+  document.body.innerHTML = String.raw\`<p>\${t}</p>\`;
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high";
+  });
+});
+
+test("TaggedTemplateExpression with only literal interpolations → NOT flagged", `
+  var name = "world";
+  document.body.innerHTML = String.raw\`<p>hello \${name}</p>\`;
+`, function(r) {
+  // name is a local, not user-controlled — the tagged template should
+  // not promote the sink.
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.sourceType === "user-controlled";
+  });
+});
+
+test("TaggedTemplateExpression with no expressions → NOT flagged", `
+  document.body.innerHTML = String.raw\`<p>static</p>\`;
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML";
+  });
+});
+
+test("Optional chaining on tainted object propagates taint → flagged", `
+  var data = location;
+  document.body.innerHTML = data?.hash;
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high";
+  });
+});
+
+test("Optional chaining on SAFE object → NOT flagged", `
+  var cfg = { name: "static" };
+  document.body.innerHTML = cfg?.name;
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.sourceType === "user-controlled";
+  });
+});
+
+test("Optional call on tainted propagates taint → flagged", `
+  var t = location.hash;
+  document.body.innerHTML = t?.slice(1);
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high";
+  });
+});
+
+test("Optional call on SAFE receiver → NOT flagged", `
+  var s = "hello";
+  document.body.innerHTML = s?.toUpperCase();
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.sourceType === "user-controlled";
+  });
+});
+
+test("Direct optional-chained taint source: location?.hash → flagged", `
+  document.body.innerHTML = location?.hash;
+`, function(r) {
+  // _matchTaintSource must recognise OptionalMemberExpression too.
+  return r.securitySinks.some(function(s) {
+    return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high" &&
+           s.source === "location.hash";
+  });
+});
+
 test("setAttribute onerror with user-controlled value", `
   var code = location.hash.slice(1);
   document.querySelector("img").setAttribute("onerror", code);
@@ -3394,7 +3929,7 @@ test("new URL(x, location.origin) for same-origin fetch is safe", `
 `, function(r) {
   // Must not flag as HIGH request-forgery just because location.origin is in the chain.
   return !r.securitySinks.some(function(s) {
-    return s.type === "request-forgery" && s.severity === "high" && (s.source === "location.origin" || s.source === "location.hostname" || s.source === "window.location");
+    return s.type === "request-forgery" && s.severity === "high" && (s.source === "location.origin" || s.source === "location.hostname" || s.source === "location");
   });
 });
 
@@ -4674,7 +5209,7 @@ test("FR: window.location → location.assign", `
   window.location.assign(payload);
 `, function(r) {
   return r.securitySinks.some(function(s) {
-    return s.type === "redirect" && s.sink === "location.assign" && s.source === "window.location";
+    return s.type === "redirect" && s.sink === "location.assign" && s.source === "location";
   });
 });
 
@@ -4683,7 +5218,7 @@ test("FR: window.location → document.write", `
   document.write(payload);
 `, function(r) {
   return r.securitySinks.some(function(s) {
-    return s.type === "xss" && s.sink === "document.write" && s.source === "window.location";
+    return s.type === "xss" && s.sink === "document.write" && s.source === "location";
   });
 });
 
@@ -4692,7 +5227,7 @@ test("FR: window.location → document.writeln", `
   document.writeln(payload);
 `, function(r) {
   return r.securitySinks.some(function(s) {
-    return s.type === "xss" && s.sink === "document.writeln" && s.source === "window.location";
+    return s.type === "xss" && s.sink === "document.writeln" && s.source === "location";
   });
 });
 
@@ -4701,7 +5236,7 @@ test("FR: window.location → eval", `
   eval(payload);
 `, function(r) {
   return r.securitySinks.some(function(s) {
-    return s.type === "eval" && s.sink === "eval" && s.source === "window.location";
+    return s.type === "eval" && s.sink === "eval" && s.source === "location";
   });
 });
 
@@ -4714,7 +5249,7 @@ test("FR: window.location → innerHTML", `
   divEl.innerHTML = payload;
 `, function(r) {
   return r.securitySinks.some(function(s) {
-    return s.type === "xss" && s.sink === "innerHTML" && s.source === "window.location";
+    return s.type === "xss" && s.sink === "innerHTML" && s.source === "location";
   });
 });
 
@@ -4726,7 +5261,7 @@ test("FR: window.location → createContextualFragment", `
   document.body.appendChild(documentFragment);
 `, function(r) {
   return r.securitySinks.some(function(s) {
-    return s.type === "xss" && s.sink === "createContextualFragment" && s.source === "window.location";
+    return s.type === "xss" && s.sink === "createContextualFragment" && s.source === "location";
   });
 });
 
@@ -4735,7 +5270,7 @@ test("FR: window.location → location.replace", `
   location.replace(payload);
 `, function(r) {
   return r.securitySinks.some(function(s) {
-    return s.type === "redirect" && s.sink === "location.replace" && s.source === "window.location";
+    return s.type === "redirect" && s.sink === "location.replace" && s.source === "location";
   });
 });
 
@@ -4744,7 +5279,7 @@ test("FR: window.location → setTimeout(string)", `
   setTimeout('var a=a;' + payload, 1);
 `, function(r) {
   return r.securitySinks.some(function(s) {
-    return s.type === "eval" && s.sink === "setTimeout" && s.source === "window.location";
+    return s.type === "eval" && s.sink === "setTimeout" && s.source === "location";
   });
 });
 
@@ -7608,6 +8143,217 @@ test("Type: Array literal .forEach() propagates taint", `
   });
 `, function(r) {
   return r.securitySinks.some(function(s) { return s.type === "xss"; });
+});
+
+// === Taint-path trace (every finding records the hops) ===
+console.log("\n=== Taint-path trace on findings ===\n");
+
+// Helper: pick the first sink of a given kind and return its taintPath kinds
+function _taintKindsFor(r, matcher) {
+  var sink = r.securitySinks.find(matcher) || r.dangerousPatterns.find(matcher);
+  if (!sink || !Array.isArray(sink.taintPath)) return null;
+  return sink.taintPath.map(function(h) { return h.kind; });
+}
+
+test("taintPath: direct location.href → innerHTML records source + member + assignment hops", `
+  document.body.innerHTML = location.href;
+`, function(r) {
+  var kinds = _taintKindsFor(r, function(s) { return s.sink === "innerHTML"; });
+  return kinds && kinds[0] === "source" && kinds.length >= 1;
+});
+
+test("taintPath: negative — safe literal innerHTML has no user-controlled finding", `
+  document.body.innerHTML = "<p>static</p>";
+`, function(r) {
+  return r.securitySinks.length === 0;
+});
+
+test("taintPath: multi-hop location.hash → split → decodeURIComponent → template → innerHTML records chain", `
+  var raw = location.hash.split("=")[1];
+  var decoded = decodeURIComponent(raw);
+  var html = \`<div>\${decoded}</div>\`;
+  document.body.innerHTML = html;
+`, function(r) {
+  var kinds = _taintKindsFor(r, function(s) { return s.sink === "innerHTML"; });
+  if (!kinds) return false;
+  // Must begin at the taint source and end at a propagation hop.
+  if (kinds[0] !== "source") return false;
+  // Must include a call-arg hop (for decodeURIComponent) and a template-interp hop.
+  return kinds.indexOf("call-arg") >= 0 && kinds.indexOf("template-interp") >= 0;
+});
+
+test("taintPath: negative — same shape with literal source has no taintPath hops on sink", `
+  var raw = "static=value".split("=")[1];
+  var decoded = decodeURIComponent(raw);
+  var html = \`<div>\${decoded}</div>\`;
+  document.body.innerHTML = html;
+`, function(r) {
+  return r.securitySinks.length === 0;
+});
+
+test("taintPath: reassignment records reassign hop kind", `
+  let x = "safe";
+  x = location.hash;
+  document.body.innerHTML = x;
+`, function(r) {
+  var kinds = _taintKindsFor(r, function(s) { return s.sink === "innerHTML"; });
+  return kinds && kinds.indexOf("reassign") >= 0;
+});
+
+test("taintPath: negative — reassignment to safe value has no sink finding", `
+  let x = location.hash;
+  x = "safe";
+  document.body.innerHTML = x;
+`, function(r) {
+  // A sound tracer picks up the ORIGINAL init — this is expected to still
+  // flag; the polarity here is specifically that no reassign-from-tainted
+  // hop appears since the reassignment is to a literal.
+  var sink = r.securitySinks.find(function(s) { return s.sink === "innerHTML"; });
+  if (!sink || !Array.isArray(sink.taintPath)) return true; // no finding is also fine
+  return !sink.taintPath.some(function(h) { return h.kind === "reassign" || h.kind === "reassign-uninit"; });
+});
+
+test("taintPath: method call on tainted object records method-call hop", `
+  var lowered = location.hash.toLowerCase();
+  document.body.innerHTML = lowered;
+`, function(r) {
+  var kinds = _taintKindsFor(r, function(s) { return s.sink === "innerHTML"; });
+  return kinds && kinds.indexOf("method-call") >= 0;
+});
+
+test("taintPath: negative — method call on safe object has no finding", `
+  var lowered = "STATIC".toLowerCase();
+  document.body.innerHTML = lowered;
+`, function(r) {
+  return r.securitySinks.length === 0;
+});
+
+test("taintPath: every hop carries a location", `
+  var raw = location.hash;
+  document.body.innerHTML = raw;
+`, function(r) {
+  var sink = r.securitySinks.find(function(s) { return s.sink === "innerHTML"; });
+  if (!sink || !Array.isArray(sink.taintPath) || !sink.taintPath.length) return false;
+  return sink.taintPath.every(function(h) {
+    return h && h.at && typeof h.at.line === "number" && typeof h.at.column === "number";
+  });
+});
+
+test("taintPath: dangerous pattern also records taintPath (Object.defineProperty with tainted key)", `
+  var k = location.hash.slice(1);
+  Object.defineProperty(obj, k, { value: 1 });
+`, function(r) {
+  var d = r.dangerousPatterns.find(function(x) { return x.type === "prototype-pollution"; });
+  return d && Array.isArray(d.taintPath) && d.taintPath.length > 0 && d.taintPath[0].kind === "source";
+});
+
+// === Sanitizer verification reports ===
+console.log("\n=== Sanitizer verification reports ===\n");
+
+test("sanitizerReport: DOMPurify.sanitize on-path downgrades to info AND records matched+on-path candidate", `
+  function render(input) {
+    var clean = DOMPurify.sanitize(input);
+    document.body.innerHTML = clean;
+  }
+  render(location.hash);
+`, function(r) {
+  var sink = r.securitySinks.find(function(s) { return s.sink === "innerHTML"; });
+  if (!sink) return false;
+  if (sink.severity !== "info") return false;
+  if (!sink.sanitizerReport || !Array.isArray(sink.sanitizerReport.candidates)) return false;
+  var cand = sink.sanitizerReport.candidates.find(function(c) { return c.label === "DOMPurify.sanitize()"; });
+  return cand && cand.matched === true && cand.onPath === true && sink.sanitizerReport.decision === "fires-on-all-paths";
+});
+
+test("sanitizerReport: negative — shadowed DOMPurify reports matched=false with shadow reason", `
+  function render(input, DOMPurify) {
+    var clean = DOMPurify.sanitize(input);
+    document.body.innerHTML = clean;
+  }
+  render(location.hash, {sanitize: function(x){return x}});
+`, function(r) {
+  var sink = r.securitySinks.find(function(s) { return s.sink === "innerHTML"; });
+  if (!sink) return false;
+  // Must NOT be downgraded to info — shadow defeats the sanitizer
+  if (sink.severity === "info") return false;
+  if (!sink.sanitizerReport) return false;
+  var cand = sink.sanitizerReport.candidates.find(function(c) { return c.label === "DOMPurify.sanitize()"; });
+  return cand && cand.matched === false && /shadow/i.test(cand.matchReason || "");
+});
+
+test("sanitizerReport: branch-only sanitizer flagged matched but NOT on-path", `
+  function render(input, flag) {
+    var clean = input;
+    if (flag) {
+      clean = DOMPurify.sanitize(input);
+    }
+    document.body.innerHTML = clean;
+  }
+  render(location.hash, true);
+`, function(r) {
+  var sink = r.securitySinks.find(function(s) { return s.sink === "innerHTML"; });
+  if (!sink) return false;
+  if (!sink.sanitizerReport) return false;
+  var cand = sink.sanitizerReport.candidates.find(function(c) { return c.label === "DOMPurify.sanitize()"; });
+  return cand && cand.matched === true && cand.onPath === false && sink.sanitizerReport.decision === "missing-on-some-paths";
+});
+
+test("sanitizerReport: negative — function with no sanitizer-shaped calls has no sanitizerReport", `
+  function render(input) {
+    document.body.innerHTML = input;
+  }
+  render(location.hash);
+`, function(r) {
+  var sink = r.securitySinks.find(function(s) { return s.sink === "innerHTML"; });
+  // no sanitizerReport because no candidates found
+  return sink && !sink.sanitizerReport;
+});
+
+test("sanitizerReport: .toString() is NOT treated as a sanitizer (prototype inheritance regression)", `
+  function render(input) {
+    var s = input.toString();
+    document.body.innerHTML = s;
+  }
+  render(location.hash);
+`, function(r) {
+  var sink = r.securitySinks.find(function(s) { return s.sink === "innerHTML"; });
+  if (!sink) return false;
+  // Must NOT be downgraded: toString doesn't sanitize HTML.
+  if (sink.severity === "info") return false;
+  // And no candidate should claim toString as a match.
+  if (sink.sanitizerReport) {
+    var bad = sink.sanitizerReport.candidates.find(function(c) { return /\.toString\(\)/.test(c.label) && c.matched; });
+    if (bad) return false;
+  }
+  return true;
+});
+
+test("sanitizerReport: .valueOf() / .hasOwnProperty() are NOT treated as sanitizers either", `
+  function render(input) {
+    var s = input.valueOf();
+    var t = s.hasOwnProperty("x");
+    document.body.innerHTML = s;
+  }
+  render(location.hash);
+`, function(r) {
+  var sink = r.securitySinks.find(function(s) { return s.sink === "innerHTML"; });
+  if (!sink) return false;
+  if (sink.severity === "info") return false;
+  return true;
+});
+
+test("sanitizerReport: encodeURIComponent on-path records global-sanitizer match", `
+  function redirect(input) {
+    var enc = encodeURIComponent(input);
+    location.href = "/go?to=" + enc;
+  }
+  redirect(location.hash);
+`, function(r) {
+  var sink = r.securitySinks.find(function(s) { return s.sink === "href"; });
+  if (!sink) return false;
+  if (!sink.sanitizerReport) return false;
+  var cand = sink.sanitizerReport.candidates.find(function(c) { return c.label === "encodeURIComponent()"; });
+  return cand && cand.matched === true && /sanitizer global/i.test(cand.matchReason || "");
 });
 
 // === CFG + Sanitizer Path Analysis (Phase 4) ===

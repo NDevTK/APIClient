@@ -115,6 +115,14 @@ const globalStore = {
   discoveryChanges: new Map(), // service → [{ timestamp, fetchUrl, changes }]
 };
 
+// In-flight exploit-probe sessions, keyed by marker. The EXPLOIT_PROBE
+// handler registers a session before opening the target tab, intercept.js
+// (running in that tab) forwards matching sink hits via content.js →
+// PROBE_HIT, and the handler reads the accumulated hits after its
+// observation window. Non-persistent: sessions outlive only their own
+// observation window (seconds), so loss-on-SW-restart is acceptable.
+const _probeSessions = new Map();
+
 // ─── Key Extraction ──────────────────────────────────────────────────────────
 
 const KEY_PATTERNS = [
@@ -362,6 +370,8 @@ function _serializeGlobalStore() {
           apiKey: v.apiKey || null,
           fetchedAt: v.fetchedAt || null,
           doc: v.doc || null,
+          grouping: v.grouping || null,
+          isVirtual: !!v.isVirtual,
           pageUrls: [...(v.pageUrls instanceof Set ? v.pageUrls : v.pageUrls || [])],
           frameOrigins: [...(v.frameOrigins instanceof Set ? v.frameOrigins : v.frameOrigins || [])],
         },
@@ -526,8 +536,10 @@ function mergeToGlobal(tab) {
         apiKey: v.apiKey,
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,
+        grouping: v.grouping || null,
         pageUrls: _mergedPageUrls,
         frameOrigins: _mergedFrameOrigins,
+        isVirtual: !!v.isVirtual,
       });
     } else if (!globalStore.discoveryDocs.has(k)) {
       globalStore.discoveryDocs.set(k, { status: v.status });
@@ -672,7 +684,14 @@ function stripJsonp(text) {
 }
 
 // Extract interface name from URL with better granularity
-function extractInterfaceName(urlObj) {
+// Service grouping is inherently heuristic — there's no server-side
+// fact that tells us "this URL path is service X". The function below
+// applies a set of URL-structure rules, each with a named reason and
+// the exact fragment it matched, so a reviewer can see WHY a request
+// was grouped into a given bucket and judge whether the classification
+// is right. `extractInterfaceName` remains a string-returning wrapper
+// for back-compat with existing callers.
+function classifyInterface(urlObj) {
   const hostname = urlObj.hostname;
   const segments = urlObj.pathname.split("/").filter(Boolean);
 
@@ -680,11 +699,11 @@ function extractInterfaceName(urlObj) {
   if (urlObj.pathname.includes("batchexecute")) {
     const dataIdx = segments.indexOf("data");
     if (dataIdx > 0) {
-      return hostname + "/" + segments[dataIdx - 1];
+      return { name: hostname + "/" + segments[dataIdx - 1], rule: "google-batchexecute-data", matched: segments[dataIdx - 1] };
     }
     const underscoreIdx = segments.indexOf("_");
     if (underscoreIdx !== -1 && segments.length > underscoreIdx + 1) {
-      return hostname + "/" + segments[underscoreIdx + 1];
+      return { name: hostname + "/" + segments[underscoreIdx + 1], rule: "google-batchexecute-underscore", matched: segments[underscoreIdx + 1] };
     }
   }
 
@@ -698,7 +717,7 @@ function extractInterfaceName(urlObj) {
     /^[A-Z][A-Za-z0-9]{2,}$/.test(segments[1]) &&
     (hostname.endsWith(".google.com") || hostname.endsWith(".googleapis.com"))
   ) {
-    return hostname + "/" + segments[1];
+    return { name: hostname + "/" + segments[1], rule: "google-boq", matched: "/_/" + segments[1] };
   }
 
   // gRPC-over-HTTP $rpc/ paths: the package+service identifies the gRPC
@@ -708,7 +727,7 @@ function extractInterfaceName(urlObj) {
   // `*-pa.clients6.google.com` host gets its own bucket.
   const rpcInfo = parseRpcPath(urlObj.pathname);
   if (rpcInfo) {
-    return hostname + "/$rpc/" + rpcInfo.grpcFullService;
+    return { name: hostname + "/$rpc/" + rpcInfo.grpcFullService, rule: "grpc-over-http", matched: "/$rpc/" + rpcInfo.grpcFullService };
   }
 
   // Special handling for Google API hosts
@@ -717,7 +736,7 @@ function extractInterfaceName(urlObj) {
     hostname.endsWith(".clients6.google.com")
   ) {
     const m = hostname.match(/^(?:staging-)?([^.]+)\./);
-    return m ? m[1] : hostname;
+    return { name: m ? m[1] : hostname, rule: m ? "googleapis-host-prefix" : "googleapis-host-fallback", matched: m ? m[1] : hostname };
   }
 
   // Google-specific: /async/ is an API root on Google properties only
@@ -744,34 +763,193 @@ function extractInterfaceName(urlObj) {
 
   // Find where the API "root" starts — match keyword roots first
   let rootIdx = -1;
+  let keywordMatched = null;
+  let versionAppended = null;
   for (let i = 0; i < segments.length; i++) {
     if (apiRootKeywords.includes(segments[i].toLowerCase())) {
       rootIdx = i;
+      keywordMatched = segments[i];
       // Also include a following version segment (e.g. api/v2 → rootIdx covers both)
       if (i + 1 < segments.length && isVersionSeg(segments[i + 1])) {
         rootIdx = i + 1;
+        versionAppended = segments[i + 1];
       }
       break;
     }
   }
 
   // If no keyword root, find the first version segment anywhere in the path
+  let versionOnly = null;
   if (rootIdx === -1) {
     for (let i = 0; i < segments.length; i++) {
       if (isVersionSeg(segments[i])) {
         rootIdx = i;
+        versionOnly = segments[i];
         break;
       }
     }
   }
 
   if (rootIdx !== -1) {
-    return hostname + "/" + segments.slice(0, rootIdx + 1).join("/");
+    const name = hostname + "/" + segments.slice(0, rootIdx + 1).join("/");
+    if (keywordMatched) {
+      return {
+        name,
+        rule: versionAppended ? "path-keyword+version" : "path-keyword",
+        matched: versionAppended ? keywordMatched + "/" + versionAppended : keywordMatched,
+        keyword: keywordMatched,
+        version: versionAppended || null,
+      };
+    }
+    return { name, rule: "path-version-only", matched: versionOnly, version: versionOnly };
   }
 
   // Fallback: group under hostname alone — most sites have one API,
   // and the first path segment is typically a resource, not a service boundary
-  return hostname;
+  return { name: hostname, rule: "hostname-fallback", matched: hostname };
+}
+
+function extractInterfaceName(urlObj) {
+  return classifyInterface(urlObj).name;
+}
+
+// Refine a hostname-fallback classification by detecting shared path
+// prefixes with URLs already registered on the same host. This is
+// OBSERVATION-DRIVEN — when the tool sees multiple URLs under
+// /svc/shreddit/… (or any other common path root) on a host with no
+// /api/ or /v1/ keyword, it infers that prefix as a service boundary
+// rather than dumping everything under one hostname bucket.
+//
+// Returns `null` if no shared prefix of >=2 segments is found with any
+// sibling method. Otherwise returns a refined classification that
+// replaces the hostname-fallback rule with `path-common-prefix`.
+function refineByObservedPrefix(tab, urlObj, initialName) {
+  if (!tab || !tab.discoveryDocs) return null;
+  const hostname = urlObj.hostname;
+  const newSegs = urlObj.pathname.split("/").filter(Boolean);
+  if (newSegs.length < 2) return null;          // need at least 2 segs to form a prefix
+
+  // Collect already-known method paths under the same hostname, by
+  // checking each method's origin. Registered services don't always key
+  // on hostname (a probe-discovered doc may have a distinct name), so
+  // the origin check is the correct fact-based sibling test.
+  const siblingPaths = [];
+  for (const [, docEntry] of tab.discoveryDocs) {
+    if (!docEntry || !docEntry.doc) continue;
+    for (const bucket of Object.values(docEntry.doc.resources || {})) {
+      for (const m of Object.values(bucket.methods || {})) {
+        if (!m || typeof m.path !== "string" || !m.origin) continue;
+        let origHost = null;
+        try { origHost = new URL(m.origin).hostname; } catch (_) {}
+        if (origHost !== hostname) continue;
+        siblingPaths.push(m.path);
+      }
+    }
+  }
+  if (!siblingPaths.length) return null;
+
+  let bestPrefixLen = 0;
+  for (const sp of siblingPaths) {
+    const segs = sp.split("/").filter(Boolean);
+    let i = 0;
+    while (i < newSegs.length && i < segs.length && newSegs[i] === segs[i]) i++;
+    // Require the match to be a STRICT prefix of both — otherwise
+    // the two URLs are identical (same method, not a common service).
+    if (i > bestPrefixLen && i < newSegs.length && i < segs.length + 1) {
+      bestPrefixLen = i;
+    }
+  }
+  if (bestPrefixLen < 2) return null;
+
+  const prefixSegs = newSegs.slice(0, bestPrefixLen);
+  // Don't promote prefixes whose last segment is a dynamic-looking ID
+  // (numeric, UUID, token) — those aren't service boundaries. Walk
+  // backward until we find a non-dynamic segment.
+  while (prefixSegs.length >= 2 && looksLikeDynamicSegment(prefixSegs[prefixSegs.length - 1])) {
+    prefixSegs.pop();
+  }
+  if (prefixSegs.length < 2) return null;
+
+  const prefix = "/" + prefixSegs.join("/");
+  return {
+    name: hostname + prefix,
+    rule: "path-common-prefix",
+    matched: prefix,
+  };
+}
+
+// Migrate method entries whose path starts with the given prefix out of
+// a hostname-fallback bucket and into a new common-prefix bucket. Used
+// when refineByObservedPrefix detects a shared prefix — without this
+// the original URL stays orphaned in the hostname bucket while the new
+// URL lands in the refined bucket, producing two buckets for the same
+// service. Schemas referenced via $ref by migrating methods are copied
+// along to preserve lookups.
+function migrateToCommonPrefixBucket(tab, oldName, refinement, urlObj) {
+  const oldDoc = tab.discoveryDocs.get(oldName);
+  if (!oldDoc || !oldDoc.doc) return;
+  const newName = refinement.name;
+  if (newName === oldName) return;
+  const prefixSegs = refinement.matched.replace(/^\//, "").split("/").filter(Boolean);
+
+  // Create or fetch the new docEntry.
+  let newDoc = tab.discoveryDocs.get(newName);
+  if (!newDoc) {
+    newDoc = {
+      status: "found",
+      isVirtual: true,
+      grouping: {
+        rule: refinement.rule,
+        matched: refinement.matched,
+        firstUrl: urlObj ? urlObj.href : null,
+      },
+      doc: {
+        kind: "discovery#restDescription",
+        name: newName,
+        title: `${newName} (Learned)`,
+        rootUrl: oldDoc.doc.rootUrl,
+        baseUrl: oldDoc.doc.baseUrl,
+        resources: {},
+        schemas: {},
+      },
+    };
+    tab.discoveryDocs.set(newName, newDoc);
+  }
+
+  const oldSchemas = oldDoc.doc.schemas || {};
+  const newSchemas = newDoc.doc.schemas;
+
+  for (const [bucketKey, bucket] of Object.entries(oldDoc.doc.resources || {})) {
+    const methods = bucket.methods || {};
+    for (const methodKey of Object.keys(methods)) {
+      const m = methods[methodKey];
+      const mSegs = (m.path || "").split("/").filter(Boolean);
+      let matches = mSegs.length >= prefixSegs.length;
+      for (let i = 0; matches && i < prefixSegs.length; i++) {
+        if (mSegs[i] !== prefixSegs[i]) matches = false;
+      }
+      if (!matches) continue;
+      // Re-id to match new interface.
+      m.id = `${newName.replace(/\//g, ".")}.${methodKey}`;
+      if (!newDoc.doc.resources[bucketKey]) newDoc.doc.resources[bucketKey] = { methods: {} };
+      newDoc.doc.resources[bucketKey].methods[methodKey] = m;
+      delete methods[methodKey];
+      // Copy the schema this method references so $ref lookups still work.
+      if (m.request && m.request.$ref && oldSchemas[m.request.$ref] && !newSchemas[m.request.$ref]) {
+        newSchemas[m.request.$ref] = oldSchemas[m.request.$ref];
+      }
+      if (m.response && m.response.$ref && oldSchemas[m.response.$ref] && !newSchemas[m.response.$ref]) {
+        newSchemas[m.response.$ref] = oldSchemas[m.response.$ref];
+      }
+    }
+  }
+
+  // If the hostname bucket is now empty, remove it so it doesn't clutter.
+  let remainingMethods = 0;
+  for (const b of Object.values(oldDoc.doc.resources || {})) {
+    remainingMethods += Object.keys(b.methods || {}).length;
+  }
+  if (remainingMethods === 0) tab.discoveryDocs.delete(oldName);
 }
 
 // Parse $rpc/ paths: "/$rpc/google.internal.people.v2.InternalPeopleService/GetPeople"
@@ -875,16 +1053,259 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
 
 // ─── Smart Learning ──────────────────────────────────────────────────────────
 
-function learnFromRequest(tabId, interfaceName, entry, headers) {
+// Register an AST-observed fetch call site as a method on its service
+// WITHOUT fabricating data. Unlike the previous design (which laundered
+// AST values through a fake URL + fake JSON body into learnFromRequest
+// so generateSchemaFromJson could extract field names), this function
+// attaches AST facts DIRECTLY:
+//   - method.parameters[name]._astValidValues    query params
+//   - doc.schemas[…].properties[name]._astValidValues  body fields
+//   - method._astSourceScript                     where in the JS bundle
+// All AST-origin data is tagged `_astInferred: true` so pickExampleValue
+// reports it under `ast-constraint` provenance — never as "observed-top"
+// (which implies the SERVER received this value; the server never did).
+// Stats observation counters are never bumped.
+function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
   const tab = getTab(tabId);
-  const url = new URL(entry.url);
-  const method = entry.method;
 
+  // Resolve URL. Dynamic / unresolvable → register service-level only,
+  // no synthetic method entry (would confuse the reviewer with made-up
+  // paths like `dynamic_0`).
+  //
+  // Relative URLs resolve against the PAGE's origin at runtime, NOT the
+  // script's host. Cross-origin-hosted scripts (e.g. Reddit serves its
+  // shreddit bundle from www.redditstatic.com but it fetches against
+  // www.reddit.com when the bundle executes on a reddit.com page) would
+  // otherwise be misattributed to the script's host. Fall back to
+  // scriptUrl only when the tab's page URL isn't available.
+  const isDynamic = /^\$\{|^\(dynamic\)|^\{[a-zA-Z]/.test(callSite.url);
+  let csUrl = null;
+  if (!isDynamic) {
+    try {
+      const _pageMeta = _tabMeta.get(tabId);
+      const _baseForRel = (_pageMeta && _pageMeta.url) ? _pageMeta.url : scriptUrl;
+      csUrl = /^https?:\/\//i.test(callSite.url)
+        ? new URL(callSite.url)
+        : new URL(callSite.url, _baseForRel);
+    } catch (_) { return null; }
+  }
+
+  // Classification at AST-time is an OPEN question — we don't have a
+  // response body to magic-byte-sniff, and request shape alone (GET
+  // with no query / body) can mean either "static asset fetch" or
+  // "plain API endpoint." We register the method regardless and defer
+  // real API-vs-asset classification to the moment real traffic flows
+  // (handleResponseBody stamps _responseKind="asset" via magic bytes).
+
+
+  // Get-or-create docEntry — same prologue as learnFromRequest.
+  // When the classifier falls back to hostname, also check for observed-
+  // prefix clustering against siblings on the same host. If a shared
+  // path prefix of >=2 segments exists, promote to a prefix-based bucket
+  // AND migrate matching siblings so the service groups as one.
+  let grouping = csUrl ? classifyInterface(csUrl) : { rule: "ast-dynamic", matched: "dynamic URL" };
+  if (csUrl && grouping.rule === "hostname-fallback") {
+    const refined = refineByObservedPrefix(tab, csUrl, grouping.name);
+    if (refined) {
+      migrateToCommonPrefixBucket(tab, grouping.name || interfaceName, refined, csUrl);
+      grouping = refined;
+      interfaceName = refined.name;
+    }
+  }
   let docEntry = tab.discoveryDocs.get(interfaceName);
   if (!docEntry || !docEntry.doc) {
     docEntry = {
       status: "found",
       isVirtual: true,
+      grouping: { rule: grouping.rule, matched: grouping.matched, firstUrl: csUrl ? csUrl.href : callSite.url },
+      doc: {
+        kind: "discovery#restDescription",
+        name: interfaceName,
+        title: `${interfaceName} (Learned)`,
+        rootUrl: csUrl ? csUrl.origin + "/" : "https://" + interfaceName + "/",
+        baseUrl: csUrl ? csUrl.origin + "/" : "https://" + interfaceName + "/",
+        resources: { learned: { methods: {} } },
+        schemas: {},
+      },
+    };
+    tab.discoveryDocs.set(interfaceName, docEntry);
+  }
+  const doc = docEntry.doc;
+  if (!doc.resources.learned) doc.resources.learned = { methods: {} };
+
+  if (!csUrl) return docEntry;   // dynamic-URL case: docEntry exists, no method
+
+  // Method name + collision handling — mirrors learnFromRequest.
+  const { methodName: baseMethodName } = calculateMethodMetadata(csUrl, interfaceName);
+  const qualifiedName = callSite.method.toLowerCase() + "_" + baseMethodName;
+  const probedMethod = doc.resources.probed?.methods?.[baseMethodName];
+
+  let methodName;
+  const existingBase = doc.resources.learned.methods[baseMethodName];
+  const existingQualified = doc.resources.learned.methods[qualifiedName];
+  if (existingQualified) {
+    methodName = qualifiedName;
+  } else if (existingBase && existingBase.httpMethod !== callSite.method && !probedMethod) {
+    const existQualName = existingBase.httpMethod.toLowerCase() + "_" + baseMethodName;
+    if (!doc.resources.learned.methods[existQualName]) {
+      existingBase.id = `${interfaceName.replace(/\//g, ".")}.${existQualName}`;
+      doc.resources.learned.methods[existQualName] = existingBase;
+    }
+    delete doc.resources.learned.methods[baseMethodName];
+    methodName = qualifiedName;
+  } else {
+    methodName = baseMethodName;
+  }
+
+  const methodId = `${interfaceName.replace(/\//g, ".")}.${methodName}`;
+  if (!doc.resources.learned.methods[methodName] && !probedMethod) {
+    doc.resources.learned.methods[methodName] = {
+      id: methodId,
+      path: csUrl.pathname.substring(1),
+      httpMethod: callSite.method,
+      parameters: {},
+      request: null,
+      origin: csUrl.origin,
+      _astSourceScript: scriptUrl || null,
+      _astInferred: true,
+      _astCallSites: [],
+    };
+  }
+  const m = probedMethod || doc.resources.learned.methods[methodName];
+  if (m && !m.origin) m.origin = csUrl.origin;
+  // Record every AST call site that registered this method. Dedup by
+  // script + line so the same call doesn't accumulate on repeat scans.
+  // Reviewer uses these to click through to the JS location each
+  // endpoint was discovered in — facts about where the code lives.
+  if (m) {
+    if (!Array.isArray(m._astCallSites)) m._astCallSites = [];
+    const cs = {
+      script: scriptUrl || null,
+      line: callSite.loc ? callSite.loc.line : null,
+      column: callSite.loc ? callSite.loc.column : null,
+      enclosingFunction: callSite.enclosingFunction || null,
+    };
+    const key = `${cs.script}:${cs.line}:${cs.column}`;
+    const alreadySeen = m._astCallSites.some(x => `${x.script}:${x.line}:${x.column}` === key);
+    if (!alreadySeen) m._astCallSites.push(cs);
+  }
+
+  // Type inference helper: pick from the first valid value's runtime type.
+  // Not a guess — this is the literal AST observed. Default "string" when
+  // no observations (neutral; no false precision).
+  const _inferType = (validValues, defaultValue) => {
+    const sample = Array.isArray(validValues) && validValues.length ? validValues[0]
+      : (defaultValue !== undefined ? defaultValue : null);
+    if (sample == null) return "string";
+    if (typeof sample === "number") return "number";
+    if (typeof sample === "boolean") return "boolean";
+    return "string";
+  };
+
+  // Merge AST-observed valid values onto a target (param or schema prop).
+  // Promotes to `enum` when distinct count >= 2 (matches prior behavior).
+  const _mergeAstValues = (target, validValues, defaultValue) => {
+    if (Array.isArray(validValues) && validValues.length) {
+      const prev = Array.isArray(target._astValidValues) ? target._astValidValues.slice() : [];
+      for (const vv of validValues) {
+        const s = String(vv);
+        if (prev.indexOf(s) < 0) prev.push(s);
+      }
+      target._astValidValues = prev;
+      if (prev.length >= 2 && !target.customEnum && !target.enum) {
+        target.enum = prev.slice();
+        target._detectedEnum = true;
+      }
+    }
+    if (defaultValue !== undefined) target._astDefault = defaultValue;
+  };
+
+  // Query params — direct registration.
+  if (callSite.params) {
+    for (const p of callSite.params) {
+      if ((p.location || "query") !== "query") continue;
+      if (!m.parameters[p.name]) {
+        m.parameters[p.name] = {
+          type: _inferType(p.validValues, p.defaultValue),
+          location: "query",
+          description: "Learned from AST fetch call site",
+          _astInferred: true,
+        };
+      }
+      _mergeAstValues(m.parameters[p.name], p.validValues, p.defaultValue);
+    }
+  }
+
+  // Body params — build a direct AST schema (no synthetic JSON round-trip).
+  const bodyParams = (callSite.params || []).filter(p => (p.location || "query") === "body");
+  if (bodyParams.length) {
+    const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Request`;
+    if (!doc.schemas[schemaName]) {
+      doc.schemas[schemaName] = { id: schemaName, type: "object", properties: {}, _astInferred: true };
+    }
+    const schema = doc.schemas[schemaName];
+    if (!schema.properties) schema.properties = {};
+    for (const bp of bodyParams) {
+      if (!schema.properties[bp.name]) {
+        schema.properties[bp.name] = {
+          type: _inferType(bp.validValues, bp.defaultValue),
+          _astInferred: true,
+        };
+      }
+      _mergeAstValues(schema.properties[bp.name], bp.validValues, bp.defaultValue);
+    }
+    if (!m.request) m.request = { $ref: schemaName };
+  }
+
+  // Record content-type when AST captured it and the method hasn't seen
+  // a real request-time content type yet. Real traffic overrides.
+  if (callSite.headers) {
+    const ct = callSite.headers["content-type"] || callSite.headers["Content-Type"];
+    if (ct && (!m.contentTypes || m.contentTypes.length === 0)) {
+      m.contentTypes = [ct];
+    }
+  }
+
+  // Apply example-value picker so the Send form has prefills even
+  // before any real traffic hits — pickExampleValue's `ast-constraint`
+  // tier uses the _astValidValues we just attached. applyStatsToMethod
+  // also walks any body-schema props we created with _astInferred:true.
+  applyStatsToMethod(m, doc);
+
+  return docEntry;
+}
+
+function learnFromRequest(tabId, interfaceName, entry, headers) {
+  const tab = getTab(tabId);
+  const url = new URL(entry.url);
+  const method = entry.method;
+
+  // Record WHICH grouping rule fired when this service was first
+  // created. Grouping decisions must be traceable to the rule that
+  // produced them so reviewers can judge. When classifyInterface falls
+  // back to hostname-only, also check for shared path prefixes with
+  // siblings on the same host — observed-prefix clustering catches
+  // cases like `/svc/shreddit/*` that no keyword rule covers.
+  let grouping = classifyInterface(url);
+  if (grouping.rule === "hostname-fallback") {
+    const refined = refineByObservedPrefix(tab, url, grouping.name);
+    if (refined) {
+      migrateToCommonPrefixBucket(tab, grouping.name, refined, url);
+      grouping = refined;
+      interfaceName = refined.name;
+    }
+  }
+  // Stamp the resolved name onto the entry so callers (handleResponseBody)
+  // can use it for downstream lookups instead of their pre-migration
+  // `service` variable — the bucket they came in with may have been
+  // emptied and deleted during migration.
+  entry.interfaceName = interfaceName;
+  let docEntry = tab.discoveryDocs.get(interfaceName);
+  if (!docEntry || !docEntry.doc) {
+    docEntry = {
+      status: "found",
+      isVirtual: true,
+      grouping: { rule: grouping.rule, matched: grouping.matched, firstUrl: entry.url },
       doc: {
         kind: "discovery#restDescription",
         name: interfaceName,
@@ -1165,6 +1586,8 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
   }
 
   // ─── Statistics collection ───────────────────────────────────────────────
+  // Only real network traffic reaches here — AST fetch call sites go
+  // through learnFromAstCallSite directly (no synthetic entries).
   if (!m._stats) m._stats = { requestCount: 0, params: {}, bodyFields: {} };
   m._stats.requestCount++;
 
@@ -1189,8 +1612,8 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
     }
   }
 
-  // Apply stats-derived metadata back to parameters
-  applyStatsToMethod(m);
+  // Apply stats-derived metadata back to parameters AND body-field schemas
+  applyStatsToMethod(m, doc);
 
   // ─── Chain detection ────────────────────────────────────────────────────
   if (tab._valueIndex) {
@@ -1241,46 +1664,122 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
   }
 }
 
-function applyStatsToMethod(m) {
-  if (!m._stats || m._stats.requestCount < STATS_MIN_OBS_FOR_REQUIRED) return;
-  const stats = m._stats;
+function _applyStatsToField(field, fieldStats, requestCount) {
+  if (!field || !fieldStats) return;
 
-  for (const [name, paramStats] of Object.entries(stats.params)) {
+  // Required detection
+  const reqAnalysis = analyzeRequired(fieldStats, requestCount);
+  if (!field.customRequired) {
+    field.required = reqAnalysis.required;
+    field._requiredConfidence = reqAnalysis.confidence;
+  }
+
+  // Enum detection
+  const enumAnalysis = analyzeEnum(fieldStats);
+  if (enumAnalysis.isEnum && !field.customEnum) {
+    field.enum = enumAnalysis.values;
+    field._detectedEnum = true;
+  }
+
+  // Default detection
+  const defaultAnalysis = analyzeDefault(fieldStats);
+  if (defaultAnalysis.hasDefault) {
+    field._defaultValue = defaultAnalysis.value;
+    field._defaultConfidence = defaultAnalysis.confidence;
+  }
+
+  // Type narrowing from format hints
+  const narrowedFormat = analyzeFormat(fieldStats);
+  if (narrowedFormat && field.type === "string") {
+    field.format = narrowedFormat;
+  }
+
+  // Numeric range
+  const range = analyzeRange(fieldStats);
+  if (range) field._range = range;
+}
+
+// Walk a request schema's property tree, resolving $refs, and attach
+// body-field stats at each dot-path that matches a stats.bodyFields
+// entry. Stops when the schema ref has already been visited to avoid
+// cycles on self-referential message types.
+function _applyBodyFieldStats(m, doc, bodyFieldStats, requestCount) {
+  if (!m.request || !m.request.$ref || !doc || !doc.schemas) return;
+  function walk(sch, prefix, visited) {
+    if (!sch || !sch.properties) return;
+    for (const [k, def] of Object.entries(sch.properties)) {
+      const dotPath = prefix ? prefix + "." + k : k;
+      const fs = bodyFieldStats[dotPath];
+      if (fs) {
+        _applyStatsToField(def, fs, requestCount);
+        // Example value + provenance on the field def so the form
+        // renderer can prefill without a second pass.
+        const ex = pickExampleValue(def, fs);
+        def._exampleValue = ex.value;
+        def._exampleValueSource = ex.source;
+        if (ex.confidence != null) def._exampleConfidence = ex.confidence;
+      } else {
+        // No observation for this specific field — still pick a synthetic
+        // example from the schema shape so the UI never has nothing.
+        const ex = pickExampleValue(def, null);
+        def._exampleValue = ex.value;
+        def._exampleValueSource = ex.source;
+      }
+      // Recurse into sub-schemas. Track visited refs per-walk to prevent
+      // infinite loops on recursive schemas (e.g. tree-shaped messages).
+      if (def.$ref && !visited.has(def.$ref)) {
+        visited.add(def.$ref);
+        walk(doc.schemas[def.$ref], dotPath, visited);
+        visited.delete(def.$ref);
+      } else if (def.type === "array" && def.items && def.items.$ref && !visited.has(def.items.$ref)) {
+        visited.add(def.items.$ref);
+        walk(doc.schemas[def.items.$ref], dotPath + "[]", visited);
+        visited.delete(def.items.$ref);
+      } else if (def.properties) {
+        walk(def, dotPath, visited);
+      }
+    }
+  }
+  const rootSchema = doc.schemas[m.request.$ref];
+  if (!rootSchema) return;
+  walk(rootSchema, "", new Set([m.request.$ref]));
+}
+
+function applyStatsToMethod(m, doc) {
+  // Runs for:
+  //   - Real-traffic methods (m._stats populated by learnFromRequest).
+  //   - AST-only methods (m._stats may be empty; m.parameters populated
+  //     by learnFromAstCallSite with _astValidValues / _astInferred).
+  // pickExampleValue naturally handles both: if paramStats is null/empty
+  // and the field has _astValidValues, the `ast-constraint` tier wins;
+  // otherwise it falls through to enum/format/type-default.
+  const stats = m._stats || { requestCount: 0, params: {}, bodyFields: {} };
+
+  // Observed-stats pass: fires analyzer metadata (required/enum/default/
+  // format/range) for params we have counts on.
+  for (const [name, paramStats] of Object.entries(stats.params || {})) {
     if (!m.parameters[name]) continue;
-    const param = m.parameters[name];
+    _applyStatsToField(m.parameters[name], paramStats, stats.requestCount);
+  }
 
-    // Required detection
-    const reqAnalysis = analyzeRequired(paramStats, stats.requestCount);
-    if (!param.customRequired) {
-      param.required = reqAnalysis.required;
-      param._requiredConfidence = reqAnalysis.confidence;
-    }
+  // Example value pass: cover EVERY declared parameter, real-observed
+  // or AST-only. Previously AST-only params got no _exampleValue
+  // because we iterated stats.params (which didn't include them) and
+  // the Send form showed empty inputs forever until real traffic hit.
+  for (const [name, param] of Object.entries(m.parameters || {})) {
+    const paramStats = (stats.params || {})[name] || null;
+    const ex = pickExampleValue(param, paramStats);
+    param._exampleValue = ex.value;
+    param._exampleValueSource = ex.source;
+    if (ex.confidence != null) param._exampleConfidence = ex.confidence;
+    else delete param._exampleConfidence;
+  }
 
-    // Enum detection
-    const enumAnalysis = analyzeEnum(paramStats);
-    if (enumAnalysis.isEnum && !param.customEnum) {
-      param.enum = enumAnalysis.values;
-      param._detectedEnum = true;
-    }
-
-    // Default detection
-    const defaultAnalysis = analyzeDefault(paramStats);
-    if (defaultAnalysis.hasDefault) {
-      param._defaultValue = defaultAnalysis.value;
-      param._defaultConfidence = defaultAnalysis.confidence;
-    }
-
-    // Type narrowing
-    const narrowedFormat = analyzeFormat(paramStats);
-    if (narrowedFormat && param.type === "string") {
-      param.format = narrowedFormat;
-    }
-
-    // Numeric range
-    const range = analyzeRange(paramStats);
-    if (range) {
-      param._range = range;
-    }
+  // Body fields: the schema tree lives in doc.schemas — walk it and
+  // attach stats + example values by dot-path. Without this, popup
+  // rendering knew which FIELDS existed but not what values to prefill.
+  if (doc && stats.bodyFields) {
+    _applyBodyFieldStats(m, doc, stats.bodyFields, stats.requestCount);
   }
 
   // Correlations
@@ -2850,7 +3349,7 @@ async function handleResponseBody(tabId, msg, frameId) {
   if (url.searchParams.has("_probe")) return;
 
   const tab = getTab(tabId);
-  const service = extractInterfaceName(url);
+  let service = extractInterfaceName(url);
 
   // Build request header map from intercept.js capture
   const headerMap = msg.requestHeaders || {};
@@ -2945,7 +3444,10 @@ async function handleResponseBody(tabId, msg, frameId) {
   // Nothing is ever hidden from the log — every request, including boring
   // CDN fetches, is captured and surfaced to the user. The bucket only
   // decides how much schema to synthesize around it.
-  const _assetClass = classifyResponseAsset(msg.body, msg.base64Encoded);
+  const _assetClass = classifyResponseAsset(msg.body, msg.base64Encoded, {
+    responseType: msg.responseType || null,
+    responseContentType: (msg.responseHeaders && (msg.responseHeaders["content-type"] || msg.responseHeaders["Content-Type"])) || null,
+  });
   entry._assetKind = _assetClass.kind;     // "asset" | "empty" | "api"
   entry._assetLabel = _assetClass.label;   // e.g. "image/png" when asset
   const _isAsset = _assetClass.kind === "asset";
@@ -2961,45 +3463,11 @@ async function handleResponseBody(tabId, msg, frameId) {
   // Snapshot discovery status before learnFromRequest (which creates a virtual doc)
   const preLearnDiscovery = tab.discoveryDocs.get(service);
 
-  // Learn from request — skipped only for "boring" fetches. Image APIs
-  // (any dynamic signal present) still learn URL + request body + auth so
-  // they can be replayed and inspected.
-  if (!_isBoringFetch) {
-    learnFromRequest(tabId, service, entry, headerMap);
-
-    // If the response was binary media (and it's a real endpoint), annotate
-    // the method entry with the detected media type so the consumer knows
-    // not to expect a JSON/protobuf response schema.
-    if (_isAsset && entry.methodId) {
-      const _mid = entry.methodId;
-      const _methodName = _mid.slice(_mid.lastIndexOf(".") + 1);
-      const _methods = tab.discoveryDocs.get(service)?.doc?.resources?.learned?.methods;
-      if (_methods && _methods[_methodName]) {
-        _methods[_methodName]._responseKind = "asset";
-        _methods[_methodName]._responseLabel = _assetClass.label;
-      }
-    }
-  }
-  mergeToGlobal(tab);
-
-  // Track which pages/origins this service has been used from
-  var _svcDocEntry = tab.discoveryDocs.get(service);
-  if (_svcDocEntry) {
-    if (!_svcDocEntry.pageUrls) _svcDocEntry.pageUrls = new Set();
-    var _svcFrameInfo = frameId != null ? _tabFrames.get(tabId)?.get(frameId) : null;
-    // pageUrls always tracks the top-level page URL
-    var _svcMeta = _tabMeta.get(tabId);
-    if (_svcMeta?.url) _svcDocEntry.pageUrls.add(_svcMeta.url);
-    if (_svcFrameInfo && !_svcFrameInfo.isTop) {
-      // Request came from an iframe — record iframe origin separately
-      if (_svcFrameInfo.origin) {
-        if (!_svcDocEntry.frameOrigins) _svcDocEntry.frameOrigins = new Set();
-        _svcDocEntry.frameOrigins.add(_svcFrameInfo.origin);
-      }
-    }
-  }
-
-  // Decode request body (protobuf/JSPB/JSON)
+  // Decode request body (protobuf/JSPB/JSON) — must happen BEFORE
+  // learnFromRequest so entry.isJson / entry.decodedBody are set when
+  // schema learning records body-field stats. Downstream code further
+  // in this function (probing trigger, chain analysis) also reads
+  // these fields, so the single decode here covers both.
   const logContentType = contentType || "";
   const isProtobuf = logContentType.includes("protobuf") || url.pathname.includes("$rpc");
   if (rawBodyB64) {
@@ -3048,6 +3516,53 @@ async function handleResponseBody(tabId, msg, frameId) {
         } catch (_) {}
       }
     } catch (_) {}
+  }
+
+  // Learn from request — skipped only for "boring" fetches. Image APIs
+  // (any dynamic signal present) still learn URL + request body + auth so
+  // they can be replayed and inspected.
+  if (!_isBoringFetch) {
+    learnFromRequest(tabId, service, entry, headerMap);
+
+    // learnFromRequest may migrate the service (e.g. hostname-fallback →
+    // path-common-prefix) when observed-prefix clustering promotes the
+    // bucket. Use the post-migration name for all downstream lookups —
+    // our pre-migration `service` may now point at a bucket that was
+    // emptied and deleted during the migration.
+    if (entry.interfaceName && entry.interfaceName !== service) {
+      service = entry.interfaceName;
+    }
+
+    // If the response was binary media (and it's a real endpoint), annotate
+    // the method entry with the detected media type so the consumer knows
+    // not to expect a JSON/protobuf response schema.
+    if (_isAsset && entry.methodId) {
+      const _mid = entry.methodId;
+      const _methodName = _mid.slice(_mid.lastIndexOf(".") + 1);
+      const _methods = tab.discoveryDocs.get(service)?.doc?.resources?.learned?.methods;
+      if (_methods && _methods[_methodName]) {
+        _methods[_methodName]._responseKind = "asset";
+        _methods[_methodName]._responseLabel = _assetClass.label;
+      }
+    }
+  }
+  mergeToGlobal(tab);
+
+  // Track which pages/origins this service has been used from.
+  var _svcDocEntry = tab.discoveryDocs.get(service);
+  if (_svcDocEntry) {
+    if (!_svcDocEntry.pageUrls) _svcDocEntry.pageUrls = new Set();
+    var _svcFrameInfo = frameId != null ? _tabFrames.get(tabId)?.get(frameId) : null;
+    // pageUrls always tracks the top-level page URL
+    var _svcMeta = _tabMeta.get(tabId);
+    if (_svcMeta?.url) _svcDocEntry.pageUrls.add(_svcMeta.url);
+    if (_svcFrameInfo && !_svcFrameInfo.isTop) {
+      // Request came from an iframe — record iframe origin separately
+      if (_svcFrameInfo.origin) {
+        if (!_svcDocEntry.frameOrigins) _svcDocEntry.frameOrigins = new Set();
+        _svcDocEntry.frameOrigins.add(_svcFrameInfo.origin);
+      }
+    }
   }
 
   // Protobuf probing trigger — skip for boring asset fetches.
@@ -3289,8 +3804,9 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
   if (meta && meta.url) tabUrl = meta.url;
   else if (buf && buf.pageUrl) tabUrl = buf.pageUrl;
 
-  // Build cross-file definition index from cached propDefs+defMap
-  _buildCrossDefs(buf, analysis, scriptOffsets);
+  // Cross-file definition index is populated by analyzeJSBundle's pre-pass
+  // into analysis.defMap/propDefs — GET_CROSS_DEFS projects those
+  // combined-bundle lines back into per-script coords on first request.
 
   var hasFindings = analysis.protoEnums.length || analysis.protoFieldMaps.length ||
     analysis.fetchCallSites.length || analysis.sourceMapUrl ||
@@ -3481,6 +3997,17 @@ async function _analyzeCombinedScripts(tabId) {
   }
   analysis = response.result;
 
+  if (analysis._timings) {
+    // Surface per-script AST latency on the analysis result so the
+    // harness (`scripts` command) can display it — useful when a
+    // user-facing stall needs root-causing without leaning on the
+    // background console. _analysisTimings is a stable name distinct
+    // from the internal _timings the worker fills in and strips.
+    tab._lastAstTimings = analysis._timings;
+    analysis._analysisTimings = analysis._timings;
+    delete analysis._timings;
+  }
+
   // ─── Cache the analysis result ──────────────────────────────────────
   if (cacheKey) {
     globalStore.scriptCache.set(cacheKey, {
@@ -3493,8 +4020,9 @@ async function _analyzeCombinedScripts(tabId) {
     scheduleSave();
   }
 
-  // Build cross-file definition index from combined propDefs+defMap
-  _buildCrossDefs(buf, analysis, scriptOffsets);
+  // Cross-file definition index is populated by analyzeJSBundle's pre-pass
+  // into analysis.defMap/propDefs — GET_CROSS_DEFS projects those
+  // combined-bundle lines back into per-script coords on first request.
 
   if (analysis.resolverErrors && analysis.resolverErrors.length > 0) {
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
@@ -3529,6 +4057,30 @@ async function _analyzeCombinedScripts(tabId) {
     var secSinks = analysis.securitySinks || [];
     var dangerousPats = analysis.dangerousPatterns || [];
     if (secSinks.length || dangerousPats.length) {
+      // Shift every nested-location field by -(lineStart-1) so the hop/
+      // candidate coords end up in SCRIPT-LOCAL space, matching the
+      // primary sink location. Without this, taintPath.at.line and
+      // sanitizerReport.candidates[i].loc.line stay in combined-bundle
+      // space and sourcemap lookups silently return null.
+      function _shiftFindingLines(finding, lineDelta) {
+        if (!lineDelta) return finding;
+        if (Array.isArray(finding.taintPath)) {
+          finding.taintPath = finding.taintPath.map(function(h) {
+            if (!h || !h.at || typeof h.at.line !== "number") return h;
+            return Object.assign({}, h, { at: Object.assign({}, h.at, { line: h.at.line + lineDelta }) });
+          });
+        }
+        if (finding.sanitizerReport && Array.isArray(finding.sanitizerReport.candidates)) {
+          finding.sanitizerReport = Object.assign({}, finding.sanitizerReport, {
+            candidates: finding.sanitizerReport.candidates.map(function(c) {
+              if (!c || !c.loc || typeof c.loc.line !== "number") return c;
+              return Object.assign({}, c, { loc: Object.assign({}, c.loc, { line: c.loc.line + lineDelta }) });
+            }),
+          });
+        }
+        return finding;
+      }
+
       var byScript = {}; // scriptUrl → {sinks: [], patterns: []}
       for (var _fsi = 0; _fsi < secSinks.length; _fsi++) {
         var sink = secSinks[_fsi];
@@ -3540,9 +4092,11 @@ async function _analyzeCombinedScripts(tabId) {
         if (!byScript[sKey]) byScript[sKey] = { sinks: [], patterns: [] };
         var adjustedSink = Object.assign({}, sink);
         if (sInfo.url && sink.location) {
+          var sDelta = -(sInfo.lineStart - 1);
           adjustedSink.location = Object.assign({}, sink.location, {
-            line: sink.location.line - sInfo.lineStart + 1
+            line: sink.location.line + sDelta
           });
+          _shiftFindingLines(adjustedSink, sDelta);
         }
         byScript[sKey].sinks.push(adjustedSink);
       }
@@ -3554,9 +4108,11 @@ async function _analyzeCombinedScripts(tabId) {
         if (!byScript[pKey]) byScript[pKey] = { sinks: [], patterns: [] };
         var adjustedPat = Object.assign({}, pat);
         if (pInfo.url && pat.location) {
+          var pDelta = -(pInfo.lineStart - 1);
           adjustedPat.location = Object.assign({}, pat.location, {
-            line: pat.location.line - pInfo.lineStart + 1
+            line: pat.location.line + pDelta
           });
+          _shiftFindingLines(adjustedPat, pDelta);
         }
         byScript[pKey].patterns.push(adjustedPat);
       }
@@ -3628,63 +4184,19 @@ function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
               console.debug("[AST:sourcemap] Extracted %d types", analysis.sourceMapTypes.length);
             }
           }
-          // Run security analysis on original (unminified) source files via batch offscreen call.
-          // Build a set of existing finding keys to deduplicate against the combined analysis.
-          var _existingKeys = new Set();
-          if (tab._securityFindings) {
-            for (var _efi = 0; _efi < tab._securityFindings.length; _efi++) {
-              var _efEntry = tab._securityFindings[_efi];
-              var _efSinks = _efEntry.securitySinks || [];
-              for (var _esi = 0; _esi < _efSinks.length; _esi++) {
-                var _es = _efSinks[_esi];
-                _existingKeys.add(_es.type + ":" + _es.sink + ":" + _es.location.line + ":" + _es.location.column);
-              }
-              var _efDangs = _efEntry.dangerousPatterns || [];
-              for (var _edi = 0; _edi < _efDangs.length; _edi++) {
-                var _ed = _efDangs[_edi];
-                _existingKeys.add(_ed.type + ":" + _ed.location.line + ":" + _ed.location.column);
-              }
-            }
-          }
-          // Collect files eligible for security analysis
-          var batchFiles = [];
-          for (var _ssi = 0; _ssi < smData.sourcesContent.length; _ssi++) {
-            var _srcContent = smData.sourcesContent[_ssi];
-            var _srcName = smData.sources[_ssi] || "source_" + _ssi;
-            if (!_srcContent || _srcContent.length < 100) continue;
-            if (!/\.(js|ts|jsx|tsx|mjs)$/i.test(_srcName) && !/^[^.]+$/.test(_srcName)) continue;
-            batchFiles.push({ code: _srcContent, name: _srcName });
-          }
-          if (batchFiles.length > 0) {
-            var batchResp = await sendToOffscreen({ type: "AST_ANALYZE_BATCH", files: batchFiles });
-            if (batchResp && batchResp.success) {
-              var smSecFindings = 0;
-              for (var _bi = 0; _bi < batchResp.result.length; _bi++) {
-                var _bResult = batchResp.result[_bi];
-                if (!_bResult.success) continue;
-                var _srcSinks = (_bResult.securitySinks || []).filter(function(s) {
-                  return !_existingKeys.has(s.type + ":" + s.sink + ":" + s.location.line + ":" + s.location.column);
-                });
-                var _srcDangerous = (_bResult.dangerousPatterns || []).filter(function(d) {
-                  return !_existingKeys.has(d.type + ":" + d.location.line + ":" + d.location.column);
-                });
-                if (_srcSinks.length || _srcDangerous.length) {
-                  if (!tab._securityFindings) tab._securityFindings = [];
-                  var _smPageMeta = _tabMeta.get(tabId);
-                  tab._securityFindings.push({
-                    sourceUrl: batchFiles[_bi].name,
-                    pageUrl: _smPageMeta ? _smPageMeta.url : null,
-                    securitySinks: _srcSinks,
-                    dangerousPatterns: _srcDangerous,
-                  });
-                  smSecFindings += _srcSinks.length + _srcDangerous.length;
-                }
-              }
-              if (smSecFindings > 0) {
-                console.debug("[AST:sourcemap] Security analysis of original sources: %d additional findings", smSecFindings);
-              }
-            }
-          }
+          // Per-file security analysis on sourcemap sourcesContent is
+          // intentionally disabled. It was meant to catch sinks that the
+          // main bundled analysis missed, but in practice every sink
+          // surfaces in both coord spaces. The dedup key was
+          // `(type, sink, line, column)` — bundled findings sit at
+          // minified (line=2, col=big-number), source-mapped findings
+          // sit at beautified (line=107, col=8), so the key never
+          // matches and EVERY source-mapped sink duplicates one that
+          // already exists. Duplicates then can't be opened in the
+          // viewer (the source-mapped URL isn't HTTP-fetchable), so
+          // they're pure reviewer noise. Re-enable only after a proper
+          // cross-coord dedup (reverse-map the source-mapped location
+          // through smData back to bundled coords, compare those).
         }
         mergeASTResultsIntoVDD(tab, [analysis], tabId);
         mergeToGlobal(tab);
@@ -3990,12 +4502,14 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
       console.debug("[AST:merge] No doc for host=%s — registering endpoints only (script: %s)", sourceHost, analysis.sourceUrl);
     }
 
-    // Feed fetch call sites through the same learning pipeline as network requests
+    // Register AST-observed fetch call sites as methods on their services.
+    // Uses learnFromAstCallSite (direct fact-based registration), NOT the
+    // old "synthesize fake URL/body, launder through learnFromRequest"
+    // path — that conflated AST observations with real server traffic.
     var newEndpoints = 0;
     for (var fc = 0; fc < analysis.fetchCallSites.length; fc++) {
       var callSite = analysis.fetchCallSites[fc];
       try {
-        // --- Resolve URL ---
         var isDynamic = /^\$\{|^\(dynamic\)|^\{[a-zA-Z]/.test(callSite.url);
         var csUrl = null;
         var interfaceName = null;
@@ -4007,105 +4521,28 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
           csUrl = new URL(callSite.url);
           interfaceName = extractInterfaceName(csUrl);
         } else {
-          csUrl = new URL(callSite.url, analysis.sourceUrl);
+          // A relative fetch URL resolves against the PAGE's origin at
+          // runtime, NOT the script's host. Using analysis.sourceUrl as
+          // the base misattributes cross-origin-hosted scripts: e.g.
+          // `fetch('/svc/shreddit/graphql')` in a script served from
+          // www.redditstatic.com actually hits www.reddit.com (the
+          // page origin). Prefer the tab's page URL when available.
+          var _csMeta = _tabMeta.get(tabId);
+          var _csBaseForRel = (_csMeta && _csMeta.url) ? _csMeta.url : analysis.sourceUrl;
+          csUrl = new URL(callSite.url, _csBaseForRel);
           interfaceName = extractInterfaceName(csUrl);
         }
 
-        // --- Build synthetic URL with query params from AST ---
-        var syntheticUrl = csUrl ? csUrl.href : "https://" + sourceHost + "/dynamic_" + fc;
-        if (callSite.params) {
-          var urlObj = new URL(syntheticUrl);
-          for (var pi = 0; pi < callSite.params.length; pi++) {
-            var p = callSite.params[pi];
-            if ((p.location || "query") === "query") {
-              urlObj.searchParams.set(p.name, p.defaultValue !== undefined ? String(p.defaultValue)
-                : (p.validValues && p.validValues.length > 0 ? String(p.validValues[0]) : ""));
-            }
-          }
-          syntheticUrl = urlObj.href;
+        var _astDocEntry = learnFromAstCallSite(tabId, interfaceName, callSite, analysis.sourceUrl);
+        // Refine interfaceName for endpoint registration if the call site
+        // got promoted to a prefix bucket via observed-prefix clustering.
+        if (_astDocEntry && _astDocEntry.doc && _astDocEntry.doc.name) {
+          interfaceName = _astDocEntry.doc.name;
         }
 
-        // --- Build synthetic body from body params ---
-        var syntheticHeaders = {};
-        if (callSite.headers) {
-          for (var hk in callSite.headers) {
-            syntheticHeaders[hk.toLowerCase()] = callSite.headers[hk];
-          }
-        }
-        var syntheticBody = null;
-        if (callSite.params) {
-          var bodyJson = {};
-          var hasBody = false;
-          for (var bi = 0; bi < callSite.params.length; bi++) {
-            var bp = callSite.params[bi];
-            if ((bp.location || "query") === "body") {
-              bodyJson[bp.name] = bp.defaultValue !== undefined ? bp.defaultValue
-                : (bp.validValues && bp.validValues.length > 0 ? bp.validValues[0] : "");
-              hasBody = true;
-            }
-          }
-          if (hasBody) {
-            var bodyStr = JSON.stringify(bodyJson);
-            syntheticBody = btoa(bodyStr);
-            if (!syntheticHeaders["content-type"]) {
-              syntheticHeaders["content-type"] = "application/json";
-            }
-          }
-        }
-
-        // --- Build entry matching what learnFromRequest expects ---
-        var syntheticEntry = {
-          url: syntheticUrl,
-          method: callSite.method,
-          source: isDynamic ? "ast_dynamic" : "ast_analysis",
-        };
-        if (syntheticBody) {
-          syntheticEntry.rawBodyB64 = syntheticBody;
-        }
-
-        // --- Call the same learning function used for real network traffic ---
-        learnFromRequest(tabId, interfaceName, syntheticEntry, syntheticHeaders);
-
-        // --- Layer on AST-only extras: value constraints as enums ---
-        var vddDocEntry = tab.discoveryDocs.get(interfaceName);
-        if (vddDocEntry && vddDocEntry.doc && callSite.params) {
-          var vddUrl = new URL(syntheticUrl);
-          var meta = calculateMethodMetadata(vddUrl, interfaceName);
-          var qualName = callSite.method ? callSite.method.toLowerCase() + "_" + meta.methodName : null;
-          var vddLearned = vddDocEntry.doc.resources.learned;
-          var vddProbed = vddDocEntry.doc.resources.probed;
-          var vddM = (vddProbed && vddProbed.methods && vddProbed.methods[meta.methodName])
-            || (vddLearned && vddLearned.methods && (vddLearned.methods[meta.methodName] || (qualName ? vddLearned.methods[qualName] : null)));
-          if (vddM) {
-            // Enrich URL parameters with valid values
-            for (var vi = 0; vi < callSite.params.length; vi++) {
-              var vp = callSite.params[vi];
-              if (vp.validValues && vp.validValues.length > 0 && vddM.parameters[vp.name]) {
-                var ep = vddM.parameters[vp.name];
-                if (!ep.customEnum && !ep.enum) {
-                  ep.enum = vp.validValues.map(String);
-                }
-              }
-            }
-            // Enrich body schema properties with valid values
-            if (vddM.request && vddM.request.$ref) {
-              var bodySchemaObj = vddDocEntry.doc.schemas[vddM.request.$ref];
-              if (bodySchemaObj && bodySchemaObj.properties) {
-                for (var bvi = 0; bvi < callSite.params.length; bvi++) {
-                  var bvp = callSite.params[bvi];
-                  if (bvp.validValues && bvp.validValues.length > 0 && (bvp.location || "query") === "body") {
-                    var schemaProp = bodySchemaObj.properties[bvp.name];
-                    if (schemaProp && !schemaProp.enum) {
-                      schemaProp.enum = bvp.validValues.map(String);
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        // --- Register endpoint for popup display ---
+        // Register endpoint for popup display — separate concern from
+        // method registration (endpoint list shows "what fetches exist
+        // on this page," method list shows "what API endpoints we know").
         var bundleId = analysis.sourceUrl ? analysis.sourceUrl.replace(/^https?:\/\//, "").slice(-60) : "";
         var epKey = isDynamic
           ? "AST DYN " + bundleId + " " + (callSite.enclosingFunction || "anon") + " " + callSite.method + " " + fc
@@ -4256,6 +4693,12 @@ function _handleFormMetadata(tabId, forms, sender) {
     if (!m.contentTypes) m.contentTypes = [];
     if (!m.contentTypes.includes(form.enctype)) m.contentTypes.push(form.enctype);
 
+    // Apply example-value picker so form-scan-derived methods show
+    // prefill values via pickExampleValue (enum/format/default tiers).
+    // Without this, the Send form would render empty inputs on AST-
+    // or form-only methods.
+    applyStatsToMethod(m, doc);
+
     // Register as endpoint
     var epKey = "FORM " + form.method + " " + url.hostname + url.pathname;
     if (!tab.endpoints.has(epKey)) {
@@ -4344,6 +4787,20 @@ function handleContentMessage(msg, sender) {
   // RESPONSE_BODY comes from intercept.js via content.js relay
   if (msg.type === "RESPONSE_BODY") {
     handleResponseBody(tabId, msg, sender.frameId);
+    return;
+  }
+
+  // PROBE_HIT: intercept.js recorded a sink that saw the active
+  // probe marker. Correlate to an open exploit-probe session via the
+  // hit's own marker (carried in the URL at probe time) and append.
+  if (msg.type === "PROBE_HIT") {
+    if (msg.hit && typeof msg.hit.marker === "string") {
+      const ses = _probeSessions.get(msg.hit.marker);
+      if (ses) {
+        // Record tabId + frameId so the reviewer can see which frame fired
+        ses.hits.push(Object.assign({}, msg.hit, { tabId: tabId, frameId: sender.frameId || 0 }));
+      }
+    }
     return;
   }
 
@@ -4678,9 +5135,62 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "GET_CROSS_DEFS": {
-      var _cdBuf = _scriptBuffers.get(tabId);
-      sendResponse(_cdBuf && _cdBuf.crossDefs || null);
-      return;
+      // Click-to-definition data (propDefs + defMap) is now populated by
+      // analyzeJSBundle's pre-pass — the structural-def collection rides
+      // on the same traversal the security analysis already needs, so
+      // there's no separate buildDefinitionMap call to make here. Pull
+      // the cached analysis result off the tab and re-project it into
+      // per-script coords. The AST_BUILD_DEFINITION_MAP fallback only
+      // runs if the analysis is missing (shouldn't happen in practice
+      // once the capture pipeline has completed).
+      const _cdBuf = _scriptBuffers.get(tabId);
+      if (!_cdBuf || !_cdBuf.scripts || !_cdBuf.scripts.length) {
+        sendResponse(null);
+        return;
+      }
+      if (_cdBuf.crossDefs) { sendResponse(_cdBuf.crossDefs); return; }
+
+      const _cdTab = state.tabs.get(tabId);
+      const _cdAnalysis = _cdTab && _cdTab._astResults && _cdTab._astResults[0];
+      const scriptOffsets = [];
+      let nlCount = 0;
+      for (let ci = 0; ci < _cdBuf.scripts.length; ci++) {
+        if (ci > 0) { nlCount++; }
+        scriptOffsets.push({ url: _cdBuf.scripts[ci].url, lineStart: nlCount + 1 });
+        const code = _cdBuf.scripts[ci].code;
+        for (let ch = 0; ch < code.length; ch++) {
+          if (code.charCodeAt(ch) === 10) nlCount++;
+        }
+      }
+      if (_cdAnalysis && (_cdAnalysis.defMap || _cdAnalysis.propDefs)) {
+        _buildCrossDefs(_cdBuf, _cdAnalysis, scriptOffsets);
+        sendResponse(_cdBuf.crossDefs || null);
+        return;
+      }
+      // Fallback: no analysis available yet, rebuild from scratch
+      (async () => {
+        let combined = "";
+        let _fbNlCount = 0;
+        for (let ci = 0; ci < _cdBuf.scripts.length; ci++) {
+          if (ci > 0) { combined += ";\n"; _fbNlCount++; }
+          const code = _cdBuf.scripts[ci].code;
+          for (let ch = 0; ch < code.length; ch++) {
+            if (code.charCodeAt(ch) === 10) _fbNlCount++;
+          }
+          combined += code;
+        }
+        let resp;
+        try {
+          resp = await sendToOffscreen({ type: "AST_BUILD_DEFINITION_MAP", code: combined });
+        } catch (e) {
+          console.debug("[GET_CROSS_DEFS] offscreen failed:", e && e.message || e);
+          sendResponse(null); return;
+        }
+        if (!resp || !resp.success) { sendResponse(null); return; }
+        _buildCrossDefs(_cdBuf, resp.result, scriptOffsets);
+        sendResponse(_cdBuf.crossDefs || null);
+      })();
+      return true;
     }
 
     case "GET_ENDPOINT_SCHEMA": {
@@ -4807,6 +5317,74 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         sendResponse(result);
       });
       return true;
+    }
+
+    // EXPLOIT_PROBE_START: kick off an exploitability probe and return
+    // the session id immediately. Caller polls EXPLOIT_PROBE_STATUS to
+    // observe progress + results. Split from the "run to completion"
+    // shape so a popup button can start a probe, let the popup close,
+    // and retrieve results later without losing them.
+    case "EXPLOIT_PROBE_START": {
+      try {
+        const session = startExploitProbe(msg);
+        sendResponse({ success: true, sessionId: session.marker });
+      } catch (e) {
+        sendResponse({ error: (e && e.message) || String(e) });
+      }
+      return true;
+    }
+
+    // EXPLOIT_PROBE_STATUS: return everything known about a running or
+    // completed probe. Sessions persist past completion (TTL 10 min)
+    // so a closed-and-reopened popup can still render the result.
+    case "EXPLOIT_PROBE_STATUS": {
+      const ses = msg.sessionId ? _probeSessions.get(msg.sessionId) : null;
+      if (!ses) { sendResponse({ error: "session not found or expired" }); return; }
+      sendResponse({
+        success: true,
+        status: ses.status,
+        marker: ses.marker,
+        strategy: ses.strategy,
+        pageUrl: ses.pageUrl,
+        hits: ses.hits.slice(),
+        executed: ses.executed || null,
+        startedAt: ses.createdAt,
+        finishedAt: ses.finishedAt || null,
+        error: ses.error || null,
+        // Expose the recipe the probe actually used so the reviewer can
+        // audit "what did we send, why didn't it fire, is the AST's
+        // precondition/decoder chain accurate?" without digging into
+        // background logs.
+        recipe: {
+          sinkType: ses.sinkType || null,
+          sinkName: ses.sinkName || null,
+          paramName: ses.paramName || null,
+          fieldPath: Array.isArray(ses.fieldPath) ? ses.fieldPath.slice() : [],
+          decoders: Array.isArray(ses.decoders) ? ses.decoders.slice() : [],
+          preconditions: Array.isArray(ses.preconditions) ? ses.preconditions.slice() : [],
+        },
+      });
+      return;
+    }
+
+    // EXPLOIT_PROBE_LIST: enumerate recent sessions so the popup can
+    // show a "probe history" view alongside findings.
+    case "EXPLOIT_PROBE_LIST": {
+      const out = [];
+      for (const [marker, ses] of _probeSessions) {
+        out.push({
+          sessionId: marker,
+          status: ses.status,
+          strategy: ses.strategy,
+          pageUrl: ses.pageUrl,
+          hitCount: ses.hits.length,
+          startedAt: ses.createdAt,
+          finishedAt: ses.finishedAt || null,
+        });
+      }
+      out.sort((a, b) => b.startedAt - a.startedAt);
+      sendResponse({ success: true, sessions: out });
+      return;
     }
 
     case "RENAME_FIELD": {
@@ -4998,6 +5576,428 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
  * Reuses the same encoding logic as executeSendRequest but returns the
  * request instead of sending it.
  */
+// ─── Exploit probe (interactive per-finding verification) ─────────────────
+
+// Construct the active payload that proves EXECUTION (not just taint
+// reach). Three payload strings, all keyed by the same marker so the
+// post-probe read can correlate:
+//   - html: an <img src=x onerror="..."> fragment. If the page
+//     innerHTMLs the probe input, the img fails to load, onerror runs,
+//     and window.__apisec_fired_<marker>.html gets a timestamp. This
+//     is the real "alert(origin)"-class proof for DOM XSS.
+//   - js: a statement that sets the same flag. If the page passes the
+//     probe input to eval() / new Function(), the flag is set.
+//   - href: a javascript: URL that, if assigned to location.href, sets
+//     the flag via its expression body.
+// Markers are suffixed with a random probe-id so multiple probes in
+// the same tab don't collide.
+function _probePayloads(marker) {
+  // Identifier-safe — marker is already [A-Z0-9_] so we can use it as
+  // a property suffix without escaping.
+  const flag = "__apisec_fired_" + marker;
+  // Sequence-expression setter: returns Date.now() after initialising
+  // `self.<flag>` as an object. Callers append `.key=Date.now()` and a
+  // CLOSING `)` — the opener is included here, closer is caller-side
+  // because html/svg/href embed it in attribute-quoted context where
+  // the ')' must be balanced at the embedding layer.
+  const setter =
+    "(self." + flag + "=(self." + flag + "||{}),self." + flag;
+  // CSP-tolerant DOM-presence id: creates a <div> in the DOM if the
+  // payload is HTML-parsed, even when the page blocks inline event
+  // handlers. Post-observation, getElementById reveals parsing.
+  const domId = "__apisec_dom_" + marker;
+  return {
+    flag: flag,
+    domId: domId,
+    // html: <img> that fires onerror even when src fails.
+    // The onerror value is itself a sequence-expression, balanced here.
+    html: '<img src=x onerror=\'' + setter + '.html=Date.now())\'>',
+    // js: complete expression-statement for eval() / Function(). Closing
+    // ')' balances the setter's opener so eval(js) doesn't SyntaxError.
+    js: setter + '.js=Date.now())',
+    // href: javascript: URL — balance the setter's paren; trailing `//`
+    // swallows anything appended by the sink.
+    href: 'javascript:' + setter + '.href=Date.now())//',
+    // svg: alternate HTML vector — some sanitizers strip <img> but miss <svg>
+    svg: '<svg onload=\'' + setter + '.svg=Date.now())\'></svg>',
+    // dom: CSP-tolerant signal. No script execution required — the
+    // browser only needs to PARSE the HTML for a div with this id to
+    // end up in the document. getElementById proves parsing happened.
+    // Works on sites with strict `script-src 'none'` where onerror
+    // would be silently dropped.
+    dom: '<div id="' + domId + '" data-apisec="' + marker + '"></div>',
+  };
+}
+
+function _buildProbeUrl(pageUrl, strategy, marker, opts) {
+  const u = new URL(pageUrl);
+  const pl = _probePayloads(marker);
+  // Payload shape depends on sink semantics. The same string cannot
+  // simultaneously be valid HTML-for-innerHTML AND valid JS-for-eval —
+  // so we pick per sink type:
+  //   eval / Function sinks → pl.js (valid JS statement sets flag.js)
+  //   redirect sinks (location.*, window.open) → pl.href (javascript: URL)
+  //   xss / DOM sinks / default → pl.html + pl.svg + pl.dom (HTML vectors)
+  // If sinkType is unknown, default to HTML (covers innerHTML/writeLn/
+  // setAttribute — the most common sink family).
+  const sinkType = opts && opts.sinkType;
+  const sinkName = opts && opts.sinkName;
+  // Pick payload shape from how the sink executes attacker content:
+  //   eval()/Function()           → pl.js (JS statement)
+  //   location.href /.assign, etc.→ pl.href (javascript: URL navigation)
+  //   href/src/action attributes  → pl.href (javascript: URL; the HTML
+  //                                 payload wouldn't change scheme)
+  //   innerHTML/write/append etc. → pl.html+svg+dom (HTML parsing)
+  //   unknown xss                 → default to HTML (common case)
+  const isUrlAttrSink = sinkType === "xss" && typeof sinkName === "string" && (
+    sinkName === "href" || sinkName === "src" || sinkName === "action" ||
+    sinkName === "formaction" ||
+    sinkName === "setAttribute:href" || sinkName === "setAttribute:src" ||
+    sinkName === "setAttribute:action" || sinkName === "setAttribute:formaction"
+  );
+  let activePayload;
+  if (sinkType === "eval") {
+    activePayload = pl.js;
+  } else if (sinkType === "redirect" || isUrlAttrSink) {
+    activePayload = pl.href;
+  } else {
+    // HTML payload: prefix with a parse-state-reset sequence so the
+    // active <img>/<svg> elements escape the most common embedding
+    // contexts and render as siblings. The three chars + `</script>`:
+    //   "   — closes a double-quoted attribute value
+    //   '   — closes a single-quoted attribute value
+    //   >   — ends the enclosing start-tag
+    //   </script>  — exits raw-text state inside <script src="…">
+    //              (needed for document.write('<script src="'+x+'">'))
+    // In pure-body contexts these leading chars render as text and do
+    // no harm; <img>/<svg> still parse. This is a PARSING FACT about
+    // HTML, not a heuristic about sinks.
+    activePayload = '"\'></script>' + pl.html + pl.svg + pl.dom;
+  }
+  if (strategy === "hash" || strategy === "postmessage") {
+    // Hash payload combines the sentinel (__apisec=MARKER) with the
+    // active payload. Pages that decode location.hash and innerHTML
+    // it will both (a) trip intercept.js sink wrappers on the marker
+    // AND (b) expose an execution proof via one of the vectors.
+    const active = "__apisec=" + marker + "&p=" + encodeURIComponent(activePayload);
+    u.hash = "#" + active;
+  } else if (strategy === "search") {
+    // The caller MUST supply the param name the finding observed the
+    // page reading. We don't guess — a hardcoded list of common names
+    // is a heuristic that gives false positives (wrong key picked,
+    // page echoes it somewhere unrelated) AND false negatives (app
+    // uses a project-specific name not in our list). The AST finding
+    // already knows which name its sink traced back to; the caller
+    // derives it from the finding and passes it through.
+    if (!opts || !opts.paramName) {
+      throw new Error("search strategy requires opts.paramName — the query key the finding observed the page reading");
+    }
+    u.searchParams.set("__apisec", marker);
+    u.searchParams.set(opts.paramName, activePayload);
+  } else if (strategy === "pathname") {
+    u.pathname = u.pathname.replace(/\/?$/, "/") + marker;
+  }
+  return u.href;
+}
+
+function _waitForTabLoaded(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const to = setTimeout(() => {
+      if (done) return; done = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, timeoutMs || 15000);
+    const listener = (id, info) => {
+      if (id === tabId && info.status === "complete") {
+        if (done) return; done = true;
+        clearTimeout(to);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+// Sessions persist past completion so the popup can reopen after the
+// probe finishes and still render the result. Capped via TTL + LRU.
+const PROBE_SESSION_TTL_MS = 10 * 60 * 1000;
+const PROBE_SESSION_MAX = 50;
+
+function _pruneProbeSessions() {
+  const now = Date.now();
+  for (const [k, s] of _probeSessions) {
+    const age = now - (s.finishedAt || s.createdAt);
+    if (s.status !== "running" && age > PROBE_SESSION_TTL_MS) _probeSessions.delete(k);
+  }
+  if (_probeSessions.size > PROBE_SESSION_MAX) {
+    // Drop oldest finished sessions first
+    const entries = [...(_probeSessions.entries())]
+      .filter(([, s]) => s.status !== "running")
+      .sort((a, b) => (a[1].finishedAt || a[1].createdAt) - (b[1].finishedAt || b[1].createdAt));
+    for (let i = 0; i < entries.length && _probeSessions.size > PROBE_SESSION_MAX; i++) {
+      _probeSessions.delete(entries[i][0]);
+    }
+  }
+}
+
+// Start an exploit probe, return the session handle immediately. The
+// actual tab-opening + observation happens async in _runExploitProbe;
+// its outcome lands back on the session object where pollers can see
+// it. No await for the run — popup callers are non-blocking.
+function startExploitProbe(msg) {
+  _pruneProbeSessions();
+  const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions } = msg || {};
+  if (!strategy) throw new Error("strategy required (hash | search | pathname | postmessage)");
+  if (strategy === "search" && !paramName) {
+    throw new Error("search strategy requires paramName — derive it from the finding's observed source (e.g. the argument to URLSearchParams.get)");
+  }
+  if (fieldPath && !Array.isArray(fieldPath)) throw new Error("fieldPath must be an array of string field names");
+
+  // Resolve pageUrl from the finding the probe is verifying.
+  // globalStore.securityFindings records pageUrl when the finding is
+  // observed; we read it directly rather than asking the caller to
+  // supply it (the caller may not know, and we must never guess which
+  // tab a finding came from). Caller can pass msg.pageUrl to override
+  // — e.g. harness's --page-url for the reviewer who audited the site.
+  let pageUrl = msg && msg.pageUrl ? msg.pageUrl : null;
+  if (!pageUrl && findingId && msg.sourceUrl) {
+    const entry = globalStore.securityFindings.get(msg.sourceUrl);
+    if (entry && entry.pageUrl) pageUrl = entry.pageUrl;
+  }
+
+  const wait = Math.max(1000, Math.min(30000, Number(waitMs) || 5000));
+  const marker = "PROBE_" + Math.random().toString(36).slice(2, 10).toUpperCase();
+  const session = {
+    marker, status: "running", strategy, pageUrl: pageUrl || null,
+    findingId: findingId || null, sourceUrl: (msg && msg.sourceUrl) || null,
+    paramName: paramName || null,
+    fieldPath: Array.isArray(fieldPath) ? fieldPath.slice() : [],
+    sinkType: sinkType || null, sinkName: sinkName || null,
+    decoders: Array.isArray(decoders) ? decoders.slice() : [],
+    preconditions: Array.isArray(preconditions) ? preconditions.slice() : [],
+    waitMs: wait,
+    hits: [], openedTabs: [], createdAt: Date.now(), finishedAt: null, error: null,
+  };
+  _probeSessions.set(marker, session);
+  _runExploitProbe(session).catch((e) => {
+    session.status = "error";
+    session.error = (e && e.message) || String(e);
+    session.finishedAt = Date.now();
+  });
+  return session;
+}
+
+// Read the per-marker execution flag from a tab. Returns an object
+// like { html: timestamp, svg: timestamp, js: timestamp, href: timestamp }
+// where each key corresponds to a payload variant that actually ran —
+// that's the PROOF OF EXECUTION, distinguishing "taint reached a
+// sink" (intercept.js wrappers saw the marker) from "the sink
+// actually parsed it as HTML / evaluated it as JS". Returns null if
+// no payload fired.
+async function _readProbeExecFlag(tabId, marker) {
+  try {
+    const flagName = "__apisec_fired_" + marker;
+    const domId = "__apisec_dom_" + marker;
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      world: "MAIN",
+      func: (flag, id) => {
+        // Two execution signals per frame:
+        //   1. self[flag] — set by <img onerror>, <svg onload>,
+        //      javascript: href navigation, or eval of js payload.
+        //      Requires inline-handler-permissive CSP.
+        //   2. document.getElementById(id) — our payload's <div>
+        //      landed in the DOM. Proves HTML PARSING happened, no
+        //      script-src required. Works under strict CSP.
+        try {
+          const out = Object.assign({}, self[flag] || {});
+          if (document.getElementById(id)) out.dom = out.dom || Date.now();
+          return Object.keys(out).length ? out : null;
+        } catch (_) { return null; }
+      },
+      args: [flagName, domId],
+    });
+    const merged = {};
+    for (const r of results || []) {
+      if (!r || !r.result) continue;
+      for (const k of Object.keys(r.result)) {
+        if (!merged[k] || r.result[k] > merged[k]) merged[k] = r.result[k];
+      }
+    }
+    return Object.keys(merged).length ? merged : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// For postmessage: the target window is opened by the attacker via
+// window.open — we didn't create that tab, so we have to find it by
+// URL. The attacker uses _buildProbeUrl(pageUrl, "hash", marker) so
+// we match on that canonical form.
+async function _findProbeTargetTab(pageUrl, marker) {
+  try {
+    const tabs = await chrome.tabs.query({});
+    const needleMarker = "__apisec=" + marker;
+    for (const t of tabs) {
+      if (t.url && t.url.indexOf(needleMarker) !== -1) return t.id;
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function _runExploitProbe(session) {
+  // The caller MUST supply pageUrl — it comes from the finding's own
+  // observed pageUrl (globalStore.securityFindings entry's pageUrl is
+  // set when the finding was recorded on a tab). We never guess which
+  // tab to probe against: if the caller doesn't know where the finding
+  // was observed, we refuse to probe rather than hit a random tab.
+  if (!session.pageUrl || !/^https?:/i.test(session.pageUrl)) {
+    throw new Error("pageUrl required — caller should read it from the finding's stored pageUrl (globalStore.securityFindings[sourceUrl].pageUrl)");
+  }
+
+  let execReadTabId = null;
+  let attackerPostedTargetUrl = null;
+  try {
+    if (session.strategy === "postmessage") {
+      // Cross-origin attacker page: example.com is a real third-party
+      // origin the extension has <all_urls> permission for. Open it,
+      // inject an attacker script that window.opens the target with
+      // the marker in the hash (so intercept.js arms wrappers at
+      // document_start), then postMessage a payload that carries both
+      // the sentinel marker AND active HTML/JS payloads. The handler
+      // that routes message.data to a sink will trip our execution
+      // flag if the sink actually parses the payload.
+      const atkTab = await chrome.tabs.create({ url: "https://example.com/", active: false });
+      session.openedTabs.push(atkTab.id);
+      await _waitForTabLoaded(atkTab.id, 10000);
+      const targetWithMarker = _buildProbeUrl(session.pageUrl, "hash", session.marker, { sinkType: session.sinkType, sinkName: session.sinkName });
+      attackerPostedTargetUrl = targetWithMarker;
+      const payloads = _probePayloads(session.marker);
+      // Build the payload SHAPE from the finding's observed field
+      // path (taint path member hops). No hardcoded field-name list
+      // — if the handler reads event.data.payload.html, the probe
+      // delivers {payload:{html:<active>}}. Empty fieldPath = the
+      // handler treats event.data as a plain string, so we send a
+      // raw string containing the active vectors.
+      //    activeStr — the HTML/SVG/DOM concatenation, carrying the
+      //      marker in multiple vectors (onerror flag, svg onload,
+      //      DOM-presence div).
+      // Postmessage payload shape depends on sink type — eval needs a
+      // JS statement, redirect needs a javascript: URL, xss/default need
+      // HTML vectors (with attribute-breakout prefix). Marker prefix is
+      // included in every case so the intercept.js sink wrappers see
+      // the sentinel whatever shape the handler unpacks it into.
+      let activeStr;
+      if (session.sinkType === "eval") activeStr = payloads.js + "/*" + session.marker + "*/";
+      else if (session.sinkType === "redirect") activeStr = payloads.href;
+      else activeStr = session.marker + ' "\'></script>' + payloads.html + payloads.svg + payloads.dom;
+      let shaped = activeStr;
+      for (let i = (session.fieldPath || []).length - 1; i >= 0; i--) {
+        shaped = { [session.fieldPath[i]]: shaped };
+      }
+      // Merge preconditions the AST extracted from reachability guards
+      // (if/switch/early-return). Each precondition pins a property
+      // path to a literal — we set that value on the shaped payload so
+      // the handler's guard passes and execution reaches the sink.
+      // The path is rooted at the same object as fieldPath (MessageEvent
+      // data after dropping the implicit .data hop), so we walk into
+      // `shaped` with the same property chain.
+      const _precs = Array.isArray(session.preconditions) ? session.preconditions : [];
+      for (const p of _precs) {
+        if (!p || !Array.isArray(p.path) || p.op !== "===") continue;
+        // If the shaped payload is a primitive (no fieldPath), wrap it
+        // so we can add sibling properties for the precondition.
+        if (typeof shaped !== "object" || shaped === null) shaped = { __apisec_root: shaped };
+        let cur = shaped;
+        for (let i = 0; i < p.path.length - 1; i++) {
+          const key = p.path[i];
+          if (typeof cur[key] !== "object" || cur[key] === null) cur[key] = {};
+          cur = cur[key];
+        }
+        if (p.path.length === 0) continue;
+        cur[p.path[p.path.length - 1]] = p.value;
+      }
+      // If we injected the __apisec_root wrapper but no precondition
+      // actually required wrapping, unwrap — the handler expects the
+      // bare value as event.data.
+      if (shaped && typeof shaped === "object" && Object.keys(shaped).length === 1 &&
+          Object.prototype.hasOwnProperty.call(shaped, "__apisec_root")) {
+        shaped = shaped.__apisec_root;
+      }
+      // Apply the inverse of each decoder on the taint path in REVERSE
+      // order (the handler applies decoders source→sink; we pre-encode
+      // sink→source so the decoder chain unpacks back to `shaped`).
+      // Each transformer here must mirror a decoder the AST observed —
+      // no speculative encoding.
+      const _decs = Array.isArray(session.decoders) ? session.decoders : [];
+      for (let i = _decs.length - 1; i >= 0; i--) {
+        const d = _decs[i];
+        try {
+          if (d === "json") shaped = JSON.stringify(shaped);
+          else if (d === "escape") shaped = escape(String(shaped));
+          else if (d === "uri-component") shaped = encodeURIComponent(String(shaped));
+          else if (d === "uri") shaped = encodeURI(String(shaped));
+          else if (d === "base64") shaped = btoa(unescape(encodeURIComponent(String(shaped))));
+        } catch (_) {}
+      }
+      await chrome.scripting.executeScript({
+        target: { tabId: atkTab.id },
+        world: "MAIN",
+        injectImmediately: true,
+        func: (tUrl, mk, shapedPayload) => {
+          const win = window.open(tUrl, "_blank");
+          // Retry so handler-registration timing races don't lose the
+          // payload. The TARGET window sees the exact shape the AST
+          // observed it reading — no guesses.
+          const deliveries = [2500, 5000, 8000];
+          for (const delay of deliveries) {
+            setTimeout(() => { try { win && win.postMessage(shapedPayload, "*"); } catch (_) {} }, delay);
+          }
+        },
+        args: [targetWithMarker, session.marker, shaped],
+      });
+      await new Promise((r) => setTimeout(r, 4000 + session.waitMs));
+    } else {
+      // URL-reachable strategies: new tab navigated to targetUrl with
+      // marker + active payload embedded. intercept.js arms wrappers
+      // at document_start; if the page consumes location.hash|search|
+      // pathname and routes it to a sink, the active payload fires.
+      const probeUrl = _buildProbeUrl(session.pageUrl, session.strategy, session.marker, { paramName: session.paramName, sinkType: session.sinkType, sinkName: session.sinkName });
+      const tab = await chrome.tabs.create({ url: probeUrl, active: false });
+      session.openedTabs.push(tab.id);
+      execReadTabId = tab.id;
+      await _waitForTabLoaded(tab.id, 10000);
+      await new Promise((r) => setTimeout(r, session.waitMs));
+    }
+
+    // READ EXECUTION FLAG before cleanup — this is what distinguishes
+    // a real PoC ("the page actually rendered our payload") from a
+    // taint-only hit ("the marker string reached a sink but was
+    // displayed as text, not interpreted as HTML/JS").
+    if (!execReadTabId && attackerPostedTargetUrl) {
+      execReadTabId = await _findProbeTargetTab(session.pageUrl, session.marker);
+    }
+    if (execReadTabId) {
+      session.executed = await _readProbeExecFlag(execReadTabId, session.marker);
+    }
+    session.status = "done";
+  } catch (e) {
+    session.status = "error";
+    session.error = (e && e.message) || String(e);
+  } finally {
+    session.finishedAt = Date.now();
+    // Close tabs the extension opened. Tabs popped by window.open
+    // inside pages are left so the reviewer can inspect state after
+    // the probe finishes.
+    for (const tid of session.openedTabs) {
+      try { await chrome.tabs.remove(tid); } catch (_) {}
+    }
+    session.openedTabs = [];
+  }
+}
+
 async function buildExportRequest(tabId, msg) {
   let parsedUrl;
   try {
@@ -5167,6 +6167,7 @@ const CONTENT_TYPES = new Set([
   "CONTENT_FORM_SUBMIT",
   "RESPONSE_BODY",
   "SCRIPT_SOURCE",
+  "PROBE_HIT",
 ]);
 
 // Threat model: Content scripts run in web page renderer processes. A compromised
@@ -5294,6 +6295,13 @@ function resolveEndpointSchema(tabId, endpointKey, service, methodId) {
             _defaultValue: pDef._defaultValue ?? null,
             _defaultConfidence: pDef._defaultConfidence ?? null,
             _range: pDef._range || null,
+            // Unified example value (pickExampleValue result) — popup
+            // uses this to prefill the Send form so reviewers can
+            // send a plausible request without first replaying a
+            // captured one. The source tag lets the UI label the
+            // prefill (observed / ast / synthesized / type-default).
+            _exampleValue: pDef._exampleValue === undefined ? null : pDef._exampleValue,
+            _exampleValueSource: pDef._exampleValueSource || null,
             // AST-discovered valid values
             _astValidValues: pDef._astValidValues || null,
             _astValueSource: pDef._astValueSource || null,
@@ -6264,6 +7272,8 @@ function serializeTabData(tab) {
         apiKey: v.apiKey || null,
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,
+        grouping: v.grouping || null,
+        isVirtual: !!v.isVirtual,
         pageUrls: [...(v.pageUrls instanceof Set ? v.pageUrls : v.pageUrls || [])],
         frameOrigins: [...(v.frameOrigins instanceof Set ? v.frameOrigins : v.frameOrigins || [])],
       };
@@ -6286,7 +7296,8 @@ function serializeTabData(tab) {
         apiKey: v.apiKey || null,
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,
-        isVirtual: v.isVirtual || false,
+        grouping: v.grouping || (_existingMerged && _existingMerged.grouping) || null,
+        isVirtual: v.isVirtual || (_existingMerged && _existingMerged.isVirtual) || false,
         pageUrls: [..._allPageUrls],
         frameOrigins: [..._allFrameOrigins],
       };

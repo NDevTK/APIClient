@@ -832,6 +832,18 @@ function mapDiscoveryProperty(doc, name, prop, requiredList, depth, visited) {
     number: prop.id != null ? prop.id : null,
     messageType: null,
     children: null,
+    // Stats- and AST-derived metadata written by applyStatsToMethod /
+    // _applyBodyFieldStats. Copied verbatim so the popup Send form
+    // can prefill leaf fields with an observed-default or AST-
+    // extracted example value when no captured body is being replayed.
+    _defaultValue: prop._defaultValue == null ? null : prop._defaultValue,
+    _defaultConfidence: prop._defaultConfidence == null ? null : prop._defaultConfidence,
+    _requiredConfidence: prop._requiredConfidence == null ? null : prop._requiredConfidence,
+    _range: prop._range || null,
+    _detectedEnum: !!prop._detectedEnum,
+    _exampleValue: prop._exampleValue === undefined ? null : prop._exampleValue,
+    _exampleValueSource: prop._exampleValueSource || null,
+    _astValidValues: prop._astValidValues || null,
   };
 
   // Handle $ref to another schema
@@ -2101,8 +2113,13 @@ function _sniffTextAssetSignature(text) {
   if (head.startsWith("#EXTM3U")) return "application/vnd.apple.mpegurl";
   // WebVTT subtitles — "WEBVTT" header line.
   if (head.startsWith("WEBVTT")) return "text/vtt";
+  // SVG (two entry shapes)
   if (lower.startsWith("<?xml") && /<svg\b/.test(lower)) return "image/svg+xml";
   if (lower.startsWith("<svg")) return "image/svg+xml";
+  // HTML — doctype declaration or root <html> tag. Page fragments and
+  // full documents fetched via fetch() are assets, not APIs.
+  if (lower.startsWith("<!doctype html")) return "text/html";
+  if (lower.startsWith("<html")) return "text/html";
   // DASH manifest — XML with <MPD as root element.
   if (lower.startsWith("<?xml") && /<mpd\b/.test(lower)) return "application/dash+xml";
   // SMIL / SRT — some streamers use these.
@@ -2113,7 +2130,21 @@ function _sniffTextAssetSignature(text) {
   return null;
 }
 
-function classifyResponseAsset(responseBody, responseBase64) {
+function classifyResponseAsset(responseBody, responseBase64, opts) {
+  // Opaque cross-origin responses (fetch mode:"no-cors") can't be read,
+  // so body is always empty. These are overwhelmingly fire-and-forget
+  // tracking pixels / preconnect beacons — not API endpoints.
+  if (opts && opts.responseType === "opaque") {
+    return { kind: "asset", label: "opaque-cross-origin" };
+  }
+  // Server-declared content type (stripped to the bare MIME). Used only
+  // as a weaker cross-check — magic bytes are authoritative; the header
+  // is a server claim that can lie or be misconfigured.
+  var declaredCt = null;
+  if (opts && typeof opts.responseContentType === "string") {
+    declaredCt = opts.responseContentType.toLowerCase().split(";")[0].trim() || null;
+  }
+
   if (responseBody == null || responseBody === "") {
     return { kind: "empty", label: null };
   }
@@ -2123,7 +2154,10 @@ function classifyResponseAsset(responseBody, responseBase64) {
     catch (_) { return { kind: "api", label: null }; }
     if (bytes.length === 0) return { kind: "empty", label: null };
     var magic = sniffBinaryMagic(bytes);
-    if (magic) return { kind: "asset", label: magic };
+    if (magic) {
+      var note1 = declaredCt && declaredCt !== magic ? " (declared " + declaredCt + ")" : "";
+      return { kind: "asset", label: magic + note1 };
+    }
     // If the base64 decodes to printable text, run the text-asset sniff
     // too — misconfigured CDNs occasionally serve SVG as application/
     // octet-stream, triggering binary capture.
@@ -2131,23 +2165,32 @@ function classifyResponseAsset(responseBody, responseBase64) {
       var decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
       if (decoded) {
         var textMagic = _sniffTextAssetSignature(decoded);
-        if (textMagic) return { kind: "asset", label: textMagic };
+        if (textMagic) {
+          var note2 = declaredCt && declaredCt !== textMagic ? " (declared " + declaredCt + ")" : "";
+          return { kind: "asset", label: textMagic + note2 };
+        }
       }
     } catch (_) {}
     // Base64 bytes with no magic match: could be protobuf, gRPC-Web, or any
     // structured binary format. These have schemas; don't skip learning.
     return { kind: "api", label: "binary-structured" };
   }
-  // Text body. Sniff text-format assets first (SVG, pure CSS).
+  // Text body. Sniff text-format assets first (SVG, CSS, HTML).
   var textAsset = _sniffTextAssetSignature(responseBody);
-  if (textAsset) return { kind: "asset", label: textAsset };
+  if (textAsset) {
+    var note3 = declaredCt && declaredCt !== textAsset ? " (declared " + declaredCt + ")" : "";
+    return { kind: "asset", label: textAsset + note3 };
+  }
   // Also run the binary sniff on raw bytes — servers sometimes ship
   // binary under a text content-type, which intercept captures as text.
   var probe = responseBody.length > 64 ? responseBody.slice(0, 64) : responseBody;
   var textBytes = new Uint8Array(probe.length);
   for (var i = 0; i < probe.length; i++) textBytes[i] = probe.charCodeAt(i) & 0xff;
   var magicText = sniffBinaryMagic(textBytes);
-  if (magicText) return { kind: "asset", label: magicText };
+  if (magicText) {
+    var note4 = declaredCt && declaredCt !== magicText ? " (declared " + declaredCt + ")" : "";
+    return { kind: "asset", label: magicText + note4 };
+  }
   return { kind: "api", label: null };
 }
 

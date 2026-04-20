@@ -6,7 +6,9 @@
   "permissions": [
     "storage",
     "offscreen",
-    "webNavigation"
+    "webNavigation",
+    "scripting",
+    "tabs"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

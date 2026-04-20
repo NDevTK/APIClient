@@ -816,6 +816,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Service filter + spec export/import
   document.getElementById("spec-service-select").addEventListener("change", () => {
     renderMethodDropdown();
+    _renderServiceGrouping();
   });
   document.getElementById("btn-export-spec").addEventListener("click", exportOpenApiSpec);
   document.getElementById("btn-import-spec").addEventListener("click", () => {
@@ -1368,6 +1369,438 @@ function renderDataPanel() {
 
 // ─── Security Panel ──────────────────────────────────────────────────────────
 
+// Popup-scoped map of findingKey → sessionId for probes kicked off this
+// session. Keeps the UI glued to the SW-side _probeSessions Map so that
+// after the first click we only show status — no duplicate probes.
+const _probeInFlight = new Map();
+
+// Probes whose result has been rendered at least once, used to avoid
+// flashing the "Running…" state when the user reopens a card that was
+// already verified. Keyed by findingKey → { hits, status, strategy, at }.
+const _probeResults = new Map();
+
+// Stable key for a finding INSIDE THE POPUP — independent of the
+// harness's SHA-1-based id. We just need something unique within a tab
+// so delegated handlers can route clicks back to the right finding.
+function _findingKey(entry) {
+  const loc = entry.item && entry.item.location;
+  const kind = entry.kind === "sink"
+    ? (entry.item.type || "?") + ":" + (entry.item.sink || "?")
+    : (entry.item.type || "?");
+  return (entry.sourceUrl || "(inline)") + "|L" + (loc ? loc.line : "?") + ":C" + (loc ? loc.column : "?") + "|" + entry.kind + "|" + kind;
+}
+
+// Classify a finding's source into an extension-side probe strategy.
+// Returns null when the source isn't URL-reachable or postMessage-
+// reachable — the Verify button is disabled (with a hint) for those.
+function _probeStrategyFor(item) {
+  const src = item && item.source ? String(item.source) : "";
+  if (!src) return null;
+  if (/location\.hash/.test(src) || src === "location.hash") return "hash";
+  if (/location\.search/.test(src) || src === "location.search") return "search";
+  if (/location\.href/.test(src) || src === "location") return "hash";
+  if (src === "location.pathname") return "pathname";
+  if (/event\.data/i.test(src) || /postMessage/i.test(src)) return "postmessage";
+  return null;
+}
+
+// Extract the exact query-string key the AST observed the sink
+// reading, from a taint hop like `.get("q")`. No guessing — if the
+// AST didn't capture a string arg, we refuse to probe instead of
+// fabricating a name.
+function _extractParamNameFromTaintPath(taintPath) {
+  if (!Array.isArray(taintPath)) return null;
+  for (const h of taintPath) {
+    if (h && h.kind === "method-call" && typeof h.arg === "string" && h.arg.length > 0) return h.arg;
+  }
+  return null;
+}
+
+// Walk [member] hops after the source to reconstruct the field path
+// the message handler reads (e.g. event.data.payload.html → ["payload","html"]).
+// Skips the implicit `.data` hop since our payload IS what event.data
+// becomes. Same algorithm the harness uses — keeps popup + harness
+// probes identical.
+function _extractFieldPathFromTaintPath(taintPath, source) {
+  const path = [];
+  if (!Array.isArray(taintPath)) return path;
+  let sawSource = false;
+  for (const h of taintPath) {
+    if (!h) continue;
+    if (h.kind === "source") { sawSource = true; continue; }
+    if (!sawSource) continue;
+    if (h.kind !== "member") continue;
+    const name = String(h.desc || "").replace(/^\./, "");
+    if (!name || name === "?") continue;
+    if (path.length === 0 && name === "data" && /event\.data/.test(source || "")) continue;
+    path.push(name);
+  }
+  return path;
+}
+
+// Walk `[call-arg]` hops between source and sink to extract the decoder
+// chain the handler applies (JSON.parse, unescape, decodeURIComponent,
+// decodeURI, atob). The probe's payload must be pre-encoded with the
+// INVERSE of each decoder, in reverse order, so the handler's chain
+// unpacks back to the active payload. Matches harness extractor.
+function _extractDecodersFromTaintPath(taintPath) {
+  const out = [];
+  if (!Array.isArray(taintPath)) return out;
+  let sawSource = false;
+  for (const h of taintPath) {
+    if (!h) continue;
+    if (h.kind === "source") { sawSource = true; continue; }
+    if (!sawSource) continue;
+    if (h.kind !== "call-arg") continue;
+    const d = String(h.desc || "");
+    if (/\.parse\(\)/.test(d)) out.push("json");
+    else if (/^unescape\(\)/.test(d)) out.push("escape");
+    else if (/^decodeURIComponent\(\)/.test(d)) out.push("uri-component");
+    else if (/^decodeURI\(\)/.test(d)) out.push("uri");
+    else if (/^atob\(\)/.test(d)) out.push("base64");
+  }
+  return out;
+}
+
+// Collapsed summary of the finding's taint path. Each hop is the
+// classifier's own explanation for why the sink was flagged — a
+// reviewer opens the <details> and reads source → … → sink without
+// leaving the popup. Source-mapped orig coords aren't included here
+// (the popup doesn't run Babel); for full context use harness
+// `finding <id>`.
+function _renderTaintPathDetails(item) {
+  if (!Array.isArray(item.taintPath) || !item.taintPath.length) return "";
+  let rows = "";
+  for (let i = 0; i < item.taintPath.length; i++) {
+    const h = item.taintPath[i];
+    const at = h.at ? ("L" + h.at.line + ":C" + h.at.column) : "?";
+    // Dim transition annotation — where in the chain did origin (or
+    // another dimension) flip? Shows before→after only when the hop
+    // changed dims; otherwise shows the current mask.
+    let dimAnn = "";
+    if (h.dims) {
+      const keys = Object.keys(h.dims).filter(k => h.dims[k]);
+      const now = keys.length ? keys.join(",") : "none";
+      if (h.dimsBefore) {
+        const bef = Object.keys(h.dimsBefore).filter(k => h.dimsBefore[k]).join(",") || "none";
+        dimAnn = ' <span class="hop-dims-change">{' + esc(bef) + '} → {' + esc(now) + '}</span>';
+      } else {
+        dimAnn = ' <span class="hop-dims">{' + esc(now) + '}</span>';
+      }
+    }
+    // Inline code snippet per hop — captured at analysis time from the
+    // bundle position, so the reviewer sees the concrete syntax at every
+    // transformation without opening the viewer. This is what makes
+    // "dim flipped here" judgeable in a 20-hop chain.
+    var snippetHtml = h.code
+      ? '<div class="hop-snippet"><code>' + esc(String(h.code).slice(0, 200)) + '</code></div>'
+      : '';
+    rows += '<li><code>[' + esc(h.kind || "?") + ']</code> '
+      + esc(h.desc || "") + ' <span class="hop-at">' + esc(at) + '</span>' + dimAnn
+      + snippetHtml + '</li>';
+  }
+  return '<details class="taint-details"><summary>taint path (' + item.taintPath.length + ' hops) — classifier\'s chain from source to sink</summary>'
+    + '<ol class="taint-hops">' + rows + '</ol></details>';
+}
+
+// Reachability gates the AST extracted between source and sink
+// (`if (x === 'exec')`, `switch (x) { case 'add': … }`, early-return
+// guards). Each entry tells the reviewer "the probe must pin field X
+// to literal Y for this sink to run" — both so the reviewer can
+// understand why the finding is real AND so they can read the same
+// payload the probe is about to deliver.
+function _renderPreconditionsDetails(item) {
+  if (!Array.isArray(item.preconditions) || !item.preconditions.length) return "";
+  let rows = "";
+  for (const p of item.preconditions) {
+    const pathLabel = Array.isArray(p.path) && p.path.length
+      ? p.path.map(s => JSON.stringify(s)).join(".")
+      : "<root>";
+    rows += '<li><code>' + esc(pathLabel) + '</code> <span class="hop-at">'
+      + esc(String(p.op || "===")) + '</span> <code>' + esc(JSON.stringify(p.value)) + '</code></li>';
+  }
+  return '<details class="taint-details"><summary>preconditions (' + item.preconditions.length
+    + ') — sink reachable only when these fields equal the pinned values</summary>'
+    + '<ul class="taint-hops">' + rows + '</ul></details>';
+}
+
+// Per-sink sanitizer audit: which sanitizer-shaped calls the
+// classifier saw in the enclosing function and whether each matched
+// on-path. A reviewer uses this to judge whether the sanitized/not-
+// sanitized decision was correct without tracing the minified
+// source by hand.
+function _renderSanitizerDetails(item) {
+  const sr = item.sanitizerReport;
+  if (!sr || !Array.isArray(sr.candidates) || !sr.candidates.length) return "";
+  let rows = "";
+  for (const c of sr.candidates) {
+    const at = c.loc ? ("L" + c.loc.line + ":C" + c.loc.column) : "?";
+    const verdict = c.matched ? (c.onPath ? "matched, on-path" : "matched, branch-only") : "rejected";
+    rows += '<li><code>' + esc(c.label || "?") + '</code> <span class="hop-at">' + esc(at) + '</span> '
+      + '[<span class="san-verdict san-' + (c.matched ? (c.onPath ? 'match' : 'branch') : 'reject') + '">' + esc(verdict) + '</span>]'
+      + '<div class="san-reason">' + esc(c.matchReason || "") + '</div></li>';
+  }
+  return '<details class="taint-details"><summary>sanitizer report: ' + esc(sr.decision || "?") + '  ('
+    + sr.candidates.length + ' candidate ' + (sr.candidates.length === 1 ? 'call' : 'calls') + ' in scope)</summary>'
+    + '<ul class="taint-hops">' + rows + '</ul></details>';
+}
+
+function _renderVerifyRow(entry, i) {
+  // Only sinks carry a taint source the probe can exercise. Dangerous
+  // patterns (prototype pollution, regex ReDoS, etc.) aren't probed by
+  // URL/postMessage strategies — show a subdued row explaining why.
+  if (entry.kind !== "sink") {
+    return '<div class="probe-row"><span class="probe-na">pattern finding — not probeable via URL/postMessage</span></div>';
+  }
+  const strategy = _probeStrategyFor(entry.item);
+  const key = _findingKey(entry);
+  if (!strategy) {
+    return '<div class="probe-row"><span class="probe-na">no probe strategy for source <code>' + esc(entry.item.source || "?") + '</code></span></div>';
+  }
+
+  // AST-derived probe parameters — if the source needs more than just
+  // "a URL with a marker" (search param name, postMessage field path),
+  // pull the specifics from the finding's taint path. When the AST
+  // didn't observe the necessary data, disable Verify and say why —
+  // we never guess a param name or field shape.
+  let paramName = null;
+  let fieldPath = [];
+  let disabledReason = null;
+  if (strategy === "search") {
+    paramName = _extractParamNameFromTaintPath(entry.item.taintPath);
+    if (!paramName) disabledReason = "AST didn't record which ?key= the sink reads (need a `.get(\"…\")` hop in the taint path)";
+  } else if (strategy === "postmessage") {
+    fieldPath = _extractFieldPathFromTaintPath(entry.item.taintPath, entry.item.source);
+    // An empty fieldPath is fine — it means the handler treats event.data as a string.
+  }
+
+  const label = 'Verify (' + strategy + ')';
+  const resultHtml = '<div class="probe-result" data-finding-key="' + esc(key) + '"></div>';
+  // sourceUrl is the script URL the finding's pageUrl is keyed to in
+  // globalStore.securityFindings — the SW uses it to look up which
+  // page the finding was observed on.
+  // Include sinkType, decoders, and preconditions so the SW can build
+  // the matching payload shape. sinkType picks js/html/href vectors;
+  // decoders are applied in reverse to pre-encode; preconditions pin
+  // gate fields (action === "exec"-style) into the shaped payload.
+  const decoders = _extractDecodersFromTaintPath(entry.item.taintPath);
+  const preconditions = Array.isArray(entry.item.preconditions) ? entry.item.preconditions : [];
+  const probeData = {
+    strategy, paramName, fieldPath,
+    sourceUrl: entry.sourceUrl || null, pageUrl: entry.pageUrl || null,
+    sinkType: entry.item.type || null, sinkName: entry.item.sink || null,
+    decoders, preconditions,
+  };
+  const btnAttrs =
+    ' data-finding-key="' + esc(key) + '"'
+    + ' data-probe=\'' + esc(JSON.stringify(probeData)) + '\''
+    + ' data-finding-idx="' + i + '"';
+  if (disabledReason) {
+    return '<div class="probe-row">'
+      + '<button class="probe-btn" disabled' + btnAttrs + '>' + esc(label) + '</button>'
+      + '<span class="probe-na">' + esc(disabledReason) + '</span>'
+      + resultHtml + '</div>';
+  }
+  const hint = strategy === "search"
+    ? 'opens a new tab with ?' + esc(paramName) + '=<payload>, observes whether it reaches a sink'
+    : strategy === "postmessage"
+      ? 'opens example.com (cross-origin attacker), window.opens target, postMessages ' +
+        (fieldPath.length ? '{' + fieldPath.map(esc).join(".") + ': <payload>}' : '<payload>')
+      : 'opens a new tab with a tracked marker in the ' + strategy + ', observes whether it reaches a sink';
+  return '<div class="probe-row">'
+    + '<button class="probe-btn"' + btnAttrs + '>' + esc(label) + '</button>'
+    + '<span class="probe-hint">' + hint + '</span>'
+    + resultHtml + '</div>';
+}
+
+function _wireVerifyButtons(container) {
+  container.querySelectorAll(".probe-btn").forEach((btn) => {
+    btn.addEventListener("click", () => _handleVerifyClick(btn));
+  });
+}
+
+function _resumeInflightProbes(container) {
+  // If a previous render kicked off a probe that's still running, or
+  // recently completed, restore its result without re-sending. Lets the
+  // reviewer close/reopen panels without losing state.
+  container.querySelectorAll(".probe-result").forEach((resultEl) => {
+    const key = resultEl.dataset.findingKey;
+    if (_probeResults.has(key)) {
+      _renderProbeResult(resultEl, _probeResults.get(key));
+    } else if (_probeInFlight.has(key)) {
+      resultEl.textContent = "Running probe…";
+      resultEl.className = "probe-result probe-running";
+      _pollProbe(resultEl, key, _probeInFlight.get(key));
+    }
+  });
+}
+
+async function _handleVerifyClick(btn) {
+  const key = btn.dataset.findingKey;
+  let probeData = {};
+  try { probeData = JSON.parse(btn.dataset.probe || "{}"); } catch (_) {}
+  const card = btn.closest(".card");
+  const resultEl = card ? card.querySelector('.probe-result') : null;
+  if (!resultEl) return;
+
+  btn.disabled = true;
+  const prevLabel = btn.textContent;
+  btn.textContent = "Verifying…";
+  resultEl.textContent = "Starting probe…";
+  resultEl.className = "probe-result probe-running";
+
+  try {
+    const start = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({
+        type: "EXPLOIT_PROBE_START",
+        strategy: probeData.strategy,
+        paramName: probeData.paramName || null,
+        fieldPath: probeData.fieldPath || [],
+        sinkType: probeData.sinkType || null,
+        sinkName: probeData.sinkName || null,
+        decoders: Array.isArray(probeData.decoders) ? probeData.decoders : [],
+        preconditions: Array.isArray(probeData.preconditions) ? probeData.preconditions : [],
+        // pageUrl comes straight from the finding's own record — the
+        // page where the classifier last observed this sink. SW falls
+        // back to looking it up by sourceUrl if popup didn't cache it.
+        pageUrl: probeData.pageUrl || null,
+        sourceUrl: probeData.sourceUrl || null,
+        findingId: key,
+        waitMs: 5000,
+      }, (r) => resolve(r));
+    });
+    if (!start || !start.sessionId) {
+      resultEl.textContent = "Could not start: " + ((start && start.error) || "no response");
+      resultEl.className = "probe-result probe-err";
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+      return;
+    }
+    _probeInFlight.set(key, start.sessionId);
+    await _pollProbe(resultEl, key, start.sessionId);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevLabel.replace("Verifying…", prevLabel);
+  }
+}
+
+async function _pollProbe(resultEl, findingKey, sessionId) {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    const s = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_STATUS", sessionId }, (r) => resolve(r));
+    });
+    if (!s || s.error) {
+      resultEl.textContent = "Error: " + ((s && s.error) || "session lost");
+      resultEl.className = "probe-result probe-err";
+      _probeInFlight.delete(findingKey);
+      return;
+    }
+    if (s.status === "done" || s.status === "error") {
+      const snapshot = {
+        hits: s.hits || [],
+        executed: s.executed || null,
+        status: s.status,
+        error: s.error || null,
+        strategy: s.strategy,
+        finishedAt: s.finishedAt,
+        recipe: s.recipe || null,
+      };
+      _probeResults.set(findingKey, snapshot);
+      _probeInFlight.delete(findingKey);
+      _renderProbeResult(resultEl, snapshot);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  resultEl.textContent = "Timed out waiting for probe. Click Verify to retry.";
+  resultEl.className = "probe-result probe-err";
+  _probeInFlight.delete(findingKey);
+}
+
+function _renderProbeResult(resultEl, snapshot) {
+  if (snapshot.status === "error" || snapshot.error) {
+    resultEl.className = "probe-result probe-err";
+    resultEl.textContent = "Probe failed: " + (snapshot.error || "unknown");
+    return;
+  }
+  const hits = snapshot.hits || [];
+  const executed = snapshot.executed || null;
+
+  // Tri-state verdict matches the harness + memory rule:
+  //   1. NOT REPRODUCED — no sink touched the marker and no payload vector fired
+  //   2. TAINT REACH ONLY — sink received the marker but didn't parse/exec it
+  //   3. REAL EXPLOIT — an active payload executed (img/svg onerror fired,
+  //      eval/Function consumed the js statement, javascript: href ran)
+  //      OR HTML parsing was confirmed via the DOM-presence div (CSP-tolerant)
+  if (!hits.length && !executed) {
+    resultEl.className = "probe-result probe-miss";
+    resultEl.textContent = "NOT REPRODUCED — no sink reached and no payload executed. Finding may require user interaction, a specific DOM state, or a different source.";
+    return;
+  }
+
+  const vectorDesc = {
+    html: "inline handler fired (img onerror)",
+    svg: "inline handler fired (svg onload)",
+    js: "eval/Function ran the JS payload",
+    href: "javascript: URL navigation ran the payload",
+    dom: "HTML parsing confirmed (div landed in DOM — CSP-tolerant)",
+  };
+  const firedKeys = executed ? Object.keys(executed).filter(k => executed[k]) : [];
+  const activeExec = firedKeys.some(k => k !== "dom");
+
+  resultEl.className = "probe-result " + (firedKeys.length ? "probe-hit" : "probe-miss");
+  let html = "";
+  if (firedKeys.length) {
+    html += '<div class="probe-hit-head">' +
+      (activeExec ? "REAL EXPLOIT — payload executed at runtime" : "HTML PARSING CONFIRMED — payload was parsed as HTML") +
+      '</div><ul class="probe-hits">';
+    for (const v of firedKeys) {
+      html += '<li><code>' + esc(v) + '</code> — ' + esc(vectorDesc[v] || "unknown vector") + '</li>';
+    }
+    html += '</ul>';
+  } else if (hits.length) {
+    html += '<div class="probe-hit-head">TAINT REACH ONLY — marker reached a sink but was not parsed/executed</div>';
+    html += '<div class="probe-hint-detail">Handler may have treated the value as plain text (textContent, encoded), or a sanitizer stripped active content before innerHTML.</div>';
+  }
+  if (hits.length) {
+    html += '<div class="probe-hit-subhead">intercept.js recorded ' + hits.length + ' sink call(s) with the marker:</div><ul class="probe-hits probe-hits-dim">';
+    for (const h of hits.slice(0, 6)) {
+      const url = h.url ? ' <span class="probe-hit-url">' + esc(String(h.url).slice(0, 80)) + '</span>' : '';
+      html += '<li><code>' + esc(h.sink) + '</code>' + url + '<br><span class="probe-hit-val">' + esc(String(h.value || "").slice(0, 200)) + '</span></li>';
+    }
+    if (hits.length > 6) html += '<li>… +' + (hits.length - 6) + ' more</li>';
+    html += '</ul>';
+  }
+  // Show the probe "recipe" — what the SW actually sent. Lets a
+  // reviewer audit "is the precondition shape right? did we pre-
+  // encode the decoder chain correctly?" without digging into logs.
+  const recipe = snapshot.recipe;
+  if (recipe) {
+    const parts = [];
+    if (recipe.sinkType) parts.push('sinkType=' + recipe.sinkType);
+    if (recipe.paramName) parts.push('param=' + JSON.stringify(recipe.paramName));
+    if (Array.isArray(recipe.fieldPath) && recipe.fieldPath.length) {
+      parts.push('fieldPath=' + recipe.fieldPath.map(s => JSON.stringify(s)).join("."));
+    }
+    if (Array.isArray(recipe.decoders) && recipe.decoders.length) {
+      parts.push('decoders=' + recipe.decoders.join("→"));
+    }
+    if (Array.isArray(recipe.preconditions) && recipe.preconditions.length) {
+      const gates = recipe.preconditions.map(p => {
+        const k = Array.isArray(p.path) && p.path.length ? p.path.map(s => JSON.stringify(s)).join(".") : "<root>";
+        return k + (p.op || "===") + JSON.stringify(p.value);
+      }).join(", ");
+      parts.push('gates={' + gates + '}');
+    }
+    if (parts.length) {
+      html += '<details class="probe-recipe"><summary>probe recipe — what was actually sent</summary>'
+        + '<pre>' + esc(parts.join("\n")) + '</pre></details>';
+    }
+  }
+  resultEl.innerHTML = html;
+}
+
 function renderSecurityPanel() {
   const container = document.getElementById("security-findings");
   const empty = document.getElementById("security-empty");
@@ -1423,6 +1856,7 @@ function renderSecurityPanel() {
     var codeHtml = item.codeContext
       ? '<pre class="code-context clickable-code" data-source-url="' + esc(entry.sourceUrl || '') +
         '" data-line="' + (item.location ? item.location.line : 0) +
+        '" data-col="' + (item.location ? item.location.column : 0) +
         '"><code class="language-javascript">' + esc(item.codeContext) + '</code></pre>'
       : '';
 
@@ -1444,41 +1878,54 @@ function renderSecurityPanel() {
         ? "user-controlled" + (item.source ? ": " + esc(item.source) : "")
         : item.sourceType === "dynamic" ? "dynamic value" : "literal value";
 
-      html += '<div class="card">'
+      var verifyHtmlSink = _renderVerifyRow(entry, i);
+      html += '<div class="card" data-finding-key="' + esc(_findingKey(entry)) + '">'
         + '<div class="card-label">' + typeBadge + ' ' + sevBadge + ' ' + esc(item.sink) + '</div>'
         + '<div class="card-value">' + esc(sourceDesc) + '</div>'
         + codeHtml
+        + _renderTaintPathDetails(item)
+        + _renderPreconditionsDetails(item)
+        + _renderSanitizerDetails(item)
         + '<div class="card-meta">' + srcLink + (loc ? " " + esc(loc) : "") + '</div>'
+        + verifyHtmlSink
         + '</div>';
     } else {
       var patBadge = '<span class="badge badge-danger">' + esc((item.type || "pattern").toUpperCase().replace(/-/g, " ")) + '</span>';
-
-      html += '<div class="card">'
+      var verifyHtmlPat = _renderVerifyRow(entry, i);
+      html += '<div class="card" data-finding-key="' + esc(_findingKey(entry)) + '">'
         + '<div class="card-label">' + patBadge + ' ' + sevBadge + '</div>'
         + '<div class="card-value">' + esc(item.description || item.type) + '</div>'
         + codeHtml
+        + _renderTaintPathDetails(item)
         + '<div class="card-meta">' + srcLink + (loc ? " " + esc(loc) : "") + '</div>'
+        + verifyHtmlPat
         + '</div>';
     }
   }
 
   container.innerHTML = html;
+  _wireVerifyButtons(container);
+  _resumeInflightProbes(container);
 
   // Syntax-highlight code snippets
   container.querySelectorAll(".code-context code.language-javascript").forEach(function(el) {
     Prism.highlightElement(el);
   });
 
-  // Click handler: open source viewer for code context snippets
+  // Click handler: open source viewer for code context snippets. The
+  // column is essential for the viewer's per-finding tree-shake on
+  // minified bundles (every sink on react-core sits on L6 — line alone
+  // can't disambiguate which finding the reviewer clicked).
   container.querySelectorAll(".clickable-code").forEach(function(el) {
     el.addEventListener("click", function() {
       var url = el.dataset.sourceUrl;
       var line = el.dataset.line;
+      var col = el.dataset.col;
       if (url) {
-        chrome.tabs.create({
-          url: "viewer.html?sourceUrl=" + encodeURIComponent(url) +
-               "&line=" + (line || 0) + "&tabId=" + (currentTabId || 0)
-        });
+        var viewerUrl = "viewer.html?sourceUrl=" + encodeURIComponent(url) +
+             "&line=" + (line || 0) + "&tabId=" + (currentTabId || 0);
+        if (col != null && col !== "") viewerUrl += "&col=" + col;
+        chrome.tabs.create({ url: viewerUrl });
       }
     });
   });
@@ -1509,8 +1956,62 @@ function renderSendPanel() {
     }
   }
   if (prevSvc) svcSelect.value = prevSvc;
+  _renderServiceGrouping();
 
   renderMethodDropdown();
+}
+
+// Show which URL-structure rule produced the currently-selected
+// service name. Service grouping is heuristic (URL-parsing — no
+// server-side fact tells us "this is service X"), so every decision
+// must be traceable to the rule that produced it; a reviewer reads
+// this row and judges whether the grouping is right for the site.
+function _renderServiceGrouping() {
+  const el = document.getElementById("spec-service-grouping");
+  if (!el) return;
+  const svcSelect = document.getElementById("spec-service-select");
+  const name = svcSelect.value;
+  if (!name || !tabData?.discoveryDocs) { el.textContent = ""; el.className = "service-grouping"; return; }
+  const svcData = tabData.discoveryDocs[name];
+  if (!svcData) { el.textContent = ""; el.className = "service-grouping"; return; }
+  el.className = "service-grouping";
+
+  // Grouping rule line.
+  let html = "";
+  const g = svcData.grouping;
+  if (g) {
+    html += '<span class="grouping-label">grouping rule:</span> <code>' + esc(g.rule) + '</code>'
+      + (g.matched ? ' <span class="grouping-matched">matched: <code>' + esc(g.matched) + '</code></span>' : '')
+      + (g.firstUrl ? '<div class="grouping-first">first request: <code>' + esc(g.firstUrl) + '</code></div>' : '');
+  }
+
+  // Bucket quality: count methods by discovery source. AST-discovered
+  // methods are the reviewer's primary target — listed first so the
+  // reviewer sees the code-analysis yield at a glance.
+  if (svcData.doc) {
+    let astCount = 0, astLiveCount = 0, liveOnlyCount = 0, assetCount = 0, total = 0;
+    for (const bucket of Object.values(svcData.doc.resources || {})) {
+      for (const m of Object.values(bucket.methods || {})) {
+        total++;
+        if (m._responseKind === "asset") { assetCount++; continue; }
+        const hasAst = !!m._astInferred;
+        const hasLive = !!(m._stats && m._stats.requestCount);
+        if (hasAst && hasLive) astLiveCount++;
+        else if (hasAst) astCount++;
+        else if (hasLive) liveOnlyCount++;
+      }
+    }
+    if (total > 0) {
+      const parts = [];
+      if (astCount) parts.push(astCount + " AST");
+      if (astLiveCount) parts.push(astLiveCount + " AST+live");
+      if (liveOnlyCount) parts.push(liveOnlyCount + " live");
+      if (assetCount) parts.push(assetCount + " asset");
+      html += '<div class="grouping-first">methods: ' + esc(parts.join(", ")) + '  (' + total + ' total)</div>';
+    }
+  }
+
+  el.innerHTML = html;
 }
 
 function renderMethodDropdown() {
@@ -1539,7 +2040,25 @@ function renderMethodDropdown() {
             const opt = document.createElement("option");
             const key = `DISCOVERY ${m.httpMethod} ${svcName} ${m.id}`;
             opt.value = key;
-            opt.textContent = `[${m.httpMethod}] ${m.id}`;
+            // Review tags reflect what the reviewer cares about:
+            //   [ast]        — discovered via source-code AST, reviewer's
+            //                  primary target (endpoint that exists in the
+            //                  bundle, may or may not have been exercised).
+            //   [ast+live]   — AST-discovered AND real traffic observed.
+            //   [live]       — only observed in traffic (no AST origin).
+            //   [asset:X]    — response magic-bytes classified as static
+            //                  (deprioritise — usually noise).
+            let tag = "";
+            if (m._responseKind === "asset") {
+              tag = " [asset" + (m._responseLabel ? ":" + String(m._responseLabel).split(";")[0].trim() : "") + "]";
+            } else {
+              const hasAst = !!m._astInferred;
+              const hasLive = !!(m._stats && m._stats.requestCount);
+              if (hasAst && hasLive) tag = " [ast+live]";
+              else if (hasAst) tag = " [ast]";
+              else if (hasLive) tag = " [live]";
+            }
+            opt.textContent = `[${m.httpMethod}] ${m.id}${tag}`;
             opt.dataset.method = m.httpMethod;
             opt.dataset.isVirtual = "true";
             opt.dataset.svc = svcName;
@@ -2015,13 +2534,21 @@ function buildFormFields(schema, initialData = null) {
             _defaultValue: param._defaultValue ?? null,
             _defaultConfidence: param._defaultConfidence ?? null,
             _requiredConfidence: param._requiredConfidence ?? null,
+            _exampleValue: param._exampleValue === undefined ? null : param._exampleValue,
+            _exampleValueSource: param._exampleValueSource || null,
             _range: param._range || null,
           },
           "param",
           0,
+          // Prefer the captured value (last real request's data), then
+          // fall back to the AST/stats-derived example value. This lets
+          // a reviewer open a method they've never replayed and still
+          // get a sendable form — no blank fields — without us making
+          // up values. The source is an observed default or an AST
+          // constraint, never a guess.
           initialData && initialData[name] !== undefined
             ? initialData[name]
-            : null,
+            : (param._exampleValue !== undefined ? param._exampleValue : null),
         ),
       );
     }
@@ -2042,9 +2569,15 @@ function buildFormFields(schema, initialData = null) {
       // the drift loop below doesn't re-render the same field under its
       // numeric key as a second anonymous entry next to the named one.
       if (field.number != null) renderedTop.add(String(field.number));
-      const fieldVal = initialData
+      // Same prefer-captured-then-example logic as parameters. When
+      // the reviewer opens a body-carrying method they haven't
+      // replayed, the form is populated from the schema's AST /
+      // observed-default values so Send produces a plausible request
+      // the server will actually accept (or reject with a useful
+      // error). No made-up values.
+      const fieldVal = (initialData && (initialData[field.number] !== undefined || initialData[field.name] !== undefined))
         ? (initialData[field.number] ?? initialData[field.name] ?? null)
-        : null;
+        : (field._exampleValue !== undefined ? field._exampleValue : null);
       section.appendChild(
         createFieldInput(
           field.name,
@@ -2185,6 +2718,13 @@ function createFieldInput(
   }
   if (fieldDef._range) {
     labelHtml += ` <span class="field-stat badge-range">${fieldDef._range.min}\u2013${fieldDef._range.max}</span>`;
+  }
+  // When the form was prefilled from an example value (vs a captured
+  // request's initialData), show the provenance so the user knows
+  // whether the value came from observed traffic, AST analysis, or a
+  // type-default fallback. Never a guess without attribution.
+  if (fieldDef._exampleValueSource && initialValue != null && (fieldDef._exampleValue === initialValue || String(fieldDef._exampleValue) === String(initialValue))) {
+    labelHtml += ` <span class="field-stat badge-prefill" title="Prefilled from ${esc(fieldDef._exampleValueSource)}">prefill: ${esc(fieldDef._exampleValueSource)}</span>`;
   }
   if (fieldDef.format && fieldDef.format !== fieldDef.type) {
     labelHtml += ` <span class="field-stat badge-format">${esc(fieldDef.format)}</span>`;
