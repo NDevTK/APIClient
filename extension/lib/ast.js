@@ -2673,6 +2673,55 @@ function _extractSinkInfo(fetchPath) {
   return info;
 }
 
+// Record a resolver gap on the fetch URL argument. Cheaper than
+// re-walking to pinpoint the exact leaf — just labels the argument's
+// shape (Identifier name / `.prop` / `call()` / node type) and its
+// location. Reviewer reads the `fetch(` at that position to see
+// which identifier didn't trace.
+function _describeMemberChain(node) {
+  // Walk the MemberExpression chain left-to-right and emit `root.a.b.c`.
+  // For identifier roots we emit the name; for `this`/`super` we emit
+  // the keyword; for anything else (CallExpression root, etc.) we emit
+  // that node's type so the reviewer at least sees the shape.
+  var parts = [];
+  var cur = node;
+  while (_t.isMemberExpression(cur) && !cur.computed) {
+    var propName = _t.isIdentifier(cur.property) ? cur.property.name :
+      (_t.isStringLiteral(cur.property) ? cur.property.value : null);
+    if (!propName) return null;
+    parts.unshift(propName);
+    cur = cur.object;
+  }
+  if (_t.isIdentifier(cur)) parts.unshift(cur.name);
+  else if (_t.isThisExpression(cur)) parts.unshift("this");
+  else if (_t.isSuper(cur)) parts.unshift("super");
+  else if (_t.isCallExpression(cur) && _t.isIdentifier(cur.callee)) parts.unshift(cur.callee.name + "()");
+  else parts.unshift("<" + cur.type + ">");
+  return parts.join(".");
+}
+function _recordUrlResolveGap(argPath) {
+  if (!argPath || !argPath.node) return;
+  var n = argPath.node;
+  var desc = null;
+  if (_t.isIdentifier(n)) desc = n.name;
+  else if (_t.isMemberExpression(n)) desc = _describeMemberChain(n) || n.type;
+  else if (_t.isCallExpression(n)) {
+    if (_t.isIdentifier(n.callee)) desc = n.callee.name + "()";
+    else if (_t.isMemberExpression(n.callee)) {
+      var calleeDesc = _describeMemberChain(n.callee);
+      desc = calleeDesc ? calleeDesc + "()" : "CallExpression";
+    } else desc = "CallExpression";
+  }
+  else if (_t.isBinaryExpression(n)) desc = "<concat>";
+  else if (_t.isTemplateLiteral(n)) desc = "<template>";
+  else desc = n.type;
+  var loc = n.loc ? "@L" + n.loc.start.line + ":C" + n.loc.start.column : "";
+  _resolver.collectError(
+    new Error("fetch URL resolver gap: " + desc + loc + " didn't resolve — add a resolution path"),
+    "fetchUrlResolve"
+  );
+}
+
 function _extractFetchCall(path, result, type) {
   var args = path.node.arguments;
   if (!args.length) return;
@@ -2680,6 +2729,17 @@ function _extractFetchCall(path, result, type) {
   // ── Resolve URL (may produce multiple values via inter-procedural tracing) ──
   var urlArgPath = path.get("arguments.0");
   var urls = _resolveAllValues(urlArgPath, 0);
+  // Empty result = resolver couldn't trace to a concrete value. For a
+  // URL argument that's a resolver gap we want visible on the analysis
+  // result so the identifier needing a new resolution path is named.
+  // _recordUrlResolveGap walks the argument tree and collects the
+  // first unresolved Identifier / MemberExpression / CallExpression
+  // with its location; silently dropping the fetch site would erase
+  // a pointer to work we still need to do.
+  if (urls.length === 0) {
+    _recordUrlResolveGap(urlArgPath);
+    return;
+  }
   // The URL came from a pure StringLiteral iff the first argument
   // node IS a StringLiteral. Knowing this at the source-node level
   // lets _buildFetchSite's query-string extractor trust the URL's
@@ -2687,15 +2747,12 @@ function _extractFetchCall(path, result, type) {
   // with real literals).
   var urlFromLiteral = _t.isStringLiteral(args[0]);
 
-  // Template literal with interpolations → keep as URL template
-  if (urls.length === 0 && _t.isTemplateLiteral(args[0]) && args[0].expressions.length > 0) {
-    urls = [_templateToUrl(args[0])];
-  }
-
-  // If URL couldn't be resolved to a concrete value, skip this call site.
-  // Library-internal sinks (jQuery xhr.open(i.type, i.url), axios fetch(w), etc.)
-  // have unresolvable URLs — emitting placeholders creates noise, not usable endpoints.
-
+  // If URL couldn't be resolved to a concrete value, skip this call
+  // site. Library-internal sinks (jQuery xhr.open(i.type, i.url),
+  // axios fetch(w), etc.) either need a new resolution path added to
+  // _resolveAllValues or don't belong in the concrete method list —
+  // emitting placeholders would give the reviewer URLs that don't
+  // actually fire at runtime.
   if (urls.length === 0) return;
 
   // ── Extract method, headers, body from options ──
@@ -3080,22 +3137,33 @@ function _resolveAllValues(path, depth) {
 
   // Template literal with resolvable expressions
   if (_t.isTemplateLiteral(node) && node.expressions.length > 0) {
-    var allResolvable = true;
     var parts = [];
     for (var ti = 0; ti < node.quasis.length; ti++) {
       parts.push(node.quasis[ti].value.cooked || node.quasis[ti].value.raw || "");
       if (ti < node.expressions.length) {
-        var exprVals = _resolveAllValues(path.get("expressions." + ti), depth + 1);
-        if (exprVals.length === 0) { allResolvable = false; break; }
-        parts.push(exprVals[0]); // use first resolved value
+        var exprPath = path.get("expressions." + ti);
+        var exprVals = _resolveAllValues(exprPath, depth + 1);
+        // Every interpolation must resolve to a literal — returning
+        // partial parts would produce false-concrete URLs the caller
+        // then misattributes. Empty result is how `_resolveAllValues`
+        // reports "this subtree has no literal value to emit".
+        if (exprVals.length === 0) return [];
+        parts.push(exprVals[0]);
       }
     }
-    if (allResolvable) return [parts.join("")];
-    return [_templateToUrl(node)]; // fall back to template with placeholders
+    return [parts.join("")];
   }
 
   // String concatenation — flatten left-recursive chain iteratively to avoid stack overflow.
   // ((a + b) + c) + d is walked as: collect [d, c, b, a] from the left spine, reverse, then zip.
+  //
+  // Every term must resolve to a literal value via the existing
+  // resolution machinery. If any term doesn't resolve, return [] —
+  // returning partial parts would produce a false-relative URL that
+  // background.js misattributes to the page origin. The caller
+  // (_extractFetchCall for URL args) converts [] into a
+  // resolverError on the analysis result so the identifier-that-
+  // didn't-resolve is named and can have a resolution path added.
   if (_t.isBinaryExpression(node, { operator: "+" })) {
     var concatParts = [];
     var cur = path;
@@ -3106,27 +3174,24 @@ function _resolveAllValues(path, depth) {
     concatParts.push(cur); // leftmost non-+ term
     concatParts.reverse();
 
-    // Resolve each term individually (bounded by term complexity, not chain length)
-    var concatResult = _resolveAllValues(concatParts[0], depth + 1);
-    var anyResolved = concatResult.length > 0;
-    for (var ci = 1; ci < concatParts.length; ci++) {
+    var termResults = [];
+    for (var ci = 0; ci < concatParts.length; ci++) {
       var partVals = _resolveAllValues(concatParts[ci], depth + 1);
-      if (partVals.length > 0) anyResolved = true;
-      if (concatResult.length > 0 && partVals.length > 0) {
-        var combined = [];
-        var maxLen = Math.max(concatResult.length, partVals.length);
-        for (var zi = 0; zi < maxLen && combined.length < 20; zi++) {
-          var l = concatResult[Math.min(zi, concatResult.length - 1)];
-          var r = partVals[Math.min(zi, partVals.length - 1)];
-          combined.push(String(l) + String(r));
-        }
-        concatResult = combined;
-      } else if (concatResult.length === 0 && partVals.length > 0) {
-        concatResult = partVals;
-      }
-      // If partVals is empty, keep concatResult as-is (partial resolution)
+      if (partVals.length === 0) return [];
+      termResults.push(partVals);
     }
-    if (anyResolved && concatResult.length > 0) return concatResult;
+    var concatResult = [""];
+    for (var tri = 0; tri < termResults.length; tri++) {
+      var next = [];
+      var maxLen = Math.max(concatResult.length, termResults[tri].length);
+      for (var zi = 0; zi < maxLen && next.length < 20; zi++) {
+        var l = concatResult[Math.min(zi, concatResult.length - 1)];
+        var r = termResults[tri][Math.min(zi, termResults[tri].length - 1)];
+        next.push(String(l) + String(r));
+      }
+      concatResult = next;
+    }
+    return concatResult;
   }
 
   // Conditional expression: a ? b : (c ? d : e) — flatten alternate-recursive chain iteratively.
@@ -3158,6 +3223,34 @@ function _resolveAllValues(path, depth) {
     if (orVals.length > 0) return orVals;
   }
 
+  // new URLSearchParams({k: v, ...}) / new URLSearchParams("a=1&b=2")
+  // coerces to a querystring via implicit toString() — resolve to the
+  // encoded form so concats like `"/api?" + params` surface a concrete
+  // URL. Every value term must resolve; if the analyzer can't trace
+  // one of them that's a resolver gap, surfaced by the concat-level
+  // throw below once control returns here.
+  if (_t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URLSearchParams" }) &&
+      !path.scope.getBinding("URLSearchParams")) {
+    var uspArg = node.arguments && node.arguments[0];
+    if (uspArg && _t.isObjectExpression(uspArg)) {
+      var uspParts = [];
+      for (var upi = 0; upi < uspArg.properties.length; upi++) {
+        var uspProp = uspArg.properties[upi];
+        if (!_t.isObjectProperty(uspProp) || uspProp.computed) return [];
+        var uspKeyName = _t.isIdentifier(uspProp.key) ? uspProp.key.name :
+          (_t.isStringLiteral(uspProp.key) ? uspProp.key.value : null);
+        if (!uspKeyName) return [];
+        var uspValVals = _resolveAllValues(path.get("arguments.0.properties." + upi + ".value"), depth + 1);
+        if (!uspValVals.length) return [];
+        uspParts.push(encodeURIComponent(uspKeyName) + "=" + String(uspValVals[0]));
+      }
+      return [uspParts.join("&")];
+    }
+    if (uspArg && _t.isStringLiteral(uspArg)) {
+      return [uspArg.value.replace(/^\?/, "")];
+    }
+  }
+
   // Call expression — resolve through function return values
   // Handles: fetch(getUrl()), fetch(buildUrl("/api", id)), var x = config.get("key")
   if (_t.isCallExpression(node)) {
@@ -3172,20 +3265,29 @@ function _resolveAllValues(path, depth) {
         var smVals = _resolveAllValues(path.get("callee.object"), depth + 1);
         if (smVals.length > 0) return smVals;
       }
-      // Array.join(separator): resolve array elements and join with separator
+      // Array.join(separator): resolve array elements (recursively, through
+      // scope bindings / return values / concats) and join with separator.
+      // Minified bundles frequently emit `[base, "/api/", id].join("")`
+      // where each element is an identifier bound elsewhere — literal-only
+      // matching would drop these on the floor and misattribute to page
+      // origin. If any element can't be resolved, return [] so the
+      // fetch-level gap recorder names the unresolved subtree.
       if (smName === "join" && node.arguments.length <= 1) {
         var joinArrNode = _resolveToArray(path.get("callee.object"), 0);
-        if (joinArrNode && joinArrNode.elements && joinArrNode.elements.length > 0) {
+        if (joinArrNode && joinArrNode.elements && joinArrNode.elements.length > 0 && joinArrNode._path) {
           var sep = ",";
           if (node.arguments.length === 1 && _t.isStringLiteral(node.arguments[0])) sep = node.arguments[0].value;
           var joinParts = [];
+          var joinOk = true;
           for (var ji = 0; ji < joinArrNode.elements.length; ji++) {
-            if (_t.isStringLiteral(joinArrNode.elements[ji])) joinParts.push(joinArrNode.elements[ji].value);
-            else if (_t.isNumericLiteral(joinArrNode.elements[ji])) joinParts.push(String(joinArrNode.elements[ji].value));
-            else joinParts = null;
-            if (!joinParts) break;
+            var joinElem = joinArrNode.elements[ji];
+            if (joinElem === null) { joinParts.push(""); continue; } // hole → empty string per ES spec
+            var joinElemVals = _resolveAllValues(joinArrNode._path.get("elements." + ji), depth + 1);
+            if (joinElemVals.length === 0) { joinOk = false; break; }
+            joinParts.push(String(joinElemVals[0]));
           }
-          if (joinParts) return [joinParts.join(sep)];
+          if (joinOk) return [joinParts.join(sep)];
+          return [];
         }
       }
     }

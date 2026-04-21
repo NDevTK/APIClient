@@ -524,75 +524,21 @@ function buildCodeGraph(beautifiedCode) {
 // Uses _allFuncRanges for containment (any function, named or not),
 // then BFS through _funcMap (named only) for call-graph expansion.
 // Returns array of [startLine, endLine] ranges, or null.
-function buildRelevantRanges(mappedFindings, opts) {
+function buildRelevantRanges(mappedFindings) {
   if (!_allFuncRanges || !mappedFindings || !mappedFindings.length) return null;
-  // BFS depth for callee expansion. Defaults to 2 — when seeds already
-  // include every taintPath hop (the AST-traced chain), BFS-ing 10 deep
-  // from each seed buries the reviewer under unrelated framework calls.
-  // Hops already tell us which functions the taint crossed; callee
-  // expansion is just a contextual "what does this call reach" bonus.
-  var bfsDepth = (opts && typeof opts.bfsDepth === "number") ? opts.bfsDepth : 2;
-
-  // Seed: find the innermost function containing each finding line
-  var seedRanges = []; // direct ranges from containment
-  var seedNames = new Set(); // named functions for BFS expansion
+  var ranges = [];
   for (var fi = 0; fi < mappedFindings.length; fi++) {
     var fLine = mappedFindings[fi].line;
-    // Find innermost (smallest range) function containing this line
     var best = null;
     for (var ri = 0; ri < _allFuncRanges.length; ri++) {
       var r = _allFuncRanges[ri];
       if (fLine >= r.line && fLine <= r.endLine) {
-        if (!best || (r.endLine - r.line) < (best.endLine - best.line)) {
-          best = r;
-        }
+        if (!best || (r.endLine - r.line) < (best.endLine - best.line)) best = r;
       }
     }
-    if (best) {
-      seedRanges.push([best.line, best.endLine]);
-      // If this range also has named calls, queue them for BFS
-      if (best.calls) {
-        best.calls.forEach(function(c) { seedNames.add(c); });
-      }
-    } else {
-      // Top-level finding (not inside any function) — include the finding line
-      // directly so it appears in the focused view.
-      seedRanges.push([fLine, fLine]);
-    }
+    ranges.push(best ? [best.line, best.endLine] : [fLine, fLine]);
   }
-
-  if (seedRanges.length === 0) return null;
-
-  // BFS through named call graph — shallow by default (see bfsDepth note).
-  var visitedNames = new Set();
-  var queue = [];
-  seedNames.forEach(function(s) {
-    if (_funcMap[s] && !visitedNames.has(s)) {
-      visitedNames.add(s);
-      queue.push({ name: s, depth: 0 });
-    }
-  });
-  while (queue.length > 0) {
-    var item = queue.shift();
-    if (item.depth >= bfsDepth) continue;
-    var func = _funcMap[item.name];
-    if (!func || !func.calls) continue;
-    func.calls.forEach(function(callee) {
-      if (!visitedNames.has(callee) && _funcMap[callee]) {
-        visitedNames.add(callee);
-        queue.push({ name: callee, depth: item.depth + 1 });
-      }
-    });
-  }
-
-  // Collect all ranges: seeds + BFS-reached named functions
-  var ranges = seedRanges.slice();
-  visitedNames.forEach(function(name) {
-    var fn = _funcMap[name];
-    if (fn) ranges.push([fn.line, fn.endLine]);
-  });
-
-  return ranges;
+  return ranges.length ? ranges : null;
 }
 
 // Build focused code: only relevant function lines, with separators.

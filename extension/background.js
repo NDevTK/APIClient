@@ -1072,6 +1072,11 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
   // no synthetic method entry (would confuse the reviewer with made-up
   // paths like `dynamic_0`).
   //
+  // Inline-content schemes (data:/blob:/about:/javascript:) aren't API
+  // endpoints — they're content embedded in the bundle. Skip them so
+  // the service list doesn't accumulate empty-host records with
+  // garbled paths.
+  if (/^(data|blob|about|javascript):/i.test(callSite.url)) return null;
   // Relative URLs resolve against the PAGE's origin at runtime, NOT the
   // script's host. Cross-origin-hosted scripts (e.g. Reddit serves its
   // shreddit bundle from www.redditstatic.com but it fetches against
@@ -4510,6 +4515,12 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
     for (var fc = 0; fc < analysis.fetchCallSites.length; fc++) {
       var callSite = analysis.fetchCallSites[fc];
       try {
+        // Skip data:/blob:/about: URLs — those are inline content, not
+        // API endpoints. Registering them as services produces empty-
+        // host records with garbled paths (the URL parser reads the
+        // scheme as origin="null" and path starts mid-string).
+        if (/^(data|blob|about|javascript):/i.test(callSite.url)) continue;
+
         var isDynamic = /^\$\{|^\(dynamic\)|^\{[a-zA-Z]/.test(callSite.url);
         var csUrl = null;
         var interfaceName = null;

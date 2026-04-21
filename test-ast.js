@@ -134,6 +134,75 @@ test("fetch with variable URL (const)", `
     r.fetchCallSites[0].url === "https://api.example.com/endpoint";
 });
 
+// Concat where the base is a function param must be resolved through
+// the call graph — not emitted as a relative URL and not padded with a
+// placeholder. Real-world: Google Tag Manager's `Pj()+'/collect'`
+// pattern used to be registered under the site's own host because the
+// concat ignored the unresolved base.
+test("fetch concat with param base resolves from caller", `
+  function loadTracker(trackHost) {
+    fetch(trackHost + "/g/d/ccm/collect");
+  }
+  loadTracker("https://www.google-analytics.com");
+`, function(r) {
+  return r.fetchCallSites.length >= 1 &&
+    r.fetchCallSites.some(function(s) { return s.url === "https://www.google-analytics.com/g/d/ccm/collect"; });
+});
+
+// Polarity: when BOTH sides are resolvable, the full URL still works.
+test("fetch concat with resolvable base stays concrete", `
+  var base = "https://www.google-analytics.com";
+  fetch(base + "/g/d/ccm/collect");
+`, function(r) {
+  return r.fetchCallSites.length === 1 &&
+    r.fetchCallSites[0].url === "https://www.google-analytics.com/g/d/ccm/collect";
+});
+
+// Concat term missing a resolution path in the analyzer throws so the
+// gap lands on resolverErrors with the identifier name — pointing the
+// reviewer at exactly which variable needs a new resolution path.
+// Silently emitting `/g/d/ccm/collect` here would let background.js
+// attribute the fetch to the current page origin, which is the wrong
+// host at runtime.
+test("fetch concat missing a resolution path reports the gap on resolverErrors", `
+  export function loadTracker(trackHost) {
+    fetch(trackHost + "/g/d/ccm/collect");
+  }
+`, function(r) {
+  return r.fetchCallSites.length === 0 &&
+    Array.isArray(r.resolverErrors) &&
+    r.resolverErrors.some(function(e) {
+      return (e.message || "").indexOf("fetch URL resolver gap") >= 0;
+    });
+});
+
+// Gap descriptor must surface the full MemberExpression chain so reviewers
+// can distinguish `form.action` from `config.action` from `this.collectorUrl`
+// — the single-property descriptor (".action") was ambiguous across 20+ sites.
+test("gap descriptor: MemberExpression chain named in full", `
+  class C {
+    send() { fetch(this.collectorUrl); }
+  }
+  new C().send();
+`, function(r) {
+  return (r.resolverErrors || []).some(function(e) {
+    return /fetch URL resolver gap: this\.collectorUrl@/.test(e.message || "");
+  });
+});
+
+// Gap descriptor: MemberExpression callee → full chain name + "()" so a
+// reviewer sees exactly which method's return value didn't resolve.
+test("gap descriptor: MemberExpression callee → named .method()", `
+  function hit(opt) {
+    fetch(opt.build());
+  }
+  window.hit = hit;
+`, function(r) {
+  return (r.resolverErrors || []).some(function(e) {
+    return /fetch URL resolver gap: opt\.build\(\)@/.test(e.message || "");
+  });
+});
+
 test("fetch with options-as-variable", `
   var opts = { method: "PUT", headers: { "X-Token": "abc" } };
   fetch("https://api.example.com/update", opts);
@@ -2228,6 +2297,43 @@ test("Chained string builder for URL", `
   fetch(buildUrl(["/api", "v1", "users", "search"]));
 `, function(r) {
   return r.fetchCallSites.some(function(s) { return s.url === "/api/v1/users/search"; });
+});
+
+// Polarity: positive — [base, endpoint].join("") resolves when every
+// element traces to a literal via scope. Minified bundles emit this
+// pattern; the earlier literal-only check missed it and misattributed
+// the URL to the page origin.
+test("join(): inline array with scope-bound string elements resolves", `
+  var base = "https://api.example.com";
+  var endpoint = "/users/me";
+  fetch([base, endpoint].join(""));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/users/me"; });
+});
+
+// Polarity: positive — mixed literals + scope-bound vars with separator.
+test("join('/'): mixed literals + scope-bound element resolves", `
+  var v = "v1";
+  var r2 = "users";
+  fetch(["api", v, r2, "search"].join("/"));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "api/v1/users/search"; });
+});
+
+// Polarity: negative — when an element traces to a function parameter
+// with no caller-reachable literal, join must NOT fabricate a concrete
+// URL. The fetch call is dropped and a resolverError names the unresolved
+// subtree so the gap can be closed later.
+test("join(): unresolved element → no URL emitted, resolverError recorded", `
+  var base = "https://api.example.com";
+  function hit(unknown) {
+    return fetch([base, unknown].join(""));
+  }
+  window.leak = hit;
+`, function(r) {
+  var fabricated = r.fetchCallSites.some(function(s) { return s.url && s.url.indexOf("https://api.example.com") === 0; });
+  if (fabricated) return false;
+  return (r.resolverErrors || []).some(function(e) { return /fetch URL resolver gap/.test(e.message); });
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -5514,15 +5620,21 @@ test("XF: tainted global → setAttribute href in another script", [
 
 console.log("\n=== Security: Cross-File — Fetch URL from Tainted Base ===\n");
 
-test("XF: URL builder with tainted base in script A → fetch in script B", [
+// When the base of a URL concat is runtime-dynamic (`location.hash`),
+// there's no static URL for this fetch — the concat reports the gap
+// via resolverErrors pointing at `apiBase`. A previous version emitted
+// `/api/users` here, which then got attributed to the page origin
+// (wrong: the runtime URL depends on the attacker-controlled hash).
+test("XF: URL builder with runtime-dynamic base reports gap on resolverErrors", [
   'var apiBase = location.hash.substring(1);',
   'function buildUrl(path) { return apiBase + "/api/" + path; }',
-  // Script B:
   'fetch(buildUrl("users"));',
 ].join(";\n"), function(r) {
-  return r.fetchCallSites.some(function(s) {
-    return s.url && s.url.indexOf("/api/users") >= 0;
-  }) || r.fetchCallSites.length > 0;
+  return r.fetchCallSites.every(function(s) { return !s.url || s.url.indexOf("/api/users") < 0; }) &&
+    Array.isArray(r.resolverErrors) &&
+    r.resolverErrors.some(function(e) {
+      return (e.message || "").indexOf("fetch URL resolver gap") >= 0;
+    });
 }, true);
 
 console.log("\n=== Security: Cross-File — True Negatives ===\n");

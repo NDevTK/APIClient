@@ -1,29 +1,69 @@
-# API Security Researcher - Development Guide
+# API Security Researcher — Development Guide
 
-Work autonomously and continuously balance all tasks based on what's the most productive with no mocking allowed
+Work autonomously and continuously across all pillars. No mocking, no placeholders, no heuristics, no summaries.
 
 ## Project Overview
 
 A Chrome Extension (MV3) for API discovery, protocol reverse-engineering (Protobuf/JSPB/JSON/gRPC-Web/GraphQL/SSE/NDJSON), JavaScript security code review, and security testing across all websites.
 
-Example tasks:
-  Learning API Schema from network and javascript
-  Learning usable values for each item in schema via network and advanced javascript analysis
-  Security issue detection on real websites
-  Service grouping quality
-  API vs boring static resource quality
-  Real execution cross-origin exploitability probe (Even complex ones)
-  Interacting with real and complex server APIs
-  Research real websites and how they work avoiding symthic data
-  Look at websites own javascript and improve what we are learning
-  Verifying and reviewing and quality of outputs
-  Review what gets shown in UI
-  Review each findings by looking at the real javascript and following the code flow
-  Improve context provided by Interactive tooling
-  Test performance on websites
-  Ensuring code is based on facts and proper analysis not guesses or hardcoded heuristics
-  Improve harness review tooling with better context (instead of guessing)
+## Pillars
 
+Every change belongs to one pillar. After a landed change, the next change must be in a different pillar until all pillars have moved once; then rotate back. Don't stay in one pillar because it's easier.
+
+1. **Schema learning** — map request/response schemas and URL params from observed traffic + AST call sites. Every field gets a real example value, never a default.
+2. **Usable example values** — pull real captured values for every param/field; no synthesized defaults.
+3. **Security issue detection** — AST-traced taint from known sources to known sinks. No name matching, no regex — only scope-resolved analysis.
+4. **Service grouping quality** — group methods under the right host/path prefix. No cross-origin misattribution from concat tricks.
+5. **API vs static asset classification** — magic-byte sniffing + content-type. No URL-suffix heuristics.
+6. **Exploit probe** — prove execution end-to-end: NOT REPRODUCED / TAINT REACH ONLY / REAL EXPLOIT. Active payloads (img onerror) set a per-marker flag the probe checks via chrome.scripting.
+7. **Real server interaction** — send learned requests through the active page (credentialed) via `schema.verify`, diff response against learned schema.
+8. **Website JS review** — follow each finding back to the original JS (sourcemap-resolved). Every per-hop code snippet is captured at analysis time.
+9. **Verifying & reviewing output quality** — findings are re-read against real JS; schema.review shows every leaf's example + provenance.
+10. **UI review** — the popup and viewer render the same taint-path and tree-shake the reviewer would want; both inspected end-to-end with the harness before claims are made.
+11. **Per-finding drill-down** — `finding`, `finding.func`, `finding.callers`, `finding.view`, `finding.exploit` together produce enough context that no guesses are needed.
+12. **Harness reviewer context** — every harness command gives ground-truth AST data, not summaries: source snippets per hop, dim transitions, sanitizer report, preconditions, receiver type.
+13. **Performance on real sites** — measure on a real 5 MB+ bundle. No change ships with regression > 10 % vs the previous real-site baseline.
+14. **Facts not guesses** — every value the analyzer emits is traced structurally. No hardcoded strings, no depth caps, no magic numbers that paper over resolver gaps.
+15. **Tooling context improvement** — when a review needed a manual step, the harness learns that step (hop snippets, receiverType, finding.view, etc.).
+
+## Operational Rules
+
+**Output rule.** Output text only when progress is blocked by something external (missing credential, ambiguous irreversible choice). Otherwise call tools. Never write "tests pass, the fix is in" style summaries. The diff is the record.
+
+**Rotation cadence.** After any non-trivial landed change, the next non-trivial change must be in a different pillar. Don't cluster.
+
+**Verification protocol.** A change is landed only after it has been:
+1. Exercised on the real site where it applies — the finding/fix seen, diffed, or measured end-to-end.
+2. Exercised on at least one site where it should NOT apply — confirming no regression.
+3. Snapshot comparisons preferred: `finding.snapshot <name>` before, `finding.diff <name>` after — the diff is the proof.
+
+Tests are for detector polarity (positive + negative, pinned to similar-shape inputs). Tests are never a substitute for real-site verification.
+
+**Resolver-gap ownership.** Any `resolverError` a batch produces is a P1. The next task after the batch is to add the missing resolution path — inter-procedural, scope-aware, whatever's needed. `_resolveAllValues` throws when a concat term can't be traced; the caller catches and records the gap. Don't paper over with placeholders, don't raise an excuse, don't use the word "unresolvable". Close the gap.
+
+**Timeout root-cause.** A command that hangs past 30 s means the service worker or offscreen worker is stuck. Inspect `_scriptBuffers`, `_tabMeta`, the offscreen document via harness. Don't poll-retry. Don't raise the timeout. Find what's blocked.
+
+**Decision log.** When a choice is ambiguous but reversible, pick the biggest-impact path, record the reason in the code comment or commit message, and proceed. Only pause on irreversible choices (destructive ops, shipping).
+
+**Phase discipline.** Each task has three phases: investigate → change → verify on real site. Finish phase N before starting N+1. Don't interleave; don't claim done mid-phase.
+
+**Comments policy.** No preachy comments, no self-congratulation, no "carefully removed the heuristic" narration. A comment explains WHY a non-obvious decision was made, not what the code does or what rule it follows.
+
+**Balance, not breadth.** Touching all 15 pillars isn't the goal — the goal is that no one pillar grows while others rot. If a fix in pillar 3 creates a harness-context gap, pillar 12 is next.
+
+## Never Do
+
+- **Heuristics after being told no heuristics.** No magic numbers (`bfsDepth: 2`, `MAX_DEPTH = 10`), no name-based matching (`if (callee.name === "fetch")` without scope check), no scoring (A-F grades, confidence percentiles).
+- **Placeholders / opaque fallbacks.** No `{foo}`, no `{param0}`, no `"unresolvable"`, no `_describeNode()` string lookups, no returning a partial concat as if complete. Computed values get fully resolved via the existing machinery — or the gap is reported and closed.
+- **"unresolvable" / "can't" in code or tests.** The word is a lie; every value has a resolution path the analyzer either has or needs.
+- **Ceremonial end-of-turn summaries.** No "tests 748/748 pass, the fix is landed". The diff and the tool output speak for themselves.
+- **Stopping because the current micro-task is done.** Rotate pillars; pick up a resolver gap; verify on a new real site. Only stop on an irreversible external block.
+- **Ignoring timeouts.** See operational rule above.
+- **Claim a change works before real-site verification.** Tree-shake line counts, finding reviews, perf numbers — one run is not a claim.
+- **Staying in one pillar because it's easy.** Security FP cleanup gets addictive; schema / service / UI work gets skipped. Rotate.
+- **Synthetic tests standing in for real data.** A polarity test never substitutes for running the change against a real bundle.
+- **Preachy or self-congratulating comments.** See comments policy.
+- **Shipping mocked or placeholder responses.** Every fetched value, every schema example, every fetch-call-site URL is from an observed or fully-resolved source.
 
 ## Core Architecture
 
@@ -57,13 +97,18 @@ Example tasks:
 | `extension/popup.js` | Popup controller. Tab rendering, service filter, cross-tab log filtering, replay, export (curl/fetch/Python/OpenAPI). |
 | `extension/popup.html` | Popup markup. |
 | `extension/popup.css` | Popup styles. |
+| `extension/viewer.html` | Source viewer markup. |
+| `extension/viewer.js` | Source viewer: tree-shaken focused view per finding, click-to-definition via AST-built defMap/propDefs/refMap. |
+| `extension/ast-worker.html` | Offscreen document that hosts the AST Web Worker. |
+| `extension/ast-thread.js` | Web Worker loading Babel + `lib/ast.js`; handles `AST_ANALYZE`, `AST_BUILD_DEFINITION_MAP`, `AST_ANALYZE_BATCH`, `AST_PARSE_SOURCEMAP`, `AST_EXTRACT_TYPES`. |
 | `extension/lib/discovery.js` | Protocol parsers (batchexecute, async chunked, gRPC-Web, GraphQL, SSE, NDJSON, multipart), OpenAPI bidirectional conversion. |
 | `extension/lib/protobuf.js` | Protobuf wire-format codec, JSPB decoder, recursive base64 key scanning. |
 | `extension/lib/req2proto.js` | Error-based schema probing engine. |
-| `extension/lib/ast.js` | AST-based JS bundle analysis. Babel parser + traverse with scope-aware inter-procedural tracing. Extracts fetch call sites, proto field maps, enums, value constraints. Security code review: DOM XSS sinks, dangerous patterns (eval, postMessage, prototype pollution, open redirect), taint source tracking. |
+| `extension/lib/ast.js` | AST-based JS bundle analysis. Babel parser + traverse with scope-aware inter-procedural tracing. Extracts fetch call sites, proto field maps, enums, value constraints. Security code review: DOM XSS sinks, dangerous patterns (eval, postMessage, prototype pollution, open redirect), taint source tracking. Structural-def collection (defMap / propDefs / funcMap / allFuncRanges) piggy-backs on the same pre-pass so the viewer doesn't need a second Babel pass. |
 | `extension/lib/sourcemap.js` | Source map recovery. Babel parser with TypeScript plugin extracts interfaces, enums, type aliases from original sources. |
 | `extension/lib/babel-bundle.js` | Bundled Babel runtime (parser, traverse, types). Built by `node build.js` via esbuild. |
 | `build.js` | esbuild config for bundling Babel into an IIFE for the service worker. |
+| `testing/harness.js` | Reviewer-facing CLI. `findings`/`finding`/`finding.func`/`finding.callers`/`finding.view`/`finding.exploit`/`ast.probe`/`services`/`method`/`schema.verify`/`audit.sinks`/`audit.schema` plus popup drive commands. |
 
 ## AST Analysis Policy
 
@@ -73,19 +118,25 @@ All AST analysis uses Babel's scope system (`path.scope.getBinding()`) for varia
 
 **No caps or depth limits**: AST analysis must handle arbitrarily large scripts (1MB+ minified bundles) without losing data. No script size limits, no depth limits that discard data, no `MAX_DEPTH` constants. Functions that walk expression chains (BinaryExpression `+`, ConditionalExpression, LogicalExpression `||`/`&&`, MemberExpression) must use iterative loops with explicit stacks instead of recursion. The JS call stack is finite (~10k frames); minified code regularly produces expression chains hundreds of nodes deep. Convert recursive AST walkers to iterative whenever they process chainable node types.
 
+**Resolver completeness**: `_resolveAllValues` traces every URL-producing expression to literal values. BinaryExpression `+` concats throw when any term can't be traced — that's a resolver gap, not an "unresolvable value". `_extractFetchCall` catches the throw, records the gap on `result.resolverErrors`, and skips the fetch site (no false-relative URL attributed to the page origin). Closing resolver gaps — adding the missing resolution path for the identifier that threw — is a P1 follow-up, not optional.
+
 **Global verification via scope**: When detecting global sinks (`fetch`, `XMLHttpRequest`) or global sources (`location`, `document`, `window`), always verify the identifier is unbound: `!path.scope.getBinding("fetch")`. A local variable shadowing a global name is not a sink/source.
 
 - **Trace to network sinks**: The browser has two network primitives — `fetch()` and `XMLHttpRequest`. All JS network calls flow through them. AST identifies these global sinks and traces backward through scope bindings to extract URLs, methods, headers, body structure, and query params.
 - **Inter-procedural tracing**: When a sink argument is a function parameter, use `binding.referencePaths` to find all call sites and resolve the concrete values passed by callers. Trace through wrapper function chains using cycle detection (visited-set), not depth limits.
 - **Resolve values**: Use `path.scope.getBinding()` to follow variable references through proper scope chains. Collect value constraints from switch/case, `.includes()`, equality chains scoped by `scope.uid`.
-- **Type tracking**: `_typeEnv` maps `scopeUid:varName` to deterministic types (e.g., `new XMLHttpRequest()` → `"XMLHttpRequest"`, `[...]` → `"Array"`). `_getTrackedType(path, node)` resolves an identifier's type through scope. Used to disambiguate `.open()` (XHR vs other objects) and iterator methods (`.forEach()` on Array vs non-iterable). Types are scope-keyed so shadowed constructors don't inherit outer types. Only unambiguous patterns are tracked — no heuristics.
+- **Type tracking**: `_typeEnv` maps `scopeUid:varName` to deterministic types (e.g., `new XMLHttpRequest()` → `"XMLHttpRequest"`, `[...]` → `"Array"`, `new Map()` → `"Map"`). `_getTrackedType(path, node)` resolves an identifier's type through scope; falls back to `_inferTypeFromAssignments` which memoises the traversal of `binding.constantViolations` on the binding object. Used to disambiguate `.open()` (XHR vs other objects), iterator methods (`.forEach()` on Array vs non-iterable), and collection-lookup receivers (`.get()` on Map vs URLSearchParams). Types are scope-keyed so shadowed constructors don't inherit outer types.
 - **Taint source classification**: `_matchTaintSource(path, node)` walks MemberExpression chains structurally, verifies the root identifier is unbound via scope, normalizes `window.`/`self.` prefixes, and matches against taint patterns. Replaces string-based `_describeNode()` lookup for security decisions.
+- **Dimensional taint model**: Every taint hop carries `{origin, path, query, hash, content}` dims. `origin` is the sole sink-check signal for open-redirect / request-forgery. `location.href` has no origin dim (current-origin locked); free-form sources (`storage.getItem`, `event.data`, `cookie`, `window.name`) have origin. Transforms strip URL-part dims and upgrade origin when the structural marker is removed (`location.hash.slice(1)`).
+- **Per-hop code snippets**: `_tvsSource` and `_tvsHop` capture a ±70-char window from the bundle at each hop's position (`_snippetAtLoc`). The popup taint-path accordion and `finding <id>` both render these inline; no separate `finding.map` call per hop.
 - **CFG + sanitizer path analysis**: `_buildCFG(bodyPath)` builds a basic-block control flow graph from a function body path. `_hasSanitizerOnAllPaths()` checks whether all paths from a taint source's block to a sink's block pass through a sanitizer. Sanitizers are verified scope-aware (`_isSanitizerCall` checks `!path.scope.getBinding()` for globals like `DOMPurify`, `encodeURIComponent`). If sanitized on all paths, severity is downgraded to `"info"` rather than suppressed.
 - **Feed into the learning pipeline**: AST call sites are converted to synthetic requests and passed through `learnFromRequest()` — the same function that learns from real network traffic. AST learns APIs before they happen; network traffic confirms and enriches them.
+- **Page-origin attribution**: relative fetch URLs from AST call sites resolve against the PAGE's origin (the tab URL), not the script's host. A script served from `www.redditstatic.com` that calls `fetch('/svc/shreddit/graphql')` on a `www.reddit.com` page hits reddit at runtime, and the learned method is attributed to `www.reddit.com`. Same rule in `learnFromAstCallSite` and in the endpoint-registration block of `_analyzeCombinedScripts`.
 - **No protocol classification**: AST does not classify calls as gRPC/REST/RPC. Protocol detection is the network monitoring code's job.
-- **Security sink detection**: Detect DOM XSS sinks (`innerHTML`, `outerHTML`, `document.write`, `eval`, `new Function`, `insertAdjacentHTML`, `setTimeout`/`setInterval` with string arg, `setAttribute("on*")`) and open redirects (`location.href`/`location.assign`/`location.replace`). All sinks only flag when the value traces to a **user-controlled source** — no vulnerability exists without attacker-controlled data reaching the sink.
-- **Taint source tracking**: `_traceValueSource()` classifies value origins by tracing through scope bindings, function params, string concatenation, and method calls. Known user-controlled sources: `location.*`, `document.referrer`, `document.URL`, `document.cookie`, `window.name`, `event.data`. Propagates taint through variable assignment chains and method calls on tainted objects.
+- **Security sink detection**: Detect DOM XSS sinks (`innerHTML`, `outerHTML`, `document.write`, `eval`, `new Function`, `insertAdjacentHTML`, `setTimeout`/`setInterval` with string arg, `setAttribute("on*")`) and open redirects (`location.href`/`location.assign`/`location.replace`). All sinks only flag when the value traces to a **user-controlled source** — no vulnerability exists without attacker-controlled data reaching the sink. Sink entries carry `receiverType` (e.g. `Element`, `FormData`, `URL`) so reviewers see at a glance whether the sink object is a real DOM receiver.
+- **Taint source tracking**: `_traceValueSource()` classifies value origins by tracing through scope bindings, function params, string concatenation, and method calls. Known user-controlled sources: `location.*`, `document.referrer`, `document.URL`, `document.cookie`, `window.name`, `event.data`. Propagates taint through variable assignment chains and method calls on tainted objects. Collection-lookup methods (`.get`/`.has` on tracked `Map`/`Set`/`WeakMap`/`WeakSet` receivers) do NOT propagate key-taint to the return value — the stored value is independent of the key the attacker chose.
 - **Dangerous pattern detection**: Detect `postMessage` listeners without `event.origin` checks, prototype pollution (`obj[userControlledKey] = value`), dynamic `RegExp` with user-controlled patterns. Prototype pollution and RegExp only flag when the key/pattern traces to a user-controlled source — dynamic keys are ubiquitous in minified code (iterators, object merges, polyfills).
+- **All-dims-false suppression**: both `_pushSink` and `_pushDangerous` drop findings whose source's dims are all false (every URL-part dim stripped along the chain + no content dim). That's an attacker-reach label on a value the attacker can no longer influence — unactionable signal.
 - **No sensitive data scanning**: API key and token extraction is handled by `KEY_PATTERNS` in `background.js` — AST does not duplicate this.
 
 ## Development Standards
@@ -128,4 +179,5 @@ All AST analysis uses Babel's scope system (`path.scope.getBinding()`) for varia
 - **UI Changes**: Ensure new components maintain scroll position in their respective panels. The Send panel includes export buttons (curl, fetch, Python).
 - **Cross-Tab Features**: Tab metadata tracked in `_tabMeta` Map. Filter logic in popup controlled by `logFilter` state variable. New message types: `GET_TAB_LIST`, `GET_ALL_LOGS`.
 - **OpenAPI Export/Import**: Service-level via `EXPORT_OPENAPI`/`IMPORT_OPENAPI` messages. `convertDiscoveryToOpenApi()` / `convertOpenApiToDiscovery()` in `lib/discovery.js`. Service selector in popup filters methods and controls export scope.
-- **Add Security Pattern**: For new DOM XSS sinks, add detection to `_processSecurityCallSink` (call-based) or `_processSecurityAssignSink` (assignment-based) in `lib/ast.js`. For new dangerous patterns, add to `_processDangerousPattern` (call-based) or `_processDangerousAssignment` (assignment-based). Use `_traceValueSource()` to classify severity. New taint sources go in `_TAINT_SOURCES`. Add tests in `test-ast.js` in the "Security:" test sections.
+- **Add Security Pattern**: For new DOM XSS sinks, add detection to `_processSecurityCallSink` (call-based) or `_processSecurityAssignSink` (assignment-based) in `lib/ast.js`. For new dangerous patterns, add to `_processDangerousPattern` (call-based) or `_processDangerousAssignment` (assignment-based). Use `_traceValueSource()` to classify severity. New taint sources go in `_TAINT_SOURCES`. Polarity tests in `test-ast.js` (positive + negative). Real-site verification required — one site where it fires, one where it must not.
+- **Close a resolver gap**: `_resolveAllValues` throws an error naming the identifier. Add the resolution path (new ImportDeclaration handling, new MemberExpression case, new function-return path, etc.). Polarity test + real-site re-run.

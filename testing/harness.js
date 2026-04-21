@@ -342,63 +342,88 @@ async function cmdStart(args) {
   const port = Number(args[0] || process.env.HARNESS_PORT || DEFAULT_PORT);
   log(`launching Chrome on port ${port} …`);
 
-  const launched = await puppeteer.launch({
-    headless: false,
-    userDataDir: PROFILE_DIR,
-    defaultViewport: null,
-    args: [
-      `--disable-extensions-except=${EXT_DIR}`,
-      `--load-extension=${EXT_DIR}`,
-      `--remote-debugging-port=${port}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-    ],
-    handleSIGINT: false,
-    handleSIGTERM: false,
-    handleSIGHUP: false,
+  // Spawn Chrome as a fully detached process so the parent shell
+  // exiting (or this node process completing) doesn't take Chrome
+  // with it. An earlier `puppeteer.launch` + `await keepAlive`
+  // version held the browser alive by keeping node running — but on
+  // Windows that ties Chrome to the launching shell, and every
+  // caller had to either leave the shell open or use a workaround
+  // like `&; disown` that doesn't actually survive shell exit.
+  // detached:true creates a new process group; unref() means node
+  // won't wait for Chrome before exiting; stdio:'ignore' severs the
+  // pipes so Chrome isn't blocked on closed descriptors.
+  const chromePath = puppeteer.executablePath();
+  const chromeArgs = [
+    `--disable-extensions-except=${EXT_DIR}`,
+    `--load-extension=${EXT_DIR}`,
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${PROFILE_DIR}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+  ];
+  const chromeProc = spawn(chromePath, chromeArgs, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false,
   });
+  chromeProc.unref();
+  if (!chromeProc.pid) {
+    log("failed to spawn Chrome");
+    process.exit(1);
+  }
 
   // Wait for the debug port to be reachable.
-  for (let i = 0; i < 50; i++) {
+  let ready = false;
+  for (let i = 0; i < 100; i++) {
     await sleep(200);
-    const v = await pingPort(port);
-    if (v) break;
+    if (await pingPort(port)) { ready = true; break; }
+  }
+  if (!ready) {
+    log(`Chrome launched (pid ${chromeProc.pid}) but port ${port} isn't responding`);
+    process.exit(1);
   }
 
-  // Capture the extension ID now while the SW target is fresh — stored
-  // in the lock so every subsequent command can wake the SW even after
-  // `reload` invalidates the target list.
+  // Capture the extension ID while the SW target is fresh so every
+  // subsequent command can wake the SW even after `reload` invalidates
+  // the target list. Briefly connect via puppeteer to enumerate.
   let extId = null;
-  for (let i = 0; i < 50; i++) {
-    const t = launched.targets().find(t => t.url().startsWith("chrome-extension://"));
-    if (t) { try { extId = new URL(t.url()).hostname; break; } catch {} }
-    await sleep(200);
+  try {
+    const probeBrowser = await puppeteer.connect({
+      browserURL: `http://127.0.0.1:${port}`,
+      defaultViewport: null,
+      targetFilter: (t) => t.type() !== "browser",
+    });
+    for (let i = 0; i < 50; i++) {
+      const t = probeBrowser.targets().find(t => t.url().startsWith("chrome-extension://"));
+      if (t) { try { extId = new URL(t.url()).hostname; break; } catch {} }
+      await sleep(200);
+    }
+    probeBrowser.disconnect();
+  } catch (e) {
+    log("extension id probe failed:", e.message);
   }
 
-  await writeLock({ port, pid: process.pid, extId, startedAt: Date.now() });
-  log(`started. pid=${process.pid} port=${port}. Leave this process running; use another shell or a second invocation of \`node testing/harness.js <cmd>\`.`);
-
-  // Keep the browser (and this process) alive until the user issues `stop`
-  // (or Ctrl+C).  puppeteer.launch's wrapper otherwise exits when the
-  // script finishes — we explicitly keep a reference.
-  const keepAlive = new Promise(() => {});
-  process.on("SIGINT", async () => { await clearLock(); try { await launched.close(); } catch {} process.exit(0); });
-  await keepAlive;
+  await writeLock({ port, pid: chromeProc.pid, extId, startedAt: Date.now() });
+  log(`started. chrome pid=${chromeProc.pid} port=${port}. Detached — survives this shell. Stop with: node testing/harness.js stop`);
 }
 
 async function cmdStop() {
   const lock = await readLock();
   if (!lock) { log("not running"); return; }
-  // Ask the browser to close via CDP — puppeteer connect then close works.
+  // Ask Chrome to close gracefully via CDP first, then fall back to
+  // killing the pid stored in the lock. The pid IS Chrome's (detached
+  // child from cmdStart) — not a node launcher — so `process.kill`
+  // reliably terminates the browser.
   try {
     const browser = await connect(lock.port);
     await browser.close();
   } catch (e) {
     log("browser already gone:", e.message);
   }
+  if (lock.pid) {
+    try { process.kill(lock.pid); } catch {}
+  }
   await clearLock();
-  // The launcher process stays alive (its `keepAlive` never resolves). Kill it.
-  try { process.kill(lock.pid); } catch {}
   log("stopped");
 }
 
@@ -795,6 +820,42 @@ async function cmdFinding(args) {
       log(`  sourceType: ${f.sourceType || "?"}  source: ${short(f.source || "-", 200)}`);
       if (f.receiverType) log(`  receiverType: ${f.receiverType}  (sink object's tracked type — e.g. Element ⇒ real DOM sink, FormData/URL ⇒ not a DOM sink)`);
       log(`  sanitized: ${!!f.sanitized}`);
+    }
+    // Latest exploit-probe verdict for this finding, if any. Closes the
+    // loop between static analysis (finding as emitted) and dynamic
+    // verification (the three-state probe outcome) so the reviewer
+    // sees the current status without re-running the probe just to
+    // check. Session TTL is 10 min in _probeSessions — older probes
+    // drop off and the line disappears.
+    const _fId = computeFindingId(f);
+    const probe = await evalSW(browser, `
+      let latest = null;
+      for (const [, s] of _probeSessions) {
+        if (s.findingId !== arg) continue;
+        if (!latest || s.createdAt > latest.createdAt) latest = s;
+      }
+      if (!latest) return null;
+      const firedKeys = Object.keys(latest.executed || {}).filter(k => (latest.executed || {})[k]);
+      const activeExec = firedKeys.some(k => k !== "dom");
+      const parsedOnly = firedKeys.length && !activeExec;
+      let verdict;
+      if (activeExec) verdict = "REAL EXPLOIT";
+      else if (parsedOnly) verdict = "HTML PARSING CONFIRMED";
+      else if ((latest.hits || []).length) verdict = "TAINT REACH ONLY";
+      else verdict = "NOT REPRODUCED";
+      return {
+        verdict,
+        marker: latest.marker,
+        status: latest.status,
+        strategy: latest.strategy,
+        hitCount: (latest.hits || []).length,
+        firedKeys,
+        when: latest.finishedAt || latest.createdAt,
+      };
+    `, _fId);
+    if (probe) {
+      const whenStr = new Date(probe.when).toISOString().slice(0, 19).replace("T", " ");
+      log(`  probe: ${probe.verdict}  (session ${probe.marker}, strategy=${probe.strategy}, hits=${probe.hitCount}${probe.firedKeys.length ? ", fired=" + probe.firedKeys.join("+") : ""}, ${whenStr})`);
     }
     if (f.description) log(`  description: ${f.description}`);
     if (f.codeContext) {
@@ -1202,7 +1263,16 @@ async function runAstAnalyzer(browser, code, sourceUrl) {
 function printAstProbeResult(r) {
   const sinks = r.securitySinks || [];
   const dang = r.dangerousPatterns || [];
-  log(`  sinks: ${sinks.length}  dangerousPatterns: ${dang.length}  fetchSites: ${(r.fetchCallSites || []).length}`);
+  const resErrs = r.resolverErrors || [];
+  log(`  sinks: ${sinks.length}  dangerousPatterns: ${dang.length}  fetchSites: ${(r.fetchCallSites || []).length}  resolverErrors: ${resErrs.length}`);
+  for (const f of (r.fetchCallSites || [])) {
+    const line = f.location?.line ?? "?";
+    const col = f.location?.column ?? "?";
+    log(`    fetch ${f.method || "GET"} ${f.url}  L${line}:C${col}`);
+  }
+  for (const e of resErrs) {
+    log(`    [resolver-gap] ${short(e.message || "", 180)}`);
+  }
   for (const s of sinks) {
     const line = s.location?.line ?? "?";
     const col = s.location?.column ?? "?";
