@@ -439,117 +439,128 @@ function pbEncodeNestedPayload(indices, size, type) {
  * @param {number} maxDepth
  * @returns {object[]}
  */
-function pbDecodeTree(buf, maxDepth, valueCallback) {
-  if (maxDepth == null) maxDepth = 8;
+function pbDecodeTree(buf, _maxDepth, valueCallback) {
+  // _maxDepth retained for ABI compatibility with existing callers but
+  // ignored — the iterative pbTreeNode handles arbitrary nesting via a
+  // worklist instead of relying on JS-stack depth, so a depth cap would
+  // just discard valid decodes for adversarially-deep responses.
   if (!(buf instanceof Uint8Array)) buf = new Uint8Array(buf);
   try {
     return pbDecodeRaw(buf).map(function (f) {
-      return pbTreeNode(f, maxDepth, valueCallback);
+      return pbTreeNode(f, valueCallback);
     });
   } catch (e) {
     return [{ error: e.message }];
   }
 }
 
-function pbTreeNode(f, depth, valueCallback) {
-  var node = { field: f.field, wire: f.wire };
+function pbTreeNode(rootF, valueCallback) {
+  // Iterative tree construction. Each worklist entry pairs an input
+  // field `f` with the destination node `dst` to populate. Embedded
+  // messages get their child nodes pre-allocated and pushed back onto
+  // the queue, so JS-stack depth stays at 1 regardless of message
+  // nesting.
+  var root = { field: rootF.field, wire: rootF.wire };
+  var queue = [{ f: rootF, dst: root }];
+  while (queue.length > 0) {
+    var entry = queue.shift();
+    var f = entry.f, dst = entry.dst;
 
-  if (f.wire === PB_VARINT) {
-    node.value = f.data;
-    // ZigZag decode for signed interpretation (arithmetic to avoid 32-bit truncation)
-    if (typeof f.data === "number") {
-      node.asSigned = f.data % 2 === 0
-        ? Math.floor(f.data / 2)
-        : -Math.floor(f.data / 2) - 1;
-    } else {
-      node.asSigned = f.data; // string representation for very large values
-    }
-    if (valueCallback) valueCallback(node.value);
-    return node;
-  }
-
-  if (f.wire === PB_32BIT) {
-    var dv32 = new DataView(f.data.buffer, f.data.byteOffset, 4);
-    node.asUint32 = dv32.getUint32(0, true);
-    node.asInt32 = dv32.getInt32(0, true);
-    node.asFloat = dv32.getFloat32(0, true);
-    if (valueCallback) valueCallback(node.asUint32);
-    return node;
-  }
-
-  if (f.wire === PB_64BIT) {
-    var dv64 = new DataView(f.data.buffer, f.data.byteOffset, 8);
-    node.asDouble = dv64.getFloat64(0, true);
-    node.hex = bytesToHex(f.data);
-    if (valueCallback) valueCallback(node.hex);
-    return node;
-  }
-
-  if (f.wire === PB_LEN) {
-    // Try as embedded message
-    if (depth > 0 && f.data.length > 1) {
-      try {
-        var nested = pbDecodeRaw(f.data);
-        if (nested.length > 0) {
-          // Sanity checks to avoid misidentifying strings as messages:
-          // 1. All field numbers must be reasonable (1-10000)
-          // 2. Must consume all bytes (no trailing garbage)
-          // 3. Reject single-field messages where the data is very short
-          //    (likely a short string that happens to parse as valid protobuf)
-          // 4. Field numbers should be somewhat sequential (no huge gaps)
-          var valid = true;
-          var maxField = 0;
-          var minField = Infinity;
-          for (var i = 0; i < nested.length; i++) {
-            if (nested[i].field < 1 || nested[i].field > 10000) {
-              valid = false;
-              break;
-            }
-            if (nested[i].field > maxField) maxField = nested[i].field;
-            if (nested[i].field < minField) minField = nested[i].field;
-          }
-          // Reject if the gap between min and max field is implausibly large
-          // relative to the number of fields (e.g., fields [1, 9999] with only 2 entries)
-          if (valid && nested.length > 0 && maxField - minField > nested.length * 100) {
-            valid = false;
-          }
-          // For very short data (≤4 bytes), require at least 2 fields to confirm it's a message
-          if (valid && f.data.length <= 4 && nested.length < 2) {
-            valid = false;
-          }
-          if (valid) {
-            node.message = nested.map(function (nf) {
-              return pbTreeNode(nf, depth - 1, valueCallback);
-            });
-            return node;
-          }
-        }
-      } catch (_) {}
-    }
-    // Try as packed repeated (proto3 default for repeated scalars)
-    var packed = pbTryDecodePacked(f.data);
-    if (packed !== null) {
-      node.packed = packed;
-      node.value = packed;
-      if (valueCallback) {
-        for (var pi = 0; pi < packed.length; pi++) valueCallback(packed[pi]);
+    if (f.wire === PB_VARINT) {
+      dst.value = f.data;
+      // ZigZag decode for signed interpretation (arithmetic to avoid 32-bit truncation)
+      if (typeof f.data === "number") {
+        dst.asSigned = f.data % 2 === 0
+          ? Math.floor(f.data / 2)
+          : -Math.floor(f.data / 2) - 1;
+      } else {
+        dst.asSigned = f.data; // string representation for very large values
       }
-      return node;
+      if (valueCallback) valueCallback(dst.value);
+      continue;
     }
-    // Try as UTF-8 string
-    var str = tryUtf8(f.data);
-    if (str !== null) {
-      node.string = str;
-      if (valueCallback) valueCallback(str);
-    } else {
-      node.hex = bytesToHex(f.data);
-      if (valueCallback) valueCallback(node.hex);
-    }
-    node.length = f.data.length;
-    return node;
-  }
 
-  return node;
+    if (f.wire === PB_32BIT) {
+      var dv32 = new DataView(f.data.buffer, f.data.byteOffset, 4);
+      dst.asUint32 = dv32.getUint32(0, true);
+      dst.asInt32 = dv32.getInt32(0, true);
+      dst.asFloat = dv32.getFloat32(0, true);
+      if (valueCallback) valueCallback(dst.asUint32);
+      continue;
+    }
+
+    if (f.wire === PB_64BIT) {
+      var dv64 = new DataView(f.data.buffer, f.data.byteOffset, 8);
+      dst.asDouble = dv64.getFloat64(0, true);
+      dst.hex = bytesToHex(f.data);
+      if (valueCallback) valueCallback(dst.hex);
+      continue;
+    }
+
+    if (f.wire === PB_LEN) {
+      // Try as embedded message. Sanity checks below reject byte
+      // sequences that happen to parse as protobuf but are actually
+      // strings — they are protocol-correctness filters (not depth
+      // caps) and are preserved verbatim from the original.
+      var parsedAsMessage = false;
+      if (f.data.length > 1) {
+        try {
+          var nested = pbDecodeRaw(f.data);
+          if (nested.length > 0) {
+            var valid = true;
+            var maxField = 0;
+            var minField = Infinity;
+            for (var i = 0; i < nested.length; i++) {
+              if (nested[i].field < 1 || nested[i].field > 10000) {
+                valid = false;
+                break;
+              }
+              if (nested[i].field > maxField) maxField = nested[i].field;
+              if (nested[i].field < minField) minField = nested[i].field;
+            }
+            if (valid && nested.length > 0 && maxField - minField > nested.length * 100) {
+              valid = false;
+            }
+            if (valid && f.data.length <= 4 && nested.length < 2) {
+              valid = false;
+            }
+            if (valid) {
+              dst.message = [];
+              for (var ci = 0; ci < nested.length; ci++) {
+                var child = { field: nested[ci].field, wire: nested[ci].wire };
+                dst.message.push(child);
+                queue.push({ f: nested[ci], dst: child });
+              }
+              parsedAsMessage = true;
+            }
+          }
+        } catch (_) {}
+      }
+      if (parsedAsMessage) continue;
+
+      // Try as packed repeated (proto3 default for repeated scalars)
+      var packed = pbTryDecodePacked(f.data);
+      if (packed !== null) {
+        dst.packed = packed;
+        dst.value = packed;
+        if (valueCallback) {
+          for (var pi = 0; pi < packed.length; pi++) valueCallback(packed[pi]);
+        }
+        continue;
+      }
+      // Try as UTF-8 string
+      var str = tryUtf8(f.data);
+      if (str !== null) {
+        dst.string = str;
+        if (valueCallback) valueCallback(str);
+      } else {
+        dst.hex = bytesToHex(f.data);
+        if (valueCallback) valueCallback(dst.hex);
+      }
+      dst.length = f.data.length;
+    }
+  }
+  return root;
 }
 
 function tryUtf8(bytes) {
@@ -599,63 +610,73 @@ function pbTryDecodePacked(data) {
  * @returns {Array<object>} Tree of nodes
  */
 function jspbToTree(arr) {
-  const nodes = [];
+  const root = [];
   if (!Array.isArray(arr)) {
     console.warn("[Protobuf] jspbToTree: input is not an array:", arr);
-    return nodes;
+    return root;
   }
-
-  arr.forEach((val, idx) => {
-    if (val === null || val === undefined) return;
-
-    const fieldNum = idx + 1;
-    let node = {
-      field: fieldNum,
-      value: val,
-      isJspb: true,
-      wire: 2, // General purpose for JS values
-    };
-
-    if (Array.isArray(val)) {
-      // Distinguish repeated scalars from nested messages:
-      // - If array contains ONLY primitives (string/number/bool/null) → repeated scalar
-      // - If array contains any sub-arrays → nested message (JSPB positional encoding)
-      // - Empty array → keep as value (empty repeated or empty message)
-      const hasSubArrays = val.some((item) => Array.isArray(item));
-      const allPrimitives = val.length > 0 && val.every(
-        (item) => item === null || item === undefined ||
-          typeof item === "string" || typeof item === "number" || typeof item === "boolean"
-      );
-
-      if (allPrimitives && !hasSubArrays) {
-        // Repeated scalar field — keep as array value, don't recurse
-        node.wire = 2;
-        node.isRepeatedScalar = true;
-      } else {
-        // Nested message (positional JSPB encoding)
-        node.message = jspbToTree(val);
-        node.wire = 2;
+  // Iterative worklist: each entry holds the source container, the
+  // destination array to populate, and how to interpret the source
+  // ("array" = positional → field=idx+1; "object" = named → field=key).
+  // Replaces the original mutual recursion (jspbToTree ↔ entries.map →
+  // jspbToTree) so adversarially-deep server payloads don't blow the
+  // JS stack.
+  const queue = [{ src: arr, dst: root, mode: "array" }];
+  while (queue.length > 0) {
+    const { src, dst, mode } = queue.shift();
+    if (mode === "array") {
+      for (let idx = 0; idx < src.length; idx++) {
+        const val = src[idx];
+        if (val === null || val === undefined) continue;
+        const node = { field: idx + 1, value: val, isJspb: true, wire: 2 };
+        if (Array.isArray(val)) {
+          const hasSubArrays = val.some((item) => Array.isArray(item));
+          const allPrimitives = val.length > 0 && val.every(
+            (item) => item === null || item === undefined ||
+              typeof item === "string" || typeof item === "number" || typeof item === "boolean"
+          );
+          if (allPrimitives && !hasSubArrays) {
+            node.isRepeatedScalar = true;
+          } else {
+            node.message = [];
+            queue.push({ src: val, dst: node.message, mode: "array" });
+          }
+        } else if (typeof val === "object") {
+          node.message = [];
+          queue.push({ src: val, dst: node.message, mode: "object" });
+          delete node.value;
+        } else if (typeof val === "number") {
+          node.wire = Number.isInteger(val) ? 0 : 5;
+        } else if (typeof val === "boolean") {
+          node.wire = 0;
+        }
+        dst.push(node);
       }
-    } else if (typeof val === "object") {
-      // Plain object embedded in JSPB — expand as named fields
-      node.message = Object.entries(val).map(([k, v]) => {
-        if (v === null || v === undefined) return null;
-        if (Array.isArray(v)) return { field: k, wire: 2, message: jspbToTree(v), isJson: true, jsType: "array" };
-        if (typeof v === "object") return { field: k, wire: 2, message: jspbToTree([v]).flatMap(n => n.message || [n]), isJson: true, jsType: "object" };
-        if (typeof v === "string") return { field: k, wire: 2, string: v, isJson: true, jsType: "string" };
-        if (typeof v === "boolean") return { field: k, wire: 0, value: v, isJson: true, jsType: "boolean" };
-        if (typeof v === "number") return { field: k, wire: 0, value: v, isJson: true, jsType: "number" };
-        return { field: k, wire: 0, value: v, isJson: true, jsType: typeof v };
-      }).filter(Boolean);
-      node.wire = 2;
-      delete node.value;
-    } else if (typeof val === "number") {
-      node.wire = Number.isInteger(val) ? 0 : 5;
-    } else if (typeof val === "boolean") {
-      node.wire = 0;
+    } else {
+      // object mode: src is a plain object; entries become named fields.
+      const entries = Object.entries(src);
+      for (let ei = 0; ei < entries.length; ei++) {
+        const k = entries[ei][0], v = entries[ei][1];
+        if (v === null || v === undefined) continue;
+        if (Array.isArray(v)) {
+          const sub = { field: k, wire: 2, message: [], isJson: true, jsType: "array" };
+          queue.push({ src: v, dst: sub.message, mode: "array" });
+          dst.push(sub);
+        } else if (typeof v === "object") {
+          const sub = { field: k, wire: 2, message: [], isJson: true, jsType: "object" };
+          queue.push({ src: v, dst: sub.message, mode: "object" });
+          dst.push(sub);
+        } else if (typeof v === "string") {
+          dst.push({ field: k, wire: 2, string: v, isJson: true, jsType: "string" });
+        } else if (typeof v === "boolean") {
+          dst.push({ field: k, wire: 0, value: v, isJson: true, jsType: "boolean" });
+        } else if (typeof v === "number") {
+          dst.push({ field: k, wire: 0, value: v, isJson: true, jsType: "number" });
+        } else {
+          dst.push({ field: k, wire: 0, value: v, isJson: true, jsType: typeof v });
+        }
+      }
     }
-
-    nodes.push(node);
-  });
-  return nodes;
+  }
+  return root;
 }

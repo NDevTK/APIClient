@@ -1313,6 +1313,17 @@ function printAstProbeResult(r) {
   const dang = r.dangerousPatterns || [];
   const resErrs = r.resolverErrors || [];
   log(`  sinks: ${sinks.length}  dangerousPatterns: ${dang.length}  fetchSites: ${(r.fetchCallSites || []).length}  resolverErrors: ${resErrs.length}`);
+  if (r.perf) {
+    const p = r.perf;
+    const ph = p.phaseMs || {};
+    const mb = (p.sizeBytes / 1048576).toFixed(2);
+    const sec = (p.totalMs / 1000).toFixed(2);
+    const mbps = (p.sizeBytes / 1048576 / (p.totalMs / 1000));
+    log(`  perf: ${sec}s for ${mb}MB (${mbps.toFixed(2)}MB/s)  phases: parse=${ph.parse?.toFixed(0)}ms prePass=${ph.prePass?.toFixed(0)}ms mainPass=${ph.mainPass?.toFixed(0)}ms structuralExport=${ph.structuralExport?.toFixed(0)}ms`);
+    if (p.counters) {
+      log(`  counters: interProc=${p.counters.interProcTraces} resolvedUrls=${p.counters.resolvedUrls} globals=${p.counters.globalAssignments} winAliases=${p.counters.windowAliases} protoMethods=${p.counters.protoMethods}/${p.counters.protoMethodsNoField}-unmatched`);
+    }
+  }
   for (const f of (r.fetchCallSites || [])) {
     const line = f.location?.line ?? "?";
     const col = f.location?.column ?? "?";
@@ -2496,6 +2507,285 @@ async function cmdAuditGaps(rest) {
       log(`    src:    ${snippet}`);
     }
   });
+}
+
+// audit.perf — per-script analysis perf breakdown across captured scripts.
+// Reads result.perf populated by analyzeJSBundle. Sorts worst-first by
+// totalMs. Pillar 13: measure on real bundles, not toy fixtures.
+async function cmdAuditPerf(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const substr = positional[0] || null;
+  const limit = flags.limit != null ? Number(flags.limit) : 30;
+  const sortBy = flags.sort || "total";  // total | parse | mainPass | prePass | mb-per-s
+  await withBrowser(async (browser) => {
+    const rows = await evalSW(browser, `
+      // A page is reviewed as the COMBINATION of all scripts it loads —
+      // cross-script inter-procedural analysis only works when the
+      // analyzer sees them together. So perf is per-combined-bundle,
+      // and the cache key is the SHA256 of all script hashes joined.
+      // audit.perf surfaces those combined-bundle costs plus any
+      // per-script fallbacks (when the combined offscreen analysis
+      // failed) from tab._astResults. Dedup by (sizeBytes, totalMs,
+      // sourceUrl) tuple to collapse the same analysis appearing in
+      // both stores.
+      const out = [];
+      const seenTuples = new Set();
+      function pushUnique(url, perf, source) {
+        if (!perf) return;
+        const key = (perf.sizeBytes||0) + ":" + (perf.totalMs||0) + ":" + url;
+        if (seenTuples.has(key)) return;
+        seenTuples.add(key);
+        out.push({ url, perf, source });
+      }
+      // Combined-script cache: one entry per multi-script bundle.
+      // Skip entries without scriptOffsets — those are stale single-
+      // script cache entries from a removed code path; combined-bundle
+      // analyses always populate offsets.
+      for (const [k, cached] of globalStore.scriptCache.entries()) {
+        const a = cached.result;
+        if (!a || !a.perf) continue;
+        const offsets = cached.scriptOffsets || [];
+        if (offsets.length === 0) continue;
+        const url = (cached.tabUrl || offsets[0].url) +
+          " (combined " + offsets.length + " script" + (offsets.length === 1 ? "" : "s") + ")";
+        pushUnique(url, a.perf, "combined");
+      }
+      // Per-tab _astResults: individual analyses (fallback when combined fails)
+      for (const [tid, tab] of state.tabs.entries()) {
+        const ar = tab._astResults || [];
+        for (const a of ar) {
+          if (!a || !a.perf) continue;
+          pushUnique(a.sourceUrl || "(tab " + tid + " inline)", a.perf, "individual-fallback");
+        }
+      }
+      return out;
+    `);
+    const filtered = substr ? rows.filter(r => r.url.toLowerCase().includes(substr.toLowerCase())) : rows;
+    if (!filtered.length) { log(substr ? `no scripts match "${substr}"` : "no scripts with perf data"); return; }
+    const sortKey = (r) => {
+      const p = r.perf;
+      if (sortBy === "parse") return -(p.phaseMs?.parse || 0);
+      if (sortBy === "mainPass") return -(p.phaseMs?.mainPass || 0);
+      if (sortBy === "prePass") return -(p.phaseMs?.prePass || 0);
+      if (sortBy === "mb-per-s") return (p.sizeBytes / 1048576) / (p.totalMs / 1000);
+      return -(p.totalMs || 0);
+    };
+    filtered.sort((a, b) => sortKey(a) - sortKey(b));
+    log(`audit.perf: ${filtered.length} script${filtered.length === 1 ? "" : "s"}${substr ? ` matching "${substr}"` : ""} (showing ${Math.min(filtered.length, limit)}, sorted by ${sortBy}):`);
+    let totalBytes = 0, totalMs = 0;
+    for (const r of filtered) { totalBytes += r.perf.sizeBytes || 0; totalMs += r.perf.totalMs || 0; }
+    const totalMb = totalBytes / 1048576;
+    const totalSec = totalMs / 1000;
+    log(`  aggregate: ${totalSec.toFixed(2)}s for ${totalMb.toFixed(2)}MB (${totalSec > 0 ? (totalMb / totalSec).toFixed(2) : "∞"}MB/s)`);
+    for (let i = 0; i < Math.min(filtered.length, limit); i++) {
+      const r = filtered[i];
+      const p = r.perf;
+      const ph = p.phaseMs || {};
+      const mb = (p.sizeBytes / 1048576).toFixed(2);
+      const sec = (p.totalMs / 1000).toFixed(2);
+      const mbps = (p.sizeBytes / 1048576) / (p.totalMs / 1000);
+      log(`\n  ${r.url}`);
+      log(`    ${sec}s for ${mb}MB (${mbps.toFixed(2)}MB/s)  parse=${ph.parse?.toFixed(0)}ms prePass=${ph.prePass?.toFixed(0)}ms mainPass=${ph.mainPass?.toFixed(0)}ms structuralExport=${ph.structuralExport?.toFixed(0)}ms`);
+      const f = p.findings || {};
+      log(`    findings: fetchSites=${f.fetchSites} sinks=${f.sinks} dangerous=${f.dangerous} gaps=${f.gaps} enums=${f.enums} fieldMaps=${f.fieldMaps}`);
+      const c = p.counters || {};
+      log(`    counters: interProc=${c.interProcTraces} resolvedUrls=${c.resolvedUrls} globals=${c.globalAssignments} winAliases=${c.windowAliases}`);
+    }
+  });
+}
+
+// audit.profile — capture a real V8 CPU profile of the offscreen
+// document during one analysis run. Uses CDP Profiler.start/stop so
+// the output is a standard Chromium .cpuprofile file loadable in
+// Chrome DevTools (Performance tab → "Load profile…"). Per-line and
+// per-function attribution comes from V8's sampling profiler — that's
+// the right tool for hot-path discovery, not custom in-bundle stats.
+//
+// Flow: pick the active tab's buffered scripts → start Profiler →
+// kick the combined-bundle analysis → wait for cache to populate →
+// stop Profiler → write profile to testing/finding-snapshots/<name>.cpuprofile.
+async function cmdAuditProfile(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const name = positional[0] || ("profile-" + Date.now());
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new Error("profile name must be [A-Za-z0-9_.-]+");
+  // Reviewer-facing knobs: V8 sampling interval (microseconds), wait
+  // deadline (ms), poll interval (ms), top-N leaves to print. Defaults
+  // chosen so the command is useful out of the box but every tunable
+  // is overridable via flag.
+  const samplingUs = Number(flags.interval) || 100;          // V8 sampling interval, µs
+  const deadlineMs = Number(flags.timeout) || 600000;        // overall wait budget
+  const pollMs = Number(flags.poll) || 2000;                 // SW state poll interval
+  const topN = Number(flags.top) || 20;                      // leaves to print
+  const outPath = path.resolve(SNAP_DIR, name + ".cpuprofile");
+  await fsp.mkdir(SNAP_DIR, { recursive: true });
+  await withBrowser(async (browser) => {
+    // Offscreen documents show up as type "page" in CDP /json/list but
+    // puppeteer's browser.targets() filters them out. Pull the raw list
+    // via CDP HTTP endpoint, find the ast-worker.html target, then ask
+    // puppeteer to attach to its targetId via _targetManager.
+    const lock = await readLock();
+    const port = lock?.port || DEFAULT_PORT;
+    const res = await fetch(`http://127.0.0.1:${port}/json/list`);
+    const cdpTargets = await res.json();
+    const offscreenInfo = cdpTargets.find(t => t.url && t.url.endsWith("/ast-worker.html"));
+    if (!offscreenInfo) throw new Error("offscreen ast-worker.html target not found — run an analysis first to spawn it");
+
+    // Puppeteer doesn't enumerate offscreen documents in browser.targets().
+    // Connect raw CDP via WebSocket to the offscreen page's webSocketDebuggerUrl
+    // (returned by /json/list) and drive Profiler directly.
+    const WebSocket = require("ws");
+    const wsUrl = offscreenInfo.webSocketDebuggerUrl;
+    if (!wsUrl) throw new Error("offscreen target has no webSocketDebuggerUrl");
+    const ws = new WebSocket(wsUrl, { perMessageDeflate: false });
+    await new Promise((res, rej) => {
+      ws.once("open", res);
+      ws.once("error", rej);
+    });
+    let cdpId = 0;
+    const pending = new Map();
+    ws.on("message", (data) => {
+      const msg = JSON.parse(String(data));
+      if (msg.id != null && pending.has(msg.id)) {
+        const { resolve, reject } = pending.get(msg.id);
+        pending.delete(msg.id);
+        if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+        else resolve(msg.result);
+      }
+    });
+    function cdpSend(method, params) {
+      const id = ++cdpId;
+      ws.send(JSON.stringify({ id, method, params: params || {} }));
+      return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+    }
+    let started = false;
+    try {
+      await cdpSend("Profiler.enable");
+      await cdpSend("Profiler.setSamplingInterval", { interval: samplingUs });
+      await cdpSend("Profiler.start");
+      started = true;
+
+      // Trigger the actual analysis — kick combined analysis on the active tab's buffered scripts
+      const triggered = await evalSW(browser, `
+        const tabId = state.tabs.keys().next().value;
+        if (!tabId) return { ok: false, error: 'no tab' };
+        const buf = _scriptBuffers.get(tabId);
+        if (!buf || !buf.scripts || !buf.scripts.length) return { ok: false, error: 'no buffered scripts for tab ' + tabId };
+        const totalChars = buf.scripts.reduce((s, x) => s + x.code.length, 0);
+        const t0 = Date.now();
+        // Fire-and-forget so the SW eval doesn't block the puppeteer protocol
+        _analyzeCombinedScripts(tabId).then(() => { globalThis._profDone = { ok: true, elapsed: Date.now() - t0 }; })
+          .catch(e => { globalThis._profDone = { error: e.message, elapsed: Date.now() - t0 }; });
+        return { ok: true, tabId, scripts: buf.scripts.length, totalChars };
+      `);
+      if (!triggered.ok) throw new Error("could not trigger analysis: " + triggered.error);
+      log(`profiling ${triggered.scripts} scripts (${triggered.totalChars} chars) for tab ${triggered.tabId}…`);
+
+      // Poll for completion (cache populated, OR _profDone set with error)
+      const deadline = Date.now() + deadlineMs;
+      while (Date.now() < deadline) {
+        await sleep(pollMs);
+        const check = await evalSW(browser, `
+          return JSON.stringify({
+            done: !!globalThis._profDone,
+            cacheSize: globalStore.scriptCache.size,
+            result: globalThis._profDone || null
+          });
+        `);
+        const parsed = JSON.parse(check);
+        if (parsed.done) {
+          log(`analysis returned: ${JSON.stringify(parsed.result)}`);
+          break;
+        }
+      }
+
+      const profileResult = await cdpSend("Profiler.stop");
+      started = false;
+      const profile = profileResult.profile;
+      await fsp.writeFile(outPath, JSON.stringify(profile));
+      log(`wrote CPU profile to ${outPath}`);
+      log(`load in Chrome DevTools: chrome://inspect/#service-workers → Performance → Load profile`);
+
+      // Quick top-functions summary so the reviewer sees hot leaves without
+      // having to open DevTools. CDP profile.nodes is a tree; .hitCount is
+      // the sample count attributed directly to that frame (self time, in
+      // sampling-interval units). Sort by hitCount desc, take the top.
+      const nodes = profile.nodes || [];
+      const totalSamples = nodes.reduce((s, n) => s + (n.hitCount || 0), 0) || 1;
+      const intervalMs = samplingUs / 1000;
+      const top = nodes
+        .filter(n => (n.hitCount || 0) > 0)
+        .sort((a, b) => (b.hitCount || 0) - (a.hitCount || 0))
+        .slice(0, topN);
+      log(`\ntop self-time leaves (${totalSamples} samples ≈ ${(totalSamples * intervalMs).toFixed(0)}ms total):`);
+      for (const n of top) {
+        const fn = n.callFrame || {};
+        const pct = ((n.hitCount / totalSamples) * 100).toFixed(1);
+        const ms = (n.hitCount * intervalMs).toFixed(0);
+        const fname = fn.functionName || "(anonymous)";
+        const url = fn.url ? fn.url.split("/").pop() : "?";
+        const loc = fn.lineNumber != null ? ":" + (fn.lineNumber + 1) + ":" + (fn.columnNumber + 1) : "";
+        log(`  ${pct.padStart(5)}%  ${ms.padStart(6)}ms  ${fname}  ${url}${loc}`);
+      }
+    } finally {
+      try { if (started) await cdpSend("Profiler.stop"); } catch {}
+      try { ws.close(); } catch {}
+    }
+  });
+}
+
+// audit.profile.summary — parse a saved .cpuprofile and surface the top
+// hot frames grouped by ast.js function. Pillar 12: reviewer-facing
+// tooling that converts a raw cpuprofile into actionable per-function
+// inclusive/self time without needing Chrome DevTools.
+async function cmdAuditProfileSummary(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const fileArg = positional[0];
+  if (!fileArg) throw new Error("usage: audit.profile.summary <name|path> [--top N] [--filter ast|all]");
+  const topN = Number(flags.top) || 20;
+  const filter = flags.filter || "ast";  // "ast" = ast.js only; "all" = all frames
+  const profilePath = fileArg.endsWith(".cpuprofile") ? path.resolve(fileArg) :
+    path.resolve(SNAP_DIR, fileArg + ".cpuprofile");
+  const profile = JSON.parse(await fsp.readFile(profilePath, "utf8"));
+  const nodes = profile.nodes || [];
+  const totalSamples = nodes.reduce((s, n) => s + (n.hitCount || 0), 0) || 1;
+  const idToNode = new Map();
+  for (const n of nodes) idToNode.set(n.id, n);
+  function inclusive(id, seen) {
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const n = idToNode.get(id);
+    if (!n) return 0;
+    let h = n.hitCount || 0;
+    if (n.children) for (const c of n.children) h += inclusive(c, seen);
+    return h;
+  }
+  // Group by function-name + line so multiple call-stack instances of the
+  // same function aggregate. Inclusive sample count is summed across
+  // all instances — each instance is a unique stack position, but they
+  // all execute the same function code, so the cumulative time is the
+  // function's total cost.
+  const byName = new Map();
+  for (const n of nodes) {
+    if (!n.callFrame) continue;
+    const url = n.callFrame.url || "?";
+    if (filter === "ast" && !url.endsWith("ast.js")) continue;
+    const key = (n.callFrame.functionName || "(anon)") + ":L" + ((n.callFrame.lineNumber || 0) + 1);
+    const incl = inclusive(n.id, new Set());
+    const cur = byName.get(key) || { name: key, self: 0, incl: 0, count: 0, urlBase: url.split("/").pop() };
+    cur.self += n.hitCount || 0;
+    cur.incl += incl;
+    cur.count++;
+    byName.set(key, cur);
+  }
+  const sorted = [...byName.values()].sort((a, b) => b.incl - a.incl).slice(0, topN);
+  log(`audit.profile.summary: ${profilePath}`);
+  log(`  ${totalSamples} samples · filter=${filter} · top ${topN}`);
+  log(`  incl%   self%   stacks  function (file:line)`);
+  for (const e of sorted) {
+    const incl = (e.incl / totalSamples * 100).toFixed(1).padStart(5);
+    const self = (e.self / totalSamples * 100).toFixed(1).padStart(5);
+    log(`  ${incl}%  ${self}%  ${String(e.count).padStart(6)}  ${e.name} (${e.urlBase})`);
+  }
 }
 
 async function cmdFindingSnapshot(args) {
@@ -3753,6 +4043,8 @@ async function cmdMethod(rest) {
             } else if (def.type === "array" && def.items && def.items.$ref) {
               const sub = flattenSchema(def.items.$ref, visited);
               for (const s of sub) out.push({ ...s, dotPath: dotPath + "[]." + s.dotPath });
+            } else if (def.type === "array" && def.items && def.items.properties) {
+              walk(dotPath + "[]", def.items.properties);
             } else if (def.properties) {
               walk(dotPath, def.properties);
             }
@@ -3765,6 +4057,40 @@ async function cmdMethod(rest) {
 
       const paramStats = stats.params || {};
       const bodyFieldStats = stats.bodyFields || {};
+      // Aggregate stats keys matching a schema dotPath that contains [].
+      // Stats keys like "info[0].source" merge into the schema path
+      // "info[].source"; without this, every nested array-item field
+      // shows as having no observed stats and gets surfaced in the
+      // orphan list redundantly. Escape a regex special-char list
+      // dynamically to avoid breaking the surrounding template literal
+      // (which would clash with the literal "\${" sequence in a regex).
+      function _aggregateStatsForPath(dotPath) {
+        if (dotPath.indexOf("[]") < 0) return null;
+        const SENTINEL = " ARR ";
+        const REGEX_SPECIAL = ".*+?^\${}()|[]\\\\".split("");
+        function _escRe(ch) { return REGEX_SPECIAL.indexOf(ch) >= 0 ? "\\\\" + ch : ch; }
+        const escaped = dotPath
+          .split("[]").join(SENTINEL)
+          .split("").map(_escRe).join("")
+          .split(SENTINEL).join("\\\\[\\\\d+\\\\]");
+        const re = new RegExp("^" + escaped + "$");
+        let merged = null;
+        for (const k of Object.keys(bodyFieldStats)) {
+          if (!re.test(k)) continue;
+          const fs = bodyFieldStats[k];
+          if (!fs) continue;
+          if (!merged) merged = { observedCount: 0, values: {}, formatHints: {}, numericRange: null };
+          merged.observedCount += fs.observedCount || 0;
+          if (fs.values) for (const v in fs.values) merged.values[v] = (merged.values[v] || 0) + fs.values[v];
+          if (fs.formatHints) for (const h in fs.formatHints) merged.formatHints[h] = (merged.formatHints[h] || 0) + fs.formatHints[h];
+          if (fs.numericRange) {
+            if (!merged.numericRange) merged.numericRange = { min: fs.numericRange.min, max: fs.numericRange.max };
+            else { merged.numericRange.min = Math.min(merged.numericRange.min, fs.numericRange.min);
+                   merged.numericRange.max = Math.max(merged.numericRange.max, fs.numericRange.max); }
+          }
+        }
+        return merged;
+      }
       const out = {
         svc: ${JSON.stringify(svcName)},
         bucket: match.bucket,
@@ -3800,7 +4126,8 @@ async function cmdMethod(rest) {
         })),
         bodyFields: bodyFields.map(bf => ({
           ...bf,
-          stats: bodyFieldStats[bf.dotPath] || null,
+          stats: bodyFieldStats[bf.dotPath] ||
+            (bf.dotPath.indexOf("[]") >= 0 ? _aggregateStatsForPath(bf.dotPath) : null),
         })),
         orphanBodyFields: Object.keys(bodyFieldStats).filter(k => !bodyFields.some(bf => bf.dotPath === k)).map(k => ({
           dotPath: k,
@@ -4516,6 +4843,22 @@ harness commands
                                and print the actual JS at the gap's root-cause line/col.
                                Maps combined-bundle (line,col) back to per-script (url,line,col)
                                via the cached scriptOffsets[]. substr filters by script URL.
+  audit.perf [substr] [--limit N] [--sort total|parse|prePass|mainPass|mb-per-s]
+                               per-script analysis perf breakdown: totalMs, per-phase ms (parse/
+                               prePass/mainPass/structuralExport), MB/s throughput, finding
+                               counts, and inter-procedural counters. Sorted worst-first by
+                               totalMs by default. Pillar 13: surface where time is spent on
+                               real bundles so regressions are visible per-phase, not just in
+                               aggregate.
+  audit.profile [name] [--interval µs] [--timeout ms] [--poll ms] [--top N]
+                               attach Chromium's V8 CPU profiler to the offscreen ast-worker
+                               document, kick the combined-bundle analysis on the active tab's
+                               buffered scripts, and write a standard .cpuprofile file to
+                               testing/finding-snapshots/<name>.cpuprofile (loadable in Chrome
+                               DevTools Performance tab). Also prints the top-N self-time leaves
+                               inline so the reviewer sees the hotspot without opening DevTools.
+                               Use this for line/function-level perf attribution on real bundles
+                               — sampling profiler is the right tool, not custom in-bundle stats.
 
   popup                        open popup page, switch filter=all
   popup.select <reqId>         replay(reqId, tabId) — refreshes allTabsData first
@@ -4551,6 +4894,7 @@ const CMDS = {
   keys: cmdKeys, services: cmdServices, service: cmdService,
   method: cmdMethod, "schema.verify": cmdSchemaVerify, "schema.review": cmdSchemaReview,
   "audit.sinks": cmdAuditSinks, "audit.schema": cmdAuditSchema, "audit.gaps": cmdAuditGaps,
+  "audit.perf": cmdAuditPerf, "audit.profile": cmdAuditProfile, "audit.profile.summary": cmdAuditProfileSummary,
   popup: cmdPopup,
   "popup.select": cmdPopupSelect,
   "popup.form": cmdPopupForm,

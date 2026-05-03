@@ -149,19 +149,32 @@ function flattenComposition(schema, components) {
     Object.assign(merged.properties, schema.properties);
   }
 
-  for (const part of parts) {
+  // Iterative merge: walk parts BFS. When a part is itself a composition,
+  // push ITS parts onto the queue instead of recursing. Cycle detection
+  // by visited-set on resolved-schema identity so a composition that
+  // references itself via $ref doesn't loop forever.
+  const queue = [...parts];
+  const visited = new Set();
+  while (queue.length > 0) {
+    const part = queue.shift();
     let resolved = part;
     if (part.$ref) {
       const name = resolveRef(part.$ref);
       resolved = components[name] || {};
     }
-    resolved = flattenComposition(resolved, components);
-    if (resolved.properties) {
-      Object.assign(merged.properties, resolved.properties);
+    if (visited.has(resolved)) continue;
+    visited.add(resolved);
+    const subParts = resolved.allOf || resolved.oneOf || resolved.anyOf;
+    if (Array.isArray(subParts)) {
+      // Pull resolved's own properties first, then queue its sub-parts
+      // so they merge after — matches the recursive form's order.
+      if (resolved.properties) Object.assign(merged.properties, resolved.properties);
+      if (resolved.required) merged.required.push(...resolved.required);
+      for (let si = 0; si < subParts.length; si++) queue.push(subParts[si]);
+      continue;
     }
-    if (resolved.required) {
-      merged.required.push(...resolved.required);
-    }
+    if (resolved.properties) Object.assign(merged.properties, resolved.properties);
+    if (resolved.required) merged.required.push(...resolved.required);
   }
   return merged;
 }
@@ -820,9 +833,9 @@ function resolveDiscoverySchema(doc, schemaName, maxDepth, visited) {
 /**
  * Map a single discovery document property to a unified field descriptor.
  */
-function mapDiscoveryProperty(doc, name, prop, requiredList, depth, visited) {
+function _buildDiscoveryFieldShell(name, prop, requiredList) {
   var isRequired = (requiredList || []).indexOf(name) >= 0;
-  var field = {
+  return {
     name: prop.name || name, // Respect renamed fields
     customName: !!prop.customName,
     type: "string",
@@ -832,10 +845,6 @@ function mapDiscoveryProperty(doc, name, prop, requiredList, depth, visited) {
     number: prop.id != null ? prop.id : null,
     messageType: null,
     children: null,
-    // Stats- and AST-derived metadata written by applyStatsToMethod /
-    // _applyBodyFieldStats. Copied verbatim so the popup Send form
-    // can prefill leaf fields with an observed-default or AST-
-    // extracted example value when no captured body is being replayed.
     _defaultValue: prop._defaultValue == null ? null : prop._defaultValue,
     _defaultConfidence: prop._defaultConfidence == null ? null : prop._defaultConfidence,
     _requiredConfidence: prop._requiredConfidence == null ? null : prop._requiredConfidence,
@@ -845,103 +854,94 @@ function mapDiscoveryProperty(doc, name, prop, requiredList, depth, visited) {
     _exampleValueSource: prop._exampleValueSource || null,
     _astValidValues: prop._astValidValues || null,
   };
+}
 
-  // Handle $ref to another schema
-  if (prop.$ref) {
-    field.type = "message";
-    field.messageType = prop.$ref;
-    field.children = resolveDiscoverySchema(
-      doc,
-      prop.$ref,
-      depth,
-      new Set(visited),
-    );
-    return field;
-  }
+function mapDiscoveryProperty(doc, name, prop, requiredList, depth, visited) {
+  // Iterative worklist replaces self-recursion for inline object/array
+  // schemas. Mutual recursion through resolveDiscoverySchema (for $ref)
+  // is bounded by the visited-set + depth cap inside that function and
+  // stays as a direct call. Each worklist entry is a pre-allocated child
+  // field shell + the prop spec to populate it from.
+  var root = _buildDiscoveryFieldShell(name, prop, requiredList);
+  var queue = [{ field: root, prop: prop, depth: depth, visited: visited }];
+  while (queue.length > 0) {
+    var item = queue.shift();
+    var f = item.field, p = item.prop, d = item.depth, v = item.visited;
 
-  // Handle arrays (repeated fields)
-  if (prop.type === "array" && prop.items) {
-    field.label = "repeated";
-    if (prop.items.$ref) {
-      field.type = "message";
-      field.messageType = prop.items.$ref;
-      field.children = resolveDiscoverySchema(
-        doc,
-        prop.items.$ref,
-        depth,
-        new Set(visited),
-      );
-    } else if (prop.items.type === "object" && prop.items.properties) {
-      // Inline array-of-objects — recurse into the item's properties so
-      // the form renderer gets a real children tree. Previously we only
-      // kept the type hint, which left the UI with no sub-fields and the
-      // encoder with nothing to walk, corrupting byte-roundtrip (e.g.
-      // statsigapi `events:[{...}]` rebuilt as `events:["<string>"]`).
-      field.type = "message";
-      field.children = [];
-      var arrRequired = prop.items.required || [];
-      for (var ipn in prop.items.properties) {
-        var arrChild = mapDiscoveryProperty(
-          doc,
-          ipn,
-          prop.items.properties[ipn],
-          arrRequired,
-          depth - 1,
-          new Set(visited),
-        );
-        if (arrChild) field.children.push(arrChild);
+    // $ref to another schema (mutual recursion through resolveDiscoverySchema)
+    if (p.$ref) {
+      f.type = "message";
+      f.messageType = p.$ref;
+      f.children = resolveDiscoverySchema(doc, p.$ref, d, new Set(v));
+      continue;
+    }
+
+    // Array (repeated fields)
+    if (p.type === "array" && p.items) {
+      f.label = "repeated";
+      if (p.items.$ref) {
+        f.type = "message";
+        f.messageType = p.items.$ref;
+        f.children = resolveDiscoverySchema(doc, p.items.$ref, d, new Set(v));
+      } else if (p.items.type === "object" && p.items.properties) {
+        // Inline array-of-objects — pre-allocate child shells, queue them
+        // for population. Previously we recursed; now the worklist drains
+        // them in BFS order with a flat JS stack.
+        f.type = "message";
+        f.children = [];
+        var arrRequired = p.items.required || [];
+        for (var ipn in p.items.properties) {
+          var arrShell = _buildDiscoveryFieldShell(ipn, p.items.properties[ipn], arrRequired);
+          f.children.push(arrShell);
+          queue.push({
+            field: arrShell, prop: p.items.properties[ipn],
+            depth: d - 1, visited: new Set(v),
+          });
+        }
+      } else {
+        f.type = mapJsonSchemaType(p.items);
       }
-    } else {
-      field.type = mapJsonSchemaType(prop.items);
+      continue;
     }
-    return field;
-  }
 
-  // Handle nested object without $ref (inline properties)
-  if (prop.type === "object" && prop.properties) {
-    field.type = "message";
-    field.children = [];
-    var nestedRequired = prop.required || [];
-    for (var pn in prop.properties) {
-      var child = mapDiscoveryProperty(
-        doc,
-        pn,
-        prop.properties[pn],
-        nestedRequired,
-        depth - 1,
-        new Set(visited),
-      );
-      if (child) field.children.push(child);
+    // Inline object (nested properties without $ref)
+    if (p.type === "object" && p.properties) {
+      f.type = "message";
+      f.children = [];
+      var nestedRequired = p.required || [];
+      for (var pn in p.properties) {
+        var nestShell = _buildDiscoveryFieldShell(pn, p.properties[pn], nestedRequired);
+        f.children.push(nestShell);
+        queue.push({
+          field: nestShell, prop: p.properties[pn],
+          depth: d - 1, visited: new Set(v),
+        });
+      }
+      continue;
     }
-    return field;
+
+    // additionalProperties (map type)
+    if (p.type === "object" && p.additionalProperties) {
+      f.type = "string";
+      f.description =
+        (f.description || "") +
+        " (map<string, " +
+        (p.additionalProperties.type || "string") +
+        ">)";
+      continue;
+    }
+
+    // Scalar
+    f.type = mapJsonSchemaType(p);
+    if (p.label === "repeated") f.label = "repeated";
+    if (p.enum) {
+      f.type = "enum";
+      f.enum = p.enum;
+      f.enumValues = p.enum;
+      f.enumDescriptions = p.enumDescriptions || null;
+    }
   }
-
-  // Handle additionalProperties (map type)
-  if (prop.type === "object" && prop.additionalProperties) {
-    field.type = "string";
-    field.description =
-      (field.description || "") +
-      " (map<string, " +
-      (prop.additionalProperties.type || "string") +
-      ">)";
-    return field;
-  }
-
-  // Scalar types
-  field.type = mapJsonSchemaType(prop);
-
-  // Preserve repeated label from JSPB-learned schemas
-  if (prop.label === "repeated") field.label = "repeated";
-
-  // Enum values from discovery doc
-  if (prop.enum) {
-    field.type = "enum";
-    field.enum = prop.enum;
-    field.enumValues = prop.enum;
-    field.enumDescriptions = prop.enumDescriptions || null;
-  }
-
-  return field;
+  return root;
 }
 
 /**

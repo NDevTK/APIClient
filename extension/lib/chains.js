@@ -22,54 +22,57 @@ function createValueIndex() {
  * @param {string} prefix - Field path prefix for recursion
  */
 function indexResponseValues(index, body, methodId, prefix) {
-  if (prefix === undefined) prefix = "";
-
-  if (Array.isArray(body)) {
-    for (var i = 0; i < Math.min(body.length, 50); i++) {
-      indexResponseValues(index, body[i], methodId, prefix + "[" + i + "]");
+  // Iterative worklist over (value, path). Replaces self-recursion so
+  // adversarially-deep response payloads can't blow the JS stack. Also
+  // drops the original 50-element array cap — every reachable string /
+  // number gets indexed, matching the resolver-completeness rule.
+  var queue = [{ value: body, path: prefix === undefined ? "" : prefix }];
+  while (queue.length > 0) {
+    var entry = queue.shift();
+    var v = entry.value, p = entry.path;
+    if (Array.isArray(v)) {
+      for (var i = 0; i < v.length; i++) {
+        queue.push({ value: v[i], path: p + "[" + i + "]" });
+      }
+      continue;
     }
-    return;
-  }
-
-  if (typeof body === "object" && body !== null) {
-    for (var keys = Object.keys(body), k = 0; k < keys.length; k++) {
-      var key = keys[k];
-      var path = prefix ? prefix + "." + key : key;
-      indexResponseValues(index, body[key], methodId, path);
+    if (typeof v === "object" && v !== null) {
+      var keys = Object.keys(v);
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k];
+        queue.push({ value: v[key], path: p ? p + "." + key : key });
+      }
+      continue;
     }
-    return;
-  }
-
-  if (typeof body === "string") {
-    if (body.length >= CHAIN_MIN_VALUE_LENGTH &&
-        body.length <= CHAIN_MAX_VALUE_LENGTH &&
-        !CHAIN_IGNORE_VALUES.has(body)) {
-      var entries = index.strings.get(body);
-      if (!entries) { entries = []; index.strings.set(body, entries); }
-      // Avoid duplicate sources for the same method+field
-      var isDupe = false;
-      for (var d = 0; d < entries.length; d++) {
-        if (entries[d].methodId === methodId && entries[d].fieldPath === prefix) {
-          isDupe = true;
+    if (typeof v === "string") {
+      if (v.length >= CHAIN_MIN_VALUE_LENGTH &&
+          v.length <= CHAIN_MAX_VALUE_LENGTH &&
+          !CHAIN_IGNORE_VALUES.has(v)) {
+        var entries = index.strings.get(v);
+        if (!entries) { entries = []; index.strings.set(v, entries); }
+        var isDupe = false;
+        for (var d = 0; d < entries.length; d++) {
+          if (entries[d].methodId === methodId && entries[d].fieldPath === p) {
+            isDupe = true;
+            break;
+          }
+        }
+        if (!isDupe) entries.push({ methodId: methodId, fieldPath: p, timestamp: Date.now() });
+      }
+      continue;
+    }
+    if (typeof v === "number" && isFinite(v) && v !== 0 && v !== 1 && v !== -1) {
+      var numEntries = index.numbers.get(v);
+      if (!numEntries) { numEntries = []; index.numbers.set(v, numEntries); }
+      var isNumDupe = false;
+      for (var nd = 0; nd < numEntries.length; nd++) {
+        if (numEntries[nd].methodId === methodId && numEntries[nd].fieldPath === p) {
+          isNumDupe = true;
           break;
         }
       }
-      if (!isDupe) entries.push({ methodId: methodId, fieldPath: prefix, timestamp: Date.now() });
+      if (!isNumDupe) numEntries.push({ methodId: methodId, fieldPath: p, timestamp: Date.now() });
     }
-    return;
-  }
-
-  if (typeof body === "number" && isFinite(body) && body !== 0 && body !== 1 && body !== -1) {
-    var numEntries = index.numbers.get(body);
-    if (!numEntries) { numEntries = []; index.numbers.set(body, numEntries); }
-    var isNumDupe = false;
-    for (var nd = 0; nd < numEntries.length; nd++) {
-      if (numEntries[nd].methodId === methodId && numEntries[nd].fieldPath === prefix) {
-        isNumDupe = true;
-        break;
-      }
-    }
-    if (!isNumDupe) numEntries.push({ methodId: methodId, fieldPath: prefix, timestamp: Date.now() });
   }
 }
 
@@ -139,24 +142,29 @@ function _lookupValue(index, value) {
  * Flatten a JSON object into { "path.to.field": value } map.
  */
 function flattenObjectValues(obj, prefix, result) {
+  // Iterative worklist (value, path). Replaces self-recursion and drops
+  // the 20-element array cap so every reachable leaf gets included in
+  // the flattened view.
   if (!result) result = {};
-  if (!prefix) prefix = "";
-
-  if (typeof obj !== "object" || obj === null) {
-    if (prefix) result[prefix] = obj;
-    return result;
-  }
-
-  if (Array.isArray(obj)) {
-    for (var i = 0; i < Math.min(obj.length, 20); i++) {
-      flattenObjectValues(obj[i], prefix + "[" + i + "]", result);
+  var queue = [{ value: obj, path: prefix || "" }];
+  while (queue.length > 0) {
+    var entry = queue.shift();
+    var v = entry.value, p = entry.path;
+    if (typeof v !== "object" || v === null) {
+      if (p) result[p] = v;
+      continue;
     }
-    return result;
-  }
-
-  for (var keys = Object.keys(obj), k = 0; k < keys.length; k++) {
-    var key = keys[k];
-    flattenObjectValues(obj[key], prefix ? prefix + "." + key : key, result);
+    if (Array.isArray(v)) {
+      for (var i = 0; i < v.length; i++) {
+        queue.push({ value: v[i], path: p + "[" + i + "]" });
+      }
+      continue;
+    }
+    var keys = Object.keys(v);
+    for (var k = 0; k < keys.length; k++) {
+      var key = keys[k];
+      queue.push({ value: v[key], path: p ? p + "." + key : key });
+    }
   }
   return result;
 }

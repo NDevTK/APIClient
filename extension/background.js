@@ -1654,6 +1654,26 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
           }
         }
       } catch (e) {}
+    } else if (text && /^[\s﻿\x00-\x1f]*[{\[]/.test(text)) {
+      // Structural JSON detection for request bodies whose content-type
+      // is text/plain, missing, or anything other than the explicit
+      // tagged shapes above. Many analytics + telemetry endpoints
+      // (reddit /svc/shreddit/events, GitHub error reporters, snowplow
+      // collectors) POST JSON with `Content-Type: text/plain` to dodge
+      // CORS preflight. Body STRUCTURE is authoritative — same rule
+      // already applied to responses at line ~2183. Without this,
+      // observed traffic produces 1000+ orphan body-field stats with
+      // 0 declared schema fields (verified on reddit.com events: 35
+      // requests captured, 1141 orphan fields, 0 attached).
+      try {
+        const json = JSON.parse(text);
+        if (json !== null && typeof json === "object") {
+          const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Request`;
+          m.request = { $ref: schemaName };
+          const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas);
+          mergeSchemaInto(doc, schemaName, newSchema);
+        }
+      } catch (e) {}
     }
   }
 
@@ -1795,6 +1815,55 @@ function _applyStatsToField(field, fieldStats, requestCount) {
   if (range) field._range = range;
 }
 
+// Aggregate stats across all array-index variants matching the schema's
+// path pattern: schema uses `info[].source`, stats are keyed
+// `info[0].source`, `info[1].source`, etc (per flattenObjectValues).
+// Walking the schema with `[]` placeholders, we collect the per-index
+// stats keys that match the pattern and merge their counters into a
+// single virtual stats bucket so pickExampleValue + dominance reporting
+// see the full population, not a single index slice.
+function _aggregateStatsForSchemaPath(bodyFieldStats, schemaPath) {
+  // Build a regex from the schema path: "info[].source" → /^info\[\d+\]\.source$/
+  // First swap the `[]` placeholders for a sentinel that won't be touched
+  // by regex escaping; escape the rest; then swap the sentinel back to
+  // the index pattern. No regex from user input — schemaPath is built
+  // by the walker from controlled property names + literal `[]` markers.
+  const SENTINEL = " ARR ";
+  const escaped = schemaPath
+    .split("[]").join(SENTINEL)
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .split(SENTINEL).join("\\[\\d+\\]");
+  const re = new RegExp("^" + escaped + "$");
+  let merged = null;
+  for (const key of Object.keys(bodyFieldStats)) {
+    if (!re.test(key)) continue;
+    const fs = bodyFieldStats[key];
+    if (!fs) continue;
+    if (!merged) {
+      merged = createParamStats();
+    }
+    // Sum scalar counters
+    merged.observed = (merged.observed || 0) + (fs.observed || 0);
+    merged.empty = (merged.empty || 0) + (fs.empty || 0);
+    merged.absent = (merged.absent || 0) + (fs.absent || 0);
+    // Merge value frequency map
+    if (fs.values) {
+      if (!merged.values) merged.values = {};
+      for (const v in fs.values) {
+        merged.values[v] = (merged.values[v] || 0) + fs.values[v];
+      }
+    }
+    // Track type observations
+    if (fs.types) {
+      if (!merged.types) merged.types = {};
+      for (const t in fs.types) {
+        merged.types[t] = (merged.types[t] || 0) + fs.types[t];
+      }
+    }
+  }
+  return merged;
+}
+
 // Walk a request schema's property tree, resolving $refs, and attach
 // body-field stats at each dot-path that matches a stats.bodyFields
 // entry. Stops when the schema ref has already been visited to avoid
@@ -1805,7 +1874,11 @@ function _applyBodyFieldStats(m, doc, bodyFieldStats, requestCount) {
     if (!sch || !sch.properties) return;
     for (const [k, def] of Object.entries(sch.properties)) {
       const dotPath = prefix ? prefix + "." + k : k;
-      const fs = bodyFieldStats[dotPath];
+      // Direct match: stats keyed exactly by dotPath (no array indices).
+      // Aggregated match: stats keyed by index variants of an array-path
+      // (info[0].x, info[1].x, ...) — merge into one virtual bucket.
+      const fs = bodyFieldStats[dotPath] ||
+        (dotPath.indexOf("[]") >= 0 ? _aggregateStatsForSchemaPath(bodyFieldStats, dotPath) : null);
       if (fs) {
         _applyStatsToField(def, fs, requestCount);
         // Example value + provenance on the field def so the form
@@ -1831,6 +1904,13 @@ function _applyBodyFieldStats(m, doc, bodyFieldStats, requestCount) {
         visited.add(def.items.$ref);
         walk(doc.schemas[def.items.$ref], dotPath + "[]", visited);
         visited.delete(def.items.$ref);
+      } else if (def.type === "array" && def.items && def.items.properties) {
+        // Inline array items (no $ref) — recurse into items.properties
+        // directly. Without this, observed paths like `info[0].source`
+        // never reach the schema's array-item field declarations and
+        // every nested field stays orphaned. Verified on reddit
+        // /svc/shreddit/events: 1141 orphan paths under info[0].* .
+        walk(def.items, dotPath + "[]", visited);
       } else if (def.properties) {
         walk(def, dotPath, visited);
       }
@@ -2249,206 +2329,216 @@ function learnFromResponse(tabId, interfaceName, entry) {
   }
 }
 
-function generateSchemaFromPbTree(tree, name, schemas) {
-  // First pass: count field occurrences to detect repeated fields
-  const fieldCounts = {};
-  for (const node of tree) {
-    fieldCounts[node.field] = (fieldCounts[node.field] || 0) + 1;
+function generateSchemaFromPbTree(rootTree, rootName, schemas) {
+  // Iterative worklist replaces self-recursion. Each entry is either a
+  // "build" (create a fresh schema for tree, attach via slot) or "merge"
+  // (build a fresh schema for tree, then fold its properties into an
+  // existing schemas[key]). Handles arbitrarily nested protobuf trees
+  // without growing the JS call stack.
+  let result = null;
+  const queue = [{ kind: "build", tree: rootTree, name: rootName, slot: { kind: "result" } }];
+  function setSlot(slot, value) {
+    if (slot.kind === "result") result = value;
+    else if (slot.kind === "schemas") schemas[slot.key] = value;
   }
+  function buildShell(tree, name, queueOut) {
+    // First pass: count field occurrences to detect repeated fields
+    const fieldCounts = {};
+    for (const node of tree) {
+      fieldCounts[node.field] = (fieldCounts[node.field] || 0) + 1;
+    }
+    const properties = {};
+    const seen = new Set();
+    for (const node of tree) {
+      const fieldKey = `field${node.field}`;
+      if (seen.has(node.field)) {
+        // Repeated message field — additional occurrence merges into the
+        // existing nested schema. Queue a "merge" job; don't recurse.
+        if (node.message) {
+          const nestedName = `${name}Field${node.field}`;
+          if (schemas[nestedName]) {
+            queueOut.push({ kind: "merge", tree: node.message,
+              name: nestedName, mergeKey: nestedName });
+          }
+        }
+        continue;
+      }
+      seen.add(node.field);
 
-  const properties = {};
-  const seen = new Set();
-  for (const node of tree) {
-    const fieldKey = `field${node.field}`;
-    if (seen.has(node.field)) {
-      // Merge nested schemas from additional occurrences of repeated message fields
+      const isRepeated = fieldCounts[node.field] > 1 || !!node.isRepeatedScalar || !!node.packed;
+      let wireType;
+      if (node.isJspb) {
+        const val = node.value;
+        if (typeof val === "boolean") wireType = "bool";
+        else if (typeof val === "number") wireType = Number.isInteger(val) ? "int64" : "double";
+        else if (typeof val === "string") wireType = "string";
+        else if (node.isRepeatedScalar && Array.isArray(val) && val.length > 0) {
+          const sample = val.find((v) => v != null);
+          if (typeof sample === "boolean") wireType = "bool";
+          else if (typeof sample === "number") wireType = Number.isInteger(sample) ? "int64" : "double";
+          else wireType = "string";
+        } else wireType = "string";
+      } else if (node.packed) {
+        wireType = "int64";
+      } else {
+        if (node.wire === 0) wireType = "int64";
+        else if (node.wire === 5) wireType = "float";
+        else if (node.wire === 1) wireType = "double";
+        else if (node.string !== undefined) wireType = "string";
+        else if (node.hex) wireType = "bytes";
+        else wireType = "string";
+      }
+      const prop = {
+        id: node.field,
+        number: node.field,
+        type: wireType,
+        description: "Discovered via response capture",
+      };
+      if (isRepeated) {
+        prop.type = "array";
+        prop.items = { type: wireType };
+      }
       if (node.message) {
         const nestedName = `${name}Field${node.field}`;
-        if (schemas[nestedName]) {
-          const additionalSchema = generateSchemaFromPbTree(node.message, nestedName, schemas);
-          const existing = schemas[nestedName];
-          if (!existing.properties) existing.properties = {};
-          for (const [k, v] of Object.entries(additionalSchema.properties || {})) {
-            if (!existing.properties[k]) {
-              existing.properties[k] = v;
+        if (isRepeated) {
+          prop.items = { $ref: nestedName };
+        } else {
+          prop.type = "message";
+          prop.$ref = nestedName;
+        }
+        // Queue nested build, attaching to schemas[nestedName].
+        queueOut.push({ kind: "build", tree: node.message, name: nestedName,
+          slot: { kind: "schemas", key: nestedName } });
+      } else if (node.string !== undefined) {
+        if (!isRepeated) prop.type = "string";
+      }
+      properties[fieldKey] = prop;
+    }
+    return { id: name, type: "object", properties };
+  }
+  while (queue.length > 0) {
+    const job = queue.shift();
+    const built = buildShell(job.tree, job.name, queue);
+    if (job.kind === "build") {
+      setSlot(job.slot, built);
+    } else if (job.kind === "merge") {
+      const existing = schemas[job.mergeKey];
+      if (existing) {
+        if (!existing.properties) existing.properties = {};
+        for (const [k, v] of Object.entries(built.properties || {})) {
+          if (!existing.properties[k]) existing.properties[k] = v;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function generateSchemaFromJson(rootJson, rootName, schemas, rootIsIndexed = false) {
+  // Iterative worklist replaces self-recursion. Each entry pairs an input
+  // (json, name, isIndexed) with a destination "slot" — where the
+  // generated schema gets attached. The slot can be:
+  //   - { type: "schemas", key: NAME }   → schemas[NAME] = schemaObj
+  //   - { type: "items", parent: SCHEMA } → SCHEMA.items = schemaObj
+  //   - { type: "result" }                → set the function's return value
+  // This keeps the JS stack at depth 1 even for deeply-nested JSON.
+  let result = null;
+  const queue = [{ json: rootJson, name: rootName, isIndexed: rootIsIndexed, slot: { kind: "result" } }];
+  function setSlot(slot, value) {
+    if (slot.kind === "result") result = value;
+    else if (slot.kind === "schemas") schemas[slot.key] = value;
+    else if (slot.kind === "items") slot.parent.items = value;
+    else if (slot.kind === "prop") slot.parent[slot.key] = value;
+  }
+  while (queue.length > 0) {
+    const { json, name, isIndexed, slot } = queue.shift();
+
+    if (Array.isArray(json)) {
+      if (isIndexed) {
+        const properties = {};
+        const obj = { id: name, type: "object", properties };
+        setSlot(slot, obj);
+        for (let idx = 0; idx < json.length; idx++) {
+          const val = json[idx];
+          const fieldNum = idx + 1;
+          const fieldKey = `field${fieldNum}`;
+          const nestedName = `${name}_f${fieldNum}`;
+          if (val === null || val === undefined) {
+            properties[fieldKey] = {
+              id: fieldNum,
+              number: fieldNum,
+              type: "string",
+              description: "Learned (null)",
+            };
+          } else if (Array.isArray(val)) {
+            const allPrim =
+              val.length > 0 &&
+              val.every(
+                (v) => v === null || v === undefined ||
+                  typeof v === "string" || typeof v === "number" || typeof v === "boolean",
+              );
+            if (allPrim) {
+              const itemType = inferRepeatedItemType(val);
+              properties[fieldKey] = {
+                id: fieldNum, number: fieldNum, type: itemType, label: "repeated",
+              };
+            } else {
+              properties[fieldKey] = { id: fieldNum, number: fieldNum, $ref: nestedName };
+              queue.push({ json: val, name: nestedName, isIndexed: true,
+                slot: { kind: "schemas", key: nestedName } });
             }
+          } else if (typeof val === "object") {
+            properties[fieldKey] = { id: fieldNum, number: fieldNum, $ref: nestedName };
+            queue.push({ json: val, name: nestedName, isIndexed: false,
+              slot: { kind: "schemas", key: nestedName } });
+          } else {
+            properties[fieldKey] = {
+              id: fieldNum, number: fieldNum, type: inferJsonType(val),
+            };
           }
+        }
+        continue;
+      }
+      // Non-indexed array → { type: "array", items: <schemaForFirstElement> }
+      const arr = { type: "array", items: { type: "string" } };
+      setSlot(slot, arr);
+      if (json.length > 0) {
+        queue.push({ json: json[0], name: name + "Item", isIndexed: false,
+          slot: { kind: "items", parent: arr } });
+      }
+      continue;
+    }
+
+    if (typeof json === "object" && json !== null) {
+      const properties = {};
+      const obj = { id: name, type: "object", properties };
+      setSlot(slot, obj);
+      for (const key in json) {
+        const val = json[key];
+        const safeKey = key.replace(/[^a-zA-Z0-9]/g, "");
+        if (Array.isArray(val)) {
+          const arr = { type: "array", items: { type: "string" } };
+          properties[key] = arr;
+          if (val.length > 0) {
+            queue.push({ json: val[0], name: name + safeKey + "Item", isIndexed: false,
+              slot: { kind: "items", parent: arr } });
+          }
+        } else if (typeof val === "object" && val !== null) {
+          const nestedName = name + safeKey.charAt(0).toUpperCase() + safeKey.slice(1);
+          properties[key] = { $ref: nestedName };
+          queue.push({ json: val, name: nestedName, isIndexed: false,
+            slot: { kind: "schemas", key: nestedName } });
+        } else {
+          properties[key] = { type: inferJsonType(val) };
         }
       }
       continue;
     }
-    seen.add(node.field);
 
-    const isRepeated = fieldCounts[node.field] > 1 || !!node.isRepeatedScalar || !!node.packed;
-    let wireType;
-
-    // For JSPB-sourced nodes, infer type from the actual JS value
-    // since wire codes are synthetic and less reliable
-    if (node.isJspb) {
-      const val = node.value;
-      if (typeof val === "boolean") wireType = "bool";
-      else if (typeof val === "number") wireType = Number.isInteger(val) ? "int64" : "double";
-      else if (typeof val === "string") wireType = "string";
-      else if (node.isRepeatedScalar && Array.isArray(val) && val.length > 0) {
-        // Infer from first non-null element of repeated scalar
-        const sample = val.find((v) => v != null);
-        if (typeof sample === "boolean") wireType = "bool";
-        else if (typeof sample === "number") wireType = Number.isInteger(sample) ? "int64" : "double";
-        else wireType = "string";
-      } else wireType = "string";
-    } else if (node.packed) {
-      // Packed repeated: values are varint-decoded numbers
-      wireType = "int64";
-    } else {
-      // Binary protobuf wire type inference
-      if (node.wire === 0) wireType = "int64";
-      else if (node.wire === 5) wireType = "float";
-      else if (node.wire === 1) wireType = "double";
-      else if (node.string !== undefined) wireType = "string";
-      else if (node.hex) wireType = "bytes";
-      else wireType = "string";
-    }
-
-    const prop = {
-      id: node.field,
-      number: node.field,
-      type: wireType,
-      description: "Discovered via response capture",
-    };
-
-    if (isRepeated) {
-      prop.type = "array";
-      prop.items = { type: wireType };
-    }
-
-    if (node.message) {
-      const nestedName = `${name}Field${node.field}`;
-      if (isRepeated) {
-        prop.items = { $ref: nestedName };
-      } else {
-        prop.type = "message";
-        prop.$ref = nestedName;
-      }
-      schemas[nestedName] = generateSchemaFromPbTree(
-        node.message,
-        nestedName,
-        schemas,
-      );
-    } else if (node.string !== undefined) {
-      if (!isRepeated) prop.type = "string";
-    }
-
-    properties[fieldKey] = prop;
+    // Primitive
+    setSlot(slot, { type: inferJsonType(json) });
   }
-  return { id: name, type: "object", properties };
-}
-
-function generateSchemaFromJson(json, name, schemas, isIndexed = false) {
-  if (Array.isArray(json)) {
-    if (isIndexed) {
-      const properties = {};
-      json.forEach((val, idx) => {
-        const fieldNum = idx + 1;
-        const fieldKey = `field${fieldNum}`;
-        const nestedName = `${name}_f${fieldNum}`;
-
-        if (val === null || val === undefined) {
-          properties[fieldKey] = {
-            id: fieldNum,
-            number: fieldNum,
-            type: "string",
-            description: "Learned (null)",
-          };
-        } else if (Array.isArray(val)) {
-          // Distinguish repeated scalars from nested JSPB messages:
-          // - All primitives (string/number/bool/null) → repeated scalar
-          // - Contains sub-arrays or objects → nested message
-          const allPrim =
-            val.length > 0 &&
-            val.every(
-              (v) =>
-                v === null ||
-                v === undefined ||
-                typeof v === "string" ||
-                typeof v === "number" ||
-                typeof v === "boolean",
-            );
-          if (allPrim) {
-            const itemType = inferRepeatedItemType(val);
-            properties[fieldKey] = {
-              id: fieldNum,
-              number: fieldNum,
-              type: itemType,
-              label: "repeated",
-            };
-          } else {
-            properties[fieldKey] = {
-              id: fieldNum,
-              number: fieldNum,
-              $ref: nestedName,
-            };
-            schemas[nestedName] = generateSchemaFromJson(
-              val,
-              nestedName,
-              schemas,
-              true,
-            );
-          }
-        } else if (typeof val === "object") {
-          // Object within indexed array → nested named-key message
-          properties[fieldKey] = {
-            id: fieldNum,
-            number: fieldNum,
-            $ref: nestedName,
-          };
-          schemas[nestedName] = generateSchemaFromJson(
-            val,
-            nestedName,
-            schemas,
-            false,
-          );
-        } else {
-          properties[fieldKey] = {
-            id: fieldNum,
-            number: fieldNum,
-            type: inferJsonType(val),
-          };
-        }
-      });
-      return { id: name, type: "object", properties };
-    } else {
-      const items =
-        json.length > 0
-          ? generateSchemaFromJson(json[0], name + "Item", schemas, false)
-          : { type: "string" };
-      return { type: "array", items };
-    }
-  } else if (typeof json === "object" && json !== null) {
-    const properties = {};
-    for (const key in json) {
-      const val = json[key];
-      const safeKey = key.replace(/[^a-zA-Z0-9]/g, "");
-      if (Array.isArray(val)) {
-        properties[key] = {
-          type: "array",
-          items:
-            val.length > 0
-              ? generateSchemaFromJson(val[0], name + safeKey + "Item", schemas)
-              : { type: "string" },
-        };
-      } else if (typeof val === "object" && val !== null) {
-        const nestedName =
-          name + safeKey.charAt(0).toUpperCase() + safeKey.slice(1);
-        properties[key] = { $ref: nestedName };
-        schemas[nestedName] = generateSchemaFromJson(val, nestedName, schemas);
-      } else {
-        properties[key] = { type: inferJsonType(val) };
-      }
-    }
-    return { id: name, type: "object", properties };
-  } else {
-    return { type: inferJsonType(json) };
-  }
+  return result;
 }
 
 /**
@@ -2479,94 +2569,97 @@ function inferRepeatedItemType(arr) {
  * and enriching with new fields. Existing fields keep customName/name if set;
  * new fields or missing type info gets filled in from the new observation.
  */
-function mergeSchemaInto(doc, schemaName, newSchema) {
-  if (!doc.schemas[schemaName]) {
-    doc.schemas[schemaName] = newSchema;
-    return;
-  }
-  const existing = doc.schemas[schemaName];
-  if (!existing.properties) existing.properties = {};
-  if (!existing._drift) existing._drift = [];
-  const newProps = newSchema.properties || {};
+function mergeSchemaInto(doc, rootSchemaName, rootNewSchema) {
+  // Iterative: merge doc.schemas[schemaName] ← newSchema, queueing
+  // nested ($ref) merges instead of recursing. visited-set on the
+  // merge target prevents cycles when a schema references itself or
+  // forms a $ref loop. Replaces the previous self-recursive form whose
+  // depth was bounded by JS-stack — adversarially-deep nested $refs
+  // in a learned schema would crash the merge before this conversion.
+  const visited = new Set();
+  const queue = [{ schemaName: rootSchemaName, newSchema: rootNewSchema }];
+  while (queue.length > 0) {
+    const { schemaName, newSchema } = queue.shift();
+    if (visited.has(schemaName)) continue;
+    visited.add(schemaName);
+    if (!doc.schemas[schemaName]) {
+      doc.schemas[schemaName] = newSchema;
+      continue;
+    }
+    const existing = doc.schemas[schemaName];
+    if (!existing.properties) existing.properties = {};
+    if (!existing._drift) existing._drift = [];
+    const newProps = newSchema.properties || {};
 
-  // Build field-number → key index for deduplication
-  const numToKey = {};
-  for (const [k, p] of Object.entries(existing.properties)) {
-    const n = p.number ?? p.id;
-    if (n != null) numToKey[n] = k;
-  }
+    const numToKey = {};
+    for (const [k, p] of Object.entries(existing.properties)) {
+      const n = p.number ?? p.id;
+      if (n != null) numToKey[n] = k;
+    }
 
-  for (const [key, newProp] of Object.entries(newProps)) {
-    // Match by key first, then fall back to field number
-    const fieldNum = newProp.number ?? newProp.id;
-    const matchKey = existing.properties[key] ? key
-      : (fieldNum != null && numToKey[fieldNum]) ? numToKey[fieldNum]
-      : null;
-    const old = matchKey ? existing.properties[matchKey] : null;
+    for (const [key, newProp] of Object.entries(newProps)) {
+      const fieldNum = newProp.number ?? newProp.id;
+      const matchKey = existing.properties[key] ? key
+        : (fieldNum != null && numToKey[fieldNum]) ? numToKey[fieldNum]
+        : null;
+      const old = matchKey ? existing.properties[matchKey] : null;
 
-    if (!old) {
-      // Brand new field — add it
-      existing.properties[key] = newProp;
-      if (fieldNum != null) numToKey[fieldNum] = key;
-      existing._drift.push({ type: "field_added", field: key, fieldType: newProp.type, timestamp: Date.now() });
-    } else {
-      // Re-key if matched by field number and the new key has a real name
-      if (matchKey !== key && !old.customName && !/^field\d+$/.test(key)) {
-        existing.properties[key] = old;
-        delete existing.properties[matchKey];
-        numToKey[fieldNum] = key;
-      }
-      // Merge: preserve custom names, upgrade types
-      if (old.customName) {
-        // Keep the user's rename
-      } else if (newProp.name && !old.name) {
-        old.name = newProp.name;
-      }
-      // Upgrade generic types with more specific ones
-      if (newProp.type && newProp.type !== old.type) {
-        if (old.type === "string" && newProp.type !== "string") {
-          existing._drift.push({ type: "type_changed", field: key || matchKey, from: old.type, to: newProp.type, timestamp: Date.now() });
-          old.type = newProp.type;
+      if (!old) {
+        existing.properties[key] = newProp;
+        if (fieldNum != null) numToKey[fieldNum] = key;
+        existing._drift.push({ type: "field_added", field: key, fieldType: newProp.type, timestamp: Date.now() });
+      } else {
+        if (matchKey !== key && !old.customName && !/^field\d+$/.test(key)) {
+          existing.properties[key] = old;
+          delete existing.properties[matchKey];
+          numToKey[fieldNum] = key;
         }
-        // int → double/float (observed fractional value refines integer assumption)
-        else if (
-          (old.type === "int64" || old.type === "int32") &&
-          (newProp.type === "double" || newProp.type === "float")
-        ) {
-          existing._drift.push({ type: "type_changed", field: key || matchKey, from: old.type, to: newProp.type, timestamp: Date.now() });
-          old.type = newProp.type;
+        if (old.customName) {
+          // Keep the user's rename
+        } else if (newProp.name && !old.name) {
+          old.name = newProp.name;
         }
-      }
-      // Upgrade array item types
-      if (old.type === "array" && newProp.items) {
-        if (!old.items) {
-          old.items = newProp.items;
-        } else {
-          if (old.items.type === "string" && newProp.items.type && newProp.items.type !== "string") {
-            old.items.type = newProp.items.type;
-          }
-          if (newProp.items.$ref && !old.items.$ref) {
-            old.items.$ref = newProp.items.$ref;
+        if (newProp.type && newProp.type !== old.type) {
+          if (old.type === "string" && newProp.type !== "string") {
+            existing._drift.push({ type: "type_changed", field: key || matchKey, from: old.type, to: newProp.type, timestamp: Date.now() });
+            old.type = newProp.type;
+          } else if (
+            (old.type === "int64" || old.type === "int32") &&
+            (newProp.type === "double" || newProp.type === "float")
+          ) {
+            existing._drift.push({ type: "type_changed", field: key || matchKey, from: old.type, to: newProp.type, timestamp: Date.now() });
+            old.type = newProp.type;
           }
         }
-      }
-      if (newProp.id != null && old.id == null) old.id = newProp.id;
-      if (newProp.number != null && old.number == null)
-        old.number = newProp.number;
-      if (newProp.$ref && !old.$ref) {
-        old.$ref = newProp.$ref;
-        old.type = "message";
-      }
-      if (newProp.children && !old.children) old.children = newProp.children;
-      if (newProp.description && !old.description) old.description = newProp.description;
-      // Merge nested schema recursively
-      if (newProp.$ref && doc.schemas[newProp.$ref]) {
-        mergeSchemaInto(doc, newProp.$ref, doc.schemas[newProp.$ref]);
+        if (old.type === "array" && newProp.items) {
+          if (!old.items) {
+            old.items = newProp.items;
+          } else {
+            if (old.items.type === "string" && newProp.items.type && newProp.items.type !== "string") {
+              old.items.type = newProp.items.type;
+            }
+            if (newProp.items.$ref && !old.items.$ref) {
+              old.items.$ref = newProp.items.$ref;
+            }
+          }
+        }
+        if (newProp.id != null && old.id == null) old.id = newProp.id;
+        if (newProp.number != null && old.number == null)
+          old.number = newProp.number;
+        if (newProp.$ref && !old.$ref) {
+          old.$ref = newProp.$ref;
+          old.type = "message";
+        }
+        if (newProp.children && !old.children) old.children = newProp.children;
+        if (newProp.description && !old.description) old.description = newProp.description;
+        // Queue nested $ref merge instead of recursing.
+        if (newProp.$ref && doc.schemas[newProp.$ref]) {
+          queue.push({ schemaName: newProp.$ref, newSchema: doc.schemas[newProp.$ref] });
+        }
       }
     }
+    if (existing._drift.length > 50) existing._drift = existing._drift.slice(-50);
   }
-  // Cap drift log at 50 entries per schema
-  if (existing._drift.length > 50) existing._drift = existing._drift.slice(-50);
 }
 
 // ─── Page-Context Fetch Bridge ───────────────────────────────────────────────
@@ -3080,76 +3173,75 @@ function updateOrCreateVirtualDoc(service, seedUrl, probeResult, existingDoc) {
   return doc;
 }
 
-function convertProbeFieldsToSchema(fieldsObj, schemas, prefix = "") {
-  const properties = {};
-  const fields = Array.isArray(fieldsObj)
-    ? fieldsObj
-    : fieldsObj instanceof Map
-      ? [...fieldsObj.values()]
-      : Object.values(fieldsObj || {});
-
-  for (const field of fields) {
-    // Discovery format property
-    const prop = {
-      id: field.number,
-      number: field.number,
-      name: field.name,
-      type: field.type || "string",
-      description: `Field ${field.number} (${field.type || "unknown"})`,
-    };
-
-    if (field.label === "repeated") {
-      prop.type = "array";
-      prop.items = { type: field.type || "string" };
-
-      if (field.type === "message" && field.children) {
-        // Use messageType as key if available, otherwise generate
-        const nestedName =
-          field.messageType ||
-          `${prefix}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}Entry`;
-
-        if (!schemas[nestedName]) {
-          const nestedProperties = convertProbeFieldsToSchema(
-            field.children,
-            schemas,
-            nestedName,
-          );
-          schemas[nestedName] = {
-            id: nestedName,
-            type: "object",
-            properties: nestedProperties,
-          };
+function convertProbeFieldsToSchema(rootFieldsObj, schemas, rootPrefix = "") {
+  // Iterative: build a properties{} map for each fields list. Nested
+  // fields (message with children) get a placeholder schemas[name] entry
+  // up-front so later refs can attach .children pointers without waiting
+  // for recursion to finish; the queue then populates each placeholder's
+  // properties in BFS order. Visited-set on nestedName prevents infinite
+  // expansion for cyclic schemas.
+  const rootProperties = {};
+  const visited = new Set();
+  const queue = [{ fieldsObj: rootFieldsObj, prefix: rootPrefix, dst: rootProperties }];
+  // Track deferred .children attachments — populated once nested
+  // properties land in schemas[nestedName].
+  const pendingAttach = [];
+  while (queue.length > 0) {
+    const job = queue.shift();
+    const { fieldsObj, prefix, dst } = job;
+    const fields = Array.isArray(fieldsObj)
+      ? fieldsObj
+      : fieldsObj instanceof Map
+        ? [...fieldsObj.values()]
+        : Object.values(fieldsObj || {});
+    for (const field of fields) {
+      const prop = {
+        id: field.number,
+        number: field.number,
+        name: field.name,
+        type: field.type || "string",
+        description: `Field ${field.number} (${field.type || "unknown"})`,
+      };
+      if (field.label === "repeated") {
+        prop.type = "array";
+        prop.items = { type: field.type || "string" };
+        if (field.type === "message" && field.children) {
+          const nestedName = field.messageType ||
+            `${prefix}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}Entry`;
+          if (!schemas[nestedName] && !visited.has(nestedName)) {
+            visited.add(nestedName);
+            const nestedProperties = {};
+            schemas[nestedName] = { id: nestedName, type: "object", properties: nestedProperties };
+            queue.push({ fieldsObj: field.children, prefix: nestedName, dst: nestedProperties });
+          }
+          prop.items.$ref = nestedName;
+          delete prop.items.type;
+          pendingAttach.push({ target: prop.items, key: "children", schemaName: nestedName });
         }
-        prop.items.$ref = nestedName;
-        prop.items.children = schemas[nestedName].properties;
-        delete prop.items.type;
+      } else if (field.type === "message" && field.children) {
+        const nestedName = field.messageType ||
+          `${prefix}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
+        if (!schemas[nestedName] && !visited.has(nestedName)) {
+          visited.add(nestedName);
+          const nestedProperties = {};
+          schemas[nestedName] = { id: nestedName, type: "object", properties: nestedProperties };
+          queue.push({ fieldsObj: field.children, prefix: nestedName, dst: nestedProperties });
+        }
+        prop.$ref = nestedName;
+        delete prop.type;
+        pendingAttach.push({ target: prop, key: "children", schemaName: nestedName });
       }
-    } else if (field.type === "message" && field.children) {
-      const nestedName =
-        field.messageType ||
-        `${prefix}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
-
-      if (!schemas[nestedName]) {
-        const nestedProperties = convertProbeFieldsToSchema(
-          field.children,
-          schemas,
-          nestedName,
-        );
-        schemas[nestedName] = {
-          id: nestedName,
-          type: "object",
-          properties: nestedProperties,
-        };
-      }
-      prop.$ref = nestedName;
-      prop.children = schemas[nestedName].properties;
-      delete prop.type;
+      const fieldKey = field.name || `field_${field.number}`;
+      dst[fieldKey] = prop;
     }
-
-    const fieldKey = field.name || `field_${field.number}`;
-    properties[fieldKey] = prop;
   }
-  return properties;
+  // All nested schemas are now populated; resolve deferred .children refs.
+  for (const a of pendingAttach) {
+    if (schemas[a.schemaName] && schemas[a.schemaName].properties) {
+      a.target[a.key] = schemas[a.schemaName].properties;
+    }
+  }
+  return rootProperties;
 }
 
 // ─── req2proto Fallback Probing ──────────────────────────────────────────────
@@ -4358,6 +4450,13 @@ function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
 async function analyzeScript(tabId, scriptUrl, code) {
   var tab = getTab(tabId);
   console.debug("[AST] Received script: %s (%d chars) tab=%d", scriptUrl || "(inline)", code.length, tabId);
+  // No per-script cache here: a page is reviewed as the combination of
+  // ALL scripts it loads — cross-script inter-procedural analysis only
+  // works when the analyzer sees them together. Per-script caching
+  // would replay an isolated-script result that lacks cross-script
+  // visibility (e.g. webpack chunks where module n.d exports are
+  // installed across files). The combined-bundle cache in
+  // _analyzeCombinedScripts is the only legitimate cache layer.
   var analysis;
   var response;
   try {
@@ -6611,94 +6710,120 @@ function encodeGraphQLBody(bodyMsg) {
   return JSON.stringify(ops.length > 0 ? encode(ops[0]) : { query: "" });
 }
 
-function encodeFormToJson(fields) {
-  const obj = {};
-  for (const f of fields) {
-    const isObj = f.type === "message" || f.type === "object";
+function encodeFormToJson(rootFields) {
+  // Iterative tree builder. Each work item populates a target object
+  // (or array element) from a fields list. Nested message/repeated
+  // fields enqueue empty sub-objects whose children arrays drive a
+  // later iteration. Replaces self-recursion so deeply-nested form
+  // structures encode without growing the JS call stack.
+  const root = {};
+  const queue = [{ fields: rootFields, target: root }];
+  while (queue.length > 0) {
+    const { fields, target } = queue.shift();
+    for (const f of fields) {
+      const isObj = f.type === "message" || f.type === "object";
 
-    // Repeated fields — both scalar arrays and arrays of objects must
-    // roundtrip. Items may carry their own `children` tree (built by the
-    // repeated-message renderer) OR be raw objects/scalars from replay
-    // initialData. Handle both.
-    if (f.label === "repeated") {
-      let list;
-      if (Array.isArray(f.value)) {
-        list = f.value.map((v) => {
-          if (v && typeof v === "object" && !Array.isArray(v) && Array.isArray(v.children)) {
-            return encodeFormToJson(v.children);
+      if (f.label === "repeated") {
+        const list = [];
+        target[f.name] = list;
+        if (Array.isArray(f.value)) {
+          for (const v of f.value) {
+            if (v && typeof v === "object" && !Array.isArray(v) && Array.isArray(v.children)) {
+              const sub = {};
+              list.push(sub);
+              queue.push({ fields: v.children, target: sub });
+            } else {
+              list.push(isObj ? v : coerceValue(v, f.type));
+            }
           }
-          return isObj ? v : coerceValue(v, f.type);
-        });
-      } else if (Array.isArray(f.children)) {
-        // Children as a list of message instances — each item is a
-        // sub-field whose own children describe one array element.
-        list = f.children.map((item) =>
-          Array.isArray(item.children) ? encodeFormToJson(item.children) : coerceValue(item.value, f.type),
-        );
-      } else {
-        list = [];
+        } else if (Array.isArray(f.children)) {
+          for (const item of f.children) {
+            if (Array.isArray(item.children)) {
+              const sub = {};
+              list.push(sub);
+              queue.push({ fields: item.children, target: sub });
+            } else {
+              list.push(coerceValue(item.value, f.type));
+            }
+          }
+        }
+        continue;
       }
-      obj[f.name] = list;
-      continue;
-    }
 
-    if (isObj) {
-      // Message/object: prefer children tree; fall back to raw value when
-      // the caller has a parsed object but no tree (e.g. replay auto-fill
-      // from captured JSON). Always surface the field even when empty so
-      // servers see `{variables: {}}` rather than dropping it.
-      if (Array.isArray(f.children) && f.children.length) {
-        obj[f.name] = encodeFormToJson(f.children);
-      } else if (f.value && typeof f.value === "object" && !Array.isArray(f.value)) {
-        obj[f.name] = f.value;
-      } else {
-        obj[f.name] = {};
+      if (isObj) {
+        // Message/object: prefer children tree; fall back to raw value
+        // when the caller has a parsed object but no tree (e.g. replay
+        // auto-fill from captured JSON). Always surface the field even
+        // when empty so servers see `{variables: {}}` rather than
+        // dropping it.
+        if (Array.isArray(f.children) && f.children.length) {
+          const sub = {};
+          target[f.name] = sub;
+          queue.push({ fields: f.children, target: sub });
+        } else if (f.value && typeof f.value === "object" && !Array.isArray(f.value)) {
+          target[f.name] = f.value;
+        } else {
+          target[f.name] = {};
+        }
+        continue;
       }
-      continue;
-    }
 
-    if (f.value == null && !f.children?.length) continue;
-    obj[f.name] = coerceValue(f.value, f.type);
+      if (f.value == null && !f.children?.length) continue;
+      target[f.name] = coerceValue(f.value, f.type);
+    }
   }
-  return obj;
+  return root;
 }
 
 /**
  * Encode form fields as a JSPB array (indexed by field number).
  */
-function encodeFormToJspb(fields) {
-  let maxNum = 0;
-  for (const f of fields) {
-    if (f.number > maxNum) maxNum = f.number;
+function encodeFormToJspb(rootFields) {
+  // Iterative: each work item builds one JSPB array from a fields list.
+  // Nested messages enqueue a fresh array that subsequent iterations
+  // populate. Replaces self-recursion so deeply-nested message trees
+  // (or pathological repeated-message arrays) encode without growing
+  // the JS call stack.
+  function buildOne(fields) {
+    let mx = 0;
+    for (const f of fields) {
+      if (f.number > mx) mx = f.number;
+    }
+    return mx === 0 ? [] : new Array(mx).fill(null);
   }
-  if (maxNum === 0) {
-    // If we have no numbered fields, but it's supposed to be an object/message,
-    // return an empty array if we are in a JSPB context.
-    return [];
-  }
-
-  // JSPB uses 0-based indexing for field 1 (i.e. index 0 is field 1)
-  const arr = new Array(maxNum).fill(null);
-  for (const f of fields) {
-    if (!f.number) continue;
-    
-    const targetIdx = f.number - 1;
-    if (f.type === "message" && f.label !== "repeated") {
-      arr[targetIdx] = encodeFormToJspb(f.children || []);
-    } else if (f.label === "repeated" && f.type === "message" && Array.isArray(f.value)) {
-      // Repeated message: each item's children must be recursively encoded
-      arr[targetIdx] = f.value.map((item) => {
-        if (item && item.children) return encodeFormToJspb(item.children);
-        if (Array.isArray(item)) return item;
-        return item;
-      });
-    } else if (f.label === "repeated" && Array.isArray(f.value)) {
-      arr[targetIdx] = f.value.map((v) => coerceValue(v, f.type));
-    } else {
-      arr[targetIdx] = coerceValue(f.value, f.type);
+  const root = buildOne(rootFields);
+  const queue = [{ fields: rootFields, target: root }];
+  while (queue.length > 0) {
+    const { fields, target } = queue.shift();
+    for (const f of fields) {
+      if (!f.number) continue;
+      const targetIdx = f.number - 1;
+      if (f.type === "message" && f.label !== "repeated") {
+        const sub = buildOne(f.children || []);
+        target[targetIdx] = sub;
+        queue.push({ fields: f.children || [], target: sub });
+      } else if (f.label === "repeated" && f.type === "message" && Array.isArray(f.value)) {
+        const repeated = [];
+        target[targetIdx] = repeated;
+        for (const item of f.value) {
+          if (item && item.children) {
+            const sub = buildOne(item.children);
+            repeated.push(sub);
+            queue.push({ fields: item.children, target: sub });
+          } else if (Array.isArray(item)) {
+            repeated.push(item);
+          } else {
+            repeated.push(item);
+          }
+        }
+      } else if (f.label === "repeated" && Array.isArray(f.value)) {
+        target[targetIdx] = f.value.map((v) => coerceValue(v, f.type));
+      } else {
+        target[targetIdx] = coerceValue(f.value, f.type);
+      }
     }
   }
-  return arr;
+  return root;
 }
 
 /**

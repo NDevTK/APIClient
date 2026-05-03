@@ -2,6 +2,20 @@
 // Run: node test-ast.js
 
 var fs = require("fs");
+var child_process = require("child_process");
+
+// Recursion lint runs first — ANY self-recursive function in our analyzer
+// fails the suite before any AST tests execute. Recursion is banned
+// (CLAUDE.md): every function must be a state machine on the shared
+// _runResolverStack driver so the JS call stack stays flat regardless of
+// AST depth.
+var lintResult = child_process.spawnSync("node", [__dirname + "/testing/audit-recursion.js"],
+  { encoding: "utf8", cwd: __dirname });
+if (lintResult.status !== 0) {
+  process.stderr.write(lintResult.stderr);
+  process.stderr.write("\n[test-ast] Recursion lint failed — fix before running AST tests.\n");
+  process.exit(1);
+}
 
 // Load Babel bundle (IIFE: var BabelBundle = (() => {...})())
 var babelCode = fs.readFileSync(__dirname + "/extension/lib/babel-bundle.js", "utf8");
