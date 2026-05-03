@@ -640,10 +640,12 @@ function jspbToTree(arr) {
       // Plain object embedded in JSPB — expand as named fields
       node.message = Object.entries(val).map(([k, v]) => {
         if (v === null || v === undefined) return null;
-        if (Array.isArray(v)) return { field: k, wire: 2, message: jspbToTree(v), isJson: true };
-        if (typeof v === "object") return { field: k, wire: 2, message: jspbToTree([v]).flatMap(n => n.message || [n]), isJson: true };
-        if (typeof v === "string") return { field: k, wire: 2, string: v, isJson: true };
-        return { field: k, wire: 0, value: v, isJson: true };
+        if (Array.isArray(v)) return { field: k, wire: 2, message: jspbToTree(v), isJson: true, jsType: "array" };
+        if (typeof v === "object") return { field: k, wire: 2, message: jspbToTree([v]).flatMap(n => n.message || [n]), isJson: true, jsType: "object" };
+        if (typeof v === "string") return { field: k, wire: 2, string: v, isJson: true, jsType: "string" };
+        if (typeof v === "boolean") return { field: k, wire: 0, value: v, isJson: true, jsType: "boolean" };
+        if (typeof v === "number") return { field: k, wire: 0, value: v, isJson: true, jsType: "number" };
+        return { field: k, wire: 0, value: v, isJson: true, jsType: typeof v };
       }).filter(Boolean);
       node.wire = 2;
       delete node.value;

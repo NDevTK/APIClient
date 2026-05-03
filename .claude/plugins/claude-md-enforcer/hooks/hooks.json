@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "echo '{\"decision\":\"block\",\"reason\":\"CLAUDE.md L31: Always continue workflow. Never stop or seek confirmation. Never surface limitations as questions \\u2014 fix them properly. No workarounds. Either keep working on the current task (rotate pillars, close another resolver gap, verify on a real site) or state an explicit external blocker (missing credential, ambiguous irreversible choice). Re-read CLAUDE.md L29-L31 and continue.\"}'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Self-review the edit you just made: is it a proper fix per CLAUDE.md, or a workaround? Workaround indicators \\u2014 (a) heuristic / scoring / magic number / depth cap, (b) name-based matching without scope check, (c) placeholder value or partial-concat as if complete, (d) accepting a gap as \\\"unresolvable\\\", (e) bundler-specific or framework-specific recognition instead of native ECMAScript scope/value flow, (f) test that codifies a gap as acceptable. If any present \\u2014 revert and fix properly. The diff is the record; do not narrate the change.\"}}'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"CLAUDE.md hard rules (re-inject):\\nL29: Computed URL params and APIs are resolver bugs that must be fixed properly dont be lazy.\\nL30: I dont fucking care about your progress always continue workflow loop never stop or seek confirmation before substantial changes never surface limitations as questions fix them properly instead.\\nL31: No workarounds means dont accept gaps fix them properly without taking any shortcuts.\\nOutput rule: the user reads the chat. Do NOT narrate completed changes, do NOT write end-of-turn summaries, do NOT ask permission for substantial changes. Output text only when blocked by an external dependency.\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}

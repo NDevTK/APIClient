@@ -1,6 +1,7 @@
 # API Security Researcher — Development Guide
 
-Work autonomously and continuously across all pillars. No mocking, no placeholders, no heuristics, no summaries.
+Work autonomously and continuously across all pillars. No mocking, no placeholders, no heuristics, no summaries, no workarounds.
+You should follow all the tasks provided in CLAUDE.md as a continuous agent
 
 ## Project Overview
 
@@ -25,6 +26,56 @@ Every change belongs to one pillar. After a landed change, the next change must 
 13. **Performance on real sites** — measure on a real 5 MB+ bundle. No change ships with regression > 10 % vs the previous real-site baseline.
 14. **Facts not guesses** — every value the analyzer emits is traced structurally. No hardcoded strings, no depth caps, no magic numbers that paper over resolver gaps.
 15. **Tooling context improvement** — when a review needed a manual step, the harness learns that step (hop snippets, receiverType, finding.view, etc.).
+
+**Computed values are fully supported via static analysis — no runtime emulation, no sandbox, no eval.** Every URL part, header, body field, and call-site argument resolves through native ECMAScript semantics modeled in `lib/ast.js`: scope bindings, MemberExpression chains, `+` concat, template literals, `Object.assign`/spread, `Object.defineProperty` getters, `Function.prototype.call`/`apply`/`bind`, `for..in` over literal-keyed objects, WHATWG `URL` instance properties, inter-procedural param substitution, return-value unification. If a computed value doesn't resolve, the missing native-JS rule is the bug — add it to the resolver. Don't reach for runtime/eval/sandbox; don't fall back to placeholders; don't call the value "dynamic" or "computed at runtime" as if that excuses the gap.
+
+**Always read real website JavaScript — never guess.** Before claiming a fix or a finding is correct, open the actual minified bundle in `globalStore.scriptCache` (or via `finding.view` / `finding.func` / `finding.callers` / `ast.probe.finding`) and confirm the AST decision against the real source. No assumed shapes, no "probably the framework does X", no test-only validation. If a real-site bundle is needed and not yet captured, capture it via the harness; don't reason without evidence.
+
+**Explore real-site APIs end-to-end through the extension UI.** Static AST analysis tells you *what could happen*; the extension's job is to learn *how the API actually works in the wild* by combining (a) reading real JS via the AST pipeline to discover endpoints + schemas + auth shape + value constraints, (b) capturing real network traffic that flows when the user (or harness-driven popup) interacts with the page, (c) calling those learned methods back through the active page (credentialed) via `schema.verify` / popup `Send` and diffing real responses against the learned schema. The popup is the integration surface: when behaviour is unclear, drive the popup with the harness (`popup.select`, `popup.fill`, `popup.send`, `popup.response`) against the real site and read the JS hops that produced any surprise. Synthetic test inputs never substitute for the real-site loop; a learned method is "real" only after it has been replayed credentialed through the page and the response shape confirmed.
+
+**Raw-JS context the analyzer leverages for learning.** The AST uses these context signals from the bundle (not just isolated fetch-call args):
+- **Scope chains** — `path.scope.getBinding()` resolves identifiers through nested scopes; shadowed locals don't hijack globals.
+- **Inter-procedural caller args** — `binding.referencePaths` walks every call site to substitute concrete values for params, including through wrapper functions (memoize, throttle, etc.).
+- **Value constraints** — `switch/case`, `.includes(literal)`, equality chains (`x === "y" || x === "z"`) feed `_astValidValues` for params; pickExampleValue's `ast-constraint` tier surfaces them as example values.
+- **Constructor chains for class methods** — `this.X` resolves through `this.X = paramRef`, `this.X = paramRef.Y`, AND `this.X = expr` (any RHS expression closed-over in the constructor's scope).
+- **WHATWG URL semantics** — `new URL(input, base).href` / `.toString()` shape comes from the input arg; URL instance properties (`pathname`/`origin`/`search`/`hash`) extracted from a fully-constructed URL.
+- **Native ECMAScript transforms** — `encodeURIComponent`/`encodeURI`/`decodeURI*`/`btoa`/`atob` are applied per spec when the arg resolves to a string (scope-checked globals).
+- **Object.assign / spread / Object.defineProperty** — merged objects, getters resolve to underlying values.
+- **Source-mapped TypeScript interfaces** — `lib/sourcemap.js` extracts interface fields and types from sourcemap'd `.ts` originals; `_tsType` / `_tsInterface` enrich learned params when names match.
+- **Structural URL shape** — when full value resolution fails, `_resolveUrlStructuralShape` extracts path + query-param NAMES from concat / template literals so the schema gets the param names even with opaque values (no placeholder bytes in the URL string).
+
+What's NOT used: JSDoc comments, runtime DOM inspection (meta tags, getAttribute values), HTTP headers from network probing. DOM-derived values genuinely don't exist statically — those bottom out in resolver gaps, which is the correct behaviour.
+
+**Framework code is just JavaScript — trace through it, don't recognise it.** Every framework call (jQuery `.fail(cb)`, axios interceptors, react-query `useQuery`, redux thunks, …) eventually flows to a native browser API: `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `postMessage`, `eval`, `innerHTML`, etc. The framework's implementation is bundled into the same source file the analyzer is reading; there is no opaque boundary. When a callback param like `responseText` traces to "no source", the right fix is NOT to add jQuery-specific knowledge ("`.fail` callbacks get XHR.responseText") — it's to make inter-procedural tracing follow the framework's OWN code into the native API call. The framework's `function fire(){ fn(jqXHR.responseText) }` is right there in the bundle; resolving the wrapper function's `referencePaths` reaches it. Framework recognition is always a workaround; bundle-deep tracing is always the proper fix.
+
+Concretely: a callback-param trace on `errCb` in `function getXhr(url, errCb){ ... xhr.onerror = function(){ errCb(xhr); }; }` must follow `errCb`'s referencePaths to find the `errCb(xhr)` invocation, then resolve the arg `xhr` to a `new XMLHttpRequest()`, classifying it as the native taint source. This walk is mechanical (not pattern-matched) but currently the tracer doesn't run it for callback-param `responseText` reads — closing that gap is the proper fix for jQuery `.fail`, axios `.catch`, fetch `.then`, etc. simultaneously.
+
+**Read the real JS yourself — don't rely on the analyzer to see what it's missing.** The analyzer can only report patterns it already understands; gaps it misses by definition won't show up in `audit.gaps` or `audit.schema`. To find new learnable shapes, fetch the actual bundle (via `script <url>` or direct HTTP), read the source around fetch call sites, and reason about how URLs / params / bodies are built. Ask: what string is the path? where does each query/body field's value come from? is it a literal, a switch case, a ternary on input, an object property, a closure variable, a class member set in constructor? For each value-source, check whether `_resolveAllValues` / `_resolveToObject` / `_resolveUrlStructuralShape` already handles that shape — if not, that's the next resolver path to add. Doing this manual review on a real bundle is the only way to surface missing logic; the analyzer's own output is a downstream view.
+
+**Audit AST learning completeness on real source.** For every fetch call site the AST extracted, ask: did we learn EVERY URL parameter (query, path, fragment, body field) the source visibly assembles, with REAL example values (literal in source, `_astValidValues` from switch/includes/equality chains, observed value from real traffic)? If the source contains `searchParams.set("page", n)` / `?nwo=${encodeURIComponent(repo)}` / `body: JSON.stringify({title, content})` and the learned method is missing one of those params or has a type-default empty-string example, the AST resolver has a gap. Use `audit.gaps` to surface unresolved leaves, `method <svc> <id>` to read learned params + their `_exampleValueSource`, and `finding.func` / `finding.callers` to read the original code that should have produced them. Type-default fallbacks on a method derived from real source are a P1 bug — the value WAS in the bundle; the resolver missed it.
+
+**Structural learning vs. value placeholders — they are different.** The "no placeholders" rule bans inventing fake VALUES (fake URL strings, fake body field values, fake header values). It does NOT ban STRUCTURAL learning when the structure is statically visible. A fetch like `fetch("/api/check?nwo=" + encodeURIComponent(repo))` has a fully-resolvable PATH (`/api/check`), a fully-resolvable PARAM NAME (`nwo`), and an opaque PARAM VALUE (`encodeURIComponent(repo)` where `repo` is a function param). The right output is: emit the method `GET /api/check` with param `{name: "nwo", location: "query", required: true, _astValueSource: "param-derived"}` and NO synthesized value. Refusing to emit anything because the value is opaque drops a learnable URL+param shape; emitting `?nwo=` as a literal value would be a placeholder. The line is: structure (paths, names, locations, types) is fair game even when values are opaque; values themselves must come from observation, AST literals, or scope-traced caller args.
+
+**Missing-logic / missing-learning visibility.** Three commands together surface what the AST or schema learner *should* have caught but didn't:
+- `audit.schema <svc> --min-obs 0` — every method (including AST-only) sorted worst-first by real-observation %; type-default-heavy methods are where param NAMES are learned but VALUES aren't.
+- `audit.gaps [substr]` — every unique URL-resolver gap with the per-script line/col + source snippet; each gap is an identifier the resolver couldn't trace.
+- `method <svc> <id>` — per-method drill-down with `_exampleValueSource` per param (observed-top, ast-constraint, param-derived, type-default, …); a real-source method whose params are all type-default is a P1 learning gap.
+
+**Source-review tooling — what's available.** Reviewing real-site source goes through these commands (all give ground-truth, none summarise):
+- `script <url|index>` — raw bundle dump under `testing/harness-dumps/`.
+- `ast <url|index> [--full]` — every AST finding the analyzer produced for a script (enums, fetchSites, sinks, dangers, fieldMaps).
+- `audit.sinks [substr]` — grep + AST cross-check; surfaces classifier-missed sinks.
+- `audit.gaps [substr]` — every unique resolver gap with its per-script line/col + source snippet (added 2026-05).
+- `finding <id>` — one finding's full taint path with per-hop dim transitions, code context, and enclosing function.
+- `finding.func <id>` — source-mapped enclosing function body.
+- `finding.callers <id>` — call sites of the enclosing function with arguments.
+- `finding.view <id>` — the source viewer's tree-shaken slice (verifies the popup viewer's own focus).
+- `ast.probe.finding <id>` — isolate the enclosing function and re-run the analyzer to confirm classifier polarity.
+- `ast.probe --inline <code>` — run the live analyzer on an arbitrary code blob (synthetic minimal repros).
+
+If a review needed a manual step that none of these covered, the harness has a gap (Pillar 12) — add the command before the gap is forgotten.
+
+**Continuous workflow across every task type.** Schema learning, security detection, service grouping, exploit probing, server interaction, JS review, UI review, performance, harness context — all pillars are first-class. Never stop, never ask for confirmation before substantial reversible changes, never surface a limitation as a question; fix it. No workarounds means don't accept gaps — close them without shortcuts. The loop ends only on an irreversible external block.
 
 ## Operational Rules
 

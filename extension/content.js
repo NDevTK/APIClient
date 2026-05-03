@@ -566,6 +566,17 @@
   // Extract all existing scripts on page load
   document.querySelectorAll("script").forEach(extractScriptSource);
 
+  // Page-lifecycle signal: when the load event fires, all initial scripts
+  // (including <script defer> and <script async>) have finished loading.
+  // Tell background to fire analysis NOW even if its 1500ms idle-debounce
+  // timer hasn't expired (continuous script-load streams reset the timer
+  // forever on busy pages, so it never fires on its own).
+  function _signalScriptsLoaded() {
+    chrome.runtime.sendMessage({ type: "SCRIPTS_LOADED" });
+  }
+  if (document.readyState === "complete") _signalScriptsLoaded();
+  else window.addEventListener("load", _signalScriptsLoaded, { once: true });
+
   // ─── Mutation Observer (Dynamic Loading) ───────────────────────────────────
 
   let debounceTimer = null;

@@ -2191,6 +2191,30 @@ function classifyResponseAsset(responseBody, responseBase64, opts) {
     var note4 = declaredCt && declaredCt !== magicText ? " (declared " + declaredCt + ")" : "";
     return { kind: "asset", label: magicText + note4 };
   }
+  // Asset content-types whose bodies have no unique structural prefix
+  // (or where the @-rule sniff above misses common shapes). Trust the
+  // server-declared MIME when the body is NOT a JSON root shape (`{`/`[`)
+  // — JSON-shape under a JS MIME is JSONP/API data; under a CSS MIME it
+  // wouldn't be valid CSS anyway, but the same gate keeps the path
+  // symmetric. The set is restricted to MIMEs where servers have no
+  // legitimate reason to ship API payloads (browsers execute JS, parse
+  // CSS, render fonts — these aren't structured data formats).
+  var ctAssetMimes = {
+    "application/javascript": 1, "text/javascript": 1,
+    "application/ecmascript": 1, "text/ecmascript": 1,
+    "application/x-javascript": 1,
+    "text/css": 1,
+  };
+  if (ctAssetMimes[declaredCt]) {
+    var trimmed = responseBody.trimStart();
+    var firstCh = trimmed.charCodeAt(0);
+    // 0x7B = '{', 0x5B = '[' — JSON root shapes. Anything else starts
+    // with a CSS selector / JS statement / comment and is asset content,
+    // not API payload.
+    if (firstCh !== 0x7B && firstCh !== 0x5B) {
+      return { kind: "asset", label: declaredCt };
+    }
+  }
   return { kind: "api", label: null };
 }
 

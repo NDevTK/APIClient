@@ -5,8 +5,11 @@
 importScripts("lib/protobuf.js", "lib/discovery.js", "lib/req2proto.js", "lib/stats.js", "lib/chains.js");
 
 // ─── AST Cache Version ──────────────────────────────────────────────────────
-// Bump this when AST analysis logic changes to auto-invalidate cached results.
-const AST_ANALYSIS_VERSION = 1;
+// Bump this when the AST analysis output shape changes or a resolver
+// path is added — cached results from an older version replay via
+// _replayCachedAST which skips the analyzer, so finding-shape changes
+// must invalidate the cache to take effect.
+const AST_ANALYSIS_VERSION = 2;
 
 // ─── Offscreen AST Worker ────────────────────────────────────────────────────
 // Heavy libs (babel-bundle.js, ast.js, sourcemap.js) run in an offscreen
@@ -15,17 +18,29 @@ const AST_ANALYSIS_VERSION = 1;
 var _offscreenReady = null;
 
 async function ensureOffscreen() {
+  // Always check contexts — caching the promise breaks when the
+  // document gets closed (chrome.offscreen.closeDocument or SW
+  // hibernation can reset the offscreen). A stale resolved promise
+  // would skip re-creation and `chrome.runtime.sendMessage` would
+  // then hang waiting for a recipient that no longer exists.
+  var contexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"]
+  });
+  if (contexts.length > 0) return;
+  // Serialize concurrent ensureOffscreen calls so chrome.offscreen
+  // .createDocument doesn't reject with "Only a single offscreen
+  // document may be created at a time."
   if (_offscreenReady) return _offscreenReady;
   _offscreenReady = (async () => {
-    var contexts = await chrome.runtime.getContexts({
-      contextTypes: ["OFFSCREEN_DOCUMENT"]
-    });
-    if (contexts.length > 0) return;
-    await chrome.offscreen.createDocument({
-      url: "ast-worker.html",
-      reasons: ["WORKERS"],
-      justification: "AST analysis of JavaScript bundles"
-    });
+    try {
+      await chrome.offscreen.createDocument({
+        url: "ast-worker.html",
+        reasons: ["WORKERS"],
+        justification: "AST analysis of JavaScript bundles"
+      });
+    } finally {
+      _offscreenReady = null;
+    }
   })();
   return _offscreenReady;
 }
@@ -552,6 +567,34 @@ function mergeToGlobal(tab) {
     globalStore.scopes.set(k, v);
   }
   if (tab._securityFindings) {
+    // Evict prior findings whose URL has the same origin+pathname as a
+    // script in this round but a different query/hash. Versioned asset
+    // URLs (`index.js?v=14` vs `?v=15`) otherwise accumulate forever
+    // because each version is keyed separately even though only the
+    // latest bundle is live.
+    var newBasePaths = new Set();
+    for (var _spi = 0; _spi < tab._securityFindings.length; _spi++) {
+      try {
+        var _u = new URL(tab._securityFindings[_spi].sourceUrl);
+        newBasePaths.add(_u.origin + _u.pathname);
+      } catch (_) { /* non-URL source (e.g. "unknown_N") — no base path to match */ }
+    }
+    var staleKeys = [];
+    for (var _key of globalStore.securityFindings.keys()) {
+      try {
+        var _ku = new URL(_key);
+        var _kbase = _ku.origin + _ku.pathname;
+        if (newBasePaths.has(_kbase)) {
+          // Same base path AND full URL changed → new version replaces old.
+          var sameUrl = tab._securityFindings.some(function(_f) { return _f.sourceUrl === _key; });
+          if (!sameUrl) staleKeys.push(_key);
+        }
+      } catch (_) { /* skip non-URL keys */ }
+    }
+    for (var _ski = 0; _ski < staleKeys.length; _ski++) {
+      globalStore.securityFindings.delete(staleKeys[_ski]);
+    }
+
     for (var sf = 0; sf < tab._securityFindings.length; sf++) {
       var finding = tab._securityFindings[sf];
       globalStore.securityFindings.set(finding.sourceUrl || ("unknown_" + sf), finding);
@@ -1143,14 +1186,17 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
   // Method name + collision handling — mirrors learnFromRequest.
   const { methodName: baseMethodName } = calculateMethodMetadata(csUrl, interfaceName);
   const qualifiedName = callSite.method.toLowerCase() + "_" + baseMethodName;
-  const probedMethod = doc.resources.probed?.methods?.[baseMethodName];
+  // Verb-matched probed lookup (see learnFromRequest for the same rule):
+  // a probed POST entry must not absorb GET traffic.
+  const probedBase = doc.resources.probed?.methods?.[baseMethodName];
+  const probedMethod = (probedBase && probedBase.httpMethod === callSite.method) ? probedBase : null;
 
   let methodName;
   const existingBase = doc.resources.learned.methods[baseMethodName];
   const existingQualified = doc.resources.learned.methods[qualifiedName];
   if (existingQualified) {
     methodName = qualifiedName;
-  } else if (existingBase && existingBase.httpMethod !== callSite.method && !probedMethod) {
+  } else if (existingBase && existingBase.httpMethod !== callSite.method) {
     const existQualName = existingBase.httpMethod.toLowerCase() + "_" + baseMethodName;
     if (!doc.resources.learned.methods[existQualName]) {
       existingBase.id = `${interfaceName.replace(/\//g, ".")}.${existQualName}`;
@@ -1209,20 +1255,36 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
 
   // Merge AST-observed valid values onto a target (param or schema prop).
   // Promotes to `enum` when distinct count >= 2 (matches prior behavior).
+  // Re-picks the example value when new AST values land — without this,
+  // a form-scan-created param whose initial pickExampleValue ran BEFORE
+  // any AST values were added would stay frozen at "type-default" even
+  // though tier-3 (ast-constraint) is now satisfied.
   const _mergeAstValues = (target, validValues, defaultValue) => {
+    let merged = false;
     if (Array.isArray(validValues) && validValues.length) {
       const prev = Array.isArray(target._astValidValues) ? target._astValidValues.slice() : [];
+      const before = prev.length;
       for (const vv of validValues) {
         const s = String(vv);
         if (prev.indexOf(s) < 0) prev.push(s);
       }
+      if (prev.length > before) merged = true;
       target._astValidValues = prev;
       if (prev.length >= 2 && !target.customEnum && !target.enum) {
         target.enum = prev.slice();
         target._detectedEnum = true;
       }
     }
-    if (defaultValue !== undefined) target._astDefault = defaultValue;
+    if (defaultValue !== undefined) {
+      if (target._astDefault !== defaultValue) merged = true;
+      target._astDefault = defaultValue;
+    }
+    if (merged) {
+      const ex = pickExampleValue(target, null);
+      target._exampleValue = ex.value;
+      target._exampleValueSource = ex.source;
+      if (ex.confidence != null) target._exampleConfidence = ex.confidence;
+    }
   };
 
   // Query params — direct registration.
@@ -1348,8 +1410,13 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
   const { methodName: baseMethodName } = calculateMethodMetadata(url, interfaceName, _nameHint);
   const qualifiedName = method.toLowerCase() + "_" + baseMethodName;
 
-  // If this method was already probed with richer schema, update it there instead
-  const probedMethod = doc.resources.probed?.methods?.[baseMethodName];
+  // If this method was already probed with richer schema, update it there
+  // instead — but ONLY when the probed entry's HTTP verb matches. A POST
+  // probe entry must not absorb GET traffic (or vice versa); they're
+  // distinct methods that happen to share a path. Without the verb match,
+  // real GET stats land on the POST schema, corrupting the probed entry.
+  const probedBase = doc.resources.probed?.methods?.[baseMethodName];
+  const probedMethod = (probedBase && probedBase.httpMethod === method) ? probedBase : null;
 
   // Resolve method name — disambiguate when different HTTP methods hit the same path
   let methodName;
@@ -1359,7 +1426,7 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
   if (existingQualified) {
     // Already disambiguated from a prior collision — use qualified name
     methodName = qualifiedName;
-  } else if (existingBase && existingBase.httpMethod !== method && !probedMethod) {
+  } else if (existingBase && existingBase.httpMethod !== method) {
     // Collision: different HTTP method to same path — rename existing, qualify new
     const existQualName = existingBase.httpMethod.toLowerCase() + "_" + baseMethodName;
     if (!doc.resources.learned.methods[existQualName]) {
@@ -1604,6 +1671,30 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
       if (!m._stats.params[name]) m._stats.params[name] = createParamStats();
       updateParamStats(m._stats.params[name], value);
     });
+  }
+
+  // Track path param values. The path-param detection block above
+  // updates m.path to a templated form like `/posts/{path_param1}` and
+  // adds the parameter to m.parameters, but the runtime value of the
+  // segment was not being recorded as an observation — leaving the
+  // example resolver with only a type-default empty string. Walk the
+  // current request's segments alongside the (now-templated) m.path and
+  // record each {name} segment's value into the same stats bucket as
+  // query params, so pickExampleValue picks the observed-top value.
+  {
+    const reqSegs = url.pathname.split("/").filter(Boolean);
+    const tmplSegs = (m.path || "").split("/").filter(Boolean);
+    if (tmplSegs.length === reqSegs.length) {
+      for (let i = 0; i < tmplSegs.length; i++) {
+        const t = tmplSegs[i];
+        if (t.startsWith("{") && t.endsWith("}")) {
+          const paramName = t.slice(1, -1);
+          if (!paramName) continue;
+          if (!m._stats.params[paramName]) m._stats.params[paramName] = createParamStats();
+          updateParamStats(m._stats.params[paramName], reqSegs[i]);
+        }
+      }
+    }
   }
 
   // Track body field values (JSON bodies only)
@@ -2088,14 +2179,19 @@ function learnFromResponse(tabId, interfaceName, entry) {
         }
       }
     } catch (e) {}
-  } else if (mimeType.includes("json") || mimeType.includes("javascript")) {
-    // JSON or JSONP (callback-wrapped JSON returned as text/javascript)
+  } else if (mimeType.includes("json") || mimeType.includes("javascript") ||
+             /^[\s﻿\x00-\x1f]*[{\[]/.test(textBody)) {
+    // JSON or JSONP (callback-wrapped JSON returned as text/javascript) OR
+    // body whose first non-whitespace byte is `{` or `[`. Many APIs return
+    // JSON under text/plain or no content-type (analytics endpoints,
+    // Cloudflare-fronted services, etc.); gating on mimetype alone misses
+    // them. Body STRUCTURE is authoritative — if it parses as a JSON
+    // object/array, learn the schema; otherwise the catch silently drops.
     try {
       var _lrText = textBody;
-      if (!mimeType.includes("json")) {
+      if (!mimeType.includes("json") && (mimeType.includes("javascript") || mimeType === "")) {
         var _lrJsonp = stripJsonp(textBody);
-        if (!_lrJsonp) throw new Error("not JSONP");
-        _lrText = _lrJsonp;
+        if (_lrJsonp) _lrText = _lrJsonp;
       }
       // Strip Google XSSI prefix if present. Many Google (and now GitLab
       // snowplow, others) endpoints prepend `)]}'\n` to prevent <script>
@@ -2105,6 +2201,9 @@ function learnFromResponse(tabId, interfaceName, entry) {
       // schema from them.
       if (/^(ok|OK|true|false|null)\s*$/.test(_lrText)) throw new Error("non-object response");
       const json = JSON.parse(_lrText);
+      // Only learn from object/array roots — bare strings/numbers/bool
+      // don't carry a useful schema and would clutter the doc.
+      if (json === null || (typeof json !== "object")) throw new Error("non-object root");
       const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Response`;
       targetM.response = { $ref: schemaName };
       const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas);
@@ -3510,13 +3609,24 @@ async function handleResponseBody(tabId, msg, frameId) {
             }
           }
         } catch (_) {}
-      } else if (logContentType.includes("json")) {
+      } else {
+        // Try JSON parsing for any non-protobuf, non-form-encoded body.
+        // Many analytics SDKs (reddit's /svc/shreddit/events, GA, sentry,
+        // segment, ...) send JSON bodies with `Content-Type: text/plain`
+        // to bypass CORS preflight. Gating on the content-type alone
+        // misses every one. Body STRUCTURE is authoritative: if it parses
+        // as a JSON object/array, treat as JSON. Failed parses fall
+        // through silently — text/binary bodies that aren't JSON simply
+        // don't get field extraction (the existing behaviour for them).
         try {
           const text = new TextDecoder().decode(bytes);
-          const json = JSON.parse(text);
-          if (json && typeof json === "object") {
-            entry.decodedBody = json;
-            entry.isJson = true;
+          const trimmed = text.trimStart();
+          if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            const json = JSON.parse(text);
+            if (json && typeof json === "object") {
+              entry.decodedBody = json;
+              entry.isJson = true;
+            }
           }
         } catch (_) {}
       }
@@ -3636,7 +3746,7 @@ async function handleResponseBody(tabId, msg, frameId) {
 function _bufferScript(tabId, scriptUrl, code, pageUrl) {
   var buf = _scriptBuffers.get(tabId);
   if (!buf) {
-    buf = { scripts: [], timer: null, pageUrl: pageUrl };
+    buf = { scripts: [], timer: null, pageUrl: pageUrl, pending: 0, loadFired: false };
     _scriptBuffers.set(tabId, buf);
   }
 
@@ -3644,6 +3754,8 @@ function _bufferScript(tabId, scriptUrl, code, pageUrl) {
   if (pageUrl && buf.pageUrl && pageUrl !== buf.pageUrl) {
     if (buf.timer) clearTimeout(buf.timer);
     buf.scripts = [];
+    buf.pending = 0;
+    buf.loadFired = false;
     buf.pageUrl = pageUrl;
     console.debug("[AST:buffer] Navigation detected, cleared buffer for tab=%d", tabId);
   }
@@ -3652,12 +3764,13 @@ function _bufferScript(tabId, scriptUrl, code, pageUrl) {
   // Deduplicate by URL or content hash
   var key = scriptUrl || _hashScriptCode(code);
   for (var i = 0; i < buf.scripts.length; i++) {
-    if (buf.scripts[i].key === key) return; // already buffered
+    if (buf.scripts[i].key === key) { _scriptBufferDecrementPending(tabId, buf); return; }
   }
 
   buf.scripts.push({ url: scriptUrl, code: code, key: key });
   console.debug("[AST:buffer] Buffered script %s (%d chars) tab=%d — %d scripts pending",
     scriptUrl || "(inline)", code.length, tabId, buf.scripts.length);
+  _scriptBufferDecrementPending(tabId, buf);
 
   // Reset debounce timer — wait for more scripts before combined analysis
   if (buf.timer) clearTimeout(buf.timer);
@@ -3667,6 +3780,17 @@ function _bufferScript(tabId, scriptUrl, code, pageUrl) {
   }, 1500);
 }
 
+// Decrement pending-fetches count. When the page's load event has fired
+// AND there are no in-flight fetches AND we have buffered scripts, fire
+// analysis immediately — every initial-script subresource is captured.
+function _scriptBufferDecrementPending(tabId, buf) {
+  if (buf.pending > 0) buf.pending--;
+  if (buf.loadFired && buf.pending === 0 && buf.scripts.length > 0) {
+    if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
+    _analyzeCombinedScripts(tabId);
+  }
+}
+
 function _fetchAndBufferScript(tabId, scriptUrl, pageUrl) {
   // Check if already buffered
   var buf = _scriptBuffers.get(tabId);
@@ -3674,26 +3798,41 @@ function _fetchAndBufferScript(tabId, scriptUrl, pageUrl) {
     for (var i = 0; i < buf.scripts.length; i++) {
       if (buf.scripts[i].key === scriptUrl) return;
     }
+  } else {
+    buf = { scripts: [], timer: null, pageUrl: pageUrl, pending: 0, loadFired: false };
+    _scriptBuffers.set(tabId, buf);
   }
+  // Increment pending so the load-fired-and-no-pending check waits for
+  // this fetch to complete (or fail) before firing analysis.
+  buf.pending++;
 
   fetch(scriptUrl).then(function(resp) {
     if (!resp.ok) {
       console.debug("[AST:buffer] Fetch failed for %s: %d %s", scriptUrl, resp.status, resp.statusText);
+      _scriptBufferDecrementPending(tabId, buf);
       return;
     }
     var ct = resp.headers.get("content-type") || "";
     // Skip non-JS responses (images, CSS, etc. that might share .open() URLs)
     if (ct && !ct.includes("javascript") && !ct.includes("ecmascript") && !ct.includes("text/plain") && !ct.includes("application/x-javascript")) {
       console.debug("[AST:buffer] Skipping non-JS content-type for %s: %s", scriptUrl, ct);
+      _scriptBufferDecrementPending(tabId, buf);
       return;
     }
     return resp.text();
   }).then(function(code) {
     if (code && code.length >= 50) {
       _bufferScript(tabId, scriptUrl, code, pageUrl);
+    } else if (code != null) {
+      // Tiny script — buffer skips it; balance the pending counter.
+      _scriptBufferDecrementPending(tabId, buf);
     }
+    // If `code` is undefined here, the previous .then returned undefined
+    // because of the content-type / status checks above — pending was
+    // already decremented there.
   }).catch(function(err) {
     console.debug("[AST:buffer] Fetch error for %s: %s", scriptUrl, err.message || err);
+    _scriptBufferDecrementPending(tabId, buf);
   });
 }
 
@@ -4412,39 +4551,15 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
           console.debug("[AST:merge] %d/%d proto enums unmatched (no schema field with same value count)", analysis.protoEnums.length - enumMatches, analysis.protoEnums.length);
         }
       }
-      // Merge value constraints: enrich VDD method parameters with AST-discovered valid values
-      if (analysis.valueConstraints && analysis.valueConstraints.length && doc.resources && doc.resources.learned) {
-        var vcMatches = 0;
-        var methods = doc.resources.learned.methods || {};
-        for (var mName in methods) {
-          var method = methods[mName];
-          if (!method.parameters) continue;
-          for (var pName in method.parameters) {
-            var param = method.parameters[pName];
-            if (param.customEnum) continue; // don't override manual enums
-            for (var vci = 0; vci < analysis.valueConstraints.length; vci++) {
-              var vc = analysis.valueConstraints[vci];
-              // Match by parameter name or constraint variable name
-              if (vc.variable === pName && vc.values.length >= 2 && vc.values.length <= 50) {
-                param._astValidValues = vc.values;
-                param._astValueSource = vc.sources.join(",");
-                if (!param.enum || !param.customEnum) {
-                  param.enum = vc.values.map(String);
-                  param._detectedEnum = true;
-                }
-                vcMatches++;
-                console.debug("[AST:merge] Value constraint: %s.%s ← [%s] (%d values, source: %s)",
-                  mName, pName, vc.values.slice(0, 5).join(", ") + (vc.values.length > 5 ? ", ..." : ""),
-                  vc.values.length, vc.sources.join(","));
-                break;
-              }
-            }
-          }
-        }
-        if (vcMatches > 0) {
-          console.debug("[AST:merge] Value constraints: %d matched to VDD parameters", vcMatches);
-        }
-      }
+      // Note: bundle-wide value constraints (analysis.valueConstraints) are
+      // NOT merged into params by name. That was a heuristic — any switch/
+      // case on a variable named `q` anywhere in the bundle would attach
+      // its values to every method's `q` param, including unrelated
+      // form-scan-derived ones. Real-world FP: stackoverflow's `/search` q
+      // received `["&", "read", "write", 0]` from an unrelated module.
+      // Per-call-site values flow through learnFromAstCallSite →
+      // _mergeAstValues from `callSite.params[i].validValues`, which is
+      // structurally tied to the specific fetch site.
       // Merge sourceMap TypeScript types: enrich VDD parameters with type info from original sources
       if (analysis.sourceMapTypes && analysis.sourceMapTypes.length) {
         var typeMatches = 0;
@@ -4471,34 +4586,14 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
             }
           }
         }
-        // Enrich proto field maps with human-readable names from TypeScript .pb.ts interfaces
-        if (analysis.protoFieldMaps && analysis.protoFieldMaps.length) {
-          for (var _fmi = 0; _fmi < analysis.protoFieldMaps.length; _fmi++) {
-            var _fm = analysis.protoFieldMaps[_fmi];
-            for (var _sti2 = 0; _sti2 < analysis.sourceMapTypes.length; _sti2++) {
-              var _pbType = analysis.sourceMapTypes[_sti2];
-              if (_pbType.kind !== "interface" && _pbType.kind !== "type") continue;
-              // Match by field count similarity — proto field maps and TypeScript interfaces
-              // from the same proto definition should have similar field counts
-              if (_pbType.fields.length === _fm.fields.length ||
-                  Math.abs(_pbType.fields.length - _fm.fields.length) <= 2) {
-                // Check if it looks proto-related (from .pb.ts file or has matching structure)
-                var _isPbType = /\.pb\.|_pb\.|proto/i.test(_pbType.source || "");
-                if (_isPbType) {
-                  if (!_fm._tsNames) _fm._tsNames = {};
-                  for (var _pfi = 0; _pfi < _pbType.fields.length; _pfi++) {
-                    var _pbField = _pbType.fields[_pfi];
-                    // Map by position: TypeScript interface field order matches proto field order
-                    _fm._tsNames[_pfi + 1] = _pbField.name;
-                  }
-                  _fm._tsInterface = _pbType.name;
-                  typeMatches++;
-                  break;
-                }
-              }
-            }
-          }
-        }
+        // Note: proto-field-map enrichment from TypeScript .pb.ts interfaces
+        // was removed. The previous heuristics — fuzzy field-count tolerance
+        // (Math.abs(diff) <= 2) and source-filename pattern matching
+        // (/\.pb\.|_pb\.|proto/i) — both violated CLAUDE.md (magic-number
+        // cap + framework-specific naming). Proto field maps work by field
+        // ID without TS-name enrichment; if field-name learning is needed
+        // it must come from a structural signal (e.g. the .proto definition
+        // file via sourcemap, or AST extraction of the message class).
         if (typeMatches > 0) {
           console.debug("[AST:merge] TypeScript type enrichment: %d matches", typeMatches);
         }
@@ -4825,6 +4920,36 @@ function handleContentMessage(msg, sender) {
       // External script — content script sent URL only (avoids CORS issues)
       // Background has host_permissions: <all_urls>, so fetch is unrestricted
       _fetchAndBufferScript(tabId, msg.url, pageUrl);
+    }
+    return;
+  }
+
+  // SCRIPTS_LOADED fires from content.js on the page's `load` event — all
+  // initial script subresources have finished loading. Mark the buffer
+  // as ready; analysis fires when pending=0 (all background fetches have
+  // completed). Without this, the 1500ms idle-debounce never fires on
+  // busy pages where new scripts (analytics, ads, dynamic imports) keep
+  // arriving every <1500ms forever, leaving 0 of N scripts analysed.
+  if (msg.type === "SCRIPTS_LOADED") {
+    var slBuf = _scriptBuffers.get(tabId);
+    var slPageUrl = (sender.tab && sender.tab.url) || "";
+    if (slBuf) {
+      // Navigation detector: if the page URL of THIS load event differs
+      // from the buffer's recorded pageUrl, the previous page's analysis
+      // has fired (or never will) and this load is for a NEW page. Reset
+      // so the new page starts a clean batch.
+      if (slPageUrl && slBuf.pageUrl && slPageUrl !== slBuf.pageUrl) {
+        if (slBuf.timer) { clearTimeout(slBuf.timer); slBuf.timer = null; }
+        slBuf.scripts = [];
+        slBuf.pending = 0;
+        slBuf.loadFired = false;
+        slBuf.pageUrl = slPageUrl;
+      }
+      slBuf.loadFired = true;
+      if (slBuf.pending === 0 && slBuf.scripts.length > 0) {
+        if (slBuf.timer) { clearTimeout(slBuf.timer); slBuf.timer = null; }
+        _analyzeCombinedScripts(tabId);
+      }
     }
     return;
   }
@@ -6178,6 +6303,7 @@ const CONTENT_TYPES = new Set([
   "CONTENT_FORM_SUBMIT",
   "RESPONSE_BODY",
   "SCRIPT_SOURCE",
+  "SCRIPTS_LOADED",
   "PROBE_HIT",
 ]);
 

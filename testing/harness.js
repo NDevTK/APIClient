@@ -522,16 +522,25 @@ async function cmdScript(args) {
   await withBrowser(async (browser) => {
     const url = await resolveScriptUrl(browser, target);
     if (!url) { err("no such script"); return; }
-    // Get the script source. The SW may still have it in `_scriptBuffers`,
-    // but that clears on analysis completion — fetch from the page instead.
+    // Get the script source. Try page-context fetch first (uses page
+    // credentials, hits the server fresh), fall back to direct HTTP+decode
+    // when cross-origin blocks the page fetch — important when the
+    // reviewer wants to read a JS file from a site they're not currently
+    // on (e.g., reading sstatic.net while parked on codeberg).
     const page = await getActivePage(browser);
-    const src = await page.evaluate(async (u) => {
-      try {
-        const resp = await fetch(u, { credentials: "include" });
-        return await resp.text();
-      } catch (e) { return "__FETCH_ERR__: " + e.message; }
-    }, url);
-    if (src.startsWith("__FETCH_ERR__:")) { err(src); return; }
+    let src = null;
+    if (page) {
+      src = await page.evaluate(async (u) => {
+        try {
+          const resp = await fetch(u, { credentials: "include" });
+          return await resp.text();
+        } catch (e) { return "__FETCH_ERR__: " + e.message; }
+      }, url);
+    }
+    if (!src || src.startsWith("__FETCH_ERR__:")) {
+      try { src = await fetchDecoded(url); }
+      catch (e) { err(`fetch failed (page + direct): ${e.message}`); return; }
+    }
     await fsp.mkdir(DUMP_DIR, { recursive: true });
     const file = path.join(DUMP_DIR, (url.replace(/[^a-zA-Z0-9._-]/g, "_")).slice(-160) + ".js");
     await fsp.writeFile(file, src, "utf8");
@@ -610,7 +619,18 @@ async function cmdAst(rest) {
     if (result.sourceMapUrl) log(`\n  sourceMapUrl: ${result.sourceMapUrl}`);
     if (full && result.resolverErrors && result.resolverErrors.length) {
       log(`\n  resolverErrors: ${result.resolverErrors.length}`);
-      for (const e of result.resolverErrors.slice(0, 5)) log(`    ${e.context}: ${short(e.message, 120)}`);
+      // Show all of them with dedup by message prefix. An analyzer run on
+      // github emits ~60-80 errors from a handful of root causes; truncating
+      // to 5 hides the gaps the reviewer most needs to fix. Dedup after
+      // truncating the message so variations in trailing call/column info
+      // don't drown out the underlying identifier name.
+      const _seen = new Set();
+      for (const e of result.resolverErrors) {
+        const line = `    ${e.context}: ${short(e.message, 160)}`;
+        if (_seen.has(line)) continue;
+        _seen.add(line);
+        log(line);
+      }
     }
   });
 }
@@ -657,42 +677,41 @@ async function cmdAstRerun(args) {
 
     log("analysis kicked off; polling up to 5 min for results…");
     const deadline = Date.now() + 300000;
-    let lastAst = 0;
+    let lastCache = 0;
     let stableTicks = 0;
     while (Date.now() < deadline) {
       await sleep(3000);
-      let astCount = 0;
+      let cacheSize = 0;
       try {
-        astCount = await evalSW(browser, `
-          let n = 0;
-          for (const tab of state.tabs.values()) n += (tab._astResults || []).length;
-          return n;
-        `);
+        cacheSize = await evalSW(browser, "return globalStore.scriptCache.size;");
       } catch (_) { continue; }
-      if (astCount > 0) {
-        if (astCount === lastAst) { stableTicks++; if (stableTicks >= 2) break; }
+      if (cacheSize > 0) {
+        if (cacheSize === lastCache) { stableTicks++; if (stableTicks >= 2) break; }
         else stableTicks = 0;
-        lastAst = astCount;
+        lastCache = cacheSize;
       }
     }
+    // Pull results from globalStore.scriptCache — survives SW restarts
+    // and is the source of truth even when tab._astResults is empty
+    // (which happens when the analysis succeeded but produced no
+    // findings, or when the early-return branches ran).
     const scripts = await evalSW(browser, `
       const rows = [];
-      for (const [tid, tab] of state.tabs.entries()) {
-        for (const r of (tab._astResults || [])) {
-          rows.push({
-            tabId: tid,
-            url: r.sourceUrl || "(inline)",
-            secSinks: (r.securitySinks || []).length,
-            dangerous: (r.dangerousPatterns || []).length,
-            fetchSites: (r.fetchCallSites || []).length,
-          });
-        }
+      for (const [key, cached] of globalStore.scriptCache.entries()) {
+        const r = cached.result || {};
+        rows.push({
+          tabUrl: cached.tabUrl || "(unknown)",
+          secSinks: (r.securitySinks || []).length,
+          dangerous: (r.dangerousPatterns || []).length,
+          fetchSites: (r.fetchCallSites || []).length,
+          gaps: (r.resolverErrors || []).length,
+        });
       }
       return rows;
     `);
     if (!scripts.length) { log("no AST results after reload"); return; }
-    log(`${scripts.length} scripts analysed:`);
-    for (const r of scripts) log(`  sink=${r.secSinks} danger=${r.dangerous} fetch=${r.fetchSites}  ${labelScript(r.url)}`);
+    log(`${scripts.length} bundle(s) analysed:`);
+    for (const r of scripts) log(`  sink=${r.secSinks} danger=${r.dangerous} fetch=${r.fetchSites} gaps=${r.gaps}  ${labelScript(r.tabUrl)}`);
   });
 }
 
@@ -735,8 +754,10 @@ async function cmdFindings(args) {
 }
 
 async function cmdFinding(args) {
-  const arg = args[0];
-  if (!arg) throw new Error("usage: finding <id|index>");
+  const { positional, flags } = parseArgs(args);
+  const arg = positional[0];
+  const dimsOnly = flags["dims-only"] === true;
+  if (!arg) throw new Error("usage: finding <id|index> [--dims-only]");
   await withBrowser(async (browser) => {
     const rows = await evalSW(browser, `
       const out = [];
@@ -820,6 +841,15 @@ async function cmdFinding(args) {
       log(`  sourceType: ${f.sourceType || "?"}  source: ${short(f.source || "-", 200)}`);
       if (f.receiverType) log(`  receiverType: ${f.receiverType}  (sink object's tracked type — e.g. Element ⇒ real DOM sink, FormData/URL ⇒ not a DOM sink)`);
       log(`  sanitized: ${!!f.sanitized}`);
+    } else if (f.sourceType || f.source) {
+      // Dangerous-pattern findings (prototype-pollution, postmessage-*,
+      // regex-dynamic) now carry sourceType/source too, unlocking probe
+      // strategy selection. Show them so the reviewer sees where the
+      // taint came from without digging into taintPath[0].
+      log(`  sourceType: ${f.sourceType || "?"}  source: ${short(f.source || "-", 200)}`);
+    }
+    if (Array.isArray(f.sinkDims)) {
+      log(`  sinkDims: {${f.sinkDims.join(",") || "none"}}  (attacker-controlled dims surviving to the sink — {none} should have been suppressed by the all-dims-false gate)`);
     }
     // Latest exploit-probe verdict for this finding, if any. Closes the
     // loop between static analysis (finding as emitted) and dynamic
@@ -897,8 +927,26 @@ async function cmdFinding(args) {
         if (end < src.length) snippet = snippet + "…";
         return snippet;
       };
-      log(`  taintPath (${f.taintPath.length} hops):`);
-      f.taintPath.forEach((h, i) => {
+      // --dims-only condenses a 100+ hop chain to the hops that actually
+      // change what the attacker controls: the source, every hop with a
+      // `dimsBefore` (dim transition), and the last hop (the taint transfer
+      // to the sink). On a 110-hop react-router finding this drops the
+      // listing from ~110 lines to ~5 — enough for the reviewer to judge
+      // reachability without scrolling through binding/reassign noise.
+      let hopsToShow;
+      if (dimsOnly) {
+        const last = f.taintPath.length - 1;
+        const kept = new Set([0, last]);
+        f.taintPath.forEach((h, i) => {
+          if (h && h.dimsBefore) kept.add(i);
+        });
+        hopsToShow = Array.from(kept).sort((a, b) => a - b).map(i => ({ i, h: f.taintPath[i] }));
+        log(`  taintPath (${f.taintPath.length} hops, --dims-only → ${hopsToShow.length}):`);
+      } else {
+        hopsToShow = f.taintPath.map((h, i) => ({ i, h }));
+        log(`  taintPath (${f.taintPath.length} hops):`);
+      }
+      hopsToShow.forEach(({ i, h }) => {
         const atMin = h.at ? `min L${h.at.line}:C${h.at.column}` : "?";
         const o = h.at ? resolveOrig(h.at.line, h.at.column) : null;
         const atOrig = o ? `  →  ${o.source}:L${o.line}:C${o.column}${o.name ? " (" + o.name + ")" : ""}` : "";
@@ -1270,8 +1318,19 @@ function printAstProbeResult(r) {
     const col = f.location?.column ?? "?";
     log(`    fetch ${f.method || "GET"} ${f.url}  L${line}:C${col}`);
   }
+  // Dedup identical gap messages for display — the analyzer emits
+  // one per fetch call site, but on a bundle with many fetches
+  // resolving through the same underlying unresolvable leaf we'd print
+  // the same line 30+ times. Each unique gap (message) is shown once
+  // with its hit count so reviewers see density without the noise.
+  const gapCounts = new Map();
   for (const e of resErrs) {
-    log(`    [resolver-gap] ${short(e.message || "", 180)}`);
+    const msg = e.message || "";
+    gapCounts.set(msg, (gapCounts.get(msg) || 0) + 1);
+  }
+  for (const [msg, count] of gapCounts) {
+    const suffix = count > 1 ? ` (×${count})` : "";
+    log(`    [resolver-gap] ${short(msg, 180)}${suffix}`);
   }
   for (const s of sinks) {
     const line = s.location?.line ?? "?";
@@ -2144,6 +2203,40 @@ async function cmdAuditSinks(rest) {
     // minified line but is easy to add later.
     const scriptIndex = await evalSW(browser, `
       const out = [];
+      // Collect per-tab resolver errors first, keyed by the script URL
+      // they point at. A fetch( grep match that lines up with a
+      // resolverError is a KNOWN gap (identifier didn't trace) — not a
+      // missed classifier. Distinguishing these two saves the reviewer
+      // from opening 50 fetch( sites that are all resolver gaps.
+      const resolverErrorsByUrlLine = {};
+      // Resolver errors live on the cached combined-analysis result in
+      // globalStore.scriptCache — each entry has the analysis +
+      // scriptOffsets[] mapping combined-bundle line to per-script URL.
+      // Remap combined-bundle (line,col) to per-script (line,col) so the
+      // gap key matches securityFindings' per-script coordinates.
+      for (const [, cached] of globalStore.scriptCache.entries()) {
+        const analysis = cached.result;
+        const offsets = cached.scriptOffsets || [];
+        if (!analysis || !offsets.length) continue;
+        for (const e of (analysis.resolverErrors || [])) {
+          const loc = (e.message || "").match(/@L(\\d+):C(\\d+)/);
+          if (!loc) continue;
+          const combinedLine = Number(loc[1]);
+          // Walk offsets[] (sorted by lineStart) to find the script
+          // whose range spans combinedLine. Last script runs to EOF.
+          let found = null;
+          for (let oi = 0; oi < offsets.length; oi++) {
+            const cur = offsets[oi].lineStart;
+            const nxt = oi + 1 < offsets.length ? offsets[oi + 1].lineStart : Number.MAX_SAFE_INTEGER;
+            if (combinedLine >= cur && combinedLine < nxt) { found = offsets[oi]; break; }
+          }
+          if (!found) continue;
+          const perScriptLine = combinedLine - found.lineStart + 1;
+          const key = found.url + "|" + perScriptLine;
+          (resolverErrorsByUrlLine[key] = resolverErrorsByUrlLine[key] || []).push(e.message);
+        }
+      }
+      const out2 = [];
       for (const [url, v] of globalStore.securityFindings) {
         const byLine = {};
         const record = (s, category) => {
@@ -2154,15 +2247,19 @@ async function cmdAuditSinks(rest) {
         };
         for (const s of (v.securitySinks || [])) record(s, "sink");
         for (const s of (v.dangerousPatterns || [])) record(s, "dangerous");
-        out.push({ url, byLine, findingCount: (v.securitySinks||[]).length + (v.dangerousPatterns||[]).length });
+        out2.push({
+          url, byLine,
+          findingCount: (v.securitySinks||[]).length + (v.dangerousPatterns||[]).length,
+        });
       }
-      return out;
+      return { scripts: out2, resolverErrorsByUrlLine };
     `);
-    const filtered = substr ? scriptIndex.filter(s => s.url.toLowerCase().includes(substr.toLowerCase())) : scriptIndex;
+    const { scripts, resolverErrorsByUrlLine } = scriptIndex;
+    const filtered = substr ? scripts.filter(s => s.url.toLowerCase().includes(substr.toLowerCase())) : scripts;
     if (!filtered.length) { log("no AST-analyzed scripts match"); return; }
 
     const aggregate = Object.create(null);
-    for (const p of SINK_GREP_PATTERNS) aggregate[p.name] = { grep: 0, covered: 0, missed: 0, samples: [] };
+    for (const p of SINK_GREP_PATTERNS) aggregate[p.name] = { grep: 0, covered: 0, resolverGap: 0, missed: 0, samples: [] };
     let scriptsScanned = 0, scriptsSkipped = 0;
 
     for (const script of filtered) {
@@ -2191,12 +2288,57 @@ async function cmdAuditSinks(rest) {
               if (nextCh === lastCh) continue;
             }
           }
+          // `new Function(code)` with a string literal as the LAST argument
+          // is a compile-time constant — the AST's _processSecurityNewSink
+          // correctly ignores it since the literal can't carry attacker
+          // content. Most real-world occurrences are the `new Function("return this")()`
+          // globalThis polyfill. Skip to avoid polluting the unexplained count.
+          if (pat.name === "new Function(") {
+            let p = match.index + match[0].length;
+            // Walk arguments shallowly: find the last top-level string literal
+            // by scanning until the matching `)` at paren-depth 0.
+            let depth = 1;
+            let lastLiteralEnd = -1;
+            let lastLiteralStart = -1;
+            let strCh = null;
+            while (p < src.length && depth > 0) {
+              const c = src[p];
+              if (strCh) {
+                if (c === "\\") { p += 2; continue; }
+                if (c === strCh) {
+                  lastLiteralEnd = p;
+                  strCh = null;
+                }
+              } else if (c === '"' || c === "'" || c === "`") {
+                strCh = c;
+                lastLiteralStart = p;
+              } else if (c === "(") depth++;
+              else if (c === ")") depth--;
+              p++;
+            }
+            // Last arg is the function body; if we saw a string literal
+            // immediately before the closing `)` (only whitespace between),
+            // it's a literal-code Function. Skip.
+            if (lastLiteralEnd > 0 && depth === 0) {
+              let q = lastLiteralEnd + 1;
+              while (q < p && /\s/.test(src[q])) q++;
+              if (q === p - 1) continue; // literal was the last arg
+            }
+          }
           aggregate[pat.name].grep++;
           const pos = _offsetToLineCol(lineStarts, match.index);
           const findingsHere = script.byLine[pos.line] || [];
           const covered = findingsHere.some(tag => pat.astTags.includes(tag));
+          const resolverGapsHere = resolverErrorsByUrlLine[script.url + "|" + pos.line] || [];
           if (covered) {
             aggregate[pat.name].covered++;
+          } else if (NETWORK_EGRESS_GREP_NAMES.has(pat.name) && resolverGapsHere.length) {
+            // Network-egress grep (fetch/sendBeacon/xhr.open/importScripts) +
+            // resolverError on same line = known gap, not a missed
+            // classifier. Count separately so the reviewer sees how many
+            // "unexplained" matches are actually resolver work waiting
+            // to be done vs patterns the classifier never saw.
+            aggregate[pat.name].resolverGap++;
           } else {
             aggregate[pat.name].missed++;
             if (aggregate[pat.name].samples.length < showPerKind) {
@@ -2210,6 +2352,7 @@ async function cmdAuditSinks(rest) {
                 column: pos.column,
                 snippet,
                 findingsOnLine: findingsHere,
+                resolverGaps: resolverGapsHere.slice(0, 3),
               });
             }
           }
@@ -2218,12 +2361,55 @@ async function cmdAuditSinks(rest) {
     }
 
     log(`audit.sinks: scanned ${scriptsScanned} AST-analyzed scripts (${scriptsSkipped} skipped — data-url or fetch-failed)${substr ? "  [filter: " + substr + "]" : ""}`);
+
+    // Categorize resolver gaps by root-cause shape so a reviewer sees
+    // WHICH kinds of static analyses are missing, not just the raw count.
+    // Each gap's error message contains either a descriptor like
+    // "this.collectorUrl@L…", "e@L…", "new URL(…, …)@L…", etc. Group by
+    // the structural prefix. Categories intentionally overlap with the
+    // CLAUDE.md resolver targets (this-field chains, DOM reads, HOF dead
+    // ends) so progress on a specific category is directly measurable.
+    const gapCategories = {
+      "this.X (class field / getter)": 0,
+      "DOM attribute read (getAttribute/dataset/.action/.href)": 0,
+      "parameter dead-end (identifier)": 0,
+      "new URL(…) with unresolved input": 0,
+      "template literal (unresolved interpolation)": 0,
+      "OptionalMemberExpression / Conditional / ObjectExpression": 0,
+      "other": 0,
+    };
+    for (const key of Object.keys(resolverErrorsByUrlLine)) {
+      for (const msg of resolverErrorsByUrlLine[key]) {
+        const desc = (msg || "").replace(/^fetch URL resolver gap: /, "").replace(/@L.*$/, "");
+        if (/^this\./.test(desc)) gapCategories["this.X (class field / getter)"]++;
+        else if (/getAttribute\(\)|dataset\.|\.action\b|\.href\b|currentTarget/.test(desc)) {
+          gapCategories["DOM attribute read (getAttribute/dataset/.action/.href)"]++;
+        }
+        else if (/^new URL/.test(desc)) gapCategories["new URL(…) with unresolved input"]++;
+        else if (/^<template>/.test(desc)) gapCategories["template literal (unresolved interpolation)"]++;
+        else if (/^(OptionalMemberExpression|ConditionalExpression|ObjectExpression|UnaryExpression|<Optional)/.test(desc)) {
+          gapCategories["OptionalMemberExpression / Conditional / ObjectExpression"]++;
+        }
+        else if (/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(desc)) gapCategories["parameter dead-end (identifier)"]++;
+        else gapCategories["other"]++;
+      }
+    }
+    const totalGaps = Object.values(gapCategories).reduce((a, b) => a + b, 0);
+    if (totalGaps > 0) {
+      log(`\n  resolver-gap root-cause breakdown (total=${totalGaps}):`);
+      for (const [cat, n] of Object.entries(gapCategories)) {
+        if (n === 0) continue;
+        log(`    ${String(n).padStart(5)}  ${cat}`);
+      }
+    }
+
     log(`\n  per-pattern counts (each grep-match either matches an AST finding on the same line, or is unexplained — unexplained hits are candidates to read):`);
     const keys = Object.keys(aggregate).sort((a, b) => (aggregate[b].grep) - (aggregate[a].grep));
     for (const k of keys) {
       const a = aggregate[k];
       if (a.grep === 0) continue;
-      log(`    ${k.padEnd(25)} grep=${String(a.grep).padStart(5)}  ast-flagged=${String(a.covered).padStart(5)}  unexplained=${String(a.missed).padStart(5)}`);
+      const gapCol = a.resolverGap > 0 ? `  resolver-gap=${String(a.resolverGap).padStart(3)}` : "";
+      log(`    ${k.padEnd(25)} grep=${String(a.grep).padStart(5)}  ast-flagged=${String(a.covered).padStart(5)}  unexplained=${String(a.missed).padStart(5)}${gapCol}`);
     }
 
     log(`\n  unexplained grep-matches to read (up to ${showPerKind} per pattern). Each is EITHER a missed FP — go read the surrounding source to decide.`);
@@ -2235,9 +2421,79 @@ async function cmdAuditSinks(rest) {
       log(`\n  ${k}  (${a.missed} unexplained):`);
       for (const s of a.samples) {
         log(`    ${s.url}`);
-        log(`      L${s.line}:C${s.column}${s.findingsOnLine.length ? "   (other AST findings on this line: " + s.findingsOnLine.join(", ") + ")" : ""}`);
+        const annotations = [];
+        if (s.findingsOnLine.length) annotations.push("other AST findings on this line: " + s.findingsOnLine.join(", "));
+        if (s.resolverGaps && s.resolverGaps.length) annotations.push("resolver gap: " + s.resolverGaps[0].replace(/^fetch URL resolver gap: /, ""));
+        log(`      L${s.line}:C${s.column}${annotations.length ? "   (" + annotations.join("; ") + ")" : ""}`);
         log(`      …${s.snippet}…`);
       }
+    }
+  });
+}
+
+// audit.gaps — for each unique resolver gap, fetch the per-script source
+// and print the actual JS at the gap's root-cause line/column. Pillar 12:
+// every harness command gives ground-truth, not summaries. Without this,
+// closing a gap means writing a one-off node script every time — see
+// `testing/dump-gaps.js` for the original ad-hoc form. Reuses
+// scriptOffsets[] from globalStore.scriptCache to map combined-bundle
+// (line,col) back to per-script (url,line,col).
+async function cmdAuditGaps(rest) {
+  const { positional, flags } = parseArgs(rest);
+  const substr = positional[0] || null;
+  const limit = flags.limit != null ? Number(flags.limit) : 30;
+  const contextChars = flags.context != null ? Number(flags.context) : 250;
+  await withBrowser(async (browser) => {
+    const gapsRaw = await evalSW(browser, `
+      const out = [];
+      const seen = new Set();
+      for (const [k, cached] of globalStore.scriptCache.entries()) {
+        const a = cached.result;
+        const offsets = cached.scriptOffsets || [];
+        if (!a || !offsets.length) continue;
+        for (const e of (a.resolverErrors || [])) {
+          const m = (e.message || "").match(/@L(\\d+):C(\\d+)/);
+          const m2 = (e.message || "").match(/root cause @L(\\d+):C(\\d+)/);
+          if (!m) continue;
+          const cl = Number(m[1]), cc = Number(m[2]);
+          const rl = m2 ? Number(m2[1]) : cl;
+          const rc = m2 ? Number(m2[2]) : cc;
+          let found = null;
+          for (let oi = 0; oi < offsets.length; oi++) {
+            const cur = offsets[oi].lineStart;
+            const nxt = oi + 1 < offsets.length ? offsets[oi + 1].lineStart : Number.MAX_SAFE_INTEGER;
+            if (rl >= cur && rl < nxt) { found = { url: offsets[oi].url, lineStart: offsets[oi].lineStart }; break; }
+          }
+          if (!found) continue;
+          const perLine = rl - found.lineStart + 1;
+          const sigKey = found.url + "|" + perLine + "|" + rc;
+          if (seen.has(sigKey)) continue;
+          seen.add(sigKey);
+          out.push({ msg: e.message, scriptUrl: found.url, perScriptLine: perLine, perScriptCol: rc });
+        }
+      }
+      return out;
+    `);
+    const filtered = substr ? gapsRaw.filter(g => g.scriptUrl.toLowerCase().includes(substr.toLowerCase())) : gapsRaw;
+    if (!filtered.length) { log(substr ? `no gaps match "${substr}"` : "no resolver gaps"); return; }
+    log(`audit.gaps: ${filtered.length} unique gap${filtered.length === 1 ? "" : "s"}${substr ? ` matching "${substr}"` : ""} (showing ${Math.min(filtered.length, limit)}):`);
+    const fetched = new Map();
+    for (let i = 0; i < Math.min(filtered.length, limit); i++) {
+      const g = filtered[i];
+      let snippet;
+      try {
+        let src = fetched.get(g.scriptUrl);
+        if (!src) { src = await fetchDecoded(g.scriptUrl); fetched.set(g.scriptUrl, src); }
+        const lns = src.split("\n");
+        const lnText = lns[g.perScriptLine - 1] || "";
+        const start = Math.max(0, g.perScriptCol - 100);
+        const end = Math.min(lnText.length, g.perScriptCol + contextChars);
+        snippet = (start > 0 ? "..." : "") + lnText.slice(start, end) + (end < lnText.length ? "..." : "");
+      } catch (e) { snippet = `<fetch error: ${e.message}>`; }
+      log(`\n  ${g.msg}`);
+      log(`    url:    ${g.scriptUrl}`);
+      log(`    L${g.perScriptLine}:C${g.perScriptCol}`);
+      log(`    src:    ${snippet}`);
     }
   });
 }
@@ -3091,17 +3347,28 @@ const SINK_GREP_PATTERNS = [
   { name: "outerHTML=",         re: /\.outerHTML\s*=\s*[^=]/g,      astTags: ["xss:outerHTML"] },
   { name: "insertAdjacentHTML", re: /\.insertAdjacentHTML\s*\(/g,   astTags: ["xss:insertAdjacentHTML", "xss:.insertAdjacentHTML"] },
   { name: "document.write",     re: /\bdocument\.write(?:ln)?\s*\(/g, astTags: ["xss:document.write", "xss:document.writeln"] },
-  { name: "eval(",              re: /(?<![.\w])eval\s*\(/g,         astTags: ["code-exec:eval"] },
-  { name: "new Function(",      re: /\bnew\s+Function\s*\(/g,       astTags: ["code-exec:Function"] },
-  { name: "setTimeout-string",  re: /\bsetTimeout\s*\(\s*['"`]/g,   astTags: ["code-exec:setTimeout"] },
-  { name: "setInterval-string", re: /\bsetInterval\s*\(\s*['"`]/g,  astTags: ["code-exec:setInterval"] },
+  { name: "parseHTMLUnsafe",    re: /\bparseHTMLUnsafe\s*\(/g,      astTags: ["xss:parseHTMLUnsafe"] },
+  { name: "setHTMLUnsafe",      re: /\.setHTMLUnsafe\s*\(/g,        astTags: ["xss:setHTMLUnsafe"] },
+  { name: "eval(",              re: /(?<![.\w])eval\s*\(/g,         astTags: ["eval:eval"] },
+  { name: "new Function(",      re: /\bnew\s+Function\s*\(/g,       astTags: ["eval:new Function"] },
+  { name: "setTimeout-string",  re: /\bsetTimeout\s*\(\s*['"`]/g,   astTags: ["eval:setTimeout"] },
+  { name: "setInterval-string", re: /\bsetInterval\s*\(\s*['"`]/g,  astTags: ["eval:setInterval"] },
   { name: "location.href=",     re: /\blocation\.href\s*=\s*[^=]/g, astTags: ["redirect:href"] },
   { name: ".href= (element)",   re: /(?<!location)\.href\s*=\s*[^=]/g, astTags: ["redirect:href"] },
   { name: "location.assign(",   re: /\blocation\.assign\s*\(/g,     astTags: ["redirect:location.assign"] },
   { name: "location.replace(",  re: /\blocation\.replace\s*\(/g,    astTags: ["redirect:location.replace"] },
-  { name: "postMessage(",       re: /\.postMessage\s*\(/g,          astTags: ["postmessage-wildcard-target"] },
+  { name: "postMessage(",       re: /\.postMessage\s*\(/g,          astTags: ["postmessage-wildcard-target", "postmessage-dynamic-target"] },
   { name: "fetch(",             re: /(?<![.\w])fetch\s*\(/g,        astTags: ["request-forgery:fetch"] },
+  { name: "sendBeacon(",        re: /\.sendBeacon\s*\(/g,           astTags: ["request-forgery:navigator.sendBeacon"] },
+  { name: "xhr.open(",          re: /\.open\s*\(\s*['"`]/g,         astTags: ["request-forgery:XMLHttpRequest.open"] },
+  { name: "importScripts(",     re: /(?<![.\w])importScripts\s*\(/g, astTags: ["eval:importScripts"] },
 ];
+
+// Grep patterns whose first arg is a URL — a resolverError on the same
+// line means the URL identifier didn't trace, not that the classifier
+// missed the sink. audit.sinks counts these as resolver-gap rather than
+// unexplained so the reviewer can triage resolver work separately.
+const NETWORK_EGRESS_GREP_NAMES = new Set(["fetch(", "sendBeacon(", "xhr.open(", "importScripts("]);
 
 // Precompute newline offsets once per source so each match's line/col
 // lookup is O(log n). Caller owns the `starts` array and threads it
@@ -3287,10 +3554,29 @@ async function cmdSchemaVerify(rest) {
       return;
     }
 
+    // Substitute path parameters into the URL template BEFORE constructing
+    // the URL. m.path is stored as `posts/{path_param1}` after the path-
+    // param detection block templates it; without substitution the URL
+    // parser keeps `{path_param1}` literal (URL-encoded as %7B%7D), which
+    // sends a request to a path that doesn't exist on the server.
+    let pathStr = m.path || "";
+    const pathParamReport = [];
+    for (const [pName, pDef] of Object.entries(m.parameters || {})) {
+      if (pDef.location !== "path") continue;
+      const v = pDef._exampleValue;
+      const src = pDef._exampleValueSource || "none";
+      if (v !== undefined && v !== null && v !== "") {
+        const tpl = "{" + pName + "}";
+        if (pathStr.includes(tpl)) {
+          pathStr = pathStr.split(tpl).join(encodeURIComponent(String(v)));
+          pathParamReport.push({ name: pName, value: v, source: src });
+        }
+      }
+    }
     // Build URL + query params from parameter example values.
     let url;
-    try { url = new URL(_joinOriginPath(m.origin, m.path)); }
-    catch (e) { err(`  invalid origin+path: ${m.origin} + ${m.path} (${e.message})`); return; }
+    try { url = new URL(_joinOriginPath(m.origin, pathStr)); }
+    catch (e) { err(`  invalid origin+path: ${m.origin} + ${pathStr} (${e.message})`); return; }
     const paramReport = [];
     for (const [pName, pDef] of Object.entries(m.parameters || {})) {
       if (pDef.location !== "query") continue;
@@ -3337,22 +3623,31 @@ async function cmdSchemaVerify(rest) {
       credentials: "include",
     };
     if (body) fetchInit.body = body;
+    // Fetch the full body first, parse against it, and only truncate
+    // for DISPLAY. Truncating pre-parse cuts mid-object on responses
+    // larger than the display window and drops the schema diff — which
+    // is the whole point of schema.verify — so JSON parsing must see
+    // the complete bytes the server actually sent.
     const result = await page.evaluate(async (u, init) => {
       try {
         const r = await fetch(u, init);
         const txt = await r.text();
-        return { status: r.status, ok: r.ok, length: txt.length, text: txt.slice(0, 4000) };
+        let parsed = null, parseError = null;
+        try { parsed = JSON.parse(txt); } catch (e) { parseError = e.message; }
+        return {
+          status: r.status, ok: r.ok, length: txt.length,
+          text: txt.slice(0, 4000),
+          parsed, parseError,
+        };
       } catch (e) { return { error: e.message }; }
     }, url.href, fetchInit);
 
     if (result.error) { err(`  fetch error: ${result.error}`); return; }
-    log(`\n  RESPONSE: HTTP ${result.status}  ${result.length}B${result.length > 4000 ? " (truncated)" : ""}`);
+    log(`\n  RESPONSE: HTTP ${result.status}  ${result.length}B${result.length > 4000 ? " (display truncated to 4000B — schema parse saw full body)" : ""}`);
 
-    // Parse JSON response if possible, diff against learned schema
-    let respJson = null;
-    try { respJson = JSON.parse(result.text); } catch {}
-    if (respJson === null) {
-      log(`  (response is not JSON or was truncated mid-parse — body below)`);
+    const respJson = result.parsed;
+    if (respJson === null || respJson === undefined) {
+      log(`  (response is not JSON${result.parseError ? ": " + result.parseError : ""})`);
       log(`  body: ${short(result.text, 400)}`);
       return;
     }
@@ -4149,7 +4444,10 @@ harness commands
   ast.clear                    drop all AST results + security findings + script cache
 
   findings [substring]         security findings (sinks + dangerous patterns) — prefixed with stable ID
-  finding <id|index>           one finding + column-aware raw JS snippet (Brotli-aware Node fetch)
+  finding <id|index> [--dims-only]
+                               one finding + column-aware raw JS snippet (Brotli-aware Node fetch).
+                               --dims-only condenses a long taint path (100+ hops) to just the
+                               source, dim-transitions, and sink — for fast reachability review.
   finding.snapshot <name>      save current findings keyed by stable ID → testing/finding-snapshots/<name>.json
   finding.diff <name>          compare current findings to snapshot; shows added / removed / severity-flipped
   finding.map <id|index>       resolve minified line/col through //# sourceMappingURL; print original source
@@ -4213,6 +4511,11 @@ harness commands
                                service-wide schema readiness: per-method % fields with real
                                observations, required-field gaps, provenance histogram,
                                worst-methods drill-down.
+  audit.gaps [substr] [--limit N] [--context N]
+                               for each unique resolver gap, fetch the per-script source
+                               and print the actual JS at the gap's root-cause line/col.
+                               Maps combined-bundle (line,col) back to per-script (url,line,col)
+                               via the cached scriptOffsets[]. substr filters by script URL.
 
   popup                        open popup page, switch filter=all
   popup.select <reqId>         replay(reqId, tabId) — refreshes allTabsData first
@@ -4247,7 +4550,7 @@ const CMDS = {
   logs: cmdLogs, log: cmdLog,
   keys: cmdKeys, services: cmdServices, service: cmdService,
   method: cmdMethod, "schema.verify": cmdSchemaVerify, "schema.review": cmdSchemaReview,
-  "audit.sinks": cmdAuditSinks, "audit.schema": cmdAuditSchema,
+  "audit.sinks": cmdAuditSinks, "audit.schema": cmdAuditSchema, "audit.gaps": cmdAuditGaps,
   popup: cmdPopup,
   "popup.select": cmdPopupSelect,
   "popup.form": cmdPopupForm,

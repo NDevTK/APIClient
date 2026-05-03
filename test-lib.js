@@ -1812,6 +1812,53 @@ test("classifyResponseAsset — CSS with @font-face at head → asset", function
   return r.kind === "asset" && r.label === "text/css";
 });
 
+// Content-type-anchored asset classification for source formats that have
+// no unique structural prefix (JS, CSS-without-@-rule). Pillar 5 says
+// "magic-byte sniffing + content-type" — for JS/CSS the server's declared
+// MIME is the structural signal browsers themselves rely on.
+test("classifyResponseAsset — minified JS + application/javascript CT → asset", function() {
+  var js = '(function(){window.__x=42})();';
+  var r = classifyResponseAsset(js, false, { responseContentType: "application/javascript" });
+  return r.kind === "asset" && r.label === "application/javascript";
+});
+test("classifyResponseAsset — JS + ct with charset → asset (charset stripped)", function() {
+  var js = '"use strict";var x=1;';
+  var r = classifyResponseAsset(js, false, { responseContentType: "application/javascript; charset=utf-8" });
+  return r.kind === "asset";
+});
+test("classifyResponseAsset — JS + text/javascript CT → asset", function() {
+  var js = 'var x=1;';
+  var r = classifyResponseAsset(js, false, { responseContentType: "text/javascript" });
+  return r.kind === "asset" && r.label === "text/javascript";
+});
+test("classifyResponseAsset — plain CSS rules + text/css CT → asset", function() {
+  // Selector-only CSS (no @-rule) — the @-rule sniff misses this; the
+  // CT-anchored path should catch it.
+  var css = "body{color:#222}.x{margin:0}";
+  var r = classifyResponseAsset(css, false, { responseContentType: "text/css" });
+  return r.kind === "asset" && r.label === "text/css";
+});
+// Polarity: JSON-shape body even under a JS MIME stays api (JSONP/data
+// payload). The asset path is anchored to non-JSON-root start byte.
+test("classifyResponseAsset — JSON-shape body + application/javascript CT → api", function() {
+  var json = '{"id":42}';
+  var r = classifyResponseAsset(json, false, { responseContentType: "application/javascript" });
+  return r.kind === "api";
+});
+// Polarity: JS body without an asset CT does NOT get classified as asset
+// — the analyzer only trusts WELL-KNOWN asset MIMEs, not arbitrary CTs.
+test("classifyResponseAsset — JS body + text/plain CT → api (not in asset CT set)", function() {
+  var js = 'var x=1;';
+  var r = classifyResponseAsset(js, false, { responseContentType: "text/plain" });
+  return r.kind === "api";
+});
+// Polarity: missing content-type → api (no CT fallback fires).
+test("classifyResponseAsset — JS body + no CT → api (CT path requires declared MIME)", function() {
+  var js = 'var x=1;';
+  var r = classifyResponseAsset(js, false);
+  return r.kind === "api";
+});
+
 test("classifyResponseAsset — JSON starting with {\"@context\": ... is NOT CSS", function() {
   // Linked-data JSON often has "@context" — shouldn't match the CSS @-rule sniff.
   var r = classifyResponseAsset('{"@context":"https://schema.org","name":"API"}', false);

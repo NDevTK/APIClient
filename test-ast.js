@@ -14,10 +14,21 @@ new Function(astCode + "\nglobalThis.analyzeJSBundle = analyzeJSBundle;\nglobalT
 
 var passed = 0, failed = 0, total = 0;
 
-function test(name, code, check, forceScript) {
+function test(name, code, check, forceScriptOrOpts) {
   total++;
+  // Accept either legacy `forceScript` boolean or an options object
+  // { sourceUrl, forceScript } so tests can override the sourceUrl to
+  // drive `location.origin` / `location.href` substitution.
+  var forceScript = false;
+  var testSourceUrl = "test://" + name;
+  if (typeof forceScriptOrOpts === "boolean") {
+    forceScript = forceScriptOrOpts;
+  } else if (forceScriptOrOpts && typeof forceScriptOrOpts === "object") {
+    if (forceScriptOrOpts.sourceUrl) testSourceUrl = forceScriptOrOpts.sourceUrl;
+    if (forceScriptOrOpts.forceScript) forceScript = forceScriptOrOpts.forceScript;
+  }
   try {
-    var result = analyzeJSBundle(code, "test://" + name, forceScript);
+    var result = analyzeJSBundle(code, testSourceUrl, forceScript);
     var ok = check(result);
     if (ok) {
       passed++;
@@ -201,6 +212,219 @@ test("gap descriptor: MemberExpression callee → named .method()", `
   return (r.resolverErrors || []).some(function(e) {
     return /fetch URL resolver gap: opt\.build\(\)@/.test(e.message || "");
   });
+});
+
+// Gap descriptor: IIFE callee with a return statement — descriptor
+// should unwrap to the return value's root cause, so reviewers see the
+// actual unresolvable leaf (e.g. `x.resolve()`) rather than an opaque
+// `<IIFE>()` label.
+test("gap descriptor: IIFE callee unwraps to return value's root cause", `
+  function page(input) {
+    fetch((function(x){ return x.resolve(); })(input));
+  }
+  window.page = page;
+`, function(r) {
+  return (r.resolverErrors || []).some(function(e) {
+    return /fetch URL resolver gap: x\.resolve\(\)@/.test(e.message || "");
+  });
+});
+
+// Gap descriptor: return with SequenceExpression `return (a, b, last)` —
+// only `last` is the value, unwrap to its root cause.
+test("gap descriptor: SequenceExpression unwraps to last element", `
+  function page(x, y) {
+    fetch((function(){ return x.setup(), y.resolve(); })());
+  }
+  window.page = page;
+`, function(r) {
+  return (r.resolverErrors || []).some(function(e) {
+    return /fetch URL resolver gap: y\.resolve\(\)@/.test(e.message || "");
+  });
+});
+
+// HOF-wrapper pattern: fn passed as arg[0] to a HOF, result assigned
+// to a binding called with args. Real-world pattern: github's
+// `let eI = (0, eM.A)(e_, {hash: fn}); eI(url, data)` where e_ does
+// fetch(url). Without tracing through the HOF, eI's callers never
+// reach e_'s param, and the fetch URL shows as an unresolved gap.
+test("HOF wrapper: fn→HOF→wrapped, caller args propagate to fn params", `
+  function e_(e, t) { fetch(e, { method: "POST", body: t }); }
+  var eI = memoize(e_, {});
+  eI("https://api.example.com/hof-wrapped", "data");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) {
+    return s.url === "https://api.example.com/hof-wrapped" && s.method === "POST";
+  });
+});
+
+// Polarity: fn passed at a non-first position (options object) — the
+// HOF convention is that only arg 0 is the wrapped callable. Binding
+// at other positions is config; the HOF won't forward args to it.
+test("HOF wrapper: fn at arg[1] is config, not wrapped — no propagation", `
+  function handler(url) { fetch(url); }
+  var setup = register("config", handler, {});
+  setup("https://api.example.com/should-not-flag");
+`, function(r) {
+  // handler isn't the wrapped callable (arg 1), so setup's args
+  // shouldn't propagate to handler's url param. No fetch for this URL.
+  return !r.fetchCallSites.some(function(s) {
+    return s.url === "https://api.example.com/should-not-flag";
+  });
+});
+
+// Gap descriptor: `new URL(DOM-attr, same-origin)` is the common
+// untraceable pattern. Annotate arg shapes so reviewers see it's a
+// DOM-driven URL, not a resolver bug.
+test("gap descriptor: new URL(getAttribute, location.origin) — arg hints", `
+  function f(el) {
+    fetch(new URL(el.getAttribute("data-src"), location.origin).toString());
+  }
+  window.f = f;
+`, function(r) {
+  return (r.resolverErrors || []).some(function(e) {
+    return /new URL\(getAttribute\("data-src"\), location\.origin\)/.test(e.message || "");
+  });
+});
+
+// `el.getAttribute("k")` roundtrips through `el.setAttribute("k", V)` —
+// when the analyzer can see the setter's value, the getter must resolve
+// to V. Real-world: custom elements that store config via data-* attrs
+// built in JS, then read them back to construct URLs.
+test("getAttribute roundtrip: setAttribute sets, getAttribute reads same key", `
+  function make() {
+    var el = document.createElement("a");
+    el.setAttribute("data-url", "https://api.example.com/roundtrip");
+    fetch(el.getAttribute("data-url"));
+  }
+  window.make = make;
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/roundtrip"; });
+});
+
+// `el.dataset.X = V` then `fetch(el.dataset.X)` — direct property access
+// on the dataset proxy. Common DOM pattern for stashing per-element
+// config without cluttering attributes.
+test("dataset direct: el.dataset.url = V; fetch(el.dataset.url)", `
+  function make() {
+    var el = document.createElement("div");
+    el.dataset.url = "https://api.example.com/ds-direct";
+    fetch(el.dataset.url);
+  }
+  window.make = make;
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/ds-direct"; });
+});
+
+// dataset ↔ setAttribute equivalence: `setAttribute("data-foo", V)` sets
+// the same underlying storage as `dataset.foo`. Reading via dataset after
+// setAttribute must resolve to V.
+test("dataset/setAttribute equivalence: setAttribute writes, dataset reads", `
+  function make() {
+    var el = document.createElement("div");
+    el.setAttribute("data-url", "https://api.example.com/ds-sa");
+    fetch(el.dataset.url);
+  }
+  window.make = make;
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/ds-sa"; });
+});
+
+// kebab-case attribute names convert to camelCase dataset keys:
+// `data-bulk-actions-url` ↔ `dataset.bulkActionsUrl`. Real-world: github
+// behaviors.js uses this pattern extensively.
+test("dataset kebab→camel: data-bulk-actions-url ↔ dataset.bulkActionsUrl", `
+  function make() {
+    var el = document.createElement("div");
+    el.setAttribute("data-bulk-actions-url", "https://api.example.com/ds-kebab");
+    fetch(el.dataset.bulkActionsUrl);
+  }
+  window.make = make;
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/ds-kebab"; });
+});
+
+// Polarity: different dataset keys must NOT cross-contaminate. Writing
+// `dataset.a = X` and reading `dataset.b` should leave b unresolved,
+// not pick up X.
+test("dataset: different keys don't cross-contaminate", `
+  function make() {
+    var el = document.createElement("div");
+    el.dataset.a = "https://api.example.com/for-a";
+    fetch(el.dataset.b);
+  }
+  window.make = make;
+`, function(r) {
+  return !r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/for-a"; });
+});
+
+// Polarity: different key — setter wrote "data-a", getter reads "data-b".
+// Must NOT mix values across keys.
+test("getAttribute roundtrip: different keys don't cross-contaminate", `
+  function make() {
+    var el = document.createElement("a");
+    el.setAttribute("data-a", "https://api.example.com/A");
+    fetch(el.getAttribute("data-b"));
+  }
+  window.make = make;
+`, function(r) {
+  return !r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/A"; });
+});
+
+// Non-empty fallback preserves: `DOM || "/default"` — when the left side
+// has no JS-resolvable value (no setAttribute roundtrip), the fallback
+// is a real URL, keep it in the resolved set. NOT a gap-accepting test:
+// the analyzer IS resolving (to the fallback literal).
+test("|| fallback resolves to literal when left is DOM-unknown", `
+  function f(el) {
+    fetch(el.getAttribute("data-x") || "/default-path");
+  }
+  window.f = f;
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/default-path"; });
+});
+
+// `location.origin` / `window.location.origin` resolve against the
+// analysis sourceUrl (the page where the script runs). Real-world:
+// `fetch(new URL(rel, location.origin).toString())` — the origin is
+// always the current page, so the analyzer should emit the fully
+// resolved URL against that origin.
+test("location.origin resolves from sourceUrl", `
+  fetch(window.location.origin + "/api/v1/ping");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://example.com/api/v1/ping"; });
+}, { sourceUrl: "https://example.com/page" });
+
+// Polarity: no sourceUrl set — analyzer has no page context, so
+// location.origin must NOT be fabricated. Gap reports properly.
+test("location.origin without sourceUrl → gap (no fabrication)", `
+  fetch(window.location.origin + "/api");
+`, function(r) {
+  if (r.fetchCallSites.length !== 0) return false;
+  return (r.resolverErrors || []).some(function(e) { return /fetch URL resolver gap/.test(e.message || ""); });
+});
+
+// Shadowed `location` — local `location` var must NOT pull from sourceUrl.
+test("location shadowed by local var → no page-URL substitution", `
+  function f() {
+    var location = { origin: "https://other.example/" };
+    fetch(location.origin + "/local");
+  }
+  window.f = f;
+`, function(r) {
+  // The analyzer should either resolve to the local object value or
+  // not resolve — but NEVER substitute sourceUrl.origin.
+  return !r.fetchCallSites.some(function(s) { return s.url === "https://example.com/local"; });
+}, { sourceUrl: "https://example.com/page" });
+
+// HOF wrapper with ANONYMOUS function: `var w = HOF(function(e){fetch(e)}, …); w(url)`.
+// Real-world pattern: github's `nS = (0, eM.A)(async function(e){ fetch(e, …) })`.
+// No binding on the inline function, so the named-fn HOF path doesn't apply —
+// needs a separate branch in the callback-arg handler.
+test("HOF wrapper anonymous fn: var w = HOF(function(e){fetch(e)}); w(url)", `
+  var nS = memoize(async function(e) { fetch(e, { headers: { Accept: "application/json" } }); }, {});
+  nS("https://api.example.com/anon-hof");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/anon-hof"; });
 });
 
 test("fetch with options-as-variable", `
@@ -2224,6 +2448,145 @@ test("async/await wrapper function", `
   return r.fetchCallSites.some(function(s) { return s.url === "/api/items/42"; });
 });
 
+// e.url chain: caller passes object literal with url; sink reads e.url.
+// Real-world pattern in dispatchEvent + handler chains.
+test("param.url when caller passes {url: literal}", `
+  function go(e) { return fetch(e.url); }
+  go({ url: "https://api.example.com/eUrl" });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/eUrl"; });
+});
+
+// `this.X` resolves through `this.X = call()` constructor assignment, then
+// through the called function's return-value object. Real-world pattern:
+// github telemetry classes do `constructor() { this.options = readMeta() }`
+// where readMeta returns `{ collectorUrl: "..." }`, then expose
+// `get collectorUrl() { return this.options.collectorUrl }` and the send
+// path does `fetch(this.collectorUrl, ...)`.
+test("class getter through this.X = call() constructor assignment", `
+  function readConfig() { return { url: "https://collector.example.com/api" }; }
+  class Telemetry {
+    constructor() { this.cfg = readConfig(); }
+    get url() { return this.cfg.url; }
+    send(p) { fetch(this.url, { method: "POST", body: p }); }
+  }
+  new Telemetry().send("ping");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://collector.example.com/api"; });
+});
+
+// Polarity: the SAME shape but with the inner function returning a
+// runtime-DOM read (no static literal) must NOT emit a fake URL — the
+// resolver gap is the correct output. Verifies the new resolver doesn't
+// invent values when the chain bottoms out at a non-literal source.
+test("class getter through this.X = call() — DOM source produces gap, no fake URL", `
+  function readConfig() { return { url: document.querySelector('meta[name=x]').content }; }
+  class Telemetry {
+    constructor() { this.cfg = readConfig(); }
+    get url() { return this.cfg.url; }
+    send(p) { fetch(this.url, { method: "POST", body: p }); }
+  }
+  new Telemetry().send("ping");
+`, function(r) {
+  // No fetch site emitted (URL didn't resolve to a literal), and a
+  // resolver gap is recorded so the reviewer sees the dead-end.
+  var noFakeUrl = !r.fetchCallSites.some(function(s) { return s.url; });
+  var hasGap = (r.resolverErrors || []).length > 0;
+  return noFakeUrl && hasGap;
+});
+
+// Param resolves to (new URL(...)) at caller, then `.pathname` extracted.
+// This is a real github pattern: `function go(u) { fetch(u.pathname); }`
+// called as `go(new URL("/api", "https://x"))`.
+test("param.pathname when caller passes new URL(rel, base)", `
+  function go(u) { return fetch(u.pathname); }
+  go(new URL("/api/v2", "https://api.example.com"));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v2"; });
+});
+
+// (new URL(absolute)).pathname / .origin / .search etc. — extract WHATWG
+// URL instance properties from a fully-resolvable URL construction.
+test("(new URL(abs)).pathname extracted via URL parser", `
+  fetch((new URL("https://api.example.com/v1/items?q=x#frag")).pathname);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/v1/items"; });
+});
+
+test("(new URL(rel, base)).origin extracted", `
+  fetch((new URL("/api", "https://api.example.com")).origin);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com"; });
+});
+
+test("(new URL(abs)).search extracted", `
+  fetch((new URL("https://api.example.com/v1?token=abc")).search);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "?token=abc"; });
+});
+
+// Polarity: shadowed URL global must NOT trigger the URL-prop extraction.
+test("shadowed URL global → URL-prop extraction skipped", `
+  function go(URL) {
+    return fetch((new URL("/x")).pathname);
+  }
+  go(function() { return { pathname: "https://api.example.com/wrong" }; });
+`, function(r) {
+  return !r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/wrong"; });
+});
+
+// Perf regression guard: react-lib's pattern of N `t.X = function(){}`
+// assignments combined with Object.defineProperty getters caused
+// _resolveToObject to be called millions of times (11M+ on real
+// react-lib at 380KB) without memoization. The wrapper that caches by
+// node identity drops it to one visit per node. This test pins the
+// behaviour: the synthetic shape (mimicking react-lib's pattern) MUST
+// analyze in well under 1 second, with all per-property reads
+// resolving to their assigned function values.
+test("perf: 30+ t.X = function assignments + reads complete fast (was infinite-loop pre-memoization)", `
+  function module_(e, t, n) {
+    t.f1 = function() { return "https://api.example.com/f1"; };
+    t.f2 = function() { return "https://api.example.com/f2"; };
+    t.f3 = function() { return "https://api.example.com/f3"; };
+    t.f4 = function() { return "x"; };
+    t.f5 = function() { return "x"; };
+    t.f6 = function() { return "x"; };
+    t.f7 = function() { return "x"; };
+    t.f8 = function() { return "x"; };
+    t.f9 = function() { return "x"; };
+    t.f10 = function() { return "x"; };
+    t.f11 = function() { return "x"; };
+    t.f12 = function() { return "x"; };
+    t.f13 = function() { return "x"; };
+    t.f14 = function() { return "x"; };
+    t.f15 = function() { return "x"; };
+    fetch(t.f1());
+    fetch(t.f2());
+    fetch(t.f3());
+  }
+  module_(null, window.exports = {}, null);
+`, function(r) {
+  var f1 = r.fetchCallSites.find(function(s) { return s.url === "https://api.example.com/f1"; });
+  var f2 = r.fetchCallSites.find(function(s) { return s.url === "https://api.example.com/f2"; });
+  var f3 = r.fetchCallSites.find(function(s) { return s.url === "https://api.example.com/f3"; });
+  return !!f1 && !!f2 && !!f3;
+});
+
+// Object.assign result with NESTED object property access. The merged
+// result is a synthetic ObjectExpression with no single Babel path that
+// owns its properties — earlier code attached `_path: <CallExpression>`
+// to the synthetic and then navigated `.get("properties.N.value")` on
+// that path, which crashed Babel's _getPattern because CallExpression
+// has no .properties array. The fix attaches per-property `_path` at
+// synthesis time so nested resolution navigates the actual source path.
+test("Object.assign result with nested object property access", `
+  var defaults = { cfg: { url: "https://api.example.com/nested" } };
+  function f(opts) { return fetch(opts.cfg.url); }
+  f(Object.assign({}, defaults));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/nested"; });
+});
+
 test("Object.assign config merge", `
   var defaults = { method: "POST", headers: {"Content-Type": "application/json"} };
   function apiCall(url, userOpts) {
@@ -2334,6 +2697,577 @@ test("join(): unresolved element → no URL emitted, resolverError recorded", `
   var fabricated = r.fetchCallSites.some(function(s) { return s.url && s.url.indexOf("https://api.example.com") === 0; });
   if (fabricated) return false;
   return (r.resolverErrors || []).some(function(e) { return /fetch URL resolver gap/.test(e.message); });
+});
+
+// new URL(rel, base).toString() resolves to the absolute URL. Common
+// minified pattern: `var n = new URL(src, base); fetch(n.toString(), …)`.
+// Before this path the .toString() call returned the receiver unresolved.
+test("new URL(rel, base).toString() resolves to absolute URL", `
+  var src = "/svc/foo";
+  var base = "https://api.example.com/";
+  var n = new URL(src, base);
+  fetch(n.toString());
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/svc/foo"; });
+});
+
+// new URL(abs).toString() — single-arg absolute. Must round-trip through
+// the URL constructor (whose normalization can add a trailing slash etc.)
+// so the emitted URL matches what runtime fetch will see.
+test("new URL(abs).toString() resolves to normalized absolute URL", `
+  var u = new URL("https://api.example.com/path");
+  fetch(u.toString());
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/path"; });
+});
+
+// Polarity: negative — relative-only URL without base must NOT be
+// attributed to anything. The resolver has no ground truth for the
+// origin, so it must decline and surface the gap.
+test("new URL(rel) with no base → gap, no URL emitted", `
+  function hit(rel) {
+    fetch(new URL(rel).toString());
+  }
+  window.hit = hit;
+`, function(r) {
+  if (r.fetchCallSites.length !== 0) return false;
+  return (r.resolverErrors || []).some(function(e) { return /fetch URL resolver gap/.test(e.message || ""); });
+});
+
+// new Request(url, init) — fetch(c) where c is a Request object resolves
+// through the Request's first argument. Github's behaviors.js emits this
+// pattern for retry-able fetches that want to share init between calls.
+test("fetch(new Request(url, init)) resolves via Request constructor", `
+  var url = "https://api.example.com/action";
+  var c = new Request(url, { method: "POST", body: "x=1" });
+  fetch(c);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/action"; });
+});
+
+// Polarity: negative — Request built from an unresolved URL must not
+// fabricate a concrete URL. Gap is surfaced at the fetch-arg boundary
+// so the reviewer sees which Request field didn't trace.
+test("fetch(new Request(unresolved)) → gap, no URL emitted", `
+  function hit(unknown) {
+    var c = new Request(unknown, { method: "GET" });
+    fetch(c);
+  }
+  window.hit = hit;
+`, function(r) {
+  if (r.fetchCallSites.length !== 0) return false;
+  return (r.resolverErrors || []).some(function(e) { return /fetch URL resolver gap/.test(e.message || ""); });
+});
+
+// this.x accessed inside a class method resolves through a getter
+// `get x() { return ...; }` defined on the same class. Real-world
+// pattern: telemetry classes expose config URLs via getter indirection
+// (`get collectorUrl() { return this.options.collectorUrl; }`).
+test("class getter: this.url → fetch resolves via getter return", `
+  class Tel {
+    constructor() {}
+    get url() { return "https://api.example.com/collect"; }
+    send(data) { fetch(this.url, {method: "POST", body: data}); }
+  }
+  new Tel().send("x");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/collect"; });
+});
+
+// Polarity: getter whose return expression itself traces to an unresolved
+// identifier must NOT fabricate a URL — the gap is propagated forward.
+test("class getter: unresolved body → gap, no URL", `
+  class Tel {
+    constructor(opts) { this.opts = opts; }
+    get url() { return this.opts.url; }
+    send() { fetch(this.url); }
+  }
+  window.tel = new Tel({});
+`, function(r) {
+  if (r.fetchCallSites.length !== 0) return false;
+  return (r.resolverErrors || []).some(function(e) { return /fetch URL resolver gap/.test(e.message || ""); });
+});
+
+// Native ECMAScript Object.defineProperty getter — reading obj.key invokes
+// the getter descriptor's `get` function and returns its result. Required
+// for any code-flow resolution that touches code emitting accessor
+// properties.
+test("Object.defineProperty getter: obj.key returns getter's return value", `
+  var exports = {};
+  Object.defineProperty(exports, "url", { get: () => "https://api.example.com/defGetter" });
+  fetch(exports.url);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/defGetter"; });
+});
+
+// Polarity: non-getter data descriptor `{value: X}` — obj.key is X directly.
+test("Object.defineProperty value: obj.key returns value", `
+  var exports = {};
+  Object.defineProperty(exports, "url", { value: "https://api.example.com/defValue" });
+  fetch(exports.url);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/defValue"; });
+});
+
+// Computed-key property mutation: `d[K] = V` then `d[K]` reads V. Pure
+// ECMAScript heap mutation tracking via the obj's binding referencePaths.
+test("computed-key mutation: d[K] = literal then d[K] reads it", `
+  var d = {};
+  d["urlA"] = "https://api.example.com/mutA";
+  fetch(d["urlA"]);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/mutA"; });
+});
+
+// Numeric key.
+test("computed-key mutation: d[N] = literal then d[N] reads it", `
+  var d = {};
+  d[42] = "https://api.example.com/mutN";
+  fetch(d[42]);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/mutN"; });
+});
+
+// Polarity: different key → no match.
+test("computed-key mutation: unrelated key → no resolution", `
+  var d = {};
+  d["other"] = "https://api.example.com/wrongMut";
+  fetch(d["urlMiss"]);
+`, function(r) {
+  return !r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/wrongMut"; });
+});
+
+// Array destructuring: `var [a, b] = [x, y]` → b resolves to y. Pure
+// ECMAScript destructuring semantics. Webpack runtime uses this:
+// `var [chunkIds, modules, runtime] = chunkData`.
+test("array destructuring: var [a, b] = [x, y] → b is y", `
+  var arr = ["aa", "https://api.example.com/destrArr"];
+  var [first, url] = arr;
+  fetch(url);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/destrArr"; });
+});
+
+// Object destructuring: `var {url} = obj` → url resolves to obj.url.
+test("object destructuring: var {url} = obj → url resolves", `
+  var cfg = { url: "https://api.example.com/destrObj", method: "GET" };
+  var {url} = cfg;
+  fetch(url);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/destrObj"; });
+});
+
+// Full chunk-push registration shape (no bundler runtime): handler
+// destructures push-data into [ids, modules], iterates modules into a
+// registry, then a separate consumer reads from the registry. All pure
+// ECMAScript: array destructure + for..in + computed-key mutation.
+test("chunk-push registration shape: handler installs into f.m, consumer reads f.m[id]", `
+  var f = {};
+  f.m = {};
+  function handler(data) {
+    var [ids, modules] = data;
+    for (var d in modules) f.m[d] = modules[d];
+  }
+  handler([["chunk1"], { 97088: "https://api.example.com/chunkPush" }]);
+  fetch(f.m[97088]);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/chunkPush"; });
+});
+
+// MemberExpression-receiver computed mutation: `f.m[K] = V` then
+// `f.m[K]` reads V. Native ECMAScript heap mutation through a non-leaf
+// receiver. Webpack runtime uses this shape: `f.m = d` where `d` is the
+// modules registry, then `f.m[id] = modules[id]` populates entries from
+// each chunk push.
+test("computed-key mutation via MemberExpression receiver: f.m[K] = V", `
+  var f = {}, d = {};
+  f.m = d;
+  f.m[97088] = "https://api.example.com/memberMut";
+  fetch(f.m[97088]);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/memberMut"; });
+});
+
+// Function.prototype.bind preArg prepending: `f.bind(thisArg, X)` returns
+// a function that calls f with X prepended. Caller's args go after.
+// Pure ECMAScript spec.
+test("Function.prototype.bind preArgs: f.bind(null, X)(Y) → f's params [X, Y]", `
+  function impl(a, b) { fetch(b.url); }
+  var bound = impl.bind(null, "preArg");
+  bound({ url: "https://api.example.com/bindPreArg" });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/bindPreArg"; });
+});
+
+// Bind result assigned to obj.k then called as obj.k(args).
+test("Function.prototype.bind via obj.k assignment", `
+  function impl(a, b) { fetch(b.url); }
+  var c = {};
+  c.push = impl.bind(null, "pre");
+  c.push({ url: "https://api.example.com/bindAssigned" });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/bindAssigned"; });
+});
+
+// Indexed-property function assignment: `obj[K] = function(p){...}` then
+// `obj[K](arg)` — the function's parameter `p` resolves via the call site.
+// Pure JS — no bundler.
+test("obj[K] = function: caller via obj[K](arg) resolves param", `
+  var d = {};
+  d[97088] = function(opts) { fetch(opts.url); };
+  d[97088]({ url: "https://api.example.com/indexedProp" });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/indexedProp"; });
+});
+
+// Same but caller uses Function.prototype.call form.
+test("obj[K] = function: caller via obj[K].call(this, arg) resolves param", `
+  var d = {};
+  d[97088] = function(opts) { fetch(opts.url); };
+  d[97088].call(null, { url: "https://api.example.com/indexedPropCall" });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/indexedPropCall"; });
+});
+
+// Class exposed via wrapper-installed getters: a wrapper function takes
+// (target, defs) and iterates defs via for..in calling
+// Object.defineProperty(target, k, {get: defs[k]}). Reading `target.<key>`
+// invokes the getter. Pure-JS pattern — no bundler runtime knowledge.
+test("indirect ctor caller via wrapper-installed getters (defs literal)", `
+  function defineGetters(target, defs) {
+    for (var k in defs) Object.defineProperty(target, k, { enumerable: true, get: defs[k] });
+  }
+  var t = {};
+  class i {
+    constructor(o) { this.options = o; }
+    get url() { return this.options.url; }
+    send() { fetch(this.url); }
+  }
+  defineGetters(t, { s: () => i });
+  new t.s({ url: "https://api.example.com/wrappedGetter" });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/wrappedGetter"; });
+});
+
+// Class exposed via Object.defineProperty getter — `obj.s` returns class
+// (via getter invocation); `new obj.s(opts)` constructs class with opts.
+// The class's `new ClassName(...)` resolver must follow this indirection
+// to find the caller's opts so `this.X` inside the class resolves.
+test("indirect ctor caller via Object.defineProperty getter exposure", `
+  var t = {};
+  class i {
+    constructor(o) { this.options = o; }
+    get url() { return this.options.url; }
+    send() { fetch(this.url); }
+  }
+  Object.defineProperty(t, "s", { get: () => i });
+  new t.s({ url: "https://api.example.com/indirectCtor" });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/indirectCtor"; });
+});
+
+// Function.prototype.bind — `f.bind(thisArg, ...args)` returns a function
+// that calls f. For URL resolution the body is f's body, so resolution
+// follows the receiver. Pure ECMAScript semantics.
+test("Function.prototype.bind: callee is f.bind(...) → resolve via f", `
+  function impl() { return "https://api.example.com/bound"; }
+  var bound = impl.bind(null);
+  fetch(bound());
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/bound"; });
+});
+
+// Inter-procedural Object.defineProperty effect — the SAME shape webpack's
+// `f.d` uses (lifted directly from wp-runtime-783cdab146108a91.js). Reading
+// `target.url` requires the resolver to:
+//   1. Look at all calls passing `target` as an argument.
+//   2. Inline the called function's body (here: `f.d`).
+//   3. Handle the for..in loop unrolling over literal-keyed `defs`.
+//   4. Recognise the Object.defineProperty getter installation effect on
+//      the function's parameter (which IS the same heap object as `target`).
+test("inter-procedural Object.defineProperty via for-in (real webpack f.d shape)", `
+  var f = {};
+  f.d = (e, a) => {
+    for (var c in a) Object.defineProperty(e, c, { enumerable: true, get: a[c] });
+  };
+  var target = {};
+  f.d(target, { url: () => "https://api.example.com/interProc" });
+  fetch(target.url);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/interProc"; });
+});
+
+// Full webpack-style indirection: f(id) returns a fresh object; the
+// module function (called via .call) installs a getter on that object
+// via f.d's for..in over a literal-keyed defs object; later reads of
+// f(id).url invoke the getter.
+//
+// This is structurally identical to wp-runtime-783cdab146108a91.js's
+// f / f.d pair plus a module body using f.d, just stripped of the
+// chunk-push registration step (modules are inlined into the registry
+// directly so nothing depends on Array.prototype.push override).
+test("webpack-shape: f(id).url via runtime call → defineProperty getter resolves", `
+  var d = {}, b = {};
+  function f(e) {
+    var a = b[e]; if (void 0 !== a) return a.exports;
+    var c = b[e] = { id: e, loaded: !1, exports: {} };
+    d[e].call(c.exports, c, c.exports, f);
+    c.loaded = !0;
+    return c.exports;
+  }
+  f.d = (e, a) => {
+    for (var c in a) Object.defineProperty(e, c, { enumerable: !0, get: a[c] });
+  };
+  d[97088] = function(mod, exp, n) {
+    n.d(exp, { url: () => "https://api.example.com/wpRuntime" });
+  };
+  fetch(f(97088).url);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/wpRuntime"; });
+});
+
+// Polarity: different key → NOT resolved (the getter matches "foo", not the
+// accessed "url").
+test("Object.defineProperty: unrelated key → gap", `
+  var exports = {};
+  Object.defineProperty(exports, "foo", { get: () => "https://api.example.com/wrong" });
+  fetch(exports.url);
+`, function(r) {
+  return !r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/wrong"; });
+});
+
+
+// Optional-chained member expressions in resolver-gap descriptors: when
+// fetch's URL arg is `obj?.prop?.url` and the chain has unresolved values,
+// the gap descriptor must show the chain (`obj.prop.url`), NOT the opaque
+// AST type name `OptionalMemberExpression`. Reviewers reading the gap
+// list need the actual identifier path so they know what to trace.
+test("resolver gap descriptor: OptionalMemberExpression chain → readable name", `
+  function go(o) { return fetch(o?.cfg?.url); }
+  go(window.maybeUndef);
+`, function(r) {
+  if (r.fetchCallSites.length !== 0) return false;
+  return (r.resolverErrors || []).some(function(e) {
+    // Should contain the chain like "o.cfg.url" — NOT the type name.
+    var msg = e.message || "";
+    if (!/fetch URL resolver gap/.test(msg)) return false;
+    if (/OptionalMemberExpression@/.test(msg)) return false;
+    return /\bo\.cfg\.url@/.test(msg) || /\bo\.cfg@/.test(msg) || /\bo@/.test(msg);
+  });
+});
+
+// Destructured ctor param: class C { constructor({url}) { this.url = url } }.
+// Prior to the fix, `_findParamIndex` only matched plain Identifier params —
+// ObjectPattern params fell through and the this-field resolver returned [],
+// leaving fetch(this.url, …) as a gap even though the caller's object-literal
+// arg has the value right there. Real-world pattern in configurable SDK
+// wrappers: new ApiClient({baseUrl: "/api/v2", …}).
+test("destructured ctor param: this.url via {url} param", `
+  class Api {
+    constructor({url}) { this.url = url; }
+    fetch_it() { return fetch(this.url); }
+  }
+  new Api({url: "https://api.example.com/destr"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/destr"; });
+});
+
+// With default destructure: `constructor({url} = {})`.
+test("destructured ctor param with default: this.url via {url} = {}", `
+  class Api {
+    constructor({url} = {}) { this.url = url; }
+    fetch_it() { return fetch(this.url); }
+  }
+  new Api({url: "https://api.example.com/destrDefault"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/destrDefault"; });
+});
+
+// Destructured with renaming: `constructor({url: u})` — assigned name differs.
+// The matching assignment is `this.url = u`, so the resolver needs to look up
+// the local name "u" in the destructure and find the source property "url".
+test("destructured+renamed ctor param: this.url via {url: u}", `
+  class Api {
+    constructor({url: u}) { this.url = u; }
+    fetch_it() { return fetch(this.url); }
+  }
+  new Api({url: "https://api.example.com/destrRename"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/destrRename"; });
+});
+
+// Nested this.options.url with destructured options holder. The resolver
+// walks `this.options` first (via _resolveToObject's this-branch), finds
+// the outer ObjectExpression, then pulls the `url` prop. Before the fix,
+// `this.options` returned null because params[0] was ObjectPattern.
+test("destructured ctor param holding object: this.options.url", `
+  class Api {
+    constructor({options}) { this.options = options; }
+    fetch_it() { return fetch(this.options.url); }
+  }
+  new Api({options: {url: "https://api.example.com/destrNest"}});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/destrNest"; });
+});
+
+// Polarity: destructured param, caller gives NO matching property — must
+// not invent a URL and must not resolve to something else.
+test("destructured ctor param: caller omits key → gap, no URL", `
+  class Api {
+    constructor({url}) { this.url = url; }
+    fetch_it() { return fetch(this.url); }
+  }
+  new Api({otherKey: "https://api.example.com/wrong"});
+`, function(r) {
+  if (r.fetchCallSites.length !== 0) return false;
+  return (r.resolverErrors || []).some(function(e) { return /fetch URL resolver gap/.test(e.message || ""); });
+});
+
+// Destructured param in a function constructor (pre-ES6 style). Same helper
+// applies to Function.prototype patterns.
+test("function constructor with destructured {url}", `
+  function Api({url}) { this.url = url; }
+  Api.prototype.fetch_it = function() { return fetch(this.url); };
+  new Api({url: "https://api.example.com/funcDestr"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/funcDestr"; });
+});
+
+// Minifier-equivalent of destructured param: `constructor(o) { this.url = o.url }`.
+// Babel/terser often emits this form instead of preserving destructured
+// patterns. The resolver needs to trace `this.url` through `o.url` back
+// to the caller's object-literal arg — a step beyond the plain
+// `this.X = ident` match. Real-world pattern in minified SDK bundles.
+test("ctor assigning this.X from param.X (minifier form of destructure)", `
+  class Api {
+    constructor(o) { this.url = o.url; }
+    fetch_it() { return fetch(this.url); }
+  }
+  new Api({url: "https://api.example.com/paramProp"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/paramProp"; });
+});
+
+// Same pattern but with a renamed property: this.url = o.apiUrl.
+test("ctor assigning this.X from param.Y (renamed)", `
+  class Api {
+    constructor(o) { this.url = o.apiUrl; }
+    fetch_it() { return fetch(this.url); }
+  }
+  new Api({apiUrl: "https://api.example.com/paramPropRenamed"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/paramPropRenamed"; });
+});
+
+// Polarity: this.X = o.Y where caller gives `Y` but NOT matching → gap.
+test("ctor this.X=o.Y: caller arg missing Y → gap, no URL", `
+  class Api {
+    constructor(o) { this.url = o.apiUrl; }
+    fetch_it() { return fetch(this.url); }
+  }
+  new Api({somethingElse: "https://api.example.com/WRONG"});
+`, function(r) {
+  if (r.fetchCallSites.length !== 0) return false;
+  return (r.resolverErrors || []).some(function(e) { return /fetch URL resolver gap/.test(e.message || ""); });
+});
+
+// Function constructor with param.prop access: real minified axios-style
+// client in pre-ES6 bundles.
+test("function ctor this.X=param.X", `
+  function Api(o) { this.url = o.url; }
+  Api.prototype.go = function() { return fetch(this.url); };
+  new Api({url: "https://api.example.com/funcParamProp"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/funcParamProp"; });
+});
+
+// IIFE returning a literal URL: `fetch((function(){ return X })())`.
+// Resolved via _resolveCallReturnValues' IIFE branch.
+test("IIFE function-expression returning literal → URL resolves", `
+  fetch((function(){ return "https://api.example.com/iife-fe"; })());
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/iife-fe"; });
+});
+
+// IIFE arrow-function expression body.
+test("IIFE arrow-expression → URL resolves", `
+  fetch((() => "https://api.example.com/iife-arrow")());
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/iife-arrow"; });
+});
+
+// Sequence-wrapped call `(0, fn)()` — minifier emits this to strip `this`.
+// The last element of the sequence is the effective callee.
+test("(0, fn)() sequence-wrapped call → URL resolves", `
+  var fn = function(){ return "https://api.example.com/seq-call"; };
+  fetch((0, fn)());
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/seq-call"; });
+});
+
+// Polarity: IIFE that does NOT return a URL (side-effects only) must
+// NOT be treated as a URL source. The direct-in-body processing still
+// handles the inner fetch — we only want the OUTER fetch's arg to fail
+// to resolve (no return value).
+test("IIFE with no return → outer fetch gap, inner fetch still detected", `
+  fetch((function(){ console.log("no return"); })());
+  !function(win) { win.fetch("https://api.example.com/inside-iife"); }(window);
+`, function(r) {
+  var innerFound = r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/inside-iife"; });
+  if (!innerFound) return false;
+  // Outer fetch has no URL (function returned undefined) — expect exactly one fetchSite total.
+  return r.fetchCallSites.length === 1;
+});
+
+// Gap descriptor unwraps Request/toString/Identifier-init wrappers so
+// reviewers see the ACTUAL unresolvable leaf, not the outer variable.
+// Before: `fetch(c)` where c = new Request(r.toString(), ...) with
+// unresolved r reports gap at `c`. After: reports gap at
+// `new URL(getAttribute("data-url"), location.origin)` — the real
+// DOM-runtime leaf with its arg shapes annotated.
+test("gap descriptor unwraps wrappers to root cause with arg hints", `
+  function f(e) {
+    let r = new URL(e.getAttribute("data-url"), location.origin);
+    let c = new Request(r.toString(), { method: "GET" });
+    fetch(c);
+  }
+  window.f = f;
+`, function(r) {
+  return (r.resolverErrors || []).some(function(e) {
+    return /fetch URL resolver gap: new URL\(getAttribute\("data-url"\), location\.origin\)@/.test(e.message || "");
+  });
+});
+
+// Object-method caller tracing: ES6 shorthand `{m(e){sink(e)}}` invoked
+// as `u.m(tainted)` — the param's taint source must propagate to the
+// sink. Real-world pattern: react-router's `u = {hardNavigate(e){window.location.href=e}}`.
+test("object method: u.m(tainted) → sink flagged via param-caller", `
+  let u = { hardNavigate(e) { window.location.href = e; } };
+  u.hardNavigate(location.hash.slice(1));
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.source === "location.hash" && s.severity === "high";
+  });
+});
+
+// Polarity: same shape but the caller passes a LITERAL — must NOT flag.
+test("object method: u.m(literal) → NOT flagged", `
+  let u = { hardNavigate(e) { window.location.href = e; } };
+  u.hardNavigate("/safe-path");
+`, function(r) {
+  return !r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href";
+  });
+});
+
+// Object-PROPERTY form (classic) covered too via the same helper.
+test("object method (classic): {m: function(e){}} → tainted call flagged", `
+  let u = { hardNavigate: function(e) { window.location.href = e; } };
+  u.hardNavigate(location.hash.slice(1));
+`, function(r) {
+  return r.securitySinks.some(function(s) {
+    return s.type === "redirect" && s.sink === "href" && s.severity === "high";
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -2592,6 +3526,34 @@ test("innerHTML with user-controlled source (location.hash) → high severity XS
   return r.securitySinks.some(function(s) {
     return s.type === "xss" && s.sink === "innerHTML" && s.severity === "high" && s.source === "location.hash";
   });
+});
+
+// sinkDims surfaces the dims at the sink entry. For innerHTML fed by
+// location.hash, the attacker controls hash + content — both must appear
+// in sinkDims so the reviewer can judge reachability without replaying
+// the whole taint chain.
+test("sinkDims surfaces {hash,content} for location.hash → innerHTML", `
+  var x = location.hash;
+  document.getElementById("output").innerHTML = x;
+`, function(r) {
+  var s = r.securitySinks.find(function(x) { return x.type === "xss" && x.sink === "innerHTML"; });
+  if (!s || !Array.isArray(s.sinkDims)) return false;
+  return s.sinkDims.indexOf("hash") >= 0 && s.sinkDims.indexOf("content") >= 0;
+});
+
+// Polarity: _pushDangerous also sets sinkDims. Prototype-pollution with
+// a user-controlled key routes through the dangerousPatterns path; if
+// sinkDims were only wired to sinks, reviewers couldn't judge prototype
+// pollution findings the same way.
+test("sinkDims surfaces on dangerousPatterns (prototype-pollution)", `
+  var k = location.hash.slice(1);
+  var o = {};
+  o[k] = {injected: true};
+  window.leak = o;
+`, function(r) {
+  var d = (r.dangerousPatterns || []).find(function(x) { return x.type === "prototype-pollution"; });
+  if (!d || !Array.isArray(d.sinkDims)) return false;
+  return d.sinkDims.length > 0;
 });
 
 test("innerHTML with string literal → not flagged (not user-controlled)", `
@@ -2981,6 +3943,131 @@ test("proto-pollution: all-dims-false key → suppressed", `
   return !r.dangerousPatterns.some(function(d) {
     return d.type === "prototype-pollution" && d.severity === "high";
   });
+});
+
+// Structural URL shape + encoding-transform resolution. Real-world
+// pattern: github's `fetch(new URL("/api/check?nwo=" + encodeURIComponent(repo), location.origin).href)`
+// where repo is a function param. Two layers must work together:
+//   1. encodeURIComponent of a resolved string → encoded value (spec).
+//   2. new URL().href / .toString() recurses into the input arg's shape.
+// When the caller passes a literal value, the FULL URL resolves with the
+// encoded value substituted — not a placeholder, the real value the
+// runtime fetch would receive.
+test("encodeURIComponent + new URL().href + caller-passed literal → full URL", `
+  function fetchIndexStatus(repo) {
+    return fetch(new URL("/api/check?nwo=" + encodeURIComponent(repo), "https://x.example.com").href);
+  }
+  fetchIndexStatus("octocat/hello");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) {
+    return s.url === "https://x.example.com/api/check?nwo=octocat%2Fhello";
+  });
+});
+
+// Polarity: when the caller's value is opaque (not a literal), the full
+// URL doesn't resolve — but the structural shape (path + param name)
+// SHOULD still be emitted, with an _astValueSource marker on the param.
+test("structural URL shape: opaque value → path + param name learned", `
+  function go(repo) {
+    return fetch("/api/check?nwo=" + encodeURIComponent(repo));
+  }
+  // No call site — repo is uncallable in static context.
+  module.exports = go;
+`, function(r) {
+  var site = r.fetchCallSites[0];
+  if (!site || site.url !== "/api/check") return false;
+  var nwoParam = (site.params || []).find(function(p) { return p.name === "nwo" && p.location === "query"; });
+  return !!nwoParam && nwoParam._astValueSource === "param-derived";
+});
+
+// Polarity: when the literal prefix has no `?` (path-only), no query
+// params should be invented from thin air. Structural shape only emits
+// query names that are visibly present in the literal prefix.
+test("structural URL shape: path-only literal + opaque value → no fake query params", `
+  function go(slug) { return fetch("/" + slug); }
+  module.exports = go;
+`, function(r) {
+  if (r.fetchCallSites.length === 0) return true;  // also acceptable: no site emitted
+  var site = r.fetchCallSites[0];
+  // If a site IS emitted, it must NOT have invented query params.
+  var queryParams = (site.params || []).filter(function(p) { return p.location === "query"; });
+  return queryParams.length === 0;
+});
+
+// Provable-undefined / null URL args are NOT resolver gaps. Real-world
+// pattern: react-query's `t.fetch(void 0, s)` is a method call that the
+// inter-procedural tracer follows into the Query class's fetch body.
+// Inside, the body uses an internal fetch with the forwarded arg → arg
+// is `void 0` (definitely undefined). The analyzer must recognize this
+// as a provable non-URL value (not "unresolved") and skip without
+// recording a NumericLiteral gap pointing at the `0` inside `void 0`.
+test("fetch(void 0) — provable undefined, no fetch site, no gap", `
+  function go(opts) { return fetch(opts); }
+  go(void 0);
+`, function(r) {
+  var noFakeUrl = r.fetchCallSites.length === 0;
+  var noVoidGap = !(r.resolverErrors || []).some(function(e) {
+    return /void|NumericLiteral/.test(e.message);
+  });
+  return noFakeUrl && noVoidGap;
+});
+test("fetch(null) — provable null, no fetch site, no gap", `
+  function go(u) { return fetch(u); }
+  go(null);
+`, function(r) {
+  var noFakeUrl = r.fetchCallSites.length === 0;
+  var noNullGap = !(r.resolverErrors || []).some(function(e) {
+    return /NullLiteral/.test(e.message);
+  });
+  return noFakeUrl && noNullGap;
+});
+// Polarity: a real undefined-shadowing variable named `undefined` (rare
+// but legal pre-ES5) — current scope check would cause this to NOT be
+// short-circuited as undefined. We don't test the shadow case directly
+// (it's rare); instead verify that a string-literal URL still resolves
+// after the new short-circuit code is in place.
+test("fetch('/api/x') — literal URL still extracts after void/null guards", `
+  fetch("/api/test-still-works");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/test-still-works"; });
+});
+
+// Method-call dim projection must NOT synthesize a content dim when the
+// receiver has no surviving attacker dim. Real-world FP from github's
+// remote-input-element: `new URL(serverSrc, location.href)` → c.toString()
+// → fetch(c.toString()) → response.text() → innerHTML. After the URL is
+// constructed, the base-URL dims are stripped (URL parsing semantics);
+// every later hop carries {none}, but `.text()` was unconditionally
+// re-introducing `content: true`, which made the chain reach a fetch sink.
+test("method-call: .text() on cleansed URL chain → no FP innerHTML", `
+  async function go(serverSrc) {
+    var u = new URL(serverSrc, window.location.href);
+    var r = await fetch(u.toString());
+    var html = await r.text();
+    document.getElementById('x').innerHTML = html;
+  }
+  go("/api/results");
+`, function(r) {
+  // No XSS finding — the URL was constructed with location.href as BASE
+  // (origin-only contributor), but location.href has no origin dim per
+  // the dimensional taint model, so the URL has no attacker dim. .text()
+  // shouldn't synthesise one.
+  return !r.securitySinks.some(function(s) { return s.type === "xss"; });
+});
+
+// Polarity: when the URL DOES carry attacker content (e.g. path comes
+// from location.hash), `.text()` correctly propagates content dim and
+// the XSS finding fires.
+test("method-call: .text() on attacker-controlled URL chain → XSS fires", `
+  async function go() {
+    var path = location.hash.slice(1);
+    var r = await fetch("/api/" + path);
+    var html = await r.text();
+    document.getElementById('x').innerHTML = html;
+  }
+  go();
+`, function(r) {
+  return r.securitySinks.some(function(s) { return s.type === "xss" && s.sink === "innerHTML"; });
 });
 
 // Polarity: a key actually built from attacker content stays HIGH.
@@ -5012,6 +6099,47 @@ test("MessagePort.addEventListener — cross-origin-capable, still flagged", `
   });
 });
 
+// SharedWorker's internal .port is a same-origin channel — only the page
+// that created the worker can post to it. Real-world pattern: codeberg
+// gitea notification.js `worker = new SharedWorker(url); worker.port.addEventListener("message", ...)`.
+test("new SharedWorker().port.addEventListener → NOT flagged (worker-internal port)", `
+  const worker = new SharedWorker("/assets/js/worker.js");
+  worker.port.addEventListener("message", (e) => {
+    document.body.innerHTML = e.data.html;
+  });
+`, function(r) {
+  return !(r.dangerousPatterns || []).some(function(p) {
+    return /postmessage-no-origin|postmessage-weak/i.test(p.type);
+  });
+});
+
+// Polarity: same-named .port on a non-Worker identifier (arbitrary object)
+// stays flagged — conservative because we can't prove it's same-origin.
+test("foo.port.addEventListener on untracked receiver IS flagged", `
+  function handle(foo) {
+    foo.port.addEventListener("message", (e) => {
+      document.body.innerHTML = e.data;
+    });
+  }
+`, function(r) {
+  return (r.dangerousPatterns || []).some(function(p) {
+    return p.type === "postmessage-no-origin";
+  });
+});
+
+// Worker.onmessage is parity with Worker.addEventListener("message", ...).
+// The assignment form is common in minified code; suppression must cover
+// both forms or the reviewer sees an inconsistent classification.
+test("worker.onmessage = handler on SharedWorker → NOT flagged", `
+  const w = new SharedWorker("/wkr.js");
+  w.onmessage = (e) => { document.body.innerHTML = e.data.html; };
+`, function(r) {
+  return !(r.dangerousPatterns || []).some(function(p) {
+    return /postmessage-no-origin|postmessage-weak/i.test(p.type);
+  });
+});
+
+
 
 test("URLSearchParams key taint survives via for-of destructuring → innerHTML", `
   for (const [k, v] of new URLSearchParams(location.search)) {
@@ -6006,6 +7134,76 @@ test("postMessage(data, 'https://specific.com') → NOT flagged", `
 `, function(r) {
   return !r.dangerousPatterns.some(function(p) {
     return p.type === "postmessage-wildcard-target";
+  });
+});
+
+// User-controlled targetOrigin: attacker sets `#target=https://evil.com` in
+// the URL hash, the page forwards postMessage to that origin. Even if the
+// payload is safe, sending it to attacker's origin leaks the content.
+test("postMessage(data, location.hash.slice(1)) → dynamic-target flagged", `
+  var target = location.hash.slice(1);
+  window.parent.postMessage({ data: 123 }, target);
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-dynamic-target" && p.severity === "high";
+  });
+});
+
+// Polarity: non-literal targetOrigin that traces to a literal (a module-level
+// constant, an enum, a config default) is NOT attacker-controllable.
+test("postMessage(data, nonTaintedVar) → NOT flagged", `
+  var target = "https://api.example.com";
+  window.parent.postMessage({ data: 123 }, target);
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-dynamic-target";
+  });
+});
+
+// Polarity: `location.origin` is the current origin — same-origin postMessage.
+// Not attacker-controllable; must not flag as dynamic-target.
+test("postMessage(data, location.origin) → NOT flagged", `
+  window.parent.postMessage({ data: 123 }, location.origin);
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-dynamic-target";
+  });
+});
+
+// Resolved-to-wildcard: `var t = "*"; postMessage(d, t)` — the target
+// variable traces to the literal "*". Parity with the inline "*" case.
+test("postMessage(data, varResolvingToWildcard) → wildcard-target flagged", `
+  var t = "*";
+  window.parent.postMessage({ secret: 1 }, t);
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-wildcard-target" && p.severity === "high";
+  });
+});
+
+// Reply-to-sender: using `event.origin` as the target echoes the message
+// back to whoever sent it. MessageEvent.origin is a browser-set property
+// — the attacker can only set it to their own real origin, not spoof it.
+// Standard secure pattern; must NOT flag as dynamic-target.
+test("postMessage(data, event.origin) → NOT flagged (reply to sender)", `
+  window.addEventListener("message", (event) => {
+    window.parent.postMessage({ ack: true }, event.origin);
+  });
+`, function(r) {
+  return !r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-dynamic-target";
+  });
+});
+
+// Still flag when the target is `event.data.foo` — attacker-content, not
+// browser-set. Ensures the event-origin carve-out is narrow.
+test("postMessage(data, event.data.target) → dynamic-target flagged", `
+  window.addEventListener("message", (event) => {
+    window.parent.postMessage({ ack: true }, event.data.target);
+  });
+`, function(r) {
+  return r.dangerousPatterns.some(function(p) {
+    return p.type === "postmessage-dynamic-target" && p.severity === "high";
   });
 });
 

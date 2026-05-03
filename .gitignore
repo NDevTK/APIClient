@@ -2,3 +2,6 @@ node_modules/
 testing/profile/
 testing/reports/
 extension.crx
+testing/harness-dumps
+testing/finding-snapshots
+testing/fixtures

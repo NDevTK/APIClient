@@ -17,10 +17,16 @@ var _constraints = {};  // scopeUid:varName → { varName, values: Set, sources:
 var _stats = null;
 var _globalAssignments = {};  // name → { valuePath, valueNode } — tracks window.X = value
 var _windowAliases = new Set();  // parameter names known to alias window/self/globalThis
+var _unboundIdRefs = null;  // name → [Path, ...] of unbound-global identifier references; populated by pre-pass
 var _lastIIFEFuncPath = null;  // scope context from last _resolveIIFEReturnedProperty resolution
 var _sourceCode = null;  // original source text for code context extraction
+var _sourceUrl = null;   // tabUrl when analyzing via live pipeline; gives us
+                         // `location.origin` etc. at analysis time.
 var _globalCallerCache = {};  // key → [innerPath, ...] — caches _traverseGlobalCallers results
 var _typeEnv = {};  // scopeUid:varName → type string — lightweight deterministic type tracking
+var _callReturnEffectMemo = new WeakMap();  // CallExpression node → { propName: [resolved values] }
+var _propAssignMemo = new WeakMap();        // binding node → { propName: [resolved values] from `obj.propName = X` assignments via that binding's referencePaths }
+var _resolveToObjectMemo = new WeakMap();   // node → resolved ObjectExpression (or null) — caches _resolveToObject result so repeated lookups on the same node are O(1)
 
 // Structural-def state, populated during analyzeJSBundle's traversal so
 // the viewer's AST_BUILD_DEFINITION_MAP only needs the `refMap` pass
@@ -66,14 +72,12 @@ class Resolver {
   // Collect a resolution error instead of silently swallowing it.
   // context: short label describing what operation failed (e.g. "resolveCallReturn")
   collectError(e, context) {
-    if (this.errors.length < 100) {
-      var entry = { context: context || "unknown", message: e.message || String(e) };
-      if (e.stack) {
-        var lines = e.stack.split("\n");
-        entry.stack = lines.slice(0, 6).join("\n");
-      }
-      this.errors.push(entry);
+    var entry = { context: context || "unknown", message: e.message || String(e) };
+    if (e.stack) {
+      var lines = e.stack.split("\n");
+      entry.stack = lines.slice(0, 6).join("\n");
     }
+    this.errors.push(entry);
   }
 }
 
@@ -230,13 +234,344 @@ function _findParamIndex(params, name) {
   return -1;
 }
 
+// Match `name` against the ctor's params including destructured ObjectPattern
+// parameters. Returns {idx, key} — idx is the param index, key is the
+// destructured property name when the param is `{key}` / `{key} = {}`, or
+// null for a plain Identifier param. Returns null when no match.
+//
+// Real-world case: `class C { constructor({apiUrl}) { this.apiUrl = apiUrl } }`.
+// `_findThisAssignedParam` spots `this.apiUrl = apiUrl` and reports the RHS
+// name "apiUrl". A plain `_findParamIndex` lookup fails because param[0]
+// is an ObjectPattern, not an Identifier "apiUrl" — so the resolver bails
+// out and the fetch(this.apiUrl, …) site hits a gap even though the value
+// is fully traceable via the caller's object-literal arg.
+function _findCtorParamOrDestr(params, name) {
+  for (var i = 0; i < params.length; i++) {
+    var p = params[i];
+    if (_t.isIdentifier(p) && p.name === name) return { idx: i, key: null };
+    if (_t.isAssignmentPattern(p) && _t.isIdentifier(p.left) && p.left.name === name) return { idx: i, key: null };
+    var pat = _t.isObjectPattern(p) ? p :
+              (_t.isAssignmentPattern(p) && _t.isObjectPattern(p.left) ? p.left : null);
+    if (pat) {
+      var k = _findDestructuredKey(pat, name);
+      if (k) return { idx: i, key: k };
+    }
+  }
+  return null;
+}
+
+// Given a caller's argument path at a `new C(arg)` call, extract the value
+// of a destructured property. If the arg is an ObjectExpression, pull the
+// property value directly; otherwise resolve the arg through _resolveToObject
+// and pull the property. Returns a [values] array.
+function _resolveCtorArgDestrProp(argPath, key, depth) {
+  if (!argPath) return [];
+  if (_t.isObjectExpression(argPath.node)) {
+    var props = argPath.node.properties;
+    for (var pi = 0; pi < props.length; pi++) {
+      var op = props[pi];
+      if (!_t.isObjectProperty(op) || op.computed) continue;
+      var opKey = _t.isIdentifier(op.key) ? op.key.name :
+        (_t.isStringLiteral(op.key) ? op.key.value : null);
+      if (opKey === key) {
+        return _resolveAllValues(argPath.get("properties." + pi + ".value"), depth + 1);
+      }
+    }
+  }
+  var obj = _resolveToObject(argPath, depth);
+  if (obj && obj.properties) {
+    for (var pi2 = 0; pi2 < obj.properties.length; pi2++) {
+      var op2 = obj.properties[pi2];
+      if (!_t.isObjectProperty(op2) || op2.computed) continue;
+      var op2Key = _t.isIdentifier(op2.key) ? op2.key.name :
+        (_t.isStringLiteral(op2.key) ? op2.key.value : null);
+      if (op2Key === key) {
+        // Object.assign-merged synthetic obj has no node-level _path
+        // (no Babel path owns the merged set). Each property's value
+        // carries its own _path attached at synthesis time, so prefer
+        // that. For real ObjectExpression obj, derive from obj._path.
+        if (op2.value && op2.value._path) {
+          return _resolveAllValues(op2.value._path, depth + 1);
+        }
+        if (obj._path) {
+          return _resolveAllValues(obj._path.get("properties." + pi2 + ".value"), depth + 1);
+        }
+      }
+    }
+  }
+  return [];
+}
+
+// Find indirect constructor-call arg paths for a class exposed via
+// `Object.defineProperty(target, key, {get: () => CLASS})`. Reads of
+// `<aliasOf(target)>.<key>` invoke the getter (returning the class);
+// `new <expr>.<key>(args)` constructs the class with `args`. Returns
+// the arg-paths at the corresponding constructor positions.
+//
+// Pure ECMAScript: getter invocation semantics + scope-resolved
+// reference walks. No bundler-specific assumptions; the same flow works
+// for any code that exposes a class via Object.defineProperty getter.
+function _findClassIndirectCtorArgs(classBinding, classDecl, paramIdx, depth) {
+  if (!classBinding || !classBinding.referencePaths) return [];
+  var argPaths = [];
+  var visited = new Set();
+  for (var ri = 0; ri < classBinding.referencePaths.length; ri++) {
+    var ref = classBinding.referencePaths[ri];
+    // Match shape `() => CLASS` arrow whose body IS the class identifier.
+    var arrow = ref.parentPath;
+    if (!arrow || !arrow.isArrowFunctionExpression() || arrow.node.body !== ref.node) continue;
+    // Arrow must be the value of an ObjectProperty `{key: arrow}`.
+    var prop = arrow.parentPath;
+    if (!prop || !prop.isObjectProperty() || prop.node.computed) continue;
+    var propKey = _t.isIdentifier(prop.node.key) ? prop.node.key.name :
+      (_t.isStringLiteral(prop.node.key) ? prop.node.key.value : null);
+    if (!propKey) continue;
+    var descObj = prop.parentPath;
+    if (!descObj || !descObj.isObjectExpression()) continue;
+    var defCall = descObj.parentPath;
+    if (!defCall || !defCall.isCallExpression()) continue;
+    // Case A: arrow is the descriptor's `get` AND descriptor is arg[2]
+    // of Object.defineProperty(target, key, descriptor) — direct install.
+    if (propKey === "get" && defCall.node.arguments[2] === descObj.node && _isObjectDefineProperty(defCall)) {
+      // (handled below via instKey extraction)
+    } else {
+      // Case B: arrow is in a defs literal `{propKey: () => CLASS}`
+      // passed to a wrapper call `wrapper(target, defs)` whose body
+      // iterates defs and does `Object.defineProperty(target, k, {get: defs[k]})`
+      // for each key. The effective install is `target.<propKey>` →
+      // CLASS. Trace through the wrapper to find the target arg, then
+      // find consumers.
+      var wrapperFunc = _resolveExprToFunctionPath(defCall.get("callee"), depth);
+      if (!wrapperFunc || !wrapperFunc.node.body || !_t.isBlockStatement(wrapperFunc.node.body)) continue;
+      // Locate which param of wrapperFunc corresponds to defs (the obj
+      // containing our arrow).
+      var defsArgIdx = -1;
+      var wrapperIsCallForm = false;
+      var wcallee = defCall.node.callee;
+      if (_t.isMemberExpression(wcallee) && !wcallee.computed && _t.isIdentifier(wcallee.property, { name: "call" })) {
+        wrapperIsCallForm = true;
+      }
+      var wrapArgOffset = wrapperIsCallForm ? 1 : 0;
+      for (var dai = 0; dai < defCall.node.arguments.length; dai++) {
+        if (defCall.node.arguments[dai] === descObj.node) { defsArgIdx = dai - wrapArgOffset; break; }
+      }
+      if (defsArgIdx < 0 || defsArgIdx >= wrapperFunc.node.params.length) continue;
+      var defsParam = wrapperFunc.node.params[defsArgIdx];
+      if (!_t.isIdentifier(defsParam)) continue;
+      // Inside wrapper body, find Object.defineProperty(<targetParam>, k, {get: defs[k]})
+      // inside `for (var k in defs)` — this is the install pattern.
+      var defsParamBinding = wrapperFunc.scope.getBinding(defsParam.name);
+      if (!defsParamBinding || !defsParamBinding.referencePaths) continue;
+      var foundTargetArgIdx = -1;
+      for (var dpr = 0; dpr < defsParamBinding.referencePaths.length; dpr++) {
+        var dpRef = defsParamBinding.referencePaths[dpr];
+        // defs[k] reads — defs as object of MemberExpression with computed=true and property = loop var
+        var dpMem = dpRef.parentPath;
+        if (!dpMem || !dpMem.isMemberExpression() || dpMem.node.object !== dpRef.node || !dpMem.node.computed) continue;
+        // Walk up to enclosing for..in.
+        var fInside = _findEnclosingForIn(dpMem);
+        if (!fInside) continue;
+        var loopVar = _getForInLoopVarName(fInside);
+        if (!loopVar) continue;
+        if (!_t.isIdentifier(dpMem.node.property, { name: loopVar })) continue;
+        // Containing call: must be the `get` of an Object.defineProperty descriptor.
+        var dpProp = dpMem.parentPath;
+        if (!dpProp || !dpProp.isObjectProperty() || dpProp.node.computed) continue;
+        if (!_t.isIdentifier(dpProp.node.key, { name: "get" }) &&
+            !(_t.isStringLiteral(dpProp.node.key) && dpProp.node.key.value === "get")) continue;
+        var dpDesc = dpProp.parentPath;
+        if (!dpDesc || !dpDesc.isObjectExpression()) continue;
+        var dpDefCall = dpDesc.parentPath;
+        if (!dpDefCall || !dpDefCall.isCallExpression()) continue;
+        if (dpDefCall.node.arguments[2] !== dpDesc.node) continue;
+        if (!_isObjectDefineProperty(dpDefCall)) continue;
+        // The target is dpDefCall arg[0]. Find which wrapperFunc param
+        // corresponds to it (must be a param identifier).
+        var dpTargetNode = dpDefCall.node.arguments[0];
+        if (!_t.isIdentifier(dpTargetNode)) continue;
+        for (var wpi = 0; wpi < wrapperFunc.node.params.length; wpi++) {
+          if (_t.isIdentifier(wrapperFunc.node.params[wpi], { name: dpTargetNode.name })) {
+            foundTargetArgIdx = wpi;
+            break;
+          }
+        }
+        if (foundTargetArgIdx >= 0) break;
+      }
+      if (foundTargetArgIdx < 0) continue;
+      // Map back to the wrapper-call's actual argument position
+      // (account for .call thisArg shift).
+      var callerTargetArgIdx = foundTargetArgIdx + wrapArgOffset;
+      if (callerTargetArgIdx >= defCall.node.arguments.length) continue;
+      var targetArgPath = defCall.get("arguments." + callerTargetArgIdx);
+      if (!_t.isIdentifier(targetArgPath.node)) continue;
+      var targetName = targetArgPath.node.name;
+      var targetBinding = targetArgPath.scope.getBinding(targetName);
+      if (!targetBinding || !targetBinding.referencePaths) continue;
+      // Find `new <targetAlias>.<propKey>(args)` consumers.
+      for (var tri = 0; tri < targetBinding.referencePaths.length; tri++) {
+        var tRef = targetBinding.referencePaths[tri];
+        var tMem = tRef.parentPath;
+        if (!tMem || !tMem.isMemberExpression() || tMem.node.object !== tRef.node) continue;
+        var tMatch = (!tMem.node.computed && _t.isIdentifier(tMem.node.property, { name: propKey })) ||
+          (tMem.node.computed && _t.isStringLiteral(tMem.node.property) && tMem.node.property.value === propKey);
+        if (!tMatch) continue;
+        var tNew = tMem.parentPath;
+        if (!tNew || !tNew.isNewExpression() || tNew.node.callee !== tMem.node) continue;
+        if (paramIdx >= tNew.node.arguments.length) continue;
+        argPaths.push(tNew.get("arguments." + paramIdx));
+      }
+      continue;
+    }
+    // Pull the property key the getter is installed under.
+    var keyArg = defCall.node.arguments[1];
+    var instKey = null;
+    if (_t.isStringLiteral(keyArg)) instKey = keyArg.value;
+    else if (_t.isIdentifier(keyArg)) {
+      // Loop-variable case: defineProperty inside `for (var k in defs)`.
+      // Resolve the loop variable's known iteration values via the
+      // defs literal.
+      var forIn = _findEnclosingForIn(defCall);
+      if (forIn && _getForInLoopVarName(forIn) === keyArg.name) {
+        var defsExpr = forIn.get("right");
+        var defsObj2 = _resolveToObject(defsExpr, depth);
+        if (defsObj2 && defsObj2.properties) {
+          for (var di = 0; di < defsObj2.properties.length; di++) {
+            var dp = defsObj2.properties[di];
+            if (!_t.isObjectProperty(dp) || dp.computed) continue;
+            // Verify this descriptor's value-expression is `defs[loopVar]`.
+            var getValNode = prop.node.value;
+            if (!(getValNode && _t.isMemberExpression(getValNode) && getValNode.computed &&
+                  _t.isIdentifier(getValNode.property, { name: keyArg.name }))) continue;
+            // For each defs key, find consumers reading that key as a constructor target.
+            var dKey = _t.isIdentifier(dp.key) ? dp.key.name :
+              (_t.isStringLiteral(dp.key) ? dp.key.value : null);
+            if (!dKey) continue;
+            // The class i shows up only at the value-position of THIS
+            // defs entry — so the `<aliasOf(target)>.<dKey>` consumers
+            // construct THIS class.
+            var dpVal = dp.value;
+            // Confirm: the dp value is itself an arrow or a Reference
+            // that resolves to our class. If it's a literal `() => i`
+            // arrow with body `i`, the Identifier matches our class
+            // binding's own identifier.
+            if (_t.isArrowFunctionExpression(dpVal) && _t.isIdentifier(dpVal.body) &&
+                dpVal.body.name === (classDecl.node.id && classDecl.node.id.name)) {
+              _findCallersOfPropertyOnTarget(defCall, dKey, paramIdx, argPaths, visited, depth);
+            }
+          }
+        }
+        continue;
+      }
+      // Identifier key that's not a for..in loop var — try resolving
+      // through scope. `const KEY = "url"; Object.defineProperty(t, KEY, …)`
+      // is fully resolvable: KEY traces to its var init.
+      var idVals = _resolveAllValues(defCall.get("arguments.1"), depth + 1);
+      if (idVals.length === 1 && typeof idVals[0] === "string") {
+        instKey = idVals[0];
+      } else {
+        continue;
+      }
+    }
+    if (instKey == null) continue;
+    _findCallersOfPropertyOnTarget(defCall, instKey, paramIdx, argPaths, visited, depth);
+  }
+  return argPaths;
+}
+
+// Given an Object.defineProperty call's path and the key it installs,
+// find all `new <aliasOf(target)>.<key>(args)` constructor call sites
+// across the program by tracing target through scope: target is arg[0]
+// of defineProperty; if it's a parameter, follow through caller args
+// (with .call thisArg shift); for each materialized target binding,
+// scan its referencePaths for `.<key>` accesses used as `new` targets.
+// Pushes the matching argPath at paramIdx into out.
+function _findCallersOfPropertyOnTarget(defCall, key, paramIdx, out, visited, depth) {
+  if (visited.has(defCall.node)) return;
+  visited.add(defCall.node);
+  var targetArgPath = defCall.get("arguments.0");
+  // Trace target back to caller-supplied arg if it's a parameter chain.
+  var aliasArgPaths = _traceToCallerArg(targetArgPath, depth);
+  for (var ai = 0; ai < aliasArgPaths.length; ai++) {
+    var aliasPath = aliasArgPaths[ai];
+    if (!_t.isIdentifier(aliasPath.node)) continue;
+    var aliasName = aliasPath.node.name;
+    var aliasBinding = aliasPath.scope.getBinding(aliasName);
+    if (!aliasBinding || !aliasBinding.referencePaths) continue;
+    for (var rj = 0; rj < aliasBinding.referencePaths.length; rj++) {
+      var aRef = aliasBinding.referencePaths[rj];
+      var mem = aRef.parentPath;
+      if (!mem || !mem.isMemberExpression() || mem.node.object !== aRef.node) continue;
+      var matchKey = (!mem.node.computed && _t.isIdentifier(mem.node.property, { name: key })) ||
+        (mem.node.computed && _t.isStringLiteral(mem.node.property) && mem.node.property.value === key);
+      if (!matchKey) continue;
+      var newExpr = mem.parentPath;
+      if (!newExpr || !newExpr.isNewExpression() || newExpr.node.callee !== mem.node) continue;
+      if (paramIdx >= newExpr.node.arguments.length) continue;
+      out.push(newExpr.get("arguments." + paramIdx));
+    }
+  }
+}
+
+// Trace `expr` back through parameter-binding chains to caller-supplied
+// argument paths. If expr is bound to a function param, find that
+// function's callers and return the corresponding arg paths. Both
+// direct calls `fn(args)` and Function.prototype.call form
+// `fn.call(thisArg, args)` are followed; the thisArg shift on .call
+// means params[k] inside the function corresponds to caller arg[k+1].
+function _traceToCallerArg(exprPath, depth) {
+  if (!exprPath || !_t.isIdentifier(exprPath.node)) return exprPath ? [exprPath] : [];
+  var b = exprPath.scope.getBinding(exprPath.node.name);
+  if (!b || b.kind !== "param") return [exprPath];
+  var hostFunc = b.scope.path;
+  if (!hostFunc || !hostFunc.node.params) return [exprPath];
+  var pIdx = -1;
+  for (var i = 0; i < hostFunc.node.params.length; i++) {
+    if (_t.isIdentifier(hostFunc.node.params[i], { name: exprPath.node.name })) { pIdx = i; break; }
+  }
+  if (pIdx < 0) return [exprPath];
+  var out = [];
+  // Direct callers via _findFunctionCallerArgs.
+  var callers = _findFunctionCallerArgs(hostFunc);
+  for (var ci = 0; ci < callers.length; ci++) {
+    if (pIdx < callers[ci].length) out.push(callers[ci][pIdx]);
+  }
+  // .call form: scan the host function's own binding referencePaths
+  // for `<expr>.call(thisArg, ...args)` invocations. The host's
+  // identifier shows up in the call expression's `callee.object` slot.
+  var hostBinding = _getFunctionBinding(hostFunc);
+  if (hostBinding && hostBinding.referencePaths) {
+    for (var hri = 0; hri < hostBinding.referencePaths.length; hri++) {
+      var hRef = hostBinding.referencePaths[hri];
+      var hMem = hRef.parentPath;
+      if (!hMem || !hMem.isMemberExpression() || hMem.node.object !== hRef.node || hMem.node.computed) continue;
+      if (!_t.isIdentifier(hMem.node.property, { name: "call" })) continue;
+      var hCall = hMem.parentPath;
+      if (!hCall || !hCall.isCallExpression() || hCall.node.callee !== hMem.node) continue;
+      var callerIdx = pIdx + 1; // .call thisArg shift
+      if (callerIdx < hCall.node.arguments.length) out.push(hCall.get("arguments." + callerIdx));
+    }
+  }
+  return out.length ? out : [exprPath];
+}
+
 // Build a fetch call site object with standard schema.
 // Tell _buildFetchSite when the URL it was given came from a pure
 // StringLiteral in source (no interpolations). Only in that case can
 // we safely treat the embedded query values as AST-observed literals —
 // a TemplateLiteral's rendered form contains `{name}` placeholders
 // that would otherwise be mistaken for real values.
+// Push a built fetch-site onto the result, skipping empty/null sites.
+// Callers that build via _buildFetchSite get null when the URL is empty,
+// which should never be pushed onto fetchCallSites.
+function _pushFetchSite(result, site) {
+  if (site) result.fetchCallSites.push(site);
+}
 function _buildFetchSite(url, method, headers, type, params, opts) {
+  // Empty-string URL is never a legitimate fetch site — it comes from
+  // falsy-fallback patterns like `DOM-read || ""` or `undefined.toString()`
+  // resolving to "". Drop the site; the fetch-call-site registration is
+  // purely misleading and pollutes the learned-APIs list.
+  if (url === "" || url == null) return null;
   var site = { url: url, method: method, headers: headers || {}, type: type };
   // If the URL was a pure StringLiteral (caller passed
   // opts.urlIsLiteral === true), lift its query-string key/value
@@ -303,16 +638,83 @@ function _findThisAssignedParam(funcPath, propName) {
   return assignedParamName;
 }
 
+// Richer variant: returns {paramName, propFromParam} where propFromParam is
+// set when the ctor assigns `this.X = param.X` (or `this.X = param.Y`), a
+// pattern minifiers emit in place of destructured params. Falls back to the
+// simple `this.X = ident` match, where propFromParam is null.
+//
+// Example:
+//   constructor(o) { this.url = o.url; }  → {paramName:"o", propFromParam:"url"}
+//   constructor(u) { this.url = u; }      → {paramName:"u", propFromParam:null}
+//
+// Returns null when neither pattern matches.
+function _findThisAssignedParamRich(funcPath, propName) {
+  var result = null;
+  try {
+    funcPath.traverse(Object.assign({
+      AssignmentExpression: function(aPath) {
+        if (result) { aPath.stop(); return; }
+        if (aPath.node.operator !== "=") return;
+        var left = aPath.node.left;
+        if (!(_t.isMemberExpression(left) && _t.isThisExpression(left.object) && !left.computed &&
+              _t.isIdentifier(left.property, { name: propName }))) return;
+        var right = aPath.node.right;
+        // Case 1: this.X = ident
+        if (_t.isIdentifier(right)) {
+          result = { paramName: right.name, propFromParam: null };
+          return;
+        }
+        // Case 2: this.X = ident.Y (non-computed member access).
+        // Common minifier output for destructured ctor params.
+        if (_t.isMemberExpression(right) && !right.computed &&
+            _t.isIdentifier(right.object) && _t.isIdentifier(right.property)) {
+          result = { paramName: right.object.name, propFromParam: right.property.name };
+          return;
+        }
+      },
+    }, _SKIP_NESTED_FUNCS));
+  } catch (e) { _resolver.collectError(e, "findThisAssignedParamRich"); }
+  return result;
+}
+
+// Return the Babel path of the RHS for the first `this.X = ...` assignment
+// in funcPath's body, regardless of RHS shape. Used to resolve constructor
+// assignments whose RHS is a call/expression (not a param ref) — the value
+// is closed-over in the function's scope, so caller substitution doesn't
+// apply and the RHS resolves directly.
+function _findThisAssignmentRhsPath(funcPath, propName) {
+  var resultPath = null;
+  try {
+    funcPath.traverse(Object.assign({
+      AssignmentExpression: function(aPath) {
+        if (resultPath) { aPath.stop(); return; }
+        if (aPath.node.operator !== "=") return;
+        var left = aPath.node.left;
+        if (!(_t.isMemberExpression(left) && _t.isThisExpression(left.object) && !left.computed &&
+              _t.isIdentifier(left.property, { name: propName }))) return;
+        resultPath = aPath.get("right");
+        aPath.stop();
+      },
+    }, _SKIP_NESTED_FUNCS));
+  } catch (e) { _resolver.collectError(e, "findThisAssignmentRhsPath"); }
+  return resultPath;
+}
+
 function analyzeJSBundle(code, sourceUrl, forceScript) {
   _constraints = {};
   _stats = { protoMethods: 0, protoMethodsNoField: 0, resolvedUrls: 0, interProcTraces: 0, globalAssignments: 0, windowAliases: 0 };
   _globalAssignments = {};
   _windowAliases = new Set();
+  _unboundIdRefs = null;
   _resolver = new Resolver();
   _globalCallerCache = {};
   _typeEnv = {};
+  _callReturnEffectMemo = new WeakMap();
+  _propAssignMemo = new WeakMap();
+  _resolveToObjectMemo = new WeakMap();
   _sourceCode = code;
   _sourceLines = null;
+  _sourceUrl = sourceUrl || null;
   // Structural-def state — populated by pre-pass visitors; exposed on the
   // result so buildDefinitionMap's lazy call doesn't rebuild them.
   _defMap = {};
@@ -414,6 +816,26 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
     AssignmentExpression: function(path) {
       _trackGlobalAssignment(path);
       _collectPropDefsFromAssignment(path);
+    },
+    // Index unbound-global identifiers used as the OBJECT of a member
+    // access (`$.method(args)` shape). Real-world need:
+    // `var ce = {}; ce.post = fn; window.$ = ce;` then `$.post(args)`.
+    // To find ce.post's callers via the `$` alias, the consumer needs
+    // to enumerate `$`'s member-access usages. Restricting to the exact
+    // shape we use keeps the index small and avoids stale paths from
+    // unrelated identifier positions.
+    MemberExpression: function(path) {
+      if (path.node.computed) return;
+      var obj = path.node.object;
+      if (!_t.isIdentifier(obj)) return;
+      // Use the path's own scope check — only TRULY unbound globals are
+      // alias candidates; locally-shadowed names point at a different
+      // value than the global.
+      if (path.scope.getBinding(obj.name)) return;
+      if (!_unboundIdRefs) _unboundIdRefs = {};
+      var nm = obj.name;
+      if (!_unboundIdRefs[nm]) _unboundIdRefs[nm] = [];
+      _unboundIdRefs[nm].push(path.get("object"));
     },
     // Track ESM exports as global-like bindings: export { k as default, ... }
     ExportNamedDeclaration: function(path) {
@@ -714,22 +1136,31 @@ function _processExportMethodCall(path, result) {
       type: "fetch",
     };
 
-    // Extract body params from second argument options object
-    // Pattern: k.post(url, {json: {name: "Alice", role: "admin"}})
+    // Extract body params from second argument options object.
+    // Two recognised shapes — both safe here because the receiver is a
+    // globally-tracked object AND the method name is an HTTP verb:
+    //   1. ky-style:    k.post(url, {json: {name: "x"}})
+    //   2. jQuery/axios: $.post(url, {fkey: "x", payload: y})
     if (node.arguments.length >= 2 && _t.isObjectExpression(node.arguments[1])) {
       var optsNode = node.arguments[1];
+      var jsonProp = null;
       for (var pi = 0; pi < optsNode.properties.length; pi++) {
         var prop = optsNode.properties[pi];
         if (!_t.isObjectProperty(prop) || prop.computed) continue;
         var keyName = _t.isIdentifier(prop.key) ? prop.key.name :
           (_t.isStringLiteral(prop.key) ? prop.key.value : null);
-        if (keyName === "json" && _t.isObjectExpression(prop.value)) {
-          site.params = _extractObjectProperties(prop.value);
-          for (var bpi = 0; bpi < site.params.length; bpi++) site.params[bpi].location = "body";
-        }
+        if (keyName === "json" && _t.isObjectExpression(prop.value)) { jsonProp = prop; break; }
+      }
+      if (jsonProp) {
+        site.params = _extractObjectProperties(jsonProp.value);
+        for (var bpi = 0; bpi < site.params.length; bpi++) site.params[bpi].location = "body";
+      } else {
+        site.params = _extractObjectProperties(optsNode);
+        for (var bpj = 0; bpj < site.params.length; bpj++) site.params[bpj].location = "body";
       }
     }
 
+    if (!site || site.url === "" || site.url == null) continue;
     console.debug("[AST:fetch] %s %s via %s.%s() (export/global API client)", site.method, site.url, objName, methodName);
     result.fetchCallSites.push(site);
   }
@@ -901,7 +1332,7 @@ function _processNetworkSink(path, result) {
                   }
                 }
                 for (var mfi = 0; mfi < methodsForUrl.length; mfi++) {
-                  result.fetchCallSites.push(_buildFetchSite(resolvedUrls[ui], methodsForUrl[mfi], xhrHeaders, "xhr", corrBodyParams));
+                  _pushFetchSite(result, _buildFetchSite(resolvedUrls[ui], methodsForUrl[mfi], xhrHeaders, "xhr", corrBodyParams));
                   console.debug("[AST:fetch] xhr %s %s", methodsForUrl[mfi], resolvedUrls[ui]);
                 }
               }
@@ -994,7 +1425,7 @@ function _processNetworkSink(path, result) {
             }
             for (var xui = 0; xui < xpUrls.length; xui++) {
               var xpMethod = xpMethods.length > 0 ? xpMethods[0].toUpperCase() : "GET";
-              result.fetchCallSites.push(_buildFetchSite(xpUrls[xui], xpMethod, xpHeaders, "xhr", xpBody));
+              _pushFetchSite(result, _buildFetchSite(xpUrls[xui], xpMethod, xpHeaders, "xhr", xpBody));
               console.debug("[AST:fetch] xhr %s %s (cross-param)", xpMethod, xpUrls[xui]);
             }
           }
@@ -1028,7 +1459,8 @@ function _processNetworkSink(path, result) {
             var _correlatedSites = _resolveThisPropXhrCorrelated(path, _ctorName, _thisMethodProp, _thisUrlProp, xhrHeaders, xhrBodyParams);
             if (_correlatedSites.length > 0) {
               for (var _csi = 0; _csi < _correlatedSites.length; _csi++) {
-                result.fetchCallSites.push(_correlatedSites[_csi]);
+                var _csSite = _correlatedSites[_csi];
+                if (_csSite && _csSite.url !== "" && _csSite.url != null) result.fetchCallSites.push(_csSite);
               }
               return;
             }
@@ -1061,7 +1493,7 @@ function _processNetworkSink(path, result) {
           if (typeof pm === "string" && _HTTP_METHODS_LC[pm.toLowerCase()]) pairedMethod = pm.toUpperCase();
         }
         var xhrMethodDisplay = pairedMethod === "(dynamic)" ? "?" : pairedMethod;
-        result.fetchCallSites.push(_buildFetchSite(urls[i], xhrMethodDisplay, xhrHeaders, "xhr", xhrBodyParams));
+        _pushFetchSite(result, _buildFetchSite(urls[i], xhrMethodDisplay, xhrHeaders, "xhr", xhrBodyParams));
         console.debug("[AST:fetch] xhr %s %s", xhrMethodDisplay, urls[i]);
       }
     }
@@ -1075,7 +1507,7 @@ function _processNetworkSink(path, result) {
     var beaconUrls = _resolveAllValues(path.get("arguments.0"), 0);
     for (var bi = 0; bi < beaconUrls.length; bi++) {
       var bParams = node.arguments.length > 1 ? _extractBodyParams(node.arguments[1], path) : [];
-      result.fetchCallSites.push(_buildFetchSite(beaconUrls[bi], "POST", {}, "beacon", bParams));
+      _pushFetchSite(result, _buildFetchSite(beaconUrls[bi], "POST", {}, "beacon", bParams));
       console.debug("[AST:fetch] beacon POST %s", beaconUrls[bi]);
     }
     return;
@@ -1103,7 +1535,7 @@ function _processNewExpressionSink(path, result) {
       node.arguments.length >= 1) {
     var urls = _resolveAllValues(path.get("arguments.0"), 0);
     for (var i = 0; i < urls.length; i++) {
-      result.fetchCallSites.push(_buildFetchSite(urls[i], "GET", {}, "eventsource"));
+      _pushFetchSite(result, _buildFetchSite(urls[i], "GET", {}, "eventsource"));
       console.debug("[AST:fetch] eventsource GET %s", urls[i]);
     }
   }
@@ -1121,7 +1553,7 @@ function _processImageSrcSink(path, result) {
   if (!_t.isNewExpression(init) || !_t.isIdentifier(init.callee, { name: "Image" }) || path.scope.getBinding("Image")) return;
   var urls = _resolveAllValues(path.get("right"), 0);
   for (var i = 0; i < urls.length; i++) {
-    result.fetchCallSites.push(_buildFetchSite(urls[i], "GET", {}, "pixel"));
+    _pushFetchSite(result, _buildFetchSite(urls[i], "GET", {}, "pixel"));
     console.debug("[AST:fetch] pixel GET %s", urls[i]);
   }
 }
@@ -1655,7 +2087,7 @@ function _traceWrapperFunction(callPath, funcPath, funcBinding, result) {
 
   var _callLoc = _nodeLoc(callPath.node);
   for (var u = 0; u < urls.length; u++) {
-    result.fetchCallSites.push(_buildFetchSite(urls[u], method, sinkInfo.headers, "fetch", allParams, { enclosingFunction: callerName, urlIsLiteral: urlsFromLiteral, loc: _callLoc }));
+    _pushFetchSite(result, _buildFetchSite(urls[u], method, sinkInfo.headers, "fetch", allParams, { enclosingFunction: callerName, urlIsLiteral: urlsFromLiteral, loc: _callLoc }));
     console.debug("[AST:fetch] traced %s %s via %s()", method, urls[u],
       (funcBinding ? funcBinding.identifier.name : _describeNode(callPath.node.callee)) || "?");
   }
@@ -1764,7 +2196,7 @@ function _traceDeepSinkCall(callPath, funcNode, funcBinding, propMap, result) {
   var calleeName = funcBinding ? funcBinding.identifier.name : _describeNode(callPath.node.callee);
 
   for (var u = 0; u < urls.length; u++) {
-    result.fetchCallSites.push(_buildFetchSite(urls[u], method, {}, propMap.type === "xhr" ? "xhr" : "fetch", deepParams, { enclosingFunction: callerName }));
+    _pushFetchSite(result, _buildFetchSite(urls[u], method, {}, propMap.type === "xhr" ? "xhr" : "fetch", deepParams, { enclosingFunction: callerName }));
     console.debug("[AST:fetch] deep-traced %s %s via %s()", method, urls[u], calleeName || "?");
   }
 }
@@ -2004,7 +2436,7 @@ function _traceChainedWrapper(callPath, funcNode, result) {
   for (var ui = 0; ui < urls.length; ui++) {
     if (typeof urls[ui] !== "string") continue;
     for (var mi = 0; mi < methods.length; mi++) {
-      result.fetchCallSites.push(_buildFetchSite(urls[ui], methods[mi], innerSinkInfo.headers, "fetch", bodyParams));
+      _pushFetchSite(result, _buildFetchSite(urls[ui], methods[mi], innerSinkInfo.headers, "fetch", bodyParams));
       console.debug("[AST:fetch] chained %s %s", methods[mi], urls[ui]);
     }
   }
@@ -2065,6 +2497,37 @@ function _findSinkInFunction(funcPath) {
             urlMemberExpr: xhrUrlMember,
             headers: {},
           };
+          // Also locate xhr.send(...) on the SAME xhr binding to capture
+          // body-source shape (Identifier or MemberExpression). The
+          // wrapper-trace then resolves this through caller args to find
+          // the literal body fields. Without this, sinkInfo for XHR
+          // carries no body info and `_traceWrapperFunction`'s caller-
+          // body-extraction branches never fire.
+          if (_t.isIdentifier(c.object)) {
+            var sendXhrBinding = innerPath.scope.getBinding(c.object.name);
+            if (sendXhrBinding && sendXhrBinding.referencePaths) {
+              for (var sri = 0; sri < sendXhrBinding.referencePaths.length; sri++) {
+                var sendRef = sendXhrBinding.referencePaths[sri];
+                var sendMember = sendRef.parentPath;
+                if (!sendMember || !sendMember.isMemberExpression() ||
+                    sendMember.node.object !== sendRef.node ||
+                    sendMember.node.computed ||
+                    !_t.isIdentifier(sendMember.node.property, { name: "send" })) continue;
+                var sendCall = sendMember.parentPath;
+                if (!sendCall || !sendCall.isCallExpression() ||
+                    sendCall.node.callee !== sendMember.node ||
+                    sendCall.node.arguments.length === 0) continue;
+                var sendArg = sendCall.node.arguments[0];
+                if (_t.isIdentifier(sendArg)) {
+                  sinkInfo.bodyParamName = sendArg.name;
+                } else if (_t.isMemberExpression(sendArg) && !sendArg.computed &&
+                           _t.isIdentifier(sendArg.object) && _t.isIdentifier(sendArg.property)) {
+                  sinkInfo.bodyMemberExpr = { obj: sendArg.object.name, prop: sendArg.property.name };
+                }
+                break;
+              }
+            }
+          }
           innerPath.stop();
         }
       }
@@ -2178,6 +2641,38 @@ function _inferTypeFromAssignments(binding) {
     var initType = _typeOfExpr(binding.path.node.init);
     if (!initType) return _cacheResult(null);
     inferred = initType;
+  }
+  // Function parameter — infer type from caller args. All callers must
+  // pass values whose type matches; otherwise inference is ambiguous
+  // and we return null. Common case: `function go(u) { fetch(u.pathname) }`
+  // called as `go(new URL("/api", base))` — u's type becomes "URL".
+  if (binding.kind === "param" && binding.path && binding.path.node && binding.scope) {
+    var hostFn = binding.scope.path;
+    if (hostFn && hostFn.node && hostFn.node.params) {
+      var paramName = binding.identifier ? binding.identifier.name : null;
+      if (paramName) {
+        var pIdxT = -1;
+        for (var pii = 0; pii < hostFn.node.params.length; pii++) {
+          if (_t.isIdentifier(hostFn.node.params[pii], { name: paramName })) { pIdxT = pii; break; }
+        }
+        if (pIdxT >= 0) {
+          var callerArgsT = _findFunctionCallerArgs(hostFn);
+          var paramInferred = inferred;
+          var sawAny = false;
+          for (var caT = 0; caT < callerArgsT.length; caT++) {
+            if (pIdxT >= callerArgsT[caT].length) continue;
+            var argP = callerArgsT[caT][pIdxT];
+            if (!argP || !argP.node) continue;
+            var argT = _typeOfExpr(argP.node);
+            if (!argT) { paramInferred = null; break; }
+            if (paramInferred && paramInferred !== argT) { paramInferred = null; break; }
+            paramInferred = argT;
+            sawAny = true;
+          }
+          if (sawAny && paramInferred) inferred = paramInferred;
+        }
+      }
+    }
   }
   var viols = binding.constantViolations || [];
   for (var vi = 0; vi < viols.length; vi++) {
@@ -2562,8 +3057,10 @@ function _extractSinkPropertyMap(sinkPath, sinkType) {
           }
         }
       } else if (_t.isIdentifier(optsArg) || _t.isMemberExpression(optsArg)) {
-        // Options is a variable — the method property is accessed as opts.method
-        // We can't resolve without scope, but record the pattern for future tracing
+        // Options is a variable — record `opts.method` access pattern in
+        // map.methodProps so the inter-procedural resolver can match it
+        // against caller-side object literals and resolve the method
+        // value once a real argument is bound.
         _collectMemberProps(optsArg, map.methodProps);
       }
     }
@@ -2656,6 +3153,17 @@ function _extractSinkInfo(fetchPath) {
         info.headers = _extractHeaders(val);
         info.headersNode = val;  // Store raw node for scope-aware resolution later
       }
+      // `headers: new Headers({...})` — W3C Headers constructor wraps the
+      // same object-literal shape. Unwrap to the inner object for header
+      // extraction. `new Headers(arrayOfPairs)` form not extracted (rarely
+      // used; would need a separate pair-iteration path).
+      if (key === "headers" && _t.isNewExpression(val) &&
+          _t.isIdentifier(val.callee, { name: "Headers" }) &&
+          !fetchPath.scope.getBinding("Headers") &&
+          val.arguments.length >= 1 && _t.isObjectExpression(val.arguments[0])) {
+        info.headers = _extractHeaders(val.arguments[0]);
+        info.headersNode = val.arguments[0];
+      }
       if (key === "body") {
         info.params = _extractBodyParams(val);
         // Track body source so _traceWrapperFunction can resolve through caller args
@@ -2683,9 +3191,12 @@ function _describeMemberChain(node) {
   // For identifier roots we emit the name; for `this`/`super` we emit
   // the keyword; for anything else (CallExpression root, etc.) we emit
   // that node's type so the reviewer at least sees the shape.
+  // OptionalMemberExpression (`a?.b`) is semantically identical to
+  // MemberExpression for chain description — handle both so gap
+  // descriptors don't fall back to the opaque type name.
   var parts = [];
   var cur = node;
-  while (_t.isMemberExpression(cur) && !cur.computed) {
+  while ((_t.isMemberExpression(cur) || _t.isOptionalMemberExpression(cur)) && !cur.computed) {
     var propName = _t.isIdentifier(cur.property) ? cur.property.name :
       (_t.isStringLiteral(cur.property) ? cur.property.value : null);
     if (!propName) return null;
@@ -2699,27 +3210,318 @@ function _describeMemberChain(node) {
   else parts.unshift("<" + cur.type + ">");
   return parts.join(".");
 }
+// Follow `Identifier → its init` and `new Request(X, …) → X` transparently
+// so the gap descriptor points at the actual unresolvable leaf instead
+// of the outer reference. Without this, `fetch(c)` where
+// `c = new Request(new URL(dom.attr, origin).toString(), init)` reports
+// the gap at `c` — the reviewer has to chase back through two bindings
+// to find the real DOM-runtime leaf.
+function _unwrapGapToRootCause(argPath, visited) {
+  if (!argPath || !argPath.node) return argPath;
+  // Cycle-safe: short-circuit when we re-visit a node we've already
+  // unwrapped through. Replaces a magic-number depth cap. Real cycles
+  // appear when a binding's init references the binding itself
+  // (recursive var) or when an IIFE's return references its callee.
+  if (!visited) visited = new Set();
+  if (visited.has(argPath.node)) return argPath;
+  visited.add(argPath.node);
+  var n = argPath.node;
+  // Identifier → var init (only if constant-init binding)
+  if (_t.isIdentifier(n)) {
+    var binding = argPath.scope.getBinding(n.name);
+    if (binding && binding.constant && _t.isVariableDeclarator(binding.path.node) && binding.path.node.init) {
+      return _unwrapGapToRootCause(binding.path.get("init"), visited);
+    }
+    return argPath;
+  }
+  // new Request(URL, init) — URL arg is what matters
+  if (_t.isNewExpression(n) && _t.isIdentifier(n.callee, { name: "Request" }) &&
+      !argPath.scope.getBinding("Request") && n.arguments.length >= 1) {
+    return _unwrapGapToRootCause(argPath.get("arguments.0"), visited);
+  }
+  // x.toString() / x.valueOf() — receiver is what matters
+  if (_t.isCallExpression(n) && _t.isMemberExpression(n.callee) && !n.callee.computed &&
+      _t.isIdentifier(n.callee.property) &&
+      (n.callee.property.name === "toString" || n.callee.property.name === "valueOf")) {
+    return _unwrapGapToRootCause(argPath.get("callee.object"), visited);
+  }
+  // IIFE / arrow IIFE — the first return statement's argument is the
+  // root cause. Avoids labelling the gap as opaque `<IIFE>()` when the
+  // actual failure is the unresolved value inside the IIFE body.
+  if (_t.isCallExpression(n) &&
+      (_t.isFunctionExpression(n.callee) || _t.isArrowFunctionExpression(n.callee))) {
+    var fn = n.callee;
+    // Arrow with expression body: the body IS the return value.
+    if (_t.isArrowFunctionExpression(fn) && !_t.isBlockStatement(fn.body)) {
+      return _unwrapGapToRootCause(argPath.get("callee.body"), visited);
+    }
+    // Function body: find the FIRST return statement at top level.
+    if (_t.isBlockStatement(fn.body)) {
+      for (var bi = 0; bi < fn.body.body.length; bi++) {
+        if (_t.isReturnStatement(fn.body.body[bi]) && fn.body.body[bi].argument) {
+          return _unwrapGapToRootCause(argPath.get("callee.body.body." + bi + ".argument"), visited);
+        }
+      }
+    }
+  }
+  // SequenceExpression `(a, b, c)` — only the LAST element is the value.
+  // Common minifier shape: `return x.search = y.toString(), x.toString()`.
+  if (_t.isSequenceExpression(n) && n.expressions.length > 0) {
+    var lastIdx = n.expressions.length - 1;
+    return _unwrapGapToRootCause(argPath.get("expressions." + lastIdx), visited);
+  }
+  // ConditionalExpression `cond ? a : b` — both branches contribute to
+  // the value. For gap reporting, unwrap to the consequent (truthy
+  // branch) so the descriptor shows a concrete leaf the reviewer can
+  // trace, not the opaque `ConditionalExpression` type name.
+  if (_t.isConditionalExpression(n)) {
+    return _unwrapGapToRootCause(argPath.get("consequent"), visited);
+  }
+  // TemplateLiteral with at least one interpolation — unwrap to the
+  // FIRST interpolation. The TemplateLiteral itself fails to resolve
+  // when any interpolation is unresolvable; surfacing the actual
+  // unresolved leaf lets the reviewer trace what's missing instead of
+  // the opaque `<template>` label.
+  if (_t.isTemplateLiteral(n) && n.expressions.length > 0) {
+    return _unwrapGapToRootCause(argPath.get("expressions.0"), visited);
+  }
+  // BinaryExpression `+` (concat) — unwrap to the LEFT operand so the
+  // descriptor shows the leftmost leaf of the concat chain.
+  if (_t.isBinaryExpression(n) && n.operator === "+") {
+    return _unwrapGapToRootCause(argPath.get("left"), visited);
+  }
+  // LogicalExpression `a || b` / `a && b` / `a ?? b` — the value at
+  // runtime depends on truthiness. Unwrap to the LEFT (the operand
+  // that's evaluated first, and frequently the dominant value-producer).
+  if (_t.isLogicalExpression(n)) {
+    return _unwrapGapToRootCause(argPath.get("left"), visited);
+  }
+  // UnaryExpression `+x` / `-x` / `!x` / `~x` / `void x` / `typeof x`
+  // — the value depends on the operand. Unwrap to the operand to surface
+  // the underlying gap leaf instead of the opaque `UnaryExpression`.
+  if (_t.isUnaryExpression(n)) {
+    return _unwrapGapToRootCause(argPath.get("argument"), visited);
+  }
+  // AwaitExpression / YieldExpression — value comes from the
+  // wrapped/yielded expression. Unwrap.
+  if (_t.isAwaitExpression(n) || _t.isYieldExpression(n)) {
+    if (n.argument) return _unwrapGapToRootCause(argPath.get("argument"), visited);
+  }
+  return argPath;
+}
 function _recordUrlResolveGap(argPath) {
   if (!argPath || !argPath.node) return;
+  // Preserve the ORIGINAL fetch-arg location — audit.sinks cross-
+  // references gaps by (script, line) and needs the sink-call site,
+  // not the root cause's location. Unwrap the node for description
+  // quality, but keep the original loc.
+  var origLoc = argPath.node.loc;
+  argPath = _unwrapGapToRootCause(argPath);
   var n = argPath.node;
   var desc = null;
   if (_t.isIdentifier(n)) desc = n.name;
-  else if (_t.isMemberExpression(n)) desc = _describeMemberChain(n) || n.type;
+  else if (_t.isMemberExpression(n) || _t.isOptionalMemberExpression(n)) desc = _describeMemberChain(n) || n.type;
   else if (_t.isCallExpression(n)) {
     if (_t.isIdentifier(n.callee)) desc = n.callee.name + "()";
     else if (_t.isMemberExpression(n.callee)) {
       var calleeDesc = _describeMemberChain(n.callee);
       desc = calleeDesc ? calleeDesc + "()" : "CallExpression";
-    } else desc = "CallExpression";
+    }
+    else if (_t.isFunctionExpression(n.callee) || _t.isArrowFunctionExpression(n.callee)) desc = "<IIFE>()";
+    else if (_t.isNewExpression(n.callee)) desc = "new " + (_t.isIdentifier(n.callee.callee) ? n.callee.callee.name : n.callee.callee.type) + "()()";
+    else desc = n.callee.type + "()";
   }
   else if (_t.isBinaryExpression(n)) desc = "<concat>";
   else if (_t.isTemplateLiteral(n)) desc = "<template>";
+  else if (_t.isNewExpression(n)) {
+    var ctorName = _t.isIdentifier(n.callee) ? n.callee.name : n.callee.type;
+    // For new URL(X, Y) specifically, annotate what the arguments look
+    // like: `DOM-read` for `.getAttribute(…)` / `.textContent`, `same-origin`
+    // for `location.origin` family. Helps reviewers see at a glance
+    // whether this is a genuinely-dynamic URL or just a resolver gap.
+    if (ctorName === "URL" && n.arguments.length >= 1) {
+      var argHints = [];
+      for (var aI = 0; aI < Math.min(n.arguments.length, 2); aI++) {
+        var arg = n.arguments[aI];
+        if (_t.isCallExpression(arg) && _t.isMemberExpression(arg.callee) &&
+            _t.isIdentifier(arg.callee.property) && arg.callee.property.name === "getAttribute") {
+          var gaArg = arg.arguments[0];
+          argHints.push("getAttribute(" + (_t.isStringLiteral(gaArg) ? '"' + gaArg.value + '"' : "…") + ")");
+        } else if (_t.isMemberExpression(arg) && !arg.computed &&
+            _t.isIdentifier(arg.property) &&
+            (arg.property.name === "origin" || arg.property.name === "href" || arg.property.name === "pathname")) {
+          var base = arg.object;
+          var basePrefix = "";
+          if (_t.isIdentifier(base) && (base.name === "location" || base.name === "window" || base.name === "self")) basePrefix = base.name + ".";
+          else if (_t.isMemberExpression(base) && _t.isIdentifier(base.property, { name: "location" })) basePrefix = (_t.isIdentifier(base.object) ? base.object.name : "") + ".location.";
+          argHints.push(basePrefix + arg.property.name);
+        } else if (_t.isStringLiteral(arg)) {
+          argHints.push('"' + (arg.value.length > 30 ? arg.value.slice(0, 27) + "…" : arg.value) + '"');
+        } else if (_t.isIdentifier(arg)) {
+          argHints.push(arg.name);
+        } else {
+          argHints.push("…");
+        }
+      }
+      desc = "new URL(" + argHints.join(", ") + ")";
+    } else {
+      desc = "new " + ctorName + "(…)";
+    }
+  }
   else desc = n.type;
-  var loc = n.loc ? "@L" + n.loc.start.line + ":C" + n.loc.start.column : "";
+  // Report the ORIGINAL fetch-arg location so audit.sinks cross-refs
+  // resolve correctly. If unwrap moved to a different location, include
+  // the root cause's coords as a trailing annotation so reviewers can
+  // navigate to the actual leaf.
+  var reportLoc = origLoc || n.loc;
+  var loc = reportLoc ? "@L" + reportLoc.start.line + ":C" + reportLoc.start.column : "";
+  var rootTag = "";
+  if (n.loc && reportLoc && (n.loc.start.line !== reportLoc.start.line || n.loc.start.column !== reportLoc.start.column)) {
+    rootTag = " (root cause @L" + n.loc.start.line + ":C" + n.loc.start.column + ")";
+  }
   _resolver.collectError(
-    new Error("fetch URL resolver gap: " + desc + loc + " didn't resolve — add a resolution path"),
+    new Error("fetch URL resolver gap: " + desc + loc + rootTag + " didn't resolve — add a resolution path"),
     "fetchUrlResolve"
   );
+}
+
+// Extract structural URL shape from a URL argument when the full value
+// doesn't resolve. Returns { path, queryParamNames, gapPath } when the
+// literal-prefix portion of a concat / template literal can be parsed as
+// a URL with at least one statically-visible query-param name; otherwise
+// null. Path-only literal prefixes (no `?`) are valid too — caller emits
+// the path with no query learned.
+//
+// Examples handled:
+//   "/api/check?nwo=" + encodeURIComponent(repo)
+//     → { path: "/api/check", queryParamNames: ["nwo"], gapPath: <repo> }
+//   `/users/${id}/posts?page=${n}`
+//     → { path: "/users/<id>/posts", … }  (when id is opaque, path itself
+//        contains a marker — only emit when path is fully literal up to ?)
+//   "/list?type=" + t + "&page=" + n
+//     → { path: "/list", queryParamNames: ["type", "page"], … }
+//
+// What's NOT done here: scheme/host invention. If the literal prefix
+// doesn't start with "/" or a known absolute URL, return null — we won't
+// invent a host.
+function _resolveUrlStructuralShape(urlArgPath) {
+  if (!urlArgPath || !urlArgPath.node) return null;
+  var n = urlArgPath.node;
+
+  // `new URL(input, base).href` / `.toString()` — the WHATWG URL parser
+  // produces the same path/query shape as the input argument itself.
+  // Recurse into the input arg; the base only contributes scheme/host
+  // (which the structural emit doesn't include anyway).
+  if (_t.isMemberExpression(n) && !n.computed &&
+      _t.isIdentifier(n.property) && (n.property.name === "href" || n.property.name === "toString") &&
+      _t.isNewExpression(n.object) && _t.isIdentifier(n.object.callee, { name: "URL" }) &&
+      !urlArgPath.scope.getBinding("URL") &&
+      n.object.arguments.length >= 1) {
+    return _resolveUrlStructuralShape(urlArgPath.get("object.arguments.0"));
+  }
+  // `(new URL(input, base)).toString()` is a CallExpression on the
+  // MemberExpression — handle the call form too.
+  if (_t.isCallExpression(n) && _t.isMemberExpression(n.callee) && !n.callee.computed &&
+      _t.isIdentifier(n.callee.property, { name: "toString" }) &&
+      _t.isNewExpression(n.callee.object) && _t.isIdentifier(n.callee.object.callee, { name: "URL" }) &&
+      !urlArgPath.scope.getBinding("URL") &&
+      n.callee.object.arguments.length >= 1) {
+    return _resolveUrlStructuralShape(urlArgPath.get("callee.object.arguments.0"));
+  }
+
+  // Build an ordered list of [literal-or-null] segments. For BinaryExpression+
+  // walk left-to-right; for TemplateLiteral interleave quasis and expressions.
+  var segments = []; // each: {literal: string|null}  null = unresolved expression
+  function pushTerm(termPath) {
+    var vals = _resolveAllValues(termPath, 0);
+    if (vals.length > 0 && typeof vals[0] === "string") {
+      segments.push({ literal: vals[0] });
+    } else {
+      segments.push({ literal: null, gapPath: termPath });
+    }
+  }
+  if (_t.isBinaryExpression(n, { operator: "+" })) {
+    var parts = [];
+    var cur = urlArgPath;
+    while (_t.isBinaryExpression(cur.node, { operator: "+" })) {
+      parts.push(cur.get("right"));
+      cur = cur.get("left");
+    }
+    parts.push(cur);
+    parts.reverse();
+    for (var pi = 0; pi < parts.length; pi++) pushTerm(parts[pi]);
+  } else if (_t.isTemplateLiteral(n)) {
+    for (var qi = 0; qi < n.quasis.length; qi++) {
+      var raw = n.quasis[qi].value.cooked || n.quasis[qi].value.raw || "";
+      if (raw) segments.push({ literal: raw });
+      if (qi < n.expressions.length) pushTerm(urlArgPath.get("expressions." + qi));
+    }
+  } else {
+    return null;
+  }
+
+  // Need at least one literal segment that starts the path. The first
+  // segment must be a literal beginning with "/" or "http(s)://" — we
+  // refuse to invent a host.
+  if (!segments.length || segments[0].literal == null) return null;
+  var firstLit = segments[0].literal;
+  if (!firstLit.startsWith("/") && !/^https?:\/\//i.test(firstLit)) return null;
+
+  // Walk segments, accumulate path until we hit `?`, then accumulate
+  // query-key names. Each unresolved segment in query-value position is
+  // skipped (its name was already established by the preceding literal
+  // ending in `=`). An unresolved segment in PATH position (before `?`)
+  // means the path itself isn't fully static — bail (path placeholders
+  // would be misleading).
+  var sawQuery = false;
+  var pathBuf = "";
+  var queryBuf = "";
+  for (var si = 0; si < segments.length; si++) {
+    var seg = segments[si];
+    if (!sawQuery) {
+      if (seg.literal == null) {
+        // Unresolved in path position — refuse to invent.
+        return null;
+      }
+      var qIdx = seg.literal.indexOf("?");
+      if (qIdx < 0) {
+        pathBuf += seg.literal;
+      } else {
+        pathBuf += seg.literal.slice(0, qIdx);
+        queryBuf += seg.literal.slice(qIdx + 1);
+        sawQuery = true;
+      }
+    } else {
+      if (seg.literal == null) {
+        // Unresolved value — its key was set by the preceding literal
+        // ending in `=`. Don't append anything; the key is already in
+        // queryBuf followed by `=` with no value. The next literal (if
+        // any) should start with `&` to introduce a new key.
+      } else {
+        queryBuf += seg.literal;
+      }
+    }
+  }
+
+  if (!sawQuery) {
+    // Pure-path resolution: just emit the path. No query params learned.
+    return pathBuf ? { path: pathBuf, queryParamNames: [] } : null;
+  }
+
+  // Parse queryBuf: split by '&', then for each part take the substring
+  // before '='. Empty key segments are skipped. Trailing '=' (or no '=')
+  // means the key is named but value was unresolved.
+  var keys = [];
+  var pieces = queryBuf.split("&");
+  for (var ki = 0; ki < pieces.length; ki++) {
+    var p = pieces[ki];
+    if (!p) continue;
+    var eqIdx = p.indexOf("=");
+    var key = eqIdx >= 0 ? p.slice(0, eqIdx) : p;
+    if (key && keys.indexOf(key) < 0) keys.push(key);
+  }
+  if (!keys.length) return null;
+  return { path: pathBuf, queryParamNames: keys };
 }
 
 function _extractFetchCall(path, result, type) {
@@ -2728,6 +3530,18 @@ function _extractFetchCall(path, result, type) {
 
   // ── Resolve URL (may produce multiple values via inter-procedural tracing) ──
   var urlArgPath = path.get("arguments.0");
+  // Provable-undefined / null short-circuit. `fetch(void 0)`, `fetch(null)`,
+  // and `fetch(undefined)` (where `undefined` is the global) aren't real
+  // network calls — at runtime the URL coerces to "undefined"/"null" and
+  // the request fails immediately. They show up via inter-procedural
+  // tracing (e.g. react-query's `t.fetch(void 0, s)` where the analyzer
+  // follows the method into its body and sees an internal fetch using the
+  // forwarded arg). Skip without recording a resolver gap — the value IS
+  // resolved, it just isn't a URL.
+  var _urlArgN = urlArgPath.node;
+  if (_t.isUnaryExpression(_urlArgN) && _urlArgN.operator === "void") return;
+  if (_t.isNullLiteral(_urlArgN)) return;
+  if (_t.isIdentifier(_urlArgN, { name: "undefined" }) && !urlArgPath.scope.getBinding("undefined")) return;
   var urls = _resolveAllValues(urlArgPath, 0);
   // Empty result = resolver couldn't trace to a concrete value. For a
   // URL argument that's a resolver gap we want visible on the analysis
@@ -2736,6 +3550,31 @@ function _extractFetchCall(path, result, type) {
   // first unresolved Identifier / MemberExpression / CallExpression
   // with its location; silently dropping the fetch site would erase
   // a pointer to work we still need to do.
+  // Track structurally-learned param names for shape-only emission.
+  // Populated by the structural-shape fallback below when full value
+  // resolution fails; consumed at fetch-site construction time so the
+  // schema gets the param NAMES even when their VALUES are opaque.
+  var structuralParamNames = null;
+  if (urls.length === 0) {
+    var shape = _resolveUrlStructuralShape(urlArgPath);
+    if (shape && shape.path) {
+      urls = [shape.path];
+      structuralParamNames = shape.queryParamNames;
+      // Still record the value gap — reviewer needs to know which
+      // expression(s) didn't resolve, even though we extracted the shape.
+      _recordUrlResolveGap(urlArgPath);
+    }
+  }
+  if (urls.length === 0) {
+    _recordUrlResolveGap(urlArgPath);
+    return;
+  }
+  // Filter out empty-string URLs from the resolution set. Common source:
+  // `el.getAttribute("x") || ""` — the DOM read doesn't resolve, the ||
+  // fallback is "". Emitting "" as a learned URL is a false positive
+  // (no one actually fetches ""). If ALL resolved values are empty, it's
+  // effectively unresolved — surface as a gap instead.
+  urls = urls.filter(function(u) { return u !== "" && u != null; });
   if (urls.length === 0) {
     _recordUrlResolveGap(urlArgPath);
     return;
@@ -2761,9 +3600,19 @@ function _extractFetchCall(path, result, type) {
   var headers = {};
   var bodyParams = [];
 
-  // Resolve options object — inline or via variable reference or function parameter
+  // Resolve options object — inline or via variable reference or function parameter.
+  // `fetch(new Request(url, init))` — Request init is the second arg of
+  // the constructor, not of fetch. Unwrap so method/headers/body extract
+  // the same way as `fetch(url, init)`.
   var optsNode = args[1] || null;
   var optsPath = args[1] ? path.get("arguments.1") : null;
+  if (!optsNode && _t.isNewExpression(args[0]) &&
+      _t.isIdentifier(args[0].callee, { name: "Request" }) &&
+      !path.scope.getBinding("Request") &&
+      args[0].arguments.length >= 2) {
+    optsNode = args[0].arguments[1];
+    optsPath = path.get("arguments.0.arguments.1");
+  }
   if (optsNode && _t.isIdentifier(optsNode) && optsPath) {
     var optsBinding = path.scope.getBinding(optsNode.name);
     if (optsBinding && _t.isVariableDeclarator(optsBinding.path.node) && optsBinding.path.node.init) {
@@ -2847,6 +3696,14 @@ function _extractFetchCall(path, result, type) {
       }
       if (optName === "headers" && _t.isObjectExpression(optVal)) {
         headers = _extractHeaders(optVal);
+      }
+      // `headers: new Headers({...})` — W3C Headers constructor wraps the
+      // header object. Unwrap to extract the same shape.
+      if (optName === "headers" && _t.isNewExpression(optVal) &&
+          _t.isIdentifier(optVal.callee, { name: "Headers" }) &&
+          !path.scope.getBinding("Headers") &&
+          optVal.arguments.length >= 1 && _t.isObjectExpression(optVal.arguments[0])) {
+        headers = _extractHeaders(optVal.arguments[0]);
       }
       if (optName === "body") {
         bodyParams = _extractBodyParams(optVal, path);
@@ -3094,10 +3951,34 @@ function _extractFetchCall(path, result, type) {
     }
   }
 
+  // Append structurally-learned query param names (from
+  // _resolveUrlStructuralShape) when the full URL value didn't resolve
+  // but the path + param-name shape did. Marked _astValueSource:
+  // "param-derived" so consumers know the value side wasn't statically
+  // determined — the schema gets a real param NAME with no example.
+  if (structuralParamNames && structuralParamNames.length) {
+    for (var sni = 0; sni < structuralParamNames.length; sni++) {
+      var pn = structuralParamNames[sni];
+      var alreadyHave = false;
+      for (var pj = 0; pj < params.length; pj++) {
+        if (params[pj].name === pn && params[pj].location === "query") { alreadyHave = true; break; }
+      }
+      if (!alreadyHave) {
+        params.push({
+          name: pn,
+          location: "query",
+          required: true,
+          source: "param-derived",
+          _astValueSource: "param-derived",
+        });
+      }
+    }
+  }
+
   // ── Create call sites (with per-caller method pairing) ──
   for (var u = 0; u < urls.length; u++) {
     var siteMethod = httpMethods && u < httpMethods.length ? httpMethods[u] : (httpMethod || "GET");
-    result.fetchCallSites.push(_buildFetchSite(urls[u], siteMethod, headers, type, params, { enclosingFunction: funcInfo ? funcInfo.name : undefined, responseType: responseType, urlIsLiteral: urlFromLiteral }));
+    _pushFetchSite(result, _buildFetchSite(urls[u], siteMethod, headers, type, params, { enclosingFunction: funcInfo ? funcInfo.name : undefined, responseType: responseType, urlIsLiteral: urlFromLiteral }));
   }
 
   if (urls.length > 0) {
@@ -3129,6 +4010,38 @@ function _resolveAllValues(path, depth) {
 
   if (!_resolver.guard("V", node)) return [];
   try {
+
+  // String-encoding transforms applied to a resolved string. WHATWG/ES
+  // spec: encodeURIComponent / encodeURI / decodeURIComponent / decodeURI
+  // are pure functions on a single string argument. When the argument
+  // resolves to a string literal (possibly via inter-procedural caller
+  // tracing), apply the transform and return the encoded value — that's
+  // a real example value the URL would receive at runtime, not a
+  // placeholder. btoa / atob get the same treatment for base64 round-
+  // trips. All four globals are scope-checked before applying.
+  if (_t.isCallExpression(node) && _t.isIdentifier(node.callee) &&
+      node.arguments.length >= 1 && !path.scope.getBinding(node.callee.name)) {
+    var ecName = node.callee.name;
+    if (ecName === "encodeURIComponent" || ecName === "encodeURI" ||
+        ecName === "decodeURIComponent" || ecName === "decodeURI" ||
+        ecName === "btoa" || ecName === "atob") {
+      var argVals = _resolveAllValues(path.get("arguments.0"), depth + 1);
+      if (argVals.length === 0) return [];
+      var fn = ecName === "encodeURIComponent" ? encodeURIComponent :
+               ecName === "encodeURI" ? encodeURI :
+               ecName === "decodeURIComponent" ? decodeURIComponent :
+               ecName === "decodeURI" ? decodeURI :
+               ecName === "btoa" ? (typeof btoa !== "undefined" ? btoa : function(s) { return Buffer.from(s, "binary").toString("base64"); }) :
+                                    (typeof atob !== "undefined" ? atob : function(s) { return Buffer.from(s, "base64").toString("binary"); });
+      var out = [];
+      for (var avi = 0; avi < argVals.length; avi++) {
+        if (typeof argVals[avi] === "string") {
+          try { out.push(fn(argVals[avi])); } catch (_) { /* malformed input — skip */ }
+        }
+      }
+      if (out.length > 0) return out;
+    }
+  }
 
   // Simple template literal without interpolations
   if (_t.isTemplateLiteral(node) && node.expressions.length === 0 && node.quasis.length === 1) {
@@ -3184,7 +4097,7 @@ function _resolveAllValues(path, depth) {
     for (var tri = 0; tri < termResults.length; tri++) {
       var next = [];
       var maxLen = Math.max(concatResult.length, termResults[tri].length);
-      for (var zi = 0; zi < maxLen && next.length < 20; zi++) {
+      for (var zi = 0; zi < maxLen; zi++) {
         var l = concatResult[Math.min(zi, concatResult.length - 1)];
         var r = termResults[tri][Math.min(zi, termResults[tri].length - 1)];
         next.push(String(l) + String(r));
@@ -3221,6 +4134,51 @@ function _resolveAllValues(path, depth) {
       orVals = orVals.concat(_resolveAllValues(orParts[oi], depth + 1));
     }
     if (orVals.length > 0) return orVals;
+  }
+
+  // new Request(input, init?) — the Fetch API's Request constructor.
+  // `fetch(c)` where `c = new Request(url, {method, body, headers})` is a
+  // common indirection in handlers that want to share init between a
+  // cancel-capable fetch and a Request validation pass. The first
+  // argument can be a URL string, a URL object, or another Request; we
+  // only need to resolve it as a URL value — the existing URL/toString
+  // paths pick up the other two forms when they recurse.
+  if (_t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "Request" }) &&
+      !path.scope.getBinding("Request") && node.arguments.length >= 1) {
+    return _resolveAllValues(path.get("arguments.0"), depth + 1);
+  }
+
+  // new URL(input, base?) — when both arguments resolve to string values
+  // the whole construction resolves to the absolute URL. The minified
+  // `fetch(new URL(rel, base).toString())` shape is common; the .toString()
+  // passthrough handler brings us back here. `URL` must be the unshadowed global.
+  if (_t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URL" }) &&
+      !path.scope.getBinding("URL") && node.arguments.length >= 1) {
+    var urlInputVals = _resolveAllValues(path.get("arguments.0"), depth + 1);
+    if (urlInputVals.length === 0) return [];
+    var urlBaseVals = null;
+    if (node.arguments.length >= 2) {
+      urlBaseVals = _resolveAllValues(path.get("arguments.1"), depth + 1);
+      if (urlBaseVals.length === 0) return [];
+    }
+    var urlOut = [];
+    for (var uli = 0; uli < urlInputVals.length; uli++) {
+      var urlInStr = String(urlInputVals[uli]);
+      if (urlBaseVals) {
+        for (var ulb = 0; ulb < urlBaseVals.length; ulb++) {
+          try {
+            var abs = new URL(urlInStr, String(urlBaseVals[ulb])).href;
+            if (urlOut.indexOf(abs) < 0) urlOut.push(abs);
+          } catch (_) { /* URL constructor would throw at runtime for this (input,base) pair — runtime never emits a URL here either */ }
+        }
+      } else {
+        try {
+          var absOnly = new URL(urlInStr).href;
+          if (urlOut.indexOf(absOnly) < 0) urlOut.push(absOnly);
+        } catch (_) { /* single-arg new URL() requires absolute input — relative string throws, matching runtime */ }
+      }
+    }
+    return urlOut;
   }
 
   // new URLSearchParams({k: v, ...}) / new URLSearchParams("a=1&b=2")
@@ -3264,6 +4222,50 @@ function _resolveAllValues(path, depth) {
           smName === "toUpperCase" || smName === "slice" || smName === "substring" || smName === "substr") {
         var smVals = _resolveAllValues(path.get("callee.object"), depth + 1);
         if (smVals.length > 0) return smVals;
+      }
+      // .toString() / .valueOf() — identity passthrough. Minified bundles
+      // emit `fetch(n.toString())` after building `n = new URL(rel, base)`;
+      // the URL-construction branch below resolves the receiver and
+      // .toString() is the no-op terminator that commits it to a string.
+      // For URLSearchParams the receiver is already resolved to the
+      // query-string form in the _resolveToObject path.
+      if (smName === "toString" || smName === "valueOf") {
+        var tsVals = _resolveAllValues(path.get("callee.object"), depth + 1);
+        if (tsVals.length > 0) return tsVals;
+      }
+      // el.getAttribute(KEY) roundtrip: if el's scope has a matching
+      // el.setAttribute(KEY, VALUE) call whose value resolves, the
+      // getter returns that value. Real-world: custom elements that
+      // stash config via data-* attrs in one method and read them in
+      // another. When setAttribute is NOT found, leave the getter
+      // unresolved (returns []) — runtime-DOM, analyzer has no static
+      // ground truth.
+      if (smName === "getAttribute" && node.arguments.length >= 1 &&
+          _t.isStringLiteral(node.arguments[0])) {
+        var gaKey = node.arguments[0].value;
+        var gaReceiverPath = path.get("callee.object");
+        var gaReceiver = gaReceiverPath.node;
+        if (_t.isIdentifier(gaReceiver)) {
+          var gaBinding = path.scope.getBinding(gaReceiver.name);
+          if (gaBinding && gaBinding.referencePaths) {
+            var setVals = [];
+            for (var gari = 0; gari < gaBinding.referencePaths.length; gari++) {
+              var gaRef = gaBinding.referencePaths[gari];
+              // Pattern: el.setAttribute(KEY, VALUE)
+              var gaMem = gaRef.parentPath;
+              if (!gaMem || !gaMem.isMemberExpression() || gaMem.node.object !== gaRef.node || gaMem.node.computed) continue;
+              if (!_t.isIdentifier(gaMem.node.property, { name: "setAttribute" })) continue;
+              var gaCall = gaMem.parentPath;
+              if (!gaCall || !gaCall.isCallExpression() || gaCall.node.callee !== gaMem.node) continue;
+              if (gaCall.node.arguments.length < 2) continue;
+              var gaSetKey = gaCall.node.arguments[0];
+              if (!_t.isStringLiteral(gaSetKey) || gaSetKey.value !== gaKey) continue;
+              var gaValVals = _resolveAllValues(gaCall.get("arguments.1"), depth + 1);
+              setVals = setVals.concat(gaValVals);
+            }
+            if (setVals.length > 0) return setVals;
+          }
+        }
       }
       // Array.join(separator): resolve array elements (recursively, through
       // scope bindings / return values / concats) and join with separator.
@@ -3323,8 +4325,10 @@ function _resolveAllValues(path, depth) {
       }
     }
 
-    // Non-constant variable — check if all assignments are string literals
-    if (!binding.constant && binding.constantViolations.length > 0 && binding.constantViolations.length <= 5) {
+    // Non-constant variable — collect all reassignments. No cap on
+    // count: every reassigned value belongs in the result set per the
+    // resolver-completeness rule.
+    if (!binding.constant && binding.constantViolations.length > 0) {
       var vals = [];
       if (_t.isVariableDeclarator(binding.path.node) && binding.path.node.init) {
         var initVal = _resolveAllValues(binding.path.get("init"), depth + 1);
@@ -3339,12 +4343,239 @@ function _resolveAllValues(path, depth) {
       }
       if (vals.length > 0) return vals;
     }
+    // for-in / for-of loop variable: `for (var k in obj)` → k iterates
+    // over obj's keys; `for (var v of arr)` → v iterates over arr's
+    // elements. When the iterable resolves to a literal-keyed object or
+    // array, the loop variable resolves to the union of those keys /
+    // elements. Pure ECMAScript iteration semantics.
+    if (_t.isVariableDeclarator(binding.path.node) && !binding.path.node.init) {
+      var loopOwner = binding.path.parentPath && binding.path.parentPath.parentPath;
+      if (loopOwner && (loopOwner.isForInStatement() || loopOwner.isForOfStatement()) &&
+          loopOwner.node.left === binding.path.parent) {
+        var iterableP = loopOwner.get("right");
+        if (loopOwner.isForInStatement()) {
+          // Keys of the iterable's resolved object.
+          var iterObj = _resolveToObject(iterableP, depth);
+          if (iterObj && iterObj.properties) {
+            var keys = [];
+            for (var ki = 0; ki < iterObj.properties.length; ki++) {
+              var ko = iterObj.properties[ki];
+              if (_t.isObjectProperty(ko) && !ko.computed) {
+                var kn = _getKeyName(ko.key);
+                if (kn != null) keys.push(kn);
+              }
+            }
+            if (keys.length > 0) return keys;
+          }
+        } else {
+          // for-of: elements of the iterable's resolved array.
+          var iterArr = _resolveToArray(iterableP, depth);
+          if (iterArr && iterArr._path && iterArr.elements) {
+            var elemVals = [];
+            for (var eli = 0; eli < iterArr.elements.length; eli++) {
+              if (iterArr.elements[eli]) {
+                elemVals = elemVals.concat(_resolveAllValues(iterArr._path.get("elements." + eli), depth + 1));
+              }
+            }
+            if (elemVals.length > 0) return elemVals;
+          }
+        }
+      }
+    }
+    // Destructured binding via VariableDeclarator with ArrayPattern or
+    // ObjectPattern id. Babel groups destructured names under a single
+    // VariableDeclarator (binding.path), so we walk the pattern shape on
+    // binding.path.node.id to find this name's position.
+    //   var [first, url] = arr;   // url → arr[1]
+    //   var {url} = cfg;          // url → cfg.url
+    //   var {key: u} = cfg;       // u → cfg.key (renamed)
+    if (_t.isVariableDeclarator(binding.path.node) && binding.path.node.init &&
+        (_t.isArrayPattern(binding.path.node.id) || _t.isObjectPattern(binding.path.node.id))) {
+      var pat = binding.path.node.id;
+      var initExpr = binding.path.node.init;
+      if (_t.isArrayPattern(pat)) {
+        var elemIdx = -1;
+        for (var aei = 0; aei < pat.elements.length; aei++) {
+          var aElem = pat.elements[aei];
+          if (_t.isIdentifier(aElem, { name: node.name })) { elemIdx = aei; break; }
+          if (_t.isAssignmentPattern(aElem) && _t.isIdentifier(aElem.left, { name: node.name })) { elemIdx = aei; break; }
+        }
+        if (elemIdx >= 0) {
+          if (_t.isArrayExpression(initExpr) && elemIdx < initExpr.elements.length && initExpr.elements[elemIdx]) {
+            return _resolveAllValues(binding.path.get("init.elements." + elemIdx), depth + 1);
+          }
+          var arrInit = _resolveToArray(binding.path.get("init"), depth);
+          if (arrInit && arrInit._path && elemIdx < arrInit.elements.length && arrInit.elements[elemIdx]) {
+            return _resolveAllValues(arrInit._path.get("elements." + elemIdx), depth + 1);
+          }
+        }
+      } else {
+        var keyForName = _findDestructuredKey(pat, node.name);
+        if (keyForName) {
+          if (_t.isObjectExpression(initExpr)) {
+            for (var oei = 0; oei < initExpr.properties.length; oei++) {
+              var oep = initExpr.properties[oei];
+              if (_t.isObjectProperty(oep) && !oep.computed && _getKeyName(oep.key) === keyForName) {
+                return _resolveAllValues(binding.path.get("init.properties." + oei + ".value"), depth + 1);
+              }
+            }
+          }
+          var initObj = _resolveToObject(binding.path.get("init"), depth);
+          if (initObj && initObj._path) {
+            for (var oej = 0; oej < initObj.properties.length; oej++) {
+              var oeq = initObj.properties[oej];
+              if (_t.isObjectProperty(oeq) && !oeq.computed && _getKeyName(oeq.key) === keyForName) {
+                return _resolveAllValues(initObj._path.get("properties." + oej + ".value"), depth + 1);
+              }
+            }
+          }
+        }
+      }
+    }
   }
+
+  // Inline _collectDefinePropertyEffects + helpers — defined later in
+  // this file via top-level function declarations (hoisted).
 
   // Member expression — resolve obj.prop through scope
   if (_t.isMemberExpression(node) && !node.computed) {
     var propName = _t.isIdentifier(node.property) ? node.property.name : null;
     if (propName) {
+      // Object.defineProperty(obj, "key", descriptor) — ECMAScript
+      // property definition. When the descriptor has `get: fn`, reading
+      // obj.key invokes fn and returns its result; when it has `value: V`,
+      // reading obj.key returns V directly. This is the pure-JS mechanism
+      // for installing late-bound properties on an object.
+      // Inter-procedural: obj may be mutated inside a function it's
+      // passed to. We collect descriptors from:
+      //   (a) Direct:        Object.defineProperty(obj, propName, desc)
+      //   (b) Through call:  someFn(obj, ...) → param-of-someFn used as
+      //                       defineProperty target inside someFn's body
+      //   (c) Through .call/.apply: fn.call(thisArg, obj, …) → arg shift
+      //   (d) Through for..in over literal-keyed object: unroll loop body
+      //   (e) Through function return: obj is `f(args)` — resolve f's
+      //       return expression then collect defineProperty effects on
+      //       it (including effects from other call sites within f's
+      //       body that pass the returned value as an arg).
+      if (_t.isIdentifier(node.object)) {
+        var dpVals = _collectDefinePropertyEffects(path.get("object"), propName, depth, new Set());
+        if (dpVals.length > 0) return dpVals;
+      }
+      if (_t.isCallExpression(node.object)) {
+        var rcVals = _collectDefinePropertyEffectsOnCallReturn(path.get("object"), propName, depth, new Set());
+        if (rcVals.length > 0) return rcVals;
+      }
+      // `<urlExpr>.<URL-prop>` — extract WHATWG URL instance properties
+      // from a fully-resolved URL string. Triggers when the receiver is
+      // either a literal `new URL(input, base?)` OR an Identifier whose
+      // tracked type is "URL" (set by the lightweight type tracker when
+      // the identifier was assigned from `new URL(...)`). Without the
+      // type-tracker check we'd extract properties from arbitrary string
+      // values that happen to parse as URLs — but plain strings don't
+      // have `.pathname` at runtime; only URL instances do.
+      if (_URL_INSTANCE_PROPS[propName]) {
+        var canExtract = false;
+        if (_t.isNewExpression(node.object) && _t.isIdentifier(node.object.callee, { name: "URL" }) &&
+            !path.scope.getBinding("URL")) {
+          canExtract = true;
+        } else if (_t.isIdentifier(node.object) && _getTrackedType(path, node.object) === "URL") {
+          canExtract = true;
+        }
+        if (canExtract) {
+          var urlAbs = _resolveAllValues(path.get("object"), depth + 1);
+          if (urlAbs.length > 0) {
+            var urlPropOut = [];
+            for (var upi = 0; upi < urlAbs.length; upi++) {
+              try {
+                var u = new URL(String(urlAbs[upi]));
+                var v = u[propName];
+                if (v != null && urlPropOut.indexOf(v) < 0) urlPropOut.push(typeof v === "string" ? v : String(v));
+              } catch (_) { /* not a parseable URL; runtime would also fail */ }
+            }
+            if (urlPropOut.length > 0) return urlPropOut;
+          }
+        }
+      }
+      // `el.dataset.X` — HTMLElement.dataset proxy. Reading `el.dataset.foo`
+      // equals reading `el.getAttribute("data-foo")`; writing assigns the
+      // corresponding attribute. Scan the element binding for any of:
+      //   el.dataset.foo = VALUE
+      //   el.dataset["foo"] = VALUE
+      //   el.setAttribute("data-foo", VALUE)
+      // — same binding, same underlying attribute, so any set resolves
+      // the read.
+      if (_t.isMemberExpression(node.object) && !node.object.computed &&
+          _t.isIdentifier(node.object.property, { name: "dataset" })) {
+        var dsReceiver = node.object.object;
+        var dsKey = propName;
+        var attrKey = "data-" + dsKey.replace(/[A-Z]/g, function(c) { return "-" + c.toLowerCase(); });
+        if (_t.isIdentifier(dsReceiver)) {
+          var dsBinding = path.scope.getBinding(dsReceiver.name);
+          if (dsBinding && dsBinding.referencePaths) {
+            var dsVals = [];
+            for (var dsi = 0; dsi < dsBinding.referencePaths.length; dsi++) {
+              var dsRef = dsBinding.referencePaths[dsi];
+              var dsMem = dsRef.parentPath;
+              if (!dsMem || !dsMem.isMemberExpression() || dsMem.node.object !== dsRef.node) continue;
+              // Pattern 1: el.dataset.foo = VALUE or el.dataset["foo"] = VALUE
+              if (!dsMem.node.computed && _t.isIdentifier(dsMem.node.property, { name: "dataset" })) {
+                var dsInner = dsMem.parentPath;
+                if (!dsInner || !dsInner.isMemberExpression() || dsInner.node.object !== dsMem.node) continue;
+                var dsInnerKey = null;
+                if (!dsInner.node.computed && _t.isIdentifier(dsInner.node.property)) dsInnerKey = dsInner.node.property.name;
+                else if (dsInner.node.computed && _t.isStringLiteral(dsInner.node.property)) dsInnerKey = dsInner.node.property.value;
+                if (dsInnerKey !== dsKey) continue;
+                var dsAssign = dsInner.parentPath;
+                if (!dsAssign || !dsAssign.isAssignmentExpression() || dsAssign.node.operator !== "=" || dsAssign.node.left !== dsInner.node) continue;
+                var dsVv = _resolveAllValues(dsAssign.get("right"), depth + 1);
+                dsVals = dsVals.concat(dsVv);
+              }
+              // Pattern 2: el.setAttribute("data-foo", VALUE)
+              if (!dsMem.node.computed && _t.isIdentifier(dsMem.node.property, { name: "setAttribute" })) {
+                var saCall = dsMem.parentPath;
+                if (!saCall || !saCall.isCallExpression() || saCall.node.callee !== dsMem.node) continue;
+                if (saCall.node.arguments.length < 2) continue;
+                var saKeyArg = saCall.node.arguments[0];
+                if (!_t.isStringLiteral(saKeyArg) || saKeyArg.value !== attrKey) continue;
+                var saVv = _resolveAllValues(saCall.get("arguments.1"), depth + 1);
+                dsVals = dsVals.concat(saVv);
+              }
+            }
+            if (dsVals.length > 0) return dsVals;
+          }
+        }
+      }
+      // `location.origin` / `window.location.origin` / `self.location.origin`
+      // — resolvable from the analysis tab URL. `location` must be the
+      // unshadowed global. Only substitute for fields the user CAN'T
+      // control at runtime: origin/protocol/hostname/host. `.href`,
+      // `.pathname`, `.search`, `.hash` are user-influenceable (via
+      // navigation) — emitting a fixed value for them would hide a
+      // real taint signal, so leave those unresolved here (they flow
+      // through the taint model separately).
+      if (_sourceUrl && (propName === "origin" || propName === "protocol" || propName === "hostname" || propName === "host")) {
+        var locNode = node.object;
+        var locGlobal = false;
+        if (_t.isIdentifier(locNode, { name: "location" }) && !path.scope.getBinding("location")) locGlobal = true;
+        else if (_t.isMemberExpression(locNode) && !locNode.computed &&
+            _t.isIdentifier(locNode.property, { name: "location" })) {
+          var locBase = locNode.object;
+          if ((_t.isIdentifier(locBase, { name: "window" }) && !path.scope.getBinding("window")) ||
+              (_t.isIdentifier(locBase, { name: "self" }) && !path.scope.getBinding("self")) ||
+              (_t.isIdentifier(locBase, { name: "document" }) && !path.scope.getBinding("document"))) {
+            locGlobal = true;
+          }
+        }
+        if (locGlobal) {
+          try {
+            var pageUrl = new URL(_sourceUrl);
+            if (propName === "origin") return [pageUrl.origin];
+            if (propName === "protocol") return [pageUrl.protocol];
+            if (propName === "hostname") return [pageUrl.hostname];
+            if (propName === "host") return [pageUrl.host];
+          } catch (_) { /* sourceUrl wasn't a parseable URL — fall through */ }
+        }
+      }
       // this.prop — resolve by walking up to the enclosing ObjectExpression
       if (_t.isThisExpression(node.object)) {
         var funcPath = path.getFunctionParent();
@@ -3389,6 +4620,34 @@ function _resolveAllValues(path, depth) {
             var classDecl = funcPath.parentPath.parentPath;
             if (classDecl && (_t.isClassDeclaration(classDecl.node) || _t.isClassExpression(classDecl.node)) && classDecl.node.id) {
               var className = classDecl.node.id.name;
+              // Getter: `get collectorUrl() { return ...; }` — inline its
+              // return expression. Real-world pattern: github telemetry
+              // classes expose config via `get xUrl()` returning
+              // `this.options.xUrl`. Without this, fetch(this.xUrl, ...)
+              // trails off at an unresolved `this.xUrl` gap.
+              var classBody = classDecl.node.body.body;
+              for (var gmi = 0; gmi < classBody.length; gmi++) {
+                var gm = classBody[gmi];
+                if (_t.isClassMethod(gm) && gm.kind === "get" && !gm.computed) {
+                  var getterName = _t.isIdentifier(gm.key) ? gm.key.name :
+                    (_t.isStringLiteral(gm.key) ? gm.key.value : null);
+                  if (getterName === propName) {
+                    var getterValues = [];
+                    var getterPath = classDecl.get("body.body." + gmi);
+                    try {
+                      getterPath.traverse(Object.assign({
+                        ReturnStatement: function(retPath) {
+                          if (retPath.node.argument) {
+                            var rv = _resolveAllValues(retPath.get("argument"), depth + 1);
+                            getterValues = getterValues.concat(rv);
+                          }
+                        },
+                      }, _SKIP_NESTED_FUNCS));
+                    } catch (e) { _resolver.collectError(e, "resolveGetter"); }
+                    if (getterValues.length > 0) return getterValues;
+                  }
+                }
+              }
               var classCtorVals = _resolveClassConstructorProperty(path, classDecl, className, propName, depth);
               if (classCtorVals.length > 0) return classCtorVals;
             }
@@ -3415,23 +4674,41 @@ function _resolveAllValues(path, depth) {
         }
       }
       // Try property assignments: obj.prop = value
-      // Babel doesn't count property mutations as constantViolations, so scan referencePaths
+      // Babel doesn't count property mutations as constantViolations, so scan referencePaths.
+      // Memoize per (binding identity, propName): when the same `obj` is
+      // a module-exports param with many property assignments (e.g. React's
+      // scheduler module sets ~15 `t.unstable_X = fn`), every property
+      // read elsewhere re-iterates ALL referencePaths. Cache the resolved
+      // value list per (binding.path.node, propName) so repeated lookups
+      // return immediately. Scope is fixed per binding, so the cache is
+      // safe — different identifiers in different scopes have distinct
+      // bindings.
       if (_t.isIdentifier(node.object)) {
         var objBinding = path.scope.getBinding(node.object.name);
         if (objBinding) {
+          var bindingNode = objBinding.path.node;
+          var bindingMemo = _propAssignMemo.get(bindingNode);
           var refs = objBinding.referencePaths;
-          for (var ri = 0; ri < refs.length; ri++) {
-            var refParent = refs[ri].parent;
-            // Looking for: mod.propName = value
-            if (_t.isMemberExpression(refParent) && refParent.object === refs[ri].node &&
-                !refParent.computed && _t.isIdentifier(refParent.property, { name: propName })) {
-              var assignNode = refs[ri].parentPath ? refs[ri].parentPath.parent : null;
-              if (assignNode && _t.isAssignmentExpression(assignNode) && assignNode.operator === "=" &&
-                  assignNode.left === refParent) {
-                var rhsVals = _resolveAllValues(refs[ri].parentPath.parentPath.get("right"), depth + 1);
-                if (rhsVals.length > 0) return rhsVals;
+          if (bindingMemo && propName in bindingMemo) {
+            if (bindingMemo[propName].length > 0) return bindingMemo[propName];
+          } else {
+            var collectedRhs = [];
+            for (var ri = 0; ri < refs.length; ri++) {
+              var refParent = refs[ri].parent;
+              // Looking for: mod.propName = value
+              if (_t.isMemberExpression(refParent) && refParent.object === refs[ri].node &&
+                  !refParent.computed && _t.isIdentifier(refParent.property, { name: propName })) {
+                var assignNode = refs[ri].parentPath ? refs[ri].parentPath.parent : null;
+                if (assignNode && _t.isAssignmentExpression(assignNode) && assignNode.operator === "=" &&
+                    assignNode.left === refParent) {
+                  var rhsVals = _resolveAllValues(refs[ri].parentPath.parentPath.get("right"), depth + 1);
+                  collectedRhs = collectedRhs.concat(rhsVals);
+                }
               }
             }
+            if (!bindingMemo) { bindingMemo = {}; _propAssignMemo.set(bindingNode, bindingMemo); }
+            bindingMemo[propName] = collectedRhs;
+            if (collectedRhs.length > 0) return collectedRhs;
           }
 
           // TypeScript-compiled enum / namespace pattern:
@@ -3442,8 +4719,15 @@ function _resolveAllValues(path, depth) {
           // argument, then scan that function body for `e.propName = literal`.
           for (var rj = 0; rj < refs.length; rj++) {
             var ref = refs[rj];
-            var hops = 0;
-            while (ref && hops < 4 && !_t.isLogicalExpression(ref.node)) { ref = ref.parentPath; hops++; }
+            // Walk up to find an enclosing LogicalExpression that's a
+            // CallExpression argument. Stop at function boundaries
+            // (we're looking for the IIFE-wrapping pattern, which keeps
+            // the LogicalExpression in the same function scope as the
+            // ref). Cycle-safe via parentPath chain — Babel paths form a
+            // tree, no cycles possible.
+            while (ref && !_t.isLogicalExpression(ref.node) && !_t.isFunction(ref.node)) {
+              ref = ref.parentPath;
+            }
             if (!ref || !_t.isLogicalExpression(ref.node)) continue;
             var callArg = ref.parentPath;
             if (!callArg || !callArg.isCallExpression()) continue;
@@ -3503,7 +4787,7 @@ function _resolveAllValues(path, depth) {
         var arrNode = _resolveToArray(path.get("object.object"), depth);
         if (arrNode) {
           var arrPropVals = [];
-          for (var ai = 0; ai < arrNode.elements.length && arrPropVals.length < 20; ai++) {
+          for (var ai = 0; ai < arrNode.elements.length; ai++) {
             var aElem = arrNode.elements[ai];
             if (aElem && _t.isObjectExpression(aElem)) {
               for (var api = 0; api < aElem.properties.length; api++) {
@@ -3522,13 +4806,74 @@ function _resolveAllValues(path, depth) {
 
   // Computed member access: obj[key] or arr[idx]
   if (_t.isMemberExpression(node) && node.computed) {
-    // Object with resolvable or unresolvable key — try specific keys first, fallback to all values
+    // Mutation-aware: for `obj[K]` reads, scan ALL `<receiver>[K2] = V`
+    // assignments visible via the root identifier's binding where
+    // <receiver> is the SAME expression as `obj` and K2 resolves to the
+    // same value as K. Pure ECMAScript heap mutation tracking: object
+    // property assignment mutates the heap; later reads see it.
+    //
+    // Receiver can be a plain Identifier (`d[K]`) or a MemberExpression
+    // (`f.m[K]`). For both, we walk the root identifier's binding refs
+    // and verify the assignment expression's receiver matches the read
+    // expression structurally.
+    var muRootName = null;
+    if (_t.isIdentifier(node.object)) muRootName = node.object.name;
+    else if (_t.isMemberExpression(node.object) && !node.object.computed && _t.isIdentifier(node.object.object)) {
+      muRootName = node.object.object.name;
+    }
+    if (muRootName) {
+      var muBinding = path.scope.getBinding(muRootName);
+      if (muBinding && muBinding.referencePaths) {
+        var muReadKeyVals = _resolveAllValues(path.get("property"), depth + 1);
+        if (muReadKeyVals.length > 0) {
+          var muVals = [];
+          for (var muri = 0; muri < muBinding.referencePaths.length; muri++) {
+            var muRef = muBinding.referencePaths[muri];
+            // Walk up to the computed MemberExpression that represents
+            // the receiver. For `d[K] = V`, ref is `d` and parent is the
+            // computed MemberExpression. For `f.m[K] = V`, ref is `f`,
+            // parent is `f.m` (non-computed MemberExpression), and
+            // grandparent is `f.m[K]` (computed MemberExpression).
+            var muRecvPath = muRef.parentPath;
+            if (!muRecvPath) continue;
+            // If the read receiver is `obj.X` (MemberExpression), match
+            // the corresponding shape on the assignment side.
+            if (_t.isMemberExpression(node.object) && !node.object.computed) {
+              if (!muRecvPath.isMemberExpression() || muRecvPath.node.object !== muRef.node || muRecvPath.node.computed) continue;
+              if (!_t.isIdentifier(muRecvPath.node.property, { name: node.object.property.name })) continue;
+              muRecvPath = muRecvPath.parentPath;
+              if (!muRecvPath) continue;
+            }
+            if (!muRecvPath.isMemberExpression() || !muRecvPath.node.computed) continue;
+            var muAssign = muRecvPath.parent;
+            if (!muAssign || !_t.isAssignmentExpression(muAssign) || muAssign.operator !== "=" || muAssign.left !== muRecvPath.node) continue;
+            // Resolve assignment key.
+            var muAssignKeyPath = muRecvPath.get("property");
+            var muAssignKeyVals = _resolveAllValues(muAssignKeyPath, depth + 1);
+            if (muAssignKeyVals.length === 0) continue;
+            var muMatched = false;
+            for (var mki = 0; mki < muReadKeyVals.length && !muMatched; mki++) {
+              for (var mai = 0; mai < muAssignKeyVals.length && !muMatched; mai++) {
+                if (String(muReadKeyVals[mki]) === String(muAssignKeyVals[mai])) muMatched = true;
+              }
+            }
+            if (!muMatched) continue;
+            var muRhs = muRecvPath.parentPath.get("right");
+            muVals = muVals.concat(_resolveAllValues(muRhs, depth + 1));
+          }
+          if (muVals.length > 0) return muVals;
+        }
+      }
+    }
+    // Object with resolvable or unresolvable key — try specific keys first, fallback to all values.
+    // No result-count caps: every reachable property value belongs in the
+    // returned set per the resolver-completeness rule.
     var compObj = _resolveToObject(path.get("object"), depth);
     if (compObj) {
       var keyVals = _resolveAllValues(path.get("property"), depth + 1);
       if (keyVals.length > 0) {
         var resolvedVals = [];
-        for (var ki = 0; ki < keyVals.length && resolvedVals.length < 20; ki++) {
+        for (var ki = 0; ki < keyVals.length; ki++) {
           for (var vi = 0; vi < compObj.properties.length; vi++) {
             var vp = compObj.properties[vi];
             if (_t.isObjectProperty(vp) && !vp.computed && _getKeyName(vp.key) === String(keyVals[ki])) {
@@ -3539,7 +4884,7 @@ function _resolveAllValues(path, depth) {
         if (resolvedVals.length > 0) {
           // For variable keys (not literal), also include remaining property values for discovery
           if (!_t.isStringLiteral(node.property) && !_t.isNumericLiteral(node.property)) {
-            for (var dpi = 0; dpi < compObj.properties.length && resolvedVals.length < 20; dpi++) {
+            for (var dpi = 0; dpi < compObj.properties.length; dpi++) {
               var dp = compObj.properties[dpi];
               if (_t.isObjectProperty(dp) && !dp.computed) {
                 var dpVals = _resolveAllValues(compObj._path.get("properties." + dpi + ".value"), depth + 1);
@@ -3554,7 +4899,7 @@ function _resolveAllValues(path, depth) {
       }
       // Can't resolve key — return all property values
       var allPropVals = [];
-      for (var fpi = 0; fpi < compObj.properties.length && allPropVals.length < 20; fpi++) {
+      for (var fpi = 0; fpi < compObj.properties.length; fpi++) {
         var fp = compObj.properties[fpi];
         if (_t.isObjectProperty(fp) && !fp.computed) {
           allPropVals = allPropVals.concat(_resolveAllValues(compObj._path.get("properties." + fpi + ".value"), depth + 1));
@@ -3566,7 +4911,7 @@ function _resolveAllValues(path, depth) {
     var compArr = _resolveToArray(path.get("object"), depth);
     if (compArr) {
       var elemVals = [];
-      for (var ei = 0; ei < compArr.elements.length && elemVals.length < 20; ei++) {
+      for (var ei = 0; ei < compArr.elements.length; ei++) {
         if (compArr.elements[ei]) {
           elemVals = elemVals.concat(_resolveAllValues(compArr._path.get("elements." + ei), depth + 1));
         }
@@ -3601,6 +4946,17 @@ function _resolveCalleeFuncPath(callPath, depth) {
   if (_t.isMemberExpression(callee) && !callee.computed) {
     var propName = _t.isIdentifier(callee.property) ? callee.property.name : null;
     if (propName) {
+      // Function.prototype.call / .apply — when the receiver is itself a
+      // function, `f.call(thisArg, ...args)` invokes f with args. Native
+      // ECMAScript semantics: the callee.object IS the function being
+      // called. Resolve the receiver to a function path and return it.
+      // .apply has the same callee resolution; arg unpacking differs but
+      // for the purpose of finding the function body the result is the
+      // same.
+      if (propName === "call" || propName === "apply") {
+        var recvFunc = _resolveExprToFunctionPath(callPath.get("callee.object"), depth || 0);
+        if (recvFunc) return recvFunc;
+      }
       var objNode = _resolveToObject(callPath.get("callee.object"), depth || 0);
       if (objNode) {
         for (var i = 0; i < objNode.properties.length; i++) {
@@ -3612,9 +4968,726 @@ function _resolveCalleeFuncPath(callPath, depth) {
             return objNode._path ? objNode._path.get("properties." + i + ".value") : null;
         }
       }
+      // `obj.key = function/arrow` mutation pattern: walk the receiver
+      // identifier's referencePaths for assignment expressions whose
+      // left side is `obj.key` and right side is a function. Native
+      // ECMAScript scope/value flow — same mechanism that backs
+      // module-exports modules (`t.fn = function() {...}`) and
+      // prototype patterns (`Ctor.prototype.method = function() {...}`).
+      if (_t.isIdentifier(callee.object)) {
+        var rcvBind = callPath.scope.getBinding(callee.object.name);
+        if (rcvBind && rcvBind.referencePaths) {
+          for (var ri = 0; ri < rcvBind.referencePaths.length; ri++) {
+            var rp = rcvBind.referencePaths[ri];
+            var rpParent = rp.parent;
+            if (!rpParent || !_t.isMemberExpression(rpParent) || rpParent.object !== rp.node) continue;
+            if (rpParent.computed || !_t.isIdentifier(rpParent.property, { name: propName })) continue;
+            var assn = rp.parentPath ? rp.parentPath.parent : null;
+            if (!assn || !_t.isAssignmentExpression(assn) || assn.operator !== "=" || assn.left !== rpParent) continue;
+            var rhs = assn.right;
+            if (_t.isFunctionExpression(rhs) || _t.isArrowFunctionExpression(rhs)) {
+              return rp.parentPath.parentPath.get("right");
+            }
+          }
+        }
+      }
+    }
+  }
+  // Identifier callee that aliases a callable expression: `var f = X.bind(Y); f()`
+  // or `var f = obj.method; f()`. Pure ECMAScript value flow — follow the
+  // initializer through the general expression-to-function resolver.
+  if (_t.isIdentifier(callee)) {
+    var b = callPath.scope.getBinding(callee.name);
+    if (b && _t.isVariableDeclarator(b.path.node) && b.path.node.init) {
+      var initNode = b.path.node.init;
+      // Already covered above for direct function-init; only follow
+      // through CallExpression (.bind etc.) here.
+      if (_t.isCallExpression(initNode)) {
+        return _resolveExprToFunctionPath(b.path.get("init"), depth || 0);
+      }
     }
   }
   return null;
+}
+
+// Resolve an expression to a function path when possible. Accepts:
+//   - Identifier bound to FunctionDeclaration / FunctionExpression init
+//     / ArrowFunctionExpression init / VariableDeclarator with function
+//     value
+//   - MemberExpression `obj.prop` where obj is an ObjectExpression with
+//     a function-valued property at `prop`
+//   - Computed MemberExpression `obj[k]` where k resolves to a literal
+//     and obj's literal-keyed property is a function
+// Used by Function.prototype.call / .apply resolution and dynamic
+// property access into module tables.
+function _resolveExprToFunctionPath(exprPath, depth) {
+  var node = exprPath.node;
+  if (_t.isFunctionExpression(node) || _t.isArrowFunctionExpression(node)) return exprPath;
+  // Function.prototype.bind — `f.bind(thisArg, ...preArgs)` returns a
+  // function whose body is f's body (with this and prepended args
+  // bound). For body resolution we just need to follow back to f.
+  if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) && !node.callee.computed &&
+      _t.isIdentifier(node.callee.property, { name: "bind" })) {
+    return _resolveExprToFunctionPath(exprPath.get("callee.object"), depth);
+  }
+  if (_t.isIdentifier(node)) {
+    var b = exprPath.scope.getBinding(node.name);
+    if (!b) return null;
+    if (_t.isFunctionDeclaration(b.path.node)) return b.path;
+    if (_t.isVariableDeclarator(b.path.node) && b.path.node.init) {
+      var init = b.path.node.init;
+      if (_t.isFunctionExpression(init) || _t.isArrowFunctionExpression(init)) {
+        return b.path.get("init");
+      }
+      // `.bind(…)` chain: follow back to the bound function.
+      if (_t.isCallExpression(init) && _t.isMemberExpression(init.callee) && !init.callee.computed &&
+          _t.isIdentifier(init.callee.property, { name: "bind" })) {
+        return _resolveExprToFunctionPath(b.path.get("init"), depth);
+      }
+    }
+    return null;
+  }
+  if (_t.isMemberExpression(node)) {
+    var keyName = null;
+    if (!node.computed && _t.isIdentifier(node.property)) keyName = node.property.name;
+    else if (node.computed) {
+      var keyVals = _resolveAllValues(exprPath.get("property"), (depth || 0) + 1);
+      if (keyVals.length > 0) keyName = String(keyVals[0]);
+    }
+    if (!keyName) return null;
+    var objNode = _resolveToObject(exprPath.get("object"), depth || 0);
+    if (objNode && objNode._path) {
+      for (var i = 0; i < objNode.properties.length; i++) {
+        var p = objNode.properties[i];
+        if (_t.isObjectProperty(p) && !p.computed) {
+          var k = _t.isIdentifier(p.key) ? p.key.name :
+            (_t.isStringLiteral(p.key) ? p.key.value : (_t.isNumericLiteral(p.key) ? String(p.key.value) : null));
+          if (k === keyName && (_t.isFunctionExpression(p.value) || _t.isArrowFunctionExpression(p.value))) {
+            return objNode._path.get("properties." + i + ".value");
+          }
+        }
+        if (_t.isObjectMethod(p) && !p.computed) {
+          var mk = _t.isIdentifier(p.key) ? p.key.name :
+            (_t.isStringLiteral(p.key) ? p.key.value : (_t.isNumericLiteral(p.key) ? String(p.key.value) : null));
+          if (mk === keyName) return objNode._path.get("properties." + i);
+        }
+      }
+    }
+    // Also handle `obj.key = function/arrow` and `obj[K] = function/arrow`
+    // assignments via the receiver's referencePaths (mutation after
+    // initial declaration). Used by webpack-style `f.d = (e, a) => {...}`
+    // and module-table installs `d[97088] = function(...) {...}`.
+    if (_t.isIdentifier(node.object)) {
+      var objBind = exprPath.scope.getBinding(node.object.name);
+      if (objBind && objBind.referencePaths) {
+        for (var ri = 0; ri < objBind.referencePaths.length; ri++) {
+          var rp = objBind.referencePaths[ri];
+          var rpParent = rp.parent;
+          if (!rpParent || !_t.isMemberExpression(rpParent) || rpParent.object !== rp.node) continue;
+          // Match property: support both `.key` and `[K]` where K resolves
+          // to keyName.
+          var propMatches = false;
+          if (!rpParent.computed && _t.isIdentifier(rpParent.property, { name: keyName })) {
+            propMatches = true;
+          } else if (rpParent.computed) {
+            if (_t.isStringLiteral(rpParent.property) && rpParent.property.value === keyName) propMatches = true;
+            else if (_t.isNumericLiteral(rpParent.property) && String(rpParent.property.value) === keyName) propMatches = true;
+            else {
+              var rpKeyVals = _resolveAllValues(rp.parentPath.get("property"), (depth || 0) + 1);
+              if (rpKeyVals.length > 0 && String(rpKeyVals[0]) === keyName) propMatches = true;
+            }
+          }
+          if (!propMatches) continue;
+          var assignNode = rp.parentPath ? rp.parentPath.parent : null;
+          if (!assignNode || !_t.isAssignmentExpression(assignNode) || assignNode.operator !== "=" ||
+              assignNode.left !== rpParent) continue;
+          var rhsNode = assignNode.right;
+          var rhsPath = rp.parentPath.parentPath.get("right");
+          if (_t.isFunctionExpression(rhsNode) || _t.isArrowFunctionExpression(rhsNode)) {
+            return rhsPath;
+          }
+          // RHS is a CallExpression / MemberExpression / Identifier that
+          // itself resolves to a function — e.g. `c.push = a.bind(null, …)`.
+          // Recurse through the general expression-to-function resolver,
+          // which already handles .bind, var aliases, etc.
+          if (_t.isCallExpression(rhsNode) || _t.isMemberExpression(rhsNode) || _t.isIdentifier(rhsNode)) {
+            var rhsFn = _resolveExprToFunctionPath(rhsPath, depth);
+            if (rhsFn) return rhsFn;
+          }
+        }
+      }
+      // Receiver is a parameter — resolve via callers. Caller passes some
+      // expression as the corresponding arg; that expression is what
+      // `obj.key` resolves against. For each caller's arg, retry
+      // resolution with the arg substituted for obj.
+      if (objBind && objBind.kind === "param") {
+        var paramName = node.object.name;
+        var hostFunc = objBind.scope.path;
+        if (hostFunc && hostFunc.node.params) {
+          var paramIdx = -1;
+          for (var pi = 0; pi < hostFunc.node.params.length; pi++) {
+            if (_t.isIdentifier(hostFunc.node.params[pi], { name: paramName })) { paramIdx = pi; break; }
+          }
+          if (paramIdx >= 0) {
+            var callerArgs = _findFunctionCallerArgs(hostFunc);
+            for (var ci = 0; ci < callerArgs.length; ci++) {
+              if (paramIdx >= callerArgs[ci].length) continue;
+              var argP = callerArgs[ci][paramIdx];
+              if (!argP) continue;
+              // Build a synthetic MemberExpression path: argP.<keyName>.
+              // We can't actually construct a path without mutating the
+              // AST, so probe argP directly with the same key resolution
+              // logic: if argP is an Identifier and assignments to
+              // `<argP>.keyName` exist, return them. We do this by
+              // recursing: temporarily wrap argP into a MemberExpression
+              // by recursing on a fresh path using argP as the object.
+              var argSubFn = _probePropertyOnExpr(argP, keyName, depth);
+              if (argSubFn) return argSubFn;
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Probe whether `objExprPath.<propName>` resolves to a function path,
+// using the same logic as _resolveExprToFunctionPath's MemberExpression
+// branch but without needing to construct a fresh MemberExpression node.
+// This is the param-substitution helper for cross-call resolution.
+function _probePropertyOnExpr(objExprPath, propName, depth) {
+  if (!objExprPath || !objExprPath.node) return null;
+  if (!_t.isIdentifier(objExprPath.node)) return null;
+  var bind = objExprPath.scope.getBinding(objExprPath.node.name);
+  if (!bind) {
+    // Global: scan global assignments.
+    return null;
+  }
+  if (bind.referencePaths) {
+    for (var ri = 0; ri < bind.referencePaths.length; ri++) {
+      var rp = bind.referencePaths[ri];
+      var rpParent = rp.parent;
+      if (!rpParent || !_t.isMemberExpression(rpParent) || rpParent.object !== rp.node) continue;
+      var matches = (!rpParent.computed && _t.isIdentifier(rpParent.property, { name: propName })) ||
+        (rpParent.computed && _t.isStringLiteral(rpParent.property) && rpParent.property.value === propName) ||
+        (rpParent.computed && _t.isNumericLiteral(rpParent.property) && String(rpParent.property.value) === propName);
+      if (!matches) continue;
+      var aN = rp.parentPath ? rp.parentPath.parent : null;
+      if (!aN || !_t.isAssignmentExpression(aN) || aN.operator !== "=" || aN.left !== rpParent) continue;
+      var rhs = aN.right;
+      if (_t.isFunctionExpression(rhs) || _t.isArrowFunctionExpression(rhs)) {
+        return rp.parentPath.parentPath.get("right");
+      }
+    }
+  }
+  return null;
+}
+
+// Find Object.defineProperty effects on the value RETURNED by a call
+// expression. Resolve callee's body, find each return statement's
+// argument expression, then collect defineProperty effects on that
+// argument's heap identity (which includes effects from other call
+// sites in the function body that pass the returned value as an arg).
+//
+// Real-world shape: webpack's `f(id)` returns `b[id].exports`, an object
+// that gets mutated by `d[id].call(b[id].exports, ...)` earlier in f's
+// body. So `f(id).url` reads happen on the same object that the call
+// installs `url` on.
+function _collectDefinePropertyEffectsOnCallReturn(callPath, propName, depth, visited) {
+  if (!callPath || !callPath.isCallExpression()) return [];
+  if (visited.has(callPath.node)) return [];
+  visited.add(callPath.node);
+  // Memoize: same (callPath, propName) repeated across a bundle returns
+  // the same effects (function bodies are immutable in the AST). Without
+  // this, every MemberExpression-on-CallExpression in github's 6MB
+  // bundle re-traverses the same callee bodies — quadratic work that
+  // appears as a hang. The cache is per-analysis (cleared via
+  // _nodePathCache reset at analyzeJSBundle entry).
+  var memoKey = callPath.node;
+  var memoSlot = _callReturnEffectMemo.get(memoKey);
+  if (memoSlot && propName in memoSlot) return memoSlot[propName];
+  // Use the global resolver-guard set ALSO so cross-call cycles are
+  // caught even when each top-level entry creates its own per-call
+  // visited Set. Without this, _resolveAllValues recursing into
+  // _readDefinePropertyDescriptor → _resolveAllValues → here would
+  // re-enter this function with a fresh visited Set and fail to
+  // detect that the same call site is already being processed.
+  if (!_resolver.guard("DPCR:" + propName + ":", callPath.node)) return [];
+  try {
+  var calleeFunc = _resolveExprToFunctionPath(callPath.get("callee"), depth);
+  if (!calleeFunc) return [];
+  var body = calleeFunc.node.body;
+  if (!_t.isBlockStatement(body)) return [];
+  var results = [];
+  try {
+    calleeFunc.get("body").traverse(Object.assign({
+      ReturnStatement: function(retPath) {
+        if (!retPath.node.argument) return;
+        var argPath = retPath.get("argument");
+        if (_t.isIdentifier(argPath.node) || _t.isMemberExpression(argPath.node)) {
+          var effects = _collectDefinePropertyEffects(argPath, propName, depth, visited);
+          results = results.concat(effects);
+        }
+      },
+    }, _SKIP_NESTED_FUNCS));
+  } catch (e) { _resolver.collectError(e, "definePropertyOnCallReturn"); }
+  // Memoize for subsequent (callPath, propName) lookups.
+  if (!memoSlot) { memoSlot = {}; _callReturnEffectMemo.set(memoKey, memoSlot); }
+  memoSlot[propName] = results;
+  return results;
+  } finally { _resolver.unguard("DPCR:" + propName + ":", callPath.node); }
+}
+
+// Inter-procedural collector: find all `Object.defineProperty(_, propName, _)`
+// effects on the heap object referenced by objPath, by walking direct
+// defineProperty calls plus call sites that pass objPath as an argument
+// into a function whose body installs the property on the corresponding
+// parameter. Handles `.call`/`.apply` arg shifting and `for..in` over
+// literal-keyed objects (the descriptor's get function is invoked once
+// per known key, key-bound to the loop variable).
+//
+// objPath: NodePath to the receiver expression (Identifier / MemberExpression).
+// propName: the property being read (e.g., "s").
+// depth: recursion depth for _resolveAllValues.
+// visited: Set of CallExpression nodes already processed to avoid cycles.
+function _collectDefinePropertyEffects(objPath, propName, depth, visited) {
+  if (!objPath || !objPath.node) return [];
+  // Memoize per (entry node, propName). React-lib-style code installs
+  // 24+ properties on a single object via `for(k in g) defineProperty`.
+  // Without memoization every read of any such property re-iterates
+  // ALL of g and re-walks each descriptor, producing O(reads × props)
+  // work per call site. With shared receivers (e.g. `m.x`, `m.y`, `m.z`
+  // all on the same `m`), the cost compounds across the bundle.
+  var entryMemo = _callReturnEffectMemo.get(objPath.node);
+  if (entryMemo && propName in entryMemo) return entryMemo[propName];
+  // Iterative work queue. The "indirect" case (param passed to yet
+  // another call whose callee installs the property) used to recurse
+  // back into _collectDefinePropertyEffects, which on real bundles
+  // (github 5.9MB) exceeded V8's call-stack depth (~13k frames) for
+  // deeply-chained call graphs. Per CLAUDE.md "Convert recursive AST
+  // walkers to iterative whenever they process chainable node types"
+  // we maintain an explicit queue of (objPath) items to process; each
+  // iteration extracts uses and either captures direct effects or
+  // pushes the next-level objPath onto the queue. Cycles are still
+  // prevented by the `visited` Set on each call site processed.
+  var queue = [objPath];
+  var queueSeen = new Set();  // node identity guard for queue entries — prevents the same objPath from being processed twice when chains of param-pass form cycles in the call graph
+  if (objPath.node) queueSeen.add(objPath.node);
+  var results = [];
+  while (queue.length > 0) {
+  var currentObjPath = queue.shift();
+  if (!currentObjPath || !currentObjPath.node) continue;
+  // Step 1: collect all "uses" of currentObjPath that we should
+  // examine. For an Identifier currentObjPath, that's its binding's
+  // referencePaths. For a MemberExpression like `c.exports`, we walk
+  // the receiver `c`'s referencePaths and filter for accesses that
+  // match the same property chain.
+  var uses = _collectExprUses(currentObjPath);
+  for (var ui = 0; ui < uses.length; ui++) {
+    var useRef = uses[ui];
+    var useParent = useRef.parentPath;
+    if (!useParent) continue;
+    // Direct: Object.defineProperty(USE, KEY, DESC)
+    if (useParent.isCallExpression() && useParent.node.arguments[0] === useRef.node &&
+        _isObjectDefineProperty(useParent)) {
+      var d = _readDefinePropertyDescriptor(useParent, propName, depth);
+      results = results.concat(d);
+      continue;
+    }
+    // useRef as an argument to some other call: trace into callee body.
+    if (useParent.isCallExpression()) {
+      // Determine the param index this argument corresponds to. Handle
+      // .call(thisArg, arg0, arg1, …) — arg0 inside the callee is at
+      // index 0 (thisArg is consumed). .apply skipped (variadic shape).
+      var argIdx = -1;
+      var calleeNode = useParent.node.callee;
+      var isCallForm = (_t.isMemberExpression(calleeNode) && !calleeNode.computed &&
+                       _t.isIdentifier(calleeNode.property, { name: "call" }));
+      var argOffset = isCallForm ? 1 : 0;
+      for (var ai = 0; ai < useParent.node.arguments.length; ai++) {
+        if (useParent.node.arguments[ai] === useRef.node) { argIdx = ai - argOffset; break; }
+      }
+      if (argIdx < 0) continue;
+      if (visited.has(useParent.node)) continue;
+      visited.add(useParent.node);
+      // Resolve the callee's function body. For `.call`, the receiver IS
+      // the function; otherwise resolve normally.
+      var calleeFunc = isCallForm ?
+        _resolveExprToFunctionPath(useParent.get("callee.object"), depth) :
+        _resolveExprToFunctionPath(useParent.get("callee"), depth);
+      if (!calleeFunc) continue;
+      var fnParams = calleeFunc.node.params;
+      if (!fnParams || argIdx >= fnParams.length) continue;
+      var paramNode = fnParams[argIdx];
+      if (!_t.isIdentifier(paramNode)) continue;
+      // Inside the callee, the param's binding's referencePaths is where
+      // the heap object is observable. Recurse: any defineProperty on
+      // that param targets the SAME heap object the caller's arg points
+      // to, so descriptors found there are descriptors on objPath.
+      var paramBinding = calleeFunc.scope.getBinding(paramNode.name);
+      if (!paramBinding) continue;
+      // Use the param's referencePaths directly — each is an Identifier
+      // path where the param is read. Object.defineProperty on the param
+      // mutates the SAME heap object the caller passed in.
+      var paramUses = paramBinding.referencePaths || [];
+      for (var pi = 0; pi < paramUses.length; pi++) {
+        var pUse = paramUses[pi];
+        var pUseParent = pUse.parentPath;
+        if (!pUseParent) continue;
+        // Direct: Object.defineProperty(param, KEY, DESC) where KEY is a
+        // string literal. (Loop-variable KEY falls through to for..in
+        // unroll below — _readDefinePropertyDescriptor returns [] for
+        // identifier keys, so the direct path naturally yields nothing
+        // and we proceed.)
+        if (pUseParent.isCallExpression() && pUseParent.node.arguments[0] === pUse.node &&
+            _isObjectDefineProperty(pUseParent)) {
+          var keyArgNode = pUseParent.node.arguments[1];
+          var keyIsLiteral = _t.isStringLiteral(keyArgNode) ||
+            (_t.isTemplateLiteral(keyArgNode) && keyArgNode.expressions.length === 0);
+          if (keyIsLiteral) {
+            var pd = _readDefinePropertyDescriptor(pUseParent, propName, depth);
+            results = results.concat(pd);
+            continue;
+          }
+          // KEY is identifier — fall through to for..in unroll path.
+        }
+        // Inside a for..in loop: `for (var k in DEFS) Object.defineProperty(param, k, …)`.
+        // When DEFS is a literal-keyed object reachable from the param's
+        // sibling parameter, unroll: for each key K of DEFS, propName
+        // matches if K === propName, and the descriptor's get expression
+        // uses DEFS[K] which resolves to the literal value at K.
+        var inLoop = _findEnclosingForIn(pUseParent);
+        if (inLoop && _isDefinePropertyInsideForIn(pUseParent, pUse, inLoop)) {
+          var loopVarName = _getForInLoopVarName(inLoop);
+          if (loopVarName) {
+            var defsExprPath = inLoop.get("right");
+            // Resolve defs to the actual ObjectExpression (literal at
+            // caller). Try param chain → caller arg position → literal.
+            var defsObj = _resolveDefsObjectFromForIn(defsExprPath, calleeFunc, useParent, isCallForm, depth);
+            if (defsObj && defsObj._path) {
+              for (var dpi = 0; dpi < defsObj.properties.length; dpi++) {
+                var dp = defsObj.properties[dpi];
+                if (!_t.isObjectProperty(dp) || dp.computed) continue;
+                var dKey = _t.isIdentifier(dp.key) ? dp.key.name :
+                  (_t.isStringLiteral(dp.key) ? dp.key.value : null);
+                if (dKey !== propName) continue;
+                // Descriptor in the loop body: Object.defineProperty(param, k, DESC).
+                // DESC's get is `defs[k]` — we know defs[k] for this iteration.
+                var defsValPath = defsObj._path.get("properties." + dpi + ".value");
+                results = results.concat(_resolveDefinePropertyDescFromGetExpr(pUseParent, defsValPath, loopVarName, depth));
+              }
+            }
+          }
+          continue;
+        }
+        // Indirect: param is itself passed to another call. The callee
+        // may reference OTHER params of calleeFunc (e.g. `n.d(exp, …)`
+        // where `n` is also a param of calleeFunc). For pure JS scope
+        // resolution to follow this, substitute calleeFunc's params with
+        // the caller's arguments at useParent (with .call offset
+        // applied).
+        if (pUseParent.isCallExpression()) {
+          var subCalleeFunc = _resolveCalleeWithParamSubst(
+            pUseParent, calleeFunc, useParent, isCallForm, depth);
+          if (subCalleeFunc) {
+            // Found callee via substitution. Walk into ITS body looking
+            // for Object.defineProperty effects on the corresponding
+            // parameter.
+            var subArgIdx = -1;
+            var subIsCall = (_t.isMemberExpression(pUseParent.node.callee) && !pUseParent.node.callee.computed &&
+                             _t.isIdentifier(pUseParent.node.callee.property, { name: "call" }));
+            var subOff = subIsCall ? 1 : 0;
+            for (var sai = 0; sai < pUseParent.node.arguments.length; sai++) {
+              if (pUseParent.node.arguments[sai] === pUse.node) { subArgIdx = sai - subOff; break; }
+            }
+            if (subArgIdx >= 0 && subArgIdx < subCalleeFunc.node.params.length) {
+              var subParamNode = subCalleeFunc.node.params[subArgIdx];
+              if (_t.isIdentifier(subParamNode)) {
+                var subParamBinding = subCalleeFunc.scope.getBinding(subParamNode.name);
+                if (subParamBinding && subParamBinding.referencePaths) {
+                  for (var spi = 0; spi < subParamBinding.referencePaths.length; spi++) {
+                    var subUse = subParamBinding.referencePaths[spi];
+                    var subUseParent = subUse.parentPath;
+                    if (!subUseParent || !subUseParent.isCallExpression()) continue;
+                    if (subUseParent.node.arguments[0] !== subUse.node) continue;
+                    if (!_isObjectDefineProperty(subUseParent)) continue;
+                    var keyArgN = subUseParent.node.arguments[1];
+                    var subForIn = _findEnclosingForIn(subUseParent);
+                    if (subForIn && _isDefinePropertyInsideForIn(subUseParent, subUse, subForIn)) {
+                      var subLoopVar = _getForInLoopVarName(subForIn);
+                      if (subLoopVar) {
+                        var subDefsExpr = subForIn.get("right");
+                        var subDefsObj = _resolveDefsObjectFromForIn(
+                          subDefsExpr, subCalleeFunc, pUseParent, subIsCall, depth);
+                        if (subDefsObj && subDefsObj._path) {
+                          for (var sdp = 0; sdp < subDefsObj.properties.length; sdp++) {
+                            var sdProp = subDefsObj.properties[sdp];
+                            if (!_t.isObjectProperty(sdProp) || sdProp.computed) continue;
+                            var sdK = _t.isIdentifier(sdProp.key) ? sdProp.key.name :
+                              (_t.isStringLiteral(sdProp.key) ? sdProp.key.value : null);
+                            if (sdK !== propName) continue;
+                            var sdValPath = subDefsObj._path.get("properties." + sdp + ".value");
+                            results = results.concat(
+                              _resolveDefinePropertyDescFromGetExpr(subUseParent, sdValPath, subLoopVar, depth));
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } else {
+            // Push for iterative processing instead of recursing —
+            // prevents stack overflow on deeply-chained call graphs.
+            // Identity guard via queueSeen — same objPath node never
+            // queued twice, bounding total iterations by # unique
+            // referencePaths in the program.
+            if (pUse && pUse.node && !queueSeen.has(pUse.node)) {
+              queueSeen.add(pUse.node);
+              queue.push(pUse);
+            }
+          }
+        }
+      }
+    }
+  }
+  } // end while
+  // Cache the entry-point result so future lookups for the same
+  // (objPath.node, propName) return immediately.
+  if (!entryMemo) { entryMemo = {}; _callReturnEffectMemo.set(objPath.node, entryMemo); }
+  entryMemo[propName] = results;
+  return results;
+}
+
+// Resolve a callee expression where the receiver is a param of an
+// enclosing function (paramHostFunc) by substituting the caller's
+// argument at that param position. Returns the resolved function path
+// or null.
+//
+// Example: inside `function(mod, exp, n) { n.d(exp, …); }`, when called
+// as `d[e].call(c.exports, c, c.exports, f)`, `n` corresponds to
+// caller arg[3] (after the .call thisArg shift) which is `f`. So `n.d`
+// resolves as `f.d` — and `f.d` may have an assignment we can find.
+function _resolveCalleeWithParamSubst(callPath, paramHostFunc, callerCallPath, callerIsCallForm, depth) {
+  var callee = callPath.node.callee;
+  if (!_t.isMemberExpression(callee) || callee.computed) return null;
+  if (!_t.isIdentifier(callee.object)) return null;
+  if (!_t.isIdentifier(callee.property)) return null;
+  var recvName = callee.object.name;
+  var propName = callee.property.name;
+  var binding = callPath.scope.getBinding(recvName);
+  if (!binding || binding.kind !== "param") return null;
+  if (binding.scope.path !== paramHostFunc) return null;
+  // Find the param's index in paramHostFunc.
+  var pIdx = -1;
+  for (var i = 0; i < paramHostFunc.node.params.length; i++) {
+    if (_t.isIdentifier(paramHostFunc.node.params[i], { name: recvName })) { pIdx = i; break; }
+  }
+  if (pIdx < 0) return null;
+  var argOffset = callerIsCallForm ? 1 : 0;
+  var callerArgIdx = pIdx + argOffset;
+  if (callerArgIdx >= callerCallPath.node.arguments.length) return null;
+  var callerArgPath = callerCallPath.get("arguments." + callerArgIdx);
+  if (!_t.isIdentifier(callerArgPath.node)) return null;
+  // The caller's arg is an Identifier — find the function assigned at
+  // `<arg>.<propName>` within the arg's scope.
+  return _probePropertyOnExpr(callerArgPath, propName, depth);
+}
+
+// Collect referencePaths for an identifier, or for a MemberExpression
+// like `c.exports`, the receiver chain matching that member access.
+function _collectExprUses(exprPath) {
+  var node = exprPath.node;
+  if (_t.isIdentifier(node)) {
+    var b = exprPath.scope.getBinding(node.name);
+    return b && b.referencePaths ? b.referencePaths : [];
+  }
+  if (_t.isMemberExpression(node) && !node.computed && _t.isIdentifier(node.object) &&
+      _t.isIdentifier(node.property)) {
+    // For `c.exports`, walk c's referencePaths and keep only the ones
+    // that appear AS the .object of a `.exports` access — those refer
+    // to the same heap value as the original c.exports expression
+    // (same alias graph).
+    var rb = exprPath.scope.getBinding(node.object.name);
+    if (!rb || !rb.referencePaths) return [];
+    var out = [];
+    var propWanted = node.property.name;
+    for (var i = 0; i < rb.referencePaths.length; i++) {
+      var rp = rb.referencePaths[i];
+      var pp = rp.parentPath;
+      if (!pp || !pp.isMemberExpression() || pp.node.object !== rp.node || pp.node.computed) continue;
+      if (!_t.isIdentifier(pp.node.property, { name: propWanted })) continue;
+      out.push(pp);
+    }
+    return out;
+  }
+  return [];
+}
+
+function _isObjectDefineProperty(callPath) {
+  var c = callPath.node.callee;
+  if (!_t.isMemberExpression(c) || c.computed) return false;
+  if (!_t.isIdentifier(c.property, { name: "defineProperty" })) return false;
+  if (!_t.isIdentifier(c.object, { name: "Object" })) return false;
+  if (callPath.scope.getBinding("Object")) return false;
+  return callPath.node.arguments.length >= 3;
+}
+
+// Read the descriptor at arg[2] of an Object.defineProperty call. If the
+// descriptor's key matches propName, return the resolved value(s) of its
+// `get` (invoked) or `value` (direct).
+function _readDefinePropertyDescriptor(callPath, propName, depth) {
+  var keyArg = callPath.node.arguments[1];
+  var key = null;
+  if (_t.isStringLiteral(keyArg)) key = keyArg.value;
+  else if (_t.isTemplateLiteral(keyArg) && keyArg.expressions.length === 0 && keyArg.quasis.length === 1) {
+    key = keyArg.quasis[0].value.cooked;
+  } else if (_t.isIdentifier(keyArg)) {
+    // Loop variable case is handled separately by the for..in unroll;
+    // a plain identifier here means we can't statically link.
+    return [];
+  }
+  if (key !== propName) return [];
+  var descArg = callPath.node.arguments[2];
+  if (!_t.isObjectExpression(descArg)) return [];
+  var out = [];
+  for (var i = 0; i < descArg.properties.length; i++) {
+    var dp = descArg.properties[i];
+    if (!_t.isObjectProperty(dp) && !_t.isObjectMethod(dp)) continue;
+    var dk = _t.isIdentifier(dp.key) ? dp.key.name :
+      (_t.isStringLiteral(dp.key) ? dp.key.value : null);
+    if (dk === "value") {
+      out = out.concat(_resolveAllValues(callPath.get("arguments.2.properties." + i + ".value"), depth + 1));
+    } else if (dk === "get") {
+      var fnPath;
+      if (_t.isObjectMethod(dp)) fnPath = callPath.get("arguments.2.properties." + i);
+      else fnPath = callPath.get("arguments.2.properties." + i + ".value");
+      out = out.concat(_invokeFunctionExprForReturn(fnPath, depth));
+    }
+  }
+  return out;
+}
+
+function _invokeFunctionExprForReturn(fnPath, depth) {
+  var fnNode = fnPath.node;
+  if (_t.isArrowFunctionExpression(fnNode) && !_t.isBlockStatement(fnNode.body)) {
+    return _resolveAllValues(fnPath.get("body"), depth + 1);
+  }
+  if ((_t.isFunctionExpression(fnNode) || _t.isArrowFunctionExpression(fnNode) || _t.isObjectMethod(fnNode)) &&
+      _t.isBlockStatement(fnNode.body)) {
+    var out = [];
+    try {
+      fnPath.get("body").traverse(Object.assign({
+        ReturnStatement: function(retPath) {
+          if (retPath.node.argument) {
+            out = out.concat(_resolveAllValues(retPath.get("argument"), depth + 1));
+          }
+        },
+      }, _SKIP_NESTED_FUNCS));
+    } catch (e) { _resolver.collectError(e, "invokeFnExprReturn"); }
+    return out;
+  }
+  return [];
+}
+
+function _findEnclosingForIn(path) {
+  var p = path;
+  while (p && !p.isProgram()) {
+    if (p.isForInStatement()) return p;
+    p = p.parentPath;
+  }
+  return null;
+}
+
+function _isDefinePropertyInsideForIn(callPath, calleeUseRef, forInPath) {
+  // The Object.defineProperty call must be in the for..in body (not the
+  // header), and the loop variable must appear in the call's args (key
+  // position).
+  if (!forInPath) return false;
+  if (!_isObjectDefineProperty(callPath)) return false;
+  var loopVarName = _getForInLoopVarName(forInPath);
+  if (!loopVarName) return false;
+  var keyArg = callPath.node.arguments[1];
+  return _t.isIdentifier(keyArg, { name: loopVarName });
+}
+
+function _getForInLoopVarName(forInPath) {
+  var left = forInPath.node.left;
+  if (_t.isVariableDeclaration(left) && left.declarations.length === 1 &&
+      _t.isVariableDeclarator(left.declarations[0]) &&
+      _t.isIdentifier(left.declarations[0].id)) {
+    return left.declarations[0].id.name;
+  }
+  if (_t.isIdentifier(left)) return left.name;
+  return null;
+}
+
+// Resolve the for..in iterable to the actual ObjectExpression literal.
+// Inside `f.d = (e, a) => { for (var c in a) ... }`, `a` is param[1].
+// The caller of f.d passed an object literal (or identifier resolving to
+// one) at arg[1]. Use the existing _resolveToObject machinery.
+function _resolveDefsObjectFromForIn(defsExprPath, calleeFunc, callerCallPath, isCallForm, depth) {
+  // Direct path: maybe defsExprPath already resolves to an object via
+  // existing scope logic.
+  var direct = _resolveToObject(defsExprPath, depth);
+  if (direct) return direct;
+  // If defsExpr is an Identifier bound to a function param of calleeFunc,
+  // map to caller's corresponding arg.
+  if (_t.isIdentifier(defsExprPath.node)) {
+    var b = defsExprPath.scope.getBinding(defsExprPath.node.name);
+    if (b && b.kind === "param" && b.scope.path === calleeFunc) {
+      var pIdx = -1;
+      for (var i = 0; i < calleeFunc.node.params.length; i++) {
+        if (_t.isIdentifier(calleeFunc.node.params[i], { name: defsExprPath.node.name })) { pIdx = i; break; }
+      }
+      if (pIdx >= 0) {
+        var argOffset = isCallForm ? 1 : 0;
+        var callerArgIdx = pIdx + argOffset;
+        if (callerArgIdx < callerCallPath.node.arguments.length) {
+          return _resolveToObject(callerCallPath.get("arguments." + callerArgIdx), depth);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Inside a for..in loop body, the descriptor's `get` is typically `defs[k]`
+// where `k` is the loop variable. For a specific iteration where k is bound
+// to a known key K, defs[K] resolves to the literal at K in defsObj. The
+// returned value is what reading the defined property invokes.
+//
+// callPath is the Object.defineProperty call. defsValPath is the path to
+// the value at key K in the original defs ObjectExpression. loopVarName
+// is `k`.
+function _resolveDefinePropertyDescFromGetExpr(callPath, defsValPath, loopVarName, depth) {
+  var descArg = callPath.node.arguments[2];
+  if (!_t.isObjectExpression(descArg)) return [];
+  for (var i = 0; i < descArg.properties.length; i++) {
+    var dp = descArg.properties[i];
+    if (!_t.isObjectProperty(dp) && !_t.isObjectMethod(dp)) continue;
+    var dk = _t.isIdentifier(dp.key) ? dp.key.name :
+      (_t.isStringLiteral(dp.key) ? dp.key.value : null);
+    if (dk !== "get") continue;
+    var getValueNode = _t.isObjectMethod(dp) ? null : dp.value;
+    // Common shape: get: defs[k]  → desc.value is a MemberExpression
+    // computed-keyed by the loopVar. The defsValPath we already have IS
+    // the value at key K, so just resolve / invoke it.
+    if (getValueNode && _t.isMemberExpression(getValueNode) && getValueNode.computed &&
+        _t.isIdentifier(getValueNode.property, { name: loopVarName })) {
+      // defsValPath is the value at key K (a function — getter). Invoke.
+      return _invokeFunctionExprForReturn(defsValPath, depth);
+    }
+    // Otherwise resolve the get expression directly using existing
+    // machinery — won't see the loop binding but may resolve constants.
+    var fnPath;
+    if (_t.isObjectMethod(dp)) fnPath = callPath.get("arguments.2.properties." + i);
+    else fnPath = callPath.get("arguments.2.properties." + i + ".value");
+    return _invokeFunctionExprForReturn(fnPath, depth);
+  }
+  return [];
 }
 
 // Resolve a call expression through the callee's return statements.
@@ -3624,6 +5697,32 @@ function _resolveCallReturnValues(callPath, depth) {
   if (!_resolver.guard("R", callPath.node)) return [];
   try {
   var funcPath = _resolveCalleeFuncPath(callPath, depth);
+  // IIFE / sequence-wrapped-IIFE: the callee IS the function. Not handled
+  // in the shared _resolveCalleeFuncPath because wrapper-sink tracing
+  // would then double-count the sinks inside the IIFE body (the direct
+  // ast walker already processes them). For value-return resolution,
+  // traverse the IIFE's body here to pick up return values.
+  if (!funcPath) {
+    var callee = callPath.node.callee;
+    if (_t.isFunctionExpression(callee) || _t.isArrowFunctionExpression(callee)) {
+      funcPath = callPath.get("callee");
+    } else if (_t.isSequenceExpression(callee) && callee.expressions.length > 0) {
+      var lastIdx = callee.expressions.length - 1;
+      var last = callee.expressions[lastIdx];
+      if (_t.isFunctionExpression(last) || _t.isArrowFunctionExpression(last)) {
+        funcPath = callPath.get("callee.expressions." + lastIdx);
+      } else if (_t.isIdentifier(last)) {
+        var seqBinding = callPath.scope.getBinding(last.name);
+        if (seqBinding) {
+          if (_t.isFunctionDeclaration(seqBinding.path.node)) funcPath = seqBinding.path;
+          else if (_t.isVariableDeclarator(seqBinding.path.node) && seqBinding.path.node.init &&
+              (_t.isFunctionExpression(seqBinding.path.node.init) || _t.isArrowFunctionExpression(seqBinding.path.node.init))) {
+            funcPath = seqBinding.path.get("init");
+          }
+        }
+      }
+    }
+  }
   if (!funcPath) return [];
 
   // Arrow function with expression body: () => "/api/data" or (x) => base + x
@@ -3692,8 +5791,20 @@ function _resolveCallReturnToObject(callPath, depth) {
   } finally { _resolver.unguard("O", callPath.node); }
 }
 
-// Resolve an expression to its ObjectExpression node (if it's a variable pointing to one)
+// Resolve an expression to its ObjectExpression node (if it's a variable pointing to one).
+// Memoization wrapper: profiling on real github bundles (react-lib's 380KB
+// module-exports object) showed _resolveToObjectImpl called 11M+ times
+// during one analysis (each `t.X` read triggers the chain). Cache by
+// node identity — results are deterministic per-analysis, cycles caught
+// inside _resolveToObjectImpl via _resolver.guard.
 function _resolveToObject(path, depth) {
+  var node = path.node;
+  if (_resolveToObjectMemo.has(node)) return _resolveToObjectMemo.get(node);
+  var result = _resolveToObjectImpl(path, depth);
+  _resolveToObjectMemo.set(node, result);
+  return result;
+}
+function _resolveToObjectImpl(path, depth) {
   var node = path.node;
   // Literal ObjectExpression — no recursion, return directly regardless of depth
   if (_t.isObjectExpression(node)) {
@@ -3722,9 +5833,85 @@ function _resolveToObject(path, depth) {
       if (_t.isCallExpression(binding.path.node.init)) {
         return _resolveCallReturnToObject(binding.path.get("init"), depth);
       }
+      // Destructured: `var [a, modules] = data` or `var {key} = obj`.
+      // Resolve the corresponding element/property of the init.
+      if (_t.isArrayPattern(binding.path.node.id)) {
+        var arrPat2 = binding.path.node.id;
+        var elemIdx2 = -1;
+        for (var dei = 0; dei < arrPat2.elements.length; dei++) {
+          var dEl = arrPat2.elements[dei];
+          if (_t.isIdentifier(dEl, { name: node.name })) { elemIdx2 = dei; break; }
+          if (_t.isAssignmentPattern(dEl) && _t.isIdentifier(dEl.left, { name: node.name })) { elemIdx2 = dei; break; }
+        }
+        if (elemIdx2 >= 0) {
+          var initE = binding.path.node.init;
+          if (_t.isArrayExpression(initE) && elemIdx2 < initE.elements.length && initE.elements[elemIdx2]) {
+            return _resolveToObject(binding.path.get("init.elements." + elemIdx2), depth);
+          }
+          var arrI = _resolveToArray(binding.path.get("init"), depth);
+          if (arrI && arrI._path && elemIdx2 < arrI.elements.length && arrI.elements[elemIdx2]) {
+            return _resolveToObject(arrI._path.get("elements." + elemIdx2), depth);
+          }
+        }
+      }
+      if (_t.isObjectPattern(binding.path.node.id)) {
+        var keyForName2 = _findDestructuredKey(binding.path.node.id, node.name);
+        if (keyForName2) {
+          var initO = binding.path.node.init;
+          if (_t.isObjectExpression(initO)) {
+            for (var oki2 = 0; oki2 < initO.properties.length; oki2++) {
+              var okp2 = initO.properties[oki2];
+              if (_t.isObjectProperty(okp2) && !okp2.computed && _getKeyName(okp2.key) === keyForName2) {
+                return _resolveToObject(binding.path.get("init.properties." + oki2 + ".value"), depth);
+              }
+            }
+          }
+          var initOO = _resolveToObject(binding.path.get("init"), depth);
+          if (initOO && initOO._path) {
+            for (var oki3 = 0; oki3 < initOO.properties.length; oki3++) {
+              var okp3 = initOO.properties[oki3];
+              if (_t.isObjectProperty(okp3) && !okp3.computed && _getKeyName(okp3.key) === keyForName2) {
+                return _resolveToObject(initOO._path.get("properties." + oki3 + ".value"), depth);
+              }
+            }
+          }
+        }
+      }
+    }
+    // Param: resolve from caller's arg.
+    if (binding.kind === "param" && binding.path.parentPath) {
+      var paramFnPath = binding.path.parentPath;
+      if (_t.isFunction(paramFnPath.node)) {
+        var pIdxObj = -1;
+        for (var pi = 0; pi < paramFnPath.node.params.length; pi++) {
+          if (_t.isIdentifier(paramFnPath.node.params[pi], { name: node.name })) { pIdxObj = pi; break; }
+        }
+        if (pIdxObj >= 0) {
+          var fbObj = _getFunctionBinding(paramFnPath);
+          if (fbObj && fbObj.referencePaths) {
+            for (var rfi = 0; rfi < fbObj.referencePaths.length; rfi++) {
+              var refO = fbObj.referencePaths[rfi];
+              if (_t.isCallExpression(refO.parent) && refO.parent.callee === refO.node &&
+                  pIdxObj < refO.parent.arguments.length) {
+                var argP = refO.parentPath.get("arguments." + pIdxObj);
+                var pObj = _resolveToObject(argP, depth);
+                if (pObj) return pObj;
+              }
+            }
+          }
+        }
+      }
     }
   }
-  // Object.assign({}, src1, src2, ...) → merge all object arguments
+  // Object.assign({}, src1, src2, ...) → merge all object arguments.
+  // Each source's properties may live in different files / different
+  // ASTs; the synthesized merged object can't have a single Babel _path
+  // that supports child navigation (path.get("properties.N.value")
+  // requires the underlying node to have a .properties array, which the
+  // CallExpression to Object.assign does not). Track per-property paths
+  // so downstream consumers reading prop.value._path see the actual
+  // source location, and don't set a node-level _path that would crash
+  // navigation.
   if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) &&
       _t.isIdentifier(node.callee.object, { name: "Object" }) &&
       !path.scope.getBinding("Object") &&
@@ -3734,22 +5921,32 @@ function _resolveToObject(path, depth) {
     for (var oai = 0; oai < node.arguments.length; oai++) {
       var oaArg = node.arguments[oai];
       var oaObj = null;
+      var oaObjPath = null;
       if (_t.isObjectExpression(oaArg)) {
         oaObj = oaArg;
+        oaObjPath = path.get("arguments." + oai);
       } else if (_t.isIdentifier(oaArg)) {
         var oaBinding = path.scope.getBinding(oaArg.name);
         if (oaBinding && _t.isVariableDeclarator(oaBinding.path.node) && _t.isObjectExpression(oaBinding.path.node.init)) {
           oaObj = oaBinding.path.node.init;
+          oaObjPath = oaBinding.path.get("init");
         }
       }
-      if (oaObj) {
+      if (oaObj && oaObjPath) {
         for (var oap = 0; oap < oaObj.properties.length; oap++) {
-          // Later args override earlier ones (like Object.assign behavior)
           var oaProp = oaObj.properties[oap];
           if (!_t.isObjectProperty(oaProp) || oaProp.computed) continue;
           var oaKey = _getKeyName(oaProp.key);
           if (oaKey) {
-            // Remove earlier property with same key
+            // Attach the source path to the property's value node only
+            // when not already attached — _path is a shared mutable AST
+            // field and overwriting on every Object.assign visit causes
+            // pathological re-traversal in bundles where the same value
+            // node is reachable from many sources.
+            if (oaProp.value && _t.isObjectExpression(oaProp.value) && !oaProp.value._path) {
+              oaProp.value._path = oaObjPath.get("properties." + oap + ".value");
+            }
+            // Later args override earlier ones (Object.assign semantics).
             mergedProps = mergedProps.filter(function(mp) {
               var mpKey = _getKeyName(mp.key);
               return mpKey !== oaKey;
@@ -3760,15 +5957,117 @@ function _resolveToObject(path, depth) {
       }
     }
     if (mergedProps.length > 0) {
-      // Create a synthetic ObjectExpression with merged properties
-      var synObj = { type: "ObjectExpression", properties: mergedProps, _path: path };
+      // Synthetic ObjectExpression — no node-level _path because there
+      // is no single Babel path that owns these merged properties.
+      // Per-property _path was attached above; consumers must navigate
+      // via prop.value._path directly, not synObj._path.get(...).
+      var synObj = { type: "ObjectExpression", properties: mergedProps };
       return synObj;
     }
+  }
+  // Generic CallExpression — resolve through the callee's return value(s).
+  // Symmetric with the `var x = call()` Identifier branch above (line ~5498)
+  // but for cases where the CallExpression itself is the node we need to
+  // resolve as an object — e.g. `this.X = readMeta()` viewed from
+  // `_resolveToObject(rhsPath)`. Placed AFTER the Object.assign branch so
+  // its dedicated merge handling runs first.
+  if (_t.isCallExpression(node)) {
+    return _resolveCallReturnToObject(path, depth);
   }
   // Member expression: obj.prop where prop's value is an ObjectExpression
   if (_t.isMemberExpression(node) && !node.computed) {
     var propName = _t.isIdentifier(node.property) ? node.property.name : null;
     if (propName) {
+      // `this.prop` inside a class method: trace through the constructor's
+      // `this.prop = param` assignment and pick up the object-literal
+      // arg at a `new C({...})` call site. Complements the primitive
+      // value resolution in _resolveAllValues so nested chains like
+      // `this.options.xUrl` (getter returns `this.options.xUrl` which
+      // needs the options object) can resolve.
+      if (_t.isThisExpression(node.object)) {
+        var thisFuncPath = path.getFunctionParent && path.getFunctionParent();
+        if (thisFuncPath && _t.isClassMethod(thisFuncPath.node) && _t.isClassBody(thisFuncPath.parent)) {
+          var classDecl = thisFuncPath.parentPath.parentPath;
+          if (classDecl && (_t.isClassDeclaration(classDecl.node) || _t.isClassExpression(classDecl.node)) && classDecl.node.id) {
+            var className = classDecl.node.id.name;
+            // Reuse the existing resolver — it returns VALUE arrays, not
+            // object nodes, so we need the AST path to the object
+            // expression. Scan class bindings: find `new ClassName(arg)`
+            // callers, pull the matching param's object-literal arg.
+            var ctorMethod = null, ctorMethodNode = null;
+            for (var cmi = 0; cmi < classDecl.node.body.body.length; cmi++) {
+              if (_t.isClassMethod(classDecl.node.body.body[cmi]) && classDecl.node.body.body[cmi].kind === "constructor") {
+                ctorMethod = classDecl.get("body.body." + cmi);
+                ctorMethodNode = classDecl.node.body.body[cmi];
+                break;
+              }
+            }
+            if (ctorMethod && ctorMethodNode) {
+              // Fast path: `this.X = expr` where expr resolves to an object
+              // in the constructor's scope (no caller substitution needed).
+              // Covers `this.options = readMeta()` style assignments where
+              // the RHS is a function call returning an object literal.
+              var _ctorRhs = _findThisAssignmentRhsPath(ctorMethod, propName);
+              if (_ctorRhs) {
+                var _rhsObj = _resolveToObject(_ctorRhs, depth + 1);
+                if (_rhsObj) return _rhsObj;
+              }
+              var _assignedRich = _findThisAssignedParamRich(ctorMethod, propName);
+              if (_assignedRich) {
+                var _ctrMatch = _findCtorParamOrDestr(ctorMethodNode.params, _assignedRich.paramName);
+                if (_ctrMatch) {
+                  var paramIdx = _ctrMatch.idx;
+                  var _destrKey = _assignedRich.propFromParam || _ctrMatch.key || null;
+                  // Pull the object node out of a caller's arg, honoring
+                  // destructured-param shape. Returns the inner object when
+                  // the param is `{destrKey}` and the caller's arg is
+                  // `{destrKey: {...}}`; otherwise the arg itself.
+                  function _pullObj(ctorArgPath) {
+                    if (!_destrKey) {
+                      if (_t.isObjectExpression(ctorArgPath.node)) {
+                        ctorArgPath.node._path = ctorArgPath;
+                        return ctorArgPath.node;
+                      }
+                      return null;
+                    }
+                    if (_t.isObjectExpression(ctorArgPath.node)) {
+                      for (var pi = 0; pi < ctorArgPath.node.properties.length; pi++) {
+                        var op = ctorArgPath.node.properties[pi];
+                        if (!_t.isObjectProperty(op) || op.computed) continue;
+                        var opKey = _t.isIdentifier(op.key) ? op.key.name :
+                          (_t.isStringLiteral(op.key) ? op.key.value : null);
+                        if (opKey === _destrKey && _t.isObjectExpression(op.value)) {
+                          op.value._path = ctorArgPath.get("properties." + pi + ".value");
+                          return op.value;
+                        }
+                      }
+                    }
+                    return null;
+                  }
+                  var classBinding = path.scope.getBinding(className) || classDecl.scope.getBinding(className);
+                  if (classBinding && classBinding.referencePaths) {
+                    for (var cri = 0; cri < classBinding.referencePaths.length; cri++) {
+                      var cref = classBinding.referencePaths[cri];
+                      if (cref.parent && _t.isNewExpression(cref.parent) && cref.parent.callee === cref.node &&
+                          paramIdx < cref.parent.arguments.length) {
+                        var ctorArgPath = cref.parentPath.get("arguments." + paramIdx);
+                        var _pulled = _pullObj(ctorArgPath);
+                        if (_pulled) return _pulled;
+                      }
+                    }
+                    // Indirect callers via Object.defineProperty getter exposure.
+                    var _indirect = _findClassIndirectCtorArgs(classBinding, classDecl, paramIdx, depth);
+                    for (var _ii = 0; _ii < _indirect.length; _ii++) {
+                      var _pulledI = _pullObj(_indirect[_ii]);
+                      if (_pulledI) return _pulledI;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
       var parentObj = _resolveToObject(path.get("object"), depth + 1);
       if (parentObj) {
         for (var i = 0; i < parentObj.properties.length; i++) {
@@ -3777,7 +6076,15 @@ function _resolveToObject(path, depth) {
           var key = _t.isIdentifier(prop.key) ? prop.key.name :
             (_t.isStringLiteral(prop.key) ? prop.key.value : null);
           if (key === propName && _t.isObjectExpression(prop.value)) {
-            prop.value._path = parentObj._path.get("properties." + i + ".value");
+            // For synthetic Object.assign-merged parentObj there is no
+            // node-level _path (no Babel path owns the merged set).
+            // Each merged property already has its own correct _path
+            // attached at synthesis time, so skip overwriting in that
+            // case. For real ObjectExpression parentObj, derive the
+            // child path from the parent.
+            if (parentObj._path) {
+              prop.value._path = parentObj._path.get("properties." + i + ".value");
+            }
             return prop.value;
           }
         }
@@ -3921,6 +6228,19 @@ function _resolveParamFromCallers(binding, depth, propName) {
     console.debug("[AST:trace]     → ObjectProperty but no method name, aborting");
     return [];
   }
+  // ES6 shorthand: { method(url) { ... } } — funcPath IS an ObjectMethod
+  // whose own .key is the method name, parent is the ObjectExpression.
+  // Callers route the same way as the ObjectProperty branch.
+  if (!funcBinding && funcPath.isObjectMethod && funcPath.isObjectMethod()) {
+    var omKey = funcPath.node.key;
+    var omName = _t.isIdentifier(omKey) && !funcPath.node.computed ? omKey.name :
+      (_t.isStringLiteral(omKey) ? omKey.value : null);
+    if (omName) {
+      console.debug("[AST:trace]     → ObjectMethod route: methodName=%s", omName);
+      return _resolveParamFromObjectMethod(funcPath, paramIdx, omName, depth, propName);
+    }
+    return [];
+  }
   if (!funcBinding && _t.isAssignmentExpression(funcPath.parent) &&
       _t.isMemberExpression(funcPath.parent.left) && !funcPath.parent.left.computed) {
     // obj.method = function(url) { ... } — trace via obj.method(...) call sites
@@ -3952,20 +6272,23 @@ function _resolveParamFromCallers(binding, depth, propName) {
     return [];
   }
   // Computed member assignment: obj[method] = function(url) { ... }
-  // Resolve method to its string values and search for obj.get/post/... call sites
+  // Resolve method to its string/numeric values and search for obj[…] /
+  // obj.<key> call sites. Property may be an Identifier (e.g. method
+  // name var), a StringLiteral, or a NumericLiteral (e.g. module IDs in
+  // a registry table).
   if (!funcBinding && _t.isAssignmentExpression(funcPath.parent) &&
       _t.isMemberExpression(funcPath.parent.left) && funcPath.parent.left.computed) {
     var compObj = funcPath.parent.left.object;
     var compProp = funcPath.parent.left.property;
-    if (_t.isIdentifier(compObj) && _t.isIdentifier(compProp)) {
+    if (_t.isIdentifier(compObj)) {
       var compObjBinding = funcPath.scope.getBinding(compObj.name);
       var compPropVals = _resolveAllValues(funcPath.parentPath.get("left.property"), 0);
       if (compObjBinding && compPropVals.length > 0) {
         var compValues = [];
         for (var cvi = 0; cvi < compPropVals.length; cvi++) {
-          if (typeof compPropVals[cvi] !== "string") continue;
-          console.debug("[AST:trace]     → computed-member route: %s[%s] → %s.%s()", compObj.name, compPropVals[cvi], compObj.name, compPropVals[cvi]);
-          var cmVals = _resolveParamFromMethodCalls(compObjBinding, compPropVals[cvi], paramIdx, depth, propName);
+          var compKeyStr = String(compPropVals[cvi]);
+          console.debug("[AST:trace]     → computed-member route: %s[%s] → %s.%s()", compObj.name, compKeyStr, compObj.name, compKeyStr);
+          var cmVals = _resolveParamFromMethodCalls(compObjBinding, compKeyStr, paramIdx, depth, propName);
           compValues = compValues.concat(cmVals);
         }
         // Also check global aliases
@@ -4001,6 +6324,30 @@ function _resolveParamFromCallers(binding, depth, propName) {
       console.debug("[AST:trace]     → callback-arg route: arg[%d] of call, tracing receiver", cbArgIdx);
       var cbValues = _resolveParamFromCallbackArg(cbCallExpr, cbArgIdx, paramIdx, depth, propName);
       if (cbValues.length > 0) return cbValues;
+      // HOF-wrapper for anonymous fn: `var w = HOF(fn, …); w(tainted)` —
+      // same pattern as the named-function branch but the fn is an inline
+      // FunctionExpression/ArrowFunctionExpression with no binding. Only
+      // apply when fn is at arg[0] (the wrapped-callable convention).
+      if (cbArgIdx === 0) {
+        var hofParent2 = cbCallExpr.parentPath;
+        var wrapperBinding2 = null;
+        if (hofParent2 && _t.isVariableDeclarator(hofParent2.node) && _t.isIdentifier(hofParent2.node.id)) {
+          wrapperBinding2 = hofParent2.scope.getBinding(hofParent2.node.id.name);
+        }
+        if (wrapperBinding2 && wrapperBinding2.referencePaths) {
+          var hofVals = [];
+          for (var wi2 = 0; wi2 < wrapperBinding2.referencePaths.length; wi2++) {
+            var wref2 = wrapperBinding2.referencePaths[wi2];
+            if (wref2.parent && _t.isCallExpression(wref2.parent) && wref2.parent.callee === wref2.node &&
+                paramIdx < wref2.parent.arguments.length) {
+              var wArgPath2 = wref2.parentPath.get("arguments." + paramIdx);
+              var wArgVals2 = propName ? _resolvePropertyFromArg(wArgPath2, propName, depth + 1) : _resolveAllValues(wArgPath2, depth + 1);
+              hofVals = hofVals.concat(wArgVals2);
+            }
+          }
+          if (hofVals.length > 0) return hofVals;
+        }
+      }
     }
   }
 
@@ -4107,6 +6454,107 @@ function _resolveParamFromCallers(binding, depth, propName) {
           values = values.concat(_resolveOverloadedArg(refPath.parentPath, paramIdx, depth, propName));
         }
       }
+      // Function.prototype.bind — `f.bind(thisArg, ...preArgs)` returns
+      // a function that calls f with preArgs prepended to caller args.
+      // Pure ECMAScript spec semantics. When the bind result is assigned
+      // to a variable or property and later called, that call's args
+      // come AFTER the bound preArgs in f's param list.
+      if (refPath.parent && _t.isMemberExpression(refPath.parent) &&
+          refPath.parent.object === refPath.node && !refPath.parent.computed &&
+          _t.isIdentifier(refPath.parent.property, { name: "bind" })) {
+        var bindCallNode = refPath.parentPath ? refPath.parentPath.parent : null;
+        var bindCallP = refPath.parentPath ? refPath.parentPath.parentPath : null;
+        if (bindCallNode && bindCallP && _t.isCallExpression(bindCallNode) &&
+            bindCallNode.callee === refPath.parent && bindCallNode.arguments.length >= 1) {
+          var preArgsCount = bindCallNode.arguments.length - 1;  // skip thisArg
+          if (paramIdx < preArgsCount) {
+            var preArgPath = bindCallP.get("arguments." + (paramIdx + 1));
+            var preArgVals = propName ? _resolvePropertyFromArg(preArgPath, propName, depth + 1) : _resolveAllValues(preArgPath, depth + 1);
+            values = values.concat(preArgVals);
+          } else {
+            var callerArgIdx = paramIdx - preArgsCount;
+            var bindOwner = bindCallP.parent;
+            if (bindOwner && _t.isVariableDeclarator(bindOwner) && _t.isIdentifier(bindOwner.id) &&
+                bindOwner.init === bindCallNode) {
+              var aliasB = bindCallP.parentPath.scope.getBinding(bindOwner.id.name);
+              if (aliasB && aliasB.referencePaths) {
+                for (var aIdx = 0; aIdx < aliasB.referencePaths.length; aIdx++) {
+                  var aRef2 = aliasB.referencePaths[aIdx];
+                  if (_t.isCallExpression(aRef2.parent) && aRef2.parent.callee === aRef2.node &&
+                      callerArgIdx < aRef2.parent.arguments.length) {
+                    var bArgPath = aRef2.parentPath.get("arguments." + callerArgIdx);
+                    var bArgVals = propName ? _resolvePropertyFromArg(bArgPath, propName, depth + 1) : _resolveAllValues(bArgPath, depth + 1);
+                    values = values.concat(bArgVals);
+                  }
+                }
+              }
+            } else if (bindOwner && _t.isAssignmentExpression(bindOwner) && bindOwner.right === bindCallNode &&
+                       _t.isMemberExpression(bindOwner.left) && _t.isIdentifier(bindOwner.left.object)) {
+              var bL = bindOwner.left;
+              var bKey = null;
+              if (!bL.computed && _t.isIdentifier(bL.property)) bKey = bL.property.name;
+              else if (bL.computed) {
+                if (_t.isStringLiteral(bL.property)) bKey = bL.property.value;
+                else if (_t.isNumericLiteral(bL.property)) bKey = String(bL.property.value);
+              }
+              var bObjBinding = bindCallP.parentPath.scope.getBinding(bL.object.name);
+              if (bKey != null && bObjBinding && bObjBinding.referencePaths) {
+                for (var boi = 0; boi < bObjBinding.referencePaths.length; boi++) {
+                  var boRef = bObjBinding.referencePaths[boi];
+                  var boMem = boRef.parentPath;
+                  if (!boMem || !boMem.isMemberExpression() || boMem.node.object !== boRef.node) continue;
+                  var boMatch = (!boMem.node.computed && _t.isIdentifier(boMem.node.property, { name: bKey })) ||
+                    (boMem.node.computed && _t.isStringLiteral(boMem.node.property) && boMem.node.property.value === bKey) ||
+                    (boMem.node.computed && _t.isNumericLiteral(boMem.node.property) && String(boMem.node.property.value) === bKey);
+                  if (!boMatch) continue;
+                  var boCall = boMem.parentPath;
+                  if (boCall && boCall.isCallExpression() && boCall.node.callee === boMem.node &&
+                      callerArgIdx < boCall.node.arguments.length) {
+                    var boArgPath = boCall.get("arguments." + callerArgIdx);
+                    var boArgVals = propName ? _resolvePropertyFromArg(boArgPath, propName, depth + 1) : _resolveAllValues(boArgPath, depth + 1);
+                    values = values.concat(boArgVals);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      // HOF-wrapper: `var w = HOF(fn, opts); w(tainted)` — function
+      // passed as arg to a HOF whose return is called. Conservatively
+      // assume the wrapper forwards args to fn, so `w(...)` callers
+      // contribute to fn's param values. Matches memoize/debounce/
+      // throttle/once and similar utility HOFs without name matching.
+      if (refPath.parent && _t.isCallExpression(refPath.parent) && refPath.parent.callee !== refPath.node) {
+        // Find which arg position fn is at
+        var hofArgIdx = -1;
+        for (var hai = 0; hai < refPath.parent.arguments.length; hai++) {
+          if (refPath.parent.arguments[hai] === refPath.node) { hofArgIdx = hai; break; }
+        }
+        if (hofArgIdx === 0) {
+          // Only when fn is the FIRST arg — that's the wrapped-function
+          // convention for memoize(fn)/debounce(fn)/wrap(fn)/etc. Other
+          // positions are typically options/config and don't call fn
+          // with forwarded args.
+          var hofCall = refPath.parentPath;
+          var hofParent = hofCall.parentPath;
+          var wrapperBinding = null;
+          if (hofParent && _t.isVariableDeclarator(hofParent.node) && _t.isIdentifier(hofParent.node.id)) {
+            wrapperBinding = hofParent.scope.getBinding(hofParent.node.id.name);
+          }
+          if (wrapperBinding && wrapperBinding.referencePaths) {
+            for (var wi = 0; wi < wrapperBinding.referencePaths.length; wi++) {
+              var wref = wrapperBinding.referencePaths[wi];
+              if (wref.parent && _t.isCallExpression(wref.parent) && wref.parent.callee === wref.node &&
+                  paramIdx < wref.parent.arguments.length) {
+                var wArgPath = wref.parentPath.get("arguments." + paramIdx);
+                var wArgVals = propName ? _resolvePropertyFromArg(wArgPath, propName, depth + 1) : _resolveAllValues(wArgPath, depth + 1);
+                values = values.concat(wArgVals);
+              }
+            }
+          }
+        }
+      }
     }
   }
   return values;
@@ -4118,8 +6566,17 @@ function _resolveParamFromCallers(binding, depth, propName) {
 
 // Resolve param from obj.method(...) calls when the function is an object property value
 function _resolveParamFromObjectMethod(funcPath, paramIdx, methodName, depth, propName) {
-  // Walk up to the ObjectExpression, then find its variable binding
-  var objExprPath = funcPath.parentPath ? funcPath.parentPath.parentPath : null;
+  // Walk up to the ObjectExpression. ObjectProperty shape:
+  // `{method: function(p){}}` — funcPath.parent is ObjectProperty, its
+  // parent is ObjectExpression (2 levels). ObjectMethod shorthand
+  // `{method(p){}}` — funcPath IS the ObjectMethod whose parent is
+  // directly the ObjectExpression (1 level). Handle both.
+  var objExprPath = null;
+  if (funcPath.isObjectMethod && funcPath.isObjectMethod()) {
+    objExprPath = funcPath.parentPath;
+  } else if (funcPath.parentPath) {
+    objExprPath = funcPath.parentPath.parentPath;
+  }
   if (!objExprPath || !_t.isObjectExpression(objExprPath.node)) return [];
 
   var declPath = objExprPath.parentPath;
@@ -5580,13 +8037,39 @@ function _resolveParamFromMethodCalls(objBinding, methodName, paramIdx, depth, p
   _methodCallVisited.add(bindKey);
   try {
   var values = [];
-  var refs = objBinding.referencePaths;
+  // Collect direct references + global-alias references. A `window.$ = ce`
+  // assignment makes `$.method()` semantically equivalent to `ce.method()`;
+  // the pre-pass index `_unboundIdRefs` records `$`'s member-access uses so
+  // we can enumerate them here without a program-wide retraversal.
+  var refs = objBinding.referencePaths.slice();
+  if (_unboundIdRefs) {
+    for (var pmGn in _globalAssignments) {
+      var pmGa = _globalAssignments[pmGn];
+      if (!pmGa || !pmGa.valueNode) continue;
+      var pmGv = pmGa.valueNode;
+      while (_t.isAssignmentExpression(pmGv)) pmGv = pmGv.right;
+      if (_t.isIdentifier(pmGv) && pmGv.name === objBinding.identifier.name) {
+        var pmAliasRefs = _unboundIdRefs[pmGn];
+        if (pmAliasRefs) {
+          for (var pmI = 0; pmI < pmAliasRefs.length; pmI++) refs.push(pmAliasRefs[pmI]);
+        }
+      }
+    }
+  }
   for (var r = 0; r < refs.length; r++) {
     var refPath = refs[r];
-    // Looking for: obj.method(...) where obj is this reference
+    // Looking for: obj.method(...) OR obj["method"](...) OR obj[N](...)
+    // where method/N matches methodName (compared as string).
     if (refPath.parent && _t.isMemberExpression(refPath.parent) &&
-        refPath.parent.object === refPath.node && !refPath.parent.computed &&
-        _t.isIdentifier(refPath.parent.property, { name: methodName })) {
+        refPath.parent.object === refPath.node) {
+      var rmProp = refPath.parent.property;
+      var rmMatch = false;
+      if (!refPath.parent.computed && _t.isIdentifier(rmProp, { name: methodName })) rmMatch = true;
+      else if (refPath.parent.computed) {
+        if (_t.isStringLiteral(rmProp) && rmProp.value === methodName) rmMatch = true;
+        else if (_t.isNumericLiteral(rmProp) && String(rmProp.value) === methodName) rmMatch = true;
+      }
+      if (!rmMatch) continue;
       var callNode = refPath.parentPath ? refPath.parentPath.parent : null;
       if (callNode && _t.isCallExpression(callNode) && callNode.callee === refPath.parent) {
         if (paramIdx < callNode.arguments.length) {
@@ -5595,6 +8078,20 @@ function _resolveParamFromMethodCalls(objBinding, methodName, paramIdx, depth, p
           values = values.concat(argVals);
         } else {
           values = values.concat(_resolveOverloadedArg(refPath.parentPath.parentPath, paramIdx, depth, propName));
+        }
+      }
+      // Also handle obj[K].call(thisArg, args) — Function.prototype.call form
+      if (callNode && _t.isMemberExpression(callNode) && callNode.object === refPath.parent &&
+          !callNode.computed && _t.isIdentifier(callNode.property, { name: "call" })) {
+        var outerCall = refPath.parentPath.parentPath ? refPath.parentPath.parentPath.parent : null;
+        if (outerCall && _t.isCallExpression(outerCall) && outerCall.callee === callNode) {
+          // .call shifts: param[k] is at outerCall.arguments[k+1]
+          var callArgIdx = paramIdx + 1;
+          if (callArgIdx < outerCall.arguments.length) {
+            var callArgPath = refPath.parentPath.parentPath.parentPath.get("arguments." + callArgIdx);
+            var callArgVals = propName ? _resolvePropertyFromArg(callArgPath, propName, depth) : _resolveAllValues(callArgPath, depth + 1);
+            values = values.concat(callArgVals);
+          }
         }
       }
     }
@@ -5927,11 +8424,18 @@ function _resolveConstructorProperty(fromPath, ctorName, propName, depth) {
   }
   if (!ctorPath) return [];
 
-  var assignedParamName = _findThisAssignedParam(ctorPath, propName);
-  if (!assignedParamName) return [];
+  var rich = _findThisAssignedParamRich(ctorPath, propName);
+  if (!rich) return [];
 
-  var paramIdx = _findParamIndex(ctorPath.node.params, assignedParamName);
-  if (paramIdx === -1) return [];
+  var match = _findCtorParamOrDestr(ctorPath.node.params, rich.paramName);
+  if (!match) return [];
+  var paramIdx = match.idx;
+  var extractKey = rich.propFromParam || match.key || null;
+
+  function extractArg(argPath) {
+    if (extractKey) return _resolveCtorArgDestrProp(argPath, extractKey, depth);
+    return _resolveAllValues(argPath, depth + 1);
+  }
 
   // Find new CtorName(args) callers (direct and aliased)
   var values = [];
@@ -5941,7 +8445,7 @@ function _resolveConstructorProperty(fromPath, ctorName, propName, depth) {
       // Direct: new CtorName(args)
       if (ref.parent && _t.isNewExpression(ref.parent) && ref.parent.callee === ref.node &&
           paramIdx < ref.parent.arguments.length) {
-        values = values.concat(_resolveAllValues(ref.parentPath.get("arguments." + paramIdx), depth + 1));
+        values = values.concat(extractArg(ref.parentPath.get("arguments." + paramIdx)));
       }
       // Aliased: obj.prop = CtorName → new obj.prop(args)
       if (ref.parent && _t.isAssignmentExpression(ref.parent) && ref.parent.right === ref.node &&
@@ -5959,9 +8463,7 @@ function _resolveConstructorProperty(fromPath, ctorName, propName, depth) {
                   aRef.parentPath && _t.isNewExpression(aRef.parentPath.parent) &&
                   aRef.parentPath.parent.callee === aRef.parent &&
                   paramIdx < aRef.parentPath.parent.arguments.length) {
-                values = values.concat(_resolveAllValues(
-                  aRef.parentPath.parentPath.get("arguments." + paramIdx), depth + 1
-                ));
+                values = values.concat(extractArg(aRef.parentPath.parentPath.get("arguments." + paramIdx)));
               }
             }
           }
@@ -5995,11 +8497,30 @@ function _resolveClassConstructorProperty(fromPath, classDecl, className, propNa
   }
   if (!ctorMethod) return [];
 
-  var assignedParamName = _findThisAssignedParam(ctorMethodPath, propName);
-  if (!assignedParamName) return [];
+  var rich = _findThisAssignedParamRich(ctorMethodPath, propName);
+  if (!rich) {
+    // Constructor assigns `this.X = expr` where expr is neither a bare
+    // ident nor an ident.Y member. Resolve expr directly in the
+    // constructor's scope — no caller substitution needed because expr
+    // is closed-over in the constructor body.
+    var rhsPath = _findThisAssignmentRhsPath(ctorMethodPath, propName);
+    if (rhsPath) return _resolveAllValues(rhsPath, depth + 1);
+    return [];
+  }
 
-  var paramIdx = _findParamIndex(ctorMethod.params, assignedParamName);
-  if (paramIdx === -1) return [];
+  // Resolve the param identifier (including destructure patterns) to an idx
+  // and optional destructured-key. When the assignment is `this.X = p.Y`,
+  // `rich.propFromParam` takes precedence over any destructured-key logic —
+  // the param is a plain identifier `p` and we want to extract `.Y` from
+  // the caller's arg.
+  var match = _findCtorParamOrDestr(ctorMethod.params, rich.paramName);
+  if (!match) return [];
+  var paramIdx = match.idx;
+  // When both destr-key AND propFromParam are present, prefer propFromParam
+  // because `rich` reflects the actual in-body access pattern. In practice
+  // they can't both be set: a destructured param binds an identifier in
+  // scope; it doesn't carry a property access in the RHS.
+  var extractKey = rich.propFromParam || match.key || null;
 
   // Find new ClassName(args) callers and extract the corresponding argument
   var classBinding = fromPath.scope.getBinding(className);
@@ -6011,7 +8532,24 @@ function _resolveClassConstructorProperty(fromPath, classDecl, className, propNa
     var ref = classBinding.referencePaths[r];
     if (ref.parent && _t.isNewExpression(ref.parent) && ref.parent.callee === ref.node &&
         paramIdx < ref.parent.arguments.length) {
-      values = values.concat(_resolveAllValues(ref.parentPath.get("arguments." + paramIdx), depth + 1));
+      var argPath = ref.parentPath.get("arguments." + paramIdx);
+      if (extractKey) values = values.concat(_resolveCtorArgDestrProp(argPath, extractKey, depth));
+      else values = values.concat(_resolveAllValues(argPath, depth + 1));
+    }
+  }
+  // Indirect callers via Object.defineProperty getter exposure: pure-JS
+  // pattern where a class is exposed through `{get: () => CLASS}` on
+  // some object, and consumers do `new <obj>.<key>(args)`. Reading
+  // `<obj>.<key>` invokes the getter and returns the class; constructing
+  // it invokes the class's constructor with `args`. To find these
+  // callers we walk the class's referencePaths for arrow-thunk shapes
+  // `() => CLASS`, locate the descriptor, and recursively find consumers
+  // that construct from `<aliasOf(target)>.<key>`.
+  if (values.length === 0) {
+    var indirect = _findClassIndirectCtorArgs(classBinding, classDecl, paramIdx, depth);
+    for (var ii = 0; ii < indirect.length; ii++) {
+      if (extractKey) values = values.concat(_resolveCtorArgDestrProp(indirect[ii], extractKey, depth));
+      else values = values.concat(_resolveAllValues(indirect[ii], depth + 1));
     }
   }
   return values;
@@ -6156,6 +8694,49 @@ function _extractBodyParamsInner(valNode, scopePath) {
   if (_t.isIdentifier(valNode) && scopePath && scopePath.scope) {
     var bpBinding = scopePath.scope.getBinding(valNode.name);
     if (bpBinding) {
+      // FormData / URLSearchParams field accumulation: when the body
+      // identifier traces to a `new FormData()` / `new URLSearchParams()`
+      // and code does `e.append(name, value)` / `e.set(name, value)`,
+      // each append/set call's first arg is a body field name.
+      // Walks the binding's referencePaths for member-call patterns —
+      // pure data-flow through W3C native APIs.
+      var bpInit = _t.isVariableDeclarator(bpBinding.path.node) ? bpBinding.path.node.init : null;
+      var bpType = bpInit && _t.isNewExpression(bpInit) && _t.isIdentifier(bpInit.callee) ? bpInit.callee.name : null;
+      if ((bpType === "FormData" || bpType === "URLSearchParams") &&
+          !bpBinding.path.scope.getBinding(bpType) && bpBinding.referencePaths) {
+        for (var fdri = 0; fdri < bpBinding.referencePaths.length; fdri++) {
+          var fdRef = bpBinding.referencePaths[fdri];
+          var fdMem = fdRef.parentPath;
+          if (!fdMem || !fdMem.isMemberExpression() || fdMem.node.object !== fdRef.node || fdMem.node.computed) continue;
+          var fdMethod = _t.isIdentifier(fdMem.node.property) ? fdMem.node.property.name : null;
+          if (fdMethod !== "append" && fdMethod !== "set") continue;
+          var fdCall = fdMem.parentPath;
+          if (!fdCall || !fdCall.isCallExpression() || fdCall.node.callee !== fdMem.node ||
+              fdCall.node.arguments.length < 1) continue;
+          // Resolve the first arg to a string — the field NAME.
+          var fdNameVals = _resolveAllValues(fdCall.get("arguments.0"), 0);
+          for (var fdni = 0; fdni < fdNameVals.length; fdni++) {
+            if (typeof fdNameVals[fdni] !== "string" || !fdNameVals[fdni]) continue;
+            // Avoid duplicate names
+            var fdAlreadyHave = false;
+            for (var fdpi = 0; fdpi < params.length; fdpi++) {
+              if (params[fdpi].name === fdNameVals[fdni]) { fdAlreadyHave = true; break; }
+            }
+            if (fdAlreadyHave) continue;
+            // Try to also resolve the value (arg[1]) for an example.
+            var fdField = { name: fdNameVals[fdni], required: true, location: "body" };
+            if (fdCall.node.arguments.length >= 2) {
+              var fdValVals = _resolveAllValues(fdCall.get("arguments.1"), 0);
+              if (fdValVals.length > 0 && typeof fdValVals[0] === "string") {
+                fdField.defaultValue = fdValVals[0];
+                fdField.type = "string";
+              }
+            }
+            params.push(fdField);
+          }
+        }
+        if (params.length > 0) return params;
+      }
       if (_t.isVariableDeclarator(bpBinding.path.node) && bpBinding.path.node.init) {
         return _extractBodyParams(bpBinding.path.node.init, bpBinding.path);
       }
@@ -6197,9 +8778,65 @@ function _extractBodyParamsInner(valNode, scopePath) {
              valNode.arguments[0] && _t.isObjectExpression(valNode.arguments[0])) {
     params = _extractObjectProperties(valNode.arguments[0]);
     for (var j = 0; j < params.length; j++) params[j].location = "body";
+  } else if (_t.isCallExpression(valNode) && _t.isMemberExpression(valNode.callee) &&
+             !valNode.callee.computed && _t.isIdentifier(valNode.callee.property, { name: "toString" }) &&
+             scopePath) {
+    // `body: new URLSearchParams({...}).toString()` / `body: fd.toString()`
+    // — strip the .toString() wrap and recurse on the receiver. Native
+    // ECMAScript: .toString() is identity for body-shape extraction.
+    params = _extractBodyParams(valNode.callee.object, scopePath);
   } else if (_t.isObjectExpression(valNode)) {
     params = _extractObjectProperties(valNode);
     for (var k = 0; k < params.length; k++) params[k].location = "body";
+  } else if (_t.isMemberExpression(valNode) && !valNode.computed &&
+             _t.isIdentifier(valNode.object) && _t.isIdentifier(valNode.property) &&
+             scopePath && scopePath.scope) {
+    // `xhr.send(opts.data)` style: the body is a property on a binding.
+    // Real-world wrapper pattern: `function ajax(opts){ xhr.send(opts.data) }`
+    // called from `$.post(url, data){ return ajax({url, data}) }` — the
+    // outer caller's body literal must flow through opts.data to xhr.send.
+    var objName = valNode.object.name;
+    var propName = valNode.property.name;
+    var objBinding = scopePath.scope.getBinding(objName);
+    if (objBinding) {
+      var objCandidates = []; // {obj, path}
+      if (_t.isVariableDeclarator(objBinding.path.node) && objBinding.path.node.init) {
+        var localObj = _resolveToObject(objBinding.path.get("init"), 0);
+        if (localObj) objCandidates.push({ obj: localObj, path: objBinding.path.get("init") });
+      } else if (objBinding.kind === "param") {
+        // Walk callers and resolve each arg at the param position.
+        var pFnPath = objBinding.scope.path;
+        var pIdx = _findParamIndex(pFnPath.node.params, objName);
+        if (pIdx >= 0) {
+          var callerArgPaths = _findFunctionCallerArgs(pFnPath);
+          for (var pri = 0; pri < callerArgPaths.length; pri++) {
+            if (pIdx < callerArgPaths[pri].length) {
+              var argPath = callerArgPaths[pri][pIdx];
+              var callerObj = _resolveToObject(argPath, 0);
+              if (callerObj) objCandidates.push({ obj: callerObj, path: argPath });
+            }
+          }
+        }
+      }
+      // For each candidate object, find the named property and recurse
+      // body extraction on its value. First non-empty result wins.
+      for (var ci = 0; ci < objCandidates.length; ci++) {
+        var co = objCandidates[ci].obj;
+        var coPath = objCandidates[ci].path;
+        if (!co.properties) continue;
+        for (var pi = 0; pi < co.properties.length; pi++) {
+          var pp = co.properties[pi];
+          if (!_t.isObjectProperty(pp) || pp.computed) continue;
+          var pk = _t.isIdentifier(pp.key) ? pp.key.name :
+            (_t.isStringLiteral(pp.key) ? pp.key.value : null);
+          if (pk !== propName) continue;
+          var subScope = co._path ? co._path.get("properties." + pi + ".value") : coPath;
+          var sub = _extractBodyParams(pp.value, subScope);
+          if (sub.length > 0) { params = sub; break; }
+        }
+        if (params.length > 0) break;
+      }
+    }
   }
   return params;
 }
@@ -6414,6 +9051,77 @@ function _findFunctionCallerArgs(funcPath) {
         }
       }
     }
+    // Indexed-property assignment: `obj[K] = function(params) { ... }` or
+    // `obj.K = function(params) { ... }`. Callers reach the function via
+    // `obj[K](args)` / `obj.K(args)` / `obj[K].call(thisArg, args)`.
+    // Walk obj's referencePaths for matching member-access calls.
+    if (!funcBinding && _t.isMemberExpression(funcPath.parent.left)) {
+      var ipLeft = funcPath.parent.left;
+      if (_t.isIdentifier(ipLeft.object)) {
+        var ipKey = null;
+        if (!ipLeft.computed && _t.isIdentifier(ipLeft.property)) ipKey = ipLeft.property.name;
+        else if (ipLeft.computed) {
+          if (_t.isStringLiteral(ipLeft.property)) ipKey = ipLeft.property.value;
+          else if (_t.isNumericLiteral(ipLeft.property)) ipKey = String(ipLeft.property.value);
+        }
+        if (ipKey != null) {
+          var ipObjBinding = funcPath.parentPath.scope.getBinding(ipLeft.object.name);
+          if (ipObjBinding && ipObjBinding.referencePaths) {
+            // Collect references for this object plus any global aliases.
+            // `var ce = {}; ce.post = fn; window.$ = ce;` — `$.post(args)`
+            // reaches ce.post but `$` is a separate global. Walk
+            // _globalAssignments for any global whose value is this
+            // identifier; pull its references from the pre-pass index
+            // (no program-traverse-during-traverse).
+            var ipAllRefs = ipObjBinding.referencePaths.slice();
+            if (_unboundIdRefs) {
+              for (var ipGn in _globalAssignments) {
+                var ipGa = _globalAssignments[ipGn];
+                if (!ipGa || !ipGa.valueNode) continue;
+                var ipGv = ipGa.valueNode;
+                while (_t.isAssignmentExpression(ipGv)) ipGv = ipGv.right;
+                if (_t.isIdentifier(ipGv) && ipGv.name === ipLeft.object.name) {
+                  var aliasRefs = _unboundIdRefs[ipGn];
+                  if (aliasRefs) {
+                    for (var ari2 = 0; ari2 < aliasRefs.length; ari2++) ipAllRefs.push(aliasRefs[ari2]);
+                  }
+                }
+              }
+            }
+            var ipResults = [];
+            for (var iri = 0; iri < ipAllRefs.length; iri++) {
+              var iRef = ipAllRefs[iri];
+              var iMem = iRef.parentPath;
+              if (!iMem || !iMem.isMemberExpression() || iMem.node.object !== iRef.node) continue;
+              var iMatch = (!iMem.node.computed && _t.isIdentifier(iMem.node.property, { name: ipKey })) ||
+                (iMem.node.computed && _t.isStringLiteral(iMem.node.property) && iMem.node.property.value === ipKey) ||
+                (iMem.node.computed && _t.isNumericLiteral(iMem.node.property) && String(iMem.node.property.value) === ipKey);
+              if (!iMatch) continue;
+              // obj.K(args) — direct call
+              var iCall = iMem.parentPath;
+              if (iCall && iCall.isCallExpression() && iCall.node.callee === iMem.node) {
+                var iArgs = [];
+                for (var iai = 0; iai < iCall.node.arguments.length; iai++) iArgs.push(iCall.get("arguments." + iai));
+                ipResults.push(iArgs);
+                continue;
+              }
+              // obj.K.call(thisArg, args) — Function.prototype.call form
+              if (iCall && iCall.isMemberExpression() && iCall.node.object === iMem.node &&
+                  !iCall.node.computed && _t.isIdentifier(iCall.node.property, { name: "call" })) {
+                var iCall2 = iCall.parentPath;
+                if (iCall2 && iCall2.isCallExpression() && iCall2.node.callee === iCall.node) {
+                  var iArgs2 = [];
+                  // Skip thisArg (arg[0]); shift remaining into params
+                  for (var iaj = 1; iaj < iCall2.node.arguments.length; iaj++) iArgs2.push(iCall2.get("arguments." + iaj));
+                  ipResults.push(iArgs2);
+                }
+              }
+            }
+            if (ipResults.length > 0) return ipResults;
+          }
+        }
+      }
+    }
   }
   if (funcBinding && funcBinding.referencePaths) {
     for (var i = 0; i < funcBinding.referencePaths.length; i++) {
@@ -6423,8 +9131,124 @@ function _findFunctionCallerArgs(funcPath) {
         for (var j = 0; j < ref.parent.arguments.length; j++) argPaths.push(ref.parentPath.get("arguments." + j));
         results.push(argPaths);
       }
+      // Function.prototype.bind: `f.bind(thisArg, …preArgs)` returns a
+      // function. Effective callee args at runtime = preArgs prepended
+      // to whatever the bound function is called with. Find:
+      //   var alias = f.bind(null, X, Y);
+      //   alias(Z, W);          // → f(X, Y, Z, W)
+      //   obj.k = f.bind(null, X);
+      //   obj.k(Z);             // → f(X, Z)
+      // Walk one .bind hop and collect aggregated arg lists for the
+      // bound aliases' call sites.
+      if (_t.isMemberExpression(ref.parent) && ref.parent.object === ref.node && !ref.parent.computed &&
+          _t.isIdentifier(ref.parent.property, { name: "bind" })) {
+        var bindCall = ref.parentPath ? ref.parentPath.parent : null;
+        var bindCallPath = ref.parentPath ? ref.parentPath.parentPath : null;
+        if (bindCall && bindCallPath && _t.isCallExpression(bindCall) && bindCall.callee === ref.parent &&
+            bindCall.arguments.length >= 1) {
+          // Pre-args (everything after thisArg).
+          var preArgs = [];
+          for (var bi = 1; bi < bindCall.arguments.length; bi++) preArgs.push(bindCallPath.get("arguments." + bi));
+          // Find what the bind result is assigned to.
+          var bindParent = bindCallPath.parent;
+          if (bindParent && _t.isVariableDeclarator(bindParent) && _t.isIdentifier(bindParent.id) &&
+              bindParent.init === bindCall) {
+            var aliasBinding = bindCallPath.parentPath.scope.getBinding(bindParent.id.name);
+            if (aliasBinding && aliasBinding.referencePaths) {
+              for (var ari = 0; ari < aliasBinding.referencePaths.length; ari++) {
+                var aRef = aliasBinding.referencePaths[ari];
+                if (_t.isCallExpression(aRef.parent) && aRef.parent.callee === aRef.node) {
+                  var combined = preArgs.slice();
+                  for (var aci = 0; aci < aRef.parent.arguments.length; aci++) {
+                    combined.push(aRef.parentPath.get("arguments." + aci));
+                  }
+                  results.push(combined);
+                }
+              }
+            }
+          } else if (bindParent && _t.isAssignmentExpression(bindParent) && bindParent.right === bindCall &&
+                     _t.isMemberExpression(bindParent.left) && _t.isIdentifier(bindParent.left.object)) {
+            // obj.k = f.bind(...) — find obj.k call sites.
+            var asgnLeft = bindParent.left;
+            var asgnObj = asgnLeft.object;
+            var asgnKey = null;
+            if (!asgnLeft.computed && _t.isIdentifier(asgnLeft.property)) asgnKey = asgnLeft.property.name;
+            else if (asgnLeft.computed) {
+              if (_t.isStringLiteral(asgnLeft.property)) asgnKey = asgnLeft.property.value;
+              else if (_t.isNumericLiteral(asgnLeft.property)) asgnKey = String(asgnLeft.property.value);
+            }
+            var asgnObjBinding = bindCallPath.parentPath.scope.getBinding(asgnObj.name);
+            if (asgnKey != null && asgnObjBinding && asgnObjBinding.referencePaths) {
+              for (var aori = 0; aori < asgnObjBinding.referencePaths.length; aori++) {
+                var aoRef = asgnObjBinding.referencePaths[aori];
+                var aoMem = aoRef.parentPath;
+                if (!aoMem || !aoMem.isMemberExpression() || aoMem.node.object !== aoRef.node) continue;
+                var aoMatch = (!aoMem.node.computed && _t.isIdentifier(aoMem.node.property, { name: asgnKey })) ||
+                  (aoMem.node.computed && _t.isStringLiteral(aoMem.node.property) && aoMem.node.property.value === asgnKey) ||
+                  (aoMem.node.computed && _t.isNumericLiteral(aoMem.node.property) && String(aoMem.node.property.value) === asgnKey);
+                if (!aoMatch) continue;
+                var aoCall = aoMem.parentPath;
+                if (aoCall && aoCall.isCallExpression() && aoCall.node.callee === aoMem.node) {
+                  var combined2 = preArgs.slice();
+                  for (var aoaci = 0; aoaci < aoCall.node.arguments.length; aoaci++) {
+                    combined2.push(aoCall.get("arguments." + aoaci));
+                  }
+                  results.push(combined2);
+                }
+              }
+            }
+          }
+        }
+      }
     }
     return results;
+  }
+  // Object-literal method: `var u = {m(e){}}; u.m(tainted);` or
+  // `{m: function(e){}}; `. The function itself has no named binding —
+  // it's reached via `u.m(args)`. Walk up to the ObjectExpression, find
+  // its VariableDeclarator binding, then filter ref usages to calls
+  // through `obj.methodName`.
+  if (!funcBinding) {
+    var objMethodName = null;
+    var objExprPath2 = null;
+    if (funcPath.isObjectMethod && funcPath.isObjectMethod()) {
+      var omK = funcPath.node.key;
+      if (!funcPath.node.computed) {
+        if (_t.isIdentifier(omK)) objMethodName = omK.name;
+        else if (_t.isStringLiteral(omK)) objMethodName = omK.value;
+      }
+      objExprPath2 = funcPath.parentPath;
+    } else if (funcPath.parentPath && _t.isObjectProperty(funcPath.parent)) {
+      var opK = funcPath.parent.key;
+      if (!funcPath.parent.computed) {
+        if (_t.isIdentifier(opK)) objMethodName = opK.name;
+        else if (_t.isStringLiteral(opK)) objMethodName = opK.value;
+      }
+      objExprPath2 = funcPath.parentPath.parentPath;
+    }
+    if (objMethodName && objExprPath2 && objExprPath2.isObjectExpression() &&
+        objExprPath2.parentPath && _t.isVariableDeclarator(objExprPath2.parentPath.node) &&
+        _t.isIdentifier(objExprPath2.parentPath.node.id)) {
+      var objName = objExprPath2.parentPath.node.id.name;
+      var objBind = objExprPath2.scope.getBinding(objName);
+      if (objBind && objBind.referencePaths) {
+        for (var omi = 0; omi < objBind.referencePaths.length; omi++) {
+          var oref = objBind.referencePaths[omi];
+          var mem = oref.parentPath;
+          if (!mem || !mem.isMemberExpression() || mem.node.object !== oref.node || mem.node.computed) continue;
+          var accessName = _t.isIdentifier(mem.node.property) ? mem.node.property.name : null;
+          if (accessName !== objMethodName) continue;
+          var callExpr = mem.parentPath;
+          if (!callExpr || !callExpr.isCallExpression() || callExpr.node.callee !== mem.node) continue;
+          var omArgPaths = [];
+          for (var omj = 0; omj < callExpr.node.arguments.length; omj++) {
+            omArgPaths.push(callExpr.get("arguments." + omj));
+          }
+          results.push(omArgPaths);
+        }
+        if (results.length > 0) return results;
+      }
+    }
   }
   // Function passed as argument: makeHandler(function(data) { sink(data); })
   // If our function is an argument to a call, find the corresponding parameter in the
@@ -6908,6 +9732,13 @@ var _TAINT_PATTERNS = [
 // computed access (`location[x]`) is still suspicious because `x` may select
 // a tainted prop.
 var _LOCATION_SAFE_PROPS = { "origin":1, "hostname":1, "host":1, "protocol":1, "port":1, "ancestorOrigins":1 };
+// WHATWG URL instance properties — read-only string projections of the
+// parsed URL. When `(new URL(input, base)).<prop>` resolves with literal
+// input/base, we can extract these directly via Node's URL parser.
+var _URL_INSTANCE_PROPS = {
+  "href":1, "origin":1, "protocol":1, "username":1, "password":1,
+  "host":1, "hostname":1, "port":1, "pathname":1, "search":1, "hash":1,
+};
 
 // Scope-aware taint source classification using structural AST matching.
 // Replaces _describeNode() + _TAINT_SOURCES string lookup.
@@ -7671,7 +10502,12 @@ function _traceValueSourceInner(path, node) {
               var _omLeft = _mhParent.node.left;
               if (_t.isMemberExpression(_omLeft) && !_omLeft.computed &&
                   _t.isIdentifier(_omLeft.property, { name: "onmessage" })) {
-                _isMsgHandler = true;
+                // Same same-origin discrimination as the addEventListener
+                // path: Worker/SharedWorker/BroadcastChannel/MessageChannel/
+                // EventSource receivers are not cross-origin. Reuse the
+                // existing receiver classifier — treat the LHS MemberExpression
+                // as if it were an addEventListener callee.
+                if (_isCrossOriginMsgReceiver(_omLeft, _mhParent)) _isMsgHandler = true;
               }
             }
             // Factory pattern: function returned from enclosing function whose call site
@@ -7961,7 +10797,19 @@ function _traceValueSourceInner(path, node) {
         // result when the receiver is a tracked collection. This block
         // only runs with a user-controlled receiver, so there's no need
         // to re-check type here.
-        if (_isPrefixPreservingName || _sliceStartZero) {
+        // If source has no surviving attacker dim, no method call can
+        // synthesise one back. Earlier transforms (e.g. `new URL(rel, base)`
+        // where base contributes only origin dim and origin gets stripped
+        // for current-origin sources) can drive every dim to false; the
+        // chain stays in the taint graph by binding identity, but there's
+        // nothing for the method's projection to upgrade. Without this
+        // guard, `.text()` (or any unknown method) on an already-cleansed
+        // value re-introduces a `content` dim from thin air, producing
+        // false-positive XSS findings.
+        var _hasAnyAttackerDim = !!(_sdM.origin || _sdM.path || _sdM.query || _sdM.hash || _sdM.content);
+        if (!_hasAnyAttackerDim) {
+          _mcProjDims = { origin: false, content: false };
+        } else if (_isPrefixPreservingName || _sliceStartZero) {
           _mcProjDims = {
             origin: _sdM.origin, path: _sdM.path, query: _sdM.query, hash: _sdM.hash,
             content: _sdM.origin || _sdM.path || _sdM.query || _sdM.hash || _sdM.content,
@@ -8347,6 +11195,19 @@ function _pushSink(result, node, type, sink, src, path, options) {
     sanitized: sanitized,
     codeContext: _extractCodeContext(node, src),
   };
+  // Taint dims at the point the value reaches the sink — surfaced so
+  // a reviewer inspecting a finding can see at a glance which dimensions
+  // the attacker still controls (e.g. `{query:true, content:true}` vs
+  // `{path:true}` only). All-dims-false would have suppressed above.
+  if (src && src.dimensions) {
+    var _trueDims = [];
+    if (src.dimensions.origin) _trueDims.push("origin");
+    if (src.dimensions.path) _trueDims.push("path");
+    if (src.dimensions.query) _trueDims.push("query");
+    if (src.dimensions.hash) _trueDims.push("hash");
+    if (src.dimensions.content) _trueDims.push("content");
+    entry.sinkDims = _trueDims;
+  }
   // Receiver type at the sink: helps reviewers tell `d.innerHTML = html`
   // on a `document.getElementById()` Element (real XSS) from the same
   // shape on an unknown object. Derived structurally from the sink's
@@ -8630,6 +11491,23 @@ function _pushDangerous(result, node, type, description, severity, src) {
     type: type, description: description, location: _nodeLoc(node),
     severity: severity, codeContext: _extractCodeContext(node, src),
   };
+  // Surface source/sourceType like _pushSink does. Without these,
+  // finding.exploit can't pick a probe strategy for prototype-pollution
+  // and other dangerousPattern findings that ARE routed from a user-
+  // controlled source (location.hash, event.data, etc.) — it falls
+  // through to "no probe strategy yet for source null" even though the
+  // source is known.
+  if (src && src.sourceType) entry.sourceType = src.sourceType;
+  if (src && src.source) entry.source = src.source;
+  if (src && src.dimensions) {
+    var _dngDims = [];
+    if (src.dimensions.origin) _dngDims.push("origin");
+    if (src.dimensions.path) _dngDims.push("path");
+    if (src.dimensions.query) _dngDims.push("query");
+    if (src.dimensions.hash) _dngDims.push("hash");
+    if (src.dimensions.content) _dngDims.push("content");
+    entry.sinkDims = _dngDims;
+  }
   if (src && src.taintPath && src.taintPath.length > 0) entry.taintPath = src.taintPath;
   result.dangerousPatterns.push(entry);
 }
@@ -8875,9 +11753,56 @@ function _isCrossOriginMsgReceiver(callee, callPath) {
       _SAME_ORIGIN_CHANNEL_CONSTRUCTORS[receiver.callee.name]) {
     return false;
   }
+  // `worker.port.addEventListener(...)` where `worker = new SharedWorker(...)`.
+  // The MessagePort exposed by a Worker/SharedWorker the current script
+  // created is a same-origin channel — the port connects this page to the
+  // worker script, no third party can send messages through it. Walk
+  // MemberExpression one more level when the leaf property is `.port` and
+  // the base is a same-origin-only worker constructor (either directly or
+  // via scope-tracked type).
+  if (_t.isMemberExpression(receiver) && !receiver.computed &&
+      _t.isIdentifier(receiver.property, { name: "port" })) {
+    var portBase = receiver.object;
+    if (_t.isNewExpression(portBase) && _t.isIdentifier(portBase.callee) &&
+        !callPath.scope.getBinding(portBase.callee.name) &&
+        _SAME_ORIGIN_CHANNEL_CONSTRUCTORS[portBase.callee.name]) {
+      return false;
+    }
+    if (_t.isIdentifier(portBase)) {
+      var portBaseType = _getTrackedType(callPath, portBase);
+      if (portBaseType && _SAME_ORIGIN_CHANNEL_CONSTRUCTORS[portBaseType]) return false;
+    }
+  }
   // `window.frames[N].addEventListener(...)`, `iframe.contentWindow.addEventListener(...)`,
   // `somePort.addEventListener(...)`, etc. — conservatively flag.
   return true;
+}
+
+// A MessageEvent's `.origin` is a browser-set property — the attacker
+// can only set it to their own real origin. Using it as a postMessage
+// reply target sends data back to the sender — a standard pattern, not
+// a data leak. The taint source labels the param as "event.data" which
+// correctly flags `event.data.foo` for XSS but OVER-flags `event.origin`
+// for reply-target. Walk the trace's final hop: if it lands on a `.origin`
+// read whose base resolves back to an addEventListener("message", …)
+// param, the value is the reply target — safe.
+function _targetTraceIsEventOrigin(src) {
+  if (!src || !Array.isArray(src.taintPath) || src.taintPath.length < 2) return false;
+  // Look for a `[member] .origin` hop immediately following an "event.data"
+  // source. Later hops can be bindings / reassigns / param-caller wrapping
+  // without changing the fact that the VALUE is the event's origin string.
+  var first = src.taintPath[0];
+  if (!first || first.kind !== "source" || first.desc !== "event.data") return false;
+  for (var hi = 1; hi < src.taintPath.length; hi++) {
+    var h = src.taintPath[hi];
+    if (h && h.kind === "member" && h.desc === ".origin") return true;
+    // Non-member, non-identity hops before `.origin` disqualify — they
+    // indicate the trace has moved to a different attribute (e.g. event.data.foo)
+    // that isn't the browser-set origin. Accept binding/reassign/param-caller
+    // as pass-through (they don't change the value, just rename it).
+    if (h && h.kind === "member" && h.desc !== ".origin") return false;
+  }
+  return false;
 }
 
 
@@ -9459,13 +12384,36 @@ function _processDangerousPattern(path, result) {
     return;
   }
 
-  // postMessage(data, "*") — wildcard target origin
+  // postMessage(data, targetOrigin) — scan targetOrigin for danger patterns.
   if (_t.isMemberExpression(callee) && _t.isIdentifier(callee.property, { name: "postMessage" }) &&
-      node.arguments.length >= 2 && _t.isStringLiteral(node.arguments[1], { value: "*" })) {
+      node.arguments.length >= 2) {
     var _isOpener = _t.isMemberExpression(callee.object) && _t.isIdentifier(callee.object.property, { name: "opener" });
-    _pushDangerous(result, node, "postmessage-wildcard-target",
-      _isOpener ? "postMessage to opener with wildcard '*' targetOrigin" : "postMessage with wildcard '*' targetOrigin", "high", null);
-    return;
+    var _targetArg = node.arguments[1];
+    // `"*"` — wildcard: any origin can receive the message. Resolve
+    // through bindings too so `var t = "*"; postMessage(d, t)` is caught
+    // at parity with the inline string.
+    var _targetResolved = _t.isStringLiteral(_targetArg)
+      ? [_targetArg.value]
+      : _resolveAllValues(path.get("arguments.1"), 0);
+    if (_targetResolved.indexOf("*") >= 0) {
+      _pushDangerous(result, node, "postmessage-wildcard-target",
+        _isOpener ? "postMessage to opener with wildcard '*' targetOrigin" : "postMessage with wildcard '*' targetOrigin", "high", null);
+      return;
+    }
+    // Non-literal target traced back to a user-controlled source — the
+    // attacker can redirect the message to any origin they pick. Even
+    // if the PAYLOAD is safe, sending it to the wrong origin leaks
+    // whatever the message contains. Literal-origin configs are fine;
+    // only flag when the target resolves to a user-controlled value.
+    if (!_t.isStringLiteral(_targetArg)) {
+      var _tgtSrc = _traceValueSource(path.get("arguments.1"), 0);
+      if (_tgtSrc.sourceType === "user-controlled" && !_targetTraceIsEventOrigin(_tgtSrc)) {
+        _pushDangerous(result, node, "postmessage-dynamic-target",
+          "postMessage targetOrigin is user-controlled — attacker can redirect message to any origin",
+          "high", _tgtSrc);
+        return;
+      }
+    }
   }
 
   // Object.defineProperty(obj, userControlledKey, desc) — prototype pollution

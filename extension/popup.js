@@ -1878,10 +1878,15 @@ function renderSecurityPanel() {
         ? "user-controlled" + (item.source ? ": " + esc(item.source) : "")
         : item.sourceType === "dynamic" ? "dynamic value" : "literal value";
 
+      var sinkDimsHtml = Array.isArray(item.sinkDims)
+        ? '<div class="card-dims" title="attacker-controlled dims surviving to the sink">sinkDims: {' + esc(item.sinkDims.join(",") || "none") + '}</div>'
+        : "";
+
       var verifyHtmlSink = _renderVerifyRow(entry, i);
       html += '<div class="card" data-finding-key="' + esc(_findingKey(entry)) + '">'
         + '<div class="card-label">' + typeBadge + ' ' + sevBadge + ' ' + esc(item.sink) + '</div>'
         + '<div class="card-value">' + esc(sourceDesc) + '</div>'
+        + sinkDimsHtml
         + codeHtml
         + _renderTaintPathDetails(item)
         + _renderPreconditionsDetails(item)
@@ -1891,10 +1896,14 @@ function renderSecurityPanel() {
         + '</div>';
     } else {
       var patBadge = '<span class="badge badge-danger">' + esc((item.type || "pattern").toUpperCase().replace(/-/g, " ")) + '</span>';
+      var patSinkDimsHtml = Array.isArray(item.sinkDims)
+        ? '<div class="card-dims" title="attacker-controlled dims surviving to the sink">sinkDims: {' + esc(item.sinkDims.join(",") || "none") + '}</div>'
+        : "";
       var verifyHtmlPat = _renderVerifyRow(entry, i);
       html += '<div class="card" data-finding-key="' + esc(_findingKey(entry)) + '">'
         + '<div class="card-label">' + patBadge + ' ' + sevBadge + '</div>'
         + '<div class="card-value">' + esc(item.description || item.type) + '</div>'
+        + patSinkDimsHtml
         + codeHtml
         + _renderTaintPathDetails(item)
         + '<div class="card-meta">' + srcLink + (loc ? " " + esc(loc) : "") + '</div>'
@@ -3953,9 +3962,25 @@ function renderPbTree(nodes, schema = null, fallbackSchemaId = "", doc = null) {
       }
     }
 
-    const typeLabel = fieldDef
-      ? `<span class="pb-type-badge">${esc(fieldDef.type || "")}</span>`
-      : `<span class="pb-wire-badge">${node.wire === 0 ? "varint" : node.wire === 1 ? "64bit" : node.wire === 2 ? "len" : "32bit"}</span>`;
+    // Type label derivation:
+    //   1. Schema-typed field → use the declared type from the schema.
+    //   2. JSON-derived node (isJson) → render the JS-native type the
+    //      decoder already determined. Showing "varint"/"len" for plain
+    //      JSON is misleading — those are protobuf wire-format labels and
+    //      this response was never protobuf.
+    //   3. Raw protobuf node → fall back to wire-type.
+    let typeLabel;
+    if (fieldDef) {
+      typeLabel = `<span class="pb-type-badge">${esc(fieldDef.type || "")}</span>`;
+    } else if (node.isJson) {
+      // Decoder tags JSON-derived nodes with the native JS type directly
+      // (jspbToTree → jsType: "string"|"number"|"boolean"|"object"|"array").
+      // Falls back to typeof for legacy decoders that don't set jsType.
+      const jsType = node.jsType || (node.string != null ? "string" : typeof node.value);
+      typeLabel = `<span class="pb-type-badge">${esc(jsType)}</span>`;
+    } else {
+      typeLabel = `<span class="pb-wire-badge">${node.wire === 0 ? "varint" : node.wire === 1 ? "64bit" : node.wire === 2 ? "len" : "32bit"}</span>`;
+    }
 
     const currentSchemaId = schema?.id || (schema?.$ref) || fallbackSchemaId;
     const renameAttr = `data-schema="${esc(currentSchemaId)}" data-key="${esc(fieldDef ? (fieldDef.id || fieldDef.number || fieldName) : node.field)}" data-is-raw="${!fieldDef}"`;
@@ -4688,18 +4713,24 @@ async function replayRequest(reqId, sourceTabId) {
           continue;
         }
 
-        // 2. Match by methodId specifically
-        if (req.methodId && opt.dataset.discoveryId === req.methodId) {
+        // 2. Match by methodId AND HTTP verb — the same methodId covers
+        //    both GET and POST probe variants of an endpoint, so a methodId-
+        //    only match picks the first declared variant (often POST) even
+        //    when replaying a captured GET, misattributing the schema.
+        if (req.methodId && opt.dataset.discoveryId === req.methodId &&
+            opt.dataset.method === req.method) {
           opt.selected = true;
           found = true;
           break;
         }
 
-        // 3. Fallback for path-based matching (Non-batch only)
+        // 3. Fallback for path-based matching (Non-batch only) — also
+        //    filtered by HTTP verb, same rationale as (2).
         if (!isBatch) {
           try {
             const reqPath = new URL(req.url).pathname;
-            if (opt.dataset.path && reqPath.endsWith(opt.dataset.path)) {
+            if (opt.dataset.path && reqPath.endsWith(opt.dataset.path) &&
+                opt.dataset.method === req.method) {
               opt.selected = true;
               found = true;
               break;
