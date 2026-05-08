@@ -8435,16 +8435,16 @@ function _resolveItemCallsFromParam(funcPath, containerParamName, paramIdx, dept
       CallExpression: function(innerPath) {
         var ic = innerPath.node.callee;
 
-        // Pattern: someLib.each(containerParam[key], function(_, item) { item(args); })
-        // or containerParam[key].forEach(function(item) { item(args); })
+        // Pattern: containerParam[key].forEach(function(item) { item(args); })
         // or containerParam.forEach(function(item) { item(args); })
+        // (`.each` shape removed per CLAUDE.md L29 — Array.prototype.forEach
+        //  per ECMA § 22.1.3.7 is the only spec-defined match.)
         var iterContainer = null;
         var cbArgStartIdx = -1;
 
-        // .forEach() / .each() on the container or container[key]
         if (_t.isMemberExpression(ic) && !ic.computed) {
           var methodName = _t.isIdentifier(ic.property) ? ic.property.name : null;
-          if (methodName === "forEach" || methodName === "each") {
+          if (methodName === "forEach") {
             // Check if object is containerParam or containerParam[key]
             var obj = ic.object;
             if (_t.isIdentifier(obj, { name: containerParamName })) {
