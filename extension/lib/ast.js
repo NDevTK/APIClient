@@ -2468,14 +2468,24 @@ function _specAnalyzePropertyFlow(funcPath) {
   if (_specEffectsMemo.has(fnNode)) return _specEffectsMemo.get(fnNode);
 
   var bodyPath = funcPath.get("body");
-  if (!bodyPath || !bodyPath.node || !_t.isBlockStatement(bodyPath.node)) {
+  if (!bodyPath || !bodyPath.node) {
     _specEffectsMemo.set(fnNode, []);
     return [];
   }
 
   var entryState = _specInitialFunctionBodyState(fnNode);
   var effects = [];
-  var stack = [{ stmts: bodyPath.node.body, idx: 0, state: entryState, parentPath: bodyPath }];
+  var stack;
+  if (_t.isBlockStatement(bodyPath.node)) {
+    stack = [{ stmts: bodyPath.node.body, idx: 0, state: entryState, parentPath: bodyPath }];
+  } else {
+    // ArrowFunctionExpression concise body per § 15.3.5.13: the body
+    // is a single expression whose value is implicitly returned.
+    // Wrap it as a synthetic ExpressionStatement to feed the walker.
+    _specEvalExpression(bodyPath, entryState, effects);
+    _specEffectsMemo.set(fnNode, effects);
+    return effects;
+  }
 
   while (stack.length > 0) {
     var top = stack[stack.length - 1];

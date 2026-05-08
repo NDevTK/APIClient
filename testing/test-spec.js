@@ -759,6 +759,29 @@ test("§ 15.7: `var c = new C(); c.method()` resolves through instance variable"
   return r.fetchCallSites.some(function(s) { return s.url === "/api/y"; });
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 15.3.5.13 ArrowFunction concise body
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 15.3.5.13 ArrowFunction concise body ===\n");
+
+test("§ 15.3.5.13: concise-body arrow function records property write", `
+  var setter = (s) => this.x = s;
+  setter("v");
+`, function(r) {
+  // Find the arrow function via traverse and analyse it directly.
+  if (!r._ast) return false;
+  var arrowPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    ArrowFunctionExpression: function(p) { if (!arrowPath) arrowPath = p; p.skip(); }
+  });
+  if (!arrowPath) return false;
+  var arrowEffects = globalThis._specAnalyzePropertyFlow(arrowPath);
+  if (arrowEffects.length !== 1) return false;
+  var e = arrowEffects[0];
+  return e.target.kind === "this" && e.key.kind === "const" && e.key.value === "x" &&
+         e.value.kind === "param" && e.value.idx === 0;
+});
+
 specTest("§ 14.3.3: nested destructuring `var [{a}, {b}] = pair`", `
   function f(pair) {
     var [{a}, {b}] = pair;
