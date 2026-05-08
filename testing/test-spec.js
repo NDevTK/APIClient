@@ -939,6 +939,20 @@ console.log("\n=== § 13.2.5.4 step 8: ObjectExpression spread ===\n");
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 13.2.4 ArrayLiteral eval ===\n");
 
+// ═════════════════════════════════════════════════════════════════════
+// § 14.2.16 AwaitExpression — passthrough operand value
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.2.16 AwaitExpression ===\n");
+
+specTest("§ 14.2.16: `await Const` passes through to Const value", `
+  async function f() {
+    this.x = await "/api/x";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "/api/x";
+});
+
 specTest("§ 13.2.4: ArrayLiteral elements collected as array-lit abstract value", `
   function f() {
     this.list = ["a", "b", "c"];

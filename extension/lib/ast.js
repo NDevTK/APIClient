@@ -2184,8 +2184,10 @@ function _specPostorderExprPaths(rootPath) {
         var elN = n.elements[aei];
         if (elN) stack.push(p.get("elements." + aei));
       }
-    } else if (_t.isUnaryExpression(n) || _t.isUpdateExpression(n)) {
-      stack.push(p.get("argument"));
+    } else if (_t.isUnaryExpression(n) || _t.isUpdateExpression(n) ||
+               _t.isAwaitExpression(n) || _t.isYieldExpression(n)) {
+      // § 14.2.16 await / § 15.5 yield need their argument evaluated.
+      if (n.argument) stack.push(p.get("argument"));
     } else if (_t.isConditionalExpression(n)) {
       stack.push(p.get("test"));
       stack.push(p.get("consequent"));
@@ -2664,6 +2666,20 @@ function _specEvalLeaf(path, state, vals, effects) {
       var lastAv = vals.get(n.expressions[n.expressions.length - 1]);
       if (lastAv) return lastAv;
     }
+    return { kind: "top" };
+  }
+  if (_t.isAwaitExpression(n)) {
+    // § 14.2.16 AwaitExpression — await unwraps a Promise; the value
+    // is the resolved value. For abstract analysis: passthrough the
+    // operand's value (sound when the operand isn't a Promise we
+    // track; otherwise refines later as Promise tracking is added).
+    var awaitArgAv = vals.get(n.argument);
+    if (awaitArgAv) return awaitArgAv;
+    return { kind: "top" };
+  }
+  if (_t.isYieldExpression(n)) {
+    // § 15.5 YieldExpression — yields a value; expression value is
+    // the resumption value. Unmodelled — Top.
     return { kind: "top" };
   }
   if (_t.isConditionalExpression(n)) {
