@@ -973,6 +973,33 @@ specTest("§ 22.1.3.25: `Const(\"POST\").toLowerCase()` resolves to Const(\"post
   return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "post";
 });
 
+specTest("§ 23.1.3 / § 9.4.2: array-lit `[a,b,c].length` resolves to Const(3)", `
+  function f() {
+    this.n = ["a", "b", "c"].length;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 3;
+});
+
+specTest("§ 23.1: array-lit numeric index access `[a,b][1]` resolves to Const(b)", `
+  function f() {
+    this.x = ["first", "second"][1];
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "second";
+});
+
+specTest("§ 13.10: obj-lit static prop access `{a: 1, b: 2}.a` resolves to Const(1)", `
+  function f() {
+    this.x = { a: 1, b: 2 }.a;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 1;
+});
+
 specTest("§ 22.1.3.32: `Const(\"  hi  \").trim()` resolves to Const(\"hi\")", `
   function f() {
     this.h = "  hi  ".trim();

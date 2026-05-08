@@ -2627,6 +2627,39 @@ function _specEvalLeaf(path, state, vals, effects) {
   }
   if (_t.isMemberExpression(n) || _t.isOptionalMemberExpression(n)) {
     var objAv = vals.get(n.object) || { kind: "top" };
+    // Array-lit element access: `arr[0]`, `arr.length` per § 23.1.3.
+    if (objAv && objAv.kind === "array-lit" && objAv.elements) {
+      // .length per ECMA-262 array exotic [[OwnProperty]] "length"
+      if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
+        return { kind: "const", value: objAv.elements.length };
+      }
+      // Computed numeric index access — return the element's abstract value.
+      if (n.computed) {
+        var idxAv = vals.get(n.property);
+        if (idxAv && idxAv.kind === "const" && typeof idxAv.value === "number" &&
+            idxAv.value >= 0 && idxAv.value < objAv.elements.length) {
+          return objAv.elements[idxAv.value];
+        }
+      }
+    }
+    // Obj-lit static property access: `obj.x` returns the stored av.
+    if (objAv && objAv.kind === "obj-lit" && objAv.props) {
+      if (!n.computed) {
+        var propName = _t.isIdentifier(n.property) ? n.property.name :
+          (_t.isStringLiteral(n.property) ? n.property.value : null);
+        if (propName !== null && Object.prototype.hasOwnProperty.call(objAv.props, propName)) {
+          return objAv.props[propName];
+        }
+      }
+      if (n.computed) {
+        var keyAvO = vals.get(n.property);
+        if (keyAvO && keyAvO.kind === "const" &&
+            (typeof keyAvO.value === "string" || typeof keyAvO.value === "number") &&
+            Object.prototype.hasOwnProperty.call(objAv.props, keyAvO.value)) {
+          return objAv.props[keyAvO.value];
+        }
+      }
+    }
     // arguments.length per § 10.4.4.6 / arguments[N] per § 10.4.4
     if (objAv && objAv.kind === "top" &&
         _t.isIdentifier(n.object, { name: "arguments" }) &&
