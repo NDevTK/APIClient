@@ -6668,15 +6668,25 @@ function _rcfpStep(F) {
                   !rpParent.computed && _t.isIdentifier(rpParent.property, { name: propName2 })) {
                 var assn = rp.parentPath ? rp.parentPath.parent : null;
                 if (assn && _t.isAssignmentExpression(assn) && assn.operator === "=" && assn.left === rpParent) {
+                  // Chained-assignment unwrap per § 13.15.4: in
+                  // `a = b = expr`, the rightmost expr provides the value;
+                  // intermediate AssignmentExpressions cascade their result.
+                  // Walk through nested AssignmentExpressions to reach
+                  // the actual RHS function/factory.
                   var rhs = assn.right;
+                  var rhsPath = rp.parentPath.parentPath.get("right");
+                  while (_t.isAssignmentExpression(rhs) && rhs.operator === "=") {
+                    rhs = rhs.right;
+                    rhsPath = rhsPath.get("right");
+                  }
                   if (_t.isFunctionExpression(rhs) || _t.isArrowFunctionExpression(rhs)) {
-                    return { done: rp.parentPath.parentPath.get("right") };
+                    return { done: rhsPath };
                   }
                   // Factory-call value: `obj.key = factory(...)` per § 13.3.
                   if (_t.isCallExpression(rhs)) {
-                    var rhsRetFn = _resolveCallReturnToFunction(rp.parentPath.parentPath.get("right"), depth + 1);
+                    var rhsRetFn = _resolveCallReturnToFunction(rhsPath, depth + 1);
                     if (rhsRetFn && rhsRetFn._path) return { done: rhsRetFn._path };
-                    if (rhsRetFn && rhsRetFn.node && _t.isFunction(rhsRetFn.node)) return { done: rp.parentPath.parentPath.get("right") };
+                    if (rhsRetFn && rhsRetFn.node && _t.isFunction(rhsRetFn.node)) return { done: rhsPath };
                   }
                 }
               }

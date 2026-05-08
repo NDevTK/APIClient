@@ -566,6 +566,20 @@ test("§ 13.2.5: object spread preserves both literal and spread fields", `
   return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.15.4 chained AssignmentExpression — `a = b = expr`
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.15.4 chained AssignmentExpression ===\n");
+
+test("§ 13.15.4: `obj.X = obj2.X = function(){...}` — calling obj.X reaches the function", `
+  var lib = {};
+  var libExt = {};
+  lib.method = libExt.method = function() { fetch("/api/x"); };
+  lib.method();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
