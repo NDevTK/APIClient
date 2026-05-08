@@ -1706,6 +1706,114 @@ specTest("§ 14.9: break inside switch case halts that case's branch", `
   return keys[0] === "first" && keys[1] === "second";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.4 UpdateExpression (++, --), § 13.15.3 Compound Assignment
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.4/13.15.3 Update + Compound Assignment ===\n");
+
+specTest("§ 13.4: prefix ++ on Const(5) yields Const(6) and rebinds", `
+  function f() {
+    var x = 5;
+    ++x;
+    this.r = x;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 6;
+});
+
+specTest("§ 13.4: postfix ++ rebinds but expression value is OLD", `
+  function f() {
+    var x = 5;
+    var y = x++;
+    this.x = x;
+    this.y = y;
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const") byKey[e.key.value] = e.value;
+  }
+  return byKey.x && byKey.x.kind === "const" && byKey.x.value === 6 &&
+         byKey.y && byKey.y.kind === "const" && byKey.y.value === 5;
+});
+
+specTest("§ 13.4: prefix -- on Const(10) yields Const(9)", `
+  function f() {
+    var x = 10;
+    this.r = --x;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 9;
+});
+
+specTest("§ 13.15.3: `+=` on Const numeric performs Number::add", `
+  function f() {
+    var x = 10;
+    x += 5;
+    this.r = x;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 15;
+});
+
+specTest("§ 13.15.3: `+=` on Const string performs string concat", `
+  function f() {
+    var s = "hello, ";
+    s += "world";
+    this.r = s;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "hello, world";
+});
+
+specTest("§ 13.15.3: `*=`, `-=`, `/=`, `%=` on Const numerics", `
+  function f() {
+    var a = 10; a *= 3;  // 30
+    var b = 10; b -= 4;  // 6
+    var c = 12; c /= 4;  // 3
+    var d = 10; d %= 3;  // 1
+    this.a = a; this.b = b; this.c = c; this.d = d;
+  }
+`, function(effects) {
+  if (effects.length !== 4) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.a === 30 && byKey.b === 6 && byKey.c === 3 && byKey.d === 1;
+});
+
+specTest("§ 13.15.5: `||=` keeps the original Const non-falsy value", `
+  function f() {
+    var x = "kept";
+    x ||= "fallback";
+    this.r = x;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  // Per § 13.15.5 LogicalAssignment ||=, if LHS is truthy, RHS isn't
+  // evaluated; result = LHS. Our or-model abstracts this as or(lhs, rhs)
+  // — both branches are possible from analyzer view.
+  var av = effects[0].value;
+  if (!av) return false;
+  if (av.kind === "const" && av.value === "kept") return true;
+  if (av.kind === "or") {
+    var leftOk = av.left && av.left.kind === "const" && av.left.value === "kept";
+    var rightOk = av.right && av.right.kind === "const" && av.right.value === "fallback";
+    return leftOk && rightOk;
+  }
+  return false;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");

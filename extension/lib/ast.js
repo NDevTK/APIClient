@@ -2022,18 +2022,75 @@ function _specLogicalOrAv(leftAv, rightAv) {
 // Compound assignments (+=, -=, …) are handled by a separate spec section
 // (§ 13.15.3 ApplyStringOrNumericBinaryOperator); routed there by callers.
 // ───────────────────────────────────────────────────────────────────────────
-function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, effects) {
-  if (!node || node.operator !== "=") return { kind: "top" };
+function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, effects, lhsCurrentAv) {
+  if (!node) return { kind: "top" };
+  var op = node.operator;
   var left = node.left;
-  if (left && left.type === "Identifier") {
-    state[left.name] = rhsAv;
+  // Plain assignment per § 13.15.4 — store rhs into target.
+  if (op === "=") {
+    if (left && left.type === "Identifier") {
+      state[left.name] = rhsAv;
+      return rhsAv;
+    }
+    if (left && left.type === "MemberExpression") {
+      effects.push({ target: lhsObjAv, key: lhsKeyAv, value: rhsAv });
+      return rhsAv;
+    }
     return rhsAv;
+  }
+  // Compound assignment per § 13.15.3 ApplyStringOrNumericBinaryOperator —
+  // read old value, apply binary op, store new value. The binary op is
+  // determined by stripping the trailing `=` from the operator.
+  // § 13.15.4 LogicalAssignment (`||=`, `&&=`, `??=`) is § 13.15.5
+  // step 1.h: model as or(lhsCurrentAv, rhsAv).
+  if (op === "||=" || op === "&&=" || op === "??=") {
+    var newAvLogical = _specLogicalOrAv(lhsCurrentAv || { kind: "top" }, rhsAv);
+    if (left && left.type === "Identifier") {
+      state[left.name] = newAvLogical;
+      return newAvLogical;
+    }
+    if (left && left.type === "MemberExpression") {
+      effects.push({ target: lhsObjAv, key: lhsKeyAv, value: newAvLogical });
+      return newAvLogical;
+    }
+    return newAvLogical;
+  }
+  // Numeric / string compound assignments (`+=`, `-=`, `*=`, `/=`, `%=`,
+  // `**=`, `<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`).
+  var binOp = op.slice(0, op.length - 1);  // strip trailing `=`
+  var newAv = { kind: "top" };
+  var lv = lhsCurrentAv;
+  if (lv && lv.kind === "const" && rhsAv && rhsAv.kind === "const") {
+    var lvv = lv.value, rvv = rhsAv.value;
+    // String concat for `+=` per § 13.8.1.
+    if (binOp === "+" && (typeof lvv === "string" || typeof rvv === "string")) {
+      newAv = { kind: "const", value: String(lvv) + String(rvv) };
+    } else if (typeof lvv === "number" && typeof rvv === "number") {
+      var resN = null;
+      if (binOp === "+") resN = lvv + rvv;
+      else if (binOp === "-") resN = lvv - rvv;
+      else if (binOp === "*") resN = lvv * rvv;
+      else if (binOp === "/") resN = lvv / rvv;
+      else if (binOp === "%") resN = lvv % rvv;
+      else if (binOp === "**") resN = Math.pow(lvv, rvv);
+      else if (binOp === "<<") resN = lvv << rvv;
+      else if (binOp === ">>") resN = lvv >> rvv;
+      else if (binOp === ">>>") resN = lvv >>> rvv;
+      else if (binOp === "&") resN = lvv & rvv;
+      else if (binOp === "|") resN = lvv | rvv;
+      else if (binOp === "^") resN = lvv ^ rvv;
+      if (resN !== null) newAv = { kind: "const", value: resN };
+    }
+  }
+  if (left && left.type === "Identifier") {
+    state[left.name] = newAv;
+    return newAv;
   }
   if (left && left.type === "MemberExpression") {
-    effects.push({ target: lhsObjAv, key: lhsKeyAv, value: rhsAv });
-    return rhsAv;
+    effects.push({ target: lhsObjAv, key: lhsKeyAv, value: newAv });
+    return newAv;
   }
-  return rhsAv;
+  return newAv;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -2889,7 +2946,43 @@ function _specEvalLeaf(path, state, vals, effects) {
       else if (_t.isStringLiteral(n.left.property)) lhsKeyAv = { kind: "const", value: n.left.property.value };
       else lhsKeyAv = { kind: "top" };
     }
-    return _specAssignmentExpressionApply(n, state, rhsAv, lhsObjAv, lhsKeyAv, effects);
+    // For compound operators (`+=`, `-=`, …) per § 13.15.3, the binary
+    // op needs the LHS's current abstract value as the left operand. Read
+    // it from state (Identifier) or from a known obj-lit prop (MemberExp).
+    var lhsCurrentAv = null;
+    if (n.operator !== "=") {
+      if (_t.isIdentifier(n.left) && Object.prototype.hasOwnProperty.call(state, n.left.name)) {
+        lhsCurrentAv = state[n.left.name];
+      } else if (_t.isMemberExpression(n.left) && lhsObjAv && lhsObjAv.kind === "obj-lit" && lhsObjAv.props &&
+                 lhsKeyAv && lhsKeyAv.kind === "const" &&
+                 Object.prototype.hasOwnProperty.call(lhsObjAv.props, lhsKeyAv.value)) {
+        lhsCurrentAv = lhsObjAv.props[lhsKeyAv.value];
+      }
+    }
+    return _specAssignmentExpressionApply(n, state, rhsAv, lhsObjAv, lhsKeyAv, effects, lhsCurrentAv);
+  }
+  if (_t.isUpdateExpression(n)) {
+    // § 13.4 UpdateExpression `++`/`--`. For Const numeric operands,
+    // compute the new value, rebind the identifier (or record property
+    // write), and return prefix=newValue / postfix=oldValue per § 13.4.2/4.
+    var argAv = vals.get(n.argument);
+    var oldNum = (argAv && argAv.kind === "const" && typeof argAv.value === "number") ? argAv.value : null;
+    var delta = (n.operator === "++") ? 1 : -1;
+    var newVal = (oldNum !== null) ? { kind: "const", value: oldNum + delta } : { kind: "top" };
+    if (_t.isIdentifier(n.argument)) {
+      state[n.argument.name] = newVal;
+    } else if (_t.isMemberExpression(n.argument)) {
+      var upObjAv = vals.get(n.argument.object) || { kind: "top" };
+      var upKeyAv;
+      if (n.argument.computed) upKeyAv = vals.get(n.argument.property) || { kind: "top" };
+      else if (_t.isIdentifier(n.argument.property)) upKeyAv = { kind: "const", value: n.argument.property.name };
+      else if (_t.isStringLiteral(n.argument.property)) upKeyAv = { kind: "const", value: n.argument.property.value };
+      else upKeyAv = { kind: "top" };
+      effects.push({ target: upObjAv, key: upKeyAv, value: newVal });
+    }
+    // Prefix returns new, postfix returns old (the original value).
+    if (n.prefix) return newVal;
+    return (oldNum !== null) ? { kind: "const", value: oldNum } : { kind: "top" };
   }
   if (_t.isSequenceExpression(n)) {
     // § 13.16 SequenceExpression — `(a, b, c)` evaluates to c per the
