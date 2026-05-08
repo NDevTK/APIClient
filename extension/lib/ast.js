@@ -2491,6 +2491,73 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     return;
   }
 
+  if (_t.isSwitchStatement(stmt)) {
+    // § 14.12 SwitchStatement: evaluate discriminant then dispatch.
+    // Each CaseClause is treated as a branch starting from pre-switch
+    // state — sound over-approximation of fall-through (per § 14.12.10
+    // RuntimeSemantics:CaseBlockEvaluation, fall-through carries the
+    // accumulated state, which we cover by walking each case from
+    // pre-switch independently and joining all end-states at merge).
+    _specEvalExpression(stmtPath.get("discriminant"), state, effects);
+    var swParent = branchStack.length > 0 ? branchStack[branchStack.length - 1] : null;
+    if (!swParent) return;
+    var swPreState = _specStateClone(state);
+    var swMergeFrame = { _isMergeFrame: true, branchEndStates: [], parentFrame: swParent, hasAlternate: false, baseState: swPreState };
+    branchStack.push(swMergeFrame);
+    // Push cases in reverse so they pop in source order (LIFO).
+    for (var ci = stmt.cases.length - 1; ci >= 0; ci--) {
+      var caseNode = stmt.cases[ci];
+      if (caseNode.consequent && caseNode.consequent.length > 0) {
+        branchStack.push({
+          stmts: caseNode.consequent,
+          idx: 0,
+          state: _specStateClone(swPreState),
+          parentPath: stmtPath.get("cases." + ci),
+          _pathField: "consequent",
+          _reportTo: swMergeFrame
+        });
+      }
+    }
+    // Evaluate each case's test expression in pre-switch state for
+    // side effects (per § 14.12.10 step 5: IsCaseSensitive ToString
+    // call); doesn't change state visible to subsequent statements.
+    for (var cti = 0; cti < stmt.cases.length; cti++) {
+      var ctn = stmt.cases[cti];
+      if (ctn.test) _specEvalExpression(stmtPath.get("cases." + cti + ".test"), swPreState, effects);
+    }
+    return;
+  }
+
+  if (_t.isBreakStatement(stmt) || _t.isContinueStatement(stmt)) {
+    // § 14.8 ContinueStatement, § 14.9 BreakStatement — halt the
+    // innermost loop iteration (continue) or innermost loop/switch
+    // case (break). Our single-pass loop/case-branch model maps both
+    // onto "halt this branch", which is sound for property-flow
+    // (any subsequent stmts in the branch are unreachable).
+    if (branchStack.length > 0) branchStack[branchStack.length - 1]._returned = true;
+    return;
+  }
+
+  if (_t.isEmptyStatement(stmt) || _t.isDebuggerStatement(stmt)) {
+    // § 14.4 EmptyStatement, § 14.16 DebuggerStatement — no-ops for
+    // property-flow analysis (the debugger statement has implementation-
+    // defined behaviour but produces no observable property writes).
+    return;
+  }
+
+  if (_t.isLabeledStatement(stmt)) {
+    // § 14.13 LabelledStatement — the label is a runtime construct
+    // for break/continue targeting; for property flow we just walk the
+    // labelled body's statements transparently.
+    var lblBody = stmt.body;
+    if (_t.isBlockStatement(lblBody)) {
+      branchStack.push({ stmts: lblBody.body, idx: 0, state: _specStateClone(state), parentPath: stmtPath.get("body") });
+    } else if (lblBody) {
+      branchStack.push({ stmts: [lblBody], idx: 0, state: _specStateClone(state), _explicitStmtPath: stmtPath.get("body") });
+    }
+    return;
+  }
+
   // Other statement types (FunctionDeclaration, ClassDeclaration, …) —
   // no transfer for property flow. They don't contribute property writes.
 }
@@ -2568,6 +2635,10 @@ function _specAnalyzePropertyFlow(funcPath) {
       // Legacy path — single-statement body where parentPath is the
       // parent statement and the body itself is at .body.
       stmtPath = top.parentPath.get("body");
+    } else if (top._pathField) {
+      // Frames with a non-default field name (SwitchCase uses
+      // "consequent" instead of the usual "body").
+      stmtPath = top.parentPath.get(top._pathField + "." + top.idx);
     } else {
       stmtPath = top.parentPath.get("body." + top.idx);
     }

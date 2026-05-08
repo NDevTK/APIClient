@@ -1573,6 +1573,139 @@ specTest("§ 14.3.3: nested destructuring `var [{a}, {b}] = pair`", `
   return firstOk && secondOk;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 14.12 SwitchStatement
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.12 SwitchStatement ===\n");
+
+specTest("§ 14.12: each case clause contributes its property writes", `
+  function f(action) {
+    switch (action) {
+      case "create": this.url = "/api/create"; this.method = "POST"; break;
+      case "update": this.url = "/api/update"; this.method = "PUT"; break;
+      case "delete": this.url = "/api/delete"; this.method = "DELETE"; break;
+    }
+  }
+`, function(effects) {
+  // Each case independently produces writes: 3 cases * 2 writes = 6 effects.
+  if (effects.length !== 6) return false;
+  var urlVals = [];
+  var methodVals = [];
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind !== "this" || e.key.kind !== "const") return false;
+    if (e.key.value === "url" && e.value.kind === "const") urlVals.push(e.value.value);
+    else if (e.key.value === "method" && e.value.kind === "const") methodVals.push(e.value.value);
+  }
+  urlVals.sort();
+  methodVals.sort();
+  return urlVals.length === 3 && methodVals.length === 3 &&
+         urlVals[0] === "/api/create" && urlVals[1] === "/api/delete" && urlVals[2] === "/api/update" &&
+         methodVals[0] === "DELETE" && methodVals[1] === "POST" && methodVals[2] === "PUT";
+});
+
+specTest("§ 14.12: default clause contributes its property writes", `
+  function f(action) {
+    switch (action) {
+      case "create": this.url = "/api/create"; break;
+      default: this.url = "/api/list";
+    }
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var urls = [];
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.key.value === "url" && e.value.kind === "const") {
+      urls.push(e.value.value);
+    }
+  }
+  urls.sort();
+  return urls.length === 2 && urls[0] === "/api/create" && urls[1] === "/api/list";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 14.4 EmptyStatement, § 14.16 DebuggerStatement, § 14.13 LabelledStatement
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.4/14.13/14.16 Empty/Labeled/Debugger ===\n");
+
+specTest("§ 14.4: empty statement is a no-op (sibling effects unaffected)", `
+  function f() {
+    ;
+    this.x = 1;
+    ;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 1;
+});
+
+specTest("§ 14.16: debugger statement is a no-op (sibling effects unaffected)", `
+  function f() {
+    debugger;
+    this.x = 1;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 1;
+});
+
+specTest("§ 14.13: labelled statement walks its body transparently", `
+  function f() {
+    outer: {
+      this.x = 1;
+    }
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].target.kind === "this" && effects[0].key.kind === "const" &&
+         effects[0].key.value === "x" && effects[0].value.kind === "const" && effects[0].value.value === 1;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 14.8 ContinueStatement, § 14.9 BreakStatement (halt branch model)
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.8/14.9 Continue/Break ===\n");
+
+specTest("§ 14.9: break inside loop halts the iteration body branch", `
+  function f(items) {
+    for (var k in items) {
+      if (k === "stop") break;
+      this.found = k;
+    }
+  }
+`, function(effects) {
+  // Single-pass loop: body is walked once; the break halts further
+  // iteration but writes after break still run in subsequent stmts within
+  // the SAME stmt-list — here, the break is inside the if's consequent,
+  // so the assignment AFTER the if is reachable on the false-branch.
+  // Effect: this.found = loop-key.
+  if (effects.length !== 1) return false;
+  return effects[0].target.kind === "this" && effects[0].key.kind === "const" && effects[0].key.value === "found" &&
+         effects[0].value.kind === "loop-key";
+});
+
+specTest("§ 14.9: break inside switch case halts that case's branch", `
+  function f(action) {
+    switch (action) {
+      case "a":
+        this.first = 1;
+        break;
+        this.unreachable = "never"; // dead code post-break
+      case "b":
+        this.second = 2;
+        break;
+    }
+  }
+`, function(effects) {
+  // Case A: this.first=1 is recorded; this.unreachable should NOT be
+  // recorded because break halted the branch. Case B: this.second=2.
+  // Total effects: 2 (no unreachable).
+  if (effects.length !== 2) return false;
+  var keys = effects.map(function(e) { return e.key.value; }).sort();
+  return keys[0] === "first" && keys[1] === "second";
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
