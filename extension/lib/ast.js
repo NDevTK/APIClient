@@ -2216,8 +2216,15 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     return;
   }
 
-  if (_t.isForInStatement(stmt)) {
-    // § 14.7.5 — evaluate RHS, bind loop var to {kind:"loop-key"}, push body.
+  if (_t.isForInStatement(stmt) || _t.isForOfStatement(stmt)) {
+    // § 14.7.5 — for-in/for-of share the syntax skeleton.
+    // for-in: loop var binds to each enumerable own/inherited STRING KEY
+    //   of the iterated object (per EnumerateObjectProperties § 14.7.5.9).
+    // for-of: loop var binds to each ELEMENT yielded by the iterator
+    //   protocol (§ 7.4.6 IteratorStep / § 7.4.7 IteratorValue).
+    // For property-flow analysis we model both as a generic loop-key:
+    // the runtime-bound value depends on the iterated source, and
+    // downstream propagation detection treats them uniformly.
     var rhsAv = _specEvalExpression(stmtPath.get("right"), state, effects);
     var bodyState = _specForInBodyEntryState(stmt, rhsAv, state);
     var bodyPath = stmtPath.get("body");
@@ -2455,8 +2462,14 @@ function _specEvalLeaf(path, state, vals, effects) {
     var keyAvComputed = n.computed ? (vals.get(n.property) || { kind: "top" }) : null;
     return _specMemberExpressionAv(n, objAv, keyAvComputed);
   }
-  if (_t.isLogicalExpression(n) && n.operator === "||") {
-    return _specLogicalOrAv(vals.get(n.left) || { kind: "top" }, vals.get(n.right) || { kind: "top" });
+  if (_t.isLogicalExpression(n)) {
+    // § 13.13.1 (&&), § 13.13.2 (||), § 13.14 (??): each operator
+    // short-circuits per ToBoolean / nullish testing. Without dynamic
+    // truthiness, the value at runtime is either left or right —
+    // model as `or(left, right)` for all three operators.
+    if (n.operator === "||" || n.operator === "&&" || n.operator === "??") {
+      return _specLogicalOrAv(vals.get(n.left) || { kind: "top" }, vals.get(n.right) || { kind: "top" });
+    }
   }
   if (_t.isAssignmentExpression(n)) {
     var rhsAv = vals.get(n.right) || { kind: "top" };

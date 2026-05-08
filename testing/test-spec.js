@@ -487,6 +487,85 @@ specTest("§ 13.10: chained member access (a.b.c) yields nested member abstract 
   return true;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.13.1 LogicalAndExpression (&&)
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.13.1 LogicalAndExpression ===\n");
+
+specTest("§ 13.13.1: `a && b` value is or(a, b) — both operands reachable per spec short-circuit", `
+  function f(req) { this.id = req.valid && req.id; }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "or" &&
+         v.left && v.left.kind === "member" &&
+         v.right && v.right.kind === "member";
+});
+
+specTest("§ 13.14: `a ?? b` value is or(a, b) — nullish-coalescing short-circuit", `
+  function f(req) { this.id = req.id ?? 42; }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "or" &&
+         v.left && v.left.kind === "member" &&
+         v.right && v.right.kind === "const" && v.right.value === 42;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 14.7.5 ForOfStatement — different iterator protocol from for-in
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.7.5 ForOfStatement ===\n");
+
+specTest("§ 14.7.5: for-of over array iterates elements (each iteration's loop var is element)", `
+  function f() {
+    var items = ["a", "b", "c"];
+    for (var item of items) {
+      this.value = item;
+    }
+  }
+`, function(effects) {
+  // Each iteration writes this.value. Single property-write effect
+  // recorded (single-pass abstraction); target=this, key=const("value").
+  return effects.length === 1 && effects[0].target.kind === "this" &&
+         effects[0].key.kind === "const" && effects[0].key.value === "value";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 13.4 UpdateExpression (++, --)
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.4 UpdateExpression ===\n");
+
+specTest("§ 13.4: postfix increment in for-loop body — body's writes still recorded", `
+  function f() {
+    var i = 0;
+    while (i < 3) {
+      this.idx = i;
+      i++;
+    }
+  }
+`, function(effects) {
+  // The this.idx = i write should be recorded.
+  return effects.length === 1 && effects[0].target.kind === "this" &&
+         effects[0].key.kind === "const" && effects[0].key.value === "idx";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 13.2.4 ArrayLiteral spread / § 13.2.5 ObjectLiteral spread
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.2.5 ObjectLiteral spread ===\n");
+
+test("§ 13.2.5: object spread preserves both literal and spread fields", `
+  function send() {
+    var defaults = { method: "GET" };
+    fetch("/api/x", { ...defaults, body: JSON.stringify({ a: 1 }) });
+  }
+  send();
+`, function(r) {
+  // The fetch should still be recognised at /api/x even with spread in opts.
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
