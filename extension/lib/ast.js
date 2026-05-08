@@ -2187,9 +2187,10 @@ function _specPostorderExprPaths(rootPath) {
       for (var ti = n.expressions.length - 1; ti >= 0; ti--) {
         stack.push(p.get("expressions." + ti));
       }
-    } else if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
+    } else if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n) || _t.isNewExpression(n)) {
       // Argument expressions still get evaluated (their property writes
-      // matter for effects), but the call's return value abstracts to Top.
+      // matter for effects); the call/construct's return value
+      // abstracts to Top per § 13.3 / § 13.3.5.
       for (var ai = n.arguments.length - 1; ai >= 0; ai--) {
         stack.push(p.get("arguments." + ai));
       }
