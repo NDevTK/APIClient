@@ -2025,6 +2025,162 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
   return bodyState;
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Iterative expression evaluator — postorder enumeration of the expression
+// tree, then leaf-up application of per-spec-section transfer functions.
+// Termination is structural: each pushed sub-path is a strict child of a
+// popped path, AST trees are finite.
+// ───────────────────────────────────────────────────────────────────────────
+
+// Enumerate all sub-paths of `rootPath` in postorder for the expression
+// kinds the property-flow analyser cares about. Leaf nodes (Identifier,
+// Literal, ThisExpression) appear before their parents; composite nodes
+// appear after their children. Used by `_specEvalExpression` to drive the
+// bottom-up evaluation without recursion.
+function _specPostorderExprPaths(rootPath) {
+  if (!rootPath || !rootPath.node) return [];
+  var preorder = [];
+  var stack = [rootPath];
+  while (stack.length > 0) {
+    var p = stack.pop();
+    if (!p || !p.node) continue;
+    preorder.push(p);
+    var n = p.node;
+    if (_t.isMemberExpression(n) || _t.isOptionalMemberExpression(n)) {
+      stack.push(p.get("object"));
+      if (n.computed) stack.push(p.get("property"));
+    } else if (_t.isLogicalExpression(n)) {
+      stack.push(p.get("left"));
+      stack.push(p.get("right"));
+    } else if (_t.isAssignmentExpression(n)) {
+      // RHS is evaluated; LHS computed/object branches eval'd separately by
+      // the assignment-statement driver, since they participate in the
+      // effect tuple, not in the assignment's own value.
+      stack.push(p.get("right"));
+      if (_t.isMemberExpression(n.left)) {
+        stack.push(p.get("left.object"));
+        if (n.left.computed) stack.push(p.get("left.property"));
+      }
+    } else if (_t.isObjectExpression(n)) {
+      for (var pi = n.properties.length - 1; pi >= 0; pi--) {
+        var prop = n.properties[pi];
+        if (_t.isObjectProperty(prop) && !prop.computed) {
+          stack.push(p.get("properties." + pi + ".value"));
+        }
+      }
+    } else if (_t.isUnaryExpression(n) || _t.isUpdateExpression(n)) {
+      stack.push(p.get("argument"));
+    } else if (_t.isConditionalExpression(n)) {
+      stack.push(p.get("test"));
+      stack.push(p.get("consequent"));
+      stack.push(p.get("alternate"));
+    } else if (_t.isSequenceExpression(n)) {
+      for (var si = n.expressions.length - 1; si >= 0; si--) {
+        stack.push(p.get("expressions." + si));
+      }
+    } else if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
+      // Argument expressions still get evaluated (their property writes
+      // matter for effects), but the call's return value abstracts to Top.
+      for (var ai = n.arguments.length - 1; ai >= 0; ai--) {
+        stack.push(p.get("arguments." + ai));
+      }
+    } else if (_t.isBinaryExpression(n)) {
+      stack.push(p.get("left"));
+      stack.push(p.get("right"));
+    }
+    // Leaf kinds: Identifier, ThisExpression, Literals — no children pushed.
+  }
+  // preorder was built by DFS with right-first push so left is processed
+  // first; postorder = reverse of the popped-order's reverse. Simpler to
+  // just reverse preorder once.
+  preorder.reverse();
+  return preorder;
+}
+
+// Evaluate an expression to its abstract value.
+// `state` is read-only here; assignment side effects are recorded into
+// `effects` and the state map is mutated by `_specAssignmentExpressionApply`.
+// Sub-evaluations are not recursive — `vals` is filled in postorder.
+function _specEvalExpression(rootPath, state, effects) {
+  var paths = _specPostorderExprPaths(rootPath);
+  var vals = new Map();
+  for (var i = 0; i < paths.length; i++) {
+    var p = paths[i];
+    var av = _specEvalLeaf(p, state, vals, effects);
+    vals.set(p.node, av);
+  }
+  return vals.get(rootPath.node);
+}
+
+// Compute one node's abstract value given its already-evaluated children
+// (looked up in `vals`). Any mutation of `state` (rebinding identifiers)
+// or `effects` (property writes) happens here for AssignmentExpression.
+function _specEvalLeaf(path, state, vals, effects) {
+  var n = path.node;
+  if (_t.isThisExpression(n)) return { kind: "this" };
+  if (_t.isStringLiteral(n)) return { kind: "const", value: n.value };
+  if (_t.isNumericLiteral(n)) return { kind: "const", value: n.value };
+  if (_t.isBooleanLiteral(n)) return { kind: "const", value: n.value };
+  if (_t.isNullLiteral(n)) return { kind: "const", value: null };
+  if (_t.isIdentifier(n)) {
+    if (Object.prototype.hasOwnProperty.call(state, n.name)) return state[n.name];
+    if (n.name === "undefined" && !path.scope.getBinding("undefined")) {
+      return { kind: "const", value: undefined };
+    }
+    // arguments references — § 10.4.4
+    if (n.name === "arguments" && !path.scope.getBinding("arguments")) {
+      return { kind: "top" }; // arguments object — handled at member access
+    }
+    return { kind: "top" };
+  }
+  if (_t.isMemberExpression(n) || _t.isOptionalMemberExpression(n)) {
+    var objAv = vals.get(n.object) || { kind: "top" };
+    // arguments.length per § 10.4.4.6 / arguments[N] per § 10.4.4
+    if (objAv && objAv.kind === "top" &&
+        _t.isIdentifier(n.object, { name: "arguments" }) &&
+        !path.scope.getBinding("arguments")) {
+      if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
+        return { kind: "args-len" };
+      }
+      if (n.computed) {
+        var idxAv = vals.get(n.property) || { kind: "top" };
+        return { kind: "args-elt", idx: idxAv };
+      }
+    }
+    var keyAvComputed = n.computed ? (vals.get(n.property) || { kind: "top" }) : null;
+    return _specMemberExpressionAv(n, objAv, keyAvComputed);
+  }
+  if (_t.isLogicalExpression(n) && n.operator === "||") {
+    return _specLogicalOrAv(vals.get(n.left) || { kind: "top" }, vals.get(n.right) || { kind: "top" });
+  }
+  if (_t.isAssignmentExpression(n)) {
+    var rhsAv = vals.get(n.right) || { kind: "top" };
+    var lhsObjAv = null, lhsKeyAv = null;
+    if (_t.isMemberExpression(n.left)) {
+      lhsObjAv = vals.get(n.left.object) || { kind: "top" };
+      if (n.left.computed) lhsKeyAv = vals.get(n.left.property) || { kind: "top" };
+      else if (_t.isIdentifier(n.left.property)) lhsKeyAv = { kind: "const", value: n.left.property.name };
+      else if (_t.isStringLiteral(n.left.property)) lhsKeyAv = { kind: "const", value: n.left.property.value };
+      else lhsKeyAv = { kind: "top" };
+    }
+    return _specAssignmentExpressionApply(n, state, rhsAv, lhsObjAv, lhsKeyAv, effects);
+  }
+  if (_t.isObjectExpression(n)) {
+    var props = Object.create(null);
+    for (var pi = 0; pi < n.properties.length; pi++) {
+      var prop = n.properties[pi];
+      if (_t.isObjectProperty(prop) && !prop.computed) {
+        var k = _t.isIdentifier(prop.key) ? prop.key.name :
+          _t.isStringLiteral(prop.key) ? prop.key.value : null;
+        if (k !== null) props[k] = vals.get(prop.value) || { kind: "top" };
+      }
+    }
+    return { kind: "obj-lit", props: props };
+  }
+  // Unmodelled expression kinds abstract to Top — sound conservative answer.
+  return { kind: "top" };
+}
+
 // Resolve a call expression's callee to its function node
 // Returns a Babel path to the resolved function node, or null.
 function _resolveCalleeToFunction(callPath) {
