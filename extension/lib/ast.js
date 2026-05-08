@@ -1927,6 +1927,104 @@ function _specJoinState(a, b) {
   return out;
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// § 13.10 — Member Expression evaluation (read-side).
+// Property accessor produces a reference whose value is `Get(obj, key)`.
+// We model the result as `{kind:"member", obj, key}` since concrete property
+// values are unknown at this dataflow level. No spec-section combining: this
+// function ONLY produces a member-read result; the property-write side is
+// handled by § 13.15.4 AssignmentExpression's MemberExpression LHS branch.
+// ───────────────────────────────────────────────────────────────────────────
+function _specMemberExpressionAv(memberNode, objAv, computedKeyAv) {
+  if (!memberNode) return { kind: "top" };
+  if (memberNode.computed) {
+    return { kind: "member", obj: objAv, key: computedKeyAv || { kind: "top" } };
+  }
+  // Static accessor: obj.NAME — key is the identifier's name as a const.
+  var p = memberNode.property;
+  var keyAv;
+  if (p && p.type === "Identifier") keyAv = { kind: "const", value: p.name };
+  else if (p && p.type === "StringLiteral") keyAv = { kind: "const", value: p.value };
+  else keyAv = { kind: "top" };
+  return { kind: "member", obj: objAv, key: keyAv };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// § 13.13 — Logical OR Expression (`a || b`).
+// Per spec: evaluate left; if ToBoolean(left) is true, return left's value;
+// else return right's value. We can't evaluate ToBoolean abstractly, so we
+// preserve both alternatives as `{kind:"or", left, right}` and let consumers
+// (e.g. propagation-detection's target-tracing) unwrap to the truthy operand.
+// ───────────────────────────────────────────────────────────────────────────
+function _specLogicalOrAv(leftAv, rightAv) {
+  return { kind: "or", left: leftAv, right: rightAv };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// § 13.15.4 — AssignmentExpression evaluation (plain `=` operator).
+// Two LHS shapes per spec (PutValue at § 6.2.4.5):
+//   (a) Identifier reference — rebinds variable in the current environment.
+//       Mutates `state[name] = rhsAv`. Returns rhsAv (per spec "the value
+//       assigned" is the expression's value).
+//   (b) Property reference (MemberExpression LHS) — sets the property on
+//       the base object. Records an effect tuple {target, key, value} so
+//       downstream consumers can analyse the property writes. Returns rhsAv.
+// Compound assignments (+=, -=, …) are handled by a separate spec section
+// (§ 13.15.3 ApplyStringOrNumericBinaryOperator); routed there by callers.
+// ───────────────────────────────────────────────────────────────────────────
+function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, effects) {
+  if (!node || node.operator !== "=") return { kind: "top" };
+  var left = node.left;
+  if (left && left.type === "Identifier") {
+    state[left.name] = rhsAv;
+    return rhsAv;
+  }
+  if (left && left.type === "MemberExpression") {
+    effects.push({ target: lhsObjAv, key: lhsKeyAv, value: rhsAv });
+    return rhsAv;
+  }
+  return rhsAv;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// § 14.3.2 — VariableDeclaration (`var`/`let`/`const`).
+// For each declarator: bind the identifier to the initializer's evaluated
+// value, or to undefined per § 14.3.2.1 step 7 when no initializer.
+// (Destructuring patterns — § 14.3.3 — handled by a separate function.)
+// ───────────────────────────────────────────────────────────────────────────
+function _specVariableDeclaratorBind(idNode, initAv, state) {
+  if (!idNode || idNode.type !== "Identifier") return;
+  state[idNode.name] = initAv === undefined
+    ? { kind: "const", value: undefined }
+    : initAv;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// § 14.7.5 — ForInStatement.
+// EnumerateObjectProperties per § 14.7.5.6 produces the enumerable property
+// keys of the iterated object. Each iteration binds the loop variable to
+// one such key, then executes the body. For our flow-insensitive-per-loop
+// abstraction: bind the loop var to `{kind:"loop-key", src: rhsAv}` and
+// process the body once. The bind is recorded in a fresh state clone so
+// post-loop state doesn't see the loop var (matches block-scoped `let`
+// semantics; for `var` declarations we conservatively join the loop var
+// into post-state below).
+// Returns the loop's body-entry state — the worklist driver consumes it.
+// ───────────────────────────────────────────────────────────────────────────
+function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
+  var bodyState = _specStateClone(preState);
+  var loopVarName = null;
+  var left = stmtNode.left;
+  if (left && left.type === "VariableDeclaration" && left.declarations.length === 1 &&
+      left.declarations[0].id && left.declarations[0].id.type === "Identifier") {
+    loopVarName = left.declarations[0].id.name;
+  } else if (left && left.type === "Identifier") {
+    loopVarName = left.name;
+  }
+  if (loopVarName) bodyState[loopVarName] = { kind: "loop-key", src: rhsAv };
+  return bodyState;
+}
+
 // Resolve a call expression's callee to its function node
 // Returns a Babel path to the resolved function node, or null.
 function _resolveCalleeToFunction(callPath) {
