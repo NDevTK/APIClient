@@ -3487,18 +3487,107 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
-    // § 23.1.2.3 Array.isArray(arg) — true iff arg's abstract value is array-lit.
+    // Array.* static methods per § 23.1.2 — scope-checked unshadowed `Array`.
     if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
         _t.isIdentifier(n.callee.object, { name: "Array" }) &&
         !path.scope.getBinding("Array") &&
-        _t.isIdentifier(n.callee.property, { name: "isArray" }) &&
+        _t.isIdentifier(n.callee.property)) {
+      var arrStatic = n.callee.property.name;
+      // § 23.1.2.3 Array.isArray(arg) — true iff arg is array-lit.
+      if (arrStatic === "isArray" && n.arguments.length === 1) {
+        var aiArg = vals.get(n.arguments[0]);
+        if (aiArg) {
+          if (aiArg.kind === "array-lit") return { kind: "const", value: true };
+          // Const non-array, obj-lit are NOT arrays.
+          if (aiArg.kind === "const" || aiArg.kind === "obj-lit") return { kind: "const", value: false };
+          // Other kinds (param/this/top/etc.) preserve top.
+        }
+      }
+      // § 23.1.2.4 Array.of(...items) — constructs array-lit from args.
+      if (arrStatic === "of") {
+        var aoElems = [];
+        for (var aoi = 0; aoi < n.arguments.length; aoi++) {
+          aoElems.push(vals.get(n.arguments[aoi]) || { kind: "top" });
+        }
+        return { kind: "array-lit", elements: aoElems };
+      }
+      // § 23.1.2.1 Array.from(items) — converts iterable. For array-lit
+      // input: copy elements (with optional mapper). For Const-string
+      // input: split into chars per § 23.1.2.1 step 5.b (string iterator).
+      // Without mapper support yet, only single-arg form maps directly.
+      if (arrStatic === "from" && n.arguments.length === 1) {
+        var afArg = vals.get(n.arguments[0]);
+        if (afArg && afArg.kind === "array-lit" && afArg.elements) {
+          return { kind: "array-lit", elements: afArg.elements.slice() };
+        }
+        if (afArg && afArg.kind === "const" && typeof afArg.value === "string") {
+          var afChars = [];
+          // Use iterable-string per § 7.4.1 GetIterator + StringIterator —
+          // splits by code point, preserving surrogate pairs as one entry.
+          for (var afCh of afArg.value) afChars.push({ kind: "const", value: afCh });
+          return { kind: "array-lit", elements: afChars };
+        }
+        return { kind: "top" };
+      }
+    }
+    // Number.* static methods per § 21.1.2 — scope-checked unshadowed `Number`.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.object, { name: "Number" }) &&
+        !path.scope.getBinding("Number") &&
+        _t.isIdentifier(n.callee.property) &&
         n.arguments.length === 1) {
-      var aiArg = vals.get(n.arguments[0]);
-      if (aiArg) {
-        if (aiArg.kind === "array-lit") return { kind: "const", value: true };
-        // Const non-array, obj-lit, member of obj-lit are NOT arrays.
-        if (aiArg.kind === "const" || aiArg.kind === "obj-lit") return { kind: "const", value: false };
-        // Other kinds (param/this/top/etc.) are unknown → preserve top.
+      var numStatic = n.callee.property.name;
+      var nArg = vals.get(n.arguments[0]);
+      if (nArg && nArg.kind === "const") {
+        // § 21.1.2.3 Number.isInteger
+        if (numStatic === "isInteger") return { kind: "const", value: Number.isInteger(nArg.value) };
+        // § 21.1.2.2 Number.isFinite — DIFFERS from global isFinite:
+        // doesn't coerce; returns false for non-numbers.
+        if (numStatic === "isFinite") return { kind: "const", value: Number.isFinite(nArg.value) };
+        // § 21.1.2.4 Number.isNaN — DIFFERS from global isNaN: no coercion.
+        if (numStatic === "isNaN") return { kind: "const", value: Number.isNaN(nArg.value) };
+        // § 21.1.2.5 Number.isSafeInteger
+        if (numStatic === "isSafeInteger") return { kind: "const", value: Number.isSafeInteger(nArg.value) };
+        // § 21.1.2.13 Number.parseInt(string)
+        if (numStatic === "parseInt" && typeof nArg.value === "string") {
+          return { kind: "const", value: Number.parseInt(nArg.value) };
+        }
+        // § 21.1.2.12 Number.parseFloat(string)
+        if (numStatic === "parseFloat" && typeof nArg.value === "string") {
+          return { kind: "const", value: Number.parseFloat(nArg.value) };
+        }
+      }
+    }
+    // String.* static methods per § 22.1.2 — scope-checked unshadowed `String`.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.object, { name: "String" }) &&
+        !path.scope.getBinding("String") &&
+        _t.isIdentifier(n.callee.property)) {
+      var strStatic = n.callee.property.name;
+      // § 22.1.2.1 String.fromCharCode(...codeUnits)
+      if (strStatic === "fromCharCode") {
+        var fcArgs = [];
+        var fcOk = true;
+        for (var fci = 0; fci < n.arguments.length; fci++) {
+          var fca = vals.get(n.arguments[fci]);
+          if (!fca || fca.kind !== "const" || typeof fca.value !== "number") { fcOk = false; break; }
+          fcArgs.push(fca.value);
+        }
+        if (fcOk) return { kind: "const", value: String.fromCharCode.apply(String, fcArgs) };
+      }
+      // § 22.1.2.2 String.fromCodePoint(...codePoints)
+      if (strStatic === "fromCodePoint") {
+        var fcpArgs = [];
+        var fcpOk = true;
+        for (var fcpi = 0; fcpi < n.arguments.length; fcpi++) {
+          var fcpa = vals.get(n.arguments[fcpi]);
+          if (!fcpa || fcpa.kind !== "const" || typeof fcpa.value !== "number") { fcpOk = false; break; }
+          fcpArgs.push(fcpa.value);
+        }
+        if (fcpOk) {
+          try { return { kind: "const", value: String.fromCodePoint.apply(String, fcpArgs) }; }
+          catch (e) { return { kind: "top" }; }
+        }
       }
     }
     // § 25.5.2 JSON.parse(text) — when text is a Const string literal

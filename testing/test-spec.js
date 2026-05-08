@@ -2362,6 +2362,113 @@ specTest("§ 23.1.1.1: shadowed `Array` does NOT trigger built-in evaluation", `
   return true;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 23.1.2 Array.{from, of} static methods
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 23.1.2 Array.{from, of} ===\n");
+
+specTest("§ 23.1.2.4: `Array.of(1, 2, 3)` → array-lit [1,2,3]", `
+  function f() {
+    var a = Array.of(1, 2, 3);
+    this.r = a.length;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 3;
+});
+
+specTest("§ 23.1.2.1: `Array.from([1,2,3])` → copy of input array-lit", `
+  function f() {
+    var a = Array.from([1, 2, 3]);
+    this.r = a.length;
+    this.first = a[0];
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.r === 3 && byKey.first === 1;
+});
+
+specTest("§ 23.1.2.1: `Array.from('abc')` → array-lit ['a','b','c'] (string iterator)", `
+  function f() {
+    var a = Array.from("abc");
+    this.first = a[0];
+    this.last = a[2];
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.first === "a" && byKey.last === "c";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 21.1.2 Number static methods
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 21.1.2 Number.{isInteger, isFinite, isNaN} ===\n");
+
+specTest("§ 21.1.2.3: `Number.isInteger(42)` → Const(true)", `
+  function f() {
+    this.r = Number.isInteger(42);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+specTest("§ 21.1.2.3: `Number.isInteger(3.14)` → Const(false)", `
+  function f() {
+    this.r = Number.isInteger(3.14);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+specTest("§ 21.1.2.4: `Number.isNaN('hello')` → Const(false) (no coercion, unlike global)", `
+  function f() {
+    // global isNaN("hello") = true (coerces to NaN); Number.isNaN("hello") = false.
+    this.r = Number.isNaN("hello");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 22.1.2 String static methods
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 22.1.2 String.{fromCharCode, fromCodePoint} ===\n");
+
+specTest("§ 22.1.2.1: `String.fromCharCode(72, 105)` → Const('Hi')", `
+  function f() {
+    this.r = String.fromCharCode(72, 105);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "Hi";
+});
+
+specTest("§ 22.1.2.2: `String.fromCodePoint(128512)` → Const('😀')", `
+  function f() {
+    this.r = String.fromCodePoint(128512);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "😀";
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
