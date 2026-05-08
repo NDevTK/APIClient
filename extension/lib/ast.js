@@ -958,7 +958,6 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
     ObjectExpression: function(path) {
       _detectEnumObject(path.node, result);
       _collectObjectLiteralConstraints(path);
-      _processReactDangerousHTML(path, result);
     },
     AssignmentExpression: function(path) {
       _trackGlobalAssignment(path);
@@ -15095,28 +15094,17 @@ function _processSecurityNewSink(path, result) {
   }
 }
 
-// ─── Security Analysis: React dangerouslySetInnerHTML Detection ─────────────
-
-// Detect { dangerouslySetInnerHTML: { __html: taintedValue } } in object literals.
-// Property names survive minification — "dangerouslySetInnerHTML" and "__html" are string keys.
-// Used in React.createElement and JSX-compiled output.
-function _processReactDangerousHTML(path, result) {
-  var node = path.node;
-  if (!node.properties || node.properties.length === 0) return;
-  for (var i = 0; i < node.properties.length; i++) {
-    var prop = node.properties[i];
-    if (!_t.isObjectProperty(prop) || prop.computed) continue;
-    if (_getKeyName(prop.key) !== "dangerouslySetInnerHTML") continue;
-    if (!_t.isObjectExpression(prop.value)) continue;
-    for (var j = 0; j < prop.value.properties.length; j++) {
-      var inner = prop.value.properties[j];
-      if (!_t.isObjectProperty(inner) || inner.computed) continue;
-      if (_getKeyName(inner.key) !== "__html") continue;
-      var htmlSrc = _traceValueSource(path.get("properties." + i + ".value.properties." + j + ".value"), 0);
-      if (htmlSrc.sourceType === "user-controlled") _pushSink(result, node, "xss", "dangerouslySetInnerHTML", htmlSrc, path);
-    }
-  }
-}
+// (Removed React-specific dangerouslySetInnerHTML detection per
+// CLAUDE.md L29 ban on framework-specific recognition. The actual
+// XSS happens when React internally writes
+// `el.innerHTML = props.dangerouslySetInnerHTML.__html` — that
+// assignment is detected spec-compliantly by
+// _processSecurityAssignSink when React's source is in the analyzed
+// bundle. For React apps that import React from a separate bundle,
+// closing this gap requires multi-bundle correlation
+// infrastructure that the analyzer doesn't yet have — that's its
+// own pillar of work, not something to paper over with a
+// framework-name shortcut.)
 
 // Is `path` an expression whose value is an object with attacker-chosen
 // KEYS (as opposed to merely attacker-chosen values)? Prototype pollution
