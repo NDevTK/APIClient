@@ -35,6 +35,8 @@ var _callReturnEffectMemo = new WeakMap();  // CallExpression node → { propNam
 var _findPrototypeMethodCallerArgsMemo = new WeakMap();
 var _propAssignMemo = new WeakMap();        // binding node → { propName: [resolved values] from `obj.propName = X` assignments via that binding's referencePaths }
 var _resolveToObjectMemo = new WeakMap();   // node → resolved ObjectExpression (or null) — caches _resolveToObject result so repeated lookups on the same node are O(1)
+var _traceParamToArgsMemo = new WeakMap();  // root binding → caller-arg-paths array — avoids rewalking caller chains for hot bindings
+var _resolveParamFromCallersMemo = new WeakMap(); // binding identifier node → { propName: [resolved values] } — avoids rewalking caller-chain resolution for hot bindings
 
 // Structural-def state, populated during analyzeJSBundle's traversal so
 // the viewer's AST_BUILD_DEFINITION_MAP only needs the `refMap` pass
@@ -7457,6 +7459,27 @@ function _rtaStep(F) {
 }
 
 function _resolveParamFromCallers(binding, depth, propName) {
+  // Per-analysis memo keyed by (binding identifier, propName). Same
+  // query returns the cached array. Hot resolver paths repeatedly
+  // ask the same caller chain. depth is NOT part of the key — the
+  // resolved set is depth-independent (depth only affects guard
+  // nesting), and including it would defeat the cache for any
+  // caller that varies depth across calls to the same binding.
+  var memoKey = propName || "_NULL_";
+  var memoForBinding = _resolveParamFromCallersMemo.get(binding.identifier);
+  if (memoForBinding && memoForBinding[memoKey] !== undefined) {
+    return memoForBinding[memoKey];
+  }
+  var result = _resolveParamFromCallersUncached(binding, depth, propName);
+  if (!memoForBinding) {
+    memoForBinding = {};
+    _resolveParamFromCallersMemo.set(binding.identifier, memoForBinding);
+  }
+  memoForBinding[memoKey] = result;
+  return result;
+}
+
+function _resolveParamFromCallersUncached(binding, depth, propName) {
   if (!_resolver.guard("P", binding.identifier)) return [];
   try {
 
@@ -8670,7 +8693,45 @@ function _resolveParamToCallerArgs(binding) {
   } finally { _resolver.unguard("Z", binding.identifier); }
 }
 
-function _traceParamToArgs(binding) {
+// Iterative entry-point. Replaces the prior synchronous recursion
+// through _collectOrTraceArg → _traceParamToArgs that closed the
+// caller-arg-tracing SCC. The driver maintains a worklist of
+// bindings; for each, _traceParamToArgsRoutes runs the original 6+
+// route dispatch (now passed the queue), and _collectOrTraceArg
+// (also queue-aware) pushes any param-bound identifiers it
+// encounters back onto the queue rather than recursing
+// synchronously. The visited set keys on the binding identity to
+// terminate cycles in the trace graph (e.g. mutually-recursive
+// callers).
+function _traceParamToArgs(rootBinding) {
+  // Per-analysis memo. Same binding asked twice within one
+  // analyzeJSBundle invocation returns the cached array — avoids
+  // rewalking caller chains for hot bindings (e.g. a wrapper
+  // function referenced by every fetch site in a request module).
+  if (_traceParamToArgsMemo.has(rootBinding)) {
+    return _traceParamToArgsMemo.get(rootBinding);
+  }
+  // LIFO worklist — the only observable side effect is concatenation
+  // into allArgs, and downstream consumers iterate the array without
+  // dependence on insertion order. pop() avoids the O(N) cost of
+  // shift() that an Array-as-queue incurs.
+  var stack = [rootBinding];
+  var visited = new Set();
+  var allArgs = [];
+  while (stack.length > 0) {
+    var binding = stack.pop();
+    if (visited.has(binding)) continue;
+    visited.add(binding);
+    var routeArgs = _traceParamToArgsRoutes(binding, stack);
+    if (routeArgs && routeArgs.length > 0) {
+      for (var rai = 0; rai < routeArgs.length; rai++) allArgs.push(routeArgs[rai]);
+    }
+  }
+  _traceParamToArgsMemo.set(rootBinding, allArgs);
+  return allArgs;
+}
+
+function _traceParamToArgsRoutes(binding, queue) {
   var funcPath = binding.scope.path;
   if (!_t.isFunction(funcPath.node)) return [];
 
@@ -8684,7 +8745,7 @@ function _traceParamToArgs(binding) {
     var methodName = _t.isIdentifier(methodKey) ? methodKey.name :
       (_t.isStringLiteral(methodKey) ? methodKey.value : null);
     if (methodName) {
-      return _traceObjectMethodToArgs(funcPath, paramIdx, methodName);
+      return _traceObjectMethodToArgs(funcPath, paramIdx, methodName, queue);
     }
     return [];
   }
@@ -8697,7 +8758,7 @@ function _traceParamToArgs(binding) {
     if (assignMethodName && _t.isIdentifier(assignObj)) {
       var assignObjBinding = funcPath.scope.getBinding(assignObj.name);
       if (assignObjBinding) {
-        return _collectMethodCallerArgs(assignObjBinding.referencePaths, assignMethodName, paramIdx);
+        return _collectMethodCallerArgs(assignObjBinding.referencePaths, assignMethodName, paramIdx, queue);
       }
       // Global: window.X = function() {} or known alias
       var isGlobalTarget = _isGlobalObject(assignObj.name, funcPath.scope);
@@ -8708,7 +8769,6 @@ function _traceParamToArgs(binding) {
     return [];
   }
   // Route 1c: obj[method] = function(param) {} — computed member assignment
-  // Resolve method to string values, search for obj.get/post/... call sites
   if (!funcBinding && _t.isAssignmentExpression(funcPath.parent) &&
       _t.isMemberExpression(funcPath.parent.left) && funcPath.parent.left.computed) {
     var compObj = funcPath.parent.left.object;
@@ -8720,10 +8780,9 @@ function _traceParamToArgs(binding) {
         var compArgs = [];
         for (var cvi = 0; cvi < compPropVals.length; cvi++) {
           if (typeof compPropVals[cvi] !== "string") continue;
-          var cmArgs = _collectMethodCallerArgs(compObjBinding.referencePaths, compPropVals[cvi], paramIdx);
+          var cmArgs = _collectMethodCallerArgs(compObjBinding.referencePaths, compPropVals[cvi], paramIdx, queue);
           compArgs = compArgs.concat(cmArgs);
         }
-        // Also check global aliases
         for (var gn in _globalAssignments) {
           var ga = _globalAssignments[gn];
           if (!ga.valueNode) continue;
@@ -8732,7 +8791,7 @@ function _traceParamToArgs(binding) {
           if (_t.isIdentifier(gaVal) && gaVal.name === compObjBinding.identifier.name) {
             for (var cvi2 = 0; cvi2 < compPropVals.length; cvi2++) {
               if (typeof compPropVals[cvi2] !== "string") continue;
-              var cgArgs = _collectGlobalMethodCallerArgs(funcPath, gn, compPropVals[cvi2], paramIdx);
+              var cgArgs = _collectGlobalMethodCallerArgs(funcPath, gn, compPropVals[cvi2], paramIdx, queue);
               compArgs = compArgs.concat(cgArgs);
             }
           }
@@ -8750,7 +8809,7 @@ function _traceParamToArgs(binding) {
       if (funcPath.parent.arguments[cbi] === funcPath.node) { cbArgIdx = cbi; break; }
     }
     if (cbArgIdx >= 0) {
-      return _traceCallbackArgToArgs(cbCallExpr, cbArgIdx, paramIdx);
+      return _traceCallbackArgToArgs(cbCallExpr, cbArgIdx, paramIdx, queue);
     }
   }
   // Route 3: Ctor.prototype.method = function(param) {} — trace via instance.method()
@@ -8774,7 +8833,7 @@ function _traceParamToArgs(binding) {
               if (!init || !_t.isNewExpression(init) || !_t.isIdentifier(init.callee, { name: ptCtorName })) return;
               var instBinding = decPath.scope.getBinding(decPath.node.id.name);
               if (instBinding) {
-                ptArgs = ptArgs.concat(_collectMethodCallerArgs(instBinding.referencePaths, ptMethodName, paramIdx));
+                ptArgs = ptArgs.concat(_collectMethodCallerArgs(instBinding.referencePaths, ptMethodName, paramIdx, queue));
               }
             },
           });
@@ -8792,7 +8851,7 @@ function _traceParamToArgs(binding) {
         var iifeParent = encParent.parentPath;
         if (iifeParent && _t.isVariableDeclarator(iifeParent.node) && _t.isIdentifier(iifeParent.node.id)) {
           var iifeVarBinding = iifeParent.scope.getBinding(iifeParent.node.id.name);
-          if (iifeVarBinding) return _collectCallerArgs(iifeVarBinding.referencePaths, paramIdx);
+          if (iifeVarBinding) return _collectCallerArgs(iifeVarBinding.referencePaths, paramIdx, queue);
         }
         if (iifeParent && _t.isAssignmentExpression(iifeParent.node) && _t.isMemberExpression(iifeParent.node.left)) {
           var iifeGlobalProp = iifeParent.node.left.property;
@@ -8821,7 +8880,7 @@ function _traceParamToArgs(binding) {
                 if (!init || !_t.isNewExpression(init) || !_t.isIdentifier(init.callee, { name: className })) return;
                 var instBinding = decPath.scope.getBinding(decPath.node.id.name);
                 if (instBinding) {
-                  clArgs = clArgs.concat(_collectMethodCallerArgs(instBinding.referencePaths, clMethodName, paramIdx));
+                  clArgs = clArgs.concat(_collectMethodCallerArgs(instBinding.referencePaths, clMethodName, paramIdx, queue));
                 }
               },
             });
@@ -8833,39 +8892,46 @@ function _traceParamToArgs(binding) {
   }
   // Route 6: Direct function binding — collect caller arguments
   if (!funcBinding) return [];
-  return _collectCallerArgs(funcBinding.referencePaths, paramIdx);
+  return _collectCallerArgs(funcBinding.referencePaths, paramIdx, queue);
 }
 
 // Collect concrete caller argument paths from reference paths to a function
-function _collectCallerArgs(refs, paramIdx) {
+function _collectCallerArgs(refs, paramIdx, queue) {
   var args = [];
   if (!refs) return args;
   for (var r = 0; r < refs.length; r++) {
-    var refPath = refs[r];
-    if (refPath.parent && _t.isCallExpression(refPath.parent) && refPath.parent.callee === refPath.node) {
-      var effectiveIdx = paramIdx < refPath.parent.arguments.length ? paramIdx :
-        (refPath.parent.arguments.length > 0 ? refPath.parent.arguments.length - 1 : -1);
-      if (effectiveIdx >= 0) {
-        _collectOrTraceArg(refPath.parentPath.get("arguments." + effectiveIdx), args);
-      }
+    var callPath = _matchDirectCallSite(refs[r]);
+    if (!callPath) continue;
+    // Overloaded-call clamp: when paramIdx exceeds the actual arg
+    // count, fall back to the last arg. Common in jQuery-style
+    // signatures `(method, url, opts?)` where some callers omit the
+    // optional positional.
+    var effectiveIdx = paramIdx < callPath.node.arguments.length ? paramIdx :
+      (callPath.node.arguments.length > 0 ? callPath.node.arguments.length - 1 : -1);
+    if (effectiveIdx >= 0) {
+      _collectOrTraceArg(callPath.get("arguments." + effectiveIdx), args, queue);
     }
   }
   return args;
 }
 
-// If arg is a param identifier, trace further to its callers; otherwise collect it directly
-function _collectOrTraceArg(argPath, out) {
+// Param-bound identifiers enqueue the binding onto the iterative
+// driver's stack (owned by _traceParamToArgs) instead of recursing
+// synchronously. Contract: every caller MUST pass a non-null queue.
+// The single entry point _traceParamToArgs creates and owns the
+// queue; all helpers in the caller-arg pipeline thread it through
+// untouched. There is no defensive fallback — a missing queue is a
+// bug, not a degraded path.
+function _collectOrTraceArg(argPath, out, queue) {
   if (_t.isIdentifier(argPath.node)) {
     var binding = argPath.scope.getBinding(argPath.node.name);
     if (binding && binding.kind === "param") {
-      var subArgs = _traceParamToArgs(binding);
-      if (subArgs.length > 0) {
-        for (var i = 0; i < subArgs.length; i++) out.push(subArgs[i]);
-        return;
-      }
+      queue.push(binding);
+      return;
     }
-    // Local variable initialized from function call: var s = merge({}, options)
-    // Trace through the call's arguments that are params to their callers
+    // Var initialized from function call: var s = merge(opts) — when
+    // any arg of that init is a param, queue it; the driver follows
+    // the chain.
     if (binding && binding.path.isVariableDeclarator && binding.path.isVariableDeclarator()) {
       var initNode = binding.path.node.init;
       if (initNode && _t.isCallExpression(initNode)) {
@@ -8874,11 +8940,8 @@ function _collectOrTraceArg(argPath, out) {
           if (_t.isIdentifier(initArgs[ai])) {
             var argBinding = binding.path.get("init").scope.getBinding(initArgs[ai].name);
             if (argBinding && argBinding.kind === "param") {
-              var callSubArgs = _traceParamToArgs(argBinding);
-              if (callSubArgs.length > 0) {
-                for (var ci = 0; ci < callSubArgs.length; ci++) out.push(callSubArgs[ci]);
-                return;
-              }
+              queue.push(argBinding);
+              return;
             }
           }
         }
@@ -8890,7 +8953,7 @@ function _collectOrTraceArg(argPath, out) {
 
 // Trace ObjectProperty method to caller args: { method: function(param) {} }
 // Walks up to the object, then through extend-patterns and global aliases
-function _traceObjectMethodToArgs(funcPath, paramIdx, methodName) {
+function _traceObjectMethodToArgs(funcPath, paramIdx, methodName, queue) {
   var objExprPath = funcPath.parentPath ? funcPath.parentPath.parentPath : null;
   if (!objExprPath || !_t.isObjectExpression(objExprPath.node)) return [];
   var declPath = objExprPath.parentPath;
@@ -8908,15 +8971,14 @@ function _traceObjectMethodToArgs(funcPath, paramIdx, methodName) {
       var args = [];
       var extObjBinding = declPath.scope.getBinding(extCallee.object.name);
       if (extObjBinding) {
-        args = _collectMethodCallerArgs(extObjBinding.referencePaths, methodName, paramIdx);
-        // Also check global aliases
+        args = _collectMethodCallerArgs(extObjBinding.referencePaths, methodName, paramIdx, queue);
         for (var gn in _globalAssignments) {
           var ga = _globalAssignments[gn];
           if (!ga.valueNode) continue;
           var gaVal = ga.valueNode;
           while (_t.isAssignmentExpression(gaVal)) gaVal = gaVal.right;
           if (_t.isIdentifier(gaVal) && gaVal.name === extObjBinding.identifier.name) {
-            var globalArgs = _collectGlobalMethodCallerArgs(funcPath, gn, methodName, paramIdx);
+            var globalArgs = _collectGlobalMethodCallerArgs(funcPath, gn, methodName, paramIdx, queue);
             args = args.concat(globalArgs);
           }
         }
@@ -8925,26 +8987,20 @@ function _traceObjectMethodToArgs(funcPath, paramIdx, methodName) {
     }
   }
   if (!objBinding) return [];
-  return _collectMethodCallerArgs(objBinding.referencePaths, methodName, paramIdx);
+  return _collectMethodCallerArgs(objBinding.referencePaths, methodName, paramIdx, queue);
 }
 
 // Collect caller args from obj.method(...) call sites
-function _collectMethodCallerArgs(refs, methodName, paramIdx) {
+function _collectMethodCallerArgs(refs, methodName, paramIdx, queue) {
   var args = [];
   if (!refs) return args;
   for (var r = 0; r < refs.length; r++) {
-    var refPath = refs[r];
-    if (refPath.parent && _t.isMemberExpression(refPath.parent) &&
-        refPath.parent.object === refPath.node && !refPath.parent.computed &&
-        _t.isIdentifier(refPath.parent.property, { name: methodName })) {
-      var callNode = refPath.parentPath ? refPath.parentPath.parent : null;
-      if (callNode && _t.isCallExpression(callNode) && callNode.callee === refPath.parent) {
-        var effectiveIdx = paramIdx < callNode.arguments.length ? paramIdx :
-          (callNode.arguments.length > 0 ? callNode.arguments.length - 1 : -1);
-        if (effectiveIdx >= 0) {
-          _collectOrTraceArg(refPath.parentPath.parentPath.get("arguments." + effectiveIdx), args);
-        }
-      }
+    var callPath = _matchMethodCallSite(refs[r], methodName);
+    if (!callPath) continue;
+    var effectiveIdx = paramIdx < callPath.node.arguments.length ? paramIdx :
+      (callPath.node.arguments.length > 0 ? callPath.node.arguments.length - 1 : -1);
+    if (effectiveIdx >= 0) {
+      _collectOrTraceArg(callPath.get("arguments." + effectiveIdx), args, queue);
     }
   }
   return args;
@@ -8979,12 +9035,12 @@ function _traverseGlobalCallers(funcPath, globalName, methodName, onMatch) {
   for (var _gci = 0; _gci < cached.length; _gci++) onMatch(cached[_gci]);
 }
 
-function _collectGlobalMethodCallerArgs(funcPath, globalName, methodName, paramIdx) {
+function _collectGlobalMethodCallerArgs(funcPath, globalName, methodName, paramIdx, queue) {
   var args = [];
   _traverseGlobalCallers(funcPath, globalName, methodName, function(innerPath) {
     var effectiveIdx = paramIdx < innerPath.node.arguments.length ? paramIdx :
       (innerPath.node.arguments.length > 0 ? innerPath.node.arguments.length - 1 : -1);
-    if (effectiveIdx >= 0) _collectOrTraceArg(innerPath.get("arguments." + effectiveIdx), args);
+    if (effectiveIdx >= 0) _collectOrTraceArg(innerPath.get("arguments." + effectiveIdx), args, queue);
   });
   return args;
 }
@@ -9002,7 +9058,7 @@ function _collectGlobalCallerArgs(funcPath, globalName, paramIdx) {
 }
 
 // Trace callback argument through callee to find where callback is invoked with args
-function _traceCallbackArgToArgs(callExprPath, cbArgIdx, paramIdx) {
+function _traceCallbackArgToArgs(callExprPath, cbArgIdx, paramIdx, queue) {
   if (!_resolver.guard("ZC", callExprPath.node)) return [];
   try {
     var calleeNode = callExprPath.node.callee;
@@ -9110,7 +9166,7 @@ function _traceCallbackArgToArgs(callExprPath, cbArgIdx, paramIdx) {
               if (_t.isIdentifier(containerNode)) {
                 var containerBinding = innerPath.scope.getBinding(containerNode.name);
                 if (containerBinding) {
-                  var storedArgs = _traceStoredCallbackToArgs(containerBinding, paramIdx);
+                  var storedArgs = _traceStoredCallbackToArgs(containerBinding, paramIdx, queue);
                   args = args.concat(storedArgs);
                 }
               }
@@ -9131,7 +9187,7 @@ function _traceCallbackArgToArgs(callExprPath, cbArgIdx, paramIdx) {
 // Iterative worklist over container bindings. Replaces tail-recursion
 // when a container is a parameter (resolve through callers — push each
 // resolved binding onto the worklist instead of recursing).
-function _traceStoredCallbackToArgs(initialContainerBinding, paramIdx) {
+function _traceStoredCallbackToArgs(initialContainerBinding, paramIdx, queue) {
   var bindingQueue = [initialContainerBinding];
   var bindingSeen = new Set();
   var args = [];
@@ -9181,8 +9237,10 @@ function _traceStoredCallbackToArgs(initialContainerBinding, paramIdx) {
               if (_t.isIdentifier(directArgPath.node)) {
                 var directArgBinding = directArgPath.scope.getBinding(directArgPath.node.name);
                 if (directArgBinding && directArgBinding.kind === "param") {
-                  var subArgs = _traceParamToArgs(directArgBinding);
-                  args = args.concat(subArgs);
+                  // Defer to the iterative driver via the shared queue
+                  // instead of recursing through _traceParamToArgs.
+                  if (queue) queue.push(directArgBinding);
+                  else args.push(directArgPath);
                 } else {
                   args.push(directArgPath);
                 }
@@ -9201,7 +9259,7 @@ function _traceStoredCallbackToArgs(initialContainerBinding, paramIdx) {
             if (_containsNode(iterCallPath.node.arguments[iai], refPath.node)) { iterArgIdx = iai; break; }
           }
           if (iterArgIdx >= 0) {
-            var iterArgs = _traceItemCallsToArgs(iterCallPath, iterArgIdx, paramIdx);
+            var iterArgs = _traceItemCallsToArgs(iterCallPath, iterArgIdx, paramIdx, queue);
             args = args.concat(iterArgs);
           }
         }
@@ -9215,7 +9273,7 @@ function _traceStoredCallbackToArgs(initialContainerBinding, paramIdx) {
 }
 
 // Trace iteration pattern to find where item callbacks are called with args
-function _traceItemCallsToArgs(callPath, iterArgIdx, paramIdx) {
+function _traceItemCallsToArgs(callPath, iterArgIdx, paramIdx, queue) {
   if (!_resolver.guard("ZI", callPath.node)) return [];
   try {
     // Resolve the called function
@@ -9259,7 +9317,7 @@ function _traceItemCallsToArgs(callPath, iterArgIdx, paramIdx) {
                       var cbBinding = cbInner.scope.getBinding(cbc.name);
                       if (!cbBinding || cbBinding.kind !== "param" || cbBinding.scope.path !== cbPath) return;
                       if (paramIdx < cbInner.node.arguments.length) {
-                        _collectOrTraceArg(cbInner.get("arguments." + paramIdx), args);
+                        _collectOrTraceArg(cbInner.get("arguments." + paramIdx), args, queue);
                       }
                     },
                   }, _SKIP_NESTED_FUNCS));
@@ -9910,6 +9968,332 @@ function _resolveParamFromGlobalCallers(funcPath, globalName, paramIdx, depth, p
 }
 
 
+// Module-level call-site matchers. Single source of truth for "is
+// this referencePath the object of a direct/method invocation, and
+// if so, what's the CallExpression NodePath?". Pure structural
+// matching against AST shapes per ECMA-262 § 13.3.6 (MemberExpression)
+// and § 13.3.5 (CallExpression). Higher-level helpers (scanners,
+// collectors) compose these matchers; downstream behavior (collect
+// arg path, enqueue binding, resolve value, handle overload) lives
+// at the higher layer where it belongs.
+
+// `<ref>(...args)` invocation site. Returns the CallExpression
+// NodePath, or null if refPath isn't the callee of a CallExpression.
+function _matchDirectCallSite(refPath) {
+  if (!refPath || !refPath.parent) return null;
+  if (!_t.isCallExpression(refPath.parent) || refPath.parent.callee !== refPath.node) return null;
+  return refPath.parentPath;
+}
+
+// `<ref>.<methodName>(...args)` invocation site. Returns the
+// CallExpression NodePath, or null. The method-name match is a
+// structural property check (ECMA-262 § 13.3.2 MemberExpression with
+// non-computed string-named property), not a name-resolution lookup.
+function _matchMethodCallSite(refPath, methodName) {
+  if (!refPath || !refPath.parent) return null;
+  var mem = refPath.parent;
+  if (!_t.isMemberExpression(mem) || mem.object !== refPath.node || mem.computed) return null;
+  if (!_t.isIdentifier(mem.property, { name: methodName })) return null;
+  var callNode = refPath.parentPath ? refPath.parentPath.parent : null;
+  if (!callNode || !_t.isCallExpression(callNode) || callNode.callee !== mem) return null;
+  return refPath.parentPath.parentPath;
+}
+
+// Module-level scanners — each takes a referencePaths array and a
+// paramIdx and returns arg paths at the specific call shape. Both
+// _enumerateCallerArgPathsForParam and other resolvers compose these.
+// They are strict (paramIdx must be < arguments.length); the
+// _collect* helpers handle the overloaded-call clamp separately.
+
+function _scanDirectCallers(refs, paramIdx) {
+  var out = [];
+  if (!refs) return out;
+  for (var r = 0; r < refs.length; r++) {
+    var callPath = _matchDirectCallSite(refs[r]);
+    if (callPath && paramIdx < callPath.node.arguments.length) {
+      out.push(callPath.get("arguments." + paramIdx));
+    }
+  }
+  return out;
+}
+
+function _scanMethodCallers(refs, methodName, paramIdx) {
+  var out = [];
+  if (!refs) return out;
+  for (var r = 0; r < refs.length; r++) {
+    var callPath = _matchMethodCallSite(refs[r], methodName);
+    if (callPath && paramIdx < callPath.node.arguments.length) {
+      out.push(callPath.get("arguments." + paramIdx));
+    }
+  }
+  return out;
+}
+
+// `<ref>.bind(thisArg, ...preArgs)` invocation site (Function.prototype
+// .bind per ECMA-262 § 20.2.3.2). The bound `preArgs` are spec-prepended
+// to subsequent caller args, so paramIdx in the original function maps
+// to either:
+//   • paramIdx < preArgsCount   → the bind call's `arguments[paramIdx+1]`
+//                                 (skipping thisArg).
+//   • paramIdx >= preArgsCount  → the bind result's callers' arg at
+//                                 `(paramIdx - preArgsCount)`. Resolved
+//                                 by walking the bind result's variable
+//                                 binding's referencePaths.
+function _scanBindCallers(refs, paramIdx) {
+  var out = [];
+  if (!refs) return out;
+  for (var r = 0; r < refs.length; r++) {
+    var bindCallPath = _matchMethodCallSite(refs[r], "bind");
+    if (!bindCallPath) continue;
+    var bindCallNode = bindCallPath.node;
+    if (bindCallNode.arguments.length < 1) continue;
+    var preArgsCount = bindCallNode.arguments.length - 1;
+    if (paramIdx < preArgsCount) {
+      out.push(bindCallPath.get("arguments." + (paramIdx + 1)));
+      continue;
+    }
+    var callerArgIdx = paramIdx - preArgsCount;
+    var bindOwner = bindCallPath.parent;
+    if (!bindOwner || !_t.isVariableDeclarator(bindOwner) || !_t.isIdentifier(bindOwner.id) ||
+        bindOwner.init !== bindCallNode) continue;
+    var aliasB = bindCallPath.parentPath.scope.getBinding(bindOwner.id.name);
+    if (!aliasB || !aliasB.referencePaths) continue;
+    var aliasArgs = _scanDirectCallers(aliasB.referencePaths, callerArgIdx);
+    for (var ai = 0; ai < aliasArgs.length; ai++) out.push(aliasArgs[ai]);
+  }
+  return out;
+}
+
+// Enumerate every caller-arg path that a function-parameter binding
+// could receive. Covers the same definition-shape routes as
+// _resolveParamFromCallers (direct funcBinding, ObjectProperty,
+// obj.method assignment, computed obj[method] assignment, callback
+// arg, prototype-method, IIFE return, ES6 class method), but does
+// NOT call any resolver function — only walks bindings and pushes
+// arg paths. Used by _resolvePropertyFromArg's worklist to follow
+// param identifiers without recursing into _resolveParamFromCallers
+// (which would close the resolver SCC). Pure spec-grounded
+// scope/binding navigation. Composes _scanDirectCallers /
+// _scanMethodCallers as building blocks.
+function _enumerateCallerArgPathsForParam(binding) {
+  var out = [];
+  var funcPath = binding.scope.path;
+  if (!_t.isFunction(funcPath.node)) return out;
+  var paramIdx = _findParamIndex(funcPath.node.params, binding.identifier.name);
+  if (paramIdx === -1) return out;
+  var funcBinding = _getFunctionBinding(funcPath);
+  function pushDirectCallerArgs(refs) {
+    var args = _scanDirectCallers(refs, paramIdx);
+    for (var i = 0; i < args.length; i++) out.push(args[i]);
+  }
+  function pushMethodCallerArgs(refs, methodName) {
+    var args = _scanMethodCallers(refs, methodName, paramIdx);
+    for (var i = 0; i < args.length; i++) out.push(args[i]);
+  }
+
+  // Route 6: direct funcBinding callers + Function.prototype.bind.
+  if (funcBinding && funcBinding.referencePaths) {
+    pushDirectCallerArgs(funcBinding.referencePaths);
+    var bindArgs = _scanBindCallers(funcBinding.referencePaths, paramIdx);
+    for (var bi = 0; bi < bindArgs.length; bi++) out.push(bindArgs[bi]);
+    return out;
+  }
+  // Route 1: ObjectProperty — { method: function(param) {} }
+  if (_t.isObjectProperty(funcPath.parent)) {
+    var opKey = funcPath.parent.key;
+    var opName = _t.isIdentifier(opKey) ? opKey.name :
+      (_t.isStringLiteral(opKey) ? opKey.value : null);
+    if (opName) {
+      var objExprPath = funcPath.parentPath ? funcPath.parentPath.parentPath : null;
+      if (objExprPath && _t.isObjectExpression(objExprPath.node)) {
+        var declPath = objExprPath.parentPath;
+        if (declPath && _t.isVariableDeclarator(declPath.node) && _t.isIdentifier(declPath.node.id)) {
+          var opObjBinding = declPath.scope.getBinding(declPath.node.id.name);
+          if (opObjBinding && opObjBinding.referencePaths) pushMethodCallerArgs(opObjBinding.referencePaths, opName);
+        }
+      }
+    }
+    return out;
+  }
+  // ES6 shorthand: { method(param) {} } — funcPath IS an ObjectMethod.
+  if (funcPath.isObjectMethod && funcPath.isObjectMethod()) {
+    var omKey = funcPath.node.key;
+    var omName = _t.isIdentifier(omKey) && !funcPath.node.computed ? omKey.name :
+      (_t.isStringLiteral(omKey) ? omKey.value : null);
+    if (omName) {
+      var omObjPath = funcPath.parentPath;
+      if (omObjPath && _t.isObjectExpression(omObjPath.node)) {
+        var omDecl = omObjPath.parentPath;
+        if (omDecl && _t.isVariableDeclarator(omDecl.node) && _t.isIdentifier(omDecl.node.id)) {
+          var omObjBinding = omDecl.scope.getBinding(omDecl.node.id.name);
+          if (omObjBinding && omObjBinding.referencePaths) pushMethodCallerArgs(omObjBinding.referencePaths, omName);
+        }
+      }
+    }
+    return out;
+  }
+  // Route 1b: obj.method = function(param) {} — non-computed assignment.
+  if (_t.isAssignmentExpression(funcPath.parent) &&
+      _t.isMemberExpression(funcPath.parent.left) && !funcPath.parent.left.computed) {
+    var aProp = funcPath.parent.left.property;
+    var aObj = funcPath.parent.left.object;
+    var aMethodName = _t.isIdentifier(aProp) ? aProp.name : null;
+    if (aMethodName) {
+      // Plain identifier object: obj.method = ...
+      if (_t.isIdentifier(aObj)) {
+        var aObjBinding = funcPath.scope.getBinding(aObj.name);
+        if (aObjBinding && aObjBinding.referencePaths) pushMethodCallerArgs(aObjBinding.referencePaths, aMethodName);
+        return out;
+      }
+      // Route 3: Ctor.prototype.method = function(param) {} — trace via instances.
+      if (_t.isMemberExpression(aObj) && !aObj.computed &&
+          (_t.isIdentifier(aObj.property, { name: "prototype" }) ||
+           (_t.isStringLiteral(aObj.property) && aObj.property.value === "prototype")) &&
+          _t.isIdentifier(aObj.object)) {
+        var ctorName = aObj.object.name;
+        var programPath = funcPath.findParent(function(p) { return p.isProgram(); });
+        if (programPath) {
+          try {
+            programPath.traverse({
+              VariableDeclarator: function(decPath) {
+                var init = decPath.node.init;
+                if (!init || !_t.isNewExpression(init) || !_t.isIdentifier(init.callee, { name: ctorName })) return;
+                var instBinding = decPath.scope.getBinding(decPath.node.id.name);
+                if (instBinding && instBinding.referencePaths) pushMethodCallerArgs(instBinding.referencePaths, aMethodName);
+              },
+            });
+          } catch (e) { _resolver.collectError(e, "enumeratePrototypeMethodCallerArgs"); }
+        }
+        return out;
+      }
+    }
+  }
+  // Route 1c: obj[method] = function(param) {} — computed assignment.
+  if (_t.isAssignmentExpression(funcPath.parent) &&
+      _t.isMemberExpression(funcPath.parent.left) && funcPath.parent.left.computed) {
+    var caObj = funcPath.parent.left.object;
+    var caProp = funcPath.parent.left.property;
+    if (_t.isIdentifier(caObj) && _t.isIdentifier(caProp)) {
+      var caObjBinding = funcPath.scope.getBinding(caObj.name);
+      var caPropVals = _resolveAllValues(funcPath.parentPath.get("left.property"), 0);
+      if (caObjBinding && caPropVals.length > 0) {
+        for (var cvi = 0; cvi < caPropVals.length; cvi++) {
+          if (typeof caPropVals[cvi] !== "string") continue;
+          pushMethodCallerArgs(caObjBinding.referencePaths, caPropVals[cvi]);
+        }
+      }
+    }
+    return out;
+  }
+  // Route 2: Callback argument — someFunc(function(param) {})
+  // The callback is invoked inside the callee. Resolve the callee,
+  // find which of its params receives our callback, then traverse
+  // the callee body for direct calls / .call() / .apply() on that
+  // param. Each such invocation's arg at paramIdx is a caller-arg
+  // path. _resolveCalleeFuncPath is outside the SCC so calling it
+  // here doesn't reintroduce the cycle.
+  if (_t.isCallExpression(funcPath.parent)) {
+    var cbCallExpr = funcPath.parentPath;
+    var cbArgIdx = -1;
+    for (var cbi = 0; cbi < funcPath.parent.arguments.length; cbi++) {
+      if (funcPath.parent.arguments[cbi] === funcPath.node) { cbArgIdx = cbi; break; }
+    }
+    if (cbArgIdx >= 0) {
+      var targetFuncPath = _resolveCalleeFuncPath(cbCallExpr, 0);
+      if (targetFuncPath && targetFuncPath.node) {
+        var targetParams = targetFuncPath.node.params || [];
+        var cbParamIdx = cbArgIdx;
+        if (cbParamIdx >= targetParams.length) cbParamIdx = targetParams.length - 1;
+        if (cbParamIdx >= 0) {
+          var cbParamName = _t.isIdentifier(targetParams[cbParamIdx]) ? targetParams[cbParamIdx].name : null;
+          if (cbParamName) {
+            try {
+              targetFuncPath.traverse({
+                CallExpression: function(innerPath) {
+                  var ic = innerPath.node.callee;
+                  // Direct: cbParam(arg0, arg1, ...)
+                  if (_t.isIdentifier(ic, { name: cbParamName })) {
+                    var innerBinding = innerPath.scope.getBinding(cbParamName);
+                    if (innerBinding && innerBinding.kind === "param" && innerBinding.scope.path === targetFuncPath &&
+                        paramIdx < innerPath.node.arguments.length) {
+                      out.push(innerPath.get("arguments." + paramIdx));
+                    }
+                  }
+                  // .call(thisArg, arg0, ...): paramIdx shifts by 1.
+                  if (_t.isMemberExpression(ic) && !ic.computed &&
+                      _t.isIdentifier(ic.object, { name: cbParamName }) &&
+                      _t.isIdentifier(ic.property, { name: "call" })) {
+                    var callBinding = innerPath.scope.getBinding(cbParamName);
+                    if (callBinding && callBinding.kind === "param" && callBinding.scope.path === targetFuncPath) {
+                      var shifted = paramIdx + 1;
+                      if (shifted < innerPath.node.arguments.length) {
+                        out.push(innerPath.get("arguments." + shifted));
+                      }
+                    }
+                  }
+                  // .apply(thisArg, [arg0, ...]) — push the literal-array element at paramIdx.
+                  if (_t.isMemberExpression(ic) && !ic.computed &&
+                      _t.isIdentifier(ic.object, { name: cbParamName }) &&
+                      _t.isIdentifier(ic.property, { name: "apply" })) {
+                    var applyBinding = innerPath.scope.getBinding(cbParamName);
+                    if (applyBinding && applyBinding.kind === "param" && applyBinding.scope.path === targetFuncPath &&
+                        innerPath.node.arguments.length >= 2 &&
+                        _t.isArrayExpression(innerPath.node.arguments[1]) &&
+                        paramIdx < innerPath.node.arguments[1].elements.length &&
+                        innerPath.node.arguments[1].elements[paramIdx]) {
+                      out.push(innerPath.get("arguments.1.elements." + paramIdx));
+                    }
+                  }
+                },
+              });
+            } catch (e) { _resolver.collectError(e, "enumerateCallbackArgInvocations"); }
+          }
+        }
+      }
+      return out;
+    }
+  }
+  // Route 5: ES6 class method — class Foo { method(param) {} }
+  if (_t.isClassMethod(funcPath.node) && _t.isClassBody(funcPath.parent)) {
+    var classDecl = funcPath.parentPath.parentPath;
+    if (classDecl && (_t.isClassDeclaration(classDecl.node) || _t.isClassExpression(classDecl.node))) {
+      var className = classDecl.node.id ? classDecl.node.id.name : null;
+      var clMethodName = _t.isIdentifier(funcPath.node.key) ? funcPath.node.key.name : null;
+      if (className && clMethodName) {
+        var clProgramPath = funcPath.findParent(function(p) { return p.isProgram(); });
+        if (clProgramPath) {
+          try {
+            clProgramPath.traverse({
+              VariableDeclarator: function(decPath) {
+                var init = decPath.node.init;
+                if (!init || !_t.isNewExpression(init) || !_t.isIdentifier(init.callee, { name: className })) return;
+                var instBinding = decPath.scope.getBinding(decPath.node.id.name);
+                if (instBinding && instBinding.referencePaths) pushMethodCallerArgs(instBinding.referencePaths, clMethodName);
+              },
+            });
+          } catch (e) { _resolver.collectError(e, "enumerateClassMethodCallerArgs"); }
+        }
+      }
+    }
+    return out;
+  }
+  // Route 4: ReturnStatement — function returned from IIFE.
+  if (_t.isReturnStatement(funcPath.parent)) {
+    var encFunc = funcPath.findParent(function(p) { return p.isFunction() && p !== funcPath; });
+    if (encFunc) {
+      var encParent = encFunc.parentPath;
+      if (encParent && _t.isCallExpression(encParent.node) && encParent.node.callee === encFunc.node) {
+        var iifeParent = encParent.parentPath;
+        if (iifeParent && _t.isVariableDeclarator(iifeParent.node) && _t.isIdentifier(iifeParent.node.id)) {
+          var iifeVarBinding = iifeParent.scope.getBinding(iifeParent.node.id.name);
+          if (iifeVarBinding && iifeVarBinding.referencePaths) pushDirectCallerArgs(iifeVarBinding.referencePaths);
+        }
+      }
+    }
+  }
+  return out;
+}
+
 // ─── Object Property Resolution from Caller Arguments ───────────────────────
 // When a function parameter is used as obj.prop (MemberExpression), resolve the
 // property value by finding callers, getting their object literal arguments,
@@ -9944,10 +10328,20 @@ function _resolvePropertyFromArg(argPath, propName, depth) {
     // Fallbacks for Identifier args.
     if (_t.isIdentifier(ap.node)) {
       var paramBinding = ap.scope.getBinding(ap.node.name);
-      // Fallback 1: param → resolve through callers.
+      // Fallback 1: param → enumerate every caller-arg path the
+      // param could receive (across all definition-shape routes —
+      // direct funcBinding, ObjectProperty, obj.method assignment,
+      // computed assignment, callback arg, prototype, IIFE return,
+      // ES6 class method) and push them onto our own worklist. The
+      // queue's existing logic extracts propName / chains through
+      // further fallbacks. Avoids a synchronous
+      // _resolveParamFromCallers call that would close the
+      // _resolvePropertyFromArg ↔ _resolveParamFromCallers SCC.
       if (paramBinding && paramBinding.kind === "param") {
-        var paramVals = _resolveParamFromCallers(paramBinding, dp + 1, propName);
-        if (paramVals.length > 0) return paramVals;
+        var callerArgPaths = _enumerateCallerArgPathsForParam(paramBinding);
+        for (var cap = 0; cap < callerArgPaths.length; cap++) {
+          queue.push({ p: callerArgPaths[cap], d: dp + 1 });
+        }
         continue;
       }
       // Fallback 2: local variable — look for obj.prop = value assignments.
@@ -10106,169 +10500,263 @@ function _extractHeaders(objNode) {
   return headers;
 }
 
-var _bodyParamVisited = null;
-function _extractBodyParams(valNode, scopePath) {
-  var isRoot = !_bodyParamVisited;
-  if (isRoot) _bodyParamVisited = new Set();
-  var nodeKey = (valNode.start != null && valNode.end != null) ? "B" + valNode.start + ":" + valNode.end : null;
-  if (nodeKey) {
-    if (_bodyParamVisited.has(nodeKey)) return [];
-    _bodyParamVisited.add(nodeKey);
+// State IDs for the iterative body-param extractor's frame state
+// machine. INIT dispatches on node type; each AFTER-state receives a
+// child frame's result via F.result and either bubbles it to this
+// frame's caller (REPLACE) or accumulates it (param-loop) or
+// short-circuits on first non-empty (opts.data).
+// State IDs use semantic ranges matching the rest of the file's
+// convention (_RAV_INIT = 0, group AFTER states by hundreds). 0 is
+// the entry; 100/200/300/400/500 are the per-route AFTER groups.
+var _EBP_INIT = 0;
+var _EBP_ALIAS_AFTER = 100;       // alias-chain recursion result — REPLACE
+var _EBP_PARAM_LOOP = 200;        // caller loop for param-bound identifiers
+var _EBP_PARAM_AFTER = 201;       // caller-arg result accumulator
+var _EBP_JSON_AFTER = 300;        // JSON.stringify(ident) recursion result — REPLACE
+var _EBP_TOSTRING_AFTER = 400;    // .toString() unwrap recursion result — REPLACE
+var _EBP_OPTS_LOOP = 500;         // opts.data candidate × property loop
+var _EBP_OPTS_AFTER = 501;        // first non-empty wins
+
+function _extractBodyParams(rootNode, rootScope) {
+  // Iterative driver replacing the prior wrapper/inner mutual
+  // recursion with a state-machine stack. Each frame represents one
+  // extraction task; sub-frames (for alias chains, JSON.stringify on
+  // identifiers, .toString() unwraps, function-param caller loops,
+  // and opts.data property walks) are pushed onto the same stack.
+  // The visited set is per-call (lives on the driver, not the
+  // module) so concurrent calls don't share state.
+  if (!rootNode) return [];
+  var visited = new Set();
+  var stack = [{ state: _EBP_INIT, node: rootNode, scope: rootScope,
+                  L: {}, result: undefined }];
+  var lastResult = [];
+  while (stack.length > 0) {
+    var top = stack[stack.length - 1];
+    top.result = lastResult;
+    lastResult = [];
+    var step = _ebpStep(top);
+    if (step.done !== undefined) {
+      lastResult = step.done;
+      stack.pop();
+      continue;
+    }
+    top.state = step.state;
+    var subNode = step.trace.node;
+    var subScope = step.trace.scope;
+    var subKey = (subNode.start != null && subNode.end != null) ? "B" + subNode.start + ":" + subNode.end : null;
+    if (subKey && visited.has(subKey)) {
+      lastResult = [];
+      continue;
+    }
+    if (subKey) visited.add(subKey);
+    stack.push({ state: _EBP_INIT, node: subNode, scope: subScope,
+                  L: {}, result: undefined });
   }
-  try { return _extractBodyParamsInner(valNode, scopePath); }
-  finally { if (isRoot) _bodyParamVisited = null; }
+  return lastResult;
 }
-function _extractBodyParamsInner(valNode, scopePath) {
-  var params = [];
-  // Resolve identifiers through scope (variable reference or function parameter)
-  if (_t.isIdentifier(valNode) && scopePath && scopePath.scope) {
-    var bpBinding = scopePath.scope.getBinding(valNode.name);
-    if (bpBinding) {
-      // FormData / URLSearchParams field accumulation: when the body
-      // identifier traces to a `new FormData()` / `new URLSearchParams()`
-      // and code does `e.append(name, value)` / `e.set(name, value)`,
-      // each append/set call's first arg is a body field name.
-      // Walks the binding's referencePaths for member-call patterns —
-      // pure data-flow through W3C native APIs.
-      var bpInit = _t.isVariableDeclarator(bpBinding.path.node) ? bpBinding.path.node.init : null;
-      var bpType = bpInit && _t.isNewExpression(bpInit) && _t.isIdentifier(bpInit.callee) ? bpInit.callee.name : null;
-      if ((bpType === "FormData" || bpType === "URLSearchParams") &&
-          !bpBinding.path.scope.getBinding(bpType) && bpBinding.referencePaths) {
-        for (var fdri = 0; fdri < bpBinding.referencePaths.length; fdri++) {
-          var fdRef = bpBinding.referencePaths[fdri];
-          var fdMem = fdRef.parentPath;
-          if (!fdMem || !fdMem.isMemberExpression() || fdMem.node.object !== fdRef.node || fdMem.node.computed) continue;
-          var fdMethod = _t.isIdentifier(fdMem.node.property) ? fdMem.node.property.name : null;
-          if (fdMethod !== "append" && fdMethod !== "set") continue;
-          var fdCall = fdMem.parentPath;
-          if (!fdCall || !fdCall.isCallExpression() || fdCall.node.callee !== fdMem.node ||
-              fdCall.node.arguments.length < 1) continue;
-          // Resolve the first arg to a string — the field NAME.
-          var fdNameVals = _resolveAllValues(fdCall.get("arguments.0"), 0);
-          for (var fdni = 0; fdni < fdNameVals.length; fdni++) {
-            if (typeof fdNameVals[fdni] !== "string" || !fdNameVals[fdni]) continue;
-            // Avoid duplicate names
-            var fdAlreadyHave = false;
-            for (var fdpi = 0; fdpi < params.length; fdpi++) {
-              if (params[fdpi].name === fdNameVals[fdni]) { fdAlreadyHave = true; break; }
-            }
-            if (fdAlreadyHave) continue;
-            // Try to also resolve the value (arg[1]) for an example.
-            var fdField = { name: fdNameVals[fdni], required: true, location: "body" };
-            if (fdCall.node.arguments.length >= 2) {
-              var fdValVals = _resolveAllValues(fdCall.get("arguments.1"), 0);
-              if (fdValVals.length > 0 && typeof fdValVals[0] === "string") {
-                fdField.defaultValue = fdValVals[0];
-                fdField.type = "string";
+
+function _ebpStep(F) {
+  var node = F.node, scopePath = F.scope, L = F.L;
+  while (true) {
+    switch (F.state) {
+      case _EBP_INIT: {
+        // CASE A: Identifier with scope binding — FormData/URLSearchParams
+        // accumulator walk, alias chain, or function-param caller loop.
+        if (_t.isIdentifier(node) && scopePath && scopePath.scope) {
+          var bpBinding = scopePath.scope.getBinding(node.name);
+          if (bpBinding) {
+            var bpInit = _t.isVariableDeclarator(bpBinding.path.node) ? bpBinding.path.node.init : null;
+            var bpType = bpInit && _t.isNewExpression(bpInit) && _t.isIdentifier(bpInit.callee) ? bpInit.callee.name : null;
+            if ((bpType === "FormData" || bpType === "URLSearchParams") &&
+                !bpBinding.path.scope.getBinding(bpType) && bpBinding.referencePaths) {
+              var fdParams = [];
+              for (var fdri = 0; fdri < bpBinding.referencePaths.length; fdri++) {
+                var fdRef = bpBinding.referencePaths[fdri];
+                var fdMem = fdRef.parentPath;
+                if (!fdMem || !fdMem.isMemberExpression() || fdMem.node.object !== fdRef.node || fdMem.node.computed) continue;
+                var fdMethod = _t.isIdentifier(fdMem.node.property) ? fdMem.node.property.name : null;
+                if (fdMethod !== "append" && fdMethod !== "set") continue;
+                var fdCall = fdMem.parentPath;
+                if (!fdCall || !fdCall.isCallExpression() || fdCall.node.callee !== fdMem.node ||
+                    fdCall.node.arguments.length < 1) continue;
+                var fdNameVals = _resolveAllValues(fdCall.get("arguments.0"), 0);
+                for (var fdni = 0; fdni < fdNameVals.length; fdni++) {
+                  if (typeof fdNameVals[fdni] !== "string" || !fdNameVals[fdni]) continue;
+                  var fdAlreadyHave = false;
+                  for (var fdpi = 0; fdpi < fdParams.length; fdpi++) {
+                    if (fdParams[fdpi].name === fdNameVals[fdni]) { fdAlreadyHave = true; break; }
+                  }
+                  if (fdAlreadyHave) continue;
+                  var fdField = { name: fdNameVals[fdni], required: true, location: "body" };
+                  if (fdCall.node.arguments.length >= 2) {
+                    var fdValVals = _resolveAllValues(fdCall.get("arguments.1"), 0);
+                    if (fdValVals.length > 0 && typeof fdValVals[0] === "string") {
+                      fdField.defaultValue = fdValVals[0];
+                      fdField.type = "string";
+                    }
+                  }
+                  fdParams.push(fdField);
+                }
               }
+              if (fdParams.length > 0) return { done: fdParams };
             }
-            params.push(fdField);
-          }
-        }
-        if (params.length > 0) return params;
-      }
-      if (_t.isVariableDeclarator(bpBinding.path.node) && bpBinding.path.node.init) {
-        return _extractBodyParams(bpBinding.path.node.init, bpBinding.path);
-      }
-      // Function parameter — resolve from callers
-      if (bpBinding.kind === "param") {
-        var bpFuncPath = bpBinding.scope.path;
-        var bpFuncB = null;
-        if (bpFuncPath.node.id) bpFuncB = bpFuncPath.scope.parent ? bpFuncPath.scope.parent.getBinding(bpFuncPath.node.id.name) : null;
-        if (!bpFuncB && _t.isVariableDeclarator(bpFuncPath.parent)) bpFuncB = bpFuncPath.scope.parent ? bpFuncPath.scope.parent.getBinding(bpFuncPath.parent.id.name) : null;
-        if (bpFuncB && bpFuncB.referencePaths) {
-          var bpIdx = _findParamIndex(bpFuncPath.node.params, valNode.name);
-          if (bpIdx >= 0) {
-            for (var bri = 0; bri < bpFuncB.referencePaths.length; bri++) {
-              var bRef = bpFuncB.referencePaths[bri];
-              if (_t.isCallExpression(bRef.parent) && bRef.parent.callee === bRef.node &&
-                  bpIdx < bRef.parent.arguments.length) {
-                var bCallerArg = _extractBodyParams(bRef.parent.arguments[bpIdx], bRef.parentPath);
-                if (bCallerArg.length > 0) {
-                  for (var bci = 0; bci < bCallerArg.length; bci++) params.push(bCallerArg[bci]);
+            if (_t.isVariableDeclarator(bpBinding.path.node) && bpBinding.path.node.init) {
+              return { trace: { node: bpBinding.path.node.init, scope: bpBinding.path },
+                        state: _EBP_ALIAS_AFTER };
+            }
+            if (bpBinding.kind === "param") {
+              var bpFuncPath = bpBinding.scope.path;
+              var bpFuncB = null;
+              if (bpFuncPath.node.id) bpFuncB = bpFuncPath.scope.parent ? bpFuncPath.scope.parent.getBinding(bpFuncPath.node.id.name) : null;
+              if (!bpFuncB && _t.isVariableDeclarator(bpFuncPath.parent)) bpFuncB = bpFuncPath.scope.parent ? bpFuncPath.scope.parent.getBinding(bpFuncPath.parent.id.name) : null;
+              if (bpFuncB && bpFuncB.referencePaths) {
+                var bpIdx = _findParamIndex(bpFuncPath.node.params, node.name);
+                if (bpIdx >= 0) {
+                  L.bpRefs = bpFuncB.referencePaths;
+                  L.bpArgIdx = bpIdx;
+                  L.bri = 0;
+                  L.params = [];
+                  F.state = _EBP_PARAM_LOOP;
+                  continue;
                 }
               }
             }
-            if (params.length > 0) return params;
           }
         }
-      }
-    }
-  }
-  if (_isJsonStringify(valNode, scopePath)) {
-    if (valNode.arguments[0] && _t.isObjectExpression(valNode.arguments[0])) {
-      params = _extractObjectProperties(valNode.arguments[0]);
-      for (var i = 0; i < params.length; i++) params[i].location = "body";
-    } else if (valNode.arguments[0] && _t.isIdentifier(valNode.arguments[0]) && scopePath) {
-      // JSON.stringify(identifier) — resolve the identifier
-      params = _extractBodyParams(valNode.arguments[0], scopePath);
-    }
-  } else if (_t.isNewExpression(valNode) && _t.isIdentifier(valNode.callee, { name: "URLSearchParams" }) &&
-             (!scopePath || !scopePath.scope.getBinding("URLSearchParams")) &&
-             valNode.arguments[0] && _t.isObjectExpression(valNode.arguments[0])) {
-    params = _extractObjectProperties(valNode.arguments[0]);
-    for (var j = 0; j < params.length; j++) params[j].location = "body";
-  } else if (_t.isCallExpression(valNode) && _t.isMemberExpression(valNode.callee) &&
-             !valNode.callee.computed && _t.isIdentifier(valNode.callee.property, { name: "toString" }) &&
-             scopePath) {
-    // `body: new URLSearchParams({...}).toString()` / `body: fd.toString()`
-    // — strip the .toString() wrap and recurse on the receiver. Native
-    // ECMAScript: .toString() is identity for body-shape extraction.
-    params = _extractBodyParams(valNode.callee.object, scopePath);
-  } else if (_t.isObjectExpression(valNode)) {
-    params = _extractObjectProperties(valNode);
-    for (var k = 0; k < params.length; k++) params[k].location = "body";
-  } else if (_t.isMemberExpression(valNode) && !valNode.computed &&
-             _t.isIdentifier(valNode.object) && _t.isIdentifier(valNode.property) &&
-             scopePath && scopePath.scope) {
-    // `xhr.send(opts.data)` style: the body is a property on a binding.
-    // Real-world wrapper pattern: `function ajax(opts){ xhr.send(opts.data) }`
-    // called from `$.post(url, data){ return ajax({url, data}) }` — the
-    // outer caller's body literal must flow through opts.data to xhr.send.
-    var objName = valNode.object.name;
-    var propName = valNode.property.name;
-    var objBinding = scopePath.scope.getBinding(objName);
-    if (objBinding) {
-      var objCandidates = []; // {obj, path}
-      if (_t.isVariableDeclarator(objBinding.path.node) && objBinding.path.node.init) {
-        var localObj = _resolveToObject(objBinding.path.get("init"), 0);
-        if (localObj) objCandidates.push({ obj: localObj, path: objBinding.path.get("init") });
-      } else if (objBinding.kind === "param") {
-        // Walk callers and resolve each arg at the param position.
-        var pFnPath = objBinding.scope.path;
-        var pIdx = _findParamIndex(pFnPath.node.params, objName);
-        if (pIdx >= 0) {
-          var callerArgPaths = _findFunctionCallerArgs(pFnPath);
-          for (var pri = 0; pri < callerArgPaths.length; pri++) {
-            if (pIdx < callerArgPaths[pri].length) {
-              var argPath = callerArgPaths[pri][pIdx];
-              var callerObj = _resolveToObject(argPath, 0);
-              if (callerObj) objCandidates.push({ obj: callerObj, path: argPath });
+        // CASE B: JSON.stringify
+        if (_isJsonStringify(node, scopePath)) {
+          if (node.arguments[0] && _t.isObjectExpression(node.arguments[0])) {
+            var jsonParams = _extractObjectProperties(node.arguments[0]);
+            for (var i = 0; i < jsonParams.length; i++) jsonParams[i].location = "body";
+            return { done: jsonParams };
+          }
+          if (node.arguments[0] && _t.isIdentifier(node.arguments[0]) && scopePath) {
+            return { trace: { node: node.arguments[0], scope: scopePath },
+                      state: _EBP_JSON_AFTER };
+          }
+          return { done: [] };
+        }
+        // CASE C: new URLSearchParams({...})
+        if (_t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URLSearchParams" }) &&
+            (!scopePath || !scopePath.scope.getBinding("URLSearchParams")) &&
+            node.arguments[0] && _t.isObjectExpression(node.arguments[0])) {
+          var uspParams = _extractObjectProperties(node.arguments[0]);
+          for (var j = 0; j < uspParams.length; j++) uspParams[j].location = "body";
+          return { done: uspParams };
+        }
+        // CASE D: .toString() unwrap
+        if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) &&
+            !node.callee.computed && _t.isIdentifier(node.callee.property, { name: "toString" }) &&
+            scopePath) {
+          return { trace: { node: node.callee.object, scope: scopePath },
+                    state: _EBP_TOSTRING_AFTER };
+        }
+        // CASE E: ObjectExpression
+        if (_t.isObjectExpression(node)) {
+          var oeParams = _extractObjectProperties(node);
+          for (var k = 0; k < oeParams.length; k++) oeParams[k].location = "body";
+          return { done: oeParams };
+        }
+        // CASE F: opts.data MemberExpression
+        if (_t.isMemberExpression(node) && !node.computed &&
+            _t.isIdentifier(node.object) && _t.isIdentifier(node.property) &&
+            scopePath && scopePath.scope) {
+          var objName = node.object.name;
+          var propName = node.property.name;
+          var objBinding = scopePath.scope.getBinding(objName);
+          if (objBinding) {
+            var objCandidates = [];
+            if (_t.isVariableDeclarator(objBinding.path.node) && objBinding.path.node.init) {
+              var localObj = _resolveToObject(objBinding.path.get("init"), 0);
+              if (localObj) objCandidates.push({ obj: localObj, path: objBinding.path.get("init") });
+            } else if (objBinding.kind === "param") {
+              var pFnPath = objBinding.scope.path;
+              var pIdx = _findParamIndex(pFnPath.node.params, objName);
+              if (pIdx >= 0) {
+                var callerArgPaths = _findFunctionCallerArgs(pFnPath);
+                for (var pri = 0; pri < callerArgPaths.length; pri++) {
+                  if (pIdx < callerArgPaths[pri].length) {
+                    var argPath = callerArgPaths[pri][pIdx];
+                    var callerObj = _resolveToObject(argPath, 0);
+                    if (callerObj) objCandidates.push({ obj: callerObj, path: argPath });
+                  }
+                }
+              }
+            }
+            if (objCandidates.length > 0) {
+              L.objCandidates = objCandidates;
+              L.propName = propName;
+              L.fci = 0;
+              L.fpi = 0;
+              F.state = _EBP_OPTS_LOOP;
+              continue;
             }
           }
         }
+        return { done: [] };
       }
-      // For each candidate object, find the named property and recurse
-      // body extraction on its value. First non-empty result wins.
-      for (var ci = 0; ci < objCandidates.length; ci++) {
-        var co = objCandidates[ci].obj;
-        var coPath = objCandidates[ci].path;
-        if (!co.properties) continue;
-        for (var pi = 0; pi < co.properties.length; pi++) {
-          var pp = co.properties[pi];
-          if (!_t.isObjectProperty(pp) || pp.computed) continue;
-          var pk = _t.isIdentifier(pp.key) ? pp.key.name :
-            (_t.isStringLiteral(pp.key) ? pp.key.value : null);
-          if (pk !== propName) continue;
-          var subScope = co._path ? co._path.get("properties." + pi + ".value") : coPath;
-          var sub = _extractBodyParams(pp.value, subScope);
-          if (sub.length > 0) { params = sub; break; }
+
+      case _EBP_ALIAS_AFTER:
+      case _EBP_JSON_AFTER:
+      case _EBP_TOSTRING_AFTER: {
+        // REPLACE — child's result becomes this frame's result.
+        return { done: F.result || [] };
+      }
+
+      case _EBP_PARAM_LOOP: {
+        while (L.bri < L.bpRefs.length) {
+          var bRef = L.bpRefs[L.bri++];
+          if (_t.isCallExpression(bRef.parent) && bRef.parent.callee === bRef.node &&
+              L.bpArgIdx < bRef.parent.arguments.length) {
+            return {
+              trace: { node: bRef.parent.arguments[L.bpArgIdx], scope: bRef.parentPath },
+              state: _EBP_PARAM_AFTER
+            };
+          }
         }
-        if (params.length > 0) break;
+        return { done: L.params };
+      }
+
+      case _EBP_PARAM_AFTER: {
+        // Accumulate caller's result; loop to next caller.
+        var pSub = F.result || [];
+        for (var pci = 0; pci < pSub.length; pci++) L.params.push(pSub[pci]);
+        F.state = _EBP_PARAM_LOOP;
+        continue;
+      }
+
+      case _EBP_OPTS_LOOP: {
+        // Iterate candidates × matching properties; first non-empty wins.
+        while (L.fci < L.objCandidates.length) {
+          var cur = L.objCandidates[L.fci];
+          if (!cur.obj.properties) { L.fci++; L.fpi = 0; continue; }
+          while (L.fpi < cur.obj.properties.length) {
+            var pp = cur.obj.properties[L.fpi];
+            var ppi = L.fpi;
+            L.fpi++;
+            if (!_t.isObjectProperty(pp) || pp.computed) continue;
+            var pk = _t.isIdentifier(pp.key) ? pp.key.name :
+              (_t.isStringLiteral(pp.key) ? pp.key.value : null);
+            if (pk !== L.propName) continue;
+            var subScope = cur.obj._path ? cur.obj._path.get("properties." + ppi + ".value") : cur.path;
+            return { trace: { node: pp.value, scope: subScope },
+                      state: _EBP_OPTS_AFTER };
+          }
+          L.fci++;
+          L.fpi = 0;
+        }
+        return { done: [] };
+      }
+
+      case _EBP_OPTS_AFTER: {
+        var oSub = F.result || [];
+        if (oSub.length > 0) return { done: oSub };
+        F.state = _EBP_OPTS_LOOP;
+        continue;
       }
     }
+    return { done: [] };
   }
-  return params;
 }
 
 function _extractObjectProperties(node) {
@@ -11513,6 +12001,13 @@ var _TVS_OBJ_LOOP = 1400;
 var _TVS_OBJ_PROP_AFTER = 1401;
 var _TVS_OBJ_SPREAD_AFTER = 1402;
 
+// Function-return resolution: walk a callee's body for ReturnStatement
+// nodes, then dispatch each return-arg as a TVS sub-frame. Replaces the
+// prior synchronous call to _traceReturnsInBlock from inside _tvsStep,
+// which created a static call cycle TVS ↔ _traceReturnsInBlock.
+var _TVS_FN_RETURN_LOOP = 1500;
+var _TVS_FN_RETURN_AFTER = 1501;
+
 function _tvsMakeFrame(path, node) {
   return {
     path: path,
@@ -11599,6 +12094,77 @@ function _traceValueSource(path, _unused) {
   } finally {
     if (isRoot) _taintVisited = null;
   }
+}
+
+// Pure AST walk — collect every ReturnStatement.argument path inside
+// a function body, including nested blocks (if/else chains, switch
+// cases, try/catch, for/while bodies). No taint analysis here; just
+// path enumeration. Used by _tvsStep's function-return resolution
+// state in lieu of a synchronous _traceReturnsInBlock call (which
+// would create a static call cycle TVS ↔ _traceReturnsInBlock).
+function _collectReturnArgPaths(blockPath) {
+  if (!blockPath || !blockPath.node) return [];
+  var argPaths = [];
+  var worklist = [blockPath];
+  while (worklist.length > 0) {
+    var curBlock = worklist.shift();
+    if (!curBlock || !curBlock.node) continue;
+    var stmts = curBlock.node.body;
+    if (!stmts) continue;
+    for (var i = 0; i < stmts.length; i++) {
+      var stmt = stmts[i];
+      var stmtPath = curBlock.get("body." + i);
+      if (_t.isReturnStatement(stmt) && stmt.argument) {
+        argPaths.push(stmtPath.get("argument"));
+      } else if (_t.isIfStatement(stmt)) {
+        if (stmt.consequent && _t.isBlockStatement(stmt.consequent)) {
+          worklist.push(stmtPath.get("consequent"));
+        }
+        if (stmt.alternate) {
+          if (_t.isBlockStatement(stmt.alternate)) {
+            worklist.push(stmtPath.get("alternate"));
+          } else if (_t.isIfStatement(stmt.alternate)) {
+            var elseIfPath = stmtPath.get("alternate");
+            while (elseIfPath && elseIfPath.node && _t.isIfStatement(elseIfPath.node)) {
+              if (elseIfPath.node.consequent && _t.isBlockStatement(elseIfPath.node.consequent)) {
+                worklist.push(elseIfPath.get("consequent"));
+              }
+              if (!elseIfPath.node.alternate) break;
+              if (_t.isBlockStatement(elseIfPath.node.alternate)) {
+                worklist.push(elseIfPath.get("alternate"));
+                break;
+              }
+              if (_t.isIfStatement(elseIfPath.node.alternate)) {
+                elseIfPath = elseIfPath.get("alternate");
+                continue;
+              }
+              break;
+            }
+          }
+        }
+      } else if (_t.isSwitchStatement(stmt)) {
+        for (var ci = 0; ci < stmt.cases.length; ci++) {
+          var c = stmt.cases[ci];
+          for (var cj = 0; cj < c.consequent.length; cj++) {
+            var cs = c.consequent[cj];
+            if (_t.isReturnStatement(cs) && cs.argument) {
+              argPaths.push(stmtPath.get("cases." + ci + ".consequent." + cj + ".argument"));
+            } else if (_t.isBlockStatement(cs)) {
+              worklist.push(stmtPath.get("cases." + ci + ".consequent." + cj));
+            }
+          }
+        }
+      } else if (_t.isTryStatement(stmt)) {
+        if (stmt.block) worklist.push(stmtPath.get("block"));
+        if (stmt.handler && stmt.handler.body) worklist.push(stmtPath.get("handler.body"));
+      } else if (_t.isBlockStatement(stmt)) {
+        worklist.push(stmtPath);
+      } else if (stmt.body && _t.isBlockStatement(stmt.body)) {
+        worklist.push(stmtPath.get("body"));
+      }
+    }
+  }
+  return argPaths;
 }
 
 // Recursively walk a block statement to find all ReturnStatement nodes,
@@ -13148,11 +13714,16 @@ function _tvsStep(F) {
           }
         }
         if (_calleeFuncPath && _calleeFuncPath.node.body && _t.isBlockStatement(_calleeFuncPath.node.body)) {
-          var _retResult = _traceReturnsInBlock(_calleeFuncPath.get("body"));
-          if (_retResult && _retResult.sourceType === "user-controlled") {
-            var _retCalleeName = _t.isIdentifier(_calleeNode) ? _calleeNode.name + "()" : "call()";
-            return { done: _tvsHop(_retResult, "function-return", "return of " + _retCalleeName, nodeLoc) };
-          }
+          // Defer the function-return scan to the FN_RETURN_LOOP
+          // state machine — collects return-arg paths and dispatches
+          // each as a TVS sub-frame. Replaces a synchronous
+          // _traceReturnsInBlock call that would close a static
+          // recursion cycle TVS ↔ _traceReturnsInBlock.
+          L.fnReturnArgPaths = _collectReturnArgPaths(_calleeFuncPath.get("body"));
+          L.fnReturnAi = 0;
+          L.fnReturnCalleeName = _t.isIdentifier(_calleeNode) ? _calleeNode.name + "()" : "call()";
+          F.state = _TVS_FN_RETURN_LOOP;
+          continue;
         }
         // Done with call branch — fall through to next branch
         L.branchSkip = 17;
@@ -13199,14 +13770,33 @@ function _tvsStep(F) {
           }
         }
         if (_calleeFuncPathF && _calleeFuncPathF.node.body && _t.isBlockStatement(_calleeFuncPathF.node.body)) {
-          var _retResultF = _traceReturnsInBlock(_calleeFuncPathF.get("body"));
-          if (_retResultF && _retResultF.sourceType === "user-controlled") {
-            var _retCalleeNameF = _t.isIdentifier(_calleeNodeF) ? _calleeNodeF.name + "()" : "call()";
-            return { done: _tvsHop(_retResultF, "function-return", "return of " + _retCalleeNameF, nodeLoc) };
-          }
+          L.fnReturnArgPaths = _collectReturnArgPaths(_calleeFuncPathF.get("body"));
+          L.fnReturnAi = 0;
+          L.fnReturnCalleeName = _t.isIdentifier(_calleeNodeF) ? _calleeNodeF.name + "()" : "call()";
+          F.state = _TVS_FN_RETURN_LOOP;
+          continue;
         }
         L.branchSkip = 17;
         F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_FN_RETURN_LOOP: {
+        if (L.fnReturnAi < L.fnReturnArgPaths.length) {
+          return { trace: L.fnReturnArgPaths[L.fnReturnAi++], state: _TVS_FN_RETURN_AFTER };
+        }
+        // No tainted return found — fall through to next branch.
+        L.branchSkip = 17;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_FN_RETURN_AFTER: {
+        var _retArgSrc = F.result;
+        if (_retArgSrc && _retArgSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_retArgSrc, "function-return", "return of " + L.fnReturnCalleeName, nodeLoc) };
+        }
+        F.state = _TVS_FN_RETURN_LOOP;
         continue;
       }
 

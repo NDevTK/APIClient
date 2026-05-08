@@ -6828,44 +6828,85 @@ function encodeFormToJspb(rootFields) {
 
 /**
  * Encode form fields as binary protobuf.
+ *
+ * Iterative driver — replaces the prior encodeFormToProtobuf ↔
+ * encodeSinglePbField mutual recursion that descended through nested
+ * message types. Each stack frame encodes one fields array. When a
+ * field is a nested message with children, the driver pushes a sub-
+ * frame for the children and stashes the parent's pending field
+ * number; the sub-frame's encoded bytes are wrapped via
+ * pbEncodeLenField and appended to the parent's parts when the
+ * sub-frame pops. encodeSinglePbField stays a pure scalar leaf
+ * encoder — its message branch is gone.
  */
 function encodeFormToProtobuf(fields) {
-  const parts = [];
-  for (const f of fields) {
-    if (!f.number) continue;
-    if (f.value == null && !f.children?.length) continue;
-    if (f.label === "repeated" && Array.isArray(f.value)) {
-      // Packed encoding for repeated scalar numeric types (proto3 default)
-      const packableTypes = [
-        "int32", "int64", "uint32", "uint64", "sint32", "sint64",
-        "bool", "enum", "fixed32", "fixed64", "sfixed32", "sfixed64",
-        "float", "double",
-      ];
-      if (packableTypes.includes(f.type)) {
-        const innerParts = [];
-        for (const v of f.value) {
-          innerParts.push(encodeSinglePbFieldRaw(f.type, v));
-        }
-        const packed = concatBytes.apply(null, innerParts.length ? innerParts : [new Uint8Array(0)]);
-        parts.push(pbEncodeLenField(f.number, packed));
-      } else {
-        // Non-packable types (string, bytes, message): individual tag+value pairs
-        for (const v of f.value) {
-          parts.push(encodeSinglePbField(f.number, f.type, v, null));
-        }
-      }
-    } else {
-      parts.push(encodeSinglePbField(f.number, f.type, f.value, f.children));
+  const PACKABLE = new Set([
+    "int32", "int64", "uint32", "uint64", "sint32", "sint64",
+    "bool", "enum", "fixed32", "fixed64", "sfixed32", "sfixed64",
+    "float", "double",
+  ]);
+  const stack = [{ fields: fields, parts: [], i: 0, pendingNum: null }];
+  let lastBytes = null;
+  while (stack.length > 0) {
+    const top = stack[stack.length - 1];
+    if (lastBytes !== null) {
+      // A child frame just finished; wrap its bytes as a length-
+      // delimited field on this frame's pending field number.
+      top.parts.push(pbEncodeLenField(top.pendingNum, lastBytes));
+      top.pendingNum = null;
+      lastBytes = null;
     }
+    let pushedSubFrame = false;
+    while (top.i < top.fields.length) {
+      const f = top.fields[top.i];
+      if (!f.number) { top.i++; continue; }
+      if (f.value == null && !(f.children && f.children.length)) { top.i++; continue; }
+      if (f.label === "repeated" && Array.isArray(f.value)) {
+        if (PACKABLE.has(f.type)) {
+          const innerParts = [];
+          for (const v of f.value) {
+            innerParts.push(encodeSinglePbFieldRaw(f.type, v));
+          }
+          const packed = concatBytes.apply(null, innerParts.length ? innerParts : [new Uint8Array(0)]);
+          top.parts.push(pbEncodeLenField(f.number, packed));
+        } else {
+          // Non-packable types (string, bytes, message): individual
+          // tag+value pairs. The original passed children=null here,
+          // so message-typed repeated fields fell through to the
+          // string-coerce default; preserving that behavior.
+          for (const v of f.value) {
+            top.parts.push(encodeSinglePbField(f.number, f.type, v));
+          }
+        }
+        top.i++;
+        continue;
+      }
+      if (f.type === "message" && f.children && f.children.length) {
+        // Push sub-frame for nested message; parent waits at its
+        // pending field number until the child returns its bytes.
+        top.pendingNum = f.number;
+        top.i++;
+        stack.push({ fields: f.children, parts: [], i: 0, pendingNum: null });
+        pushedSubFrame = true;
+        break;
+      }
+      top.parts.push(encodeSinglePbField(f.number, f.type, f.value));
+      top.i++;
+    }
+    if (pushedSubFrame) continue;
+    const bytes = concatBytes.apply(null, top.parts.length ? top.parts : [new Uint8Array(0)]);
+    stack.pop();
+    lastBytes = bytes;
   }
-  return concatBytes.apply(null, parts.length ? parts : [new Uint8Array(0)]);
+  return lastBytes;
 }
 
-function encodeSinglePbField(num, type, value, children) {
-  if (type === "message" && children?.length) {
-    const inner = encodeFormToProtobuf(children);
-    return pbEncodeLenField(num, inner);
-  }
+// Encode a single scalar protobuf field (tag + value). Pure leaf —
+// message-typed fields are now handled by encodeFormToProtobuf's
+// driver, so the message branch is no longer here. The 4-arg signature
+// is kept so existing call sites compile, but the children param is
+// unused.
+function encodeSinglePbField(num, type, value /*, children */) {
   switch (type) {
     case "string":
       return pbEncodeLenField(num, String(value));

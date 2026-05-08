@@ -182,8 +182,25 @@ function flattenComposition(schema, components) {
 /**
  * Convert an inline OpenAPI schema to our Discovery schema format.
  * Handles nested objects, arrays, composition, and enums.
+ *
+ * Iterative: nested schemas (composition results, array-item objects,
+ * object-typed properties) used to recurse via convertInlineSchema /
+ * convertSchemaProperty; that mutual recursion is now a worklist
+ * drained before the entry-point function returns. The output shape
+ * is unchanged — sub-schemas register under their generated name in
+ * `docSchemas` and the parent property holds a `$ref` pointer.
  */
 function convertInlineSchema(schema, name, components, docSchemas) {
+  const deferred = [];
+  const result = _convertInlineSchemaStep(schema, name, components, docSchemas, deferred);
+  while (deferred.length > 0) {
+    const d = deferred.shift();
+    docSchemas[d.name] = _convertInlineSchemaStep(d.schema, d.name, components, docSchemas, deferred);
+  }
+  return result;
+}
+
+function _convertInlineSchemaStep(schema, name, components, docSchemas, deferred) {
   if (!schema) return { id: name, type: "object", properties: {} };
   const resolved = flattenComposition(schema, components);
 
@@ -196,11 +213,12 @@ function convertInlineSchema(schema, name, components, docSchemas) {
 
   if (resolved.properties) {
     for (const [pName, pDef] of Object.entries(resolved.properties)) {
-      result.properties[pName] = convertSchemaProperty(
+      result.properties[pName] = _convertSchemaPropertyStep(
         pDef,
         name + "_" + pName.replace(/[^a-zA-Z0-9]/g, ""),
         components,
         docSchemas,
+        deferred,
       );
     }
   }
@@ -209,8 +227,25 @@ function convertInlineSchema(schema, name, components, docSchemas) {
 
 /**
  * Convert a single OpenAPI property definition to Discovery format.
+ *
+ * Iterative: nested schemas inside a property (composition payload,
+ * array-item objects, object-typed sub-properties) are queued onto a
+ * worklist that the entry-point drains. The property descriptor
+ * returned here references those sub-schemas by their generated
+ * `prefix`, which is also the key under which the sub-schema will be
+ * registered in `docSchemas`.
  */
 function convertSchemaProperty(pDef, prefix, components, docSchemas) {
+  const deferred = [];
+  const result = _convertSchemaPropertyStep(pDef, prefix, components, docSchemas, deferred);
+  while (deferred.length > 0) {
+    const d = deferred.shift();
+    docSchemas[d.name] = _convertInlineSchemaStep(d.schema, d.name, components, docSchemas, deferred);
+  }
+  return result;
+}
+
+function _convertSchemaPropertyStep(pDef, prefix, components, docSchemas, deferred) {
   if (!pDef) return { type: "string", description: "" };
 
   if (pDef.$ref) {
@@ -221,16 +256,13 @@ function convertSchemaProperty(pDef, prefix, components, docSchemas) {
     };
   }
 
-  // Composition in property
+  // Composition in property — defer the flattened sub-schema onto the
+  // worklist; the parent only needs the $ref pointer to that prefix,
+  // which is known synchronously.
   if (pDef.allOf || pDef.oneOf || pDef.anyOf) {
     const flat = flattenComposition(pDef, components);
     if (flat.properties && Object.keys(flat.properties).length > 0) {
-      docSchemas[prefix] = convertInlineSchema(
-        flat,
-        prefix,
-        components,
-        docSchemas,
-      );
+      deferred.push({ schema: flat, name: prefix });
       return {
         type: "object",
         $ref: prefix,
@@ -246,12 +278,7 @@ function convertSchemaProperty(pDef, prefix, components, docSchemas) {
       items.$ref = resolveRef(pDef.items.$ref);
     } else if (pDef.items.properties || pDef.items.allOf) {
       const itemName = prefix + "Item";
-      docSchemas[itemName] = convertInlineSchema(
-        pDef.items,
-        itemName,
-        components,
-        docSchemas,
-      );
+      deferred.push({ schema: pDef.items, name: itemName });
       items.$ref = itemName;
     } else {
       items.type = pDef.items.type || "string";
@@ -261,12 +288,7 @@ function convertSchemaProperty(pDef, prefix, components, docSchemas) {
 
   // Nested inline objects
   if (pDef.type === "object" && pDef.properties) {
-    docSchemas[prefix] = convertInlineSchema(
-      pDef,
-      prefix,
-      components,
-      docSchemas,
-    );
+    deferred.push({ schema: pDef, name: prefix });
     return {
       type: "object",
       $ref: prefix,
@@ -777,66 +799,49 @@ function findMethodById(doc, methodId) {
  * Resolve a discovery document schema into a recursive field list.
  * Follows $ref pointers in doc.schemas to build the full type tree.
  *
+ * Iterative driver — single shared queue processes SCHEMA frames
+ * (resolve a named schema's fields into a target array) and PROP
+ * frames (populate a single field from a prop definition). Cycles
+ * are detected by a per-chain visited set carried on each frame:
+ * the set reflects the chain from the root through nested $refs to
+ * the current frame, so a back-reference adds a self-circular
+ * sentinel field to the children array. No depth cap — visited set
+ * is structurally sufficient for any finite OpenAPI schema graph.
+ *
  * @param {object} doc - Full parsed discovery JSON
  * @param {string} schemaName - Schema name to resolve (e.g. "Person")
- * @param {number} [maxDepth=5] - Maximum recursion depth
- * @param {Set} [visited] - Circular reference guard
  * @returns {Array<{name, type, required, description, label, children}>}
  */
-function resolveDiscoverySchema(doc, schemaName, maxDepth, visited) {
-  if (maxDepth == null) maxDepth = 5;
-  if (!visited) visited = new Set();
-  if (!doc || !doc.schemas || !doc.schemas[schemaName]) return [];
-  if (visited.has(schemaName) || maxDepth <= 0) {
-    return [
-      {
-        name: "...",
-        type: "message",
-        description: "(circular ref: " + schemaName + ")",
-        label: "optional",
-      },
-    ];
-  }
-  visited.add(schemaName);
-
-  var schema = doc.schemas[schemaName];
-  var required = schema.required || [];
+function resolveDiscoverySchema(doc, schemaName) {
   var fields = [];
-
-  var i = 1;
-  for (var propName in schema.properties || {}) {
-    var prop = schema.properties[propName];
-    var field = mapDiscoveryProperty(
-      doc,
-      propName,
-      prop,
-      required,
-      maxDepth - 1,
-      visited,
-    );
-    if (field) {
-      // Automatic indexing for JSPB/Protobuf services if 'id' is missing
-      if (field.number == null) {
-        field.number = i;
-        field.isNumberGuessed = true;
-      }
-      fields.push(field);
-    }
-    i++;
-  }
-
-  visited.delete(schemaName);
-  fields.id = schemaName; // Tag array with schema name for rename targeting
+  if (!doc || !doc.schemas || !doc.schemas[schemaName]) return fields;
+  fields.id = schemaName;
+  var queue = [{ kind: "SCHEMA", doc: doc, schemaName: schemaName,
+                  visited: new Set(), into: fields }];
+  _drainDiscoveryQueue(queue);
   return fields;
 }
 
 /**
  * Map a single discovery document property to a unified field descriptor.
+ *
+ * Iterative driver — same queue and step functions as
+ * resolveDiscoverySchema. The entry-point pre-allocates the root
+ * field shell, seeds the queue with a PROP frame targeting it, and
+ * drains the queue before returning.
  */
+function mapDiscoveryProperty(doc, name, prop, requiredList) {
+  var root = _buildDiscoveryFieldShell(name, prop, requiredList);
+  var queue = [{ kind: "PROP", doc: doc, field: root, prop: prop,
+                  visited: new Set() }];
+  _drainDiscoveryQueue(queue);
+  return root;
+}
+
 function _buildDiscoveryFieldShell(name, prop, requiredList) {
   var isRequired = (requiredList || []).indexOf(name) >= 0;
   return {
-    name: prop.name || name, // Respect renamed fields
+    name: prop.name || name,
     customName: !!prop.customName,
     type: "string",
     required: isRequired,
@@ -856,92 +861,136 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
   };
 }
 
-function mapDiscoveryProperty(doc, name, prop, requiredList, depth, visited) {
-  // Iterative worklist replaces self-recursion for inline object/array
-  // schemas. Mutual recursion through resolveDiscoverySchema (for $ref)
-  // is bounded by the visited-set + depth cap inside that function and
-  // stays as a direct call. Each worklist entry is a pre-allocated child
-  // field shell + the prop spec to populate it from.
-  var root = _buildDiscoveryFieldShell(name, prop, requiredList);
-  var queue = [{ field: root, prop: prop, depth: depth, visited: visited }];
+// Sentinel field appended to a children array when a $ref points back
+// to a schema already on the current chain. The OpenAPI/JSON-Schema
+// spec permits self-referential schemas, so a finite tree
+// representation must terminate the cycle somewhere — the sentinel
+// makes the truncation point visible to callers (form builders,
+// renderers) instead of silently dropping data.
+function _circularRefSentinel(schemaName) {
+  return {
+    name: "...",
+    type: "message",
+    description: "(circular ref: " + schemaName + ")",
+    label: "optional",
+  };
+}
+
+function _drainDiscoveryQueue(queue) {
+  // LIFO drain: the only observable side effect is registration into
+  // docSchemas keyed by schema name, so order doesn't matter and pop()
+  // avoids the O(N) cost of shift().
   while (queue.length > 0) {
-    var item = queue.shift();
-    var f = item.field, p = item.prop, d = item.depth, v = item.visited;
+    var item = queue.pop();
+    if (item.kind === "SCHEMA") _stepResolveSchema(item, queue);
+    else if (item.kind === "PROP") _stepMapProperty(item, queue);
+  }
+}
 
-    // $ref to another schema (mutual recursion through resolveDiscoverySchema)
-    if (p.$ref) {
+// SCHEMA frame: produce field shells for each property of
+// `doc.schemas[schemaName]`, append them to `into`, and queue PROP
+// frames that populate each shell. Cycle check: if `schemaName` is
+// already on the current chain (visited set), append the circular-ref
+// sentinel and skip processing.
+function _stepResolveSchema(item, queue) {
+  var doc = item.doc, schemaName = item.schemaName, visited = item.visited, into = item.into;
+  if (!doc || !doc.schemas || !doc.schemas[schemaName]) return;
+  if (visited.has(schemaName)) {
+    into.push(_circularRefSentinel(schemaName));
+    return;
+  }
+  var nextVisited = new Set(visited);
+  nextVisited.add(schemaName);
+  var schema = doc.schemas[schemaName];
+  var required = schema.required || [];
+  var i = 1;
+  for (var propName in schema.properties || {}) {
+    var prop = schema.properties[propName];
+    var shell = _buildDiscoveryFieldShell(propName, prop, required);
+    if (shell.number == null) {
+      shell.number = i;
+      shell.isNumberGuessed = true;
+    }
+    into.push(shell);
+    queue.push({ kind: "PROP", doc: doc, field: shell, prop: prop, visited: nextVisited });
+    i++;
+  }
+}
+
+// PROP frame: populate the pre-allocated `field` from `prop`. $ref →
+// queue a SCHEMA frame whose `into` is the field's children array.
+// Inline object / array-of-object → queue child PROP frames. The
+// visited set carried into sub-frames is the chain from root to the
+// current node; when a sub-frame recurses through a $ref, it gets a
+// fresh clone via _stepResolveSchema's `nextVisited`.
+function _stepMapProperty(item, queue) {
+  var doc = item.doc, f = item.field, p = item.prop, v = item.visited;
+
+  if (p.$ref) {
+    f.type = "message";
+    f.messageType = p.$ref;
+    f.children = [];
+    queue.push({ kind: "SCHEMA", doc: doc, schemaName: p.$ref,
+                  visited: v, into: f.children });
+    return;
+  }
+
+  if (p.type === "array" && p.items) {
+    f.label = "repeated";
+    if (p.items.$ref) {
       f.type = "message";
-      f.messageType = p.$ref;
-      f.children = resolveDiscoverySchema(doc, p.$ref, d, new Set(v));
-      continue;
-    }
-
-    // Array (repeated fields)
-    if (p.type === "array" && p.items) {
-      f.label = "repeated";
-      if (p.items.$ref) {
-        f.type = "message";
-        f.messageType = p.items.$ref;
-        f.children = resolveDiscoverySchema(doc, p.items.$ref, d, new Set(v));
-      } else if (p.items.type === "object" && p.items.properties) {
-        // Inline array-of-objects — pre-allocate child shells, queue them
-        // for population. Previously we recursed; now the worklist drains
-        // them in BFS order with a flat JS stack.
-        f.type = "message";
-        f.children = [];
-        var arrRequired = p.items.required || [];
-        for (var ipn in p.items.properties) {
-          var arrShell = _buildDiscoveryFieldShell(ipn, p.items.properties[ipn], arrRequired);
-          f.children.push(arrShell);
-          queue.push({
-            field: arrShell, prop: p.items.properties[ipn],
-            depth: d - 1, visited: new Set(v),
-          });
-        }
-      } else {
-        f.type = mapJsonSchemaType(p.items);
-      }
-      continue;
-    }
-
-    // Inline object (nested properties without $ref)
-    if (p.type === "object" && p.properties) {
+      f.messageType = p.items.$ref;
+      f.children = [];
+      queue.push({ kind: "SCHEMA", doc: doc, schemaName: p.items.$ref,
+                    visited: v, into: f.children });
+    } else if (p.items.type === "object" && p.items.properties) {
       f.type = "message";
       f.children = [];
-      var nestedRequired = p.required || [];
-      for (var pn in p.properties) {
-        var nestShell = _buildDiscoveryFieldShell(pn, p.properties[pn], nestedRequired);
-        f.children.push(nestShell);
-        queue.push({
-          field: nestShell, prop: p.properties[pn],
-          depth: d - 1, visited: new Set(v),
-        });
+      var arrRequired = p.items.required || [];
+      for (var ipn in p.items.properties) {
+        var arrShell = _buildDiscoveryFieldShell(ipn, p.items.properties[ipn], arrRequired);
+        f.children.push(arrShell);
+        queue.push({ kind: "PROP", doc: doc, field: arrShell,
+                      prop: p.items.properties[ipn], visited: v });
       }
-      continue;
+    } else {
+      f.type = mapJsonSchemaType(p.items);
     }
-
-    // additionalProperties (map type)
-    if (p.type === "object" && p.additionalProperties) {
-      f.type = "string";
-      f.description =
-        (f.description || "") +
-        " (map<string, " +
-        (p.additionalProperties.type || "string") +
-        ">)";
-      continue;
-    }
-
-    // Scalar
-    f.type = mapJsonSchemaType(p);
-    if (p.label === "repeated") f.label = "repeated";
-    if (p.enum) {
-      f.type = "enum";
-      f.enum = p.enum;
-      f.enumValues = p.enum;
-      f.enumDescriptions = p.enumDescriptions || null;
-    }
+    return;
   }
-  return root;
+
+  if (p.type === "object" && p.properties) {
+    f.type = "message";
+    f.children = [];
+    var nestedRequired = p.required || [];
+    for (var pn in p.properties) {
+      var nestShell = _buildDiscoveryFieldShell(pn, p.properties[pn], nestedRequired);
+      f.children.push(nestShell);
+      queue.push({ kind: "PROP", doc: doc, field: nestShell,
+                    prop: p.properties[pn], visited: v });
+    }
+    return;
+  }
+
+  if (p.type === "object" && p.additionalProperties) {
+    f.type = "string";
+    f.description =
+      (f.description || "") +
+      " (map<string, " +
+      (p.additionalProperties.type || "string") +
+      ">)";
+    return;
+  }
+
+  // Scalar
+  f.type = mapJsonSchemaType(p);
+  if (p.label === "repeated") f.label = "repeated";
+  if (p.enum) {
+    f.type = "enum";
+    f.enum = p.enum;
+    f.enumValues = p.enum;
+    f.enumDescriptions = p.enumDescriptions || null;
+  }
 }
 
 /**

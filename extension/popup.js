@@ -377,18 +377,12 @@ function gqlRenderTabs() {
     });
     tabsEl.appendChild(tab);
   }
-  // Close button handlers
-  tabsEl.querySelectorAll(".gql-tab-close").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const closeIdx = parseInt(btn.dataset.gqlClose, 10);
-      gqlSaveCurrentOp();
-      gqlState.ops.splice(closeIdx, 1);
-      if (gqlState.activeIdx >= gqlState.ops.length) gqlState.activeIdx = gqlState.ops.length - 1;
-      if (gqlState.activeIdx < 0) gqlState.activeIdx = 0;
-      gqlRenderAll();
-    });
-  });
+  // Close-button click handling moved to a single file-scope delegate
+  // (registered at module load, see end of this section). The previous
+  // per-button handler called gqlRenderAll directly, creating a static
+  // back-edge gqlRenderTabs → gqlRenderAll. With delegation, the
+  // handler lives outside the renderer's body — the static call
+  // graph is one-way: gqlRenderAll → gqlRenderTabs.
 }
 
 function gqlActivateTab(idx) {
@@ -447,6 +441,25 @@ function gqlRenderAll() {
     });
   });
 }
+
+// File-scope delegate for the gql tab close button. The delegate is
+// registered once at module load — outside any function declaration —
+// so the recursion lint correctly does not see this as a call edge
+// from inside gqlRenderTabs's body. Each close click runs in a fresh
+// task; there is no JS stack growth between the click and the
+// re-render.
+document.addEventListener("click", (e) => {
+  const btn = e.target && e.target.closest && e.target.closest(".gql-tab-close");
+  if (!btn) return;
+  e.stopPropagation();
+  const closeIdx = parseInt(btn.dataset.gqlClose, 10);
+  if (Number.isNaN(closeIdx)) return;
+  gqlSaveCurrentOp();
+  gqlState.ops.splice(closeIdx, 1);
+  if (gqlState.activeIdx >= gqlState.ops.length) gqlState.activeIdx = gqlState.ops.length - 1;
+  if (gqlState.activeIdx < 0) gqlState.activeIdx = 0;
+  gqlRenderAll();
+});
 
 function gqlLoadOperations(ops, batched) {
   gqlState.ops = ops.map((o) => ({ ...o }));
@@ -576,13 +589,17 @@ function mpRenderPart(index) {
   return _mpBuildPartCard(index);
 }
 
-// Builder that produces a fresh card element for parts[index]. The
-// content-type oninput handler calls this builder (not mpRenderPart) to
-// re-render in-place, so neither function names itself.
+// Builder that produces a fresh card element for parts[index].
+// Click/input handlers for Remove / Content-Type are delegated at
+// file scope (see end of section) so this body never references
+// mpRenderAll or mpRenderPart by name. Each handler stashes the
+// part index on its DOM element via data-mp-part-idx; the file-scope
+// delegate reads the index and invokes the renderer in a fresh task.
 function _mpBuildPartCard(index) {
   const p = mpState.parts[index];
   const card = document.createElement("div");
   card.className = "mp-part-card";
+  card.dataset.mpPartIdx = String(index);
 
   const head = document.createElement("div");
   head.className = "mp-part-head";
@@ -594,7 +611,7 @@ function _mpBuildPartCard(index) {
   del.className = "btn-small mp-part-del";
   del.type = "button";
   del.textContent = "Remove";
-  del.onclick = () => { mpState.parts.splice(index, 1); mpRenderAll(); };
+  del.dataset.mpPartIdx = String(index);
   head.appendChild(del);
   card.appendChild(head);
 
@@ -604,14 +621,8 @@ function _mpBuildPartCard(index) {
   const ctInput = document.createElement("input");
   ctInput.type = "text";
   ctInput.value = p.contentType;
-  ctInput.oninput = () => {
-    p.contentType = ctInput.value;
-    p.editor.kind = mpClassifyPartBody(p.contentType, p.editor.value);
-    // Re-render this card via the public entry. mpRenderPart is the
-    // public wrapper; this avoids _mpBuildPartCard naming itself, which
-    // the recursion lint would (correctly) flag.
-    card.replaceWith(mpRenderPart(index));
-  };
+  ctInput.classList.add("mp-part-ct-input");
+  ctInput.dataset.mpPartIdx = String(index);
   ctRow.appendChild(ctInput);
   card.appendChild(ctRow);
 
@@ -765,6 +776,33 @@ function mpClear() {
   const info = document.getElementById("mp-boundary-info");
   if (info) info.textContent = "";
 }
+
+// File-scope delegates for the multipart part card. Each delegate is
+// registered once at module load — outside any function declaration —
+// so the recursion lint correctly does not see them as call edges
+// from inside _mpBuildPartCard's body. The handlers run in fresh
+// tasks (separate JS stack from the original render).
+document.addEventListener("click", (e) => {
+  const btn = e.target && e.target.closest && e.target.closest(".mp-part-del");
+  if (!btn) return;
+  const idx = parseInt(btn.dataset.mpPartIdx, 10);
+  if (Number.isNaN(idx)) return;
+  mpState.parts.splice(idx, 1);
+  mpRenderAll();
+});
+
+document.addEventListener("input", (e) => {
+  const input = e.target;
+  if (!input || !input.classList || !input.classList.contains("mp-part-ct-input")) return;
+  const idx = parseInt(input.dataset.mpPartIdx, 10);
+  if (Number.isNaN(idx)) return;
+  const p = mpState.parts[idx];
+  if (!p) return;
+  p.contentType = input.value;
+  p.editor.kind = mpClassifyPartBody(p.contentType, p.editor.value);
+  const card = input.closest(".mp-part-card");
+  if (card) card.replaceWith(mpRenderPart(idx));
+});
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 
@@ -2777,13 +2815,48 @@ function typeOfScalar(v) {
   return "string";
 }
 
-function createFieldInput(
-  name,
-  fieldDef,
-  category,
-  depth,
-  initialValue = null,
-) {
+// Form-builder iterative driver. The three public entry points
+// (createFieldInput, _buildRepeatedMessageItem, _buildMessageGroup)
+// each seed a build queue, build the root wrapper synchronously, and
+// drain the queue (which dispatches each enqueued item to its step
+// function). Step functions only enqueue children — they never call
+// each other or the public entry points — so the static call graph
+// is acyclic.
+//
+// Dynamic-add-item / remove-item user interactions don't reference
+// the renderer from inside the renderer. Each "+ Add item" button is
+// registered in `_addItemTargets` (a WeakMap from button to its
+// build context); a single document-level click delegate at file
+// scope reads the registry and invokes _buildRepeatedMessageItem.
+// Each remove "×" button gets `data-form-remove-item="1"`. The
+// file-scope listener is outside any function declaration, so the
+// recursion lint correctly does not see this as a call edge from
+// inside the renderer's body.
+const _addItemTargets = new WeakMap();
+
+function createFieldInput(name, fieldDef, category, depth, initialValue = null) {
+  const queue = [];
+  const wrapper = _buildFieldStep(name, fieldDef, category, depth || 0, initialValue, queue);
+  _drainBuildQueue(queue);
+  return wrapper;
+}
+
+function _drainBuildQueue(queue) {
+  while (queue.length > 0) {
+    const item = queue.shift();
+    let wrapper;
+    if (item.kind === "FIELD") {
+      wrapper = _buildFieldStep(item.name, item.fieldDef, item.category, item.depth, item.initialValue, queue);
+    } else if (item.kind === "REPEATED_ITEM") {
+      wrapper = _buildRepeatedItemStep(item.fieldDef, item.category, item.depth, item.itemValue, queue);
+    } else if (item.kind === "MESSAGE_GROUP") {
+      wrapper = _buildMessageStep(item.fieldDef, item.category, item.depth, item.initialValue, item.hasSchema, queue);
+    }
+    if (wrapper) item.parent.appendChild(wrapper);
+  }
+}
+
+function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   depth = depth || 0;
   const wrapper = el("div", "form-field");
   wrapper.style.paddingLeft = depth * 16 + "px";
@@ -2830,7 +2903,7 @@ function createFieldInput(
     labelHtml += ` <span class="field-stat badge-default">default: ${esc(String(fieldDef._defaultValue))}</span>`;
   }
   if (fieldDef._range) {
-    labelHtml += ` <span class="field-stat badge-range">${fieldDef._range.min}\u2013${fieldDef._range.max}</span>`;
+    labelHtml += ` <span class="field-stat badge-range">${fieldDef._range.min}–${fieldDef._range.max}</span>`;
   }
   // When the form was prefilled from an example value (vs a captured
   // request's initialData), show the provenance so the user knows
@@ -2874,40 +2947,27 @@ function createFieldInput(
     const listContainer = el("div", "form-repeated-list form-repeated-message-list");
     listContainer.dataset.fieldType = fieldDef.type;
 
-    // Initial render: build each item via top-level helper. The helper
-    // calls createFieldInput per child, but createFieldInput's body no
-    // longer contains createFieldInput by name — the calls live in
-    // _buildRepeatedMessageItem outside this function. Lint sees the
-    // recursion break.
+    // Repeated-message branch — enqueue each item onto the build
+    // queue with this listContainer as its DOM parent. The driver
+    // drains them in order, calling _buildRepeatedItemStep for each.
     const items = Array.isArray(initialValue) ? initialValue : [];
     for (const it of items) {
-      listContainer.appendChild(
-        _buildRepeatedMessageItem(fieldDef, category, depth, it),
-      );
+      queue.push({ kind: "REPEATED_ITEM", parent: listContainer, fieldDef, category, depth, itemValue: it });
     }
     wrapper.appendChild(listContainer);
 
     const addBtn = el("button", "btn-small");
     addBtn.textContent = "+ Add item";
     addBtn.type = "button";
-    addBtn.addEventListener("click", () => {
-      listContainer.appendChild(
-        _buildRepeatedMessageItem(fieldDef, category, depth, null),
-      );
-    });
+    addBtn.dataset.formAddRepeated = "1";
+    _addItemTargets.set(addBtn, { kind: "repeatedMessage", listContainer, fieldDef, category, depth });
     wrapper.appendChild(addBtn);
   } else if ((fieldDef.type === "message" || fieldDef.type === "object") && fieldDef.children?.length) {
-    // Schema-listed message: build via top-level helper. The helper's
-    // calls to createFieldInput are external (different function), so
-    // createFieldInput's own body never names itself.
-    wrapper.appendChild(_buildMessageGroup(fieldDef, category, depth, initialValue, /*hasSchema*/true));
+    queue.push({ kind: "MESSAGE_GROUP", parent: wrapper, fieldDef, category, depth, initialValue, hasSchema: true });
   } else if (fieldDef.type === "message" || fieldDef.type === "object") {
-    // Message-shaped field with no known schema — synthesize children
-    // from the captured value's keys (same helper, hasSchema=false).
     if (initialValue && typeof initialValue === "object" && !Array.isArray(initialValue)) {
-      wrapper.appendChild(_buildMessageGroup(fieldDef, category, depth, initialValue, /*hasSchema*/false));
+      queue.push({ kind: "MESSAGE_GROUP", parent: wrapper, fieldDef, category, depth, initialValue, hasSchema: false });
     } else {
-      // No captured value and no schema — empty object placeholder.
       wrapper.appendChild(createSingleInput({ type: "string" }, ""));
     }
   } else if (fieldDef.label === "repeated" && fieldDef.type !== "message") {
@@ -2926,9 +2986,8 @@ function createFieldInput(
     const addBtn = el("button", "btn-small");
     addBtn.textContent = "+ Add";
     addBtn.type = "button";
-    addBtn.addEventListener("click", () => {
-      listContainer.appendChild(createSingleInput(fieldDef));
-    });
+    addBtn.dataset.formAddRepeated = "1";
+    _addItemTargets.set(addBtn, { kind: "repeatedScalar", listContainer, fieldDef });
     wrapper.appendChild(addBtn);
   } else if (fieldDef.type !== "message") {
     wrapper.appendChild(createSingleInput(fieldDef, initialValue));
@@ -2937,11 +2996,14 @@ function createFieldInput(
   return wrapper;
 }
 
-// Build one repeated-message item wrapper (used by both initial render
-// and the dynamic "+ Add item" button). Calls createFieldInput per
-// child — that's an external call, so neither this function nor
-// createFieldInput names itself in its own body.
 function _buildRepeatedMessageItem(fieldDef, category, depth, itemValue) {
+  const queue = [];
+  const wrapper = _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue);
+  _drainBuildQueue(queue);
+  return wrapper;
+}
+
+function _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue) {
   const itemWrapper = el("div", "form-repeated-item form-message-group");
   const summary = document.createElement("div");
   summary.className = "form-repeated-item-summary";
@@ -2950,7 +3012,7 @@ function _buildRepeatedMessageItem(fieldDef, category, depth, itemValue) {
   removeBtn.textContent = "×";
   removeBtn.type = "button";
   removeBtn.title = "Remove item";
-  removeBtn.addEventListener("click", () => itemWrapper.remove());
+  removeBtn.dataset.formRemoveItem = "1";
   summary.appendChild(removeBtn);
   itemWrapper.appendChild(summary);
 
@@ -2963,36 +3025,35 @@ function _buildRepeatedMessageItem(fieldDef, category, depth, itemValue) {
     const childVal = itemValue && typeof itemValue === "object"
       ? (itemValue[child.name] ?? itemValue[child.number] ?? null)
       : null;
-    childContainer.appendChild(
-      createFieldInput(
-        child.name,
-        { ...child, parentSchema: fieldDef.messageType || fieldDef.parentSchema },
-        category,
-        depth + 1,
-        childVal,
-      ),
-    );
+    queue.push({
+      kind: "FIELD", parent: childContainer,
+      name: child.name,
+      fieldDef: { ...child, parentSchema: fieldDef.messageType || fieldDef.parentSchema },
+      category, depth: depth + 1, initialValue: childVal,
+    });
   }
-  // Schema drift: render captured-value keys not in the schema so
-  // roundtrip doesn't silently drop them.
   if (itemValue && typeof itemValue === "object" && !Array.isArray(itemValue)) {
     for (const [k, v] of Object.entries(itemValue)) {
       if (rendered.has(k)) continue;
-      childContainer.appendChild(
-        createFieldInput(k, synthesizeFieldDefFromValue(k, v), category, depth + 1, v),
-      );
+      queue.push({
+        kind: "FIELD", parent: childContainer,
+        name: k, fieldDef: synthesizeFieldDefFromValue(k, v),
+        category, depth: depth + 1, initialValue: v,
+      });
     }
   }
   itemWrapper.appendChild(childContainer);
   return itemWrapper;
 }
 
-// Build one <details>-wrapped message group: schema-listed children +
-// any captured-value drift keys. Used for both schema-known and
-// schema-unknown message-shaped fields. The flag distinguishes:
-//   hasSchema=true  → use fieldDef.children + drift keys (initial)
-//   hasSchema=false → use only captured value's keys (no schema)
 function _buildMessageGroup(fieldDef, category, depth, initialValue, hasSchema) {
+  const queue = [];
+  const wrapper = _buildMessageStep(fieldDef, category, depth, initialValue, hasSchema, queue);
+  _drainBuildQueue(queue);
+  return wrapper;
+}
+
+function _buildMessageStep(fieldDef, category, depth, initialValue, hasSchema, queue) {
   const details = document.createElement("details");
   details.open = hasSchema ? (initialValue !== null || depth < 1) : (depth < 1);
   details.className = "form-message-group";
@@ -3011,10 +3072,12 @@ function _buildMessageGroup(fieldDef, category, depth, initialValue, hasSchema) 
       const childVal = initialValue
         ? (initialValue[child.name] ?? initialValue[child.number] ?? null)
         : null;
-      childContainer.appendChild(
-        createFieldInput(child.name, { ...child, parentSchema: inheritedSchema },
-          category, depth + 1, childVal),
-      );
+      queue.push({
+        kind: "FIELD", parent: childContainer,
+        name: child.name,
+        fieldDef: { ...child, parentSchema: inheritedSchema },
+        category, depth: depth + 1, initialValue: childVal,
+      });
     }
   }
   if (initialValue && typeof initialValue === "object" && !Array.isArray(initialValue)) {
@@ -3022,14 +3085,44 @@ function _buildMessageGroup(fieldDef, category, depth, initialValue, hasSchema) 
       if (rendered.has(k)) continue;
       const synthDef = synthesizeFieldDefFromValue(k, v);
       if (inheritedSchema) synthDef.parentSchema = inheritedSchema;
-      childContainer.appendChild(
-        createFieldInput(k, synthDef, category, depth + 1, v),
-      );
+      queue.push({
+        kind: "FIELD", parent: childContainer,
+        name: k, fieldDef: synthDef,
+        category, depth: depth + 1, initialValue: v,
+      });
     }
   }
   details.appendChild(childContainer);
   return details;
 }
+
+// File-scope event delegation for dynamic add/remove buttons. The
+// addEventListener call lives outside any function declaration; the
+// recursion lint walks function bodies, so this listener's invocation
+// of the public entry point is correctly NOT seen as a call edge from
+// inside the renderer. Architecturally: state mutation (clicking the
+// button) is decoupled from rendering — the click handler resolves
+// build context from the WeakMap registry and asks the renderer to
+// build the new node.
+document.addEventListener("click", (e) => {
+  const target = e.target;
+  if (!target || !target.closest) return;
+  const removeBtn = target.closest("[data-form-remove-item]");
+  if (removeBtn) {
+    const item = removeBtn.closest(".form-repeated-item");
+    if (item) item.remove();
+    return;
+  }
+  const addBtn = target.closest("[data-form-add-repeated]");
+  if (!addBtn) return;
+  const ctx = _addItemTargets.get(addBtn);
+  if (!ctx) return;
+  if (ctx.kind === "repeatedMessage") {
+    ctx.listContainer.appendChild(_buildRepeatedMessageItem(ctx.fieldDef, ctx.category, ctx.depth, null));
+  } else if (ctx.kind === "repeatedScalar") {
+    ctx.listContainer.appendChild(createSingleInput(ctx.fieldDef));
+  }
+});
 
 function createSingleInput(fieldDef, initialValue = null) {
   const type = fieldDef.type || "string";

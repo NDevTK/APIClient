@@ -1,13 +1,12 @@
 # API Security Researcher — Development Guide
 
 Work autonomously and continuously across all pillars. No mocking, no placeholders, no heuristics, no summaries, no workarounds.
-You should follow all the tasks provided in CLAUDE.md as a continuous agent
 
 ## Project Overview
 
 A Chrome Extension (MV3) for API discovery, protocol reverse-engineering (Protobuf/JSPB/JSON/gRPC-Web/GraphQL/SSE/NDJSON), JavaScript security code review, and security testing across all websites.
 
-## Pillars
+## Ideas for what to do during continuous work
 
 Every change belongs to one pillar. After a landed change, the next change must be in a different pillar until all pillars have moved once; then rotate back. Don't stay in one pillar because it's easier.
 
