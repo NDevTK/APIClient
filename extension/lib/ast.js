@@ -3527,6 +3527,80 @@ function _specEvalLeaf(path, state, vals, effects) {
           }
           return { kind: "const", value: parts.join(sep) };
         }
+        // § 23.1.3.2 Array.prototype.concat(...items) — append items to
+        // a copy of the receiver. Arrays are spread; non-arrays appended
+        // as a single element per IsConcatSpreadable abstract op (§ 23.1.3.2.1).
+        if (aMeth === "concat") {
+          var concatElems = recvAv.elements.slice();
+          for (var ci = 0; ci < n.arguments.length; ci++) {
+            var argAv = vals.get(n.arguments[ci]);
+            if (!argAv) return { kind: "top" };
+            if (argAv.kind === "array-lit" && argAv.elements) {
+              for (var ai = 0; ai < argAv.elements.length; ai++) concatElems.push(argAv.elements[ai]);
+            } else if (argAv.kind === "const" || argAv.kind === "obj-lit") {
+              concatElems.push(argAv);
+            } else {
+              // Unknown shape — concat result is unknown (could be spread or single).
+              return { kind: "top" };
+            }
+          }
+          return { kind: "array-lit", elements: concatElems };
+        }
+        // § 23.1.3.28 Array.prototype.slice([start, end]) — sub-array.
+        if (aMeth === "slice") {
+          var sStart = 0;
+          var sEnd = recvAv.elements.length;
+          if (n.arguments.length >= 1) {
+            var sStartAv = vals.get(n.arguments[0]);
+            if (sStartAv && sStartAv.kind === "const" && typeof sStartAv.value === "number") {
+              sStart = sStartAv.value;
+              if (sStart < 0) sStart = Math.max(0, recvAv.elements.length + sStart);
+            } else { return { kind: "top" }; }
+          }
+          if (n.arguments.length >= 2) {
+            var sEndAv = vals.get(n.arguments[1]);
+            if (sEndAv && sEndAv.kind === "const" && typeof sEndAv.value === "number") {
+              sEnd = sEndAv.value;
+              if (sEnd < 0) sEnd = Math.max(0, recvAv.elements.length + sEnd);
+            } else { return { kind: "top" }; }
+          }
+          return { kind: "array-lit", elements: recvAv.elements.slice(sStart, sEnd) };
+        }
+        // § 23.1.3.16 Array.prototype.includes(searchElement) — Boolean.
+        // Returns true iff any element SameValueZero-equals searchElement
+        // per § 7.2.13. For Const-Const comparison this matches `===`
+        // (excluding NaN-NaN, which SameValueZero treats as equal).
+        if (aMeth === "includes" && n.arguments.length >= 1) {
+          var inclSearch = vals.get(n.arguments[0]);
+          if (!inclSearch || inclSearch.kind !== "const") return { kind: "top" };
+          for (var inci = 0; inci < recvAv.elements.length; inci++) {
+            var ie = recvAv.elements[inci];
+            if (!ie || ie.kind !== "const") return { kind: "top" };
+            // SameValueZero: NaN === NaN; other primitives use ===.
+            if (Number.isNaN(inclSearch.value) && Number.isNaN(ie.value)) return { kind: "const", value: true };
+            if (ie.value === inclSearch.value) return { kind: "const", value: true };
+          }
+          return { kind: "const", value: false };
+        }
+        // § 23.1.3.17 Array.prototype.indexOf(searchElement) — Number.
+        // Returns the first index where element strict-equals searchElement,
+        // -1 if none. Strict equality per § 7.2.16.
+        if (aMeth === "indexOf" && n.arguments.length >= 1) {
+          var ioSearch = vals.get(n.arguments[0]);
+          if (!ioSearch || ioSearch.kind !== "const") return { kind: "top" };
+          for (var ioi = 0; ioi < recvAv.elements.length; ioi++) {
+            var ioe = recvAv.elements[ioi];
+            if (!ioe || ioe.kind !== "const") return { kind: "top" };
+            if (ioe.value === ioSearch.value) return { kind: "const", value: ioi };
+          }
+          return { kind: "const", value: -1 };
+        }
+        // § 23.1.3.26 Array.prototype.reverse() — returns reversed array.
+        // (Spec mutates in place; for our value lattice we return a new
+        // array-lit with elements reversed, which matches the return value.)
+        if (aMeth === "reverse" && n.arguments.length === 0) {
+          return { kind: "array-lit", elements: recvAv.elements.slice().reverse() };
+        }
       }
       // § 23.1.3 Array.prototype.{map, filter, reduce, find, findIndex,
       // some, every, flatMap, forEach} — dispatch the callback against

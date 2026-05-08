@@ -2012,6 +2012,122 @@ specTest("§ 20.1.2: shadowed `Object` does NOT trigger built-in evaluation", `
   return true;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 23.1.3.{2, 28, 16, 17, 26} Array.prototype.{concat, slice, includes, indexOf, reverse}
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 23.1.3 Array.prototype.{concat,slice,includes,indexOf,reverse} ===\n");
+
+specTest("§ 23.1.3.2: `[1,2].concat([3,4])` → array-lit [1,2,3,4]", `
+  function f() {
+    var a = [1, 2].concat([3, 4]);
+    this.r = a.length;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 4;
+});
+
+specTest("§ 23.1.3.2: `[1].concat(2, [3, 4])` mixes singletons + arrays", `
+  function f() {
+    var a = [1].concat(2, [3, 4]);
+    this.r = a.length;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 4;
+});
+
+specTest("§ 23.1.3.28: `[1,2,3,4,5].slice(1,3)` → array-lit [2,3]", `
+  function f() {
+    var a = [1, 2, 3, 4, 5].slice(1, 3);
+    this.r = a.length;
+    this.first = a[0];
+    this.second = a[1];
+  }
+`, function(effects) {
+  if (effects.length !== 3) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.r === 2 && byKey.first === 2 && byKey.second === 3;
+});
+
+specTest("§ 23.1.3.28: `[1,2,3].slice(-2)` handles negative start", `
+  function f() {
+    var a = [1, 2, 3].slice(-2);
+    this.r = a.length;
+    this.first = a[0];
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.r === 2 && byKey.first === 2;
+});
+
+specTest("§ 23.1.3.16: `['a','b','c'].includes('b')` → Const(true)", `
+  function f() {
+    this.r = ["a", "b", "c"].includes("b");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+specTest("§ 23.1.3.16: `[1,2,3].includes(99)` → Const(false)", `
+  function f() {
+    this.r = [1, 2, 3].includes(99);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+specTest("§ 23.1.3.17: `['a','b','c'].indexOf('b')` → Const(1)", `
+  function f() {
+    this.r = ["a", "b", "c"].indexOf("b");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 1;
+});
+
+specTest("§ 23.1.3.17: `['a','b','c'].indexOf('zz')` → Const(-1)", `
+  function f() {
+    this.r = ["a", "b", "c"].indexOf("zz");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === -1;
+});
+
+specTest("§ 23.1.3.26: `[1,2,3].reverse()` → array-lit [3,2,1]", `
+  function f() {
+    var r = [1, 2, 3].reverse();
+    this.first = r[0];
+    this.last = r[2];
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.first === 3 && byKey.last === 1;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
