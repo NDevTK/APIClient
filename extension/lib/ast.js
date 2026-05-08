@@ -1533,7 +1533,7 @@ function _processNetworkSink(path, result) {
 
   // ── Check if this is a call to a function that contains a network sink ──
   // Inter-procedural: if callee resolves to a function definition that has fetch/XHR inside
-  var funcPath = _resolveCalleeToFunction(path);
+  var funcPath = _resolveCalleeFuncPath(path, 0);
   if (funcPath) {
     // calleeBinding is used for finding OTHER callers (wrapper tracing).
     // For MemberExpression callees ($.ajax, axios.get), binding is null — we still
@@ -2553,93 +2553,13 @@ function _specDetectPropagationFromEffects(effects) {
   return null;
 }
 
-// Resolve a call expression's callee to its function node
-// Returns a Babel path to the resolved function node, or null.
-function _resolveCalleeToFunction(callPath) {
-  var callee = callPath.node.callee;
-
-  // Common case: identifier → scope binding, member expr → object property
-  var commonPath = _resolveCalleeFuncPath(callPath, 0);
-  if (commonPath) return commonPath;
-
-  // Extended identifier resolution: global assignments, factory returns
-  if (_t.isIdentifier(callee)) {
-    var binding = callPath.scope.getBinding(callee.name);
-    if (!binding) {
-      var globalDef = _globalAssignments[callee.name];
-      if (globalDef && globalDef.valueNode && globalDef.valuePath) {
-        if (_t.isFunctionExpression(globalDef.valueNode) || _t.isArrowFunctionExpression(globalDef.valueNode))
-          return globalDef.valuePath;
-        if (_t.isCallExpression(globalDef.valueNode)) {
-          var retFunc = _resolveCallReturnToFunction(globalDef.valuePath, 0);
-          if (retFunc && retFunc._path) return retFunc._path;
-        }
-      }
-      return null;
-    }
-    if (!binding.path) return null;
-    // Higher-order: var fn = factory() where factory returns a function
-    if (_t.isVariableDeclarator(binding.path.node) && binding.path.node.init &&
-        _t.isCallExpression(binding.path.node.init)) {
-      var retFunc = _resolveCallReturnToFunction(binding.path.get("init"), 0);
-      if (retFunc && retFunc._path) return retFunc._path;
-    }
-    return null;
-  }
-
-  // Member expression: obj.method(url) → resolve obj, find method property
-  if (_t.isMemberExpression(callee) && !callee.computed) {
-    var propName = _t.isIdentifier(callee.property) ? callee.property.name : null;
-    if (!propName) return null;
-
-    // Try: obj = IIFE() returning a function/object with properties assigned inside
-    // Handles: var e = function(){...n.get=fn...return n}(); e.get(url)
-    if (_t.isIdentifier(callee.object)) {
-      var iifeObjBinding = callPath.scope.getBinding(callee.object.name);
-      if (iifeObjBinding && _t.isVariableDeclarator(iifeObjBinding.path.node) &&
-          iifeObjBinding.path.node.init && _t.isCallExpression(iifeObjBinding.path.node.init)) {
-        var iifePropFn = _resolveIIFEReturnedProperty(iifeObjBinding.path.get("init"), propName);
-        if (iifePropFn) return iifePropFn;
-      }
-      // Also check global assignments: window.X = IIFE()
-      if (!iifeObjBinding) {
-        var gDef = _globalAssignments[callee.object.name];
-        if (gDef && gDef.valuePath && _t.isCallExpression(gDef.valueNode)) {
-          var gPropFn = _resolveIIFEReturnedProperty(gDef.valuePath, propName);
-          if (gPropFn) return gPropFn;
-        }
-      }
-    }
-
-    // Second try: method assigned separately (Closure pattern: a.b = function(url) { ... })
-    // Use referencePaths since Babel doesn't track property mutations as constantViolations
-    if (_t.isIdentifier(callee.object)) {
-      var objBinding = callPath.scope.getBinding(callee.object.name);
-      // Fallback: if no local binding, check _globalAssignments.
-      // Handles window.jQuery = jQuery inside IIFE → user code calls jQuery.ajax() outside.
-      // Unwraps chained assignments: window.jQuery = window.$ = jQuery → jQuery
-      if (!objBinding) {
-        var globalDef = _globalAssignments[callee.object.name];
-        if (globalDef && globalDef.valueNode) {
-          var gVal = globalDef.valueNode;
-          while (_t.isAssignmentExpression(gVal)) gVal = gVal.right;
-          if (_t.isIdentifier(gVal)) {
-            objBinding = globalDef.valuePath.scope.getBinding(gVal.name);
-          }
-        }
-      }
-      // (Property-lookup routes — direct assignment, Object.assign,
-      // factory-call return, property-propagation — moved into the
-      // canonical state machine `_RCFP_OBJ_AFTER` per CLAUDE.md
-      // spec-organisation discipline. _resolveCalleeFuncPath above
-      // covers them now; this function exists only for the IIFE-
-      // returned-property and global-alias-unwrap routes specific
-      // to its outer-scope binding lookups.)
-    }
-  }
-
-  return null;
-}
+// (Removed `_resolveCalleeToFunction` — all routes now live in the
+// canonical iterative state machine `_resolveCalleeFuncPath` /
+// `_rcfpStep` per CLAUDE.md spec-organisation discipline. Identifier
+// global-assignment / factory-return resolution is in `_RCFP_INIT`'s
+// Branch 4 / Branch 5; MemberExpression IIFE-returned property and
+// global-alias unwrap routes are in `_RCFP_OBJ_AFTER`. ONE callee
+// resolver, no fallback chain.)
 
 function _traceWrapperFunction(callPath, funcPath, funcBinding, result) {
   var funcNode = funcPath.node;
@@ -6627,6 +6547,30 @@ function _rcfpStep(F) {
               return { done: _resolveExprToFunctionPath(binding.path.get("init"), depth || 0) };
             }
           }
+          // Branch 4 (no binding — unbound identifier resolves via global
+          // assignments): handles `window.X = function() {…}` then a later
+          // call site referencing `X` directly. Module-scope aliases via
+          // _globalAssignments per the analyser's global tracking.
+          if (!binding) {
+            var globalDef = _globalAssignments[callee.name];
+            if (globalDef && globalDef.valueNode && globalDef.valuePath) {
+              if (_t.isFunctionExpression(globalDef.valueNode) || _t.isArrowFunctionExpression(globalDef.valueNode)) {
+                return { done: globalDef.valuePath };
+              }
+              if (_t.isCallExpression(globalDef.valueNode)) {
+                var gRetFunc = _resolveCallReturnToFunction(globalDef.valuePath, depth || 0);
+                if (gRetFunc && gRetFunc._path) return { done: gRetFunc._path };
+              }
+            }
+          }
+          // Branch 5 (higher-order: `var f = factory()`): when no direct
+          // function-init match but the binding is `var = call(...)`, the
+          // call's return may be a function per ECMA § 13.3.
+          if (binding && _t.isVariableDeclarator(binding.path.node) && binding.path.node.init &&
+              _t.isCallExpression(binding.path.node.init)) {
+            var bRetFunc = _resolveCallReturnToFunction(binding.path.get("init"), depth || 0);
+            if (bRetFunc && bRetFunc._path) return { done: bRetFunc._path };
+          }
           return { done: null };
         }
         // Branch 2 (MemberExpression callee).
@@ -6665,6 +6609,45 @@ function _rcfpStep(F) {
               (_t.isStringLiteral(prop.key) ? prop.key.value : null);
             if (key === propName2 && (_t.isFunctionExpression(prop.value) || _t.isArrowFunctionExpression(prop.value))) {
               return { done: objNode._path ? objNode._path.get("properties." + i + ".value") : null };
+            }
+          }
+        }
+        // IIFE-returned property: `var e = function(){…n.X=fn…return n}()`
+        // followed by `e.X(…)`. The IIFE's return value is an object
+        // whose internal mutations include `X`; resolve through.
+        if (_t.isIdentifier(callee2.object)) {
+          var iifeBind = callPath.scope.getBinding(callee2.object.name);
+          if (iifeBind && _t.isVariableDeclarator(iifeBind.path.node) &&
+              iifeBind.path.node.init && _t.isCallExpression(iifeBind.path.node.init)) {
+            var iifePropFn = _resolveIIFEReturnedProperty(iifeBind.path.get("init"), propName2);
+            if (iifePropFn) return { done: iifePropFn };
+          }
+          // Global-assigned IIFE: `window.X = function(){…}()` then `X.method()`.
+          if (!iifeBind) {
+            var iifeGDef = _globalAssignments[callee2.object.name];
+            if (iifeGDef && iifeGDef.valuePath && _t.isCallExpression(iifeGDef.valueNode)) {
+              var iifeGFn = _resolveIIFEReturnedProperty(iifeGDef.valuePath, propName2);
+              if (iifeGFn) return { done: iifeGFn };
+            }
+          }
+        }
+        // Global-alias unwrap: `window.jQuery = jQuery` (chained
+        // assignments) — the receiver's binding isn't local so resolve
+        // through `_globalAssignments` to find the underlying binding,
+        // then continue with the standard ref-walk routes below.
+        if (_t.isIdentifier(callee2.object) && !callPath.scope.getBinding(callee2.object.name)) {
+          var aliasGDef = _globalAssignments[callee2.object.name];
+          if (aliasGDef && aliasGDef.valueNode) {
+            var aliasVal = aliasGDef.valueNode;
+            while (_t.isAssignmentExpression(aliasVal)) aliasVal = aliasVal.right;
+            if (_t.isIdentifier(aliasVal)) {
+              var aliasBind = aliasGDef.valuePath.scope.getBinding(aliasVal.name);
+              if (aliasBind) {
+                // Re-run the same search on the aliased binding's refs.
+                callee2 = { object: { type: "Identifier", name: aliasVal.name }, property: callee2.property, computed: false };
+                // Note: synthetic callee2 — only object.name is used by the
+                // ref-walk below, so it's safe.
+              }
             }
           }
         }
@@ -9403,7 +9386,7 @@ function _resolveItemCallsInFunction(callPath, iterArgIdx, paramIdx, depth, prop
   // The called function might not have an inline callback — resolve it and search inside
   // E.g., inspectPrefiltersOrTransports(transports, s, ...) — the function iterates
   // internally and calls items. This requires resolving the function and finding the pattern.
-  var targetFuncPath = _resolveCalleeToFunction(callPath);
+  var targetFuncPath = _resolveCalleeFuncPath(callPath, 0);
   if (targetFuncPath && iterArgIdx < targetFuncPath.node.params.length) {
     var containerParamName = _t.isIdentifier(targetFuncPath.node.params[iterArgIdx]) ? targetFuncPath.node.params[iterArgIdx].name : null;
     if (containerParamName) {
@@ -10200,7 +10183,7 @@ function _traceItemCallsToArgs(callPath, iterArgIdx, paramIdx, queue) {
   if (!_resolver.guard("ZI", callPath.node)) return [];
   try {
     // Resolve the called function
-    var funcPath = _resolveCalleeToFunction(callPath);
+    var funcPath = _resolveCalleeFuncPath(callPath, 0);
     if (!funcPath) return [];
     if (iterArgIdx >= funcPath.node.params.length) return [];
     var containerParamName = _t.isIdentifier(funcPath.node.params[iterArgIdx]) ? funcPath.node.params[iterArgIdx].name : null;
