@@ -2741,6 +2741,27 @@ function _specEvalLeaf(path, state, vals, effects) {
       var srcAv = vals.get(n.arguments[0]) || { kind: "top" };
       return { kind: "keys-of", src: srcAv };
     }
+    // § 13.3.6 CallExpression: when the call resolves to a function
+    // whose body is a single ReturnStatement with a const-literal
+    // argument, the call's value is that const. Pure spec semantics —
+    // function call's value is its return value per AbstractClosure.
+    // Only attempt this when _resolver is initialised (within an
+    // analyzeJSBundle call); when invoked stand-alone (post-analysis),
+    // skip this branch since _resolveCalleeFuncPath needs _resolver.
+    if (_resolver) {
+      var calleeFnPath = _resolveCalleeFuncPath(path, 0);
+      if (calleeFnPath && calleeFnPath.node && calleeFnPath.node.body &&
+          _t.isBlockStatement(calleeFnPath.node.body)) {
+        var fnBody = calleeFnPath.node.body.body;
+        if (fnBody.length === 1 && _t.isReturnStatement(fnBody[0]) && fnBody[0].argument) {
+          var retArg = fnBody[0].argument;
+          if (_t.isStringLiteral(retArg)) return { kind: "const", value: retArg.value };
+          if (_t.isNumericLiteral(retArg)) return { kind: "const", value: retArg.value };
+          if (_t.isBooleanLiteral(retArg)) return { kind: "const", value: retArg.value };
+          if (_t.isNullLiteral(retArg)) return { kind: "const", value: null };
+        }
+      }
+    }
     return { kind: "top" }; // Other call returns abstract to Top.
   }
   // Unmodelled expression kinds abstract to Top — sound conservative answer.

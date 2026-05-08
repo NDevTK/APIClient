@@ -865,6 +865,18 @@ specTest("§ 13.5.3.5: `typeof Const(42)` resolves to Const(\"number\")", `
 });
 
 // ═════════════════════════════════════════════════════════════════════
+// § 13.3.6 CallExpression — Const-return propagation
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.3.6 CallExpression Const-return ===\n");
+
+test("§ 13.3.6: call to const-returning function flows to fetch URL", `
+  function getEndpoint() { return "/api/x"; }
+  fetch(getEndpoint());
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
+});
+
+// ═════════════════════════════════════════════════════════════════════
 // § 14.7.2 WhileStatement — body's writes captured
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 14.7.2 WhileStatement ===\n");
