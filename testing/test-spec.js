@@ -903,6 +903,33 @@ test("Composition: destructured config + member chain + concat", `
 });
 
 // ═════════════════════════════════════════════════════════════════════
+// § 13.16 SequenceExpression — `(a, b, c)` evaluates to c
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.16 SequenceExpression ===\n");
+
+specTest("§ 13.16: sequence expression value is the last element (comma operator)", `
+  function f() {
+    this.url = (1, 2, "/api/x");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" &&
+         effects[0].value.value === "/api/x";
+});
+
+specTest("§ 13.14: ternary value preserves both arms as or(cons, alt)", `
+  function f(b) {
+    this.url = b ? "/yes" : "/no";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "or" &&
+         v.left && v.left.kind === "const" && v.left.value === "/yes" &&
+         v.right && v.right.kind === "const" && v.right.value === "/no";
+});
+
+// ═════════════════════════════════════════════════════════════════════
 // § 14.7.2 WhileStatement — body's writes captured
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 14.7.2 WhileStatement ===\n");

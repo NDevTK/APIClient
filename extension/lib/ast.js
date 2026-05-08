@@ -2647,6 +2647,26 @@ function _specEvalLeaf(path, state, vals, effects) {
     }
     return _specAssignmentExpressionApply(n, state, rhsAv, lhsObjAv, lhsKeyAv, effects);
   }
+  if (_t.isSequenceExpression(n)) {
+    // § 13.16 SequenceExpression — `(a, b, c)` evaluates to c per the
+    // comma-operator semantics; only the last expression's value is
+    // the SequenceExpression's value.
+    if (n.expressions.length > 0) {
+      var lastAv = vals.get(n.expressions[n.expressions.length - 1]);
+      if (lastAv) return lastAv;
+    }
+    return { kind: "top" };
+  }
+  if (_t.isConditionalExpression(n)) {
+    // § 13.14 ConditionalExpression — `test ? cons : alt` evaluates to
+    // either cons or alt depending on ToBoolean(test). Without
+    // truthiness analysis on test, both arms are reachable; preserve
+    // both via or(cons, alt).
+    var consAv = vals.get(n.consequent);
+    var altAv = vals.get(n.alternate);
+    if (consAv && altAv) return _specLogicalOrAv(consAv, altAv);
+    return { kind: "top" };
+  }
   if (_t.isUnaryExpression(n)) {
     // § 13.5 UnaryOperators. When operand resolves to Const, evaluate
     // per spec-defined operator semantics:
