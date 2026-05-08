@@ -2128,6 +2128,119 @@ specTest("§ 23.1.3.26: `[1,2,3].reverse()` → array-lit [3,2,1]", `
   return byKey.first === 3 && byKey.last === 1;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 22.1.3 String.prototype additional methods
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 22.1.3 String.prototype.{split,replace,indexOf,includes,startsWith,endsWith,repeat,padStart,charAt} ===\n");
+
+specTest("§ 22.1.3.23: `'a,b,c'.split(',')` → array-lit ['a','b','c']", `
+  function f() {
+    var parts = "a,b,c".split(",");
+    this.first = parts[0];
+    this.last = parts[2];
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.first === "a" && byKey.last === "c";
+});
+
+specTest("§ 22.1.3.19: `'hello world'.replace('world', 'there')` → Const('hello there')", `
+  function f() {
+    this.r = "hello world".replace("world", "there");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "hello there";
+});
+
+specTest("§ 22.1.3.20: `'a-b-c'.replaceAll('-', '_')` → Const('a_b_c')", `
+  function f() {
+    this.r = "a-b-c".replaceAll("-", "_");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "a_b_c";
+});
+
+specTest("§ 22.1.3.9: `'hello'.indexOf('lo')` → Const(3)", `
+  function f() {
+    this.r = "hello".indexOf("lo");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 3;
+});
+
+specTest("§ 22.1.3.8: `'hello'.includes('ell')` → Const(true)", `
+  function f() {
+    this.r = "hello".includes("ell");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+specTest("§ 22.1.3.24: `'/api/users'.startsWith('/api')` → Const(true)", `
+  function f() {
+    this.r = "/api/users".startsWith("/api");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+specTest("§ 22.1.3.7: `'file.json'.endsWith('.json')` → Const(true)", `
+  function f() {
+    this.r = "file.json".endsWith(".json");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+specTest("§ 22.1.3.18: `'ab'.repeat(3)` → Const('ababab')", `
+  function f() {
+    this.r = "ab".repeat(3);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "ababab";
+});
+
+specTest("§ 22.1.3.17: `'5'.padStart(3, '0')` → Const('005')", `
+  function f() {
+    this.r = "5".padStart(3, "0");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "005";
+});
+
+specTest("§ 22.1.3.2: `'abc'.charAt(1)` → Const('b')", `
+  function f() {
+    this.r = "abc".charAt(1);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "b";
+});
+
+specTest("§ 22.1.3.1: `'abc'.at(-1)` → Const('c') (negative index)", `
+  function f() {
+    this.r = "abc".at(-1);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "c";
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
