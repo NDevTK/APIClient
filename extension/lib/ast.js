@@ -1241,14 +1241,9 @@ function _processNetworkSink(path, result) {
       isXhr = true; // String literal method ⇒ almost certainly XHR
     }
     if (!isXhr && _t.isIdentifier(callee.object)) {
-      var xhrCheckBinding = path.scope.getBinding(callee.object.name);
-      if (xhrCheckBinding && _t.isVariableDeclarator(xhrCheckBinding.path.node) && xhrCheckBinding.path.node.init) {
-        var _initN = xhrCheckBinding.path.node.init;
-        if (_t.isNewExpression(_initN) && _t.isIdentifier(_initN.callee, { name: "XMLHttpRequest" }) &&
-            !path.scope.getBinding("XMLHttpRequest")) isXhr = true;
-        if (_t.isCallExpression(_initN) && _t.isMemberExpression(_initN.callee) &&
-            _t.isIdentifier(_initN.callee.property, { name: "xhr" })) isXhr = true;
-      }
+      // Delegate to _isXhrObject which does spec-grounded trace
+      // through factory return statements (no method-name shortcut).
+      if (_isXhrObject(path, callee.object)) isXhr = true;
     }
     // Try resolving method to confirm — but skip if the object is provably NOT XHR
     // (e.g., bound to `new BroadcastChannel()`, `new URL()`, or other known non-XHR constructors)
