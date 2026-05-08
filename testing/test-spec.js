@@ -1000,6 +1000,33 @@ specTest("§ 13.10: obj-lit static prop access `{a: 1, b: 2}.a` resolves to Cons
   return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 1;
 });
 
+specTest("§ 21.1.3.6: `Const(42).toString()` resolves to Const(\"42\")", `
+  function f() {
+    this.s = (42).toString();
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "42";
+});
+
+specTest("§ 21.1.3.6: `Const(255).toString(16)` resolves to Const(\"ff\")", `
+  function f() {
+    this.s = (255).toString(16);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "ff";
+});
+
+specTest("§ 21.1.3.3: `Const(3.14159).toFixed(2)` resolves to Const(\"3.14\")", `
+  function f() {
+    this.s = (3.14159).toFixed(2);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "3.14";
+});
+
 specTest("§ 22.1.3.32: `Const(\"  hi  \").trim()` resolves to Const(\"hi\")", `
   function f() {
     this.h = "  hi  ".trim();

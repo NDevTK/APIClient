@@ -2897,6 +2897,26 @@ function _specEvalLeaf(path, state, vals, effects) {
           }
         }
       }
+      // Number built-ins per § 21.1.3 — receiver Const number.
+      if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "number") {
+        var nMeth = n.callee.property.name;
+        var nv = recvAv.value;
+        // § 21.1.3.6 Number.prototype.toString [(radix)]
+        if (nMeth === "toString") {
+          if (n.arguments.length === 0) return { kind: "const", value: nv.toString() };
+          var radixAv = vals.get(n.arguments[0]);
+          if (radixAv && radixAv.kind === "const" && typeof radixAv.value === "number") {
+            return { kind: "const", value: nv.toString(radixAv.value) };
+          }
+        }
+        // § 21.1.3.3 Number.prototype.toFixed (digits)
+        if (nMeth === "toFixed" && n.arguments.length >= 1) {
+          var digitsAv = vals.get(n.arguments[0]);
+          if (digitsAv && digitsAv.kind === "const" && typeof digitsAv.value === "number") {
+            return { kind: "const", value: nv.toFixed(digitsAv.value) };
+          }
+        }
+      }
     }
     // § 13.3.6 CallExpression: when the call resolves to a function
     // whose body is a single ReturnStatement with a const-literal
