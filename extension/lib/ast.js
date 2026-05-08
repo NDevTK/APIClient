@@ -2543,6 +2543,34 @@ function _resolveCalleeToFunction(callPath) {
               }
             }
           }
+          // ECMA § 19.1.2.1 — Object.assign(target, ...sources) copies
+          // each source's enumerable own properties onto target. Built-in
+          // semantics; recognised by scope-checked `Object` identifier
+          // (no framework-name match).
+          // Pattern: refs[cv] is `obj` used as arg[0] of Object.assign.
+          var oaCallPath = refs[cv].parentPath;
+          var oaCallNode = oaCallPath ? oaCallPath.node : null;
+          if (oaCallNode && _t.isCallExpression(oaCallNode) &&
+              oaCallNode.arguments[0] === refs[cv].node &&
+              _t.isMemberExpression(oaCallNode.callee) && !oaCallNode.callee.computed &&
+              _t.isIdentifier(oaCallNode.callee.object, { name: "Object" }) &&
+              !refs[cv].scope.getBinding("Object") &&
+              _t.isIdentifier(oaCallNode.callee.property, { name: "assign" })) {
+            for (var oaArgIdx = 1; oaArgIdx < oaCallNode.arguments.length; oaArgIdx++) {
+              var oaSrc = oaCallNode.arguments[oaArgIdx];
+              if (!_t.isObjectExpression(oaSrc)) continue;
+              for (var oap = 0; oap < oaSrc.properties.length; oap++) {
+                var oaProp = oaSrc.properties[oap];
+                if (!_t.isObjectProperty(oaProp) || oaProp.computed) continue;
+                var oaKey = _t.isIdentifier(oaProp.key) ? oaProp.key.name :
+                  (_t.isStringLiteral(oaProp.key) ? oaProp.key.value : null);
+                if (oaKey === propName &&
+                    (_t.isFunctionExpression(oaProp.value) || _t.isArrowFunctionExpression(oaProp.value))) {
+                  return oaCallPath.get("arguments." + oaArgIdx + ".properties." + oap + ".value");
+                }
+              }
+            }
+          }
         }
       }
     }

@@ -10488,6 +10488,18 @@ test("End-to-end negative: single-value role surfaces just that one value", `
   return roleP.validValues.length === 1 && roleP.validValues[0] === "user";
 });
 
+// § 19.1.2.1 — Object.assign(target, src) propagates src's properties to
+// target. Calling client.fetchUser() with a literal-URL inside the
+// fetched function should produce a fetch site at that URL — the lookup
+// flows through the spec-built-in to the function definition.
+test("§ 19.1.2.1: Object.assign({...}, {fetchUser: fn}) propagates — call traces literal-URL fetch", `
+  var client = {};
+  Object.assign(client, { fetchUser: function() { fetch("/api/users"); } });
+  client.fetchUser();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/users"; });
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Results: " + passed + "/" + total + " passed, " + failed + " failed");
