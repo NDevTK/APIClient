@@ -1877,31 +1877,6 @@ function _resolveCalleeToFunction(callPath) {
               }
             }
           }
-          // Third try: property defined via obj.extend({method: function(){}})
-          if (_t.isMemberExpression(refParent) && refParent.object === refs[cv].node && !refParent.computed) {
-            var extName = _t.isIdentifier(refParent.property) ? refParent.property.name : null;
-            if (extName === "extend" || extName === "mixin" || extName === "assign") {
-              var extCallPath = refs[cv].parentPath ? refs[cv].parentPath.parentPath : null;
-              var extCallNode = extCallPath ? extCallPath.node : null;
-              if (extCallNode && _t.isCallExpression(extCallNode) && extCallNode.callee === refParent) {
-                for (var ea = 0; ea < extCallNode.arguments.length; ea++) {
-                  var extArgObj = extCallNode.arguments[ea];
-                  if (!_t.isObjectExpression(extArgObj)) continue;
-                  for (var ep = 0; ep < extArgObj.properties.length; ep++) {
-                    var extProp = extArgObj.properties[ep];
-                    if (!_t.isObjectProperty(extProp) || extProp.computed) continue;
-                    var epKey = _t.isIdentifier(extProp.key) ? extProp.key.name :
-                      (_t.isStringLiteral(extProp.key) ? extProp.key.value : null);
-                    if (epKey === propName) {
-                      if (_t.isFunctionExpression(extProp.value) || _t.isArrowFunctionExpression(extProp.value)) {
-                        return extCallPath.get("arguments." + ea + ".properties." + ep + ".value");
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
         }
       }
     }
