@@ -12374,7 +12374,7 @@ function _collectEqualityConstraints(path) {
 }
 
 // Detect iteration constraints from spec-defined Array iterators per
-// ECMA-262 § 23.1.3.15 / § 23.1.3.20 — `arr.forEach(fn)` / `arr.map(fn)`.
+// ECMA-262 § 23.1.3.15 / § 23.1.3.21 — `arr.forEach(fn)` / `arr.map(fn)`.
 // The callback parameter is constrained to the array's element values.
 // The jQuery / underscore / lodash `X.each(arr, fn)` shape was removed
 // per CLAUDE.md L29 — those library helpers reach the analyser when
@@ -12407,7 +12407,7 @@ function _collectIterationConstraints(path) {
   }
   if (elemValues.length < 1) return;
 
-  // forEach / map per ECMA § 23.1.3.15 / § 23.1.3.20 invoke the callback
+  // forEach / map per ECMA § 23.1.3.15 / § 23.1.3.21 invoke the callback
   // with (element, index, array) — element is param 0.
   var elemParamIdx = 0;
   if (callbackNode.params.length <= elemParamIdx) return;
