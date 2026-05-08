@@ -3214,16 +3214,101 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "obj-lit", props: props };
   }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
-    // § 20.1.2.19 — Object.keys(src) returns an array of src's
-    // enumerable own keys. Recognised as a built-in only when the
-    // `Object` identifier is the unshadowed global (§ 8.1.1).
+    // § 20.1.2.{19,5,24,7} — Object.{keys,entries,values,fromEntries}.
+    // Scope-checked unshadowed `Object` global identifier (§ 8.1.1).
     if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
         _t.isIdentifier(n.callee.object, { name: "Object" }) &&
         !path.scope.getBinding("Object") &&
-        _t.isIdentifier(n.callee.property, { name: "keys" }) &&
-        n.arguments.length >= 1) {
-      var srcAv = vals.get(n.arguments[0]) || { kind: "top" };
-      return { kind: "keys-of", src: srcAv };
+        _t.isIdentifier(n.callee.property)) {
+      var objBuiltin = n.callee.property.name;
+      // § 20.1.2.19 Object.keys(src) — array of src's enumerable own
+      // string keys. Tracked as a special abstract value `keys-of(src)`
+      // that downstream consumers (forEach dispatch, member access) recognise.
+      if (objBuiltin === "keys" && n.arguments.length >= 1) {
+        var srcAv = vals.get(n.arguments[0]) || { kind: "top" };
+        return { kind: "keys-of", src: srcAv };
+      }
+      // § 20.1.2.5 Object.entries(src) — array of [key, value] pairs.
+      // For obj-lit src: build array-lit of [Const(key), value-av] pairs.
+      if (objBuiltin === "entries" && n.arguments.length >= 1) {
+        var entriesSrc = vals.get(n.arguments[0]);
+        if (entriesSrc && entriesSrc.kind === "obj-lit" && entriesSrc.props) {
+          var entriesArr = [];
+          var entryKeys = Object.keys(entriesSrc.props);
+          for (var eki = 0; eki < entryKeys.length; eki++) {
+            var ek = entryKeys[eki];
+            entriesArr.push({
+              kind: "array-lit",
+              elements: [{ kind: "const", value: ek }, entriesSrc.props[ek]]
+            });
+          }
+          return { kind: "array-lit", elements: entriesArr };
+        }
+        return { kind: "top" };
+      }
+      // § 20.1.2.24 Object.values(src) — array of own enumerable values.
+      // For obj-lit src: build array-lit of value-avs (in insertion order
+      // per § 7.3.21 EnumerableOwnPropertyNames).
+      if (objBuiltin === "values" && n.arguments.length >= 1) {
+        var valuesSrc = vals.get(n.arguments[0]);
+        if (valuesSrc && valuesSrc.kind === "obj-lit" && valuesSrc.props) {
+          var valuesArr = [];
+          var valueKeys = Object.keys(valuesSrc.props);
+          for (var vki = 0; vki < valueKeys.length; vki++) {
+            valuesArr.push(valuesSrc.props[valueKeys[vki]]);
+          }
+          return { kind: "array-lit", elements: valuesArr };
+        }
+        return { kind: "top" };
+      }
+      // § 20.1.2.7 Object.fromEntries(iterable) — inverse of entries.
+      // Per spec the iterable must yield [key, value] pairs. For our
+      // analyser: when arg is an array-lit whose elements are array-lit
+      // [Const(key), value-av] pairs, build the obj-lit.
+      if (objBuiltin === "fromEntries" && n.arguments.length >= 1) {
+        var feSrc = vals.get(n.arguments[0]);
+        if (feSrc && feSrc.kind === "array-lit" && feSrc.elements) {
+          var feProps = Object.create(null);
+          var feOk = true;
+          for (var fei = 0; fei < feSrc.elements.length; fei++) {
+            var pair = feSrc.elements[fei];
+            if (!pair || pair.kind !== "array-lit" || !pair.elements ||
+                pair.elements.length < 2) { feOk = false; break; }
+            var pk = pair.elements[0];
+            if (!pk || pk.kind !== "const" ||
+                (typeof pk.value !== "string" && typeof pk.value !== "number")) { feOk = false; break; }
+            feProps[String(pk.value)] = pair.elements[1];
+          }
+          if (feOk) return { kind: "obj-lit", props: feProps };
+        }
+        return { kind: "top" };
+      }
+      // § 20.1.2.1 Object.assign(target, ...sources) — merges enumerable
+      // own props of each source into target. Returns target.
+      if (objBuiltin === "assign" && n.arguments.length >= 1) {
+        var oaTargetAv = vals.get(n.arguments[0]) || { kind: "top" };
+        if (oaTargetAv.kind !== "obj-lit") return { kind: "top" };
+        var oaMerged = Object.create(null);
+        for (var omk in oaTargetAv.props) {
+          if (Object.prototype.hasOwnProperty.call(oaTargetAv.props, omk)) {
+            oaMerged[omk] = oaTargetAv.props[omk];
+          }
+        }
+        for (var oai = 1; oai < n.arguments.length; oai++) {
+          var oaSrc = vals.get(n.arguments[oai]);
+          if (!oaSrc || oaSrc.kind !== "obj-lit" || !oaSrc.props) {
+            // Unknown source — sound result is target with possibly more
+            // unknown keys; abstract to top to avoid claiming a complete shape.
+            return { kind: "top" };
+          }
+          for (var omk2 in oaSrc.props) {
+            if (Object.prototype.hasOwnProperty.call(oaSrc.props, omk2)) {
+              oaMerged[omk2] = oaSrc.props[omk2];
+            }
+          }
+        }
+        return { kind: "obj-lit", props: oaMerged };
+      }
     }
     // Global encoding/parse built-ins per § 19.2 — scope-checked
     // unshadowed global identifier with Const args, evaluate spec.

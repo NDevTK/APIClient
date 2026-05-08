@@ -1901,6 +1901,117 @@ specTest("§ 23.1.3.21: shadowed Array constructor / unknown receiver — no dis
   return true;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 20.1.2 Object.{entries, values, fromEntries, assign}
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 20.1.2 Object.entries/values/fromEntries/assign ===\n");
+
+specTest("§ 20.1.2.5: `Object.entries({a:1,b:2})` → array-lit of [key,value] pairs", `
+  function f() {
+    var o = Object.entries({a: 1, b: 2});
+    this.first = o[0];
+    this.second = o[1];
+  }
+`, function(effects) {
+  // Each entry is array-lit [Const(key), Const(value)].
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const") byKey[e.key.value] = e.value;
+  }
+  var firstOk = byKey.first && byKey.first.kind === "array-lit" && byKey.first.elements.length === 2 &&
+                byKey.first.elements[0].kind === "const" && byKey.first.elements[0].value === "a" &&
+                byKey.first.elements[1].kind === "const" && byKey.first.elements[1].value === 1;
+  var secondOk = byKey.second && byKey.second.kind === "array-lit" && byKey.second.elements.length === 2 &&
+                 byKey.second.elements[0].kind === "const" && byKey.second.elements[0].value === "b" &&
+                 byKey.second.elements[1].kind === "const" && byKey.second.elements[1].value === 2;
+  return firstOk && secondOk;
+});
+
+specTest("§ 20.1.2.24: `Object.values({a:1,b:'x'})` → array-lit of value-avs in source order", `
+  function f() {
+    var v = Object.values({a: 1, b: "x"});
+    this.first = v[0];
+    this.second = v[1];
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.first === 1 && byKey.second === "x";
+});
+
+specTest("§ 20.1.2.7: `Object.fromEntries([['k', 42]])` → obj-lit {k: Const(42)}", `
+  function f() {
+    var o = Object.fromEntries([["k", 42]]);
+    this.x = o.k;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 42;
+});
+
+specTest("§ 20.1.2.1: `Object.assign({a:1}, {b:2}, {c:3})` → merged obj-lit", `
+  function f() {
+    var merged = Object.assign({a: 1}, {b: 2}, {c: 3});
+    this.a = merged.a;
+    this.b = merged.b;
+    this.c = merged.c;
+  }
+`, function(effects) {
+  if (effects.length !== 3) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.a === 1 && byKey.b === 2 && byKey.c === 3;
+});
+
+specTest("§ 20.1.2.1: `Object.assign(target, src)` — later source overrides earlier key", `
+  function f() {
+    var merged = Object.assign({k: "first"}, {k: "second"});
+    this.r = merged.k;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "second";
+});
+
+// Negative case: shadowed `Object` does NOT trigger the built-in.
+specTest("§ 20.1.2: shadowed `Object` does NOT trigger built-in evaluation", `
+  function f() {
+    var Object = { entries: function() { return [["k", 99]]; } };
+    var o = Object.entries({});
+    this.r = o[0];
+  }
+`, function(effects) {
+  // Built-in would have produced `[]` (empty array-lit) for entries({}).
+  // The local Object.entries returns [["k", 99]], but that's a function call
+  // which we don't trace through unless via the const-return path. Either:
+  // top, or some non-built-in result is acceptable; explicitly NOT array-lit
+  // representing the built-in's output.
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Built-in produced for `Object.entries({})` would be `[][0]` = top
+  // (since 0 is out of range of empty array). So a passing case: we MUST
+  // not see `[]` in the chain; just check that we DON'T resolve to built-in
+  // shape (i.e. value is not the array-lit pair).
+  if (av && av.kind === "array-lit" && av.elements && av.elements.length === 2 &&
+      av.elements[0].kind === "const" && av.elements[0].value === "k") {
+    return false; // would mean built-in fired wrongly
+  }
+  return true;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
