@@ -2221,18 +2221,15 @@ function _traceDeepSinkCall(callPath, funcNode, funcBinding, propMap, result) {
           dpKey === "async" ||           // XHR open()'s third param
           dpKey === "withCredentials" || // XHR property
           dpKey === "responseType") continue;  // XHR responseType
-      // "data" property: extract its sub-properties as body params
-      if (dpKey === "data") {
-        if (_t.isObjectExpression(dp.value)) {
-          var dataParams = _extractObjectProperties(dp.value);
-          for (var ddp = 0; ddp < dataParams.length; ddp++) { dataParams[ddp].location = "body"; deepParams.push(dataParams[ddp]); }
-        } else if (_t.isCallExpression(dp.value) && _isJsonStringify(dp.value, callPath) &&
-                   dp.value.arguments[0] && _t.isObjectExpression(dp.value.arguments[0])) {
-          var jsonParams = _extractObjectProperties(dp.value.arguments[0]);
-          for (var djp = 0; djp < jsonParams.length; djp++) { jsonParams[djp].location = "body"; deepParams.push(jsonParams[djp]); }
-        }
-        continue;
-      }
+      // (Removed `dpKey === "data"` flatten-as-body-fields special
+      // case — that was jQuery $.ajax convention. Spec-correct
+      // treatment per Fetch Standard § 5.4: the body property is
+      // named `body`, and arbitrary wrapper functions may name their
+      // body argument anything. The wrapper's actual body assignment
+      // is reachable via inter-procedural trace-through; without it,
+      // every non-skip-listed property is added as a single body
+      // field below — which is the spec-grounded fallback when the
+      // wrapper's body extraction semantic isn't known.)
     }
   }
 
