@@ -934,6 +934,24 @@ specTest("§ 13.14: ternary value preserves both arms as or(cons, alt)", `
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 13.2.5.4 step 8: ObjectExpression spread ===\n");
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.2.4 ArrayLiteral evaluation
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.2.4 ArrayLiteral eval ===\n");
+
+specTest("§ 13.2.4: ArrayLiteral elements collected as array-lit abstract value", `
+  function f() {
+    this.list = ["a", "b", "c"];
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  if (!v || v.kind !== "array-lit" || !v.elements || v.elements.length !== 3) return false;
+  return v.elements[0].kind === "const" && v.elements[0].value === "a" &&
+         v.elements[1].kind === "const" && v.elements[1].value === "b" &&
+         v.elements[2].kind === "const" && v.elements[2].value === "c";
+});
+
 specTest("§ 13.2.5.4 step 8: `{...other, x: 1}` merges other's known props", `
   function f() {
     var defaults = { method: "GET", role: "user" };

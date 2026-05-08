@@ -1922,6 +1922,7 @@ function _specEqualAv(a, b) {
       case "args-len": break;
       case "top":      break;
       case "obj-lit":  return false;  // identity-based
+      case "array-lit": return false;  // identity-based
       case "const":    if (x.value !== y.value) return false; break;
       case "args-elt": pairs.push([x.idx, y.idx]); break;
       case "loop-key": pairs.push([x.src, y.src]); break;
@@ -2175,6 +2176,13 @@ function _specPostorderExprPaths(rootPath) {
           // for the CopyDataProperties merge in obj-lit eval.
           stack.push(p.get("properties." + pi + ".argument"));
         }
+      }
+    } else if (_t.isArrayExpression(n)) {
+      // § 13.2.4 — ArrayLiteral elements need eval so the array-lit
+      // value records their abstract values.
+      for (var aei = n.elements.length - 1; aei >= 0; aei--) {
+        var elN = n.elements[aei];
+        if (elN) stack.push(p.get("elements." + aei));
       }
     } else if (_t.isUnaryExpression(n) || _t.isUpdateExpression(n)) {
       stack.push(p.get("argument"));
@@ -2726,6 +2734,19 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
     }
     return { kind: "top" };
+  }
+  if (_t.isArrayExpression(n)) {
+    // § 13.2.4 ArrayLiteral evaluation. Each element's abstract value
+    // is collected; SpreadElement abstracts to a top-marker since we
+    // don't track inline-array composition.
+    var elems = [];
+    for (var aei = 0; aei < n.elements.length; aei++) {
+      var elN = n.elements[aei];
+      if (!elN) { elems.push({ kind: "const", value: undefined }); continue; }
+      if (_t.isSpreadElement(elN)) { elems.push({ kind: "top" }); continue; }
+      elems.push(vals.get(elN) || { kind: "top" });
+    }
+    return { kind: "array-lit", elements: elems };
   }
   if (_t.isObjectExpression(n)) {
     var props = Object.create(null);
