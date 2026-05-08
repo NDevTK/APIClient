@@ -3236,6 +3236,56 @@ function _specEvalLeaf(path, state, vals, effects) {
     }
     return { kind: "obj-lit", props: props };
   }
+  if (_t.isNewExpression(n)) {
+    // § 13.3.5 NewExpression — invokes the constructor as [[Construct]].
+    // For known built-in constructors with Const/array-lit arguments,
+    // evaluate to the spec-defined instance abstract value:
+    //   § 23.1.1.1 Array — single-numeric → empty-of-length; multi-arg →
+    //                       array-lit of args; zero-arg → empty.
+    //   § 22.2.1 RegExp — abstract to top (regex semantics not modeled).
+    //   Other classes — top.
+    if (_t.isIdentifier(n.callee) && !path.scope.getBinding(n.callee.name)) {
+      var ctorName = n.callee.name;
+      // § 23.1.1.1 Array(...values)
+      if (ctorName === "Array") {
+        if (n.arguments.length === 0) {
+          return { kind: "array-lit", elements: [] };
+        }
+        if (n.arguments.length === 1) {
+          var lenAv = vals.get(n.arguments[0]);
+          // Single-numeric arg per § 23.1.1.1 step 5 — array of that length.
+          if (lenAv && lenAv.kind === "const" && typeof lenAv.value === "number" &&
+              Number.isInteger(lenAv.value) && lenAv.value >= 0) {
+            var initElems = new Array(lenAv.value);
+            for (var iei = 0; iei < lenAv.value; iei++) initElems[iei] = { kind: "const", value: undefined };
+            return { kind: "array-lit", elements: initElems };
+          }
+          // Single non-numeric arg → array containing that single element
+          // per § 23.1.1.1 step 6.b.
+          if (lenAv) return { kind: "array-lit", elements: [lenAv] };
+          return { kind: "top" };
+        }
+        // Multi-arg → array of those args per § 23.1.1.1 step 6.
+        var newElems = [];
+        for (var nai = 0; nai < n.arguments.length; nai++) {
+          newElems.push(vals.get(n.arguments[nai]) || { kind: "top" });
+        }
+        return { kind: "array-lit", elements: newElems };
+      }
+      // § 21.1.1.1 new Number(value) — produces a Number wrapper object.
+      // For property-flow analysis, .valueOf() is unwrap; abstract to top
+      // since downstream property access won't see the Number prototype.
+      if (ctorName === "Number" || ctorName === "String" || ctorName === "Boolean") {
+        return { kind: "top" };
+      }
+      // § 24.1.1 new Map() / § 24.2.1 new Set() — return empty obj-lit
+      // shape isn't appropriate; return top (their member access would
+      // need .get/.set tracking we don't yet model).
+      // § 21.4.1 new Date(...) — returns a Date instance, opaque to flow.
+      // § 22.2.1 new RegExp(...) — opaque.
+    }
+    return { kind: "top" };
+  }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
     // § 20.1.2.{19,5,24,7} — Object.{keys,entries,values,fromEntries}.
     // Scope-checked unshadowed `Object` global identifier (§ 8.1.1).

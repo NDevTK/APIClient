@@ -2301,6 +2301,67 @@ specTest("§ 13.2.4.1: `[...opaque]` with non-array-lit source bails to Top", `
   return av && av.kind !== "const";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.3.5 / § 23.1.1.1 NewExpression — Array constructor
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 23.1.1.1 new Array(...) ===\n");
+
+specTest("§ 23.1.1.1: `new Array()` → empty array-lit", `
+  function f() {
+    var a = new Array();
+    this.r = a.length;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 0;
+});
+
+specTest("§ 23.1.1.1: `new Array(3)` → array-lit of length 3 (single-numeric)", `
+  function f() {
+    var a = new Array(3);
+    this.r = a.length;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 3;
+});
+
+specTest("§ 23.1.1.1: `new Array(1, 2, 3)` → array-lit [1,2,3] (multi-arg)", `
+  function f() {
+    var a = new Array(1, 2, 3);
+    this.r = a.length;
+    this.first = a[0];
+    this.last = a[2];
+  }
+`, function(effects) {
+  if (effects.length !== 3) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.r === 3 && byKey.first === 1 && byKey.last === 3;
+});
+
+// Negative case: shadowed Array does NOT trigger built-in.
+specTest("§ 23.1.1.1: shadowed `Array` does NOT trigger built-in evaluation", `
+  function f() {
+    var Array = function (n) { return { length: -1 }; };
+    var a = new Array(3);
+    this.r = a.length;
+  }
+`, function(effects) {
+  // Built-in would have produced length = 3. With shadowed Array, the
+  // local function's return value isn't tracked here — anything except
+  // Const(3) is acceptable.
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (av && av.kind === "const" && av.value === 3) return false;
+  return true;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
