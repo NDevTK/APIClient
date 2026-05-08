@@ -426,6 +426,67 @@ specTest("§ 14.6 chain: if/else-if assigning same var records all branch effect
          roleVals.indexOf("admin") >= 0;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.2.4 ArrayLiteral — element access by const index
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.2.4 ArrayLiteral ===\n");
+
+test("§ 13.2.4: array literal indexed by literal const resolves URL", `
+  function f() {
+    var hosts = ["api.x.com", "api.y.com"];
+    fetch("https://" + hosts[1] + "/users");
+  }
+  f();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.y.com/users"; });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 14.3.1 Let and Const Declarations
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.3.1 Let and Const Declarations ===\n");
+
+specTest("§ 14.3.1: const declaration binding tracked same as var per Lexical Environments", `
+  function f() {
+    const url = "/api/x";
+    this.url = url;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var e = effects[0];
+  return e.target.kind === "this" &&
+         e.value.kind === "const" && e.value.value === "/api/x";
+});
+
+specTest("§ 14.3.1: let declaration binding tracked same as var", `
+  function f() {
+    let role = "admin";
+    this.role = role;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var e = effects[0];
+  return e.target.kind === "this" &&
+         e.value.kind === "const" && e.value.value === "admin";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 13.10 chained MemberExpression — `obj.a.b.c`
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.10 chained MemberExpression ===\n");
+
+specTest("§ 13.10: chained member access (a.b.c) yields nested member abstract value", `
+  function f(o) { this.url = o.config.api.endpoint; }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  // Should be member(member(member(param, "config"), "api"), "endpoint")
+  if (!v || v.kind !== "member") return false;
+  if (!v.key || v.key.kind !== "const" || v.key.value !== "endpoint") return false;
+  if (!v.obj || v.obj.kind !== "member") return false;
+  return true;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
