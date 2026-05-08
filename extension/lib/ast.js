@@ -2492,6 +2492,50 @@ function _resolveCalleeToFunction(callPath) {
               }
             }
           }
+          // Property defined via property-propagation function call.
+          // Detect `obj.copier(srcLit)` where copier's body's dataflow
+          // produces an Object.assign-equivalent effect (target=this,
+          // src=Param(0) or args-elt) per ECMA § 19.1.2.1. Spec-grounded
+          // — no library-name match.
+          if (_t.isMemberExpression(refParent) && refParent.object === refs[cv].node && !refParent.computed) {
+            var copierCallPath = refs[cv].parentPath ? refs[cv].parentPath.parentPath : null;
+            var copierCallNode = copierCallPath ? copierCallPath.node : null;
+            if (copierCallNode && _t.isCallExpression(copierCallNode) && copierCallNode.callee === refParent) {
+              var copierFn = _resolveCalleeFuncPath(copierCallPath, 0);
+              if (copierFn) {
+                var copierEffects = _specAnalyzePropertyFlow(copierFn);
+                var prop = _specDetectPropagationFromEffects(copierEffects);
+                if (prop && prop.target.kind === "this") {
+                  // The propagation source is one of the copier's params
+                  // (or arguments[i]). Map to the call site's argument
+                  // index, then scan that argument's literal for propName.
+                  var srcArgIdx = -1;
+                  if (prop.source.kind === "param") srcArgIdx = prop.source.idx;
+                  else if (prop.source.kind === "args-elt" &&
+                           prop.source.idx && prop.source.idx.kind === "const" &&
+                           typeof prop.source.idx.value === "number") {
+                    srcArgIdx = prop.source.idx.value;
+                  }
+                  if (srcArgIdx >= 0 && srcArgIdx < copierCallNode.arguments.length) {
+                    var srcArg = copierCallNode.arguments[srcArgIdx];
+                    if (_t.isObjectExpression(srcArg)) {
+                      for (var ep = 0; ep < srcArg.properties.length; ep++) {
+                        var sp = srcArg.properties[ep];
+                        if (!_t.isObjectProperty(sp) || sp.computed) continue;
+                        var spKey = _t.isIdentifier(sp.key) ? sp.key.name :
+                          (_t.isStringLiteral(sp.key) ? sp.key.value : null);
+                        if (spKey === propName) {
+                          if (_t.isFunctionExpression(sp.value) || _t.isArrowFunctionExpression(sp.value)) {
+                            return copierCallPath.get("arguments." + srcArgIdx + ".properties." + ep + ".value");
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
