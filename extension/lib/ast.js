@@ -1881,6 +1881,7 @@ function _specEqualAv(a, b) {
       case "const":    if (x.value !== y.value) return false; break;
       case "args-elt": pairs.push([x.idx, y.idx]); break;
       case "loop-key": pairs.push([x.src, y.src]); break;
+      case "keys-of":  pairs.push([x.src, y.src]); break;
       case "member":   pairs.push([x.obj, y.obj]); pairs.push([x.key, y.key]); break;
       case "or":       pairs.push([x.left, y.left]); pairs.push([x.right, y.right]); break;
       default: return false;
@@ -2117,50 +2118,53 @@ function _specEvalExpression(rootPath, state, effects) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// § 19.1.2.16 + § 22.1.3.7 — Object.keys(src).forEach(callback)
-// recognition. Built-in semantics: the callback is invoked once per
-// enumerable own key of `src` with that key as its first argument. For
-// our property-flow domain the effect is identical to `for (k in src)`,
-// so we bind the callback's first param to {kind:"loop-key", src} and
-// walk its body via the worklist's branch-stack mechanism.
+// § 22.1.3.7 — Array.prototype.forEach.
+// Dispatch any `arr.forEach(callback)` call whose receiver evaluates to
+// an iterable abstract value the analyser tracks. The callback's first
+// param is bound to the array's element type:
+//   - {kind:"keys-of", src} (returned by Object.keys per § 19.1.2.16)
+//     → element type is {kind:"loop-key", src} (semantically identical
+//       to a for-in loop's binding)
+//   - other iterables abstract to Top for now.
+// No compound shape matching: Object.keys is recognised separately by
+// the expression evaluator and produces the abstract value passed in
+// via the receiver. forEach dispatches purely on the receiver's
+// abstract value — exactly the spec's compositional semantics.
 // Returns true when the expression matched and was handled.
 // ───────────────────────────────────────────────────────────────────────────
-function _specHandleObjectKeysForEach(exprNode, exprPath, state, effects, branchStack) {
+function _specHandleArrayForEach(exprNode, exprPath, state, effects, branchStack) {
   if (!exprNode || !_t.isCallExpression(exprNode)) return false;
   var callee = exprNode.callee;
   if (!_t.isMemberExpression(callee) || callee.computed) return false;
   if (!_t.isIdentifier(callee.property, { name: "forEach" })) return false;
-  // Receiver must be `Object.keys(src)` per § 19.1.2.16; scope-checked
-  // on the unshadowed `Object` global.
-  var recv = callee.object;
-  if (!_t.isCallExpression(recv)) return false;
-  var recvCallee = recv.callee;
-  if (!_t.isMemberExpression(recvCallee) || recvCallee.computed) return false;
-  if (!_t.isIdentifier(recvCallee.object, { name: "Object" })) return false;
-  if (exprPath.scope.getBinding("Object")) return false;
-  if (!_t.isIdentifier(recvCallee.property, { name: "keys" })) return false;
-  if (recv.arguments.length < 1) return false;
   if (exprNode.arguments.length < 1) return false;
   var cb = exprNode.arguments[0];
   if (!_t.isFunctionExpression(cb) && !_t.isArrowFunctionExpression(cb)) return false;
   if (cb.params.length < 1 || !_t.isIdentifier(cb.params[0])) return false;
 
-  // Evaluate the source argument abstractly.
-  var srcAv = _specEvalExpression(exprPath.get("callee.object.arguments.0"), state, effects);
-  // Build callback's body-entry state with loop var bound.
-  var cbState = _specStateClone(state);
-  cbState[cb.params[0].name] = { kind: "loop-key", src: srcAv };
+  // Evaluate the receiver abstractly through the spec-organised
+  // expression evaluator. If it's a tracked iterable, derive the
+  // element type per § 22.1.3.7's CallbackInvocation.
+  var receiverAv = _specEvalExpression(exprPath.get("callee.object"), state, effects);
+  var elementAv;
+  if (receiverAv && receiverAv.kind === "keys-of") {
+    elementAv = { kind: "loop-key", src: receiverAv.src };
+  } else {
+    return false; // Not a tracked iterable — let standard expression
+                  // walk handle the call (its callback won't fire here,
+                  // which preserves soundness for unknown receivers).
+  }
 
-  // Push the callback's body into the branch stack so the worklist
-  // continues into it. Mirrors how _specApplyStatement handles ForInStatement.
+  var cbState = _specStateClone(state);
+  cbState[cb.params[0].name] = elementAv;
+
   var cbPath = exprPath.get("arguments.0");
   var bodyPath = cbPath.get("body");
   if (!bodyPath || !bodyPath.node) return true;
   if (_t.isBlockStatement(bodyPath.node)) {
     branchStack.push({ stmts: bodyPath.node.body, idx: 0, state: cbState, parentPath: bodyPath, isBody: true });
   } else {
-    // Arrow function with concise body (an expression). Evaluate it
-    // for side effects with the loop-binding state.
+    // Concise arrow body — evaluate as an expression with the binding.
     _specEvalExpression(bodyPath, cbState, effects);
   }
   return true;
@@ -2198,16 +2202,14 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
 
   if (_t.isExpressionStatement(stmt)) {
     // § 14.5 — evaluate the expression for side effects.
-    // First: recognise the spec-built-in iterator-callback pattern
-    //   Object.keys(src).forEach(callback)
-    // per ECMA § 19.1.2.16 (Object.keys) + § 22.1.3.7 (Array.prototype.forEach).
-    // The callback is invoked once per enumerable own key of `src` —
-    // semantically identical to `for(k in src)` for the property-flow
-    // domain, so we bind the callback's first param to {loop-key, src}
-    // and walk its body. No library-name match — this is the spec's
-    // own definition of these built-ins.
+    // First: recognise spec-built-in callback dispatchers like
+    // Array.prototype.forEach (§ 22.1.3.7). The dispatcher derives the
+    // callback's binding from the receiver's abstract value, so
+    // composition works naturally — `Object.keys(src).forEach(cb)`
+    // composes Object.keys (§ 19.1.2.16, in expression eval) with
+    // forEach (here) without any compound shape match.
     var exprNode = stmt.expression;
-    if (_specHandleObjectKeysForEach(exprNode, stmtPath.get("expression"), state, effects, branchStack)) {
+    if (_specHandleArrayForEach(exprNode, stmtPath.get("expression"), state, effects, branchStack)) {
       return;
     }
     _specEvalExpression(stmtPath.get("expression"), state, effects);
@@ -2472,6 +2474,20 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
     }
     return { kind: "obj-lit", props: props };
+  }
+  if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
+    // § 19.1.2.16 — Object.keys(src) returns an array of src's
+    // enumerable own keys. Recognised as a built-in only when the
+    // `Object` identifier is the unshadowed global (§ 8.1.1).
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.object, { name: "Object" }) &&
+        !path.scope.getBinding("Object") &&
+        _t.isIdentifier(n.callee.property, { name: "keys" }) &&
+        n.arguments.length >= 1) {
+      var srcAv = vals.get(n.arguments[0]) || { kind: "top" };
+      return { kind: "keys-of", src: srcAv };
+    }
+    return { kind: "top" }; // Other call returns abstract to Top.
   }
   // Unmodelled expression kinds abstract to Top — sound conservative answer.
   return { kind: "top" };
