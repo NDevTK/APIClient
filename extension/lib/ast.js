@@ -3422,6 +3422,55 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
         return { kind: "top" };
       }
+      // § 20.1.2.15 Object.is(value1, value2) — SameValue per § 7.2.10.
+      // Const-Const args evaluate; everything else abstracts to top.
+      if (objBuiltin === "is" && n.arguments.length === 2) {
+        var oiA = vals.get(n.arguments[0]);
+        var oiB = vals.get(n.arguments[1]);
+        if (oiA && oiA.kind === "const" && oiB && oiB.kind === "const") {
+          return { kind: "const", value: Object.is(oiA.value, oiB.value) };
+        }
+      }
+      // § 20.1.2.6 Object.freeze(obj) — returns obj. For our value
+      // lattice: passthrough the obj-lit value (we don't track mutability,
+      // and downstream property reads on the returned obj see the same shape).
+      if (objBuiltin === "freeze" && n.arguments.length === 1) {
+        var ofArg = vals.get(n.arguments[0]);
+        if (ofArg) return ofArg;
+      }
+      // § 20.1.2.12 Object.getPrototypeOf(obj) — proto of obj. Without
+      // tracking prototype chains we return Top (sound — null/object are
+      // both possible without instance tracking).
+      if (objBuiltin === "getPrototypeOf" && n.arguments.length === 1) {
+        return { kind: "top" };
+      }
+      // § 20.1.2.10 Object.getOwnPropertyNames(obj-lit) — array-lit of
+      // own string property names of obj-lit. (For non-obj-lit, top.)
+      if (objBuiltin === "getOwnPropertyNames" && n.arguments.length === 1) {
+        var opnArg = vals.get(n.arguments[0]);
+        if (opnArg && opnArg.kind === "obj-lit" && opnArg.props) {
+          var opnElems = [];
+          var opnKeys = Object.keys(opnArg.props);
+          for (var opni = 0; opni < opnKeys.length; opni++) {
+            opnElems.push({ kind: "const", value: opnKeys[opni] });
+          }
+          return { kind: "array-lit", elements: opnElems };
+        }
+        return { kind: "top" };
+      }
+      // § 20.1.2.2 Object.create(proto, [properties]) — single-arg with
+      // null prototype creates an empty obj. With known proto and no
+      // properties: empty obj-lit.
+      if (objBuiltin === "create") {
+        if (n.arguments.length === 1) {
+          var ocProto = vals.get(n.arguments[0]);
+          if (ocProto && (ocProto.kind === "const" && ocProto.value === null) ||
+              (ocProto && ocProto.kind === "obj-lit")) {
+            return { kind: "obj-lit", props: Object.create(null) };
+          }
+        }
+        return { kind: "top" };
+      }
       // § 20.1.2.1 Object.assign(target, ...sources) — merges enumerable
       // own props of each source into target. Returns target.
       if (objBuiltin === "assign" && n.arguments.length >= 1) {
@@ -3977,6 +4026,47 @@ function _specEvalLeaf(path, state, vals, effects) {
         if (aMeth === "reverse" && n.arguments.length === 0) {
           return { kind: "array-lit", elements: recvAv.elements.slice().reverse() };
         }
+      }
+      // § 23.1.3.1 Array.prototype.at(index) on array-lit receiver.
+      if (recvAv && recvAv.kind === "array-lit" && recvAv.elements && n.callee.property.name === "at" &&
+          n.arguments.length >= 1) {
+        var atIdxAv = vals.get(n.arguments[0]);
+        if (atIdxAv && atIdxAv.kind === "const" && typeof atIdxAv.value === "number") {
+          var atResolved = atIdxAv.value < 0 ? recvAv.elements.length + atIdxAv.value : atIdxAv.value;
+          if (atResolved >= 0 && atResolved < recvAv.elements.length) {
+            return recvAv.elements[atResolved];
+          }
+          return { kind: "const", value: undefined };
+        }
+      }
+      // § 23.1.3.13 Array.prototype.flat([depth]) — single-level flatten by
+      // default; deeper depths flatten nested array-lit elements iteratively.
+      if (recvAv && recvAv.kind === "array-lit" && recvAv.elements && n.callee.property.name === "flat") {
+        var flatDepth = 1;
+        if (n.arguments.length >= 1) {
+          var fdAv = vals.get(n.arguments[0]);
+          if (fdAv && fdAv.kind === "const" && typeof fdAv.value === "number") flatDepth = fdAv.value;
+          else return { kind: "top" };
+        }
+        // Iterative flatten with worklist of {av, depth-remaining} per spec
+        // § 23.1.3.10 FlattenIntoArray (uses LoopBody; we walk iteratively).
+        var flatRes = [];
+        var flatStack = [];
+        for (var fei = recvAv.elements.length - 1; fei >= 0; fei--) {
+          flatStack.push({ av: recvAv.elements[fei], depth: flatDepth });
+        }
+        while (flatStack.length > 0) {
+          var fe = flatStack.pop();
+          var feAv = fe.av;
+          if (feAv && feAv.kind === "array-lit" && feAv.elements && fe.depth > 0) {
+            for (var fej = feAv.elements.length - 1; fej >= 0; fej--) {
+              flatStack.push({ av: feAv.elements[fej], depth: fe.depth - 1 });
+            }
+          } else {
+            flatRes.push(feAv);
+          }
+        }
+        return { kind: "array-lit", elements: flatRes };
       }
       // § 23.1.3 Array.prototype.{map, filter, reduce, find, findIndex,
       // some, every, flatMap, forEach} — dispatch the callback against

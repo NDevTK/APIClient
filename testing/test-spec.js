@@ -2601,6 +2601,116 @@ specTest("§ 13.3.6.1: `Math.max(...opaque)` bails to Top when spread source unk
   return av && av.kind !== "const";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 23.1.3.{1, 13} Array.prototype.{at, flat}
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 23.1.3.{1,13} Array.prototype.{at, flat} ===\n");
+
+specTest("§ 23.1.3.1: `[1,2,3].at(-1)` → Const(3) (negative index)", `
+  function f() {
+    this.r = [1, 2, 3].at(-1);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 3;
+});
+
+specTest("§ 23.1.3.1: `[1,2,3].at(0)` → Const(1) (positive index)", `
+  function f() {
+    this.r = [1, 2, 3].at(0);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 1;
+});
+
+specTest("§ 23.1.3.13: `[[1,2],[3,4]].flat()` → array-lit [1,2,3,4]", `
+  function f() {
+    var f = [[1, 2], [3, 4]].flat();
+    this.r = f.length;
+    this.first = f[0];
+    this.last = f[3];
+  }
+`, function(effects) {
+  if (effects.length !== 3) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.r === 4 && byKey.first === 1 && byKey.last === 4;
+});
+
+specTest("§ 23.1.3.13: `[[[1]],[[2]]].flat(2)` → array-lit [1,2] (depth 2)", `
+  function f() {
+    var f = [[[1]], [[2]]].flat(2);
+    this.r = f.length;
+    this.first = f[0];
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.r === 2 && byKey.first === 1;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 20.1.2 Object.{is, freeze, getOwnPropertyNames}
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 20.1.2 Object.{is, freeze, getOwnPropertyNames} ===\n");
+
+specTest("§ 20.1.2.15: `Object.is(NaN, NaN)` → Const(true) (SameValue)", `
+  function f() {
+    this.r = Object.is(0/0, 0/0);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+specTest("§ 20.1.2.15: `Object.is(0, -0)` → Const(false) (SameValue distinguishes)", `
+  function f() {
+    this.r = Object.is(0, -0);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+specTest("§ 20.1.2.6: `Object.freeze({a:1}).a` passthrough → Const(1)", `
+  function f() {
+    this.r = Object.freeze({a: 1}).a;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 1;
+});
+
+specTest("§ 20.1.2.10: `Object.getOwnPropertyNames({a:1,b:2})` → array-lit ['a','b']", `
+  function f() {
+    var names = Object.getOwnPropertyNames({a: 1, b: 2});
+    this.r = names.length;
+    this.first = names[0];
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.r === 2 && byKey.first === "a";
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
