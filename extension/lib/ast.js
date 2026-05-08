@@ -8994,19 +8994,6 @@ function _resolveParamFromCallbackArg(callExprPath, cbArgIdx, paramIdx, depth, p
   var targetFuncPath = _resolveCalleeFuncPath(callExprPath, depth + 1);
   var targetFuncNode = targetFuncPath ? targetFuncPath.node : null;
 
-  // Fallback: _resolveCalleeToFunction has additional routes (property-
-  // flow propagation, Object.assign built-in, factory-call return) that
-  // _resolveCalleeFuncPath alone doesn't cover. Used for cases like
-  // `jQuery.ajaxTransport = factory(...)` where the property's value is
-  // itself a call.
-  if (!targetFuncPath) {
-    var extResolved = _resolveCalleeToFunction(callExprPath);
-    if (extResolved && extResolved.node) {
-      targetFuncPath = extResolved;
-      targetFuncNode = extResolved.node;
-    }
-  }
-
   if (!targetFuncNode) {
     // Try resolving callee as a call return value (e.g. addToPrefiltersOrTransports(structure) returns a function)
     if (_t.isCallExpression(calleeNode)) {
