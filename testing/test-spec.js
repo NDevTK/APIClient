@@ -855,6 +855,35 @@ specTest("§ 14.7.2: while-loop body writes recorded once (single-pass abstracti
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 14.15 TryStatement ===\n");
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.2.5.4 ComputedPropertyName — `{[k]: v}` with const-resolvable k
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.2.5.4 ComputedPropertyName ===\n");
+
+specTest("§ 13.2.5.4: computed key resolved from local const var becomes static prop", `
+  function f(v) {
+    var key = "role";
+    this.body = { [key]: v };
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  // body's obj-lit should have `role` as a key (resolved from `key` Const).
+  return v && v.kind === "obj-lit" && v.props && v.props.role &&
+         v.props.role.kind === "param" && v.props.role.idx === 0;
+});
+
+specTest("§ 13.2.5.4: computed key from string-literal expression resolves directly", `
+  function f(v) {
+    this.body = { ["explicit"]: v };
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "obj-lit" && v.props && v.props.explicit &&
+         v.props.explicit.kind === "param" && v.props.explicit.idx === 0;
+});
+
 specTest("§ 14.15: try, catch AND finally blocks all contribute property writes", `
   function f() {
     try {

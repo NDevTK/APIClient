@@ -2167,8 +2167,12 @@ function _specPostorderExprPaths(rootPath) {
     } else if (_t.isObjectExpression(n)) {
       for (var pi = n.properties.length - 1; pi >= 0; pi--) {
         var prop = n.properties[pi];
-        if (_t.isObjectProperty(prop) && !prop.computed) {
+        if (_t.isObjectProperty(prop)) {
           stack.push(p.get("properties." + pi + ".value"));
+          // Computed key needs evaluation so we can resolve it to a
+          // Const at the eval step per § 13.2.5.4 PropertyDefinition-
+          // Evaluation.
+          if (prop.computed) stack.push(p.get("properties." + pi + ".key"));
         }
       }
     } else if (_t.isUnaryExpression(n) || _t.isUpdateExpression(n)) {
@@ -2666,11 +2670,22 @@ function _specEvalLeaf(path, state, vals, effects) {
     var props = Object.create(null);
     for (var pi = 0; pi < n.properties.length; pi++) {
       var prop = n.properties[pi];
-      if (_t.isObjectProperty(prop) && !prop.computed) {
-        var k = _t.isIdentifier(prop.key) ? prop.key.name :
-          _t.isStringLiteral(prop.key) ? prop.key.value : null;
-        if (k !== null) props[k] = vals.get(prop.value) || { kind: "top" };
+      if (!_t.isObjectProperty(prop)) continue;
+      var k = null;
+      if (prop.computed) {
+        // § 13.2.5.4 ComputedPropertyName: evaluate the key expression;
+        // when it resolves to a Const string/number, use that as the key.
+        var keyAv = vals.get(prop.key);
+        if (keyAv && keyAv.kind === "const" &&
+            (typeof keyAv.value === "string" || typeof keyAv.value === "number")) {
+          k = keyAv.value;
+        }
+      } else {
+        k = _t.isIdentifier(prop.key) ? prop.key.name :
+          _t.isStringLiteral(prop.key) ? prop.key.value :
+          _t.isNumericLiteral(prop.key) ? prop.key.value : null;
       }
+      if (k !== null) props[k] = vals.get(prop.value) || { kind: "top" };
     }
     return { kind: "obj-lit", props: props };
   }
