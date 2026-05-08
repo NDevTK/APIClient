@@ -24,7 +24,14 @@ new Function(babelCode.replace(/^var BabelBundle/, "globalThis.BabelBundle"))();
 
 // Load ast.js (expects BabelBundle global; expose analyzeJSBundle + extractSourceMapUrl)
 var astCode = fs.readFileSync(__dirname + "/extension/lib/ast.js", "utf8");
-new Function(astCode + "\nglobalThis.analyzeJSBundle = analyzeJSBundle;\nglobalThis.extractSourceMapUrl = extractSourceMapUrl;\nglobalThis.buildDefinitionMap = buildDefinitionMap;")();
+new Function(astCode +
+  "\nglobalThis.analyzeJSBundle = analyzeJSBundle;" +
+  "\nglobalThis.extractSourceMapUrl = extractSourceMapUrl;" +
+  "\nglobalThis.buildDefinitionMap = buildDefinitionMap;" +
+  "\nglobalThis._specAnalyzePropertyFlow = _specAnalyzePropertyFlow;" +
+  "\nglobalThis._specInitialFunctionBodyState = _specInitialFunctionBodyState;" +
+  "\nglobalThis._specEvalExpression = _specEvalExpression;" +
+  "\nglobalThis._specEqualAv = _specEqualAv;")();
 
 var passed = 0, failed = 0, total = 0;
 
@@ -10154,6 +10161,181 @@ var p = new Promise(b => {
     return fr.line >= 2 && fr.calls && !fr.calls.has("b");
   });
   return !!arrowRange;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Property-Flow Analyser — focused ECMA spec-section tests.
+// Each test exercises ONE spec section's transfer function via the
+// analyser's published entry point. The analyser is not yet exposed on
+// the analyseJSBundle() result, so these tests exercise it indirectly
+// by checking that the recorded effects appear when we drive the analysis
+// through a wrapper (added below) that runs `_specAnalyzePropertyFlow`
+// on the first FunctionDeclaration of the bundle.
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log("\n=== Property-Flow Analyser: ECMA spec-section transfers ===\n");
+
+// Helper that finds the first FunctionDeclaration / FunctionExpression node
+// in a parsed bundle and runs the property-flow analyser on it. Exposed on
+// the bundle for testing only.
+function _runPropFlow(code) {
+  // Inject a sentinel call so the bundle isn't treated as dead code
+  var fullCode = code;
+  var result = analyzeJSBundle(fullCode, "test://propflow", true);
+  if (!result || !result._ast) return null;
+  // Find first top-level FunctionDeclaration in the AST
+  var fnNode = null;
+  for (var i = 0; i < result._ast.program.body.length; i++) {
+    var stmt = result._ast.program.body[i];
+    if (stmt.type === "FunctionDeclaration") { fnNode = stmt; break; }
+  }
+  if (!fnNode) return null;
+  // Use Babel traverse to obtain a path for the function declaration so the
+  // analyser can call .get(...) on it. Walking the program once, find the
+  // first FunctionDeclaration's path.
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(result._ast, {
+    FunctionDeclaration: function(p) {
+      if (!fnPath) fnPath = p;
+      p.skip();
+    }
+  });
+  if (!fnPath) return null;
+  // Reach the analyser. It's an internal function — eval-bind it via the
+  // _ast result by re-running the analysis script with a captured handle.
+  return globalThis._specAnalyzePropertyFlow ? globalThis._specAnalyzePropertyFlow(fnPath) : null;
+}
+
+// Re-eval the analyser script with a global-export sentinel so tests can
+// reach the internal function. This is test-only plumbing.
+new Function("globalThis._specAnalyzePropertyFlow = _specAnalyzePropertyFlow;\n" +
+             "globalThis._specInitialFunctionBodyState = _specInitialFunctionBodyState;\n" +
+             "globalThis._specEvalExpression = _specEvalExpression;\n" +
+             "globalThis._specEqualAv = _specEqualAv;").call(globalThis);
+
+// § 14.7.5 — for-in copy: `for(var k in s) this[k] = s[k]` records an
+// effect whose target is {kind:"this"} and whose key/value reflect the
+// loop-key over the source param.
+test("§ 14.7.5: for-in copy from param → this records {target:this, key:loop-key(param0), value:member(param0, loop-key(param0))}", `
+  function copy(s) { for (var k in s) this[k] = s[k]; }
+`, function(r) {
+  if (!r._ast) return false;
+  // Walk to find the function node
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 1) return false;
+  var e = effects[0];
+  if (!e.target || e.target.kind !== "this") return false;
+  if (!e.key || e.key.kind !== "loop-key") return false;
+  if (!e.key.src || e.key.src.kind !== "param" || e.key.src.idx !== 0) return false;
+  if (!e.value || e.value.kind !== "member") return false;
+  if (!e.value.obj || e.value.obj.kind !== "param" || e.value.obj.idx !== 0) return false;
+  if (!e.value.key || !globalThis._specEqualAv(e.value.key, e.key)) return false;
+  return true;
+});
+
+// § 14.7.5 — two-arg propagator: `function(t, s) { for(k in s) t[k] = s[k] }`
+// records target=Param(0), key=loop-key(Param(1)), value=member(Param(1), loop-key).
+test("§ 14.7.5: two-arg copy — target=param0, source=param1", `
+  function assign(t, s) { for (var k in s) t[k] = s[k]; }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 1) return false;
+  var e = effects[0];
+  if (!e.target || e.target.kind !== "param" || e.target.idx !== 0) return false;
+  if (!e.key || e.key.kind !== "loop-key") return false;
+  if (!e.key.src || e.key.src.kind !== "param" || e.key.src.idx !== 1) return false;
+  return true;
+});
+
+// § 13.13 — Logical-OR default: `var t = arguments[0] || {}; t.k = "v"`
+// records target as {kind:"or", left: {kind:"args-elt", idx:{const,0}}, right: {obj-lit}}.
+test("§ 13.13: `var t = arguments[0] || {}` then `t.k = \"v\"` records or-LHS target", `
+  function withDefault() { var t = arguments[0] || {}; t.k = "v"; }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 1) return false;
+  var e = effects[0];
+  if (!e.target || e.target.kind !== "or") return false;
+  if (!e.target.left || e.target.left.kind !== "args-elt") return false;
+  if (!e.key || e.key.kind !== "const" || e.key.value !== "k") return false;
+  return true;
+});
+
+// § 14.6 — IfStatement branch effect: `if (x) this.a = 1` records the
+// effect inside the branch (state cloning honours `let`/`const`).
+test("§ 14.6: if-branch property write recorded in effects", `
+  function maybeSet(x) { if (x) { this.a = 1; } }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 1) return false;
+  var e = effects[0];
+  if (!e.target || e.target.kind !== "this") return false;
+  if (!e.key || e.key.kind !== "const" || e.key.value !== "a") return false;
+  return true;
+});
+
+// § 13.10 — Member expression read inside RHS: `this.a = obj.b`
+// records target=this, key=const("a"), value=member(<obj-eval>, const("b")).
+test("§ 13.10: MemberExpression read on RHS preserves obj/key structure", `
+  function take(o) { this.a = o.b; }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 1) return false;
+  var e = effects[0];
+  if (!e.target || e.target.kind !== "this") return false;
+  if (!e.value || e.value.kind !== "member") return false;
+  if (!e.value.obj || e.value.obj.kind !== "param" || e.value.obj.idx !== 0) return false;
+  if (!e.value.key || e.value.key.kind !== "const" || e.value.key.value !== "b") return false;
+  return true;
+});
+
+// Negative — `this.a = 1` (constant value, no propagation pattern).
+test("§ 13.15.4: constant-value assignment records const value, NOT a propagation pattern", `
+  function setLit() { this.a = 1; }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 1) return false;
+  var e = effects[0];
+  if (!e.target || e.target.kind !== "this") return false;
+  if (!e.value || e.value.kind !== "const" || e.value.value !== 1) return false;
+  // Confirm propagation-shape detector would NOT match this.
+  if (e.key.kind === "loop-key") return false;
+  return true;
 });
 
 // ── Summary ──

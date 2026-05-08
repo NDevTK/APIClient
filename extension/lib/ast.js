@@ -2148,10 +2148,13 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     var bodyState = _specForInBodyEntryState(stmt, rhsAv, state);
     var bodyPath = stmtPath.get("body");
     if (bodyPath && bodyPath.node) {
-      var bodyStmts = _t.isBlockStatement(bodyPath.node) ? bodyPath.node.body : [bodyPath.node];
-      var bodyParent = _t.isBlockStatement(bodyPath.node) ? bodyPath : stmtPath;
-      var bodyKey = _t.isBlockStatement(bodyPath.node) ? "body.body" : "body";
-      branchStack.push({ stmts: bodyStmts, idx: 0, state: bodyState, parentPath: bodyParent, isBody: true });
+      if (_t.isBlockStatement(bodyPath.node)) {
+        branchStack.push({ stmts: bodyPath.node.body, idx: 0, state: bodyState, parentPath: bodyPath, isBody: true });
+      } else {
+        // Single-statement body — wrap in a one-element frame whose
+        // parentPath points to the for-in node and resolves via "body".
+        branchStack.push({ stmts: [bodyPath.node], idx: 0, state: bodyState, parentPath: stmtPath, _wrapBody: true, isBody: true });
+      }
     }
     return;
   }
