@@ -2169,10 +2169,11 @@ function _specPostorderExprPaths(rootPath) {
         var prop = n.properties[pi];
         if (_t.isObjectProperty(prop)) {
           stack.push(p.get("properties." + pi + ".value"));
-          // Computed key needs evaluation so we can resolve it to a
-          // Const at the eval step per § 13.2.5.4 PropertyDefinition-
-          // Evaluation.
           if (prop.computed) stack.push(p.get("properties." + pi + ".key"));
+        } else if (_t.isSpreadElement(prop)) {
+          // § 13.2.5.4 step 8 — SpreadElement's argument needs eval
+          // for the CopyDataProperties merge in obj-lit eval.
+          stack.push(p.get("properties." + pi + ".argument"));
         }
       }
     } else if (_t.isUnaryExpression(n) || _t.isUpdateExpression(n)) {
@@ -2730,6 +2731,21 @@ function _specEvalLeaf(path, state, vals, effects) {
     var props = Object.create(null);
     for (var pi = 0; pi < n.properties.length; pi++) {
       var prop = n.properties[pi];
+      if (_t.isSpreadElement(prop)) {
+        // § 13.2.5.4 PropertyDefinitionEvaluation step 8: SpreadElement
+        // CopyDataProperties — `{...other}` copies other's enumerable
+        // own properties into the result. When the spread argument
+        // resolves to obj-lit, merge its known props.
+        var spreadAv = vals.get(prop.argument);
+        if (spreadAv && spreadAv.kind === "obj-lit" && spreadAv.props) {
+          for (var spk in spreadAv.props) {
+            if (Object.prototype.hasOwnProperty.call(spreadAv.props, spk)) {
+              props[spk] = spreadAv.props[spk];
+            }
+          }
+        }
+        continue;
+      }
       if (!_t.isObjectProperty(prop)) continue;
       var k = null;
       if (prop.computed) {

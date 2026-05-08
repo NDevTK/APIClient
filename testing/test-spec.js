@@ -930,6 +930,26 @@ specTest("§ 13.14: ternary value preserves both arms as or(cons, alt)", `
 });
 
 // ═════════════════════════════════════════════════════════════════════
+// § 13.2.5.4 step 8 — SpreadElement in ObjectExpression
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.2.5.4 step 8: ObjectExpression spread ===\n");
+
+specTest("§ 13.2.5.4 step 8: `{...other, x: 1}` merges other's known props", `
+  function f() {
+    var defaults = { method: "GET", role: "user" };
+    this.body = { ...defaults, role: "admin" };
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  if (!v || v.kind !== "obj-lit") return false;
+  // method comes from spread; role overridden by literal "admin".
+  return v.props && v.props.method && v.props.method.kind === "const" &&
+         v.props.method.value === "GET" &&
+         v.props.role && v.props.role.kind === "const" && v.props.role.value === "admin";
+});
+
+// ═════════════════════════════════════════════════════════════════════
 // § 14.7.2 WhileStatement — body's writes captured
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 14.7.2 WhileStatement ===\n");
