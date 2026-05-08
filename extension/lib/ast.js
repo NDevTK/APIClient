@@ -1316,29 +1316,13 @@ function _processNetworkSink(path, result) {
                 } else {
                   methodsForUrl = ["?"];
                 }
-                // Extract body params from the "data" property of caller args
+                // Body params come from the XHR-internal trace
+                // (xhrBodyParams) — that's the spec-correct source: it
+                // observes what xhr.send() actually receives, regardless
+                // of the caller-arg property name used. The previous
+                // `cpKey === "data"` framework recognition (jQuery
+                // $.ajax convention) is removed per CLAUDE.md L29.
                 var corrBodyParams = xhrBodyParams.length > 0 ? xhrBodyParams : [];
-                if (corrBodyParams.length === 0) {
-                  // Resolve the caller arg to an object, then extract the "data" property
-                  var callerArgObj = null;
-                  try { callerArgObj = _resolveToObject(callerArgs[cai], 1); } catch(e) { _resolver.collectError(e, "xhrCallerArgResolve"); }
-                  if (callerArgObj) {
-                    for (var cpi = 0; cpi < callerArgObj.properties.length; cpi++) {
-                      var cprop = callerArgObj.properties[cpi];
-                      if (!_t.isObjectProperty(cprop) || cprop.computed) continue;
-                      var cpKey = _getKeyName(cprop.key);
-                      if (cpKey === "data") {
-                        var dataValNode = cprop.value;
-                        dataValNode = _unwrapJsonStringify(dataValNode, path);
-                        if (_t.isObjectExpression(dataValNode)) {
-                          corrBodyParams = _extractObjectProperties(dataValNode);
-                          for (var dbp = 0; dbp < corrBodyParams.length; dbp++) corrBodyParams[dbp].location = "body";
-                          break;
-                        }
-                      }
-                    }
-                  }
-                }
                 for (var mfi = 0; mfi < methodsForUrl.length; mfi++) {
                   _pushFetchSite(result, _buildFetchSite(resolvedUrls[ui], methodsForUrl[mfi], xhrHeaders, "xhr", corrBodyParams));
                   console.debug("[AST:fetch] xhr %s %s", methodsForUrl[mfi], resolvedUrls[ui]);
