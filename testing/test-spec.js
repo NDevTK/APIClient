@@ -780,6 +780,15 @@ test("§ 13.3 composition: register(fn) stores in handlers; handlers[0](opts) re
   return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
 });
 
+test("§ 13.3 composition with § 23.1.3.15 forEach: stored callback iterated", `
+  var hooks = [];
+  function on(fn) { hooks.push(fn); }
+  on(function(cfg) { fetch(cfg.endpoint); });
+  hooks.forEach(function(h) { h({endpoint: "/api/y"}); });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/y"; });
+});
+
 test("§ 15.3.5.13: concise-body arrow function records property write", `
   var setter = (s) => this.x = s;
   setter("v");

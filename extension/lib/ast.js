@@ -9547,6 +9547,52 @@ function _resolveStoredCallbackArgs(initialContainerBinding, paramIdx, depth, pr
         values = values.concat(iterVals);
       }
     }
+
+    // Pattern 3: container.forEach(cb) — Array.prototype.forEach per
+    // ECMA § 23.1.3.15 invokes cb once per element. If cb's first param
+    // is invoked with args inside cb's body, those args go to each
+    // stored callback. Receiver is the container; this differs from
+    // Pattern 2 where the container is an arg.
+    if (_t.isMemberExpression(refPath.parent) && refPath.parent.object === refPath.node && !refPath.parent.computed) {
+      var iterMethodName = _t.isIdentifier(refPath.parent.property) ? refPath.parent.property.name : null;
+      if (iterMethodName === "forEach") {
+        var forEachCallPath = refPath.parentPath ? refPath.parentPath.parentPath : null;
+        if (forEachCallPath && _t.isCallExpression(forEachCallPath.node) &&
+            forEachCallPath.node.callee === refPath.parent &&
+            forEachCallPath.node.arguments.length >= 1) {
+          var feCb = forEachCallPath.node.arguments[0];
+          if (_t.isFunctionExpression(feCb) || _t.isArrowFunctionExpression(feCb)) {
+            // Inside the callback, find where the first param is invoked
+            // with args. That arg-position becomes a value for paramIdx
+            // of the stored callback.
+            if (feCb.params.length >= 1 && _t.isIdentifier(feCb.params[0])) {
+              var elemParamName = feCb.params[0].name;
+              var feCbPath = forEachCallPath.get("arguments.0");
+              try {
+                feCbPath.traverse({
+                  CallExpression: function(innerPath) {
+                    var innerCallee = innerPath.node.callee;
+                    if (!_t.isIdentifier(innerCallee, { name: elemParamName })) return;
+                    var innerBinding = innerPath.scope.getBinding(elemParamName);
+                    if (!innerBinding || innerBinding.kind !== "param") return;
+                    if (paramIdx < innerPath.node.arguments.length) {
+                      var argP = innerPath.get("arguments." + paramIdx);
+                      var argVs = propName
+                        ? _resolvePropertyFromArg(argP, propName, depth + 1)
+                        : _resolveAllValues(argP, depth + 1);
+                      for (var avi = 0; avi < argVs.length; avi++) values.push(argVs[avi]);
+                    }
+                  },
+                  FunctionDeclaration: function(p) { p.skip(); },
+                  FunctionExpression: function(p) { p.skip(); },
+                  ArrowFunctionExpression: function(p) { p.skip(); },
+                });
+              } catch (e) { _resolver.collectError(e, "storedCallbackForEach"); }
+            }
+          }
+        }
+      }
+    }
   }
     } catch (_rse) {
       if (_rse instanceof RangeError) { _resolver.collectError(_rse, "resolveStoredCallbackArgs"); }
