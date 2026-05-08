@@ -2736,6 +2736,65 @@ specTest("§ 13.3.11: tagged template's interpolated expression's writes are rec
   return false;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.13 / § 13.14 LogicalExpression / ConditionalExpression — Const short-circuit
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.13/13.14 Const short-circuit on logical/conditional ===\n");
+
+specTest("§ 13.14: `true ? 'a' : 'b'` resolves directly to Const('a')", `
+  function f() {
+    this.r = true ? "a" : "b";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "a";
+});
+
+specTest("§ 13.14: `0 ? 'a' : 'b'` resolves directly to Const('b') (ToBoolean false)", `
+  function f() {
+    this.r = 0 ? "a" : "b";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "b";
+});
+
+specTest("§ 13.13.2: `'kept' || 'fallback'` resolves to Const('kept')", `
+  function f() {
+    this.r = "kept" || "fallback";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "kept";
+});
+
+specTest("§ 13.13.1: `0 && 'never'` resolves to Const(0)", `
+  function f() {
+    this.r = 0 && "never";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 0;
+});
+
+specTest("§ 13.14: `null ?? 'default'` resolves to Const('default') (nullish)", `
+  function f() {
+    this.r = null ?? "default";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "default";
+});
+
+specTest("§ 13.14: `0 ?? 'default'` resolves to Const(0) (NOT nullish)", `
+  function f() {
+    this.r = 0 ?? "default";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 0;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");

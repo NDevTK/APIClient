@@ -3071,11 +3071,27 @@ function _specEvalLeaf(path, state, vals, effects) {
   }
   if (_t.isLogicalExpression(n)) {
     // § 13.13.1 (&&), § 13.13.2 (||), § 13.14 (??): each operator
-    // short-circuits per ToBoolean / nullish testing. Without dynamic
-    // truthiness, the value at runtime is either left or right —
-    // model as `or(left, right)` for all three operators.
+    // short-circuits per ToBoolean / nullish testing. When `left` is a
+    // Const we can pick statically per spec; otherwise both arms are
+    // possible and we model as or(left, right).
+    var lLeft = vals.get(n.left) || { kind: "top" };
+    var lRight = vals.get(n.right) || { kind: "top" };
+    if (lLeft.kind === "const") {
+      if (n.operator === "||") {
+        // § 13.13.2: if ToBoolean(left) is true, return left; else right.
+        return lLeft.value ? lLeft : lRight;
+      }
+      if (n.operator === "&&") {
+        // § 13.13.1: if ToBoolean(left) is false, return left; else right.
+        return lLeft.value ? lRight : lLeft;
+      }
+      if (n.operator === "??") {
+        // § 13.14 NullishCoalescingExpression: left if not null/undefined.
+        return (lLeft.value === null || lLeft.value === undefined) ? lRight : lLeft;
+      }
+    }
     if (n.operator === "||" || n.operator === "&&" || n.operator === "??") {
-      return _specLogicalOrAv(vals.get(n.left) || { kind: "top" }, vals.get(n.right) || { kind: "top" });
+      return _specLogicalOrAv(lLeft, lRight);
     }
   }
   if (_t.isAssignmentExpression(n)) {
@@ -3151,12 +3167,19 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "top" };
   }
   if (_t.isConditionalExpression(n)) {
-    // § 13.14 ConditionalExpression — `test ? cons : alt` evaluates to
-    // either cons or alt depending on ToBoolean(test). Without
-    // truthiness analysis on test, both arms are reachable; preserve
-    // both via or(cons, alt).
+    // § 13.14 ConditionalExpression — `test ? cons : alt`. If test
+    // resolves to a Const, ToBoolean per § 7.1.2 picks the arm
+    // statically. Otherwise both arms are reachable; preserve both
+    // via or(cons, alt).
+    var testAv = vals.get(n.test);
     var consAv = vals.get(n.consequent);
     var altAv = vals.get(n.alternate);
+    if (testAv && testAv.kind === "const") {
+      // ToBoolean per § 7.1.2 — the spec rule for primitive truthiness.
+      var truthy = !!testAv.value;
+      if (truthy && consAv) return consAv;
+      if (!truthy && altAv) return altAv;
+    }
     if (consAv && altAv) return _specLogicalOrAv(consAv, altAv);
     return { kind: "top" };
   }
