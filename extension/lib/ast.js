@@ -2112,6 +2112,194 @@ function _specEvalExpression(rootPath, state, effects) {
   return vals.get(rootPath.node);
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Statement walker — dispatch by spec section.
+// Each branch routes a single statement to its dedicated transfer function.
+// No combining of spec sections; mutation of state and effects happens
+// inside the called transfer functions.
+// ───────────────────────────────────────────────────────────────────────────
+function _specApplyStatement(stmtPath, state, effects, branchStack) {
+  if (!stmtPath || !stmtPath.node) return;
+  var stmt = stmtPath.node;
+
+  if (_t.isVariableDeclaration(stmt)) {
+    // § 14.3.2 — bind each declarator.
+    for (var di = 0; di < stmt.declarations.length; di++) {
+      var d = stmt.declarations[di];
+      var initAv;
+      if (d.init) {
+        initAv = _specEvalExpression(stmtPath.get("declarations." + di + ".init"), state, effects);
+      }
+      _specVariableDeclaratorBind(d.id, initAv, state);
+    }
+    return;
+  }
+
+  if (_t.isExpressionStatement(stmt)) {
+    // § 14.5 — evaluate the expression purely for side effects on state /
+    // effects accumulator. The expression's value is discarded.
+    _specEvalExpression(stmtPath.get("expression"), state, effects);
+    return;
+  }
+
+  if (_t.isForInStatement(stmt)) {
+    // § 14.7.5 — evaluate RHS, bind loop var to {kind:"loop-key"}, push body.
+    var rhsAv = _specEvalExpression(stmtPath.get("right"), state, effects);
+    var bodyState = _specForInBodyEntryState(stmt, rhsAv, state);
+    var bodyPath = stmtPath.get("body");
+    if (bodyPath && bodyPath.node) {
+      var bodyStmts = _t.isBlockStatement(bodyPath.node) ? bodyPath.node.body : [bodyPath.node];
+      var bodyParent = _t.isBlockStatement(bodyPath.node) ? bodyPath : stmtPath;
+      var bodyKey = _t.isBlockStatement(bodyPath.node) ? "body.body" : "body";
+      branchStack.push({ stmts: bodyStmts, idx: 0, state: bodyState, parentPath: bodyParent, isBody: true });
+    }
+    return;
+  }
+
+  if (_t.isForStatement(stmt)) {
+    // § 14.7.4 — evaluate init, push body once. The increment is not
+    // modeled; for property-flow, body's effects are the same per
+    // iteration so a single pass suffices.
+    if (stmt.init) {
+      if (_t.isVariableDeclaration(stmt.init)) {
+        for (var fdi = 0; fdi < stmt.init.declarations.length; fdi++) {
+          var fd = stmt.init.declarations[fdi];
+          var fdAv;
+          if (fd.init) {
+            fdAv = _specEvalExpression(stmtPath.get("init.declarations." + fdi + ".init"), state, effects);
+          }
+          _specVariableDeclaratorBind(fd.id, fdAv, state);
+        }
+      } else {
+        _specEvalExpression(stmtPath.get("init"), state, effects);
+      }
+    }
+    var forBody = stmt.body;
+    var forBodyState = _specStateClone(state);
+    if (_t.isBlockStatement(forBody)) {
+      branchStack.push({ stmts: forBody.body, idx: 0, state: forBodyState, parentPath: stmtPath.get("body"), isBody: true });
+    } else if (forBody) {
+      branchStack.push({ stmts: [forBody], idx: 0, state: forBodyState, parentPath: stmtPath, _wrapBody: true, isBody: true });
+    }
+    return;
+  }
+
+  if (_t.isIfStatement(stmt)) {
+    // § 14.6 — evaluate test for side effects; push consequent and (if
+    // present) alternate with cloned states. Branch states diverge; for
+    // a sequential walker the union of branch effects is recorded into
+    // the shared `effects` list. Post-merge state would need a CFG-based
+    // worklist; for simple linear function bodies the sequential walker
+    // suffices because subsequent statements only see effects, not state.
+    _specEvalExpression(stmtPath.get("test"), state, effects);
+    if (stmt.consequent) {
+      var consState = _specStateClone(state);
+      var consNode = stmt.consequent;
+      if (_t.isBlockStatement(consNode)) {
+        branchStack.push({ stmts: consNode.body, idx: 0, state: consState, parentPath: stmtPath.get("consequent") });
+      } else {
+        branchStack.push({ stmts: [consNode], idx: 0, state: consState, parentPath: stmtPath.get("consequent"), _wrapBody: true });
+      }
+    }
+    if (stmt.alternate) {
+      var altState = _specStateClone(state);
+      var altNode = stmt.alternate;
+      if (_t.isBlockStatement(altNode)) {
+        branchStack.push({ stmts: altNode.body, idx: 0, state: altState, parentPath: stmtPath.get("alternate") });
+      } else {
+        branchStack.push({ stmts: [altNode], idx: 0, state: altState, parentPath: stmtPath.get("alternate"), _wrapBody: true });
+      }
+    }
+    return;
+  }
+
+  if (_t.isBlockStatement(stmt)) {
+    // § 14.2 — sub-block. Push as a new frame with cloned state to honor
+    // block-scoping for `let`/`const`; for `var` the scope-blind walker
+    // remains correct because lookups still find the binding.
+    branchStack.push({ stmts: stmt.body, idx: 0, state: _specStateClone(state), parentPath: stmtPath });
+    return;
+  }
+
+  if (_t.isReturnStatement(stmt)) {
+    // § 14.10 — evaluate argument for any nested side effects, then stop
+    // this branch. The current frame's index is left where it is; the
+    // caller's check `if (idx >= stmts.length || frame._returned)` ends
+    // execution.
+    if (stmt.argument) _specEvalExpression(stmtPath.get("argument"), state, effects);
+    if (branchStack.length > 0) branchStack[branchStack.length - 1]._returned = true;
+    return;
+  }
+
+  if (_t.isThrowStatement(stmt)) {
+    // § 14.14 — like return for our purposes; evaluate argument then halt.
+    if (stmt.argument) _specEvalExpression(stmtPath.get("argument"), state, effects);
+    if (branchStack.length > 0) branchStack[branchStack.length - 1]._returned = true;
+    return;
+  }
+
+  if (_t.isWhileStatement(stmt) || _t.isDoWhileStatement(stmt)) {
+    // § 14.7.2 / § 14.7.3 — evaluate test then body once.
+    _specEvalExpression(stmtPath.get("test"), state, effects);
+    var wBody = stmt.body;
+    var wBodyState = _specStateClone(state);
+    if (_t.isBlockStatement(wBody)) {
+      branchStack.push({ stmts: wBody.body, idx: 0, state: wBodyState, parentPath: stmtPath.get("body"), isBody: true });
+    } else if (wBody) {
+      branchStack.push({ stmts: [wBody], idx: 0, state: wBodyState, parentPath: stmtPath, _wrapBody: true, isBody: true });
+    }
+    return;
+  }
+
+  // Other statement types (FunctionDeclaration, ClassDeclaration, …) —
+  // no transfer for property flow. They don't contribute property writes.
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Property-flow analyser entry point.
+// Walks a function body with the iterative statement walker; returns the
+// effects list (every property write recorded as
+// `{target: AbstractValue, key: AbstractValue, value: AbstractValue}`).
+// Memoised per function node.
+// ───────────────────────────────────────────────────────────────────────────
+var _specEffectsMemo = new WeakMap();
+function _specAnalyzePropertyFlow(funcPath) {
+  if (!funcPath || !funcPath.node) return [];
+  var fnNode = funcPath.node;
+  if (!_t.isFunction(fnNode)) return [];
+  if (_specEffectsMemo.has(fnNode)) return _specEffectsMemo.get(fnNode);
+
+  var bodyPath = funcPath.get("body");
+  if (!bodyPath || !bodyPath.node || !_t.isBlockStatement(bodyPath.node)) {
+    _specEffectsMemo.set(fnNode, []);
+    return [];
+  }
+
+  var entryState = _specInitialFunctionBodyState(fnNode);
+  var effects = [];
+  var stack = [{ stmts: bodyPath.node.body, idx: 0, state: entryState, parentPath: bodyPath }];
+
+  while (stack.length > 0) {
+    var top = stack[stack.length - 1];
+    if (top._returned || top.idx >= top.stmts.length) { stack.pop(); continue; }
+    var stmt = top.stmts[top.idx];
+    var stmtPath;
+    if (top._wrapBody) {
+      // Single-statement body wrapped as one-element array; parentPath is
+      // the parent statement and the body itself is at .body.
+      stmtPath = top.parentPath.get("body");
+    } else {
+      stmtPath = top.parentPath.get("body." + top.idx);
+    }
+    top.idx++;
+    if (!stmt) continue;
+    _specApplyStatement(stmtPath, top.state, effects, stack);
+  }
+
+  _specEffectsMemo.set(fnNode, effects);
+  return effects;
+}
+
 // Compute one node's abstract value given its already-evaluated children
 // (looked up in `vals`). Any mutation of `state` (rebinding identifiers)
 // or `effects` (property writes) happens here for AssignmentExpression.
