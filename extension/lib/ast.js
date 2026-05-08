@@ -4596,7 +4596,23 @@ function _extractFetchCall(path, result, type) {
         headers = _extractHeaders(optVal.arguments[0]);
       }
       if (optName === "body") {
-        bodyParams = _extractBodyParams(optVal, path);
+        // Direct path to optVal (the body argument expression). Used to
+        // pass through to _extractObjectProperties so identifier-valued
+        // body fields can resolve via _resolveAllValues.
+        var optValPath = null;
+        try { optValPath = optsPath.get("properties." + o + ".value"); } catch (e) { _resolver.collectError(e, "fetchBodyOptValPath"); }
+        // For body = JSON.stringify(<inline ObjectExpression>), extract
+        // properties path-aware so identifier-valued fields resolve via
+        // the existing iterative value resolver per ECMA § 25.5.2.
+        if (optValPath && _t.isCallExpression(optVal) && _isJsonStringify(optVal, path) &&
+            optVal.arguments.length >= 1 && _t.isObjectExpression(optVal.arguments[0])) {
+          var jsonObjPath = optValPath.get("arguments.0");
+          if (jsonObjPath && jsonObjPath.node) {
+            bodyParams = _extractObjectProperties(optVal.arguments[0], jsonObjPath);
+            for (var bpj = 0; bpj < bodyParams.length; bpj++) bodyParams[bpj].location = "body";
+          }
+        }
+        if (bodyParams.length === 0) bodyParams = _extractBodyParams(optVal, path);
         // When the body is `JSON.stringify(localVar)` and `_extractBodyParams`
         // didn't recover the inner shape (because the var's literal lives
         // elsewhere in the function), fall back to the property-flow
@@ -11650,7 +11666,7 @@ function _ebpStep(F) {
   }
 }
 
-function _extractObjectProperties(node) {
+function _extractObjectProperties(node, objExprPath) {
   if (!node || !_t.isObjectExpression(node)) return [];
   var props = [];
   for (var i = 0; i < node.properties.length; i++) {
@@ -11690,6 +11706,36 @@ function _extractObjectProperties(node) {
     if (_t.isBooleanLiteral(val)) {
       prop.defaultValue = val.value;
       prop.type = "boolean";
+    }
+
+    // When a path is available and the value didn't resolve to a
+    // direct literal, run _resolveAllValues on the value path. This
+    // closes the multi-hop indirection gap (e.g. `var s1 = "X"; s2 = s1;
+    // body: {token: s2}` resolves token to "X" via the value chain).
+    if (objExprPath && prop.defaultValue === undefined && !_t.isStringLiteral(val) &&
+        !_t.isNumericLiteral(val) && !_t.isBooleanLiteral(val)) {
+      try {
+        var valPath = objExprPath.get("properties." + i + ".value");
+        if (valPath && valPath.node) {
+          var resolved = _resolveAllValues(valPath, 0);
+          if (resolved && resolved.length > 0) {
+            var primOnly = [];
+            for (var ri = 0; ri < resolved.length; ri++) {
+              var rv = resolved[ri];
+              if (typeof rv === "string" || typeof rv === "number" || typeof rv === "boolean") {
+                primOnly.push(rv);
+              }
+            }
+            if (primOnly.length > 0) {
+              prop.defaultValue = primOnly[0];
+              if (typeof primOnly[0] === "string") prop.type = "string";
+              else if (typeof primOnly[0] === "number") prop.type = "number";
+              else if (typeof primOnly[0] === "boolean") prop.type = "boolean";
+              if (primOnly.length > 1) prop.validValues = primOnly;
+            }
+          }
+        }
+      } catch (e) { _resolver.collectError(e, "extractObjectPropertiesValueResolve"); }
     }
 
     props.push(prop);

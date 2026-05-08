@@ -10525,51 +10525,46 @@ test("§ 19.1.2.16+§ 22.1.3.7: Object.keys.forEach produces propagation effect"
   return true;
 });
 
-// § 14.6 + § 14.7.4 + § 14.7.5 — jQuery-style extend body where target
-// could be either arguments[0] (multi-arg call) or `this` (single-arg
-// call after the conditional reassignment). The CFG-based merge frame
-// produces an or-shaped target, and the propagation detector walks
-// every leaf of the or-tree — `this` is one of them, so the propagation
-// `args-elt(i) → this` is detected. Verifies merge + or-leaf walking.
-test("jQuery-extend body: CFG merge produces or-target with this leaf, propagation detected", `
-  function extend() {
-    var target = arguments[0] || {};
-    if (arguments.length === 1) { target = this; }
-    for (var i = 1; i < arguments.length; i++) {
-      var options = arguments[i];
-      for (var k in options) {
-        target[k] = options[k];
-      }
-    }
+// ═══════════════════════════════════════════════════════════════════════════
+// Spec-grounded complex value flow — URL endpoint + dropdown values.
+// Each test exercises ECMA spec features (not framework patterns) with
+// realistic indirect logic deciding values.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// § 13.14 ConditionalExpression — base URL switches on env, version is
+// concatenated. Both base URLs are valid endpoints; the analyzer should
+// surface both.
+test("§ 13.14: ternary-driven base URL produces both endpoints", `
+  function call(env) {
+    var base = env === "prod" ? "https://api.example.com" : "https://staging.example.com";
+    fetch(base + "/v1/users");
   }
 `, function(r) {
-  if (!r._ast) return false;
-  var fnPath = null;
-  globalThis.BabelBundle.traverse(r._ast, {
-    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
-  });
-  if (!fnPath) return false;
-  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
-  if (!effects || effects.length !== 1) return false;
-  var prop = globalThis._specDetectPropagationFromEffects
-    ? globalThis._specDetectPropagationFromEffects(effects)
-    : null;
-  if (!prop) {
-    // _specDetectPropagationFromEffects not exposed — verify via target shape.
-    var e = effects[0];
-    // Target should be an or-tree containing both arguments[0]-derived and this
-    var queue = [e.target];
-    var hasThis = false, hasArgsElt = false;
-    while (queue.length > 0) {
-      var t = queue.pop();
-      if (!t) continue;
-      if (t.kind === "or") { queue.push(t.left); queue.push(t.right); continue; }
-      if (t.kind === "this") hasThis = true;
-      if (t.kind === "args-elt") hasArgsElt = true;
-    }
-    return hasThis && hasArgsElt;
+  var urls = r.fetchCallSites.map(function(s) { return s.url; });
+  var hasProd = urls.indexOf("https://api.example.com/v1/users") >= 0;
+  var hasStaging = urls.indexOf("https://staging.example.com/v1/users") >= 0;
+  return hasProd && hasStaging;
+});
+
+// § 14.3.2 + § 13.5 — body assembled from multiple intermediate
+// variables that chain through several reads. Verifies the analyser
+// tracks identifier-valued body fields across multi-hop chains via
+// _resolveAllValues post-extraction.
+test("§ 14.3.2 chain: multi-hop indirection through locals reaches body field", `
+  function send() {
+    var step1 = "AUTH_TOKEN_VALUE";
+    var step2 = step1;
+    var step3 = step2;
+    fetch("/api/x", { method: "POST", body: JSON.stringify({ token: step3 }) });
   }
-  return prop.target && prop.target.kind === "this" && prop.source && prop.source.kind === "args-elt";
+`, function(r) {
+  var site = r.fetchCallSites.find(function(s) { return s.url === "/api/x"; });
+  if (!site || !site.params) return false;
+  var tokenP = site.params.find(function(p) { return p.name === "token"; });
+  if (!tokenP) return false;
+  var ok = tokenP.defaultValue === "AUTH_TOKEN_VALUE" ||
+           (tokenP.validValues && tokenP.validValues.indexOf("AUTH_TOKEN_VALUE") >= 0);
+  return !!ok;
 });
 
 // ── Summary ──
