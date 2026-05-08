@@ -6759,6 +6759,61 @@ function _rcfpStep(F) {
             }
           }
         }
+        // Class instance method: `new C().method()` per § 15.7
+        // (ClassDeclaration). Resolve the constructor identifier to its
+        // class declaration and look up the method.
+        if (_t.isNewExpression(callee2.object) && _t.isIdentifier(callee2.object.callee)) {
+          var ctorName = callee2.object.callee.name;
+          var ctorBind = callPath.scope.getBinding(ctorName);
+          if (ctorBind && ctorBind.path) {
+            var classNode = ctorBind.path.node;
+            if (_t.isClassDeclaration(classNode) || _t.isClassExpression(classNode)) {
+              var classBody = classNode.body;
+              if (classBody && classBody.body) {
+                for (var ci = 0; ci < classBody.body.length; ci++) {
+                  var classMember = classBody.body[ci];
+                  if (!_t.isClassMethod(classMember) || classMember.computed) continue;
+                  if (classMember.kind !== "method") continue;
+                  var memberKey = _t.isIdentifier(classMember.key) ? classMember.key.name :
+                    (_t.isStringLiteral(classMember.key) ? classMember.key.value : null);
+                  if (memberKey === propName2) {
+                    return { done: ctorBind.path.get("body.body." + ci) };
+                  }
+                }
+              }
+            }
+          }
+        }
+        // Variable bound to a class instance: `var c = new C(); c.method()`
+        // — same lookup as above but obj is an Identifier whose binding
+        // is `var c = new C()`.
+        if (_t.isIdentifier(callee2.object)) {
+          var instBind = callPath.scope.getBinding(callee2.object.name);
+          if (instBind && _t.isVariableDeclarator(instBind.path.node) &&
+              instBind.path.node.init && _t.isNewExpression(instBind.path.node.init) &&
+              _t.isIdentifier(instBind.path.node.init.callee)) {
+            var instCtorName = instBind.path.node.init.callee.name;
+            var instCtorBind = callPath.scope.getBinding(instCtorName);
+            if (instCtorBind && instCtorBind.path) {
+              var iClassNode = instCtorBind.path.node;
+              if (_t.isClassDeclaration(iClassNode) || _t.isClassExpression(iClassNode)) {
+                var iClassBody = iClassNode.body;
+                if (iClassBody && iClassBody.body) {
+                  for (var ici = 0; ici < iClassBody.body.length; ici++) {
+                    var iMember = iClassBody.body[ici];
+                    if (!_t.isClassMethod(iMember) || iMember.computed) continue;
+                    if (iMember.kind !== "method") continue;
+                    var iKey = _t.isIdentifier(iMember.key) ? iMember.key.name :
+                      (_t.isStringLiteral(iMember.key) ? iMember.key.value : null);
+                    if (iKey === propName2) {
+                      return { done: instCtorBind.path.get("body.body." + ici) };
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
         // IIFE-returned property: `var e = function(){…n.X=fn…return n}()`
         // followed by `e.X(…)`. The IIFE's return value is an object
         // whose internal mutations include `X`; resolve through.

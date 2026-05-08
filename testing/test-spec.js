@@ -735,6 +735,30 @@ specTest("§ 13.10 + § 13.15.3: BinaryExpression with non-Const operand abstrac
   return effects[0].value && effects[0].value.kind === "top";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 15.7 ClassDeclaration — instance method invocation
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 15.7 ClassDeclaration ===\n");
+
+test("§ 15.7: `new C().method()` resolves to the class method's body", `
+  class C {
+    send() { fetch("/api/x"); }
+  }
+  new C().send();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
+});
+
+test("§ 15.7: `var c = new C(); c.method()` resolves through instance variable", `
+  class C {
+    send() { fetch("/api/y"); }
+  }
+  var c = new C();
+  c.send();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/y"; });
+});
+
 specTest("§ 14.3.3: nested destructuring `var [{a}, {b}] = pair`", `
   function f(pair) {
     var [{a}, {b}] = pair;
