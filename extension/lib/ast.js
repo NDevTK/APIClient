@@ -2647,6 +2647,46 @@ function _specEvalLeaf(path, state, vals, effects) {
     }
     return _specAssignmentExpressionApply(n, state, rhsAv, lhsObjAv, lhsKeyAv, effects);
   }
+  if (_t.isUnaryExpression(n)) {
+    // § 13.5 UnaryOperators. When operand resolves to Const, evaluate
+    // per spec-defined operator semantics:
+    //   § 13.5.3 typeof — yields a string per the type of operand
+    //   § 13.5.6 ! — Logical NOT, yields ToBoolean negated
+    //   § 13.5.7 +/- — UnaryPlus / UnaryMinus, yields Number
+    //   § 13.5.8 ~ — Bitwise NOT, yields Number
+    //   § 13.5.4 void — yields undefined
+    var argAv = vals.get(n.argument);
+    if (n.operator === "void") return { kind: "const", value: undefined };
+    if (n.operator === "typeof") {
+      // typeof on a Const operand resolves per § 13.5.3.5 typeof.
+      if (argAv && argAv.kind === "const") {
+        var v = argAv.value;
+        if (v === undefined) return { kind: "const", value: "undefined" };
+        if (v === null) return { kind: "const", value: "object" };
+        if (typeof v === "boolean") return { kind: "const", value: "boolean" };
+        if (typeof v === "number") return { kind: "const", value: "number" };
+        if (typeof v === "string") return { kind: "const", value: "string" };
+      }
+      // Other abstract values — typeof yields one of the 8 spec strings;
+      // without type-tracking, abstract to Top.
+      return { kind: "top" };
+    }
+    if (argAv && argAv.kind === "const") {
+      var av = argAv.value;
+      if (n.operator === "!") return { kind: "const", value: !av };
+      if (n.operator === "-") {
+        if (typeof av === "number") return { kind: "const", value: -av };
+      }
+      if (n.operator === "+") {
+        if (typeof av === "number") return { kind: "const", value: +av };
+        if (typeof av === "string" && !isNaN(Number(av))) return { kind: "const", value: Number(av) };
+      }
+      if (n.operator === "~") {
+        if (typeof av === "number") return { kind: "const", value: ~av };
+      }
+    }
+    return { kind: "top" };
+  }
   if (_t.isBinaryExpression(n)) {
     // § 13.10 BinaryOperators — only `+` is interesting for property-flow
     // (string concat for URL/key building per § 13.15.3 ApplyStringOrNumeric-

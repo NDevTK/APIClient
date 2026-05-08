@@ -819,16 +819,49 @@ specTest("§ 14.7.5 for-of: loop var bound to loop-key over iterated value", `
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 13.5.5 UnaryExpression ===\n");
 
-specTest("§ 13.5.5: unary `!x` on Param yields Top — sound (value depends on runtime ToBoolean)", `
-  function f(x) {
-    this.flag = !x;
+specTest("§ 13.5.6: `!Const(true)` resolves to Const(false)", `
+  function f() {
+    this.flag = !true;
   }
 `, function(effects) {
-  // Per spec, !x = ToBoolean(x) negated. With x abstractly Param(0)
-  // (value unknown), the negation result IS unknown — Top is the only
-  // sound abstract answer. This verifies the analyser doesn't fabricate.
   if (effects.length !== 1) return false;
-  return effects[0].value && effects[0].value.kind === "top";
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+specTest("§ 13.5.7: `+Const(\"42\")` numeric coerces to Const(42)", `
+  function f() {
+    this.n = +"42";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 42;
+});
+
+specTest("§ 13.5.4: `void Const` resolves to Const(undefined)", `
+  function f() {
+    this.x = void 0;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === undefined;
+});
+
+specTest("§ 13.5.3.5: `typeof Const(\"hello\")` resolves to Const(\"string\")", `
+  function f() {
+    this.t = typeof "hello";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "string";
+});
+
+specTest("§ 13.5.3.5: `typeof Const(42)` resolves to Const(\"number\")", `
+  function f() {
+    this.t = typeof 42;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "number";
 });
 
 // ═════════════════════════════════════════════════════════════════════
