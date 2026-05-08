@@ -2130,6 +2130,13 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
       if (d.init) {
         initAv = _specEvalExpression(stmtPath.get("declarations." + di + ".init"), state, effects);
       }
+      // Tag obj-lit values with the local var name they're bound to so
+      // downstream consumers can match `JSON.stringify(varName)` body
+      // arguments back to their literal-built shape. Pure metadata —
+      // doesn't affect equality on AbstractValue.
+      if (initAv && initAv.kind === "obj-lit" && d.id && d.id.type === "Identifier") {
+        initAv = { kind: "obj-lit", props: initAv.props, _bindingName: d.id.name };
+      }
       _specVariableDeclaratorBind(d.id, initAv, state);
     }
     return;
@@ -4438,6 +4445,53 @@ function _extractFetchCall(path, result, type) {
       }
       if (optName === "body") {
         bodyParams = _extractBodyParams(optVal, path);
+        // When the body is `JSON.stringify(localVar)` and `_extractBodyParams`
+        // didn't recover the inner shape (because the var's literal lives
+        // elsewhere in the function), fall back to the property-flow
+        // analyser's effects: the local var is tagged with `_bindingName`
+        // when declared, and every property write to it shows up as an
+        // obj-lit-targeted effect. Each unique const key becomes a body
+        // param; const values for that key become its validValues.
+        if (bodyParams.length === 0 && _t.isCallExpression(optVal) &&
+            _isJsonStringify(optVal, path) &&
+            optVal.arguments.length >= 1 && _t.isIdentifier(optVal.arguments[0])) {
+          var varName = optVal.arguments[0].name;
+          var encFn = path.getFunctionParent();
+          if (encFn) {
+            var pfBodyEffects = _specAnalyzePropertyFlow(encFn);
+            if (pfBodyEffects && pfBodyEffects.length > 0) {
+              var byKey2 = Object.create(null);
+              for (var pbi = 0; pbi < pfBodyEffects.length; pbi++) {
+                var pbe = pfBodyEffects[pbi];
+                if (!pbe.target || pbe.target.kind !== "obj-lit") continue;
+                if (pbe.target._bindingName !== varName) continue;
+                if (!pbe.key || pbe.key.kind !== "const") continue;
+                var keyName = pbe.key.value;
+                if (!byKey2[keyName]) byKey2[keyName] = { values: new Set(), type: null };
+                if (pbe.value && pbe.value.kind === "const") {
+                  var vv = pbe.value.value;
+                  if (typeof vv === "string" || typeof vv === "number" || typeof vv === "boolean") {
+                    byKey2[keyName].values.add(vv);
+                    if (!byKey2[keyName].type) byKey2[keyName].type = typeof vv;
+                  }
+                }
+              }
+              for (var bk in byKey2) {
+                var entry = byKey2[bk];
+                var newParam = { name: bk, location: "body", required: true };
+                if (entry.type) newParam.type = entry.type;
+                if (entry.values.size > 0) {
+                  var vals = [];
+                  entry.values.forEach(function(vv) { vals.push(vv); });
+                  newParam.validValues = vals;
+                  // First value as defaultValue for the dropdown's initial pick.
+                  newParam.defaultValue = vals[0];
+                }
+                bodyParams.push(newParam);
+              }
+            }
+          }
+        }
       }
     }
   }

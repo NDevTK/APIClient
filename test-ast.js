@@ -10451,6 +10451,43 @@ test("Multi-field body: each field's value extracted separately", `
   return true;
 });
 
+// End-to-end: the canonical "incrementally built body" pattern with a
+// branch-conditional value. The fetch site MUST surface both `admin`
+// and `guest` as candidates for the `role` field's dropdown.
+test("End-to-end: JSON.stringify(localBodyVar) with branch-conditional role surfaces both values", `
+  function send(isAdmin) {
+    var body = {};
+    body.user = "alice";
+    if (isAdmin) { body.role = "admin"; }
+    else { body.role = "guest"; }
+    fetch("/api/x", { method: "POST", body: JSON.stringify(body) });
+  }
+`, function(r) {
+  var site = r.fetchCallSites.find(function(s) { return s.url === "/api/x" && s.method === "POST"; });
+  if (!site || !site.params) return false;
+  var roleP = site.params.find(function(p) { return p.name === "role" && p.location === "body"; });
+  var userP = site.params.find(function(p) { return p.name === "user" && p.location === "body"; });
+  if (!roleP || !userP) return false;
+  if (!roleP.validValues || roleP.validValues.indexOf("admin") < 0 || roleP.validValues.indexOf("guest") < 0) return false;
+  if (!userP.validValues || userP.validValues.indexOf("alice") < 0) return false;
+  return true;
+});
+
+// Negative — single-value local-body should not produce multiple validValues.
+test("End-to-end negative: single-value role surfaces just that one value", `
+  function send() {
+    var body = {};
+    body.role = "user";
+    fetch("/api/x", { method: "POST", body: JSON.stringify(body) });
+  }
+`, function(r) {
+  var site = r.fetchCallSites.find(function(s) { return s.url === "/api/x" && s.method === "POST"; });
+  if (!site || !site.params) return false;
+  var roleP = site.params.find(function(p) { return p.name === "role" && p.location === "body"; });
+  if (!roleP || !roleP.validValues) return false;
+  return roleP.validValues.length === 1 && roleP.validValues[0] === "user";
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Results: " + passed + "/" + total + " passed, " + failed + " failed");
