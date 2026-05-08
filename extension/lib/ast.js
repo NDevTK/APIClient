@@ -2236,11 +2236,21 @@ function _specPostorderExprPaths(rootPath) {
       }
     } else if (_t.isArrayExpression(n)) {
       // § 13.2.4 — ArrayLiteral elements need eval so the array-lit
-      // value records their abstract values.
+      // value records their abstract values. SpreadElement's argument
+      // also needs eval so § 13.2.4.1 ArrayAccumulation can spread it.
       for (var aei = n.elements.length - 1; aei >= 0; aei--) {
         var elN = n.elements[aei];
-        if (elN) stack.push(p.get("elements." + aei));
+        if (!elN) continue;
+        if (_t.isSpreadElement(elN)) {
+          stack.push(p.get("elements." + aei + ".argument"));
+        } else {
+          stack.push(p.get("elements." + aei));
+        }
       }
+    } else if (_t.isSpreadElement(n)) {
+      // SpreadElement at top-level (rare — e.g. inside a function call
+      // argument list); ensure its argument is evaluated.
+      stack.push(p.get("argument"));
     } else if (_t.isUnaryExpression(n) || _t.isUpdateExpression(n) ||
                _t.isAwaitExpression(n) || _t.isYieldExpression(n)) {
       // § 14.2.16 await / § 15.5 yield need their argument evaluated.
@@ -3164,15 +3174,28 @@ function _specEvalLeaf(path, state, vals, effects) {
   }
   if (_t.isArrayExpression(n)) {
     // § 13.2.4 ArrayLiteral evaluation. Each element's abstract value
-    // is collected; SpreadElement abstracts to a top-marker since we
-    // don't track inline-array composition.
+    // is collected; SpreadElement spreads the elements of an inline
+    // array-lit per § 13.2.4.1 step 5 (ArrayAccumulation:SpreadElement).
+    // Unknown spread sources abstract the whole array to top — without
+    // knowing the spread's length, we can't keep meaningful index info.
     var elems = [];
+    var arrayBail = false;
     for (var aei = 0; aei < n.elements.length; aei++) {
       var elN = n.elements[aei];
       if (!elN) { elems.push({ kind: "const", value: undefined }); continue; }
-      if (_t.isSpreadElement(elN)) { elems.push({ kind: "top" }); continue; }
+      if (_t.isSpreadElement(elN)) {
+        var spreadAv = vals.get(elN.argument);
+        if (spreadAv && spreadAv.kind === "array-lit" && spreadAv.elements) {
+          for (var sai = 0; sai < spreadAv.elements.length; sai++) elems.push(spreadAv.elements[sai]);
+        } else {
+          arrayBail = true;
+          break;
+        }
+        continue;
+      }
       elems.push(vals.get(elN) || { kind: "top" });
     }
+    if (arrayBail) return { kind: "top" };
     return { kind: "array-lit", elements: elems };
   }
   if (_t.isObjectExpression(n)) {

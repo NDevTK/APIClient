@@ -2241,6 +2241,66 @@ specTest("§ 22.1.3.1: `'abc'.at(-1)` → Const('c') (negative index)", `
   return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "c";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.2.4.1 ArrayAccumulation — SpreadElement
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.2.4.1 ArrayAccumulation:SpreadElement ===\n");
+
+specTest("§ 13.2.4.1: `[...[1, 2], 3]` spreads inline array-lit into elements", `
+  function f() {
+    var a = [...[1, 2], 3];
+    this.first = a[0];
+    this.second = a[1];
+    this.third = a[2];
+    this.len = a.length;
+  }
+`, function(effects) {
+  if (effects.length !== 4) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.first === 1 && byKey.second === 2 && byKey.third === 3 && byKey.len === 3;
+});
+
+specTest("§ 13.2.4.1: `[...arr1, ...arr2]` from local-bound array-lits", `
+  function f() {
+    var a = [1, 2];
+    var b = [3, 4];
+    var c = [...a, ...b];
+    this.len = c.length;
+    this.first = c[0];
+    this.last = c[3];
+  }
+`, function(effects) {
+  if (effects.length !== 3) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.len === 4 && byKey.first === 1 && byKey.last === 4;
+});
+
+specTest("§ 13.2.4.1: `[...opaque]` with non-array-lit source bails to Top", `
+  function f(opaque) {
+    var c = [...opaque, 99];
+    this.r = c.length;
+  }
+`, function(effects) {
+  // Spreading an opaque (param-derived) source means we don't know the
+  // length, so the array-lit bails to Top. Subsequent .length access on
+  // Top is itself Top — the assignment value is Top.
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind !== "const";
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
