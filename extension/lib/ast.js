@@ -1889,13 +1889,17 @@ function _specEqualAv(a, b) {
   return true;
 }
 
-// LUB on AbstractValues. Conservative — when two values diverge,
-// produce Top. Used at CFG merge points for the worklist join.
+// LUB on AbstractValues. When two distinct tractable values meet at a
+// merge point (e.g. `if (cond) x = this; else x = arg`), preserve the
+// alternatives as `or(a, b)` so consumers (e.g. propagation detection)
+// can examine each branch. Falls back to Top when either operand is
+// already Top, since adding more cases under Top doesn't refine.
 function _specJoinAv(a, b) {
   if (!a) return b;
   if (!b) return a;
   if (_specEqualAv(a, b)) return a;
-  return { kind: "top" };
+  if (a.kind === "top" || b.kind === "top") return { kind: "top" };
+  return { kind: "or", left: a, right: b };
 }
 
 // State equality (shallow) — used by the worklist's fixed-point detection.
@@ -2256,29 +2260,37 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
   }
 
   if (_t.isIfStatement(stmt)) {
-    // § 14.6 — evaluate test for side effects; push consequent and (if
-    // present) alternate with cloned states. Branch states diverge; for
-    // a sequential walker the union of branch effects is recorded into
-    // the shared `effects` list. Post-merge state would need a CFG-based
-    // worklist; for simple linear function bodies the sequential walker
-    // suffices because subsequent statements only see effects, not state.
+    // § 14.6 — evaluate test for side effects, then push branches with
+    // cloned states. CFG-style merge at the IfStatement's exit point:
+    // each branch reports its end-state to a merge frame that joins
+    // them back into the parent's state when popped. Subsequent
+    // statements see the joined post-if state per § 14.6 semantics.
     _specEvalExpression(stmtPath.get("test"), state, effects);
-    if (stmt.consequent) {
-      var consState = _specStateClone(state);
-      var consNode = stmt.consequent;
-      if (_t.isBlockStatement(consNode)) {
-        branchStack.push({ stmts: consNode.body, idx: 0, state: consState, parentPath: stmtPath.get("consequent") });
-      } else {
-        branchStack.push({ stmts: [consNode], idx: 0, state: consState, parentPath: stmtPath.get("consequent"), _wrapBody: true });
-      }
-    }
+    // Find the parent frame (the one whose stmt-array we're walking).
+    // It's the frame currently on top of the stack — branchStack[length-1].
+    var ifParent = branchStack.length > 0 ? branchStack[branchStack.length - 1] : null;
+    if (!ifParent) return;
+    // Save base state for branches that don't execute (alternate-less if).
+    var ifPreState = _specStateClone(state);
+    // Merge frame: pushed first (so it executes LAST due to LIFO).
+    var mergeFrame = { _isMergeFrame: true, branchEndStates: [], parentFrame: ifParent, hasAlternate: !!stmt.alternate, baseState: ifPreState };
+    branchStack.push(mergeFrame);
     if (stmt.alternate) {
       var altState = _specStateClone(state);
       var altNode = stmt.alternate;
       if (_t.isBlockStatement(altNode)) {
-        branchStack.push({ stmts: altNode.body, idx: 0, state: altState, parentPath: stmtPath.get("alternate") });
+        branchStack.push({ stmts: altNode.body, idx: 0, state: altState, parentPath: stmtPath.get("alternate"), _reportTo: mergeFrame });
       } else {
-        branchStack.push({ stmts: [altNode], idx: 0, state: altState, parentPath: stmtPath.get("alternate"), _wrapBody: true });
+        branchStack.push({ stmts: [altNode], idx: 0, state: altState, parentPath: stmtPath.get("alternate"), _wrapBody: true, _reportTo: mergeFrame });
+      }
+    }
+    if (stmt.consequent) {
+      var consState = _specStateClone(state);
+      var consNode = stmt.consequent;
+      if (_t.isBlockStatement(consNode)) {
+        branchStack.push({ stmts: consNode.body, idx: 0, state: consState, parentPath: stmtPath.get("consequent"), _reportTo: mergeFrame });
+      } else {
+        branchStack.push({ stmts: [consNode], idx: 0, state: consState, parentPath: stmtPath.get("consequent"), _wrapBody: true, _reportTo: mergeFrame });
       }
     }
     return;
@@ -2352,7 +2364,32 @@ function _specAnalyzePropertyFlow(funcPath) {
 
   while (stack.length > 0) {
     var top = stack[stack.length - 1];
-    if (top._returned || top.idx >= top.stmts.length) { stack.pop(); continue; }
+
+    // Merge frame: branches that report to it have all completed
+    // (LIFO ordering — branches were pushed AFTER the merge frame, so
+    // they pop first). Join collected end-states into the parent's state.
+    if (top._isMergeFrame) {
+      var ifPF = top.parentFrame;
+      var joinedState = top.baseState;  // base state if no branches ran
+      for (var bi = 0; bi < top.branchEndStates.length; bi++) {
+        joinedState = _specJoinState(joinedState, top.branchEndStates[bi]);
+      }
+      // If the if had no alternate, the implicit "no-op" branch is
+      // baseState — already in the join. Otherwise both branches
+      // contributed.
+      if (ifPF) ifPF.state = joinedState;
+      stack.pop();
+      continue;
+    }
+
+    if (top._returned || top.idx >= top.stmts.length) {
+      // Branch frame completing: report end-state to its merge frame.
+      if (top._reportTo) {
+        top._reportTo.branchEndStates.push(top.state);
+      }
+      stack.pop();
+      continue;
+    }
     var stmt = top.stmts[top.idx];
     var stmtPath;
     if (top._wrapBody) {
