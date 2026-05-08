@@ -2269,6 +2269,20 @@ function _specPostorderExprPaths(rootPath) {
       for (var ti = n.expressions.length - 1; ti >= 0; ti--) {
         stack.push(p.get("expressions." + ti));
       }
+    } else if (_t.isTaggedTemplateExpression(n)) {
+      // § 13.3.11 TaggedTemplateExpression — evaluate the tag's callee
+      // chain (so receiver-based dispatch works) and the quasi's expr
+      // children (their side-effects matter for property flow).
+      if (_t.isMemberExpression(n.tag) || _t.isOptionalMemberExpression(n.tag)) {
+        stack.push(p.get("tag.object"));
+        if (n.tag.computed) stack.push(p.get("tag.property"));
+      }
+      var taggedQuasi = n.quasi;
+      if (taggedQuasi && taggedQuasi.expressions) {
+        for (var tqi = taggedQuasi.expressions.length - 1; tqi >= 0; tqi--) {
+          stack.push(p.get("quasi.expressions." + tqi));
+        }
+      }
     } else if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n) || _t.isNewExpression(n)) {
       // Argument expressions get evaluated (their property writes
       // matter for effects). The callee's MemberExpression's `object`

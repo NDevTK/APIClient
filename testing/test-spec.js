@@ -2711,6 +2711,31 @@ specTest("§ 20.1.2.10: `Object.getOwnPropertyNames({a:1,b:2})` → array-lit ['
   return byKey.r === 2 && byKey.first === "a";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.3.11 TaggedTemplateExpression
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.3.11 TaggedTemplateExpression ===\n");
+
+specTest("§ 13.3.11: tagged template's interpolated expression's writes are recorded", `
+  function f() {
+    var self = this;
+    function tag(strings, ...values) { return strings[0]; }
+    var x = tag\`hello \${(self.found = "yes", "world")}\`;
+    this.r = x;
+  }
+`, function(effects) {
+  // The interpolated SequenceExpression `(self.found = "yes", "world")`
+  // has a side-effect: assigns self.found. The postorder must evaluate
+  // it so the property write reaches effects.
+  if (effects.length < 1) return false;
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.key && e.key.kind === "const" && e.key.value === "found" &&
+        e.value && e.value.kind === "const" && e.value.value === "yes") return true;
+  }
+  return false;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
