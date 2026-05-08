@@ -11362,8 +11362,13 @@ function _collectEqualityConstraints(path) {
   }
 }
 
-// Detect iteration constraints: arr.forEach(fn), X.each(arr, fn), arr.map(fn)
+// Detect iteration constraints from spec-defined Array iterators per
+// ECMA-262 § 22.1.3.7 / § 22.1.3.16 — `arr.forEach(fn)` / `arr.map(fn)`.
 // The callback parameter is constrained to the array's element values.
+// The jQuery / underscore / lodash `X.each(arr, fn)` shape was removed
+// per CLAUDE.md L29 — those library helpers reach the analyser when
+// their bundle is present and the analyser traces through their own
+// forEach-equivalent call.
 function _collectIterationConstraints(path) {
   var node = path.node;
   if (!_t.isMemberExpression(node.callee)) return;
@@ -11372,25 +11377,12 @@ function _collectIterationConstraints(path) {
 
   var arrNode = null, callbackNode = null;
 
-  // Pattern: arr.forEach(fn) / arr.map(fn)
   if ((methodName === "forEach" || methodName === "map") && node.arguments.length >= 1) {
-    // V4: skip if callee object is a known non-iterable type
     var _icObjType = _getTrackedType(path.get("callee.object"), node.callee.object);
     if (_icObjType && _NON_ITERABLE_TYPES[_icObjType]) return;
     var arrPath = path.get("callee.object");
     arrNode = _resolveToArray(arrPath, 0);
     callbackNode = node.arguments[0];
-  }
-  // Pattern: X.each(arr, fn) — jQuery.each / $.each
-  else if (methodName === "each" && node.arguments.length >= 2) {
-    var eachArrArg = node.arguments[0];
-    if (_t.isArrayExpression(eachArrArg)) {
-      arrNode = eachArrArg;
-      arrNode._path = path.get("arguments.0");
-    } else if (_t.isIdentifier(eachArrArg)) {
-      arrNode = _resolveToArray(path.get("arguments.0"), 0);
-    }
-    callbackNode = node.arguments[1];
   }
 
   if (!arrNode || !callbackNode) return;
@@ -11404,10 +11396,9 @@ function _collectIterationConstraints(path) {
   }
   if (elemValues.length < 1) return;
 
-  // Determine which callback parameter receives the element value
-  // forEach/map: fn(element, index) — param 0 is element
-  // X.each: fn(index, element) — param 1 is element
-  var elemParamIdx = (methodName === "each") ? 1 : 0;
+  // forEach / map per ECMA § 22.1.3.7 / § 22.1.3.16 invoke the callback
+  // with (element, index, array) — element is param 0.
+  var elemParamIdx = 0;
   if (callbackNode.params.length <= elemParamIdx) return;
   var elemParam = callbackNode.params[elemParamIdx];
   var elemParamName = _t.isIdentifier(elemParam) ? elemParam.name : null;
