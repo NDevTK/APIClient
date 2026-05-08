@@ -814,6 +814,42 @@ specTest("§ 14.7.5 for-of: loop var bound to loop-key over iterated value", `
          v.src && v.src.kind === "param" && v.src.idx === 0;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.5.5 UnaryExpression — typeof/void/!/~/+/-
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.5.5 UnaryExpression ===\n");
+
+specTest("§ 13.5.5: unary `!x` on Param yields Top — sound (value depends on runtime ToBoolean)", `
+  function f(x) {
+    this.flag = !x;
+  }
+`, function(effects) {
+  // Per spec, !x = ToBoolean(x) negated. With x abstractly Param(0)
+  // (value unknown), the negation result IS unknown — Top is the only
+  // sound abstract answer. This verifies the analyser doesn't fabricate.
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "top";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 14.7.2 WhileStatement — body's writes captured
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.7.2 WhileStatement ===\n");
+
+specTest("§ 14.7.2: while-loop body writes recorded once (single-pass abstraction)", `
+  function f() {
+    var i = 0;
+    while (i < 5) {
+      this.value = i;
+      i++;
+    }
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].target.kind === "this" &&
+         effects[0].key.kind === "const" && effects[0].key.value === "value";
+});
+
 test("§ 13.3 composition with § 23.1.3.15 forEach: stored callback iterated", `
   var hooks = [];
   function on(fn) { hooks.push(fn); }
