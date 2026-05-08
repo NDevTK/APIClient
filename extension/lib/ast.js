@@ -2496,12 +2496,22 @@ function _specDetectPropagationFromEffects(effects) {
     if (!e.value || e.value.kind !== "member") continue;
     if (!_specEqualAv(e.key.src, e.value.obj)) continue;
     if (!_specEqualAv(e.value.key, e.key)) continue;
-    var target = e.target;
-    // Unwrap or-defaulted target: `arguments[0] || {}` resolves to args-elt.
-    while (target && target.kind === "or") target = target.left;
-    if (!target) continue;
-    if (target.kind === "this" || target.kind === "param" || target.kind === "args-elt") {
-      return { source: e.key.src, target: target };
+    // Walk every leaf of the target's or-tree; each represents a
+    // possible value the target could hold per § 13.13 / § 14.6 join
+    // semantics. A propagation matches if any leaf is a tractable
+    // input slot (this / param / args-elt).
+    var queue = [e.target];
+    while (queue.length > 0) {
+      var t = queue.pop();
+      if (!t) continue;
+      if (t.kind === "or") {
+        if (t.left) queue.push(t.left);
+        if (t.right) queue.push(t.right);
+        continue;
+      }
+      if (t.kind === "this" || t.kind === "param" || t.kind === "args-elt") {
+        return { source: e.key.src, target: t };
+      }
     }
   }
   return null;
