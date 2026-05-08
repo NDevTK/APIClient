@@ -1156,28 +1156,16 @@ function _processExportMethodCall(path, result) {
       type: "fetch",
     };
 
-    // Extract body params from second argument options object.
-    // Two recognised shapes — both safe here because the receiver is a
-    // globally-tracked object AND the method name is an HTTP verb:
-    //   1. ky-style:    k.post(url, {json: {name: "x"}})
-    //   2. jQuery/axios: $.post(url, {fkey: "x", payload: y})
+    // Extract body params from the second argument options object.
+    // Each property is treated as a potential body field — spec-correct
+    // when the wrapper's body extraction semantic isn't known. Removed:
+    // the ky-specific `json: {...}` flatten special case (per CLAUDE.md
+    // L29 ban on framework recognition; ky's body extraction is reachable
+    // through inter-procedural trace into ky's own implementation when
+    // bundled).
     if (node.arguments.length >= 2 && _t.isObjectExpression(node.arguments[1])) {
-      var optsNode = node.arguments[1];
-      var jsonProp = null;
-      for (var pi = 0; pi < optsNode.properties.length; pi++) {
-        var prop = optsNode.properties[pi];
-        if (!_t.isObjectProperty(prop) || prop.computed) continue;
-        var keyName = _t.isIdentifier(prop.key) ? prop.key.name :
-          (_t.isStringLiteral(prop.key) ? prop.key.value : null);
-        if (keyName === "json" && _t.isObjectExpression(prop.value)) { jsonProp = prop; break; }
-      }
-      if (jsonProp) {
-        site.params = _extractObjectProperties(jsonProp.value);
-        for (var bpi = 0; bpi < site.params.length; bpi++) site.params[bpi].location = "body";
-      } else {
-        site.params = _extractObjectProperties(optsNode);
-        for (var bpj = 0; bpj < site.params.length; bpj++) site.params[bpj].location = "body";
-      }
+      site.params = _extractObjectProperties(node.arguments[1]);
+      for (var bpj = 0; bpj < site.params.length; bpj++) site.params[bpj].location = "body";
     }
 
     if (!site || site.url === "" || site.url == null) continue;
