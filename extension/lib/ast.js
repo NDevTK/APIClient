@@ -2628,113 +2628,13 @@ function _resolveCalleeToFunction(callPath) {
           }
         }
       }
-      if (objBinding) {
-        var refs = objBinding.referencePaths;
-        for (var cv = 0; cv < refs.length; cv++) {
-          var refParent = refs[cv].parent;
-          if (_t.isMemberExpression(refParent) && refParent.object === refs[cv].node &&
-              !refParent.computed && _t.isIdentifier(refParent.property, { name: propName })) {
-            var assignParentPath = refs[cv].parentPath ? refs[cv].parentPath.parentPath : null;
-            var assignExpr = assignParentPath ? assignParentPath.node : null;
-            if (assignExpr && _t.isAssignmentExpression(assignExpr) && assignExpr.operator === "=" &&
-                assignExpr.left === refParent) {
-              if (_t.isFunctionExpression(assignExpr.right) || _t.isArrowFunctionExpression(assignExpr.right)) {
-                return assignParentPath.get("right");
-              }
-            }
-          }
-          // Property defined via property-propagation function call.
-          // Detect `obj.copier(srcLit)` where copier's body's dataflow
-          // produces an Object.assign-equivalent effect (target=this,
-          // src=Param(0) or args-elt) per ECMA § 20.1.2.1. Spec-grounded
-          // — no library-name match.
-          if (_t.isMemberExpression(refParent) && refParent.object === refs[cv].node && !refParent.computed) {
-            var copierCallPath = refs[cv].parentPath ? refs[cv].parentPath.parentPath : null;
-            var copierCallNode = copierCallPath ? copierCallPath.node : null;
-            if (copierCallNode && _t.isCallExpression(copierCallNode) && copierCallNode.callee === refParent) {
-              var copierFn = _resolveCalleeFuncPath(copierCallPath, 0);
-              if (copierFn) {
-                var copierEffects = _specAnalyzePropertyFlow(copierFn);
-                var prop = _specDetectPropagationFromEffects(copierEffects);
-                if (prop && prop.target.kind === "this") {
-                  // The propagation source is one of the copier's params
-                  // (or arguments[i]). Map to the call site's argument
-                  // index, then scan that argument's literal for propName.
-                  var srcArgIdx = -1;
-                  if (prop.source.kind === "param") srcArgIdx = prop.source.idx;
-                  else if (prop.source.kind === "args-elt" &&
-                           prop.source.idx && prop.source.idx.kind === "const" &&
-                           typeof prop.source.idx.value === "number") {
-                    srcArgIdx = prop.source.idx.value;
-                  }
-                  if (srcArgIdx >= 0 && srcArgIdx < copierCallNode.arguments.length) {
-                    var srcArg = copierCallNode.arguments[srcArgIdx];
-                    if (_t.isObjectExpression(srcArg)) {
-                      for (var ep = 0; ep < srcArg.properties.length; ep++) {
-                        var sp = srcArg.properties[ep];
-                        if (!_t.isObjectProperty(sp) || sp.computed) continue;
-                        var spKey = _t.isIdentifier(sp.key) ? sp.key.name :
-                          (_t.isStringLiteral(sp.key) ? sp.key.value : null);
-                        if (spKey === propName) {
-                          var spValPath = copierCallPath.get("arguments." + srcArgIdx + ".properties." + ep + ".value");
-                          if (_t.isFunctionExpression(sp.value) || _t.isArrowFunctionExpression(sp.value)) {
-                            return spValPath;
-                          }
-                          // Property value is itself a call (factory pattern):
-                          // `obj.copy({prop: factory(...)}` per § 13.3 / § 7.2.5
-                          // — resolve the call's return to a function so calls
-                          // to obj.prop(args) reach the factory's returned fn.
-                          if (_t.isCallExpression(sp.value)) {
-                            var spRetFn = _resolveCallReturnToFunction(spValPath, 0);
-                            if (spRetFn && spRetFn._path) return spRetFn._path;
-                            if (spRetFn && spRetFn.node && _t.isFunction(spRetFn.node)) return spValPath;
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-          // ECMA § 20.1.2.1 — Object.assign(target, ...sources) copies
-          // each source's enumerable own properties onto target. Built-in
-          // semantics; recognised by scope-checked `Object` identifier
-          // (no framework-name match).
-          // Pattern: refs[cv] is `obj` used as arg[0] of Object.assign.
-          var oaCallPath = refs[cv].parentPath;
-          var oaCallNode = oaCallPath ? oaCallPath.node : null;
-          if (oaCallNode && _t.isCallExpression(oaCallNode) &&
-              oaCallNode.arguments[0] === refs[cv].node &&
-              _t.isMemberExpression(oaCallNode.callee) && !oaCallNode.callee.computed &&
-              _t.isIdentifier(oaCallNode.callee.object, { name: "Object" }) &&
-              !refs[cv].scope.getBinding("Object") &&
-              _t.isIdentifier(oaCallNode.callee.property, { name: "assign" })) {
-            for (var oaArgIdx = 1; oaArgIdx < oaCallNode.arguments.length; oaArgIdx++) {
-              var oaSrc = oaCallNode.arguments[oaArgIdx];
-              if (!_t.isObjectExpression(oaSrc)) continue;
-              for (var oap = 0; oap < oaSrc.properties.length; oap++) {
-                var oaProp = oaSrc.properties[oap];
-                if (!_t.isObjectProperty(oaProp) || oaProp.computed) continue;
-                var oaKey = _t.isIdentifier(oaProp.key) ? oaProp.key.name :
-                  (_t.isStringLiteral(oaProp.key) ? oaProp.key.value : null);
-                if (oaKey === propName) {
-                  var oaValPath = oaCallPath.get("arguments." + oaArgIdx + ".properties." + oap + ".value");
-                  if (_t.isFunctionExpression(oaProp.value) || _t.isArrowFunctionExpression(oaProp.value)) {
-                    return oaValPath;
-                  }
-                  // Factory-call value: `Object.assign(obj, {prop: factory(...)})`.
-                  if (_t.isCallExpression(oaProp.value)) {
-                    var oaRetFn = _resolveCallReturnToFunction(oaValPath, 0);
-                    if (oaRetFn && oaRetFn._path) return oaRetFn._path;
-                    if (oaRetFn && oaRetFn.node && _t.isFunction(oaRetFn.node)) return oaValPath;
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+      // (Property-lookup routes — direct assignment, Object.assign,
+      // factory-call return, property-propagation — moved into the
+      // canonical state machine `_RCFP_OBJ_AFTER` per CLAUDE.md
+      // spec-organisation discipline. _resolveCalleeFuncPath above
+      // covers them now; this function exists only for the IIFE-
+      // returned-property and global-alias-unwrap routes specific
+      // to its outer-scope binding lookups.)
     }
   }
 
@@ -6823,6 +6723,54 @@ function _rcfpStep(F) {
                         var oart = _resolveCallReturnToFunction(oavp, depth + 1);
                         if (oart && oart._path) return { done: oart._path };
                         if (oart && oart.node && _t.isFunction(oart.node)) return { done: oavp };
+                      }
+                    }
+                  }
+                }
+              }
+              // Property-flow propagation: `obj.copier(srcLit)` where
+              // copier's body has Object.assign-equivalent dataflow
+              // (target=this, source=param[0]/args-elt). The function is
+              // resolved via the analyser's effect detection — pure
+              // spec-grounded data flow per ECMA § 20.1.2.1 semantics
+              // expressed via for-in / Object.keys.forEach copy patterns.
+              if (rpParent && _t.isMemberExpression(rpParent) && rpParent.object === rp.node && !rpParent.computed) {
+                var copyCallPath = rp.parentPath ? rp.parentPath.parentPath : null;
+                var copyCallNode = copyCallPath ? copyCallPath.node : null;
+                if (copyCallNode && _t.isCallExpression(copyCallNode) && copyCallNode.callee === rpParent) {
+                  var copyFn = _resolveCalleeFuncPath(copyCallPath, depth + 1);
+                  if (copyFn) {
+                    var copyEffects = _specAnalyzePropertyFlow(copyFn);
+                    var pp = _specDetectPropagationFromEffects(copyEffects);
+                    if (pp && pp.target.kind === "this") {
+                      var ppArgIdx = -1;
+                      if (pp.source.kind === "param") ppArgIdx = pp.source.idx;
+                      else if (pp.source.kind === "args-elt" &&
+                               pp.source.idx && pp.source.idx.kind === "const" &&
+                               typeof pp.source.idx.value === "number") {
+                        ppArgIdx = pp.source.idx.value;
+                      }
+                      if (ppArgIdx >= 0 && ppArgIdx < copyCallNode.arguments.length) {
+                        var ppArg = copyCallNode.arguments[ppArgIdx];
+                        if (_t.isObjectExpression(ppArg)) {
+                          for (var ppe = 0; ppe < ppArg.properties.length; ppe++) {
+                            var ppp = ppArg.properties[ppe];
+                            if (!_t.isObjectProperty(ppp) || ppp.computed) continue;
+                            var ppk = _t.isIdentifier(ppp.key) ? ppp.key.name :
+                              (_t.isStringLiteral(ppp.key) ? ppp.key.value : null);
+                            if (ppk === propName2) {
+                              var ppvp = copyCallPath.get("arguments." + ppArgIdx + ".properties." + ppe + ".value");
+                              if (_t.isFunctionExpression(ppp.value) || _t.isArrowFunctionExpression(ppp.value)) {
+                                return { done: ppvp };
+                              }
+                              if (_t.isCallExpression(ppp.value)) {
+                                var ppr = _resolveCallReturnToFunction(ppvp, depth + 1);
+                                if (ppr && ppr._path) return { done: ppr._path };
+                                if (ppr && ppr.node && _t.isFunction(ppr.node)) return { done: ppvp };
+                              }
+                            }
+                          }
+                        }
                       }
                     }
                   }
