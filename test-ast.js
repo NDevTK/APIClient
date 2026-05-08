@@ -10500,6 +10500,30 @@ test("§ 19.1.2.1: Object.assign({...}, {fetchUser: fn}) propagates — call tra
   return r.fetchCallSites.some(function(s) { return s.url === "/api/users"; });
 });
 
+// § 19.1.2.16 + § 22.1.3.7 — `Object.keys(src).forEach(k => target[k] = src[k])`
+// produces the same propagation effect as `for(k in src) target[k] = src[k]`
+// because Array.prototype.forEach invokes the callback once per key.
+test("§ 19.1.2.16+§ 22.1.3.7: Object.keys.forEach produces propagation effect", `
+  function copy(s) {
+    Object.keys(s).forEach(function(k) { this[k] = s[k]; });
+  }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 1) return false;
+  var e = effects[0];
+  if (!e.target || e.target.kind !== "this") return false;
+  if (!e.key || e.key.kind !== "loop-key") return false;
+  if (!e.key.src || e.key.src.kind !== "param" || e.key.src.idx !== 0) return false;
+  if (!e.value || e.value.kind !== "member") return false;
+  return true;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Results: " + passed + "/" + total + " passed, " + failed + " failed");

@@ -2113,6 +2113,56 @@ function _specEvalExpression(rootPath, state, effects) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// § 19.1.2.16 + § 22.1.3.7 — Object.keys(src).forEach(callback)
+// recognition. Built-in semantics: the callback is invoked once per
+// enumerable own key of `src` with that key as its first argument. For
+// our property-flow domain the effect is identical to `for (k in src)`,
+// so we bind the callback's first param to {kind:"loop-key", src} and
+// walk its body via the worklist's branch-stack mechanism.
+// Returns true when the expression matched and was handled.
+// ───────────────────────────────────────────────────────────────────────────
+function _specHandleObjectKeysForEach(exprNode, exprPath, state, effects, branchStack) {
+  if (!exprNode || !_t.isCallExpression(exprNode)) return false;
+  var callee = exprNode.callee;
+  if (!_t.isMemberExpression(callee) || callee.computed) return false;
+  if (!_t.isIdentifier(callee.property, { name: "forEach" })) return false;
+  // Receiver must be `Object.keys(src)` per § 19.1.2.16; scope-checked
+  // on the unshadowed `Object` global.
+  var recv = callee.object;
+  if (!_t.isCallExpression(recv)) return false;
+  var recvCallee = recv.callee;
+  if (!_t.isMemberExpression(recvCallee) || recvCallee.computed) return false;
+  if (!_t.isIdentifier(recvCallee.object, { name: "Object" })) return false;
+  if (exprPath.scope.getBinding("Object")) return false;
+  if (!_t.isIdentifier(recvCallee.property, { name: "keys" })) return false;
+  if (recv.arguments.length < 1) return false;
+  if (exprNode.arguments.length < 1) return false;
+  var cb = exprNode.arguments[0];
+  if (!_t.isFunctionExpression(cb) && !_t.isArrowFunctionExpression(cb)) return false;
+  if (cb.params.length < 1 || !_t.isIdentifier(cb.params[0])) return false;
+
+  // Evaluate the source argument abstractly.
+  var srcAv = _specEvalExpression(exprPath.get("callee.object.arguments.0"), state, effects);
+  // Build callback's body-entry state with loop var bound.
+  var cbState = _specStateClone(state);
+  cbState[cb.params[0].name] = { kind: "loop-key", src: srcAv };
+
+  // Push the callback's body into the branch stack so the worklist
+  // continues into it. Mirrors how _specApplyStatement handles ForInStatement.
+  var cbPath = exprPath.get("arguments.0");
+  var bodyPath = cbPath.get("body");
+  if (!bodyPath || !bodyPath.node) return true;
+  if (_t.isBlockStatement(bodyPath.node)) {
+    branchStack.push({ stmts: bodyPath.node.body, idx: 0, state: cbState, parentPath: bodyPath, isBody: true });
+  } else {
+    // Arrow function with concise body (an expression). Evaluate it
+    // for side effects with the loop-binding state.
+    _specEvalExpression(bodyPath, cbState, effects);
+  }
+  return true;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Statement walker — dispatch by spec section.
 // Each branch routes a single statement to its dedicated transfer function.
 // No combining of spec sections; mutation of state and effects happens
@@ -2143,8 +2193,19 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
   }
 
   if (_t.isExpressionStatement(stmt)) {
-    // § 14.5 — evaluate the expression purely for side effects on state /
-    // effects accumulator. The expression's value is discarded.
+    // § 14.5 — evaluate the expression for side effects.
+    // First: recognise the spec-built-in iterator-callback pattern
+    //   Object.keys(src).forEach(callback)
+    // per ECMA § 19.1.2.16 (Object.keys) + § 22.1.3.7 (Array.prototype.forEach).
+    // The callback is invoked once per enumerable own key of `src` —
+    // semantically identical to `for(k in src)` for the property-flow
+    // domain, so we bind the callback's first param to {loop-key, src}
+    // and walk its body. No library-name match — this is the spec's
+    // own definition of these built-ins.
+    var exprNode = stmt.expression;
+    if (_specHandleObjectKeysForEach(exprNode, stmtPath.get("expression"), state, effects, branchStack)) {
+      return;
+    }
     _specEvalExpression(stmtPath.get("expression"), state, effects);
     return;
   }
