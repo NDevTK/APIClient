@@ -580,6 +580,50 @@ test("§ 13.15.4: `obj.X = obj2.X = function(){...}` — calling obj.X reaches t
   return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.10.3 OptionalCallExpression — `obj?.method()`
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.10.3 OptionalCallExpression ===\n");
+
+test("§ 13.10.3: optional method call traces fetch URL through declared function", `
+  var lib = { call: function() { fetch("/api/x"); } };
+  lib?.call();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 13.5 BinaryExpression — string concat for URL construction
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.5 BinaryExpression (string concat) ===\n");
+
+test("§ 13.5: string concat for URL with two const segments", `
+  function f() {
+    var prefix = "/api/";
+    var endpoint = "users";
+    fetch(prefix + endpoint);
+  }
+  f();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/users"; });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 13.10 nested member with property chain through param
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.10 nested member through param ===\n");
+
+specTest("§ 13.10: param.config.url retains 3-level abstract structure", `
+  function f(p) { this.url = p.config.url; }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  // member(member(param0, "config"), "url")
+  return v && v.kind === "member" && v.key.kind === "const" && v.key.value === "url" &&
+         v.obj && v.obj.kind === "member" && v.obj.key.kind === "const" && v.obj.key.value === "config" &&
+         v.obj.obj && v.obj.obj.kind === "param" && v.obj.obj.idx === 0;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
