@@ -304,6 +304,75 @@ test("§ 25.5.2: JSON.stringify(localBodyVar) with branch-conditional role surfa
   return roleP.validValues.indexOf("admin") >= 0 && roleP.validValues.indexOf("guest") >= 0;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.5 TemplateLiteral
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.5 TemplateLiteral ===\n");
+
+test("§ 13.5: template literal with literal-only segments resolves URL", `
+  fetch(\`/api/v1/users\`);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v1/users"; });
+});
+
+test("§ 13.5: template literal with const interpolation resolves URL fully", `
+  function f() {
+    var v = "42";
+    fetch(\`/api/\${v}/profile\`);
+  }
+  f();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/42/profile"; });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 14.7.4 ForStatement
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.7.4 ForStatement ===\n");
+
+specTest("§ 14.7.4: for-loop body's property writes recorded once (single-pass abstraction)", `
+  function f() {
+    for (var i = 0; i < 3; i++) {
+      this.idx = i;
+    }
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].target.kind === "this" &&
+         effects[0].key.kind === "const" && effects[0].key.value === "idx";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 14.10 ReturnStatement
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.10 ReturnStatement ===\n");
+
+specTest("§ 14.10: ReturnStatement halts branch — subsequent statements not analysed in that branch", `
+  function f() {
+    this.before = 1;
+    return;
+    this.after = 2;
+  }
+`, function(effects) {
+  // Only the pre-return assignment should be recorded.
+  return effects.length === 1 &&
+         effects[0].key.kind === "const" && effects[0].key.value === "before";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 13.3.5 Method invocation — `this` binding
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.3.5 Method invocation ===\n");
+
+test("§ 13.3.5: object literal method invocation traces fetch URL", `
+  var obj = {
+    fetchData: function() { fetch("/api/data"); }
+  };
+  obj.fetchData();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/data"; });
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
