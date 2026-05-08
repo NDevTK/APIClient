@@ -6767,13 +6767,53 @@ function _rcfpStep(F) {
             for (var ri = 0; ri < rcvBind.referencePaths.length; ri++) {
               var rp = rcvBind.referencePaths[ri];
               var rpParent = rp.parent;
-              if (!rpParent || !_t.isMemberExpression(rpParent) || rpParent.object !== rp.node) continue;
-              if (rpParent.computed || !_t.isIdentifier(rpParent.property, { name: propName2 })) continue;
-              var assn = rp.parentPath ? rp.parentPath.parent : null;
-              if (!assn || !_t.isAssignmentExpression(assn) || assn.operator !== "=" || assn.left !== rpParent) continue;
-              var rhs = assn.right;
-              if (_t.isFunctionExpression(rhs) || _t.isArrowFunctionExpression(rhs)) {
-                return { done: rp.parentPath.parentPath.get("right") };
+              // Direct assignment `obj.key = …`
+              if (rpParent && _t.isMemberExpression(rpParent) && rpParent.object === rp.node &&
+                  !rpParent.computed && _t.isIdentifier(rpParent.property, { name: propName2 })) {
+                var assn = rp.parentPath ? rp.parentPath.parent : null;
+                if (assn && _t.isAssignmentExpression(assn) && assn.operator === "=" && assn.left === rpParent) {
+                  var rhs = assn.right;
+                  if (_t.isFunctionExpression(rhs) || _t.isArrowFunctionExpression(rhs)) {
+                    return { done: rp.parentPath.parentPath.get("right") };
+                  }
+                  // Factory-call value: `obj.key = factory(...)` per § 13.3.
+                  if (_t.isCallExpression(rhs)) {
+                    var rhsRetFn = _resolveCallReturnToFunction(rp.parentPath.parentPath.get("right"), depth + 1);
+                    if (rhsRetFn && rhsRetFn._path) return { done: rhsRetFn._path };
+                    if (rhsRetFn && rhsRetFn.node && _t.isFunction(rhsRetFn.node)) return { done: rp.parentPath.parentPath.get("right") };
+                  }
+                }
+              }
+              // Object.assign(obj, {key: value}) — built-in property
+              // propagation per ECMA § 20.1.2.1. Scope-checked on the
+              // unshadowed `Object` global.
+              if (rpParent && _t.isCallExpression(rpParent) &&
+                  rpParent.arguments[0] === rp.node &&
+                  _t.isMemberExpression(rpParent.callee) && !rpParent.callee.computed &&
+                  _t.isIdentifier(rpParent.callee.object, { name: "Object" }) &&
+                  !rp.scope.getBinding("Object") &&
+                  _t.isIdentifier(rpParent.callee.property, { name: "assign" })) {
+                for (var oai = 1; oai < rpParent.arguments.length; oai++) {
+                  var oas = rpParent.arguments[oai];
+                  if (!_t.isObjectExpression(oas)) continue;
+                  for (var oap = 0; oap < oas.properties.length; oap++) {
+                    var oapp = oas.properties[oap];
+                    if (!_t.isObjectProperty(oapp) || oapp.computed) continue;
+                    var oapk = _t.isIdentifier(oapp.key) ? oapp.key.name :
+                      (_t.isStringLiteral(oapp.key) ? oapp.key.value : null);
+                    if (oapk === propName2) {
+                      var oavp = rp.parentPath.get("arguments." + oai + ".properties." + oap + ".value");
+                      if (_t.isFunctionExpression(oapp.value) || _t.isArrowFunctionExpression(oapp.value)) {
+                        return { done: oavp };
+                      }
+                      if (_t.isCallExpression(oapp.value)) {
+                        var oart = _resolveCallReturnToFunction(oavp, depth + 1);
+                        if (oart && oart._path) return { done: oart._path };
+                        if (oart && oart.node && _t.isFunction(oart.node)) return { done: oavp };
+                      }
+                    }
+                  }
+                }
               }
             }
           }
