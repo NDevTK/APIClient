@@ -624,6 +624,58 @@ specTest("§ 13.10: param.config.url retains 3-level abstract structure", `
          v.obj.obj && v.obj.obj.kind === "param" && v.obj.obj.idx === 0;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 14.3.3 / § 8.6.2 Destructuring patterns in function parameters
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.3.3 destructuring params ===\n");
+
+specTest("§ 14.3.3: ObjectPattern destructured param `{a, b}` resolves to member(param0, key)", `
+  function f({a, b}) {
+    this.first = a;
+    this.second = b;
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const") byKey[e.key.value] = e.value;
+  }
+  var firstOK = byKey.first && byKey.first.kind === "member" &&
+                byKey.first.obj.kind === "param" && byKey.first.obj.idx === 0 &&
+                byKey.first.key.kind === "const" && byKey.first.key.value === "a";
+  var secondOK = byKey.second && byKey.second.kind === "member" &&
+                 byKey.second.obj.kind === "param" && byKey.second.obj.idx === 0 &&
+                 byKey.second.key.kind === "const" && byKey.second.key.value === "b";
+  return firstOK && secondOK;
+});
+
+specTest("§ 14.3.3: ArrayPattern destructured param `[a, b]` resolves to member(param0, idx)", `
+  function f([a, b]) {
+    this.first = a;
+    this.second = b;
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const") byKey[e.key.value] = e.value;
+  }
+  return byKey.first && byKey.first.kind === "member" &&
+         byKey.first.obj.kind === "param" && byKey.first.obj.idx === 0 &&
+         byKey.first.key.kind === "const" && byKey.first.key.value === 0 &&
+         byKey.second && byKey.second.kind === "member" &&
+         byKey.second.key.value === 1;
+});
+
+specTest("§ 14.1: AssignmentPattern default-valued param `function f(x = 1)` binds x", `
+  function f(x = 99) { this.v = x; }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "param" && effects[0].value.idx === 0;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");

@@ -1856,7 +1856,51 @@ function _specInitialFunctionBodyState(funcNode) {
   if (!funcNode || !funcNode.params) return state;
   for (var i = 0; i < funcNode.params.length; i++) {
     var p = funcNode.params[i];
-    if (p && p.type === "Identifier") state[p.name] = { kind: "param", idx: i };
+    if (!p) continue;
+    if (p.type === "Identifier") {
+      state[p.name] = { kind: "param", idx: i };
+    } else if (p.type === "AssignmentPattern" && p.left && p.left.type === "Identifier") {
+      // Default-valued param `function f(x = 1)` per § 14.1 — the binding
+      // resolves to either the arg's value or the default; abstractly Param(i).
+      state[p.left.name] = { kind: "param", idx: i };
+    } else if (p.type === "ObjectPattern") {
+      // Destructured param `function f({a, b})` per § 14.3.3 / § 8.6.2:
+      // each property of the pattern binds a separate identifier whose
+      // value is `member(param-i, key)`.
+      for (var pi = 0; pi < p.properties.length; pi++) {
+        var op = p.properties[pi];
+        if (!op || op.type !== "ObjectProperty" || op.computed) continue;
+        var keyName = op.key && (op.key.type === "Identifier" ? op.key.name :
+          (op.key.type === "StringLiteral" ? op.key.value : null));
+        if (!keyName) continue;
+        var bindIdent = op.value;
+        // Default in destructured: `{a = 1}` parses as AssignmentPattern.
+        if (bindIdent && bindIdent.type === "AssignmentPattern") bindIdent = bindIdent.left;
+        if (bindIdent && bindIdent.type === "Identifier") {
+          state[bindIdent.name] = {
+            kind: "member",
+            obj: { kind: "param", idx: i },
+            key: { kind: "const", value: keyName }
+          };
+        }
+      }
+    } else if (p.type === "ArrayPattern") {
+      // Destructured array param `function f([a, b])` per § 14.3.3 /
+      // § 8.6.2 ArrayBindingPattern: each element binds to
+      // `member(param-i, idx)` where idx is the position as a const.
+      for (var ai = 0; ai < p.elements.length; ai++) {
+        var ae = p.elements[ai];
+        if (!ae) continue;
+        if (ae.type === "AssignmentPattern") ae = ae.left;
+        if (ae && ae.type === "Identifier") {
+          state[ae.name] = {
+            kind: "member",
+            obj: { kind: "param", idx: i },
+            key: { kind: "const", value: ai }
+          };
+        }
+      }
+    }
   }
   return state;
 }
