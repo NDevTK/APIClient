@@ -2627,6 +2627,14 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
 // Memoised per function node.
 // ───────────────────────────────────────────────────────────────────────────
 var _specEffectsMemo = new WeakMap();
+// Higher-order function callback dispatch queue. Filled by _specEvalLeaf
+// when it recognises Array.prototype.{map,filter,reduce,…}; drained by
+// the _specAnalyzePropertyFlow driver loop after each statement, which
+// pushes the cb body's stmts onto the local branch stack with caller
+// args bound. Decoupling via this queue breaks the static call graph
+// cycle _specEvalLeaf → _specAnalyzePropertyFlow → … → _specEvalLeaf
+// that would otherwise violate the recursion ban.
+var _hofPendingDispatches = [];
 function _specAnalyzePropertyFlow(funcPath) {
   if (!funcPath || !funcPath.node) return [];
   var fnNode = funcPath.node;
@@ -2639,6 +2647,10 @@ function _specAnalyzePropertyFlow(funcPath) {
     return [];
   }
 
+  // Snapshot the queue's pre-call length so any dispatches we drain
+  // here belong to THIS analysis (not a sibling analysis whose own
+  // dispatches were already pending).
+  var hofQueueBaseLen = _hofPendingDispatches.length;
   var entryState = _specInitialFunctionBodyState(fnNode);
   var effects = [];
   var stack;
@@ -2649,6 +2661,8 @@ function _specAnalyzePropertyFlow(funcPath) {
     // is a single expression whose value is implicitly returned.
     // Wrap it as a synthetic ExpressionStatement to feed the walker.
     _specEvalExpression(bodyPath, entryState, effects);
+    // Drain HOF queue from concise-body eval too.
+    _drainHofQueueIntoStack(stack || [], hofQueueBaseLen, effects);
     _specEffectsMemo.set(fnNode, effects);
     return effects;
   }
@@ -2702,10 +2716,48 @@ function _specAnalyzePropertyFlow(funcPath) {
     top.idx++;
     if (!stmt) continue;
     _specApplyStatement(stmtPath, top.state, effects, stack);
+    // Drain any HOF cb dispatches enqueued by expressions inside this
+    // statement. Each becomes a new branch frame on the same stack.
+    _drainHofQueueIntoStack(stack, hofQueueBaseLen, effects);
   }
 
   _specEffectsMemo.set(fnNode, effects);
   return effects;
+}
+
+// Pop HOF dispatches enqueued during the current analysis (anything
+// above hofQueueBaseLen on _hofPendingDispatches) and push each cb
+// body onto `stack` with cb's parameters bound to the caller's
+// abstract values per § 23.1.3.21 step 6.c CallbackInvocation.
+function _drainHofQueueIntoStack(stack, hofQueueBaseLen, effects) {
+  while (_hofPendingDispatches.length > hofQueueBaseLen) {
+    var dispatch = _hofPendingDispatches.pop();
+    var cbPath = dispatch.cbPath;
+    var paramAvs = dispatch.paramAvs || [];
+    if (!cbPath || !cbPath.node) continue;
+    if (!_t.isFunctionExpression(cbPath.node) && !_t.isArrowFunctionExpression(cbPath.node)) continue;
+    var cbState = {};
+    var cbParams = cbPath.node.params || [];
+    for (var pi = 0; pi < cbParams.length && pi < paramAvs.length; pi++) {
+      var pp = cbParams[pi];
+      if (pp && pp.type === "Identifier") {
+        cbState[pp.name] = paramAvs[pi];
+      } else {
+        // Destructuring param — bind via the same iterative helper used
+        // by VariableDeclarator. Reuses § 14.3.3 patterns.
+        _specVariableDeclaratorBind(pp, paramAvs[pi], cbState);
+      }
+    }
+    var cbBodyPath = cbPath.get("body");
+    if (!cbBodyPath || !cbBodyPath.node) continue;
+    if (_t.isBlockStatement(cbBodyPath.node)) {
+      stack.push({ stmts: cbBodyPath.node.body, idx: 0, state: cbState, parentPath: cbBodyPath });
+    } else {
+      // Concise-body arrow — evaluate the expression directly with the
+      // bound state. Effects from sub-expressions land in `effects`.
+      _specEvalExpression(cbBodyPath, cbState, effects);
+    }
+  }
 }
 
 // § 25.5.2 / § 25.5.4 helpers — lift parsed JSON values up to abstract
@@ -3389,6 +3441,65 @@ function _specEvalLeaf(path, state, vals, effects) {
             parts.push(String(el.value));
           }
           return { kind: "const", value: parts.join(sep) };
+        }
+      }
+      // § 23.1.3 Array.prototype.{map, filter, reduce, find, findIndex,
+      // some, every, flatMap, forEach} — dispatch the callback against
+      // each array element so cb's property writes reach the effects
+      // array. The cb is per § 23.1.3.21 step 6.c (CallbackInvocation)
+      // called with (kValue, k, O); for property-flow we bind kValue
+      // (and accumulator for reduce) into the cb body's entry state.
+      // Recursion ban: dispatch is queued onto the module-level
+      // _hofPendingDispatches array; the outer _specAnalyzePropertyFlow
+      // driver drains the queue and pushes cb body stmts onto its own
+      // branch stack, breaking the call-graph cycle that would otherwise
+      // form via _specEvalLeaf → _specAnalyzePropertyFlow.
+      if (recvAv && (recvAv.kind === "array-lit" || recvAv.kind === "keys-of")) {
+        var hofMeth = n.callee.property.name;
+        var hofIsHigherOrder =
+          hofMeth === "map" || hofMeth === "filter" || hofMeth === "find" ||
+          hofMeth === "findIndex" || hofMeth === "some" || hofMeth === "every" ||
+          hofMeth === "flatMap" || hofMeth === "forEach";
+        var hofIsReduce = hofMeth === "reduce" || hofMeth === "reduceRight";
+        if ((hofIsHigherOrder || hofIsReduce) && n.arguments.length >= 1) {
+          var hofCb = n.arguments[0];
+          if (_t.isFunctionExpression(hofCb) || _t.isArrowFunctionExpression(hofCb)) {
+            // Derive elementAv per receiver kind:
+            //   keys-of(src) → loop-key{src}  (per § 14.7.5 EnumerateObjectProperties)
+            //   array-lit    → join of all element avs (sound over-approx
+            //                  since cb runs once per element)
+            var hofElementAv;
+            if (recvAv.kind === "keys-of") {
+              hofElementAv = { kind: "loop-key", src: recvAv.src };
+            } else if (recvAv.elements.length === 0) {
+              hofElementAv = { kind: "top" };
+            } else {
+              hofElementAv = recvAv.elements[0];
+              for (var hi = 1; hi < recvAv.elements.length; hi++) {
+                hofElementAv = _specLogicalOrAv(hofElementAv, recvAv.elements[hi]);
+              }
+            }
+            // For reduce, param 0 is the accumulator (init or top), param 1
+            // is the element. For map/filter/etc., param 0 is the element.
+            var hofParamAvs;
+            if (hofIsReduce) {
+              var hofInitAv = (n.arguments.length >= 2) ? (vals.get(n.arguments[1]) || { kind: "top" }) : { kind: "top" };
+              hofParamAvs = [hofInitAv, hofElementAv];
+            } else {
+              hofParamAvs = [hofElementAv];
+            }
+            // Queue dispatch for the outer driver to pick up. Includes
+            // the cbPath and per-param caller AVs; the driver binds them
+            // into cb's body-entry state and pushes onto its branch stack.
+            _hofPendingDispatches.push({ cbPath: path.get("arguments.0"), paramAvs: hofParamAvs });
+            // Return value per § 23.1.3:
+            //   forEach → undefined (per spec)
+            //   filter → array-lit with same element type (subset)
+            //   map/flatMap/reduce/some/every/find/findIndex → Top
+            if (hofMeth === "forEach") return { kind: "const", value: undefined };
+            if (hofMeth === "filter") return { kind: "array-lit", elements: [hofElementAv] };
+            return { kind: "top" };
+          }
         }
       }
       // Number built-ins per § 21.1.3 — receiver Const number.

@@ -1814,6 +1814,93 @@ specTest("§ 13.15.5: `||=` keeps the original Const non-falsy value", `
   return false;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 23.1.3.21 / .16 / .27 Array.prototype.{map, filter, reduce}
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 23.1.3 Array HOFs (map/filter/reduce/find/some/every) ===\n");
+
+specTest("§ 23.1.3.21: `[1,2,3].map(x => this.last = x)` dispatches cb writes", `
+  function f() {
+    var arr = [1, 2, 3];
+    arr.map(x => this.last = x);
+  }
+`, function(effects) {
+  // Arrow's concise body evaluates as an AssignmentExpression that
+  // records the property write on this. Effect key=last.
+  if (effects.length < 1) return false;
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.key && e.key.kind === "const" && e.key.value === "last") return true;
+  }
+  return false;
+});
+
+specTest("§ 23.1.3.21: `Object.keys(items).map(...)` cb dispatched with k=loop-key", `
+  function f(items) {
+    Object.keys(items).map(function(k) {
+      this.found = k;
+    });
+  }
+`, function(effects) {
+  // Object.keys returns keys-of(items), so map's cb element is loop-key.
+  // The cb writes this.found = loop-key; effect should reflect that.
+  if (effects.length < 1) return false;
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.key && e.key.kind === "const" && e.key.value === "found" &&
+        e.value && e.value.kind === "loop-key") return true;
+  }
+  return false;
+});
+
+specTest("§ 23.1.3.16: `arr.filter(cb)` dispatches cb (effect-only check)", `
+  function f() {
+    var arr = [1, 2, 3];
+    arr.filter(function(x) {
+      this.seen = x;
+      return true;
+    });
+  }
+`, function(effects) {
+  if (effects.length < 1) return false;
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.key && e.key.kind === "const" && e.key.value === "seen") return true;
+  }
+  return false;
+});
+
+specTest("§ 23.1.3.27: `arr.reduce(cb, init)` dispatches cb with element", `
+  function f() {
+    var arr = ["a", "b", "c"];
+    arr.reduce(function(acc, x) {
+      this.last = x;
+      return acc;
+    }, null);
+  }
+`, function(effects) {
+  if (effects.length < 1) return false;
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.key && e.key.kind === "const" && e.key.value === "last") return true;
+  }
+  return false;
+});
+
+// Negative case: map on UNKNOWN receiver does NOT dispatch (sound).
+specTest("§ 23.1.3.21: shadowed Array constructor / unknown receiver — no dispatch", `
+  function f(opaque) {
+    opaque.map(function(x) { this.shouldNotFire = x; }.bind(this));
+  }
+`, function(effects) {
+  // opaque is param-derived (top); .map on top doesn't trigger HOF dispatch.
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.key && e.key.kind === "const" && e.key.value === "shouldNotFire") return false;
+  }
+  return true;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
