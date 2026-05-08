@@ -1018,6 +1018,29 @@ specTest("§ 21.1.3.6: `Const(255).toString(16)` resolves to Const(\"ff\")", `
   return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "ff";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 19.2.6 URI handling built-ins
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 19.2.6 URI handling built-ins ===\n");
+
+specTest("§ 19.2.6.5: `encodeURIComponent(Const(\"a b\"))` resolves to Const(\"a%20b\")", `
+  function f() {
+    this.q = encodeURIComponent("a b");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "a%20b";
+});
+
+specTest("§ 19.2.6.4: `decodeURIComponent(Const(\"a%20b\"))` resolves to Const(\"a b\")", `
+  function f() {
+    this.q = decodeURIComponent("a%20b");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "a b";
+});
+
 specTest("§ 21.1.3.3: `Const(3.14159).toFixed(2)` resolves to Const(\"3.14\")", `
   function f() {
     this.s = (3.14159).toFixed(2);

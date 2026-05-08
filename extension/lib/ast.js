@@ -2852,6 +2852,25 @@ function _specEvalLeaf(path, state, vals, effects) {
       var srcAv = vals.get(n.arguments[0]) || { kind: "top" };
       return { kind: "keys-of", src: srcAv };
     }
+    // Global encoding built-ins per § 19.2.6 — when called with the
+    // unshadowed global identifier and a Const string arg, evaluate
+    // the spec-defined transform.
+    if (_t.isIdentifier(n.callee) && n.arguments.length === 1 &&
+        !path.scope.getBinding(n.callee.name)) {
+      var encName = n.callee.name;
+      var encArgAv = vals.get(n.arguments[0]);
+      if (encArgAv && encArgAv.kind === "const" && typeof encArgAv.value === "string") {
+        var es = encArgAv.value;
+        if (encName === "encodeURIComponent") return { kind: "const", value: encodeURIComponent(es) };
+        if (encName === "decodeURIComponent") {
+          try { return { kind: "const", value: decodeURIComponent(es) }; } catch (e) { return { kind: "top" }; }
+        }
+        if (encName === "encodeURI") return { kind: "const", value: encodeURI(es) };
+        if (encName === "decodeURI") {
+          try { return { kind: "const", value: decodeURI(es) }; } catch (e) { return { kind: "top" }; }
+        }
+      }
+    }
     // String built-ins: § 22.1.3 — String.prototype methods on Const
     // string receivers can be evaluated statically. Useful for HTTP
     // method normalisation (`"get".toUpperCase()` → `"GET"`).
