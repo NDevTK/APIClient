@@ -2039,13 +2039,67 @@ function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, 
 // § 14.3.2 — VariableDeclaration (`var`/`let`/`const`).
 // For each declarator: bind the identifier to the initializer's evaluated
 // value, or to undefined per § 14.3.2.1 step 7 when no initializer.
-// (Destructuring patterns — § 14.3.3 — handled by a separate function.)
+// Handles destructuring patterns per § 14.3.3 / § 8.6.2 inline:
+// `var {a, b} = obj` binds a to member(obj, "a") etc.
+// `var [a, b] = arr` binds a to member(arr, 0) etc.
+// Iterative — uses an explicit worklist to descend into nested patterns
+// (e.g. `var [{a}, b] = arr`, `var {a = 1} = obj`).
 // ───────────────────────────────────────────────────────────────────────────
 function _specVariableDeclaratorBind(idNode, initAv, state) {
-  if (!idNode || idNode.type !== "Identifier") return;
-  state[idNode.name] = initAv === undefined
-    ? { kind: "const", value: undefined }
-    : initAv;
+  if (!idNode) return;
+  var stack = [{ id: idNode, av: initAv === undefined ? { kind: "const", value: undefined } : initAv }];
+  while (stack.length > 0) {
+    var top = stack.pop();
+    var id = top.id, av = top.av;
+    if (!id) continue;
+    if (id.type === "Identifier") {
+      state[id.name] = av;
+      continue;
+    }
+    if (id.type === "AssignmentPattern" && id.left) {
+      // Default-valued destructure (`{a = 1}` or `[x = 0]`) per § 14.1 /
+      // § 8.6.2 — left descended with the same source value; default
+      // applies at runtime when the resolved arg/element is undefined.
+      stack.push({ id: id.left, av: av });
+      continue;
+    }
+    if (id.type === "ObjectPattern") {
+      var srcAv = av || { kind: "top" };
+      for (var pi = id.properties.length - 1; pi >= 0; pi--) {
+        var op = id.properties[pi];
+        if (!op || op.type !== "ObjectProperty" || op.computed) continue;
+        var keyName = op.key && (op.key.type === "Identifier" ? op.key.name :
+          (op.key.type === "StringLiteral" ? op.key.value : null));
+        if (keyName === null) continue;
+        stack.push({
+          id: op.value,
+          av: { kind: "member", obj: srcAv, key: { kind: "const", value: keyName } }
+        });
+      }
+      continue;
+    }
+    if (id.type === "ArrayPattern") {
+      var srcAvA = av || { kind: "top" };
+      for (var ai = id.elements.length - 1; ai >= 0; ai--) {
+        var ae = id.elements[ai];
+        if (!ae) continue;
+        stack.push({
+          id: ae,
+          av: { kind: "member", obj: srcAvA, key: { kind: "const", value: ai } }
+        });
+      }
+      continue;
+    }
+    if (id.type === "RestElement" && id.argument) {
+      // `{...rest}` / `[...rest]` per § 14.3.3 — rest collects the
+      // remaining properties/elements into a new object/array. Without
+      // key-set tracking, the rest binding's value abstracts to Top
+      // (sound conservative answer; a future enhancement can refine
+      // by tracking consumed keys).
+      stack.push({ id: id.argument, av: { kind: "top" } });
+      continue;
+    }
+  }
 }
 
 // ───────────────────────────────────────────────────────────────────────────

@@ -676,6 +676,50 @@ specTest("§ 14.1: AssignmentPattern default-valued param `function f(x = 1)` bi
   return effects[0].value && effects[0].value.kind === "param" && effects[0].value.idx === 0;
 });
 
+specTest("§ 14.3.3: VariableDeclarator destructuring `var {a, b} = obj`", `
+  function f(o) {
+    var { foo, bar } = o;
+    this.x = foo;
+    this.y = bar;
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const") byKey[e.key.value] = e.value;
+  }
+  return byKey.x && byKey.x.kind === "member" &&
+         byKey.x.obj.kind === "param" && byKey.x.obj.idx === 0 &&
+         byKey.x.key.kind === "const" && byKey.x.key.value === "foo" &&
+         byKey.y && byKey.y.kind === "member" &&
+         byKey.y.key.kind === "const" && byKey.y.key.value === "bar";
+});
+
+specTest("§ 14.3.3: nested destructuring `var [{a}, {b}] = pair`", `
+  function f(pair) {
+    var [{a}, {b}] = pair;
+    this.first = a;
+    this.second = b;
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const") byKey[e.key.value] = e.value;
+  }
+  // first = member(member(param0, 0), "a")
+  // second = member(member(param0, 1), "b")
+  var firstOk = byKey.first && byKey.first.kind === "member" &&
+                byKey.first.key.kind === "const" && byKey.first.key.value === "a" &&
+                byKey.first.obj && byKey.first.obj.kind === "member" &&
+                byKey.first.obj.key.kind === "const" && byKey.first.obj.key.value === 0;
+  var secondOk = byKey.second && byKey.second.kind === "member" &&
+                 byKey.second.key.kind === "const" && byKey.second.key.value === "b";
+  return firstOk && secondOk;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
