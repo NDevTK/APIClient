@@ -2737,6 +2737,53 @@ function _traceWrapperFunction(callPath, funcPath, funcBinding, result) {
     }
   }
 
+  // ── Property-flow effects → branch-conditional valid values ──
+  // The user directive: "if there's a code path where role=admin and
+  // role=guest we show both as options". The property-flow analyser
+  // already records every property write (including conditional
+  // branches) per § 14.6 IfStatement. Aggregate const-value writes per
+  // body-param key and emit the union as `validValues` so the schema
+  // dropdown surfaces all branch values.
+  var enclosingFnPath = callPath.getFunctionParent();
+  if (enclosingFnPath) {
+    var pfeEffects = _specAnalyzePropertyFlow(enclosingFnPath);
+    if (pfeEffects && pfeEffects.length > 0) {
+      var byKey = Object.create(null);
+      for (var pi = 0; pi < pfeEffects.length; pi++) {
+        var pe = pfeEffects[pi];
+        if (!pe.target || (pe.target.kind !== "this" && pe.target.kind !== "param" && pe.target.kind !== "args-elt")) continue;
+        if (!pe.key || pe.key.kind !== "const") continue;
+        if (!pe.value || pe.value.kind !== "const") continue;
+        // Only keep primitive-valued writes; objects/loop-keys are not
+        // dropdown-displayable values.
+        var v = pe.value.value;
+        if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
+        var k = pe.key.value;
+        if (!byKey[k]) byKey[k] = new Set();
+        byKey[k].add(v);
+      }
+      for (var apIdx = 0; apIdx < allParams.length; apIdx++) {
+        if (allParams[apIdx].spread) continue;
+        var apName = allParams[apIdx].name;
+        if (!byKey[apName]) continue;
+        var pfeVals = [];
+        byKey[apName].forEach(function(vv) { pfeVals.push(vv); });
+        if (pfeVals.length === 0) continue;
+        // Merge with existing validValues (constraint-derived); union of
+        // both sets so neither is lost.
+        if (allParams[apIdx].validValues && allParams[apIdx].validValues.length > 0) {
+          var merged = allParams[apIdx].validValues.slice();
+          for (var mi = 0; mi < pfeVals.length; mi++) {
+            if (merged.indexOf(pfeVals[mi]) < 0) merged.push(pfeVals[mi]);
+          }
+          allParams[apIdx].validValues = merged;
+        } else {
+          allParams[apIdx].validValues = pfeVals;
+        }
+      }
+    }
+  }
+
   var _callLoc = _nodeLoc(callPath.node);
   for (var u = 0; u < urls.length; u++) {
     _pushFetchSite(result, _buildFetchSite(urls[u], method, sinkInfo.headers, "fetch", allParams, { enclosingFunction: callerName, urlIsLiteral: urlsFromLiteral, loc: _callLoc }));
