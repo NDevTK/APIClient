@@ -2191,11 +2191,36 @@ function _traceDeepSinkCall(callPath, funcNode, funcBinding, propMap, result) {
       if (!_t.isObjectProperty(dp) || dp.computed) continue;
       var dpKey = _getKeyName(dp.key);
       if (!dpKey || consumedProps[dpKey]) continue;
-      // Skip known non-body config properties
-      if (dpKey === "headers" || dpKey === "contentType" || dpKey === "dataType" ||
-          dpKey === "success" || dpKey === "error" || dpKey === "complete" ||
-          dpKey === "beforeSend" || dpKey === "async" || dpKey === "cache" ||
-          dpKey === "timeout" || dpKey === "crossDomain" || dpKey === "processData") continue;
+      // Skip spec-defined non-body config properties (Fetch RequestInit
+      // per Fetch Standard § 5.4 + XMLHttpRequest properties per XHR
+      // Standard § 4.5). Framework-specific option names (jQuery's
+      // success / error / complete / beforeSend / dataType / crossDomain /
+      // processData / contentType) are NOT skipped — they fall through
+      // to body extraction. Spec-correct treatment: when the wrapper is
+      // jQuery $.ajax, those options are callbacks/config; when it's an
+      // arbitrary user-defined wrapper, they could legitimately be body
+      // fields. Without trace-through into the wrapper's body to see how
+      // each option is actually used, the analyzer cannot tell — and
+      // CLAUDE.md L29 bans framework-specific name recognition. The
+      // spec-grounded skip list contains only ECMAScript / Fetch / XHR
+      // spec property names.
+      if (dpKey === "headers" ||         // Fetch RequestInit + XHR setRequestHeader
+          dpKey === "method" ||          // Fetch RequestInit
+          dpKey === "mode" ||            // Fetch RequestInit (no-cors / cors / same-origin)
+          dpKey === "credentials" ||     // Fetch RequestInit (omit / same-origin / include)
+          dpKey === "cache" ||           // Fetch RequestInit (cache mode)
+          dpKey === "redirect" ||        // Fetch RequestInit (follow / error / manual)
+          dpKey === "referrer" ||        // Fetch RequestInit
+          dpKey === "referrerPolicy" ||  // Fetch RequestInit
+          dpKey === "integrity" ||       // Fetch RequestInit (subresource integrity)
+          dpKey === "keepalive" ||       // Fetch RequestInit
+          dpKey === "signal" ||          // Fetch RequestInit (AbortSignal)
+          dpKey === "priority" ||        // Fetch RequestInit (priority hints)
+          dpKey === "duplex" ||          // Fetch RequestInit (half / full)
+          dpKey === "window" ||          // Fetch RequestInit (must be null per spec)
+          dpKey === "async" ||           // XHR open()'s third param
+          dpKey === "withCredentials" || // XHR property
+          dpKey === "responseType") continue;  // XHR responseType
       // "data" property: extract its sub-properties as body params
       if (dpKey === "data") {
         if (_t.isObjectExpression(dp.value)) {
