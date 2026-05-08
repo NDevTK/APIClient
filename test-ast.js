@@ -10338,6 +10338,119 @@ test("§ 13.15.4: constant-value assignment records const value, NOT a propagati
   return true;
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Property-Flow Analyser — example-value extraction for extension dropdowns.
+// Custom code's complex logic decides what value gets used for each key of a
+// POST/GET request. The analyser must surface BOTH possible values when a
+// branch decides between them (admin-flag-guarded paths still get tested),
+// and must trace through default-value short-circuits per § 13.13.
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log("\n=== Property-Flow Analyser: example values across branches ===\n");
+
+// § 14.6 — Both branches of an if/else write to the same key with different
+// const values. Both effects must be recorded so the dropdown can offer both.
+test("Branch values: admin-vs-user role both recorded as usable example values", `
+  function buildBody(isAdmin) {
+    if (isAdmin) { this.role = "admin"; }
+    else { this.role = "user"; }
+  }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 2) return false;
+  var roleValues = effects
+    .filter(function(e) { return e.target.kind === "this" && e.key.kind === "const" && e.key.value === "role"; })
+    .map(function(e) { return e.value && e.value.kind === "const" ? e.value.value : null; })
+    .filter(function(v) { return v !== null; });
+  return roleValues.indexOf("admin") >= 0 && roleValues.indexOf("user") >= 0;
+});
+
+// § 13.13 — `body.id = req.id || 42`: OR-default — both `req.id` (Member)
+// and the const fallback `42` must be reachable in the value lattice so
+// downstream consumers can offer both as example values.
+test("§ 13.13 OR-default: both LHS and fallback reachable in value", `
+  function buildBody(req) {
+    this.id = req.id || 42;
+  }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 1) return false;
+  var v = effects[0].value;
+  if (!v || v.kind !== "or") return false;
+  if (!v.left || v.left.kind !== "member") return false;
+  if (!v.right || v.right.kind !== "const" || v.right.value !== 42) return false;
+  return true;
+});
+
+// § 14.6 nested with literal — guarded fetch URL. The user's example: a
+// path "guarded on a client-side admin mode flag should be tested for".
+// The propagation detector must surface the property write whether the
+// guard is taken or not, so dropdown extraction can find the URL.
+test("Branch-guarded: admin-only path effect captured for usable value", `
+  function buildOptions(isAdmin) {
+    this.url = "/api/public";
+    if (isAdmin) { this.url = "/api/admin/secret"; }
+  }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 2) return false;
+  var urlValues = effects
+    .filter(function(e) { return e.target.kind === "this" && e.key.kind === "const" && e.key.value === "url"; })
+    .map(function(e) { return e.value && e.value.kind === "const" ? e.value.value : null; })
+    .filter(function(v) { return v !== null; });
+  // Both /api/public AND /api/admin/secret must be present so the
+  // extension can list both as candidate URLs for testing.
+  return urlValues.indexOf("/api/public") >= 0 && urlValues.indexOf("/api/admin/secret") >= 0;
+});
+
+// Multiple keys in one body — different fields should each get their
+// own effect entry with the right key-name.
+test("Multi-field body: each field's value extracted separately", `
+  function buildBody(name, age) {
+    this.name = name;
+    this.age = age;
+    this.role = "user";
+  }
+`, function(r) {
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 3) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const") {
+      byKey[e.key.value] = e.value;
+    }
+  }
+  if (!byKey.name || byKey.name.kind !== "param" || byKey.name.idx !== 0) return false;
+  if (!byKey.age || byKey.age.kind !== "param" || byKey.age.idx !== 1) return false;
+  if (!byKey.role || byKey.role.kind !== "const" || byKey.role.value !== "user") return false;
+  return true;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Results: " + passed + "/" + total + " passed, " + failed + " failed");
