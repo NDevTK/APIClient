@@ -764,6 +764,22 @@ test("§ 15.7: `var c = new C(); c.method()` resolves through instance variable"
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 15.3.5.13 ArrowFunction concise body ===\n");
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.3 + § 13.15.4 + § 13.3 — callback-stored-then-invoked composition
+// (function passed as arg to a registration function that stores it,
+//  then the stored function is invoked elsewhere with concrete args)
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== Callback-stored-then-invoked (§ 13.3 + § 13.15.4 + § 13.3) ===\n");
+
+test("§ 13.3 composition: register(fn) stores in handlers; handlers[0](opts) resolves opts.url", `
+  var handlers = [];
+  function register(handler) { handlers.push(handler); }
+  register(function(opts) { fetch(opts.url); });
+  handlers[0]({url: "/api/x"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
+});
+
 test("§ 15.3.5.13: concise-body arrow function records property write", `
   var setter = (s) => this.x = s;
   setter("v");

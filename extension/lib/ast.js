@@ -9192,8 +9192,12 @@ function _resolveParamFromObjectMethod(funcPath, paramIdx, methodName, depth, pr
 // Resolve param values when the function is a callback argument:
 //   registerCallback(function(param) { sink(param.prop) })
 // Traces into the called function to find where it invokes the callback and with what args.
+// Uses guard prefix "CB" — distinct from "C" used by _resolveCalleeFuncPath
+// which is called inside this function. Sharing prefixes caused false
+// guard collisions on the same callExprPath.node and prevented callee
+// resolution.
 function _resolveParamFromCallbackArg(callExprPath, cbArgIdx, paramIdx, depth, propName) {
-  if (!_resolver.guard("C", callExprPath.node)) return [];
+  if (!_resolver.guard("CB", callExprPath.node)) return [];
   try {
   var calleeNode = callExprPath.node.callee;
 
@@ -9449,7 +9453,7 @@ function _resolveParamFromCallbackArg(callExprPath, cbArgIdx, paramIdx, depth, p
   } catch (_rce) {
     if (_rce instanceof RangeError) { _resolver.collectError(_rce, "resolvePropertyFromCall"); return []; }
     throw _rce;
-  } finally { _resolver.unguard("C", callExprPath.node); }
+  } finally { _resolver.unguard("CB", callExprPath.node); }
 }
 
 // Trace a container variable (array) to find where its stored items are called.
