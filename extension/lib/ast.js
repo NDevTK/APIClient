@@ -8039,39 +8039,15 @@ function _resolveParamFromCallbackArg(callExprPath, cbArgIdx, paramIdx, depth, p
                 }
               }
             }
-            // Pattern 2: obj.extend({prop: value}) — property defined in an extend/mixin call
-            if (_t.isMemberExpression(refP) && refP.object === refs[ri].node && !refP.computed) {
-              var extProp = _t.isIdentifier(refP.property) ? refP.property.name : null;
-              if (extProp === "extend" || extProp === "mixin" || extProp === "assign") {
-                var extCall = refs[ri].parentPath ? refs[ri].parentPath.parent : null;
-                if (extCall && _t.isCallExpression(extCall) && extCall.callee === refP) {
-                  // Scan arguments for object literals containing our property
-                  var extCallPath = refs[ri].parentPath.parentPath;
-                  for (var ai = 0; ai < extCall.arguments.length && !targetFuncNode; ai++) {
-                    var extArg = extCall.arguments[ai];
-                    if (!_t.isObjectExpression(extArg)) continue;
-                    for (var epi = 0; epi < extArg.properties.length; epi++) {
-                      var ep = extArg.properties[epi];
-                      if (!_t.isObjectProperty(ep) || ep.computed) continue;
-                      var epKey = _t.isIdentifier(ep.key) ? ep.key.name : (_t.isStringLiteral(ep.key) ? ep.key.value : null);
-                      if (epKey !== mProp) continue;
-                      // Found the property — check if value is a function or call return
-                      if (_t.isFunctionExpression(ep.value) || _t.isArrowFunctionExpression(ep.value)) {
-                        targetFuncNode = ep.value;
-                        targetFuncPath = extCallPath.get("arguments." + ai + ".properties." + epi + ".value");
-                      } else if (_t.isCallExpression(ep.value)) {
-                        var extRetFunc = _resolveCallReturnToFunction(extCallPath.get("arguments." + ai + ".properties." + epi + ".value"), depth + 1);
-                        if (extRetFunc) {
-                          targetFuncNode = extRetFunc.node || extRetFunc;
-                          targetFuncPath = extRetFunc._path || null;
-                        }
-                      }
-                      break;
-                    }
-                  }
-                }
-              }
-            }
+            // (Removed `obj.extend({...}) / obj.mixin({...}) / obj.assign({...})`
+            // framework-shape recognition per CLAUDE.md L29 ban on
+            // framework-specific name matching. The same property-
+            // assignment effect is reached spec-compliantly by
+            // resolving `obj.<methodName>` through _resolveCalleeFuncPath
+            // to the actual extend/mixin/assign function definition,
+            // then trace-throughing its body via the inter-procedural
+            // caller-arg pipeline. Object.assign — the spec global —
+            // is recognised separately at scope-checked call sites.)
           }
         }
       }
@@ -9059,36 +9035,9 @@ function _traceCallbackArgToArgs(callExprPath, cbArgIdx, paramIdx, queue) {
       if (mProp && _t.isIdentifier(calleeNode.object)) {
         var objBinding = callExprPath.scope.getBinding(calleeNode.object.name);
         if (objBinding) {
-          var refs = objBinding.referencePaths;
-          for (var ri = 0; ri < refs.length && !targetFuncPath; ri++) {
-            var refP = refs[ri].parent;
-            if (_t.isMemberExpression(refP) && refP.object === refs[ri].node && !refP.computed) {
-              var extProp = _t.isIdentifier(refP.property) ? refP.property.name : null;
-              if (extProp === "extend" || extProp === "mixin" || extProp === "assign") {
-                var extCall = refs[ri].parentPath ? refs[ri].parentPath.parent : null;
-                if (extCall && _t.isCallExpression(extCall) && extCall.callee === refP) {
-                  var extCallPath = refs[ri].parentPath.parentPath;
-                  for (var ai = 0; ai < extCall.arguments.length && !targetFuncPath; ai++) {
-                    var extArg = extCall.arguments[ai];
-                    if (!_t.isObjectExpression(extArg)) continue;
-                    for (var epi = 0; epi < extArg.properties.length; epi++) {
-                      var ep = extArg.properties[epi];
-                      if (!_t.isObjectProperty(ep) || ep.computed) continue;
-                      var epKey = _t.isIdentifier(ep.key) ? ep.key.name : (_t.isStringLiteral(ep.key) ? ep.key.value : null);
-                      if (epKey !== mProp) continue;
-                      if (_t.isFunctionExpression(ep.value) || _t.isArrowFunctionExpression(ep.value))
-                        targetFuncPath = extCallPath.get("arguments." + ai + ".properties." + epi + ".value");
-                      else if (_t.isCallExpression(ep.value)) {
-                        var retFunc = _resolveCallReturnToFunction(extCallPath.get("arguments." + ai + ".properties." + epi + ".value"), 0);
-                        if (retFunc) targetFuncPath = retFunc._path || null;
-                      }
-                      break;
-                    }
-                  }
-                }
-              }
-            }
-          }
+          // (Removed `obj.extend({...}) / obj.mixin({...}) / obj.assign({...})`
+          // framework-shape recognition per CLAUDE.md L29 — same
+          // rationale as the matching block in _resolveParamFromCallbackArg.)
         }
       }
     }
