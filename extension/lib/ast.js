@@ -4682,6 +4682,52 @@ function _extractFetchCall(path, result, type) {
     }
   }
 
+  // ── Property-flow effects → branch-conditional valid values ──
+  // For direct fetch calls inside a function, run the property-flow
+  // analyser on the enclosing function and aggregate const-value
+  // writes per body-param key. Both branches of a conditional are
+  // surfaced (per § 14.6 IfStatement effect-accumulation).
+  var pfEnclosingFn = path.getFunctionParent();
+  if (pfEnclosingFn) {
+    var pfEffects = _specAnalyzePropertyFlow(pfEnclosingFn);
+    if (pfEffects && pfEffects.length > 0) {
+      var pfByKey = Object.create(null);
+      for (var pfi = 0; pfi < pfEffects.length; pfi++) {
+        var pfe = pfEffects[pfi];
+        if (!pfe.target) continue;
+        // Accept this/param/args-elt/obj-lit targets — local-var bodies
+        // (`var body = {}`) become obj-lit at decl, and subsequent
+        // writes target it.
+        var tk = pfe.target.kind;
+        if (tk !== "this" && tk !== "param" && tk !== "args-elt" && tk !== "obj-lit") continue;
+        if (!pfe.key || pfe.key.kind !== "const") continue;
+        if (!pfe.value || pfe.value.kind !== "const") continue;
+        var pv = pfe.value.value;
+        if (typeof pv !== "string" && typeof pv !== "number" && typeof pv !== "boolean") continue;
+        var pk = pfe.key.value;
+        if (!pfByKey[pk]) pfByKey[pk] = new Set();
+        pfByKey[pk].add(pv);
+      }
+      for (var apIdx = 0; apIdx < params.length; apIdx++) {
+        if (params[apIdx].spread) continue;
+        var apName = params[apIdx].name;
+        if (!pfByKey[apName]) continue;
+        var pfVals = [];
+        pfByKey[apName].forEach(function(vv) { pfVals.push(vv); });
+        if (pfVals.length === 0) continue;
+        if (params[apIdx].validValues && params[apIdx].validValues.length > 0) {
+          var pfMerged = params[apIdx].validValues.slice();
+          for (var pfmi = 0; pfmi < pfVals.length; pfmi++) {
+            if (pfMerged.indexOf(pfVals[pfmi]) < 0) pfMerged.push(pfVals[pfmi]);
+          }
+          params[apIdx].validValues = pfMerged;
+        } else {
+          params[apIdx].validValues = pfVals;
+        }
+      }
+    }
+  }
+
   // Append structurally-learned query param names (from
   // _resolveUrlStructuralShape) when the full URL value didn't resolve
   // but the path + param-name shape did. Marked _astValueSource:
