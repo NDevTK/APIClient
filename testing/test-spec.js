@@ -780,6 +780,40 @@ test("§ 13.3 composition: register(fn) stores in handlers; handlers[0](opts) re
   return r.fetchCallSites.some(function(s) { return s.url === "/api/x"; });
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.2.5 ObjectLiteral with shorthand property
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.2.5 ObjectLiteral shorthand ===\n");
+
+specTest("§ 13.2.5: shorthand `{ x }` binds property to identifier's value", `
+  function f(role) {
+    this.body = { role };
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  if (!v || v.kind !== "obj-lit") return false;
+  return v.props && v.props.role && v.props.role.kind === "param" && v.props.role.idx === 0;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 25.1 Iteration protocols — for-of binds element abstract value
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 25.1 for-of element binding ===\n");
+
+specTest("§ 14.7.5 for-of: loop var bound to loop-key over iterated value", `
+  function f(arr) {
+    for (var item of arr) {
+      this.element = item;
+    }
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "loop-key" &&
+         v.src && v.src.kind === "param" && v.src.idx === 0;
+});
+
 test("§ 13.3 composition with § 23.1.3.15 forEach: stored callback iterated", `
   var hooks = [];
   function on(fn) { hooks.push(fn); }
