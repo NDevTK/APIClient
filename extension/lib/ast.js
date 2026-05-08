@@ -2986,6 +2986,49 @@ function _specEvalLeaf(path, state, vals, effects) {
         return { kind: "args-elt", idx: idxAv };
       }
     }
+    // § 22.1.4 Properties of String Instances — Const-string receivers:
+    //   .length per § 22.1.4.1 — number of code units (UTF-16).
+    //   [N] per § 22.1.4.4 — single-char Const for in-range integer index.
+    if (objAv && objAv.kind === "const" && typeof objAv.value === "string") {
+      if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
+        return { kind: "const", value: objAv.value.length };
+      }
+      if (n.computed) {
+        var sIdxAv = vals.get(n.property);
+        if (sIdxAv && sIdxAv.kind === "const" && typeof sIdxAv.value === "number" &&
+            Number.isInteger(sIdxAv.value) && sIdxAv.value >= 0 && sIdxAv.value < objAv.value.length) {
+          return { kind: "const", value: objAv.value[sIdxAv.value] };
+        }
+      }
+    }
+    // § 21.3.1 Math constants — scope-checked unshadowed `Math` identifier
+    // accessed with .PI / .E / .LN2 / etc.
+    if (!n.computed && _t.isIdentifier(n.object, { name: "Math" }) &&
+        !path.scope.getBinding("Math") && _t.isIdentifier(n.property)) {
+      var mathProp = n.property.name;
+      // § 21.3.1.{1-8} Math.{E, LN10, LN2, LOG10E, LOG2E, PI, SQRT1_2, SQRT2}
+      if (mathProp === "E") return { kind: "const", value: Math.E };
+      if (mathProp === "PI") return { kind: "const", value: Math.PI };
+      if (mathProp === "LN2") return { kind: "const", value: Math.LN2 };
+      if (mathProp === "LN10") return { kind: "const", value: Math.LN10 };
+      if (mathProp === "LOG2E") return { kind: "const", value: Math.LOG2E };
+      if (mathProp === "LOG10E") return { kind: "const", value: Math.LOG10E };
+      if (mathProp === "SQRT1_2") return { kind: "const", value: Math.SQRT1_2 };
+      if (mathProp === "SQRT2") return { kind: "const", value: Math.SQRT2 };
+    }
+    // § 21.1.1.{2,3,4,5,6,7,8,9} Number constants — scope-checked.
+    if (!n.computed && _t.isIdentifier(n.object, { name: "Number" }) &&
+        !path.scope.getBinding("Number") && _t.isIdentifier(n.property)) {
+      var numProp = n.property.name;
+      if (numProp === "EPSILON") return { kind: "const", value: Number.EPSILON };
+      if (numProp === "MAX_SAFE_INTEGER") return { kind: "const", value: Number.MAX_SAFE_INTEGER };
+      if (numProp === "MIN_SAFE_INTEGER") return { kind: "const", value: Number.MIN_SAFE_INTEGER };
+      if (numProp === "MAX_VALUE") return { kind: "const", value: Number.MAX_VALUE };
+      if (numProp === "MIN_VALUE") return { kind: "const", value: Number.MIN_VALUE };
+      if (numProp === "POSITIVE_INFINITY") return { kind: "const", value: Number.POSITIVE_INFINITY };
+      if (numProp === "NEGATIVE_INFINITY") return { kind: "const", value: Number.NEGATIVE_INFINITY };
+      if (numProp === "NaN") return { kind: "const", value: Number.NaN };
+    }
     var keyAvComputed = n.computed ? (vals.get(n.property) || { kind: "top" }) : null;
     return _specMemberExpressionAv(n, objAv, keyAvComputed);
   }

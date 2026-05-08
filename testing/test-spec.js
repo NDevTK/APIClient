@@ -2469,6 +2469,86 @@ specTest("§ 22.1.2.2: `String.fromCodePoint(128512)` → Const('😀')", `
   return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "😀";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 22.1.4 String instance properties (.length, [N])
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 22.1.4 String instance .length / [N] ===\n");
+
+specTest("§ 22.1.4.1: `'hello'.length` → Const(5)", `
+  function f() {
+    this.r = "hello".length;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 5;
+});
+
+specTest("§ 22.1.4.4: `'abc'[1]` → Const('b')", `
+  function f() {
+    this.r = "abc"[1];
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "b";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 21.3.1 Math constants, § 21.1.1 Number constants
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 21.3.1 Math / § 21.1.1 Number constants ===\n");
+
+specTest("§ 21.3.1.6: `Math.PI` → Const(Math.PI)", `
+  function f() {
+    this.r = Math.PI;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === Math.PI;
+});
+
+specTest("§ 21.3.1.1: `Math.E` → Const(Math.E)", `
+  function f() {
+    this.r = Math.E;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === Math.E;
+});
+
+specTest("§ 21.1.1.6: `Number.MAX_SAFE_INTEGER` → Const(2^53-1)", `
+  function f() {
+    this.r = Number.MAX_SAFE_INTEGER;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === Number.MAX_SAFE_INTEGER;
+});
+
+specTest("§ 21.1.1.4: `Number.EPSILON` → Const(EPSILON)", `
+  function f() {
+    this.r = Number.EPSILON;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === Number.EPSILON;
+});
+
+// Negative case: shadowed Math doesn't get built-in constants.
+specTest("§ 21.3.1: shadowed `Math` doesn't expose built-in constants", `
+  function f() {
+    var Math = { PI: -1 };
+    this.r = Math.PI;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Built-in would have produced Math.PI ≈ 3.14159. Local Math is an
+  // obj-lit with PI = -1; the analyser should resolve to Const(-1).
+  // Either way, NOT the actual Math.PI value.
+  if (av && av.kind === "const" && av.value === Math.PI) return false;
+  return true;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
