@@ -2611,6 +2611,25 @@ function _specEvalLeaf(path, state, vals, effects) {
     }
     return _specAssignmentExpressionApply(n, state, rhsAv, lhsObjAv, lhsKeyAv, effects);
   }
+  if (_t.isBinaryExpression(n)) {
+    // § 13.10 BinaryOperators — only `+` is interesting for property-flow
+    // (string concat for URL/key building per § 13.15.3 ApplyStringOrNumeric-
+    // BinaryOperator). When both operands are Const, perform the spec-
+    // grounded concatenation; otherwise abstract to Top.
+    var leftAv = vals.get(n.left);
+    var rightAv = vals.get(n.right);
+    if (n.operator === "+" && leftAv && rightAv &&
+        leftAv.kind === "const" && rightAv.kind === "const") {
+      var lv = leftAv.value, rv = rightAv.value;
+      if (typeof lv === "string" || typeof rv === "string") {
+        return { kind: "const", value: String(lv) + String(rv) };
+      }
+      if (typeof lv === "number" && typeof rv === "number") {
+        return { kind: "const", value: lv + rv };
+      }
+    }
+    return { kind: "top" };
+  }
   if (_t.isObjectExpression(n)) {
     var props = Object.create(null);
     for (var pi = 0; pi < n.properties.length; pi++) {

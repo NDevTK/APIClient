@@ -716,6 +716,25 @@ specTest("§ 13.2.8.6: TemplateLiteral with non-const interpolation abstracts to
   return effects[0].value && effects[0].value.kind === "top";
 });
 
+specTest("§ 13.10 + § 13.15.3: BinaryExpression `+` composes two Const strings", `
+  function f() {
+    this.url = "/api/" + "users";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" &&
+         effects[0].value.value === "/api/users";
+});
+
+specTest("§ 13.10 + § 13.15.3: BinaryExpression with non-Const operand abstracts to Top (sound)", `
+  function f(suffix) {
+    this.url = "/api/" + suffix;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "top";
+});
+
 specTest("§ 14.3.3: nested destructuring `var [{a}, {b}] = pair`", `
   function f(pair) {
     var [{a}, {b}] = pair;
