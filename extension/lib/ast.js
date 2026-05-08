@@ -14837,13 +14837,21 @@ function _processSecurityAssignSink(path, result) {
 }
 
 // Table-driven global identifier sinks: name → { type, sink }
+// Spec-defined global call sinks (each is a Web Platform / ECMA built-in
+// whose semantics imply the listed taint-receiver category). Scope-checked
+// in `_processSecurityCallSink` via `!path.scope.getBinding(callee.name)`
+// so a local var named `eval` / `open` / `fetch` doesn't trip the table.
+//
+// Library-named sinks (`$`, `jQuery`) were removed per CLAUDE.md L29 ban
+// on framework-specific recognition: the analyzer must reach jQuery-style
+// DOM injection by tracing `$(value)` to jQuery's actual function body
+// (which calls `.parseHTML` → `insertBefore` etc.), not by matching the
+// global identifier's name.
 var _GLOBAL_CALL_SINKS = {
   "eval": { type: "eval", sink: "eval" },
   "open": { type: "redirect", sink: "window.open" },
   "fetch": { type: "request-forgery", sink: "fetch" },
   "importScripts": { type: "eval", sink: "importScripts" },
-  "$": { type: "xss", sink: "jQuery" },
-  "jQuery": { type: "xss", sink: "jQuery" },
 };
 
 // Call-based sinks: eval(), document.write(), setTimeout(string), insertAdjacentHTML, setAttribute("on*")
@@ -14951,23 +14959,13 @@ function _processSecurityCallSink(path, result) {
     }
   }
 
-  // jQuery DOM manipulation: .html(), .append(), .prepend(), .after(), .before(), .replaceWith()
-  // Skip when the receiver is a tracked non-DOM type — `.append()` is also
-  // a method on FormData, URLSearchParams, and Headers (key/value push,
-  // not HTML injection). Receiver type check matches the `href`/`src`
-  // assign sink skip (8296-8301). Real-world FP: react-router builds a
-  // FormData via `t.append(r, a)` inside a submission helper.
-  if ((methName === "html" || methName === "append" || methName === "prepend" ||
-       methName === "after" || methName === "before" || methName === "replaceWith") &&
-      node.arguments.length > 0) {
-    var _jqReceiverType = _getTrackedType(path, callee.object);
-    if (_jqReceiverType === "FormData" || _jqReceiverType === "URLSearchParams" ||
-        _jqReceiverType === "Headers" || _jqReceiverType === "Request" ||
-        _jqReceiverType === "Response" || _jqReceiverType === "URL") return;
-    var _jqSrc = _traceValueSource(path.get("arguments.0"), 0);
-    if (_jqSrc.sourceType === "user-controlled") _pushSink(result, node, "xss", "." + methName, _jqSrc, path);
-    return;
-  }
+  // (jQuery DOM-manipulation method-name match — `.html`, `.append`,
+  // `.prepend`, `.after`, `.before`, `.replaceWith` — was removed per
+  // CLAUDE.md L29 ban on framework-specific recognition. The same
+  // injection is reached spec-grounded: the analyzer follows `$(sel).html(x)`
+  // through jQuery's bundle to the underlying `insertBefore` /
+  // `outerHTML` / `innerHTML` mutation, then flags those native sinks.
+  // No method-name table required.)
 
   // Implicit ReDoS: .match(), .search() with user-controlled first arg.
   // Note: .split() does NOT create an implicit RegExp — it does literal string matching.
