@@ -2372,6 +2372,36 @@ function _specEvalLeaf(path, state, vals, effects) {
   return { kind: "top" };
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Propagation-pattern detection on accumulated effects.
+// Scans the effect list for the canonical Object.assign-equivalent pattern:
+//   target[loop-key(src)] = src[same loop-key]
+// where target.kind ∈ {this, param, args-elt} and src is one of those too.
+// Returns { source: <AbstractValue of src>, target: <AbstractValue of target> }
+// or null. Per CLAUDE.md L29: this is recognising the SPEC-equivalent of
+// Object.assign per ECMA § 19.1.2.1 by its dataflow effect, not by name —
+// any function whose body's net effect is "copy src's enumerable own
+// properties to target" qualifies, regardless of how it spells the loop.
+// ───────────────────────────────────────────────────────────────────────────
+function _specDetectPropagationFromEffects(effects) {
+  if (!effects || effects.length === 0) return null;
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (!e.key || e.key.kind !== "loop-key") continue;
+    if (!e.value || e.value.kind !== "member") continue;
+    if (!_specEqualAv(e.key.src, e.value.obj)) continue;
+    if (!_specEqualAv(e.value.key, e.key)) continue;
+    var target = e.target;
+    // Unwrap or-defaulted target: `arguments[0] || {}` resolves to args-elt.
+    while (target && target.kind === "or") target = target.left;
+    if (!target) continue;
+    if (target.kind === "this" || target.kind === "param" || target.kind === "args-elt") {
+      return { source: e.key.src, target: target };
+    }
+  }
+  return null;
+}
+
 // Resolve a call expression's callee to its function node
 // Returns a Babel path to the resolved function node, or null.
 function _resolveCalleeToFunction(callPath) {
