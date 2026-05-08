@@ -877,6 +877,32 @@ test("§ 13.3.6: call to const-returning function flows to fetch URL", `
 });
 
 // ═════════════════════════════════════════════════════════════════════
+// Composition: multi-step spec composition
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== Multi-spec composition ===\n");
+
+test("Composition: ternary base URL with concat resolves to both endpoints", `
+  function send(env) {
+    var base = env === "prod" ? "https://api.example.com" : "https://dev.example.com";
+    fetch(base + "/v1/users");
+  }
+  send("prod");
+`, function(r) {
+  var urls = r.fetchCallSites.map(function(s) { return s.url; });
+  return urls.indexOf("https://api.example.com/v1/users") >= 0 &&
+         urls.indexOf("https://dev.example.com/v1/users") >= 0;
+});
+
+test("Composition: destructured config + member chain + concat", `
+  function send({base, path}) {
+    fetch(base + path);
+  }
+  send({base: "/api", path: "/items"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/items"; });
+});
+
+// ═════════════════════════════════════════════════════════════════════
 // § 14.7.2 WhileStatement — body's writes captured
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 14.7.2 WhileStatement ===\n");
