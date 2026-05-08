@@ -8502,28 +8502,17 @@ function _resolveItemCallsFromParam(funcPath, containerParamName, paramIdx, dept
           }
         }
 
-        // jQuery.each(containerParam[key], fn) or anyLib.each(containerParam[key], fn)
-        if (!iterContainer && _t.isMemberExpression(ic) && !ic.computed &&
-            _t.isIdentifier(ic.property, { name: "each" })) {
-          var eachArgs = innerPath.node.arguments;
-          for (var eai = 0; eai < eachArgs.length; eai++) {
-            var eaArg = eachArgs[eai];
-            if (_t.isIdentifier(eaArg, { name: containerParamName })) {
-              iterContainer = eaArg; cbArgStartIdx = eai + 1; break;
-            }
-            if (_t.isMemberExpression(eaArg) && _t.isIdentifier(eaArg.object, { name: containerParamName })) {
-              iterContainer = eaArg; cbArgStartIdx = eai + 1; break;
-            }
-            // (containerParam[key] || [])
-            if (_t.isLogicalExpression(eaArg)) {
-              var eaLeft = eaArg.left;
-              if (_t.isIdentifier(eaLeft, { name: containerParamName }) ||
-                  (_t.isMemberExpression(eaLeft) && _t.isIdentifier(eaLeft.object, { name: containerParamName }))) {
-                iterContainer = eaLeft; cbArgStartIdx = eai + 1; break;
-              }
-            }
-          }
-        }
+        // (Removed `.each` framework-name recognition per CLAUDE.md
+        // L29 ban on framework-specific shape matching. jQuery /
+        // Underscore / Lodash `.each` is just JavaScript — the inter-
+        // procedural callback tracer (_traceCallbackArgToArgs) reaches
+        // it by resolving someLib's `.each` property to its actual
+        // function definition in the same bundle and walking that
+        // body for callback invocations. Coverage for genuine `.each`
+        // call sites depends on _resolveCalleeFuncPath being able to
+        // resolve `someLib.each` to its function definition; if a
+        // real-site bundle proves it can't, the gap is in
+        // _resolveCalleeFuncPath and gets closed there.)
 
         if (iterContainer && cbArgStartIdx >= 0) {
           // Find the callback argument after the container
@@ -9283,45 +9272,55 @@ function _traceItemCallsToArgs(callPath, iterArgIdx, paramIdx, queue) {
     var containerParamName = _t.isIdentifier(funcPath.node.params[iterArgIdx]) ? funcPath.node.params[iterArgIdx].name : null;
     if (!containerParamName) return [];
 
-    // Find iteration patterns inside the function that call items from container
+    // Spec-grounded inter-procedural trace: scan the called
+    // function's body for invocations of items extracted from the
+    // container parameter. Three concrete shapes per ECMA-262:
+    //   • Direct indexed call: container[i](args), container[k](args)
+    //     — MemberExpression with the container as base, called as a
+    //       function (§ 13.3.5 CallExpression on MemberExpression).
+    //   • Aliased item invocation: var item = container[i]; item(args)
+    //     — Variable declared from container[i], then called.
+    //   • Iterator/forEach callback invocation: a callback that
+    //     received an item is invoked with args. Detected by scanning
+    //     for any param-bound identifier called with args at paramIdx,
+    //     where the param's binding came from a container iteration.
+    // No framework-name recognition (.each / .forEach / etc.) — the
+    // analyzer relies on Array.prototype.forEach / iterator protocols
+    // being part of the function's actual implementation in the same
+    // bundle, reachable via _resolveCalleeFuncPath when those methods
+    // resolve via scope binding.
     var args = [];
     try {
       funcPath.traverse({
         CallExpression: function(innerPath) {
           var ic = innerPath.node.callee;
-          // jQuery.each(container[key] || [], function(_, item) { item(args); })
-          if (_t.isMemberExpression(ic) && !ic.computed && _t.isIdentifier(ic.property, { name: "each" })) {
-            var eachArgs = innerPath.node.arguments;
-            var containerFound = false;
-            for (var eai = 0; eai < eachArgs.length && !containerFound; eai++) {
-              var eaArg = eachArgs[eai];
-              var isContainer = false;
-              if (_t.isIdentifier(eaArg, { name: containerParamName })) isContainer = true;
-              else if (_t.isMemberExpression(eaArg) && _t.isIdentifier(eaArg.object, { name: containerParamName })) isContainer = true;
-              else if (_t.isLogicalExpression(eaArg)) {
-                var left = eaArg.left;
-                if (_t.isIdentifier(left, { name: containerParamName }) ||
-                    (_t.isMemberExpression(left) && _t.isIdentifier(left.object, { name: containerParamName }))) isContainer = true;
-              }
-              if (!isContainer) continue;
-              containerFound = true;
-              // Find callback after container arg
-              for (var cai = eai + 1; cai < eachArgs.length; cai++) {
-                if (!_t.isFunctionExpression(eachArgs[cai]) && !_t.isArrowFunctionExpression(eachArgs[cai])) continue;
-                var cbPath = innerPath.get("arguments." + cai);
-                try {
-                  cbPath.traverse(Object.assign({
-                    CallExpression: function(cbInner) {
-                      var cbc = cbInner.node.callee;
-                      if (!_t.isIdentifier(cbc)) return;
-                      var cbBinding = cbInner.scope.getBinding(cbc.name);
-                      if (!cbBinding || cbBinding.kind !== "param" || cbBinding.scope.path !== cbPath) return;
-                      if (paramIdx < cbInner.node.arguments.length) {
-                        _collectOrTraceArg(cbInner.get("arguments." + paramIdx), args, queue);
-                      }
-                    },
-                  }, _SKIP_NESTED_FUNCS));
-                } catch (e) { _resolver.collectError(e, "traceItemCallsInner"); }
+          if (paramIdx >= innerPath.node.arguments.length) return;
+
+          // container[...](args)
+          if (_t.isMemberExpression(ic) && ic.computed &&
+              _t.isIdentifier(ic.object, { name: containerParamName })) {
+            var icBinding = innerPath.scope.getBinding(containerParamName);
+            if (icBinding && icBinding.kind === "param" && icBinding.scope.path === funcPath) {
+              _collectOrTraceArg(innerPath.get("arguments." + paramIdx), args, queue);
+              return;
+            }
+          }
+
+          // <ident>(args) where ident's binding init is container[i] /
+          // container[i][j] / container.method(...) — chase the var
+          // assignment back to a container access.
+          if (_t.isIdentifier(ic)) {
+            var aliasBinding = innerPath.scope.getBinding(ic.name);
+            if (!aliasBinding || aliasBinding.scope.path !== funcPath) return;
+            var aliasInit = aliasBinding.path && _t.isVariableDeclarator(aliasBinding.path.node) ? aliasBinding.path.node.init : null;
+            if (!aliasInit) return;
+            // Walk member chain to find container at base.
+            var chain = aliasInit;
+            while (_t.isMemberExpression(chain) || _t.isOptionalMemberExpression(chain)) chain = chain.object;
+            if (_t.isIdentifier(chain, { name: containerParamName })) {
+              var chainBinding = aliasBinding.scope.getBinding(containerParamName);
+              if (chainBinding && chainBinding.kind === "param" && chainBinding.scope.path === funcPath) {
+                _collectOrTraceArg(innerPath.get("arguments." + paramIdx), args, queue);
               }
             }
           }
