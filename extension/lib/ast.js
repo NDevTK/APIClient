@@ -2309,6 +2309,29 @@ function _specEvalExpression(rootPath, state, effects) {
   return vals.get(rootPath.node);
 }
 
+// Expand a CallExpression's argument list into a flat array of
+// AbstractValues, expanding any SpreadElement whose argument resolves
+// to a known array-lit (per § 13.3.6.1 ArgumentListEvaluation step 4
+// for SpreadElement). When a spread source isn't a known array-lit,
+// returns null — caller must abstract its result to top.
+function _specExpandCallArgs(argNodes, vals) {
+  var out = [];
+  for (var i = 0; i < argNodes.length; i++) {
+    var an = argNodes[i];
+    if (!an) { out.push({ kind: "top" }); continue; }
+    if (_t.isSpreadElement(an)) {
+      var spAv = vals.get(an.argument);
+      if (spAv && spAv.kind === "array-lit" && spAv.elements) {
+        for (var spi = 0; spi < spAv.elements.length; spi++) out.push(spAv.elements[spi]);
+        continue;
+      }
+      return null;  // unknown spread source — caller bails to top
+    }
+    out.push(vals.get(an) || { kind: "top" });
+  }
+  return out;
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // § 23.1.3.15 — Array.prototype.forEach.
 // Dispatch any `arr.forEach(callback)` call whose receiver evaluates to
@@ -3503,10 +3526,12 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
       // Variadic numeric Math methods: max, min — all args must be Const numbers
       if (mMeth === "max" || mMeth === "min") {
+        var mExpanded = _specExpandCallArgs(n.arguments, vals);
+        if (mExpanded === null) return { kind: "top" };  // unknown spread
         var mvNums = [];
         var mvOk = true;
-        for (var mai = 0; mai < n.arguments.length; mai++) {
-          var mav = vals.get(n.arguments[mai]);
+        for (var mai = 0; mai < mExpanded.length; mai++) {
+          var mav = mExpanded[mai];
           if (!mav || mav.kind !== "const" || typeof mav.value !== "number") { mvOk = false; break; }
           mvNums.push(mav.value);
         }
@@ -3548,11 +3573,9 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
       // § 23.1.2.4 Array.of(...items) — constructs array-lit from args.
       if (arrStatic === "of") {
-        var aoElems = [];
-        for (var aoi = 0; aoi < n.arguments.length; aoi++) {
-          aoElems.push(vals.get(n.arguments[aoi]) || { kind: "top" });
-        }
-        return { kind: "array-lit", elements: aoElems };
+        var aoExpanded = _specExpandCallArgs(n.arguments, vals);
+        if (aoExpanded === null) return { kind: "top" };
+        return { kind: "array-lit", elements: aoExpanded };
       }
       // § 23.1.2.1 Array.from(items) — converts iterable. For array-lit
       // input: copy elements (with optional mapper). For Const-string
@@ -3609,10 +3632,12 @@ function _specEvalLeaf(path, state, vals, effects) {
       var strStatic = n.callee.property.name;
       // § 22.1.2.1 String.fromCharCode(...codeUnits)
       if (strStatic === "fromCharCode") {
+        var fcExp = _specExpandCallArgs(n.arguments, vals);
+        if (fcExp === null) return { kind: "top" };
         var fcArgs = [];
         var fcOk = true;
-        for (var fci = 0; fci < n.arguments.length; fci++) {
-          var fca = vals.get(n.arguments[fci]);
+        for (var fci = 0; fci < fcExp.length; fci++) {
+          var fca = fcExp[fci];
           if (!fca || fca.kind !== "const" || typeof fca.value !== "number") { fcOk = false; break; }
           fcArgs.push(fca.value);
         }
@@ -3620,10 +3645,12 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
       // § 22.1.2.2 String.fromCodePoint(...codePoints)
       if (strStatic === "fromCodePoint") {
+        var fcpExp = _specExpandCallArgs(n.arguments, vals);
+        if (fcpExp === null) return { kind: "top" };
         var fcpArgs = [];
         var fcpOk = true;
-        for (var fcpi = 0; fcpi < n.arguments.length; fcpi++) {
-          var fcpa = vals.get(n.arguments[fcpi]);
+        for (var fcpi = 0; fcpi < fcpExp.length; fcpi++) {
+          var fcpa = fcpExp[fcpi];
           if (!fcpa || fcpa.kind !== "const" || typeof fcpa.value !== "number") { fcpOk = false; break; }
           fcpArgs.push(fcpa.value);
         }
@@ -3878,9 +3905,11 @@ function _specEvalLeaf(path, state, vals, effects) {
         // a copy of the receiver. Arrays are spread; non-arrays appended
         // as a single element per IsConcatSpreadable abstract op (§ 23.1.3.2.1).
         if (aMeth === "concat") {
+          var concatExp = _specExpandCallArgs(n.arguments, vals);
+          if (concatExp === null) return { kind: "top" };
           var concatElems = recvAv.elements.slice();
-          for (var ci = 0; ci < n.arguments.length; ci++) {
-            var argAv = vals.get(n.arguments[ci]);
+          for (var ci = 0; ci < concatExp.length; ci++) {
+            var argAv = concatExp[ci];
             if (!argAv) return { kind: "top" };
             if (argAv.kind === "array-lit" && argAv.elements) {
               for (var ai = 0; ai < argAv.elements.length; ai++) concatElems.push(argAv.elements[ai]);

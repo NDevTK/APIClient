@@ -2549,6 +2549,58 @@ specTest("§ 21.3.1: shadowed `Math` doesn't expose built-in constants", `
   return true;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 13.3.6.1 ArgumentListEvaluation:SpreadElement
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.3.6.1 SpreadElement in call args ===\n");
+
+specTest("§ 13.3.6.1: `Math.max(...[1,5,3])` expands spread → Const(5)", `
+  function f() {
+    this.r = Math.max(...[1, 5, 3]);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 5;
+});
+
+specTest("§ 13.3.6.1: `Math.max(0, ...arr, 100)` mixes literal + spread", `
+  function f() {
+    var arr = [10, 50];
+    this.r = Math.max(0, ...arr, 100);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 100;
+});
+
+specTest("§ 13.3.6.1: `Array.of(...[1,2], 3)` expands spread", `
+  function f() {
+    var a = Array.of(...[1, 2], 3);
+    this.r = a.length;
+    this.last = a[2];
+  }
+`, function(effects) {
+  if (effects.length !== 2) return false;
+  var byKey = {};
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    if (e.target.kind === "this" && e.key.kind === "const" && e.value.kind === "const") {
+      byKey[e.key.value] = e.value.value;
+    }
+  }
+  return byKey.r === 3 && byKey.last === 3;
+});
+
+specTest("§ 13.3.6.1: `Math.max(...opaque)` bails to Top when spread source unknown", `
+  function f(opaque) {
+    this.r = Math.max(...opaque);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind !== "const";
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
