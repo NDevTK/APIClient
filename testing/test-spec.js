@@ -22,7 +22,8 @@ new Function(astCode +
   "\nglobalThis._specInitialFunctionBodyState = _specInitialFunctionBodyState;" +
   "\nglobalThis._specEvalExpression = _specEvalExpression;" +
   "\nglobalThis._specEqualAv = _specEqualAv;" +
-  "\nglobalThis._specDetectPropagationFromEffects = _specDetectPropagationFromEffects;").call(globalThis);
+  "\nglobalThis._specDetectPropagationFromEffects = _specDetectPropagationFromEffects;" +
+  "\nglobalThis._specInstantiateEffects = _specInstantiateEffects;").call(globalThis);
 
 var passed = 0, failed = 0, total = 0;
 
@@ -943,6 +944,32 @@ console.log("\n=== § 13.2.4 ArrayLiteral eval ===\n");
 // § 14.2.16 AwaitExpression — passthrough operand value
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 14.2.16 AwaitExpression ===\n");
+
+// ═════════════════════════════════════════════════════════════════════
+// § 10.2.10 Per-call-site instantiation — Param substitution
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 10.2.10 Per-call-site instantiation ===\n");
+
+test("§ 10.2.10: instantiating effects with caller-arg substitutes Param(0)", `
+  function f(x) { this.role = x; }
+`, function(r) {
+  // Use the analyser + instantiator API directly to verify substitution.
+  if (!r._ast) return false;
+  var fnPath = null;
+  globalThis.BabelBundle.traverse(r._ast, {
+    FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+  });
+  if (!fnPath) return false;
+  var effects = globalThis._specAnalyzePropertyFlow(fnPath);
+  if (!effects || effects.length !== 1) return false;
+  // Effect: target=this, key=const("role"), value=Param(0)
+  var orig = effects[0].value;
+  if (!orig || orig.kind !== "param") return false;
+  // Instantiate with caller arg = Const("admin")
+  var instantiated = globalThis._specInstantiateEffects([effects[0]], [{ kind: "const", value: "admin" }]);
+  return instantiated && instantiated[0] && instantiated[0].value &&
+         instantiated[0].value.kind === "const" && instantiated[0].value.value === "admin";
+});
 
 specTest("§ 14.2.16: `await Const` passes through to Const value", `
   async function f() {

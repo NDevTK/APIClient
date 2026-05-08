@@ -2842,6 +2842,94 @@ function _specEvalLeaf(path, state, vals, effects) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// § 10.2.10 — Per-call-site instantiation of function effects.
+// Given a function's analyser effects (which reference Param(N) /
+// args-elt(N) etc.) and the call-site's arg abstract values, produce
+// a new effects list with Param/args-elt substituted by their concrete
+// caller-arg abstract values. Pure spec semantics: function body
+// executes with parameters bound to arg values per
+// FunctionDeclarationInstantiation.
+// ───────────────────────────────────────────────────────────────────────────
+function _specInstantiateAv(rootAv, callerArgAvs) {
+  // Iterative tree walk: postorder enumeration, then bottom-up
+  // substitution. Termination structural — the AbstractValue tree is
+  // finite, each pushed sub-av is a strict child of a popped one.
+  if (!rootAv) return rootAv;
+  // Enumerate all sub-av nodes in postorder.
+  var preorder = [];
+  var stack = [rootAv];
+  while (stack.length > 0) {
+    var av = stack.pop();
+    if (!av) continue;
+    preorder.push(av);
+    if (av.kind === "member") { stack.push(av.obj); stack.push(av.key); }
+    else if (av.kind === "or") { stack.push(av.left); stack.push(av.right); }
+    else if (av.kind === "loop-key") { stack.push(av.src); }
+    else if (av.kind === "keys-of") { stack.push(av.src); }
+    else if (av.kind === "obj-lit" && av.props) {
+      for (var k in av.props) if (Object.prototype.hasOwnProperty.call(av.props, k)) {
+        stack.push(av.props[k]);
+      }
+    }
+  }
+  preorder.reverse();
+  // Bottom-up substitute, storing each sub-av's substituted value in the map.
+  var subs = new Map();
+  for (var i = 0; i < preorder.length; i++) {
+    var node = preorder[i];
+    if (node.kind === "param" && callerArgAvs && node.idx < callerArgAvs.length && callerArgAvs[node.idx]) {
+      subs.set(node, callerArgAvs[node.idx]);
+      continue;
+    }
+    if (node.kind === "args-elt" && node.idx && node.idx.kind === "const" &&
+        typeof node.idx.value === "number" && callerArgAvs && node.idx.value < callerArgAvs.length && callerArgAvs[node.idx.value]) {
+      subs.set(node, callerArgAvs[node.idx.value]);
+      continue;
+    }
+    if (node.kind === "member") {
+      subs.set(node, { kind: "member", obj: subs.get(node.obj) || node.obj, key: subs.get(node.key) || node.key });
+      continue;
+    }
+    if (node.kind === "or") {
+      subs.set(node, { kind: "or", left: subs.get(node.left) || node.left, right: subs.get(node.right) || node.right });
+      continue;
+    }
+    if (node.kind === "loop-key") {
+      subs.set(node, { kind: "loop-key", src: subs.get(node.src) || node.src });
+      continue;
+    }
+    if (node.kind === "keys-of") {
+      subs.set(node, { kind: "keys-of", src: subs.get(node.src) || node.src });
+      continue;
+    }
+    if (node.kind === "obj-lit" && node.props) {
+      var newProps = Object.create(null);
+      for (var pk in node.props) if (Object.prototype.hasOwnProperty.call(node.props, pk)) {
+        newProps[pk] = subs.get(node.props[pk]) || node.props[pk];
+      }
+      subs.set(node, { kind: "obj-lit", props: newProps });
+      continue;
+    }
+    subs.set(node, node);
+  }
+  return subs.get(rootAv) || rootAv;
+}
+
+function _specInstantiateEffects(effects, callerArgAvs) {
+  if (!effects || effects.length === 0) return effects;
+  var out = [];
+  for (var i = 0; i < effects.length; i++) {
+    var e = effects[i];
+    out.push({
+      target: _specInstantiateAv(e.target, callerArgAvs),
+      key: _specInstantiateAv(e.key, callerArgAvs),
+      value: _specInstantiateAv(e.value, callerArgAvs),
+    });
+  }
+  return out;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Propagation-pattern detection on accumulated effects.
 // Scans the effect list for the canonical Object.assign-equivalent pattern:
 //   target[loop-key(src)] = src[same loop-key]
