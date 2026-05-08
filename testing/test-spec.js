@@ -243,11 +243,11 @@ specTest("§ 14.7.5: two-arg for-in copy `(t, s) => for(k in s) t[k]=s[k]` recor
 });
 
 // ═════════════════════════════════════════════════════════════════════
-// § 19.1.2.1 Object.assign (built-in)
+// § 20.1.2.1 Object.assign (built-in)
 // ═════════════════════════════════════════════════════════════════════
-console.log("\n=== § 19.1.2.1 Object.assign ===\n");
+console.log("\n=== § 20.1.2.1 Object.assign ===\n");
 
-test("§ 19.1.2.1: Object.assign({...}, {fetchUser: fn}) — call traces literal-URL fetch", `
+test("§ 20.1.2.1: Object.assign({...}, {fetchUser: fn}) — call traces literal-URL fetch", `
   var client = {};
   Object.assign(client, { fetchUser: function() { fetch("/api/users"); } });
   client.fetchUser();
@@ -256,11 +256,11 @@ test("§ 19.1.2.1: Object.assign({...}, {fetchUser: fn}) — call traces literal
 });
 
 // ═════════════════════════════════════════════════════════════════════
-// § 19.1.2.16 + § 22.1.3.7 — Object.keys + Array.prototype.forEach
+// § 20.1.2.19 + § 23.1.3.15 — Object.keys + Array.prototype.forEach
 // ═════════════════════════════════════════════════════════════════════
-console.log("\n=== § 19.1.2.16 + § 22.1.3.7: Object.keys / forEach ===\n");
+console.log("\n=== § 20.1.2.19 + § 23.1.3.15: Object.keys / forEach ===\n");
 
-specTest("§ 19.1.2.16+§ 22.1.3.7: Object.keys.forEach produces propagation effect (compositional)", `
+specTest("§ 20.1.2.19+§ 23.1.3.15: Object.keys.forEach produces propagation effect (compositional)", `
   function copy(s) {
     Object.keys(s).forEach(function(k) { this[k] = s[k]; });
   }
@@ -273,11 +273,11 @@ specTest("§ 19.1.2.16+§ 22.1.3.7: Object.keys.forEach produces propagation eff
 });
 
 // ═════════════════════════════════════════════════════════════════════
-// § 25.5.2 JSON.stringify
+// § 25.5.4 JSON.stringify
 // ═════════════════════════════════════════════════════════════════════
-console.log("\n=== § 25.5.2 JSON.stringify ===\n");
+console.log("\n=== § 25.5.4 JSON.stringify ===\n");
 
-test("§ 25.5.2: JSON.stringify(inline-literal) → body fields extracted", `
+test("§ 25.5.4: JSON.stringify(inline-literal) → body fields extracted", `
   function send() {
     fetch("/api/x", { method: "POST", body: JSON.stringify({ user: "alice", role: "admin" }) });
   }
@@ -288,7 +288,7 @@ test("§ 25.5.2: JSON.stringify(inline-literal) → body fields extracted", `
          site.params.some(function(p) { return p.name === "role" && p.defaultValue === "admin"; });
 });
 
-test("§ 25.5.2: JSON.stringify(localBodyVar) with branch-conditional role surfaces both values", `
+test("§ 25.5.4: JSON.stringify(localBodyVar) with branch-conditional role surfaces both values", `
   function send(isAdmin) {
     var body = {};
     body.user = "alice";
@@ -371,6 +371,59 @@ test("§ 13.3.5: object literal method invocation traces fetch URL", `
   obj.fetchData();
 `, function(r) {
   return r.fetchCallSites.some(function(s) { return s.url === "/api/data"; });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 13.10.2 + § 7.1.17 — chained member with array literal (HTTP method
+// table). The analyzer should resolve `methods[0]` when the array is
+// known.
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.10.2 chained member access ===\n");
+
+test("§ 13.10.2: array element access via const index resolves URL", `
+  function f() {
+    var endpoints = ["/api/users", "/api/posts"];
+    fetch(endpoints[0]);
+  }
+  f();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/users"; });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 13.3.6 OptionalChainEvaluation — `obj?.x`
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 13.3.6 OptionalChainEvaluation ===\n");
+
+specTest("§ 13.3.6: optional-chain member access produces member abstract value", `
+  function f(o) { this.a = o?.b; }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "member";
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 14.6 IfStatement — chained if/else-if for value selection
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.6 IfStatement chains ===\n");
+
+specTest("§ 14.6 chain: if/else-if assigning same var records all branch effects", `
+  function f(level) {
+    if (level === 1) { this.role = "guest"; }
+    else if (level === 2) { this.role = "user"; }
+    else if (level === 3) { this.role = "admin"; }
+  }
+`, function(effects) {
+  // Each branch records its property-write into the shared effects list.
+  // Per § 14.6 the test is evaluated, then the matching branch executes;
+  // for static analysis ALL three writes are recorded as possible effects.
+  var roleVals = effects
+    .filter(function(e) { return e.target.kind === "this" && e.key.kind === "const" && e.key.value === "role"; })
+    .map(function(e) { return e.value && e.value.kind === "const" ? e.value.value : null; })
+    .filter(function(v) { return v !== null; });
+  return roleVals.indexOf("guest") >= 0 &&
+         roleVals.indexOf("user") >= 0 &&
+         roleVals.indexOf("admin") >= 0;
 });
 
 // ── Summary ──

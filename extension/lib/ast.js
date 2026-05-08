@@ -1795,7 +1795,7 @@ function _resolveIIFEReturnedProperty(callExprPath, propName) {
 // — each spec section has its own transfer function and the driver composes
 // them. Used by callee-resolution and security analysis to determine when a
 // function copies one input's properties to another (Object.assign-equivalent
-// per § 19.1.2.1) without library-name recognition.
+// per § 20.1.2.1) without library-name recognition.
 //
 // Spec sections covered:
 //   § 8.4  Lexical Environments        → state model
@@ -1805,8 +1805,8 @@ function _resolveIIFEReturnedProperty(callExprPath, propName) {
 //   § 14.6 If statement                → state split + join
 //   § 14.7.4 For statement             → init + body (loop body once)
 //   § 14.7.5 For-in statement          → loop var bound to key-of(rhs)
-//   § 19.1.2.1 Object.assign           → recognised as direct propagation
-//   § 22.1.3.7 Array.prototype.forEach → callback invocation effects
+//   § 20.1.2.1 Object.assign           → recognised as direct propagation
+//   § 23.1.3.15 Array.prototype.forEach → callback invocation effects
 //
 // Recursion is banned (CLAUDE.md): expression evaluation runs on a postorder
 // enumeration; statement processing runs on an explicit worklist of CFG
@@ -2118,11 +2118,11 @@ function _specEvalExpression(rootPath, state, effects) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// § 22.1.3.7 — Array.prototype.forEach.
+// § 23.1.3.15 — Array.prototype.forEach.
 // Dispatch any `arr.forEach(callback)` call whose receiver evaluates to
 // an iterable abstract value the analyser tracks. The callback's first
 // param is bound to the array's element type:
-//   - {kind:"keys-of", src} (returned by Object.keys per § 19.1.2.16)
+//   - {kind:"keys-of", src} (returned by Object.keys per § 20.1.2.19)
 //     → element type is {kind:"loop-key", src} (semantically identical
 //       to a for-in loop's binding)
 //   - other iterables abstract to Top for now.
@@ -2144,7 +2144,7 @@ function _specHandleArrayForEach(exprNode, exprPath, state, effects, branchStack
 
   // Evaluate the receiver abstractly through the spec-organised
   // expression evaluator. If it's a tracked iterable, derive the
-  // element type per § 22.1.3.7's CallbackInvocation.
+  // element type per § 23.1.3.15's CallbackInvocation.
   var receiverAv = _specEvalExpression(exprPath.get("callee.object"), state, effects);
   var elementAv;
   if (receiverAv && receiverAv.kind === "keys-of") {
@@ -2203,10 +2203,10 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
   if (_t.isExpressionStatement(stmt)) {
     // § 14.5 — evaluate the expression for side effects.
     // First: recognise spec-built-in callback dispatchers like
-    // Array.prototype.forEach (§ 22.1.3.7). The dispatcher derives the
+    // Array.prototype.forEach (§ 23.1.3.15). The dispatcher derives the
     // callback's binding from the receiver's abstract value, so
     // composition works naturally — `Object.keys(src).forEach(cb)`
-    // composes Object.keys (§ 19.1.2.16, in expression eval) with
+    // composes Object.keys (§ 20.1.2.19, in expression eval) with
     // forEach (here) without any compound shape match.
     var exprNode = stmt.expression;
     if (_specHandleArrayForEach(exprNode, stmtPath.get("expression"), state, effects, branchStack)) {
@@ -2283,7 +2283,9 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
       if (_t.isBlockStatement(altNode)) {
         branchStack.push({ stmts: altNode.body, idx: 0, state: altState, parentPath: stmtPath.get("alternate"), _reportTo: mergeFrame });
       } else {
-        branchStack.push({ stmts: [altNode], idx: 0, state: altState, parentPath: stmtPath.get("alternate"), _wrapBody: true, _reportTo: mergeFrame });
+        // Single-statement alternate (e.g. else-if chain) — stmtPath
+        // resolves directly via the alternate's own path.
+        branchStack.push({ stmts: [altNode], idx: 0, state: altState, _explicitStmtPath: stmtPath.get("alternate"), _reportTo: mergeFrame });
       }
     }
     if (stmt.consequent) {
@@ -2292,7 +2294,7 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
       if (_t.isBlockStatement(consNode)) {
         branchStack.push({ stmts: consNode.body, idx: 0, state: consState, parentPath: stmtPath.get("consequent"), _reportTo: mergeFrame });
       } else {
-        branchStack.push({ stmts: [consNode], idx: 0, state: consState, parentPath: stmtPath.get("consequent"), _wrapBody: true, _reportTo: mergeFrame });
+        branchStack.push({ stmts: [consNode], idx: 0, state: consState, _explicitStmtPath: stmtPath.get("consequent"), _reportTo: mergeFrame });
       }
     }
     return;
@@ -2394,9 +2396,14 @@ function _specAnalyzePropertyFlow(funcPath) {
     }
     var stmt = top.stmts[top.idx];
     var stmtPath;
-    if (top._wrapBody) {
-      // Single-statement body wrapped as one-element array; parentPath is
-      // the parent statement and the body itself is at .body.
+    if (top._explicitStmtPath) {
+      // Single-statement frame with a pre-computed path (used for
+      // if-statement consequent/alternate, and for-loop bodies that
+      // aren't BlockStatements — see callers).
+      stmtPath = top._explicitStmtPath;
+    } else if (top._wrapBody) {
+      // Legacy path — single-statement body where parentPath is the
+      // parent statement and the body itself is at .body.
       stmtPath = top.parentPath.get("body");
     } else {
       stmtPath = top.parentPath.get("body." + top.idx);
@@ -2476,7 +2483,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "obj-lit", props: props };
   }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
-    // § 19.1.2.16 — Object.keys(src) returns an array of src's
+    // § 20.1.2.19 — Object.keys(src) returns an array of src's
     // enumerable own keys. Recognised as a built-in only when the
     // `Object` identifier is the unshadowed global (§ 8.1.1).
     if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
@@ -2500,7 +2507,7 @@ function _specEvalLeaf(path, state, vals, effects) {
 // where target.kind ∈ {this, param, args-elt} and src is one of those too.
 // Returns { source: <AbstractValue of src>, target: <AbstractValue of target> }
 // or null. Per CLAUDE.md L29: this is recognising the SPEC-equivalent of
-// Object.assign per ECMA § 19.1.2.1 by its dataflow effect, not by name —
+// Object.assign per ECMA § 20.1.2.1 by its dataflow effect, not by name —
 // any function whose body's net effect is "copy src's enumerable own
 // properties to target" qualifies, regardless of how it spells the loop.
 // ───────────────────────────────────────────────────────────────────────────
@@ -2626,7 +2633,7 @@ function _resolveCalleeToFunction(callPath) {
           // Property defined via property-propagation function call.
           // Detect `obj.copier(srcLit)` where copier's body's dataflow
           // produces an Object.assign-equivalent effect (target=this,
-          // src=Param(0) or args-elt) per ECMA § 19.1.2.1. Spec-grounded
+          // src=Param(0) or args-elt) per ECMA § 20.1.2.1. Spec-grounded
           // — no library-name match.
           if (_t.isMemberExpression(refParent) && refParent.object === refs[cv].node && !refParent.computed) {
             var copierCallPath = refs[cv].parentPath ? refs[cv].parentPath.parentPath : null;
@@ -2667,7 +2674,7 @@ function _resolveCalleeToFunction(callPath) {
               }
             }
           }
-          // ECMA § 19.1.2.1 — Object.assign(target, ...sources) copies
+          // ECMA § 20.1.2.1 — Object.assign(target, ...sources) copies
           // each source's enumerable own properties onto target. Built-in
           // semantics; recognised by scope-checked `Object` identifier
           // (no framework-name match).
@@ -4603,7 +4610,7 @@ function _extractFetchCall(path, result, type) {
         try { optValPath = optsPath.get("properties." + o + ".value"); } catch (e) { _resolver.collectError(e, "fetchBodyOptValPath"); }
         // For body = JSON.stringify(<inline ObjectExpression>), extract
         // properties path-aware so identifier-valued fields resolve via
-        // the existing iterative value resolver per ECMA § 25.5.2.
+        // the existing iterative value resolver per ECMA § 25.5.4.
         if (optValPath && _t.isCallExpression(optVal) && _isJsonStringify(optVal, path) &&
             optVal.arguments.length >= 1 && _t.isObjectExpression(optVal.arguments[0])) {
           var jsonObjPath = optValPath.get("arguments.0");
@@ -9025,7 +9032,7 @@ function _resolveParamFromCallbackArg(callExprPath, cbArgIdx, paramIdx, depth, p
 
   if (!targetFuncNode) {
     // Fallback: arr.forEach(fn) — resolve array element values per
-    // ECMA-262 § 22.1.3.7 (Array.prototype.forEach). Receiver is the
+    // ECMA-262 § 23.1.3.15 (Array.prototype.forEach). Receiver is the
     // array; callback is invoked with (element, index, array). The
     // jQuery / underscore / lodash `.each(arr, fn)` shape was removed
     // per CLAUDE.md L29 — those library helpers reach the analysed
@@ -9190,7 +9197,7 @@ function _resolveParamFromCallbackArg(callExprPath, cbArgIdx, paramIdx, depth, p
     } catch (e) { _resolver.collectError(e, "resolveParamFromCallers"); }
   }
 
-  // Fallback: arr.forEach(fn) per ECMA-262 § 22.1.3.7 — fn invoked with
+  // Fallback: arr.forEach(fn) per ECMA-262 § 23.1.3.15 — fn invoked with
   // (element, index, array). The jQuery / underscore / lodash `.each`
   // shape was removed per CLAUDE.md L29.
   if (values.length === 0 && _t.isMemberExpression(calleeNode) && !calleeNode.computed) {
@@ -9412,7 +9419,7 @@ function _resolveItemCallsFromParam(funcPath, containerParamName, paramIdx, dept
         // Pattern: containerParam[key].forEach(function(item) { item(args); })
         // or containerParam.forEach(function(item) { item(args); })
         // (`.each` shape removed per CLAUDE.md L29 — Array.prototype.forEach
-        //  per ECMA § 22.1.3.7 is the only spec-defined match.)
+        //  per ECMA § 23.1.3.15 is the only spec-defined match.)
         var iterContainer = null;
         var cbArgStartIdx = -1;
 
@@ -12367,7 +12374,7 @@ function _collectEqualityConstraints(path) {
 }
 
 // Detect iteration constraints from spec-defined Array iterators per
-// ECMA-262 § 22.1.3.7 / § 22.1.3.16 — `arr.forEach(fn)` / `arr.map(fn)`.
+// ECMA-262 § 23.1.3.15 / § 23.1.3.20 — `arr.forEach(fn)` / `arr.map(fn)`.
 // The callback parameter is constrained to the array's element values.
 // The jQuery / underscore / lodash `X.each(arr, fn)` shape was removed
 // per CLAUDE.md L29 — those library helpers reach the analyser when
@@ -12400,7 +12407,7 @@ function _collectIterationConstraints(path) {
   }
   if (elemValues.length < 1) return;
 
-  // forEach / map per ECMA § 22.1.3.7 / § 22.1.3.16 invoke the callback
+  // forEach / map per ECMA § 23.1.3.15 / § 23.1.3.20 invoke the callback
   // with (element, index, array) — element is param 0.
   var elemParamIdx = 0;
   if (callbackNode.params.length <= elemParamIdx) return;
