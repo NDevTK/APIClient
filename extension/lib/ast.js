@@ -1787,6 +1787,146 @@ function _resolveIIFEReturnedProperty(callExprPath, propName) {
   return foundFuncPath;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Property-Flow Analyser (ECMA-262 spec-organised; one section per function)
+// ───────────────────────────────────────────────────────────────────────────
+// Forward dataflow over a function body's CFG to record every property-write
+// as `(target, key, value)` with abstract values. NO syntactic shape matching
+// — each spec section has its own transfer function and the driver composes
+// them. Used by callee-resolution and security analysis to determine when a
+// function copies one input's properties to another (Object.assign-equivalent
+// per § 19.1.2.1) without library-name recognition.
+//
+// Spec sections covered:
+//   § 8.4  Lexical Environments        → state model
+//   § 10.2 Function bodies             → entry state (params bound, this)
+//   § 13.5 / § 13.10 / § 13.13 / § 13.15 → expression eval (Member, OR, Assign)
+//   § 14.3 Variable declarations       → declarator → state
+//   § 14.6 If statement                → state split + join
+//   § 14.7.4 For statement             → init + body (loop body once)
+//   § 14.7.5 For-in statement          → loop var bound to key-of(rhs)
+//   § 19.1.2.1 Object.assign           → recognised as direct propagation
+//   § 22.1.3.7 Array.prototype.forEach → callback invocation effects
+//
+// Recursion is banned (CLAUDE.md): expression evaluation runs on a postorder
+// enumeration; statement processing runs on an explicit worklist of CFG
+// blocks.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// AbstractValue — sum type built lazily as the lattice grows.
+// Each constructor is a small record; LUB / equality are structural.
+//
+//   { kind: "param", idx }         — function parameter at position idx
+//   { kind: "this" }                — receiver
+//   { kind: "args-elt", idx }       — arguments[idx]; idx is AbstractValue
+//   { kind: "args-len" }            — arguments.length
+//   { kind: "loop-key", src }       — loop var bound by `for(k in src)`
+//   { kind: "member", obj, key }    — obj[key] (read access)
+//   { kind: "obj-lit", props }      — object expression with abstract values
+//   { kind: "or", left, right }     — `a || b` (left when truthy per § 13.13)
+//   { kind: "const", value }        — primitive literal
+//   { kind: "top" }                 — unknown
+//
+// `_specEqualAv` and `_specJoinAv` operate over this lattice. Bottom is
+// represented by the absence of a state entry for a variable name (not a
+// distinct lattice element) — keeps the env-map small.
+
+// § 8.4 Lexical Environments — state shape.
+// State is a plain object whose keys are variable names. We use a
+// null-prototype object so a variable named "toString" / "constructor"
+// doesn't collide with Object prototype methods.
+function _specStateCreate(initBindings) {
+  var s = Object.create(null);
+  if (initBindings) {
+    for (var k in initBindings) if (Object.prototype.hasOwnProperty.call(initBindings, k)) s[k] = initBindings[k];
+  }
+  return s;
+}
+function _specStateClone(state) {
+  return _specStateCreate(state);
+}
+
+// § 10.2.10 FunctionDeclarationInstantiation (simplified for our domain).
+// Each formal parameter is bound to its abstract param-reference; `this`
+// is implicit (the analyser checks `ThisExpression` directly via the
+// `{kind:"this"}` constructor in expression eval — no explicit "this"
+// state slot is required).
+function _specInitialFunctionBodyState(funcNode) {
+  var state = _specStateCreate();
+  if (!funcNode || !funcNode.params) return state;
+  for (var i = 0; i < funcNode.params.length; i++) {
+    var p = funcNode.params[i];
+    if (p && p.type === "Identifier") state[p.name] = { kind: "param", idx: i };
+  }
+  return state;
+}
+
+// Structural equality on AbstractValues — iterative worklist over
+// (a, b) pairs. Termination is structural: every pushed pair is a strict
+// subterm of a popped pair, and AbstractValue terms are finite trees.
+function _specEqualAv(a, b) {
+  var pairs = [[a, b]];
+  while (pairs.length > 0) {
+    var pair = pairs.pop();
+    var x = pair[0], y = pair[1];
+    if (x === y) continue;
+    if (!x || !y) return false;
+    if (x.kind !== y.kind) return false;
+    switch (x.kind) {
+      case "param":    if (x.idx !== y.idx) return false; break;
+      case "this":     break;
+      case "args-len": break;
+      case "top":      break;
+      case "obj-lit":  return false;  // identity-based
+      case "const":    if (x.value !== y.value) return false; break;
+      case "args-elt": pairs.push([x.idx, y.idx]); break;
+      case "loop-key": pairs.push([x.src, y.src]); break;
+      case "member":   pairs.push([x.obj, y.obj]); pairs.push([x.key, y.key]); break;
+      case "or":       pairs.push([x.left, y.left]); pairs.push([x.right, y.right]); break;
+      default: return false;
+    }
+  }
+  return true;
+}
+
+// LUB on AbstractValues. Conservative — when two values diverge,
+// produce Top. Used at CFG merge points for the worklist join.
+function _specJoinAv(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  if (_specEqualAv(a, b)) return a;
+  return { kind: "top" };
+}
+
+// State equality (shallow) — used by the worklist's fixed-point detection.
+function _specEqualState(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  for (var k in a) if (Object.prototype.hasOwnProperty.call(a, k)) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (!_specEqualAv(a[k], b[k])) return false;
+  }
+  for (var k2 in b) if (Object.prototype.hasOwnProperty.call(b, k2)) {
+    if (!Object.prototype.hasOwnProperty.call(a, k2)) return false;
+  }
+  return true;
+}
+
+// State LUB — pointwise on each binding name; missing bindings remain
+// missing (Bottom).
+function _specJoinState(a, b) {
+  if (!a) return _specStateClone(b);
+  if (!b) return _specStateClone(a);
+  var out = _specStateCreate();
+  for (var k in a) if (Object.prototype.hasOwnProperty.call(a, k)) {
+    out[k] = Object.prototype.hasOwnProperty.call(b, k) ? _specJoinAv(a[k], b[k]) : a[k];
+  }
+  for (var k2 in b) if (Object.prototype.hasOwnProperty.call(b, k2)) {
+    if (!Object.prototype.hasOwnProperty.call(out, k2)) out[k2] = b[k2];
+  }
+  return out;
+}
+
 // Resolve a call expression's callee to its function node
 // Returns a Babel path to the resolved function node, or null.
 function _resolveCalleeToFunction(callPath) {
