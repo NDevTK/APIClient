@@ -2916,6 +2916,26 @@ function _specEvalLeaf(path, state, vals, effects) {
           }
         }
       }
+      // Array built-ins per § 23.1.3 — receiver array-lit.
+      if (recvAv && recvAv.kind === "array-lit" && recvAv.elements) {
+        var aMeth = n.callee.property.name;
+        // § 23.1.3.18 Array.prototype.join — concat elements with separator.
+        if (aMeth === "join") {
+          var sep = ",";  // spec default per § 23.1.3.18 step 4
+          if (n.arguments.length >= 1) {
+            var sepAv = vals.get(n.arguments[0]);
+            if (sepAv && sepAv.kind === "const" && typeof sepAv.value === "string") sep = sepAv.value;
+            else if (n.arguments.length >= 1) { /* unknown sep — skip */ return { kind: "top" }; }
+          }
+          var parts = [];
+          for (var aei = 0; aei < recvAv.elements.length; aei++) {
+            var el = recvAv.elements[aei];
+            if (!el || el.kind !== "const") return { kind: "top" };  // unknown element — bail
+            parts.push(String(el.value));
+          }
+          return { kind: "const", value: parts.join(sep) };
+        }
+      }
       // Number built-ins per § 21.1.3 — receiver Const number.
       if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "number") {
         var nMeth = n.callee.property.name;

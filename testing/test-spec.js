@@ -1041,6 +1041,30 @@ specTest("§ 19.2.6.4: `decodeURIComponent(Const(\"a%20b\"))` resolves to Const(
   return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "a b";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 23.1.3.18 Array.prototype.join
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 23.1.3.18 Array.prototype.join ===\n");
+
+specTest("§ 23.1.3.18: array-lit join with default separator yields Const concat", `
+  function f() {
+    this.s = ["a", "b", "c"].join();
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  // Default separator per spec § 23.1.3.18 step 4 is ",".
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "a,b,c";
+});
+
+specTest("§ 23.1.3.18: array-lit join with explicit separator yields Const concat", `
+  function f() {
+    this.path = ["api", "v1", "users"].join("/");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "api/v1/users";
+});
+
 specTest("§ 21.1.3.3: `Const(3.14159).toFixed(2)` resolves to Const(\"3.14\")", `
   function f() {
     this.s = (3.14159).toFixed(2);
