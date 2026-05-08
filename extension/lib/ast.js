@@ -8050,29 +8050,26 @@ function _resolveParamFromCallbackArg(callExprPath, cbArgIdx, paramIdx, depth, p
   }
 
   if (!targetFuncNode) {
-    // Fallback: .forEach(fn) or X.each(arr, fn) — resolve array element values
-    // forEach: arr.forEach(fn) — fn(element, index, array)
-    // jQuery.each: X.each(arr, fn) — fn(index, element)
+    // Fallback: arr.forEach(fn) — resolve array element values per
+    // ECMA-262 § 22.1.3.7 (Array.prototype.forEach). Receiver is the
+    // array; callback is invoked with (element, index, array). The
+    // jQuery / underscore / lodash `.each(arr, fn)` shape was removed
+    // per CLAUDE.md L29 — those library helpers reach the analysed
+    // callback when their bundle is present and the analyzer traces
+    // through their own forEach-equivalent call.
     if (_t.isMemberExpression(calleeNode) && !calleeNode.computed) {
       var iterMethod = _t.isIdentifier(calleeNode.property) ? calleeNode.property.name : null;
-      if (_ITERATION_METHODS[iterMethod] || iterMethod === "each") {
-        // V4: skip if callee object is a known non-iterable type
-        var _cbObjType = (iterMethod !== "each") ? _getTrackedType(callExprPath.get("callee.object"), calleeNode.object) : null;
+      if (_ITERATION_METHODS[iterMethod]) {
+        // Skip if callee object is a known non-iterable type — `.forEach`
+        // also exists on Map/Set but the array-element semantics here
+        // assume Array.prototype dispatch.
+        var _cbObjType = _getTrackedType(callExprPath.get("callee.object"), calleeNode.object);
         if (_cbObjType && _NON_ITERABLE_TYPES[_cbObjType]) {
           // Known non-iterable — skip
         } else {
-        var arrPath = null;
-        var elemParamIdx = -1; // which param of callback receives elements
-        if (_ITERATION_METHODS[iterMethod]) {
-          // arr.forEach/map/filter(fn) — arr is callee.object, fn gets (element, index, array)
-          arrPath = callExprPath.get("callee.object");
-          elemParamIdx = 0;
-        } else if (iterMethod === "each" && callExprPath.node.arguments.length >= 2) {
-          // X.each(arr, fn) — arr is first arg, fn gets (index, element)
-          arrPath = callExprPath.get("arguments.0");
-          elemParamIdx = 1;
-        }
-        if (arrPath && paramIdx === elemParamIdx) {
+        var arrPath = callExprPath.get("callee.object");
+        var elemParamIdx = 0;
+        if (paramIdx === elemParamIdx) {
           var arrNode = _resolveToArray(arrPath, 0);
           if (arrNode && arrNode.elements && arrNode.elements.length > 0) {
             var iterValues = [];
@@ -8219,24 +8216,17 @@ function _resolveParamFromCallbackArg(callExprPath, cbArgIdx, paramIdx, depth, p
     } catch (e) { _resolver.collectError(e, "resolveParamFromCallers"); }
   }
 
-  // Fallback: if traversal of callee body yielded nothing, try iteration patterns.
-  // .forEach(fn) — fn(element, index, array); jQuery.each(arr, fn) — fn(index, element)
+  // Fallback: arr.forEach(fn) per ECMA-262 § 22.1.3.7 — fn invoked with
+  // (element, index, array). The jQuery / underscore / lodash `.each`
+  // shape was removed per CLAUDE.md L29.
   if (values.length === 0 && _t.isMemberExpression(calleeNode) && !calleeNode.computed) {
     var iterMethod = _t.isIdentifier(calleeNode.property) ? calleeNode.property.name : null;
-    if (iterMethod === "forEach" || iterMethod === "each") {
-      // V4: skip if callee object is a known non-iterable type
-      var _fb2ObjType = (iterMethod !== "each") ? _getTrackedType(callExprPath.get("callee.object"), calleeNode.object) : null;
+    if (iterMethod === "forEach") {
+      var _fb2ObjType = _getTrackedType(callExprPath.get("callee.object"), calleeNode.object);
       if (!(_fb2ObjType && _NON_ITERABLE_TYPES[_fb2ObjType])) {
-        var arrPath = null;
-        var elemParamIdx = -1;
-        if (iterMethod === "forEach") {
-          arrPath = callExprPath.get("callee.object");
-          elemParamIdx = 0;
-        } else if (iterMethod === "each" && callExprPath.node.arguments.length >= 2) {
-          arrPath = callExprPath.get("arguments.0");
-          elemParamIdx = 1;
-        }
-        if (arrPath && paramIdx === elemParamIdx) {
+        var arrPath = callExprPath.get("callee.object");
+        var elemParamIdx = 0;
+        if (paramIdx === elemParamIdx) {
           var arrNode = _resolveToArray(arrPath, 0);
           if (arrNode && arrNode.elements) {
             for (var avi = 0; avi < arrNode.elements.length; avi++) {
