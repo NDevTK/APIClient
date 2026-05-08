@@ -950,6 +950,38 @@ console.log("\n=== § 14.2.16 AwaitExpression ===\n");
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 10.2.10 Per-call-site instantiation ===\n");
 
+// ═════════════════════════════════════════════════════════════════════
+// § 22.1.3 String.prototype built-ins
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 22.1.3 String.prototype built-ins ===\n");
+
+specTest("§ 22.1.3.27: `Const(\"get\").toUpperCase()` resolves to Const(\"GET\")", `
+  function f() {
+    this.method = "get".toUpperCase();
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "GET";
+});
+
+specTest("§ 22.1.3.25: `Const(\"POST\").toLowerCase()` resolves to Const(\"post\")", `
+  function f() {
+    this.method = "POST".toLowerCase();
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "post";
+});
+
+specTest("§ 22.1.3.32: `Const(\"  hi  \").trim()` resolves to Const(\"hi\")", `
+  function f() {
+    this.h = "  hi  ".trim();
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "hi";
+});
+
 test("§ 10.2.10: instantiating effects with caller-arg substitutes Param(0)", `
   function f(x) { this.role = x; }
 `, function(r) {

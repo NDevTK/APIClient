@@ -2203,11 +2203,16 @@ function _specPostorderExprPaths(rootPath) {
         stack.push(p.get("expressions." + ti));
       }
     } else if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n) || _t.isNewExpression(n)) {
-      // Argument expressions still get evaluated (their property writes
-      // matter for effects); the call/construct's return value
-      // abstracts to Top per § 13.3 / § 13.3.5.
+      // Argument expressions get evaluated (their property writes
+      // matter for effects). The callee's MemberExpression's `object`
+      // also needs eval so String/Object built-in receivers can be
+      // identified per § 13.3.6 / § 22.1.3 dispatch.
       for (var ai = n.arguments.length - 1; ai >= 0; ai--) {
         stack.push(p.get("arguments." + ai));
+      }
+      if (_t.isMemberExpression(n.callee) || _t.isOptionalMemberExpression(n.callee)) {
+        stack.push(p.get("callee.object"));
+        if (n.callee.computed) stack.push(p.get("callee.property"));
       }
     } else if (_t.isBinaryExpression(n)) {
       stack.push(p.get("left"));
@@ -2813,6 +2818,52 @@ function _specEvalLeaf(path, state, vals, effects) {
         n.arguments.length >= 1) {
       var srcAv = vals.get(n.arguments[0]) || { kind: "top" };
       return { kind: "keys-of", src: srcAv };
+    }
+    // String built-ins: § 22.1.3 — String.prototype methods on Const
+    // string receivers can be evaluated statically. Useful for HTTP
+    // method normalisation (`"get".toUpperCase()` → `"GET"`).
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.property)) {
+      var recvAv = vals.get(n.callee.object);
+      if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "string") {
+        var meth = n.callee.property.name;
+        var s = recvAv.value;
+        // § 22.1.3.27 String.prototype.toUpperCase
+        if (meth === "toUpperCase" && n.arguments.length === 0) return { kind: "const", value: s.toUpperCase() };
+        // § 22.1.3.25 String.prototype.toLowerCase
+        if (meth === "toLowerCase" && n.arguments.length === 0) return { kind: "const", value: s.toLowerCase() };
+        // § 22.1.3.32 String.prototype.trim
+        if (meth === "trim" && n.arguments.length === 0) return { kind: "const", value: s.trim() };
+        // § 22.1.3.16 String.prototype.slice — when both args (or neither) are Const numbers
+        if (meth === "slice") {
+          var sliceArgs = [];
+          var sliceOk = true;
+          for (var sai = 0; sai < n.arguments.length && sai < 2; sai++) {
+            var sav = vals.get(n.arguments[sai]);
+            if (!sav || sav.kind !== "const" || typeof sav.value !== "number") { sliceOk = false; break; }
+            sliceArgs.push(sav.value);
+          }
+          if (sliceOk) return { kind: "const", value: s.slice.apply(s, sliceArgs) };
+        }
+        // § 22.1.3.17 String.prototype.substring
+        if (meth === "substring") {
+          var subArgs = [];
+          var subOk = true;
+          for (var sui = 0; sui < n.arguments.length && sui < 2; sui++) {
+            var suv = vals.get(n.arguments[sui]);
+            if (!suv || suv.kind !== "const" || typeof suv.value !== "number") { subOk = false; break; }
+            subArgs.push(suv.value);
+          }
+          if (subOk) return { kind: "const", value: s.substring.apply(s, subArgs) };
+        }
+        // § 22.1.3.7 String.prototype.concat — single Const arg case
+        if (meth === "concat" && n.arguments.length === 1) {
+          var concatAv = vals.get(n.arguments[0]);
+          if (concatAv && concatAv.kind === "const") {
+            return { kind: "const", value: s + String(concatAv.value) };
+          }
+        }
+      }
     }
     // § 13.3.6 CallExpression: when the call resolves to a function
     // whose body is a single ReturnStatement with a const-literal
