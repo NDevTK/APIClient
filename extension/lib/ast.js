@@ -2181,6 +2181,12 @@ function _specPostorderExprPaths(rootPath) {
       for (var si = n.expressions.length - 1; si >= 0; si--) {
         stack.push(p.get("expressions." + si));
       }
+    } else if (_t.isTemplateLiteral(n)) {
+      // § 13.2.8 — interpolated expressions need eval before the
+      // template's composition step.
+      for (var ti = n.expressions.length - 1; ti >= 0; ti--) {
+        stack.push(p.get("expressions." + ti));
+      }
     } else if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
       // Argument expressions still get evaluated (their property writes
       // matter for effects), but the call's return value abstracts to Top.
@@ -2532,6 +2538,30 @@ function _specEvalLeaf(path, state, vals, effects) {
   if (_t.isNumericLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isBooleanLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isNullLiteral(n)) return { kind: "const", value: null };
+  if (_t.isTemplateLiteral(n)) {
+    // § 13.2.8.6 Template Literal Evaluation: composes cooked quasis
+    // with stringified expression results. When every expression
+    // resolves to a Const value at this analysis level, compose the
+    // full string; otherwise the value abstracts to Top per abstract
+    // interpretation soundness (we don't fabricate the unknown bits).
+    var composedStr = "";
+    var allConst = true;
+    for (var qi = 0; qi < n.quasis.length; qi++) {
+      var quasi = n.quasis[qi];
+      var qCooked = quasi && quasi.value && quasi.value.cooked;
+      composedStr += (typeof qCooked === "string" ? qCooked : "");
+      if (qi < n.expressions.length) {
+        var exprAv = vals.get(n.expressions[qi]);
+        if (!exprAv || exprAv.kind !== "const") { allConst = false; break; }
+        // ToString per § 7.1.17: spec-grounded conversion.
+        var s = exprAv.value;
+        if (typeof s !== "string") s = String(s);
+        composedStr += s;
+      }
+    }
+    if (allConst) return { kind: "const", value: composedStr };
+    return { kind: "top" };
+  }
   if (_t.isIdentifier(n)) {
     if (Object.prototype.hasOwnProperty.call(state, n.name)) return state[n.name];
     if (n.name === "undefined" && !path.scope.getBinding("undefined")) {

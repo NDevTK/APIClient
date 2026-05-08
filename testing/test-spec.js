@@ -696,6 +696,26 @@ specTest("§ 14.3.3: VariableDeclarator destructuring `var {a, b} = obj`", `
          byKey.y.key.kind === "const" && byKey.y.key.value === "bar";
 });
 
+specTest("§ 13.2.8.6: TemplateLiteral with const interpolation composes to single Const", `
+  function f() {
+    var ver = "v2";
+    this.url = \`/api/\${ver}/users\`;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" &&
+         effects[0].value.value === "/api/v2/users";
+});
+
+specTest("§ 13.2.8.6: TemplateLiteral with non-const interpolation abstracts to Top (sound)", `
+  function f(dynamic) {
+    this.url = \`/api/\${dynamic}/users\`;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "top";
+});
+
 specTest("§ 14.3.3: nested destructuring `var [{a}, {b}] = pair`", `
   function f(pair) {
     var [{a}, {b}] = pair;
