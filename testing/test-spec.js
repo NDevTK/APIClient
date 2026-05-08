@@ -850,6 +850,30 @@ specTest("§ 14.7.2: while-loop body writes recorded once (single-pass abstracti
          effects[0].key.kind === "const" && effects[0].key.value === "value";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 14.15 TryStatement — try / catch / finally all walked
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 14.15 TryStatement ===\n");
+
+specTest("§ 14.15: try, catch AND finally blocks all contribute property writes", `
+  function f() {
+    try {
+      this.attempt = 1;
+    } catch (e) {
+      this.fallback = 2;
+    } finally {
+      this.cleanup = 3;
+    }
+  }
+`, function(effects) {
+  var keys = effects
+    .filter(function(e) { return e.target.kind === "this" && e.key.kind === "const"; })
+    .map(function(e) { return e.key.value; });
+  return keys.indexOf("attempt") >= 0 &&
+         keys.indexOf("fallback") >= 0 &&
+         keys.indexOf("cleanup") >= 0;
+});
+
 test("§ 13.3 composition with § 23.1.3.15 forEach: stored callback iterated", `
   var hooks = [];
   function on(fn) { hooks.push(fn); }

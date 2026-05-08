@@ -2437,6 +2437,27 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     return;
   }
 
+  if (_t.isTryStatement(stmt)) {
+    // § 14.15 TryStatement — block, handler (catch), and finalizer all
+    // contribute side-effects. Walk each like a sequential block.
+    if (stmt.block) {
+      branchStack.push({ stmts: stmt.block.body, idx: 0, state: _specStateClone(state), parentPath: stmtPath.get("block") });
+    }
+    if (stmt.handler && stmt.handler.body) {
+      var catchState = _specStateClone(state);
+      // Catch param binds to Top (the thrown value's runtime shape isn't
+      // tracked). Per § 14.15.2.
+      if (stmt.handler.param && stmt.handler.param.type === "Identifier") {
+        catchState[stmt.handler.param.name] = { kind: "top" };
+      }
+      branchStack.push({ stmts: stmt.handler.body.body, idx: 0, state: catchState, parentPath: stmtPath.get("handler.body") });
+    }
+    if (stmt.finalizer) {
+      branchStack.push({ stmts: stmt.finalizer.body, idx: 0, state: _specStateClone(state), parentPath: stmtPath.get("finalizer") });
+    }
+    return;
+  }
+
   if (_t.isWhileStatement(stmt) || _t.isDoWhileStatement(stmt)) {
     // § 14.7.2 / § 14.7.3 — evaluate test then body once.
     _specEvalExpression(stmtPath.get("test"), state, effects);
