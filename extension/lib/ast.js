@@ -2663,8 +2663,18 @@ function _resolveCalleeToFunction(callPath) {
                         var spKey = _t.isIdentifier(sp.key) ? sp.key.name :
                           (_t.isStringLiteral(sp.key) ? sp.key.value : null);
                         if (spKey === propName) {
+                          var spValPath = copierCallPath.get("arguments." + srcArgIdx + ".properties." + ep + ".value");
                           if (_t.isFunctionExpression(sp.value) || _t.isArrowFunctionExpression(sp.value)) {
-                            return copierCallPath.get("arguments." + srcArgIdx + ".properties." + ep + ".value");
+                            return spValPath;
+                          }
+                          // Property value is itself a call (factory pattern):
+                          // `obj.copy({prop: factory(...)}` per § 13.3 / § 7.2.5
+                          // — resolve the call's return to a function so calls
+                          // to obj.prop(args) reach the factory's returned fn.
+                          if (_t.isCallExpression(sp.value)) {
+                            var spRetFn = _resolveCallReturnToFunction(spValPath, 0);
+                            if (spRetFn && spRetFn._path) return spRetFn._path;
+                            if (spRetFn && spRetFn.node && _t.isFunction(spRetFn.node)) return spValPath;
                           }
                         }
                       }
@@ -2695,9 +2705,17 @@ function _resolveCalleeToFunction(callPath) {
                 if (!_t.isObjectProperty(oaProp) || oaProp.computed) continue;
                 var oaKey = _t.isIdentifier(oaProp.key) ? oaProp.key.name :
                   (_t.isStringLiteral(oaProp.key) ? oaProp.key.value : null);
-                if (oaKey === propName &&
-                    (_t.isFunctionExpression(oaProp.value) || _t.isArrowFunctionExpression(oaProp.value))) {
-                  return oaCallPath.get("arguments." + oaArgIdx + ".properties." + oap + ".value");
+                if (oaKey === propName) {
+                  var oaValPath = oaCallPath.get("arguments." + oaArgIdx + ".properties." + oap + ".value");
+                  if (_t.isFunctionExpression(oaProp.value) || _t.isArrowFunctionExpression(oaProp.value)) {
+                    return oaValPath;
+                  }
+                  // Factory-call value: `Object.assign(obj, {prop: factory(...)})`.
+                  if (_t.isCallExpression(oaProp.value)) {
+                    var oaRetFn = _resolveCallReturnToFunction(oaValPath, 0);
+                    if (oaRetFn && oaRetFn._path) return oaRetFn._path;
+                    if (oaRetFn && oaRetFn.node && _t.isFunction(oaRetFn.node)) return oaValPath;
+                  }
                 }
               }
             }
