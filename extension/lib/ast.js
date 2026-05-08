@@ -2580,6 +2580,130 @@ function _specAnalyzePropertyFlow(funcPath) {
   return effects;
 }
 
+// § 25.5.2 / § 25.5.4 helpers — lift parsed JSON values up to abstract
+// values, and lower abstract values back to concrete JS values for
+// stringification. Both walk iteratively via worklist with parent-link
+// recording so children populate parents bottom-up (no recursion).
+
+function _liftJsonValueToAv(rootJv) {
+  // Postorder iterative lift: collect every node into `nodes` in
+  // postorder, then evaluate Const-leaves first, build composites later.
+  var nodes = [];
+  var stack = [{ jv: rootJv, parent: -1, key: null }];
+  while (stack.length) {
+    var f = stack.pop();
+    var idx = nodes.length;
+    nodes.push({ jv: f.jv, parent: f.parent, key: f.key, av: null });
+    if (f.jv && typeof f.jv === "object") {
+      // Push children in reverse so pop yields forward order — preserves
+      // array index order and object insertion order per § 21.1.2.13
+      // (Object.keys returns keys in property creation order).
+      if (Array.isArray(f.jv)) {
+        for (var ai = f.jv.length - 1; ai >= 0; ai--) {
+          stack.push({ jv: f.jv[ai], parent: idx, key: ai });
+        }
+      } else {
+        var jvKeys = Object.keys(f.jv);
+        for (var jki = jvKeys.length - 1; jki >= 0; jki--) {
+          stack.push({ jv: f.jv[jvKeys[jki]], parent: idx, key: jvKeys[jki] });
+        }
+      }
+    }
+  }
+  // Evaluate postorder: deepest indices first (children precede parents).
+  for (var ni = nodes.length - 1; ni >= 0; ni--) {
+    var nd = nodes[ni];
+    var jv = nd.jv;
+    if (jv === null || typeof jv !== "object") {
+      nd.av = { kind: "const", value: jv };
+    } else if (Array.isArray(jv)) {
+      nd.av = { kind: "array-lit", elements: new Array(jv.length) };
+    } else {
+      nd.av = { kind: "obj-lit", props: Object.create(null) };
+    }
+  }
+  // Wire children into parents. obj-lit props uses the same shape the
+  // rest of the analyser builds: `{ [key]: av }` map (not array).
+  for (var ci = 1; ci < nodes.length; ci++) {
+    var cn = nodes[ci];
+    var parent = nodes[cn.parent];
+    if (parent.av.kind === "array-lit") {
+      parent.av.elements[cn.key] = cn.av;
+    } else if (parent.av.kind === "obj-lit") {
+      parent.av.props[cn.key] = cn.av;
+    }
+  }
+  return nodes[0].av;
+}
+
+function _avToJsonValue(rootAv) {
+  if (!rootAv) return { ok: false };
+  // Postorder iterative lower. Each node tracks its parent so children
+  // populate the parent's concrete container after their own value is built.
+  var nodes = [];
+  var stack = [{ av: rootAv, parent: -1, key: null }];
+  while (stack.length) {
+    var f = stack.pop();
+    var idx = nodes.length;
+    nodes.push({ av: f.av, parent: f.parent, key: f.key, jv: undefined, ok: true });
+    var av = f.av;
+    if (!av) { nodes[idx].ok = false; continue; }
+    if (av.kind === "const") continue;
+    if (av.kind === "array-lit") {
+      // Reverse-push so children pop in forward index order; postorder
+      // wiring then sets indices in source order (no impact for arrays
+      // since assignment is by-index, but matches obj-lit handling).
+      var elts = av.elements || [];
+      for (var ei = elts.length - 1; ei >= 0; ei--) {
+        stack.push({ av: elts[ei], parent: idx, key: ei });
+      }
+    } else if (av.kind === "obj-lit") {
+      // obj-lit props is a `{ [key]: av }` map (the rest of the analyser
+      // builds it that way). Reverse-push keys so children pop in source
+      // order; wire-up loop (wi forward) assigns keys in source order —
+      // JSON.stringify emits properties in insertion order per § 25.5.4
+      // + § 7.3.21 (EnumerableOwnPropertyNames preserves [[OwnPropertyKeys]]).
+      var propsMap = av.props || Object.create(null);
+      var pKeys = Object.keys(propsMap);
+      for (var pi = pKeys.length - 1; pi >= 0; pi--) {
+        stack.push({ av: propsMap[pKeys[pi]], parent: idx, key: pKeys[pi] });
+      }
+    } else {
+      // Unknown / param / member / top — not lowerable.
+      nodes[idx].ok = false;
+    }
+  }
+  // Evaluate postorder.
+  for (var pni = nodes.length - 1; pni >= 0; pni--) {
+    var pnd = nodes[pni];
+    if (!pnd.ok) return { ok: false };
+    var pAv = pnd.av;
+    if (pAv.kind === "const") {
+      // JSON only supports null / bool / number / string. Per § 25.5.4
+      // step 11, undefined / functions are skipped (here, treat as not lowerable).
+      var v = pAv.value;
+      if (v === null || typeof v === "boolean" || typeof v === "number" || typeof v === "string") {
+        pnd.jv = v;
+      } else {
+        return { ok: false };
+      }
+    } else if (pAv.kind === "array-lit") {
+      pnd.jv = new Array((pAv.elements || []).length);
+    } else if (pAv.kind === "obj-lit") {
+      pnd.jv = {};
+    }
+  }
+  // Wire up children into parents.
+  for (var wi = 1; wi < nodes.length; wi++) {
+    var wn = nodes[wi];
+    if (!wn.ok) return { ok: false };
+    var wp = nodes[wn.parent];
+    if (Array.isArray(wp.jv)) wp.jv[wn.key] = wn.jv;
+    else if (wp.jv && typeof wp.jv === "object") wp.jv[wn.key] = wn.jv;
+  }
+  return { ok: true, value: nodes[0].jv };
+}
+
 // Compute one node's abstract value given its already-evaluated children
 // (looked up in `vals`). Any mutation of `state` (rebinding identifiers)
 // or `effects` (property writes) happens here for AssignmentExpression.
@@ -2771,22 +2895,55 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "top" };
   }
   if (_t.isBinaryExpression(n)) {
-    // § 13.10 BinaryOperators — only `+` is interesting for property-flow
-    // (string concat for URL/key building per § 13.15.3 ApplyStringOrNumeric-
-    // BinaryOperator). When both operands are Const, perform the spec-
-    // grounded concatenation; otherwise abstract to Top.
+    // § 13.6–§ 13.13 Binary operators evaluated per their abstract op
+    // when both operands are Const. Each operator below cites its spec
+    // section. When operands are not both Const (or types disqualify
+    // an op), abstract to Top.
     var leftAv = vals.get(n.left);
     var rightAv = vals.get(n.right);
-    if (n.operator === "+" && leftAv && rightAv &&
-        leftAv.kind === "const" && rightAv.kind === "const") {
-      var lv = leftAv.value, rv = rightAv.value;
+    if (!leftAv || !rightAv) return { kind: "top" };
+    if (leftAv.kind !== "const" || rightAv.kind !== "const") return { kind: "top" };
+    var lv = leftAv.value, rv = rightAv.value;
+    var op = n.operator;
+    // § 13.8.1 AdditiveExpression `+` — string concat or Number::add.
+    if (op === "+") {
       if (typeof lv === "string" || typeof rv === "string") {
         return { kind: "const", value: String(lv) + String(rv) };
       }
       if (typeof lv === "number" && typeof rv === "number") {
         return { kind: "const", value: lv + rv };
       }
+      return { kind: "top" };
     }
+    // Numeric-only binary ops require both operands numeric.
+    if (typeof lv === "number" && typeof rv === "number") {
+      // § 13.8.2 AdditiveExpression `-`
+      if (op === "-") return { kind: "const", value: lv - rv };
+      // § 13.7 MultiplicativeExpression
+      if (op === "*") return { kind: "const", value: lv * rv };
+      if (op === "/") return { kind: "const", value: lv / rv };
+      if (op === "%") return { kind: "const", value: lv % rv };
+      // § 13.6 ExponentiationExpression
+      if (op === "**") return { kind: "const", value: Math.pow(lv, rv) };
+      // § 13.10 BitwiseShiftExpression
+      if (op === "<<") return { kind: "const", value: lv << rv };
+      if (op === ">>") return { kind: "const", value: lv >> rv };
+      if (op === ">>>") return { kind: "const", value: lv >>> rv };
+      // § 13.13 BinaryBitwiseExpression
+      if (op === "&") return { kind: "const", value: lv & rv };
+      if (op === "|") return { kind: "const", value: lv | rv };
+      if (op === "^") return { kind: "const", value: lv ^ rv };
+    }
+    // § 13.11 RelationalExpression — all type combinations per spec.
+    if (op === "<") return { kind: "const", value: lv < rv };
+    if (op === "<=") return { kind: "const", value: lv <= rv };
+    if (op === ">") return { kind: "const", value: lv > rv };
+    if (op === ">=") return { kind: "const", value: lv >= rv };
+    // § 13.12 EqualityExpression
+    if (op === "==") return { kind: "const", value: lv == rv };
+    if (op === "!=") return { kind: "const", value: lv != rv };
+    if (op === "===") return { kind: "const", value: lv === rv };
+    if (op === "!==") return { kind: "const", value: lv !== rv };
     return { kind: "top" };
   }
   if (_t.isArrayExpression(n)) {
@@ -2852,23 +3009,157 @@ function _specEvalLeaf(path, state, vals, effects) {
       var srcAv = vals.get(n.arguments[0]) || { kind: "top" };
       return { kind: "keys-of", src: srcAv };
     }
-    // Global encoding built-ins per § 19.2.6 — when called with the
-    // unshadowed global identifier and a Const string arg, evaluate
-    // the spec-defined transform.
-    if (_t.isIdentifier(n.callee) && n.arguments.length === 1 &&
-        !path.scope.getBinding(n.callee.name)) {
-      var encName = n.callee.name;
-      var encArgAv = vals.get(n.arguments[0]);
-      if (encArgAv && encArgAv.kind === "const" && typeof encArgAv.value === "string") {
-        var es = encArgAv.value;
-        if (encName === "encodeURIComponent") return { kind: "const", value: encodeURIComponent(es) };
-        if (encName === "decodeURIComponent") {
-          try { return { kind: "const", value: decodeURIComponent(es) }; } catch (e) { return { kind: "top" }; }
+    // Global encoding/parse built-ins per § 19.2 — scope-checked
+    // unshadowed global identifier with Const args, evaluate spec.
+    if (_t.isIdentifier(n.callee) && !path.scope.getBinding(n.callee.name)) {
+      var globalName = n.callee.name;
+      // Single-string-arg: § 19.2.6 URI handling functions.
+      if (n.arguments.length === 1) {
+        var encArgAv = vals.get(n.arguments[0]);
+        if (encArgAv && encArgAv.kind === "const" && typeof encArgAv.value === "string") {
+          var es = encArgAv.value;
+          if (globalName === "encodeURIComponent") return { kind: "const", value: encodeURIComponent(es) };
+          if (globalName === "decodeURIComponent") {
+            try { return { kind: "const", value: decodeURIComponent(es) }; } catch (e) { return { kind: "top" }; }
+          }
+          if (globalName === "encodeURI") return { kind: "const", value: encodeURI(es) };
+          if (globalName === "decodeURI") {
+            try { return { kind: "const", value: decodeURI(es) }; } catch (e) { return { kind: "top" }; }
+          }
         }
-        if (encName === "encodeURI") return { kind: "const", value: encodeURI(es) };
-        if (encName === "decodeURI") {
-          try { return { kind: "const", value: decodeURI(es) }; } catch (e) { return { kind: "top" }; }
+        if (encArgAv && encArgAv.kind === "const") {
+          // § 19.2.3 isNaN, § 19.2.2 isFinite — accept any primitive Const.
+          if (globalName === "isNaN") return { kind: "const", value: isNaN(encArgAv.value) };
+          if (globalName === "isFinite") return { kind: "const", value: isFinite(encArgAv.value) };
+          // § 21.1.1.1 Number(value) — coerce per ToNumber.
+          if (globalName === "Number") return { kind: "const", value: Number(encArgAv.value) };
+          // § 22.1.1.1 String(value) — coerce per ToString.
+          if (globalName === "String") return { kind: "const", value: String(encArgAv.value) };
+          // § 20.3.1.1 Boolean(value) — coerce per ToBoolean.
+          if (globalName === "Boolean") return { kind: "const", value: Boolean(encArgAv.value) };
+          // § 19.2.4 parseFloat(value) — coerce string then parse.
+          if (globalName === "parseFloat") return { kind: "const", value: parseFloat(encArgAv.value) };
+          // § 19.2.5 parseInt(value) — single-arg form (radix=10 default).
+          if (globalName === "parseInt") return { kind: "const", value: parseInt(encArgAv.value, 10) };
         }
+      }
+      // Two-arg parseInt: parseInt(string, radix) per § 19.2.5.
+      if (globalName === "parseInt" && n.arguments.length === 2) {
+        var piStr = vals.get(n.arguments[0]);
+        var piRad = vals.get(n.arguments[1]);
+        if (piStr && piStr.kind === "const" && piRad && piRad.kind === "const" &&
+            typeof piRad.value === "number") {
+          return { kind: "const", value: parseInt(piStr.value, piRad.value) };
+        }
+      }
+    }
+    // Math.* built-ins per § 21.3.2 — scope-checked unshadowed `Math`
+    // identifier with Const numeric args, evaluate per spec abstract op.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.object, { name: "Math" }) &&
+        !path.scope.getBinding("Math") &&
+        _t.isIdentifier(n.callee.property)) {
+      var mMeth = n.callee.property.name;
+      // Single-arg numeric Math methods: floor, ceil, abs, round, trunc, sign, sqrt, log, log2, log10, exp, sin, cos, tan, asin, acos, atan
+      if (n.arguments.length === 1) {
+        var mArg = vals.get(n.arguments[0]);
+        if (mArg && mArg.kind === "const" && typeof mArg.value === "number") {
+          // § 21.3.2.16 Math.floor
+          if (mMeth === "floor") return { kind: "const", value: Math.floor(mArg.value) };
+          // § 21.3.2.10 Math.ceil
+          if (mMeth === "ceil") return { kind: "const", value: Math.ceil(mArg.value) };
+          // § 21.3.2.1 Math.abs
+          if (mMeth === "abs") return { kind: "const", value: Math.abs(mArg.value) };
+          // § 21.3.2.29 Math.round
+          if (mMeth === "round") return { kind: "const", value: Math.round(mArg.value) };
+          // § 21.3.2.36 Math.trunc
+          if (mMeth === "trunc") return { kind: "const", value: Math.trunc(mArg.value) };
+          // § 21.3.2.32 Math.sign
+          if (mMeth === "sign") return { kind: "const", value: Math.sign(mArg.value) };
+          // § 21.3.2.33 Math.sqrt
+          if (mMeth === "sqrt") return { kind: "const", value: Math.sqrt(mArg.value) };
+          // § 21.3.2.21 Math.log
+          if (mMeth === "log") return { kind: "const", value: Math.log(mArg.value) };
+          // § 21.3.2.13 Math.exp
+          if (mMeth === "exp") return { kind: "const", value: Math.exp(mArg.value) };
+        }
+      }
+      // Variadic numeric Math methods: max, min — all args must be Const numbers
+      if (mMeth === "max" || mMeth === "min") {
+        var mvNums = [];
+        var mvOk = true;
+        for (var mai = 0; mai < n.arguments.length; mai++) {
+          var mav = vals.get(n.arguments[mai]);
+          if (!mav || mav.kind !== "const" || typeof mav.value !== "number") { mvOk = false; break; }
+          mvNums.push(mav.value);
+        }
+        if (mvOk && mvNums.length > 0) {
+          // § 21.3.2.25 Math.max — Math.max() with no args returns -Infinity
+          // § 21.3.2.26 Math.min — Math.min() with no args returns +Infinity
+          if (mMeth === "max") return { kind: "const", value: Math.max.apply(Math, mvNums) };
+          if (mMeth === "min") return { kind: "const", value: Math.min.apply(Math, mvNums) };
+        }
+      }
+      // Two-arg Math methods: pow, atan2
+      if (n.arguments.length === 2) {
+        var mA0 = vals.get(n.arguments[0]);
+        var mA1 = vals.get(n.arguments[1]);
+        if (mA0 && mA0.kind === "const" && typeof mA0.value === "number" &&
+            mA1 && mA1.kind === "const" && typeof mA1.value === "number") {
+          // § 21.3.2.27 Math.pow
+          if (mMeth === "pow") return { kind: "const", value: Math.pow(mA0.value, mA1.value) };
+          // § 21.3.2.6 Math.atan2
+          if (mMeth === "atan2") return { kind: "const", value: Math.atan2(mA0.value, mA1.value) };
+        }
+      }
+    }
+    // § 23.1.2.3 Array.isArray(arg) — true iff arg's abstract value is array-lit.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.object, { name: "Array" }) &&
+        !path.scope.getBinding("Array") &&
+        _t.isIdentifier(n.callee.property, { name: "isArray" }) &&
+        n.arguments.length === 1) {
+      var aiArg = vals.get(n.arguments[0]);
+      if (aiArg) {
+        if (aiArg.kind === "array-lit") return { kind: "const", value: true };
+        // Const non-array, obj-lit, member of obj-lit are NOT arrays.
+        if (aiArg.kind === "const" || aiArg.kind === "obj-lit") return { kind: "const", value: false };
+        // Other kinds (param/this/top/etc.) are unknown → preserve top.
+      }
+    }
+    // § 25.5.2 JSON.parse(text) — when text is a Const string literal
+    // that's syntactically valid JSON, evaluate to the parsed value as
+    // an abstract value per the resulting JS type.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.object, { name: "JSON" }) &&
+        !path.scope.getBinding("JSON") &&
+        _t.isIdentifier(n.callee.property, { name: "parse" }) &&
+        n.arguments.length === 1) {
+      var jpArg = vals.get(n.arguments[0]);
+      if (jpArg && jpArg.kind === "const" && typeof jpArg.value === "string") {
+        try {
+          var parsed = JSON.parse(jpArg.value);
+          // Lift JSON value to abstract value: primitives → const,
+          // objects → obj-lit with const-keyed props, arrays → array-lit.
+          var liftedAv = _liftJsonValueToAv(parsed);
+          if (liftedAv) return liftedAv;
+        } catch (e) { /* not valid JSON — fall through to top */ }
+      }
+    }
+    // § 25.5.4 JSON.stringify(value) — when value is a Const, obj-lit
+    // (with all-Const leaves), or array-lit (with all-Const elements),
+    // evaluate to the string per JSON.stringify semantics.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.object, { name: "JSON" }) &&
+        !path.scope.getBinding("JSON") &&
+        _t.isIdentifier(n.callee.property, { name: "stringify" }) &&
+        n.arguments.length >= 1) {
+      var jsArg = vals.get(n.arguments[0]);
+      var jsConcrete = _avToJsonValue(jsArg);
+      if (jsConcrete && jsConcrete.ok) {
+        try {
+          return { kind: "const", value: JSON.stringify(jsConcrete.value) };
+        } catch (e) { /* fall through */ }
       }
     }
     // String built-ins: § 22.1.3 — String.prototype methods on Const

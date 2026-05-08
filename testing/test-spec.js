@@ -1042,6 +1042,315 @@ specTest("§ 19.2.6.4: `decodeURIComponent(Const(\"a%20b\"))` resolves to Const(
 });
 
 // ═════════════════════════════════════════════════════════════════════
+// § 19.2.2 isFinite, § 19.2.3 isNaN — global predicate functions
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 19.2.2/19.2.3 isFinite/isNaN ===\n");
+
+specTest("§ 19.2.2: `isFinite(Const(42))` resolves to Const(true)", `
+  function f() {
+    this.x = isFinite(42);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+specTest("§ 19.2.2: `isFinite(Const(Infinity))` resolves to Const(false) — wait, Infinity is special; use NaN-derived", `
+  function f() {
+    this.x = isFinite(0/0);
+  }
+`, function(effects) {
+  // Note: BinaryExpression `0/0` evaluates per § 13.7 to NaN.
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+specTest("§ 19.2.3: `isNaN(Const(\"hello\"))` resolves to Const(true)", `
+  function f() {
+    this.x = isNaN("hello");
+  }
+`, function(effects) {
+  // isNaN coerces string "hello" via ToNumber → NaN → true.
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+specTest("§ 19.2.3: `isNaN(Const(42))` resolves to Const(false)", `
+  function f() {
+    this.x = isNaN(42);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 19.2.4 parseFloat, § 19.2.5 parseInt
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 19.2.4/19.2.5 parseFloat/parseInt ===\n");
+
+specTest("§ 19.2.4: `parseFloat(Const(\"3.14\"))` resolves to Const(3.14)", `
+  function f() {
+    this.pi = parseFloat("3.14");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 3.14;
+});
+
+specTest("§ 19.2.5: `parseInt(Const(\"42px\"))` resolves to Const(42) (single-arg form)", `
+  function f() {
+    this.n = parseInt("42px");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 42;
+});
+
+specTest("§ 19.2.5: `parseInt(Const(\"ff\"), Const(16))` resolves to Const(255) (two-arg form)", `
+  function f() {
+    this.n = parseInt("ff", 16);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 255;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 21.1.1.1 Number, § 22.1.1.1 String, § 20.3.1.1 Boolean coercions
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 21.1.1.1/§ 22.1.1.1/§ 20.3.1.1 Number/String/Boolean ===\n");
+
+specTest("§ 21.1.1.1: `Number(Const(\"42\"))` resolves to Const(42)", `
+  function f() {
+    this.n = Number("42");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 42;
+});
+
+specTest("§ 22.1.1.1: `String(Const(123))` resolves to Const(\"123\")", `
+  function f() {
+    this.s = String(123);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "123";
+});
+
+specTest("§ 20.3.1.1: `Boolean(Const(0))` resolves to Const(false)", `
+  function f() {
+    this.b = Boolean(0);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+specTest("§ 20.3.1.1: `Boolean(Const(\"x\"))` resolves to Const(true)", `
+  function f() {
+    this.b = Boolean("x");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+// Negative case: shadowed Number must NOT trigger built-in evaluation.
+specTest("§ 21.1.1.1: shadowed `Number` (local var) does NOT evaluate as built-in", `
+  function f() {
+    var Number = function (x) { return "shadowed"; };
+    this.n = Number("42");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  // The local Number returns "shadowed" — but our Const-return path
+  // evaluates the inner function body (single ReturnStatement returning
+  // a StringLiteral). Either we get Const("shadowed") OR top — both are
+  // acceptable; what's UNACCEPTABLE is Const(42) (built-in firing).
+  var av = effects[0].value;
+  if (av && av.kind === "const" && av.value === 42) return false;
+  return true;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 21.3.2 Math.* built-ins
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 21.3.2 Math.* built-ins ===\n");
+
+specTest("§ 21.3.2.16: `Math.floor(Const(3.7))` resolves to Const(3)", `
+  function f() {
+    this.n = Math.floor(3.7);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 3;
+});
+
+specTest("§ 21.3.2.10: `Math.ceil(Const(3.2))` resolves to Const(4)", `
+  function f() {
+    this.n = Math.ceil(3.2);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 4;
+});
+
+specTest("§ 21.3.2.1: `Math.abs(Const(-7))` resolves to Const(7)", `
+  function f() {
+    this.n = Math.abs(-7);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 7;
+});
+
+specTest("§ 21.3.2.29: `Math.round(Const(2.5))` resolves to Const(3)", `
+  function f() {
+    this.n = Math.round(2.5);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 3;
+});
+
+specTest("§ 21.3.2.25: `Math.max(Const(1), Const(5), Const(3))` resolves to Const(5)", `
+  function f() {
+    this.n = Math.max(1, 5, 3);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 5;
+});
+
+specTest("§ 21.3.2.26: `Math.min(Const(8), Const(2), Const(5))` resolves to Const(2)", `
+  function f() {
+    this.n = Math.min(8, 2, 5);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 2;
+});
+
+specTest("§ 21.3.2.27: `Math.pow(Const(2), Const(10))` resolves to Const(1024)", `
+  function f() {
+    this.n = Math.pow(2, 10);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 1024;
+});
+
+// Negative case: shadowed Math must NOT trigger built-in evaluation.
+specTest("§ 21.3.2: shadowed `Math` (local var) does NOT evaluate as built-in", `
+  function f() {
+    var Math = { floor: function (x) { return -1; } };
+    this.n = Math.floor(3.7);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  // Must NOT get Const(3) — the global built-in would have produced that.
+  // The local Math.floor returns -1 from a Const-return body; the analyzer
+  // may resolve to Const(-1) or top — both are acceptable.
+  var av = effects[0].value;
+  if (av && av.kind === "const" && av.value === 3) return false;
+  return true;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 23.1.2.3 Array.isArray
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 23.1.2.3 Array.isArray ===\n");
+
+specTest("§ 23.1.2.3: `Array.isArray([1,2,3])` resolves to Const(true)", `
+  function f() {
+    this.b = Array.isArray([1, 2, 3]);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === true;
+});
+
+specTest("§ 23.1.2.3: `Array.isArray({a:1})` resolves to Const(false)", `
+  function f() {
+    this.b = Array.isArray({a: 1});
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+specTest("§ 23.1.2.3: `Array.isArray(\"x\")` resolves to Const(false)", `
+  function f() {
+    this.b = Array.isArray("x");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === false;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// § 25.5.2 JSON.parse, § 25.5.4 JSON.stringify
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 25.5.2/25.5.4 JSON.parse/JSON.stringify ===\n");
+
+specTest("§ 25.5.4: `JSON.stringify({a:1, b:\"x\"})` resolves to canonical JSON Const string", `
+  function f() {
+    this.s = JSON.stringify({a: 1, b: "x"});
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" &&
+         effects[0].value.value === '{"a":1,"b":"x"}';
+});
+
+specTest("§ 25.5.4: `JSON.stringify([1, \"two\", true])` resolves to Const(\"[1,\\\"two\\\",true]\")", `
+  function f() {
+    this.s = JSON.stringify([1, "two", true]);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" &&
+         effects[0].value.value === '[1,"two",true]';
+});
+
+specTest("§ 25.5.2: `JSON.parse(Const(\"{\\\"k\\\":42}\"))` resolves to obj-lit with Const(42) value", `
+  function f() {
+    var o = JSON.parse('{"k":42}');
+    this.x = o.k;
+  }
+`, function(effects) {
+  // After JSON.parse → obj-lit { k: Const(42) }, member access this.x = o.k
+  // should resolve via _specMemberExpressionAv to Const(42).
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 42;
+});
+
+specTest("§ 25.5.4: nested obj/array stringifies in source-property order", `
+  function f() {
+    this.s = JSON.stringify({first: 1, second: [2, 3], third: "x"});
+  }
+`, function(effects) {
+  // Property insertion order per § 7.3.21 EnumerableOwnPropertyNames.
+  if (effects.length !== 1) return false;
+  return effects[0].value && effects[0].value.kind === "const" &&
+         effects[0].value.value === '{"first":1,"second":[2,3],"third":"x"}';
+});
+
+// Negative case: JSON.stringify of param-derived value cannot be a Const.
+specTest("§ 25.5.4: `JSON.stringify(param)` does NOT collapse to Const (param is opaque)", `
+  function f(input) {
+    this.s = JSON.stringify(input);
+  }
+`, function(effects) {
+  // Effects has top — Const here would be a placeholder.
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return !av || av.kind !== "const";
+});
+
+// ═════════════════════════════════════════════════════════════════════
 // § 23.1.3.18 Array.prototype.join
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 23.1.3.18 Array.prototype.join ===\n");
