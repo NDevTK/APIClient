@@ -2277,6 +2277,23 @@ function _specGlobalThisAv() {
   return _SPEC_GLOBAL_AV;
 }
 
+// WHATWG DOM § 4.9 Element.prototype methods. Exposed via the [[Prototype]]
+// chain on obj-lit AVs returned from getElementById/querySelector
+// (recognised structurally — those builders emit obj-lits with the
+// standard Element-attribute keys: href, src, action, dataset).
+var _SPEC_ELEMENT_PROTO_AV = null;
+function _specElementPrototypeAv() {
+  if (!_SPEC_ELEMENT_PROTO_AV) {
+    _SPEC_ELEMENT_PROTO_AV = {
+      kind: "obj-lit",
+      props: {
+        getAttribute: { kind: "builtin-method", id: "Element.prototype.getAttribute" },
+      }
+    };
+  }
+  return _SPEC_ELEMENT_PROTO_AV;
+}
+
 // Number.prototype per ECMA § 21.1.3 — pure. All methods route through
 // _applyNumberMethodToConst from _specApplyBuiltinMethod.
 var _SPEC_NUMBER_PROTO_AV = null;
@@ -2300,6 +2317,7 @@ function _specNumberPrototypeAv() {
 function _specGetPrototypeOfAv(av) {
   if (!av) return null;
   if (av.kind === "array-lit") return _specArrayPrototypeAv();
+  if (av.kind === "dom-element") return _specElementPrototypeAv();
   if (av.kind === "const" && typeof av.value === "string") return _specStringPrototypeAv();
   if (av.kind === "const" && typeof av.value === "number") return _specNumberPrototypeAv();
   // For or-trees whose every leaf shares a [[Prototype]], return that
@@ -2698,6 +2716,25 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "Promise.resolve" || methodId === "Promise.reject") {
     return argAvs.length >= 1 ? argAvs[0] : { kind: "const", value: undefined };
   }
+  // WHATWG DOM § 4.9.1 Element.getAttribute(qualifiedName). When recv
+  // is a dom-element, return the matching prop AV. Maps "data-X" to
+  // dataset.X per HTML5 § 7.5.5.
+  if (methodId === "Element.prototype.getAttribute") {
+    if (!recvAv || (recvAv.kind !== "dom-element" && recvAv.kind !== "obj-lit") || !recvAv.props) return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") return { kind: "top" };
+    var gaName = argAvs[0].value;
+    if (Object.prototype.hasOwnProperty.call(recvAv.props, gaName)) {
+      return recvAv.props[gaName];
+    }
+    if (gaName.indexOf("data-") === 0 && recvAv.props.dataset &&
+        recvAv.props.dataset.kind === "obj-lit" && recvAv.props.dataset.props) {
+      var dsKey = gaName.slice(5).replace(/-([a-z])/g, function(_m, c) { return c.toUpperCase(); });
+      if (Object.prototype.hasOwnProperty.call(recvAv.props.dataset.props, dsKey)) {
+        return recvAv.props.dataset.props[dsKey];
+      }
+    }
+    return { kind: "top" };
+  }
   // WHATWG DOM § 4.5 Document.getElementById / Document.querySelector.
   // Looks up the page-DOM context (provided by content.js) for the
   // requested element id. Returns the element obj-lit (with href/src/
@@ -2713,11 +2750,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       var qsIdMatch = argAvs[0].value.match(/^#([A-Za-z][\w:.-]*)$/);
       if (qsIdMatch) domLookupId = qsIdMatch[1];
       // CSS Selectors L4 attribute form `meta[name=X]` for CSRF-token pattern.
+      // Returned as a dom-element AV so .getAttribute('content') etc.
+      // dispatch via Element.prototype.
       var metaMatch = argAvs[0].value.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
       if (metaMatch && _domContext && _domContext.metaTags &&
           Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaMatch[1])) {
         return {
-          kind: "obj-lit",
+          kind: "dom-element",
           props: { content: { kind: "const", value: String(_domContext.metaTags[metaMatch[1]]) } }
         };
       }
@@ -3268,8 +3307,10 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
       }
     }
   }
-  // Obj-lit static property access: `obj.x` returns the stored av.
-  if (objAv && objAv.kind === "obj-lit" && objAv.props) {
+  // Obj-lit / dom-element static property access: `obj.x` returns the
+  // stored av. Same shape (props map); separate kinds carry distinct
+  // [[Prototype]] for method dispatch.
+  if (objAv && (objAv.kind === "obj-lit" || objAv.kind === "dom-element") && objAv.props) {
     if (!n.computed) {
       var propName = _t.isIdentifier(n.property) ? n.property.name :
         (_t.isStringLiteral(n.property) ? n.property.value : null);
@@ -3382,7 +3423,9 @@ function _specBuildDomElementObjLit(domEl) {
       props.dataset = _specDataAttrsToDatasetObjLit(domEl.dataAttrs);
     }
   }
-  return { kind: "obj-lit", props: props };
+  // Tag as DOM Element so [[Prototype]] resolves to Element.prototype
+  // for `getAttribute()` etc. dispatch.
+  return { kind: "dom-element", props: props };
 }
 
 // Resolve a single AST node in the callee body's context to its
@@ -5115,32 +5158,9 @@ function _specEvalLeaf(path, state, vals, effects) {
     // § 20.3.1.1. ONE central path; no inline shape match.
     // String.* statics dispatched via globalThis.String registry per
     // § 22.1.2. ONE central dispatch.
-    // WHATWG DOM § 4.9.1 Element.getAttribute(qualifiedName). When the
-    // receiver is an obj-lit (typically from document.getElementById /
-    // querySelector / inline-handler binding) and the attribute name is
-    // a Const string, return the matching prop AV. Maps "data-X"
-    // attributes to obj.dataset.X per HTML5 dataset semantics.
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.property, { name: "getAttribute" }) &&
-        n.arguments.length === 1) {
-      var gaRecvAv = vals.get(n.callee.object);
-      var gaArgAv = vals.get(n.arguments[0]);
-      if (gaRecvAv && gaRecvAv.kind === "obj-lit" && gaRecvAv.props &&
-          gaArgAv && gaArgAv.kind === "const" && typeof gaArgAv.value === "string") {
-        var gaName = gaArgAv.value;
-        if (Object.prototype.hasOwnProperty.call(gaRecvAv.props, gaName)) {
-          return gaRecvAv.props[gaName];
-        }
-        // HTML5 dataset: "data-foo" → dataset.foo (per HTML5 § 2.6.6).
-        if (gaName.indexOf("data-") === 0 && gaRecvAv.props.dataset &&
-            gaRecvAv.props.dataset.kind === "obj-lit" && gaRecvAv.props.dataset.props) {
-          var dsKey = gaName.slice(5).replace(/-([a-z])/g, function(_m, c) { return c.toUpperCase(); });
-          if (Object.prototype.hasOwnProperty.call(gaRecvAv.props.dataset.props, dsKey)) {
-            return gaRecvAv.props.dataset.props[dsKey];
-          }
-        }
-      }
-    }
+    // Element.prototype.getAttribute dispatched via Element.prototype
+    // chain (dom-element AV → Element.prototype obj-lit → builtin-method
+    // → _specApplyBuiltinMethod). ONE central path per WHATWG DOM § 4.9.1.
     // Promise.resolve / Promise.reject dispatched via globalThis.Promise
     // registry. Per § 27.2.4. Inline shape match removed.
     // document.getElementById / document.querySelector dispatched via
