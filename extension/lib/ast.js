@@ -4783,10 +4783,16 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
     var ctorNode = ctorPath.node;
     var ctorState = _specStateCreate();
     var ctorParams = ctorNode.params || [];
+  // Tag constructor params with `fn: ctorNode` so they're distinguishable
+  // from method-body params at substitution time. When the resulting
+  // instance AV flows into a method's analysis as `this`, the
+  // constructor's params should NOT be substituted by the method's
+  // caller args (they belong to a different function). _specInstantiateAv
+  // matches `fn` to enforce per-function-context substitution.
   for (var cpi = 0; cpi < ctorParams.length; cpi++) {
     var cp = ctorParams[cpi];
     if (!cp) continue;
-    var cpAv = { kind: "param", idx: cpi };
+    var cpAv = { kind: "param", idx: cpi, fn: ctorNode };
     if (cp.type === "Identifier") {
       ctorState[cp.name] = cpAv;
     } else if (cp.type === "AssignmentPattern" && cp.left && cp.left.type === "Identifier") {
@@ -4803,7 +4809,7 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
         if (cpBindIdent && cpBindIdent.type === "Identifier") {
           ctorState[cpBindIdent.name] = {
             kind: "member",
-            obj: { kind: "param", idx: cpi },
+            obj: { kind: "param", idx: cpi, fn: ctorNode },
             key: { kind: "const", value: cpKeyName }
           };
         }
@@ -4816,7 +4822,7 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
         if (cpae && cpae.type === "Identifier") {
           ctorState[cpae.name] = {
             kind: "member",
-            obj: { kind: "param", idx: cpi },
+            obj: { kind: "param", idx: cpi, fn: ctorNode },
             key: { kind: "const", value: cpai }
           };
         }
@@ -8188,6 +8194,86 @@ function _specEvalLeaf(path, state, vals, effects) {
       // § 21.4.1 new Date(...) — returns a Date instance, opaque to flow.
       // § 22.2.1 new RegExp(...) — opaque.
     }
+    // § 13.3.5 + § 9.2.1 user-defined class instantiation. Build the
+    // instance AV from constructor's _specThisEffectsMemo (populated
+    // by program-fixpoint when the constructor was analysed) plus the
+    // class's instance methods as function-ref props. Substitute the
+    // call's argument AVs for the constructor's params via
+    // _specInstantiateAv. fnContext = ctorNode ensures only ctor-tagged
+    // params get substituted; method-body params (encountered when the
+    // result later flows through a method's analysis) are untouched.
+    if (_t.isIdentifier(n.callee)) {
+      var classBinding = path.scope.getBinding(n.callee.name);
+      if (classBinding && classBinding.path && classBinding.path.node) {
+        var classNode = null;
+        if (_t.isClassDeclaration(classBinding.path.node)) {
+          classNode = classBinding.path.node;
+        } else if (_t.isVariableDeclarator(classBinding.path.node) &&
+                   classBinding.path.node.init &&
+                   _t.isClassExpression(classBinding.path.node.init)) {
+          classNode = classBinding.path.node.init;
+        }
+        if (classNode && classNode.body && _t.isClassBody(classNode.body)) {
+          var ctorNode2 = null;
+          for (var cmi2 = 0; cmi2 < classNode.body.body.length; cmi2++) {
+            var cmm2 = classNode.body.body[cmi2];
+            if (_t.isClassMethod(cmm2) && cmm2.kind === "constructor") {
+              ctorNode2 = cmm2; break;
+            }
+          }
+          var instProps2 = Object.create(null);
+          if (ctorNode2) {
+            var ctorThisEffects = _specThisEffectsMemo.get(ctorNode2);
+            if (ctorThisEffects && ctorThisEffects.length > 0) {
+              for (var ctei = 0; ctei < ctorThisEffects.length; ctei++) {
+                var ce = ctorThisEffects[ctei];
+                if (ce.target && ce.target.kind === "this" && ce.key &&
+                    ce.key.kind === "const" && typeof ce.key.value === "string") {
+                  instProps2[ce.key.value] = ce.value;
+                }
+              }
+            }
+          }
+          // Class methods (non-static, kind=method) per § 15.7.4 —
+          // exposed on prototype, reachable as `instance.method`.
+          for (var bmi = 0; bmi < classNode.body.body.length; bmi++) {
+            var bm = classNode.body.body[bmi];
+            if (_t.isClassMethod(bm) && !bm.static && !bm.computed && bm.kind === "method") {
+              var bmName = _t.isIdentifier(bm.key) ? bm.key.name :
+                (_t.isStringLiteral(bm.key) ? bm.key.value : null);
+              if (bmName !== null && !Object.prototype.hasOwnProperty.call(instProps2, bmName)) {
+                instProps2[bmName] = { kind: "function-ref", funcNode: bm };
+              }
+            }
+            // Instance ClassProperty literal initialisers (§ 15.7.5).
+            var bmIsField = !bm.static && (_t.isClassProperty && _t.isClassProperty(bm));
+            if (bmIsField && !bm.computed && bm.value) {
+              var fName = _t.isIdentifier(bm.key) ? bm.key.name :
+                (_t.isStringLiteral(bm.key) ? bm.key.value : null);
+              if (fName !== null && !Object.prototype.hasOwnProperty.call(instProps2, fName)) {
+                var fv = bm.value;
+                if (_t.isStringLiteral(fv)) instProps2[fName] = { kind: "const", value: fv.value };
+                else if (_t.isNumericLiteral(fv)) instProps2[fName] = { kind: "const", value: fv.value };
+                else if (_t.isBooleanLiteral(fv)) instProps2[fName] = { kind: "const", value: fv.value };
+                else if (_t.isNullLiteral(fv)) instProps2[fName] = { kind: "const", value: null };
+              }
+            }
+          }
+          if (Object.keys(instProps2).length > 0) {
+            var newCallArgAvs = [];
+            for (var nai = 0; nai < n.arguments.length; nai++) {
+              newCallArgAvs.push(vals.get(n.arguments[nai]) || { kind: "top" });
+            }
+            var instanceAv = { kind: "obj-lit", props: instProps2 };
+            // fnContext = ctorNode2 ensures only ctor-tagged params
+            // get substituted; method-body params untagged at this
+            // point are untouched (this matters when method bodies
+            // contain class-internal cross-references).
+            return _specInstantiateAv(instanceAv, newCallArgAvs, undefined, ctorNode2);
+          }
+        }
+      }
+    }
     return { kind: "top" };
   }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
@@ -8653,7 +8739,7 @@ function _specEvalLeaf(path, state, vals, effects) {
 // executes with parameters bound to arg values per
 // FunctionDeclarationInstantiation.
 // ───────────────────────────────────────────────────────────────────────────
-function _specInstantiateAv(rootAv, callerArgAvs, thisAv) {
+function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
   // Iterative tree walk: postorder enumeration, then bottom-up
   // substitution. Termination structural — the AbstractValue tree is
   // finite, each pushed sub-av is a strict child of a popped one.
@@ -8661,6 +8747,14 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv) {
   // known receiver per § 9.2.1 OrdinaryCallBindThis, bind `this` AVs
   // in the callee body to the receiver. Lets `this.field` projections
   // resolve through the receiver's obj-lit props.
+  // fnContext (optional): the function-node identity whose params are
+  // being substituted. When a param AV carries a `fn` field that does
+  // NOT match fnContext, the param belongs to a different function
+  // (e.g. constructor's param flowing through `this` into a method's
+  // body) and must NOT be substituted by this caller's args. When
+  // fnContext is unspecified, untagged params are substituted (legacy
+  // behaviour) — preserves backward compatibility for call sites that
+  // haven't been updated yet.
   if (!rootAv) return rootAv;
   // Enumerate all sub-av nodes in postorder.
   var preorder = [];
@@ -8702,6 +8796,13 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv) {
   for (var i = 0; i < preorder.length; i++) {
     var node = preorder[i];
     if (node.kind === "param" && callerArgAvs && node.idx < callerArgAvs.length && callerArgAvs[node.idx]) {
+      // Per-function-context substitution per § 10.2.10: when the param
+      // has an `fn` tag and a fnContext is provided, only substitute on
+      // a match. Otherwise (untagged param OR no fnContext) substitute
+      // legacy-style. This prevents constructor-params from being
+      // substituted by method-caller args when the constructor's
+      // `this.X = arg` AVs flow through `this` into a method body.
+      if (node.fn && fnContext && node.fn !== fnContext) continue;
       subs.set(node, callerArgAvs[node.idx]);
       continue;
     }
@@ -11773,7 +11874,10 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
         }
         callerArgAvs.push(argAv || { kind: "top" });
       }
-      var substituted = _specInstantiateAv(itemAv, callerArgAvs);
+      // Pass the function being substituted as fnContext so only
+      // params tagged with this funcNode get replaced. Constructor-
+      // params (tagged via _specBuildThisInstanceAv) won't be touched.
+      var substituted = _specInstantiateAv(itemAv, callerArgAvs, undefined, itemFunc.node);
       if (!substituted) continue;
       var leaves = _avFlattenStringLeaves(substituted);
       for (var li = 0; li < leaves.length; li++) {
