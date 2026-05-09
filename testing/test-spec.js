@@ -749,6 +749,25 @@ specTest("§ 14.3.3: VariableDeclarator destructuring `var {a, b} = obj`", `
          byKey.y.key.kind === "const" && byKey.y.key.value === "bar";
 });
 
+specTest("§ 10.2.10: multi-level caller-arg substitution through wrapper functions", `
+  function f() {
+    var n = { id: function (x) { return x; } };
+    function b(e) { return _((0, n.id)(e)); }
+    function _(u) { return u; }
+    this.url = b("/api/multi");
+  }
+`, function(effects) {
+  // The analyser must substitute caller-args iteratively:
+  //   _'s return = param[0]_of_b
+  //   substitute via _'s call site `_((0,n.id)(e))` → param[0]_of_b
+  //   substitute again via b's call site `b("/api/multi")` → const "/api/multi"
+  // Single-level substitution would stop at param[0]_of_b without ever
+  // reaching the const value.
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "const" && v.value === "/api/multi";
+});
+
 specTest("§ 13.3.6 + § 15.2: IIFE with literal-return body folds to const", `
   function f() {
     var u = (function () { return "/api/foo"; })();

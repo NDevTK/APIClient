@@ -11503,33 +11503,24 @@ function _resolveAllValues(initialPath, initialDepth) {
   } catch (_) { return []; }
 }
 
-// Walk encFn's call sites via path.scope binding referencePaths.
-// For each call, evaluate its argument AVs through spec eval, then
-// substitute into avWithParamRefs via _specInstantiateAv. Project each
-// substituted result to string leaves and union. Returns string[] or
-// null when no callers / no substitutable leaves.
-function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
-  if (!funcPath || !funcPath.node || !avWithParamRefs) return null;
-  var fnBindingId = null;
+// Find every CallExpression that calls funcPath. Combines identifier-
+// binding lookup (for declarations whose name we can find) with the
+// spec-eval call-site index (for anonymous function expressions whose
+// identity flows through closure state per § 9.1.1). Returns Babel
+// paths to the call expressions; empty when funcPath has no callers.
+function _specFindCallSites(funcPath) {
+  if (!funcPath || !funcPath.node) return [];
   var fnNode = funcPath.node;
-  // For FunctionDeclaration: id is the binding name.
+  var fnBindingId = null;
   if (_t.isFunctionDeclaration(fnNode) && fnNode.id) fnBindingId = fnNode.id.name;
-  // For `var X = function() {}` / `var X = function name() {}` — outer
-  // binding name is the VariableDeclarator's id; ignore inner self-name.
   if (!fnBindingId && funcPath.parent && _t.isVariableDeclarator(funcPath.parent) &&
       funcPath.parent.id && _t.isIdentifier(funcPath.parent.id)) {
     fnBindingId = funcPath.parent.id.name;
   }
-  // For `X = function() {}` assignment — outer binding.
   if (!fnBindingId && funcPath.parent && _t.isAssignmentExpression(funcPath.parent) &&
       funcPath.parent.right === fnNode && _t.isIdentifier(funcPath.parent.left)) {
     fnBindingId = funcPath.parent.left.name;
   }
-  // Collect call sites: by binding referencePaths when fnBindingId is
-  // resolvable, plus the spec-eval call-site index per ECMA § 9.1.1
-  // closure write-back (covers anonymous function expressions whose
-  // identity flows through state — e.g. `register(function(){...})`
-  // → handlers[0]() — where binding-based lookup finds nothing).
   var callExprPaths = [];
   if (fnBindingId) {
     var lookupScope = funcPath.parentPath && funcPath.parentPath.scope;
@@ -11552,36 +11543,117 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
       if (callExprPaths.indexOf(specCallSites[sci]) < 0) callExprPaths.push(specCallSites[sci]);
     }
   }
-  if (callExprPaths.length === 0) return null;
-  var allLeaves = [];
-  for (var ri = 0; ri < callExprPaths.length; ri++) {
-    var ref = callExprPaths[ri];
-    var refParent = ref.node;
-    if (!refParent || !_t.isCallExpression(refParent)) continue;
-    // Evaluate each arg's AV via spec eval at the caller's enclosing function.
-    var callerEncFn = ref.getFunctionParent && ref.getFunctionParent();
-    var callerState = (callerEncFn && _t.isFunction(callerEncFn.node))
-      ? _specInitialFunctionBodyState(callerEncFn.node, callerEncFn)
-      : _specStateCreate({});
-    if (callerEncFn && _t.isFunction(callerEncFn.node)) {
-      _specAnalyzePropertyFlow(callerEncFn);
+  return callExprPaths;
+}
+
+// Iterative AV walker checking whether avTree contains a param leaf.
+// Used to decide whether further caller-arg substitution can resolve
+// more leaves vs. terminating with what's been collected. Reference-
+// identity visited set handles cyclic AV graphs from or-tree joins.
+function _specAvHasParamLeaf(av) {
+  if (!av) return false;
+  var stack = [av];
+  var seen = new Set();
+  while (stack.length > 0) {
+    var s = stack.pop();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    if (s.kind === "param" || s.kind === "rest-args" || s.kind === "args-elt" || s.kind === "args-len") return true;
+    if (s.kind === "or" || s.kind === "binop") { stack.push(s.left); stack.push(s.right); continue; }
+    if (s.kind === "template" && s.exprs) {
+      for (var ti = 0; ti < s.exprs.length; ti++) stack.push(s.exprs[ti]);
+      continue;
     }
-    var callerArgAvs = [];
-    for (var ai = 0; ai < refParent.arguments.length; ai++) {
-      var argNode = refParent.arguments[ai];
-      var argAv = _specPathValMemo.get(argNode);
-      if (!argAv) {
-        try {
-          argAv = _specEvalExpression(ref.get("arguments." + ai), callerState, []);
-        } catch (_) { argAv = null; }
+    if (s.kind === "coerce" && s.arg) { stack.push(s.arg); continue; }
+    if (s.kind === "obj-lit" && s.props) {
+      for (var oki in s.props) {
+        if (Object.prototype.hasOwnProperty.call(s.props, oki)) stack.push(s.props[oki]);
       }
-      callerArgAvs.push(argAv || { kind: "top" });
+      continue;
     }
-    var substituted = _specInstantiateAv(avWithParamRefs, callerArgAvs);
-    if (substituted) {
+    if (s.kind === "array-lit" && s.elements) {
+      for (var ai = 0; ai < s.elements.length; ai++) stack.push(s.elements[ai]);
+      continue;
+    }
+    if (s.kind === "member") {
+      if (s.obj) stack.push(s.obj);
+      if (s.key) stack.push(s.key);
+      continue;
+    }
+  }
+  return false;
+}
+
+// Walk encFn's call sites via path.scope binding referencePaths.
+// For each call, evaluate its argument AVs through spec eval, then
+// substitute into avWithParamRefs via _specInstantiateAv. Project each
+// substituted result to string leaves and union. Returns string[] or
+// null when no callers / no substitutable leaves.
+//
+// Iterative across multiple call levels per § 10.2.10
+// FunctionDeclarationInstantiation: when a substituted AV still
+// contains param leaves (because the caller's arg was itself one of
+// the caller's parameters — `b(e) → _((0,n.f)(e))` chain), continue
+// substituting through the caller's call sites until either all params
+// resolve to const leaves OR a call site has no further parent (top-
+// level binding terminates the chain). Worklist-based to avoid
+// recursion through _resolveAvBySubstitutingCallerArgs.
+function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
+  if (!funcPath || !funcPath.node || !avWithParamRefs) return null;
+  var allLeaves = [];
+  var worklist = [{ funcPath: funcPath, av: avWithParamRefs }];
+  // Cycle break-up: _specInstantiateAv allocates fresh AVs at each
+  // substitution step, so reference identity (WeakSet per func) catches
+  // cycles where the SAME post-substitution AV is encountered for the
+  // same function (recursive functions / mutual recursion).
+  var fnVisited = new Map();
+  while (worklist.length > 0) {
+    var item = worklist.pop();
+    var itemFunc = item.funcPath;
+    var itemAv = item.av;
+    if (!itemFunc || !itemFunc.node || !itemAv) continue;
+    if (!fnVisited.has(itemFunc.node)) fnVisited.set(itemFunc.node, new WeakSet());
+    var avSet = fnVisited.get(itemFunc.node);
+    if (typeof itemAv === "object" && itemAv !== null) {
+      if (avSet.has(itemAv)) continue;
+      avSet.add(itemAv);
+    }
+    var callExprPaths = _specFindCallSites(itemFunc);
+    if (callExprPaths.length === 0) continue;
+    for (var ri = 0; ri < callExprPaths.length; ri++) {
+      var ref = callExprPaths[ri];
+      var refParent = ref.node;
+      if (!refParent || !_t.isCallExpression(refParent)) continue;
+      var callerEncFn = ref.getFunctionParent && ref.getFunctionParent();
+      var callerState = (callerEncFn && _t.isFunction(callerEncFn.node))
+        ? _specInitialFunctionBodyState(callerEncFn.node, callerEncFn)
+        : _specStateCreate({});
+      if (callerEncFn && _t.isFunction(callerEncFn.node)) {
+        _specAnalyzePropertyFlow(callerEncFn);
+      }
+      var callerArgAvs = [];
+      for (var ai = 0; ai < refParent.arguments.length; ai++) {
+        var argNode = refParent.arguments[ai];
+        var argAv = _specPathValMemo.get(argNode);
+        if (!argAv) {
+          try {
+            argAv = _specEvalExpression(ref.get("arguments." + ai), callerState, []);
+          } catch (_) { argAv = null; }
+        }
+        callerArgAvs.push(argAv || { kind: "top" });
+      }
+      var substituted = _specInstantiateAv(itemAv, callerArgAvs);
+      if (!substituted) continue;
       var leaves = _avFlattenStringLeaves(substituted);
       for (var li = 0; li < leaves.length; li++) {
         if (allLeaves.indexOf(leaves[li]) < 0) allLeaves.push(leaves[li]);
+      }
+      // If substituted still has params, the caller's args were
+      // themselves params — recurse via the worklist into the caller's
+      // call sites. callerEncFn must be a Function for there to be
+      // further callers; module-level callers terminate.
+      if (callerEncFn && _t.isFunction(callerEncFn.node) && _specAvHasParamLeaf(substituted)) {
+        worklist.push({ funcPath: callerEncFn, av: substituted });
       }
     }
   }
