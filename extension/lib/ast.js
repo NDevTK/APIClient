@@ -2220,6 +2220,13 @@ function _specGlobalThisAv() {
     getElementById: { kind: "builtin-method", id: "document.getElementById" },
     querySelector: { kind: "builtin-method", id: "document.querySelector" },
   };
+  // Constructable globals — modeled as `{kind:"builtin-ctor", id}` AVs.
+  // NewExpression handler reads the kind and dispatches via
+  // _specApplyBuiltinCtor. Per WHATWG URL § 6.1, Fetch § 5.2/5.5.
+  var urlCtorAv = { kind: "builtin-ctor", id: "WHATWG.URL" };
+  var requestCtorAv = { kind: "builtin-ctor", id: "Fetch.Request" };
+  var urlSearchParamsCtorAv = { kind: "builtin-ctor", id: "WHATWG.URLSearchParams" };
+  var headersCtorAv = { kind: "builtin-ctor", id: "Fetch.Headers" };
   // Object namespace per § 20.1.2 — statics.
   var objectProps = {
     keys: { kind: "builtin-method", id: "Object.keys" },
@@ -2244,6 +2251,10 @@ function _specGlobalThisAv() {
       Object: { kind: "obj-lit", props: objectProps },
       Promise: { kind: "obj-lit", props: promiseProps },
       document: { kind: "obj-lit", props: documentProps },
+      URL: urlCtorAv,
+      Request: requestCtorAv,
+      URLSearchParams: urlSearchParamsCtorAv,
+      Headers: headersCtorAv,
       // Global functions per § 19.2.
       encodeURI: { kind: "builtin-method", id: "global.encodeURI" },
       encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
@@ -2426,6 +2437,110 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
       }
     }
     return { kind: "array-lit", elements: flatRes };
+  }
+  return { kind: "top" };
+}
+
+// Apply a built-in constructor per its spec algorithm. Receives:
+//   ctorId  — "WHATWG.URL", "Fetch.Request", etc.
+//   argAvs  — caller-arg AbstractValues
+// Returns the new instance's AbstractValue per the constructor's spec.
+function _specApplyBuiltinCtor(ctorId, argAvs) {
+  if (ctorId === "WHATWG.URL") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var urlInputAv = argAvs[0] || { kind: "top" };
+    var urlBaseAv = argAvs.length >= 2 ? (argAvs[1] || { kind: "top" }) : null;
+    var urlInputLeaves = _avFlattenStringLeaves(urlInputAv);
+    var urlBaseLeaves = urlBaseAv ? _avFlattenStringLeaves(urlBaseAv) : [undefined];
+    if (urlInputLeaves.length === 0 || urlBaseLeaves.length === 0) return { kind: "top" };
+    var urlResults = [];
+    var urlAllOk = true;
+    for (var uili = 0; uili < urlInputLeaves.length; uili++) {
+      for (var ubli = 0; ubli < urlBaseLeaves.length; ubli++) {
+        try {
+          var ub = urlBaseLeaves[ubli];
+          var u = (ub === undefined) ? new URL(urlInputLeaves[uili]) : new URL(urlInputLeaves[uili], ub);
+          urlResults.push({
+            kind: "obj-lit",
+            props: {
+              href: { kind: "const", value: u.href },
+              pathname: { kind: "const", value: u.pathname },
+              origin: { kind: "const", value: u.origin },
+              search: { kind: "const", value: u.search },
+              hash: { kind: "const", value: u.hash },
+              host: { kind: "const", value: u.host },
+              hostname: { kind: "const", value: u.hostname },
+              port: { kind: "const", value: u.port },
+              protocol: { kind: "const", value: u.protocol },
+              username: { kind: "const", value: u.username },
+              password: { kind: "const", value: u.password }
+            }
+          });
+        } catch (_) { urlAllOk = false; break; }
+      }
+      if (!urlAllOk) break;
+    }
+    if (!urlAllOk || urlResults.length === 0) return { kind: "top" };
+    if (urlResults.length === 1) return urlResults[0];
+    var urlOr = urlResults[0];
+    for (var uri = 1; uri < urlResults.length; uri++) urlOr = _specLogicalOrAv(urlOr, urlResults[uri]);
+    return urlOr;
+  }
+  if (ctorId === "WHATWG.URLSearchParams") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var uspArgAv = argAvs[0];
+    if (uspArgAv && uspArgAv.kind === "const" && typeof uspArgAv.value === "string") {
+      return { kind: "const", value: uspArgAv.value.replace(/^\?/, "") };
+    }
+    if (uspArgAv && uspArgAv.kind === "obj-lit" && uspArgAv.props) {
+      var uspParts = [];
+      var uspOk = true;
+      for (var uspK in uspArgAv.props) {
+        if (!Object.prototype.hasOwnProperty.call(uspArgAv.props, uspK)) continue;
+        var uspV = uspArgAv.props[uspK];
+        if (!uspV || uspV.kind !== "const") { uspOk = false; break; }
+        uspParts.push(encodeURIComponent(uspK) + "=" + encodeURIComponent(String(uspV.value)));
+      }
+      if (uspOk) return { kind: "const", value: uspParts.join("&") };
+    }
+    return { kind: "top" };
+  }
+  if (ctorId === "Fetch.Headers") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var hdrInitAv = argAvs[0];
+    if (hdrInitAv && hdrInitAv.kind === "obj-lit" && hdrInitAv.props) return hdrInitAv;
+    return { kind: "top" };
+  }
+  if (ctorId === "Fetch.Request") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var reqInputAv = argAvs[0] || { kind: "top" };
+    var reqInputLeaves = _avFlattenStringLeaves(reqInputAv);
+    if (reqInputLeaves.length === 0) return { kind: "top" };
+    var reqInitAv = argAvs.length >= 2 ? argAvs[1] : null;
+    var reqMethodAv = { kind: "const", value: "GET" };
+    if (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.method) {
+      reqMethodAv = reqInitAv.props.method;
+    }
+    var reqResults = [];
+    for (var rli = 0; rli < reqInputLeaves.length; rli++) {
+      reqResults.push({
+        kind: "obj-lit",
+        props: {
+          url: { kind: "const", value: reqInputLeaves[rli] },
+          method: reqMethodAv,
+          headers: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.headers)
+            ? reqInitAv.props.headers : { kind: "top" },
+          body: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.body)
+            ? reqInitAv.props.body : { kind: "const", value: null },
+          credentials: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.credentials)
+            ? reqInitAv.props.credentials : { kind: "const", value: "same-origin" }
+        }
+      });
+    }
+    if (reqResults.length === 1) return reqResults[0];
+    var reqOr = reqResults[0];
+    for (var rri = 1; rri < reqResults.length; rri++) reqOr = _specLogicalOrAv(reqOr, reqResults[rri]);
+    return reqOr;
   }
   return { kind: "top" };
 }
@@ -4847,12 +4962,19 @@ function _specEvalLeaf(path, state, vals, effects) {
   }
   if (_t.isNewExpression(n)) {
     // § 13.3.5 NewExpression — invokes the constructor as [[Construct]].
-    // For known built-in constructors with Const/array-lit arguments,
-    // evaluate to the spec-defined instance abstract value:
-    //   § 23.1.1.1 Array — single-numeric → empty-of-length; multi-arg →
-    //                       array-lit of args; zero-arg → empty.
-    //   § 22.2.1 RegExp — abstract to top (regex semantics not modeled).
-    //   Other classes — top.
+    // Callee resolves through scope/globalThis registry. When AV is a
+    // builtin-ctor (URL/Request/URLSearchParams/Headers), dispatch via
+    // _specApplyBuiltinCtor.
+    if (_t.isIdentifier(n.callee)) {
+      var newCalleeAv = vals.get(n.callee);
+      if (newCalleeAv && newCalleeAv.kind === "builtin-ctor") {
+        var newArgAvs = _specExpandCallArgs(n.arguments, vals);
+        if (newArgAvs === null) return { kind: "top" };
+        return _specApplyBuiltinCtor(newCalleeAv.id, newArgAvs);
+      }
+    }
+    // Per-class spec semantics for built-in constructors not yet in the
+    // ctor registry (Array, Number/String/Boolean wrappers).
     if (_t.isIdentifier(n.callee) && !path.scope.getBinding(n.callee.name)) {
       var ctorName = n.callee.name;
       // § 23.1.1.1 Array(...values)
@@ -4887,133 +5009,9 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (ctorName === "Number" || ctorName === "String" || ctorName === "Boolean") {
         return { kind: "top" };
       }
-      // WHATWG URL § 6.1 — new URL(input [, base]). Eagerly compute the
-      // URL via the host JS engine and emit an obj-lit with all URL
-      // properties as Const strings. Subsequent .href / .pathname /
-      // .origin / .search / .hash / .host / .hostname / .port /
-      // .protocol member access then resolves through obj-lit prop
-      // lookup. Distributes over alternation on either arg.
-      if (ctorName === "URL" && n.arguments.length >= 1) {
-        var urlInputAv = vals.get(n.arguments[0]) || { kind: "top" };
-        var urlBaseAv = n.arguments.length >= 2 ? (vals.get(n.arguments[1]) || { kind: "top" }) : null;
-        var urlInputLeaves = _avFlattenStringLeaves(urlInputAv);
-        var urlBaseLeaves = urlBaseAv ? _avFlattenStringLeaves(urlBaseAv) : [undefined];
-        if (urlInputLeaves.length === 0 || urlBaseLeaves.length === 0) return { kind: "top" };
-        var urlResults = [];
-        var urlAllOk = true;
-        for (var uili = 0; uili < urlInputLeaves.length; uili++) {
-          for (var ubli = 0; ubli < urlBaseLeaves.length; ubli++) {
-            try {
-              var ub = urlBaseLeaves[ubli];
-              var u = (ub === undefined) ? new URL(urlInputLeaves[uili]) : new URL(urlInputLeaves[uili], ub);
-              urlResults.push({
-                kind: "obj-lit",
-                props: {
-                  href: { kind: "const", value: u.href },
-                  pathname: { kind: "const", value: u.pathname },
-                  origin: { kind: "const", value: u.origin },
-                  search: { kind: "const", value: u.search },
-                  hash: { kind: "const", value: u.hash },
-                  host: { kind: "const", value: u.host },
-                  hostname: { kind: "const", value: u.hostname },
-                  port: { kind: "const", value: u.port },
-                  protocol: { kind: "const", value: u.protocol },
-                  username: { kind: "const", value: u.username },
-                  password: { kind: "const", value: u.password }
-                }
-              });
-            } catch (_) { urlAllOk = false; break; }
-          }
-          if (!urlAllOk) break;
-        }
-        if (!urlAllOk || urlResults.length === 0) return { kind: "top" };
-        if (urlResults.length === 1) return urlResults[0];
-        var urlOr = urlResults[0];
-        for (var uri = 1; uri < urlResults.length; uri++) urlOr = _specLogicalOrAv(urlOr, urlResults[uri]);
-        return urlOr;
-      }
-      // WHATWG URLSearchParams § 5.2 — new URLSearchParams(init).
-      // For fetch URL extraction the relevant projection is the encoded
-      // string form (yielded by .toString() / passed to URL.search /
-      // concatenated). Distinct from URL: we emit a Const string directly
-      // rather than an obj-lit, since URLSearchParams instances are
-      // typically consumed by toString(). When init is an obj-lit with
-      // resolvable values, build "k1=v1&k2=v2" via percent-encoding;
-      // when init is a Const string, return it (with leading "?" stripped
-      // per spec).
-      if (ctorName === "URLSearchParams" && n.arguments.length >= 1) {
-        var uspArg = n.arguments[0];
-        var uspArgAv = vals.get(uspArg) || { kind: "top" };
-        // String-literal init: spec strips a leading "?".
-        if (uspArgAv.kind === "const" && typeof uspArgAv.value === "string") {
-          return { kind: "const", value: uspArgAv.value.replace(/^\?/, "") };
-        }
-        // Obj-lit init: encode each key=value, join with "&".
-        if (uspArgAv.kind === "obj-lit" && uspArgAv.props) {
-          var uspParts = [];
-          var uspOk = true;
-          for (var uspK in uspArgAv.props) {
-            if (!Object.prototype.hasOwnProperty.call(uspArgAv.props, uspK)) continue;
-            var uspV = uspArgAv.props[uspK];
-            if (!uspV || uspV.kind !== "const") { uspOk = false; break; }
-            uspParts.push(encodeURIComponent(uspK) + "=" + encodeURIComponent(String(uspV.value)));
-          }
-          if (uspOk) return { kind: "const", value: uspParts.join("&") };
-        }
-        return { kind: "top" };
-      }
-      // Fetch spec § 5.2 — new Headers(init). Returns a Headers instance.
-      // For abstract analysis: emit obj-lit mirroring init when init is
-      // an obj-lit (each header name → value). Used as the receiver for
-      // .get(name) lookups. Scope-checked.
-      if (ctorName === "Headers" && n.arguments.length >= 1) {
-        var hdrInitAv = vals.get(n.arguments[0]);
-        if (hdrInitAv && hdrInitAv.kind === "obj-lit" && hdrInitAv.props) {
-          // Pass through the obj-lit; props are case-sensitive header names
-          // per how the user wrote them. Real Headers normalises lower-case
-          // — caller's downstream .get usually uses the same case.
-          return hdrInitAv;
-        }
-        return { kind: "top" };
-      }
-      // Fetch spec § 5.5 — new Request(input [, init]) returns a Request.
-      // The .url property derives from `input` per the constructor:
-      //   - When input is a USVString → parse as URL (relative to current document)
-      //   - When input is a Request → copy its url
-      // For our analyser: when input is a Const string, the .url is the
-      // string itself (or a URL-resolved form if it's relative to a known
-      // base — we don't have document context, so emit the input as-is).
-      // The .method comes from init.method (default "GET").
-      if (ctorName === "Request" && n.arguments.length >= 1) {
-        var reqInputAv = vals.get(n.arguments[0]) || { kind: "top" };
-        var reqInputLeaves = _avFlattenStringLeaves(reqInputAv);
-        if (reqInputLeaves.length === 0) return { kind: "top" };
-        var reqInitAv = n.arguments.length >= 2 ? (vals.get(n.arguments[1]) || { kind: "top" }) : null;
-        var reqMethodAv = { kind: "const", value: "GET" };
-        if (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.method) {
-          reqMethodAv = reqInitAv.props.method;
-        }
-        var reqResults = [];
-        for (var rli = 0; rli < reqInputLeaves.length; rli++) {
-          reqResults.push({
-            kind: "obj-lit",
-            props: {
-              url: { kind: "const", value: reqInputLeaves[rli] },
-              method: reqMethodAv,
-              headers: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.headers)
-                ? reqInitAv.props.headers : { kind: "top" },
-              body: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.body)
-                ? reqInitAv.props.body : { kind: "const", value: null },
-              credentials: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.credentials)
-                ? reqInitAv.props.credentials : { kind: "const", value: "same-origin" }
-            }
-          });
-        }
-        if (reqResults.length === 1) return reqResults[0];
-        var reqOr = reqResults[0];
-        for (var rri = 1; rri < reqResults.length; rri++) reqOr = _specLogicalOrAv(reqOr, reqResults[rri]);
-        return reqOr;
-      }
+      // URL/Request/URLSearchParams/Headers ctors dispatched via the
+      // ctor registry (globalThis.URL etc. → builtin-ctor AV →
+      // _specApplyBuiltinCtor). ONE central path; no inline shape match.
       // § 24.1.1 new Map() / § 24.2.1 new Set() — return empty obj-lit
       // shape isn't appropriate; return top (their member access would
       // need .get/.set tracking we don't yet model).
