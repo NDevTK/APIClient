@@ -1010,6 +1010,8 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _specBindingInitAvCache = new WeakMap();
   _specOuterImportsListCache = new WeakMap();
   _specCallSitesByFn = new WeakMap();
+  _specThisInstanceCache = new WeakMap();
+  _specObjectMethodThisCache = new WeakMap();
   _tvsMemo = new WeakMap();
   _cfgMemo = new WeakMap();
   // Page DOM context: when the analyser runs against a page (HTML +
@@ -4483,9 +4485,15 @@ function _specFindConstructorForMethod(funcNode, funcPath) {
 
 // Detect whether a function is a method whose `this` binding can be
 // derived from a constructor — used to gate the (potentially expensive)
-// _specBuildThisInstanceAv call. Returns true iff a constructor is
-// reachable per the rules in _specFindConstructorForMethod.
+// _specBuildThisInstanceAv call. Returns true when this is a class
+// method (getters can contribute even without a constructor) OR a
+// constructor is reachable per _specFindConstructorForMethod (covers
+// prototype-assigned methods and ES5 patterns).
 function _specCanResolveThisInstance(funcNode, funcPath) {
+  if ((_t.isClassMethod(funcNode) || _t.isClassPrivateMethod(funcNode)) &&
+      funcPath && funcPath.parentPath && _t.isClassBody(funcPath.parent)) {
+    return true;
+  }
   return _specFindConstructorForMethod(funcNode, funcPath) !== null;
 }
 
@@ -4504,19 +4512,29 @@ var _specThisInstanceCache = new WeakMap();
 // Method `this` ≈ obj-lit. The same obj-lit lookup logic already in
 // _specMemberAccessOnObjLeaf handles `.X` access; no separate dispatch.
 //
-// Returns null when the constructor can't be analysed (ill-formed, or
-// no useful this.X writes).
+// Returns null when no this-shape can be derived (no constructor and
+// no getters / no useful this.X writes).
 function _specBuildThisInstanceAv(funcNode, funcPath) {
+  // Locate the ClassBody if this is a class method, regardless of whether
+  // a constructor exists. Even classes with only getters contribute
+  // properties to the receiver shape.
+  var classBodyPath = null;
+  if ((_t.isClassMethod(funcNode) || _t.isClassPrivateMethod(funcNode)) &&
+      funcPath && funcPath.parentPath && _t.isClassBody(funcPath.parent)) {
+    classBodyPath = funcPath.parentPath;
+  }
   var ctorPath = _specFindConstructorForMethod(funcNode, funcPath);
-  if (!ctorPath || !ctorPath.node) return null;
-  var ctorNode = ctorPath.node;
-  if (_specThisInstanceCache.has(ctorNode)) return _specThisInstanceCache.get(ctorNode);
+  // Cache key: constructor node when one exists; otherwise the ClassBody
+  // node so getter-only classes still cache their derived shape.
+  var cacheKey = (ctorPath && ctorPath.node) || (classBodyPath && classBodyPath.node);
+  if (!cacheKey) return null;
+  if (_specThisInstanceCache.has(cacheKey)) return _specThisInstanceCache.get(cacheKey);
   // Mark cache early to break a self-reference cycle: a constructor that
   // reads `this.X` (inside the same scope being built) gets {kind:"this"}
   // — the eventual obj-lit value is computed once and used afterward.
-  _specThisInstanceCache.set(ctorNode, null);
+  _specThisInstanceCache.set(cacheKey, null);
   var props = Object.create(null);
-  // Walk the constructor body's statements via the iterative
+  // When a constructor exists, walk its body's statements via the iterative
   // _specApplyStatement driver; collect effects whose target.kind === "this"
   // and key.kind === "const". Per § 9.2.1, the constructor's effects on
   // `this` define the instance's own properties.
@@ -4528,8 +4546,10 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
   // capture pre-load and inline-handler binding aren't needed for the
   // constructor body's `this.X = ...` projection, which only depends on
   // the constructor's formal-param state.
-  var ctorState = _specStateCreate();
-  var ctorParams = ctorNode.params || [];
+  if (ctorPath && ctorPath.node) {
+    var ctorNode = ctorPath.node;
+    var ctorState = _specStateCreate();
+    var ctorParams = ctorNode.params || [];
   for (var cpi = 0; cpi < ctorParams.length; cpi++) {
     var cp = ctorParams[cpi];
     if (!cp) continue;
@@ -4570,52 +4590,108 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
       }
     }
   }
-  var effects = [];
-  // Body iteration uses the same statement-driver pattern as
-  // _specAnalyzePropertyFlow but inlined here to avoid creating a memo
-  // entry that would mistake the constructor's own analysis for a
-  // separate one (the program-level fixpoint analyses constructors in
-  // their own right via the funcPaths list).
-  var bodyN = ctorNode.body;
-  if (bodyN && _t.isBlockStatement(bodyN)) {
-    var stack = [{ stmts: bodyN.body, idx: 0, state: ctorState, parentPath: ctorPath.get("body") }];
-    while (stack.length > 0) {
-      var top = stack[stack.length - 1];
-      if (top._isMergeFrame) {
-        var joined = top.baseState;
-        for (var bi = 0; bi < top.branchEndStates.length; bi++) joined = _specJoinState(joined, top.branchEndStates[bi]);
-        if (top.parentFrame) top.parentFrame.state = joined;
-        stack.pop();
-        continue;
+    var effects = [];
+    // Body iteration uses the same statement-driver pattern as
+    // _specAnalyzePropertyFlow but inlined here to avoid creating a memo
+    // entry that would mistake the constructor's own analysis for a
+    // separate one (the program-level fixpoint analyses constructors in
+    // their own right via the funcPaths list).
+    var bodyN = ctorNode.body;
+    if (bodyN && _t.isBlockStatement(bodyN)) {
+      var stack = [{ stmts: bodyN.body, idx: 0, state: ctorState, parentPath: ctorPath.get("body") }];
+      while (stack.length > 0) {
+        var top = stack[stack.length - 1];
+        if (top._isMergeFrame) {
+          var joined = top.baseState;
+          for (var bi = 0; bi < top.branchEndStates.length; bi++) joined = _specJoinState(joined, top.branchEndStates[bi]);
+          if (top.parentFrame) top.parentFrame.state = joined;
+          stack.pop();
+          continue;
+        }
+        if (top._returned || top.idx >= top.stmts.length) {
+          if (top._reportTo) top._reportTo.branchEndStates.push(top.state);
+          stack.pop();
+          continue;
+        }
+        var stmtIdx = top.idx;
+        top.idx++;
+        var stmtPath;
+        if (top._explicitStmtPath) stmtPath = top._explicitStmtPath;
+        else if (top._wrapBody) stmtPath = top.parentPath.get("body");
+        else if (top._pathField) stmtPath = top.parentPath.get(top._pathField + "." + stmtIdx);
+        else stmtPath = top.parentPath.get("body." + stmtIdx);
+        _specApplyStatement(stmtPath, top.state, effects, stack);
       }
-      if (top._returned || top.idx >= top.stmts.length) {
-        if (top._reportTo) top._reportTo.branchEndStates.push(top.state);
-        stack.pop();
-        continue;
-      }
-      var stmtIdx = top.idx;
-      top.idx++;
-      var stmtPath;
-      if (top._explicitStmtPath) stmtPath = top._explicitStmtPath;
-      else if (top._wrapBody) stmtPath = top.parentPath.get("body");
-      else if (top._pathField) stmtPath = top.parentPath.get(top._pathField + "." + stmtIdx);
-      else stmtPath = top.parentPath.get("body." + stmtIdx);
-      _specApplyStatement(stmtPath, top.state, effects, stack);
+    }
+    for (var ei = 0; ei < effects.length; ei++) {
+      var eff = effects[ei];
+      if (!eff || !eff.target || eff.target.kind !== "this") continue;
+      if (!eff.key || eff.key.kind !== "const") continue;
+      var keyV = eff.key.value;
+      if (typeof keyV !== "string" && typeof keyV !== "number") continue;
+      var existing = Object.prototype.hasOwnProperty.call(props, keyV) ? props[keyV] : null;
+      props[keyV] = existing ? _specLogicalOrAv(existing, eff.value) : eff.value;
     }
   }
-  for (var ei = 0; ei < effects.length; ei++) {
-    var eff = effects[ei];
-    if (!eff || !eff.target || eff.target.kind !== "this") continue;
-    if (!eff.key || eff.key.kind !== "const") continue;
-    var keyV = eff.key.value;
-    if (typeof keyV !== "string" && typeof keyV !== "number") continue;
-    var existing = Object.prototype.hasOwnProperty.call(props, keyV) ? props[keyV] : null;
-    props[keyV] = existing ? _specLogicalOrAv(existing, eff.value) : eff.value;
+  // ECMA § 15.7.4 ClassMethod with kind "get" — sibling getters of the
+  // method being analysed contribute getter-return-values as instance
+  // properties accessible via `this.<getterName>`. Locate the ClassBody
+  // (constructor's parent) and project each getter's return AV. The
+  // funcPath for the original method is used to find the ClassBody:
+  // _specFindConstructorForMethod confirmed funcNode is a ClassMethod
+  // when ctorNode came from a ClassBody, so funcPath.parentPath is that
+  // ClassBody. Skip when funcPath isn't a ClassMethod (prototype/object
+  // methods don't have spec-defined `get` accessors of the same form).
+  if (_t.isClassMethod(funcNode) || _t.isClassPrivateMethod(funcNode)) {
+    var classBodyPath2 = funcPath && funcPath.parentPath;
+    if (classBodyPath2 && _t.isClassBody(classBodyPath2.node)) {
+      var membersArr = classBodyPath2.node.body;
+      for (var gi = 0; gi < membersArr.length; gi++) {
+        var gm = membersArr[gi];
+        if (!_t.isClassMethod(gm) || gm.kind !== "get" || gm.computed) continue;
+        var gName = _t.isIdentifier(gm.key) ? gm.key.name :
+          (_t.isStringLiteral(gm.key) ? gm.key.value : null);
+        if (gName === null) continue;
+        if (Object.prototype.hasOwnProperty.call(props, gName)) continue;
+        // INLINE getter return-value computation. Reading from
+        // _specReturnValueMemo would be order-dependent (worklist may
+        // analyse getter AFTER consumer method, leaving memo empty when
+        // we look). Inline body walk: locate ReturnStatement nodes in
+        // the getter body via a single Babel-traverse, eval each return
+        // arg via _specEvalExpression in a fresh state (no closure
+        // captures since getter accesses are confined to `this` —
+        // already excluded via state["this"] never being set during
+        // this nested eval), join via lattice JOIN (control-flow merge
+        // across return statements). Calling _specEvalExpression here
+        // is fine: it's a leaf-only eval that doesn't recurse back into
+        // _specBuildThisInstanceAv.
+        var getterFnNode = gm;
+        var getterPath = classBodyPath2.get("body." + gi);
+        var getterBody = getterFnNode.body;
+        if (getterBody && _t.isBlockStatement(getterBody)) {
+          var getterRetAv = null;
+          var getterRetPaths = [];
+          getterPath.traverse({
+            "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ClassMethod|ObjectMethod": function(p) { p.skip(); },
+            ReturnStatement: function(p) {
+              if (p.node.argument) getterRetPaths.push(p.get("argument"));
+            }
+          });
+          for (var gri = 0; gri < getterRetPaths.length; gri++) {
+            try {
+              var retAv = _specEvalExpression(getterRetPaths[gri], _specStateCreate({}), [], true);
+              if (retAv) getterRetAv = (getterRetAv === null) ? retAv : _specLogicalOrAv(getterRetAv, retAv);
+            } catch (_) { /* skip return when eval fails */ }
+          }
+          if (getterRetAv) props[gName] = getterRetAv;
+        }
+      }
+    }
   }
   var hasAnyKey = false;
   for (var pk in props) { if (Object.prototype.hasOwnProperty.call(props, pk)) { hasAnyKey = true; break; } }
   var instanceAv = hasAnyKey ? { kind: "obj-lit", props: props } : null;
-  _specThisInstanceCache.set(ctorNode, instanceAv);
+  _specThisInstanceCache.set(cacheKey, instanceAv);
   return instanceAv;
 }
 

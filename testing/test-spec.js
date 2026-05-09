@@ -57,21 +57,27 @@ function specTest(name, code, check, opts) {
     // For class-syntax tests, that's a ClassMethod with kind!=="constructor".
     // For function-syntax tests, that's the first FunctionDeclaration.
     // Constructors are still added to allFnPaths for fixpoint coverage.
-    var firstNonCtor = null;
+    var firstRegularMethod = null;
     var firstAny = null;
     globalThis.BabelBundle.traverse(result._ast, {
       "FunctionDeclaration|ClassMethod|ClassPrivateMethod|ObjectMethod": function(p) {
         if (!firstAny) firstAny = p;
-        if (!firstNonCtor) {
-          var isCtor = (_t.isClassMethod(p.node) || _t.isClassPrivateMethod(p.node)) && p.node.kind === "constructor";
-          if (!isCtor) firstNonCtor = p;
+        // Prefer the first regular method (kind: "method") — getters and
+        // setters and constructors are usually helpers in spec tests, while
+        // the regular method is the one whose effects the test wants. For
+        // FunctionDeclaration / ObjectMethod (no kind disambiguation), all
+        // are eligible.
+        if (!firstRegularMethod) {
+          var isCtorOrAccessor = (_t.isClassMethod(p.node) || _t.isClassPrivateMethod(p.node)) &&
+            p.node.kind !== "method";
+          if (!isCtorOrAccessor) firstRegularMethod = p;
         }
         allFnPaths.push(p);
         // Don't skip — we want nested functions in allFnPaths too for
         // fixpoint coverage. Babel descends naturally.
       }
     });
-    fnPath = firstNonCtor || firstAny;
+    fnPath = firstRegularMethod || firstAny;
     if (!fnPath) { failed++; console.log("  FAIL: " + name + " — no function found"); return; }
     // Fixpoint analysis: each pass re-analyses every function with
     // force=true so callee memos (_specReturnValueMemo, _specSideEffectMemo)
@@ -4595,6 +4601,21 @@ specTest("§ 13.3.1 ObjectMethod this: literal sibling props visible", `
     url: "/api",
     doFetch() { this.flag = this.url; }
   };
+`, function(effects) {
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api";
+    }
+  }
+  return false;
+});
+
+specTest("§ 15.7.4 ClassMethod kind 'get': getter return value visible via this", `
+  class C {
+    get url() { return "/api"; }
+    doFetch() { this.flag = this.url; }
+  }
 `, function(effects) {
   for (var i = 0; i < effects.length; i++) {
     if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
