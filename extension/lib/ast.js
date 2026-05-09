@@ -7557,31 +7557,50 @@ function _ravStep(F) {
       // 12 (DOM): object is an Identifier whose binding init is
       // `document.getElementById("X")` or `document.querySelector("#X")`.
       // Look up byId — same as the inline forms 1b/1e but through one
-      // level of variable binding.
+      // level of variable binding. Also handles `el.dataset.<k>` reads
+      // (one extra MemberExpression hop).
+      function _ravResolveBoundDomElementId(idNode) {
+        if (!_t.isIdentifier(idNode)) return null;
+        var b = path.scope.getBinding(idNode.name);
+        if (!b || !_t.isVariableDeclarator(b.path.node) || !b.path.node.init) return null;
+        var ini = b.path.node.init;
+        if (!_t.isCallExpression(ini)) return null;
+        if (!_t.isMemberExpression(ini.callee) || ini.callee.computed) return null;
+        if (!_t.isIdentifier(ini.callee.object, { name: "document" })) return null;
+        if (path.scope.getBinding("document")) return null;
+        if (ini.arguments.length !== 1 || !_t.isStringLiteral(ini.arguments[0])) return null;
+        if (_t.isIdentifier(ini.callee.property, { name: "getElementById" })) {
+          return ini.arguments[0].value;
+        }
+        if (_t.isIdentifier(ini.callee.property, { name: "querySelector" })) {
+          var sel = ini.arguments[0].value;
+          var idm = sel.match(/^#([A-Za-z][\w:.-]*)$/);
+          if (idm) return idm[1];
+        }
+        return null;
+      }
       if (memSubSkip < 1 && _t.isIdentifier(node.object) && _domContext && _domContext.byId) {
-        var elBinding = path.scope.getBinding(node.object.name);
-        if (elBinding && _t.isVariableDeclarator(elBinding.path.node) && elBinding.path.node.init) {
-          var elInit = elBinding.path.node.init;
-          var elInitId = null;
-          if (_t.isCallExpression(elInit) &&
-              _t.isMemberExpression(elInit.callee) && !elInit.callee.computed &&
-              _t.isIdentifier(elInit.callee.object, { name: "document" }) &&
-              !path.scope.getBinding("document") &&
-              elInit.arguments.length === 1 &&
-              _t.isStringLiteral(elInit.arguments[0])) {
-            if (_t.isIdentifier(elInit.callee.property, { name: "getElementById" })) {
-              elInitId = elInit.arguments[0].value;
-            } else if (_t.isIdentifier(elInit.callee.property, { name: "querySelector" })) {
-              var bsel = elInit.arguments[0].value;
-              var bidMatch = bsel.match(/^#([A-Za-z][\w:.-]*)$/);
-              if (bidMatch) elInitId = bidMatch[1];
-            }
+        var elInitId = _ravResolveBoundDomElementId(node.object);
+        if (elInitId && Object.prototype.hasOwnProperty.call(_domContext.byId, elInitId)) {
+          var bElInfo = _domContext.byId[elInitId];
+          if (bElInfo && bElInfo[propName] != null) {
+            return { done: [bElInfo[propName]] };
           }
-          if (elInitId && Object.prototype.hasOwnProperty.call(_domContext.byId, elInitId)) {
-            var bElInfo = _domContext.byId[elInitId];
-            if (bElInfo && bElInfo[propName] != null) {
-              return { done: [bElInfo[propName]] };
-            }
+        }
+      }
+      // 12 (DOM-dataset): `el.dataset.<key>` where el is bound to a
+      // getElementById/querySelector call. WHATWG HTML § 7.5.5 dataset
+      // reflects data-* attributes (camelCase ↔ kebab-case).
+      if (memSubSkip < 1 && _t.isMemberExpression(node.object) && !node.object.computed &&
+          _t.isIdentifier(node.object.property, { name: "dataset" }) &&
+          _t.isIdentifier(node.object.object) &&
+          _domContext && _domContext.byId) {
+        var dsElId = _ravResolveBoundDomElementId(node.object.object);
+        if (dsElId && Object.prototype.hasOwnProperty.call(_domContext.byId, dsElId)) {
+          var dsBoundInfo = _domContext.byId[dsElId];
+          var dsKebab = propName.replace(/[A-Z]/g, function(c) { return "-" + c.toLowerCase(); });
+          if (dsBoundInfo && dsBoundInfo.dataAttrs && dsBoundInfo.dataAttrs[dsKebab] != null) {
+            return { done: [dsBoundInfo.dataAttrs[dsKebab]] };
           }
         }
       }
