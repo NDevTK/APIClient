@@ -3202,6 +3202,67 @@ specTest("§ 13.8.1 inter-proc concat with caller alternation: `getUrl(cond ? 'a
   return leaves.length === 2 && leaves.indexOf("/api/a") >= 0 && leaves.indexOf("/api/b") >= 0;
 });
 
+specTest("WHATWG URL § 6.1: `new URL('/api', 'https://x.com').href` → 'https://x.com/api'", `
+  function f() {
+    this.u = new URL("/api", "https://x.com").href;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "https://x.com/api";
+});
+
+specTest("WHATWG URL: `new URL('https://a.com/p?q=1').pathname` → '/p'", `
+  function f() {
+    this.p = new URL("https://a.com/p?q=1").pathname;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/p";
+});
+
+specTest("WHATWG URL: `new URL('https://a.com/p?q=1').origin` → 'https://a.com'", `
+  function f() {
+    this.o = new URL("https://a.com/p?q=1").origin;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "https://a.com";
+});
+
+specTest("WHATWG URL distributes over alternation: `new URL(cond?'a':'b','https://x.com').href` → or", `
+  function f(cond) {
+    this.u = new URL(cond ? "/a" : "/b", "https://x.com").href;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf("https://x.com/a") >= 0 && leaves.indexOf("https://x.com/b") >= 0;
+});
+
+specTest("WHATWG URL shadowed `URL` does NOT fire", `
+  function f() {
+    var URL = function(x) { return { href: "shadow" }; };
+    this.u = new URL("/api", "https://x.com").href;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Spec eval must not eagerly evaluate via host URL; ctorName check is
+  // scope-gated. Result should NOT be the WHATWG-resolved URL string.
+  return !(av && av.kind === "const" && av.value === "https://x.com/api");
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));

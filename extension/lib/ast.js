@@ -3844,6 +3844,51 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (ctorName === "Number" || ctorName === "String" || ctorName === "Boolean") {
         return { kind: "top" };
       }
+      // WHATWG URL § 6.1 — new URL(input [, base]). Eagerly compute the
+      // URL via the host JS engine and emit an obj-lit with all URL
+      // properties as Const strings. Subsequent .href / .pathname /
+      // .origin / .search / .hash / .host / .hostname / .port /
+      // .protocol member access then resolves through obj-lit prop
+      // lookup. Distributes over alternation on either arg.
+      if (ctorName === "URL" && n.arguments.length >= 1) {
+        var urlInputAv = vals.get(n.arguments[0]) || { kind: "top" };
+        var urlBaseAv = n.arguments.length >= 2 ? (vals.get(n.arguments[1]) || { kind: "top" }) : null;
+        var urlInputLeaves = _avFlattenStringLeaves(urlInputAv);
+        var urlBaseLeaves = urlBaseAv ? _avFlattenStringLeaves(urlBaseAv) : [undefined];
+        if (urlInputLeaves.length === 0 || urlBaseLeaves.length === 0) return { kind: "top" };
+        var urlResults = [];
+        var urlAllOk = true;
+        for (var uili = 0; uili < urlInputLeaves.length; uili++) {
+          for (var ubli = 0; ubli < urlBaseLeaves.length; ubli++) {
+            try {
+              var ub = urlBaseLeaves[ubli];
+              var u = (ub === undefined) ? new URL(urlInputLeaves[uili]) : new URL(urlInputLeaves[uili], ub);
+              urlResults.push({
+                kind: "obj-lit",
+                props: {
+                  href: { kind: "const", value: u.href },
+                  pathname: { kind: "const", value: u.pathname },
+                  origin: { kind: "const", value: u.origin },
+                  search: { kind: "const", value: u.search },
+                  hash: { kind: "const", value: u.hash },
+                  host: { kind: "const", value: u.host },
+                  hostname: { kind: "const", value: u.hostname },
+                  port: { kind: "const", value: u.port },
+                  protocol: { kind: "const", value: u.protocol },
+                  username: { kind: "const", value: u.username },
+                  password: { kind: "const", value: u.password }
+                }
+              });
+            } catch (_) { urlAllOk = false; break; }
+          }
+          if (!urlAllOk) break;
+        }
+        if (!urlAllOk || urlResults.length === 0) return { kind: "top" };
+        if (urlResults.length === 1) return urlResults[0];
+        var urlOr = urlResults[0];
+        for (var uri = 1; uri < urlResults.length; uri++) urlOr = _specLogicalOrAv(urlOr, urlResults[uri]);
+        return urlOr;
+      }
       // § 24.1.1 new Map() / § 24.2.1 new Set() — return empty obj-lit
       // shape isn't appropriate; return top (their member access would
       // need .get/.set tracking we don't yet model).
