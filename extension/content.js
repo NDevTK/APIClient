@@ -469,6 +469,7 @@
 
   var _lastScanHash = null;
   var _lastFormScanHash = null;
+  var _lastDomScanHash = null;
 
   function _simpleHash(str) {
     var h = 0;
@@ -513,6 +514,64 @@
         pageUrl: location.href,
       });
     }
+  }
+
+  // Page DOM context — meta tags, data-* attrs, hrefs/srcs/actions —
+  // for the AST analyser's virtual DOM resolution. Per user directive:
+  // "what DOM gets sent in the first place [is] useful for learning".
+  // Walks the live DOM (more reliable than re-parsing outerHTML), but
+  // shape matches extractDomContextFromHtml's output so the analyser
+  // consumes either uniformly.
+  function _scanDomContext() {
+    var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {} };
+    try {
+      // <meta name=X content=Y>
+      var metas = document.querySelectorAll("meta[name][content]");
+      for (var mi = 0; mi < metas.length; mi++) {
+        var nm = metas[mi].getAttribute("name");
+        var ct = metas[mi].getAttribute("content");
+        if (nm && ct != null) ctx.metaTags[nm] = ct;
+      }
+      // Per-element scan: every element. Most don't have any of these
+      // attributes; the loop bails early on each. Walking `*` keeps the
+      // extraction framework-agnostic — no specific data-* convention
+      // (Stimulus, Vue, etc.) is privileged.
+      var els = document.querySelectorAll("*");
+      for (var ei = 0; ei < els.length; ei++) {
+        var el = els[ei];
+        var dataMap = null;
+        var ds = el.dataset;
+        if (ds) {
+          for (var dk in ds) {
+            if (Object.prototype.hasOwnProperty.call(ds, dk)) {
+              if (!dataMap) dataMap = {};
+              // Convert camelCase back to kebab to match HTML extractor's shape.
+              var kebab = dk.replace(/[A-Z]/g, function(c) { return "-" + c.toLowerCase(); });
+              dataMap[kebab] = ds[dk];
+            }
+          }
+        }
+        if (dataMap) ctx.dataAttrs[ei] = dataMap;
+        var hv = el.getAttribute("href");
+        if (hv) ctx.hrefs[ei] = hv;
+        var sv = el.getAttribute("src");
+        if (sv) ctx.srcs[ei] = sv;
+        var av = el.getAttribute("action");
+        if (av) ctx.actions[ei] = av;
+      }
+    } catch (e) { /* DOM access failures are silent */ }
+    return ctx;
+  }
+  var domCtx = _scanDomContext();
+  var domHash = _simpleHash(JSON.stringify(domCtx));
+  if (domHash !== _lastDomScanHash) {
+    _lastDomScanHash = domHash;
+    chrome.runtime.sendMessage({
+      type: "CONTENT_DOM",
+      domContext: domCtx,
+      origin: location.origin,
+      pageUrl: location.href,
+    });
   }
 
   // ─── Script Source Extraction (for AST analysis) ────────────────────────────

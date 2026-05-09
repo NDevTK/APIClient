@@ -4215,7 +4215,8 @@ async function _analyzeCombinedScripts(tabId) {
   var response;
   try {
     response = await sendToOffscreen({
-      type: "AST_ANALYZE", code: combined, sourceUrl: tabUrl, forceScript: true
+      type: "AST_ANALYZE", code: combined, sourceUrl: tabUrl, forceScript: true,
+      domContext: getTab(tabId).domContext || null,
     });
   } catch (e) {
     console.debug("[AST:combined] sendToOffscreen failed for tab=%d: %s", tabId, e.message || e);
@@ -5122,6 +5123,18 @@ function handleContentMessage(msg, sender) {
     notifyPopup(tabId);
   }
 
+  // CONTENT_DOM: snapshot of static page DOM context (meta tags, data-*
+  // attrs, hrefs/srcs/actions extracted from the rendered HTML). Cached
+  // per-tab; passed into AST_ANALYZE so virtual-DOM resolution can close
+  // gaps where JS reads markup-set values (e.g.
+  // document.querySelector("meta[name=X]").content). Per user directive:
+  // "HTML is also in-scope... pages should be reviewed with all the
+  // javascript files plus DOM."
+  if (msg.type === "CONTENT_DOM") {
+    if (msg.domContext) {
+      tab.domContext = msg.domContext;
+    }
+  }
 }
 
 // Popup messages — sender.tab is absent for popup contexts.
@@ -6400,6 +6413,7 @@ const CONTENT_TYPES = new Set([
   "CONTENT_ENDPOINTS",
   "CONTENT_FORMS",
   "CONTENT_FORM_SUBMIT",
+  "CONTENT_DOM",
   "RESPONSE_BODY",
   "SCRIPT_SOURCE",
   "SCRIPTS_LOADED",
