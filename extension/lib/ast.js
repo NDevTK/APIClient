@@ -2139,22 +2139,8 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       for (var ci = 0; ci < ihCallers.length; ci++) {
         var pa = ihCallers[ci].paramArgs[i];
         if (pa === "this") {
-          // The element. Build obj-lit from elementAttrs.
-          var ea = ihCallers[ci].elementAttrs || {};
-          var elProps = Object.create(null);
-          if (ea.href != null) elProps.href = { kind: "const", value: String(ea.href) };
-          if (ea.src != null) elProps.src = { kind: "const", value: String(ea.src) };
-          if (ea.action != null) elProps.action = { kind: "const", value: String(ea.action) };
-          if (ea.dataAttrs && typeof ea.dataAttrs === "object") {
-            var datasetProps = Object.create(null);
-            for (var dk in ea.dataAttrs) {
-              if (Object.prototype.hasOwnProperty.call(ea.dataAttrs, dk)) {
-                datasetProps[dk] = { kind: "const", value: String(ea.dataAttrs[dk]) };
-              }
-            }
-            elProps.dataset = { kind: "obj-lit", props: datasetProps };
-          }
-          perCallAvs.push({ kind: "obj-lit", props: elProps });
+          // The element — build obj-lit from elementAttrs via shared helper.
+          perCallAvs.push(_specBuildDomElementObjLit(ihCallers[ci].elementAttrs || {}));
         } else if (pa && pa.kind === "const") {
           perCallAvs.push(pa);
         } else {
@@ -2386,6 +2372,40 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
 // ───────────────────────────────────────────────────────────────────────────
 function _specLogicalOrAv(leftAv, rightAv) {
   return { kind: "or", left: leftAv, right: rightAv };
+}
+
+// Build the dataset obj-lit AV from a domContext element's dataAttrs.
+// Per HTML5 § 7.5.5 — the markup attribute `data-foo-bar` becomes
+// `element.dataset.fooBar`. Input keys may be either kebab (markup form)
+// or already-camelCased; the conversion is idempotent. Returns an
+// obj-lit with camelCased keys whose values are Const strings.
+function _specDataAttrsToDatasetObjLit(dataAttrs) {
+  var datasetProps = Object.create(null);
+  if (!dataAttrs || typeof dataAttrs !== "object") return { kind: "obj-lit", props: datasetProps };
+  for (var k in dataAttrs) {
+    if (!Object.prototype.hasOwnProperty.call(dataAttrs, k)) continue;
+    var camelK = k.replace(/-([a-z])/g, function(_m, c) { return c.toUpperCase(); });
+    datasetProps[camelK] = { kind: "const", value: String(dataAttrs[k]) };
+  }
+  return { kind: "obj-lit", props: datasetProps };
+}
+
+// Build the obj-lit AV for a DOM element described by domContext.byId
+// entry: {href, src, action, dataAttrs}. Used uniformly by the
+// CallExpression dispatch (`document.getElementById(...).<prop>`),
+// the binding-init resolver (`var el = document.getElementById(...)`),
+// and the inline-handler synthetic-caller binding.
+function _specBuildDomElementObjLit(domEl) {
+  var props = Object.create(null);
+  if (domEl) {
+    if (domEl.href != null) props.href = { kind: "const", value: String(domEl.href) };
+    if (domEl.src != null) props.src = { kind: "const", value: String(domEl.src) };
+    if (domEl.action != null) props.action = { kind: "const", value: String(domEl.action) };
+    if (domEl.dataAttrs && typeof domEl.dataAttrs === "object") {
+      props.dataset = _specDataAttrsToDatasetObjLit(domEl.dataAttrs);
+    }
+  }
+  return { kind: "obj-lit", props: props };
 }
 
 // Resolve a single AST node in the callee body's context to its
@@ -3553,23 +3573,7 @@ function _specEvalLeaf(path, state, vals, effects) {
           }
           if (initLookupId !== null && _domContext && _domContext.byId &&
               Object.prototype.hasOwnProperty.call(_domContext.byId, initLookupId)) {
-            var initEl = _domContext.byId[initLookupId];
-            var initElProps = Object.create(null);
-            if (initEl) {
-              if (initEl.href != null) initElProps.href = { kind: "const", value: String(initEl.href) };
-              if (initEl.src != null) initElProps.src = { kind: "const", value: String(initEl.src) };
-              if (initEl.action != null) initElProps.action = { kind: "const", value: String(initEl.action) };
-              if (initEl.dataAttrs && typeof initEl.dataAttrs === "object") {
-                var initDsProps = Object.create(null);
-                for (var iddk in initEl.dataAttrs) {
-                  if (Object.prototype.hasOwnProperty.call(initEl.dataAttrs, iddk)) {
-                    initDsProps[iddk] = { kind: "const", value: String(initEl.dataAttrs[iddk]) };
-                  }
-                }
-                initElProps.dataset = { kind: "obj-lit", props: initDsProps };
-              }
-            }
-            return { kind: "obj-lit", props: initElProps };
+            return _specBuildDomElementObjLit(_domContext.byId[initLookupId]);
           }
         }
       }
@@ -4612,23 +4616,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
       if (domLookupId !== null && _domContext && _domContext.byId &&
           Object.prototype.hasOwnProperty.call(_domContext.byId, domLookupId)) {
-        var domEl = _domContext.byId[domLookupId];
-        var domElProps = Object.create(null);
-        if (domEl) {
-          if (domEl.href != null) domElProps.href = { kind: "const", value: String(domEl.href) };
-          if (domEl.src != null) domElProps.src = { kind: "const", value: String(domEl.src) };
-          if (domEl.action != null) domElProps.action = { kind: "const", value: String(domEl.action) };
-          if (domEl.dataAttrs && typeof domEl.dataAttrs === "object") {
-            var domDsProps = Object.create(null);
-            for (var domDk in domEl.dataAttrs) {
-              if (Object.prototype.hasOwnProperty.call(domEl.dataAttrs, domDk)) {
-                domDsProps[domDk] = { kind: "const", value: String(domEl.dataAttrs[domDk]) };
-              }
-            }
-            domElProps.dataset = { kind: "obj-lit", props: domDsProps };
-          }
-        }
-        return { kind: "obj-lit", props: domElProps };
+        return _specBuildDomElementObjLit(_domContext.byId[domLookupId]);
       }
     }
     // § 25.5.2 JSON.parse(text) — when text is a Const string literal
@@ -7514,15 +7502,27 @@ function _ravShortCircuit(node, path) {
 }
 
 function _resolveAllValues(initialPath, initialDepth) {
-  var initialNode = initialPath && initialPath.node;
-  if (!initialNode) return [];
-  // Apply short-circuit at entry to avoid driver setup for literals.
-  var sc = _ravShortCircuit(initialNode, initialPath);
-  if (sc !== undefined) return sc;
-  if (!_resolver.guard("V", initialNode)) return [];
-  var initialFrame = _ravMakeFrame(initialPath, initialNode, initialDepth || 0,
-    _ravStep, _ravShortCircuit, "V", []);
-  return _runResolverStack(initialFrame);
+  if (!initialPath || !initialPath.node) return [];
+  // Run the full property-flow analysis on the enclosing function to
+  // populate _specPathValMemo with per-expression AVs that reflect state
+  // evolution (var bindings, if-branch joins, loop iterations). Then look
+  // up this path's AV. This is the SINGLE engine: spec eval is the
+  // source of truth; this function projects its string leaves.
+  var encFn = initialPath.getFunctionParent && initialPath.getFunctionParent();
+  if (encFn && _t.isFunction(encFn.node)) {
+    _specAnalyzePropertyFlow(encFn);  // memoised — cheap on repeat call
+    var memoAv = _specPathValMemo.get(initialPath.node);
+    if (memoAv) {
+      var memoLeaves = _avFlattenStringLeaves(memoAv);
+      if (memoLeaves.length > 0) return memoLeaves;
+    }
+  }
+  // Module-level path or memo-miss: ad-hoc evaluate. State is empty
+  // (top-level scope params don't exist).
+  try {
+    var av = _specEvalExpression(initialPath, _specStateCreate({}), []);
+    return av ? _avFlattenStringLeaves(av) : [];
+  } catch (_) { return []; }
 }
 
 // Step function for the _resolveAllValues state machine. Each branch from
