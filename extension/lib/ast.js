@@ -3668,12 +3668,29 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     if (!dpO || dpO.kind !== "obj-lit") return { kind: "top" };
     if (!dpP || dpP.kind !== "const") return dpO;
     if (typeof dpP.value !== "string" && typeof dpP.value !== "number") return dpO;
-    if (!dpD || dpD.kind !== "obj-lit" || !dpD.props || !dpD.props.value) return dpO;
+    if (!dpD || dpD.kind !== "obj-lit" || !dpD.props) return dpO;
     var dpNew = Object.create(null);
     for (var dpk in dpO.props) {
       if (Object.prototype.hasOwnProperty.call(dpO.props, dpk)) dpNew[dpk] = dpO.props[dpk];
     }
-    dpNew[String(dpP.value)] = dpD.props.value;
+    // § 20.1.2.4 Object.defineProperty: descriptor may have either
+    // `value` (data property) or `get` (accessor — getter function).
+    // For `value`: bind the prop to that AV directly. For `get`:
+    // invoke the getter (function-ref) and bind to its return value.
+    // Setter-only descriptors don't define a readable value.
+    if (dpD.props.value) {
+      dpNew[String(dpP.value)] = dpD.props.value;
+    } else if (dpD.props.get && dpD.props.get.kind === "function-ref" && dpD.props.get.funcNode) {
+      var dpGetterRet = _specReturnValueMemo.get(dpD.props.get.funcNode);
+      if (dpGetterRet) {
+        dpNew[String(dpP.value)] = dpGetterRet;
+      } else {
+        dpNew[String(dpP.value)] = { kind: "top" };
+      }
+    } else {
+      // Unknown descriptor shape — bind to top to preserve the prop key.
+      dpNew[String(dpP.value)] = { kind: "top" };
+    }
     return { kind: "obj-lit", props: dpNew };
   }
   // § 20.1.2.5 Object.defineProperties(O, Properties) — like above but
@@ -6993,20 +7010,34 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
     if (prevSnap.returnValue && currSnap.returnValue && !_specEqualAv(prevSnap.returnValue, currSnap.returnValue)) return true;
     return false;
   }
-  // Pass 1: analyse every function. Record snapshot for subsequent
-  // pass comparisons (no comparison on pass 1 — everyone is freshly
-  // memoised).
+  // Pass 1: analyse every function. Top-down by source order means
+  // outer functions are analysed before their inner callees / nested
+  // functions whose memos they read (e.g. Object.defineProperty's
+  // getter argument FunctionExpression). Pass 2 below re-analyses
+  // every function once with the now-populated memos so outer
+  // analyses see inner returns. After pass 2, the worklist handles
+  // remaining propagations efficiently.
   var pendingNodes = new Set();
   for (var ip = 0; ip < fnPaths.length; ip++) {
     var ipFp = fnPaths[ip];
     _specAnalyzePropertyFlow(ipFp, true);
-    sigByFn.set(ipFp.node, _ssSnapshot(ipFp.node));
+  }
+  // Pass 2: bottom-up. Inner functions (later in fnPaths since Babel
+  // traverse is top-down) are revisited first; their callers — which
+  // may now read populated memos — get freshly recomputed memos by
+  // the time we revisit them. After pass 2, snapshot for the
+  // worklist's change-detection.
+  for (var ip2nd = fnPaths.length - 1; ip2nd >= 0; ip2nd--) {
+    var ipFp2 = fnPaths[ip2nd];
+    _specAnalyzePropertyFlow(ipFp2, true);
+    sigByFn.set(ipFp2.node, _ssSnapshot(ipFp2.node));
   }
   // Build initial worklist from any function whose memo affected its callers.
-  // (After pass 1, all sigs are "fresh" — we treat all as potentially affecting callers.)
-  for (var ip2 = 0; ip2 < fnPaths.length; ip2++) {
-    if (callersOf.has(fnPaths[ip2].node)) {
-      var callerSet = callersOf.get(fnPaths[ip2].node);
+  // (After pass 2, all sigs are populated — we treat all as potentially
+  // affecting callers, modulo the change-detection in the worklist loop.)
+  for (var ip3 = 0; ip3 < fnPaths.length; ip3++) {
+    if (callersOf.has(fnPaths[ip3].node)) {
+      var callerSet = callersOf.get(fnPaths[ip3].node);
       callerSet.forEach(function(c) { pendingNodes.add(c); });
     }
   }
@@ -8130,7 +8161,19 @@ function _specEvalLeaf(path, state, vals, effects) {
         if (bmArgAvs === null) return { kind: "top" };  // unknown spread source
         var bmRecvName = (_t.isMemberExpression(n.callee) && _t.isIdentifier(n.callee.object))
           ? n.callee.object.name : null;
-        return _specApplyBuiltinMethod(bmId, bmRecvAv, bmRecvName, bmArgAvs, state);
+        var bmResult = _specApplyBuiltinMethod(bmId, bmRecvAv, bmRecvName, bmArgAvs, state);
+        // § 20.1.2.4 / § 20.1.2.5: Object.defineProperty / defineProperties
+        // mutate the FIRST argument's target object. When the first arg is
+        // a tracked Identifier, rebind state[name] to the new shape so
+        // subsequent reads see the defined property. Without this, the
+        // call returns the new obj-lit but state[name] is the old one.
+        if ((bmId === "Object.defineProperty" || bmId === "Object.defineProperties") &&
+            bmResult && bmResult.kind === "obj-lit" && n.arguments.length >= 1 &&
+            _t.isIdentifier(n.arguments[0]) && state &&
+            Object.prototype.hasOwnProperty.call(state, n.arguments[0].name)) {
+          state[n.arguments[0].name] = bmResult;
+        }
+        return bmResult;
       }
     }
     // Object.* dispatched via globalThis.Object registry now —
