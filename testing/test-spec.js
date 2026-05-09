@@ -3959,6 +3959,32 @@ specTest("§ 24.1.3.4 Map.prototype.forEach: cb body's writes propagate via valu
   return leaves.indexOf("/api/v1") >= 0 && leaves.indexOf("/api/v2") >= 0;
 });
 
+specTest("§ 9.1.1 closure: HOF cb body resolves captured outer var via lexical environment", `
+  function f() {
+    var arr = ["alpha", "beta"];
+    var prefix = "/api/";
+    arr.forEach(function(x) { this.url = prefix + x; }, this);
+  }
+`, function(effects) {
+  // The cb body uses `prefix` which is closed over from f's scope.
+  // With outerState wiring, prefix resolves to "/api/" and the
+  // assigned value is the joined "/api/alpha" || "/api/beta".
+  var urlEffects = effects.filter(function(e) {
+    return e.key && e.key.kind === "const" && e.key.value === "url";
+  });
+  if (urlEffects.length === 0) return false;
+  var av = urlEffects[0].value;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (!x) continue;
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.indexOf("/api/alpha") >= 0 && leaves.indexOf("/api/beta") >= 0;
+});
+
 specTest("§ 24.2.3.6 Set.prototype.forEach: cb body's writes propagate via item joins", `
   function f() {
     var s = new Set();

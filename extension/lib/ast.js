@@ -4924,10 +4924,24 @@ function _drainHofQueueIntoStack(stack, hofQueueBaseLen, effects) {
     if (!cbPath || !cbPath.node) continue;
     if (!_t.isFunctionExpression(cbPath.node) && !_t.isArrowFunctionExpression(cbPath.node)) continue;
     var cbState = {};
+    // Inherit closure-captured bindings from the outer function's state
+    // per § 9.1.1 lexical environments: cb body resolves free variables
+    // through the cb's [[Environment]] outer chain. Sound snapshot at
+    // dispatch-time (cb is called synchronously during forEach/map/etc.,
+    // per the spec algorithms in § 23.1.3 — no later modifications
+    // before the first cb invocation are observable).
+    if (dispatch.outerState) {
+      for (var osk in dispatch.outerState) {
+        if (Object.prototype.hasOwnProperty.call(dispatch.outerState, osk)) {
+          cbState[osk] = dispatch.outerState[osk];
+        }
+      }
+    }
     var cbParams = cbPath.node.params || [];
     for (var pi = 0; pi < cbParams.length && pi < paramAvs.length; pi++) {
       var pp = cbParams[pi];
       if (pp && pp.type === "Identifier") {
+        // cb params shadow closure-captured vars per § 10.2 — set last.
         cbState[pp.name] = paramAvs[pi];
       } else {
         // Destructuring param — bind via the same iterative helper used
@@ -5745,7 +5759,7 @@ function _specEvalLeaf(path, state, vals, effects) {
               msfKeyAv = msfValAv;
             }
           }
-          _hofPendingDispatches.push({ cbPath: path.get("arguments.0"), paramAvs: [msfValAv, msfKeyAv] });
+          _hofPendingDispatches.push({ cbPath: path.get("arguments.0"), paramAvs: [msfValAv, msfKeyAv], outerState: state });
           return { kind: "const", value: undefined };
         }
       }
@@ -5787,7 +5801,7 @@ function _specEvalLeaf(path, state, vals, effects) {
             // Queue dispatch for the outer driver to pick up. Includes
             // the cbPath and per-param caller AVs; the driver binds them
             // into cb's body-entry state and pushes onto its branch stack.
-            _hofPendingDispatches.push({ cbPath: path.get("arguments.0"), paramAvs: hofParamAvs });
+            _hofPendingDispatches.push({ cbPath: path.get("arguments.0"), paramAvs: hofParamAvs, outerState: state });
             // Return value per § 23.1.3 with proper spec semantics:
             //   forEach → undefined (per spec)
             //   filter → array-lit with same element type (subset)
