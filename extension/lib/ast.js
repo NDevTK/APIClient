@@ -6194,6 +6194,11 @@ function _specEvalLeaf(path, state, vals, effects) {
   if (_t.isNumericLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isBooleanLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isNullLiteral(n)) return { kind: "const", value: null };
+  if (_t.isBigIntLiteral(n)) {
+    // § 21.2.1.1.1 BigInt literal evaluation — produces a BigInt value.
+    try { return { kind: "const", value: BigInt(n.value) }; }
+    catch (_) { return { kind: "top" }; }
+  }
   if (_t.isRegExpLiteral(n)) {
     // § 13.2.7 RegularExpressionLiteral — produces a RegExp instance per
     // § 22.2.1.1. Build a regex-instance AV with statically-extracted
