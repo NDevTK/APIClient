@@ -749,6 +749,31 @@ specTest("§ 14.3.3: VariableDeclarator destructuring `var {a, b} = obj`", `
          byKey.y.key.kind === "const" && byKey.y.key.value === "bar";
 });
 
+specTest("§ 13.10 + § 14.3.3: ObjectPattern distributes over or-tree of obj-lits", `
+  function f(b) {
+    var o = b ? { url: "/api/a" } : { url: "/api/b" };
+    var { url } = o;
+    this.endpoint = url;
+  }
+`, function(effects) {
+  // ObjectPattern destructuring of a ConditionalExpression that joins
+  // two obj-lits should distribute per § 13.10 alternation: each leaf's
+  // .url property feeds a set-union, yielding `or("/api/a", "/api/b")`.
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  if (!v) return false;
+  if (v.kind !== "or") return false;
+  // Flatten and check both const leaves are present.
+  var leaves = [v];
+  var found = {};
+  while (leaves.length) {
+    var l = leaves.pop();
+    if (l && l.kind === "or") { leaves.push(l.left); leaves.push(l.right); }
+    else if (l && l.kind === "const") found[l.value] = true;
+  }
+  return found["/api/a"] && found["/api/b"];
+});
+
 specTest("§ 13.2.8.6: TemplateLiteral with const interpolation composes to single Const", `
   function f() {
     var ver = "v2";

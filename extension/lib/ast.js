@@ -6236,11 +6236,38 @@ function _specVariableDeclaratorBind(idNode, initAv, state) {
         if (keyName === null) continue;
         // § 13.10 reduce eagerly when src is obj-lit + Const-key —
         // bind the prop's actual value rather than a `member` AV that
-        // _avFlattenStringLeaves would treat as opaque.
+        // _avFlattenStringLeaves would treat as opaque. Distribute
+        // over or-trees of obj-lits so destructuring of joined objects
+        // (e.g. `var {url}` of an or-tree of {url:"/a"} | {url:"/b"})
+        // yields k = or("/a", "/b") instead of opaque member.
         var boundAv;
         if (srcAv.kind === "obj-lit" && srcAv.props &&
             Object.prototype.hasOwnProperty.call(srcAv.props, keyName)) {
           boundAv = srcAv.props[keyName];
+        } else if (srcAv.kind === "or") {
+          var orLeavesO = _avFlattenOrLeaves(srcAv);
+          var allObjLeaves = orLeavesO && orLeavesO.length > 0;
+          var perLeafProps = [];
+          if (allObjLeaves) {
+            for (var oloi = 0; oloi < orLeavesO.length; oloi++) {
+              var leafO = orLeavesO[oloi];
+              if (leafO && leafO.kind === "obj-lit" && leafO.props &&
+                  Object.prototype.hasOwnProperty.call(leafO.props, keyName)) {
+                perLeafProps.push(leafO.props[keyName]);
+              } else {
+                allObjLeaves = false;
+                break;
+              }
+            }
+          }
+          if (allObjLeaves && perLeafProps.length > 0) {
+            boundAv = perLeafProps[0];
+            for (var plpo = 1; plpo < perLeafProps.length; plpo++) {
+              boundAv = _specSetUnionAv(boundAv, perLeafProps[plpo]);
+            }
+          } else {
+            boundAv = { kind: "member", obj: srcAv, key: { kind: "const", value: keyName } };
+          }
         } else {
           boundAv = { kind: "member", obj: srcAv, key: { kind: "const", value: keyName } };
         }
