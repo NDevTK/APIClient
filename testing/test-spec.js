@@ -2941,6 +2941,26 @@ test("Pillar 2: switch-case branch values surfaced as validValues", `
   return roleParam.validValues.indexOf("admin") >= 0 && roleParam.validValues.indexOf("guest") >= 0;
 });
 
+specTest("§ 13.8.1: alternation distribution `(cond ? 'a' : 'b') + '/x'` → or('a/x', 'b/x')", `
+  function f(cond) {
+    var url = (cond ? "/a" : "/b") + "/api";
+    this.url = url;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Should be or('/a/api', '/b/api') in some left/right shape.
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf("/a/api") >= 0 && leaves.indexOf("/b/api") >= 0;
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));
