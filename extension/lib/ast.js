@@ -2171,8 +2171,10 @@ function _specGlobalThisAv() {
     SQRT2: { kind: "const", value: Math.SQRT2 },
   };
   var mathMethodNames = ["floor", "ceil", "abs", "round", "trunc", "sign", "sqrt",
-    "log", "log2", "log10", "exp", "sin", "cos", "tan", "asin", "acos", "atan",
-    "min", "max", "pow"];
+    "cbrt", "log", "log2", "log10", "log1p", "exp", "expm1", "fround",
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+    "hypot", "min", "max", "pow", "clz32", "imul"];
   for (var mmi = 0; mmi < mathMethodNames.length; mmi++) {
     mathProps[mathMethodNames[mmi]] = { kind: "builtin-method", id: "Math." + mathMethodNames[mmi] };
   }
@@ -2981,6 +2983,20 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       else if (mMethName === "asin") mResult = Math.asin(mNumArgs[0]);
       else if (mMethName === "acos") mResult = Math.acos(mNumArgs[0]);
       else if (mMethName === "atan") mResult = Math.atan(mNumArgs[0]);
+      else if (mMethName === "atan2") mResult = Math.atan2(mNumArgs[0], mNumArgs[1]);
+      else if (mMethName === "cbrt") mResult = Math.cbrt(mNumArgs[0]);
+      else if (mMethName === "log1p") mResult = Math.log1p(mNumArgs[0]);
+      else if (mMethName === "expm1") mResult = Math.expm1(mNumArgs[0]);
+      else if (mMethName === "fround") mResult = Math.fround(mNumArgs[0]);
+      else if (mMethName === "sinh") mResult = Math.sinh(mNumArgs[0]);
+      else if (mMethName === "cosh") mResult = Math.cosh(mNumArgs[0]);
+      else if (mMethName === "tanh") mResult = Math.tanh(mNumArgs[0]);
+      else if (mMethName === "asinh") mResult = Math.asinh(mNumArgs[0]);
+      else if (mMethName === "acosh") mResult = Math.acosh(mNumArgs[0]);
+      else if (mMethName === "atanh") mResult = Math.atanh(mNumArgs[0]);
+      else if (mMethName === "hypot") mResult = Math.hypot.apply(Math, mNumArgs);
+      else if (mMethName === "clz32") mResult = Math.clz32(mNumArgs[0]);
+      else if (mMethName === "imul") mResult = Math.imul(mNumArgs[0], mNumArgs[1]);
       else if (mMethName === "min") mResult = Math.min.apply(Math, mNumArgs);
       else if (mMethName === "max") mResult = Math.max.apply(Math, mNumArgs);
       else if (mMethName === "pow") mResult = Math.pow(mNumArgs[0], mNumArgs[1]);
