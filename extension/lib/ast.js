@@ -5339,6 +5339,23 @@ function _specEqualAv(a, b) {
       case "keys-of":  pairs.push([x.src, y.src]); break;
       case "member":   pairs.push([x.obj, y.obj]); pairs.push([x.key, y.key]); break;
       case "or":       pairs.push([x.left, y.left]); pairs.push([x.right, y.right]); break;
+      case "binop": {
+        if (x.op !== y.op) return false;
+        pairs.push([x.left, y.left]);
+        pairs.push([x.right, y.right]);
+        break;
+      }
+      case "template": {
+        if (!x.quasis || !y.quasis || x.quasis.length !== y.quasis.length) return false;
+        for (var tqei = 0; tqei < x.quasis.length; tqei++) {
+          if (x.quasis[tqei] !== y.quasis[tqei]) return false;
+        }
+        if (!x.exprs || !y.exprs || x.exprs.length !== y.exprs.length) return false;
+        for (var teei = 0; teei < x.exprs.length; teei++) {
+          pairs.push([x.exprs[teei], y.exprs[teei]]);
+        }
+        break;
+      }
       default: return false;
     }
   }
