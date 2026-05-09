@@ -2132,6 +2132,12 @@ function _specArrayPrototypeAv() {
       // Pure (return new value, no mutation):
       "join", "concat", "slice", "includes", "indexOf", "lastIndexOf",
       "reverse", "at", "flat"
+      // HOF-callback methods (filter, map, find, etc.) are dispatched at
+      // the CallExpression level via _hofPendingDispatches per § 23.1.3.7
+      // / .18 / .10 etc. — see the inline handler that pushes the cb
+      // body for inter-procedural per-element analysis. Adding them
+      // here would conflict because _specApplyBuiltinMethod's per-leaf
+      // dispatch can't replicate the cb-body environment binding.
     ];
     for (var ami = 0; ami < arrayMethodNames.length; ami++) {
       props[arrayMethodNames[ami]] = { kind: "builtin-method", id: "Array.prototype." + arrayMethodNames[ami] };
