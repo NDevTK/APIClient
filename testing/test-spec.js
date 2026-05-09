@@ -854,6 +854,23 @@ specTest("§ 13.2.5.4: spread element merges defaults into fetch options for met
   return true;
 });
 
+specTest("§ 13.3.5 + § 9.2.1: class+ctor `new C(arg).method()` resolves URL through this", `
+  class API { constructor(base) { this.base = base; } get(path) { fetch(this.base + path); } }
+  new API("/api").get("/users");
+`, function(effects, result) {
+  // Class instance dispatch per § 13.3.5: `new API("/api")` constructs
+  // an instance whose `this.base` is bound to "/api" via the ctor; the
+  // subsequent `.get("/users")` call's body's `this.base + path` is
+  // resolved by:
+  // (a) substituting get's param `path` = "/users" with fnContext=getFn
+  // (b) walking get's call-site receiver `new API("/api")` and using
+  //     it to substitute ctor-tagged params via fnContext=ctorNode
+  // The URL extractor records the resolved fetch call.
+  var sites = (result && result.fetchCallSites) || [];
+  if (sites.length !== 1) return false;
+  return sites[0].url === "/api/users";
+});
+
 specTest("§ 9.2.1 OrdinaryCallBindThis: obj-method `this.X` binds to receiver's prop", `
   function f() {
     var obj = {

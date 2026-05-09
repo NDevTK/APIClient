@@ -5056,7 +5056,7 @@ function _specBuildClassStaticAv(classNode, classPath) {
       var mName = _t.isIdentifier(member.key) ? member.key.name :
         (_t.isStringLiteral(member.key) ? member.key.value : null);
       if (mName === null) continue;
-      props[mName] = { kind: "function-ref", funcNode: member };
+      props[mName] = { kind: "function-ref", funcNode: member, methodOf: classNode };
     }
     // Static field initialisers per § 15.7.5: `static X = expr`. Calling
     // _specEvalExpression here would form a static call-graph cycle
@@ -7056,6 +7056,75 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
                    (_t.isFunctionExpression(b.path.node.init) || _t.isArrowFunctionExpression(b.path.node.init))) {
             calleeNode = b.path.node.init;
           }
+          // NewExpression on a ClassDeclaration: the call site indexes the
+          // class's constructor per § 13.3.5 — so the ctor's
+          // _resolveAvBySubstitutingCallerArgs walks back to NewExpression
+          // sites with their args, completing the multi-level chain
+          // (NewExpression → ctor params → method's `this` projections).
+          else if (_t.isNewExpression(p.node)) {
+            var clsBody = null;
+            if (_t.isClassDeclaration(b.path.node) && b.path.node.body) clsBody = b.path.node.body;
+            else if (_t.isVariableDeclarator(b.path.node) && b.path.node.init &&
+                     _t.isClassExpression(b.path.node.init) && b.path.node.init.body) {
+              clsBody = b.path.node.init.body;
+            }
+            if (clsBody && _t.isClassBody(clsBody)) {
+              for (var cmiN = 0; cmiN < clsBody.body.length; cmiN++) {
+                var cmN = clsBody.body[cmiN];
+                if (_t.isClassMethod(cmN) && cmN.kind === "constructor") {
+                  calleeNode = cmN;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+      // Class method dispatch per § 13.3.6: when callee is `recv.name`
+      // and the receiver resolves to a known class instance (via
+      // NewExpression on a known class binding), index this CallExpression
+      // as a call site of the class's `name` method. Lets URL-extractor
+      // caller-tracing find class-method invocations.
+      if (!calleeNode && _t.isMemberExpression(c) && !c.computed &&
+          _t.isIdentifier(c.property) && _t.isCallExpression(p.node)) {
+        var methName = c.property.name;
+        var recv = c.object;
+        var classDeclNode = null;
+        // recv = new ClassName(...) (direct)
+        if (_t.isNewExpression(recv) && _t.isIdentifier(recv.callee)) {
+          var clsB = p.scope.getBinding(recv.callee.name);
+          if (clsB && clsB.path && _t.isClassDeclaration(clsB.path.node)) {
+            classDeclNode = clsB.path.node;
+          } else if (clsB && clsB.path && _t.isVariableDeclarator(clsB.path.node) &&
+                     clsB.path.node.init && _t.isClassExpression(clsB.path.node.init)) {
+            classDeclNode = clsB.path.node.init;
+          }
+        }
+        // recv = identifier bound to `new ClassName(...)`
+        else if (_t.isIdentifier(recv)) {
+          var rcvB = p.scope.getBinding(recv.name);
+          if (rcvB && rcvB.path && _t.isVariableDeclarator(rcvB.path.node) &&
+              rcvB.path.node.init && _t.isNewExpression(rcvB.path.node.init) &&
+              _t.isIdentifier(rcvB.path.node.init.callee)) {
+            var clsB2 = p.scope.getBinding(rcvB.path.node.init.callee.name);
+            if (clsB2 && clsB2.path && _t.isClassDeclaration(clsB2.path.node)) {
+              classDeclNode = clsB2.path.node;
+            } else if (clsB2 && clsB2.path && _t.isVariableDeclarator(clsB2.path.node) &&
+                       clsB2.path.node.init && _t.isClassExpression(clsB2.path.node.init)) {
+              classDeclNode = clsB2.path.node.init;
+            }
+          }
+        }
+        if (classDeclNode && classDeclNode.body && _t.isClassBody(classDeclNode.body)) {
+          for (var cmiC = 0; cmiC < classDeclNode.body.body.length; cmiC++) {
+            var cmC = classDeclNode.body.body[cmiC];
+            if (_t.isClassMethod(cmC) && !cmC.static && !cmC.computed &&
+                cmC.kind === "method" && _t.isIdentifier(cmC.key) &&
+                cmC.key.name === methName) {
+              calleeNode = cmC;
+              break;
+            }
+          }
         }
       }
       if (calleeNode) {
@@ -8242,7 +8311,7 @@ function _specEvalLeaf(path, state, vals, effects) {
               var bmName = _t.isIdentifier(bm.key) ? bm.key.name :
                 (_t.isStringLiteral(bm.key) ? bm.key.value : null);
               if (bmName !== null && !Object.prototype.hasOwnProperty.call(instProps2, bmName)) {
-                instProps2[bmName] = { kind: "function-ref", funcNode: bm };
+                instProps2[bmName] = { kind: "function-ref", funcNode: bm, methodOf: classNode };
               }
             }
             // Instance ClassProperty literal initialisers (§ 15.7.5).
@@ -8368,12 +8437,56 @@ function _specEvalLeaf(path, state, vals, effects) {
             frArgAvs.push(vals.get(n.arguments[frai]) || { kind: "top" });
           }
           // § 9.2.1 OrdinaryCallBindThis: receiver becomes `this` in
-          // method body. When bmRecvAv is a known instance AV, bind
-          // `this.X` projections to receiver.X — closes the gap where
-          // `class C { constructor(b){this.base=b;} get(p){fetch(this.base+p);}}; new C("/api").get("/x")`
-          // produced `binop(member(this,"base"), "+", "/x")` and
-          // never resolved.
-          return _specInstantiateAv(frRet, frArgAvs, bmRecvAv);
+          // method body. fnContext = frFn ensures only this method's
+          // params get substituted.
+          var firstSub = _specInstantiateAv(frRet, frArgAvs, bmRecvAv, frFn);
+          // Class-method ctor substitution per § 13.3.5: when the
+          // function-ref AV carries `methodOf` (the class node) and the
+          // receiver is the substituted instance AV, use the receiver's
+          // prop values to map ctor-tagged params back to const values.
+          // For each ctor this-effect (this, K, value=param[i]_fn=ctor),
+          // the receiver's prop K is the substituted value; build a
+          // ctor-arg array indexed by param idx and apply a second
+          // substitution pass with fnContext=ctorNode.
+          if (bmCalleeAv.methodOf && bmCalleeAv.methodOf.body &&
+              _t.isClassBody(bmCalleeAv.methodOf.body) &&
+              bmRecvAv && bmRecvAv.kind === "obj-lit" && bmRecvAv.props) {
+            var ctorOfClass = null;
+            var classBodyMembers = bmCalleeAv.methodOf.body.body;
+            for (var coc = 0; coc < classBodyMembers.length; coc++) {
+              if (_t.isClassMethod(classBodyMembers[coc]) &&
+                  classBodyMembers[coc].kind === "constructor") {
+                ctorOfClass = classBodyMembers[coc]; break;
+              }
+            }
+            if (ctorOfClass) {
+              var ctorEffectsForSub = _specThisEffectsMemo.get(ctorOfClass);
+              if (ctorEffectsForSub && ctorEffectsForSub.length > 0) {
+                // Build ctor param idx → AV map from receiver + effects.
+                var ctorArgsFromRecv = [];
+                for (var cesi = 0; cesi < ctorEffectsForSub.length; cesi++) {
+                  var ces = ctorEffectsForSub[cesi];
+                  if (ces.target && ces.target.kind === "this" &&
+                      ces.key && ces.key.kind === "const" &&
+                      ces.value && ces.value.kind === "param" &&
+                      ces.value.fn === ctorOfClass &&
+                      typeof ces.value.idx === "number") {
+                    if (Object.prototype.hasOwnProperty.call(bmRecvAv.props, ces.key.value)) {
+                      ctorArgsFromRecv[ces.value.idx] = bmRecvAv.props[ces.key.value];
+                    }
+                  }
+                }
+                if (ctorArgsFromRecv.length > 0) {
+                  // Fill any missing slots with top.
+                  for (var fsi = 0; fsi < ctorArgsFromRecv.length; fsi++) {
+                    if (ctorArgsFromRecv[fsi] === undefined) ctorArgsFromRecv[fsi] = { kind: "top" };
+                  }
+                  return _specInstantiateAv(firstSub, ctorArgsFromRecv, undefined, ctorOfClass);
+                }
+              }
+            }
+          }
+          return firstSub;
         }
         // No memo yet: handle single-statement-return fast path inline so
         // the first fixpoint pass still resolves common static methods
@@ -11879,6 +11992,72 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
       // params (tagged via _specBuildThisInstanceAv) won't be touched.
       var substituted = _specInstantiateAv(itemAv, callerArgAvs, undefined, itemFunc.node);
       if (!substituted) continue;
+      // Class-method receiver substitution per § 13.3.5 + § 9.2.1: when
+      // the call site is `new ClassName(ctorArgs).method(args)` (or
+      // `c.method(args)` where c was bound to a NewExpression), the
+      // method's `this` carries constructor-tagged params. After
+      // substituting the method's own params, do a second substitution
+      // pass with fnContext=ctorNode and callerArgAvs=ctorArgs to
+      // resolve the constructor's params from the NewExpression's args.
+      if (refParent.callee && _t.isMemberExpression(refParent.callee)) {
+        var receiver = refParent.callee.object;
+        var newExprNode = null;
+        if (_t.isNewExpression(receiver)) newExprNode = receiver;
+        else if (_t.isIdentifier(receiver)) {
+          var rcvBinding = ref.scope.getBinding(receiver.name);
+          if (rcvBinding && rcvBinding.path && _t.isVariableDeclarator(rcvBinding.path.node) &&
+              rcvBinding.path.node.init && _t.isNewExpression(rcvBinding.path.node.init)) {
+            newExprNode = rcvBinding.path.node.init;
+          }
+        }
+        if (newExprNode && _t.isIdentifier(newExprNode.callee)) {
+          var clsBindForCtor = ref.scope.getBinding(newExprNode.callee.name);
+          if (clsBindForCtor && clsBindForCtor.path) {
+            var clsBodyForCtor = null;
+            if (_t.isClassDeclaration(clsBindForCtor.path.node) && clsBindForCtor.path.node.body) {
+              clsBodyForCtor = clsBindForCtor.path.node.body;
+            } else if (_t.isVariableDeclarator(clsBindForCtor.path.node) &&
+                       clsBindForCtor.path.node.init && _t.isClassExpression(clsBindForCtor.path.node.init) &&
+                       clsBindForCtor.path.node.init.body) {
+              clsBodyForCtor = clsBindForCtor.path.node.init.body;
+            }
+            if (clsBodyForCtor && _t.isClassBody(clsBodyForCtor)) {
+              for (var cmiR = 0; cmiR < clsBodyForCtor.body.length; cmiR++) {
+                var cmR = clsBodyForCtor.body[cmiR];
+                if (_t.isClassMethod(cmR) && cmR.kind === "constructor") {
+                  // Extract ctor caller args from the NewExpression.
+                  var ctorArgAvs = [];
+                  for (var nai2 = 0; nai2 < newExprNode.arguments.length; nai2++) {
+                    var ctorArgNode = newExprNode.arguments[nai2];
+                    var ctorArgAv = _specPathValMemo.get(ctorArgNode);
+                    if (!ctorArgAv) {
+                      try {
+                        // Find a path for the ctor arg via the program traversal
+                        // — not strictly necessary since spec eval is idempotent;
+                        // fall back to top when memo miss.
+                        ctorArgAv = { kind: "top" };
+                      } catch (_e2) { ctorArgAv = { kind: "top" }; }
+                    }
+                    ctorArgAvs.push(ctorArgAv);
+                  }
+                  // Try literal extraction for StringLiteral args if memo missed.
+                  for (var nai3 = 0; nai3 < newExprNode.arguments.length; nai3++) {
+                    if (ctorArgAvs[nai3].kind === "top") {
+                      var na3 = newExprNode.arguments[nai3];
+                      if (_t.isStringLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: na3.value };
+                      else if (_t.isNumericLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: na3.value };
+                      else if (_t.isBooleanLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: na3.value };
+                      else if (_t.isNullLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: null };
+                    }
+                  }
+                  substituted = _specInstantiateAv(substituted, ctorArgAvs, undefined, cmR);
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
       var leaves = _avFlattenStringLeaves(substituted);
       for (var li = 0; li < leaves.length; li++) {
         if (allLeaves.indexOf(leaves[li]) < 0) allLeaves.push(leaves[li]);
