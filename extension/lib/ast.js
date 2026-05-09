@@ -2334,6 +2334,113 @@ function _specLogicalOrAv(leftAv, rightAv) {
   return { kind: "or", left: leftAv, right: rightAv };
 }
 
+// Resolve a single AST node in the callee body's context to its
+// AbstractValue, where any Identifier-of-callee-param is substituted
+// with the corresponding caller-arg AV from `vals`. Returns the AV or
+// null if the node shape isn't handled here. Pure spec — scope-checked
+// param resolution per § 8.1.1.
+//
+// Used by _specEvalLeaf's CallExpression return-substitution branch
+// to evaluate `return expr` where expr references the callee's params.
+// Iterative — no recursion. Handles leaf shapes:
+//   - StringLiteral / NumericLiteral / BooleanLiteral / NullLiteral
+//   - Identifier of a param (binding.kind === "param" + identity check)
+function _specResolveLeafInCalleeContext(node, calleeFnPath, callExpr, vals) {
+  if (!node) return null;
+  if (_t.isStringLiteral(node)) return { kind: "const", value: node.value };
+  if (_t.isNumericLiteral(node)) return { kind: "const", value: node.value };
+  if (_t.isBooleanLiteral(node)) return { kind: "const", value: node.value };
+  if (_t.isNullLiteral(node)) return { kind: "const", value: null };
+  if (_t.isIdentifier(node)) {
+    var b = calleeFnPath.scope.getBinding(node.name);
+    if (!b || b.kind !== "param") return null;
+    var ps = calleeFnPath.node.params;
+    for (var pi = 0; pi < ps.length; pi++) {
+      var par = ps[pi];
+      var bindIdNode = _t.isAssignmentPattern(par) ? par.left : par;
+      if (b.identifier === bindIdNode) {
+        if (pi < callExpr.arguments.length) {
+          return vals.get(callExpr.arguments[pi]) || { kind: "top" };
+        }
+        return { kind: "const", value: undefined };  // missing arg per § 10.2.10
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+// Evaluate the callee's `return EXPR` argument with caller-arg AVs
+// substituted for params. Returns the AV or null when the EXPR shape
+// isn't handled. Iterative; no call into _specEvalLeaf/_specEvalExpression
+// (would create call-graph cycle per audit-recursion lint).
+//
+// Handled shapes (all per ECMA-262):
+//   - Leaf shapes via _specResolveLeafInCalleeContext.
+//   - § 13.8.1 BinaryExpression `+` of two leaves: const-string concat
+//     when both leaves are Const strings; alternation distribution when
+//     either leaf is or-tree of Const strings.
+//   - § 13.2.8 TemplateLiteral with all-leaf expressions: per-quasi
+//     concatenation, alternation distribution if any expr is or-tree.
+function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) {
+  if (!retArg) return null;
+  // Leaf.
+  var leafAv = _specResolveLeafInCalleeContext(retArg, calleeFnPath, callExpr, vals);
+  if (leafAv !== null) return leafAv;
+  // BinaryExpression `+` per § 13.8.1.
+  if (_t.isBinaryExpression(retArg) && retArg.operator === "+") {
+    var leftAv = _specResolveLeafInCalleeContext(retArg.left, calleeFnPath, callExpr, vals);
+    var rightAv = _specResolveLeafInCalleeContext(retArg.right, calleeFnPath, callExpr, vals);
+    if (leftAv === null || rightAv === null) return null;
+    var leftLeaves = _avFlattenAnyConstLeaves(leftAv);
+    var rightLeaves = _avFlattenAnyConstLeaves(rightAv);
+    if (leftLeaves === null || rightLeaves === null) return null;
+    var concatResults = [];
+    for (var ll = 0; ll < leftLeaves.length; ll++) {
+      for (var rr = 0; rr < rightLeaves.length; rr++) {
+        var lv = leftLeaves[ll], rv = rightLeaves[rr];
+        // ToString per § 7.1.17 when either operand is string.
+        if (typeof lv === "string" || typeof rv === "string") {
+          concatResults.push({ kind: "const", value: String(lv) + String(rv) });
+        } else if (typeof lv === "number" && typeof rv === "number") {
+          concatResults.push({ kind: "const", value: lv + rv });
+        } else {
+          return null;  // unsupported types
+        }
+      }
+    }
+    if (concatResults.length === 1) return concatResults[0];
+    var concatOr = concatResults[0];
+    for (var ci = 1; ci < concatResults.length; ci++) concatOr = _specLogicalOrAv(concatOr, concatResults[ci]);
+    return concatOr;
+  }
+  // TemplateLiteral per § 13.2.8.6: quasis interspersed with expressions.
+  if (_t.isTemplateLiteral(retArg)) {
+    var quasis = retArg.quasis;
+    var exprs = retArg.expressions;
+    var alts = [quasis[0].value.cooked];
+    for (var ei = 0; ei < exprs.length; ei++) {
+      var exAv = _specResolveLeafInCalleeContext(exprs[ei], calleeFnPath, callExpr, vals);
+      if (exAv === null) return null;
+      var exLeaves = _avFlattenAnyConstLeaves(exAv);
+      if (exLeaves === null) return null;
+      var nextAlts = [];
+      for (var aj = 0; aj < alts.length; aj++) {
+        for (var li = 0; li < exLeaves.length; li++) {
+          var exv = exLeaves[li];
+          nextAlts.push(alts[aj] + (typeof exv === "string" ? exv : String(exv)) + quasis[ei + 1].value.cooked);
+        }
+      }
+      alts = nextAlts;
+    }
+    if (alts.length === 1) return { kind: "const", value: alts[0] };
+    var tlOr = { kind: "const", value: alts[0] };
+    for (var ti = 1; ti < alts.length; ti++) tlOr = _specLogicalOrAv(tlOr, { kind: "const", value: alts[ti] });
+    return tlOr;
+  }
+  return null;
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // § 13.15.4 — AssignmentExpression evaluation (plain `=` operator).
 // Two LHS shapes per spec (PutValue at § 6.2.4.5):
@@ -4378,38 +4485,13 @@ function _specEvalLeaf(path, state, vals, effects) {
           if (_t.isNumericLiteral(retArg)) return { kind: "const", value: retArg.value };
           if (_t.isBooleanLiteral(retArg)) return { kind: "const", value: retArg.value };
           if (_t.isNullLiteral(retArg)) return { kind: "const", value: null };
-          // `return paramName;` — substitute caller's arg AV per § 10.2.10
-          // FunctionDeclarationInstantiation: the param's value at runtime
-          // is the corresponding caller argument. Scope-checked: retArg's
-          // binding inside the callee body must actually be the param
-          // (not a shadow like `var x = 1; return x;`).
-          if (_t.isIdentifier(retArg)) {
-            var retBinding = calleeFnPath.scope.getBinding(retArg.name);
-            if (retBinding && retBinding.kind === "param") {
-              var calleeParams = calleeFnPath.node.params;
-              for (var rpi = 0; rpi < calleeParams.length; rpi++) {
-                var rpar = calleeParams[rpi];
-                var rparName = _t.isIdentifier(rpar) ? rpar.name :
-                  (_t.isAssignmentPattern(rpar) && _t.isIdentifier(rpar.left) ? rpar.left.name : null);
-                if (rparName === retArg.name && retBinding.identifier === rpar) {
-                  if (rpi < n.arguments.length) {
-                    var callerArgAv = vals.get(n.arguments[rpi]);
-                    if (callerArgAv) return callerArgAv;
-                  }
-                  break;
-                }
-                // AssignmentPattern: binding identifier is rpar.left.
-                if (_t.isAssignmentPattern(rpar) && retBinding.identifier === rpar.left &&
-                    rparName === retArg.name) {
-                  if (rpi < n.arguments.length) {
-                    var callerArgAvAp = vals.get(n.arguments[rpi]);
-                    if (callerArgAvAp) return callerArgAvAp;
-                  }
-                  break;
-                }
-              }
-            }
-          }
+          // Per § 10.2.10 FunctionDeclarationInstantiation, evaluate the
+          // return expression with caller-arg AVs substituted for the
+          // callee's params. Helper handles Identifier-of-param (direct
+          // substitution), BinaryExpression `+` (concat distribution),
+          // TemplateLiteral (string-leaf substitution).
+          var subAv = _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, n, vals);
+          if (subAv !== null) return subAv;
         }
       }
     return { kind: "top" }; // Other call returns abstract to Top.
