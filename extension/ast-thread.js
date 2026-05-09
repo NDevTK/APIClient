@@ -12,7 +12,7 @@ onmessage = function(e) {
   if (msg.type === "AST_ANALYZE") {
     try {
       var _t0 = Date.now();
-      var result = analyzeJSBundle(msg.code, msg.sourceUrl, msg.forceScript);
+      var result = analyzeJSBundle(msg.code, msg.sourceUrl, msg.forceScript, { domContext: msg.domContext });
       var _t1 = Date.now();
       // The click-to-definition index (buildDefinitionMap) is NOT built
       // here — it's built on demand by AST_BUILD_DEFINITION_MAP when the
