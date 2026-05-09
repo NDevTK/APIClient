@@ -2134,9 +2134,9 @@ function _specStringPrototypeAv() {
   if (!_SPEC_STRING_PROTO_AV) {
     var props = {};
     var stringMethodNames = [
-      "trim", "toLowerCase", "toUpperCase", "toString", "valueOf", "normalize",
+      "trim", "trimStart", "trimEnd", "toLowerCase", "toUpperCase", "toString", "valueOf", "normalize",
       "replace", "replaceAll", "concat", "slice", "substring", "substr",
-      "padStart", "padEnd", "repeat",
+      "padStart", "padEnd", "repeat", "split", "codePointAt",
       "indexOf", "lastIndexOf", "includes", "startsWith", "endsWith",
       "charAt", "charCodeAt", "at"
     ];
@@ -3012,6 +3012,40 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       numOr = _specLogicalOrAv(numOr, { kind: "const", value: numResults[nri] });
     }
     return numOr;
+  }
+  // String.prototype.split per § 22.1.3.23 — returns array-lit of
+  // substrings. Doesn't fit the Const→Const _applyStringMethodToConst
+  // helper (which is for string-returning methods); handled inline.
+  if (methodId === "String.prototype.split") {
+    if (!recvAv) return { kind: "top" };
+    var splitLeaves = recvAv.kind === "const" && typeof recvAv.value === "string"
+      ? [recvAv.value]
+      : (recvAv.kind === "or" ? _avFlattenStringLeaves(recvAv) : []);
+    if (!splitLeaves || splitLeaves.length === 0) return { kind: "top" };
+    var sep, lim;
+    if (argAvs.length >= 1) {
+      var sepAv = argAvs[0];
+      if (sepAv && sepAv.kind === "const") {
+        if (typeof sepAv.value === "string") sep = sepAv.value;
+        else if (sepAv.value === undefined) sep = undefined;
+        else return { kind: "top" };
+      } else { return { kind: "top" }; }
+    }
+    if (argAvs.length >= 2) {
+      var limAv = argAvs[1];
+      if (limAv && limAv.kind === "const" && typeof limAv.value === "number") lim = limAv.value;
+      else return { kind: "top" };
+    }
+    // Per spec: each leaf splits into its own array; for an or-tree recv
+    // we'd need to or-distribute the resulting arrays. Single-leaf case
+    // (most common) returns the array directly.
+    if (splitLeaves.length === 1) {
+      var splitRes = (sep === undefined) ? [splitLeaves[0]] : splitLeaves[0].split(sep, lim);
+      var splitElems = [];
+      for (var spi = 0; spi < splitRes.length; spi++) splitElems.push({ kind: "const", value: splitRes[spi] });
+      return { kind: "array-lit", elements: splitElems };
+    }
+    return { kind: "top" };  // multi-leaf split — array-of-arrays not yet modeled
   }
   // String.prototype methods per § 22.1.3 — pure (no state mutation).
   // Distribute over alternation when recv is an or-tree of Const strings.
@@ -5162,33 +5196,9 @@ function _specEvalLeaf(path, state, vals, effects) {
     if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
         _t.isIdentifier(n.callee.property)) {
       var recvAv = vals.get(n.callee.object);
-      if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "string") {
-        var splitS = recvAv.value;
-        var meth = n.callee.property.name;
-        // § 22.1.3.23 String.prototype.split(separator [, limit]) — array-lit
-        // (return type is array, not handled by the const-returning helper).
-        if (meth === "split") {
-          var splitSep, splitLim;
-          if (n.arguments.length >= 1) {
-            var ssAv = vals.get(n.arguments[0]);
-            if (ssAv && ssAv.kind === "const") {
-              if (typeof ssAv.value === "string") splitSep = ssAv.value;
-              else if (ssAv.value === undefined) splitSep = undefined;
-              else return { kind: "top" };  // RegExp etc. not modeled
-            } else { return { kind: "top" }; }
-          }
-          if (n.arguments.length >= 2) {
-            var slAv = vals.get(n.arguments[1]);
-            if (slAv && slAv.kind === "const" && typeof slAv.value === "number") splitLim = slAv.value;
-            else return { kind: "top" };
-          }
-          var splitRes = (splitSep === undefined) ? [splitS] : splitS.split(splitSep, splitLim);
-          var splitElems = [];
-          for (var spi = 0; spi < splitRes.length; spi++) splitElems.push({ kind: "const", value: splitRes[spi] });
-          return { kind: "array-lit", elements: splitElems };
-        }
-        // padStart/padEnd/charAt/charCodeAt/at all routed via the helper above.
-      }
+      // String.prototype.split now dispatched via prototype-chain
+      // (String.prototype obj-lit → builtin-method "String.prototype.split"
+      // → _specApplyBuiltinMethod). Inline shape match removed.
       // Array.prototype pure methods now dispatched via prototype-chain
       // at the top of CallExpression handler (_specApplyBuiltinMethod).
       // HOF methods (map/filter/reduce/etc.) handled below — they queue
@@ -8205,6 +8215,11 @@ function _applyGlobalUriTransform(name, s) {
 function _applyStringMethodToConst(s, methodName, argLits) {
   if (typeof s !== "string") return undefined;
   if (methodName === "trim" && argLits.length === 0) return s.trim();
+  if (methodName === "trimStart" && argLits.length === 0) return s.trimStart();
+  if (methodName === "trimEnd" && argLits.length === 0) return s.trimEnd();
+  if (methodName === "codePointAt" && argLits.length === 1 && typeof argLits[0] === "number") {
+    return s.codePointAt(argLits[0]);
+  }
   if (methodName === "toLowerCase" && argLits.length === 0) return s.toLowerCase();
   if (methodName === "toUpperCase" && argLits.length === 0) return s.toUpperCase();
   if (methodName === "toString" && argLits.length === 0) return s.toString();
