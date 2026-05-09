@@ -767,6 +767,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
   _rcfpMemo = new WeakMap();
   _specEffectsMemo = new WeakMap();
   _tvsMemo = new WeakMap();
+  _cfgMemo = new WeakMap();
   _sourceCode = code;
   _sourceLines = null;
   _sourceUrl = sourceUrl || null;
@@ -19342,9 +19343,16 @@ function _exprContainsSanitizer(exprPath) {
 //     appropriate join block.
 //   • Loop back-edges point body-exit → loop-header, so DFS from entry
 //     still terminates via visited[].
+var _cfgMemo = new WeakMap();
 function _buildCFG(bodyPath) {
   if (!bodyPath || !bodyPath.node) return null;
   if (!_t.isBlockStatement(bodyPath.node)) return null;
+  // Per-analysis memo on the BlockStatement node. Three callers
+  // (_checkSanitization, _checkKeyValidation, sanitizer-related)
+  // independently rebuild the CFG for the same function body
+  // — sometimes many times if a function has multiple sinks. The
+  // body is immutable per analysis, so the CFG is too.
+  if (_cfgMemo.has(bodyPath.node)) return _cfgMemo.get(bodyPath.node);
 
   var blockId = 0;
   var blocks = {};
@@ -19531,7 +19539,9 @@ function _buildCFG(bodyPath) {
     link(prev, scope.exit);
   }
 
-  return { blocks: blocks, entry: entryId, exit: exitId };
+  var cfgResult = { blocks: blocks, entry: entryId, exit: exitId };
+  _cfgMemo.set(bodyPath.node, cfgResult);
+  return cfgResult;
 }
 
 // Find which block contains a statement at a given line. When several blocks
