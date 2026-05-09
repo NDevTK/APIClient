@@ -5637,6 +5637,18 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
           idxAv.value >= 0 && idxAv.value < objAv.elements.length) {
         return objAv.elements[idxAv.value];
       }
+      // Non-const numeric index per § 23.1.5.1 OrdinaryGet: at runtime
+      // the index produces some valid array element. Sound widening:
+      // join all elements into an or-tree so consumers see every
+      // statically-possible value. Covers `for (var i; ...) arr[i]`,
+      // `arr[someParam]`, `arr[Math.floor(...)]`. Empty array → top.
+      if (idxAv && idxAv.kind !== "const" && objAv.elements.length > 0) {
+        var joinAcc = objAv.elements[0];
+        for (var jli = 1; jli < objAv.elements.length; jli++) {
+          joinAcc = _specSetUnionAv(joinAcc, objAv.elements[jli]);
+        }
+        return joinAcc;
+      }
     }
   }
   // callable-namespace property access — same as obj-lit for the
@@ -6765,9 +6777,19 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
   }
 
   if (_t.isForStatement(stmt)) {
-    // § 14.7.4 — evaluate init, push body once. The increment is not
-    // modeled; for property-flow, body's effects are the same per
-    // iteration so a single pass suffices.
+    // § 14.7.4 ForStatement — evaluate init, then push body. Per
+    // § 14.7.4.2 ForBodyEvaluation, the loop var is updated each
+    // iteration; subsequent iterations see possibly-different values.
+    // For property-flow we widen any loop var that has an update
+    // expression (e.g. `i++`) — its body-state value becomes top
+    // (any number) so `arr[i]` joins all elements per § 23.1.5.1
+    // OrdinaryGet at non-const index. Init values that don't appear
+    // in the update (e.g. `for(var u of x)` desugared) stay tight.
+    var loopVarsWithUpdate = null;
+    if (stmt.update) {
+      loopVarsWithUpdate = new Set();
+      _collectIdentifiers(stmt.update, loopVarsWithUpdate);
+    }
     if (stmt.init) {
       if (_t.isVariableDeclaration(stmt.init)) {
         for (var fdi = 0; fdi < stmt.init.declarations.length; fdi++) {
@@ -6784,6 +6806,16 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     }
     var forBody = stmt.body;
     var forBodyState = _specStateClone(state);
+    // Widen update-target variables in the body's state. The init's
+    // assignment is preserved in `state` for code AFTER the for-loop;
+    // only the body's view sees the widened value.
+    if (loopVarsWithUpdate) {
+      loopVarsWithUpdate.forEach(function(vn) {
+        if (Object.prototype.hasOwnProperty.call(forBodyState, vn)) {
+          forBodyState[vn] = { kind: "top" };
+        }
+      });
+    }
     if (_t.isBlockStatement(forBody)) {
       branchStack.push({ stmts: forBody.body, idx: 0, state: forBodyState, parentPath: stmtPath.get("body"), isBody: true });
     } else if (forBody) {
@@ -25323,6 +25355,24 @@ function _collectIdentifiers(node, set) {
     }
     if (_t.isMemberExpression(n)) {
       stack.push(n.object);
+    }
+    if (_t.isUpdateExpression(n) || _t.isUnaryExpression(n)) {
+      // § 13.4 UpdateExpression / § 13.5 UnaryExpression: their
+      // operand is an Identifier (e.g. `i++` increments `i`); collect
+      // it so for-loop widening can detect update targets.
+      if (n.argument) stack.push(n.argument);
+    }
+    if (_t.isAssignmentExpression(n)) {
+      // § 13.15 AssignmentExpression: both LHS and RHS reference
+      // identifiers (e.g. `i = i + 1` updates `i` and reads `i`).
+      if (n.left) stack.push(n.left);
+      if (n.right) stack.push(n.right);
+    }
+    if (_t.isSequenceExpression(n)) {
+      // § 13.16 SequenceExpression: collect from all sub-expressions.
+      for (var seqI = 0; seqI < n.expressions.length; seqI++) {
+        stack.push(n.expressions[seqI]);
+      }
     }
   }
 }
