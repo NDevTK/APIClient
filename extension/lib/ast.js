@@ -2110,15 +2110,17 @@ function _resolveIIFEReturnedProperty(callExprPath, propName) {
 var _SPEC_ARRAY_PROTO_AV = null;
 function _specArrayPrototypeAv() {
   if (!_SPEC_ARRAY_PROTO_AV) {
-    _SPEC_ARRAY_PROTO_AV = {
-      kind: "obj-lit",
-      props: {
-        push: { kind: "builtin-method", id: "Array.prototype.push" },
-        pop: { kind: "builtin-method", id: "Array.prototype.pop" },
-        shift: { kind: "builtin-method", id: "Array.prototype.shift" },
-        unshift: { kind: "builtin-method", id: "Array.prototype.unshift" },
-      }
-    };
+    var props = {};
+    var arrayMethodNames = [
+      // Mutating per § 23.1.3 (state mutation handled in _specApplyBuiltinMethod):
+      "push", "pop", "shift", "unshift",
+      // Pure (return new value, no mutation):
+      "join", "concat", "slice", "includes", "indexOf", "reverse", "at", "flat"
+    ];
+    for (var ami = 0; ami < arrayMethodNames.length; ami++) {
+      props[arrayMethodNames[ami]] = { kind: "builtin-method", id: "Array.prototype." + arrayMethodNames[ami] };
+    }
+    _SPEC_ARRAY_PROTO_AV = { kind: "obj-lit", props: props };
   }
   return _SPEC_ARRAY_PROTO_AV;
 }
@@ -2171,20 +2173,23 @@ function _specGetPrototypeOfAv(av) {
   if (av.kind === "array-lit") return _specArrayPrototypeAv();
   if (av.kind === "const" && typeof av.value === "string") return _specStringPrototypeAv();
   if (av.kind === "const" && typeof av.value === "number") return _specNumberPrototypeAv();
-  // For or-trees whose every leaf is a Const of a uniform primitive type,
-  // the [[Prototype]] is shared. Member access then distributes per-leaf
-  // when the dispatch sees a corresponding builtin-method AV.
+  // For or-trees whose every leaf shares a [[Prototype]], return that
+  // prototype. Member access then dispatches per shared method via
+  // _specApplyBuiltinMethod (which distributes over leaves itself).
   if (av.kind === "or") {
     var leaves = _avFlattenOrLeaves(av);
     if (leaves && leaves.length > 0) {
+      var allArrayLit = true;
       var allStringConst = true;
       var allNumberConst = true;
       for (var li = 0; li < leaves.length; li++) {
         var leaf = leaves[li];
-        if (!leaf || leaf.kind !== "const") { allStringConst = false; allNumberConst = false; break; }
-        if (typeof leaf.value !== "string") allStringConst = false;
-        if (typeof leaf.value !== "number") allNumberConst = false;
+        if (!leaf) { allArrayLit = false; allStringConst = false; allNumberConst = false; break; }
+        if (leaf.kind !== "array-lit") allArrayLit = false;
+        if (leaf.kind !== "const" || typeof leaf.value !== "string") allStringConst = false;
+        if (leaf.kind !== "const" || typeof leaf.value !== "number") allNumberConst = false;
       }
+      if (allArrayLit) return _specArrayPrototypeAv();
       if (allStringConst) return _specStringPrototypeAv();
       if (allNumberConst) return _specNumberPrototypeAv();
     }
@@ -2201,6 +2206,118 @@ function _specGetPrototypeOfAv(av) {
 //   argAvs     — caller-arg AbstractValues
 //   state      — spec eval state map (mutable for state-evolving methods)
 // Returns the call's result AV per the method's spec algorithm.
+// Apply pure (non-mutating) Array.prototype methods to a single array-lit
+// receiver per § 23.1.3 spec algorithms. Used by _specApplyBuiltinMethod
+// for both single-array-lit recv and per-leaf distribution over or-trees.
+function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
+  if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+  if (methodId === "Array.prototype.join") {
+    var sep = ",";
+    if (argAvs.length >= 1) {
+      if (argAvs[0] && argAvs[0].kind === "const" && typeof argAvs[0].value === "string") sep = argAvs[0].value;
+      else return { kind: "top" };
+    }
+    var joinParts = [];
+    for (var jei = 0; jei < (recvAv.elements || []).length; jei++) {
+      var je = recvAv.elements[jei];
+      if (!je || je.kind !== "const") return { kind: "top" };
+      joinParts.push(String(je.value));
+    }
+    return { kind: "const", value: joinParts.join(sep) };
+  }
+  if (methodId === "Array.prototype.concat") {
+    var concatElems = (recvAv.elements || []).slice();
+    for (var ci = 0; ci < argAvs.length; ci++) {
+      var argA = argAvs[ci];
+      if (!argA) return { kind: "top" };
+      if (argA.kind === "array-lit" && argA.elements) {
+        for (var ai = 0; ai < argA.elements.length; ai++) concatElems.push(argA.elements[ai]);
+      } else if (argA.kind === "const" || argA.kind === "obj-lit") {
+        concatElems.push(argA);
+      } else {
+        return { kind: "top" };
+      }
+    }
+    return { kind: "array-lit", elements: concatElems };
+  }
+  if (methodId === "Array.prototype.slice") {
+    var sliceLen = (recvAv.elements || []).length;
+    var sStart = 0, sEnd = sliceLen;
+    if (argAvs.length >= 1) {
+      var sa = argAvs[0];
+      if (sa && sa.kind === "const" && typeof sa.value === "number") {
+        sStart = sa.value;
+        if (sStart < 0) sStart = Math.max(0, sliceLen + sStart);
+      } else { return { kind: "top" }; }
+    }
+    if (argAvs.length >= 2) {
+      var ea = argAvs[1];
+      if (ea && ea.kind === "const" && typeof ea.value === "number") {
+        sEnd = ea.value;
+        if (sEnd < 0) sEnd = Math.max(0, sliceLen + sEnd);
+      } else { return { kind: "top" }; }
+    }
+    return { kind: "array-lit", elements: (recvAv.elements || []).slice(sStart, sEnd) };
+  }
+  if (methodId === "Array.prototype.includes") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    var iSearch = argAvs[0].value;
+    for (var inci = 0; inci < (recvAv.elements || []).length; inci++) {
+      var iel = recvAv.elements[inci];
+      if (!iel || iel.kind !== "const") return { kind: "top" };
+      if (Number.isNaN(iSearch) && Number.isNaN(iel.value)) return { kind: "const", value: true };
+      if (iel.value === iSearch) return { kind: "const", value: true };
+    }
+    return { kind: "const", value: false };
+  }
+  if (methodId === "Array.prototype.indexOf") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    var ioSearch = argAvs[0].value;
+    for (var ioi = 0; ioi < (recvAv.elements || []).length; ioi++) {
+      var ioe = recvAv.elements[ioi];
+      if (!ioe || ioe.kind !== "const") return { kind: "top" };
+      if (ioe.value === ioSearch) return { kind: "const", value: ioi };
+    }
+    return { kind: "const", value: -1 };
+  }
+  if (methodId === "Array.prototype.reverse") {
+    return { kind: "array-lit", elements: (recvAv.elements || []).slice().reverse() };
+  }
+  if (methodId === "Array.prototype.at") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "number") return { kind: "top" };
+    var atLen = (recvAv.elements || []).length;
+    var atIdx = argAvs[0].value < 0 ? atLen + argAvs[0].value : argAvs[0].value;
+    if (atIdx >= 0 && atIdx < atLen) return recvAv.elements[atIdx];
+    return { kind: "const", value: undefined };
+  }
+  if (methodId === "Array.prototype.flat") {
+    var flatDepth = 1;
+    if (argAvs.length >= 1) {
+      var fa = argAvs[0];
+      if (fa && fa.kind === "const" && typeof fa.value === "number") flatDepth = fa.value;
+      else return { kind: "top" };
+    }
+    var flatRes = [];
+    var flatStack = [];
+    for (var fei = (recvAv.elements || []).length - 1; fei >= 0; fei--) {
+      flatStack.push({ av: recvAv.elements[fei], depth: flatDepth });
+    }
+    while (flatStack.length > 0) {
+      var fe = flatStack.pop();
+      var feAv = fe.av;
+      if (feAv && feAv.kind === "array-lit" && feAv.elements && fe.depth > 0) {
+        for (var fej = feAv.elements.length - 1; fej >= 0; fej--) {
+          flatStack.push({ av: feAv.elements[fej], depth: fe.depth - 1 });
+        }
+      } else {
+        flatRes.push(feAv);
+      }
+    }
+    return { kind: "array-lit", elements: flatRes };
+  }
+  return { kind: "top" };
+}
+
 function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // § 23.1.3.20 Array.prototype.push: appends arguments to `this`,
   // returns the new length. Models state mutation when receiver is a
@@ -2245,6 +2362,41 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       state[recvName] = { kind: "array-lit", elements: usElements };
     }
     return { kind: "const", value: usElements.length };
+  }
+  // Array.prototype pure (non-mutating) methods per § 23.1.3.
+  // join/concat/slice/includes/indexOf/reverse/at/flat — each implemented
+  // per its spec algorithm, working over array-lit receivers. When recv
+  // is an or-tree of array-lits, distribute per-leaf via inline iteration
+  // (avoids self-recursion of _specApplyBuiltinMethod).
+  var pureArrayIds = ["Array.prototype.join", "Array.prototype.concat",
+    "Array.prototype.slice", "Array.prototype.includes", "Array.prototype.indexOf",
+    "Array.prototype.reverse", "Array.prototype.at", "Array.prototype.flat"];
+  if (pureArrayIds.indexOf(methodId) >= 0 && recvAv && recvAv.kind === "or") {
+    var arrLeaves = _avFlattenOrLeaves(recvAv);
+    if (arrLeaves) {
+      var allArrLits = arrLeaves.length > 0;
+      for (var ali = 0; allArrLits && ali < arrLeaves.length; ali++) {
+        if (!arrLeaves[ali] || arrLeaves[ali].kind !== "array-lit") allArrLits = false;
+      }
+      if (allArrLits) {
+        var perLeafResults = [];
+        for (var alri = 0; alri < arrLeaves.length; alri++) {
+          // Re-enter via the single-array-lit branches below by simulating
+          // the call: pretend recvAv is this single array-lit.
+          var leafRes = _specApplyBuiltinMethodOnArrLitRecv(methodId, arrLeaves[alri], argAvs);
+          perLeafResults.push(leafRes);
+        }
+        if (perLeafResults.length === 1) return perLeafResults[0];
+        var arrOr = perLeafResults[0];
+        for (var aori = 1; aori < perLeafResults.length; aori++) {
+          arrOr = _specLogicalOrAv(arrOr, perLeafResults[aori]);
+        }
+        return arrOr;
+      }
+    }
+  }
+  if (pureArrayIds.indexOf(methodId) >= 0) {
+    return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
   }
   // Number.prototype methods per § 21.1.3 — pure (no state mutation).
   if (methodId.indexOf("Number.prototype.") === 0) {
@@ -5061,43 +5213,10 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
         // padStart/padEnd/charAt/charCodeAt/at all routed via the helper above.
       }
-      // Array built-ins per § 23.1.3 — pure (non-HOF) methods. Receiver
-      // can be a single array-lit OR an or-tree of array-lits (per-leaf
-      // distribution). HOF methods (map/filter/reduce/…) handled below
-      // — they queue cb dispatches with side effects, so they don't fit
-      // the leaf-distribution pattern.
-      if (recvAv && (recvAv.kind === "array-lit" || recvAv.kind === "or")) {
-        var aMethName = n.callee.property.name;
-        if (recvAv.kind === "array-lit") {
-          var aSingleRes = _applyArrayMethodToArrLit(recvAv, aMethName, n, vals);
-          if (aSingleRes !== null) return aSingleRes;
-        } else {
-          var arrLeaves = _avFlattenOrLeaves(recvAv);
-          var allArrLits = !!arrLeaves;
-          if (allArrLits) {
-            for (var ali = 0; ali < arrLeaves.length; ali++) {
-              if (!arrLeaves[ali] || arrLeaves[ali].kind !== "array-lit") { allArrLits = false; break; }
-            }
-          }
-          if (allArrLits) {
-            var aResults = [];
-            var aMethodMatched = true;
-            for (var alri = 0; alri < arrLeaves.length; alri++) {
-              var aLeafRes = _applyArrayMethodToArrLit(arrLeaves[alri], aMethName, n, vals);
-              if (aLeafRes === null) { aMethodMatched = false; break; }
-              aResults.push(aLeafRes);
-            }
-            if (aMethodMatched && aResults.length > 0) {
-              if (aResults.length === 1) return aResults[0];
-              var aOr = aResults[0];
-              for (var aori = 1; aori < aResults.length; aori++) {
-                aOr = _specLogicalOrAv(aOr, aResults[aori]);
-              }
-              return aOr;
-            }
-          }
-        }
-      }
+      // Array.prototype pure methods now dispatched via prototype-chain
+      // at the top of CallExpression handler (_specApplyBuiltinMethod).
+      // HOF methods (map/filter/reduce/etc.) handled below — they queue
+      // cb dispatches with side effects, distinct dispatch model.
       // § 23.1.3 Array.prototype.{map, filter, reduce, find, findIndex,
       // some, every, flatMap, forEach} — dispatch the callback against
       // each array element so cb's property writes reach the effects
