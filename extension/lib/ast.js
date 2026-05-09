@@ -1005,6 +1005,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _specPathValMemo = new WeakMap();
   _specReturnValueMemo = new WeakMap();
   _specSideEffectMemo = new WeakMap();
+  _specThisEffectsMemo = new WeakMap();
   _specStateOuterImports = new WeakMap();
   _specProgramFixpointDone = new WeakSet();
   _specBindingInitAvCache = new WeakMap();
@@ -4395,6 +4396,16 @@ var _specStateOuterImports = new WeakMap();
 // CallExpression handler to update the caller's state per § 9.1.1
 // closure write-back semantics. Keyed by funcNode.
 var _specSideEffectMemo = new WeakMap();
+// § 15.7.4 setter-dispatch support: per-function memo of `this.X = av`
+// effects discovered during _specAnalyzePropertyFlow. Keyed by funcNode.
+// Populated when fn analysis completes; consumed by setter dispatch in
+// _specAssignmentExpressionApply when `this.X = rhs` runs and the class
+// has a `set X(v) { … }` accessor — the setter's stored this-effects
+// are projected into the caller's effects with v=rhs substituted.
+// Distinct from _specSideEffectMemo (which only records outer-scope
+// closure write-back per § 9.1.1; setter writes are this-bound, not
+// outer captures).
+var _specThisEffectsMemo = new WeakMap();
 
 // Per-binding cache of the joined init+constantViolations AV used when
 // lazy-importing closure-captured outer-scope bindings. Independent of
@@ -5902,7 +5913,30 @@ function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) 
 // Compound assignments (+=, -=, …) are handled by a separate spec section
 // (§ 13.15.3 ApplyStringOrNumericBinaryOperator); routed there by callers.
 // ───────────────────────────────────────────────────────────────────────────
-function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, effects, lhsCurrentAv) {
+// § 15.7.4 ClassMethod kind="set": find the setter for `propName` in
+// the class body that lexically encloses `path`. Returns the setter's
+// Babel path, or null when not in a class method or no matching
+// setter exists. Walks at most one ClassBody up — siblings of the
+// enclosing method.
+function _specFindSetterForKey(path, propName) {
+  if (!path || !propName) return null;
+  var fnPath = path.getFunctionParent && path.getFunctionParent();
+  if (!fnPath || !fnPath.node) return null;
+  if (!_t.isClassMethod(fnPath.node) && !_t.isClassPrivateMethod(fnPath.node)) return null;
+  var classBodyPath = fnPath.parentPath;
+  if (!classBodyPath || !_t.isClassBody(classBodyPath.node)) return null;
+  var members = classBodyPath.node.body;
+  for (var mi = 0; mi < members.length; mi++) {
+    var m = members[mi];
+    if (!_t.isClassMethod(m) || m.kind !== "set" || m.computed) continue;
+    var keyName = _t.isIdentifier(m.key) ? m.key.name :
+      (_t.isStringLiteral(m.key) ? m.key.value : null);
+    if (keyName === propName) return classBodyPath.get("body." + mi);
+  }
+  return null;
+}
+
+function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, effects, lhsCurrentAv, path) {
   if (!node) return { kind: "top" };
   var op = node.operator;
   var left = node.left;
@@ -5913,6 +5947,30 @@ function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, 
       return rhsAv;
     }
     if (left && left.type === "MemberExpression") {
+      // § 15.7.4 setter dispatch: when target is `this` and the
+      // enclosing class has a `set X(v)` accessor for the key, the
+      // assignment runs the setter's body with v=rhsAv. Project the
+      // setter's stored this-effects (substituting param 0 → rhsAv)
+      // into caller's effects, instead of the raw `this.X = rhs`.
+      if (path && _t.isThisExpression(left.object) && lhsKeyAv &&
+          lhsKeyAv.kind === "const" && typeof lhsKeyAv.value === "string") {
+        var setterPath = _specFindSetterForKey(path, lhsKeyAv.value);
+        if (setterPath && setterPath.node) {
+          var setterThisEffects = _specThisEffectsMemo.get(setterPath.node);
+          if (setterThisEffects && setterThisEffects.length > 0) {
+            for (var sei = 0; sei < setterThisEffects.length; sei++) {
+              var setterEff = setterThisEffects[sei];
+              if (!setterEff) continue;
+              effects.push({
+                target: _specInstantiateAv(setterEff.target, [rhsAv]),
+                key: _specInstantiateAv(setterEff.key, [rhsAv]),
+                value: _specInstantiateAv(setterEff.value, [rhsAv])
+              });
+            }
+            return rhsAv;
+          }
+        }
+      }
       effects.push({ target: lhsObjAv, key: lhsKeyAv, value: rhsAv });
       return rhsAv;
     }
@@ -6972,6 +7030,20 @@ function _specAnalyzePropertyFlow(funcPath, force) {
       _specSideEffectMemo.set(fnNode, ssSummary);
     }
   }
+  // § 15.7.4 setter-dispatch support: collect `this.X = av` effects from
+  // this function's body into a per-function memo. Used by
+  // _specAssignmentExpressionApply when an assignment to `this.<key>` in
+  // an enclosing class method needs to dispatch through `set <key>(v)`.
+  // Always populate (even when empty) so the absence of this-writes is
+  // observable as an empty array rather than a memo miss.
+  var thisEffects = [];
+  for (var tei = 0; tei < effects.length; tei++) {
+    var teff = effects[tei];
+    if (teff && teff.target && teff.target.kind === "this") {
+      thisEffects.push(teff);
+    }
+  }
+  if (thisEffects.length > 0) _specThisEffectsMemo.set(fnNode, thisEffects);
   _specEffectsMemo.set(fnNode, effects);
   return effects;
 }
@@ -7439,7 +7511,7 @@ function _specEvalLeaf(path, state, vals, effects) {
         lhsCurrentAv = lhsObjAv.props[lhsKeyAv.value];
       }
     }
-    return _specAssignmentExpressionApply(n, state, rhsAv, lhsObjAv, lhsKeyAv, effects, lhsCurrentAv);
+    return _specAssignmentExpressionApply(n, state, rhsAv, lhsObjAv, lhsKeyAv, effects, lhsCurrentAv, path);
   }
   if (_t.isUpdateExpression(n)) {
     // § 13.4 UpdateExpression `++`/`--`. For Const numeric operands,
