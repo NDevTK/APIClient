@@ -20033,18 +20033,24 @@ function _traceValueSource(path, _unused) {
     // const-resolved expressions don't need taint tracing.
     var specAv = _specPathValMemo.get(node);
     if (specAv) {
-      var allConst = false;
-      if (specAv.kind === "const") allConst = true;
-      else if (specAv.kind === "or") {
-        var stack = [specAv];
-        allConst = true;
-        while (stack.length > 0 && allConst) {
-          var s = stack.pop();
-          if (!s) continue;
-          if (s.kind === "const") continue;
-          if (s.kind === "or") { stack.push(s.left); stack.push(s.right); continue; }
-          allConst = false;
+      // Walk the AV tree iteratively. allConst iff every reachable
+      // leaf is `const`. `or`, `binop`, `template` recurse into
+      // operands/exprs. Other kinds (param, member, top, function-ref,
+      // dom-element, etc.) interrupt — those potentially carry user-
+      // controlled or framework-provided values.
+      var allConst = true;
+      var sStack = [specAv];
+      while (sStack.length > 0 && allConst) {
+        var s = sStack.pop();
+        if (!s) continue;
+        if (s.kind === "const") continue;
+        if (s.kind === "or") { sStack.push(s.left); sStack.push(s.right); continue; }
+        if (s.kind === "binop") { sStack.push(s.left); sStack.push(s.right); continue; }
+        if (s.kind === "template" && s.exprs) {
+          for (var sti = 0; sti < s.exprs.length; sti++) sStack.push(s.exprs[sti]);
+          continue;
         }
+        allConst = false;
       }
       if (allConst) {
         var litResult = { sourceType: "literal", source: null };
