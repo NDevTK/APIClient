@@ -838,6 +838,18 @@ specTest("§ 10.2.10: multi-level caller-arg substitution through wrapper functi
   return v && v.kind === "const" && v.value === "/api/multi";
 });
 
+specTest("§ 13.3.2: OptionalCallExpression `o?.method()` dispatches to method", `
+  function f() {
+    var o = { get: function () { return "/api/oc"; } };
+    var u = o?.get();
+    this.url = u;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "const" && v.value === "/api/oc";
+});
+
 specTest("§ 13.3.6 + § 15.2: IIFE with literal-return body folds to const", `
   function f() {
     var u = (function () { return "/api/foo"; })();

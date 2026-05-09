@@ -8234,7 +8234,12 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
     }
     var bmRecvAv = null, bmCalleeAv = null;
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed) {
+    if ((_t.isMemberExpression(n.callee) || _t.isOptionalMemberExpression(n.callee)) && !n.callee.computed) {
+      // OptionalMemberExpression `o?.method` per § 13.3.2 short-circuit:
+      // when `o` is null/undefined, the chain returns undefined. For
+      // property-flow we treat OC member access as MemberExpression —
+      // the AV of the receiver is what matters; null short-circuit only
+      // affects the runtime value, not the static dispatch shape.
       bmRecvAv = vals.get(n.callee.object);
       bmCalleeAv = vals.get(n.callee);
     } else if (_t.isIdentifier(n.callee)) {
