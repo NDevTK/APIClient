@@ -2113,7 +2113,7 @@ function _specArrayPrototypeAv() {
     var props = {};
     var arrayMethodNames = [
       // Mutating per § 23.1.3 (state mutation handled in _specApplyBuiltinMethod):
-      "push", "pop", "shift", "unshift", "fill",
+      "push", "pop", "shift", "unshift", "fill", "sort", "splice", "copyWithin",
       // Pure (return new value, no mutation):
       "join", "concat", "slice", "includes", "indexOf", "lastIndexOf",
       "reverse", "at", "flat"
@@ -2615,6 +2615,65 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       state[recvName] = { kind: "array-lit", elements: shiftElements };
     }
     return shifted || { kind: "const", value: undefined };
+  }
+  // § 23.1.3.30 Array.prototype.sort: sorts `this` in place. Without
+  // a comparator, default lexicographic on ToString. Returns `this`.
+  if (methodId === "Array.prototype.sort") {
+    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    // Without comparator: only sort if all elements are Const.
+    if (argAvs.length === 0) {
+      var sortAllConst = true;
+      var sortVals = [];
+      for (var srtI = 0; srtI < (recvAv.elements || []).length; srtI++) {
+        var srte = recvAv.elements[srtI];
+        if (!srte || srte.kind !== "const") { sortAllConst = false; break; }
+        sortVals.push(srte.value);
+      }
+      if (sortAllConst) {
+        sortVals.sort();
+        var sortNew = { kind: "array-lit", elements: sortVals.map(function(v) { return { kind: "const", value: v }; }) };
+        if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+          state[recvName] = sortNew;
+        }
+        return sortNew;
+      }
+    }
+    // With comparator or non-Const elements — return the original array
+    // (sound: order may change but element set doesn't).
+    return recvAv;
+  }
+  // § 23.1.3.31 Array.prototype.splice: removes/inserts elements. For
+  // simple removal/insertion with Const indices, compute the new array.
+  if (methodId === "Array.prototype.splice") {
+    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    var spLen = (recvAv.elements || []).length;
+    var spStart = 0, spDel = 0;
+    if (argAvs.length >= 1 && argAvs[0] && argAvs[0].kind === "const" && typeof argAvs[0].value === "number") {
+      spStart = argAvs[0].value < 0 ? Math.max(0, spLen + argAvs[0].value) : Math.min(spLen, argAvs[0].value);
+    } else if (argAvs.length >= 1) {
+      return { kind: "top" };
+    }
+    if (argAvs.length >= 2 && argAvs[1] && argAvs[1].kind === "const" && typeof argAvs[1].value === "number") {
+      spDel = Math.max(0, Math.min(spLen - spStart, argAvs[1].value));
+    } else if (argAvs.length >= 2) {
+      return { kind: "top" };
+    } else {
+      spDel = spLen - spStart;
+    }
+    var spInsertions = argAvs.slice(2);
+    var spNewElements = (recvAv.elements || []).slice();
+    var spRemoved = spNewElements.splice.apply(spNewElements, [spStart, spDel].concat(spInsertions));
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = { kind: "array-lit", elements: spNewElements };
+    }
+    return { kind: "array-lit", elements: spRemoved };
+  }
+  // § 23.1.3.4 Array.prototype.copyWithin: shallow-copy a slice within
+  // the array. Per spec mutates and returns `this`. Conservative model
+  // that keeps the original element set since indices may not resolve.
+  if (methodId === "Array.prototype.copyWithin") {
+    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    return recvAv;
   }
   // § 23.1.3.7 Array.prototype.fill: fills `this` with value from start
   // to end. Per spec mutates and returns `this`.
