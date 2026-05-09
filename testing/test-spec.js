@@ -3420,6 +3420,29 @@ specTest("WHATWG DOM: shadowed `document` does NOT fire", `
   return !(av && av.kind === "const" && av.value === "/hide?id=5");
 }, { domContext: { byId: { hide5: { href: "/hide?id=5" } } } });
 
+specTest("ECMA § 27.2.4.7: Promise.resolve(x) passes through x to await/then in spec eval", `
+  async function f() {
+    this.u = await Promise.resolve("/api/promise-passthrough");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api/promise-passthrough";
+});
+
+specTest("ECMA § 27.2.4.7: shadowed `Promise` does NOT fire passthrough", `
+  async function f() {
+    var Promise = { resolve: function() { return "shadow"; } };
+    this.u = await Promise.resolve("/api/p");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Shadowed — passthrough must NOT fire; `await Promise.resolve("/api/p")`
+  // would call the local fake; we don't model that, so result is Top.
+  return !(av && av.kind === "const" && av.value === "/api/p");
+});
+
 specTest("CSS L4 attribute selector: `document.querySelector('meta[name=X]').content` from _domContext.metaTags", `
   function f() {
     this.t = document.querySelector("meta[name=csrf-token]").content;

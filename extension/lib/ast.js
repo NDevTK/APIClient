@@ -4417,6 +4417,17 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
+    // ECMA-262 § 27.2.4.7 — Promise.resolve(value). Returns a Promise
+    // resolved with value. For abstract analysis: passthrough the arg's
+    // AV (await/then will unwrap the same value). Scope-checked Promise.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.object, { name: "Promise" }) &&
+        !path.scope.getBinding("Promise") &&
+        _t.isIdentifier(n.callee.property, { name: "resolve" }) &&
+        n.arguments.length >= 1) {
+      var prAv = vals.get(n.arguments[0]);
+      if (prAv) return prAv;
+    }
     // WHATWG DOM § 4.2.6 — document.getElementById(id) on scope-checked
     // unshadowed `document`. Returns an obj-lit AV built from the page's
     // _domContext.byId entry for the given id, with href/src/action/dataset
