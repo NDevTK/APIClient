@@ -119,7 +119,7 @@ function _collectDomEndpointsFromContext(ctx) {
 // Returns the same shape as `_domContext`. Cheap to call repeatedly
 // (per-page); host can cache externally.
 function extractDomContextFromHtml(htmlString) {
-  var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {} };
+  var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {}, byId: {} };
   if (!htmlString || typeof htmlString !== "string") return ctx;
   // <meta name="X" content="Y"> — both single and double quotes; allow
   // attribute order swap. Scan iteratively over <meta ...> tags.
@@ -159,6 +159,18 @@ function extractDomContextFromHtml(htmlString) {
     if (s) ctx.srcs[elIdx] = s[1] != null ? s[1] : s[2];
     var a = actionRe.exec(attrs);
     if (a) ctx.actions[elIdx] = a[1] != null ? a[1] : a[2];
+    // Element id → element-attrs lookup, so getElementById("X") +
+    // .href / .src / .dataset.K can resolve via byId[X].
+    var idMatch = /\bid\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(attrs);
+    if (idMatch) {
+      var elId = idMatch[1] != null ? idMatch[1] : idMatch[2];
+      ctx.byId[elId] = {
+        href: h ? (h[1] != null ? h[1] : h[2]) : null,
+        src: s ? (s[1] != null ? s[1] : s[2]) : null,
+        action: a ? (a[1] != null ? a[1] : a[2]) : null,
+        dataAttrs: dataMap || null,
+      };
+    }
     elIdx++;
   }
   return ctx;
@@ -6978,6 +6990,29 @@ function _ravStep(F) {
     if (metaName1 && _domContext && _domContext.metaTags &&
         Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaName1)) {
       return { done: [_domContext.metaTags[metaName1]] };
+    }
+  }
+  // Form 1b: `document.getElementById("X").href` / .src / .action
+  // — when HTML has an element with id=X, look up the matching
+  // attribute via _domContext.byId. WHATWG DOM: getElementById is a
+  // standard Document method.
+  if (skip < 1 && _t.isMemberExpression(node) && !node.computed &&
+      _t.isIdentifier(node.property) &&
+      _t.isCallExpression(node.object) &&
+      _t.isMemberExpression(node.object.callee) && !node.object.callee.computed &&
+      _t.isIdentifier(node.object.callee.object, { name: "document" }) &&
+      !path.scope.getBinding("document") &&
+      _t.isIdentifier(node.object.callee.property, { name: "getElementById" }) &&
+      node.object.arguments.length === 1 &&
+      _t.isStringLiteral(node.object.arguments[0])) {
+    var gbiId = node.object.arguments[0].value;
+    var gbiProp = node.property.name;
+    if (_domContext && _domContext.byId &&
+        Object.prototype.hasOwnProperty.call(_domContext.byId, gbiId)) {
+      var elInfo = _domContext.byId[gbiId];
+      if (elInfo && elInfo[gbiProp] != null) {
+        return { done: [elInfo[gbiProp]] };
+      }
     }
   }
   // Form 2: `document.querySelector("meta[name=X]").getAttribute("content")`
