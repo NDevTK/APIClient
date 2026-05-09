@@ -7255,9 +7255,10 @@ function _ravStep(F) {
   }
 
   // BRANCH 1: String-encoding transforms (encodeURIComponent / encodeURI /
-  // decodeURIComponent / decodeURI / btoa / atob). Pure ECMAScript: when
-  // the argument resolves to a string, apply the transform and return the
-  // encoded value. Each is scope-checked (must be the unshadowed global).
+  // decodeURIComponent / decodeURI / btoa / atob) per § 19.2.6.
+  // Plus the `String(value)` global coercion per § 22.1.1.1 — when its
+  // single arg resolves to a string, the result IS that string (passthrough).
+  // Each is scope-checked (must be the unshadowed global).
   if (skip < 1 && _t.isCallExpression(node) && _t.isIdentifier(node.callee) &&
       node.arguments.length >= 1 && !path.scope.getBinding(node.callee.name)) {
     var ecName = node.callee.name;
@@ -7265,6 +7266,13 @@ function _ravStep(F) {
         ecName === "decodeURIComponent" || ecName === "decodeURI" ||
         ecName === "btoa" || ecName === "atob") {
       L.ecName = ecName;
+      return { trace: path.get("arguments.0"), state: _RAV_ENC_AFTER };
+    }
+    // String(...) coercion — passthrough when arg resolves to strings.
+    // For non-string arg results, ToString per spec; we only return the
+    // string-typed values (others are silently dropped).
+    if (ecName === "String") {
+      L.ecName = "String";
       return { trace: path.get("arguments.0"), state: _RAV_ENC_AFTER };
     }
   }
@@ -8149,6 +8157,18 @@ function _ravStep(F) {
       case _RAV_ENC_AFTER: {
         var argVals = F.result;
         if (argVals.length === 0) return { done: [] };
+        // String(...) is passthrough on string-typed values (ToString of
+        // a string returns the string per § 7.1.18 step 1).
+        if (L.ecName === "String") {
+          var sOut = [];
+          for (var savi = 0; savi < argVals.length; savi++) {
+            if (typeof argVals[savi] === "string") sOut.push(argVals[savi]);
+          }
+          if (sOut.length > 0) return { done: sOut };
+          L.branchSkip = 1;
+          F.state = _RAV_INIT;
+          continue;
+        }
         var fn = L.ecName === "encodeURIComponent" ? encodeURIComponent :
                  L.ecName === "encodeURI" ? encodeURI :
                  L.ecName === "decodeURIComponent" ? decodeURIComponent :
