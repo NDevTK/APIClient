@@ -3117,6 +3117,56 @@ function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
 }
 
 function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
+  // § 22.1.1.1 String coercion: `String(x)` → ToString(x).
+  // § 21.1.1.1 Number coercion: `Number(x)` → ToNumber(x).
+  // § 20.3.1.1 Boolean coercion: `Boolean(x)` → ToBoolean(x).
+  // For const args we apply the spec-defined coercion directly. For
+  // const-leaves or-trees, distribute per leaf.
+  if (methodId === "global.String" || methodId === "global.Number" || methodId === "global.Boolean") {
+    if (argAvs.length === 0) {
+      // String() → "", Number() → 0, Boolean() → false per spec.
+      if (methodId === "global.String") return { kind: "const", value: "" };
+      if (methodId === "global.Number") return { kind: "const", value: 0 };
+      return { kind: "const", value: false };
+    }
+    var coerceArg = argAvs[0];
+    var coerceLeafs = [];
+    if (coerceArg && coerceArg.kind === "const") coerceLeafs.push(coerceArg.value);
+    else if (coerceArg && coerceArg.kind === "or") {
+      var coerceFlat = _avFlattenAnyConstLeaves(coerceArg);
+      if (coerceFlat) coerceLeafs = coerceFlat;
+    }
+    if (coerceLeafs.length === 0) {
+      // Arg has structure (param/member/binop/template) — retain a
+      // `coerce` AV so caller-arg substitution can fold to a const
+      // after the param resolves. Mirror the binop / template
+      // structure-preservation pattern.
+      if (coerceArg && (coerceArg.kind === "param" || coerceArg.kind === "member" ||
+                        coerceArg.kind === "binop" || coerceArg.kind === "template")) {
+        var toType = methodId === "global.String" ? "string" :
+                     methodId === "global.Number" ? "number" : "boolean";
+        return { kind: "coerce", to: toType, arg: coerceArg };
+      }
+      return { kind: "top" };
+    }
+    var coerceResults = [];
+    for (var ccri = 0; ccri < coerceLeafs.length; ccri++) {
+      try {
+        var cv = coerceLeafs[ccri];
+        var coerced;
+        if (methodId === "global.String") coerced = String(cv);
+        else if (methodId === "global.Number") coerced = Number(cv);
+        else coerced = Boolean(cv);
+        coerceResults.push({ kind: "const", value: coerced });
+      } catch (_) { return { kind: "top" }; }
+    }
+    if (coerceResults.length === 1) return coerceResults[0];
+    var coerceOr = coerceResults[0];
+    for (var ccoi = 1; ccoi < coerceResults.length; ccoi++) {
+      coerceOr = _specSetUnionAv(coerceOr, coerceResults[ccoi]);
+    }
+    return coerceOr;
+  }
   // § 23.1.3.20 Array.prototype.push: appends arguments to `this`,
   // returns the new length. Models state mutation when receiver is a
   // tracked Identifier and resolves to array-lit.
@@ -8333,6 +8383,7 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
     else if (av.kind === "template" && av.exprs) {
       for (var tii = 0; tii < av.exprs.length; tii++) stack.push(av.exprs[tii]);
     }
+    else if (av.kind === "coerce" && av.arg) { stack.push(av.arg); }
     else if (av.kind === "loop-key") { stack.push(av.src); }
     else if (av.kind === "keys-of") { stack.push(av.src); }
     else if (av.kind === "obj-lit" && av.props) {
@@ -8496,6 +8547,46 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
         }
       } else {
         subs.set(node, { kind: "template", quasis: node.quasis, exprs: tplExprsSubbed });
+      }
+      continue;
+    }
+    if (node.kind === "coerce") {
+      // § 22.1.1.1 / § 21.1.1.1 / § 20.3.1.1: when arg substitutes to
+      // const, apply ToString / ToNumber / ToBoolean and fold to const.
+      // For or-trees of const, distribute. Otherwise retain coerce shape.
+      var subCoerceArg = subs.get(node.arg) || node.arg;
+      var coerceFold = function(v) {
+        try {
+          if (node.to === "string") return { kind: "const", value: String(v) };
+          if (node.to === "number") return { kind: "const", value: Number(v) };
+          if (node.to === "boolean") return { kind: "const", value: Boolean(v) };
+        } catch (_) { return null; }
+        return null;
+      };
+      if (subCoerceArg && subCoerceArg.kind === "const") {
+        var folded = coerceFold(subCoerceArg.value);
+        subs.set(node, folded || { kind: "top" });
+      } else if (subCoerceArg && subCoerceArg.kind === "or") {
+        var coerceLeavesS = _avFlattenAnyConstLeaves(subCoerceArg);
+        if (coerceLeavesS) {
+          var coerceFolded = [];
+          for (var ccfsi = 0; ccfsi < coerceLeavesS.length; ccfsi++) {
+            var foldOne = coerceFold(coerceLeavesS[ccfsi]);
+            coerceFolded.push(foldOne || { kind: "top" });
+          }
+          if (coerceFolded.length === 1) subs.set(node, coerceFolded[0]);
+          else {
+            var coerceOrFolded = coerceFolded[0];
+            for (var ccoifs = 1; ccoifs < coerceFolded.length; ccoifs++) {
+              coerceOrFolded = _specSetUnionAv(coerceOrFolded, coerceFolded[ccoifs]);
+            }
+            subs.set(node, coerceOrFolded);
+          }
+        } else {
+          subs.set(node, { kind: "coerce", to: node.to, arg: subCoerceArg });
+        }
+      } else {
+        subs.set(node, { kind: "coerce", to: node.to, arg: subCoerceArg });
       }
       continue;
     }
