@@ -5016,6 +5016,24 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
         }
       }
     }
+    // ECMA § 15.7.4 ClassMethod with kind "method" — sibling instance
+    // methods are reachable as `this.<methodName>` from within other
+    // methods of the same class. Add them as function-ref props so
+    // `this.method(args)` dispatches through the function-ref +
+    // thisAv binding chain. methodOf carries the class node for the
+    // ctor-arg substitution at the call site.
+    var classBodyPath3 = classBodyPath;
+    var classBody3Members = classBodyPath3.node.body;
+    var classOfBody = classBodyPath3.parent;
+    for (var mmi = 0; mmi < classBody3Members.length; mmi++) {
+      var mm = classBody3Members[mmi];
+      if (!_t.isClassMethod(mm) || mm.kind !== "method" || mm.static || mm.computed) continue;
+      var mmName = _t.isIdentifier(mm.key) ? mm.key.name :
+        (_t.isStringLiteral(mm.key) ? mm.key.value : null);
+      if (mmName === null) continue;
+      if (Object.prototype.hasOwnProperty.call(props, mmName)) continue;
+      props[mmName] = { kind: "function-ref", funcNode: mm, methodOf: classOfBody };
+    }
   }
   // Always return an obj-lit (possibly empty) for class methods so
   // flow-sensitive `this` updates from in-method writes (e.g. setter
