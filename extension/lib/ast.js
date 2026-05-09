@@ -4424,51 +4424,45 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
     if (bodyPath && bodyPath.node) {
       var outerBindingsToImport = _specOuterImportsListCache.get(funcNode);
       if (outerBindingsToImport === undefined) {
-      var seenOuterNames = Object.create(null);
       outerBindingsToImport = [];
-      bodyPath.traverse({
-        // Skip nested function bodies — their free Identifier references
-        // are the nested function's own closure captures, not the current
-        // function's. Without this, a function with N levels of nesting
-        // re-traverses the same inner body N times during pre-walk.
-        "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression": function(p) {
-          p.skip();
-        },
-        Identifier: function(idPath) {
-          // Only treat as a value-position reference if not the property
-          // of a non-computed MemberExpression and not a binding decl.
-          if (idPath.parentPath) {
-            var pn = idPath.parent;
-            if (_t.isMemberExpression(pn) && pn.property === idPath.node && !pn.computed) return;
-            if (_t.isObjectProperty(pn) && pn.key === idPath.node && !pn.computed) return;
-            if (_t.isVariableDeclarator(pn) && pn.id === idPath.node) return;
-            if (_t.isFunctionDeclaration(pn) && pn.id === idPath.node) return;
-            if (_t.isFunctionExpression(pn) && pn.id === idPath.node) return;
-            if (_t.isClassDeclaration(pn) && pn.id === idPath.node) return;
-            if (_t.isClassExpression(pn) && pn.id === idPath.node) return;
-            if ((_t.isFunction(pn) || _t.isArrowFunctionExpression(pn)) && pn.params.indexOf(idPath.node) >= 0) return;
-            if (_t.isLabeledStatement(pn) && pn.label === idPath.node) return;
-            if (_t.isBreakStatement(pn) && pn.label === idPath.node) return;
-            if (_t.isContinueStatement(pn) && pn.label === idPath.node) return;
+      // Walk the OUTER scope chain and check each binding's referencePaths
+      // for any reference contained in our function body. O(outer-bindings)
+      // not O(body-size) — critical perf for IIFE wrappers around minified
+      // bundles whose bodies are ~bundle-size. ECMA § 9.1.1 — closure
+      // capture semantics depend on which outer bindings are referenced.
+      var fnStart = funcNode.start, fnEnd = funcNode.end;
+      var globalAv = _specGlobalThisAv();
+      var outerScope = funcPath.scope.parent;
+      while (outerScope) {
+        var bindings = outerScope.bindings;
+        for (var bn in bindings) {
+          if (!Object.prototype.hasOwnProperty.call(bindings, bn)) continue;
+          if (Object.prototype.hasOwnProperty.call(state, bn)) continue;  // shadowed by param/local
+          if (funcPath.scope.hasOwnBinding(bn)) continue;
+          if (bn === "undefined" || bn === "arguments" || bn === "this") continue;
+          if (globalAv && globalAv.props && Object.prototype.hasOwnProperty.call(globalAv.props, bn)) continue;
+          var b = bindings[bn];
+          if (!b || !b.path || !b.path.node) continue;
+          if (!_t.isVariableDeclarator(b.path.node) || !b.path.node.init) continue;
+          // Check if any reference is in our function body's range (and not
+          // nested inside an inner function — we'd reach those by walking
+          // the inner function's scope chain, not via this outer's
+          // referencePaths). Cheap byte-range containment via node.start/end.
+          var refs = b.referencePaths || [];
+          var bodyHasRef = false;
+          for (var ri = 0; ri < refs.length; ri++) {
+            var rn = refs[ri].node;
+            if (!rn || rn.start == null) continue;
+            if (rn.start < fnStart || rn.end > fnEnd) continue;
+            // Skip if this reference is inside a nested function within
+            // funcNode (those references are the nested function's
+            // closure captures, not this function's).
+            var refFp = refs[ri].getFunctionParent();
+            if (refFp && refFp.node !== funcNode) continue;
+            bodyHasRef = true;
+            break;
           }
-          var nm = idPath.node.name;
-          if (Object.prototype.hasOwnProperty.call(seenOuterNames, nm)) return;
-          if (Object.prototype.hasOwnProperty.call(state, nm)) return;
-          if (nm === "undefined" || nm === "arguments" || nm === "this") return;
-          var b = idPath.scope.getBinding(nm);
-          if (!b || !b.path || !b.path.node) return;
-          if (!_t.isVariableDeclarator(b.path.node) || !b.path.node.init) return;
-          // Verify the binding is in an OUTER scope (the function's own
-          // scope doesn't have its own binding for this name).
-          if (funcPath.scope.hasOwnBinding(nm)) return;
-          // Skip globals already exposed via globalThis registry.
-          var globalAv = _specGlobalThisAv();
-          if (globalAv && globalAv.props && Object.prototype.hasOwnProperty.call(globalAv.props, nm)) return;
-          seenOuterNames[nm] = true;
-          // Collect init plus all reassignment RHS paths per § 9.1.1
-          // EnvironmentRecord — the binding's value at function-call
-          // time is one of these (joined sound over-approximation).
-          // binding.constantViolations is the AssignmentExpression paths.
+          if (!bodyHasRef) continue;
           var initSourcePaths = [b.path.get("init")];
           if (!b.constant && b.constantViolations) {
             for (var cvi = 0; cvi < b.constantViolations.length; cvi++) {
@@ -4478,9 +4472,10 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
               }
             }
           }
-          outerBindingsToImport.push({ name: nm, initSourcePaths: initSourcePaths, declaratorNode: b.path.node });
+          outerBindingsToImport.push({ name: bn, initSourcePaths: initSourcePaths, declaratorNode: b.path.node });
         }
-      });
+        outerScope = outerScope.parent;
+      }
       _specOuterImportsListCache.set(funcNode, outerBindingsToImport);
       }
       // Resolve each import via _specEvalExpression in a fresh state.
