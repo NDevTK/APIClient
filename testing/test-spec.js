@@ -3543,6 +3543,18 @@ specTest("ECMA § 13.1.3: identifier resolves to const-bind init via path.scope.
   return av && av.kind === "const" && av.value === "/api/v2";
 });
 
+specTest("ECMA § 23.1.3.20 Array.prototype.push: mutates local array-lit state", `
+  function f() {
+    var arr = ["/api/initial"];
+    arr.push("/api/added");
+    this.u = arr[1];
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api/added";
+});
+
 specTest("ECMA § 15.7: `new MyClass(arg)` instantiates obj-lit from constructor's this.X = arg assignments", `
   class MyService {
     constructor(url) {

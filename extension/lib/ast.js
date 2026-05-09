@@ -3013,6 +3013,29 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     if (_specHandleArrayForEach(exprNode, stmtPath.get("expression"), state, effects, branchStack)) {
       return;
     }
+    // § 23.1.3.20 Array.prototype.push: mutates the receiver array,
+    // appending arguments. Model state evolution: when receiver is an
+    // Identifier resolvable to an array-lit AV in state, replace state
+    // binding with new array-lit including appended elements.
+    if (_t.isCallExpression(exprNode) && _t.isMemberExpression(exprNode.callee) &&
+        !exprNode.callee.computed &&
+        _t.isIdentifier(exprNode.callee.property, { name: "push" }) &&
+        _t.isIdentifier(exprNode.callee.object) &&
+        Object.prototype.hasOwnProperty.call(state, exprNode.callee.object.name)) {
+      var pushRecvName = exprNode.callee.object.name;
+      var pushRecvAv = state[pushRecvName];
+      if (pushRecvAv && pushRecvAv.kind === "array-lit") {
+        // Evaluate the args to populate the per-expression memo.
+        _specEvalExpression(stmtPath.get("expression"), state, effects);
+        var newElements = (pushRecvAv.elements || []).slice();
+        for (var pai = 0; pai < exprNode.arguments.length; pai++) {
+          var argAv = _specPathValMemo.get(exprNode.arguments[pai]) || { kind: "top" };
+          newElements.push(argAv);
+        }
+        state[pushRecvName] = { kind: "array-lit", elements: newElements };
+        return;
+      }
+    }
     _specEvalExpression(stmtPath.get("expression"), state, effects);
     return;
   }
