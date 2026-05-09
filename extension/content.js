@@ -515,7 +515,7 @@
   // outerHTML), but shape matches extractDomContextFromHtml's output
   // (plus richer form metadata) so the analyser and consumers see both.
   function _scanDomContext() {
-    var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {}, byId: {}, forms: [] };
+    var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {}, byId: {}, inlineHandlers: {}, forms: [] };
     try {
       // <meta name=X content=Y>
       var metas = document.querySelectorAll("meta[name][content]");
@@ -559,6 +559,33 @@
             src: sv || null,
             action: av || null,
             dataAttrs: dataMap || null,
+          };
+        }
+        // Inline event handlers (<... onclick="fn(this)" ...>). HTML5
+        // § 8.2.3 event handler attributes — handler runs with `this`
+        // bound to the element. The analyser uses these as synthetic
+        // call sites so `this` resolves to element attributes.
+        var inlineHandlers = null;
+        for (var ai = 0; ai < el.attributes.length; ai++) {
+          var attr = el.attributes[ai];
+          if (attr.name && attr.name.toLowerCase().indexOf("on") === 0 && attr.name.length > 2 && attr.value) {
+            if (!inlineHandlers) inlineHandlers = [];
+            inlineHandlers.push({
+              event: attr.name.slice(2).toLowerCase(),
+              body: attr.value,
+            });
+          }
+        }
+        if (inlineHandlers) {
+          var ihKey = idAttr || ("el" + ei);
+          ctx.inlineHandlers[ihKey] = {
+            handlers: inlineHandlers,
+            elementAttrs: {
+              href: hv || null,
+              src: sv || null,
+              action: av || null,
+              dataAttrs: dataMap || null,
+            },
           };
         }
       }
