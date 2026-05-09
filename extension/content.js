@@ -515,7 +515,7 @@
   // outerHTML), but shape matches extractDomContextFromHtml's output
   // (plus richer form metadata) so the analyser and consumers see both.
   function _scanDomContext() {
-    var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {}, forms: [] };
+    var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {}, byId: {}, forms: [] };
     try {
       // <meta name=X content=Y>
       var metas = document.querySelectorAll("meta[name][content]");
@@ -550,6 +550,17 @@
         if (sv) ctx.srcs[ei] = sv;
         var av = el.getAttribute("action");
         if (av) ctx.actions[ei] = av;
+        // id-keyed lookup for `document.getElementById("X").<prop>`
+        // resolution in the analyser. WHATWG DOM standard pattern.
+        var idAttr = el.getAttribute("id");
+        if (idAttr) {
+          ctx.byId[idAttr] = {
+            href: hv || null,
+            src: sv || null,
+            action: av || null,
+            dataAttrs: dataMap || null,
+          };
+        }
       }
       // Forms — same metadata scanForms() previously collected, now part
       // of the unified DOM context. The user noted: "This DOM work
