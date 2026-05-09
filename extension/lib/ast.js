@@ -4791,6 +4791,69 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
   return instanceAv;
 }
 
+// § 15.7 Class (constructor function) static side: build an obj-lit AV
+// whose props are the class's static methods (kind === "method" with
+// static === true) as function-ref AVs. Used when a ClassDeclaration /
+// ClassExpression Identifier is referenced — the resulting obj-lit
+// allows `C.staticMethod()` to dispatch via _specMemberAccessOnObjLeaf
+// + the call-dispatch's function-ref branch.
+//
+// Per-class cache: same class node yields the same static-side shape.
+var _specClassStaticAvCache = new WeakMap();
+function _specBuildClassStaticAv(classNode, classPath) {
+  if (_specClassStaticAvCache.has(classNode)) return _specClassStaticAvCache.get(classNode);
+  // Cycle guard.
+  _specClassStaticAvCache.set(classNode, null);
+  var props = Object.create(null);
+  var body = classNode.body;
+  if (body && _t.isClassBody(body)) {
+    for (var ci = 0; ci < body.body.length; ci++) {
+      var member = body.body[ci];
+      if (!_t.isClassMethod(member) || member.computed) continue;
+      if (!member.static) continue;
+      // Constructor isn't a static side member; only kind === "method"/"get"
+      // are surfaced (setters store, don't return; we don't model them
+      // for value resolution).
+      if (member.kind !== "method" && member.kind !== "get") continue;
+      var mName = _t.isIdentifier(member.key) ? member.key.name :
+        (_t.isStringLiteral(member.key) ? member.key.value : null);
+      if (mName === null) continue;
+      props[mName] = { kind: "function-ref", funcNode: member };
+    }
+    // Static field initialisers per § 15.7.5: `static X = expr`. Calling
+    // _specEvalExpression here would form a static call-graph cycle
+    // (_specEvalLeaf → _specBuildClassStaticAv → _specEvalExpression →
+    // _specEvalLeaf), which the recursion lint forbids. Inline a small
+    // literal-only resolver instead — covers the common case `static X =
+    // "/api"` without re-entering spec eval. Non-literal initialisers
+    // resolve to top here; the binding's per-call lookup at the use-site
+    // will hit the program fixpoint memo for the class-body's static field
+    // through other paths.
+    for (var fi = 0; fi < body.body.length; fi++) {
+      var fld = body.body[fi];
+      var fldIsProp = (_t.isClassProperty && _t.isClassProperty(fld)) ||
+        (_t.isClassPrivateProperty && _t.isClassPrivateProperty(fld));
+      if (!fldIsProp || !fld.static || fld.computed || !fld.value) continue;
+      var fldName = _t.isIdentifier(fld.key) ? fld.key.name :
+        (_t.isStringLiteral(fld.key) ? fld.key.value : null);
+      if (fldName === null) continue;
+      var v = fld.value;
+      if (_t.isStringLiteral(v)) props[fldName] = { kind: "const", value: v.value };
+      else if (_t.isNumericLiteral(v)) props[fldName] = { kind: "const", value: v.value };
+      else if (_t.isBooleanLiteral(v)) props[fldName] = { kind: "const", value: v.value };
+      else if (_t.isNullLiteral(v)) props[fldName] = { kind: "const", value: null };
+      else if (_t.isTemplateLiteral(v) && v.expressions.length === 0 && v.quasis.length === 1) {
+        props[fldName] = { kind: "const", value: v.quasis[0].value.cooked };
+      }
+    }
+  }
+  var hasAny = false;
+  for (var pk in props) { if (Object.prototype.hasOwnProperty.call(props, pk)) { hasAny = true; break; } }
+  var av = hasAny ? { kind: "obj-lit", props: props } : { kind: "top" };
+  _specClassStaticAvCache.set(classNode, av);
+  return av;
+}
+
 // § 13.3.1 ChainExpression evaluation: when an ObjectExpression method
 // (`{foo() { ... }}` or `{foo: function() { ... }}`) is invoked as
 // `obj.foo()`, `this` binds to the receiver `obj` (the obj-lit). Project
@@ -6991,6 +7054,21 @@ function _specEvalLeaf(path, state, vals, effects) {
           return { kind: "const", value: initN.quasis[0].value.cooked };
         }
       }
+      // § 15.7 ClassDeclaration / ClassExpression as Identifier reference:
+      // the binding's value is the constructor function, but for static-
+      // method dispatch (`C.staticMeth()`) the relevant access is via
+      // member access on the constructor's "static side". Build an obj-lit
+      // AV whose props map static-method names to function-ref AVs so the
+      // existing _specMemberAccessOnObjLeaf branch handles `C.X` access
+      // and the call-dispatch branch routes `C.X()` through the function
+      // body's return-value memo.
+      if (_t.isClassDeclaration(bn) && bn.body && _t.isClassBody(bn.body)) {
+        return _specBuildClassStaticAv(bn, idBinding.path);
+      }
+      if (_t.isVariableDeclarator(bn) && bn.init && _t.isClassExpression(bn.init) &&
+          bn.init.body && _t.isClassBody(bn.init.body)) {
+        return _specBuildClassStaticAv(bn.init, idBinding.path.get("init"));
+      }
       // ECMA § 9.1.1 closure capture: outer-scope `var X = init` bindings
       // that this function's body references are pre-loaded into entryState
       // by _specInitialFunctionBodyState's outer-import scan (which uses
@@ -7463,6 +7541,34 @@ function _specEvalLeaf(path, state, vals, effects) {
       bmRecvAv = null;
     }
     if (bmCalleeAv) {
+      // function-ref dispatch per § 13.3.6: when callee AV is a function-
+      // ref (produced by class static-method resolution, ObjectExpression
+      // method capture, or closure write-back of stored callbacks), look
+      // up the function's return-value memo and substitute caller args.
+      // Same semantics as the Identifier-callee path below; just handles
+      // the case where the callee was an obj-lit member access.
+      if (bmCalleeAv.kind === "function-ref" && bmCalleeAv.funcNode) {
+        var frFn = bmCalleeAv.funcNode;
+        var frRet = _specReturnValueMemo.get(frFn);
+        if (frRet) {
+          var frArgAvs = [];
+          for (var frai = 0; frai < n.arguments.length; frai++) {
+            frArgAvs.push(vals.get(n.arguments[frai]) || { kind: "top" });
+          }
+          return _specInstantiateAv(frRet, frArgAvs);
+        }
+        // No memo yet: handle single-statement-return fast path inline so
+        // the first fixpoint pass still resolves common static methods
+        // before the worklist gets to them.
+        if (frFn.body && _t.isBlockStatement(frFn.body) && frFn.body.body.length === 1 &&
+            _t.isReturnStatement(frFn.body.body[0]) && frFn.body.body[0].argument) {
+          var frArg = frFn.body.body[0].argument;
+          if (_t.isStringLiteral(frArg)) return { kind: "const", value: frArg.value };
+          if (_t.isNumericLiteral(frArg)) return { kind: "const", value: frArg.value };
+          if (_t.isBooleanLiteral(frArg)) return { kind: "const", value: frArg.value };
+          if (_t.isNullLiteral(frArg)) return { kind: "const", value: null };
+        }
+      }
       // Resolve the builtin-method id, even when callee AV is an or-tree
       // of identical builtin-methods (happens when receiver is or-tree of
       // same-prototype values per § 13.10 distribution).
