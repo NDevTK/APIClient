@@ -11476,6 +11476,15 @@ function _resolveCallReturnToFunction(callPath, depth) {
 
 // Get the scope binding for a function (by name, variable declarator, or assignment)
 function _getFunctionBinding(funcPath) {
+  // VariableDeclarator wrapping takes precedence over a named function
+  // expression's inner self-name. For `var Bl = function e(t) {...}`,
+  // call sites use `Bl(...)` (outer binding); the inner `e` binding is
+  // only the function's self-reference inside its own body and has no
+  // external callers. Picking `e` would miss every real call site.
+  if (_t.isVariableDeclarator(funcPath.parent) && _t.isIdentifier(funcPath.parent.id)) {
+    var vBinding = funcPath.scope.parent ? funcPath.scope.parent.getBinding(funcPath.parent.id.name) : null;
+    if (vBinding) return vBinding;
+  }
   if (funcPath.node.id) {
     var binding = funcPath.scope.parent ? funcPath.scope.parent.getBinding(funcPath.node.id.name) : null;
     if (!binding) binding = funcPath.scope.getBinding(funcPath.node.id.name);
