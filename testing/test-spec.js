@@ -2855,6 +2855,20 @@ test("DOM context: missing meta tag does NOT resolve to garbage", `
   return true;
 }, { domContext: { metaTags: {} } });
 
+test("DOM context: getElementById('X').href resolves via byId lookup", `
+  fetch(document.getElementById("link1").href);
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "/api/foo";
+}, { domContext: { byId: { link1: { href: "/api/foo", src: null, action: null, dataAttrs: null } } } });
+
+test("DOM context: getElementById('X').src resolves via byId lookup", `
+  fetch(document.getElementById("script1").src);
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "/static/lib.js";
+}, { domContext: { byId: { script1: { src: "/static/lib.js", href: null, action: null, dataAttrs: null } } } });
+
 test("result.domEndpoints surfaces URL-shaped href/src/action/data values", `
   var x = 1;
 `, function(result) {
