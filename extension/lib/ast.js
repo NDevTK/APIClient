@@ -4309,7 +4309,7 @@ var _specCallSitesByFn = new WeakMap();
 // is implicit (the analyser checks `ThisExpression` directly via the
 // `{kind:"this"}` constructor in expression eval — no explicit "this"
 // state slot is required).
-function _specInitialFunctionBodyState(funcNode, funcPath) {
+function _specInitialFunctionBodyState(funcNode, funcPath, enableClosurePreWalk) {
   var state = _specStateCreate();
   if (!funcNode || !funcNode.params) return state;
   // Inline-handler synthetic-caller binding per HTML5 § 8.2.3: inline
@@ -4433,7 +4433,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
   // The eval call is from this scope (not _specEvalLeaf), so no static
   // call-graph cycle. Iterative scan via Babel traverse (in babel-bundle,
   // outside our scoped recursion ban) collects identifier references.
-  if (funcPath && funcPath.get && (_t.isFunctionDeclaration(funcNode) ||
+  if (enableClosurePreWalk && funcPath && funcPath.get && (_t.isFunctionDeclaration(funcNode) ||
       _t.isFunctionExpression(funcNode) || _t.isArrowFunctionExpression(funcNode))) {
     var bodyPath = funcPath.get("body");
     if (bodyPath && bodyPath.node) {
@@ -5903,7 +5903,7 @@ function _specAnalyzePropertyFlow(funcPath, force) {
   // (not a sibling analysis whose own items were already pending).
   var hofQueueBaseLen = _hofPendingDispatches.length;
   var returnAvBaseLen = _specReturnAvAccum.length;
-  var entryState = _specInitialFunctionBodyState(fnNode, funcPath);
+  var entryState = _specInitialFunctionBodyState(fnNode, funcPath, force);
   var effects = [];
   var stack;
   if (_t.isBlockStatement(bodyPath.node) || _t.isProgram(bodyPath.node)) {
