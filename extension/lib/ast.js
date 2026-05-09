@@ -7554,6 +7554,37 @@ function _ravStep(F) {
     var memSubSkip = L.memSubSkip || 0;
     var propName = _t.isIdentifier(node.property) ? node.property.name : null;
     if (propName) {
+      // 12 (DOM): object is an Identifier whose binding init is
+      // `document.getElementById("X")` or `document.querySelector("#X")`.
+      // Look up byId — same as the inline forms 1b/1e but through one
+      // level of variable binding.
+      if (memSubSkip < 1 && _t.isIdentifier(node.object) && _domContext && _domContext.byId) {
+        var elBinding = path.scope.getBinding(node.object.name);
+        if (elBinding && _t.isVariableDeclarator(elBinding.path.node) && elBinding.path.node.init) {
+          var elInit = elBinding.path.node.init;
+          var elInitId = null;
+          if (_t.isCallExpression(elInit) &&
+              _t.isMemberExpression(elInit.callee) && !elInit.callee.computed &&
+              _t.isIdentifier(elInit.callee.object, { name: "document" }) &&
+              !path.scope.getBinding("document") &&
+              elInit.arguments.length === 1 &&
+              _t.isStringLiteral(elInit.arguments[0])) {
+            if (_t.isIdentifier(elInit.callee.property, { name: "getElementById" })) {
+              elInitId = elInit.arguments[0].value;
+            } else if (_t.isIdentifier(elInit.callee.property, { name: "querySelector" })) {
+              var bsel = elInit.arguments[0].value;
+              var bidMatch = bsel.match(/^#([A-Za-z][\w:.-]*)$/);
+              if (bidMatch) elInitId = bidMatch[1];
+            }
+          }
+          if (elInitId && Object.prototype.hasOwnProperty.call(_domContext.byId, elInitId)) {
+            var bElInfo = _domContext.byId[elInitId];
+            if (bElInfo && bElInfo[propName] != null) {
+              return { done: [bElInfo[propName]] };
+            }
+          }
+        }
+      }
       // Object.defineProperty(obj, "key", descriptor) — ECMAScript
       // property definition. When the descriptor has `get: fn`, reading
       // obj.key invokes fn and returns its result; when it has `value: V`,
