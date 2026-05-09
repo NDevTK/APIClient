@@ -4206,142 +4206,42 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
         // padStart/padEnd/charAt/charCodeAt/at all routed via the helper above.
       }
-      // Array built-ins per § 23.1.3 — receiver array-lit.
-      if (recvAv && recvAv.kind === "array-lit" && recvAv.elements) {
-        var aMeth = n.callee.property.name;
-        // § 23.1.3.18 Array.prototype.join — concat elements with separator.
-        if (aMeth === "join") {
-          var sep = ",";  // spec default per § 23.1.3.18 step 4
-          if (n.arguments.length >= 1) {
-            var sepAv = vals.get(n.arguments[0]);
-            if (sepAv && sepAv.kind === "const" && typeof sepAv.value === "string") sep = sepAv.value;
-            else if (n.arguments.length >= 1) { /* unknown sep — skip */ return { kind: "top" }; }
-          }
-          var parts = [];
-          for (var aei = 0; aei < recvAv.elements.length; aei++) {
-            var el = recvAv.elements[aei];
-            if (!el || el.kind !== "const") return { kind: "top" };  // unknown element — bail
-            parts.push(String(el.value));
-          }
-          return { kind: "const", value: parts.join(sep) };
-        }
-        // § 23.1.3.2 Array.prototype.concat(...items) — append items to
-        // a copy of the receiver. Arrays are spread; non-arrays appended
-        // as a single element per IsConcatSpreadable abstract op (§ 23.1.3.2.1).
-        if (aMeth === "concat") {
-          var concatExp = _specExpandCallArgs(n.arguments, vals);
-          if (concatExp === null) return { kind: "top" };
-          var concatElems = recvAv.elements.slice();
-          for (var ci = 0; ci < concatExp.length; ci++) {
-            var argAv = concatExp[ci];
-            if (!argAv) return { kind: "top" };
-            if (argAv.kind === "array-lit" && argAv.elements) {
-              for (var ai = 0; ai < argAv.elements.length; ai++) concatElems.push(argAv.elements[ai]);
-            } else if (argAv.kind === "const" || argAv.kind === "obj-lit") {
-              concatElems.push(argAv);
-            } else {
-              // Unknown shape — concat result is unknown (could be spread or single).
-              return { kind: "top" };
+      // Array built-ins per § 23.1.3 — pure (non-HOF) methods. Receiver
+      // can be a single array-lit OR an or-tree of array-lits (per-leaf
+      // distribution). HOF methods (map/filter/reduce/…) handled below
+      // — they queue cb dispatches with side effects, so they don't fit
+      // the leaf-distribution pattern.
+      if (recvAv && (recvAv.kind === "array-lit" || recvAv.kind === "or")) {
+        var aMethName = n.callee.property.name;
+        if (recvAv.kind === "array-lit") {
+          var aSingleRes = _applyArrayMethodToArrLit(recvAv, aMethName, n, vals);
+          if (aSingleRes !== null) return aSingleRes;
+        } else {
+          var arrLeaves = _avFlattenOrLeaves(recvAv);
+          var allArrLits = !!arrLeaves;
+          if (allArrLits) {
+            for (var ali = 0; ali < arrLeaves.length; ali++) {
+              if (!arrLeaves[ali] || arrLeaves[ali].kind !== "array-lit") { allArrLits = false; break; }
             }
           }
-          return { kind: "array-lit", elements: concatElems };
-        }
-        // § 23.1.3.28 Array.prototype.slice([start, end]) — sub-array.
-        if (aMeth === "slice") {
-          var sStart = 0;
-          var sEnd = recvAv.elements.length;
-          if (n.arguments.length >= 1) {
-            var sStartAv = vals.get(n.arguments[0]);
-            if (sStartAv && sStartAv.kind === "const" && typeof sStartAv.value === "number") {
-              sStart = sStartAv.value;
-              if (sStart < 0) sStart = Math.max(0, recvAv.elements.length + sStart);
-            } else { return { kind: "top" }; }
-          }
-          if (n.arguments.length >= 2) {
-            var sEndAv = vals.get(n.arguments[1]);
-            if (sEndAv && sEndAv.kind === "const" && typeof sEndAv.value === "number") {
-              sEnd = sEndAv.value;
-              if (sEnd < 0) sEnd = Math.max(0, recvAv.elements.length + sEnd);
-            } else { return { kind: "top" }; }
-          }
-          return { kind: "array-lit", elements: recvAv.elements.slice(sStart, sEnd) };
-        }
-        // § 23.1.3.16 Array.prototype.includes(searchElement) — Boolean.
-        // Returns true iff any element SameValueZero-equals searchElement
-        // per § 7.2.13. For Const-Const comparison this matches `===`
-        // (excluding NaN-NaN, which SameValueZero treats as equal).
-        if (aMeth === "includes" && n.arguments.length >= 1) {
-          var inclSearch = vals.get(n.arguments[0]);
-          if (!inclSearch || inclSearch.kind !== "const") return { kind: "top" };
-          for (var inci = 0; inci < recvAv.elements.length; inci++) {
-            var ie = recvAv.elements[inci];
-            if (!ie || ie.kind !== "const") return { kind: "top" };
-            // SameValueZero: NaN === NaN; other primitives use ===.
-            if (Number.isNaN(inclSearch.value) && Number.isNaN(ie.value)) return { kind: "const", value: true };
-            if (ie.value === inclSearch.value) return { kind: "const", value: true };
-          }
-          return { kind: "const", value: false };
-        }
-        // § 23.1.3.17 Array.prototype.indexOf(searchElement) — Number.
-        // Returns the first index where element strict-equals searchElement,
-        // -1 if none. Strict equality per § 7.2.16.
-        if (aMeth === "indexOf" && n.arguments.length >= 1) {
-          var ioSearch = vals.get(n.arguments[0]);
-          if (!ioSearch || ioSearch.kind !== "const") return { kind: "top" };
-          for (var ioi = 0; ioi < recvAv.elements.length; ioi++) {
-            var ioe = recvAv.elements[ioi];
-            if (!ioe || ioe.kind !== "const") return { kind: "top" };
-            if (ioe.value === ioSearch.value) return { kind: "const", value: ioi };
-          }
-          return { kind: "const", value: -1 };
-        }
-        // § 23.1.3.26 Array.prototype.reverse() — returns reversed array.
-        // (Spec mutates in place; for our value lattice we return a new
-        // array-lit with elements reversed, which matches the return value.)
-        if (aMeth === "reverse" && n.arguments.length === 0) {
-          return { kind: "array-lit", elements: recvAv.elements.slice().reverse() };
-        }
-      }
-      // § 23.1.3.1 Array.prototype.at(index) on array-lit receiver.
-      if (recvAv && recvAv.kind === "array-lit" && recvAv.elements && n.callee.property.name === "at" &&
-          n.arguments.length >= 1) {
-        var atIdxAv = vals.get(n.arguments[0]);
-        if (atIdxAv && atIdxAv.kind === "const" && typeof atIdxAv.value === "number") {
-          var atResolved = atIdxAv.value < 0 ? recvAv.elements.length + atIdxAv.value : atIdxAv.value;
-          if (atResolved >= 0 && atResolved < recvAv.elements.length) {
-            return recvAv.elements[atResolved];
-          }
-          return { kind: "const", value: undefined };
-        }
-      }
-      // § 23.1.3.13 Array.prototype.flat([depth]) — single-level flatten by
-      // default; deeper depths flatten nested array-lit elements iteratively.
-      if (recvAv && recvAv.kind === "array-lit" && recvAv.elements && n.callee.property.name === "flat") {
-        var flatDepth = 1;
-        if (n.arguments.length >= 1) {
-          var fdAv = vals.get(n.arguments[0]);
-          if (fdAv && fdAv.kind === "const" && typeof fdAv.value === "number") flatDepth = fdAv.value;
-          else return { kind: "top" };
-        }
-        // Iterative flatten with worklist of {av, depth-remaining} per spec
-        // § 23.1.3.10 FlattenIntoArray (uses LoopBody; we walk iteratively).
-        var flatRes = [];
-        var flatStack = [];
-        for (var fei = recvAv.elements.length - 1; fei >= 0; fei--) {
-          flatStack.push({ av: recvAv.elements[fei], depth: flatDepth });
-        }
-        while (flatStack.length > 0) {
-          var fe = flatStack.pop();
-          var feAv = fe.av;
-          if (feAv && feAv.kind === "array-lit" && feAv.elements && fe.depth > 0) {
-            for (var fej = feAv.elements.length - 1; fej >= 0; fej--) {
-              flatStack.push({ av: feAv.elements[fej], depth: fe.depth - 1 });
+          if (allArrLits) {
+            var aResults = [];
+            var aMethodMatched = true;
+            for (var alri = 0; alri < arrLeaves.length; alri++) {
+              var aLeafRes = _applyArrayMethodToArrLit(arrLeaves[alri], aMethName, n, vals);
+              if (aLeafRes === null) { aMethodMatched = false; break; }
+              aResults.push(aLeafRes);
             }
-          } else {
-            flatRes.push(feAv);
+            if (aMethodMatched && aResults.length > 0) {
+              if (aResults.length === 1) return aResults[0];
+              var aOr = aResults[0];
+              for (var aori = 1; aori < aResults.length; aori++) {
+                aOr = _specLogicalOrAv(aOr, aResults[aori]);
+              }
+              return aOr;
+            }
           }
         }
-        return { kind: "array-lit", elements: flatRes };
       }
       // § 23.1.3 Array.prototype.{map, filter, reduce, find, findIndex,
       // some, every, flatMap, forEach} — dispatch the callback against
@@ -7302,6 +7202,128 @@ function _applyStringMethodToConst(s, methodName, argLits) {
     return s.at(argLits[0]);
   }
   return undefined;
+}
+
+// Apply an Array.prototype method to a single array-lit receiver per
+// § 23.1.3 (pure / non-HOF subset: join, concat, slice, includes,
+// indexOf, reverse, at, flat). Returns the resulting AbstractValue
+// (which may be {kind:"top"} when args don't fully resolve), or null
+// if methodName is not modeled here. HOF methods (map/filter/reduce/…)
+// are NOT routed here because they queue per-cb dispatches via
+// _hofPendingDispatches and have side effects that must run once,
+// not per-leaf in a distribution loop.
+function _applyArrayMethodToArrLit(arrLitAv, methodName, n, vals) {
+  if (!arrLitAv || arrLitAv.kind !== "array-lit" || !arrLitAv.elements) return null;
+  if (methodName === "join") {
+    var sep = ",";  // spec default per § 23.1.3.18 step 4
+    if (n.arguments.length >= 1) {
+      var sepAv = vals.get(n.arguments[0]);
+      if (sepAv && sepAv.kind === "const" && typeof sepAv.value === "string") sep = sepAv.value;
+      else return { kind: "top" };
+    }
+    var parts = [];
+    for (var aei = 0; aei < arrLitAv.elements.length; aei++) {
+      var el = arrLitAv.elements[aei];
+      if (!el || el.kind !== "const") return { kind: "top" };
+      parts.push(String(el.value));
+    }
+    return { kind: "const", value: parts.join(sep) };
+  }
+  if (methodName === "concat") {
+    var concatExp = _specExpandCallArgs(n.arguments, vals);
+    if (concatExp === null) return { kind: "top" };
+    var concatElems = arrLitAv.elements.slice();
+    for (var ci = 0; ci < concatExp.length; ci++) {
+      var argAv = concatExp[ci];
+      if (!argAv) return { kind: "top" };
+      if (argAv.kind === "array-lit" && argAv.elements) {
+        for (var ai = 0; ai < argAv.elements.length; ai++) concatElems.push(argAv.elements[ai]);
+      } else if (argAv.kind === "const" || argAv.kind === "obj-lit") {
+        concatElems.push(argAv);
+      } else {
+        return { kind: "top" };
+      }
+    }
+    return { kind: "array-lit", elements: concatElems };
+  }
+  if (methodName === "slice") {
+    var sStart = 0;
+    var sEnd = arrLitAv.elements.length;
+    if (n.arguments.length >= 1) {
+      var sStartAv = vals.get(n.arguments[0]);
+      if (sStartAv && sStartAv.kind === "const" && typeof sStartAv.value === "number") {
+        sStart = sStartAv.value;
+        if (sStart < 0) sStart = Math.max(0, arrLitAv.elements.length + sStart);
+      } else { return { kind: "top" }; }
+    }
+    if (n.arguments.length >= 2) {
+      var sEndAv = vals.get(n.arguments[1]);
+      if (sEndAv && sEndAv.kind === "const" && typeof sEndAv.value === "number") {
+        sEnd = sEndAv.value;
+        if (sEnd < 0) sEnd = Math.max(0, arrLitAv.elements.length + sEnd);
+      } else { return { kind: "top" }; }
+    }
+    return { kind: "array-lit", elements: arrLitAv.elements.slice(sStart, sEnd) };
+  }
+  if (methodName === "includes" && n.arguments.length >= 1) {
+    var inclSearch = vals.get(n.arguments[0]);
+    if (!inclSearch || inclSearch.kind !== "const") return { kind: "top" };
+    for (var inci = 0; inci < arrLitAv.elements.length; inci++) {
+      var ie = arrLitAv.elements[inci];
+      if (!ie || ie.kind !== "const") return { kind: "top" };
+      if (Number.isNaN(inclSearch.value) && Number.isNaN(ie.value)) return { kind: "const", value: true };
+      if (ie.value === inclSearch.value) return { kind: "const", value: true };
+    }
+    return { kind: "const", value: false };
+  }
+  if (methodName === "indexOf" && n.arguments.length >= 1) {
+    var ioSearch = vals.get(n.arguments[0]);
+    if (!ioSearch || ioSearch.kind !== "const") return { kind: "top" };
+    for (var ioi = 0; ioi < arrLitAv.elements.length; ioi++) {
+      var ioe = arrLitAv.elements[ioi];
+      if (!ioe || ioe.kind !== "const") return { kind: "top" };
+      if (ioe.value === ioSearch.value) return { kind: "const", value: ioi };
+    }
+    return { kind: "const", value: -1 };
+  }
+  if (methodName === "reverse" && n.arguments.length === 0) {
+    return { kind: "array-lit", elements: arrLitAv.elements.slice().reverse() };
+  }
+  if (methodName === "at" && n.arguments.length >= 1) {
+    var atIdxAv = vals.get(n.arguments[0]);
+    if (atIdxAv && atIdxAv.kind === "const" && typeof atIdxAv.value === "number") {
+      var atResolved = atIdxAv.value < 0 ? arrLitAv.elements.length + atIdxAv.value : atIdxAv.value;
+      if (atResolved >= 0 && atResolved < arrLitAv.elements.length) return arrLitAv.elements[atResolved];
+      return { kind: "const", value: undefined };
+    }
+    return { kind: "top" };
+  }
+  if (methodName === "flat") {
+    var flatDepth = 1;
+    if (n.arguments.length >= 1) {
+      var fdAv = vals.get(n.arguments[0]);
+      if (fdAv && fdAv.kind === "const" && typeof fdAv.value === "number") flatDepth = fdAv.value;
+      else return { kind: "top" };
+    }
+    var flatRes = [];
+    var flatStack = [];
+    for (var fei = arrLitAv.elements.length - 1; fei >= 0; fei--) {
+      flatStack.push({ av: arrLitAv.elements[fei], depth: flatDepth });
+    }
+    while (flatStack.length > 0) {
+      var fe = flatStack.pop();
+      var feAv = fe.av;
+      if (feAv && feAv.kind === "array-lit" && feAv.elements && fe.depth > 0) {
+        for (var fej = feAv.elements.length - 1; fej >= 0; fej--) {
+          flatStack.push({ av: feAv.elements[fej], depth: fe.depth - 1 });
+        }
+      } else {
+        flatRes.push(feAv);
+      }
+    }
+    return { kind: "array-lit", elements: flatRes };
+  }
+  return null;  // method not modeled
 }
 
 // Apply a Number.prototype method to a Const number receiver per § 21.1.3.

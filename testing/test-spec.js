@@ -3109,6 +3109,44 @@ specTest("§ 21.1.3.6 Number.prototype.toString(radix) distributes `(cond ? 10 :
   return leaves.length === 2 && leaves.indexOf("a") >= 0 && leaves.indexOf("f") >= 0;
 });
 
+specTest("§ 23.1.3.18 Array.prototype.join distributes over alternation `(cond ? ['a','b'] : ['c','d']).join('-')` → or('a-b', 'c-d')", `
+  function f(cond) {
+    var arr = cond ? ["a", "b"] : ["c", "d"];
+    this.s = arr.join("-");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf("a-b") >= 0 && leaves.indexOf("c-d") >= 0;
+});
+
+specTest("§ 23.1.3.16 Array.prototype.includes distributes `(cond ? ['x'] : ['y']).includes('x')` → or(true, false)", `
+  function f(cond) {
+    var arr = cond ? ["x"] : ["y"];
+    this.b = arr.includes("x");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf(true) >= 0 && leaves.indexOf(false) >= 0;
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));
