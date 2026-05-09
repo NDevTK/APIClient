@@ -2979,6 +2979,60 @@ specTest("§ 13.8.1: alternation distribution `(cond ? 'a' : 'b') + '/x'` → or
   return leaves.length === 2 && leaves.indexOf("/a/api") >= 0 && leaves.indexOf("/b/api") >= 0;
 });
 
+specTest("§ 13.5.6: unary `!` distributes over alternation `!(cond ? true : false)` → or(false, true)", `
+  function f(cond) {
+    this.x = !(cond ? true : false);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf(true) >= 0 && leaves.indexOf(false) >= 0;
+});
+
+specTest("§ 13.5.7: unary `-` distributes over alternation `-(cond ? 1 : 2)` → or(-1, -2)", `
+  function f(cond) {
+    this.x = -(cond ? 1 : 2);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf(-1) >= 0 && leaves.indexOf(-2) >= 0;
+});
+
+specTest("§ 13.5.3: typeof distributes over alternation `typeof (cond ? 'a' : 1)` → or('string', 'number')", `
+  function f(cond) {
+    this.x = typeof (cond ? "a" : 1);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf("string") >= 0 && leaves.indexOf("number") >= 0;
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));

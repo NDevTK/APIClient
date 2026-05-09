@@ -3455,28 +3455,61 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "top" };
   }
   if (_t.isUnaryExpression(n)) {
-    // § 13.5 UnaryOperators. When operand resolves to Const, evaluate
-    // per spec-defined operator semantics:
-    //   § 13.5.3 typeof — yields a string per the type of operand
-    //   § 13.5.6 ! — Logical NOT, yields ToBoolean negated
-    //   § 13.5.7 +/- — UnaryPlus / UnaryMinus, yields Number
-    //   § 13.5.8 ~ — Bitwise NOT, yields Number
-    //   § 13.5.4 void — yields undefined
+    // § 13.5 UnaryOperators. Distributes over alternation: `!or(true, false)`
+    // → `or(false, true)`. Evaluates per spec-defined operator semantics
+    // when operand is Const (or every leaf of an or-tree is Const).
     var argAv = vals.get(n.argument);
     if (n.operator === "void") return { kind: "const", value: undefined };
     if (n.operator === "typeof") {
       // typeof on a Const operand resolves per § 13.5.3.5 typeof.
-      if (argAv && argAv.kind === "const") {
-        var v = argAv.value;
-        if (v === undefined) return { kind: "const", value: "undefined" };
-        if (v === null) return { kind: "const", value: "object" };
-        if (typeof v === "boolean") return { kind: "const", value: "boolean" };
-        if (typeof v === "number") return { kind: "const", value: "number" };
-        if (typeof v === "string") return { kind: "const", value: "string" };
+      // Distribution: typeof or(a, b) → or(typeof a, typeof b).
+      var typeofLeaves = _avFlattenAnyConstLeaves(argAv);
+      if (typeofLeaves !== null) {
+        var typeofResults = [];
+        for (var tli = 0; tli < typeofLeaves.length; tli++) {
+          var tv = typeofLeaves[tli];
+          if (tv === undefined) typeofResults.push("undefined");
+          else if (tv === null) typeofResults.push("object");
+          else if (typeof tv === "boolean") typeofResults.push("boolean");
+          else if (typeof tv === "number") typeofResults.push("number");
+          else if (typeof tv === "string") typeofResults.push("string");
+          else { typeofResults = null; break; }
+        }
+        if (typeofResults && typeofResults.length === 1) return { kind: "const", value: typeofResults[0] };
+        if (typeofResults && typeofResults.length > 1) {
+          var typeofOr = { kind: "const", value: typeofResults[0] };
+          for (var toi = 1; toi < typeofResults.length; toi++) {
+            typeofOr = _specLogicalOrAv(typeofOr, { kind: "const", value: typeofResults[toi] });
+          }
+          return typeofOr;
+        }
       }
-      // Other abstract values — typeof yields one of the 8 spec strings;
-      // without type-tracking, abstract to Top.
       return { kind: "top" };
+    }
+    // Generic alternation distribution for unary ops other than void/typeof.
+    var unaryLeaves = _avFlattenAnyConstLeaves(argAv);
+    if (unaryLeaves !== null) {
+      var unaryResults = [];
+      var unaryOk = true;
+      for (var uli = 0; uli < unaryLeaves.length; uli++) {
+        var uv = unaryLeaves[uli];
+        var ur;
+        if (n.operator === "!") ur = !uv;
+        else if (n.operator === "-" && typeof uv === "number") ur = -uv;
+        else if (n.operator === "+" && typeof uv === "number") ur = +uv;
+        else if (n.operator === "+" && typeof uv === "string" && !isNaN(Number(uv))) ur = Number(uv);
+        else if (n.operator === "~" && typeof uv === "number") ur = ~uv;
+        else { unaryOk = false; break; }
+        unaryResults.push({ kind: "const", value: ur });
+      }
+      if (unaryOk) {
+        if (unaryResults.length === 1) return unaryResults[0];
+        var unaryOr = unaryResults[0];
+        for (var uri = 1; uri < unaryResults.length; uri++) {
+          unaryOr = _specLogicalOrAv(unaryOr, unaryResults[uri]);
+        }
+        return unaryOr;
+      }
     }
     if (argAv && argAv.kind === "const") {
       var av = argAv.value;
