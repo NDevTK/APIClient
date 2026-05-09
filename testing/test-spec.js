@@ -2862,6 +2862,13 @@ test("DOM context: getElementById('X').href resolves via byId lookup", `
   return result.fetchCallSites[0].url === "/api/foo";
 }, { domContext: { byId: { link1: { href: "/api/foo", src: null, action: null, dataAttrs: null } } } });
 
+test("DOM context: getElementById('X').dataset.<key> resolves data-* attribute (Stimulus pattern)", `
+  fetch(document.getElementById("controller1").dataset.fooEndpointValue);
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "/api/foo";
+}, { domContext: { byId: { controller1: { dataAttrs: { "foo-endpoint-value": "/api/foo" }, href: null, src: null, action: null } } } });
+
 test("DOM context: getElementById('X').src resolves via byId lookup", `
   fetch(document.getElementById("script1").src);
 `, function(result) {
