@@ -5317,12 +5317,15 @@ function _specEvalLeaf(path, state, vals, effects) {
             // Return value per § 23.1.3:
             //   forEach → undefined (per spec)
             //   filter → array-lit with same element type (subset)
+            //   find → element AV (one of the elements satisfying cb)
+            //   some/every → Top (boolean, can't determine statically)
             //   map → array-lit with cb's return-AV (computed when cb's
             //         body is a single ReturnStatement evaluable with
             //         the joined element AV as cb's first param)
-            //   reduce/some/every/find/findIndex/flatMap → Top
+            //   reduce/findIndex/flatMap → Top
             if (hofMeth === "forEach") return { kind: "const", value: undefined };
             if (hofMeth === "filter") return { kind: "array-lit", elements: [hofElementAv] };
+            if (hofMeth === "find") return hofElementAv;
             if (hofMeth === "map") {
               // Compute cb's return AV via single-stmt fast path.
               var mapCbBody = hofCb.body;
