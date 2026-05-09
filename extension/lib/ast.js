@@ -5520,6 +5520,19 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
           Object.prototype.hasOwnProperty.call(objAv.props, keyAvO.value)) {
         return objAv.props[keyAvO.value];
       }
+      // § 14.7.5 for-in: `obj[k]` where k is a loop-key over THIS obj-lit
+      // is the JOIN of all values per § 14.7.5.9 EnumerateObjectProperties.
+      // The for-in body sees one of the keys per iteration; the analyser's
+      // sound over-approximation is the join of corresponding values.
+      if (keyAvO && keyAvO.kind === "loop-key" && keyAvO.src === objAv) {
+        var loopKeys = Object.keys(objAv.props);
+        if (loopKeys.length === 0) return { kind: "top" };
+        var loopJoinAv = objAv.props[loopKeys[0]];
+        for (var lki = 1; lki < loopKeys.length; lki++) {
+          loopJoinAv = _specSetUnionAv(loopJoinAv, objAv.props[loopKeys[lki]]);
+        }
+        return loopJoinAv;
+      }
     }
   }
   // arguments.length per § 10.4.4.6 / arguments[N] per § 10.4.4
