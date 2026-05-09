@@ -21036,12 +21036,24 @@ function _traceValueSource(path, _unused) {
       }
     }
     // Spec-eval fast path per ECMA: when _specPathValMemo has a fully-
-    // resolved const value AV for this node, the value is a literal in
-    // the source — not user-controlled by definition. Short-circuit
-    // taint tracing to "literal" without walking the legacy state
-    // machine. Same for or-trees of all-const leaves. This integrates
-    // the spec eval pipeline with the taint subsystem incrementally:
-    // const-resolved expressions don't need taint tracing.
+    // resolved value AV for this node, classify directly from the AV
+    // (taint-source AVs → user-controlled; all-const-leaves → literal).
+    // Trigger property-flow analysis on the enclosing function first so
+    // the memo is populated even when this is the first
+    // _traceValueSource call against this function. Idempotent.
+    if (path.getFunctionParent) {
+      var tvsEncFn = path.getFunctionParent();
+      if (tvsEncFn && tvsEncFn.node && _t.isFunction(tvsEncFn.node)) {
+        try { _specAnalyzePropertyFlow(tvsEncFn); } catch (_tvspf) {}
+      } else {
+        // Module-level: trigger program fixpoint.
+        var tvsProgPath = path;
+        while (tvsProgPath && tvsProgPath.parentPath) tvsProgPath = tvsProgPath.parentPath;
+        if (tvsProgPath && tvsProgPath.node && _t.isProgram(tvsProgPath.node)) {
+          try { _specAnalyzeProgramWithFixpoint(tvsProgPath); } catch (_tvsfp) {}
+        }
+      }
+    }
     var specAv = _specPathValMemo.get(node);
     if (specAv) {
       // Walk the AV tree iteratively. allConst iff every reachable leaf
