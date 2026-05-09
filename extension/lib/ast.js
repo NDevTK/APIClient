@@ -8429,70 +8429,31 @@ function _ravStep(F) {
       case _RAV_CALL_RECV_AFTER: {
         // String method chain: receiver leaf has been traced. Apply
         // each transform in the chain (innermost-first) per spec
-        // String.prototype semantics when args are Const literals.
+        // String.prototype semantics via the shared
+        // _applyStringMethodToConst helper.
         if (F.result.length > 0) {
           var smVals = F.result;
           if (L.smChain && L.smChain.length > 0) {
             // smChain[0] is outermost; apply in reverse (innermost first).
             for (var smChi = L.smChain.length - 1; smChi >= 0; smChi--) {
               var ch = L.smChain[smChi];
+              // Pre-extract Const arg literals from the AST nodes.
+              var argLits = [];
+              var argsLitOk = true;
+              for (var ali = 0; ali < ch.args.length; ali++) {
+                var an = ch.args[ali];
+                if (_t.isStringLiteral(an)) argLits.push(an.value);
+                else if (_t.isNumericLiteral(an)) argLits.push(an.value);
+                else if (_t.isBooleanLiteral(an)) argLits.push(an.value);
+                else if (_t.isNullLiteral(an)) argLits.push(null);
+                else { argsLitOk = false; break; }
+              }
               var nextSmVals = [];
               for (var smVi = 0; smVi < smVals.length; smVi++) {
                 var sv = smVals[smVi];
-                if (typeof sv !== "string") { nextSmVals.push(sv); continue; }
-                var transformed = sv;
-                if (ch.name === "trim" && ch.args.length === 0) transformed = sv.trim();
-                else if (ch.name === "toLowerCase" && ch.args.length === 0) transformed = sv.toLowerCase();
-                else if (ch.name === "toUpperCase" && ch.args.length === 0) transformed = sv.toUpperCase();
-                else if (ch.name === "toString" && ch.args.length === 0) transformed = sv.toString();
-                else if (ch.name === "valueOf" && ch.args.length === 0) transformed = sv;
-                else if (ch.name === "replace" && ch.args.length === 2 &&
-                         _t.isStringLiteral(ch.args[0]) && _t.isStringLiteral(ch.args[1])) {
-                  transformed = sv.replace(ch.args[0].value, ch.args[1].value);
-                }
-                else if (ch.name === "replaceAll" && ch.args.length === 2 &&
-                         _t.isStringLiteral(ch.args[0]) && _t.isStringLiteral(ch.args[1])) {
-                  transformed = sv.replaceAll(ch.args[0].value, ch.args[1].value);
-                }
-                else if (ch.name === "concat") {
-                  // Variadic; each arg must be a StringLit.
-                  var concatOk = true;
-                  var concatRes = sv;
-                  for (var ci = 0; ci < ch.args.length; ci++) {
-                    if (!_t.isStringLiteral(ch.args[ci])) { concatOk = false; break; }
-                    concatRes += ch.args[ci].value;
-                  }
-                  if (concatOk) transformed = concatRes;
-                }
-                else if (ch.name === "padStart" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
-                  var psFill = " ";
-                  if (ch.args.length >= 2 && _t.isStringLiteral(ch.args[1])) psFill = ch.args[1].value;
-                  transformed = sv.padStart(ch.args[0].value, psFill);
-                }
-                else if (ch.name === "padEnd" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
-                  var peFill = " ";
-                  if (ch.args.length >= 2 && _t.isStringLiteral(ch.args[1])) peFill = ch.args[1].value;
-                  transformed = sv.padEnd(ch.args[0].value, peFill);
-                }
-                else if (ch.name === "repeat" && ch.args.length === 1 && _t.isNumericLiteral(ch.args[0])) {
-                  try { transformed = sv.repeat(ch.args[0].value); } catch (_e) { /* RangeError on negative */ }
-                }
-                else if (ch.name === "normalize" && ch.args.length === 0) {
-                  transformed = sv.normalize();
-                }
-                else if (ch.name === "slice" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
-                  if (ch.args.length === 1) transformed = sv.slice(ch.args[0].value);
-                  else if (_t.isNumericLiteral(ch.args[1])) transformed = sv.slice(ch.args[0].value, ch.args[1].value);
-                }
-                else if (ch.name === "substring" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
-                  if (ch.args.length === 1) transformed = sv.substring(ch.args[0].value);
-                  else if (_t.isNumericLiteral(ch.args[1])) transformed = sv.substring(ch.args[0].value, ch.args[1].value);
-                }
-                else if (ch.name === "substr" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
-                  if (ch.args.length === 1) transformed = sv.substr(ch.args[0].value);
-                  else if (_t.isNumericLiteral(ch.args[1])) transformed = sv.substr(ch.args[0].value, ch.args[1].value);
-                }
-                nextSmVals.push(transformed);
+                if (typeof sv !== "string" || !argsLitOk) { nextSmVals.push(sv); continue; }
+                var transformed = _applyStringMethodToConst(sv, ch.name, argLits);
+                nextSmVals.push(transformed !== undefined ? transformed : sv);
               }
               smVals = nextSmVals;
             }
