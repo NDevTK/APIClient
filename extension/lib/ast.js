@@ -11895,15 +11895,24 @@ function _specFindCallSites(funcPath) {
 // Used to decide whether further caller-arg substitution can resolve
 // more leaves vs. terminating with what's been collected. Reference-
 // identity visited set handles cyclic AV graphs from or-tree joins.
+// Result cached on av reference (AVs are produced immutable, so the
+// cache is stable for the analysis lifetime).
+var _specAvHasParamLeafCache = new WeakMap();
 function _specAvHasParamLeaf(av) {
   if (!av) return false;
+  if (typeof av === "object" && _specAvHasParamLeafCache.has(av)) {
+    return _specAvHasParamLeafCache.get(av);
+  }
   var stack = [av];
   var seen = new Set();
+  var result = false;
   while (stack.length > 0) {
     var s = stack.pop();
     if (!s || seen.has(s)) continue;
     seen.add(s);
-    if (s.kind === "param" || s.kind === "rest-args" || s.kind === "args-elt" || s.kind === "args-len") return true;
+    if (s.kind === "param" || s.kind === "rest-args" || s.kind === "args-elt" || s.kind === "args-len") {
+      result = true; break;
+    }
     if (s.kind === "or" || s.kind === "binop") { stack.push(s.left); stack.push(s.right); continue; }
     if (s.kind === "template" && s.exprs) {
       for (var ti = 0; ti < s.exprs.length; ti++) stack.push(s.exprs[ti]);
@@ -11926,7 +11935,8 @@ function _specAvHasParamLeaf(av) {
       continue;
     }
   }
-  return false;
+  if (typeof av === "object") _specAvHasParamLeafCache.set(av, result);
+  return result;
 }
 
 // Walk encFn's call sites via path.scope binding referencePaths.
