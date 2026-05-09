@@ -3824,31 +3824,35 @@ function _specEvalLeaf(path, state, vals, effects) {
     // Alternation distribution per spec semantics: `(a | b) + c` is
     // semantically equivalent to `(a + c) | (b + c)` because at runtime
     // exactly one of the alternatives is realised. Distribute the binary
-    // op across `or` trees to preserve precision (URL resolver does this
-    // via its own multi-value zip; spec eval should match).
+    // op across `or` trees to preserve precision. Walks ALL leaves (any
+    // kind), not just Const — when a leaf pair includes a non-Const, the
+    // pair contributes Top to the result, but Const-Const pairs still
+    // produce concrete leaves we can project later.
     if (leftAv.kind === "or" || rightAv.kind === "or") {
-      var leftLeaves = _avFlattenAnyConstLeaves(leftAv);
-      var rightLeaves = _avFlattenAnyConstLeaves(rightAv);
-      if (leftLeaves !== null && rightLeaves !== null) {
+      var leftAllLeaves = leftAv.kind === "or" ? _avFlattenOrLeaves(leftAv) : [leftAv];
+      var rightAllLeaves = rightAv.kind === "or" ? _avFlattenOrLeaves(rightAv) : [rightAv];
+      if (leftAllLeaves && rightAllLeaves &&
+          leftAllLeaves.length > 0 && rightAllLeaves.length > 0) {
         var alts = [];
-        for (var bli = 0; bli < leftLeaves.length; bli++) {
-          for (var bri = 0; bri < rightLeaves.length; bri++) {
-            // Recursively evaluate a "virtual" BinaryExpression with
-            // the two Const leaves substituted. Since this branch is
-            // only entered when at least one is `or`, we evaluate
-            // inline rather than re-parse.
-            var lvLeaf = leftLeaves[bli], rvLeaf = rightLeaves[bri];
-            var altOp = n.operator;
-            var av = _evalBinaryConstConst(lvLeaf, rvLeaf, altOp);
-            if (av) alts.push(av);
+        var sawAny = false;
+        for (var bli = 0; bli < leftAllLeaves.length; bli++) {
+          for (var bri = 0; bri < rightAllLeaves.length; bri++) {
+            var lLeaf = leftAllLeaves[bli], rLeaf = rightAllLeaves[bri];
+            if (lLeaf && lLeaf.kind === "const" && rLeaf && rLeaf.kind === "const") {
+              var av = _evalBinaryConstConst(lLeaf.value, rLeaf.value, n.operator);
+              if (av) { alts.push(av); sawAny = true; }
+            } else {
+              alts.push({ kind: "top" });
+              sawAny = true;
+            }
           }
         }
-        if (alts.length === 0) return { kind: "top" };
-        if (alts.length === 1) return alts[0];
-        // Build a left-leaning or-tree to match _specLogicalOrAv shape.
-        var orRes = alts[0];
-        for (var ai = 1; ai < alts.length; ai++) orRes = _specLogicalOrAv(orRes, alts[ai]);
-        return orRes;
+        if (sawAny) {
+          if (alts.length === 1) return alts[0];
+          var orRes = alts[0];
+          for (var ai = 1; ai < alts.length; ai++) orRes = _specLogicalOrAv(orRes, alts[ai]);
+          return orRes;
+        }
       }
     }
     if (leftAv.kind !== "const" || rightAv.kind !== "const") return { kind: "top" };
