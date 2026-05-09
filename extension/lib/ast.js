@@ -2362,48 +2362,58 @@ function _specGlobalThisAv() {
     preventExtensions: { kind: "builtin-method", id: "Object.preventExtensions" },
     hasOwn: { kind: "builtin-method", id: "Object.hasOwn" },
   };
+  // WHATWG HTML § 7.7 Window: Location object — user-controllable URL
+  // info. Each prop AV carries `taint-source` + dimensional info per
+  // WHATWG URL § 4.4 partition. Shared reference so window.location /
+  // self.location / globalThis.location all dispatch identically.
+  // Dimensions: { origin, path, query, hash, content } — `true` means
+  // attacker can control that URL section.
+  var locationAv = {
+    kind: "obj-lit",
+    props: {
+      href: { kind: "taint-source", id: "location.href",
+        dims: { origin: false, path: true, query: true, hash: true, content: true } },
+      hash: { kind: "taint-source", id: "location.hash",
+        dims: { origin: false, path: false, query: false, hash: true, content: true } },
+      search: { kind: "taint-source", id: "location.search",
+        dims: { origin: false, path: false, query: true, hash: false, content: true } },
+      pathname: { kind: "taint-source", id: "location.pathname",
+        dims: { origin: false, path: true, query: false, hash: false, content: true } },
+      origin: { kind: "taint-source", id: "location.origin",
+        dims: { origin: false, path: false, query: false, hash: false, content: false } },
+      host: { kind: "taint-source", id: "location.host",
+        dims: { origin: false, path: false, query: false, hash: false, content: false } },
+      hostname: { kind: "taint-source", id: "location.hostname",
+        dims: { origin: false, path: false, query: false, hash: false, content: false } },
+      protocol: { kind: "taint-source", id: "location.protocol",
+        dims: { origin: false, path: false, query: false, hash: false, content: false } },
+      port: { kind: "taint-source", id: "location.port",
+        dims: { origin: false, path: false, query: false, hash: false, content: false } },
+    }
+  };
+  // window / self / globalThis WHATWG HTML § 7.2 alias of the global —
+  // shared AV so member projections through any of them resolve to the
+  // same location / name / etc. AVs.
+  var windowSelfAv = {
+    kind: "obj-lit",
+    props: {
+      location: locationAv,
+      name: { kind: "taint-source", id: "window.name",
+        dims: { origin: false, path: false, query: false, hash: false, content: true } },
+    }
+  };
   _SPEC_GLOBAL_AV = {
     kind: "obj-lit",
     props: {
-      // WHATWG HTML § 7.7 Window: location is the Location object whose
-      // properties are user-controllable URL components. Each prop AV
-      // carries `taintSource` + dimensional info per the WHATWG URL § 4.4
-      // partition; the taint classifier uses this directly instead of
-      // shape-matching the AST. Same canonicalisation as `_matchTaintSource`:
-      // `window.location` and `self.location` are aliases — registered
-      // below with shared prop AVs.
-      // Dimensions: { origin, path, query, hash, content } — `true` means
-      // attacker can control that URL section.
-      location: {
-        kind: "obj-lit",
-        props: {
-          // location.href — the full URL, attacker controls everything
-          // except origin (current-origin locked at runtime).
-          href: { kind: "taint-source", id: "location.href",
-            dims: { origin: false, path: true, query: true, hash: true, content: true } },
-          // location.hash — fragment + leading "#"; only hash dim.
-          hash: { kind: "taint-source", id: "location.hash",
-            dims: { origin: false, path: false, query: false, hash: true, content: true } },
-          // location.search — query string + leading "?"; only query dim.
-          search: { kind: "taint-source", id: "location.search",
-            dims: { origin: false, path: false, query: true, hash: false, content: true } },
-          // location.pathname — path; only path dim.
-          pathname: { kind: "taint-source", id: "location.pathname",
-            dims: { origin: false, path: true, query: false, hash: false, content: true } },
-          // location.host / location.hostname / location.origin — current
-          // origin, not attacker-controlled at runtime.
-          origin: { kind: "taint-source", id: "location.origin",
-            dims: { origin: false, path: false, query: false, hash: false, content: false } },
-          host: { kind: "taint-source", id: "location.host",
-            dims: { origin: false, path: false, query: false, hash: false, content: false } },
-          hostname: { kind: "taint-source", id: "location.hostname",
-            dims: { origin: false, path: false, query: false, hash: false, content: false } },
-          protocol: { kind: "taint-source", id: "location.protocol",
-            dims: { origin: false, path: false, query: false, hash: false, content: false } },
-          port: { kind: "taint-source", id: "location.port",
-            dims: { origin: false, path: false, query: false, hash: false, content: false } },
-        }
-      },
+      location: locationAv,
+      // window / self / globalThis — WHATWG HTML § 7.2 — same global
+      // object; aliases for `location`, `name`. Spec eval projects
+      // `window.location` / `self.location` / `globalThis.location`
+      // through the locationAv shared reference, eliminating the
+      // shape-match canonicalisation in _matchTaintSource.
+      window: windowSelfAv,
+      self: windowSelfAv,
+      globalThis: windowSelfAv,
       Math: { kind: "obj-lit", props: mathProps },
       Number: { kind: "callable-namespace", callId: "global.Number", props: numberProps },
       Array: { kind: "obj-lit", props: arrayProps },
