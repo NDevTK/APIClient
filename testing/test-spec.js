@@ -2893,6 +2893,21 @@ test("Pillar 2: branch-conditional param values surfaced as validValues (dropdow
   return roleParam.validValues.indexOf("admin") >= 0 && roleParam.validValues.indexOf("guest") >= 0;
 });
 
+test("Pillar 2: equality-chain (x === A || x === B) surfaced as validValues", `
+  function f(role) {
+    if (role === "admin" || role === "guest") {
+      fetch("/api/users", { body: JSON.stringify({role: role}) });
+    }
+  }
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  var fs = result.fetchCallSites[0];
+  if (!fs.params || fs.params.length === 0) return false;
+  var roleParam = fs.params.find(function(p) { return p.name === "role"; });
+  if (!roleParam || !roleParam.validValues) return false;
+  return roleParam.validValues.indexOf("admin") >= 0 && roleParam.validValues.indexOf("guest") >= 0;
+});
+
 test("Pillar 2: switch-case branch values surfaced as validValues", `
   function f(action) {
     var role;
