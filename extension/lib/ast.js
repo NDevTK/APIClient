@@ -5213,7 +5213,16 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       // Default-valued param `function f(x = 1)` per § 14.1 — the binding
       // resolves to either the arg's value or the default; abstractly Param(i).
       state[p.left.name] = paramAv;
-    } else if (p.type === "ObjectPattern") {
+    } else if (p.type === "AssignmentPattern" && p.left &&
+               (p.left.type === "ObjectPattern" || p.left.type === "ArrayPattern")) {
+      // Default-valued destructured param `function f({a} = {})` per
+      // § 14.3.3 — descend into the inner pattern, treating the param
+      // as the source. Mirrors the AssignmentPattern handling for
+      // destructured slots within ObjectPattern below.
+      p = p.left;
+      // Fall through to the ObjectPattern / ArrayPattern handler below.
+    }
+    if (p.type === "ObjectPattern") {
       // Destructured param `function f({a, b})` per § 14.3.3 / § 8.6.2:
       // each property of the pattern binds a separate identifier whose
       // value is `member(param-i, key)`.
