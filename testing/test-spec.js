@@ -4323,6 +4323,54 @@ specTest("§ 20.1.2.13 Object.hasOwn: missing prop returns false const", `
   return av && av.kind === "const" && av.value === false;
 });
 
+specTest("§ 13.15.5 ||=: truthy lhs leaves lhs unchanged statically", `
+  function f() {
+    var x = "alpha";
+    x ||= "beta";
+    this.v = x;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "alpha";
+});
+
+specTest("§ 13.15.5 ||=: falsy lhs replaced by rhs statically", `
+  function f() {
+    var x = "";
+    x ||= "fallback";
+    this.v = x;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "fallback";
+});
+
+specTest("§ 13.15.5 ??=: nullish lhs replaced by rhs statically", `
+  function f() {
+    var x = null;
+    x ??= "fallback";
+    this.v = x;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "fallback";
+});
+
+specTest("§ 13.15.5 ??=: defined lhs (even falsy) leaves lhs unchanged", `
+  function f() {
+    var x = "";
+    x ??= "ignored";
+    this.v = x;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "";
+});
+
 specTest("§ 28.1.13 Reflect.ownKeys: returns array-lit of obj-lit keys", `
   function f() {
     var o = { foo: 1, bar: 2 };

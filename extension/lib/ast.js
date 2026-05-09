@@ -4819,13 +4819,23 @@ function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, 
     }
     return rhsAv;
   }
-  // Compound assignment per § 13.15.3 ApplyStringOrNumericBinaryOperator —
-  // read old value, apply binary op, store new value. The binary op is
-  // determined by stripping the trailing `=` from the operator.
-  // § 13.15.4 LogicalAssignment (`||=`, `&&=`, `??=`) is § 13.15.5
-  // step 1.h: model as or(lhsCurrentAv, rhsAv).
+  // § 13.15.5 LogicalAssignment (`||=`, `&&=`, `??=`).
+  // Spec semantics: a OP= b is equivalent to a = a OP b (with short-circuit).
+  //   ||=: if ToBoolean(a) is true → a unchanged; else a = b. Returns final a.
+  //   &&=: if ToBoolean(a) is false → a unchanged; else a = b. Returns final a.
+  //   ??=: if a is null/undefined → a = b; else a unchanged. Returns final a.
+  // When lhsCurrentAv is a Const we can pick statically; otherwise both
+  // branches reachable → or(lhsCurrentAv, rhsAv).
   if (op === "||=" || op === "&&=" || op === "??=") {
-    var newAvLogical = _specLogicalOrAv(lhsCurrentAv || { kind: "top" }, rhsAv);
+    var lvLog = lhsCurrentAv;
+    var newAvLogical;
+    if (lvLog && lvLog.kind === "const") {
+      if (op === "||=") newAvLogical = lvLog.value ? lvLog : rhsAv;
+      else if (op === "&&=") newAvLogical = lvLog.value ? rhsAv : lvLog;
+      else /* ??= */ newAvLogical = (lvLog.value === null || lvLog.value === undefined) ? rhsAv : lvLog;
+    } else {
+      newAvLogical = _specLogicalOrAv(lvLog || { kind: "top" }, rhsAv);
+    }
     if (left && left.type === "Identifier") {
       state[left.name] = newAvLogical;
       return newAvLogical;
