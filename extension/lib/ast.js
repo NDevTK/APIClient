@@ -8281,7 +8281,13 @@ function _specEvalLeaf(path, state, vals, effects) {
           for (var frai = 0; frai < n.arguments.length; frai++) {
             frArgAvs.push(vals.get(n.arguments[frai]) || { kind: "top" });
           }
-          return _specInstantiateAv(frRet, frArgAvs);
+          // § 9.2.1 OrdinaryCallBindThis: receiver becomes `this` in
+          // method body. When bmRecvAv is a known instance AV, bind
+          // `this.X` projections to receiver.X — closes the gap where
+          // `class C { constructor(b){this.base=b;} get(p){fetch(this.base+p);}}; new C("/api").get("/x")`
+          // produced `binop(member(this,"base"), "+", "/x")` and
+          // never resolved.
+          return _specInstantiateAv(frRet, frArgAvs, bmRecvAv);
         }
         // No memo yet: handle single-statement-return fast path inline so
         // the first fixpoint pass still resolves common static methods
@@ -8647,10 +8653,14 @@ function _specEvalLeaf(path, state, vals, effects) {
 // executes with parameters bound to arg values per
 // FunctionDeclarationInstantiation.
 // ───────────────────────────────────────────────────────────────────────────
-function _specInstantiateAv(rootAv, callerArgAvs) {
+function _specInstantiateAv(rootAv, callerArgAvs, thisAv) {
   // Iterative tree walk: postorder enumeration, then bottom-up
   // substitution. Termination structural — the AbstractValue tree is
   // finite, each pushed sub-av is a strict child of a popped one.
+  // thisAv (optional): when the callee is a method dispatched off a
+  // known receiver per § 9.2.1 OrdinaryCallBindThis, bind `this` AVs
+  // in the callee body to the receiver. Lets `this.field` projections
+  // resolve through the receiver's obj-lit props.
   if (!rootAv) return rootAv;
   // Enumerate all sub-av nodes in postorder.
   var preorder = [];
@@ -8693,6 +8703,12 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
     var node = preorder[i];
     if (node.kind === "param" && callerArgAvs && node.idx < callerArgAvs.length && callerArgAvs[node.idx]) {
       subs.set(node, callerArgAvs[node.idx]);
+      continue;
+    }
+    // § 9.2.1 OrdinaryCallBindThis: when a thisAv is supplied (callee
+    // dispatched off a known receiver), substitute `this` AVs with it.
+    if (node.kind === "this" && thisAv) {
+      subs.set(node, thisAv);
       continue;
     }
     if (node.kind === "rest-args" && callerArgAvs) {

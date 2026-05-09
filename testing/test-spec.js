@@ -854,6 +854,25 @@ specTest("§ 13.2.5.4: spread element merges defaults into fetch options for met
   return true;
 });
 
+specTest("§ 9.2.1 OrdinaryCallBindThis: obj-method `this.X` binds to receiver's prop", `
+  function f() {
+    var obj = {
+      base: "/api",
+      get: function(p) { return this.base + p; }
+    };
+    this.url = obj.get("/users");
+  }
+`, function(effects) {
+  // _specInstantiateAv now substitutes `this` AVs in the function-ref's
+  // return body with the receiver AV (bmRecvAv). For an obj-lit receiver
+  // {base: "/api"}, member(this, "base") → member(obj-lit, "base") →
+  // "/api" via prop projection. Combined with the param substitution
+  // for `p`, the full result is "/api" + "/users" = "/api/users".
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "const" && v.value === "/api/users";
+});
+
 specTest("§ 13.3.2: OptionalCallExpression `o?.method()` dispatches to method", `
   function f() {
     var o = { get: function () { return "/api/oc"; } };
