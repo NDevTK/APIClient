@@ -6941,6 +6941,7 @@ var _RAV_COMP_OBJ_PROP_LOOP = 511;
 var _RAV_COMP_OBJ_DISC_LOOP = 512;
 var _RAV_COMP_OBJ_ALL_LOOP = 520;
 var _RAV_COMP_ARR_LOOP = 530;
+var _RAV_PROMISE_AFTER = 540;
 
 function _ravMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, defaultResult) {
   return {
@@ -7254,6 +7255,28 @@ function _ravStep(F) {
     }
   }
 
+  // BRANCH 0a: AwaitExpression — per § 14.2.16, await unwraps a
+  // Promise to its resolved value. For URL-resolver purposes,
+  // passthrough the argument's resolved values (when the arg is
+  // already non-Promise per § 27.2.5.4 PromiseResolve, await
+  // returns it unchanged).
+  if (skip < 1 && _t.isAwaitExpression(node) && node.argument) {
+    L.branchSkip = 1;
+    return { trace: path.get("argument"), state: _RAV_PROMISE_AFTER };
+  }
+  // BRANCH 1a: Promise.resolve(value) — per § 27.2.4.7, returns a
+  // Promise resolved with value. For the URL resolver, await/then unwrap
+  // recovers the original value, so Promise.resolve is passthrough on
+  // its argument's resolved values.
+  if (skip < 1 && _t.isCallExpression(node) &&
+      _t.isMemberExpression(node.callee) && !node.callee.computed &&
+      _t.isIdentifier(node.callee.object, { name: "Promise" }) &&
+      !path.scope.getBinding("Promise") &&
+      _t.isIdentifier(node.callee.property, { name: "resolve" }) &&
+      node.arguments.length === 1) {
+    L.branchSkip = 1;
+    return { trace: path.get("arguments.0"), state: _RAV_PROMISE_AFTER };
+  }
   // BRANCH 1: String-encoding transforms (encodeURIComponent / encodeURI /
   // decodeURIComponent / decodeURI / btoa / atob) per § 19.2.6.
   // Plus the `String(value)` global coercion per § 22.1.1.1 — when its
@@ -8152,6 +8175,17 @@ function _ravStep(F) {
 
   // No INIT branch matched / no result — return empty.
   return { done: [] };
+      }
+
+      case _RAV_PROMISE_AFTER: {
+        // Promise.resolve(x) — passthrough x's resolved values per
+        // § 27.2.4.7 step 1 (if x is already a thenable of the same
+        // constructor, return it; otherwise wrap and unwrap is
+        // semantically a no-op for value-resolution purposes).
+        if (F.result.length > 0) return { done: F.result };
+        L.branchSkip = 1;
+        F.state = _RAV_INIT;
+        continue;
       }
 
       case _RAV_ENC_AFTER: {
