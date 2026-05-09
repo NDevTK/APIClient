@@ -5178,6 +5178,13 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
           };
         }
       }
+    } else if (p.type === "RestElement" && p.argument && p.argument.type === "Identifier") {
+      // § 14.1.20 RestParameter: `function f(a, ...rest)` collects
+      // arguments[i..] into a fresh array. Bind to a `rest-args` AV
+      // that _specInstantiateAv knows to expand into an array-lit at
+      // call-site substitution time. Without caller context the rest
+      // value is opaque (top); inter-procedural substitution refines.
+      state[p.argument.name] = { kind: "rest-args", startIdx: i };
     }
   }
   // ECMA § 9.2.1 OrdinaryCallEvaluation: bind `this` to the receiver.
@@ -8229,6 +8236,16 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
     var node = preorder[i];
     if (node.kind === "param" && callerArgAvs && node.idx < callerArgAvs.length && callerArgAvs[node.idx]) {
       subs.set(node, callerArgAvs[node.idx]);
+      continue;
+    }
+    if (node.kind === "rest-args" && callerArgAvs) {
+      // § 14.1.20 RestParameter: collect callerArgAvs[startIdx..] into
+      // an array-lit. Empty array when no args remain past startIdx.
+      var restElems = [];
+      for (var rri = node.startIdx; rri < callerArgAvs.length; rri++) {
+        restElems.push(callerArgAvs[rri] || { kind: "top" });
+      }
+      subs.set(node, { kind: "array-lit", elements: restElems });
       continue;
     }
     if (node.kind === "args-elt" && node.idx && node.idx.kind === "const" &&

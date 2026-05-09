@@ -4697,6 +4697,19 @@ specTest("§ 13.3.11 TaggedTemplateExpression dispatches via function-ref + memo
   return false;
 });
 
+specTest("§ 14.1.20 RestParameter: tagged template with interpolation via ...vals", `
+  function f() { this.s = html\`/api/\${"users"}\`; }
+  function html(strs, ...vals) { return strs[0] + vals[0] + strs[1]; }
+`, function(effects) {
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "s") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api/users";
+    }
+  }
+  return false;
+});
+
 specTest("§ 13.3.5 PrivateName access: this.#X resolves to ClassPrivateProperty value", `
   class C {
     #url = "/api";
