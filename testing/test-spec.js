@@ -2885,6 +2885,14 @@ test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   return result.fetchCallSites[0].url === "/api/await-promise";
 });
 
+test("§ 27.2.4.7 + 27.2.5.4: function returning Promise.resolve, .then unwrap", `
+  function getUrl() { return Promise.resolve("/api/inter-proc-promise"); }
+  getUrl().then(function(url) { fetch(url); });
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "/api/inter-proc-promise";
+});
+
 test("§ 27.2.5.4: `Promise.resolve(x).then(v => fetch(v))` resolves callback param via receiver", `
   Promise.resolve("/api/then-callback").then(function(url) { fetch(url); });
 `, function(result) {
