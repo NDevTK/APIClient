@@ -4810,6 +4810,33 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
 // (e.g. propagation-detection's target-tracing) unwrap to the truthy operand.
 // ───────────────────────────────────────────────────────────────────────────
 function _specLogicalOrAv(leftAv, rightAv) {
+  // Idempotent join per ECMA lattice semantics: a ⊔ a = a. Without
+  // deduplication, recursive function fixpoint diverges (each iteration
+  // wraps another or-layer indefinitely instead of saturating). Use
+  // structural _specEqualAv to detect identical operands.
+  if (!leftAv) return rightAv;
+  if (!rightAv) return leftAv;
+  if (_specEqualAv(leftAv, rightAv)) return leftAv;
+  if (leftAv.kind === "top" || rightAv.kind === "top") return { kind: "top" };
+  // Check if rightAv is already a leaf of leftAv's or-tree (or vice versa).
+  // Walk leaves iteratively; if rightAv equals any leaf, leftAv already
+  // covers it. Same for the reverse.
+  if (leftAv.kind === "or") {
+    var lLeaves = _avFlattenOrLeaves(leftAv);
+    if (lLeaves) {
+      for (var li = 0; li < lLeaves.length; li++) {
+        if (_specEqualAv(lLeaves[li], rightAv)) return leftAv;
+      }
+    }
+  }
+  if (rightAv.kind === "or") {
+    var rLeaves = _avFlattenOrLeaves(rightAv);
+    if (rLeaves) {
+      for (var rli = 0; rli < rLeaves.length; rli++) {
+        if (_specEqualAv(rLeaves[rli], leftAv)) return rightAv;
+      }
+    }
+  }
   return { kind: "or", left: leftAv, right: rightAv };
 }
 
