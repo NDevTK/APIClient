@@ -3154,26 +3154,29 @@ function createSingleInput(fieldDef, initialValue = null) {
   }
 
   // AST-discovered valid values (e.g. role=admin/role=guest in different
-  // code branches) — render as <select> dropdown so users pick from the
-  // actual literal values the bundle assigns. Per user directive:
-  // 'this should get shown as extension drop down options'.
+  // code branches) — render as autocomplete via <input list> + <datalist>.
+  // Per user direction: 'I think it should be autocomplete suggestions'
+  // — keeps free-text entry while offering the AST-observed values as
+  // suggestions the user can pick from.
   if (fieldDef._astValidValues && fieldDef._astValidValues.length > 0) {
-    const sel = document.createElement("select");
-    sel.className = "form-input form-input-select";
-    const emptyOpt = document.createElement("option");
-    emptyOpt.value = "";
-    emptyOpt.textContent = "-- select --";
-    sel.appendChild(emptyOpt);
+    const wrap = document.createDocumentFragment();
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.className = "form-input";
+    inp.autocomplete = "off";
+    var dlId = "ast-vals-" + Math.random().toString(36).slice(2, 10);
+    inp.setAttribute("list", dlId);
+    if (initialValue !== null && initialValue !== undefined) inp.value = String(initialValue);
+    const dl = document.createElement("datalist");
+    dl.id = dlId;
     for (let i = 0; i < fieldDef._astValidValues.length; i++) {
       const opt = document.createElement("option");
       opt.value = String(fieldDef._astValidValues[i]);
-      opt.textContent = String(fieldDef._astValidValues[i]);
-      if (initialValue !== null && String(initialValue) === String(fieldDef._astValidValues[i])) {
-        opt.selected = true;
-      }
-      sel.appendChild(opt);
+      dl.appendChild(opt);
     }
-    return sel;
+    wrap.appendChild(inp);
+    wrap.appendChild(dl);
+    return wrap;
   }
 
   switch (type) {
