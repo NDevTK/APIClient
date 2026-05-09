@@ -3071,6 +3071,44 @@ specTest("§ 13.10: MemberExpression alternation `(cond ? 'abc' : 'wxyz').length
   return leaves.length === 2 && leaves.indexOf(3) >= 0 && leaves.indexOf(4) >= 0;
 });
 
+specTest("§ 21.1.3.6 Number.prototype.toString distributes over alternation `(cond ? 1 : 2).toString()` → or('1', '2')", `
+  function f(cond) {
+    var n = cond ? 1 : 2;
+    this.s = n.toString();
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf("1") >= 0 && leaves.indexOf("2") >= 0;
+});
+
+specTest("§ 21.1.3.6 Number.prototype.toString(radix) distributes `(cond ? 10 : 15).toString(16)` → or('a', 'f')", `
+  function f(cond) {
+    var n = cond ? 10 : 15;
+    this.s = n.toString(16);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf("a") >= 0 && leaves.indexOf("f") >= 0;
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));

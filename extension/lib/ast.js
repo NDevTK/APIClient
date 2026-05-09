@@ -4402,23 +4402,44 @@ function _specEvalLeaf(path, state, vals, effects) {
           }
         }
       }
-      // Number built-ins per § 21.1.3 — receiver Const number.
-      if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "number") {
+      // Number built-ins per § 21.1.3 — receiver Const number, or
+      // or-tree of Const numbers (distributes per leaf).
+      if (recvAv && ((recvAv.kind === "const" && typeof recvAv.value === "number") || recvAv.kind === "or")) {
         var nMeth = n.callee.property.name;
-        var nv = recvAv.value;
-        // § 21.1.3.6 Number.prototype.toString [(radix)]
-        if (nMeth === "toString") {
-          if (n.arguments.length === 0) return { kind: "const", value: nv.toString() };
-          var radixAv = vals.get(n.arguments[0]);
-          if (radixAv && radixAv.kind === "const" && typeof radixAv.value === "number") {
-            return { kind: "const", value: nv.toString(radixAv.value) };
-          }
+        // Pre-extract Const args.
+        var nArgLits = [];
+        var nArgsOk = true;
+        for (var nai = 0; nai < n.arguments.length; nai++) {
+          var nav = vals.get(n.arguments[nai]);
+          if (!nav || nav.kind !== "const") { nArgsOk = false; break; }
+          nArgLits.push(nav.value);
         }
-        // § 21.1.3.3 Number.prototype.toFixed (digits)
-        if (nMeth === "toFixed" && n.arguments.length >= 1) {
-          var digitsAv = vals.get(n.arguments[0]);
-          if (digitsAv && digitsAv.kind === "const" && typeof digitsAv.value === "number") {
-            return { kind: "const", value: nv.toFixed(digitsAv.value) };
+        if (nArgsOk) {
+          // Collect numeric receiver leaves.
+          var numRecvLeaves;
+          if (recvAv.kind === "const") {
+            numRecvLeaves = [recvAv.value];
+          } else {
+            var numAnyLeaves = _avFlattenAnyConstLeaves(recvAv);
+            numRecvLeaves = (numAnyLeaves || []).filter(function(v) { return typeof v === "number"; });
+            if (!numAnyLeaves || numRecvLeaves.length !== numAnyLeaves.length) numRecvLeaves = null;
+          }
+          if (numRecvLeaves && numRecvLeaves.length > 0) {
+            var nResults = [];
+            var nAllOk = true;
+            for (var nrli = 0; nrli < numRecvLeaves.length; nrli++) {
+              var nt = _applyNumberMethodToConst(numRecvLeaves[nrli], nMeth, nArgLits);
+              if (nt === undefined) { nAllOk = false; break; }
+              nResults.push(nt);
+            }
+            if (nAllOk && nResults.length === 1) return { kind: "const", value: nResults[0] };
+            if (nAllOk && nResults.length > 1) {
+              var nOr = { kind: "const", value: nResults[0] };
+              for (var nri = 1; nri < nResults.length; nri++) {
+                nOr = _specLogicalOrAv(nOr, { kind: "const", value: nResults[nri] });
+              }
+              return nOr;
+            }
           }
         }
       }
@@ -7280,6 +7301,37 @@ function _applyStringMethodToConst(s, methodName, argLits) {
   if (methodName === "at" && argLits.length === 1 && typeof argLits[0] === "number") {
     return s.at(argLits[0]);
   }
+  return undefined;
+}
+
+// Apply a Number.prototype method to a Const number receiver per § 21.1.3.
+// Returns the result value (number / string / boolean) or undefined when
+// not applicable. Centralised between single-Const dispatch and or-tree
+// alternation distribution so spec eval has one method table per recv type.
+function _applyNumberMethodToConst(nv, methodName, argLits) {
+  if (typeof nv !== "number") return undefined;
+  // § 21.1.3.6 Number.prototype.toString [(radix)]
+  if (methodName === "toString") {
+    if (argLits.length === 0) return nv.toString();
+    if (argLits.length === 1 && typeof argLits[0] === "number") {
+      try { return nv.toString(argLits[0]); } catch (_) { return undefined; }
+    }
+    return undefined;
+  }
+  // § 21.1.3.3 Number.prototype.toFixed (digits)
+  if (methodName === "toFixed" && argLits.length === 1 && typeof argLits[0] === "number") {
+    try { return nv.toFixed(argLits[0]); } catch (_) { return undefined; }
+  }
+  // § 21.1.3.2 Number.prototype.toExponential (fractionDigits)
+  if (methodName === "toExponential" && argLits.length === 1 && typeof argLits[0] === "number") {
+    try { return nv.toExponential(argLits[0]); } catch (_) { return undefined; }
+  }
+  // § 21.1.3.5 Number.prototype.toPrecision (precision)
+  if (methodName === "toPrecision" && argLits.length === 1 && typeof argLits[0] === "number") {
+    try { return nv.toPrecision(argLits[0]); } catch (_) { return undefined; }
+  }
+  // § 21.1.3.7 Number.prototype.valueOf
+  if (methodName === "valueOf" && argLits.length === 0) return nv;
   return undefined;
 }
 
