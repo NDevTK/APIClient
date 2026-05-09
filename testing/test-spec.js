@@ -60,13 +60,13 @@ function specTest(name, code, check, opts) {
     var firstRegularMethod = null;
     var firstAny = null;
     globalThis.BabelBundle.traverse(result._ast, {
-      "FunctionDeclaration|ClassMethod|ClassPrivateMethod|ObjectMethod": function(p) {
+      "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ClassMethod|ClassPrivateMethod|ObjectMethod": function(p) {
         if (!firstAny) firstAny = p;
         // Prefer the first regular method (kind: "method") — getters and
         // setters and constructors are usually helpers in spec tests, while
         // the regular method is the one whose effects the test wants. For
-        // FunctionDeclaration / ObjectMethod (no kind disambiguation), all
-        // are eligible.
+        // FunctionDeclaration / ArrowFunctionExpression / ObjectMethod (no
+        // kind disambiguation), all are eligible.
         if (!firstRegularMethod) {
           var isCtorOrAccessor = (_t.isClassMethod(p.node) || _t.isClassPrivateMethod(p.node)) &&
             p.node.kind !== "method";
@@ -4630,6 +4630,21 @@ specTest("§ 15.7.5 ClassProperty (class field): initialiser visible via this", 
   class C {
     url = "/api";
     doFetch() { this.flag = this.url; }
+  }
+`, function(effects) {
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api";
+    }
+  }
+  return false;
+});
+
+specTest("§ 15.3.5.4 ArrowFunction class-field this: lexical capture from constructor", `
+  class C {
+    constructor() { this.url = "/api"; }
+    doFetch = () => { this.flag = this.url; };
   }
 `, function(effects) {
   for (var i = 0; i < effects.length; i++) {

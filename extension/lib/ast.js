@@ -4494,6 +4494,21 @@ function _specCanResolveThisInstance(funcNode, funcPath) {
       funcPath && funcPath.parentPath && _t.isClassBody(funcPath.parent)) {
     return true;
   }
+  // ArrowFunctionExpression as the initialiser of a ClassProperty /
+  // ClassPrivateProperty: per § 15.3.5.4 the arrow captures `this`
+  // lexically — when the surrounding class instance is constructed, the
+  // arrow's `this` is the instance. The class field is initialised in
+  // the constructor's environment per § 15.7.5, so the arrow stored on
+  // the instance closes over the instance's `this`.
+  if (_t.isArrowFunctionExpression(funcNode) && funcPath && funcPath.parentPath) {
+    var ap = funcPath.parent;
+    var apIsClassField = (_t.isClassProperty && _t.isClassProperty(ap)) ||
+      (_t.isClassPrivateProperty && _t.isClassPrivateProperty(ap));
+    if (apIsClassField && ap.value === funcNode) {
+      var fieldGrandparent = funcPath.parentPath.parentPath;
+      if (fieldGrandparent && _t.isClassBody(fieldGrandparent.node)) return true;
+    }
+  }
   return _specFindConstructorForMethod(funcNode, funcPath) !== null;
 }
 
@@ -4517,13 +4532,70 @@ var _specThisInstanceCache = new WeakMap();
 function _specBuildThisInstanceAv(funcNode, funcPath) {
   // Locate the ClassBody if this is a class method, regardless of whether
   // a constructor exists. Even classes with only getters contribute
-  // properties to the receiver shape.
+  // properties to the receiver shape. Two paths to the ClassBody:
+  //   1. funcPath.parent IS the ClassBody (ClassMethod / ClassPrivateMethod
+  //      whose body is the function being analysed).
+  //   2. funcPath.parent is a ClassProperty / ClassPrivateProperty whose
+  //      value is an ArrowFunctionExpression (or FunctionExpression);
+  //      grandparent is the ClassBody. Per § 15.3.5.4, the arrow captures
+  //      lexical `this` from the constructor's instance scope.
   var classBodyPath = null;
   if ((_t.isClassMethod(funcNode) || _t.isClassPrivateMethod(funcNode)) &&
       funcPath && funcPath.parentPath && _t.isClassBody(funcPath.parent)) {
     classBodyPath = funcPath.parentPath;
+  } else if (funcPath && funcPath.parentPath && funcPath.parent) {
+    var maybeFieldNode = funcPath.parent;
+    var maybeIsField = (_t.isClassProperty && _t.isClassProperty(maybeFieldNode)) ||
+      (_t.isClassPrivateProperty && _t.isClassPrivateProperty(maybeFieldNode));
+    if (maybeIsField && maybeFieldNode.value === funcNode &&
+        funcPath.parentPath.parentPath && _t.isClassBody(funcPath.parentPath.parent)) {
+      classBodyPath = funcPath.parentPath.parentPath;
+    }
   }
   var ctorPath = _specFindConstructorForMethod(funcNode, funcPath);
+  // When the funcNode isn't directly a class method (e.g. it's an arrow
+  // class-field initialiser), _specFindConstructorForMethod returns null
+  // even though the class has a constructor. Look up the sibling
+  // constructor on classBodyPath directly per § 15.7.1 ClassBody members.
+  if (!ctorPath && classBodyPath && _t.isClassBody(classBodyPath.node)) {
+    var cbBody = classBodyPath.node.body;
+    for (var cmi = 0; cmi < cbBody.length; cmi++) {
+      var cm = cbBody[cmi];
+      if (_t.isClassMethod(cm) && cm.kind === "constructor") {
+        ctorPath = classBodyPath.get("body." + cmi);
+        break;
+      }
+    }
+    // No own constructor: walk extends chain per § 15.7.3 ClassHeritage.
+    if (!ctorPath) {
+      var classNode2 = classBodyPath.parent;
+      if (classNode2 && (_t.isClassDeclaration(classNode2) || _t.isClassExpression(classNode2)) &&
+          classNode2.superClass && _t.isIdentifier(classNode2.superClass)) {
+        var superBinding2 = funcPath.scope.getBinding(classNode2.superClass.name);
+        if (superBinding2 && superBinding2.path && superBinding2.path.node) {
+          var superNode2 = superBinding2.path.node;
+          var superClassPath2 = null;
+          if (_t.isClassDeclaration(superNode2)) superClassPath2 = superBinding2.path;
+          else if (_t.isVariableDeclarator(superNode2) && superNode2.init &&
+                   _t.isClassExpression(superNode2.init)) {
+            superClassPath2 = superBinding2.path.get("init");
+          }
+          if (superClassPath2 && superClassPath2.node) {
+            var superBody2 = superClassPath2.node.body;
+            if (_t.isClassBody(superBody2)) {
+              for (var sci2 = 0; sci2 < superBody2.body.length; sci2++) {
+                var sm2 = superBody2.body[sci2];
+                if (_t.isClassMethod(sm2) && sm2.kind === "constructor") {
+                  ctorPath = superClassPath2.get("body.body." + sci2);
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
   // Cache key: constructor node when one exists; otherwise the ClassBody
   // node so getter-only classes still cache their derived shape.
   var cacheKey = (ctorPath && ctorPath.node) || (classBodyPath && classBodyPath.node);
@@ -4663,15 +4735,11 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
   }
   // ECMA § 15.7.4 ClassMethod with kind "get" — sibling getters of the
   // method being analysed contribute getter-return-values as instance
-  // properties accessible via `this.<getterName>`. Locate the ClassBody
-  // (constructor's parent) and project each getter's return AV. The
-  // funcPath for the original method is used to find the ClassBody:
-  // _specFindConstructorForMethod confirmed funcNode is a ClassMethod
-  // when ctorNode came from a ClassBody, so funcPath.parentPath is that
-  // ClassBody. Skip when funcPath isn't a ClassMethod (prototype/object
-  // methods don't have spec-defined `get` accessors of the same form).
-  if (_t.isClassMethod(funcNode) || _t.isClassPrivateMethod(funcNode)) {
-    var classBodyPath2 = funcPath && funcPath.parentPath;
+  // properties accessible via `this.<getterName>`. Use the classBodyPath
+  // resolved earlier (handles both direct ClassMethod parent and arrow-fn
+  // class field grandparent uniformly).
+  if (classBodyPath && _t.isClassBody(classBodyPath.node)) {
+    var classBodyPath2 = classBodyPath;
     if (classBodyPath2 && _t.isClassBody(classBodyPath2.node)) {
       var membersArr = classBodyPath2.node.body;
       for (var gi = 0; gi < membersArr.length; gi++) {
