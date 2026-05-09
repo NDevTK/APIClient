@@ -43,6 +43,53 @@ var _resolveParamFromCallersMemo = new WeakMap(); // binding identifier node →
 // resolve to the real value. Empty object means JS-only analysis.
 var _domContext = { metaTags: {}, dataAttrs: {}, hrefs: {} };
 
+// Collect URL-shaped values from a _domContext into a flat list
+// suitable for the analyser's `domEndpoints` result. URL-shaped
+// means: starts with "/" or "http://"/"https://" — same gate
+// `_resolveUrlStructuralShape` uses to refuse inventing hosts.
+// Iterative scan over context shape; no framework recognition.
+function _collectDomEndpointsFromContext(ctx) {
+  var out = [];
+  if (!ctx) return out;
+  // hrefs: <a href="..."> values
+  if (ctx.hrefs) {
+    var hrefKeys = Object.keys(ctx.hrefs);
+    for (var hi = 0; hi < hrefKeys.length; hi++) {
+      var hv = ctx.hrefs[hrefKeys[hi]];
+      if (typeof hv === "string" && (hv.charAt(0) === "/" || /^https?:\/\//i.test(hv))) {
+        out.push({ url: hv, source: "html-href" });
+      }
+    }
+  }
+  // metaTags: <meta name=X content=Y> URL-valued
+  if (ctx.metaTags) {
+    var mtKeys = Object.keys(ctx.metaTags);
+    for (var mi = 0; mi < mtKeys.length; mi++) {
+      var mv = ctx.metaTags[mtKeys[mi]];
+      if (typeof mv === "string" && (mv.charAt(0) === "/" || /^https?:\/\//i.test(mv))) {
+        out.push({ url: mv, source: "html-meta", name: mtKeys[mi] });
+      }
+    }
+  }
+  // dataAttrs: data-* attributes on any element. Per element, any value
+  // that looks URL-shaped becomes an endpoint.
+  if (ctx.dataAttrs) {
+    var elKeys = Object.keys(ctx.dataAttrs);
+    for (var ei = 0; ei < elKeys.length; ei++) {
+      var attrs = ctx.dataAttrs[elKeys[ei]];
+      if (!attrs) continue;
+      var aKeys = Object.keys(attrs);
+      for (var ai = 0; ai < aKeys.length; ai++) {
+        var av = attrs[aKeys[ai]];
+        if (typeof av === "string" && (av.charAt(0) === "/" || /^https?:\/\//i.test(av))) {
+          out.push({ url: av, source: "html-data", attr: "data-" + aKeys[ai] });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 // Extract static DOM-derived values from an HTML string for the
 // resolver to use as ground truth. Iterative regex scan over markup —
 // no full HTML parser dependency needed for the values we resolve:
@@ -849,6 +896,11 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
     securitySinks: [],       // DOM XSS, eval, open redirect sinks
     dangerousPatterns: [],   // unsafe eval, postMessage, prototype pollution
     sourceMapUrl: extractSourceMapUrl(code),
+    // DOM-derived endpoints from the static page markup the user passed
+    // in via opts.domContext. Useful for learning "what DOM gets sent
+    // in the first place" per the user's directive — URL-shaped values
+    // in href / src / action / data-*-url attributes.
+    domEndpoints: _collectDomEndpointsFromContext(_domContext),
   };
 
   var ast = null;
