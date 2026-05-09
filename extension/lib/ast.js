@@ -11106,6 +11106,18 @@ function _resolveParamFromCallersUncached(binding, depth, propName) {
     for (var cbi = 0; cbi < funcPath.parent.arguments.length; cbi++) {
       if (funcPath.parent.arguments[cbi] === funcPath.node) { cbArgIdx = cbi; break; }
     }
+    // Promise.prototype.then/.catch/.finally: when the function is the
+    // first arg of `.then(cb)` (or `.catch(cb)` resolution path), the
+    // cb's first param is the Promise's resolved value per § 27.2.5.4
+    // PerformPromiseThen. Resolve via the receiver's resolved values.
+    if (cbArgIdx === 0 && paramIdx === 0 && _t.isMemberExpression(funcPath.parent.callee) &&
+        !funcPath.parent.callee.computed &&
+        _t.isIdentifier(funcPath.parent.callee.property) &&
+        (funcPath.parent.callee.property.name === "then" || funcPath.parent.callee.property.name === "catch" || funcPath.parent.callee.property.name === "finally")) {
+      var thenRecvPath = cbCallExpr.get("callee.object");
+      var thenRecvVals = propName ? _resolvePropertyFromArg(thenRecvPath, propName, depth + 1) : _resolveAllValues(thenRecvPath, depth + 1);
+      if (thenRecvVals.length > 0) return thenRecvVals;
+    }
     if (cbArgIdx >= 0) {
       console.debug("[AST:trace]     → callback-arg route: arg[%d] of call, tracing receiver", cbArgIdx);
       var cbValues = _resolveParamFromCallbackArg(cbCallExpr, cbArgIdx, paramIdx, depth, propName);
