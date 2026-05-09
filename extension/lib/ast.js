@@ -2200,11 +2200,16 @@ function _specGlobalThisAv() {
     of: { kind: "builtin-method", id: "Array.of" },
     from: { kind: "builtin-method", id: "Array.from" },
   };
-  // String namespace per § 22.1.2 — statics.
+  // String namespace per § 22.1.2 — statics. Also callable as
+  // `String(x)` for ToString coercion per § 22.1.1.1; modeled with
+  // _callableId so CallExpression dispatcher routes the callable form.
   var stringProps = {
     fromCharCode: { kind: "builtin-method", id: "String.fromCharCode" },
     fromCodePoint: { kind: "builtin-method", id: "String.fromCodePoint" },
   };
+  var stringCallableAv = { kind: "callable-namespace", callId: "global.String", props: stringProps };
+  // Boolean callable per § 20.3.1.1 (no relevant statics for our analysis).
+  var booleanCallableAv = { kind: "callable-namespace", callId: "global.Boolean", props: {} };
   // JSON namespace per § 25.5.
   var jsonProps = {
     parse: { kind: "builtin-method", id: "JSON.parse" },
@@ -2244,9 +2249,10 @@ function _specGlobalThisAv() {
     kind: "obj-lit",
     props: {
       Math: { kind: "obj-lit", props: mathProps },
-      Number: { kind: "obj-lit", props: numberProps },
+      Number: { kind: "callable-namespace", callId: "global.Number", props: numberProps },
       Array: { kind: "obj-lit", props: arrayProps },
-      String: { kind: "obj-lit", props: stringProps },
+      String: stringCallableAv,
+      Boolean: booleanCallableAv,
       JSON: { kind: "obj-lit", props: jsonProps },
       Object: { kind: "obj-lit", props: objectProps },
       Promise: { kind: "obj-lit", props: promiseProps },
@@ -2649,6 +2655,16 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       }
       if (globalName === "isNaN") return { kind: "const", value: isNaN(ga) };
       if (globalName === "isFinite") return { kind: "const", value: isFinite(ga) };
+      // § 22.1.1.1 String(x) coercion (callable form, not constructor).
+      if (globalName === "String") {
+        if (ga === undefined) return { kind: "const", value: "undefined" };
+        if (ga === null) return { kind: "const", value: "null" };
+        return { kind: "const", value: String(ga) };
+      }
+      // § 21.1.1.1 Number(x) coercion.
+      if (globalName === "Number") return { kind: "const", value: Number(ga) };
+      // § 20.3.1.1 Boolean(x) coercion.
+      if (globalName === "Boolean") return { kind: "const", value: Boolean(ga) };
     }
     return { kind: "top" };
   }
@@ -3238,6 +3254,17 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
       if (idxAv && idxAv.kind === "const" && typeof idxAv.value === "number" &&
           idxAv.value >= 0 && idxAv.value < objAv.elements.length) {
         return objAv.elements[idxAv.value];
+      }
+    }
+  }
+  // callable-namespace property access — same as obj-lit for the
+  // properties side. The callable form fires only at CallExpression.
+  if (objAv && objAv.kind === "callable-namespace" && objAv.props) {
+    if (!n.computed) {
+      var cnsName = _t.isIdentifier(n.property) ? n.property.name :
+        (_t.isStringLiteral(n.property) ? n.property.value : null);
+      if (cnsName !== null && Object.prototype.hasOwnProperty.call(objAv.props, cnsName)) {
+        return objAv.props[cnsName];
       }
     }
   }
@@ -5043,6 +5070,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       // same-prototype values per § 13.10 distribution).
       var bmId = null;
       if (bmCalleeAv && bmCalleeAv.kind === "builtin-method") bmId = bmCalleeAv.id;
+      else if (bmCalleeAv && bmCalleeAv.kind === "callable-namespace") bmId = bmCalleeAv.callId;
       else if (bmCalleeAv && bmCalleeAv.kind === "or") {
         var bmOrLeaves = _avFlattenOrLeaves(bmCalleeAv);
         if (bmOrLeaves && bmOrLeaves.length > 0) {
@@ -5082,55 +5110,9 @@ function _specEvalLeaf(path, state, vals, effects) {
     // shape match.
     // Number.* statics dispatched via globalThis.Number registry now.
     // Per § 21.1.2 — distinct from globals: no coercion.
-    // ECMA § 22.1.1.1 — `String(x)` called as function (not constructor)
-    // returns ToString(x) per spec. For Const-resolvable args, evaluate;
-    // otherwise Top. Scope-checked unshadowed `String`.
-    if (_t.isIdentifier(n.callee, { name: "String" }) &&
-        !path.scope.getBinding("String") && n.arguments.length >= 1) {
-      var strCoerceAv = vals.get(n.arguments[0]);
-      if (strCoerceAv && strCoerceAv.kind === "const") {
-        var strV = strCoerceAv.value;
-        if (strV === undefined) return { kind: "const", value: "undefined" };
-        if (strV === null) return { kind: "const", value: "null" };
-        return { kind: "const", value: String(strV) };
-      }
-      // Distribute over alternation of Const leaves.
-      if (strCoerceAv && strCoerceAv.kind === "or") {
-        var strLeaves = _avFlattenAnyConstLeaves(strCoerceAv);
-        if (strLeaves !== null) {
-          var strResults = [];
-          for (var sli = 0; sli < strLeaves.length; sli++) {
-            var slv = strLeaves[sli];
-            if (slv === undefined) strResults.push("undefined");
-            else if (slv === null) strResults.push("null");
-            else strResults.push(String(slv));
-          }
-          if (strResults.length === 1) return { kind: "const", value: strResults[0] };
-          var strOr = { kind: "const", value: strResults[0] };
-          for (var sri = 1; sri < strResults.length; sri++) {
-            strOr = _specLogicalOrAv(strOr, { kind: "const", value: strResults[sri] });
-          }
-          return strOr;
-        }
-      }
-    }
-    // ECMA § 21.1.1.1 — `Number(x)` called as function returns ToNumber(x).
-    if (_t.isIdentifier(n.callee, { name: "Number" }) &&
-        !path.scope.getBinding("Number") && n.arguments.length >= 1) {
-      var numCoerceAv = vals.get(n.arguments[0]);
-      if (numCoerceAv && numCoerceAv.kind === "const") {
-        var numV = Number(numCoerceAv.value);
-        return { kind: "const", value: numV };
-      }
-    }
-    // ECMA § 21.1.1 — `Boolean(x)` called as function returns ToBoolean(x).
-    if (_t.isIdentifier(n.callee, { name: "Boolean" }) &&
-        !path.scope.getBinding("Boolean") && n.arguments.length >= 1) {
-      var boolCoerceAv = vals.get(n.arguments[0]);
-      if (boolCoerceAv && boolCoerceAv.kind === "const") {
-        return { kind: "const", value: Boolean(boolCoerceAv.value) };
-      }
-    }
+    // String/Number/Boolean callable globals dispatched via callable-
+    // namespace AVs in the globalThis registry per § 22.1.1.1, § 21.1.1.1,
+    // § 20.3.1.1. ONE central path; no inline shape match.
     // String.* statics dispatched via globalThis.String registry per
     // § 22.1.2. ONE central dispatch.
     // WHATWG DOM § 4.9.1 Element.getAttribute(qualifiedName). When the
