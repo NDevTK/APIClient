@@ -2113,7 +2113,7 @@ function _specArrayPrototypeAv() {
     var props = {};
     var arrayMethodNames = [
       // Mutating per § 23.1.3 (state mutation handled in _specApplyBuiltinMethod):
-      "push", "pop", "shift", "unshift",
+      "push", "pop", "shift", "unshift", "fill",
       // Pure (return new value, no mutation):
       "join", "concat", "slice", "includes", "indexOf", "lastIndexOf",
       "reverse", "at", "flat"
@@ -2615,6 +2615,27 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       state[recvName] = { kind: "array-lit", elements: shiftElements };
     }
     return shifted || { kind: "const", value: undefined };
+  }
+  // § 23.1.3.7 Array.prototype.fill: fills `this` with value from start
+  // to end. Per spec mutates and returns `this`.
+  if (methodId === "Array.prototype.fill") {
+    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    var fillVal = argAvs.length >= 1 ? argAvs[0] : { kind: "const", value: undefined };
+    var fillLen = (recvAv.elements || []).length;
+    var fillStart = 0, fillEnd = fillLen;
+    if (argAvs.length >= 2 && argAvs[1] && argAvs[1].kind === "const" && typeof argAvs[1].value === "number") {
+      fillStart = argAvs[1].value < 0 ? Math.max(0, fillLen + argAvs[1].value) : Math.min(fillLen, argAvs[1].value);
+    }
+    if (argAvs.length >= 3 && argAvs[2] && argAvs[2].kind === "const" && typeof argAvs[2].value === "number") {
+      fillEnd = argAvs[2].value < 0 ? Math.max(0, fillLen + argAvs[2].value) : Math.min(fillLen, argAvs[2].value);
+    }
+    var fillElements = (recvAv.elements || []).slice();
+    for (var fi = fillStart; fi < fillEnd; fi++) fillElements[fi] = fillVal;
+    var fillNew = { kind: "array-lit", elements: fillElements };
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = fillNew;
+    }
+    return fillNew;
   }
   // § 23.1.3.34 Array.prototype.unshift: prepends, returns new length.
   if (methodId === "Array.prototype.unshift") {
