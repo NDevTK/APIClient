@@ -8047,6 +8047,26 @@ function _specEvalLeaf(path, state, vals, effects) {
     // ctor registry (Array, Number/String/Boolean wrappers).
     if (_t.isIdentifier(n.callee) && !path.scope.getBinding(n.callee.name)) {
       var ctorName = n.callee.name;
+      // § 28.3.1 Proxy: `new Proxy(target, handler)`. When handler is
+      // empty / has no traps, the proxy is transparent — Get/Set forward
+      // to target. Returning target's AV directly is sound for empty-
+      // handler proxies. Non-empty handlers (with .get / .set traps)
+      // would require trap-call simulation; abstract to top until needed.
+      if (ctorName === "Proxy" && n.arguments.length >= 2) {
+        var pTargetAv = vals.get(n.arguments[0]);
+        var pHandlerAv = vals.get(n.arguments[1]);
+        if (pTargetAv && pHandlerAv && pHandlerAv.kind === "obj-lit" &&
+            pHandlerAv.props) {
+          var handlerHasTraps = false;
+          for (var phk in pHandlerAv.props) {
+            if (Object.prototype.hasOwnProperty.call(pHandlerAv.props, phk)) {
+              handlerHasTraps = true; break;
+            }
+          }
+          if (!handlerHasTraps) return pTargetAv;
+        }
+        return { kind: "top" };
+      }
       // § 23.1.1.1 Array(...values)
       if (ctorName === "Array") {
         if (n.arguments.length === 0) {
