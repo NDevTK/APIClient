@@ -10050,6 +10050,49 @@ function _extractFetchCall(path, result, type) {
   if (_t.isUnaryExpression(_urlArgN) && _urlArgN.operator === "void") return;
   if (_t.isNullLiteral(_urlArgN)) return;
   if (_t.isIdentifier(_urlArgN, { name: "undefined" }) && !urlArgPath.scope.getBinding("undefined")) return;
+  // SpreadElement per § 13.3.6.1 ArgumentListEvaluation: `fetch(...args)`
+  // — the spread's first ITERATION yields the URL. Try to resolve the
+  // spread's argument to an array-lit; first element is the URL.
+  if (_t.isSpreadElement(_urlArgN)) {
+    var spreadArgPath = urlArgPath.get("argument");
+    if (spreadArgPath && spreadArgPath.node) {
+      // Run spec eval on the spread's source and check for array-lit.
+      try {
+        var encFnSpread = spreadArgPath.getFunctionParent && spreadArgPath.getFunctionParent();
+        if (encFnSpread && _t.isFunction(encFnSpread.node)) {
+          _specAnalyzePropertyFlow(encFnSpread);
+        }
+        var spreadSrcAv = _specPathValMemo.get(spreadArgPath.node);
+        if (!spreadSrcAv) {
+          spreadSrcAv = _specEvalExpression(spreadArgPath, _specStateCreate({}), [], true);
+        }
+        if (spreadSrcAv && spreadSrcAv.kind === "array-lit" && spreadSrcAv.elements && spreadSrcAv.elements.length > 0) {
+          var firstElemAv = spreadSrcAv.elements[0];
+          var spreadUrls = _avFlattenStringLeaves(firstElemAv);
+          if (spreadUrls.length > 0) {
+            // Synthesize a fake urlArgPath wrapper so the rest of the
+            // extraction logic (params parsing, etc.) operates on the
+            // spread's first element. For now, just emit the URLs and
+            // skip body/params learning (which requires deeper rework).
+            for (var spui = 0; spui < spreadUrls.length; spui++) {
+              var spreadUrl = spreadUrls[spui];
+              if (spreadUrl == null || spreadUrl === "") continue;
+              result.fetchCallSites.push({
+                url: String(spreadUrl),
+                method: "GET",
+                headers: {},
+                type: type || "fetch",
+                params: []
+              });
+            }
+            return;
+          }
+        }
+      } catch (_) { /* fall through to standard gap recording */ }
+    }
+    _recordUrlResolveGap(urlArgPath);
+    return;
+  }
   var urls = _resolveAllValues(urlArgPath, 0);
   // Empty result = resolver couldn't trace to a concrete value. For a
   // URL argument that's a resolver gap we want visible on the analysis
