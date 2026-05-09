@@ -6872,6 +6872,14 @@ var _specReturnValueMemo = new WeakMap();
 // _specAnalyzePropertyFlow snapshots base length on entry, joins accumulated
 // AVs after the driver completes, and stores in _specReturnValueMemo.
 var _specReturnAvAccum = [];
+var _specYieldAvAccum = [];
+// § 15.5 Generator yield accumulator. Generators (`function* g() { yield X }`)
+// don't return a single value — they produce an iterable. _specEvalLeaf's
+// YieldExpression handler pushes each yielded value here. After the
+// generator's body is analysed, _specAnalyzePropertyFlow assembles an
+// array-lit AV from the accumulated yields and stores it as the function's
+// return value memo — for-of iteration over the generator's call result
+// then sees each yielded value as a loop-iteration AV per § 27.5.
 // Higher-order function callback dispatch queue. Filled by _specEvalLeaf
 // when it recognises Array.prototype.{map,filter,reduce,…}; drained by
 // the _specAnalyzePropertyFlow driver loop after each statement, which
@@ -7066,6 +7074,7 @@ function _specAnalyzePropertyFlow(funcPath, force) {
   // (not a sibling analysis whose own items were already pending).
   var hofQueueBaseLen = _hofPendingDispatches.length;
   var returnAvBaseLen = _specReturnAvAccum.length;
+  var yieldAvBaseLen = _specYieldAvAccum.length;
   var entryState = _specInitialFunctionBodyState(fnNode, funcPath);
   var effects = [];
   var stack;
@@ -7149,6 +7158,23 @@ function _specAnalyzePropertyFlow(funcPath, force) {
     }
     _specReturnAvAccum.length = returnAvBaseLen;  // pop our slice
     _specReturnValueMemo.set(fnNode, joinedRet);
+  }
+  // § 15.5 GeneratorFunction: when this function is a generator
+  // (`function* g() { … }`), assemble an array-lit AV from accumulated
+  // yields and store as the function's return value. Calls to the
+  // generator return an iterable; for-of iteration walks each yielded
+  // value as a loop AV. The array-lit shape lets the existing for-of
+  // body-state binder treat the iteration values per § 23.1.5.1.
+  // Generators with no yields produce an empty iterable.
+  if (fnNode && fnNode.generator) {
+    var genYieldElems = [];
+    for (var gyi = yieldAvBaseLen; gyi < _specYieldAvAccum.length; gyi++) {
+      genYieldElems.push(_specYieldAvAccum[gyi]);
+    }
+    _specYieldAvAccum.length = yieldAvBaseLen; // pop our slice
+    _specReturnValueMemo.set(fnNode, { kind: "array-lit", elements: genYieldElems });
+  } else {
+    _specYieldAvAccum.length = yieldAvBaseLen; // pop unused slice anyway
   }
   // Compute side-effect summary per ECMA § 9.1.1: for each outer-imported
   // binding that was lazy-loaded into entryState during analysis, capture
@@ -7696,8 +7722,24 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "top" };
   }
   if (_t.isYieldExpression(n)) {
-    // § 15.5 YieldExpression — yields a value; expression value is
-    // the resumption value. Unmodelled — Top.
+    // § 15.5 YieldExpression — yields a value to the iterator's
+    // consumer; the expression's own value is the .next() resumption
+    // value (also unknown, top). Push the yielded value into the
+    // accumulator so the generator's iterable shape can be assembled
+    // when the body's analysis completes.
+    if (n.argument) {
+      var yieldedAv = vals.get(n.argument) || { kind: "top" };
+      // yield* delegates: yields all elements of the iterable. When the
+      // delegated value is array-lit, push each element separately so
+      // the generator's collected yields preserve element shape.
+      if (n.delegate && yieldedAv.kind === "array-lit" && yieldedAv.elements) {
+        for (var ydi = 0; ydi < yieldedAv.elements.length; ydi++) {
+          _specYieldAvAccum.push(yieldedAv.elements[ydi]);
+        }
+      } else {
+        _specYieldAvAccum.push(yieldedAv);
+      }
+    }
     return { kind: "top" };
   }
   if (_t.isConditionalExpression(n)) {
