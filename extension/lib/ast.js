@@ -3486,6 +3486,36 @@ function _specEvalLeaf(path, state, vals, effects) {
     var leftAv = vals.get(n.left);
     var rightAv = vals.get(n.right);
     if (!leftAv || !rightAv) return { kind: "top" };
+    // Alternation distribution per spec semantics: `(a | b) + c` is
+    // semantically equivalent to `(a + c) | (b + c)` because at runtime
+    // exactly one of the alternatives is realised. Distribute the binary
+    // op across `or` trees to preserve precision (URL resolver does this
+    // via its own multi-value zip; spec eval should match).
+    if (leftAv.kind === "or" || rightAv.kind === "or") {
+      var leftLeaves = _avFlattenAnyConstLeaves(leftAv);
+      var rightLeaves = _avFlattenAnyConstLeaves(rightAv);
+      if (leftLeaves !== null && rightLeaves !== null) {
+        var alts = [];
+        for (var bli = 0; bli < leftLeaves.length; bli++) {
+          for (var bri = 0; bri < rightLeaves.length; bri++) {
+            // Recursively evaluate a "virtual" BinaryExpression with
+            // the two Const leaves substituted. Since this branch is
+            // only entered when at least one is `or`, we evaluate
+            // inline rather than re-parse.
+            var lvLeaf = leftLeaves[bli], rvLeaf = rightLeaves[bri];
+            var altOp = n.operator;
+            var av = _evalBinaryConstConst(lvLeaf, rvLeaf, altOp);
+            if (av) alts.push(av);
+          }
+        }
+        if (alts.length === 0) return { kind: "top" };
+        if (alts.length === 1) return alts[0];
+        // Build a left-leaning or-tree to match _specLogicalOrAv shape.
+        var orRes = alts[0];
+        for (var ai = 1; ai < alts.length; ai++) orRes = _specLogicalOrAv(orRes, alts[ai]);
+        return orRes;
+      }
+    }
     if (leftAv.kind !== "const" || rightAv.kind !== "const") return { kind: "top" };
     var lv = leftAv.value, rv = rightAv.value;
     var op = n.operator;
@@ -6956,6 +6986,67 @@ function _resolveBoundDomElementId(path, idNode) {
 // the URL-extraction layer (which wants string URL candidates). With it,
 // _resolveAllValues callers can rely on the spec eval as the single
 // abstract-interpretation engine, then project strings here.
+// Like _avFlattenStringLeaves but returns ALL Const leaf VALUES
+// (any type — string/number/boolean/null/undefined). Returns null if
+// any non-or, non-const leaf is encountered (i.e., has Top/param/etc.
+// somewhere in the alternation tree). Used by BinaryExpression
+// alternation distribution to know "every alternative is a Const".
+function _avFlattenAnyConstLeaves(rootAv) {
+  if (!rootAv) return null;
+  if (rootAv.kind === "const") return [rootAv.value];
+  if (rootAv.kind !== "or") return null;
+  var out = [];
+  var stack = [rootAv];
+  while (stack.length > 0) {
+    var av = stack.pop();
+    if (!av) return null;
+    if (av.kind === "const") { out.push(av.value); continue; }
+    if (av.kind === "or") {
+      if (av.left) stack.push(av.left);
+      if (av.right) stack.push(av.right);
+      continue;
+    }
+    return null;  // any other kind (top/param/member/etc.) — bail
+  }
+  return out;
+}
+
+// Evaluate a binary operator on two Const-typed leaf values per ECMA-262
+// § 13.6–13.13. Returns AbstractValue or null on type-disqualification.
+function _evalBinaryConstConst(lv, rv, op) {
+  if (op === "+") {
+    if (typeof lv === "string" || typeof rv === "string") {
+      return { kind: "const", value: String(lv) + String(rv) };
+    }
+    if (typeof lv === "number" && typeof rv === "number") {
+      return { kind: "const", value: lv + rv };
+    }
+    return null;
+  }
+  if (typeof lv === "number" && typeof rv === "number") {
+    if (op === "-") return { kind: "const", value: lv - rv };
+    if (op === "*") return { kind: "const", value: lv * rv };
+    if (op === "/") return { kind: "const", value: lv / rv };
+    if (op === "%") return { kind: "const", value: lv % rv };
+    if (op === "**") return { kind: "const", value: Math.pow(lv, rv) };
+    if (op === "<<") return { kind: "const", value: lv << rv };
+    if (op === ">>") return { kind: "const", value: lv >> rv };
+    if (op === ">>>") return { kind: "const", value: lv >>> rv };
+    if (op === "&") return { kind: "const", value: lv & rv };
+    if (op === "|") return { kind: "const", value: lv | rv };
+    if (op === "^") return { kind: "const", value: lv ^ rv };
+  }
+  if (op === "<") return { kind: "const", value: lv < rv };
+  if (op === "<=") return { kind: "const", value: lv <= rv };
+  if (op === ">") return { kind: "const", value: lv > rv };
+  if (op === ">=") return { kind: "const", value: lv >= rv };
+  if (op === "==") return { kind: "const", value: lv == rv };
+  if (op === "!=") return { kind: "const", value: lv != rv };
+  if (op === "===") return { kind: "const", value: lv === rv };
+  if (op === "!==") return { kind: "const", value: lv !== rv };
+  return null;
+}
+
 function _avFlattenStringLeaves(rootAv) {
   if (!rootAv) return [];
   var out = [];
