@@ -2129,11 +2129,37 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
     }
   }
   var ihCallers = ihName ? _inlineHandlerCallSites[ihName] : null;
+  // ECMA § 27.2.5.4 Promise.prototype.then: when this function is the
+  // FunctionExpression / ArrowFunctionExpression callback arg of a
+  // `recv.then(cb)` call, bind cb's param 0 to recv's resolved value.
+  // Detected via parent path: if parentPath is a CallExpression with
+  // callee = MemberExpression `something.then` (scope-checked unshadowed
+  // Promise on the something side, OR — more permissively — any call to
+  // `.then` on a value the analyser tracks), substitute.
+  var promiseRecvAv = null;
+  if (funcPath && funcPath.parentPath && funcPath.parent &&
+      _t.isCallExpression(funcPath.parent) &&
+      funcPath.parent.arguments[0] === funcNode &&
+      _t.isMemberExpression(funcPath.parent.callee) && !funcPath.parent.callee.computed &&
+      _t.isIdentifier(funcPath.parent.callee.property, { name: "then" })) {
+    // Compute the receiver AV via spec eval. Use an empty state so the
+    // recursion lint stays clean (calling _specInitialFunctionBodyState
+    // here would self-recurse). _specEvalLeaf falls back to scope-based
+    // identifier resolution (path.scope.getBinding) for free vars in the
+    // receiver, which covers literal/const cases like Promise.resolve("x").
+    var thenRecvPath = funcPath.parentPath.get("callee.object");
+    try {
+      promiseRecvAv = _specEvalExpression(thenRecvPath, _specStateCreate({}), []);
+    } catch (_) { promiseRecvAv = null; }
+  }
   for (var i = 0; i < funcNode.params.length; i++) {
     var p = funcNode.params[i];
     if (!p) continue;
     var paramAv;
-    if (ihCallers && ihCallers.length > 0) {
+    if (i === 0 && promiseRecvAv) {
+      // .then(cb) callback's param 0 = receiver's resolved value.
+      paramAv = promiseRecvAv;
+    } else if (ihCallers && ihCallers.length > 0) {
       // Per call site, derive the param's bound AV.
       var perCallAvs = [];
       for (var ci = 0; ci < ihCallers.length; ci++) {
