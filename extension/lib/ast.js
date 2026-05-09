@@ -2512,6 +2512,31 @@ function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) 
     for (var ti = 1; ti < alts.length; ti++) tlOr = _specLogicalOrAv(tlOr, { kind: "const", value: alts[ti] });
     return tlOr;
   }
+  // § 13.10 PropertyAccess on a leaf object: `return paramRef.prop` or
+  // `return paramRef[constKeyExpr]`. Resolve the object via leaf helper,
+  // build a member-AV with the substituted obj. When obj reduces to
+  // obj-lit + Const-key, the prop value is returned directly.
+  if (_t.isMemberExpression(retArg) || _t.isOptionalMemberExpression(retArg)) {
+    var memObjAv = _specResolveLeafInCalleeContext(retArg.object, calleeFnPath, callExpr, vals);
+    if (memObjAv === null) return null;
+    var memKeyAv;
+    if (retArg.computed) {
+      memKeyAv = _specResolveLeafInCalleeContext(retArg.property, calleeFnPath, callExpr, vals);
+      if (memKeyAv === null) return null;
+    } else if (_t.isIdentifier(retArg.property)) {
+      memKeyAv = { kind: "const", value: retArg.property.name };
+    } else if (_t.isStringLiteral(retArg.property)) {
+      memKeyAv = { kind: "const", value: retArg.property.value };
+    } else {
+      return null;
+    }
+    // Reduce when obj is obj-lit + Const-key.
+    if (memObjAv.kind === "obj-lit" && memObjAv.props && memKeyAv.kind === "const" &&
+        Object.prototype.hasOwnProperty.call(memObjAv.props, memKeyAv.value)) {
+      return memObjAv.props[memKeyAv.value];
+    }
+    return { kind: "member", obj: memObjAv, key: memKeyAv };
+  }
   return null;
 }
 
