@@ -61,6 +61,26 @@ function _collectDomEndpointsFromContext(ctx) {
       }
     }
   }
+  // srcs: <script/img/iframe src="..."> values
+  if (ctx.srcs) {
+    var srcKeys = Object.keys(ctx.srcs);
+    for (var si = 0; si < srcKeys.length; si++) {
+      var sv = ctx.srcs[srcKeys[si]];
+      if (typeof sv === "string" && (sv.charAt(0) === "/" || /^https?:\/\//i.test(sv))) {
+        out.push({ url: sv, source: "html-src" });
+      }
+    }
+  }
+  // actions: <form action="..."> values — these are submission targets.
+  if (ctx.actions) {
+    var actKeys = Object.keys(ctx.actions);
+    for (var ai = 0; ai < actKeys.length; ai++) {
+      var av = ctx.actions[actKeys[ai]];
+      if (typeof av === "string" && (av.charAt(0) === "/" || /^https?:\/\//i.test(av))) {
+        out.push({ url: av, source: "html-action" });
+      }
+    }
+  }
   // metaTags: <meta name=X content=Y> URL-valued
   if (ctx.metaTags) {
     var mtKeys = Object.keys(ctx.metaTags);
@@ -99,7 +119,7 @@ function _collectDomEndpointsFromContext(ctx) {
 // Returns the same shape as `_domContext`. Cheap to call repeatedly
 // (per-page); host can cache externally.
 function extractDomContextFromHtml(htmlString) {
-  var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {} };
+  var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {} };
   if (!htmlString || typeof htmlString !== "string") return ctx;
   // <meta name="X" content="Y"> — both single and double quotes; allow
   // attribute order swap. Scan iteratively over <meta ...> tags.
@@ -115,10 +135,14 @@ function extractDomContextFromHtml(htmlString) {
       ctx.metaTags[nm[1] != null ? nm[1] : nm[2]] = ct[1] != null ? ct[1] : ct[2];
     }
   }
-  // <... data-X="Y" ...> — collect by element index.
+  // Per-element scan for data-* attributes and URL-bearing attributes
+  // (href / src / action). Element index keys allow downstream consumers
+  // to correlate attrs from the same element.
   var elRe = /<([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>/g;
   var dataAttrRe = /\bdata-([a-zA-Z0-9-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
   var hrefRe = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+  var srcRe = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+  var actionRe = /\baction\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
   var elIdx = 0;
   while ((m = elRe.exec(htmlString)) !== null) {
     var attrs = m[2] || "";
@@ -131,6 +155,10 @@ function extractDomContextFromHtml(htmlString) {
     if (dataMap) ctx.dataAttrs[elIdx] = dataMap;
     var h = hrefRe.exec(attrs);
     if (h) ctx.hrefs[elIdx] = h[1] != null ? h[1] : h[2];
+    var s = srcRe.exec(attrs);
+    if (s) ctx.srcs[elIdx] = s[1] != null ? s[1] : s[2];
+    var a = actionRe.exec(attrs);
+    if (a) ctx.actions[elIdx] = a[1] != null ? a[1] : a[2];
     elIdx++;
   }
   return ctx;
