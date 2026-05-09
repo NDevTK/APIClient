@@ -2186,6 +2186,12 @@ function _specGlobalThisAv() {
     POSITIVE_INFINITY: { kind: "const", value: Number.POSITIVE_INFINITY },
     NEGATIVE_INFINITY: { kind: "const", value: Number.NEGATIVE_INFINITY },
     NaN: { kind: "const", value: Number.NaN },
+    isInteger: { kind: "builtin-method", id: "Number.isInteger" },
+    isFinite: { kind: "builtin-method", id: "Number.isFinite" },
+    isNaN: { kind: "builtin-method", id: "Number.isNaN" },
+    isSafeInteger: { kind: "builtin-method", id: "Number.isSafeInteger" },
+    parseInt: { kind: "builtin-method", id: "Number.parseInt" },
+    parseFloat: { kind: "builtin-method", id: "Number.parseFloat" },
   };
   // Array namespace per § 23.1.2 — statics. Array() callable handled
   // separately at NewExpression / CallExpression entries.
@@ -2518,6 +2524,31 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (globalName === "isFinite") return { kind: "const", value: isFinite(ga) };
     }
     return { kind: "top" };
+  }
+  // Number.* statics per § 21.1.2 — DISTINCT from globals: no coercion.
+  if (methodId === "Number.isInteger") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    return { kind: "const", value: Number.isInteger(argAvs[0].value) };
+  }
+  if (methodId === "Number.isFinite") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    return { kind: "const", value: Number.isFinite(argAvs[0].value) };
+  }
+  if (methodId === "Number.isNaN") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    return { kind: "const", value: Number.isNaN(argAvs[0].value) };
+  }
+  if (methodId === "Number.isSafeInteger") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    return { kind: "const", value: Number.isSafeInteger(argAvs[0].value) };
+  }
+  if (methodId === "Number.parseInt") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") return { kind: "top" };
+    return { kind: "const", value: Number.parseInt(argAvs[0].value) };
+  }
+  if (methodId === "Number.parseFloat") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") return { kind: "top" };
+    return { kind: "const", value: Number.parseFloat(argAvs[0].value) };
   }
   // Object.* statics per § 20.1.2.
   if (methodId === "Object.keys") {
@@ -5001,75 +5032,11 @@ function _specEvalLeaf(path, state, vals, effects) {
     // Identifier(Math) resolves to globalThis.Math, then .floor etc. is
     // a builtin-method AV that _specApplyBuiltinMethod handles per
     // § 21.3.2. No inline shape-matched Math dispatch.
-    // Array.* static methods per § 23.1.2 — scope-checked unshadowed `Array`.
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.object, { name: "Array" }) &&
-        !path.scope.getBinding("Array") &&
-        _t.isIdentifier(n.callee.property)) {
-      var arrStatic = n.callee.property.name;
-      // § 23.1.2.3 Array.isArray(arg) — true iff arg is array-lit.
-      if (arrStatic === "isArray" && n.arguments.length === 1) {
-        var aiArg = vals.get(n.arguments[0]);
-        if (aiArg) {
-          if (aiArg.kind === "array-lit") return { kind: "const", value: true };
-          // Const non-array, obj-lit are NOT arrays.
-          if (aiArg.kind === "const" || aiArg.kind === "obj-lit") return { kind: "const", value: false };
-          // Other kinds (param/this/top/etc.) preserve top.
-        }
-      }
-      // § 23.1.2.4 Array.of(...items) — constructs array-lit from args.
-      if (arrStatic === "of") {
-        var aoExpanded = _specExpandCallArgs(n.arguments, vals);
-        if (aoExpanded === null) return { kind: "top" };
-        return { kind: "array-lit", elements: aoExpanded };
-      }
-      // § 23.1.2.1 Array.from(items) — converts iterable. For array-lit
-      // input: copy elements (with optional mapper). For Const-string
-      // input: split into chars per § 23.1.2.1 step 5.b (string iterator).
-      // Without mapper support yet, only single-arg form maps directly.
-      if (arrStatic === "from" && n.arguments.length === 1) {
-        var afArg = vals.get(n.arguments[0]);
-        if (afArg && afArg.kind === "array-lit" && afArg.elements) {
-          return { kind: "array-lit", elements: afArg.elements.slice() };
-        }
-        if (afArg && afArg.kind === "const" && typeof afArg.value === "string") {
-          var afChars = [];
-          // Use iterable-string per § 7.4.1 GetIterator + StringIterator —
-          // splits by code point, preserving surrogate pairs as one entry.
-          for (var afCh of afArg.value) afChars.push({ kind: "const", value: afCh });
-          return { kind: "array-lit", elements: afChars };
-        }
-        return { kind: "top" };
-      }
-    }
-    // Number.* static methods per § 21.1.2 — scope-checked unshadowed `Number`.
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.object, { name: "Number" }) &&
-        !path.scope.getBinding("Number") &&
-        _t.isIdentifier(n.callee.property) &&
-        n.arguments.length === 1) {
-      var numStatic = n.callee.property.name;
-      var nArg = vals.get(n.arguments[0]);
-      if (nArg && nArg.kind === "const") {
-        // § 21.1.2.3 Number.isInteger
-        if (numStatic === "isInteger") return { kind: "const", value: Number.isInteger(nArg.value) };
-        // § 21.1.2.2 Number.isFinite — DIFFERS from global isFinite:
-        // doesn't coerce; returns false for non-numbers.
-        if (numStatic === "isFinite") return { kind: "const", value: Number.isFinite(nArg.value) };
-        // § 21.1.2.4 Number.isNaN — DIFFERS from global isNaN: no coercion.
-        if (numStatic === "isNaN") return { kind: "const", value: Number.isNaN(nArg.value) };
-        // § 21.1.2.5 Number.isSafeInteger
-        if (numStatic === "isSafeInteger") return { kind: "const", value: Number.isSafeInteger(nArg.value) };
-        // § 21.1.2.13 Number.parseInt(string)
-        if (numStatic === "parseInt" && typeof nArg.value === "string") {
-          return { kind: "const", value: Number.parseInt(nArg.value) };
-        }
-        // § 21.1.2.12 Number.parseFloat(string)
-        if (numStatic === "parseFloat" && typeof nArg.value === "string") {
-          return { kind: "const", value: Number.parseFloat(nArg.value) };
-        }
-      }
-    }
+    // Array.* statics dispatched via globalThis.Array obj-lit registry.
+    // Per § 23.1.2: isArray, of, from. ONE central dispatch; no inline
+    // shape match.
+    // Number.* statics dispatched via globalThis.Number registry now.
+    // Per § 21.1.2 — distinct from globals: no coercion.
     // ECMA § 22.1.1.1 — `String(x)` called as function (not constructor)
     // returns ToString(x) per spec. For Const-resolvable args, evaluate;
     // otherwise Top. Scope-checked unshadowed `String`.
