@@ -59,13 +59,32 @@ function specTest(name, code, check, opts) {
       }
     });
     if (!fnPath) { failed++; console.log("  FAIL: " + name + " — no function found"); return; }
-    // Pre-warm callee memos: analyse non-target functions first so that
-    // callee lookups (_specReturnValueMemo) resolve when the target's
-    // body is analysed. Target function analysed last so its effects
-    // come from the latest evaluation.
-    for (var fpi = 0; fpi < allFnPaths.length; fpi++) {
-      if (allFnPaths[fpi] !== fnPath) globalThis._specAnalyzePropertyFlow(allFnPaths[fpi]);
+    // Fixpoint analysis: each pass re-analyses every function with
+    // force=true so callee memos (_specReturnValueMemo, _specSideEffectMemo)
+    // populated in earlier passes feed into later passes. Iterates until
+    // every function's effects stabilise. The analyser's AV lattice is
+    // monotonic (LUB-based), so fixpoint is guaranteed to converge for
+    // any call-graph shape — callee-before-caller, caller-before-callee,
+    // mutual cycles. If a test ever fails to converge, that's an
+    // analyser bug to fix at the AV-join level, not papered over with
+    // a max-passes cap here.
+    var lastEffectsByFn = new Map();
+    var pass = 0;
+    while (true) {
+      var anyChanged = false;
+      for (var fpi = 0; fpi < allFnPaths.length; fpi++) {
+        var fp = allFnPaths[fpi];
+        var newEffects = globalThis._specAnalyzePropertyFlow(fp, pass > 0);
+        var sig = JSON.stringify(newEffects);
+        if (lastEffectsByFn.get(fp.node) !== sig) {
+          lastEffectsByFn.set(fp.node, sig);
+          anyChanged = true;
+        }
+      }
+      if (!anyChanged) break;
+      pass++;
     }
+    // Final read of fnPath's effects from the converged state.
     var effects = globalThis._specAnalyzePropertyFlow(fnPath);
     if (check(effects, result)) {
       passed++;

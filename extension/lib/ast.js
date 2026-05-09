@@ -1004,6 +1004,11 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _specEffectsMemo = new WeakMap();
   _specPathValMemo = new WeakMap();
   _specReturnValueMemo = new WeakMap();
+  _specSideEffectMemo = new WeakMap();
+  _specStateOuterImports = new WeakMap();
+  _specProgramFixpointDone = new WeakSet();
+  _specBindingInitAvCache = new WeakMap();
+  _specOuterImportsListCache = new WeakMap();
   _tvsMemo = new WeakMap();
   _cfgMemo = new WeakMap();
   // Page DOM context: when the analyser runs against a page (HTML +
@@ -4267,16 +4272,22 @@ var _specStateOuterImports = new WeakMap();
 // closure write-back semantics. Keyed by funcNode.
 var _specSideEffectMemo = new WeakMap();
 
-// Cycle-break for the outer-import lazy-load: when evaluating
-// init expression for a binding currently being lazy-loaded, return
-// top to avoid infinite recursion on patterns like `var a = b; var b = a;`.
-var _specOuterImportInFlight = null;
+// Per-binding cache of the joined init+constantViolations AV used when
+// lazy-importing closure-captured outer-scope bindings. Independent of
+// calling context (init expressions evaluate in the binding's own
+// scope), so the same AV is reused across fixpoint passes.
+// Keyed by the VariableDeclarator node.
+var _specBindingInitAvCache = new WeakMap();
 
-// Cycle-break for on-demand callee analysis: tracks function nodes
-// currently being analyzed so a mutually-recursive call doesn't
-// re-trigger _specAnalyzePropertyFlow on a function that's already on
-// the analysis stack.
-var _specAnalysisInFlight = new WeakSet();
+// Per-function cache of the outer-bindings-to-import list. The pre-walk
+// in _specInitialFunctionBodyState scans the function body for free
+// Identifier references that resolve to outer-scope bindings; this
+// scan's result is invariant across analysis passes (depends only on
+// the AST, not on call context). Cached so fixpoint passes don't
+// re-traverse function bodies.
+var _specOuterImportsListCache = new WeakMap();
+
+
 
 // § 10.2.10 FunctionDeclarationInstantiation (simplified for our domain).
 // Each formal parameter is bound to its abstract param-reference; `this`
@@ -4394,6 +4405,114 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
             obj: { kind: "param", idx: i },
             key: { kind: "const", value: ai }
           };
+        }
+      }
+    }
+  }
+  // ECMA § 9.1.1 Closure capture pre-load: scan the function body for
+  // free Identifier references that resolve via path.scope to outer
+  // VariableDeclarator bindings with init expressions. Pre-evaluate each
+  // init via _specEvalExpression so the binding's current AV is in
+  // entryState when body walk starts. Track imports in the per-state
+  // outer-imports set so subsequent mutations propagate as side effects.
+  // The eval call is from this scope (not _specEvalLeaf), so no static
+  // call-graph cycle. Iterative scan via Babel traverse (in babel-bundle,
+  // outside our scoped recursion ban) collects identifier references.
+  if (funcPath && funcPath.get && (_t.isFunctionDeclaration(funcNode) ||
+      _t.isFunctionExpression(funcNode) || _t.isArrowFunctionExpression(funcNode))) {
+    var bodyPath = funcPath.get("body");
+    if (bodyPath && bodyPath.node) {
+      var outerBindingsToImport = _specOuterImportsListCache.get(funcNode);
+      if (outerBindingsToImport === undefined) {
+      var seenOuterNames = Object.create(null);
+      outerBindingsToImport = [];
+      bodyPath.traverse({
+        // Skip nested function bodies — their free Identifier references
+        // are the nested function's own closure captures, not the current
+        // function's. Without this, a function with N levels of nesting
+        // re-traverses the same inner body N times during pre-walk.
+        "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression": function(p) {
+          p.skip();
+        },
+        Identifier: function(idPath) {
+          // Only treat as a value-position reference if not the property
+          // of a non-computed MemberExpression and not a binding decl.
+          if (idPath.parentPath) {
+            var pn = idPath.parent;
+            if (_t.isMemberExpression(pn) && pn.property === idPath.node && !pn.computed) return;
+            if (_t.isObjectProperty(pn) && pn.key === idPath.node && !pn.computed) return;
+            if (_t.isVariableDeclarator(pn) && pn.id === idPath.node) return;
+            if (_t.isFunctionDeclaration(pn) && pn.id === idPath.node) return;
+            if (_t.isFunctionExpression(pn) && pn.id === idPath.node) return;
+            if (_t.isClassDeclaration(pn) && pn.id === idPath.node) return;
+            if (_t.isClassExpression(pn) && pn.id === idPath.node) return;
+            if ((_t.isFunction(pn) || _t.isArrowFunctionExpression(pn)) && pn.params.indexOf(idPath.node) >= 0) return;
+            if (_t.isLabeledStatement(pn) && pn.label === idPath.node) return;
+            if (_t.isBreakStatement(pn) && pn.label === idPath.node) return;
+            if (_t.isContinueStatement(pn) && pn.label === idPath.node) return;
+          }
+          var nm = idPath.node.name;
+          if (Object.prototype.hasOwnProperty.call(seenOuterNames, nm)) return;
+          if (Object.prototype.hasOwnProperty.call(state, nm)) return;
+          if (nm === "undefined" || nm === "arguments" || nm === "this") return;
+          var b = idPath.scope.getBinding(nm);
+          if (!b || !b.path || !b.path.node) return;
+          if (!_t.isVariableDeclarator(b.path.node) || !b.path.node.init) return;
+          // Verify the binding is in an OUTER scope (the function's own
+          // scope doesn't have its own binding for this name).
+          if (funcPath.scope.hasOwnBinding(nm)) return;
+          // Skip globals already exposed via globalThis registry.
+          var globalAv = _specGlobalThisAv();
+          if (globalAv && globalAv.props && Object.prototype.hasOwnProperty.call(globalAv.props, nm)) return;
+          seenOuterNames[nm] = true;
+          // Collect init plus all reassignment RHS paths per § 9.1.1
+          // EnvironmentRecord — the binding's value at function-call
+          // time is one of these (joined sound over-approximation).
+          // binding.constantViolations is the AssignmentExpression paths.
+          var initSourcePaths = [b.path.get("init")];
+          if (!b.constant && b.constantViolations) {
+            for (var cvi = 0; cvi < b.constantViolations.length; cvi++) {
+              var cv = b.constantViolations[cvi];
+              if (cv.isAssignmentExpression() && cv.node.operator === "=") {
+                initSourcePaths.push(cv.get("right"));
+              }
+            }
+          }
+          outerBindingsToImport.push({ name: nm, initSourcePaths: initSourcePaths, declaratorNode: b.path.node });
+        }
+      });
+      _specOuterImportsListCache.set(funcNode, outerBindingsToImport);
+      }
+      // Resolve each import via _specEvalExpression in a fresh state.
+      // For non-constant bindings, join init's AV with each assignment's
+      // RHS AV per § 9.1.1 — the binding's value at function-call time is
+      // one of these. Sound over-approx; if execution-order tracking is
+      // added later, it can be tightened to the actual last-write.
+      // Track in the outer-imports set so mutations during body walk
+      // surface as side effects in the function's summary.
+      // Cached per VariableDeclarator node: the joined init AV doesn't
+      // depend on the calling function's context, so the same value is
+      // reused across fixpoint passes (avoids quadratic eval cost).
+      if (outerBindingsToImport.length > 0) {
+        var outerImports = _specStateOuterImports.get(state);
+        if (!outerImports) { outerImports = new Set(); _specStateOuterImports.set(state, outerImports); }
+        for (var oii = 0; oii < outerBindingsToImport.length; oii++) {
+          var entry = outerBindingsToImport[oii];
+          var declNode = entry.declaratorNode;
+          var joinedAv = _specBindingInitAvCache.get(declNode);
+          if (joinedAv === undefined) {
+            joinedAv = null;
+            for (var ispi = 0; ispi < entry.initSourcePaths.length; ispi++) {
+              var srcAv = _specEvalExpression(entry.initSourcePaths[ispi], _specStateCreate({}), []);
+              if (!srcAv) continue;
+              joinedAv = (joinedAv === null) ? srcAv : _specLogicalOrAv(joinedAv, srcAv);
+            }
+            _specBindingInitAvCache.set(declNode, joinedAv || null);
+          }
+          if (joinedAv) {
+            state[entry.name] = joinedAv;
+            outerImports.add(entry.name);
+          }
         }
       }
     }
@@ -5596,7 +5715,101 @@ var _specReturnAvAccum = [];
 // cycle _specEvalLeaf → _specAnalyzePropertyFlow → … → _specEvalLeaf
 // that would otherwise violate the recursion ban.
 var _hofPendingDispatches = [];
-function _specAnalyzePropertyFlow(funcPath) {
+// Program-level fixpoint driver: collects all FunctionDeclaration /
+// FunctionExpression / ArrowFunctionExpression paths reachable from a
+// Program node, then iterates _specAnalyzePropertyFlow(force=true) over
+// each until no function's effects/memos change. This propagates
+// closure write-back side-effect summaries (per ECMA § 9.1.1) and
+// return-value memos across the whole call graph regardless of source
+// order. Idempotent per program node via _specProgramFixpointDone.
+var _specProgramFixpointDone = new WeakSet();
+function _specAnalyzeProgramWithFixpoint(programPath) {
+  if (!programPath || !programPath.node || !_t.isProgram(programPath.node)) return;
+  if (_specProgramFixpointDone.has(programPath.node)) return;
+  _specProgramFixpointDone.add(programPath.node);
+  var fnPaths = [programPath];
+  programPath.traverse({
+    "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression": function(p) {
+      fnPaths.push(p);
+    }
+  });
+  // Worklist-based fixpoint: pass 1 analyses every function. Subsequent
+  // passes only re-analyse functions whose direct callees changed in
+  // the previous pass — bounds total work to O(F * affected-chain-depth)
+  // instead of O(F²). Reverse call graph computed once via traverse.
+  var callersOf = new Map();   // funcNode → Set of caller funcNodes
+  for (var fpi0 = 0; fpi0 < fnPaths.length; fpi0++) {
+    var fp0 = fnPaths[fpi0];
+    fp0.traverse({
+      "CallExpression|NewExpression": function(p) {
+        var calleeName = null;
+        var c = p.node.callee;
+        if (_t.isIdentifier(c)) calleeName = c.name;
+        if (!calleeName) return;
+        var b = p.scope.getBinding(calleeName);
+        if (!b || !b.path || !b.path.node) return;
+        var calleeNode = null;
+        if (_t.isFunctionDeclaration(b.path.node)) calleeNode = b.path.node;
+        else if (_t.isVariableDeclarator(b.path.node) && b.path.node.init &&
+                 (_t.isFunctionExpression(b.path.node.init) || _t.isArrowFunctionExpression(b.path.node.init))) {
+          calleeNode = b.path.node.init;
+        }
+        if (!calleeNode) return;
+        if (!callersOf.has(calleeNode)) callersOf.set(calleeNode, new Set());
+        callersOf.get(calleeNode).add(fp0.node);
+      }
+    });
+  }
+  var sigByFn = new Map();
+  function _ssSig(fnNode) {
+    var seSig = "";
+    if (_specSideEffectMemo.has(fnNode)) {
+      var seSummary = _specSideEffectMemo.get(fnNode);
+      var seKeys = Object.keys(seSummary).sort();
+      for (var ski = 0; ski < seKeys.length; ski++) seSig += seKeys[ski] + ":" + JSON.stringify(seSummary[seKeys[ski]]) + ";";
+    }
+    var rvSig = _specReturnValueMemo.has(fnNode) ? JSON.stringify(_specReturnValueMemo.get(fnNode)) : "";
+    return seSig + "|" + rvSig;
+  }
+  // Pass 1: analyse every function, record signature.
+  var pendingNodes = new Set();
+  for (var ip = 0; ip < fnPaths.length; ip++) {
+    var ipFp = fnPaths[ip];
+    _specAnalyzePropertyFlow(ipFp, true);
+    var ipSig = _ssSig(ipFp.node);
+    sigByFn.set(ipFp.node, ipSig);
+  }
+  // Build initial worklist from any function whose memo affected its callers.
+  // (After pass 1, all sigs are "fresh" — we treat all as potentially affecting callers.)
+  for (var ip2 = 0; ip2 < fnPaths.length; ip2++) {
+    if (callersOf.has(fnPaths[ip2].node)) {
+      var callerSet = callersOf.get(fnPaths[ip2].node);
+      callerSet.forEach(function(c) { pendingNodes.add(c); });
+    }
+  }
+  // Worklist loop: re-analyse pending callers, add their callers if their sig changed.
+  var nodeToPath = new Map();
+  for (var npi = 0; npi < fnPaths.length; npi++) nodeToPath.set(fnPaths[npi].node, fnPaths[npi]);
+  while (pendingNodes.size > 0) {
+    var batch = Array.from(pendingNodes);
+    pendingNodes.clear();
+    for (var bi = 0; bi < batch.length; bi++) {
+      var node = batch[bi];
+      var fp = nodeToPath.get(node);
+      if (!fp) continue;
+      _specAnalyzePropertyFlow(fp, true);
+      var newSig = _ssSig(node);
+      if (sigByFn.get(node) !== newSig) {
+        sigByFn.set(node, newSig);
+        if (callersOf.has(node)) {
+          callersOf.get(node).forEach(function(c) { pendingNodes.add(c); });
+        }
+      }
+    }
+  }
+}
+
+function _specAnalyzePropertyFlow(funcPath, force) {
   if (!funcPath || !funcPath.node) return [];
   var fnNode = funcPath.node;
   // ECMA § 16.1 Scripts: a Program is analyzed top-to-bottom in the
@@ -5604,7 +5817,7 @@ function _specAnalyzePropertyFlow(funcPath) {
   // params for state-evolution purposes (var declarations, expression
   // statements with side-effects propagate state across statements).
   if (!_t.isFunction(fnNode) && !_t.isProgram(fnNode)) return [];
-  if (_specEffectsMemo.has(fnNode)) return _specEffectsMemo.get(fnNode);
+  if (!force && _specEffectsMemo.has(fnNode)) return _specEffectsMemo.get(fnNode);
 
   // For Program, the "body" is the Program itself's body array.
   // For Function, the body is the function body block.
@@ -5995,46 +6208,14 @@ function _specEvalLeaf(path, state, vals, effects) {
           return { kind: "const", value: initN.quasis[0].value.cooked };
         }
       }
-      // ECMA § 9.1.1 Closure capture: this identifier is bound in an
-      // outer EnvironmentRecord (the binding's scope is not the current
-      // function's). Lazy-load its current AV into our state and mark it
-      // as outer-imported so subsequent mutations propagate back to the
-      // caller via the side-effect memo. Skip for params (already in
-      // entry state) and inner locals (own binding in current scope).
-      // Only lazy-load if the binding's Identifier itself isn't reassigned
-      // (idBinding.constant) — direct assignments to the binding would
-      // make the init value stale; method calls on the bound value
-      // (e.g. `arr.push(x)`) preserve constness per Babel semantics.
-      if (_t.isVariableDeclarator(bn) && bn.init &&
-          idBinding.constant && !path.scope.hasOwnBinding(n.name)) {
-        // Bound in outer scope → lazy-load its init AV. Use a fresh
-        // analysis state so we don't cross-contaminate; the init is
-        // evaluated in the binding's scope, which closes over only its
-        // own outer chain.
-        var initPath = idBinding.path.get("init");
-        if (initPath && initPath.node) {
-          // Bound recursion: skip if we're already in the middle of
-          // evaluating this same binding's init (cycle break).
-          if (_specOuterImportInFlight && _specOuterImportInFlight.has(bn)) {
-            return { kind: "top" };
-          }
-          if (!_specOuterImportInFlight) _specOuterImportInFlight = new Set();
-          _specOuterImportInFlight.add(bn);
-          var importedAv;
-          try {
-            importedAv = _specEvalExpression(initPath, _specStateCreate({}), []);
-          } finally {
-            _specOuterImportInFlight.delete(bn);
-          }
-          if (importedAv && importedAv.kind !== "top") {
-            state[n.name] = importedAv;
-            var outerImports = _specStateOuterImports.get(state);
-            if (!outerImports) { outerImports = new Set(); _specStateOuterImports.set(state, outerImports); }
-            outerImports.add(n.name);
-            return importedAv;
-          }
-        }
-      }
+      // ECMA § 9.1.1 closure capture: outer-scope `var X = init` bindings
+      // that this function's body references are pre-loaded into entryState
+      // by _specInitialFunctionBodyState's outer-import scan (which uses
+      // _specEvalExpression to evaluate init in a fresh state — that call
+      // is from outside _specEvalLeaf so doesn't form a cycle). If we reach
+      // here, either the binding is not a closure capture (e.g. param,
+      // local, global on globalThis registry) or its init couldn't be
+      // resolved by spec eval. Fall through to top.
     }
     return { kind: "top" };
   }
@@ -6751,30 +6932,24 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
-    // ECMA § 9.1.1 closure write-back: ensure the callee was analyzed so
-    // its side-effect memo (mutations on outer-scope captures) is
-    // available, then replay the mutations on caller's state with
-    // caller-arg AVs substituted. On-demand analysis with cycle guard:
-    // mutually-recursive functions (A→B→A) skip the inner re-analysis
-    // and return what's already memoised (or no side effects on first hit).
-    if (calleeFnPath && calleeFnPath.node && state) {
-      if (!_specSideEffectMemo.has(calleeFnPath.node) && !_specEffectsMemo.has(calleeFnPath.node) &&
-          !_specAnalysisInFlight.has(calleeFnPath.node)) {
-        _specAnalysisInFlight.add(calleeFnPath.node);
-        try { _specAnalyzePropertyFlow(calleeFnPath); }
-        finally { _specAnalysisInFlight.delete(calleeFnPath.node); }
+    // ECMA § 9.1.1 closure write-back: when the callee was previously
+    // analyzed (memo exists) and its body mutated outer-scope captures,
+    // replay the mutations on caller's state with caller-arg AVs
+    // substituted. The memo is populated by _specAnalyzePropertyFlow
+    // when the callee's body is analyzed; the caller's analysis driver
+    // is responsible for analysing callees before their call sites
+    // (no on-demand call here, to keep the static call graph acyclic
+    // per CLAUDE.md recursion ban).
+    if (calleeFnPath && calleeFnPath.node && state && _specSideEffectMemo.has(calleeFnPath.node)) {
+      var ssApply = _specSideEffectMemo.get(calleeFnPath.node);
+      var ssCallerArgs = [];
+      for (var ssai = 0; ssai < n.arguments.length; ssai++) {
+        ssCallerArgs.push(vals.get(n.arguments[ssai]) || { kind: "top" });
       }
-      if (_specSideEffectMemo.has(calleeFnPath.node)) {
-        var ssApply = _specSideEffectMemo.get(calleeFnPath.node);
-        var ssCallerArgs = [];
-        for (var ssai = 0; ssai < n.arguments.length; ssai++) {
-          ssCallerArgs.push(vals.get(n.arguments[ssai]) || { kind: "top" });
-        }
-        for (var ssN in ssApply) {
-          if (!Object.prototype.hasOwnProperty.call(ssApply, ssN)) continue;
-          // Substitute Param(N) refs in the side-effect AV with caller's args.
-          state[ssN] = _specInstantiateAv(ssApply[ssN], ssCallerArgs);
-        }
+      for (var ssN in ssApply) {
+        if (!Object.prototype.hasOwnProperty.call(ssApply, ssN)) continue;
+        // Substitute Param(N) refs in the side-effect AV with caller's args.
+        state[ssN] = _specInstantiateAv(ssApply[ssN], ssCallerArgs);
       }
     }
     // Single-statement fast path FIRST: when callee body is a single
@@ -9490,7 +9665,10 @@ function _resolveAllValues(initialPath, initialDepth) {
     var programPath = initialPath;
     while (programPath && programPath.parentPath) programPath = programPath.parentPath;
     if (programPath && programPath.node && _t.isProgram(programPath.node)) {
-      _specAnalyzePropertyFlow(programPath);
+      // Use the fixpoint driver so closure write-back side effects from
+      // any function in the program propagate to all callers regardless
+      // of source order. Idempotent — runs once per Program node.
+      _specAnalyzeProgramWithFixpoint(programPath);
       var pMemoAv = _specPathValMemo.get(initialPath.node);
       if (pMemoAv) {
         var pMemoLeaves = _avFlattenStringLeaves(pMemoAv);
