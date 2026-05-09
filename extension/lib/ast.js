@@ -5324,8 +5324,12 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
   // [[Prototype]] for method dispatch.
   if (objAv && (objAv.kind === "obj-lit" || objAv.kind === "dom-element") && objAv.props) {
     if (!n.computed) {
+      // PrivateName per § 13.3.5: `obj.#x` accesses a private field stored
+      // under "#"-prefixed key in the obj-lit's props (consistent with how
+      // _specBuildThisInstanceAv inserts ClassPrivateProperty fields).
       var propName = _t.isIdentifier(n.property) ? n.property.name :
-        (_t.isStringLiteral(n.property) ? n.property.value : null);
+        (_t.isStringLiteral(n.property) ? n.property.value :
+        ((n.property && n.property.type === "PrivateName" && n.property.id) ? "#" + n.property.id.name : null));
       if (propName !== null && Object.prototype.hasOwnProperty.call(objAv.props, propName)) {
         return objAv.props[propName];
       }
