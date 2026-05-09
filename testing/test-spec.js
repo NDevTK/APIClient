@@ -2870,6 +2870,22 @@ test("DOM context: variable-bound DOM element resolves through binding", `
   return result.fetchCallSites[0].url === "/api/foo";
 }, { domContext: { byId: { link5: { href: "/api/foo", src: null, action: null, dataAttrs: null } } } });
 
+test("DOM context: var-bound el.getAttribute('href') resolves via byId", `
+  var el = document.getElementById("link7");
+  fetch(el.getAttribute("href"));
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "/api/baz";
+}, { domContext: { byId: { link7: { href: "/api/baz", src: null, action: null, dataAttrs: null } } } });
+
+test("DOM context: var-bound el.dataset.<key> resolves via byId", `
+  var el = document.getElementById("ctrl1");
+  fetch(el.dataset.fooEndpointValue);
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "/api/foo";
+}, { domContext: { byId: { ctrl1: { href: null, src: null, action: null, dataAttrs: { "foo-endpoint-value": "/api/foo" } } } } });
+
 test("DOM context: variable-bound querySelector('#X') also resolves", `
   var el = document.querySelector("#link6");
   fetch(el.href);
