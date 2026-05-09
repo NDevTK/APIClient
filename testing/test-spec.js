@@ -838,6 +838,22 @@ specTest("§ 10.2.10: multi-level caller-arg substitution through wrapper functi
   return v && v.kind === "const" && v.value === "/api/multi";
 });
 
+specTest("§ 13.2.5.4: spread element merges defaults into fetch options for method/headers", `
+  function f() {
+    var defaults = { method: "POST" };
+    var defaultHeaders = { "X-Auth": "secret" };
+    fetch("/api/x", { ...defaults, body: "x", headers: { ...defaultHeaders, "X-Y": "z" } });
+  }
+`, function(effects, result) {
+  var sites = (result && result.fetchCallSites) || [];
+  if (sites.length !== 1) return false;
+  var s = sites[0];
+  if (s.method !== "POST") return false;
+  // Headers: inline X-Y plus spread-merged X-Auth.
+  if (!s.headers || s.headers["X-Auth"] !== "secret" || s.headers["X-Y"] !== "z") return false;
+  return true;
+});
+
 specTest("§ 13.3.2: OptionalCallExpression `o?.method()` dispatches to method", `
   function f() {
     var o = { get: function () { return "/api/oc"; } };

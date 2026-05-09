@@ -10884,8 +10884,68 @@ function _extractFetchCall(path, result, type) {
   }
 
   if (optsNode && _t.isObjectExpression(optsNode)) {
+    // Pre-process SpreadElements per § 13.2.5.4 CopyDataProperties: each
+    // spread source's resolved obj-lit contributes its props as if they
+    // were inline. We merge the spread's props with subsequent inline
+    // properties — later props override earlier ones per the spec.
+    // Built lazily so the common no-spread case has no overhead.
+    var hasSpread = false;
+    for (var soi = 0; soi < optsNode.properties.length; soi++) {
+      if (_t.isSpreadElement(optsNode.properties[soi])) { hasSpread = true; break; }
+    }
+    var spreadMethod = null;
+    var spreadHeaderProps = null;  // obj-lit props AV map for headers from spread
+    if (hasSpread && optsPath) {
+      // Resolve the optsNode as a whole through spec eval so spread
+      // sources fold into a single obj-lit AV per § 13.2.5.4
+      // CopyDataProperties. Inline properties take precedence over
+      // spread when both contribute to the same key (already enforced
+      // by _specEvalLeaf's ObjectExpression handling).
+      // Use the program-fixpoint-populated memo (which has the full
+      // module state with all bindings resolved) rather than ad-hoc
+      // eval with empty state — empty state can't see `d` in
+      // `var d = {...}; fetch(url, {...d})`.
+      var spreadEncFn = optsPath.getFunctionParent && optsPath.getFunctionParent();
+      if (spreadEncFn && _t.isFunction(spreadEncFn.node)) {
+        _specAnalyzePropertyFlow(spreadEncFn);
+      } else {
+        var spreadProgPath = optsPath;
+        while (spreadProgPath && spreadProgPath.parentPath) spreadProgPath = spreadProgPath.parentPath;
+        if (spreadProgPath && spreadProgPath.node && _t.isProgram(spreadProgPath.node)) {
+          _specAnalyzeProgramWithFixpoint(spreadProgPath);
+        }
+      }
+      try {
+        var optsAv = _specPathValMemo.get(optsNode);
+        if (!optsAv) optsAv = _specEvalExpression(optsPath, _specStateCreate({}), []);
+        if (optsAv && optsAv.kind === "obj-lit" && optsAv.props) {
+          // Method: spec eval already folded merged AVs; pull the
+          // const string leaves directly.
+          if (Object.prototype.hasOwnProperty.call(optsAv.props, "method")) {
+            var smAv = optsAv.props.method;
+            var smLeaves = _avFlattenStringLeaves(smAv);
+            for (var smli = 0; smli < smLeaves.length; smli++) {
+              var smv = smLeaves[smli];
+              if (typeof smv === "string" && _HTTP_METHODS_LC[smv.toLowerCase()]) {
+                if (!spreadMethod) spreadMethod = [];
+                spreadMethod.push(smv.toUpperCase());
+              }
+            }
+          }
+          // Headers: an obj-lit prop. Pull the obj-lit's props and
+          // flatten each value's leaves into a {name: value} map.
+          if (Object.prototype.hasOwnProperty.call(optsAv.props, "headers")) {
+            var smHdrAv = optsAv.props.headers;
+            if (smHdrAv && smHdrAv.kind === "obj-lit" && smHdrAv.props) {
+              spreadHeaderProps = smHdrAv.props;
+            }
+          }
+        }
+      } catch (_) { /* fall through — process inline props only */ }
+    }
     var opts = optsNode.properties;
     for (var o = 0; o < opts.length; o++) {
+      if (_t.isSpreadElement(opts[o])) continue;  // handled via spec-eval merge above
       if (!_t.isObjectProperty(opts[o]) || opts[o].computed) continue;
       var optName = _getKeyName(opts[o].key);
       var optVal = opts[o].value;
@@ -10911,7 +10971,9 @@ function _extractFetchCall(path, result, type) {
         }
       }
       if (optName === "headers" && _t.isObjectExpression(optVal)) {
-        headers = _extractHeaders(optVal);
+        var hdrPath = null;
+        try { hdrPath = optsPath.get("properties." + o + ".value"); } catch (_he) { _resolver.collectError(_he, "fetchHeadersPath"); }
+        headers = _extractHeaders(optVal, hdrPath);
       }
       // `headers: new Headers({...})` — W3C Headers constructor wraps the
       // header object. Unwrap to extract the same shape.
@@ -10919,7 +10981,9 @@ function _extractFetchCall(path, result, type) {
           _t.isIdentifier(optVal.callee, { name: "Headers" }) &&
           !path.scope.getBinding("Headers") &&
           optVal.arguments.length >= 1 && _t.isObjectExpression(optVal.arguments[0])) {
-        headers = _extractHeaders(optVal.arguments[0]);
+        var hdrInnerPath = null;
+        try { hdrInnerPath = optsPath.get("properties." + o + ".value.arguments.0"); } catch (_he2) { _resolver.collectError(_he2, "fetchHeadersInnerPath"); }
+        headers = _extractHeaders(optVal.arguments[0], hdrInnerPath);
       }
       if (optName === "body") {
         // Direct path to optVal (the body argument expression). Used to
@@ -10987,6 +11051,24 @@ function _extractFetchCall(path, result, type) {
           }
         }
       }
+    }
+    // After processing inline properties, fall back to spread-derived
+    // method / headers if inline didn't set them. Per § 13.2.5.4 inline
+    // props take precedence; spread fills in only what's missing.
+    if (!httpMethod && spreadMethod && spreadMethod.length > 0) {
+      httpMethod = spreadMethod[0];
+      if (spreadMethod.length > 1) httpMethods = spreadMethod;
+    }
+    if (!headers && spreadHeaderProps) {
+      headers = {};
+      for (var shk in spreadHeaderProps) {
+        if (Object.prototype.hasOwnProperty.call(spreadHeaderProps, shk)) {
+          var shVal = spreadHeaderProps[shk];
+          var shLeaves = _avFlattenStringLeaves(shVal);
+          if (shLeaves.length > 0) headers[shk] = shLeaves[0];
+        }
+      }
+      if (Object.keys(headers).length === 0) headers = null;
     }
   }
 
@@ -18909,8 +18991,38 @@ function _resolveHeaderValue(rootNode, bindings) {
   return results.length === 1 ? results[0] : null;
 }
 
-function _extractHeaders(objNode) {
+function _extractHeaders(objNode, objPath) {
   var headers = {};
+  // Spread elements per § 13.2.5.4 CopyDataProperties: when the
+  // headers literal contains `{...defaults, ...}`, fold the spread
+  // source's obj-lit props in first; inline string-valued props
+  // override per spec (right-to-left precedence in source order).
+  var hasSpread = false;
+  for (var ssi = 0; ssi < objNode.properties.length; ssi++) {
+    if (_t.isSpreadElement(objNode.properties[ssi])) { hasSpread = true; break; }
+  }
+  if (hasSpread && objPath) {
+    var encFn = objPath.getFunctionParent && objPath.getFunctionParent();
+    if (encFn && _t.isFunction(encFn.node)) {
+      _specAnalyzePropertyFlow(encFn);
+    } else {
+      var progPath = objPath;
+      while (progPath && progPath.parentPath) progPath = progPath.parentPath;
+      if (progPath && progPath.node && _t.isProgram(progPath.node)) {
+        _specAnalyzeProgramWithFixpoint(progPath);
+      }
+    }
+    var hAv = _specPathValMemo.get(objNode);
+    if (hAv && hAv.kind === "obj-lit" && hAv.props) {
+      for (var hk in hAv.props) {
+        if (Object.prototype.hasOwnProperty.call(hAv.props, hk)) {
+          var hLeaves = _avFlattenStringLeaves(hAv.props[hk]);
+          if (hLeaves.length > 0) headers[hk] = hLeaves[0];
+        }
+      }
+      return headers;  // Spec-eval merge already handled override precedence.
+    }
+  }
   for (var i = 0; i < objNode.properties.length; i++) {
     var prop = objNode.properties[i];
     if (!_t.isObjectProperty(prop) || prop.computed) continue;
