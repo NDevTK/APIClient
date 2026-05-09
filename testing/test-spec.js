@@ -27,10 +27,10 @@ new Function(astCode +
 
 var passed = 0, failed = 0, total = 0;
 
-function test(name, code, check) {
+function test(name, code, check, opts) {
   total++;
   try {
-    var result = analyzeJSBundle(code, "test://" + name, true);
+    var result = analyzeJSBundle(code, "test://" + name, true, opts || null);
     if (check(result)) {
       passed++;
       console.log("  PASS: " + name);
@@ -2822,6 +2822,53 @@ test("§ 15.2: `var Bl = function e(t)` resolves t through Bl's call sites, not 
     if (result.fetchCallSites[i].url === "/api/named-fn-expr") return true;
   }
   return false;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// WHATWG DOM virtual context — meta tag resolution
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== WHATWG DOM: document.querySelector('meta[name=X]').content ===\n");
+
+test("DOM context: meta tag URL resolves via virtual DOM lookup", `
+  fetch(document.querySelector("meta[name=api-base-url]").content);
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "https://api.example.com/v1";
+}, { domContext: { metaTags: { "api-base-url": "https://api.example.com/v1" } } });
+
+test("DOM context: getAttribute('content') form also resolves", `
+  fetch(document.querySelector("meta[name=api-base-url]").getAttribute("content"));
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "https://api.example.com/v2";
+}, { domContext: { metaTags: { "api-base-url": "https://api.example.com/v2" } } });
+
+test("DOM context: missing meta tag does NOT resolve to garbage", `
+  fetch(document.querySelector("meta[name=missing-key]").content);
+`, function(result) {
+  // No matching meta tag → resolver gap (not a fabricated value).
+  if (result.fetchCallSites && result.fetchCallSites.length > 0) {
+    if (typeof result.fetchCallSites[0].url === "string" &&
+        result.fetchCallSites[0].url.length > 0 &&
+        result.fetchCallSites[0].url !== "[object Object]") return false;
+  }
+  return true;
+}, { domContext: { metaTags: {} } });
+
+test("result.domEndpoints surfaces URL-shaped href/src/action/data values", `
+  var x = 1;
+`, function(result) {
+  if (!result.domEndpoints || result.domEndpoints.length === 0) return false;
+  var srcs = new Set(result.domEndpoints.map(function(e) { return e.source; }));
+  return srcs.has("html-href") && srcs.has("html-meta") && srcs.has("html-action");
+}, {
+  domContext: {
+    metaTags: { "api-url": "https://api.example.com" },
+    hrefs: { 0: "/api/list" },
+    actions: { 1: "/api/submit" },
+    srcs: {},
+    dataAttrs: {},
+  }
 });
 
 // ── Summary ──
