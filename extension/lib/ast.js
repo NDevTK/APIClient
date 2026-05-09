@@ -14905,8 +14905,23 @@ function _traceValueSource(path, _unused) {
   // arg sink-checked across multiple visitors); memoising avoids
   // re-walking the same chain. Only cache top-level invocations; nested
   // recursive calls share the visited set instead.
+  // Identifiers with bindings: cache by binding identifier so distinct
+  // reference nodes that resolve to the same binding share the result.
+  // (E.g. inside a loop, `obj[k] = v` references `k` via different
+  // referencePaths each iteration but they all bind to the same loop-var
+  // declaration.)
   var isRoot = !_taintVisited;
-  if (isRoot && _tvsMemo.has(node)) return _tvsMemo.get(node);
+  if (isRoot) {
+    if (_tvsMemo.has(node)) return _tvsMemo.get(node);
+    if (_t.isIdentifier(node)) {
+      var idBinding = path.scope.getBinding(node.name);
+      if (idBinding && _tvsMemo.has(idBinding.identifier)) {
+        var bMemoed = _tvsMemo.get(idBinding.identifier);
+        _tvsMemo.set(node, bMemoed);
+        return bMemoed;
+      }
+    }
+  }
 
   // Cycle detection via visited set keyed on AST node position
   if (isRoot) _taintVisited = new Set();
@@ -14967,7 +14982,15 @@ function _traceValueSource(path, _unused) {
       stack.push(_tvsMakeFrame(subPath, subNode));
     }
     var finalResult = lastResult === undefined ? DYN : lastResult;
-    if (isRoot) _tvsMemo.set(node, finalResult);
+    if (isRoot) {
+      _tvsMemo.set(node, finalResult);
+      // Also memo by binding identifier so other reference nodes
+      // resolving to the same binding share this result on future calls.
+      if (_t.isIdentifier(node)) {
+        var fbinding = path.scope.getBinding(node.name);
+        if (fbinding) _tvsMemo.set(fbinding.identifier, finalResult);
+      }
+    }
     return finalResult;
   } finally {
     if (isRoot) _taintVisited = null;
