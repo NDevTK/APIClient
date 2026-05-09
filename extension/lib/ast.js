@@ -1475,6 +1475,12 @@ function _processNetworkSink(path, result) {
 
   // ── Identify fetch() / window.fetch() — verify these are actual globals via scope ──
   if (_isGlobalFetchCall(callee, path.scope)) {
+    // Trigger spec-eval program fixpoint per ECMA § 9.1.1 closure
+    // write-back so URL extraction sees side effects from any callee
+    // that mutates outer-scope captures. Idempotent — runs once per
+    // program. Only invoked from confirmed fetch sites so bundles
+    // without fetch don't pay the per-function analysis cost.
+    _specEnsureProgramFixpoint(path);
     _extractFetchCall(path, result, "fetch");
     return;
   }
