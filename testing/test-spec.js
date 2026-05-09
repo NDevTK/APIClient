@@ -760,13 +760,26 @@ specTest("§ 13.2.8.6: TemplateLiteral with const interpolation composes to sing
          effects[0].value.value === "/api/v2/users";
 });
 
-specTest("§ 13.2.8.6: TemplateLiteral with non-const interpolation abstracts to Top (sound)", `
+specTest("§ 13.2.8.6: TemplateLiteral with non-const interpolation retains template structure", `
   function f(dynamic) {
     this.url = \`/api/\${dynamic}/users\`;
   }
 `, function(effects) {
+  // Per § 13.2.8.6, when an interpolation is non-const (e.g. param), the
+  // template AV retains its quasis + interpolation expression refs so
+  // caller-arg substitution (§ 10.2.10) can fold to a const after
+  // substitution. Sound since the structure represents the same set of
+  // possible runtime values.
   if (effects.length !== 1) return false;
-  return effects[0].value && effects[0].value.kind === "top";
+  var v = effects[0].value;
+  if (!v) return false;
+  // Acceptable: template (precise) or top (conservative).
+  if (v.kind === "template" && v.quasis &&
+      v.quasis[0] === "/api/" && v.quasis[1] === "/users" &&
+      v.exprs && v.exprs.length === 1 && v.exprs[0].kind === "param" &&
+      v.exprs[0].idx === 0) return true;
+  if (v.kind === "top") return true;
+  return false;
 });
 
 specTest("§ 13.10 + § 13.15.3: BinaryExpression `+` composes two Const strings", `

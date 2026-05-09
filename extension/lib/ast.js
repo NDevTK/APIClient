@@ -7127,7 +7127,32 @@ function _specEvalLeaf(path, state, vals, effects) {
         alts = nextAlts;
       }
     }
-    if (!tlOk) return { kind: "top" };
+    if (!tlOk) {
+      // Some expression's AV wasn't a const-leaves tree. Retain template
+      // structure as a "template" AV per § 13.2.8.6 so caller-arg
+      // substitution (via _specInstantiateAv) can fill in param refs and
+      // re-fold to a const after substitution. This mirrors the binop
+      // structure preservation for BinaryExpression `+` when operands
+      // include non-const structured AVs.
+      var quasiStrs = [];
+      for (var qsi = 0; qsi < n.quasis.length; qsi++) {
+        var qs = n.quasis[qsi];
+        quasiStrs.push((qs && qs.value && typeof qs.value.cooked === "string") ? qs.value.cooked : "");
+      }
+      var exprAvs = [];
+      var anyStructured = false;
+      for (var qei = 0; qei < n.expressions.length; qei++) {
+        var qeAv = vals.get(n.expressions[qei]);
+        if (!qeAv) qeAv = { kind: "top" };
+        exprAvs.push(qeAv);
+        if (qeAv.kind === "param" || qeAv.kind === "member" || qeAv.kind === "binop" ||
+            qeAv.kind === "template" || qeAv.kind === "or") anyStructured = true;
+      }
+      if (anyStructured) {
+        return { kind: "template", quasis: quasiStrs, exprs: exprAvs };
+      }
+      return { kind: "top" };
+    }
     if (alts.length === 1) return { kind: "const", value: alts[0] };
     // _specSetUnionAv per § 13.2.8.6 distribution: each cooked-quasi
     // interleaved with each interpolated leaf is a statically-possible
@@ -8048,6 +8073,9 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
     if (av.kind === "member") { stack.push(av.obj); stack.push(av.key); }
     else if (av.kind === "or") { stack.push(av.left); stack.push(av.right); }
     else if (av.kind === "binop") { stack.push(av.left); stack.push(av.right); }
+    else if (av.kind === "template" && av.exprs) {
+      for (var tii = 0; tii < av.exprs.length; tii++) stack.push(av.exprs[tii]);
+    }
     else if (av.kind === "loop-key") { stack.push(av.src); }
     else if (av.kind === "keys-of") { stack.push(av.src); }
     else if (av.kind === "obj-lit" && av.props) {
@@ -8112,6 +8140,53 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
         subs.set(node, bopRes || { kind: "top" });
       } else {
         subs.set(node, { kind: "binop", op: node.op, left: bopL, right: bopR });
+      }
+      continue;
+    }
+    if (node.kind === "template") {
+      // Substitute interpolation AVs per § 13.2.8.6. If every interpolation
+      // resolves to a const-string-leaves tree, fold to const string(s)
+      // via cartesian product over alternatives. Otherwise retain template
+      // shape with substituted exprs for further substitution upstream.
+      var tplExprsSubbed = [];
+      var tplAllConst = true;
+      var tplAlts = [""];
+      for (var tei = 0; tei < node.exprs.length; tei++) {
+        var tplExpr = subs.get(node.exprs[tei]) || node.exprs[tei];
+        tplExprsSubbed.push(tplExpr);
+        if (tplAllConst) {
+          var tplLeaves = _avFlattenAnyConstLeaves(tplExpr);
+          if (tplLeaves === null) {
+            tplAllConst = false;
+          } else {
+            // Cross-product update over alternatives.
+            var tplNextAlts = [];
+            for (var tai = 0; tai < tplAlts.length; tai++) {
+              for (var tli = 0; tli < tplLeaves.length; tli++) {
+                tplNextAlts.push(tplAlts[tai] + node.quasis[tei] + (typeof tplLeaves[tli] === "string" ? tplLeaves[tli] : String(tplLeaves[tli])));
+              }
+            }
+            tplAlts = tplNextAlts;
+          }
+        }
+      }
+      if (tplAllConst) {
+        // Append final quasi to every alternative.
+        var tplFinal = node.quasis[node.quasis.length - 1] || "";
+        for (var taj = 0; taj < tplAlts.length; taj++) tplAlts[taj] += tplFinal;
+        if (tplAlts.length === 0) {
+          subs.set(node, { kind: "top" });
+        } else if (tplAlts.length === 1) {
+          subs.set(node, { kind: "const", value: tplAlts[0] });
+        } else {
+          var tplOrFolded = { kind: "const", value: tplAlts[0] };
+          for (var tak = 1; tak < tplAlts.length; tak++) {
+            tplOrFolded = _specSetUnionAv(tplOrFolded, { kind: "const", value: tplAlts[tak] });
+          }
+          subs.set(node, tplOrFolded);
+        }
+      } else {
+        subs.set(node, { kind: "template", quasis: node.quasis, exprs: tplExprsSubbed });
       }
       continue;
     }
