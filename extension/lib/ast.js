@@ -4982,7 +4982,18 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
       continue;
     }
     if (node.kind === "member") {
-      subs.set(node, { kind: "member", obj: subs.get(node.obj) || node.obj, key: subs.get(node.key) || node.key });
+      // Substitute obj/key; reduce if the substituted form is
+      // obj-lit + Const-key (look up the prop) per § 13.10 PropertyAccess.
+      var subObj = subs.get(node.obj) || node.obj;
+      var subKey = subs.get(node.key) || node.key;
+      if (subObj && subObj.kind === "obj-lit" && subObj.props &&
+          subKey && subKey.kind === "const" &&
+          (typeof subKey.value === "string" || typeof subKey.value === "number") &&
+          Object.prototype.hasOwnProperty.call(subObj.props, subKey.value)) {
+        subs.set(node, subObj.props[subKey.value]);
+      } else {
+        subs.set(node, { kind: "member", obj: subObj, key: subKey });
+      }
       continue;
     }
     if (node.kind === "or") {
@@ -7519,6 +7530,12 @@ function _resolveAllValues(initialPath, initialDepth) {
     if (memoAv) {
       var memoLeaves = _avFlattenStringLeaves(memoAv);
       if (memoLeaves.length > 0) return memoLeaves;
+      // Param-substitution path per § 10.2.10 FunctionDeclarationInstantiation:
+      // when memoAv references encFn's params, walk encFn's call sites and
+      // substitute each caller's arg AVs. Returns the union of string leaves
+      // across all caller substitutions.
+      var subLeaves = _resolveAvBySubstitutingCallerArgs(encFn, memoAv);
+      if (subLeaves && subLeaves.length > 0) return subLeaves;
     }
   }
   // Module-level path or memo-miss: ad-hoc evaluate. State is empty
@@ -7527,6 +7544,69 @@ function _resolveAllValues(initialPath, initialDepth) {
     var av = _specEvalExpression(initialPath, _specStateCreate({}), []);
     return av ? _avFlattenStringLeaves(av) : [];
   } catch (_) { return []; }
+}
+
+// Walk encFn's call sites via path.scope binding referencePaths.
+// For each call, evaluate its argument AVs through spec eval, then
+// substitute into avWithParamRefs via _specInstantiateAv. Project each
+// substituted result to string leaves and union. Returns string[] or
+// null when no callers / no substitutable leaves.
+function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
+  if (!funcPath || !funcPath.node || !avWithParamRefs) return null;
+  var fnBindingId = null;
+  var fnNode = funcPath.node;
+  // For FunctionDeclaration: id is the binding name.
+  if (_t.isFunctionDeclaration(fnNode) && fnNode.id) fnBindingId = fnNode.id.name;
+  // For `var X = function() {}` / `var X = function name() {}` — outer
+  // binding name is the VariableDeclarator's id; ignore inner self-name.
+  if (!fnBindingId && funcPath.parent && _t.isVariableDeclarator(funcPath.parent) &&
+      funcPath.parent.id && _t.isIdentifier(funcPath.parent.id)) {
+    fnBindingId = funcPath.parent.id.name;
+  }
+  // For `X = function() {}` assignment — outer binding.
+  if (!fnBindingId && funcPath.parent && _t.isAssignmentExpression(funcPath.parent) &&
+      funcPath.parent.right === fnNode && _t.isIdentifier(funcPath.parent.left)) {
+    fnBindingId = funcPath.parent.left.name;
+  }
+  if (!fnBindingId) return null;
+  // Look up the binding via the function's parent scope.
+  var lookupScope = funcPath.parentPath && funcPath.parentPath.scope;
+  if (!lookupScope) return null;
+  var binding = lookupScope.getBinding(fnBindingId);
+  if (!binding || !binding.referencePaths) return null;
+  var allLeaves = [];
+  for (var ri = 0; ri < binding.referencePaths.length; ri++) {
+    var ref = binding.referencePaths[ri];
+    var refParent = ref.parentPath && ref.parentPath.node;
+    if (!refParent || !_t.isCallExpression(refParent) || refParent.callee !== ref.node) continue;
+    // Evaluate each arg's AV via spec eval at the caller's enclosing function.
+    var callerEncFn = ref.getFunctionParent && ref.getFunctionParent();
+    var callerState = (callerEncFn && _t.isFunction(callerEncFn.node))
+      ? _specInitialFunctionBodyState(callerEncFn.node, callerEncFn)
+      : _specStateCreate({});
+    if (callerEncFn && _t.isFunction(callerEncFn.node)) {
+      _specAnalyzePropertyFlow(callerEncFn);
+    }
+    var callerArgAvs = [];
+    for (var ai = 0; ai < refParent.arguments.length; ai++) {
+      var argNode = refParent.arguments[ai];
+      var argAv = _specPathValMemo.get(argNode);
+      if (!argAv) {
+        try {
+          argAv = _specEvalExpression(ref.parentPath.get("arguments." + ai), callerState, []);
+        } catch (_) { argAv = null; }
+      }
+      callerArgAvs.push(argAv || { kind: "top" });
+    }
+    var substituted = _specInstantiateAv(avWithParamRefs, callerArgAvs);
+    if (substituted) {
+      var leaves = _avFlattenStringLeaves(substituted);
+      for (var li = 0; li < leaves.length; li++) {
+        if (allLeaves.indexOf(leaves[li]) < 0) allLeaves.push(leaves[li]);
+      }
+    }
+  }
+  return allLeaves.length > 0 ? allLeaves : null;
 }
 
 // Step function for the _resolveAllValues state machine. Each branch from
