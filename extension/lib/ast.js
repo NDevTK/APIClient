@@ -6945,6 +6945,24 @@ function _resolveBoundDomElementId(path, idNode) {
   return null;
 }
 
+// Apply a global URI/Base64 transform (encodeURIComponent/decodeURIComponent/
+// encodeURI/decodeURI/btoa/atob) per § 19.2.6 to a Const string. Returns
+// the transformed string or undefined if not applicable / errored.
+// Centralised between spec eval (`_specEvalLeaf`) and URL resolver
+// (`_RAV_ENC_AFTER`).
+function _applyGlobalUriTransform(name, s) {
+  if (typeof s !== "string") return undefined;
+  try {
+    if (name === "encodeURIComponent") return encodeURIComponent(s);
+    if (name === "encodeURI") return encodeURI(s);
+    if (name === "decodeURIComponent") return decodeURIComponent(s);
+    if (name === "decodeURI") return decodeURI(s);
+    if (name === "btoa") return typeof btoa !== "undefined" ? btoa(s) : Buffer.from(s, "binary").toString("base64");
+    if (name === "atob") return typeof atob !== "undefined" ? atob(s) : Buffer.from(s, "base64").toString("binary");
+  } catch (_) { return undefined; }
+  return undefined;
+}
+
 // Apply a String.prototype method to a Const string receiver, returning
 // the transformed string or undefined if not statically applicable.
 // `argLits` is an array of JS values (already extracted from AST).
