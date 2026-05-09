@@ -4591,6 +4591,84 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
   return instanceAv;
 }
 
+// § 13.3.1 ChainExpression evaluation: when an ObjectExpression method
+// (`{foo() { ... }}` or `{foo: function() { ... }}`) is invoked as
+// `obj.foo()`, `this` binds to the receiver `obj` (the obj-lit). Project
+// the surrounding ObjectExpression's literal properties into an obj-lit
+// AV so `this.X` resolves via _specMemberAccessOnObjLeaf.
+//
+// Each property's value is captured as its literal AV when statically
+// known (StringLiteral / NumericLiteral / BooleanLiteral / NullLiteral /
+// nested ObjectExpression / ArrayExpression with literal elements / etc.).
+// The method itself is excluded from `this`-shape (it's a function-ref
+// AV that doesn't yield a useful URL).
+//
+// Returns null when the function isn't an ObjectExpression method or no
+// useful sibling properties are visible.
+//
+// Per-ObjectExpression cache: same literal produces the same shape
+// regardless of which method's `this` is being resolved.
+var _specObjectMethodThisCache = new WeakMap();
+function _specBuildThisFromObjectLiteral(funcNode, funcPath) {
+  if (!funcPath || !funcPath.parentPath) return null;
+  // The function is the value of an ObjectProperty, OR is an ObjectMethod
+  // (shorthand syntax `{foo() {}}` parses as ObjectMethod whose body is
+  // a BlockStatement; the function-like node IS the property).
+  var parentN = funcPath.parent;
+  var objExprPath = null;
+  if (_t.isObjectProperty(parentN) && parentN.value === funcNode) {
+    objExprPath = funcPath.parentPath.parentPath;
+  } else if (_t.isObjectMethod(funcNode)) {
+    // ObjectMethod's parent IS the ObjectExpression directly.
+    objExprPath = funcPath.parentPath;
+  } else {
+    return null;
+  }
+  if (!objExprPath || !_t.isObjectExpression(objExprPath.node)) return null;
+  var objExprNode = objExprPath.node;
+  if (_specObjectMethodThisCache.has(objExprNode)) return _specObjectMethodThisCache.get(objExprNode);
+  _specObjectMethodThisCache.set(objExprNode, null); // cycle break
+  var props = Object.create(null);
+  for (var pi = 0; pi < objExprNode.properties.length; pi++) {
+    var p = objExprNode.properties[pi];
+    if (!p) continue;
+    if (_t.isSpreadElement(p)) continue; // unknown shape; skip
+    if (!_t.isObjectProperty(p) && !_t.isObjectMethod(p)) continue;
+    if (p.computed) continue;
+    var keyN = p.key;
+    var keyStr = null;
+    if (_t.isIdentifier(keyN)) keyStr = keyN.name;
+    else if (_t.isStringLiteral(keyN)) keyStr = keyN.value;
+    else if (_t.isNumericLiteral(keyN)) keyStr = keyN.value;
+    if (keyStr === null) continue;
+    // Skip the method itself — it would be a function-ref AV with no
+    // useful URL projection (and including would risk re-binding `this`
+    // recursively). For ObjectMethod, the property IS the method.
+    if (p === parentN || p === funcNode) continue;
+    if (_t.isObjectProperty(p) && p.value === funcNode) continue;
+    if (_t.isObjectMethod(p)) {
+      // Other methods in the same literal: capture as function-ref.
+      props[keyStr] = { kind: "function-ref", funcNode: p };
+      continue;
+    }
+    // ObjectProperty value: try literal eval via spec-eval expression
+    // walker on the property's value path. Use a fresh state since
+    // ObjectExpression can be at any scope and we don't have caller
+    // context here. NoWriteMemo to avoid polluting per-node memo.
+    var valuePath = objExprPath.get("properties." + pi + ".value");
+    if (!valuePath || !valuePath.node) continue;
+    try {
+      var pAv = _specEvalExpression(valuePath, _specStateCreate({}), [], true);
+      if (pAv) props[keyStr] = pAv;
+    } catch (_) { /* skip property when eval fails */ }
+  }
+  var hasAny = false;
+  for (var ck in props) { if (Object.prototype.hasOwnProperty.call(props, ck)) { hasAny = true; break; } }
+  var result = hasAny ? { kind: "obj-lit", props: props } : null;
+  _specObjectMethodThisCache.set(objExprNode, result);
+  return result;
+}
+
 // § 10.2.10 FunctionDeclarationInstantiation (simplified for our domain).
 // Each formal parameter is bound to its abstract param-reference; `this`
 // is bound to a constructor-derived obj-lit when the function is a class
@@ -4737,6 +4815,18 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
   if (funcPath && funcPath.get && _specCanResolveThisInstance(funcNode, funcPath)) {
     var ctorAv = _specBuildThisInstanceAv(funcNode, funcPath);
     if (ctorAv) state["this"] = ctorAv;
+  } else if (funcPath && funcPath.parentPath) {
+    // ObjectExpression method: `var obj = { url: "/api", fetch() { ... } }`
+    // Inside the method, `this` binds to the obj-lit at runtime when called
+    // as `obj.fetch()` per § 13.3.1 (ChainExpression evaluation —
+    // GetThisValue produces the receiver). Project the surrounding
+    // ObjectExpression's literal properties into a this-instance AV so
+    // `this.url` resolves via _specMemberAccessOnObjLeaf's obj-lit branch.
+    // Excludes the method itself (would be a function-ref AV); excludes
+    // computed and SpreadElement properties whose key isn't statically
+    // known (they'd contribute "top" with no useful resolution).
+    var objMethodAv = _specBuildThisFromObjectLiteral(funcNode, funcPath);
+    if (objMethodAv) state["this"] = objMethodAv;
   }
   // ECMA § 9.1.1 Closure capture pre-load: scan the function body for
   // free Identifier references that resolve via path.scope to outer
