@@ -3263,6 +3263,36 @@ specTest("WHATWG URL shadowed `URL` does NOT fire", `
   return !(av && av.kind === "const" && av.value === "https://x.com/api");
 });
 
+specTest("Fetch § 5.5: `new Request('/api', {method:'POST'}).url` → '/api'", `
+  function f() {
+    this.u = new Request("/api", { method: "POST" }).url;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api";
+});
+
+specTest("Fetch § 5.5: `new Request('/api', {method:'POST'}).method` → 'POST'", `
+  function f() {
+    this.m = new Request("/api", { method: "POST" }).method;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "POST";
+});
+
+specTest("Fetch § 5.5: `new Request('/api').method` defaults to 'GET'", `
+  function f() {
+    this.m = new Request("/api").method;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "GET";
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));

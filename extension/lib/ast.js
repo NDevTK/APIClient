@@ -3889,6 +3889,44 @@ function _specEvalLeaf(path, state, vals, effects) {
         for (var uri = 1; uri < urlResults.length; uri++) urlOr = _specLogicalOrAv(urlOr, urlResults[uri]);
         return urlOr;
       }
+      // Fetch spec § 5.5 — new Request(input [, init]) returns a Request.
+      // The .url property derives from `input` per the constructor:
+      //   - When input is a USVString → parse as URL (relative to current document)
+      //   - When input is a Request → copy its url
+      // For our analyser: when input is a Const string, the .url is the
+      // string itself (or a URL-resolved form if it's relative to a known
+      // base — we don't have document context, so emit the input as-is).
+      // The .method comes from init.method (default "GET").
+      if (ctorName === "Request" && n.arguments.length >= 1) {
+        var reqInputAv = vals.get(n.arguments[0]) || { kind: "top" };
+        var reqInputLeaves = _avFlattenStringLeaves(reqInputAv);
+        if (reqInputLeaves.length === 0) return { kind: "top" };
+        var reqInitAv = n.arguments.length >= 2 ? (vals.get(n.arguments[1]) || { kind: "top" }) : null;
+        var reqMethodAv = { kind: "const", value: "GET" };
+        if (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.method) {
+          reqMethodAv = reqInitAv.props.method;
+        }
+        var reqResults = [];
+        for (var rli = 0; rli < reqInputLeaves.length; rli++) {
+          reqResults.push({
+            kind: "obj-lit",
+            props: {
+              url: { kind: "const", value: reqInputLeaves[rli] },
+              method: reqMethodAv,
+              headers: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.headers)
+                ? reqInitAv.props.headers : { kind: "top" },
+              body: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.body)
+                ? reqInitAv.props.body : { kind: "const", value: null },
+              credentials: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.credentials)
+                ? reqInitAv.props.credentials : { kind: "const", value: "same-origin" }
+            }
+          });
+        }
+        if (reqResults.length === 1) return reqResults[0];
+        var reqOr = reqResults[0];
+        for (var rri = 1; rri < reqResults.length; rri++) reqOr = _specLogicalOrAv(reqOr, reqResults[rri]);
+        return reqOr;
+      }
       // § 24.1.1 new Map() / § 24.2.1 new Set() — return empty obj-lit
       // shape isn't appropriate; return top (their member access would
       // need .get/.set tracking we don't yet model).
