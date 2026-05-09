@@ -2223,6 +2223,17 @@ function _specGlobalThisAv() {
     resolve: { kind: "builtin-method", id: "Promise.resolve" },
     reject: { kind: "builtin-method", id: "Promise.reject" },
   };
+  // Date namespace per ECMA § 21.4 — statics. Date.now (§ 21.4.3.1)
+  // returns ms since epoch (host time, can't be statically resolved
+  // to a Const — return top per the engine's number domain). Date.parse
+  // (§ 21.4.3.2) and Date.UTC (§ 21.4.3.4) are similarly host/locale-
+  // dependent for arbitrary inputs but are statically resolvable when
+  // the spec algorithm has a deterministic answer for Const string args.
+  var dateProps = {
+    now: { kind: "builtin-method", id: "Date.now" },
+    parse: { kind: "builtin-method", id: "Date.parse" },
+    UTC: { kind: "builtin-method", id: "Date.UTC" },
+  };
   // WHATWG document host object per DOM § 4.5 — Document interface.
   var documentProps = {
     getElementById: { kind: "builtin-method", id: "document.getElementById" },
@@ -2289,6 +2300,7 @@ function _specGlobalThisAv() {
       Object: { kind: "obj-lit", props: objectProps },
       Reflect: { kind: "obj-lit", props: reflectProps },
       Promise: { kind: "obj-lit", props: promiseProps },
+      Date: { kind: "obj-lit", props: dateProps },
       document: { kind: "obj-lit", props: documentProps },
       URL: urlCtorAv,
       Request: requestCtorAv,
@@ -3530,6 +3542,37 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   if (methodId === "Reflect.preventExtensions") {
     return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  // Date.* statics per ECMA § 21.4.3.
+  if (methodId === "Date.now") {
+    // § 21.4.3.1 — returns Number ms since epoch from host time. Not
+    // statically determinable; sound answer is top in the number domain.
+    return { kind: "top" };
+  }
+  if (methodId === "Date.parse") {
+    // § 21.4.3.2 — Per spec, the result depends on host implementation
+    // for invalid/format-ambiguous strings. For our analysis, return top
+    // (a Number could be NaN or any ms value). When string is statically
+    // resolvable, the spec doesn't guarantee a deterministic answer
+    // across hosts so top is the sound answer.
+    return { kind: "top" };
+  }
+  if (methodId === "Date.UTC") {
+    // § 21.4.3.4 — returns ms since epoch for the given UTC date parts.
+    // Deterministic when all args are Const numbers.
+    var dateUtcArgs = [];
+    var dateUtcAllConst = argAvs.length >= 1;
+    for (var dui = 0; dui < argAvs.length; dui++) {
+      if (!argAvs[dui] || argAvs[dui].kind !== "const" || typeof argAvs[dui].value !== "number") {
+        dateUtcAllConst = false; break;
+      }
+      dateUtcArgs.push(argAvs[dui].value);
+    }
+    if (dateUtcAllConst) {
+      try { return { kind: "const", value: Date.UTC.apply(Date, dateUtcArgs) }; }
+      catch (_) { return { kind: "top" }; }
+    }
+    return { kind: "top" };
   }
   // Array.* statics per § 23.1.2.
   if (methodId === "Array.isArray") {

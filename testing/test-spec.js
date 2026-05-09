@@ -4084,6 +4084,27 @@ specTest("§ 28.1.6 Reflect.get: array-lit length is the elements count", `
   return av && av.kind === "const" && av.value === 3;
 });
 
+specTest("§ 21.4.3.4 Date.UTC: all-Const-number args resolve to deterministic ms", `
+  function f() {
+    this.ms = Date.UTC(2026, 0, 1);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Date.UTC(2026, 0, 1) is deterministic (1767225600000 ms).
+  return av && av.kind === "const" && av.value === Date.UTC(2026, 0, 1);
+});
+
+specTest("§ 21.4.3.1 Date.now: host-time, top per spec", `
+  function f() {
+    this.t = Date.now();
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "top";
+});
+
 specTest("§ 28.1.13 Reflect.ownKeys: returns array-lit of obj-lit keys", `
   function f() {
     var o = { foo: 1, bar: 2 };
