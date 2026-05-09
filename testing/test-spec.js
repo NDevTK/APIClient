@@ -3374,6 +3374,20 @@ specTest("HTML5 § 8.2.3 inline handler: spec eval binds DOM-derived el.href via
   return av && av.kind === "const" && av.value === "/hide?id=5";
 }, { domContext: { inlineHandlers: { hide5: { handlers: [{ event: "click", body: "hidestory(this)" }], elementAttrs: { href: "/hide?id=5", src: null, action: null, dataAttrs: null } } } } });
 
+specTest("HTML5 § 8.2.3: nested FunctionDeclaration shadowing global name does NOT bind to inline handler", `
+  function outer() {
+    function hidestory(el) { return el.href; }  // nested shadow
+    this.u = hidestory({ href: "local" });
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // The inner `hidestory` is NOT the global — inline-handler binding
+  // must not fire on it. The result should reflect the local call's
+  // arg ({href:"local"}), not the DOM-context "/hide?id=5".
+  return !(av && av.kind === "const" && av.value === "/hide?id=5");
+}, { domContext: { inlineHandlers: { hide5: { handlers: [{ event: "click", body: "hidestory(this)" }], elementAttrs: { href: "/hide?id=5", src: null, action: null, dataAttrs: null } } } } });
+
 specTest("WHATWG DOM § 4.2.6: spec eval `document.getElementById('X').href` from _domContext.byId", `
   function f() {
     this.u = document.getElementById("hide5").href;

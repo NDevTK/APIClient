@@ -2108,16 +2108,26 @@ function _specStateClone(state) {
 // is implicit (the analyser checks `ThisExpression` directly via the
 // `{kind:"this"}` constructor in expression eval — no explicit "this"
 // state slot is required).
-function _specInitialFunctionBodyState(funcNode) {
+function _specInitialFunctionBodyState(funcNode, funcPath) {
   var state = _specStateCreate();
   if (!funcNode || !funcNode.params) return state;
-  // Inline-handler synthetic-caller binding: when this function is the
-  // target of one or more inline handler call sites collected from the
-  // page DOM (`onclick="hidestory(this)"` etc.), substitute its params
-  // with the DOM-derived element AVs from each call site. Multiple call
-  // sites produce an or-tree per param. Only fires when the function
-  // has a binding name we can match against _inlineHandlerCallSites.
-  var ihName = funcNode.id && funcNode.id.name;
+  // Inline-handler synthetic-caller binding per HTML5 § 8.2.3: inline
+  // event-handler attributes are evaluated in a scope chain whose top
+  // is the document's global scope. The function `name` referenced in
+  // the handler body resolves to the GLOBAL binding — i.e. a top-level
+  // FunctionDeclaration in the page's script. We must verify both:
+  //   (1) funcNode is a FunctionDeclaration with an id (named).
+  //   (2) Its name resolves at the program-root scope to THIS exact node
+  //       (not a nested shadow with the same name).
+  // Only then is this the function the inline handler binds to.
+  var ihName = null;
+  if (funcNode.type === "FunctionDeclaration" && funcNode.id && funcPath && funcPath.scope) {
+    var rootScope = funcPath.scope.getProgramParent ? funcPath.scope.getProgramParent() : funcPath.scope;
+    var rootBinding = rootScope.getBinding(funcNode.id.name);
+    if (rootBinding && rootBinding.path && rootBinding.path.node === funcNode) {
+      ihName = funcNode.id.name;
+    }
+  }
   var ihCallers = ihName ? _inlineHandlerCallSites[ihName] : null;
   for (var i = 0; i < funcNode.params.length; i++) {
     var p = funcNode.params[i];
@@ -3202,7 +3212,7 @@ function _specAnalyzePropertyFlow(funcPath) {
   // (not a sibling analysis whose own items were already pending).
   var hofQueueBaseLen = _hofPendingDispatches.length;
   var returnAvBaseLen = _specReturnAvAccum.length;
-  var entryState = _specInitialFunctionBodyState(fnNode);
+  var entryState = _specInitialFunctionBodyState(fnNode, funcPath);
   var effects = [];
   var stack;
   if (_t.isBlockStatement(bodyPath.node)) {

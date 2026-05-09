@@ -30,8 +30,22 @@ var bundlePath = path.join(rootDir, "testing/harness-dumps", bundleName);
 var code = fs.readFileSync(bundlePath, "utf8");
 console.log("Analyzing " + bundleName + " (" + (code.length / 1024).toFixed(1) + " KB)");
 
+// Optional sibling DOM-context JSON: testing/harness-dumps/<bundle>.dom.json
+// containing { metaTags, byId, inlineHandlers } simulates what content.js
+// scrapes from the live page. Skipped silently when absent.
+var domCtxPath = bundlePath + ".dom.json";
+var opts = null;
+if (fs.existsSync(domCtxPath)) {
+  try {
+    opts = { domContext: JSON.parse(fs.readFileSync(domCtxPath, "utf8")) };
+    console.log("  + DOM context: " + Object.keys(opts.domContext).join(", "));
+  } catch (e) {
+    console.log("  ! DOM context parse error: " + e.message);
+  }
+}
+
 var t0 = Date.now();
-var result = analyzeJSBundle(code, "https://test.example.com/" + bundleName, true);
+var result = analyzeJSBundle(code, "https://test.example.com/" + bundleName, true, opts);
 var t1 = Date.now();
 
 console.log("\n=== Analysis: " + (t1 - t0) + "ms ===");
