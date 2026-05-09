@@ -6870,6 +6870,31 @@ function _ravStep(F) {
       case _RAV_INIT: {
   var skip = L.branchSkip || 0;
 
+  // BRANCH 0: DOM virtual-context lookup. JS reads of static markup
+  // values resolve via the per-analysis _domContext (extracted from
+  // the page's HTML by the host). Patterns:
+  //   document.querySelector("meta[name=X]").content   → metaTags[X]
+  //   document.querySelector("meta[name=X]").getAttribute("content")
+  //                                                   → metaTags[X]
+  // The `document` identifier is scope-checked unshadowed per § 8.1.1.
+  if (skip < 1 && _t.isMemberExpression(node) && !node.computed &&
+      _t.isIdentifier(node.property, { name: "content" }) &&
+      _t.isCallExpression(node.object) &&
+      _t.isMemberExpression(node.object.callee) && !node.object.callee.computed &&
+      _t.isIdentifier(node.object.callee.object, { name: "document" }) &&
+      !path.scope.getBinding("document") &&
+      _t.isIdentifier(node.object.callee.property, { name: "querySelector" }) &&
+      node.object.arguments.length === 1 &&
+      _t.isStringLiteral(node.object.arguments[0])) {
+    var qsSelector = node.object.arguments[0].value;
+    // Match `meta[name=X]` selector — both quoted and unquoted name attr.
+    var metaMatch = qsSelector.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
+    if (metaMatch && _domContext && _domContext.metaTags &&
+        Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaMatch[1])) {
+      return { done: [_domContext.metaTags[metaMatch[1]]] };
+    }
+  }
+
   // BRANCH 1: String-encoding transforms (encodeURIComponent / encodeURI /
   // decodeURIComponent / decodeURI / btoa / atob). Pure ECMAScript: when
   // the argument resolves to a string, apply the transform and return the
