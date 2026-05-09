@@ -2795,6 +2795,35 @@ specTest("§ 13.14: `0 ?? 'default'` resolves to Const(0) (NOT nullish)", `
   return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === 0;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 14.3.2 / § 15.2 NamedEvaluation — VariableDeclarator wrapping a
+// named function expression: outer `var X` binding takes precedence
+// over the inner self-name `Y` for caller resolution.
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 15.2 var X = function Y(t) — outer binding for callers ===\n");
+
+test("§ 15.2: `var Bl = function e(t)` resolves t through Bl's call sites, not e's", `
+  (function(){
+    var jl = function(p) { return p.url; };
+    var Bl = function e(t) {
+      var u = jl(t);
+      window.fetch(u);
+    };
+    Bl({url: "/api/named-fn-expr"});
+  })();
+`, function(result) {
+  // Without the fix, the resolver looks at the inner self-name `e`'s
+  // referencePaths — `e` is only used recursively (or not at all),
+  // so callers aren't found and `t.url` doesn't resolve.
+  // With the fix, the outer `Bl` binding's call sites are scanned,
+  // and `t` substitutes with `{url: "/api/named-fn-expr"}`.
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  for (var i = 0; i < result.fetchCallSites.length; i++) {
+    if (result.fetchCallSites[i].url === "/api/named-fn-expr") return true;
+  }
+  return false;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
