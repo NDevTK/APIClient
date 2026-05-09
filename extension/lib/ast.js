@@ -4654,6 +4654,17 @@ function _specCanResolveThisInstance(funcNode, funcPath) {
       var fieldGrandparent = funcPath.parentPath.parentPath;
       if (fieldGrandparent && _t.isClassBody(fieldGrandparent.node)) return true;
     }
+    // ArrowFunctionExpression assigned to `this.X` inside a class method's
+    // body (commonly seen in constructors as `this.handler = () => …`).
+    // Per § 15.3.5.4 the arrow captures lexical this; the enclosing class
+    // method's `this` is the instance. Walk up to find a ClassMethod
+    // ancestor; if found, the arrow's this is that class's instance.
+    var ancestorFn = funcPath.getFunctionParent && funcPath.getFunctionParent();
+    if (ancestorFn && ancestorFn.node &&
+        (_t.isClassMethod(ancestorFn.node) || _t.isClassPrivateMethod(ancestorFn.node)) &&
+        ancestorFn.parentPath && _t.isClassBody(ancestorFn.parent)) {
+      return true;
+    }
   }
   return _specFindConstructorForMethod(funcNode, funcPath) !== null;
 }
@@ -4696,6 +4707,18 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
     if (maybeIsField && maybeFieldNode.value === funcNode &&
         funcPath.parentPath.parentPath && _t.isClassBody(funcPath.parentPath.parent)) {
       classBodyPath = funcPath.parentPath.parentPath;
+    }
+  }
+  // Nested ArrowFunctionExpression inside a class method body (per
+  // § 15.3.5.4 — arrow's `this` is lexically captured from the enclosing
+  // function, which is the class method whose `this` is the instance).
+  // Walk up to the nearest ClassMethod ancestor.
+  if (!classBodyPath && _t.isArrowFunctionExpression(funcNode) && funcPath && funcPath.getFunctionParent) {
+    var ancFn = funcPath.getFunctionParent();
+    if (ancFn && ancFn.node &&
+        (_t.isClassMethod(ancFn.node) || _t.isClassPrivateMethod(ancFn.node)) &&
+        ancFn.parentPath && _t.isClassBody(ancFn.parent)) {
+      classBodyPath = ancFn.parentPath;
     }
   }
   var ctorPath = _specFindConstructorForMethod(funcNode, funcPath);
