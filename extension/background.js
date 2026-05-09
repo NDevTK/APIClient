@@ -5124,15 +5124,21 @@ function handleContentMessage(msg, sender) {
   }
 
   // CONTENT_DOM: snapshot of static page DOM context (meta tags, data-*
-  // attrs, hrefs/srcs/actions extracted from the rendered HTML). Cached
-  // per-tab; passed into AST_ANALYZE so virtual-DOM resolution can close
-  // gaps where JS reads markup-set values (e.g.
+  // attrs, hrefs/srcs/actions/forms extracted from the rendered HTML).
+  // Cached per-tab; passed into AST_ANALYZE so virtual-DOM resolution
+  // can close gaps where JS reads markup-set values (e.g.
   // document.querySelector("meta[name=X]").content). Per user directive:
   // "HTML is also in-scope... pages should be reviewed with all the
-  // javascript files plus DOM."
+  // javascript files plus DOM" + "DOM work likely replaces the HTML form
+  // extraction" — so forms inside the DOM context are routed to the
+  // existing form handler instead of going through a separate
+  // CONTENT_FORMS message.
   if (msg.type === "CONTENT_DOM") {
     if (msg.domContext) {
       tab.domContext = msg.domContext;
+      if (Array.isArray(msg.domContext.forms) && msg.domContext.forms.length > 0) {
+        _handleFormMetadata(tabId, msg.domContext.forms, sender);
+      }
     }
   }
 }

@@ -502,28 +502,20 @@
     }
   }
 
-  var forms = scanForms();
-  var formHash = _simpleHash(JSON.stringify(forms));
-  if (formHash !== _lastFormScanHash) {
-    _lastFormScanHash = formHash;
-    if (forms.length > 0) {
-      chrome.runtime.sendMessage({
-        type: "CONTENT_FORMS",
-        forms: forms,
-        origin: location.origin,
-        pageUrl: location.href,
-      });
-    }
-  }
+  // Forms are now collected as part of the unified DOM scan (CONTENT_DOM
+  // below). Background routes msg.domContext.forms into the same form
+  // handler that previously consumed CONTENT_FORMS — one DOM walk
+  // instead of two. Per user directive: "DOM work likely replaces the
+  // HTML form extraction".
 
-  // Page DOM context — meta tags, data-* attrs, hrefs/srcs/actions —
-  // for the AST analyser's virtual DOM resolution. Per user directive:
-  // "what DOM gets sent in the first place [is] useful for learning".
-  // Walks the live DOM (more reliable than re-parsing outerHTML), but
-  // shape matches extractDomContextFromHtml's output so the analyser
-  // consumes either uniformly.
+  // Page DOM context — meta tags, data-* attrs, hrefs/srcs/actions, and
+  // forms — for the AST analyser's virtual DOM resolution. Per user
+  // directive: "what DOM gets sent in the first place [is] useful for
+  // learning". Walks the live DOM (more reliable than re-parsing
+  // outerHTML), but shape matches extractDomContextFromHtml's output
+  // (plus richer form metadata) so the analyser and consumers see both.
   function _scanDomContext() {
-    var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {} };
+    var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {}, forms: [] };
     try {
       // <meta name=X content=Y>
       var metas = document.querySelectorAll("meta[name][content]");
@@ -558,6 +550,14 @@
         if (sv) ctx.srcs[ei] = sv;
         var av = el.getAttribute("action");
         if (av) ctx.actions[ei] = av;
+      }
+      // Forms — same metadata scanForms() previously collected, now part
+      // of the unified DOM context. The user noted: "This DOM work
+      // likely replaces the HTML form extraction".
+      var forms = document.querySelectorAll("form");
+      for (var fi = 0; fi < forms.length; fi++) {
+        var fmeta = _extractFormMetadata(forms[fi]);
+        if (fmeta) ctx.forms.push(fmeta);
       }
     } catch (e) { /* DOM access failures are silent */ }
     return ctx;
