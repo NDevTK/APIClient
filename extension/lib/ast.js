@@ -6254,10 +6254,37 @@ function _specVariableDeclaratorBind(idNode, initAv, state) {
         var ae = id.elements[ai];
         if (!ae) continue;
         // § 13.10 reduce eagerly when src is array-lit — bind the
-        // element's actual value rather than a `member` AV.
+        // element's actual value rather than a `member` AV. Distribute
+        // over or-tree of array-lits per spec alternation: each leaf's
+        // [ai] element joined produces the destructured slot's AV.
+        // Required for Map iterator destructuring `for ([k, v] of m)`
+        // where m's entries form an or-tree of [k_i, v_i] pairs.
         var boundAvA;
         if (srcAvA.kind === "array-lit" && srcAvA.elements && ai < srcAvA.elements.length) {
           boundAvA = srcAvA.elements[ai];
+        } else if (srcAvA.kind === "or") {
+          var orLeavesA = _avFlattenOrLeaves(srcAvA);
+          var allLeavesArr = orLeavesA && orLeavesA.length > 0;
+          var perLeafElems = [];
+          if (allLeavesArr) {
+            for (var olai = 0; olai < orLeavesA.length; olai++) {
+              var leafA = orLeavesA[olai];
+              if (leafA && leafA.kind === "array-lit" && leafA.elements && ai < leafA.elements.length) {
+                perLeafElems.push(leafA.elements[ai]);
+              } else {
+                allLeavesArr = false;
+                break;
+              }
+            }
+          }
+          if (allLeavesArr && perLeafElems.length > 0) {
+            boundAvA = perLeafElems[0];
+            for (var pleq = 1; pleq < perLeafElems.length; pleq++) {
+              boundAvA = _specSetUnionAv(boundAvA, perLeafElems[pleq]);
+            }
+          } else {
+            boundAvA = { kind: "member", obj: srcAvA, key: { kind: "const", value: ai } };
+          }
         } else {
           boundAvA = { kind: "member", obj: srcAvA, key: { kind: "const", value: ai } };
         }
@@ -6292,14 +6319,33 @@ function _specVariableDeclaratorBind(idNode, initAv, state) {
 function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
   var bodyState = _specStateClone(preState);
   var loopVarName = null;
+  var loopVarPattern = null;
   var left = stmtNode.left;
   if (left && left.type === "VariableDeclaration" && left.declarations.length === 1 &&
-      left.declarations[0].id && left.declarations[0].id.type === "Identifier") {
-    loopVarName = left.declarations[0].id.name;
+      left.declarations[0].id) {
+    var declId = left.declarations[0].id;
+    if (declId.type === "Identifier") {
+      loopVarName = declId.name;
+    } else if (declId.type === "ObjectPattern" || declId.type === "ArrayPattern") {
+      // § 14.7.5 / § 14.3.3: destructured loop var binds multiple names
+      // from the iterated value's shape per iteration. Defer to pattern
+      // descent below using the iterated AV.
+      loopVarPattern = declId;
+    }
   } else if (left && left.type === "Identifier") {
     loopVarName = left.name;
+  } else if (left && (left.type === "ObjectPattern" || left.type === "ArrayPattern")) {
+    loopVarPattern = left;
   }
-  if (!loopVarName) return bodyState;
+  if (!loopVarName && !loopVarPattern) return bodyState;
+  // Helper: bind the per-iteration AV to either a simple name or descend
+  // into a destructuring pattern (Object/Array). Reuses the existing
+  // _specVariableDeclaratorBind logic which already handles nested
+  // patterns + default values + member-access reduction per § 14.3.3.
+  function bindLoopVar(perIterAv) {
+    if (loopVarName) bodyState[loopVarName] = perIterAv;
+    else if (loopVarPattern) _specVariableDeclaratorBind(loopVarPattern, perIterAv, bodyState);
+  }
   // Per § 14.7.5: for-in yields string KEYS (EnumerateObjectProperties);
   // for-of yields VALUES via iterator protocol (§ 7.4.6 IteratorStep /
   // § 7.4.7 IteratorValue). Distinguish by stmt kind so each binds the
@@ -6312,7 +6358,7 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
       for (var oei = 1; oei < rhsAv.elements.length; oei++) {
         ofVal = _specLogicalOrAv(ofVal, rhsAv.elements[oei]);
       }
-      bodyState[loopVarName] = ofVal;
+      bindLoopVar(ofVal);
       return bodyState;
     }
     if (rhsAv && rhsAv.kind === "set-instance" && rhsAv.items && rhsAv.items.length > 0) {
@@ -6321,7 +6367,7 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
       for (var sii = 1; sii < rhsAv.items.length; sii++) {
         siVal = _specLogicalOrAv(siVal, rhsAv.items[sii]);
       }
-      bodyState[loopVarName] = siVal;
+      bindLoopVar(siVal);
       return bodyState;
     }
     if (rhsAv && rhsAv.kind === "map-instance" && rhsAv.entries && rhsAv.entries.length > 0) {
@@ -6334,7 +6380,7 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
       for (var mep = 1; mep < mePairs.length; mep++) {
         mePair = _specLogicalOrAv(mePair, mePairs[mep]);
       }
-      bodyState[loopVarName] = mePair;
+      bindLoopVar(mePair);
       return bodyState;
     }
     // Const string source → § 22.1.5.1 String iterator yields each
@@ -6343,21 +6389,21 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
     if (rhsAv && rhsAv.kind === "const" && typeof rhsAv.value === "string") {
       var codePoints = Array.from(rhsAv.value);
       if (codePoints.length === 0) {
-        bodyState[loopVarName] = { kind: "top" };
+        bindLoopVar({ kind: "top" });
         return bodyState;
       }
       var cpVal = { kind: "const", value: codePoints[0] };
       for (var cpi = 1; cpi < codePoints.length; cpi++) {
         cpVal = _specLogicalOrAv(cpVal, { kind: "const", value: codePoints[cpi] });
       }
-      bodyState[loopVarName] = cpVal;
+      bindLoopVar(cpVal);
       return bodyState;
     }
-    bodyState[loopVarName] = { kind: "top" };
+    bindLoopVar({ kind: "top" });
     return bodyState;
   }
   // for-in: loop var is a STRING KEY drawn from rhsAv.
-  bodyState[loopVarName] = { kind: "loop-key", src: rhsAv };
+  bindLoopVar({ kind: "loop-key", src: rhsAv });
   return bodyState;
 }
 
