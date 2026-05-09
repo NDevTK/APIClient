@@ -3543,6 +3543,38 @@ specTest("ECMA § 13.1.3: identifier resolves to const-bind init via path.scope.
   return av && av.kind === "const" && av.value === "/api/v2";
 });
 
+specTest("ECMA § 15.7: `new MyClass(arg)` instantiates obj-lit from constructor's this.X = arg assignments", `
+  class MyService {
+    constructor(url) {
+      this.endpoint = url;
+    }
+  }
+  function f() {
+    var svc = new MyService("/api/v3");
+    this.u = svc.endpoint;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api/v3";
+});
+
+specTest("ECMA § 15.7: `new MyClass()` with literal-only constructor body", `
+  class Constants {
+    constructor() {
+      this.url = "/api/static";
+    }
+  }
+  function f() {
+    var c = new Constants();
+    this.u = c.url;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api/static";
+});
+
 specTest("ECMA § 13.1.3: reassigned var does NOT resolve via init (binding.constant=false)", `
   var URL_PREFIX = "/api/v2";
   URL_PREFIX = "mutated";

@@ -4043,6 +4043,72 @@ function _specEvalLeaf(path, state, vals, effects) {
     //                       array-lit of args; zero-arg → empty.
     //   § 22.2.1 RegExp — abstract to top (regex semantics not modeled).
     //   Other classes — top.
+    // ECMA § 15.7 ClassDeclaration / ClassExpression instantiation:
+    // `new MyClass(args)` — when callee resolves via path.scope to a
+    // ClassDeclaration/ClassExpression, model the instance as an obj-lit
+    // built from the constructor's `this.X = ...` assignments. Sound
+    // approximation: only literal/param-derived this.X values populate.
+    if (_t.isIdentifier(n.callee)) {
+      var classBinding = path.scope.getBinding(n.callee.name);
+      if (classBinding && classBinding.path && classBinding.path.node &&
+          (_t.isClassDeclaration(classBinding.path.node) ||
+           (_t.isVariableDeclarator(classBinding.path.node) && classBinding.path.node.init &&
+            _t.isClassExpression(classBinding.path.node.init)))) {
+        var classNode = _t.isClassDeclaration(classBinding.path.node)
+          ? classBinding.path.node
+          : classBinding.path.node.init;
+        // Find constructor.
+        var ctorMethod = null;
+        if (classNode.body && classNode.body.body) {
+          for (var cmi = 0; cmi < classNode.body.body.length; cmi++) {
+            var member = classNode.body.body[cmi];
+            if (_t.isClassMethod(member) && member.kind === "constructor") {
+              ctorMethod = member;
+              break;
+            }
+          }
+        }
+        // Initial instance obj-lit (empty if no constructor).
+        var instProps = Object.create(null);
+        // Walk constructor's body for `this.X = literalOrParamRef`.
+        // (Iterative over BlockStatement.body — no recursion.)
+        if (ctorMethod && ctorMethod.body && _t.isBlockStatement(ctorMethod.body)) {
+          var ctorParamNames = [];
+          for (var cpi = 0; cpi < ctorMethod.params.length; cpi++) {
+            var cp = ctorMethod.params[cpi];
+            if (_t.isIdentifier(cp)) ctorParamNames.push(cp.name);
+            else if (_t.isAssignmentPattern(cp) && _t.isIdentifier(cp.left)) ctorParamNames.push(cp.left.name);
+            else ctorParamNames.push(null);
+          }
+          var bs = ctorMethod.body.body;
+          for (var bsi = 0; bsi < bs.length; bsi++) {
+            var bsStmt = bs[bsi];
+            if (!_t.isExpressionStatement(bsStmt)) continue;
+            var bsExpr = bsStmt.expression;
+            if (!_t.isAssignmentExpression(bsExpr) || bsExpr.operator !== "=") continue;
+            if (!_t.isMemberExpression(bsExpr.left) || bsExpr.left.computed) continue;
+            if (!_t.isThisExpression(bsExpr.left.object)) continue;
+            if (!_t.isIdentifier(bsExpr.left.property)) continue;
+            var thisKey = bsExpr.left.property.name;
+            // RHS resolution — direct literal or param ref.
+            var rhs = bsExpr.right;
+            var rhsAv = null;
+            if (_t.isStringLiteral(rhs)) rhsAv = { kind: "const", value: rhs.value };
+            else if (_t.isNumericLiteral(rhs)) rhsAv = { kind: "const", value: rhs.value };
+            else if (_t.isBooleanLiteral(rhs)) rhsAv = { kind: "const", value: rhs.value };
+            else if (_t.isNullLiteral(rhs)) rhsAv = { kind: "const", value: null };
+            else if (_t.isIdentifier(rhs)) {
+              var rhsParamIdx = ctorParamNames.indexOf(rhs.name);
+              if (rhsParamIdx >= 0 && rhsParamIdx < n.arguments.length) {
+                rhsAv = vals.get(n.arguments[rhsParamIdx]);
+              }
+            }
+            if (rhsAv) instProps[thisKey] = rhsAv;
+          }
+        }
+        return { kind: "obj-lit", props: instProps };
+      }
+    }
     if (_t.isIdentifier(n.callee) && !path.scope.getBinding(n.callee.name)) {
       var ctorName = n.callee.name;
       // § 23.1.1.1 Array(...values)
