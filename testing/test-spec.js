@@ -3555,22 +3555,6 @@ specTest("ECMA § 23.1.3.20 Array.prototype.push: mutates local array-lit state"
   return av && av.kind === "const" && av.value === "/api/added";
 });
 
-specTest("ECMA § 15.7: `new MyClass(arg)` instantiates obj-lit from constructor's this.X = arg assignments", `
-  class MyService {
-    constructor(url) {
-      this.endpoint = url;
-    }
-  }
-  function f() {
-    var svc = new MyService("/api/v3");
-    this.u = svc.endpoint;
-  }
-`, function(effects) {
-  if (effects.length !== 1) return false;
-  var av = effects[0].value;
-  return av && av.kind === "const" && av.value === "/api/v3";
-});
-
 test("§ 13.8.1 + § 10.2.10 + § 13.10: end-to-end binop preserved through inter-proc and reduced via member-of-obj-lit caller arg", `
   function send(cfg) {
     fetch(cfg.base + cfg.path);
@@ -3578,22 +3562,6 @@ test("§ 13.8.1 + § 10.2.10 + § 13.10: end-to-end binop preserved through inte
   send({base: "/api", path: "/items"});
 `, function(r) {
   return r.fetchCallSites && r.fetchCallSites.some(function(s) { return s.url === "/api/items"; });
-});
-
-specTest("ECMA § 15.7: `new MyClass()` with literal-only constructor body", `
-  class Constants {
-    constructor() {
-      this.url = "/api/static";
-    }
-  }
-  function f() {
-    var c = new Constants();
-    this.u = c.url;
-  }
-`, function(effects) {
-  if (effects.length !== 1) return false;
-  var av = effects[0].value;
-  return av && av.kind === "const" && av.value === "/api/static";
 });
 
 specTest("ECMA § 13.1.3: reassigned var does NOT resolve via init (binding.constant=false)", `

@@ -2092,6 +2092,105 @@ function _resolveIIFEReturnedProperty(callExprPath, propName) {
 // State is a plain object whose keys are variable names. We use a
 // null-prototype object so a variable named "toString" / "constructor"
 // doesn't collide with Object prototype methods.
+// Built-in prototype methods modeled as `{kind:"builtin-method", id}`
+// AVs. Dispatched by _specApplyBuiltinMethod (called from spec eval's
+// CallExpression handler when the callee resolves to one of these).
+// Centralised registry — ONE place where all built-in method semantics
+// live, so per-method shape matching across spec eval is replaced by
+// uniform prototype lookup + table dispatch.
+//
+// Built-in IDs:
+//   "Array.prototype.push"       § 23.1.3.20 — mutates `this`, returns new length
+//   "Array.prototype.pop"        § 23.1.3.19 — mutates, returns popped element
+//   "Array.prototype.shift"      § 23.1.3.27 — mutates, returns first element
+//   "Array.prototype.unshift"    § 23.1.3.34 — mutates, returns new length
+// (Pure / non-mutating array methods like join/concat/slice are still
+// dispatched via the existing pattern elsewhere; they fold over per-leaf
+// distribution and don't need state mutation.)
+var _SPEC_ARRAY_PROTO_AV = null;
+function _specArrayPrototypeAv() {
+  if (!_SPEC_ARRAY_PROTO_AV) {
+    _SPEC_ARRAY_PROTO_AV = {
+      kind: "obj-lit",
+      props: {
+        push: { kind: "builtin-method", id: "Array.prototype.push" },
+        pop: { kind: "builtin-method", id: "Array.prototype.pop" },
+        shift: { kind: "builtin-method", id: "Array.prototype.shift" },
+        unshift: { kind: "builtin-method", id: "Array.prototype.unshift" },
+      }
+    };
+  }
+  return _SPEC_ARRAY_PROTO_AV;
+}
+
+// Return the prototype AV for a given AV kind, or null. Per ECMA-262
+// each value has an implicit [[Prototype]]; member access falls through
+// to it when own-property lookup misses. Currently models Array.prototype
+// only; further prototypes (String.prototype etc.) can be added to the
+// same registry without scattered shape matches.
+function _specGetPrototypeOfAv(av) {
+  if (!av) return null;
+  if (av.kind === "array-lit") return _specArrayPrototypeAv();
+  return null;
+}
+
+// Apply a built-in prototype method per its spec algorithm. Receives:
+//   methodId   — "Array.prototype.push" etc.
+//   recvAv     — the `this` value (already resolved via member access)
+//   recvName   — the receiver Identifier name when the call expression
+//                is `recvName.method(...)` (so state mutation can rebind
+//                state[recvName]); null for non-Identifier receivers.
+//   argAvs     — caller-arg AbstractValues
+//   state      — spec eval state map (mutable for state-evolving methods)
+// Returns the call's result AV per the method's spec algorithm.
+function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
+  // § 23.1.3.20 Array.prototype.push: appends arguments to `this`,
+  // returns the new length. Models state mutation when receiver is a
+  // tracked Identifier and resolves to array-lit.
+  if (methodId === "Array.prototype.push") {
+    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    var newPushElements = (recvAv.elements || []).slice();
+    for (var pi = 0; pi < argAvs.length; pi++) newPushElements.push(argAvs[pi] || { kind: "top" });
+    var newPushArr = { kind: "array-lit", elements: newPushElements };
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = newPushArr;
+    }
+    return { kind: "const", value: newPushElements.length };
+  }
+  // § 23.1.3.19 Array.prototype.pop: removes and returns last element.
+  if (methodId === "Array.prototype.pop") {
+    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    var popElements = (recvAv.elements || []).slice();
+    var popped = popElements.length > 0 ? popElements.pop() : { kind: "const", value: undefined };
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = { kind: "array-lit", elements: popElements };
+    }
+    return popped || { kind: "const", value: undefined };
+  }
+  // § 23.1.3.27 Array.prototype.shift: removes and returns first element.
+  if (methodId === "Array.prototype.shift") {
+    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    var shiftElements = (recvAv.elements || []).slice();
+    var shifted = shiftElements.length > 0 ? shiftElements.shift() : { kind: "const", value: undefined };
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = { kind: "array-lit", elements: shiftElements };
+    }
+    return shifted || { kind: "const", value: undefined };
+  }
+  // § 23.1.3.34 Array.prototype.unshift: prepends, returns new length.
+  if (methodId === "Array.prototype.unshift") {
+    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    var usElements = [];
+    for (var ui = 0; ui < argAvs.length; ui++) usElements.push(argAvs[ui] || { kind: "top" });
+    for (var uei = 0; uei < (recvAv.elements || []).length; uei++) usElements.push(recvAv.elements[uei]);
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = { kind: "array-lit", elements: usElements };
+    }
+    return { kind: "const", value: usElements.length };
+  }
+  return { kind: "top" };
+}
+
 function _specStateCreate(initBindings) {
   var s = Object.create(null);
   if (initBindings) {
@@ -2380,6 +2479,28 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
       if (sIdxAv && sIdxAv.kind === "const" && typeof sIdxAv.value === "number" &&
           Number.isInteger(sIdxAv.value) && sIdxAv.value >= 0 && sIdxAv.value < objAv.value.length) {
         return { kind: "const", value: objAv.value[sIdxAv.value] };
+      }
+    }
+  }
+  // ECMA § 13.10 PropertyAccess fallback through the [[Prototype]] chain:
+  // when own-property lookup misses on an obj-lit/array-lit, walk to
+  // the AV's prototype (Array.prototype, etc.). Returns the prototype
+  // method AV if found. This is the spec-grounded path replacing
+  // per-method shape-matched dispatch.
+  if (!n.computed && _t.isIdentifier(n.property)) {
+    var protoMemberName = n.property.name;
+    var protoAv = _specGetPrototypeOfAv(objAv);
+    if (protoAv && protoAv.kind === "obj-lit" && protoAv.props &&
+        Object.prototype.hasOwnProperty.call(protoAv.props, protoMemberName)) {
+      return protoAv.props[protoMemberName];
+    }
+  } else if (n.computed) {
+    var protoKey = vals.get(n.property);
+    if (protoKey && protoKey.kind === "const" && typeof protoKey.value === "string") {
+      var protoAvC = _specGetPrototypeOfAv(objAv);
+      if (protoAvC && protoAvC.kind === "obj-lit" && protoAvC.props &&
+          Object.prototype.hasOwnProperty.call(protoAvC.props, protoKey.value)) {
+        return protoAvC.props[protoKey.value];
       }
     }
   }
@@ -2854,11 +2975,15 @@ function _specPostorderExprPaths(rootPath) {
       // Argument expressions get evaluated (their property writes
       // matter for effects). The callee's MemberExpression's `object`
       // also needs eval so String/Object built-in receivers can be
-      // identified per § 13.3.6 / § 22.1.3 dispatch.
+      // identified per § 13.3.6 / § 22.1.3 dispatch. The callee
+      // MemberExpression itself is also pushed so its AV (which may
+      // resolve through the [[Prototype]] chain to a built-in method
+      // per § 13.10) is available for dispatch in CallExpression eval.
       for (var ai = n.arguments.length - 1; ai >= 0; ai--) {
         stack.push(p.get("arguments." + ai));
       }
       if (_t.isMemberExpression(n.callee) || _t.isOptionalMemberExpression(n.callee)) {
+        stack.push(p.get("callee"));
         stack.push(p.get("callee.object"));
         if (n.callee.computed) stack.push(p.get("callee.property"));
       }
@@ -3012,29 +3137,6 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     var exprNode = stmt.expression;
     if (_specHandleArrayForEach(exprNode, stmtPath.get("expression"), state, effects, branchStack)) {
       return;
-    }
-    // § 23.1.3.20 Array.prototype.push: mutates the receiver array,
-    // appending arguments. Model state evolution: when receiver is an
-    // Identifier resolvable to an array-lit AV in state, replace state
-    // binding with new array-lit including appended elements.
-    if (_t.isCallExpression(exprNode) && _t.isMemberExpression(exprNode.callee) &&
-        !exprNode.callee.computed &&
-        _t.isIdentifier(exprNode.callee.property, { name: "push" }) &&
-        _t.isIdentifier(exprNode.callee.object) &&
-        Object.prototype.hasOwnProperty.call(state, exprNode.callee.object.name)) {
-      var pushRecvName = exprNode.callee.object.name;
-      var pushRecvAv = state[pushRecvName];
-      if (pushRecvAv && pushRecvAv.kind === "array-lit") {
-        // Evaluate the args to populate the per-expression memo.
-        _specEvalExpression(stmtPath.get("expression"), state, effects);
-        var newElements = (pushRecvAv.elements || []).slice();
-        for (var pai = 0; pai < exprNode.arguments.length; pai++) {
-          var argAv = _specPathValMemo.get(exprNode.arguments[pai]) || { kind: "top" };
-          newElements.push(argAv);
-        }
-        state[pushRecvName] = { kind: "array-lit", elements: newElements };
-        return;
-      }
     }
     _specEvalExpression(stmtPath.get("expression"), state, effects);
     return;
@@ -4074,72 +4176,6 @@ function _specEvalLeaf(path, state, vals, effects) {
     //                       array-lit of args; zero-arg → empty.
     //   § 22.2.1 RegExp — abstract to top (regex semantics not modeled).
     //   Other classes — top.
-    // ECMA § 15.7 ClassDeclaration / ClassExpression instantiation:
-    // `new MyClass(args)` — when callee resolves via path.scope to a
-    // ClassDeclaration/ClassExpression, model the instance as an obj-lit
-    // built from the constructor's `this.X = ...` assignments. Sound
-    // approximation: only literal/param-derived this.X values populate.
-    if (_t.isIdentifier(n.callee)) {
-      var classBinding = path.scope.getBinding(n.callee.name);
-      if (classBinding && classBinding.path && classBinding.path.node &&
-          (_t.isClassDeclaration(classBinding.path.node) ||
-           (_t.isVariableDeclarator(classBinding.path.node) && classBinding.path.node.init &&
-            _t.isClassExpression(classBinding.path.node.init)))) {
-        var classNode = _t.isClassDeclaration(classBinding.path.node)
-          ? classBinding.path.node
-          : classBinding.path.node.init;
-        // Find constructor.
-        var ctorMethod = null;
-        if (classNode.body && classNode.body.body) {
-          for (var cmi = 0; cmi < classNode.body.body.length; cmi++) {
-            var member = classNode.body.body[cmi];
-            if (_t.isClassMethod(member) && member.kind === "constructor") {
-              ctorMethod = member;
-              break;
-            }
-          }
-        }
-        // Initial instance obj-lit (empty if no constructor).
-        var instProps = Object.create(null);
-        // Walk constructor's body for `this.X = literalOrParamRef`.
-        // (Iterative over BlockStatement.body — no recursion.)
-        if (ctorMethod && ctorMethod.body && _t.isBlockStatement(ctorMethod.body)) {
-          var ctorParamNames = [];
-          for (var cpi = 0; cpi < ctorMethod.params.length; cpi++) {
-            var cp = ctorMethod.params[cpi];
-            if (_t.isIdentifier(cp)) ctorParamNames.push(cp.name);
-            else if (_t.isAssignmentPattern(cp) && _t.isIdentifier(cp.left)) ctorParamNames.push(cp.left.name);
-            else ctorParamNames.push(null);
-          }
-          var bs = ctorMethod.body.body;
-          for (var bsi = 0; bsi < bs.length; bsi++) {
-            var bsStmt = bs[bsi];
-            if (!_t.isExpressionStatement(bsStmt)) continue;
-            var bsExpr = bsStmt.expression;
-            if (!_t.isAssignmentExpression(bsExpr) || bsExpr.operator !== "=") continue;
-            if (!_t.isMemberExpression(bsExpr.left) || bsExpr.left.computed) continue;
-            if (!_t.isThisExpression(bsExpr.left.object)) continue;
-            if (!_t.isIdentifier(bsExpr.left.property)) continue;
-            var thisKey = bsExpr.left.property.name;
-            // RHS resolution — direct literal or param ref.
-            var rhs = bsExpr.right;
-            var rhsAv = null;
-            if (_t.isStringLiteral(rhs)) rhsAv = { kind: "const", value: rhs.value };
-            else if (_t.isNumericLiteral(rhs)) rhsAv = { kind: "const", value: rhs.value };
-            else if (_t.isBooleanLiteral(rhs)) rhsAv = { kind: "const", value: rhs.value };
-            else if (_t.isNullLiteral(rhs)) rhsAv = { kind: "const", value: null };
-            else if (_t.isIdentifier(rhs)) {
-              var rhsParamIdx = ctorParamNames.indexOf(rhs.name);
-              if (rhsParamIdx >= 0 && rhsParamIdx < n.arguments.length) {
-                rhsAv = vals.get(n.arguments[rhsParamIdx]);
-              }
-            }
-            if (rhsAv) instProps[thisKey] = rhsAv;
-          }
-        }
-        return { kind: "obj-lit", props: instProps };
-      }
-    }
     if (_t.isIdentifier(n.callee) && !path.scope.getBinding(n.callee.name)) {
       var ctorName = n.callee.name;
       // § 23.1.1.1 Array(...values)
@@ -4310,6 +4346,23 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "top" };
   }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
+    // ECMA § 13.3.6 Call: when callee resolves through prototype chain
+    // to a built-in method AV, dispatch through the central
+    // _specApplyBuiltinMethod table. This is the spec-grounded path for
+    // Array.prototype.push etc. — no per-method shape matching at the
+    // call site; everything routes through prototype lookup + dispatch.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed) {
+      var bmRecvAv = vals.get(n.callee.object);
+      var bmCalleeAv = vals.get(n.callee);
+      if (bmCalleeAv && bmCalleeAv.kind === "builtin-method") {
+        var bmArgAvs = [];
+        for (var bmai = 0; bmai < n.arguments.length; bmai++) {
+          bmArgAvs.push(vals.get(n.arguments[bmai]) || { kind: "top" });
+        }
+        var bmRecvName = _t.isIdentifier(n.callee.object) ? n.callee.object.name : null;
+        return _specApplyBuiltinMethod(bmCalleeAv.id, bmRecvAv, bmRecvName, bmArgAvs, state);
+      }
+    }
     // § 20.1.2.{19,5,24,7} — Object.{keys,entries,values,fromEntries}.
     // Scope-checked unshadowed `Object` global identifier (§ 8.1.1).
     if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
