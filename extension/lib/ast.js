@@ -2241,6 +2241,12 @@ function _specGlobalThisAv() {
   // optional iterable arg per spec).
   var mapCtorAv = { kind: "builtin-ctor", id: "ECMA.Map" };
   var setCtorAv = { kind: "builtin-ctor", id: "ECMA.Set" };
+  // ECMA § 24.3.1 WeakMap / § 24.4.1 WeakSet — same value-flow semantics
+  // as Map/Set for static analysis (no GC modeling). Dispatch builds the
+  // same map-instance/set-instance AVs; the WeakMap.prototype obj-lit
+  // exposes only the spec-defined subset (no iteration).
+  var weakMapCtorAv = { kind: "builtin-ctor", id: "ECMA.WeakMap" };
+  var weakSetCtorAv = { kind: "builtin-ctor", id: "ECMA.WeakSet" };
   // Object namespace per § 20.1.2 — statics.
   var objectProps = {
     keys: { kind: "builtin-method", id: "Object.keys" },
@@ -2272,6 +2278,8 @@ function _specGlobalThisAv() {
       Headers: headersCtorAv,
       Map: mapCtorAv,
       Set: setCtorAv,
+      WeakMap: weakMapCtorAv,
+      WeakSet: weakSetCtorAv,
       // Global functions per § 19.2.
       encodeURI: { kind: "builtin-method", id: "global.encodeURI" },
       encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
@@ -2356,6 +2364,38 @@ function _specSetPrototypeAv() {
   return _SPEC_SET_PROTO_AV;
 }
 
+// WeakMap.prototype per ECMA § 24.3.3. Per § 24.3.3.1 the spec only
+// defines get / has / delete / set — no iteration (keys are weak refs).
+// For static analysis the value-flow semantics match Map.prototype.*; we
+// dispatch to the same helpers via the shared "Map.prototype." routing.
+var _SPEC_WEAKMAP_PROTO_AV = null;
+function _specWeakMapPrototypeAv() {
+  if (!_SPEC_WEAKMAP_PROTO_AV) {
+    var props = {};
+    var wmMethodNames = ["get", "set", "has", "delete"];
+    for (var wmi = 0; wmi < wmMethodNames.length; wmi++) {
+      props[wmMethodNames[wmi]] = { kind: "builtin-method", id: "Map.prototype." + wmMethodNames[wmi] };
+    }
+    _SPEC_WEAKMAP_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_WEAKMAP_PROTO_AV;
+}
+
+// WeakSet.prototype per ECMA § 24.4.3. Spec defines only add / has / delete.
+// Same value-flow as Set.prototype.* for our purposes.
+var _SPEC_WEAKSET_PROTO_AV = null;
+function _specWeakSetPrototypeAv() {
+  if (!_SPEC_WEAKSET_PROTO_AV) {
+    var props = {};
+    var wsMethodNames = ["add", "has", "delete"];
+    for (var wsi = 0; wsi < wsMethodNames.length; wsi++) {
+      props[wsMethodNames[wsi]] = { kind: "builtin-method", id: "Set.prototype." + wsMethodNames[wsi] };
+    }
+    _SPEC_WEAKSET_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_WEAKSET_PROTO_AV;
+}
+
 // Return the prototype AV for a given AV kind, or null. Per ECMA-262
 // each value has an implicit [[Prototype]]; member access falls through
 // to it when own-property lookup misses. Currently models Array.prototype
@@ -2369,6 +2409,8 @@ function _specGetPrototypeOfAv(av) {
   if (av.kind === "const" && typeof av.value === "number") return _specNumberPrototypeAv();
   if (av.kind === "map-instance") return _specMapPrototypeAv();
   if (av.kind === "set-instance") return _specSetPrototypeAv();
+  if (av.kind === "weakmap-instance") return _specWeakMapPrototypeAv();
+  if (av.kind === "weakset-instance") return _specWeakSetPrototypeAv();
   // For or-trees whose every leaf shares a [[Prototype]], return that
   // prototype. Member access then dispatches per shared method via
   // _specApplyBuiltinMethod (which distributes over leaves itself).
@@ -2667,6 +2709,44 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     }
     return { kind: "set-instance", items: [], unknownInit: true };
   }
+  // ECMA § 24.3.1 WeakMap and § 24.4.1 WeakSet. Same iterable handling
+  // as Map/Set (per spec step "If iterable is undefined or null, return
+  // empty"; otherwise iterate and Set/Add). Distinct AV kinds so the
+  // prototype-chain dispatch exposes only the spec-allowed methods (no
+  // iteration / no clear) and so a weak instance never accidentally
+  // matches a Map/Set HOF code path.
+  if (ctorId === "ECMA.WeakMap") {
+    var wmInputAv = argAvs.length >= 1 ? argAvs[0] : null;
+    var wmInputUN = !wmInputAv ||
+      (wmInputAv.kind === "const" && (wmInputAv.value === undefined || wmInputAv.value === null));
+    if (wmInputUN) return { kind: "weakmap-instance", entries: [] };
+    if (wmInputAv.kind === "array-lit") {
+      var wmEntries = [];
+      var wmPairs = wmInputAv.elements || [];
+      var wmAllKnown = true;
+      for (var wmpi = 0; wmpi < wmPairs.length; wmpi++) {
+        var wmp = wmPairs[wmpi];
+        if (wmp && wmp.kind === "array-lit" && (wmp.elements || []).length >= 2) {
+          wmEntries.push([wmp.elements[0], wmp.elements[1]]);
+        } else {
+          wmAllKnown = false;
+        }
+      }
+      if (wmAllKnown) return { kind: "weakmap-instance", entries: wmEntries };
+      return { kind: "weakmap-instance", entries: wmEntries, unknownInit: true };
+    }
+    return { kind: "weakmap-instance", entries: [], unknownInit: true };
+  }
+  if (ctorId === "ECMA.WeakSet") {
+    var wsInputAv = argAvs.length >= 1 ? argAvs[0] : null;
+    var wsInputUN = !wsInputAv ||
+      (wsInputAv.kind === "const" && (wsInputAv.value === undefined || wsInputAv.value === null));
+    if (wsInputUN) return { kind: "weakset-instance", items: [] };
+    if (wsInputAv.kind === "array-lit") {
+      return { kind: "weakset-instance", items: (wsInputAv.elements || []).slice() };
+    }
+    return { kind: "weakset-instance", items: [], unknownInit: true };
+  }
   return { kind: "top" };
 }
 
@@ -2686,10 +2766,13 @@ function _specSameValueZeroAv(aAv, bAv) {
 
 // Apply Map.prototype.* method on a single map-instance receiver per
 // ECMA § 24.1.3 spec algorithms. Mutating methods rebind state[recvName]
-// when receiver is a tracked Identifier.
+// when receiver is a tracked Identifier. Also handles weakmap-instance
+// receivers (§ 24.3.3) — value-flow semantics are identical for static
+// analysis; the kind is preserved through mutating ops.
 function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   var entries = recvAv.entries || [];
   var unknownInit = !!recvAv.unknownInit;
+  var instKind = recvAv.kind;  // "map-instance" or "weakmap-instance"
   var methodName = methodId.slice("Map.prototype.".length);
   // § 24.1.3.5 get(key) — returns the value for a matching entry per
   // SameValueZero, or undefined if none. With unknown init, an unmatched
@@ -2735,7 +2818,7 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
       else newEntries.push(entries[si]);
     }
     if (!replaced) newEntries.push([newKeyAv, newValAv]);
-    var newMapAv = { kind: "map-instance", entries: newEntries };
+    var newMapAv = { kind: instKind, entries: newEntries };
     if (unknownInit) newMapAv.unknownInit = true;
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = newMapAv;
@@ -2753,7 +2836,7 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
       if (dsv === null) delAmbig = true;
       delEntries.push(entries[di]);
     }
-    var newDelMap = { kind: "map-instance", entries: delEntries };
+    var newDelMap = { kind: instKind, entries: delEntries };
     if (unknownInit) newDelMap.unknownInit = true;
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = newDelMap;
@@ -2765,7 +2848,7 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   // § 24.1.3.1 clear() — returns undefined; empties entries. unknownInit
   // is also cleared (after clear, the Map is verifiably empty).
   if (methodName === "clear") {
-    var clearMapAv = { kind: "map-instance", entries: [] };
+    var clearMapAv = { kind: instKind, entries: [] };
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = clearMapAv;
     }
@@ -2802,6 +2885,7 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
 function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   var items = recvAv.items || [];
   var setUnknownInit = !!recvAv.unknownInit;
+  var setInstKind = recvAv.kind;  // "set-instance" or "weakset-instance"
   var setMethodName = methodId.slice("Set.prototype.".length);
   // § 24.2.3.1 add(value) — adds if absent under SameValueZero; returns this.
   if (setMethodName === "add") {
@@ -2812,7 +2896,7 @@ function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
     }
     var newItems = items.slice();
     if (!addPresent) newItems.push(addValAv);
-    var newSetAv = { kind: "set-instance", items: newItems };
+    var newSetAv = { kind: setInstKind, items: newItems };
     if (setUnknownInit) newSetAv.unknownInit = true;
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = newSetAv;
@@ -2843,7 +2927,7 @@ function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
       if (sdsv === null) sdAmbig = true;
       sdItems.push(items[sdi]);
     }
-    var newSdSet = { kind: "set-instance", items: sdItems };
+    var newSdSet = { kind: setInstKind, items: sdItems };
     if (setUnknownInit) newSdSet.unknownInit = true;
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = newSdSet;
@@ -2854,7 +2938,7 @@ function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   }
   // § 24.2.3.2 clear() — empties items; returns undefined.
   if (setMethodName === "clear") {
-    var clearSetAv = { kind: "set-instance", items: [] };
+    var clearSetAv = { kind: setInstKind, items: [] };
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = clearSetAv;
     }
@@ -3038,17 +3122,21 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (pureArrayIds.indexOf(methodId) >= 0) {
     return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
   }
-  // ECMA § 24.1.3 Map.prototype.* dispatches. Receiver must be a tracked
-  // map-instance for value-precise dispatch; or-tree of map-instances
-  // distributes per leaf. Mutating methods (set, delete, clear) rebind
-  // state[recvName] when receiver is a tracked Identifier.
+  // ECMA § 24.1.3 Map.prototype.* dispatches. Receiver may be map-instance
+  // (§ 24.1.3) or weakmap-instance (§ 24.3.3 — same value-flow semantics
+  // for static analysis; weak-ref / GC isn't modeled). Or-tree distributes
+  // per leaf. Mutating methods (set/delete/clear) rebind state[recvName]
+  // when receiver is a tracked Identifier.
   if (methodId.indexOf("Map.prototype.") === 0 && recvAv) {
     if (recvAv.kind === "or") {
       var mapOrLeaves = _avFlattenOrLeaves(recvAv);
       if (mapOrLeaves) {
         var mapAllInst = mapOrLeaves.length > 0;
         for (var moi = 0; mapAllInst && moi < mapOrLeaves.length; moi++) {
-          if (!mapOrLeaves[moi] || mapOrLeaves[moi].kind !== "map-instance") mapAllInst = false;
+          if (!mapOrLeaves[moi] ||
+              (mapOrLeaves[moi].kind !== "map-instance" && mapOrLeaves[moi].kind !== "weakmap-instance")) {
+            mapAllInst = false;
+          }
         }
         if (mapAllInst) {
           var mapPerRes = [];
@@ -3062,19 +3150,23 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         }
       }
     }
-    if (recvAv.kind === "map-instance") {
+    if (recvAv.kind === "map-instance" || recvAv.kind === "weakmap-instance") {
       return _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state);
     }
     return { kind: "top" };
   }
-  // ECMA § 24.2.3 Set.prototype.* dispatches. Same shape as Map.
+  // ECMA § 24.2.3 Set.prototype.* dispatches. Same shape as Map; receiver
+  // may be set-instance or weakset-instance (§ 24.4.3 same value-flow).
   if (methodId.indexOf("Set.prototype.") === 0 && recvAv) {
     if (recvAv.kind === "or") {
       var setOrLeaves = _avFlattenOrLeaves(recvAv);
       if (setOrLeaves) {
         var setAllInst = setOrLeaves.length > 0;
         for (var soi = 0; setAllInst && soi < setOrLeaves.length; soi++) {
-          if (!setOrLeaves[soi] || setOrLeaves[soi].kind !== "set-instance") setAllInst = false;
+          if (!setOrLeaves[soi] ||
+              (setOrLeaves[soi].kind !== "set-instance" && setOrLeaves[soi].kind !== "weakset-instance")) {
+            setAllInst = false;
+          }
         }
         if (setAllInst) {
           var setPerRes = [];
@@ -3088,7 +3180,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         }
       }
     }
-    if (recvAv.kind === "set-instance") {
+    if (recvAv.kind === "set-instance" || recvAv.kind === "weakset-instance") {
       return _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state);
     }
     return { kind: "top" };

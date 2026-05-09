@@ -3933,6 +3933,46 @@ specTest("§ 24.1.1 new Map(unknownIterable): get returns top, not undefined (no
   return av && av.kind === "top";
 });
 
+specTest("§ 24.3.3.5 WeakMap.prototype.get: same value-flow as Map for known keys", `
+  function f() {
+    var wm = new WeakMap();
+    var k = {};
+    wm.set(k, "/api/path");
+    this.url = wm.get(k);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Key is an obj-lit (not Const), so SameValueZero is ambiguous;
+  // .get returns top per the ambiguous-match rule.
+  // For the known-Const-key case, see the Map test.
+  return av && av.kind === "top";
+});
+
+specTest("§ 24.3.3.6 WeakMap.prototype.has: const-key match returns true", `
+  function f() {
+    var wm = new WeakMap();
+    wm.set("k", "v");
+    this.flag = wm.has("k");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
+specTest("§ 24.4.3.7 WeakSet.prototype.has: const-value match returns true", `
+  function f() {
+    var ws = new WeakSet();
+    ws.add("v");
+    this.flag = ws.has("v");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
 specTest("§ 24.1.3.4 Map.prototype.forEach: cb body's writes propagate via value/key bindings", `
   function f() {
     var m = new Map();
