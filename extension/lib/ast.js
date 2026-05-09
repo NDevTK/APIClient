@@ -7079,6 +7079,63 @@ function _resolveBoundDomElementId(path, idNode) {
   return null;
 }
 
+// Apply a String.prototype method to a Const string receiver, returning
+// the transformed string or undefined if not statically applicable.
+// `argLits` is an array of JS values (already extracted from AST).
+// Centralised so both _specEvalLeaf (spec eval, AbstractValue-driven)
+// and _ravStep (URL resolver, NodeAST-driven) share the same per-method
+// implementation per ECMA-262 § 22.1.3.
+function _applyStringMethodToConst(s, methodName, argLits) {
+  if (typeof s !== "string") return undefined;
+  if (methodName === "trim" && argLits.length === 0) return s.trim();
+  if (methodName === "toLowerCase" && argLits.length === 0) return s.toLowerCase();
+  if (methodName === "toUpperCase" && argLits.length === 0) return s.toUpperCase();
+  if (methodName === "toString" && argLits.length === 0) return s.toString();
+  if (methodName === "valueOf" && argLits.length === 0) return s;
+  if (methodName === "normalize" && argLits.length === 0) return s.normalize();
+  if (methodName === "replace" && argLits.length === 2 && typeof argLits[0] === "string" && typeof argLits[1] === "string") {
+    return s.replace(argLits[0], argLits[1]);
+  }
+  if (methodName === "replaceAll" && argLits.length === 2 && typeof argLits[0] === "string" && typeof argLits[1] === "string") {
+    return s.replaceAll(argLits[0], argLits[1]);
+  }
+  if (methodName === "concat") {
+    var out = s;
+    for (var i = 0; i < argLits.length; i++) {
+      if (typeof argLits[i] !== "string") return undefined;
+      out += argLits[i];
+    }
+    return out;
+  }
+  if (methodName === "slice" && argLits.length >= 0 && argLits.length <= 2) {
+    if (argLits.length === 0) return s.slice();
+    if (typeof argLits[0] !== "number") return undefined;
+    if (argLits.length === 1) return s.slice(argLits[0]);
+    if (typeof argLits[1] !== "number") return undefined;
+    return s.slice(argLits[0], argLits[1]);
+  }
+  if (methodName === "substring" && argLits.length >= 1 && typeof argLits[0] === "number") {
+    if (argLits.length === 1) return s.substring(argLits[0]);
+    if (argLits.length === 2 && typeof argLits[1] === "number") return s.substring(argLits[0], argLits[1]);
+  }
+  if (methodName === "substr" && argLits.length >= 1 && typeof argLits[0] === "number") {
+    if (argLits.length === 1) return s.substr(argLits[0]);
+    if (argLits.length === 2 && typeof argLits[1] === "number") return s.substr(argLits[0], argLits[1]);
+  }
+  if (methodName === "padStart" && argLits.length >= 1 && typeof argLits[0] === "number") {
+    var psFill = argLits.length >= 2 && typeof argLits[1] === "string" ? argLits[1] : " ";
+    return s.padStart(argLits[0], psFill);
+  }
+  if (methodName === "padEnd" && argLits.length >= 1 && typeof argLits[0] === "number") {
+    var peFill = argLits.length >= 2 && typeof argLits[1] === "string" ? argLits[1] : " ";
+    return s.padEnd(argLits[0], peFill);
+  }
+  if (methodName === "repeat" && argLits.length === 1 && typeof argLits[0] === "number") {
+    try { return s.repeat(argLits[0]); } catch (_) { return undefined; }
+  }
+  return undefined;
+}
+
 function _ravStep(F) {
   var path = F.path, node = F.node, depth = F.depth, L = F.L;
   ravLoop:
