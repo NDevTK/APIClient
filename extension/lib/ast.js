@@ -2303,7 +2303,7 @@ var _SPEC_NUMBER_PROTO_AV = null;
 function _specNumberPrototypeAv() {
   if (!_SPEC_NUMBER_PROTO_AV) {
     var props = {};
-    var numMethodNames = ["toString", "toFixed", "toExponential", "toPrecision", "valueOf"];
+    var numMethodNames = ["toString", "toFixed", "toExponential", "toPrecision", "valueOf", "toLocaleString"];
     for (var nmi = 0; nmi < numMethodNames.length; nmi++) {
       props[numMethodNames[nmi]] = { kind: "builtin-method", id: "Number.prototype." + numMethodNames[nmi] };
     }
@@ -8503,6 +8503,12 @@ function _applyNumberMethodToConst(nv, methodName, argLits) {
   }
   // § 21.1.3.7 Number.prototype.valueOf
   if (methodName === "valueOf" && argLits.length === 0) return nv;
+  // § 21.1.3.4 Number.prototype.toLocaleString — without locale args,
+  // default to host locale; with args, may diverge by host. For
+  // consistency we only handle the no-arg case (host-default locale).
+  if (methodName === "toLocaleString" && argLits.length === 0) {
+    try { return nv.toLocaleString(); } catch (_) { return undefined; }
+  }
   return undefined;
 }
 
