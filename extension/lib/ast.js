@@ -2258,6 +2258,8 @@ function _specGlobalThisAv() {
   // exposes only the spec-defined subset (no iteration).
   var weakMapCtorAv = { kind: "builtin-ctor", id: "ECMA.WeakMap" };
   var weakSetCtorAv = { kind: "builtin-ctor", id: "ECMA.WeakSet" };
+  // ECMA § 22.2.1 RegExp ctor.
+  var regExpCtorAv = { kind: "builtin-ctor", id: "ECMA.RegExp" };
   // Reflect namespace per ECMA § 28.1 — statics that delegate to the
   // corresponding internal methods on target. For static analysis the
   // value-flow semantics are well-defined; we dispatch via _specApply
@@ -2310,6 +2312,7 @@ function _specGlobalThisAv() {
       Set: setCtorAv,
       WeakMap: weakMapCtorAv,
       WeakSet: weakSetCtorAv,
+      RegExp: regExpCtorAv,
       // Global functions per § 19.2.
       encodeURI: { kind: "builtin-method", id: "global.encodeURI" },
       encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
@@ -2394,6 +2397,21 @@ function _specSetPrototypeAv() {
   return _SPEC_SET_PROTO_AV;
 }
 
+// RegExp.prototype per ECMA § 22.2.6 — pure (returns new value or boolean).
+// Dispatched by RegExp instance receiver via the [[Prototype]] chain.
+var _SPEC_REGEXP_PROTO_AV = null;
+function _specRegExpPrototypeAv() {
+  if (!_SPEC_REGEXP_PROTO_AV) {
+    var props = {};
+    var regexMethodNames = ["test", "exec", "toString"];
+    for (var rmi = 0; rmi < regexMethodNames.length; rmi++) {
+      props[regexMethodNames[rmi]] = { kind: "builtin-method", id: "RegExp.prototype." + regexMethodNames[rmi] };
+    }
+    _SPEC_REGEXP_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_REGEXP_PROTO_AV;
+}
+
 // WeakMap.prototype per ECMA § 24.3.3. Per § 24.3.3.1 the spec only
 // defines get / has / delete / set — no iteration (keys are weak refs).
 // For static analysis the value-flow semantics match Map.prototype.*; we
@@ -2441,6 +2459,7 @@ function _specGetPrototypeOfAv(av) {
   if (av.kind === "set-instance") return _specSetPrototypeAv();
   if (av.kind === "weakmap-instance") return _specWeakMapPrototypeAv();
   if (av.kind === "weakset-instance") return _specWeakSetPrototypeAv();
+  if (av.kind === "regex-instance") return _specRegExpPrototypeAv();
   // For or-trees whose every leaf shares a [[Prototype]], return that
   // prototype. Member access then dispatches per shared method via
   // _specApplyBuiltinMethod (which distributes over leaves itself).
@@ -2766,6 +2785,39 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       return { kind: "weakmap-instance", entries: wmEntries, unknownInit: true };
     }
     return { kind: "weakmap-instance", entries: [], unknownInit: true };
+  }
+  // ECMA § 22.2.1 new RegExp(pattern, flags). When both args are Const
+  // strings (or pattern Const + flags omitted/undefined), build a
+  // regex-instance AV that will dispatch RegExp.prototype.test/exec.
+  if (ctorId === "ECMA.RegExp") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var rxPatAv = argAvs[0];
+    var rxFlagsAv = argAvs.length >= 2 ? argAvs[1] : null;
+    if (rxPatAv && rxPatAv.kind === "regex-instance") {
+      // § 22.2.1.1 step 4 — `new RegExp(/.../, flags)` reuses pattern;
+      // flags arg replaces if provided.
+      var rxNewFlags = rxPatAv.flags;
+      if (rxFlagsAv && rxFlagsAv.kind === "const" && typeof rxFlagsAv.value === "string") {
+        rxNewFlags = rxFlagsAv.value;
+      }
+      return { kind: "regex-instance", pattern: rxPatAv.pattern, flags: rxNewFlags };
+    }
+    if (rxPatAv && rxPatAv.kind === "const" && typeof rxPatAv.value === "string") {
+      var rxFlagsStr = "";
+      if (rxFlagsAv) {
+        if (rxFlagsAv.kind === "const" && typeof rxFlagsAv.value === "string") rxFlagsStr = rxFlagsAv.value;
+        else if (rxFlagsAv.kind === "const" && (rxFlagsAv.value === undefined || rxFlagsAv.value === null)) rxFlagsStr = "";
+        else return { kind: "top" };
+      }
+      // Verify pattern parses; if it throws (SyntaxError), spec says
+      // RegExp ctor throws — return top conservatively (caller will
+      // observe a runtime exception).
+      try {
+        new RegExp(rxPatAv.value, rxFlagsStr);
+        return { kind: "regex-instance", pattern: rxPatAv.value, flags: rxFlagsStr };
+      } catch (_) { return { kind: "top" }; }
+    }
+    return { kind: "top" };
   }
   if (ctorId === "ECMA.WeakSet") {
     var wsInputAv = argAvs.length >= 1 ? argAvs[0] : null;
@@ -3554,6 +3606,49 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   if (methodId === "Reflect.preventExtensions") {
     return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  // RegExp.prototype.* per ECMA § 22.2.6 — for static analysis, when both
+  // pattern (regex-instance) and the input string are known statically,
+  // dispatch the host RegExp engine for a precise answer.
+  if (methodId.indexOf("RegExp.prototype.") === 0 && recvAv && recvAv.kind === "regex-instance") {
+    var rxMeth = methodId.slice("RegExp.prototype.".length);
+    if (rxMeth === "test") {
+      // § 22.2.6.16: returns boolean. Compute via host RegExp when input
+      // arg is Const string.
+      if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") {
+        return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+      }
+      try {
+        var rxTestRe = new RegExp(recvAv.pattern, recvAv.flags);
+        return { kind: "const", value: rxTestRe.test(argAvs[0].value) };
+      } catch (_) { return { kind: "top" }; }
+    }
+    if (rxMeth === "exec") {
+      // § 22.2.6.4: returns a match-result array (with index/input props)
+      // or null. For Const-string input + static regex, compute the match
+      // and build an array-lit of the captures plus null on no match.
+      if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") {
+        return { kind: "top" };
+      }
+      try {
+        var rxExecRe = new RegExp(recvAv.pattern, recvAv.flags);
+        var rxExecRes = rxExecRe.exec(argAvs[0].value);
+        if (rxExecRes === null) return { kind: "const", value: null };
+        var rxExecElems = [];
+        for (var rei = 0; rei < rxExecRes.length; rei++) {
+          rxExecElems.push({ kind: "const", value: rxExecRes[rei] });
+        }
+        return { kind: "array-lit", elements: rxExecElems };
+      } catch (_) { return { kind: "top" }; }
+    }
+    if (rxMeth === "toString") {
+      // § 22.2.6.17: "/" + source + "/" + flags
+      try {
+        var rxStr = "/" + recvAv.pattern + "/" + recvAv.flags;
+        return { kind: "const", value: rxStr };
+      } catch (_) { return { kind: "top" }; }
+    }
+    return { kind: "top" };
   }
   // Date.* statics per ECMA § 21.4.3.
   if (methodId === "Date.now") {
@@ -5447,6 +5542,12 @@ function _specEvalLeaf(path, state, vals, effects) {
   if (_t.isNumericLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isBooleanLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isNullLiteral(n)) return { kind: "const", value: null };
+  if (_t.isRegExpLiteral(n)) {
+    // § 13.2.7 RegularExpressionLiteral — produces a RegExp instance per
+    // § 22.2.1.1. Build a regex-instance AV with statically-extracted
+    // pattern and flags so RegExp.prototype.test/exec can dispatch.
+    return { kind: "regex-instance", pattern: n.pattern, flags: n.flags || "" };
+  }
   if (_t.isTemplateLiteral(n)) {
     // § 13.2.8.6 Template Literal Evaluation: composes cooked quasis
     // with stringified expression results. Each expression's result

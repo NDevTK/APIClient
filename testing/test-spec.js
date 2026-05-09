@@ -4036,6 +4036,85 @@ specTest("§ 24.4.3.7 WeakSet.prototype.has: const-value match returns true", `
 });
 
 // ═════════════════════════════════════════════════════════════════════
+// § 22.2 RegExp — RegExpLiteral, ctor, prototype.test/exec
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 22.2 RegExp ===\n");
+
+specTest("§ 22.2.6.16 RegExp.prototype.test: literal regex + Const string match true", `
+  function f() {
+    this.flag = /abc/.test("xabcy");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
+specTest("§ 22.2.6.16 RegExp.prototype.test: literal regex + Const string match false", `
+  function f() {
+    this.flag = /abc/.test("nope");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === false;
+});
+
+specTest("§ 22.2.6.4 RegExp.prototype.exec: literal regex + Const string returns match array-lit", `
+  function f() {
+    this.m = /^(\\w+)-(\\w+)$/.exec("alpha-beta");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "array-lit" || (av.elements || []).length !== 3) return false;
+  return av.elements[0].kind === "const" && av.elements[0].value === "alpha-beta" &&
+         av.elements[1].kind === "const" && av.elements[1].value === "alpha" &&
+         av.elements[2].kind === "const" && av.elements[2].value === "beta";
+});
+
+specTest("§ 22.2.6.4 RegExp.prototype.exec: no match returns Const null", `
+  function f() {
+    this.m = /xyz/.exec("nope");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === null;
+});
+
+specTest("§ 22.2.6.16 RegExp.prototype.test: opaque input returns or(true,false)", `
+  function f(str) {
+    this.flag = /abc/.test(str);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  // Joined boolean leaves.
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (!x) continue;
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.indexOf(true) >= 0 && leaves.indexOf(false) >= 0;
+});
+
+specTest("§ 22.2.1 new RegExp(Const, flags): builds regex-instance, dispatches test", `
+  function f() {
+    var re = new RegExp("^api/", "i");
+    this.flag = re.test("API/test");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
+// ═════════════════════════════════════════════════════════════════════
 // § 28.1 Reflect — statics
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 28.1 Reflect ===\n");
