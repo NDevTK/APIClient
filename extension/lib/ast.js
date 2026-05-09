@@ -7015,6 +7015,32 @@ function _ravStep(F) {
       }
     }
   }
+  // Form 1c: `document.getElementById("X").dataset.<key>` — for any
+  // data-* attribute on the byId-tracked element. WHATWG HTML §
+  // 7.5.5 dataset property reflects data-* attributes (camelCased).
+  if (skip < 1 && _t.isMemberExpression(node) && !node.computed &&
+      _t.isIdentifier(node.property) &&
+      _t.isMemberExpression(node.object) && !node.object.computed &&
+      _t.isIdentifier(node.object.property, { name: "dataset" }) &&
+      _t.isCallExpression(node.object.object) &&
+      _t.isMemberExpression(node.object.object.callee) && !node.object.object.callee.computed &&
+      _t.isIdentifier(node.object.object.callee.object, { name: "document" }) &&
+      !path.scope.getBinding("document") &&
+      _t.isIdentifier(node.object.object.callee.property, { name: "getElementById" }) &&
+      node.object.object.arguments.length === 1 &&
+      _t.isStringLiteral(node.object.object.arguments[0])) {
+    var gbiDsId = node.object.object.arguments[0].value;
+    var gbiDsKey = node.property.name;
+    // dataset uses camelCase per HTML spec; markup uses kebab-case.
+    var gbiDsKebab = gbiDsKey.replace(/[A-Z]/g, function(c) { return "-" + c.toLowerCase(); });
+    if (_domContext && _domContext.byId &&
+        Object.prototype.hasOwnProperty.call(_domContext.byId, gbiDsId)) {
+      var dsInfo = _domContext.byId[gbiDsId];
+      if (dsInfo && dsInfo.dataAttrs && dsInfo.dataAttrs[gbiDsKebab] != null) {
+        return { done: [dsInfo.dataAttrs[gbiDsKebab]] };
+      }
+    }
+  }
   // Form 2: `document.querySelector("meta[name=X]").getAttribute("content")`
   if (skip < 1 && _t.isCallExpression(node) &&
       _t.isMemberExpression(node.callee) && !node.callee.computed &&
