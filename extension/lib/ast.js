@@ -2254,6 +2254,75 @@ function _specMemberExpressionAv(memberNode, objAv, computedKeyAv) {
   return { kind: "member", obj: objAv, key: keyAv };
 }
 
+// Per-leaf MemberExpression evaluation given a single (already-resolved)
+// receiver objAv. Used by both the direct (single objAv) path and the
+// alternation-distribution path that calls this once per or-tree leaf.
+// Math/Number static-constant checks live in the caller because they
+// match on AST identifier shape, not on objAv kind.
+function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
+  // Array-lit element access: `arr[0]`, `arr.length` per § 23.1.3.
+  if (objAv && objAv.kind === "array-lit" && objAv.elements) {
+    if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
+      return { kind: "const", value: objAv.elements.length };
+    }
+    if (n.computed) {
+      var idxAv = vals.get(n.property);
+      if (idxAv && idxAv.kind === "const" && typeof idxAv.value === "number" &&
+          idxAv.value >= 0 && idxAv.value < objAv.elements.length) {
+        return objAv.elements[idxAv.value];
+      }
+    }
+  }
+  // Obj-lit static property access: `obj.x` returns the stored av.
+  if (objAv && objAv.kind === "obj-lit" && objAv.props) {
+    if (!n.computed) {
+      var propName = _t.isIdentifier(n.property) ? n.property.name :
+        (_t.isStringLiteral(n.property) ? n.property.value : null);
+      if (propName !== null && Object.prototype.hasOwnProperty.call(objAv.props, propName)) {
+        return objAv.props[propName];
+      }
+    }
+    if (n.computed) {
+      var keyAvO = vals.get(n.property);
+      if (keyAvO && keyAvO.kind === "const" &&
+          (typeof keyAvO.value === "string" || typeof keyAvO.value === "number") &&
+          Object.prototype.hasOwnProperty.call(objAv.props, keyAvO.value)) {
+        return objAv.props[keyAvO.value];
+      }
+    }
+  }
+  // arguments.length per § 10.4.4.6 / arguments[N] per § 10.4.4
+  if (objAv && objAv.kind === "top" &&
+      _t.isIdentifier(n.object, { name: "arguments" }) &&
+      !path.scope.getBinding("arguments")) {
+    if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
+      return { kind: "args-len" };
+    }
+    if (n.computed) {
+      var idxAvA = vals.get(n.property) || { kind: "top" };
+      return { kind: "args-elt", idx: idxAvA };
+    }
+  }
+  // § 22.1.4 Properties of String Instances — Const-string receivers:
+  //   .length per § 22.1.4.1, [N] per § 22.1.4.4 (single UTF-16 code unit).
+  if (objAv && objAv.kind === "const" && typeof objAv.value === "string") {
+    if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
+      return { kind: "const", value: objAv.value.length };
+    }
+    if (n.computed) {
+      var sIdxAv = vals.get(n.property);
+      if (sIdxAv && sIdxAv.kind === "const" && typeof sIdxAv.value === "number" &&
+          Number.isInteger(sIdxAv.value) && sIdxAv.value >= 0 && sIdxAv.value < objAv.value.length) {
+        return { kind: "const", value: objAv.value[sIdxAv.value] };
+      }
+    }
+  }
+  // Default — opaque receiver: build a `member` AV that downstream
+  // consumers (target tracing, propagation) can reason about.
+  var keyAvComputed = n.computed ? (vals.get(n.property) || { kind: "top" }) : null;
+  return _specMemberExpressionAv(n, objAv, keyAvComputed);
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // § 13.13 — Logical OR Expression (`a || b`).
 // Per spec: evaluate left; if ToBoolean(left) is true, return left's value;
@@ -3248,73 +3317,11 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "top" };
   }
   if (_t.isMemberExpression(n) || _t.isOptionalMemberExpression(n)) {
-    var objAv = vals.get(n.object) || { kind: "top" };
-    // Array-lit element access: `arr[0]`, `arr.length` per § 23.1.3.
-    if (objAv && objAv.kind === "array-lit" && objAv.elements) {
-      // .length per ECMA-262 array exotic [[OwnProperty]] "length"
-      if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
-        return { kind: "const", value: objAv.elements.length };
-      }
-      // Computed numeric index access — return the element's abstract value.
-      if (n.computed) {
-        var idxAv = vals.get(n.property);
-        if (idxAv && idxAv.kind === "const" && typeof idxAv.value === "number" &&
-            idxAv.value >= 0 && idxAv.value < objAv.elements.length) {
-          return objAv.elements[idxAv.value];
-        }
-      }
-    }
-    // Obj-lit static property access: `obj.x` returns the stored av.
-    if (objAv && objAv.kind === "obj-lit" && objAv.props) {
-      if (!n.computed) {
-        var propName = _t.isIdentifier(n.property) ? n.property.name :
-          (_t.isStringLiteral(n.property) ? n.property.value : null);
-        if (propName !== null && Object.prototype.hasOwnProperty.call(objAv.props, propName)) {
-          return objAv.props[propName];
-        }
-      }
-      if (n.computed) {
-        var keyAvO = vals.get(n.property);
-        if (keyAvO && keyAvO.kind === "const" &&
-            (typeof keyAvO.value === "string" || typeof keyAvO.value === "number") &&
-            Object.prototype.hasOwnProperty.call(objAv.props, keyAvO.value)) {
-          return objAv.props[keyAvO.value];
-        }
-      }
-    }
-    // arguments.length per § 10.4.4.6 / arguments[N] per § 10.4.4
-    if (objAv && objAv.kind === "top" &&
-        _t.isIdentifier(n.object, { name: "arguments" }) &&
-        !path.scope.getBinding("arguments")) {
-      if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
-        return { kind: "args-len" };
-      }
-      if (n.computed) {
-        var idxAv = vals.get(n.property) || { kind: "top" };
-        return { kind: "args-elt", idx: idxAv };
-      }
-    }
-    // § 22.1.4 Properties of String Instances — Const-string receivers:
-    //   .length per § 22.1.4.1 — number of code units (UTF-16).
-    //   [N] per § 22.1.4.4 — single-char Const for in-range integer index.
-    if (objAv && objAv.kind === "const" && typeof objAv.value === "string") {
-      if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
-        return { kind: "const", value: objAv.value.length };
-      }
-      if (n.computed) {
-        var sIdxAv = vals.get(n.property);
-        if (sIdxAv && sIdxAv.kind === "const" && typeof sIdxAv.value === "number" &&
-            Number.isInteger(sIdxAv.value) && sIdxAv.value >= 0 && sIdxAv.value < objAv.value.length) {
-          return { kind: "const", value: objAv.value[sIdxAv.value] };
-        }
-      }
-    }
-    // § 21.3.1 Math constants — scope-checked unshadowed `Math` identifier
-    // accessed with .PI / .E / .LN2 / etc.
+    // § 21.3.1 Math constants — scope-checked unshadowed `Math` identifier.
+    // AST-shape based (independent of objAv kind), so checked first.
     if (!n.computed && _t.isIdentifier(n.object, { name: "Math" }) &&
         !path.scope.getBinding("Math") && _t.isIdentifier(n.property)) {
       var mathProp = n.property.name;
-      // § 21.3.1.{1-8} Math.{E, LN10, LN2, LOG10E, LOG2E, PI, SQRT1_2, SQRT2}
       if (mathProp === "E") return { kind: "const", value: Math.E };
       if (mathProp === "PI") return { kind: "const", value: Math.PI };
       if (mathProp === "LN2") return { kind: "const", value: Math.LN2 };
@@ -3324,7 +3331,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (mathProp === "SQRT1_2") return { kind: "const", value: Math.SQRT1_2 };
       if (mathProp === "SQRT2") return { kind: "const", value: Math.SQRT2 };
     }
-    // § 21.1.1.{2,3,4,5,6,7,8,9} Number constants — scope-checked.
+    // § 21.1.1 Number constants — scope-checked unshadowed `Number` identifier.
     if (!n.computed && _t.isIdentifier(n.object, { name: "Number" }) &&
         !path.scope.getBinding("Number") && _t.isIdentifier(n.property)) {
       var numProp = n.property.name;
@@ -3337,8 +3344,23 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (numProp === "NEGATIVE_INFINITY") return { kind: "const", value: Number.NEGATIVE_INFINITY };
       if (numProp === "NaN") return { kind: "const", value: Number.NaN };
     }
-    var keyAvComputed = n.computed ? (vals.get(n.property) || { kind: "top" }) : null;
-    return _specMemberExpressionAv(n, objAv, keyAvComputed);
+    var objAv = vals.get(n.object) || { kind: "top" };
+    // Distribute over alternation: `or(a, b).prop` → `or(a.prop, b.prop)`.
+    // Pure projection — no operand semantics changes, just per-leaf access.
+    var memberLeaves = _avFlattenOrLeaves(objAv);
+    if (memberLeaves !== null && memberLeaves.length > 0) {
+      var memberResults = [];
+      for (var mli = 0; mli < memberLeaves.length; mli++) {
+        memberResults.push(_specMemberAccessOnObjLeaf(path, n, memberLeaves[mli], vals));
+      }
+      if (memberResults.length === 1) return memberResults[0];
+      var memberOr = memberResults[0];
+      for (var moi = 1; moi < memberResults.length; moi++) {
+        memberOr = _specLogicalOrAv(memberOr, memberResults[moi]);
+      }
+      return memberOr;
+    }
+    return _specMemberAccessOnObjLeaf(path, n, objAv, vals);
   }
   if (_t.isLogicalExpression(n)) {
     // § 13.13.1 (&&), § 13.13.2 (||), § 13.14 (??): each operator
@@ -7133,6 +7155,28 @@ function _avFlattenStringLeaves(rootAv) {
     // keys-of, loop-key, args-elt, args-len) have no statically-known
     // string leaf for the URL projection — they're either opaque or
     // structurally typed beyond a single string.
+  }
+  return out;
+}
+
+// Flatten an or-tree into its leaf AbstractValues (any kind, not just
+// Const). Returns null if rootAv is not an or — caller takes single-leaf
+// path. Used for per-leaf operator/method/access distribution:
+//   `or(a, b).prop` → `or(a.prop, b.prop)`
+//   `or(a, b)(...args)` → `or(a(args), b(args))`
+function _avFlattenOrLeaves(rootAv) {
+  if (!rootAv || rootAv.kind !== "or") return null;
+  var out = [];
+  var stack = [rootAv];
+  while (stack.length > 0) {
+    var av = stack.pop();
+    if (!av) continue;
+    if (av.kind === "or") {
+      if (av.left) stack.push(av.left);
+      if (av.right) stack.push(av.right);
+      continue;
+    }
+    out.push(av);
   }
   return out;
 }

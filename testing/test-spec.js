@@ -3033,6 +3033,44 @@ specTest("§ 13.5.3: typeof distributes over alternation `typeof (cond ? 'a' : 1
   return leaves.length === 2 && leaves.indexOf("string") >= 0 && leaves.indexOf("number") >= 0;
 });
 
+specTest("§ 13.10: MemberExpression distributes over alternation `(cond ? {x:1} : {x:2}).x` → or(1, 2)", `
+  function f(cond) {
+    var obj = cond ? { x: 1 } : { x: 2 };
+    this.v = obj.x;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf(1) >= 0 && leaves.indexOf(2) >= 0;
+});
+
+specTest("§ 13.10: MemberExpression alternation `(cond ? 'abc' : 'wxyz').length` → or(3, 4)", `
+  function f(cond) {
+    var s = cond ? "abc" : "wxyz";
+    this.n = s.length;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf(3) >= 0 && leaves.indexOf(4) >= 0;
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));

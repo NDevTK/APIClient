@@ -1,6 +1,7 @@
 # API Security Researcher — Development Guide
 
 Work autonomously and continuously across all pillars. No mocking, no placeholders, no heuristics, no summaries, no workarounds.
+No context limits even when you get to 1M context it continues automatically.
 
 ## Project Overview
 
