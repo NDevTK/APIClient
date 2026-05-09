@@ -3374,6 +3374,38 @@ specTest("HTML5 § 8.2.3 inline handler: spec eval binds DOM-derived el.href via
   return av && av.kind === "const" && av.value === "/hide?id=5";
 }, { domContext: { inlineHandlers: { hide5: { handlers: [{ event: "click", body: "hidestory(this)" }], elementAttrs: { href: "/hide?id=5", src: null, action: null, dataAttrs: null } } } } });
 
+specTest("WHATWG DOM § 4.2.6: spec eval `document.getElementById('X').href` from _domContext.byId", `
+  function f() {
+    this.u = document.getElementById("hide5").href;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/hide?id=5";
+}, { domContext: { byId: { hide5: { href: "/hide?id=5" } } } });
+
+specTest("CSS Selectors L4: spec eval `document.querySelector('#X').dataset.k` from _domContext.byId", `
+  function f() {
+    this.u = document.querySelector("#userlink").dataset.url;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/u/alice";
+}, { domContext: { byId: { userlink: { dataAttrs: { url: "/u/alice" } } } } });
+
+specTest("WHATWG DOM: shadowed `document` does NOT fire", `
+  function f() {
+    var document = { getElementById: function() { return { href: "shadow" }; } };
+    this.u = document.getElementById("hide5").href;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Shadowed document — spec eval must NOT consult _domContext.byId.
+  return !(av && av.kind === "const" && av.value === "/hide?id=5");
+}, { domContext: { byId: { hide5: { href: "/hide?id=5" } } } });
+
 specTest("§ 14.10 multi-stmt return with param: `if(p) return p; return 'default';`", `
   function f() {
     this.u = orDefault("/api/foo");

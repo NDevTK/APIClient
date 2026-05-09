@@ -4407,6 +4407,51 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
+    // WHATWG DOM § 4.2.6 — document.getElementById(id) on scope-checked
+    // unshadowed `document`. Returns an obj-lit AV built from the page's
+    // _domContext.byId entry for the given id, with href/src/action/dataset
+    // sub-properties as Const strings. Subsequent `.href` etc. resolves
+    // through obj-lit prop access.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.object, { name: "document" }) &&
+        !path.scope.getBinding("document") &&
+        _t.isIdentifier(n.callee.property)) {
+      var docMethName = n.callee.property.name;
+      var domLookupId = null;
+      if (docMethName === "getElementById" && n.arguments.length === 1) {
+        var gbiArgAv = vals.get(n.arguments[0]);
+        if (gbiArgAv && gbiArgAv.kind === "const" && typeof gbiArgAv.value === "string") {
+          domLookupId = gbiArgAv.value;
+        }
+      } else if (docMethName === "querySelector" && n.arguments.length === 1) {
+        var qsArgAv = vals.get(n.arguments[0]);
+        if (qsArgAv && qsArgAv.kind === "const" && typeof qsArgAv.value === "string") {
+          // CSS Selectors L4: `#id` form.
+          var qsIdMatch = qsArgAv.value.match(/^#([A-Za-z][\w:.-]*)$/);
+          if (qsIdMatch) domLookupId = qsIdMatch[1];
+        }
+      }
+      if (domLookupId !== null && _domContext && _domContext.byId &&
+          Object.prototype.hasOwnProperty.call(_domContext.byId, domLookupId)) {
+        var domEl = _domContext.byId[domLookupId];
+        var domElProps = Object.create(null);
+        if (domEl) {
+          if (domEl.href != null) domElProps.href = { kind: "const", value: String(domEl.href) };
+          if (domEl.src != null) domElProps.src = { kind: "const", value: String(domEl.src) };
+          if (domEl.action != null) domElProps.action = { kind: "const", value: String(domEl.action) };
+          if (domEl.dataAttrs && typeof domEl.dataAttrs === "object") {
+            var domDsProps = Object.create(null);
+            for (var domDk in domEl.dataAttrs) {
+              if (Object.prototype.hasOwnProperty.call(domEl.dataAttrs, domDk)) {
+                domDsProps[domDk] = { kind: "const", value: String(domEl.dataAttrs[domDk]) };
+              }
+            }
+            domElProps.dataset = { kind: "obj-lit", props: domDsProps };
+          }
+        }
+        return { kind: "obj-lit", props: domElProps };
+      }
+    }
     // § 25.5.2 JSON.parse(text) — when text is a Const string literal
     // that's syntactically valid JSON, evaluate to the parsed value as
     // an abstract value per the resulting JS type.
