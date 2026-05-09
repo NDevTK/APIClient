@@ -21452,7 +21452,16 @@ function _tvsStep(F) {
           // § 7.2 / § 7.7 / WHATWG DOM § 4.5: when spec eval has
           // projected this MemberExpression to a taint-source AV
           // (e.g. window.location.href → location.href taint-source),
-          // use that directly without AST shape matching.
+          // use that directly without AST shape matching. Trigger
+          // property-flow analysis on the enclosing function first so
+          // sub-traces (where the top-level _traceValueSource already
+          // ran for a different path) still see the memo.
+          if (path.getFunctionParent) {
+            var subEncFn = path.getFunctionParent();
+            if (subEncFn && subEncFn.node && _t.isFunction(subEncFn.node)) {
+              try { _specAnalyzePropertyFlow(subEncFn); } catch (_subspf) {}
+            }
+          }
           var subAv = _specPathValMemo.get(node);
           if (subAv && subAv.kind === "taint-source") {
             return { done: _tvsSource(subAv.id, nodeLoc, subAv.dims || _dimsForSource(subAv.id)) };
