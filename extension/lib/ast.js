@@ -42,6 +42,12 @@ var _resolveParamFromCallersMemo = new WeakMap(); // binding identifier node →
 // or `el.dataset.X` (where the value is set in markup, not JS) can
 // resolve to the real value. Empty object means JS-only analysis.
 var _domContext = { metaTags: {}, dataAttrs: {}, hrefs: {} };
+// Inline-handler call sites built from _domContext.inlineHandlers at
+// analyse start. Map: functionName → [{ paramArgs, elementAttrs }, ...].
+// Used by _resolveParamFromCallers to add HTML-derived synthetic
+// callers when JS source has no `referencePaths` for a function (or
+// to enrich the caller set with element-attr info from `this`).
+var _inlineHandlerCallSites = {};
 
 // Collect URL-shaped values from a _domContext into a flat list
 // suitable for the analyser's `domEndpoints` result. URL-shaped
@@ -110,6 +116,58 @@ function _collectDomEndpointsFromContext(ctx) {
   return out;
 }
 
+// Build a map { functionName: [{ paramArgs: ["this"|literal, ...],
+// elementAttrs }, ...] } from inline handler bodies. Each entry
+// records a call site where `functionName(args...)` was invoked from
+// an inline event handler attribute, with the element the handler
+// was attached to. The resolver consults this map when tracing a
+// function's caller-args — `this` arg resolves to the element's
+// statically-extracted attributes (href/src/action/data-*).
+function _buildInlineHandlerCallSites(domContext) {
+  var out = {};
+  if (!domContext || !domContext.inlineHandlers) return out;
+  var ihKeys = Object.keys(domContext.inlineHandlers);
+  for (var i = 0; i < ihKeys.length; i++) {
+    var entry = domContext.inlineHandlers[ihKeys[i]];
+    if (!entry || !entry.handlers) continue;
+    for (var hi = 0; hi < entry.handlers.length; hi++) {
+      var body = entry.handlers[hi].body || "";
+      // Iterative scan for `name(args)` call patterns. Parses the body
+      // as JS via Babel for accurate matching — handler bodies are
+      // small (one-liners typically), so cost is bounded.
+      var ast;
+      try {
+        ast = _babelParse(body, { sourceType: "script", errorRecovery: true });
+      } catch (_e) { continue; }
+      // Walk top-level CallExpressions iteratively.
+      var stack = [ast.program.body];
+      while (stack.length > 0) {
+        var arr = stack.pop();
+        if (!Array.isArray(arr)) continue;
+        for (var ai = 0; ai < arr.length; ai++) {
+          var stmt = arr[ai];
+          if (!stmt) continue;
+          var expr = _t.isExpressionStatement(stmt) ? stmt.expression : null;
+          if (!expr || !_t.isCallExpression(expr) || !_t.isIdentifier(expr.callee)) continue;
+          var fnName = expr.callee.name;
+          var paramArgs = [];
+          for (var pi = 0; pi < expr.arguments.length; pi++) {
+            var pa = expr.arguments[pi];
+            if (_t.isThisExpression(pa)) paramArgs.push("this");
+            else if (_t.isStringLiteral(pa)) paramArgs.push({ kind: "const", value: pa.value });
+            else if (_t.isNumericLiteral(pa)) paramArgs.push({ kind: "const", value: pa.value });
+            else if (_t.isBooleanLiteral(pa)) paramArgs.push({ kind: "const", value: pa.value });
+            else paramArgs.push({ kind: "top" });
+          }
+          if (!out[fnName]) out[fnName] = [];
+          out[fnName].push({ paramArgs: paramArgs, elementAttrs: entry.elementAttrs });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 // Extract static DOM-derived values from an HTML string for the
 // resolver to use as ground truth. Iterative regex scan over markup —
 // no full HTML parser dependency needed for the values we resolve:
@@ -119,7 +177,7 @@ function _collectDomEndpointsFromContext(ctx) {
 // Returns the same shape as `_domContext`. Cheap to call repeatedly
 // (per-page); host can cache externally.
 function extractDomContextFromHtml(htmlString) {
-  var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {}, byId: {} };
+  var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {}, byId: {}, inlineHandlers: {} };
   if (!htmlString || typeof htmlString !== "string") return ctx;
   // <meta name="X" content="Y"> — both single and double quotes; allow
   // attribute order swap. Scan iteratively over <meta ...> tags.
@@ -161,14 +219,43 @@ function extractDomContextFromHtml(htmlString) {
     if (a) ctx.actions[elIdx] = a[1] != null ? a[1] : a[2];
     // Element id → element-attrs lookup, so getElementById("X") +
     // .href / .src / .dataset.K can resolve via byId[X].
-    var idMatch = /\bid\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(attrs);
+    var idMatch = /\bid\s*=\s*(?:"([^"]*)"|'([^">]*)')/i.exec(attrs);
+    var elIdValue = null;
     if (idMatch) {
-      var elId = idMatch[1] != null ? idMatch[1] : idMatch[2];
-      ctx.byId[elId] = {
+      elIdValue = idMatch[1] != null ? idMatch[1] : idMatch[2];
+      ctx.byId[elIdValue] = {
         href: h ? (h[1] != null ? h[1] : h[2]) : null,
         src: s ? (s[1] != null ? s[1] : s[2]) : null,
         action: a ? (a[1] != null ? a[1] : a[2]) : null,
         dataAttrs: dataMap || null,
+      };
+    }
+    // Inline event handlers: <... onclick="fn(this, ...)" ...>
+    // The handler runs with `this` bound to the element. When the JS
+    // function is `function fn(el, ...) { fetch(el.href); }`, the
+    // analyser can resolve `el` to the element's attributes via the
+    // (function-name, args, element-attrs) triple recorded here.
+    var inlineHandlerRe = /\bon[a-z]+\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+    var ih, handlersForEl = null;
+    while ((ih = inlineHandlerRe.exec(attrs)) !== null) {
+      if (!handlersForEl) handlersForEl = [];
+      var ihEvent = ih[0].match(/\bon([a-z]+)\s*=/i);
+      handlersForEl.push({
+        event: ihEvent ? ihEvent[1].toLowerCase() : null,
+        body: ih[1] != null ? ih[1] : ih[2],
+      });
+    }
+    if (handlersForEl) {
+      // Index by element-id when available, otherwise by element index.
+      var ihKey = elIdValue || ("el" + elIdx);
+      ctx.inlineHandlers[ihKey] = {
+        handlers: handlersForEl,
+        elementAttrs: {
+          href: h ? (h[1] != null ? h[1] : h[2]) : null,
+          src: s ? (s[1] != null ? s[1] : s[2]) : null,
+          action: a ? (a[1] != null ? a[1] : a[2]) : null,
+          dataAttrs: dataMap || null,
+        },
       };
     }
     elIdx++;
@@ -915,6 +1002,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   //   hrefs["sel"]              ← <a href="..." matched by selector>
   // Empty when not provided — analyser falls back to JS-only resolution.
   _domContext = (opts && opts.domContext) || { metaTags: {}, dataAttrs: {}, hrefs: {} };
+  _inlineHandlerCallSites = _buildInlineHandlerCallSites(_domContext);
   _sourceCode = code;
   _sourceLines = null;
   _sourceUrl = sourceUrl || null;
@@ -11111,6 +11199,33 @@ function _resolveParamFromCallersUncached(binding, depth, propName) {
             }
           }
         }
+      }
+    }
+  }
+  // Inline-handler synthetic callers: when the function is invoked
+  // from an HTML inline event handler attribute (e.g. <... onclick=
+  // "fn(this, ...)">), the analyser doesn't see the call site in JS
+  // referencePaths. _domContext.inlineHandlers (built per-analysis)
+  // provides them. For each match, the param at paramIdx maps to the
+  // call's arg: `this` resolves to the element's static attributes
+  // (href / src / dataset.X via propName).
+  var ihFn = funcBinding.identifier ? funcBinding.identifier.name : null;
+  if (ihFn && _inlineHandlerCallSites && _inlineHandlerCallSites[ihFn]) {
+    var ihCalls = _inlineHandlerCallSites[ihFn];
+    for (var ihi = 0; ihi < ihCalls.length; ihi++) {
+      var ihCall = ihCalls[ihi];
+      if (paramIdx >= ihCall.paramArgs.length) continue;
+      var ihArg = ihCall.paramArgs[paramIdx];
+      if (ihArg === "this") {
+        // The element. propName tells us which attribute to read.
+        var ea = ihCall.elementAttrs;
+        if (!ea) continue;
+        if (propName === "href" && ea.href != null) values.push(ea.href);
+        else if (propName === "src" && ea.src != null) values.push(ea.src);
+        else if (propName === "action" && ea.action != null) values.push(ea.action);
+        // Without propName, no specific attribute requested.
+      } else if (ihArg && ihArg.kind === "const" && !propName) {
+        values.push(String(ihArg.value));
       }
     }
   }
