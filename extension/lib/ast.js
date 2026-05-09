@@ -139,7 +139,9 @@ function _buildInlineHandlerCallSites(domContext) {
       try {
         ast = _babelParse(body, { sourceType: "script", errorRecovery: true });
       } catch (_e) { continue; }
-      // Walk top-level CallExpressions iteratively.
+      // Walk top-level CallExpressions iteratively. Handler bodies are
+      // typically one or more statements, often a SequenceExpression
+      // (`fn1(this); fn2(this)` or `fn1(this), fn2(this)`).
       var stack = [ast.program.body];
       while (stack.length > 0) {
         var arr = stack.pop();
@@ -148,6 +150,15 @@ function _buildInlineHandlerCallSites(domContext) {
           var stmt = arr[ai];
           if (!stmt) continue;
           var expr = _t.isExpressionStatement(stmt) ? stmt.expression : null;
+          // SequenceExpression: drain each sub-expression as a separate stmt.
+          if (expr && _t.isSequenceExpression(expr)) {
+            for (var si = 0; si < expr.expressions.length; si++) {
+              if (_t.isCallExpression(expr.expressions[si])) {
+                arr.push({ type: "ExpressionStatement", expression: expr.expressions[si] });
+              }
+            }
+            continue;
+          }
           if (!expr || !_t.isCallExpression(expr) || !_t.isIdentifier(expr.callee)) continue;
           var fnName = expr.callee.name;
           var paramArgs = [];
