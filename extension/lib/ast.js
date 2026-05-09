@@ -4345,26 +4345,73 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
     }
     // § 13.3.6 CallExpression: when the call resolves to a function
-    // whose body is a single ReturnStatement with a const-literal
-    // argument, the call's value is that const. Pure spec semantics —
-    // function call's value is its return value per AbstractClosure.
-    // Only attempt this when _resolver is initialised (within an
-    // analyzeJSBundle call); when invoked stand-alone (post-analysis),
-    // skip this branch since _resolveCalleeFuncPath needs _resolver.
-    if (_resolver) {
-      var calleeFnPath = _resolveCalleeFuncPath(path, 0);
-      if (calleeFnPath && calleeFnPath.node && calleeFnPath.node.body &&
-          _t.isBlockStatement(calleeFnPath.node.body)) {
-        var fnBody = calleeFnPath.node.body.body;
-        if (fnBody.length === 1 && _t.isReturnStatement(fnBody[0]) && fnBody[0].argument) {
+    // whose body is a single ReturnStatement, the call's value is the
+    // (substituted) return value per AbstractClosure semantics. Pure
+    // spec — no heuristic. Two routes for resolving callee:
+    //   (a) `_resolver`-backed `_resolveCalleeFuncPath` for full
+    //       inter-procedural cases (factory returns, assignment chains).
+    //   (b) Direct scope binding when callee is an Identifier with a
+    //       FunctionDeclaration / VariableDeclarator(FunctionExpression)
+    //       binding — works post-`_resolver`-teardown.
+    var calleeFnPath = null;
+    if (_resolver) calleeFnPath = _resolveCalleeFuncPath(path, 0);
+    if (!calleeFnPath && _t.isIdentifier(n.callee)) {
+      var calleeBinding = path.scope.getBinding(n.callee.name);
+      if (calleeBinding && calleeBinding.path) {
+        if (_t.isFunctionDeclaration(calleeBinding.path.node)) {
+          calleeFnPath = calleeBinding.path;
+        } else if (_t.isVariableDeclarator(calleeBinding.path.node) &&
+                   calleeBinding.path.node.init &&
+                   (_t.isFunctionExpression(calleeBinding.path.node.init) ||
+                    _t.isArrowFunctionExpression(calleeBinding.path.node.init))) {
+          calleeFnPath = calleeBinding.path.get("init");
+        }
+      }
+    }
+    if (calleeFnPath && calleeFnPath.node && calleeFnPath.node.body &&
+        _t.isBlockStatement(calleeFnPath.node.body)) {
+      var fnBody = calleeFnPath.node.body.body;
+      if (fnBody.length === 1 && _t.isReturnStatement(fnBody[0]) && fnBody[0].argument) {
           var retArg = fnBody[0].argument;
+          // Direct literal returns — § 13.2.3-13.2.5.
           if (_t.isStringLiteral(retArg)) return { kind: "const", value: retArg.value };
           if (_t.isNumericLiteral(retArg)) return { kind: "const", value: retArg.value };
           if (_t.isBooleanLiteral(retArg)) return { kind: "const", value: retArg.value };
           if (_t.isNullLiteral(retArg)) return { kind: "const", value: null };
+          // `return paramName;` — substitute caller's arg AV per § 10.2.10
+          // FunctionDeclarationInstantiation: the param's value at runtime
+          // is the corresponding caller argument. Scope-checked: retArg's
+          // binding inside the callee body must actually be the param
+          // (not a shadow like `var x = 1; return x;`).
+          if (_t.isIdentifier(retArg)) {
+            var retBinding = calleeFnPath.scope.getBinding(retArg.name);
+            if (retBinding && retBinding.kind === "param") {
+              var calleeParams = calleeFnPath.node.params;
+              for (var rpi = 0; rpi < calleeParams.length; rpi++) {
+                var rpar = calleeParams[rpi];
+                var rparName = _t.isIdentifier(rpar) ? rpar.name :
+                  (_t.isAssignmentPattern(rpar) && _t.isIdentifier(rpar.left) ? rpar.left.name : null);
+                if (rparName === retArg.name && retBinding.identifier === rpar) {
+                  if (rpi < n.arguments.length) {
+                    var callerArgAv = vals.get(n.arguments[rpi]);
+                    if (callerArgAv) return callerArgAv;
+                  }
+                  break;
+                }
+                // AssignmentPattern: binding identifier is rpar.left.
+                if (_t.isAssignmentPattern(rpar) && retBinding.identifier === rpar.left &&
+                    rparName === retArg.name) {
+                  if (rpi < n.arguments.length) {
+                    var callerArgAvAp = vals.get(n.arguments[rpi]);
+                    if (callerArgAvAp) return callerArgAvAp;
+                  }
+                  break;
+                }
+              }
+            }
+          }
         }
       }
-    }
     return { kind: "top" }; // Other call returns abstract to Top.
   }
   // Unmodelled expression kinds abstract to Top — sound conservative answer.

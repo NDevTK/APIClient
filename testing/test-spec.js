@@ -3147,6 +3147,26 @@ specTest("§ 23.1.3.16 Array.prototype.includes distributes `(cond ? ['x'] : ['y
   return leaves.length === 2 && leaves.indexOf(true) >= 0 && leaves.indexOf(false) >= 0;
 });
 
+specTest("§ 10.2.10 inter-proc spec eval: `id(x){return x}` call substitutes caller arg `id('foo')` → 'foo'", `
+  function f() { this.u = id("/api/foo"); }
+  function id(x) { return x; }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api/foo";
+});
+
+specTest("§ 10.2.10 inter-proc spec eval: `id(x){return x}` shadow `var x=1` does NOT substitute", `
+  function f() { this.u = id("oops"); }
+  function id(x) { var x = 7; return x; }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // The retArg's binding is the local `var x`, not the param. Substitution
+  // must NOT fire — value should NOT be "oops" (the caller arg).
+  return !(av && av.kind === "const" && av.value === "oops");
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));

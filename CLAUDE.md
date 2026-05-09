@@ -1,6 +1,6 @@
 # API Security Researcher — Development Guide
 
-Work autonomously and continuously across all pillars. No mocking, no placeholders, no heuristics, no summaries, no workarounds.
+Work autonomously and continuously across all ideas. No mocking, no placeholders, no heuristics, no summaries, no workarounds.
 No context limits even when you get to 1M context it continues automatically.
 
 ## Project Overview
@@ -9,7 +9,7 @@ A Chrome Extension (MV3) for API discovery, protocol reverse-engineering (Protob
 
 ## Ideas for what to do during continuous work
 
-Every change belongs to one pillar. After a landed change, the next change must be in a different pillar until all pillars have moved once; then rotate back. Don't stay in one pillar because it's easier.
+Don't stay in one idea because it's easier.
 
 1. **Schema learning** — map request/response schemas and URL params from observed traffic + AST call sites. Every field gets a real example value, never a default.
 2. **Usable example values** — pull real captured values for every param/field; no synthesized defaults.
@@ -77,13 +77,11 @@ Concretely: a callback-param trace on `errCb` in `function getXhr(url, errCb){ .
 
 If a review needed a manual step that none of these covered, the harness has a gap (Pillar 12) — add the command before the gap is forgotten.
 
-**Continuous workflow across every task type.** Schema learning, security detection, service grouping, exploit probing, server interaction, JS review, UI review, performance, harness context — all pillars are first-class. Never stop, never ask for confirmation before substantial reversible changes, never surface a limitation as a question; fix it. No workarounds means don't accept gaps — close them without shortcuts. The loop ends only on an irreversible external block.
+**Continuous workflow across every task type.** Schema learning, security detection, service grouping, exploit probing, server interaction, JS review, UI review, performance, harness context — all ideas are first-class. Never stop, never ask for confirmation before substantial reversible changes, never surface a limitation as a question; fix it. No workarounds means don't accept gaps — close them without shortcuts. The loop ends only on an irreversible external block.
 
 ## Operational Rules
 
 **Output rule.** Output text only when progress is blocked by something external (missing credential, ambiguous irreversible choice). Otherwise call tools. Never write "tests pass, the fix is in" style summaries. The diff is the record.
-
-**Rotation cadence.** After any non-trivial landed change, the next non-trivial change must be in a different pillar. Don't cluster.
 
 **Verification protocol.** A change is landed only after it has been:
 1. Exercised on the real site where it applies — the finding/fix seen, diffed, or measured end-to-end.
@@ -102,18 +100,16 @@ Tests are for detector polarity (positive + negative, pinned to similar-shape in
 
 **Comments policy.** No preachy comments, no self-congratulation, no "carefully removed the heuristic" narration. A comment explains WHY a non-obvious decision was made, not what the code does or what rule it follows.
 
-**Balance, not breadth.** Touching all 15 pillars isn't the goal — the goal is that no one pillar grows while others rot. If a fix in pillar 3 creates a harness-context gap, pillar 12 is next.
-
 ## Never Do
 
 - **Heuristics after being told no heuristics.** No magic numbers (`bfsDepth: 2`, `MAX_DEPTH = 10`), no name-based matching (`if (callee.name === "fetch")` without scope check), no scoring (A-F grades, confidence percentiles).
 - **Placeholders / opaque fallbacks.** No `{foo}`, no `{param0}`, no `"unresolvable"`, no `_describeNode()` string lookups, no returning a partial concat as if complete. Computed values get fully resolved via the existing machinery — or the gap is reported and closed.
 - **"unresolvable" / "can't" in code or tests.** The word is a lie; every value has a resolution path the analyzer either has or needs.
 - **Ceremonial end-of-turn summaries.** No "tests 748/748 pass, the fix is landed". The diff and the tool output speak for themselves.
-- **Stopping because the current micro-task is done.** Rotate pillars; pick up a resolver gap; verify on a new real site. Only stop on an irreversible external block.
+- **Stopping because the current micro-task is done.** Rotate ideas; pick up a resolver gap; verify on a new real site. Only stop on an irreversible external block.
 - **Ignoring timeouts.** See operational rule above.
 - **Claim a change works before real-site verification.** Tree-shake line counts, finding reviews, perf numbers — one run is not a claim.
-- **Staying in one pillar because it's easy.** Security FP cleanup gets addictive; schema / service / UI work gets skipped. Rotate.
+- **Staying in one idea because it's easy.** Security FP cleanup gets addictive; schema / service / UI work gets skipped. Rotate.
 - **Synthetic tests standing in for real data.** A polarity test never substitutes for running the change against a real bundle.
 - **Preachy or self-congratulating comments.** See comments policy.
 - **Shipping mocked or placeholder responses.** Every fetched value, every schema example, every fetch-call-site URL is from an observed or fully-resolved source.
