@@ -4892,9 +4892,9 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
       for (var apii = 0; apii < ancParams.length; apii++) {
         var ap = ancParams[apii];
         if (!ap) continue;
-        if (ap.type === "Identifier") ancCtorState[ap.name] = { kind: "param", idx: apii };
+        if (ap.type === "Identifier") ancCtorState[ap.name] = { kind: "param", idx: apii, fn: null };
         else if (ap.type === "AssignmentPattern" && ap.left && ap.left.type === "Identifier") {
-          ancCtorState[ap.left.name] = { kind: "param", idx: apii };
+          ancCtorState[ap.left.name] = { kind: "param", idx: apii, fn: null };
         }
       }
       var ancEffects = [];
@@ -5251,7 +5251,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       // each per-call value as an alternative.
       for (var pci = 1; pci < perCallAvs.length; pci++) paramAv = _specSetUnionAv(paramAv, perCallAvs[pci]);
     } else {
-      paramAv = { kind: "param", idx: i };
+      paramAv = { kind: "param", idx: i, fn: null };
     }
     if (p.type === "Identifier") {
       state[p.name] = paramAv;
@@ -5284,7 +5284,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         if (bindIdent && bindIdent.type === "Identifier") {
           state[bindIdent.name] = {
             kind: "member",
-            obj: { kind: "param", idx: i },
+            obj: { kind: "param", idx: i, fn: null },
             key: { kind: "const", value: keyName }
           };
         }
@@ -5300,7 +5300,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         if (ae && ae.type === "Identifier") {
           state[ae.name] = {
             kind: "member",
-            obj: { kind: "param", idx: i },
+            obj: { kind: "param", idx: i, fn: null },
             key: { kind: "const", value: ai }
           };
         }
