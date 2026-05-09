@@ -3369,6 +3369,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     return { kind: "top" };
   }
   if (methodId === "Object.fromEntries") {
+    // § 20.1.2.7 — accepts an iterable of [k,v] pairs.
     if (argAvs.length === 0) return { kind: "top" };
     var feSrc = argAvs[0];
     if (feSrc && feSrc.kind === "array-lit" && feSrc.elements) {
@@ -3381,6 +3382,17 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         feProps[String(pk.value)] = pair.elements[1];
       }
       return { kind: "obj-lit", props: feProps };
+    }
+    // § 24.1.5.1 Map default iterator yields [k,v] pairs — directly map
+    // entries to obj-lit props when keys are Const strings/numbers.
+    if (feSrc && feSrc.kind === "map-instance" && feSrc.entries) {
+      var feMapProps = Object.create(null);
+      for (var fmei = 0; fmei < feSrc.entries.length; fmei++) {
+        var fmek = feSrc.entries[fmei][0];
+        if (!fmek || fmek.kind !== "const" || (typeof fmek.value !== "string" && typeof fmek.value !== "number")) return { kind: "top" };
+        feMapProps[String(fmek.value)] = feSrc.entries[fmei][1];
+      }
+      return { kind: "obj-lit", props: feMapProps };
     }
     return { kind: "top" };
   }
@@ -3588,6 +3600,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "Array.from") {
     if (argAvs.length === 0) return { kind: "top" };
     var afArg = argAvs[0];
+    // § 23.1.2.1 step 6 — iterable: walk via the source's spec iterator.
     if (afArg && afArg.kind === "array-lit" && afArg.elements) {
       return { kind: "array-lit", elements: afArg.elements.slice() };
     }
@@ -3595,6 +3608,29 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       var afChars = [];
       for (var afCh of afArg.value) afChars.push({ kind: "const", value: afCh });
       return { kind: "array-lit", elements: afChars };
+    }
+    // § 24.2.5.1 Set default iterator yields each item.
+    if (afArg && afArg.kind === "set-instance" && afArg.items) {
+      return { kind: "array-lit", elements: afArg.items.slice() };
+    }
+    // § 24.1.5.1 Map default iterator yields [k,v] array-lit entries.
+    if (afArg && afArg.kind === "map-instance" && afArg.entries) {
+      var afMapEntries = [];
+      for (var afmi = 0; afmi < afArg.entries.length; afmi++) {
+        afMapEntries.push({ kind: "array-lit", elements: [afArg.entries[afmi][0], afArg.entries[afmi][1]] });
+      }
+      return { kind: "array-lit", elements: afMapEntries };
+    }
+    // § 23.1.2.1 step 5 — array-like with .length: when arg has obj-lit
+    // shape with numeric length and indexed props, build array-lit.
+    if (afArg && afArg.kind === "obj-lit" && afArg.props && afArg.props.length &&
+        afArg.props.length.kind === "const" && typeof afArg.props.length.value === "number") {
+      var afLen = afArg.props.length.value;
+      var afArrLikeElems = [];
+      for (var afli = 0; afli < afLen; afli++) {
+        afArrLikeElems.push(afArg.props[afli] || { kind: "const", value: undefined });
+      }
+      return { kind: "array-lit", elements: afArrLikeElems };
     }
     return { kind: "top" };
   }

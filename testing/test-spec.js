@@ -4095,6 +4095,51 @@ specTest("§ 21.4.3.4 Date.UTC: all-Const-number args resolve to deterministic m
   return av && av.kind === "const" && av.value === Date.UTC(2026, 0, 1);
 });
 
+specTest("§ 23.1.2.1 Array.from(Set): yields items per § 24.2.5.1 default iterator", `
+  function f() {
+    var s = new Set();
+    s.add("a"); s.add("b");
+    this.arr = Array.from(s);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "array-lit" || (av.elements || []).length !== 2) return false;
+  return av.elements[0].kind === "const" && av.elements[0].value === "a" &&
+         av.elements[1].kind === "const" && av.elements[1].value === "b";
+});
+
+specTest("§ 23.1.2.1 Array.from(Map): yields [k,v] pairs per § 24.1.5.1", `
+  function f() {
+    var m = new Map();
+    m.set("k", "v");
+    this.arr = Array.from(m);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "array-lit" || (av.elements || []).length !== 1) return false;
+  var pair = av.elements[0];
+  if (!pair || pair.kind !== "array-lit" || (pair.elements || []).length !== 2) return false;
+  return pair.elements[0].kind === "const" && pair.elements[0].value === "k" &&
+         pair.elements[1].kind === "const" && pair.elements[1].value === "v";
+});
+
+specTest("§ 20.1.2.7 Object.fromEntries(Map): builds obj-lit from Map's [k,v] entries", `
+  function f() {
+    var m = new Map();
+    m.set("foo", "F");
+    m.set("bar", "B");
+    this.obj = Object.fromEntries(m);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "obj-lit" || !av.props) return false;
+  return av.props.foo && av.props.foo.kind === "const" && av.props.foo.value === "F" &&
+         av.props.bar && av.props.bar.kind === "const" && av.props.bar.value === "B";
+});
+
 specTest("§ 21.4.3.1 Date.now: host-time, top per spec", `
   function f() {
     this.t = Date.now();
