@@ -764,6 +764,8 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
   _findPrototypeMethodCallerArgsMemo = new WeakMap();
   _propAssignMemo = new WeakMap();
   _resolveToObjectMemo = new WeakMap();
+  _rcfpMemo = new WeakMap();
+  _specEffectsMemo = new WeakMap();
   _sourceCode = code;
   _sourceLines = null;
   _sourceUrl = sourceUrl || null;
@@ -8297,13 +8299,28 @@ function _rcfpMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, de
   };
 }
 
+// Per-analysis memo for _resolveCalleeFuncPath. Each top-level invocation
+// re-walks the resolver state machine; without memoization, repeated
+// resolution of the same call site (which happens when multiple resolver
+// branches probe the same `obj.method(...)` pattern) does redundant work.
+// Key is the CallExpression node; value is the resolved function path or
+// the sentinel `_RCFP_MISS` (we cache misses too — the resolver gap is
+// a fact about the source, not a transient state).
+var _rcfpMemo = new WeakMap();
+var _RCFP_MISS = { _miss: true };
 function _resolveCalleeFuncPath(callPath, depth) {
   var node = callPath && callPath.node;
   if (!node) return null;
+  if (_rcfpMemo.has(node)) {
+    var memoed = _rcfpMemo.get(node);
+    return memoed === _RCFP_MISS ? null : memoed;
+  }
   if (!_resolver.guard("C", node)) return null;
   var initialFrame = _rcfpMakeFrame(callPath, node, depth || 0,
     _rcfpStep, null, "C", null);
-  return _runResolverStack(initialFrame);
+  var result = _runResolverStack(initialFrame);
+  _rcfpMemo.set(node, result === null ? _RCFP_MISS : result);
+  return result;
 }
 
 function _rcfpStep(F) {
