@@ -7015,6 +7015,32 @@ function _ravStep(F) {
       }
     }
   }
+  // Form 1e: `document.querySelector("#X").<prop>` — CSS id selector.
+  // Same lookup as getElementById, just via querySelector. WHATWG DOM
+  // querySelector accepts CSS Selectors L4 syntax.
+  if (skip < 1 && _t.isMemberExpression(node) && !node.computed &&
+      _t.isIdentifier(node.property) &&
+      _t.isCallExpression(node.object) &&
+      _t.isMemberExpression(node.object.callee) && !node.object.callee.computed &&
+      _t.isIdentifier(node.object.callee.object, { name: "document" }) &&
+      !path.scope.getBinding("document") &&
+      _t.isIdentifier(node.object.callee.property, { name: "querySelector" }) &&
+      node.object.arguments.length === 1 &&
+      _t.isStringLiteral(node.object.arguments[0])) {
+    var qsSel = node.object.arguments[0].value;
+    var qsIdMatch = qsSel.match(/^#([A-Za-z][\w:.-]*)$/);
+    if (qsIdMatch) {
+      var qsId = qsIdMatch[1];
+      var qsProp = node.property.name;
+      if (_domContext && _domContext.byId &&
+          Object.prototype.hasOwnProperty.call(_domContext.byId, qsId)) {
+        var qsInfo = _domContext.byId[qsId];
+        if (qsInfo && qsInfo[qsProp] != null) {
+          return { done: [qsInfo[qsProp]] };
+        }
+      }
+    }
+  }
   // Form 1d: `document.getElementById("X").getAttribute("Y")` — direct
   // attribute access. Returns the matching data-/href/src/action value.
   if (skip < 1 && _t.isCallExpression(node) &&
