@@ -4777,6 +4777,34 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
         analysis.fetchCallSites.length, newEndpoints);
     }
 
+    // DOM-derived endpoints (href/src/action/data-* values from page
+    // markup). Per user directive: "what DOM gets sent in the first
+    // place [is] useful for learning". Surfaced into tab.endpoints
+    // alongside AST-derived ones, with source="dom_html_<kind>" for
+    // origin tracking.
+    var domEps = analysis.domEndpoints || [];
+    for (var dei = 0; dei < domEps.length; dei++) {
+      var domEp = domEps[dei];
+      try {
+        var deBase = (_tabMeta.get(tabId) && _tabMeta.get(tabId).url) || analysis.sourceUrl;
+        if (!deBase) continue;
+        var deResolved = new URL(domEp.url, deBase);
+        if (/^(data|blob|about|javascript):/i.test(deResolved.protocol)) continue;
+        var deKey = "DOM " + (domEp.source || "html") + " " + deResolved.href;
+        if (tab.endpoints.has(deKey)) continue;
+        tab.endpoints.set(deKey, {
+          url: deResolved.href,
+          method: "?",
+          host: deResolved.hostname,
+          path: deResolved.pathname,
+          service: extractInterfaceName(deResolved),
+          source: "dom_" + (domEp.source || "html").replace(/-/g, "_"),
+          pageUrl: deBase,
+          firstSeen: Date.now(),
+        });
+      } catch (_) {}
+    }
+
     // Store security findings on tab state (only once per analysis — skip if already merged)
     var secSinks = analysis.securitySinks || [];
     var dangerousPats = analysis.dangerousPatterns || [];
