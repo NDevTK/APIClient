@@ -5086,42 +5086,8 @@ function _specEvalLeaf(path, state, vals, effects) {
         return { kind: "const", value: Boolean(boolCoerceAv.value) };
       }
     }
-    // String.* static methods per § 22.1.2 — scope-checked unshadowed `String`.
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.object, { name: "String" }) &&
-        !path.scope.getBinding("String") &&
-        _t.isIdentifier(n.callee.property)) {
-      var strStatic = n.callee.property.name;
-      // § 22.1.2.1 String.fromCharCode(...codeUnits)
-      if (strStatic === "fromCharCode") {
-        var fcExp = _specExpandCallArgs(n.arguments, vals);
-        if (fcExp === null) return { kind: "top" };
-        var fcArgs = [];
-        var fcOk = true;
-        for (var fci = 0; fci < fcExp.length; fci++) {
-          var fca = fcExp[fci];
-          if (!fca || fca.kind !== "const" || typeof fca.value !== "number") { fcOk = false; break; }
-          fcArgs.push(fca.value);
-        }
-        if (fcOk) return { kind: "const", value: String.fromCharCode.apply(String, fcArgs) };
-      }
-      // § 22.1.2.2 String.fromCodePoint(...codePoints)
-      if (strStatic === "fromCodePoint") {
-        var fcpExp = _specExpandCallArgs(n.arguments, vals);
-        if (fcpExp === null) return { kind: "top" };
-        var fcpArgs = [];
-        var fcpOk = true;
-        for (var fcpi = 0; fcpi < fcpExp.length; fcpi++) {
-          var fcpa = fcpExp[fcpi];
-          if (!fcpa || fcpa.kind !== "const" || typeof fcpa.value !== "number") { fcpOk = false; break; }
-          fcpArgs.push(fcpa.value);
-        }
-        if (fcpOk) {
-          try { return { kind: "const", value: String.fromCodePoint.apply(String, fcpArgs) }; }
-          catch (e) { return { kind: "top" }; }
-        }
-      }
-    }
+    // String.* statics dispatched via globalThis.String registry per
+    // § 22.1.2. ONE central dispatch.
     // WHATWG DOM § 4.9.1 Element.getAttribute(qualifiedName). When the
     // receiver is an obj-lit (typically from document.getElementById /
     // querySelector / inline-handler binding) and the attribute name is
@@ -5202,38 +5168,8 @@ function _specEvalLeaf(path, state, vals, effects) {
     // § 25.5.2 JSON.parse(text) — when text is a Const string literal
     // that's syntactically valid JSON, evaluate to the parsed value as
     // an abstract value per the resulting JS type.
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.object, { name: "JSON" }) &&
-        !path.scope.getBinding("JSON") &&
-        _t.isIdentifier(n.callee.property, { name: "parse" }) &&
-        n.arguments.length === 1) {
-      var jpArg = vals.get(n.arguments[0]);
-      if (jpArg && jpArg.kind === "const" && typeof jpArg.value === "string") {
-        try {
-          var parsed = JSON.parse(jpArg.value);
-          // Lift JSON value to abstract value: primitives → const,
-          // objects → obj-lit with const-keyed props, arrays → array-lit.
-          var liftedAv = _liftJsonValueToAv(parsed);
-          if (liftedAv) return liftedAv;
-        } catch (e) { /* not valid JSON — fall through to top */ }
-      }
-    }
-    // § 25.5.4 JSON.stringify(value) — when value is a Const, obj-lit
-    // (with all-Const leaves), or array-lit (with all-Const elements),
-    // evaluate to the string per JSON.stringify semantics.
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.object, { name: "JSON" }) &&
-        !path.scope.getBinding("JSON") &&
-        _t.isIdentifier(n.callee.property, { name: "stringify" }) &&
-        n.arguments.length >= 1) {
-      var jsArg = vals.get(n.arguments[0]);
-      var jsConcrete = _avToJsonValue(jsArg);
-      if (jsConcrete && jsConcrete.ok) {
-        try {
-          return { kind: "const", value: JSON.stringify(jsConcrete.value) };
-        } catch (e) { /* fall through */ }
-      }
-    }
+    // JSON.parse / JSON.stringify dispatched via globalThis.JSON registry
+    // per § 25.5. ONE central dispatch.
     // String.prototype methods (trim/toLowerCase/replace/etc.) and
     // Array.prototype mutating methods (push/pop/shift/unshift) are now
     // dispatched via the prototype-chain mechanism above
