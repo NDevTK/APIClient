@@ -1393,6 +1393,39 @@ specTest("§ 23.1.3.18: array-lit join with explicit separator yields Const conc
   return effects[0].value && effects[0].value.kind === "const" && effects[0].value.value === "api/v1/users";
 });
 
+specTest("§ 22.1.3.23: `String.prototype.split('/')` via prototype dispatch", `
+  function f() {
+    this.parts = "a/b/c".split("/");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "array-lit" || av.elements.length !== 3) return false;
+  return av.elements[0].kind === "const" && av.elements[0].value === "a" &&
+         av.elements[1].kind === "const" && av.elements[1].value === "b" &&
+         av.elements[2].kind === "const" && av.elements[2].value === "c";
+});
+
+specTest("§ 22.1.3.30/31: trimStart/trimEnd via prototype dispatch", `
+  function f() {
+    this.s = "   hello   ".trimEnd();
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "   hello";
+});
+
+specTest("§ 23.1.3.18 lastIndexOf via prototype dispatch", `
+  function f() {
+    this.i = ["a", "b", "a", "c"].lastIndexOf("a");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === 2;
+});
+
 specTest("§ 21.1.3.3: `Const(3.14159).toFixed(2)` resolves to Const(\"3.14\")", `
   function f() {
     this.s = (3.14159).toFixed(2);

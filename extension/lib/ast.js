@@ -2115,7 +2115,8 @@ function _specArrayPrototypeAv() {
       // Mutating per § 23.1.3 (state mutation handled in _specApplyBuiltinMethod):
       "push", "pop", "shift", "unshift",
       // Pure (return new value, no mutation):
-      "join", "concat", "slice", "includes", "indexOf", "reverse", "at", "flat"
+      "join", "concat", "slice", "includes", "indexOf", "lastIndexOf",
+      "reverse", "at", "flat"
     ];
     for (var ami = 0; ami < arrayMethodNames.length; ami++) {
       props[arrayMethodNames[ami]] = { kind: "builtin-method", id: "Array.prototype." + arrayMethodNames[ami] };
@@ -2427,6 +2428,16 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
     }
     return { kind: "const", value: -1 };
   }
+  if (methodId === "Array.prototype.lastIndexOf") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    var lioSearch = argAvs[0].value;
+    for (var lioi = (recvAv.elements || []).length - 1; lioi >= 0; lioi--) {
+      var lioe = recvAv.elements[lioi];
+      if (!lioe || lioe.kind !== "const") return { kind: "top" };
+      if (lioe.value === lioSearch) return { kind: "const", value: lioi };
+    }
+    return { kind: "const", value: -1 };
+  }
   if (methodId === "Array.prototype.reverse") {
     return { kind: "array-lit", elements: (recvAv.elements || []).slice().reverse() };
   }
@@ -2621,7 +2632,8 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // (avoids self-recursion of _specApplyBuiltinMethod).
   var pureArrayIds = ["Array.prototype.join", "Array.prototype.concat",
     "Array.prototype.slice", "Array.prototype.includes", "Array.prototype.indexOf",
-    "Array.prototype.reverse", "Array.prototype.at", "Array.prototype.flat"];
+    "Array.prototype.lastIndexOf", "Array.prototype.reverse",
+    "Array.prototype.at", "Array.prototype.flat"];
   if (pureArrayIds.indexOf(methodId) >= 0 && recvAv && recvAv.kind === "or") {
     var arrLeaves = _avFlattenOrLeaves(recvAv);
     if (arrLeaves) {
