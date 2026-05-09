@@ -7066,25 +7066,38 @@ function _ravStep(F) {
       }
     }
   }
-  // Form 1d: `document.getElementById("X").getAttribute("Y")` — direct
-  // attribute access. Returns the matching data-/href/src/action value.
+  // Form 1d: `<el>.getAttribute("Y")` where <el> is either an inline
+  // getElementById/querySelector call or an Identifier bound to one.
+  // Returns the matching data-/href/src/action value via byId.
   if (skip < 1 && _t.isCallExpression(node) &&
       _t.isMemberExpression(node.callee) && !node.callee.computed &&
       _t.isIdentifier(node.callee.property, { name: "getAttribute" }) &&
       node.arguments.length === 1 &&
-      _t.isStringLiteral(node.arguments[0]) &&
-      _t.isCallExpression(node.callee.object) &&
-      _t.isMemberExpression(node.callee.object.callee) && !node.callee.object.callee.computed &&
-      _t.isIdentifier(node.callee.object.callee.object, { name: "document" }) &&
-      !path.scope.getBinding("document") &&
-      _t.isIdentifier(node.callee.object.callee.property, { name: "getElementById" }) &&
-      node.callee.object.arguments.length === 1 &&
-      _t.isStringLiteral(node.callee.object.arguments[0])) {
-    var gaId = node.callee.object.arguments[0].value;
-    var gaAttr = node.arguments[0].value;
-    if (_domContext && _domContext.byId &&
+      _t.isStringLiteral(node.arguments[0])) {
+    var gaId = null;
+    var receiver = node.callee.object;
+    // Inline form: document.getElementById("X").getAttribute("Y")
+    if (_t.isCallExpression(receiver) &&
+        _t.isMemberExpression(receiver.callee) && !receiver.callee.computed &&
+        _t.isIdentifier(receiver.callee.object, { name: "document" }) &&
+        !path.scope.getBinding("document") &&
+        receiver.arguments.length === 1 &&
+        _t.isStringLiteral(receiver.arguments[0])) {
+      if (_t.isIdentifier(receiver.callee.property, { name: "getElementById" })) {
+        gaId = receiver.arguments[0].value;
+      } else if (_t.isIdentifier(receiver.callee.property, { name: "querySelector" })) {
+        var gaSel = receiver.arguments[0].value;
+        var gaIdMatch = gaSel.match(/^#([A-Za-z][\w:.-]*)$/);
+        if (gaIdMatch) gaId = gaIdMatch[1];
+      }
+    } else if (_t.isIdentifier(receiver)) {
+      // Variable-bound form: var el = getElementById("X"); el.getAttribute("Y")
+      gaId = _resolveBoundDomElementId(path, receiver);
+    }
+    if (gaId && _domContext && _domContext.byId &&
         Object.prototype.hasOwnProperty.call(_domContext.byId, gaId)) {
       var gaInfo = _domContext.byId[gaId];
+      var gaAttr = node.arguments[0].value;
       // Standard attribute names map directly to byId properties.
       if (gaAttr === "href" && gaInfo.href != null) return { done: [gaInfo.href] };
       if (gaAttr === "src" && gaInfo.src != null) return { done: [gaInfo.src] };
