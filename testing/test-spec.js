@@ -4657,6 +4657,20 @@ specTest("§ 15.3.5.4 ArrowFunction class-field this: lexical capture from const
   return false;
 });
 
+specTest("§ 15.7.3 nested extends: grandparent ctor's this.X reaches grandchild method", `
+  class A { constructor() { this.url = "/api"; } }
+  class B extends A { constructor() { super(); } }
+  class C extends B { doFetch() { this.flag = this.url; } }
+`, function(effects) {
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api";
+    }
+  }
+  return false;
+});
+
 specTest("§ 13.3.5 PrivateName access: this.#X resolves to ClassPrivateProperty value", `
   class C {
     #url = "/api";

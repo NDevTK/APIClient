@@ -4399,6 +4399,84 @@ var _specCallSitesByFn = new WeakMap();
 
 
 
+// § 15.7.3 ClassHeritage: iteratively walk an extends chain to find
+// the closest constructor (own or inherited). Returns the constructor's
+// Babel path or null. Cycle guard via visited Set on classNode identity
+// — pathological `class A extends B; B extends A` doesn't infinite-loop.
+function _specFindCtorInExtendsChain(classNode, scope) {
+  if (!classNode || !scope) return null;
+  var visited = new Set();
+  var current = classNode;
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    if (!(_t.isClassDeclaration(current) || _t.isClassExpression(current))) return null;
+    if (!current.superClass || !_t.isIdentifier(current.superClass)) return null;
+    var sb = scope.getBinding(current.superClass.name);
+    if (!sb || !sb.path || !sb.path.node) return null;
+    var sn = sb.path.node;
+    var spcPath = null;
+    if (_t.isClassDeclaration(sn)) spcPath = sb.path;
+    else if (_t.isVariableDeclarator(sn) && sn.init && _t.isClassExpression(sn.init)) {
+      spcPath = sb.path.get("init");
+    }
+    if (!spcPath || !spcPath.node) return null;
+    var sbody = spcPath.node.body;
+    if (!_t.isClassBody(sbody)) return null;
+    for (var sci = 0; sci < sbody.body.length; sci++) {
+      var sm = sbody.body[sci];
+      if (_t.isClassMethod(sm) && sm.kind === "constructor") {
+        return spcPath.get("body.body." + sci);
+      }
+    }
+    // Parent has no own constructor; continue up its extends chain.
+    current = spcPath.node;
+  }
+  return null;
+}
+
+// Collect all ancestor constructor paths in the extends chain starting
+// from `classNode`. Per § 15.7.3 + § 15.7.5, when a child class's
+// constructor calls `super(...)`, the parent's constructor runs first
+// and its `this.X = ...` assignments establish the inherited part of
+// the instance shape. Returns an array of constructor Babel paths in
+// derived-to-base order (deepest at the end, e.g. C, B, A for
+// `class C extends B extends A`). Used by _specBuildThisInstanceAv to
+// project all ancestor ctor effects into the merged this-instance shape.
+function _specCollectAncestorCtors(classNode, scope) {
+  var ctors = [];
+  if (!classNode || !scope) return ctors;
+  var visited = new Set();
+  var current = classNode;
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    if (!(_t.isClassDeclaration(current) || _t.isClassExpression(current))) break;
+    if (!current.superClass || !_t.isIdentifier(current.superClass)) break;
+    var sb = scope.getBinding(current.superClass.name);
+    if (!sb || !sb.path || !sb.path.node) break;
+    var sn = sb.path.node;
+    var spcPath = null;
+    if (_t.isClassDeclaration(sn)) spcPath = sb.path;
+    else if (_t.isVariableDeclarator(sn) && sn.init && _t.isClassExpression(sn.init)) {
+      spcPath = sb.path.get("init");
+    }
+    if (!spcPath || !spcPath.node) break;
+    var sbody = spcPath.node.body;
+    if (!_t.isClassBody(sbody)) break;
+    for (var sci = 0; sci < sbody.body.length; sci++) {
+      var sm = sbody.body[sci];
+      if (_t.isClassMethod(sm) && sm.kind === "constructor") {
+        ctors.push(spcPath.get("body.body." + sci));
+        break;
+      }
+    }
+    // Always continue walking up — a class with own ctor still inherits
+    // from its parent if its ctor calls super (default for
+    // `extends`-declared classes per § 15.7.2.1).
+    current = spcPath.node;
+  }
+  return ctors;
+}
+
 // § 9.2.1 OrdinaryCallEvaluation: locate the constructor whose `this.X = ...`
 // assignments define the receiver shape for this method's `this`. Three
 // structural shapes per ECMA spec:
@@ -4430,32 +4508,11 @@ function _specFindConstructorForMethod(funcNode, funcPath) {
       }
       // No own constructor: per § 15.7.2.1 default constructor `(...args)
       // => super(...args)`. Inherit instance shape from extends chain.
-      // Walk superClass per § 15.7.3 and find its constructor.
-      var classNode = classBodyPath.parent;
-      if (classNode && (_t.isClassDeclaration(classNode) || _t.isClassExpression(classNode)) &&
-          classNode.superClass && _t.isIdentifier(classNode.superClass)) {
-        var superBinding = funcPath.scope.getBinding(classNode.superClass.name);
-        if (superBinding && superBinding.path && superBinding.path.node) {
-          var superNode = superBinding.path.node;
-          var superClassPath = null;
-          if (_t.isClassDeclaration(superNode)) superClassPath = superBinding.path;
-          else if (_t.isVariableDeclarator(superNode) && superNode.init &&
-                   _t.isClassExpression(superNode.init)) {
-            superClassPath = superBinding.path.get("init");
-          }
-          if (superClassPath && superClassPath.node) {
-            var superBody = superClassPath.node.body;
-            if (_t.isClassBody(superBody)) {
-              for (var sci = 0; sci < superBody.body.length; sci++) {
-                var sm = superBody.body[sci];
-                if (_t.isClassMethod(sm) && sm.kind === "constructor") {
-                  return superClassPath.get("body.body." + sci);
-                }
-              }
-            }
-          }
-        }
-      }
+      // Walk superClass per § 15.7.3 iteratively up the chain — supports
+      // nested extends (`C extends B extends A`) where the constructor
+      // may be several levels up. Cycle guard via visited set.
+      var ctorFromChain = _specFindCtorInExtendsChain(classBodyPath.parent, funcPath.scope);
+      if (ctorFromChain) return ctorFromChain;
     }
     return null;
   }
@@ -4566,34 +4623,9 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
         break;
       }
     }
-    // No own constructor: walk extends chain per § 15.7.3 ClassHeritage.
+    // No own constructor: walk extends chain per § 15.7.3 iteratively.
     if (!ctorPath) {
-      var classNode2 = classBodyPath.parent;
-      if (classNode2 && (_t.isClassDeclaration(classNode2) || _t.isClassExpression(classNode2)) &&
-          classNode2.superClass && _t.isIdentifier(classNode2.superClass)) {
-        var superBinding2 = funcPath.scope.getBinding(classNode2.superClass.name);
-        if (superBinding2 && superBinding2.path && superBinding2.path.node) {
-          var superNode2 = superBinding2.path.node;
-          var superClassPath2 = null;
-          if (_t.isClassDeclaration(superNode2)) superClassPath2 = superBinding2.path;
-          else if (_t.isVariableDeclarator(superNode2) && superNode2.init &&
-                   _t.isClassExpression(superNode2.init)) {
-            superClassPath2 = superBinding2.path.get("init");
-          }
-          if (superClassPath2 && superClassPath2.node) {
-            var superBody2 = superClassPath2.node.body;
-            if (_t.isClassBody(superBody2)) {
-              for (var sci2 = 0; sci2 < superBody2.body.length; sci2++) {
-                var sm2 = superBody2.body[sci2];
-                if (_t.isClassMethod(sm2) && sm2.kind === "constructor") {
-                  ctorPath = superClassPath2.get("body.body." + sci2);
-                  break;
-                }
-              }
-            }
-          }
-        }
-      }
+      ctorPath = _specFindCtorInExtendsChain(classBodyPath.parent, funcPath.scope);
     }
   }
   // Cache key: constructor node when one exists; otherwise the ClassBody
@@ -4703,6 +4735,72 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
       if (typeof keyV !== "string" && typeof keyV !== "number") continue;
       var existing = Object.prototype.hasOwnProperty.call(props, keyV) ? props[keyV] : null;
       props[keyV] = existing ? _specLogicalOrAv(existing, eff.value) : eff.value;
+    }
+  }
+  // § 15.7.3 ClassHeritage: when a child class's constructor calls
+  // super(...), the parent class's constructor runs first and its
+  // this.X = ... assignments establish the inherited part of the
+  // instance shape. Walk the extends chain and project each ancestor
+  // constructor's effects too. Use _specCollectAncestorCtors to get the
+  // chain in derived-to-base order; per § 15.7.5 each ancestor's
+  // effects compose with the child's (own props override inherited via
+  // _specLogicalOrAv for any duplicate keys — the child's value already
+  // populated `props` before this loop, so existing checks preserve it).
+  if (classBodyPath && classBodyPath.parent) {
+    var ancestorCtors = _specCollectAncestorCtors(classBodyPath.parent, funcPath.scope);
+    for (var aci = 0; aci < ancestorCtors.length; aci++) {
+      var ancCtorPath = ancestorCtors[aci];
+      if (!ancCtorPath || !ancCtorPath.node) continue;
+      var ancCtorNode = ancCtorPath.node;
+      var ancCtorState = _specStateCreate();
+      var ancParams = ancCtorNode.params || [];
+      for (var apii = 0; apii < ancParams.length; apii++) {
+        var ap = ancParams[apii];
+        if (!ap) continue;
+        if (ap.type === "Identifier") ancCtorState[ap.name] = { kind: "param", idx: apii };
+        else if (ap.type === "AssignmentPattern" && ap.left && ap.left.type === "Identifier") {
+          ancCtorState[ap.left.name] = { kind: "param", idx: apii };
+        }
+      }
+      var ancEffects = [];
+      var ancBody = ancCtorNode.body;
+      if (ancBody && _t.isBlockStatement(ancBody)) {
+        var ancStack = [{ stmts: ancBody.body, idx: 0, state: ancCtorState, parentPath: ancCtorPath.get("body") }];
+        while (ancStack.length > 0) {
+          var ancTop = ancStack[ancStack.length - 1];
+          if (ancTop._isMergeFrame) {
+            var ancJoined = ancTop.baseState;
+            for (var ancBi = 0; ancBi < ancTop.branchEndStates.length; ancBi++) ancJoined = _specJoinState(ancJoined, ancTop.branchEndStates[ancBi]);
+            if (ancTop.parentFrame) ancTop.parentFrame.state = ancJoined;
+            ancStack.pop();
+            continue;
+          }
+          if (ancTop._returned || ancTop.idx >= ancTop.stmts.length) {
+            if (ancTop._reportTo) ancTop._reportTo.branchEndStates.push(ancTop.state);
+            ancStack.pop();
+            continue;
+          }
+          var ancStmtIdx = ancTop.idx;
+          ancTop.idx++;
+          var ancStmtPath;
+          if (ancTop._explicitStmtPath) ancStmtPath = ancTop._explicitStmtPath;
+          else if (ancTop._wrapBody) ancStmtPath = ancTop.parentPath.get("body");
+          else if (ancTop._pathField) ancStmtPath = ancTop.parentPath.get(ancTop._pathField + "." + ancStmtIdx);
+          else ancStmtPath = ancTop.parentPath.get("body." + ancStmtIdx);
+          _specApplyStatement(ancStmtPath, ancTop.state, ancEffects, ancStack);
+        }
+      }
+      for (var ancEi = 0; ancEi < ancEffects.length; ancEi++) {
+        var ancEff = ancEffects[ancEi];
+        if (!ancEff || !ancEff.target || ancEff.target.kind !== "this") continue;
+        if (!ancEff.key || ancEff.key.kind !== "const") continue;
+        var ancKey = ancEff.key.value;
+        if (typeof ancKey !== "string" && typeof ancKey !== "number") continue;
+        // Don't overwrite child's own props (set earlier in this function);
+        // only fill in props the child didn't define.
+        if (Object.prototype.hasOwnProperty.call(props, ancKey)) continue;
+        props[ancKey] = ancEff.value;
+      }
     }
   }
   // ECMA § 15.7.5 ClassProperty (class fields) — `class C { url = "/api"; }`
