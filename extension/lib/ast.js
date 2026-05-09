@@ -2328,7 +2328,10 @@ var _SPEC_MAP_PROTO_AV = null;
 function _specMapPrototypeAv() {
   if (!_SPEC_MAP_PROTO_AV) {
     var props = {};
-    var mapMethodNames = ["get", "set", "has", "delete", "clear", "forEach", "keys", "values", "entries"];
+    // forEach intentionally omitted from the registry — like Array.prototype
+    // .forEach, it's handled at the call-site HOF block to queue cb dispatch
+    // (callbacks need cbPath as a Babel path, not just an AV).
+    var mapMethodNames = ["get", "set", "has", "delete", "clear", "keys", "values", "entries"];
     for (var mmi = 0; mmi < mapMethodNames.length; mmi++) {
       props[mapMethodNames[mmi]] = { kind: "builtin-method", id: "Map.prototype." + mapMethodNames[mmi] };
     }
@@ -2343,7 +2346,8 @@ var _SPEC_SET_PROTO_AV = null;
 function _specSetPrototypeAv() {
   if (!_SPEC_SET_PROTO_AV) {
     var props = {};
-    var setMethodNames = ["add", "has", "delete", "clear", "forEach", "keys", "values", "entries"];
+    // forEach omitted — handled at call-site HOF block, see Map.prototype.
+    var setMethodNames = ["add", "has", "delete", "clear", "keys", "values", "entries"];
     for (var smi = 0; smi < setMethodNames.length; smi++) {
       props[setMethodNames[smi]] = { kind: "builtin-method", id: "Set.prototype." + setMethodNames[smi] };
     }
@@ -5702,6 +5706,49 @@ function _specEvalLeaf(path, state, vals, effects) {
       // driver drains the queue and pushes cb body stmts onto its own
       // branch stack, breaking the call-graph cycle that would otherwise
       // form via _specEvalLeaf → _specAnalyzePropertyFlow.
+      // Map/Set forEach per § 24.1.3.4 / § 24.2.3.6 — receiver is a
+      // map-instance / set-instance; cb gets (value, key, map) for Map
+      // and (value, value, set) for Set. Queue cb dispatch with the
+      // joined value/key AVs derived from entries/items so cb body
+      // effects propagate.
+      if (recvAv && (recvAv.kind === "map-instance" || recvAv.kind === "set-instance") &&
+          n.callee.property.name === "forEach" && n.arguments.length >= 1) {
+        var msfCb = n.arguments[0];
+        if (_t.isFunctionExpression(msfCb) || _t.isArrowFunctionExpression(msfCb)) {
+          var msfValAv = { kind: "top" };
+          var msfKeyAv = { kind: "top" };
+          if (recvAv.kind === "map-instance") {
+            var msfEntries = recvAv.entries || [];
+            if (msfEntries.length > 0) {
+              msfValAv = msfEntries[0][1]; msfKeyAv = msfEntries[0][0];
+              for (var msfi = 1; msfi < msfEntries.length; msfi++) {
+                msfValAv = _specLogicalOrAv(msfValAv, msfEntries[msfi][1]);
+                msfKeyAv = _specLogicalOrAv(msfKeyAv, msfEntries[msfi][0]);
+              }
+            }
+            if (recvAv.unknownInit) {
+              // Unmodeled init entries could be any (key, value); join top.
+              msfValAv = (msfEntries.length > 0) ? _specLogicalOrAv(msfValAv, { kind: "top" }) : { kind: "top" };
+              msfKeyAv = (msfEntries.length > 0) ? _specLogicalOrAv(msfKeyAv, { kind: "top" }) : { kind: "top" };
+            }
+          } else {
+            var msfItems = recvAv.items || [];
+            if (msfItems.length > 0) {
+              msfValAv = msfItems[0];
+              for (var msii = 1; msii < msfItems.length; msii++) {
+                msfValAv = _specLogicalOrAv(msfValAv, msfItems[msii]);
+              }
+              msfKeyAv = msfValAv;  // Set forEach passes value as key per § 24.2.3.6
+            }
+            if (recvAv.unknownInit) {
+              msfValAv = (msfItems.length > 0) ? _specLogicalOrAv(msfValAv, { kind: "top" }) : { kind: "top" };
+              msfKeyAv = msfValAv;
+            }
+          }
+          _hofPendingDispatches.push({ cbPath: path.get("arguments.0"), paramAvs: [msfValAv, msfKeyAv] });
+          return { kind: "const", value: undefined };
+        }
+      }
       if (recvAv && (recvAv.kind === "array-lit" || recvAv.kind === "keys-of")) {
         var hofMeth = n.callee.property.name;
         var hofIsHigherOrder =

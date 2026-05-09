@@ -3933,6 +3933,57 @@ specTest("§ 24.1.1 new Map(unknownIterable): get returns top, not undefined (no
   return av && av.kind === "top";
 });
 
+specTest("§ 24.1.3.4 Map.prototype.forEach: cb body's writes propagate via value/key bindings", `
+  function f() {
+    var m = new Map();
+    m.set("k1", "/api/v1");
+    m.set("k2", "/api/v2");
+    var self = this;
+    m.forEach(function(value, key) { self.url = value; });
+  }
+`, function(effects) {
+  // Cb body effect: any-target.url = joined values from entries.
+  var urlEffects = effects.filter(function(e) {
+    return e.key && e.key.kind === "const" && e.key.value === "url";
+  });
+  if (urlEffects.length === 0) return false;
+  var av = urlEffects[0].value;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (!x) continue;
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.indexOf("/api/v1") >= 0 && leaves.indexOf("/api/v2") >= 0;
+});
+
+specTest("§ 24.2.3.6 Set.prototype.forEach: cb body's writes propagate via item joins", `
+  function f() {
+    var s = new Set();
+    s.add("/api/foo");
+    s.add("/api/bar");
+    var self = this;
+    s.forEach(function(value) { self.url = value; });
+  }
+`, function(effects) {
+  var urlEffects = effects.filter(function(e) {
+    return e.key && e.key.kind === "const" && e.key.value === "url";
+  });
+  if (urlEffects.length === 0) return false;
+  var av = urlEffects[0].value;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (!x) continue;
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.indexOf("/api/foo") >= 0 && leaves.indexOf("/api/bar") >= 0;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
