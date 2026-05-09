@@ -4036,6 +4036,33 @@ specTest("§ 24.4.3.7 WeakSet.prototype.has: const-value match returns true", `
 });
 
 // ═════════════════════════════════════════════════════════════════════
+// § 20.4 Symbol
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 20.4 Symbol ===\n");
+
+specTest("§ 20.4.2.1 Symbol.for: returns sentinel obj-lit carrying description", `
+  function f() {
+    this.s = Symbol.for("api-key");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "obj-lit" || !av.props || !av.props.description) return false;
+  return av.props.description.kind === "const" && av.props.description.value === "api-key";
+});
+
+specTest("§ 20.4 Symbol global is callable but identity opaque (top)", `
+  function f() {
+    this.s = Symbol("desc");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Symbol() returns opaque per-call symbol — top is the sound answer.
+  return av && av.kind === "top";
+});
+
+// ═════════════════════════════════════════════════════════════════════
 // § 22.2 RegExp — RegExpLiteral, ctor, prototype.test/exec
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 22.2 RegExp ===\n");

@@ -2264,6 +2264,24 @@ function _specGlobalThisAv() {
   var weakSetCtorAv = { kind: "builtin-ctor", id: "ECMA.WeakSet" };
   // ECMA § 22.2.1 RegExp ctor.
   var regExpCtorAv = { kind: "builtin-ctor", id: "ECMA.RegExp" };
+  // Symbol namespace per ECMA § 20.4. Symbol value identity isn't
+  // statically tracked (each call to Symbol(desc) is unique per spec
+  // § 20.4.1.1); we model the well-known symbols as opaque obj-lit
+  // sentinels so member access against them works for `obj[Symbol.X]`
+  // patterns. The callable form Symbol(desc) returns top.
+  var symbolWellKnown = {};
+  var symbolWellKnownNames = [
+    "asyncIterator", "hasInstance", "isConcatSpreadable", "iterator",
+    "match", "matchAll", "replace", "search", "species", "split",
+    "toPrimitive", "toStringTag", "unscopables"
+  ];
+  for (var swki = 0; swki < symbolWellKnownNames.length; swki++) {
+    symbolWellKnown[symbolWellKnownNames[swki]] = { kind: "obj-lit", props: {} };
+  }
+  // Symbol.for / Symbol.keyFor per § 20.4.2.1 / .5.
+  symbolWellKnown.for = { kind: "builtin-method", id: "Symbol.for" };
+  symbolWellKnown.keyFor = { kind: "builtin-method", id: "Symbol.keyFor" };
+  var symbolCallableAv = { kind: "callable-namespace", callId: "global.Symbol", props: symbolWellKnown };
   // Reflect namespace per ECMA § 28.1 — statics that delegate to the
   // corresponding internal methods on target. For static analysis the
   // value-flow semantics are well-defined; we dispatch via _specApply
@@ -2305,6 +2323,7 @@ function _specGlobalThisAv() {
       JSON: { kind: "obj-lit", props: jsonProps },
       Object: { kind: "obj-lit", props: objectProps },
       Reflect: { kind: "obj-lit", props: reflectProps },
+      Symbol: symbolCallableAv,
       Promise: { kind: "obj-lit", props: promiseProps },
       Date: { kind: "obj-lit", props: dateProps },
       document: { kind: "obj-lit", props: documentProps },
@@ -3652,6 +3671,22 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         return { kind: "const", value: rxStr };
       } catch (_) { return { kind: "top" }; }
     }
+    return { kind: "top" };
+  }
+  // Symbol statics per ECMA § 20.4.2. Symbol identity isn't statically
+  // tracked so symbol-returning calls produce opaque obj-lit sentinels;
+  // Symbol.keyFor returns the registry key string when input is one of
+  // those sentinels (we don't model the global registry, so top).
+  if (methodId === "Symbol.for") {
+    // § 20.4.2.1 — Symbol.for(key) returns a registry symbol. We don't
+    // track registry identity, so return an opaque obj-lit sentinel that
+    // captures the description.
+    if (argAvs.length === 0) return { kind: "top" };
+    var sfDesc = argAvs[0];
+    return { kind: "obj-lit", props: { description: sfDesc } };
+  }
+  if (methodId === "Symbol.keyFor") {
+    // § 20.4.2.5 — registry-key lookup; opaque without registry tracking.
     return { kind: "top" };
   }
   // Date.* statics per ECMA § 21.4.3.
