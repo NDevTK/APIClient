@@ -2247,6 +2247,23 @@ function _specGlobalThisAv() {
   // exposes only the spec-defined subset (no iteration).
   var weakMapCtorAv = { kind: "builtin-ctor", id: "ECMA.WeakMap" };
   var weakSetCtorAv = { kind: "builtin-ctor", id: "ECMA.WeakSet" };
+  // Reflect namespace per ECMA § 28.1 — statics that delegate to the
+  // corresponding internal methods on target. For static analysis the
+  // value-flow semantics are well-defined; we dispatch via _specApply
+  // BuiltinMethod under the "Reflect.*" id prefix.
+  var reflectProps = {
+    has: { kind: "builtin-method", id: "Reflect.has" },
+    get: { kind: "builtin-method", id: "Reflect.get" },
+    set: { kind: "builtin-method", id: "Reflect.set" },
+    deleteProperty: { kind: "builtin-method", id: "Reflect.deleteProperty" },
+    ownKeys: { kind: "builtin-method", id: "Reflect.ownKeys" },
+    getPrototypeOf: { kind: "builtin-method", id: "Reflect.getPrototypeOf" },
+    setPrototypeOf: { kind: "builtin-method", id: "Reflect.setPrototypeOf" },
+    defineProperty: { kind: "builtin-method", id: "Reflect.defineProperty" },
+    getOwnPropertyDescriptor: { kind: "builtin-method", id: "Reflect.getOwnPropertyDescriptor" },
+    isExtensible: { kind: "builtin-method", id: "Reflect.isExtensible" },
+    preventExtensions: { kind: "builtin-method", id: "Reflect.preventExtensions" },
+  };
   // Object namespace per § 20.1.2 — statics.
   var objectProps = {
     keys: { kind: "builtin-method", id: "Object.keys" },
@@ -2270,6 +2287,7 @@ function _specGlobalThisAv() {
       Boolean: booleanCallableAv,
       JSON: { kind: "obj-lit", props: jsonProps },
       Object: { kind: "obj-lit", props: objectProps },
+      Reflect: { kind: "obj-lit", props: reflectProps },
       Promise: { kind: "obj-lit", props: promiseProps },
       document: { kind: "obj-lit", props: documentProps },
       URL: urlCtorAv,
@@ -3407,6 +3425,111 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       }
     }
     return { kind: "top" };
+  }
+  // Reflect.* statics per ECMA § 28.1. Each delegates to the corresponding
+  // [[InternalMethod]] on target — for our value-flow analysis, this means
+  // routing through the same primitives used by direct access (member,
+  // assignment, key-in).
+  if (methodId === "Reflect.has") {
+    // § 28.1.10 step 4: return ? HasProperty(target, key). Equivalent to
+    // `key in target`. For obj-lit/keys-of-known target with const key,
+    // statically decidable; otherwise top.
+    if (argAvs.length < 2) return { kind: "top" };
+    var rhTarget = argAvs[0], rhKey = argAvs[1];
+    if (rhTarget && rhTarget.kind === "obj-lit" && rhTarget.props &&
+        rhKey && rhKey.kind === "const" &&
+        (typeof rhKey.value === "string" || typeof rhKey.value === "number")) {
+      return { kind: "const", value: Object.prototype.hasOwnProperty.call(rhTarget.props, rhKey.value) };
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Reflect.get") {
+    // § 28.1.6 step 4: return ? target.[[Get]](key, receiver). Equivalent
+    // to `target[key]`. Delegates to existing member-access semantics on
+    // obj-lit/array-lit/etc.
+    if (argAvs.length < 2) return { kind: "top" };
+    var rgTarget = argAvs[0], rgKey = argAvs[1];
+    if (rgTarget && rgTarget.kind === "obj-lit" && rgTarget.props &&
+        rgKey && rgKey.kind === "const" &&
+        (typeof rgKey.value === "string" || typeof rgKey.value === "number") &&
+        Object.prototype.hasOwnProperty.call(rgTarget.props, rgKey.value)) {
+      return rgTarget.props[rgKey.value];
+    }
+    if (rgTarget && rgTarget.kind === "array-lit" && rgTarget.elements &&
+        rgKey && rgKey.kind === "const") {
+      if (typeof rgKey.value === "number" && rgKey.value >= 0 && rgKey.value < rgTarget.elements.length) {
+        return rgTarget.elements[rgKey.value];
+      }
+      if (rgKey.value === "length") return { kind: "const", value: rgTarget.elements.length };
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Reflect.set") {
+    // § 28.1.14 step 4: return ? target.[[Set]](key, value, receiver).
+    // Returns boolean indicating success. We don't model the side-effect
+    // through Reflect.set (would need a tracked-Identifier target).
+    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  if (methodId === "Reflect.deleteProperty") {
+    // § 28.1.4 step 4: return ? target.[[Delete]](key). Returns boolean.
+    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  if (methodId === "Reflect.ownKeys") {
+    // § 28.1.13 step 3: return ? target.[[OwnPropertyKeys]](). For obj-lit,
+    // returns string keys.
+    if (argAvs.length === 0) return { kind: "top" };
+    var roTarget = argAvs[0];
+    if (roTarget && roTarget.kind === "obj-lit" && roTarget.props) {
+      var roKeys = Object.keys(roTarget.props);
+      var roElems = [];
+      for (var roi = 0; roi < roKeys.length; roi++) {
+        roElems.push({ kind: "const", value: roKeys[roi] });
+      }
+      return { kind: "array-lit", elements: roElems };
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Reflect.getPrototypeOf") {
+    // § 28.1.9. Modeled by _specGetPrototypeOfAv when applicable.
+    if (argAvs.length === 0) return { kind: "top" };
+    var rgpResult = _specGetPrototypeOfAv(argAvs[0]);
+    if (rgpResult) return rgpResult;
+    return { kind: "const", value: null };
+  }
+  if (methodId === "Reflect.setPrototypeOf") {
+    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  if (methodId === "Reflect.defineProperty") {
+    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  if (methodId === "Reflect.getOwnPropertyDescriptor") {
+    // § 28.1.7 — returns a descriptor obj or undefined. For known obj-lit
+    // and string key, build a data-property descriptor.
+    if (argAvs.length < 2) return { kind: "top" };
+    var rdTarget = argAvs[0], rdKey = argAvs[1];
+    if (rdTarget && rdTarget.kind === "obj-lit" && rdTarget.props &&
+        rdKey && rdKey.kind === "const" &&
+        Object.prototype.hasOwnProperty.call(rdTarget.props, rdKey.value)) {
+      return {
+        kind: "obj-lit",
+        props: {
+          value: rdTarget.props[rdKey.value],
+          writable: { kind: "const", value: true },
+          enumerable: { kind: "const", value: true },
+          configurable: { kind: "const", value: true }
+        }
+      };
+    }
+    return { kind: "const", value: undefined };
+  }
+  if (methodId === "Reflect.isExtensible") {
+    // § 28.1.11. For our purposes, all obj-lit AVs are extensible.
+    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs[0] && argAvs[0].kind === "obj-lit") return { kind: "const", value: true };
+    return { kind: "top" };
+  }
+  if (methodId === "Reflect.preventExtensions") {
+    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
   }
   // Array.* statics per § 23.1.2.
   if (methodId === "Array.isArray") {

@@ -3973,6 +3973,68 @@ specTest("§ 24.4.3.7 WeakSet.prototype.has: const-value match returns true", `
   return av && av.kind === "const" && av.value === true;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 28.1 Reflect — statics
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 28.1 Reflect ===\n");
+
+specTest("§ 28.1.10 Reflect.has: present own prop returns true const", `
+  function f() {
+    var o = { a: 1, b: 2 };
+    this.flag = Reflect.has(o, "a");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
+specTest("§ 28.1.10 Reflect.has: missing prop returns false const", `
+  function f() {
+    var o = { a: 1 };
+    this.flag = Reflect.has(o, "z");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === false;
+});
+
+specTest("§ 28.1.6 Reflect.get: returns the property's stored value", `
+  function f() {
+    var o = { url: "/api/path" };
+    this.url = Reflect.get(o, "url");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api/path";
+});
+
+specTest("§ 28.1.6 Reflect.get: array-lit length is the elements count", `
+  function f() {
+    var arr = ["a", "b", "c"];
+    this.len = Reflect.get(arr, "length");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === 3;
+});
+
+specTest("§ 28.1.13 Reflect.ownKeys: returns array-lit of obj-lit keys", `
+  function f() {
+    var o = { foo: 1, bar: 2 };
+    this.keys = Reflect.ownKeys(o);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "array-lit" || av.elements.length !== 2) return false;
+  var ks = av.elements.map(function(e) { return e && e.kind === "const" ? e.value : null; });
+  return ks.indexOf("foo") >= 0 && ks.indexOf("bar") >= 0;
+});
+
 specTest("§ 24.1.3.4 Map.prototype.forEach: cb body's writes propagate via value/key bindings", `
   function f() {
     var m = new Map();
