@@ -20141,6 +20141,7 @@ function _traceValueSource(path, _unused) {
           for (var sti = 0; sti < s.exprs.length; sti++) sStack.push(s.exprs[sti]);
           continue;
         }
+        if (s.kind === "coerce" && s.arg) { sStack.push(s.arg); continue; }
         allConst = false;
       }
       if (allConst) {
