@@ -2123,6 +2123,29 @@ function _specArrayPrototypeAv() {
   return _SPEC_ARRAY_PROTO_AV;
 }
 
+// String.prototype per ECMA § 22.1.3 — pure (returns new value, doesn't
+// mutate `this`). All methods route through _applyStringMethodToConst
+// from _specApplyBuiltinMethod, distributing over alternation when recv
+// is an or-tree of Const strings.
+var _SPEC_STRING_PROTO_AV = null;
+function _specStringPrototypeAv() {
+  if (!_SPEC_STRING_PROTO_AV) {
+    var props = {};
+    var stringMethodNames = [
+      "trim", "toLowerCase", "toUpperCase", "toString", "valueOf", "normalize",
+      "replace", "replaceAll", "concat", "slice", "substring", "substr",
+      "padStart", "padEnd", "repeat",
+      "indexOf", "lastIndexOf", "includes", "startsWith", "endsWith",
+      "charAt", "charCodeAt", "at"
+    ];
+    for (var smi = 0; smi < stringMethodNames.length; smi++) {
+      props[stringMethodNames[smi]] = { kind: "builtin-method", id: "String.prototype." + stringMethodNames[smi] };
+    }
+    _SPEC_STRING_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_STRING_PROTO_AV;
+}
+
 // Return the prototype AV for a given AV kind, or null. Per ECMA-262
 // each value has an implicit [[Prototype]]; member access falls through
 // to it when own-property lookup misses. Currently models Array.prototype
@@ -2131,6 +2154,23 @@ function _specArrayPrototypeAv() {
 function _specGetPrototypeOfAv(av) {
   if (!av) return null;
   if (av.kind === "array-lit") return _specArrayPrototypeAv();
+  if (av.kind === "const" && typeof av.value === "string") return _specStringPrototypeAv();
+  // For or-trees whose every leaf is a Const string, the [[Prototype]]
+  // is uniformly String.prototype. Member access then distributes per-leaf
+  // when the dispatch sees a String.prototype builtin-method.
+  if (av.kind === "or") {
+    var leaves = _avFlattenOrLeaves(av);
+    if (leaves) {
+      var allStringConst = leaves.length > 0;
+      for (var li = 0; li < leaves.length; li++) {
+        if (!leaves[li] || leaves[li].kind !== "const" || typeof leaves[li].value !== "string") {
+          allStringConst = false;
+          break;
+        }
+      }
+      if (allStringConst) return _specStringPrototypeAv();
+    }
+  }
   return null;
 }
 
@@ -2187,6 +2227,39 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       state[recvName] = { kind: "array-lit", elements: usElements };
     }
     return { kind: "const", value: usElements.length };
+  }
+  // String.prototype methods per § 22.1.3 — pure (no state mutation).
+  // Distribute over alternation when recv is an or-tree of Const strings.
+  if (methodId.indexOf("String.prototype.") === 0) {
+    var strMethName = methodId.slice("String.prototype.".length);
+    // Pre-extract Const arg literals.
+    var strArgLits = [];
+    var strArgsOk = true;
+    for (var sai = 0; sai < argAvs.length; sai++) {
+      var sav = argAvs[sai];
+      if (!sav || sav.kind !== "const") { strArgsOk = false; break; }
+      strArgLits.push(sav.value);
+    }
+    if (!strArgsOk) return { kind: "top" };
+    // Collect string-typed receiver leaves.
+    var strRecvLeaves = recvAv && recvAv.kind === "const" && typeof recvAv.value === "string"
+      ? [recvAv.value]
+      : (recvAv ? _avFlattenStringLeaves(recvAv) : []);
+    if (!strRecvLeaves || strRecvLeaves.length === 0) return { kind: "top" };
+    var strResults = [];
+    var strAllOk = true;
+    for (var srli = 0; srli < strRecvLeaves.length; srli++) {
+      var st = _applyStringMethodToConst(strRecvLeaves[srli], strMethName, strArgLits);
+      if (st === undefined) { strAllOk = false; break; }
+      strResults.push(st);
+    }
+    if (!strAllOk) return { kind: "top" };
+    if (strResults.length === 1) return { kind: "const", value: strResults[0] };
+    var strOr = { kind: "const", value: strResults[0] };
+    for (var sri = 1; sri < strResults.length; sri++) {
+      strOr = _specLogicalOrAv(strOr, { kind: "const", value: strResults[sri] });
+    }
+    return strOr;
   }
   return { kind: "top" };
 }
@@ -4880,48 +4953,14 @@ function _specEvalLeaf(path, state, vals, effects) {
         } catch (e) { /* fall through */ }
       }
     }
-    // String built-ins: § 22.1.3 — String.prototype methods on Const
-    // string receivers can be evaluated statically. Useful for HTTP
-    // method normalisation (`"get".toUpperCase()` → `"GET"`).
+    // String.prototype methods (trim/toLowerCase/replace/etc.) and
+    // Array.prototype mutating methods (push/pop/shift/unshift) are now
+    // dispatched via the prototype-chain mechanism above
+    // (_specApplyBuiltinMethod). The blocks below cover the remaining
+    // shape-matched dispatches that haven't been migrated yet.
     if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
         _t.isIdentifier(n.callee.property)) {
       var recvAv = vals.get(n.callee.object);
-      // § 22.1.3 String.prototype on Const-string OR or-tree of Const-strings.
-      // Methods distribute over alternation: `or(A, B).replace(x, y)` →
-      // `or(A.replace(x, y), B.replace(x, y))`.
-      if (recvAv && (recvAv.kind === "const" && typeof recvAv.value === "string") || (recvAv && recvAv.kind === "or")) {
-        var meth = n.callee.property.name;
-        // Pre-extract Const args.
-        var seArgLits = [];
-        var seArgsOk = true;
-        for (var seai = 0; seai < n.arguments.length; seai++) {
-          var seav = vals.get(n.arguments[seai]);
-          if (!seav || seav.kind !== "const") { seArgsOk = false; break; }
-          seArgLits.push(seav.value);
-        }
-        if (seArgsOk) {
-          // Collect string-typed receiver leaves (may be one if Const,
-          // many if or-tree).
-          var recvLeaves = recvAv.kind === "const" ? [recvAv.value] : _avFlattenStringLeaves(recvAv);
-          if (recvLeaves && recvLeaves.length > 0) {
-            var seResults = [];
-            var seAllOk = true;
-            for (var rli = 0; rli < recvLeaves.length; rli++) {
-              var t = _applyStringMethodToConst(recvLeaves[rli], meth, seArgLits);
-              if (t === undefined) { seAllOk = false; break; }
-              seResults.push(t);
-            }
-            if (seAllOk && seResults.length === 1) return { kind: "const", value: seResults[0] };
-            if (seAllOk && seResults.length > 1) {
-              var seOr = { kind: "const", value: seResults[0] };
-              for (var sri = 1; sri < seResults.length; sri++) {
-                seOr = _specLogicalOrAv(seOr, { kind: "const", value: seResults[sri] });
-              }
-              return seOr;
-            }
-          }
-        }
-      }
       if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "string") {
         var splitS = recvAv.value;
         var meth = n.callee.property.name;
