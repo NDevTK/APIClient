@@ -3578,16 +3578,50 @@ function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) 
     for (var ti = 1; ti < alts.length; ti++) tlOr = _specLogicalOrAv(tlOr, { kind: "const", value: alts[ti] });
     return tlOr;
   }
-  // ECMA § 27.2.4.7 Promise.resolve passthrough in return-arg.
-  // `return Promise.resolve(x)` returns x's AV directly so callers can
-  // .then-unwrap. Scope-checked unshadowed Promise.
-  if (_t.isCallExpression(retArg) && _t.isMemberExpression(retArg.callee) &&
-      !retArg.callee.computed &&
-      _t.isIdentifier(retArg.callee.object, { name: "Promise" }) &&
-      !calleeFnPath.scope.getBinding("Promise") &&
-      _t.isIdentifier(retArg.callee.property, { name: "resolve" }) &&
-      retArg.arguments.length >= 1) {
-    return _specResolveLeafInCalleeContext(retArg.arguments[0], calleeFnPath, callExpr, vals);
+  // ECMA § 13.3.6 CallExpression in return arg: `return recv.method(args)`.
+  // When recv is a leaf-resolvable expression (param/literal) and the
+  // resolved AV has a known [[Prototype]] method dispatchable via
+  // _specApplyBuiltinMethod, dispatch through it. Also handles globals
+  // like Promise.resolve via the globalThis registry lookup on the recv
+  // identifier.
+  if (_t.isCallExpression(retArg) || _t.isOptionalCallExpression(retArg)) {
+    if (_t.isMemberExpression(retArg.callee) && !retArg.callee.computed &&
+        _t.isIdentifier(retArg.callee.property)) {
+      var rcMethodName = retArg.callee.property.name;
+      // Try leaf resolution first (recv is a param-derived value).
+      var rcRecvAv = _specResolveLeafInCalleeContext(retArg.callee.object, calleeFnPath, callExpr, vals);
+      // If recv is an unbound Identifier (global), look up via globalThis registry.
+      if (rcRecvAv === null && _t.isIdentifier(retArg.callee.object) &&
+          !calleeFnPath.scope.getBinding(retArg.callee.object.name)) {
+        var rcGlobal = _specGlobalThisAv();
+        if (rcGlobal && rcGlobal.props && rcGlobal.props[retArg.callee.object.name]) {
+          rcRecvAv = rcGlobal.props[retArg.callee.object.name];
+        }
+      }
+      if (rcRecvAv) {
+        // Resolve the method via [[Prototype]] of recv, OR via the recv's
+        // own props (for namespaces like Math/Promise/Object).
+        var rcMethodAv = null;
+        if (rcRecvAv.kind === "obj-lit" && rcRecvAv.props && rcRecvAv.props[rcMethodName]) {
+          rcMethodAv = rcRecvAv.props[rcMethodName];
+        } else {
+          var rcProto = _specGetPrototypeOfAv(rcRecvAv);
+          if (rcProto && rcProto.kind === "obj-lit" && rcProto.props && rcProto.props[rcMethodName]) {
+            rcMethodAv = rcProto.props[rcMethodName];
+          }
+        }
+        if (rcMethodAv && rcMethodAv.kind === "builtin-method") {
+          var rcArgAvs = [];
+          var rcArgsOk = true;
+          for (var rcai = 0; rcai < retArg.arguments.length; rcai++) {
+            var rcArgAv = _specResolveLeafInCalleeContext(retArg.arguments[rcai], calleeFnPath, callExpr, vals);
+            if (rcArgAv === null) { rcArgsOk = false; break; }
+            rcArgAvs.push(rcArgAv);
+          }
+          if (rcArgsOk) return _specApplyBuiltinMethod(rcMethodAv.id, rcRecvAv, null, rcArgAvs, null);
+        }
+      }
+    }
   }
   // § 13.10 PropertyAccess on a leaf object: `return paramRef.prop` or
   // `return paramRef[constKeyExpr]`. Resolve the object via leaf helper,
@@ -5267,9 +5301,37 @@ function _specEvalLeaf(path, state, vals, effects) {
             // Return value per § 23.1.3:
             //   forEach → undefined (per spec)
             //   filter → array-lit with same element type (subset)
-            //   map/flatMap/reduce/some/every/find/findIndex → Top
+            //   map → array-lit with cb's return-AV (computed when cb's
+            //         body is a single ReturnStatement evaluable with
+            //         the joined element AV as cb's first param)
+            //   reduce/some/every/find/findIndex/flatMap → Top
             if (hofMeth === "forEach") return { kind: "const", value: undefined };
             if (hofMeth === "filter") return { kind: "array-lit", elements: [hofElementAv] };
+            if (hofMeth === "map") {
+              // Compute cb's return AV via single-stmt fast path.
+              var mapCbBody = hofCb.body;
+              if (_t.isBlockStatement(mapCbBody) && mapCbBody.body.length === 1 &&
+                  _t.isReturnStatement(mapCbBody.body[0]) && mapCbBody.body[0].argument) {
+                // Construct synthetic callExpr with hofElementAv as arg 0.
+                var syntheticVals = new Map();
+                var syntheticArg = mapCbBody.body[0].argument;  // unused as key, just placeholder
+                var syntheticCall = { arguments: [syntheticArg] };
+                syntheticVals.set(syntheticArg, hofElementAv);
+                var mapRet = _specEvalReturnArgWithCallerArgs(
+                  mapCbBody.body[0].argument, path.get("arguments.0"), syntheticCall, syntheticVals);
+                if (mapRet !== null) return { kind: "array-lit", elements: [mapRet] };
+              }
+              // Concise arrow body — single expression is implicit return.
+              if (!_t.isBlockStatement(mapCbBody)) {
+                var syntheticVals2 = new Map();
+                var syntheticArg2 = mapCbBody;
+                var syntheticCall2 = { arguments: [syntheticArg2] };
+                syntheticVals2.set(syntheticArg2, hofElementAv);
+                var mapRet2 = _specEvalReturnArgWithCallerArgs(
+                  mapCbBody, path.get("arguments.0"), syntheticCall2, syntheticVals2);
+                if (mapRet2 !== null) return { kind: "array-lit", elements: [mapRet2] };
+              }
+            }
             return { kind: "top" };
           }
         }

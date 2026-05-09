@@ -3754,6 +3754,47 @@ test("result.domEndpoints surfaces URL-shaped href/src/action/data values", `
   }
 });
 
+specTest("§ 23.1.3.21 Array.prototype.map: cb single-stmt return resolves array-lit element", `
+  function f() {
+    this.urls = ["a", "b"].map(function(x) { return "/api/" + x; });
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "array-lit") return false;
+  // Element is the joined cb-applied AV ("/api/a" or "/api/b").
+  var el0 = av.elements[0];
+  if (!el0 || el0.kind !== "or") return false;
+  var leaves = [];
+  var stack = [el0];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.indexOf("/api/a") >= 0 && leaves.indexOf("/api/b") >= 0;
+});
+
+specTest("§ 23.1.3.21 Array.prototype.map: arrow concise body with String.prototype call resolves array-lit element", `
+  function f() {
+    this.urls = ["a", "b"].map(x => x.toUpperCase());
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "array-lit") return false;
+  var el0 = av.elements[0];
+  if (!el0 || el0.kind !== "or") return false;
+  var leaves = [];
+  var stack = [el0];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.indexOf("A") >= 0 && leaves.indexOf("B") >= 0;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
