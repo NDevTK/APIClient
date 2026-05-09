@@ -11218,11 +11218,18 @@ function _resolveParamFromCallersUncached(binding, depth, propName) {
       var ihArg = ihCall.paramArgs[paramIdx];
       if (ihArg === "this") {
         // The element. propName tells us which attribute to read.
+        // For data-* attributes, propName looks like "X" (camelCase
+        // dataset key) or "data-X" depending on access pattern.
         var ea = ihCall.elementAttrs;
         if (!ea) continue;
         if (propName === "href" && ea.href != null) values.push(ea.href);
         else if (propName === "src" && ea.src != null) values.push(ea.src);
         else if (propName === "action" && ea.action != null) values.push(ea.action);
+        else if (propName && ea.dataAttrs) {
+          // Try camelCase → kebab conversion (dataset access).
+          var ihKebab = propName.replace(/[A-Z]/g, function(c) { return "-" + c.toLowerCase(); });
+          if (ea.dataAttrs[ihKebab] != null) values.push(ea.dataAttrs[ihKebab]);
+        }
         // Without propName, no specific attribute requested.
       } else if (ihArg && ihArg.kind === "const" && !propName) {
         values.push(String(ihArg.value));
