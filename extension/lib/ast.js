@@ -2263,6 +2263,24 @@ function _specGlobalThisAv() {
   var documentProps = {
     getElementById: { kind: "builtin-method", id: "document.getElementById" },
     querySelector: { kind: "builtin-method", id: "document.querySelector" },
+    // WHATWG DOM § 4.5 user-controllable Document properties — each
+    // reflects URL/HTTP-header/UA state attacker can influence. Same
+    // taint-source AV scheme as Window.location for spec-eval-driven
+    // taint classification (no AST shape match needed).
+    referrer: { kind: "taint-source", id: "document.referrer",
+      dims: { origin: true, path: true, query: true, hash: true, content: true } },
+    URL: { kind: "taint-source", id: "document.URL",
+      dims: { origin: false, path: true, query: true, hash: true, content: true } },
+    documentURI: { kind: "taint-source", id: "document.documentURI",
+      dims: { origin: false, path: true, query: true, hash: true, content: true } },
+    baseURI: { kind: "taint-source", id: "document.baseURI",
+      dims: { origin: false, path: true, query: true, hash: true, content: true } },
+    cookie: { kind: "taint-source", id: "document.cookie",
+      dims: { origin: false, path: false, query: false, hash: false, content: true } },
+    domain: { kind: "taint-source", id: "document.domain",
+      dims: { origin: false, path: false, query: false, hash: false, content: false } },
+    title: { kind: "taint-source", id: "document.title",
+      dims: { origin: false, path: false, query: false, hash: false, content: true } },
   };
   // Constructable globals — modeled as `{kind:"builtin-ctor", id}` AVs.
   // NewExpression handler reads the kind and dispatches via
