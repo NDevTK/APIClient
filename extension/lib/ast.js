@@ -21040,13 +21040,17 @@ function _traceValueSource(path, _unused) {
     // (taint-source AVs → user-controlled; all-const-leaves → literal).
     // Trigger property-flow analysis on the enclosing function first so
     // the memo is populated even when this is the first
-    // _traceValueSource call against this function. Idempotent.
+    // _traceValueSource call against this function. Idempotent — gated
+    // on _specEffectsMemo.has so repeated calls within the same encFn
+    // skip the redundant lookup.
     if (path.getFunctionParent) {
       var tvsEncFn = path.getFunctionParent();
-      if (tvsEncFn && tvsEncFn.node && _t.isFunction(tvsEncFn.node)) {
+      if (tvsEncFn && tvsEncFn.node && _t.isFunction(tvsEncFn.node) &&
+          !_specEffectsMemo.has(tvsEncFn.node)) {
         try { _specAnalyzePropertyFlow(tvsEncFn); } catch (_tvspf) {}
-      } else {
-        // Module-level: trigger program fixpoint.
+      } else if (!tvsEncFn) {
+        // Module-level: trigger program fixpoint (idempotent via
+        // _specProgramFixpointDone WeakSet).
         var tvsProgPath = path;
         while (tvsProgPath && tvsProgPath.parentPath) tvsProgPath = tvsProgPath.parentPath;
         if (tvsProgPath && tvsProgPath.node && _t.isProgram(tvsProgPath.node)) {
