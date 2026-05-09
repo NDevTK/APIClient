@@ -1009,6 +1009,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _specProgramFixpointDone = new WeakSet();
   _specBindingInitAvCache = new WeakMap();
   _specOuterImportsListCache = new WeakMap();
+  _specCallSitesByFn = new WeakMap();
   _tvsMemo = new WeakMap();
   _cfgMemo = new WeakMap();
   // Page DOM context: when the analyser runs against a page (HTML +
@@ -4293,6 +4294,14 @@ var _specBindingInitAvCache = new WeakMap();
 // re-traverse function bodies.
 var _specOuterImportsListCache = new WeakMap();
 
+// Inverse call-site index: function node → list of CallExpression /
+// NewExpression Babel paths whose callee resolves to that function.
+// Populated by _specAnalyzeProgramWithFixpoint during its single
+// program traverse. Used by URL extractor's caller-tracing to find
+// call sites of stored callbacks (e.g. \`handlers[N]()\` where
+// handlers contains the function via closure write-back).
+var _specCallSitesByFn = new WeakMap();
+
 
 
 // § 10.2.10 FunctionDeclarationInstantiation (simplified for our domain).
@@ -5753,26 +5762,36 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
   // depth) (would be the case if we traversed each function's body
   // separately — nested function bodies would be visited per ancestor).
   var callersOf = new Map();   // funcNode → Set of caller funcNodes
+  // Inverse: funcNode → Array of CallExpression paths whose callee
+  // resolves to that function. Populated during this single program
+  // traverse (no extra walk). Used by URL extractor's caller-tracing
+  // to find call sites of stored callbacks (e.g. `handlers[N](args)`
+  // when handlers contains a function-ref AV after closure write-back
+  // fixpoint completes).
   programPath.traverse({
     "CallExpression|NewExpression": function(p) {
       var calleeName = null;
       var c = p.node.callee;
       if (_t.isIdentifier(c)) calleeName = c.name;
-      if (!calleeName) return;
-      var b = p.scope.getBinding(calleeName);
-      if (!b || !b.path || !b.path.node) return;
       var calleeNode = null;
-      if (_t.isFunctionDeclaration(b.path.node)) calleeNode = b.path.node;
-      else if (_t.isVariableDeclarator(b.path.node) && b.path.node.init &&
-               (_t.isFunctionExpression(b.path.node.init) || _t.isArrowFunctionExpression(b.path.node.init))) {
-        calleeNode = b.path.node.init;
+      if (calleeName) {
+        var b = p.scope.getBinding(calleeName);
+        if (b && b.path && b.path.node) {
+          if (_t.isFunctionDeclaration(b.path.node)) calleeNode = b.path.node;
+          else if (_t.isVariableDeclarator(b.path.node) && b.path.node.init &&
+                   (_t.isFunctionExpression(b.path.node.init) || _t.isArrowFunctionExpression(b.path.node.init))) {
+            calleeNode = b.path.node.init;
+          }
+        }
       }
-      if (!calleeNode) return;
-      // Caller = the function enclosing this call site (or Program).
-      var enc = p.getFunctionParent();
-      var callerNode = (enc && enc.node) ? enc.node : programPath.node;
-      if (!callersOf.has(calleeNode)) callersOf.set(calleeNode, new Set());
-      callersOf.get(calleeNode).add(callerNode);
+      if (calleeNode) {
+        var enc = p.getFunctionParent();
+        var callerNode = (enc && enc.node) ? enc.node : programPath.node;
+        if (!callersOf.has(calleeNode)) callersOf.set(calleeNode, new Set());
+        callersOf.get(calleeNode).add(callerNode);
+        if (!_specCallSitesByFn.has(calleeNode)) _specCallSitesByFn.set(calleeNode, []);
+        _specCallSitesByFn.get(calleeNode).push(p);
+      }
     }
   });
   // Per-function snapshot of side-effect summary + return-value AV.
@@ -5843,6 +5862,23 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
       }
     }
   }
+  // Post-fixpoint pass: extend the call-site index with CallExpressions
+  // whose callee resolves through spec-eval state to a function-ref AV.
+  // Examples include `arr[N](args)` (computed MemberExpression callee
+  // where arr's AV is array-lit of function-refs after closure write-back)
+  // or any callee whose spec-eval AV identifies a known function node.
+  // Cheap: single program walk, per-callee AV lookup is O(1) WeakMap.get.
+  programPath.traverse({
+    "CallExpression|NewExpression": function(p) {
+      var calleeNode = p.node.callee;
+      var calleeAv = _specPathValMemo.get(calleeNode);
+      if (!calleeAv || calleeAv.kind !== "function-ref" || !calleeAv.funcNode) return;
+      var fn = calleeAv.funcNode;
+      if (!_specCallSitesByFn.has(fn)) _specCallSitesByFn.set(fn, []);
+      var existing = _specCallSitesByFn.get(fn);
+      if (existing.indexOf(p) < 0) existing.push(p);
+    }
+  });
 }
 
 function _specAnalyzePropertyFlow(funcPath, force) {
@@ -9748,17 +9784,39 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
       funcPath.parent.right === fnNode && _t.isIdentifier(funcPath.parent.left)) {
     fnBindingId = funcPath.parent.left.name;
   }
-  if (!fnBindingId) return null;
-  // Look up the binding via the function's parent scope.
-  var lookupScope = funcPath.parentPath && funcPath.parentPath.scope;
-  if (!lookupScope) return null;
-  var binding = lookupScope.getBinding(fnBindingId);
-  if (!binding || !binding.referencePaths) return null;
+  // Collect call sites: by binding referencePaths when fnBindingId is
+  // resolvable, plus the spec-eval call-site index per ECMA § 9.1.1
+  // closure write-back (covers anonymous function expressions whose
+  // identity flows through state — e.g. `register(function(){...})`
+  // → handlers[0]() — where binding-based lookup finds nothing).
+  var callExprPaths = [];
+  if (fnBindingId) {
+    var lookupScope = funcPath.parentPath && funcPath.parentPath.scope;
+    if (lookupScope) {
+      var binding = lookupScope.getBinding(fnBindingId);
+      if (binding && binding.referencePaths) {
+        for (var bri = 0; bri < binding.referencePaths.length; bri++) {
+          var bref = binding.referencePaths[bri];
+          var brefParent = bref.parentPath && bref.parentPath.node;
+          if (brefParent && _t.isCallExpression(brefParent) && brefParent.callee === bref.node) {
+            callExprPaths.push(bref.parentPath);
+          }
+        }
+      }
+    }
+  }
+  var specCallSites = _specCallSitesByFn.get(fnNode);
+  if (specCallSites) {
+    for (var sci = 0; sci < specCallSites.length; sci++) {
+      if (callExprPaths.indexOf(specCallSites[sci]) < 0) callExprPaths.push(specCallSites[sci]);
+    }
+  }
+  if (callExprPaths.length === 0) return null;
   var allLeaves = [];
-  for (var ri = 0; ri < binding.referencePaths.length; ri++) {
-    var ref = binding.referencePaths[ri];
-    var refParent = ref.parentPath && ref.parentPath.node;
-    if (!refParent || !_t.isCallExpression(refParent) || refParent.callee !== ref.node) continue;
+  for (var ri = 0; ri < callExprPaths.length; ri++) {
+    var ref = callExprPaths[ri];
+    var refParent = ref.node;
+    if (!refParent || !_t.isCallExpression(refParent)) continue;
     // Evaluate each arg's AV via spec eval at the caller's enclosing function.
     var callerEncFn = ref.getFunctionParent && ref.getFunctionParent();
     var callerState = (callerEncFn && _t.isFunction(callerEncFn.node))
@@ -9773,7 +9831,7 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
       var argAv = _specPathValMemo.get(argNode);
       if (!argAv) {
         try {
-          argAv = _specEvalExpression(ref.parentPath.get("arguments." + ai), callerState, []);
+          argAv = _specEvalExpression(ref.get("arguments." + ai), callerState, []);
         } catch (_) { argAv = null; }
       }
       callerArgAvs.push(argAv || { kind: "top" });
@@ -14737,6 +14795,32 @@ function _resolveParamFromCallbackArg(callExprPath, cbArgIdx, paramIdx, depth, p
               if (_t.isStringLiteral(arrNode.elements[avi])) values.push(arrNode.elements[avi].value);
             }
             if (values.length > 0) console.debug("[AST:trace]     callback-arg: iteration values from array: [%s]", values.join(", "));
+          }
+        }
+      }
+    }
+  }
+
+  // Spec-eval fallback per ECMA § 9.1.1 closure write-back: if existing
+  // direct/store-and-call patterns didn't yield, look up the cb function
+  // expression in _specCallSitesByFn (populated by program fixpoint
+  // post-pass — every CallExpression whose callee resolves via spec-eval
+  // state to a function-ref AV is indexed against the function node).
+  // For each indexed call site, get arg paramIdx and resolve.
+  if (values.length === 0) {
+    var cbArg = callExprPath.node.arguments[cbArgIdx];
+    if (cbArg && (_t.isFunctionExpression(cbArg) || _t.isArrowFunctionExpression(cbArg))) {
+      var cbCallSites = _specCallSitesByFn.get(cbArg);
+      if (cbCallSites && cbCallSites.length > 0) {
+        for (var ccsi = 0; ccsi < cbCallSites.length; ccsi++) {
+          var siteP = cbCallSites[ccsi];
+          if (paramIdx < siteP.node.arguments.length) {
+            var siteArgP = siteP.get("arguments." + paramIdx);
+            var siteArgVals = propName ? _resolvePropertyFromArg(siteArgP, propName, depth + 1) : _resolveAllValues(siteArgP, depth + 1);
+            if (siteArgVals.length > 0) {
+              console.debug("[AST:trace]     callback-arg: spec-eval call-site found, arg[%d] → [%s]", paramIdx, siteArgVals.join(", "));
+              values = values.concat(siteArgVals);
+            }
           }
         }
       }
