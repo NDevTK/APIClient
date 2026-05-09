@@ -3527,6 +3527,17 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     return { kind: "top" };
   }
   if (methodId === "Object.assign") {
+    // § 20.1.2.1 Object.assign(target, ...sources). Per spec: copy
+    // each source's own enumerable string-keyed properties onto target,
+    // returning target. Spec eval models this as obj-lit merge.
+    //
+    // When a source is statically known (obj-lit), its props are merged
+    // with later-source props overriding earlier ones. When a source is
+    // opaque (e.g. param), we don't know which props it has — sound
+    // over-approximation: every existing prop in oaMerged could be
+    // overridden, so JOIN with top via _specSetUnionAv (preserves the
+    // known value as one alternative). Continuing with subsequent
+    // known sources lets concrete defaults still propagate.
     if (argAvs.length === 0) return { kind: "top" };
     var oaTarget = argAvs[0];
     if (!oaTarget || oaTarget.kind !== "obj-lit" || !oaTarget.props) return { kind: "top" };
@@ -3536,9 +3547,20 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     }
     for (var oai = 1; oai < argAvs.length; oai++) {
       var oaSrc = argAvs[oai];
-      if (!oaSrc || oaSrc.kind !== "obj-lit" || !oaSrc.props) return { kind: "top" };
-      for (var oask in oaSrc.props) {
-        if (Object.prototype.hasOwnProperty.call(oaSrc.props, oask)) oaMerged[oask] = oaSrc.props[oask];
+      if (oaSrc && oaSrc.kind === "obj-lit" && oaSrc.props) {
+        for (var oask in oaSrc.props) {
+          if (Object.prototype.hasOwnProperty.call(oaSrc.props, oask)) {
+            oaMerged[oask] = oaSrc.props[oask];
+          }
+        }
+      } else {
+        // Opaque source: each known prop in oaMerged could be overridden
+        // by an unknown value. JOIN with top via set union.
+        for (var oadk in oaMerged) {
+          if (Object.prototype.hasOwnProperty.call(oaMerged, oadk)) {
+            oaMerged[oadk] = _specSetUnionAv(oaMerged[oadk], { kind: "top" });
+          }
+        }
       }
     }
     return { kind: "obj-lit", props: oaMerged };
