@@ -5360,7 +5360,8 @@ function _specEvalLeaf(path, state, vals, effects) {
         var hofMeth = n.callee.property.name;
         var hofIsHigherOrder =
           hofMeth === "map" || hofMeth === "filter" || hofMeth === "find" ||
-          hofMeth === "findIndex" || hofMeth === "some" || hofMeth === "every" ||
+          hofMeth === "findIndex" || hofMeth === "findLast" || hofMeth === "findLastIndex" ||
+          hofMeth === "some" || hofMeth === "every" ||
           hofMeth === "flatMap" || hofMeth === "forEach";
         var hofIsReduce = hofMeth === "reduce" || hofMeth === "reduceRight";
         if ((hofIsHigherOrder || hofIsReduce) && n.arguments.length >= 1) {
@@ -5397,7 +5398,12 @@ function _specEvalLeaf(path, state, vals, effects) {
             // Return value per § 23.1.3 with proper spec semantics:
             //   forEach → undefined (per spec)
             //   filter → array-lit with same element type (subset)
-            //   find → element AV (one of the elements satisfying cb)
+            //   find / findLast → element AV (one of the elements satisfying
+            //     cb) joined with undefined (per § 23.1.3.10/11 step 6:
+            //     "Return undefined" when no element satisfies cb).
+            //   findIndex / findLastIndex → integer index in [0, length-1] or
+            //     -1 (§ 23.1.3.12/13 step 6); for known-length array-lit
+            //     return or(-1, 0, ..., length-1).
             //   some / every → boolean. Without per-element cb evaluation
             //     both true and false are reachable runtime outcomes;
             //     return or(true, false) — sound and consumer-friendly
@@ -5405,11 +5411,23 @@ function _specEvalLeaf(path, state, vals, effects) {
             //   map → array-lit with cb's return-AV (computed when cb's
             //         body is a single ReturnStatement evaluable with
             //         the joined element AV as cb's first param)
-            //   reduce/findIndex/flatMap → Top (return type varies by cb
-            //     and accumulator semantics; future work)
+            //   reduce/flatMap → Top (return type varies by cb and
+            //     accumulator semantics; future work)
             if (hofMeth === "forEach") return { kind: "const", value: undefined };
             if (hofMeth === "filter") return { kind: "array-lit", elements: [hofElementAv] };
-            if (hofMeth === "find") return hofElementAv;
+            if (hofMeth === "find" || hofMeth === "findLast") {
+              return _specLogicalOrAv(hofElementAv, { kind: "const", value: undefined });
+            }
+            if (hofMeth === "findIndex" || hofMeth === "findLastIndex") {
+              if (recvAv.kind === "array-lit") {
+                var idxRet = { kind: "const", value: -1 };
+                for (var idxI = 0; idxI < recvAv.elements.length; idxI++) {
+                  idxRet = _specLogicalOrAv(idxRet, { kind: "const", value: idxI });
+                }
+                return idxRet;
+              }
+              return { kind: "top" };
+            }
             if (hofMeth === "some" || hofMeth === "every") {
               return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
             }
