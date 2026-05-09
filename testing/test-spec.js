@@ -3795,6 +3795,144 @@ specTest("§ 23.1.3.21 Array.prototype.map: arrow concise body with String.proto
   return leaves.indexOf("A") >= 0 && leaves.indexOf("B") >= 0;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// § 24.1.3 Map.prototype.* — get/set/has/delete on map-instance
+// § 24.2.3 Set.prototype.* — add/has/delete on set-instance
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== § 24.1.3 / § 24.2.3 Map / Set ===\n");
+
+specTest("§ 24.1.3.5 Map.prototype.get: returns value for matching key", `
+  function f() {
+    var m = new Map();
+    m.set("a", "alpha");
+    m.set("b", "beta");
+    this.url = m.get("a");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "alpha";
+});
+
+specTest("§ 24.1.3.5 Map.prototype.get: replaced key returns latest value", `
+  function f() {
+    var m = new Map();
+    m.set("k", "v1");
+    m.set("k", "v2");
+    this.url = m.get("k");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "v2";
+});
+
+specTest("§ 24.1.3.5 Map.prototype.get: missing key returns undefined", `
+  function f() {
+    var m = new Map();
+    m.set("a", "alpha");
+    this.url = m.get("missing");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === undefined;
+});
+
+specTest("§ 24.1.3.6 Map.prototype.has: present key returns true const", `
+  function f() {
+    var m = new Map();
+    m.set("a", 1);
+    this.flag = m.has("a");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
+specTest("§ 24.1.3.6 Map.prototype.has: absent key returns false const", `
+  function f() {
+    var m = new Map();
+    m.set("a", 1);
+    this.flag = m.has("z");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === false;
+});
+
+specTest("§ 24.1.1 new Map([[k,v]...]): iterable extracts entries statically", `
+  function f() {
+    var m = new Map([["x", "ex"], ["y", "why"]]);
+    this.url = m.get("y");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "why";
+});
+
+specTest("§ 24.1.3.3 Map.prototype.delete: removed key returns undefined on get", `
+  function f() {
+    var m = new Map();
+    m.set("k", "v");
+    m.delete("k");
+    this.url = m.get("k");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === undefined;
+});
+
+specTest("§ 24.2.3.7 Set.prototype.has: added value returns true const", `
+  function f() {
+    var s = new Set();
+    s.add("foo");
+    this.flag = s.has("foo");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
+specTest("§ 24.2.3.7 Set.prototype.has: missing value returns false const", `
+  function f() {
+    var s = new Set();
+    s.add("foo");
+    this.flag = s.has("bar");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === false;
+});
+
+specTest("§ 24.2.1 new Set(iterable): items extracted from array-lit", `
+  function f() {
+    var s = new Set(["a", "b", "c"]);
+    this.flag = s.has("b");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
+specTest("§ 24.1.1 new Map(unknownIterable): get returns top, not undefined (no false negative)", `
+  function f(rawIter) {
+    var m = new Map(rawIter);
+    this.val = m.get("k");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "top";
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");

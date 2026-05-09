@@ -2235,6 +2235,12 @@ function _specGlobalThisAv() {
   var requestCtorAv = { kind: "builtin-ctor", id: "Fetch.Request" };
   var urlSearchParamsCtorAv = { kind: "builtin-ctor", id: "WHATWG.URLSearchParams" };
   var headersCtorAv = { kind: "builtin-ctor", id: "Fetch.Headers" };
+  // ECMA § 24.1.1 Map / § 24.2.1 Set ctors. NewExpression handler reads
+  // `id` and dispatches via _specApplyBuiltinCtor, which returns the
+  // map-instance / set-instance AV (entries / items computed from the
+  // optional iterable arg per spec).
+  var mapCtorAv = { kind: "builtin-ctor", id: "ECMA.Map" };
+  var setCtorAv = { kind: "builtin-ctor", id: "ECMA.Set" };
   // Object namespace per § 20.1.2 — statics.
   var objectProps = {
     keys: { kind: "builtin-method", id: "Object.keys" },
@@ -2264,6 +2270,8 @@ function _specGlobalThisAv() {
       Request: requestCtorAv,
       URLSearchParams: urlSearchParamsCtorAv,
       Headers: headersCtorAv,
+      Map: mapCtorAv,
+      Set: setCtorAv,
       // Global functions per § 19.2.
       encodeURI: { kind: "builtin-method", id: "global.encodeURI" },
       encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
@@ -2312,6 +2320,38 @@ function _specNumberPrototypeAv() {
   return _SPEC_NUMBER_PROTO_AV;
 }
 
+// Map.prototype per ECMA § 24.1.3. The `size` accessor (§ 24.1.3.10)
+// is a getter on the prototype; we expose it as a per-instance prop
+// computed at construction/mutation time, so it's not in this proto av.
+// All callable methods are routed through _specApplyBuiltinMethod.
+var _SPEC_MAP_PROTO_AV = null;
+function _specMapPrototypeAv() {
+  if (!_SPEC_MAP_PROTO_AV) {
+    var props = {};
+    var mapMethodNames = ["get", "set", "has", "delete", "clear", "forEach", "keys", "values", "entries"];
+    for (var mmi = 0; mmi < mapMethodNames.length; mmi++) {
+      props[mapMethodNames[mmi]] = { kind: "builtin-method", id: "Map.prototype." + mapMethodNames[mmi] };
+    }
+    _SPEC_MAP_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_MAP_PROTO_AV;
+}
+
+// Set.prototype per ECMA § 24.2.3. `size` accessor (§ 24.2.3.9) treated
+// the same way as Map's — per-instance prop, not on prototype obj-lit.
+var _SPEC_SET_PROTO_AV = null;
+function _specSetPrototypeAv() {
+  if (!_SPEC_SET_PROTO_AV) {
+    var props = {};
+    var setMethodNames = ["add", "has", "delete", "clear", "forEach", "keys", "values", "entries"];
+    for (var smi = 0; smi < setMethodNames.length; smi++) {
+      props[setMethodNames[smi]] = { kind: "builtin-method", id: "Set.prototype." + setMethodNames[smi] };
+    }
+    _SPEC_SET_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_SET_PROTO_AV;
+}
+
 // Return the prototype AV for a given AV kind, or null. Per ECMA-262
 // each value has an implicit [[Prototype]]; member access falls through
 // to it when own-property lookup misses. Currently models Array.prototype
@@ -2323,6 +2363,8 @@ function _specGetPrototypeOfAv(av) {
   if (av.kind === "dom-element") return _specElementPrototypeAv();
   if (av.kind === "const" && typeof av.value === "string") return _specStringPrototypeAv();
   if (av.kind === "const" && typeof av.value === "number") return _specNumberPrototypeAv();
+  if (av.kind === "map-instance") return _specMapPrototypeAv();
+  if (av.kind === "set-instance") return _specSetPrototypeAv();
   // For or-trees whose every leaf shares a [[Prototype]], return that
   // prototype. Member access then dispatches per shared method via
   // _specApplyBuiltinMethod (which distributes over leaves itself).
@@ -2579,6 +2621,255 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     for (var rri = 1; rri < reqResults.length; rri++) reqOr = _specLogicalOrAv(reqOr, reqResults[rri]);
     return reqOr;
   }
+  // ECMA § 24.1.1 new Map([iterable]). Per spec step 8: if iterable is
+  // null/undefined, return empty Map. Otherwise iterate; for each entry,
+  // if not array-shaped throw TypeError; else extract [k,v] and Set.
+  // Cases:
+  //   no arg / explicit undefined / null → empty map-instance
+  //   array-lit of array-lit pairs → entries extracted statically
+  //   array-lit with one or more non-pair leaves → unknown shape on those
+  //     leaves; mark unknownInit so .get on unmatched keys returns top
+  //   any other AV → entries unknown; unknownInit
+  if (ctorId === "ECMA.Map") {
+    var mapInputAv = argAvs.length >= 1 ? argAvs[0] : null;
+    var mapInputUndefOrNull = !mapInputAv ||
+      (mapInputAv.kind === "const" && (mapInputAv.value === undefined || mapInputAv.value === null));
+    if (mapInputUndefOrNull) return { kind: "map-instance", entries: [] };
+    if (mapInputAv.kind === "array-lit") {
+      var mapEntries = [];
+      var mapPairs = mapInputAv.elements || [];
+      var allPairsKnown = true;
+      for (var mpi = 0; mpi < mapPairs.length; mpi++) {
+        var pair = mapPairs[mpi];
+        if (pair && pair.kind === "array-lit" && (pair.elements || []).length >= 2) {
+          mapEntries.push([pair.elements[0], pair.elements[1]]);
+        } else {
+          allPairsKnown = false;
+        }
+      }
+      if (allPairsKnown) return { kind: "map-instance", entries: mapEntries };
+      return { kind: "map-instance", entries: mapEntries, unknownInit: true };
+    }
+    return { kind: "map-instance", entries: [], unknownInit: true };
+  }
+  // ECMA § 24.2.1 new Set([iterable]). Same shape; items array.
+  if (ctorId === "ECMA.Set") {
+    var setInputAv = argAvs.length >= 1 ? argAvs[0] : null;
+    var setInputUndefOrNull = !setInputAv ||
+      (setInputAv.kind === "const" && (setInputAv.value === undefined || setInputAv.value === null));
+    if (setInputUndefOrNull) return { kind: "set-instance", items: [] };
+    if (setInputAv.kind === "array-lit") {
+      return { kind: "set-instance", items: (setInputAv.elements || []).slice() };
+    }
+    return { kind: "set-instance", items: [], unknownInit: true };
+  }
+  return { kind: "top" };
+}
+
+// SameValueZero per ECMA § 7.2.10 used by Map/Set for key equality.
+// Returns:
+//   true  — definitely equal (both are Const with === values, modulo NaN)
+//   false — definitely not equal (both are Const with distinct values)
+//   null  — indeterminate (at least one is non-Const; can't decide statically)
+function _specSameValueZeroAv(aAv, bAv) {
+  if (!aAv || !bAv) return null;
+  if (aAv.kind !== "const" || bAv.kind !== "const") return null;
+  // Per § 7.2.10 step 4: NaN equals NaN under SameValueZero.
+  if (typeof aAv.value === "number" && typeof bAv.value === "number" &&
+      Number.isNaN(aAv.value) && Number.isNaN(bAv.value)) return true;
+  return aAv.value === bAv.value;
+}
+
+// Apply Map.prototype.* method on a single map-instance receiver per
+// ECMA § 24.1.3 spec algorithms. Mutating methods rebind state[recvName]
+// when receiver is a tracked Identifier.
+function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
+  var entries = recvAv.entries || [];
+  var unknownInit = !!recvAv.unknownInit;
+  var methodName = methodId.slice("Map.prototype.".length);
+  // § 24.1.3.5 get(key) — returns the value for a matching entry per
+  // SameValueZero, or undefined if none. With unknown init, an unmatched
+  // lookup is undefined OR top (any value from the unknown init).
+  if (methodName === "get") {
+    var keyAv = argAvs[0] || { kind: "const", value: undefined };
+    var matched = null, ambiguous = false;
+    for (var gi = entries.length - 1; gi >= 0; gi--) {
+      var sv = _specSameValueZeroAv(entries[gi][0], keyAv);
+      if (sv === true) { matched = entries[gi][1]; break; }
+      if (sv === null) { ambiguous = true; }
+    }
+    if (matched !== null && !ambiguous && !unknownInit) return matched;
+    if (matched !== null && (ambiguous || unknownInit)) {
+      return _specLogicalOrAv(matched, { kind: "top" });
+    }
+    if (ambiguous || unknownInit) return { kind: "top" };
+    return { kind: "const", value: undefined };
+  }
+  // § 24.1.3.6 has(key) — boolean per SameValueZero.
+  if (methodName === "has") {
+    var hasKeyAv = argAvs[0] || { kind: "const", value: undefined };
+    var hasMatched = false, hasAmbig = false;
+    for (var hi = 0; hi < entries.length; hi++) {
+      var hsv = _specSameValueZeroAv(entries[hi][0], hasKeyAv);
+      if (hsv === true) { hasMatched = true; break; }
+      if (hsv === null) hasAmbig = true;
+    }
+    if (hasMatched && !unknownInit) return { kind: "const", value: true };
+    if (!hasMatched && !hasAmbig && !unknownInit) return { kind: "const", value: false };
+    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  // § 24.1.3.9 set(key, value) — adds or replaces; returns this. Replaces
+  // last matching entry when key is statically known, else appends.
+  if (methodName === "set") {
+    var newKeyAv = argAvs[0] || { kind: "const", value: undefined };
+    var newValAv = argAvs[1] || { kind: "const", value: undefined };
+    var newEntries = [];
+    var replaced = false;
+    for (var si = 0; si < entries.length; si++) {
+      var ssv = _specSameValueZeroAv(entries[si][0], newKeyAv);
+      if (ssv === true && !replaced) { newEntries.push([entries[si][0], newValAv]); replaced = true; }
+      else newEntries.push(entries[si]);
+    }
+    if (!replaced) newEntries.push([newKeyAv, newValAv]);
+    var newMapAv = { kind: "map-instance", entries: newEntries };
+    if (unknownInit) newMapAv.unknownInit = true;
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = newMapAv;
+    }
+    return newMapAv;
+  }
+  // § 24.1.3.3 delete(key) — returns true if removed, false otherwise.
+  if (methodName === "delete") {
+    var delKeyAv = argAvs[0] || { kind: "const", value: undefined };
+    var delEntries = [];
+    var delHit = false, delAmbig = false;
+    for (var di = 0; di < entries.length; di++) {
+      var dsv = _specSameValueZeroAv(entries[di][0], delKeyAv);
+      if (dsv === true && !delHit) { delHit = true; continue; }
+      if (dsv === null) delAmbig = true;
+      delEntries.push(entries[di]);
+    }
+    var newDelMap = { kind: "map-instance", entries: delEntries };
+    if (unknownInit) newDelMap.unknownInit = true;
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = newDelMap;
+    }
+    if (delHit && !delAmbig && !unknownInit) return { kind: "const", value: true };
+    if (!delHit && !delAmbig && !unknownInit) return { kind: "const", value: false };
+    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  // § 24.1.3.1 clear() — returns undefined; empties entries. unknownInit
+  // is also cleared (after clear, the Map is verifiably empty).
+  if (methodName === "clear") {
+    var clearMapAv = { kind: "map-instance", entries: [] };
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = clearMapAv;
+    }
+    return { kind: "const", value: undefined };
+  }
+  // § 24.1.3.7 keys() / 24.1.3.10 values() / 24.1.3.2 entries() — return
+  // iterators. We model the iterator as an array-lit so .forEach/.map
+  // through Array.prototype HOF dispatch still works downstream.
+  if (methodName === "keys") {
+    var keysOut = [];
+    for (var ki = 0; ki < entries.length; ki++) keysOut.push(entries[ki][0]);
+    return { kind: "array-lit", elements: keysOut };
+  }
+  if (methodName === "values") {
+    var valsOut = [];
+    for (var vi = 0; vi < entries.length; vi++) valsOut.push(entries[vi][1]);
+    return { kind: "array-lit", elements: valsOut };
+  }
+  if (methodName === "entries") {
+    var entriesOut = [];
+    for (var ei = 0; ei < entries.length; ei++) {
+      entriesOut.push({ kind: "array-lit", elements: [entries[ei][0], entries[ei][1]] });
+    }
+    return { kind: "array-lit", elements: entriesOut };
+  }
+  // forEach is HOF — handled at the call site (queue cb dispatch).
+  // Without that integration, return undefined (the spec return value).
+  if (methodName === "forEach") return { kind: "const", value: undefined };
+  return { kind: "top" };
+}
+
+// Apply Set.prototype.* method on a single set-instance receiver per
+// ECMA § 24.2.3 spec algorithms.
+function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
+  var items = recvAv.items || [];
+  var setUnknownInit = !!recvAv.unknownInit;
+  var setMethodName = methodId.slice("Set.prototype.".length);
+  // § 24.2.3.1 add(value) — adds if absent under SameValueZero; returns this.
+  if (setMethodName === "add") {
+    var addValAv = argAvs[0] || { kind: "const", value: undefined };
+    var addPresent = false;
+    for (var ai = 0; ai < items.length; ai++) {
+      if (_specSameValueZeroAv(items[ai], addValAv) === true) { addPresent = true; break; }
+    }
+    var newItems = items.slice();
+    if (!addPresent) newItems.push(addValAv);
+    var newSetAv = { kind: "set-instance", items: newItems };
+    if (setUnknownInit) newSetAv.unknownInit = true;
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = newSetAv;
+    }
+    return newSetAv;
+  }
+  // § 24.2.3.7 has(value) — boolean per SameValueZero.
+  if (setMethodName === "has") {
+    var hasValAv = argAvs[0] || { kind: "const", value: undefined };
+    var setMatched = false, setAmbig = false;
+    for (var hsi = 0; hsi < items.length; hsi++) {
+      var sssv = _specSameValueZeroAv(items[hsi], hasValAv);
+      if (sssv === true) { setMatched = true; break; }
+      if (sssv === null) setAmbig = true;
+    }
+    if (setMatched && !setUnknownInit) return { kind: "const", value: true };
+    if (!setMatched && !setAmbig && !setUnknownInit) return { kind: "const", value: false };
+    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  // § 24.2.3.3 delete(value) — returns true if removed, false otherwise.
+  if (setMethodName === "delete") {
+    var sdValAv = argAvs[0] || { kind: "const", value: undefined };
+    var sdItems = [];
+    var sdHit = false, sdAmbig = false;
+    for (var sdi = 0; sdi < items.length; sdi++) {
+      var sdsv = _specSameValueZeroAv(items[sdi], sdValAv);
+      if (sdsv === true && !sdHit) { sdHit = true; continue; }
+      if (sdsv === null) sdAmbig = true;
+      sdItems.push(items[sdi]);
+    }
+    var newSdSet = { kind: "set-instance", items: sdItems };
+    if (setUnknownInit) newSdSet.unknownInit = true;
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = newSdSet;
+    }
+    if (sdHit && !sdAmbig && !setUnknownInit) return { kind: "const", value: true };
+    if (!sdHit && !sdAmbig && !setUnknownInit) return { kind: "const", value: false };
+    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+  }
+  // § 24.2.3.2 clear() — empties items; returns undefined.
+  if (setMethodName === "clear") {
+    var clearSetAv = { kind: "set-instance", items: [] };
+    if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+      state[recvName] = clearSetAv;
+    }
+    return { kind: "const", value: undefined };
+  }
+  // § 24.2.3.4 entries() — array-lit of [v,v] pairs (Set entries are
+  // mirrored per spec).
+  if (setMethodName === "entries") {
+    var sEntriesOut = [];
+    for (var sei = 0; sei < items.length; sei++) {
+      sEntriesOut.push({ kind: "array-lit", elements: [items[sei], items[sei]] });
+    }
+    return { kind: "array-lit", elements: sEntriesOut };
+  }
+  // § 24.2.3.10 values() / keys() — array-lit of items (alias per spec).
+  if (setMethodName === "values" || setMethodName === "keys") {
+    return { kind: "array-lit", elements: items.slice() };
+  }
+  if (setMethodName === "forEach") return { kind: "const", value: undefined };
   return { kind: "top" };
 }
 
@@ -2742,6 +3033,61 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   if (pureArrayIds.indexOf(methodId) >= 0) {
     return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
+  }
+  // ECMA § 24.1.3 Map.prototype.* dispatches. Receiver must be a tracked
+  // map-instance for value-precise dispatch; or-tree of map-instances
+  // distributes per leaf. Mutating methods (set, delete, clear) rebind
+  // state[recvName] when receiver is a tracked Identifier.
+  if (methodId.indexOf("Map.prototype.") === 0 && recvAv) {
+    if (recvAv.kind === "or") {
+      var mapOrLeaves = _avFlattenOrLeaves(recvAv);
+      if (mapOrLeaves) {
+        var mapAllInst = mapOrLeaves.length > 0;
+        for (var moi = 0; mapAllInst && moi < mapOrLeaves.length; moi++) {
+          if (!mapOrLeaves[moi] || mapOrLeaves[moi].kind !== "map-instance") mapAllInst = false;
+        }
+        if (mapAllInst) {
+          var mapPerRes = [];
+          for (var mori = 0; mori < mapOrLeaves.length; mori++) {
+            mapPerRes.push(_specApplyMapMethodOnInst(methodId, mapOrLeaves[mori], recvName, argAvs, state));
+          }
+          if (mapPerRes.length === 1) return mapPerRes[0];
+          var mapResOr = mapPerRes[0];
+          for (var mri = 1; mri < mapPerRes.length; mri++) mapResOr = _specLogicalOrAv(mapResOr, mapPerRes[mri]);
+          return mapResOr;
+        }
+      }
+    }
+    if (recvAv.kind === "map-instance") {
+      return _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state);
+    }
+    return { kind: "top" };
+  }
+  // ECMA § 24.2.3 Set.prototype.* dispatches. Same shape as Map.
+  if (methodId.indexOf("Set.prototype.") === 0 && recvAv) {
+    if (recvAv.kind === "or") {
+      var setOrLeaves = _avFlattenOrLeaves(recvAv);
+      if (setOrLeaves) {
+        var setAllInst = setOrLeaves.length > 0;
+        for (var soi = 0; setAllInst && soi < setOrLeaves.length; soi++) {
+          if (!setOrLeaves[soi] || setOrLeaves[soi].kind !== "set-instance") setAllInst = false;
+        }
+        if (setAllInst) {
+          var setPerRes = [];
+          for (var sori = 0; sori < setOrLeaves.length; sori++) {
+            setPerRes.push(_specApplySetMethodOnInst(methodId, setOrLeaves[sori], recvName, argAvs, state));
+          }
+          if (setPerRes.length === 1) return setPerRes[0];
+          var setResOr = setPerRes[0];
+          for (var sri = 1; sri < setPerRes.length; sri++) setResOr = _specLogicalOrAv(setResOr, setPerRes[sri]);
+          return setResOr;
+        }
+      }
+    }
+    if (recvAv.kind === "set-instance") {
+      return _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state);
+    }
+    return { kind: "top" };
   }
   // Global URI/Base64 transforms per § 19.2.6 routed through the existing
   // _applyGlobalUriTransform helper.
