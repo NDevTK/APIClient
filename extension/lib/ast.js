@@ -4045,46 +4045,28 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "string") {
         var meth = n.callee.property.name;
         var s = recvAv.value;
-        // § 22.1.3.27 String.prototype.toUpperCase
-        if (meth === "toUpperCase" && n.arguments.length === 0) return { kind: "const", value: s.toUpperCase() };
-        // § 22.1.3.25 String.prototype.toLowerCase
-        if (meth === "toLowerCase" && n.arguments.length === 0) return { kind: "const", value: s.toLowerCase() };
-        // § 22.1.3.32 String.prototype.trim
-        if (meth === "trim" && n.arguments.length === 0) return { kind: "const", value: s.trim() };
-        // § 22.1.3.16 String.prototype.slice — when both args (or neither) are Const numbers
-        if (meth === "slice") {
-          var sliceArgs = [];
-          var sliceOk = true;
-          for (var sai = 0; sai < n.arguments.length && sai < 2; sai++) {
-            var sav = vals.get(n.arguments[sai]);
-            if (!sav || sav.kind !== "const" || typeof sav.value !== "number") { sliceOk = false; break; }
-            sliceArgs.push(sav.value);
-          }
-          if (sliceOk) return { kind: "const", value: s.slice.apply(s, sliceArgs) };
+        // § 22.1.3 String.prototype methods that take Const literal args
+        // and produce a Const string. Routed through the shared helper
+        // so spec eval and URL resolver share one implementation.
+        var seArgLits = [];
+        var seArgsOk = true;
+        for (var seai = 0; seai < n.arguments.length; seai++) {
+          var seav = vals.get(n.arguments[seai]);
+          if (!seav || seav.kind !== "const") { seArgsOk = false; break; }
+          seArgLits.push(seav.value);
         }
-        // § 22.1.3.17 String.prototype.substring
-        if (meth === "substring") {
-          var subArgs = [];
-          var subOk = true;
-          for (var sui = 0; sui < n.arguments.length && sui < 2; sui++) {
-            var suv = vals.get(n.arguments[sui]);
-            if (!suv || suv.kind !== "const" || typeof suv.value !== "number") { subOk = false; break; }
-            subArgs.push(suv.value);
+        if (seArgsOk) {
+          var seTransformed = _applyStringMethodToConst(s, meth, seArgLits);
+          if (seTransformed !== undefined) {
+            // Return type depends on method: string for transform-style,
+            // number for indexOf/lastIndexOf/charCodeAt, boolean for
+            // includes/startsWith/endsWith. The helper returns the raw
+            // value; we just wrap as Const.
+            return { kind: "const", value: seTransformed };
           }
-          if (subOk) return { kind: "const", value: s.substring.apply(s, subArgs) };
         }
-        // § 22.1.3.7 String.prototype.concat — variadic Const args.
-        if (meth === "concat") {
-          var concatRes = s;
-          var concatOk = true;
-          for (var cci = 0; cci < n.arguments.length; cci++) {
-            var ccv = vals.get(n.arguments[cci]);
-            if (!ccv || ccv.kind !== "const") { concatOk = false; break; }
-            concatRes += String(ccv.value);
-          }
-          if (concatOk) return { kind: "const", value: concatRes };
-        }
-        // § 22.1.3.23 String.prototype.split(separator [, limit]) — array-lit.
+        // § 22.1.3.23 String.prototype.split(separator [, limit]) — array-lit
+        // (return type is array, not handled by the const-returning helper).
         if (meth === "split") {
           var splitSep, splitLim;
           if (n.arguments.length >= 1) {
@@ -4105,123 +4087,7 @@ function _specEvalLeaf(path, state, vals, effects) {
           for (var spi = 0; spi < splitRes.length; spi++) splitElems.push({ kind: "const", value: splitRes[spi] });
           return { kind: "array-lit", elements: splitElems };
         }
-        // § 22.1.3.19 String.prototype.replace(searchValue, replaceValue) —
-        // Const-string both args. Regex / function replaceValue → top.
-        if (meth === "replace" && n.arguments.length === 2) {
-          var rsAv = vals.get(n.arguments[0]);
-          var rvAv = vals.get(n.arguments[1]);
-          if (rsAv && rsAv.kind === "const" && typeof rsAv.value === "string" &&
-              rvAv && rvAv.kind === "const" && typeof rvAv.value === "string") {
-            return { kind: "const", value: s.replace(rsAv.value, rvAv.value) };
-          }
-        }
-        // § 22.1.3.20 String.prototype.replaceAll — Const-string both args.
-        if (meth === "replaceAll" && n.arguments.length === 2) {
-          var raSAv = vals.get(n.arguments[0]);
-          var raVAv = vals.get(n.arguments[1]);
-          if (raSAv && raSAv.kind === "const" && typeof raSAv.value === "string" &&
-              raVAv && raVAv.kind === "const" && typeof raVAv.value === "string") {
-            return { kind: "const", value: s.replaceAll(raSAv.value, raVAv.value) };
-          }
-        }
-        // § 22.1.3.9 String.prototype.indexOf(searchString [, position])
-        if (meth === "indexOf") {
-          if (n.arguments.length >= 1) {
-            var ssIo = vals.get(n.arguments[0]);
-            if (ssIo && ssIo.kind === "const" && typeof ssIo.value === "string") {
-              var posIo = 0;
-              if (n.arguments.length >= 2) {
-                var posAv = vals.get(n.arguments[1]);
-                if (posAv && posAv.kind === "const" && typeof posAv.value === "number") posIo = posAv.value;
-                else return { kind: "top" };
-              }
-              return { kind: "const", value: s.indexOf(ssIo.value, posIo) };
-            }
-          }
-        }
-        // § 22.1.3.11 String.prototype.lastIndexOf(searchString [, position])
-        if (meth === "lastIndexOf" && n.arguments.length >= 1) {
-          var ssLi = vals.get(n.arguments[0]);
-          if (ssLi && ssLi.kind === "const" && typeof ssLi.value === "string") {
-            return { kind: "const", value: s.lastIndexOf(ssLi.value) };
-          }
-        }
-        // § 22.1.3.8 String.prototype.includes(searchString [, position])
-        if (meth === "includes" && n.arguments.length >= 1) {
-          var ssIn = vals.get(n.arguments[0]);
-          if (ssIn && ssIn.kind === "const" && typeof ssIn.value === "string") {
-            return { kind: "const", value: s.includes(ssIn.value) };
-          }
-        }
-        // § 22.1.3.24 String.prototype.startsWith(searchString [, position])
-        if (meth === "startsWith" && n.arguments.length >= 1) {
-          var ssSw = vals.get(n.arguments[0]);
-          if (ssSw && ssSw.kind === "const" && typeof ssSw.value === "string") {
-            return { kind: "const", value: s.startsWith(ssSw.value) };
-          }
-        }
-        // § 22.1.3.7 String.prototype.endsWith(searchString [, endPosition])
-        if (meth === "endsWith" && n.arguments.length >= 1) {
-          var ssEw = vals.get(n.arguments[0]);
-          if (ssEw && ssEw.kind === "const" && typeof ssEw.value === "string") {
-            return { kind: "const", value: s.endsWith(ssEw.value) };
-          }
-        }
-        // § 22.1.3.18 String.prototype.repeat(count) — repeated string.
-        if (meth === "repeat" && n.arguments.length === 1) {
-          var repCnt = vals.get(n.arguments[0]);
-          if (repCnt && repCnt.kind === "const" && typeof repCnt.value === "number" &&
-              Number.isInteger(repCnt.value) && repCnt.value >= 0) {
-            try { return { kind: "const", value: s.repeat(repCnt.value) }; }
-            catch (e) { return { kind: "top" }; }
-          }
-        }
-        // § 22.1.3.17 String.prototype.padStart(maxLength [, fillString])
-        if (meth === "padStart" && n.arguments.length >= 1) {
-          var psM = vals.get(n.arguments[0]);
-          if (!psM || psM.kind !== "const" || typeof psM.value !== "number") return { kind: "top" };
-          var psFill = " ";
-          if (n.arguments.length >= 2) {
-            var psF = vals.get(n.arguments[1]);
-            if (!psF || psF.kind !== "const" || typeof psF.value !== "string") return { kind: "top" };
-            psFill = psF.value;
-          }
-          return { kind: "const", value: s.padStart(psM.value, psFill) };
-        }
-        // § 22.1.3.16 String.prototype.padEnd(maxLength [, fillString])
-        if (meth === "padEnd" && n.arguments.length >= 1) {
-          var peM = vals.get(n.arguments[0]);
-          if (!peM || peM.kind !== "const" || typeof peM.value !== "number") return { kind: "top" };
-          var peFill = " ";
-          if (n.arguments.length >= 2) {
-            var peF = vals.get(n.arguments[1]);
-            if (!peF || peF.kind !== "const" || typeof peF.value !== "string") return { kind: "top" };
-            peFill = peF.value;
-          }
-          return { kind: "const", value: s.padEnd(peM.value, peFill) };
-        }
-        // § 22.1.3.2 String.prototype.charAt(pos)
-        if (meth === "charAt" && n.arguments.length >= 1) {
-          var caP = vals.get(n.arguments[0]);
-          if (caP && caP.kind === "const" && typeof caP.value === "number") {
-            return { kind: "const", value: s.charAt(caP.value) };
-          }
-        }
-        // § 22.1.3.3 String.prototype.charCodeAt(pos)
-        if (meth === "charCodeAt" && n.arguments.length >= 1) {
-          var ccP = vals.get(n.arguments[0]);
-          if (ccP && ccP.kind === "const" && typeof ccP.value === "number") {
-            return { kind: "const", value: s.charCodeAt(ccP.value) };
-          }
-        }
-        // § 22.1.3.1 String.prototype.at(index) — returns char at index
-        // (negative indices count from end per spec step 5).
-        if (meth === "at" && n.arguments.length >= 1) {
-          var atP = vals.get(n.arguments[0]);
-          if (atP && atP.kind === "const" && typeof atP.value === "number") {
-            return { kind: "const", value: s.at(atP.value) };
-          }
-        }
+        // padStart/padEnd/charAt/charCodeAt/at all routed via the helper above.
       }
       // Array built-ins per § 23.1.3 — receiver array-lit.
       if (recvAv && recvAv.kind === "array-lit" && recvAv.elements) {
@@ -7132,6 +6998,33 @@ function _applyStringMethodToConst(s, methodName, argLits) {
   }
   if (methodName === "repeat" && argLits.length === 1 && typeof argLits[0] === "number") {
     try { return s.repeat(argLits[0]); } catch (_) { return undefined; }
+  }
+  // Methods returning non-string types (number / boolean) — also routed
+  // here so spec eval has one dispatch table.
+  if (methodName === "indexOf" && argLits.length >= 1 && typeof argLits[0] === "string") {
+    if (argLits.length === 1) return s.indexOf(argLits[0]);
+    if (argLits.length === 2 && typeof argLits[1] === "number") return s.indexOf(argLits[0], argLits[1]);
+  }
+  if (methodName === "lastIndexOf" && argLits.length >= 1 && typeof argLits[0] === "string") {
+    return s.lastIndexOf(argLits[0]);
+  }
+  if (methodName === "includes" && argLits.length >= 1 && typeof argLits[0] === "string") {
+    return s.includes(argLits[0]);
+  }
+  if (methodName === "startsWith" && argLits.length >= 1 && typeof argLits[0] === "string") {
+    return s.startsWith(argLits[0]);
+  }
+  if (methodName === "endsWith" && argLits.length >= 1 && typeof argLits[0] === "string") {
+    return s.endsWith(argLits[0]);
+  }
+  if (methodName === "charAt" && argLits.length === 1 && typeof argLits[0] === "number") {
+    return s.charAt(argLits[0]);
+  }
+  if (methodName === "charCodeAt" && argLits.length === 1 && typeof argLits[0] === "number") {
+    return s.charCodeAt(argLits[0]);
+  }
+  if (methodName === "at" && argLits.length === 1 && typeof argLits[0] === "number") {
+    return s.at(argLits[0]);
   }
   return undefined;
 }
