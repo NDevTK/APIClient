@@ -3453,6 +3453,26 @@ specTest("CSS L4 attribute selector: `document.querySelector('meta[name=X]').con
   return av && av.kind === "const" && av.value === "abc-token-123";
 }, { domContext: { metaTags: { "csrf-token": "abc-token-123" } } });
 
+specTest("WHATWG DOM § 4.9.1: `el.getAttribute('href')` on getElementById obj-lit returns href", `
+  function f() {
+    this.u = document.getElementById("link").getAttribute("href");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api/foo";
+}, { domContext: { byId: { link: { href: "/api/foo" } } } });
+
+specTest("HTML5 § 2.6.6 dataset: `el.getAttribute('data-X')` maps to dataset.X", `
+  function f() {
+    this.u = document.getElementById("link").getAttribute("data-target-url");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api/foo";
+}, { domContext: { byId: { link: { dataAttrs: { targetUrl: "/api/foo" } } } } });
+
 specTest("§ 14.10 multi-stmt return with param: `if(p) return p; return 'default';`", `
   function f() {
     this.u = orDefault("/api/foo");

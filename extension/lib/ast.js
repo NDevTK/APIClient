@@ -4417,6 +4417,32 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
+    // WHATWG DOM § 4.9.1 Element.getAttribute(qualifiedName). When the
+    // receiver is an obj-lit (typically from document.getElementById /
+    // querySelector / inline-handler binding) and the attribute name is
+    // a Const string, return the matching prop AV. Maps "data-X"
+    // attributes to obj.dataset.X per HTML5 dataset semantics.
+    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
+        _t.isIdentifier(n.callee.property, { name: "getAttribute" }) &&
+        n.arguments.length === 1) {
+      var gaRecvAv = vals.get(n.callee.object);
+      var gaArgAv = vals.get(n.arguments[0]);
+      if (gaRecvAv && gaRecvAv.kind === "obj-lit" && gaRecvAv.props &&
+          gaArgAv && gaArgAv.kind === "const" && typeof gaArgAv.value === "string") {
+        var gaName = gaArgAv.value;
+        if (Object.prototype.hasOwnProperty.call(gaRecvAv.props, gaName)) {
+          return gaRecvAv.props[gaName];
+        }
+        // HTML5 dataset: "data-foo" → dataset.foo (per HTML5 § 2.6.6).
+        if (gaName.indexOf("data-") === 0 && gaRecvAv.props.dataset &&
+            gaRecvAv.props.dataset.kind === "obj-lit" && gaRecvAv.props.dataset.props) {
+          var dsKey = gaName.slice(5).replace(/-([a-z])/g, function(_m, c) { return c.toUpperCase(); });
+          if (Object.prototype.hasOwnProperty.call(gaRecvAv.props.dataset.props, dsKey)) {
+            return gaRecvAv.props.dataset.props[dsKey];
+          }
+        }
+      }
+    }
     // ECMA-262 § 27.2.4.7 — Promise.resolve(value). Returns a Promise
     // resolved with value. For abstract analysis: passthrough the arg's
     // AV (await/then will unwrap the same value). Scope-checked Promise.
