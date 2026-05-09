@@ -2876,6 +2876,18 @@ test("DOM context: Stimulus pattern URL surfaced via domEndpoints (data-X-Y-valu
   return false;
 }, { domContext: { dataAttrs: { 0: { "controller": "se-dismiss", "se-dismiss-endpoint-value": "/posts/123/dismiss" } } } });
 
+test("DOM context: chained .replace().toLowerCase() applies both transforms", `
+  function fn(el) {
+    fetch(el.href.replace("HIDE", "snip").toLowerCase());
+  }
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  for (var i = 0; i < result.fetchCallSites.length; i++) {
+    if (result.fetchCallSites[i].url === "snip?id=5") return true;
+  }
+  return false;
+}, { domContext: { inlineHandlers: { x: { handlers: [{ event: "click", body: "fn(this)" }], elementAttrs: { href: "HIDE?id=5", src: null, action: null, dataAttrs: null } } } } });
+
 test("DOM context: inline handler with .replace() applies the transform", `
   function hidestory(el, id) {
     fetch(el.href.replace("hide", "snip-story"));
