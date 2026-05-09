@@ -3932,6 +3932,36 @@ function _specEvalLeaf(path, state, vals, effects) {
         for (var uri = 1; uri < urlResults.length; uri++) urlOr = _specLogicalOrAv(urlOr, urlResults[uri]);
         return urlOr;
       }
+      // WHATWG URLSearchParams § 5.2 — new URLSearchParams(init).
+      // For fetch URL extraction the relevant projection is the encoded
+      // string form (yielded by .toString() / passed to URL.search /
+      // concatenated). Distinct from URL: we emit a Const string directly
+      // rather than an obj-lit, since URLSearchParams instances are
+      // typically consumed by toString(). When init is an obj-lit with
+      // resolvable values, build "k1=v1&k2=v2" via percent-encoding;
+      // when init is a Const string, return it (with leading "?" stripped
+      // per spec).
+      if (ctorName === "URLSearchParams" && n.arguments.length >= 1) {
+        var uspArg = n.arguments[0];
+        var uspArgAv = vals.get(uspArg) || { kind: "top" };
+        // String-literal init: spec strips a leading "?".
+        if (uspArgAv.kind === "const" && typeof uspArgAv.value === "string") {
+          return { kind: "const", value: uspArgAv.value.replace(/^\?/, "") };
+        }
+        // Obj-lit init: encode each key=value, join with "&".
+        if (uspArgAv.kind === "obj-lit" && uspArgAv.props) {
+          var uspParts = [];
+          var uspOk = true;
+          for (var uspK in uspArgAv.props) {
+            if (!Object.prototype.hasOwnProperty.call(uspArgAv.props, uspK)) continue;
+            var uspV = uspArgAv.props[uspK];
+            if (!uspV || uspV.kind !== "const") { uspOk = false; break; }
+            uspParts.push(encodeURIComponent(uspK) + "=" + encodeURIComponent(String(uspV.value)));
+          }
+          if (uspOk) return { kind: "const", value: uspParts.join("&") };
+        }
+        return { kind: "top" };
+      }
       // Fetch spec § 5.5 — new Request(input [, init]) returns a Request.
       // The .url property derives from `input` per the constructor:
       //   - When input is a USVString → parse as URL (relative to current document)

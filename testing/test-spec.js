@@ -3330,6 +3330,37 @@ specTest("§ 14.10 multi-stmt return: `if(c) return A; return B;` — both branc
   return leaves.length === 2 && leaves.indexOf("/api/admin") >= 0 && leaves.indexOf("/api/user") >= 0;
 });
 
+specTest("WHATWG URLSearchParams § 5.2: `new URLSearchParams({k:'v', k2:'v 2'})` → 'k=v&k2=v%202'", `
+  function f() {
+    this.q = new URLSearchParams({ k: "v", k2: "v 2" });
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "k=v&k2=v%202";
+});
+
+specTest("WHATWG URLSearchParams: string init strips leading '?'", `
+  function f() {
+    this.q = new URLSearchParams("?a=1&b=2");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "a=1&b=2";
+});
+
+specTest("WHATWG URLSearchParams shadowed identifier does NOT fire", `
+  function f() {
+    var URLSearchParams = function() { return "shadow"; };
+    this.q = new URLSearchParams({ k: "v" });
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return !(av && av.kind === "const" && av.value === "k=v");
+});
+
 specTest("§ 14.10 multi-stmt return with param: `if(p) return p; return 'default';`", `
   function f() {
     this.u = orDefault("/api/foo");
