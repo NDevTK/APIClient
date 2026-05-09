@@ -5744,30 +5744,33 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
   // Worklist-based fixpoint: pass 1 analyses every function. Subsequent
   // passes only re-analyse functions whose direct callees changed in
   // the previous pass — bounds total work to O(F * affected-chain-depth)
-  // instead of O(F²). Reverse call graph computed once via traverse.
+  // instead of O(F²). Reverse call graph computed via a SINGLE program-
+  // wide traversal so cost is O(total-AST), not O(total-AST * nesting-
+  // depth) (would be the case if we traversed each function's body
+  // separately — nested function bodies would be visited per ancestor).
   var callersOf = new Map();   // funcNode → Set of caller funcNodes
-  for (var fpi0 = 0; fpi0 < fnPaths.length; fpi0++) {
-    var fp0 = fnPaths[fpi0];
-    fp0.traverse({
-      "CallExpression|NewExpression": function(p) {
-        var calleeName = null;
-        var c = p.node.callee;
-        if (_t.isIdentifier(c)) calleeName = c.name;
-        if (!calleeName) return;
-        var b = p.scope.getBinding(calleeName);
-        if (!b || !b.path || !b.path.node) return;
-        var calleeNode = null;
-        if (_t.isFunctionDeclaration(b.path.node)) calleeNode = b.path.node;
-        else if (_t.isVariableDeclarator(b.path.node) && b.path.node.init &&
-                 (_t.isFunctionExpression(b.path.node.init) || _t.isArrowFunctionExpression(b.path.node.init))) {
-          calleeNode = b.path.node.init;
-        }
-        if (!calleeNode) return;
-        if (!callersOf.has(calleeNode)) callersOf.set(calleeNode, new Set());
-        callersOf.get(calleeNode).add(fp0.node);
+  programPath.traverse({
+    "CallExpression|NewExpression": function(p) {
+      var calleeName = null;
+      var c = p.node.callee;
+      if (_t.isIdentifier(c)) calleeName = c.name;
+      if (!calleeName) return;
+      var b = p.scope.getBinding(calleeName);
+      if (!b || !b.path || !b.path.node) return;
+      var calleeNode = null;
+      if (_t.isFunctionDeclaration(b.path.node)) calleeNode = b.path.node;
+      else if (_t.isVariableDeclarator(b.path.node) && b.path.node.init &&
+               (_t.isFunctionExpression(b.path.node.init) || _t.isArrowFunctionExpression(b.path.node.init))) {
+        calleeNode = b.path.node.init;
       }
-    });
-  }
+      if (!calleeNode) return;
+      // Caller = the function enclosing this call site (or Program).
+      var enc = p.getFunctionParent();
+      var callerNode = (enc && enc.node) ? enc.node : programPath.node;
+      if (!callersOf.has(calleeNode)) callersOf.set(calleeNode, new Set());
+      callersOf.get(calleeNode).add(callerNode);
+    }
+  });
   var sigByFn = new Map();
   function _ssSig(fnNode) {
     var seSig = "";
