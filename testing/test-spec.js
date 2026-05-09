@@ -3473,6 +3473,47 @@ specTest("HTML5 § 2.6.6 dataset: `el.getAttribute('data-X')` maps to dataset.X"
   return av && av.kind === "const" && av.value === "/api/foo";
 }, { domContext: { byId: { link: { dataAttrs: { targetUrl: "/api/foo" } } } } });
 
+specTest("ECMA § 22.1.1.1: `String(123)` → '123' via ToString coercion", `
+  function f() {
+    this.s = String(42);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "42";
+});
+
+specTest("ECMA § 22.1.1.1: `String(null)` → 'null' per spec", `
+  function f() {
+    this.s = String(null);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "null";
+});
+
+specTest("ECMA § 21.1.1.1: `Number('42')` → 42 via ToNumber coercion", `
+  function f() {
+    this.n = Number("42");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === 42;
+});
+
+specTest("ECMA § 22.1.1.1: shadowed `String` does NOT coerce", `
+  function f() {
+    var String = function() { return "shadow"; };
+    this.s = String(42);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return !(av && av.kind === "const" && av.value === "42");
+});
+
 specTest("§ 14.10 multi-stmt return with param: `if(p) return p; return 'default';`", `
   function f() {
     this.u = orDefault("/api/foo");

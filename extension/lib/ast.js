@@ -4381,6 +4381,55 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
+    // ECMA § 22.1.1.1 — `String(x)` called as function (not constructor)
+    // returns ToString(x) per spec. For Const-resolvable args, evaluate;
+    // otherwise Top. Scope-checked unshadowed `String`.
+    if (_t.isIdentifier(n.callee, { name: "String" }) &&
+        !path.scope.getBinding("String") && n.arguments.length >= 1) {
+      var strCoerceAv = vals.get(n.arguments[0]);
+      if (strCoerceAv && strCoerceAv.kind === "const") {
+        var strV = strCoerceAv.value;
+        if (strV === undefined) return { kind: "const", value: "undefined" };
+        if (strV === null) return { kind: "const", value: "null" };
+        return { kind: "const", value: String(strV) };
+      }
+      // Distribute over alternation of Const leaves.
+      if (strCoerceAv && strCoerceAv.kind === "or") {
+        var strLeaves = _avFlattenAnyConstLeaves(strCoerceAv);
+        if (strLeaves !== null) {
+          var strResults = [];
+          for (var sli = 0; sli < strLeaves.length; sli++) {
+            var slv = strLeaves[sli];
+            if (slv === undefined) strResults.push("undefined");
+            else if (slv === null) strResults.push("null");
+            else strResults.push(String(slv));
+          }
+          if (strResults.length === 1) return { kind: "const", value: strResults[0] };
+          var strOr = { kind: "const", value: strResults[0] };
+          for (var sri = 1; sri < strResults.length; sri++) {
+            strOr = _specLogicalOrAv(strOr, { kind: "const", value: strResults[sri] });
+          }
+          return strOr;
+        }
+      }
+    }
+    // ECMA § 21.1.1.1 — `Number(x)` called as function returns ToNumber(x).
+    if (_t.isIdentifier(n.callee, { name: "Number" }) &&
+        !path.scope.getBinding("Number") && n.arguments.length >= 1) {
+      var numCoerceAv = vals.get(n.arguments[0]);
+      if (numCoerceAv && numCoerceAv.kind === "const") {
+        var numV = Number(numCoerceAv.value);
+        return { kind: "const", value: numV };
+      }
+    }
+    // ECMA § 21.1.1 — `Boolean(x)` called as function returns ToBoolean(x).
+    if (_t.isIdentifier(n.callee, { name: "Boolean" }) &&
+        !path.scope.getBinding("Boolean") && n.arguments.length >= 1) {
+      var boolCoerceAv = vals.get(n.arguments[0]);
+      if (boolCoerceAv && boolCoerceAv.kind === "const") {
+        return { kind: "const", value: Boolean(boolCoerceAv.value) };
+      }
+    }
     // String.* static methods per § 22.1.2 — scope-checked unshadowed `String`.
     if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
         _t.isIdentifier(n.callee.object, { name: "String" }) &&
