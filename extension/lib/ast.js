@@ -1002,6 +1002,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _resolveToObjectMemo = new WeakMap();
   _rcfpMemo = new WeakMap();
   _specEffectsMemo = new WeakMap();
+  _specPathValMemo = new WeakMap();
   _tvsMemo = new WeakMap();
   _cfgMemo = new WeakMap();
   // Page DOM context: when the analyser runs against a page (HTML +
@@ -2750,6 +2751,11 @@ function _specEvalExpression(rootPath, state, effects) {
     var p = paths[i];
     var av = _specEvalLeaf(p, state, vals, effects);
     vals.set(p.node, av);
+    // Cross-call memo: lets URL extraction / security taint look up the
+    // spec-computed AV for any node without re-running spec eval. Last
+    // write wins — for nodes seen in multiple states (e.g. via inter-
+    // procedural revisits), the latest analysis context's AV is kept.
+    _specPathValMemo.set(p.node, av);
   }
   return vals.get(rootPath.node);
 }
@@ -3105,6 +3111,12 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
 // Memoised per function node.
 // ───────────────────────────────────────────────────────────────────────────
 var _specEffectsMemo = new WeakMap();
+// Per-expression-node AbstractValue cache, populated by _specEvalLeaf as
+// it processes nodes inside any _specAnalyzePropertyFlow walk. This lets
+// downstream code (URL extraction, security-taint projection) look up
+// the spec-computed AV for any expression without re-running spec eval.
+// Reset at the start of each analyzeJSBundle. Keyed by path.node.
+var _specPathValMemo = new WeakMap();
 // Higher-order function callback dispatch queue. Filled by _specEvalLeaf
 // when it recognises Array.prototype.{map,filter,reduce,…}; drained by
 // the _specAnalyzePropertyFlow driver loop after each statement, which
