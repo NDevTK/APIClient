@@ -2187,11 +2187,42 @@ function _specGlobalThisAv() {
     NEGATIVE_INFINITY: { kind: "const", value: Number.NEGATIVE_INFINITY },
     NaN: { kind: "const", value: Number.NaN },
   };
+  // Array namespace per § 23.1.2 — statics. Array() callable handled
+  // separately at NewExpression / CallExpression entries.
+  var arrayProps = {
+    isArray: { kind: "builtin-method", id: "Array.isArray" },
+    of: { kind: "builtin-method", id: "Array.of" },
+    from: { kind: "builtin-method", id: "Array.from" },
+  };
+  // String namespace per § 22.1.2 — statics.
+  var stringProps = {
+    fromCharCode: { kind: "builtin-method", id: "String.fromCharCode" },
+    fromCodePoint: { kind: "builtin-method", id: "String.fromCodePoint" },
+  };
+  // JSON namespace per § 25.5.
+  var jsonProps = {
+    parse: { kind: "builtin-method", id: "JSON.parse" },
+    stringify: { kind: "builtin-method", id: "JSON.stringify" },
+  };
   _SPEC_GLOBAL_AV = {
     kind: "obj-lit",
     props: {
       Math: { kind: "obj-lit", props: mathProps },
       Number: { kind: "obj-lit", props: numberProps },
+      Array: { kind: "obj-lit", props: arrayProps },
+      String: { kind: "obj-lit", props: stringProps },
+      JSON: { kind: "obj-lit", props: jsonProps },
+      // Global functions per § 19.2.
+      encodeURI: { kind: "builtin-method", id: "global.encodeURI" },
+      encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
+      decodeURI: { kind: "builtin-method", id: "global.decodeURI" },
+      decodeURIComponent: { kind: "builtin-method", id: "global.decodeURIComponent" },
+      btoa: { kind: "builtin-method", id: "global.btoa" },
+      atob: { kind: "builtin-method", id: "global.atob" },
+      parseInt: { kind: "builtin-method", id: "global.parseInt" },
+      parseFloat: { kind: "builtin-method", id: "global.parseFloat" },
+      isNaN: { kind: "builtin-method", id: "global.isNaN" },
+      isFinite: { kind: "builtin-method", id: "global.isFinite" },
     }
   };
   return _SPEC_GLOBAL_AV;
@@ -2446,6 +2477,100 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   if (pureArrayIds.indexOf(methodId) >= 0) {
     return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
+  }
+  // Global URI/Base64 transforms per § 19.2.6 routed through the existing
+  // _applyGlobalUriTransform helper.
+  if (methodId.indexOf("global.") === 0) {
+    var globalName = methodId.slice("global.".length);
+    if (argAvs.length >= 1 && argAvs[0] && argAvs[0].kind === "const") {
+      var ga = argAvs[0].value;
+      if (typeof ga === "string") {
+        if (globalName === "encodeURI" || globalName === "encodeURIComponent" ||
+            globalName === "decodeURI" || globalName === "decodeURIComponent" ||
+            globalName === "btoa" || globalName === "atob") {
+          var tr = _applyGlobalUriTransform(globalName, ga);
+          if (tr !== undefined) return { kind: "const", value: tr };
+        }
+      }
+      if (globalName === "parseFloat") return { kind: "const", value: parseFloat(String(ga)) };
+      if (globalName === "parseInt") {
+        var radix = 10;
+        if (argAvs.length >= 2 && argAvs[1] && argAvs[1].kind === "const" && typeof argAvs[1].value === "number") {
+          radix = argAvs[1].value;
+        }
+        return { kind: "const", value: parseInt(String(ga), radix) };
+      }
+      if (globalName === "isNaN") return { kind: "const", value: isNaN(ga) };
+      if (globalName === "isFinite") return { kind: "const", value: isFinite(ga) };
+    }
+    return { kind: "top" };
+  }
+  // Array.* statics per § 23.1.2.
+  if (methodId === "Array.isArray") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var aiArg = argAvs[0];
+    if (aiArg && aiArg.kind === "array-lit") return { kind: "const", value: true };
+    if (aiArg && (aiArg.kind === "const" || aiArg.kind === "obj-lit")) return { kind: "const", value: false };
+    return { kind: "top" };
+  }
+  if (methodId === "Array.of") {
+    return { kind: "array-lit", elements: argAvs.slice() };
+  }
+  if (methodId === "Array.from") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var afArg = argAvs[0];
+    if (afArg && afArg.kind === "array-lit" && afArg.elements) {
+      return { kind: "array-lit", elements: afArg.elements.slice() };
+    }
+    if (afArg && afArg.kind === "const" && typeof afArg.value === "string") {
+      var afChars = [];
+      for (var afCh of afArg.value) afChars.push({ kind: "const", value: afCh });
+      return { kind: "array-lit", elements: afChars };
+    }
+    return { kind: "top" };
+  }
+  // String.* statics per § 22.1.2.
+  if (methodId === "String.fromCharCode") {
+    var fcArgs = [];
+    for (var fci = 0; fci < argAvs.length; fci++) {
+      var fca = argAvs[fci];
+      if (!fca || fca.kind !== "const" || typeof fca.value !== "number") return { kind: "top" };
+      fcArgs.push(fca.value);
+    }
+    return { kind: "const", value: String.fromCharCode.apply(String, fcArgs) };
+  }
+  if (methodId === "String.fromCodePoint") {
+    var fcpArgs = [];
+    for (var fcpi = 0; fcpi < argAvs.length; fcpi++) {
+      var fcpa = argAvs[fcpi];
+      if (!fcpa || fcpa.kind !== "const" || typeof fcpa.value !== "number") return { kind: "top" };
+      fcpArgs.push(fcpa.value);
+    }
+    try { return { kind: "const", value: String.fromCodePoint.apply(String, fcpArgs) }; }
+    catch (_) { return { kind: "top" }; }
+  }
+  // JSON.parse per § 25.5.2.
+  if (methodId === "JSON.parse") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") {
+      return { kind: "top" };
+    }
+    try {
+      var parsed = JSON.parse(argAvs[0].value);
+      var liftedAv = _liftJsonValueToAv(parsed);
+      if (liftedAv) return liftedAv;
+    } catch (_) {}
+    return { kind: "top" };
+  }
+  // JSON.stringify per § 25.5.4. Routes through _avToJsonValue which
+  // returns {ok, value} — only stringify if all leaves are concrete.
+  if (methodId === "JSON.stringify") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var jsonV = _avToJsonValue(argAvs[0]);
+    if (jsonV && jsonV.ok) {
+      try { return { kind: "const", value: JSON.stringify(jsonV.value) }; }
+      catch (_) {}
+    }
+    return { kind: "top" };
   }
   // Math.* per ECMA § 21.3.2: pure functions on numeric args. Single-arg
   // math methods take a Const number, multi-arg take Const numbers.
@@ -3338,13 +3463,11 @@ function _specPostorderExprPaths(rootPath) {
         }
       }
     } else if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n) || _t.isNewExpression(n)) {
-      // Argument expressions get evaluated (their property writes
-      // matter for effects). The callee's MemberExpression's `object`
-      // also needs eval so String/Object built-in receivers can be
-      // identified per § 13.3.6 / § 22.1.3 dispatch. The callee
-      // MemberExpression itself is also pushed so its AV (which may
-      // resolve through the [[Prototype]] chain to a built-in method
-      // per § 13.10) is available for dispatch in CallExpression eval.
+      // Argument expressions get evaluated. The callee is also pushed
+      // so its AV resolves before the call dispatch runs:
+      //   - Identifier callee → globalThis registry lookup per § 19
+      //   - MemberExpression callee → prototype chain per § 13.10
+      // Both produce a builtin-method AV when applicable.
       for (var ai = n.arguments.length - 1; ai >= 0; ai--) {
         stack.push(p.get("arguments." + ai));
       }
@@ -3352,6 +3475,8 @@ function _specPostorderExprPaths(rootPath) {
         stack.push(p.get("callee"));
         stack.push(p.get("callee.object"));
         if (n.callee.computed) stack.push(p.get("callee.property"));
+      } else if (_t.isIdentifier(n.callee)) {
+        stack.push(p.get("callee"));
       }
     } else if (_t.isBinaryExpression(n)) {
       stack.push(p.get("left"));
@@ -4702,13 +4827,22 @@ function _specEvalLeaf(path, state, vals, effects) {
   }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
     // ECMA § 13.3.6 Call: when callee resolves through prototype chain
-    // to a built-in method AV, dispatch through the central
-    // _specApplyBuiltinMethod table. This is the spec-grounded path for
-    // Array.prototype.push etc. — no per-method shape matching at the
-    // call site; everything routes through prototype lookup + dispatch.
+    // OR through globalThis identifier resolution to a built-in method
+    // AV, dispatch through the central _specApplyBuiltinMethod table.
+    // This is the spec-grounded path — no per-method shape matching at
+    // the call site; everything routes through identifier/prototype
+    // lookup + central dispatch.
+    var bmRecvAv = null, bmCalleeAv = null;
     if (_t.isMemberExpression(n.callee) && !n.callee.computed) {
-      var bmRecvAv = vals.get(n.callee.object);
-      var bmCalleeAv = vals.get(n.callee);
+      bmRecvAv = vals.get(n.callee.object);
+      bmCalleeAv = vals.get(n.callee);
+    } else if (_t.isIdentifier(n.callee)) {
+      // Free-function call (encodeURIComponent, parseInt, etc.) —
+      // callee resolves via globalThis registry. recvAv is the global.
+      bmCalleeAv = vals.get(n.callee);
+      bmRecvAv = null;
+    }
+    if (bmCalleeAv) {
       // Resolve the builtin-method id, even when callee AV is an or-tree
       // of identical builtin-methods (happens when receiver is or-tree of
       // same-prototype values per § 13.10 distribution).
@@ -4731,7 +4865,8 @@ function _specEvalLeaf(path, state, vals, effects) {
         // Expand spread arguments per § 13.3.6.1 ArgumentListEvaluation.
         var bmArgAvs = _specExpandCallArgs(n.arguments, vals);
         if (bmArgAvs === null) return { kind: "top" };  // unknown spread source
-        var bmRecvName = _t.isIdentifier(n.callee.object) ? n.callee.object.name : null;
+        var bmRecvName = (_t.isMemberExpression(n.callee) && _t.isIdentifier(n.callee.object))
+          ? n.callee.object.name : null;
         return _specApplyBuiltinMethod(bmId, bmRecvAv, bmRecvName, bmArgAvs, state);
       }
     }
@@ -4880,50 +5015,10 @@ function _specEvalLeaf(path, state, vals, effects) {
         return { kind: "obj-lit", props: oaMerged };
       }
     }
-    // Global encoding/parse built-ins per § 19.2 — scope-checked
-    // unshadowed global identifier with Const args, evaluate spec.
-    if (_t.isIdentifier(n.callee) && !path.scope.getBinding(n.callee.name)) {
-      var globalName = n.callee.name;
-      // Single-string-arg: § 19.2.6 URI handling functions.
-      if (n.arguments.length === 1) {
-        var encArgAv = vals.get(n.arguments[0]);
-        if (encArgAv && encArgAv.kind === "const" && typeof encArgAv.value === "string") {
-          var es = encArgAv.value;
-          if (globalName === "encodeURIComponent") return { kind: "const", value: encodeURIComponent(es) };
-          if (globalName === "decodeURIComponent") {
-            try { return { kind: "const", value: decodeURIComponent(es) }; } catch (e) { return { kind: "top" }; }
-          }
-          if (globalName === "encodeURI") return { kind: "const", value: encodeURI(es) };
-          if (globalName === "decodeURI") {
-            try { return { kind: "const", value: decodeURI(es) }; } catch (e) { return { kind: "top" }; }
-          }
-        }
-        if (encArgAv && encArgAv.kind === "const") {
-          // § 19.2.3 isNaN, § 19.2.2 isFinite — accept any primitive Const.
-          if (globalName === "isNaN") return { kind: "const", value: isNaN(encArgAv.value) };
-          if (globalName === "isFinite") return { kind: "const", value: isFinite(encArgAv.value) };
-          // § 21.1.1.1 Number(value) — coerce per ToNumber.
-          if (globalName === "Number") return { kind: "const", value: Number(encArgAv.value) };
-          // § 22.1.1.1 String(value) — coerce per ToString.
-          if (globalName === "String") return { kind: "const", value: String(encArgAv.value) };
-          // § 20.3.1.1 Boolean(value) — coerce per ToBoolean.
-          if (globalName === "Boolean") return { kind: "const", value: Boolean(encArgAv.value) };
-          // § 19.2.4 parseFloat(value) — coerce string then parse.
-          if (globalName === "parseFloat") return { kind: "const", value: parseFloat(encArgAv.value) };
-          // § 19.2.5 parseInt(value) — single-arg form (radix=10 default).
-          if (globalName === "parseInt") return { kind: "const", value: parseInt(encArgAv.value, 10) };
-        }
-      }
-      // Two-arg parseInt: parseInt(string, radix) per § 19.2.5.
-      if (globalName === "parseInt" && n.arguments.length === 2) {
-        var piStr = vals.get(n.arguments[0]);
-        var piRad = vals.get(n.arguments[1]);
-        if (piStr && piStr.kind === "const" && piRad && piRad.kind === "const" &&
-            typeof piRad.value === "number") {
-          return { kind: "const", value: parseInt(piStr.value, piRad.value) };
-        }
-      }
-    }
+    // Global encoding/parse built-ins per § 19.2 dispatched via the
+    // globalThis registry now (encodeURI/encodeURIComponent/decodeURI/
+    // decodeURIComponent/btoa/atob/parseInt/parseFloat). Inline shape
+    // matches removed.
     // Math.* dispatched via globalThis.Math obj-lit registry now —
     // Identifier(Math) resolves to globalThis.Math, then .floor etc. is
     // a builtin-method AV that _specApplyBuiltinMethod handles per
