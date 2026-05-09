@@ -37,6 +37,57 @@ var _propAssignMemo = new WeakMap();        // binding node → { propName: [res
 var _resolveToObjectMemo = new WeakMap();   // node → resolved ObjectExpression (or null) — caches _resolveToObject result so repeated lookups on the same node are O(1)
 var _traceParamToArgsMemo = new WeakMap();  // root binding → caller-arg-paths array — avoids rewalking caller chains for hot bindings
 var _resolveParamFromCallersMemo = new WeakMap(); // binding identifier node → { propName: [resolved values] } — avoids rewalking caller-chain resolution for hot bindings
+// DOM context for the current analysis. Populated from page HTML so JS
+// access patterns like `document.querySelector("meta[name=X]").content`
+// or `el.dataset.X` (where the value is set in markup, not JS) can
+// resolve to the real value. Empty object means JS-only analysis.
+var _domContext = { metaTags: {}, dataAttrs: {}, hrefs: {} };
+
+// Extract static DOM-derived values from an HTML string for the
+// resolver to use as ground truth. Iterative regex scan over markup —
+// no full HTML parser dependency needed for the values we resolve:
+//   <meta name="X" content="Y">  → metaTags["X"] = "Y"
+//   <... data-FOO="V" ...>       → dataAttrs[<index>] = { "foo": "V" }
+//   <a ... href="U" ...>         → hrefs[<index>] = "U"
+// Returns the same shape as `_domContext`. Cheap to call repeatedly
+// (per-page); host can cache externally.
+function extractDomContextFromHtml(htmlString) {
+  var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {} };
+  if (!htmlString || typeof htmlString !== "string") return ctx;
+  // <meta name="X" content="Y"> — both single and double quotes; allow
+  // attribute order swap. Scan iteratively over <meta ...> tags.
+  var metaRe = /<meta\b[^>]*>/gi;
+  var nameRe = /\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+  var contentRe = /\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+  var m;
+  while ((m = metaRe.exec(htmlString)) !== null) {
+    var tag = m[0];
+    var nm = nameRe.exec(tag);
+    var ct = contentRe.exec(tag);
+    if (nm && ct) {
+      ctx.metaTags[nm[1] != null ? nm[1] : nm[2]] = ct[1] != null ? ct[1] : ct[2];
+    }
+  }
+  // <... data-X="Y" ...> — collect by element index.
+  var elRe = /<([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>/g;
+  var dataAttrRe = /\bdata-([a-zA-Z0-9-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  var hrefRe = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+  var elIdx = 0;
+  while ((m = elRe.exec(htmlString)) !== null) {
+    var attrs = m[2] || "";
+    dataAttrRe.lastIndex = 0;
+    var d, dataMap = null;
+    while ((d = dataAttrRe.exec(attrs)) !== null) {
+      if (!dataMap) dataMap = {};
+      dataMap[d[1].toLowerCase()] = d[2] != null ? d[2] : d[3];
+    }
+    if (dataMap) ctx.dataAttrs[elIdx] = dataMap;
+    var h = hrefRe.exec(attrs);
+    if (h) ctx.hrefs[elIdx] = h[1] != null ? h[1] : h[2];
+    elIdx++;
+  }
+  return ctx;
+}
 
 // Structural-def state, populated during analyzeJSBundle's traversal so
 // the viewer's AST_BUILD_DEFINITION_MAP only needs the `refMap` pass
@@ -751,7 +802,7 @@ function _findThisAssignmentRhsPath(funcPath, propName) {
   return resultPath;
 }
 
-function analyzeJSBundle(code, sourceUrl, forceScript) {
+function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _constraints = {};
   _stats = { protoMethods: 0, protoMethodsNoField: 0, resolvedUrls: 0, interProcTraces: 0, globalAssignments: 0, windowAliases: 0 };
   _globalAssignments = {};
@@ -768,6 +819,15 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
   _specEffectsMemo = new WeakMap();
   _tvsMemo = new WeakMap();
   _cfgMemo = new WeakMap();
+  // Page DOM context: when the analyser runs against a page (HTML +
+  // bundled JS), the host can pass static DOM-derived values that the
+  // resolver uses to close gaps that JS source alone can't bridge.
+  // Keys map JS access patterns to their HTML-extracted values:
+  //   metaTags["X"]            ← <meta name="X" content="Y">
+  //   dataAttrs["sel"]["k"]    ← <... data-k="v"> matched by selector
+  //   hrefs["sel"]              ← <a href="..." matched by selector>
+  // Empty when not provided — analyser falls back to JS-only resolution.
+  _domContext = (opts && opts.domContext) || { metaTags: {}, dataAttrs: {}, hrefs: {} };
   _sourceCode = code;
   _sourceLines = null;
   _sourceUrl = sourceUrl || null;
