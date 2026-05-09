@@ -2538,6 +2538,17 @@ function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) 
     for (var ti = 1; ti < alts.length; ti++) tlOr = _specLogicalOrAv(tlOr, { kind: "const", value: alts[ti] });
     return tlOr;
   }
+  // ECMA § 27.2.4.7 Promise.resolve passthrough in return-arg.
+  // `return Promise.resolve(x)` returns x's AV directly so callers can
+  // .then-unwrap. Scope-checked unshadowed Promise.
+  if (_t.isCallExpression(retArg) && _t.isMemberExpression(retArg.callee) &&
+      !retArg.callee.computed &&
+      _t.isIdentifier(retArg.callee.object, { name: "Promise" }) &&
+      !calleeFnPath.scope.getBinding("Promise") &&
+      _t.isIdentifier(retArg.callee.property, { name: "resolve" }) &&
+      retArg.arguments.length >= 1) {
+    return _specResolveLeafInCalleeContext(retArg.arguments[0], calleeFnPath, callExpr, vals);
+  }
   // § 13.10 PropertyAccess on a leaf object: `return paramRef.prop` or
   // `return paramRef[constKeyExpr]`. Resolve the object via leaf helper,
   // build a member-AV with the substituted obj. When obj reduces to
