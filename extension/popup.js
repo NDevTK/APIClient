@@ -3164,7 +3164,9 @@ function createSingleInput(fieldDef, initialValue = null) {
     inp.type = "text";
     inp.className = "form-input";
     inp.autocomplete = "off";
-    var dlId = "ast-vals-" + Math.random().toString(36).slice(2, 10);
+    // Stable id derived from field name so re-renders reuse the same
+    // datalist (no orphaned <datalist> nodes accumulating in the DOM).
+    const dlId = "astvals-" + (fieldDef.name || "field").replace(/[^A-Za-z0-9]/g, "_") + "-" + (category || "");
     inp.setAttribute("list", dlId);
     if (initialValue !== null && initialValue !== undefined) inp.value = String(initialValue);
     const dl = document.createElement("datalist");
