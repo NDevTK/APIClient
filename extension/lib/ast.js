@@ -3198,27 +3198,43 @@ function _specEvalLeaf(path, state, vals, effects) {
   if (_t.isNullLiteral(n)) return { kind: "const", value: null };
   if (_t.isTemplateLiteral(n)) {
     // § 13.2.8.6 Template Literal Evaluation: composes cooked quasis
-    // with stringified expression results. When every expression
-    // resolves to a Const value at this analysis level, compose the
-    // full string; otherwise the value abstracts to Top per abstract
-    // interpretation soundness (we don't fabricate the unknown bits).
-    var composedStr = "";
-    var allConst = true;
+    // with stringified expression results. Each expression's result
+    // distributes over alternation when it's an `or` of Consts —
+    // `${cond ? "a" : "b"}/X` yields or("a/X", "b/X") not Top.
+    // Final result is the cartesian product of expression alternatives,
+    // each interleaved with the cooked quasis.
+    var alts = [""];
+    var tlOk = true;
     for (var qi = 0; qi < n.quasis.length; qi++) {
       var quasi = n.quasis[qi];
       var qCooked = quasi && quasi.value && quasi.value.cooked;
-      composedStr += (typeof qCooked === "string" ? qCooked : "");
+      var qStr = typeof qCooked === "string" ? qCooked : "";
+      // Append quasi to every alternative.
+      for (var ai = 0; ai < alts.length; ai++) alts[ai] += qStr;
       if (qi < n.expressions.length) {
         var exprAv = vals.get(n.expressions[qi]);
-        if (!exprAv || exprAv.kind !== "const") { allConst = false; break; }
-        // ToString per § 7.1.17: spec-grounded conversion.
-        var s = exprAv.value;
-        if (typeof s !== "string") s = String(s);
-        composedStr += s;
+        if (!exprAv) { tlOk = false; break; }
+        var exprLeaves = _avFlattenAnyConstLeaves(exprAv);
+        if (exprLeaves === null) { tlOk = false; break; }
+        // Cross-product: each existing alternative × each leaf.
+        var nextAlts = [];
+        for (var aj = 0; aj < alts.length; aj++) {
+          for (var li = 0; li < exprLeaves.length; li++) {
+            var lv2 = exprLeaves[li];
+            // ToString per § 7.1.17.
+            nextAlts.push(alts[aj] + (typeof lv2 === "string" ? lv2 : String(lv2)));
+          }
+        }
+        alts = nextAlts;
       }
     }
-    if (allConst) return { kind: "const", value: composedStr };
-    return { kind: "top" };
+    if (!tlOk) return { kind: "top" };
+    if (alts.length === 1) return { kind: "const", value: alts[0] };
+    var tlOr = { kind: "const", value: alts[0] };
+    for (var ti = 1; ti < alts.length; ti++) {
+      tlOr = _specLogicalOrAv(tlOr, { kind: "const", value: alts[ti] });
+    }
+    return tlOr;
   }
   if (_t.isIdentifier(n)) {
     if (Object.prototype.hasOwnProperty.call(state, n.name)) return state[n.name];
