@@ -1298,7 +1298,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   for (var si = 0; si < result.fetchCallSites.length; si++) {
     var _s = result.fetchCallSites[si];
     var _sk = _s.method + " " + _s.url;
-    if (!_seenSites[_sk]) {
+    if (!Object.prototype.hasOwnProperty.call(_seenSites, _sk)) {
       _seenSites[_sk] = _dedupedSites.length;
       _dedupedSites.push(_s);
     } else {
