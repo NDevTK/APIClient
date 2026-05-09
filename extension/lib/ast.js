@@ -6957,6 +6957,14 @@ function _ravStep(F) {
   //   document.querySelector("meta[name=X]").getAttribute("content")
   //                                                   → metaTags[X]
   // The `document` identifier is scope-checked unshadowed per § 8.1.1.
+  // Helper: parse a `meta[name=X]` selector (CSS Selectors L4 attribute
+  // form, quoted or unquoted) and return X or null.
+  function _ravParseMetaNameSelector(sel) {
+    if (typeof sel !== "string") return null;
+    var mm = sel.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
+    return mm ? mm[1] : null;
+  }
+  // Form 1: `document.querySelector("meta[name=X]").content`
   if (skip < 1 && _t.isMemberExpression(node) && !node.computed &&
       _t.isIdentifier(node.property, { name: "content" }) &&
       _t.isCallExpression(node.object) &&
@@ -6966,12 +6974,30 @@ function _ravStep(F) {
       _t.isIdentifier(node.object.callee.property, { name: "querySelector" }) &&
       node.object.arguments.length === 1 &&
       _t.isStringLiteral(node.object.arguments[0])) {
-    var qsSelector = node.object.arguments[0].value;
-    // Match `meta[name=X]` selector — both quoted and unquoted name attr.
-    var metaMatch = qsSelector.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
-    if (metaMatch && _domContext && _domContext.metaTags &&
-        Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaMatch[1])) {
-      return { done: [_domContext.metaTags[metaMatch[1]]] };
+    var metaName1 = _ravParseMetaNameSelector(node.object.arguments[0].value);
+    if (metaName1 && _domContext && _domContext.metaTags &&
+        Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaName1)) {
+      return { done: [_domContext.metaTags[metaName1]] };
+    }
+  }
+  // Form 2: `document.querySelector("meta[name=X]").getAttribute("content")`
+  if (skip < 1 && _t.isCallExpression(node) &&
+      _t.isMemberExpression(node.callee) && !node.callee.computed &&
+      _t.isIdentifier(node.callee.property, { name: "getAttribute" }) &&
+      node.arguments.length === 1 &&
+      _t.isStringLiteral(node.arguments[0]) &&
+      node.arguments[0].value === "content" &&
+      _t.isCallExpression(node.callee.object) &&
+      _t.isMemberExpression(node.callee.object.callee) && !node.callee.object.callee.computed &&
+      _t.isIdentifier(node.callee.object.callee.object, { name: "document" }) &&
+      !path.scope.getBinding("document") &&
+      _t.isIdentifier(node.callee.object.callee.property, { name: "querySelector" }) &&
+      node.callee.object.arguments.length === 1 &&
+      _t.isStringLiteral(node.callee.object.arguments[0])) {
+    var metaName2 = _ravParseMetaNameSelector(node.callee.object.arguments[0].value);
+    if (metaName2 && _domContext && _domContext.metaTags &&
+        Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaName2)) {
+      return { done: [_domContext.metaTags[metaName2]] };
     }
   }
 
