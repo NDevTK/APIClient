@@ -21028,6 +21028,44 @@ function _traceValueSource(path, _unused) {
       // `keys-of`, `loop-key`, `args-elt`, `args-len`, `rest-args` —
       // those carry potentially user-controlled or context-dependent
       // values that must go through full chain tracing.
+      // First-priority scan: any taint-source AV anywhere in the tree
+      // means user-controlled. Spec eval registers Window.location
+      // properties (and similar) as taint-source AVs in the globalThis
+      // registry — when a value flows from those, the AV graph carries
+      // the taint-source node directly, eliminating the AST-level
+      // shape-match in _matchTaintSource for nodes spec eval has visited.
+      var taintScan = [specAv];
+      var taintSeen = new Set();
+      var foundTaintSource = null;
+      while (taintScan.length > 0) {
+        var ts = taintScan.pop();
+        if (!ts || taintSeen.has(ts)) continue;
+        taintSeen.add(ts);
+        if (ts.kind === "taint-source") { foundTaintSource = ts; break; }
+        if (ts.kind === "or" || ts.kind === "binop") { taintScan.push(ts.left); taintScan.push(ts.right); continue; }
+        if (ts.kind === "template" && ts.exprs) {
+          for (var tsti = 0; tsti < ts.exprs.length; tsti++) taintScan.push(ts.exprs[tsti]);
+          continue;
+        }
+        if (ts.kind === "coerce" && ts.arg) { taintScan.push(ts.arg); continue; }
+        if (ts.kind === "member") { if (ts.obj) taintScan.push(ts.obj); if (ts.key) taintScan.push(ts.key); continue; }
+        if (ts.kind === "obj-lit" && ts.props) {
+          // Don't traverse globalThis-owned obj-lits' full prop sets
+          // here — only propagate taint when an actual prop has been
+          // PROJECTED via a member access (caught above as `member`).
+          // Otherwise the bare `location` reference would be flagged.
+          continue;
+        }
+      }
+      if (foundTaintSource) {
+        var tsResult = {
+          sourceType: "user-controlled",
+          source: foundTaintSource.id,
+          dimensions: foundTaintSource.dims || null
+        };
+        _tvsMemo.set(node, tsResult);
+        return tsResult;
+      }
       var allConst = true;
       var sStack = [specAv];
       // Visited set for cycle detection: AV graphs can become cyclic
