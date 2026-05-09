@@ -4634,27 +4634,10 @@ function _specEvalLeaf(path, state, vals, effects) {
             initN.quasis.length === 1) {
           return { kind: "const", value: initN.quasis[0].value.cooked };
         }
-        // WHATWG DOM § 4.2.6 init: `var el = document.getElementById("X")`
-        // or `var el = document.querySelector("#X")`. Resolves to obj-lit
-        // from _domContext.byId (same logic as the inline CallExpression
-        // dispatch). Scope-checked unshadowed `document`.
-        if (_t.isCallExpression(initN) && _t.isMemberExpression(initN.callee) &&
-            !initN.callee.computed && _t.isIdentifier(initN.callee.object, { name: "document" }) &&
-            !idBinding.path.scope.getBinding("document") &&
-            _t.isIdentifier(initN.callee.property) &&
-            initN.arguments.length === 1 && _t.isStringLiteral(initN.arguments[0])) {
-          var initMethod = initN.callee.property.name;
-          var initLookupId = null;
-          if (initMethod === "getElementById") initLookupId = initN.arguments[0].value;
-          else if (initMethod === "querySelector") {
-            var initIdMatch = initN.arguments[0].value.match(/^#([A-Za-z][\w:.-]*)$/);
-            if (initIdMatch) initLookupId = initIdMatch[1];
-          }
-          if (initLookupId !== null && _domContext && _domContext.byId &&
-              Object.prototype.hasOwnProperty.call(_domContext.byId, initLookupId)) {
-            return _specBuildDomElementObjLit(_domContext.byId[initLookupId]);
-          }
-        }
+        // For non-literal binding inits, state evolution via
+        // _specApplyStatement populates state[name] when the var
+        // declaration is processed. If we reach this point, state
+        // wasn't populated — fall through to top.
       }
     }
     return { kind: "top" };
