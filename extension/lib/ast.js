@@ -6954,6 +6954,31 @@ function _resolveAllValues(initialPath, initialDepth) {
 // driver to push a new frame via {trace: subPath, state: AFTER_X}.
 // Internal-goto via F.state = X; continue; mimics the original
 // "if (X) {…} if (Y) {…}" sequential dispatch fall-through.
+// Resolve an Identifier node to a DOM element id when its binding's
+// init is `document.getElementById("X")` or `document.querySelector("#X")`.
+// Returns the id string or null. Pure spec-grounded: scope-checked
+// document, CSS L4 id selector form.
+function _resolveBoundDomElementId(path, idNode) {
+  if (!_t.isIdentifier(idNode)) return null;
+  var b = path.scope.getBinding(idNode.name);
+  if (!b || !_t.isVariableDeclarator(b.path.node) || !b.path.node.init) return null;
+  var ini = b.path.node.init;
+  if (!_t.isCallExpression(ini)) return null;
+  if (!_t.isMemberExpression(ini.callee) || ini.callee.computed) return null;
+  if (!_t.isIdentifier(ini.callee.object, { name: "document" })) return null;
+  if (path.scope.getBinding("document")) return null;
+  if (ini.arguments.length !== 1 || !_t.isStringLiteral(ini.arguments[0])) return null;
+  if (_t.isIdentifier(ini.callee.property, { name: "getElementById" })) {
+    return ini.arguments[0].value;
+  }
+  if (_t.isIdentifier(ini.callee.property, { name: "querySelector" })) {
+    var sel = ini.arguments[0].value;
+    var idm = sel.match(/^#([A-Za-z][\w:.-]*)$/);
+    if (idm) return idm[1];
+  }
+  return null;
+}
+
 function _ravStep(F) {
   var path = F.path, node = F.node, depth = F.depth, L = F.L;
   ravLoop:
@@ -7559,28 +7584,8 @@ function _ravStep(F) {
       // Look up byId — same as the inline forms 1b/1e but through one
       // level of variable binding. Also handles `el.dataset.<k>` reads
       // (one extra MemberExpression hop).
-      function _ravResolveBoundDomElementId(idNode) {
-        if (!_t.isIdentifier(idNode)) return null;
-        var b = path.scope.getBinding(idNode.name);
-        if (!b || !_t.isVariableDeclarator(b.path.node) || !b.path.node.init) return null;
-        var ini = b.path.node.init;
-        if (!_t.isCallExpression(ini)) return null;
-        if (!_t.isMemberExpression(ini.callee) || ini.callee.computed) return null;
-        if (!_t.isIdentifier(ini.callee.object, { name: "document" })) return null;
-        if (path.scope.getBinding("document")) return null;
-        if (ini.arguments.length !== 1 || !_t.isStringLiteral(ini.arguments[0])) return null;
-        if (_t.isIdentifier(ini.callee.property, { name: "getElementById" })) {
-          return ini.arguments[0].value;
-        }
-        if (_t.isIdentifier(ini.callee.property, { name: "querySelector" })) {
-          var sel = ini.arguments[0].value;
-          var idm = sel.match(/^#([A-Za-z][\w:.-]*)$/);
-          if (idm) return idm[1];
-        }
-        return null;
-      }
       if (memSubSkip < 1 && _t.isIdentifier(node.object) && _domContext && _domContext.byId) {
-        var elInitId = _ravResolveBoundDomElementId(node.object);
+        var elInitId = _resolveBoundDomElementId(path, node.object);
         if (elInitId && Object.prototype.hasOwnProperty.call(_domContext.byId, elInitId)) {
           var bElInfo = _domContext.byId[elInitId];
           if (bElInfo && bElInfo[propName] != null) {
@@ -7595,7 +7600,7 @@ function _ravStep(F) {
           _t.isIdentifier(node.object.property, { name: "dataset" }) &&
           _t.isIdentifier(node.object.object) &&
           _domContext && _domContext.byId) {
-        var dsElId = _ravResolveBoundDomElementId(node.object.object);
+        var dsElId = _resolveBoundDomElementId(path, node.object.object);
         if (dsElId && Object.prototype.hasOwnProperty.call(_domContext.byId, dsElId)) {
           var dsBoundInfo = _domContext.byId[dsElId];
           var dsKebab = propName.replace(/[A-Z]/g, function(c) { return "-" + c.toLowerCase(); });
