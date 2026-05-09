@@ -2876,6 +2876,23 @@ test("DOM context: Stimulus pattern URL surfaced via domEndpoints (data-X-Y-valu
   return false;
 }, { domContext: { dataAttrs: { 0: { "controller": "se-dismiss", "se-dismiss-endpoint-value": "/posts/123/dismiss" } } } });
 
+test("Pillar 2: branch-conditional param values surfaced as validValues (dropdown)", `
+  function f(role) {
+    if (Math.random() > 0.5) { role = "admin"; }
+    else { role = "guest"; }
+    fetch("/api/users", { method: "POST", body: JSON.stringify({role: role}) });
+  }
+`, function(result) {
+  // User directive: 'code might set role=admin and role=guest in different
+  // code paths this should get shown as extension dropdown options'.
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  var fs = result.fetchCallSites[0];
+  if (!fs.params || fs.params.length === 0) return false;
+  var roleParam = fs.params.find(function(p) { return p.name === "role"; });
+  if (!roleParam || !roleParam.validValues) return false;
+  return roleParam.validValues.indexOf("admin") >= 0 && roleParam.validValues.indexOf("guest") >= 0;
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));
