@@ -4425,44 +4425,43 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       var outerBindingsToImport = _specOuterImportsListCache.get(funcNode);
       if (outerBindingsToImport === undefined) {
       outerBindingsToImport = [];
-      // Walk the OUTER scope chain and check each binding's referencePaths
-      // for any reference contained in our function body. O(outer-bindings)
-      // not O(body-size) — critical perf for IIFE wrappers around minified
-      // bundles whose bodies are ~bundle-size. ECMA § 9.1.1 — closure
-      // capture semantics depend on which outer bindings are referenced.
-      var fnStart = funcNode.start, fnEnd = funcNode.end;
+      // Walk this function's OWN body looking for free-Identifier
+      // references that resolve via path.scope.getBinding to outer-scope
+      // bindings. Skip nested function bodies (their refs are the
+      // nested function's captures, not ours). O(own-body-size, not
+      // counting nested fns) — Babel scope.getBinding is O(scope-depth).
+      // ECMA § 9.1.1 closure capture semantics.
+      var seenOuterNames = Object.create(null);
       var globalAv = _specGlobalThisAv();
-      var outerScope = funcPath.scope.parent;
-      while (outerScope) {
-        var bindings = outerScope.bindings;
-        for (var bn in bindings) {
-          if (!Object.prototype.hasOwnProperty.call(bindings, bn)) continue;
-          if (Object.prototype.hasOwnProperty.call(state, bn)) continue;  // shadowed by param/local
-          if (funcPath.scope.hasOwnBinding(bn)) continue;
-          if (bn === "undefined" || bn === "arguments" || bn === "this") continue;
-          if (globalAv && globalAv.props && Object.prototype.hasOwnProperty.call(globalAv.props, bn)) continue;
-          var b = bindings[bn];
-          if (!b || !b.path || !b.path.node) continue;
-          if (!_t.isVariableDeclarator(b.path.node) || !b.path.node.init) continue;
-          // Check if any reference is in our function body's range (and not
-          // nested inside an inner function — we'd reach those by walking
-          // the inner function's scope chain, not via this outer's
-          // referencePaths). Cheap byte-range containment via node.start/end.
-          var refs = b.referencePaths || [];
-          var bodyHasRef = false;
-          for (var ri = 0; ri < refs.length; ri++) {
-            var rn = refs[ri].node;
-            if (!rn || rn.start == null) continue;
-            if (rn.start < fnStart || rn.end > fnEnd) continue;
-            // Skip if this reference is inside a nested function within
-            // funcNode (those references are the nested function's
-            // closure captures, not this function's).
-            var refFp = refs[ri].getFunctionParent();
-            if (refFp && refFp.node !== funcNode) continue;
-            bodyHasRef = true;
-            break;
+      bodyPath.traverse({
+        "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression": function(p) {
+          p.skip();
+        },
+        Identifier: function(idPath) {
+          if (idPath.parentPath) {
+            var pn = idPath.parent;
+            if (_t.isMemberExpression(pn) && pn.property === idPath.node && !pn.computed) return;
+            if (_t.isObjectProperty(pn) && pn.key === idPath.node && !pn.computed) return;
+            if (_t.isVariableDeclarator(pn) && pn.id === idPath.node) return;
+            if (_t.isFunctionDeclaration(pn) && pn.id === idPath.node) return;
+            if (_t.isFunctionExpression(pn) && pn.id === idPath.node) return;
+            if (_t.isClassDeclaration(pn) && pn.id === idPath.node) return;
+            if (_t.isClassExpression(pn) && pn.id === idPath.node) return;
+            if ((_t.isFunction(pn) || _t.isArrowFunctionExpression(pn)) && pn.params.indexOf(idPath.node) >= 0) return;
+            if (_t.isLabeledStatement(pn) && pn.label === idPath.node) return;
+            if (_t.isBreakStatement(pn) && pn.label === idPath.node) return;
+            if (_t.isContinueStatement(pn) && pn.label === idPath.node) return;
           }
-          if (!bodyHasRef) continue;
+          var nm = idPath.node.name;
+          if (Object.prototype.hasOwnProperty.call(seenOuterNames, nm)) return;
+          if (Object.prototype.hasOwnProperty.call(state, nm)) return;
+          if (nm === "undefined" || nm === "arguments" || nm === "this") return;
+          if (globalAv && globalAv.props && Object.prototype.hasOwnProperty.call(globalAv.props, nm)) return;
+          var b = idPath.scope.getBinding(nm);
+          if (!b || !b.path || !b.path.node) return;
+          if (!_t.isVariableDeclarator(b.path.node) || !b.path.node.init) return;
+          if (funcPath.scope.hasOwnBinding(nm)) return;
+          seenOuterNames[nm] = true;
           var initSourcePaths = [b.path.get("init")];
           if (!b.constant && b.constantViolations) {
             for (var cvi = 0; cvi < b.constantViolations.length; cvi++) {
@@ -4472,10 +4471,9 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
               }
             }
           }
-          outerBindingsToImport.push({ name: bn, initSourcePaths: initSourcePaths, declaratorNode: b.path.node });
+          outerBindingsToImport.push({ name: nm, initSourcePaths: initSourcePaths, declaratorNode: b.path.node });
         }
-        outerScope = outerScope.parent;
-      }
+      });
       _specOuterImportsListCache.set(funcNode, outerBindingsToImport);
       }
       // Resolve each import via _specEvalExpression in a fresh state.
