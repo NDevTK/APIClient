@@ -2862,6 +2862,18 @@ test("DOM context: getElementById('X').href resolves via byId lookup", `
   return result.fetchCallSites[0].url === "/api/foo";
 }, { domContext: { byId: { link1: { href: "/api/foo", src: null, action: null, dataAttrs: null } } } });
 
+test("DOM context: inline handler with .replace() applies the transform", `
+  function hidestory(el, id) {
+    fetch(el.href.replace("hide", "snip-story"));
+  }
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  for (var i = 0; i < result.fetchCallSites.length; i++) {
+    if (result.fetchCallSites[i].url === "snip-story?id=5") return true;
+  }
+  return false;
+}, { domContext: { inlineHandlers: { hide5: { handlers: [{ event: "click", body: "hidestory(this, 5)" }], elementAttrs: { href: "hide?id=5", src: null, action: null, dataAttrs: null } } } } });
+
 test("DOM context: inline handler `onclick=fn(this)` resolves el.href via synthetic caller", `
   function hidestory(el, id) { fetch(el.href); }
 `, function(result) {
