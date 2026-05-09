@@ -4289,6 +4289,40 @@ specTest("§ 21.4.3.1 Date.now: host-time, top per spec", `
   return av && av.kind === "top";
 });
 
+specTest("§ 20.1.2.4 Object.defineProperty: data descriptor adds prop with value AV", `
+  function f() {
+    var o = { a: 1 };
+    this.r = Object.defineProperty(o, "b", { value: 2 });
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "obj-lit" || !av.props) return false;
+  return av.props.a && av.props.a.value === 1 && av.props.b && av.props.b.value === 2;
+});
+
+specTest("§ 20.1.2.13 Object.hasOwn: present prop returns true const", `
+  function f() {
+    var o = { x: 1 };
+    this.flag = Object.hasOwn(o, "x");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
+specTest("§ 20.1.2.13 Object.hasOwn: missing prop returns false const", `
+  function f() {
+    var o = { x: 1 };
+    this.flag = Object.hasOwn(o, "z");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === false;
+});
+
 specTest("§ 28.1.13 Reflect.ownKeys: returns array-lit of obj-lit keys", `
   function f() {
     var o = { foo: 1, bar: 2 };

@@ -2310,7 +2310,18 @@ function _specGlobalThisAv() {
     freeze: { kind: "builtin-method", id: "Object.freeze" },
     getPrototypeOf: { kind: "builtin-method", id: "Object.getPrototypeOf" },
     getOwnPropertyNames: { kind: "builtin-method", id: "Object.getOwnPropertyNames" },
+    getOwnPropertyDescriptor: { kind: "builtin-method", id: "Object.getOwnPropertyDescriptor" },
+    getOwnPropertyDescriptors: { kind: "builtin-method", id: "Object.getOwnPropertyDescriptors" },
     create: { kind: "builtin-method", id: "Object.create" },
+    defineProperty: { kind: "builtin-method", id: "Object.defineProperty" },
+    defineProperties: { kind: "builtin-method", id: "Object.defineProperties" },
+    setPrototypeOf: { kind: "builtin-method", id: "Object.setPrototypeOf" },
+    isFrozen: { kind: "builtin-method", id: "Object.isFrozen" },
+    isSealed: { kind: "builtin-method", id: "Object.isSealed" },
+    isExtensible: { kind: "builtin-method", id: "Object.isExtensible" },
+    seal: { kind: "builtin-method", id: "Object.seal" },
+    preventExtensions: { kind: "builtin-method", id: "Object.preventExtensions" },
+    hasOwn: { kind: "builtin-method", id: "Object.hasOwn" },
   };
   _SPEC_GLOBAL_AV = {
     kind: "obj-lit",
@@ -3525,6 +3536,124 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     }
     return { kind: "top" };
   }
+  // § 20.1.2.4 Object.defineProperty(O, P, Descriptor) — returns O. When
+  // O is obj-lit + P is Const string + Descriptor has Const `value`,
+  // build new obj-lit with the prop set. Otherwise return O unchanged.
+  if (methodId === "Object.defineProperty") {
+    if (argAvs.length < 3) return { kind: "top" };
+    var dpO = argAvs[0], dpP = argAvs[1], dpD = argAvs[2];
+    if (!dpO || dpO.kind !== "obj-lit") return { kind: "top" };
+    if (!dpP || dpP.kind !== "const") return dpO;
+    if (typeof dpP.value !== "string" && typeof dpP.value !== "number") return dpO;
+    if (!dpD || dpD.kind !== "obj-lit" || !dpD.props || !dpD.props.value) return dpO;
+    var dpNew = Object.create(null);
+    for (var dpk in dpO.props) {
+      if (Object.prototype.hasOwnProperty.call(dpO.props, dpk)) dpNew[dpk] = dpO.props[dpk];
+    }
+    dpNew[String(dpP.value)] = dpD.props.value;
+    return { kind: "obj-lit", props: dpNew };
+  }
+  // § 20.1.2.5 Object.defineProperties(O, Properties) — like above but
+  // Properties is an obj-lit of {key: descriptor}.
+  if (methodId === "Object.defineProperties") {
+    if (argAvs.length < 2) return { kind: "top" };
+    var dpsO = argAvs[0], dpsP = argAvs[1];
+    if (!dpsO || dpsO.kind !== "obj-lit") return { kind: "top" };
+    if (!dpsP || dpsP.kind !== "obj-lit" || !dpsP.props) return dpsO;
+    var dpsNew = Object.create(null);
+    for (var dpsk in dpsO.props) {
+      if (Object.prototype.hasOwnProperty.call(dpsO.props, dpsk)) dpsNew[dpsk] = dpsO.props[dpsk];
+    }
+    for (var dpspk in dpsP.props) {
+      if (!Object.prototype.hasOwnProperty.call(dpsP.props, dpspk)) continue;
+      var desc = dpsP.props[dpspk];
+      if (desc && desc.kind === "obj-lit" && desc.props && desc.props.value) {
+        dpsNew[dpspk] = desc.props.value;
+      }
+    }
+    return { kind: "obj-lit", props: dpsNew };
+  }
+  // § 20.1.2.13 Object.hasOwn(O, P) — boolean per HasOwnProperty.
+  if (methodId === "Object.hasOwn") {
+    if (argAvs.length < 2) return { kind: "top" };
+    var hoO = argAvs[0], hoP = argAvs[1];
+    if (hoO && hoO.kind === "obj-lit" && hoO.props &&
+        hoP && hoP.kind === "const" && (typeof hoP.value === "string" || typeof hoP.value === "number")) {
+      return { kind: "const", value: Object.prototype.hasOwnProperty.call(hoO.props, hoP.value) };
+    }
+    return { kind: "top" };
+  }
+  // § 20.1.2.6 Object.getOwnPropertyDescriptor — descriptor obj-lit or undefined.
+  if (methodId === "Object.getOwnPropertyDescriptor") {
+    if (argAvs.length < 2) return { kind: "top" };
+    var gdO = argAvs[0], gdP = argAvs[1];
+    if (gdO && gdO.kind === "obj-lit" && gdO.props &&
+        gdP && gdP.kind === "const" &&
+        Object.prototype.hasOwnProperty.call(gdO.props, gdP.value)) {
+      return {
+        kind: "obj-lit",
+        props: {
+          value: gdO.props[gdP.value],
+          writable: { kind: "const", value: true },
+          enumerable: { kind: "const", value: true },
+          configurable: { kind: "const", value: true }
+        }
+      };
+    }
+    return { kind: "const", value: undefined };
+  }
+  // § 20.1.2.7 Object.getOwnPropertyDescriptors — obj-lit mapping each
+  // own key to its descriptor.
+  if (methodId === "Object.getOwnPropertyDescriptors") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var gdsO = argAvs[0];
+    if (gdsO && gdsO.kind === "obj-lit" && gdsO.props) {
+      var gdsRes = Object.create(null);
+      for (var gdsk in gdsO.props) {
+        if (!Object.prototype.hasOwnProperty.call(gdsO.props, gdsk)) continue;
+        gdsRes[gdsk] = {
+          kind: "obj-lit",
+          props: {
+            value: gdsO.props[gdsk],
+            writable: { kind: "const", value: true },
+            enumerable: { kind: "const", value: true },
+            configurable: { kind: "const", value: true }
+          }
+        };
+      }
+      return { kind: "obj-lit", props: gdsRes };
+    }
+    return { kind: "top" };
+  }
+  // § 20.1.2.18 Object.setPrototypeOf — returns O unchanged for our purposes.
+  if (methodId === "Object.setPrototypeOf") {
+    return argAvs[0] || { kind: "top" };
+  }
+  // § 20.1.2.14/.15/.10 isFrozen / isSealed / isExtensible — without
+  // tracking frozen/sealed state changes through Object.freeze / .seal /
+  // .preventExtensions, sound answer is or(true, false) for obj-lit (the
+  // boolean depends on prior mutating calls we don't model). For non-
+  // objects (Const number/string), spec says return true (not frozen
+  // means freezable; primitives are vacuously frozen per § 20.1.2.14).
+  if (methodId === "Object.isFrozen" || methodId === "Object.isSealed") {
+    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs[0] && argAvs[0].kind === "const") return { kind: "const", value: true };
+    if (argAvs[0] && argAvs[0].kind === "obj-lit") {
+      return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Object.isExtensible") {
+    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs[0] && argAvs[0].kind === "const") return { kind: "const", value: false };
+    if (argAvs[0] && argAvs[0].kind === "obj-lit") {
+      return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Object.seal" || methodId === "Object.preventExtensions") {
+    return argAvs[0] || { kind: "top" };
+  }
   // Reflect.* statics per ECMA § 28.1. Each delegates to the corresponding
   // [[InternalMethod]] on target — for our value-flow analysis, this means
   // routing through the same primitives used by direct access (member,
@@ -3622,9 +3751,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     return { kind: "const", value: undefined };
   }
   if (methodId === "Reflect.isExtensible") {
-    // § 28.1.11. For our purposes, all obj-lit AVs are extensible.
+    // § 28.1.11. Without tracking preventExtensions calls, sound answer
+    // is or(true, false) for obj-lit (the result depends on prior mutating
+    // calls we don't model).
     if (argAvs.length === 0) return { kind: "top" };
-    if (argAvs[0] && argAvs[0].kind === "obj-lit") return { kind: "const", value: true };
+    if (argAvs[0] && argAvs[0].kind === "obj-lit") {
+      return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    }
     return { kind: "top" };
   }
   if (methodId === "Reflect.preventExtensions") {
