@@ -20024,6 +20024,34 @@ function _traceValueSource(path, _unused) {
         return bMemoed;
       }
     }
+    // Spec-eval fast path per ECMA: when _specPathValMemo has a fully-
+    // resolved const value AV for this node, the value is a literal in
+    // the source — not user-controlled by definition. Short-circuit
+    // taint tracing to "literal" without walking the legacy state
+    // machine. Same for or-trees of all-const leaves. This integrates
+    // the spec eval pipeline with the taint subsystem incrementally:
+    // const-resolved expressions don't need taint tracing.
+    var specAv = _specPathValMemo.get(node);
+    if (specAv) {
+      var allConst = false;
+      if (specAv.kind === "const") allConst = true;
+      else if (specAv.kind === "or") {
+        var stack = [specAv];
+        allConst = true;
+        while (stack.length > 0 && allConst) {
+          var s = stack.pop();
+          if (!s) continue;
+          if (s.kind === "const") continue;
+          if (s.kind === "or") { stack.push(s.left); stack.push(s.right); continue; }
+          allConst = false;
+        }
+      }
+      if (allConst) {
+        var litResult = { sourceType: "literal", source: null };
+        _tvsMemo.set(node, litResult);
+        return litResult;
+      }
+    }
   }
 
   // Cycle detection via visited set keyed on AST node position
