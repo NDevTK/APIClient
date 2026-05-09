@@ -766,6 +766,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript) {
   _resolveToObjectMemo = new WeakMap();
   _rcfpMemo = new WeakMap();
   _specEffectsMemo = new WeakMap();
+  _tvsMemo = new WeakMap();
   _sourceCode = code;
   _sourceLines = null;
   _sourceUrl = sourceUrl || null;
@@ -14613,6 +14614,7 @@ function _matchTaintSource(path, node) {
 // Uses a visited-node set instead of depth limits to prevent infinite recursion while
 // allowing unlimited tracing depth through variable chains, function params, and object properties.
 var _taintVisited = null;
+var _tvsMemo = new WeakMap();
 
 // Dimension-set constructors used across the module so the shape stays
 // consistent. Omitted properties are treated as false — we never rely on
@@ -14887,8 +14889,16 @@ function _traceValueSource(path, _unused) {
   if (!path || !path.node) return { sourceType: "dynamic", source: null };
   var node = path.node;
 
-  // Cycle detection via visited set keyed on AST node position
+  // Per-analysis memoisation: result is structurally determined by the
+  // node's identity (Babel scope is bound to position). Repeated calls
+  // for the same node are common in the security path (every CallExpression
+  // arg sink-checked across multiple visitors); memoising avoids
+  // re-walking the same chain. Only cache top-level invocations; nested
+  // recursive calls share the visited set instead.
   var isRoot = !_taintVisited;
+  if (isRoot && _tvsMemo.has(node)) return _tvsMemo.get(node);
+
+  // Cycle detection via visited set keyed on AST node position
   if (isRoot) _taintVisited = new Set();
   var rootKey = (node.start != null && node.end != null) ? node.start + ":" + node.end : null;
   if (rootKey) {
@@ -14946,7 +14956,9 @@ function _traceValueSource(path, _unused) {
       }
       stack.push(_tvsMakeFrame(subPath, subNode));
     }
-    return lastResult === undefined ? DYN : lastResult;
+    var finalResult = lastResult === undefined ? DYN : lastResult;
+    if (isRoot) _tvsMemo.set(node, finalResult);
+    return finalResult;
   } finally {
     if (isRoot) _taintVisited = null;
   }
