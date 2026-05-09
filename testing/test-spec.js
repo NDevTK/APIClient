@@ -4656,6 +4656,35 @@ specTest("§ 15.3.5.4 ArrowFunction class-field this: lexical capture from const
   return false;
 });
 
+specTest("§ 13.8.1 BinaryExpression `+` distribution: const + or(top,'') keeps const", `
+  function f() {
+    var url = "/api";
+    var next = (Math.random() ? "&x=" + Date.now() : "");
+    this.flag = url + next;
+  }
+`, function(effects) {
+  // url is const "/api"; next is or(top, ""). url + next via set-union
+  // distribution: or("/api"+top, "/api"+"") = or(top, "/api"). Flatten
+  // to string leaves should yield ["/api"]. The effect value should
+  // contain "/api" as a const leaf.
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
+      var v = effects[i].value;
+      if (!v) return false;
+      // Walk or-tree leaves looking for const "/api".
+      var stack = [v];
+      while (stack.length > 0) {
+        var av = stack.pop();
+        if (!av) continue;
+        if (av.kind === "const" && av.value === "/api") return true;
+        if (av.kind === "or") { stack.push(av.left); stack.push(av.right); }
+      }
+      return false;
+    }
+  }
+  return false;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
