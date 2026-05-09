@@ -2893,6 +2893,24 @@ test("Pillar 2: branch-conditional param values surfaced as validValues (dropdow
   return roleParam.validValues.indexOf("admin") >= 0 && roleParam.validValues.indexOf("guest") >= 0;
 });
 
+test("Pillar 2: switch-case branch values surfaced as validValues", `
+  function f(action) {
+    var role;
+    switch (action) {
+      case 1: role = "admin"; break;
+      case 2: role = "guest"; break;
+    }
+    fetch("/api/users", { method: "POST", body: JSON.stringify({role: role}) });
+  }
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  var fs = result.fetchCallSites[0];
+  if (!fs.params || fs.params.length === 0) return false;
+  var roleParam = fs.params.find(function(p) { return p.name === "role"; });
+  if (!roleParam || !roleParam.validValues) return false;
+  return roleParam.validValues.indexOf("admin") >= 0 && roleParam.validValues.indexOf("guest") >= 0;
+});
+
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));
