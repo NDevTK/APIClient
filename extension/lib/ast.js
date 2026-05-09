@@ -21448,6 +21448,15 @@ function _tvsStep(F) {
 
         // ── Branch 2: MemberExpression — known taint sources ───────────
         if (skip < 2 && (_t.isMemberExpression(node) || _t.isOptionalMemberExpression(node)) && !node.computed) {
+          // Spec-eval-driven taint source detection per WHATWG HTML
+          // § 7.2 / § 7.7 / WHATWG DOM § 4.5: when spec eval has
+          // projected this MemberExpression to a taint-source AV
+          // (e.g. window.location.href → location.href taint-source),
+          // use that directly without AST shape matching.
+          var subAv = _specPathValMemo.get(node);
+          if (subAv && subAv.kind === "taint-source") {
+            return { done: _tvsSource(subAv.id, nodeLoc, subAv.dims || _dimsForSource(subAv.id)) };
+          }
           var taintMatch = _matchTaintSource(path, node);
           if (taintMatch) {
             return { done: _tvsSource(taintMatch, nodeLoc, _dimsForSource(taintMatch)) };
