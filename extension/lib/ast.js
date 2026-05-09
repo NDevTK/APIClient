@@ -4426,7 +4426,11 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
     // receiver, which covers literal/const cases like Promise.resolve("x").
     var thenRecvPath = funcPath.parentPath.get("callee.object");
     try {
-      promiseRecvAv = _specEvalExpression(thenRecvPath, _specStateCreate({}), []);
+      // noWriteMemo: this fresh-state eval is for cb param binding only
+      // — its per-node AVs would otherwise overwrite the global memo
+      // entries that hidestory's actual analysis (with its own state
+      // including inline-handler bindings) needs to populate correctly.
+      promiseRecvAv = _specEvalExpression(thenRecvPath, _specStateCreate({}), [], true);
     } catch (_) { promiseRecvAv = null; }
   }
   for (var i = 0; i < funcNode.params.length; i++) {
@@ -5427,7 +5431,7 @@ function _specPostorderExprPaths(rootPath) {
 // `state` is read-only here; assignment side effects are recorded into
 // `effects` and the state map is mutated by `_specAssignmentExpressionApply`.
 // Sub-evaluations are not recursive — `vals` is filled in postorder.
-function _specEvalExpression(rootPath, state, effects) {
+function _specEvalExpression(rootPath, state, effects, noWriteMemo) {
   var paths = _specPostorderExprPaths(rootPath);
   var vals = new Map();
   for (var i = 0; i < paths.length; i++) {
@@ -5438,7 +5442,12 @@ function _specEvalExpression(rootPath, state, effects) {
     // spec-computed AV for any node without re-running spec eval. Last
     // write wins — for nodes seen in multiple states (e.g. via inter-
     // procedural revisits), the latest analysis context's AV is kept.
-    _specPathValMemo.set(p.node, av);
+    // Skipped when noWriteMemo=true (caller doesn't want this eval's
+    // results to overwrite the global memo — used for ad-hoc context
+    // evaluations like Promise.then receiver substitution where the
+    // fresh-state eval would pollute later inline-handler-aware analysis
+    // of the same nodes).
+    if (!noWriteMemo) _specPathValMemo.set(p.node, av);
   }
   return vals.get(rootPath.node);
 }
