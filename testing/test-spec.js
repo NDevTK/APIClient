@@ -45,10 +45,10 @@ function test(name, code, check, opts) {
   }
 }
 
-function specTest(name, code, check) {
+function specTest(name, code, check, opts) {
   total++;
   try {
-    var result = analyzeJSBundle(code, "test://" + name, true);
+    var result = analyzeJSBundle(code, "test://" + name, true, opts || null);
     var fnPath = null;
     var allFnPaths = [];
     globalThis.BabelBundle.traverse(result._ast, {
@@ -3360,6 +3360,19 @@ specTest("WHATWG URLSearchParams shadowed identifier does NOT fire", `
   var av = effects[0].value;
   return !(av && av.kind === "const" && av.value === "k=v");
 });
+
+specTest("HTML5 § 8.2.3 inline handler: spec eval binds DOM-derived el.href via _inlineHandlerCallSites", `
+  function hidestory(el) {
+    this.u = el.href;
+  }
+`, function(effects, result) {
+  // Inline handler path: a hidden caller `hidestory(this)` in HTML
+  // binds el to the element with href="/hide?id=5". Spec eval should
+  // resolve this.u to "/hide?id=5".
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/hide?id=5";
+}, { domContext: { inlineHandlers: { hide5: { handlers: [{ event: "click", body: "hidestory(this)" }], elementAttrs: { href: "/hide?id=5", src: null, action: null, dataAttrs: null } } } } });
 
 specTest("§ 14.10 multi-stmt return with param: `if(p) return p; return 'default';`", `
   function f() {

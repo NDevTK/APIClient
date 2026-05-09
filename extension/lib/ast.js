@@ -2111,15 +2111,57 @@ function _specStateClone(state) {
 function _specInitialFunctionBodyState(funcNode) {
   var state = _specStateCreate();
   if (!funcNode || !funcNode.params) return state;
+  // Inline-handler synthetic-caller binding: when this function is the
+  // target of one or more inline handler call sites collected from the
+  // page DOM (`onclick="hidestory(this)"` etc.), substitute its params
+  // with the DOM-derived element AVs from each call site. Multiple call
+  // sites produce an or-tree per param. Only fires when the function
+  // has a binding name we can match against _inlineHandlerCallSites.
+  var ihName = funcNode.id && funcNode.id.name;
+  var ihCallers = ihName ? _inlineHandlerCallSites[ihName] : null;
   for (var i = 0; i < funcNode.params.length; i++) {
     var p = funcNode.params[i];
     if (!p) continue;
+    var paramAv;
+    if (ihCallers && ihCallers.length > 0) {
+      // Per call site, derive the param's bound AV.
+      var perCallAvs = [];
+      for (var ci = 0; ci < ihCallers.length; ci++) {
+        var pa = ihCallers[ci].paramArgs[i];
+        if (pa === "this") {
+          // The element. Build obj-lit from elementAttrs.
+          var ea = ihCallers[ci].elementAttrs || {};
+          var elProps = Object.create(null);
+          if (ea.href != null) elProps.href = { kind: "const", value: String(ea.href) };
+          if (ea.src != null) elProps.src = { kind: "const", value: String(ea.src) };
+          if (ea.action != null) elProps.action = { kind: "const", value: String(ea.action) };
+          if (ea.dataAttrs && typeof ea.dataAttrs === "object") {
+            var datasetProps = Object.create(null);
+            for (var dk in ea.dataAttrs) {
+              if (Object.prototype.hasOwnProperty.call(ea.dataAttrs, dk)) {
+                datasetProps[dk] = { kind: "const", value: String(ea.dataAttrs[dk]) };
+              }
+            }
+            elProps.dataset = { kind: "obj-lit", props: datasetProps };
+          }
+          perCallAvs.push({ kind: "obj-lit", props: elProps });
+        } else if (pa && pa.kind === "const") {
+          perCallAvs.push(pa);
+        } else {
+          perCallAvs.push({ kind: "top" });
+        }
+      }
+      paramAv = perCallAvs[0];
+      for (var pci = 1; pci < perCallAvs.length; pci++) paramAv = _specLogicalOrAv(paramAv, perCallAvs[pci]);
+    } else {
+      paramAv = { kind: "param", idx: i };
+    }
     if (p.type === "Identifier") {
-      state[p.name] = { kind: "param", idx: i };
+      state[p.name] = paramAv;
     } else if (p.type === "AssignmentPattern" && p.left && p.left.type === "Identifier") {
       // Default-valued param `function f(x = 1)` per § 14.1 — the binding
       // resolves to either the arg's value or the default; abstractly Param(i).
-      state[p.left.name] = { kind: "param", idx: i };
+      state[p.left.name] = paramAv;
     } else if (p.type === "ObjectPattern") {
       // Destructured param `function f({a, b})` per § 14.3.3 / § 8.6.2:
       // each property of the pattern binds a separate identifier whose
