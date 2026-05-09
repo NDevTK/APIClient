@@ -5305,7 +5305,49 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
             _specBindingInitAvCache.set(declNode, joinedAv || null);
           }
           if (joinedAv) {
-            state[entry.name] = joinedAv;
+            // § 14.3.3 BindingPattern destructuring: when declaratorNode.id
+            // is ObjectPattern / ArrayPattern, the imported name maps to
+            // a destructured slot, not the whole init. Project from the
+            // init AV by walking the pattern to find the matching slot.
+            var importAv = joinedAv;
+            if (declNode.id && declNode.id.type === "ObjectPattern") {
+              var found = null;
+              for (var dpi = 0; dpi < declNode.id.properties.length; dpi++) {
+                var dop = declNode.id.properties[dpi];
+                if (!dop || dop.type !== "ObjectProperty" || dop.computed) continue;
+                var dKeyName = dop.key && (dop.key.type === "Identifier" ? dop.key.name :
+                  (dop.key.type === "StringLiteral" ? dop.key.value : null));
+                if (dKeyName === null) continue;
+                var dVal = dop.value;
+                // Default-valued destructure (`{a = 1}`) — use the left side.
+                if (dVal && dVal.type === "AssignmentPattern" && dVal.left) dVal = dVal.left;
+                if (dVal && dVal.type === "Identifier" && dVal.name === entry.name) {
+                  if (joinedAv.kind === "obj-lit" && joinedAv.props &&
+                      Object.prototype.hasOwnProperty.call(joinedAv.props, dKeyName)) {
+                    found = joinedAv.props[dKeyName];
+                  } else {
+                    found = { kind: "member", obj: joinedAv, key: { kind: "const", value: dKeyName } };
+                  }
+                  break;
+                }
+              }
+              if (found) importAv = found;
+            } else if (declNode.id && declNode.id.type === "ArrayPattern") {
+              for (var dai = 0; dai < declNode.id.elements.length; dai++) {
+                var dae = declNode.id.elements[dai];
+                if (!dae) continue;
+                if (dae.type === "AssignmentPattern" && dae.left) dae = dae.left;
+                if (dae && dae.type === "Identifier" && dae.name === entry.name) {
+                  if (joinedAv.kind === "array-lit" && joinedAv.elements && dai < joinedAv.elements.length) {
+                    importAv = joinedAv.elements[dai];
+                  } else {
+                    importAv = { kind: "member", obj: joinedAv, key: { kind: "const", value: dai } };
+                  }
+                  break;
+                }
+              }
+            }
+            state[entry.name] = importAv;
             outerImports.add(entry.name);
           }
         }
@@ -5957,10 +5999,17 @@ function _specVariableDeclaratorBind(idNode, initAv, state) {
         var keyName = op.key && (op.key.type === "Identifier" ? op.key.name :
           (op.key.type === "StringLiteral" ? op.key.value : null));
         if (keyName === null) continue;
-        stack.push({
-          id: op.value,
-          av: { kind: "member", obj: srcAv, key: { kind: "const", value: keyName } }
-        });
+        // § 13.10 reduce eagerly when src is obj-lit + Const-key —
+        // bind the prop's actual value rather than a `member` AV that
+        // _avFlattenStringLeaves would treat as opaque.
+        var boundAv;
+        if (srcAv.kind === "obj-lit" && srcAv.props &&
+            Object.prototype.hasOwnProperty.call(srcAv.props, keyName)) {
+          boundAv = srcAv.props[keyName];
+        } else {
+          boundAv = { kind: "member", obj: srcAv, key: { kind: "const", value: keyName } };
+        }
+        stack.push({ id: op.value, av: boundAv });
       }
       continue;
     }
@@ -5969,10 +6018,15 @@ function _specVariableDeclaratorBind(idNode, initAv, state) {
       for (var ai = id.elements.length - 1; ai >= 0; ai--) {
         var ae = id.elements[ai];
         if (!ae) continue;
-        stack.push({
-          id: ae,
-          av: { kind: "member", obj: srcAvA, key: { kind: "const", value: ai } }
-        });
+        // § 13.10 reduce eagerly when src is array-lit — bind the
+        // element's actual value rather than a `member` AV.
+        var boundAvA;
+        if (srcAvA.kind === "array-lit" && srcAvA.elements && ai < srcAvA.elements.length) {
+          boundAvA = srcAvA.elements[ai];
+        } else {
+          boundAvA = { kind: "member", obj: srcAvA, key: { kind: "const", value: ai } };
+        }
+        stack.push({ id: ae, av: boundAvA });
       }
       continue;
     }
