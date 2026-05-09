@@ -20340,16 +20340,31 @@ function _traceValueSource(path, _unused) {
     // const-resolved expressions don't need taint tracing.
     var specAv = _specPathValMemo.get(node);
     if (specAv) {
-      // Walk the AV tree iteratively. allConst iff every reachable
-      // leaf is `const`. `or`, `binop`, `template` recurse into
-      // operands/exprs. Other kinds (param, member, top, function-ref,
-      // dom-element, etc.) interrupt — those potentially carry user-
-      // controlled or framework-provided values.
+      // Walk the AV tree iteratively. allConst iff every reachable leaf
+      // resolves to a literal source per ECMA value semantics. The
+      // walker covers (a) value-form AVs that recurse into structural
+      // children — `or`, `binop`, `template`, `coerce`, `obj-lit`,
+      // `array-lit`, `map-instance`, `set-instance`, `regex-instance`,
+      // `callable-namespace`; and (b) reference-form AVs that are
+      // intrinsically literal — `function-ref` (the function reference
+      // itself, not its return value), `builtin-method` (method ref).
+      // Interrupts on `param`, `member`, `top`, `this`, `dom-element`,
+      // `keys-of`, `loop-key`, `args-elt`, `args-len`, `rest-args` —
+      // those carry potentially user-controlled or context-dependent
+      // values that must go through full chain tracing.
       var allConst = true;
       var sStack = [specAv];
+      // Visited set for cycle detection: AV graphs can become cyclic
+      // when joining or-trees over recursive structures (e.g. a binding
+      // whose AV references itself through obj-lit props). Reference-
+      // identity tracking is sufficient since spec eval allocates fresh
+      // AV objects at each combinator step.
+      var sSeen = new Set();
       while (sStack.length > 0 && allConst) {
         var s = sStack.pop();
         if (!s) continue;
+        if (sSeen.has(s)) continue;
+        sSeen.add(s);
         if (s.kind === "const") continue;
         if (s.kind === "or") { sStack.push(s.left); sStack.push(s.right); continue; }
         if (s.kind === "binop") { sStack.push(s.left); sStack.push(s.right); continue; }
@@ -20358,6 +20373,35 @@ function _traceValueSource(path, _unused) {
           continue;
         }
         if (s.kind === "coerce" && s.arg) { sStack.push(s.arg); continue; }
+        if (s.kind === "obj-lit" && s.props) {
+          for (var oki in s.props) {
+            if (Object.prototype.hasOwnProperty.call(s.props, oki)) sStack.push(s.props[oki]);
+          }
+          continue;
+        }
+        if (s.kind === "array-lit" && s.elements) {
+          for (var ali = 0; ali < s.elements.length; ali++) sStack.push(s.elements[ali]);
+          continue;
+        }
+        if (s.kind === "map-instance" && s.entries && !s.unknownInit) {
+          for (var mei = 0; mei < s.entries.length; mei++) {
+            var ent = s.entries[mei];
+            if (ent && ent.length >= 2) { sStack.push(ent[0]); sStack.push(ent[1]); }
+          }
+          continue;
+        }
+        if (s.kind === "set-instance" && s.items && !s.unknownInit) {
+          for (var sii = 0; sii < s.items.length; sii++) sStack.push(s.items[sii]);
+          continue;
+        }
+        if (s.kind === "regex-instance" && s.pattern) { sStack.push(s.pattern); continue; }
+        if (s.kind === "callable-namespace" && s.props) {
+          for (var cnki in s.props) {
+            if (Object.prototype.hasOwnProperty.call(s.props, cnki)) sStack.push(s.props[cnki]);
+          }
+          continue;
+        }
+        if (s.kind === "function-ref" || s.kind === "builtin-method") continue;
         allConst = false;
       }
       if (allConst) {
