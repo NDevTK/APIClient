@@ -3535,6 +3535,43 @@ function _specEvalLeaf(path, state, vals, effects) {
             initN.quasis.length === 1) {
           return { kind: "const", value: initN.quasis[0].value.cooked };
         }
+        // WHATWG DOM § 4.2.6 init: `var el = document.getElementById("X")`
+        // or `var el = document.querySelector("#X")`. Resolves to obj-lit
+        // from _domContext.byId (same logic as the inline CallExpression
+        // dispatch). Scope-checked unshadowed `document`.
+        if (_t.isCallExpression(initN) && _t.isMemberExpression(initN.callee) &&
+            !initN.callee.computed && _t.isIdentifier(initN.callee.object, { name: "document" }) &&
+            !idBinding.path.scope.getBinding("document") &&
+            _t.isIdentifier(initN.callee.property) &&
+            initN.arguments.length === 1 && _t.isStringLiteral(initN.arguments[0])) {
+          var initMethod = initN.callee.property.name;
+          var initLookupId = null;
+          if (initMethod === "getElementById") initLookupId = initN.arguments[0].value;
+          else if (initMethod === "querySelector") {
+            var initIdMatch = initN.arguments[0].value.match(/^#([A-Za-z][\w:.-]*)$/);
+            if (initIdMatch) initLookupId = initIdMatch[1];
+          }
+          if (initLookupId !== null && _domContext && _domContext.byId &&
+              Object.prototype.hasOwnProperty.call(_domContext.byId, initLookupId)) {
+            var initEl = _domContext.byId[initLookupId];
+            var initElProps = Object.create(null);
+            if (initEl) {
+              if (initEl.href != null) initElProps.href = { kind: "const", value: String(initEl.href) };
+              if (initEl.src != null) initElProps.src = { kind: "const", value: String(initEl.src) };
+              if (initEl.action != null) initElProps.action = { kind: "const", value: String(initEl.action) };
+              if (initEl.dataAttrs && typeof initEl.dataAttrs === "object") {
+                var initDsProps = Object.create(null);
+                for (var iddk in initEl.dataAttrs) {
+                  if (Object.prototype.hasOwnProperty.call(initEl.dataAttrs, iddk)) {
+                    initDsProps[iddk] = { kind: "const", value: String(initEl.dataAttrs[iddk]) };
+                  }
+                }
+                initElProps.dataset = { kind: "obj-lit", props: initDsProps };
+              }
+            }
+            return { kind: "obj-lit", props: initElProps };
+          }
+        }
       }
     }
     return { kind: "top" };
