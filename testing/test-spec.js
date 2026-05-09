@@ -50,10 +50,22 @@ function specTest(name, code, check) {
   try {
     var result = analyzeJSBundle(code, "test://" + name, true);
     var fnPath = null;
+    var allFnPaths = [];
     globalThis.BabelBundle.traverse(result._ast, {
-      FunctionDeclaration: function(p) { if (!fnPath) fnPath = p; p.skip(); }
+      FunctionDeclaration: function(p) {
+        if (!fnPath) fnPath = p;
+        allFnPaths.push(p);
+        p.skip();
+      }
     });
     if (!fnPath) { failed++; console.log("  FAIL: " + name + " — no function found"); return; }
+    // Pre-warm callee memos: analyse non-target functions first so that
+    // callee lookups (_specReturnValueMemo) resolve when the target's
+    // body is analysed. Target function analysed last so its effects
+    // come from the latest evaluation.
+    for (var fpi = 0; fpi < allFnPaths.length; fpi++) {
+      if (allFnPaths[fpi] !== fnPath) globalThis._specAnalyzePropertyFlow(allFnPaths[fpi]);
+    }
     var effects = globalThis._specAnalyzePropertyFlow(fnPath);
     if (check(effects, result)) {
       passed++;
@@ -3291,6 +3303,55 @@ specTest("Fetch § 5.5: `new Request('/api').method` defaults to 'GET'", `
   if (effects.length !== 1) return false;
   var av = effects[0].value;
   return av && av.kind === "const" && av.value === "GET";
+});
+
+specTest("§ 14.10 multi-stmt return: `if(c) return A; return B;` — both branches join", `
+  function f() {
+    this.u = pickUrl(true);
+  }
+  function pickUrl(c) {
+    if (c) return "/api/admin";
+    return "/api/user";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // After memo lookup + caller-arg substitution, joined return AV is
+  // or("/api/admin", "/api/user"). Caller-arg c=true does not narrow
+  // (we don't model branch-pruning by caller arg constants yet).
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf("/api/admin") >= 0 && leaves.indexOf("/api/user") >= 0;
+});
+
+specTest("§ 14.10 multi-stmt return with param: `if(p) return p; return 'default';`", `
+  function f() {
+    this.u = orDefault("/api/foo");
+  }
+  function orDefault(p) {
+    if (p) return p;
+    return "/api/default";
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // Joined returns: or(param0, "/api/default"); after caller-arg
+  // substitution with "/api/foo": or("/api/foo", "/api/default").
+  if (!av || av.kind !== "or") return false;
+  var leaves = [];
+  var stack = [av];
+  while (stack.length) {
+    var x = stack.pop();
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.length === 2 && leaves.indexOf("/api/foo") >= 0 && leaves.indexOf("/api/default") >= 0;
 });
 
 test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `

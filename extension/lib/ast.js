@@ -1003,6 +1003,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _rcfpMemo = new WeakMap();
   _specEffectsMemo = new WeakMap();
   _specPathValMemo = new WeakMap();
+  _specReturnValueMemo = new WeakMap();
   _tvsMemo = new WeakMap();
   _cfgMemo = new WeakMap();
   // Page DOM context: when the analyser runs against a page (HTML +
@@ -2982,11 +2983,17 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
   }
 
   if (_t.isReturnStatement(stmt)) {
-    // § 14.10 — evaluate argument for any nested side effects, then stop
-    // this branch. The current frame's index is left where it is; the
-    // caller's check `if (idx >= stmts.length || frame._returned)` ends
-    // execution.
-    if (stmt.argument) _specEvalExpression(stmtPath.get("argument"), state, effects);
+    // § 14.10 — evaluate argument for any nested side effects AND capture
+    // its AbstractValue for inter-procedural return-value tracking. The
+    // outer _specAnalyzePropertyFlow drains accumulated AVs after the
+    // driver completes, joins via or, and stores in _specReturnValueMemo.
+    if (stmt.argument) {
+      var retAv = _specEvalExpression(stmtPath.get("argument"), state, effects);
+      if (retAv) _specReturnAvAccum.push(retAv);
+    } else {
+      // `return;` per § 14.10 yields undefined.
+      _specReturnAvAccum.push({ kind: "const", value: undefined });
+    }
     if (branchStack.length > 0) branchStack[branchStack.length - 1]._returned = true;
     return;
   }
@@ -3117,6 +3124,18 @@ var _specEffectsMemo = new WeakMap();
 // the spec-computed AV for any expression without re-running spec eval.
 // Reset at the start of each analyzeJSBundle. Keyed by path.node.
 var _specPathValMemo = new WeakMap();
+// Per-function joined return-value AbstractValue, computed during
+// _specAnalyzePropertyFlow by collecting each ReturnStatement's arg AV
+// and joining via _specLogicalOrAv. Used by _specEvalLeaf's CallExpression
+// handler to compute call return values for arbitrary multi-statement
+// callees (single-statement `return X` is the simple case; this covers
+// `if (cond) return A; return B;`, etc.). Keyed by funcNode.
+var _specReturnValueMemo = new WeakMap();
+// Module-level return-AV accumulator queue (parallel to _hofPendingDispatches).
+// _specApplyStatement's ReturnStatement handler pushes evaluated return AVs;
+// _specAnalyzePropertyFlow snapshots base length on entry, joins accumulated
+// AVs after the driver completes, and stores in _specReturnValueMemo.
+var _specReturnAvAccum = [];
 // Higher-order function callback dispatch queue. Filled by _specEvalLeaf
 // when it recognises Array.prototype.{map,filter,reduce,…}; drained by
 // the _specAnalyzePropertyFlow driver loop after each statement, which
@@ -3137,10 +3156,10 @@ function _specAnalyzePropertyFlow(funcPath) {
     return [];
   }
 
-  // Snapshot the queue's pre-call length so any dispatches we drain
-  // here belong to THIS analysis (not a sibling analysis whose own
-  // dispatches were already pending).
+  // Snapshot queue base lengths so any drains here belong to THIS analysis
+  // (not a sibling analysis whose own items were already pending).
   var hofQueueBaseLen = _hofPendingDispatches.length;
+  var returnAvBaseLen = _specReturnAvAccum.length;
   var entryState = _specInitialFunctionBodyState(fnNode);
   var effects = [];
   var stack;
@@ -3149,8 +3168,8 @@ function _specAnalyzePropertyFlow(funcPath) {
   } else {
     // ArrowFunctionExpression concise body per § 15.3.5.13: the body
     // is a single expression whose value is implicitly returned.
-    // Wrap it as a synthetic ExpressionStatement to feed the walker.
-    _specEvalExpression(bodyPath, entryState, effects);
+    var conciseAv = _specEvalExpression(bodyPath, entryState, effects);
+    if (conciseAv) _specReturnValueMemo.set(fnNode, conciseAv);
     // Drain HOF queue from concise-body eval too.
     _drainHofQueueIntoStack(stack || [], hofQueueBaseLen, effects);
     _specEffectsMemo.set(fnNode, effects);
@@ -3211,6 +3230,18 @@ function _specAnalyzePropertyFlow(funcPath) {
     _drainHofQueueIntoStack(stack, hofQueueBaseLen, effects);
   }
 
+  // Drain accumulated return AVs (from this analysis's slice). Join
+  // via _specLogicalOrAv and store in _specReturnValueMemo. If no
+  // return statements fired (or all were `return;`), the value is
+  // undefined per § 14.10.
+  if (_specReturnAvAccum.length > returnAvBaseLen) {
+    var joinedRet = _specReturnAvAccum[returnAvBaseLen];
+    for (var rai = returnAvBaseLen + 1; rai < _specReturnAvAccum.length; rai++) {
+      joinedRet = _specLogicalOrAv(joinedRet, _specReturnAvAccum[rai]);
+    }
+    _specReturnAvAccum.length = returnAvBaseLen;  // pop our slice
+    _specReturnValueMemo.set(fnNode, joinedRet);
+  }
   _specEffectsMemo.set(fnNode, effects);
   return effects;
 }
@@ -4570,6 +4601,13 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
+    // Single-statement fast path FIRST: when callee body is a single
+    // `return EXPR`, evaluate EXPR with caller-arg substitution via
+    // _specEvalReturnArgWithCallerArgs. Handles literal/Identifier-of-
+    // param/`+`-concat/template patterns with full caller-arg fidelity.
+    // (Memo from multi-statement analysis is fallback below — it can
+    // store Top for params it couldn't resolve, which would mask the
+    // single-stmt substitution's better answer.)
     if (calleeFnPath && calleeFnPath.node && calleeFnPath.node.body &&
         _t.isBlockStatement(calleeFnPath.node.body)) {
       var fnBody = calleeFnPath.node.body.body;
@@ -4589,6 +4627,21 @@ function _specEvalLeaf(path, state, vals, effects) {
           if (subAv !== null) return subAv;
         }
       }
+    // Multi-statement inter-procedural fallback: when single-stmt path
+    // didn't apply (function body has multiple statements / branches /
+    // local var bindings), look up the joined return-value AV from
+    // _specReturnValueMemo (populated by a prior _specAnalyzePropertyFlow
+    // walk on the callee). Substitute caller-arg AVs per § 10.2.10.
+    if (calleeFnPath && calleeFnPath.node && _specReturnValueMemo.has(calleeFnPath.node)) {
+      var memoRet = _specReturnValueMemo.get(calleeFnPath.node);
+      if (memoRet) {
+        var callArgAvs = [];
+        for (var ciai = 0; ciai < n.arguments.length; ciai++) {
+          callArgAvs.push(vals.get(n.arguments[ciai]) || { kind: "top" });
+        }
+        return _specInstantiateAv(memoRet, callArgAvs);
+      }
+    }
     return { kind: "top" }; // Other call returns abstract to Top.
   }
   // Unmodelled expression kinds abstract to Top — sound conservative answer.
