@@ -2876,6 +2876,22 @@ test("DOM context: Stimulus pattern URL surfaced via domEndpoints (data-X-Y-valu
   return false;
 }, { domContext: { dataAttrs: { 0: { "controller": "se-dismiss", "se-dismiss-endpoint-value": "/posts/123/dismiss" } } } });
 
+test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
+  (async function(){
+    fetch(await Promise.resolve("/api/await-promise"));
+  })();
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "/api/await-promise";
+});
+
+test("§ 27.2.5.4: `Promise.resolve(x).then(v => fetch(v))` resolves callback param via receiver", `
+  Promise.resolve("/api/then-callback").then(function(url) { fetch(url); });
+`, function(result) {
+  if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
+  return result.fetchCallSites[0].url === "/api/then-callback";
+});
+
 test("DOM context: chained .replace().toLowerCase() applies both transforms", `
   function fn(el) {
     fetch(el.href.replace("HIDE", "snip").toLowerCase());
