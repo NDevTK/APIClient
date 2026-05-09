@@ -6164,6 +6164,13 @@ function _specEvalLeaf(path, state, vals, effects) {
     // pattern and flags so RegExp.prototype.test/exec can dispatch.
     return { kind: "regex-instance", pattern: n.pattern, flags: n.flags || "" };
   }
+  if (_t.isFunctionExpression(n) || _t.isArrowFunctionExpression(n)) {
+    // § 15.2 FunctionExpression / § 15.3 ArrowFunction — produce a
+    // function value identifying the source function node. Lets
+    // downstream consumers (e.g. RCFP for `arr[N]()` callee resolution)
+    // recover the function path through closure write-back state.
+    return { kind: "function-ref", funcNode: n };
+  }
   if (_t.isTemplateLiteral(n)) {
     // § 13.2.8.6 Template Literal Evaluation: composes cooked quasis
     // with stringified expression results. Each expression's result
@@ -11961,6 +11968,37 @@ function _rcfpStep(F) {
             stepFn: _rtoiStep, makeFrame: _rtoiMakeFrame,
             shortCircuit: _rtoiShortCircuit, guardPrefix: "T", defaultResult: null,
           };
+        }
+        // Branch 2c (computed MemberExpression callee): `arr[N]()` or
+        // `obj[key]()`. Resolve via spec-eval state per § 9.1.1: if the
+        // object is an array-lit AV (e.g. produced by closure write-back
+        // on `handlers.push(fn)`) and the key is a Const number, look
+        // up the element. If it's a function-ref AV, return its path.
+        if (_t.isMemberExpression(callee) && callee.computed) {
+          var memoObjAv = _specPathValMemo.get(callee.object);
+          var memoKeyAv = _specPathValMemo.get(callee.property);
+          if (memoObjAv && memoObjAv.kind === "array-lit" && memoObjAv.elements &&
+              memoKeyAv && memoKeyAv.kind === "const" && typeof memoKeyAv.value === "number" &&
+              memoKeyAv.value >= 0 && memoKeyAv.value < memoObjAv.elements.length) {
+            var elemAv = memoObjAv.elements[memoKeyAv.value];
+            if (elemAv && elemAv.kind === "function-ref" && elemAv.funcNode) {
+              // Find a Babel path for the function node by walking from
+              // the program root via parent links — Babel doesn't index
+              // node→path globally; the function node lives inside the
+              // AST so a guided traversal locates it.
+              var found = null;
+              var rootP = callPath;
+              while (rootP.parentPath) rootP = rootP.parentPath;
+              if (rootP && rootP.node) {
+                rootP.traverse({
+                  "FunctionExpression|ArrowFunctionExpression|FunctionDeclaration": function(p) {
+                    if (p.node === elemAv.funcNode) { found = p; p.stop(); }
+                  }
+                });
+              }
+              if (found) return { done: found };
+            }
+          }
         }
         return { done: null };
       }
