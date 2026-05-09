@@ -2724,7 +2724,9 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     if (!urlAllOk || urlResults.length === 0) return { kind: "top" };
     if (urlResults.length === 1) return urlResults[0];
     var urlOr = urlResults[0];
-    for (var uri = 1; uri < urlResults.length; uri++) urlOr = _specLogicalOrAv(urlOr, urlResults[uri]);
+    // _specSetUnionAv per WHATWG URL constructor distribution: each
+    // (input, base) pair produces a statically-possible URL value.
+    for (var uri = 1; uri < urlResults.length; uri++) urlOr = _specSetUnionAv(urlOr, urlResults[uri]);
     return urlOr;
   }
   if (ctorId === "WHATWG.URLSearchParams") {
@@ -2780,7 +2782,8 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     }
     if (reqResults.length === 1) return reqResults[0];
     var reqOr = reqResults[0];
-    for (var rri = 1; rri < reqResults.length; rri++) reqOr = _specLogicalOrAv(reqOr, reqResults[rri]);
+    // _specSetUnionAv per Request constructor distribution.
+    for (var rri = 1; rri < reqResults.length; rri++) reqOr = _specSetUnionAv(reqOr, reqResults[rri]);
     return reqOr;
   }
   // ECMA § 24.1.1 new Map([iterable]). Per spec step 8: if iterable is
@@ -3260,9 +3263,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
           perLeafResults.push(leafRes);
         }
         if (perLeafResults.length === 1) return perLeafResults[0];
+        // _specSetUnionAv per § 23.1.3 method distribution: at
+        // runtime exactly one receiver leaf is realised, so all leaves'
+        // results are statically possible — preserve concrete branches
+        // even when some leaves' methods returned top.
         var arrOr = perLeafResults[0];
         for (var aori = 1; aori < perLeafResults.length; aori++) {
-          arrOr = _specLogicalOrAv(arrOr, perLeafResults[aori]);
+          arrOr = _specSetUnionAv(arrOr, perLeafResults[aori]);
         }
         return arrOr;
       }
@@ -3293,8 +3300,9 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             mapPerRes.push(_specApplyMapMethodOnInst(methodId, mapOrLeaves[mori], recvName, argAvs, state));
           }
           if (mapPerRes.length === 1) return mapPerRes[0];
+          // _specSetUnionAv per § 24.1.3 distribution.
           var mapResOr = mapPerRes[0];
-          for (var mri = 1; mri < mapPerRes.length; mri++) mapResOr = _specLogicalOrAv(mapResOr, mapPerRes[mri]);
+          for (var mri = 1; mri < mapPerRes.length; mri++) mapResOr = _specSetUnionAv(mapResOr, mapPerRes[mri]);
           return mapResOr;
         }
       }
@@ -3323,8 +3331,9 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             setPerRes.push(_specApplySetMethodOnInst(methodId, setOrLeaves[sori], recvName, argAvs, state));
           }
           if (setPerRes.length === 1) return setPerRes[0];
+          // _specSetUnionAv per § 24.2.3 / § 24.4.3 distribution.
           var setResOr = setPerRes[0];
-          for (var sri = 1; sri < setPerRes.length; sri++) setResOr = _specLogicalOrAv(setResOr, setPerRes[sri]);
+          for (var sri = 1; sri < setPerRes.length; sri++) setResOr = _specSetUnionAv(setResOr, setPerRes[sri]);
           return setResOr;
         }
       }
@@ -4114,9 +4123,10 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     }
     if (!numAllOk) return { kind: "top" };
     if (numResults.length === 1) return { kind: "const", value: numResults[0] };
+    // _specSetUnionAv per § 21.1.3 distribution.
     var numOr = { kind: "const", value: numResults[0] };
     for (var nri = 1; nri < numResults.length; nri++) {
-      numOr = _specLogicalOrAv(numOr, { kind: "const", value: numResults[nri] });
+      numOr = _specSetUnionAv(numOr, { kind: "const", value: numResults[nri] });
     }
     return numOr;
   }
@@ -4146,9 +4156,10 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             splitRePerLeaf.push({ kind: "array-lit", elements: splitReElems });
           }
           if (splitRePerLeaf.length === 1) return splitRePerLeaf[0];
+          // _specSetUnionAv per § 22.1.3.18 split distribution.
           var splitReOr = splitRePerLeaf[0];
           for (var spro = 1; spro < splitRePerLeaf.length; spro++) {
-            splitReOr = _specLogicalOrAv(splitReOr, splitRePerLeaf[spro]);
+            splitReOr = _specSetUnionAv(splitReOr, splitRePerLeaf[spro]);
           }
           return splitReOr;
         } catch (_) { return { kind: "top" }; }
@@ -4206,9 +4217,10 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
               : rsRecvLeaves[rsi].replace(rsRe, argAvs[1].value));
           }
           if (rsResults.length === 1) return { kind: "const", value: rsResults[0] };
+          // _specSetUnionAv per § 22.1.3.13/14 replace/replaceAll distribution.
           var rsOr = { kind: "const", value: rsResults[0] };
           for (var rso = 1; rso < rsResults.length; rso++) {
-            rsOr = _specLogicalOrAv(rsOr, { kind: "const", value: rsResults[rso] });
+            rsOr = _specSetUnionAv(rsOr, { kind: "const", value: rsResults[rso] });
           }
           return rsOr;
         }
@@ -4219,9 +4231,10 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             rsSearchResults.push(rsRecvLeaves[rssi].search(rsRe));
           }
           if (rsSearchResults.length === 1) return { kind: "const", value: rsSearchResults[0] };
+          // _specSetUnionAv per § 22.1.3.16 search distribution.
           var rsSearchOr = { kind: "const", value: rsSearchResults[0] };
           for (var rsso = 1; rsso < rsSearchResults.length; rsso++) {
-            rsSearchOr = _specLogicalOrAv(rsSearchOr, { kind: "const", value: rsSearchResults[rsso] });
+            rsSearchOr = _specSetUnionAv(rsSearchOr, { kind: "const", value: rsSearchResults[rsso] });
           }
           return rsSearchOr;
         }
@@ -4242,9 +4255,10 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             }
           }
           if (rsMatchPerLeaf.length === 1) return rsMatchPerLeaf[0];
+          // _specSetUnionAv per § 22.1.3.10 match distribution.
           var rsMatchOr = rsMatchPerLeaf[0];
           for (var rsmo = 1; rsmo < rsMatchPerLeaf.length; rsmo++) {
-            rsMatchOr = _specLogicalOrAv(rsMatchOr, rsMatchPerLeaf[rsmo]);
+            rsMatchOr = _specSetUnionAv(rsMatchOr, rsMatchPerLeaf[rsmo]);
           }
           return rsMatchOr;
         }
@@ -4260,9 +4274,10 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             rsSplitPerLeaf.push({ kind: "array-lit", elements: rsSplitElems });
           }
           if (rsSplitPerLeaf.length === 1) return rsSplitPerLeaf[0];
+          // _specSetUnionAv per § 22.1.3.18 split distribution.
           var rsSplitOr = rsSplitPerLeaf[0];
           for (var rspo = 1; rspo < rsSplitPerLeaf.length; rspo++) {
-            rsSplitOr = _specLogicalOrAv(rsSplitOr, rsSplitPerLeaf[rspo]);
+            rsSplitOr = _specSetUnionAv(rsSplitOr, rsSplitPerLeaf[rspo]);
           }
           return rsSplitOr;
         }
@@ -4283,9 +4298,10 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             rsAllPerLeaf.push({ kind: "array-lit", elements: rsAllElems });
           }
           if (rsAllPerLeaf.length === 1) return rsAllPerLeaf[0];
+          // _specSetUnionAv per § 22.1.3.11 matchAll distribution.
           var rsAllOr = rsAllPerLeaf[0];
           for (var rsao = 1; rsao < rsAllPerLeaf.length; rsao++) {
-            rsAllOr = _specLogicalOrAv(rsAllOr, rsAllPerLeaf[rsao]);
+            rsAllOr = _specSetUnionAv(rsAllOr, rsAllPerLeaf[rsao]);
           }
           return rsAllOr;
         }
@@ -4314,9 +4330,10 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     }
     if (!strAllOk) return { kind: "top" };
     if (strResults.length === 1) return { kind: "const", value: strResults[0] };
+    // _specSetUnionAv per § 22.1.3 distribution.
     var strOr = { kind: "const", value: strResults[0] };
     for (var sri = 1; sri < strResults.length; sri++) {
-      strOr = _specLogicalOrAv(strOr, { kind: "const", value: strResults[sri] });
+      strOr = _specSetUnionAv(strOr, { kind: "const", value: strResults[sri] });
     }
     return strOr;
   }
@@ -4455,7 +4472,10 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         }
       }
       paramAv = perCallAvs[0];
-      for (var pci = 1; pci < perCallAvs.length; pci++) paramAv = _specLogicalOrAv(paramAv, perCallAvs[pci]);
+      // _specSetUnionAv per § 9.1.1: each inline-handler call site
+      // binds the param to a specific element AV at runtime; preserve
+      // each per-call value as an alternative.
+      for (var pci = 1; pci < perCallAvs.length; pci++) paramAv = _specSetUnionAv(paramAv, perCallAvs[pci]);
     } else {
       paramAv = { kind: "param", idx: i };
     }
@@ -4998,7 +5018,8 @@ function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) 
     }
     if (concatResults.length === 1) return concatResults[0];
     var concatOr = concatResults[0];
-    for (var ci = 1; ci < concatResults.length; ci++) concatOr = _specLogicalOrAv(concatOr, concatResults[ci]);
+    // _specSetUnionAv per § 13.8.1 BinaryExpression `+` distribution.
+    for (var ci = 1; ci < concatResults.length; ci++) concatOr = _specSetUnionAv(concatOr, concatResults[ci]);
     return concatOr;
   }
   // TemplateLiteral per § 13.2.8.6: quasis interspersed with expressions.
@@ -5022,7 +5043,8 @@ function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) 
     }
     if (alts.length === 1) return { kind: "const", value: alts[0] };
     var tlOr = { kind: "const", value: alts[0] };
-    for (var ti = 1; ti < alts.length; ti++) tlOr = _specLogicalOrAv(tlOr, { kind: "const", value: alts[ti] });
+    // _specSetUnionAv per § 13.2.8.6 TemplateLiteral distribution.
+    for (var ti = 1; ti < alts.length; ti++) tlOr = _specSetUnionAv(tlOr, { kind: "const", value: alts[ti] });
     return tlOr;
   }
   // ECMA § 13.3.6 CallExpression in return arg: `return recv.method(args)`.
@@ -6399,9 +6421,12 @@ function _specEvalLeaf(path, state, vals, effects) {
     }
     if (!tlOk) return { kind: "top" };
     if (alts.length === 1) return { kind: "const", value: alts[0] };
+    // _specSetUnionAv per § 13.2.8.6 distribution: each cooked-quasi
+    // interleaved with each interpolated leaf is a statically-possible
+    // runtime value. Preserve all alternatives without top-absorption.
     var tlOr = { kind: "const", value: alts[0] };
     for (var ti = 1; ti < alts.length; ti++) {
-      tlOr = _specLogicalOrAv(tlOr, { kind: "const", value: alts[ti] });
+      tlOr = _specSetUnionAv(tlOr, { kind: "const", value: alts[ti] });
     }
     return tlOr;
   }
@@ -6472,9 +6497,14 @@ function _specEvalLeaf(path, state, vals, effects) {
         memberResults.push(_specMemberAccessOnObjLeaf(path, n, memberLeaves[mli], vals));
       }
       if (memberResults.length === 1) return memberResults[0];
+      // _specSetUnionAv per § 13.3.2 MemberExpression distribution:
+      // `or(a, b).prop` → `or(a.prop, b.prop)`. At runtime exactly one
+      // leaf is realised, so all leaves' projections are statically
+      // possible — preserve concrete branches even when some leaves
+      // project to top.
       var memberOr = memberResults[0];
       for (var moi = 1; moi < memberResults.length; moi++) {
-        memberOr = _specLogicalOrAv(memberOr, memberResults[moi]);
+        memberOr = _specSetUnionAv(memberOr, memberResults[moi]);
       }
       return memberOr;
     }
