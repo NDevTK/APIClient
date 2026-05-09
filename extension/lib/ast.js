@@ -4429,6 +4429,17 @@ function _specEvalLeaf(path, state, vals, effects) {
           // CSS Selectors L4: `#id` form.
           var qsIdMatch = qsArgAv.value.match(/^#([A-Za-z][\w:.-]*)$/);
           if (qsIdMatch) domLookupId = qsIdMatch[1];
+          // CSS Selectors L4 attribute form `meta[name=X]` → return obj-lit
+          // with .content from _domContext.metaTags[X]. Common CSRF-token
+          // pattern: `document.querySelector("meta[name=csrf-token]").content`.
+          var metaMatch = qsArgAv.value.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
+          if (metaMatch && _domContext && _domContext.metaTags &&
+              Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaMatch[1])) {
+            return {
+              kind: "obj-lit",
+              props: { content: { kind: "const", value: String(_domContext.metaTags[metaMatch[1]]) } }
+            };
+          }
         }
       }
       if (domLookupId !== null && _domContext && _domContext.byId &&

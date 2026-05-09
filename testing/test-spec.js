@@ -3406,6 +3406,16 @@ specTest("WHATWG DOM: shadowed `document` does NOT fire", `
   return !(av && av.kind === "const" && av.value === "/hide?id=5");
 }, { domContext: { byId: { hide5: { href: "/hide?id=5" } } } });
 
+specTest("CSS L4 attribute selector: `document.querySelector('meta[name=X]').content` from _domContext.metaTags", `
+  function f() {
+    this.t = document.querySelector("meta[name=csrf-token]").content;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "abc-token-123";
+}, { domContext: { metaTags: { "csrf-token": "abc-token-123" } } });
+
 specTest("§ 14.10 multi-stmt return with param: `if(p) return p; return 'default';`", `
   function f() {
     this.u = orDefault("/api/foo");
