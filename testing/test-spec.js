@@ -4697,6 +4697,35 @@ specTest("§ 13.3.11 TaggedTemplateExpression dispatches via function-ref + memo
   return false;
 });
 
+specTest("§ 21.1.1.1 Number coercion preserves coerce structure for caller substitution", `
+  function f(n) { this.s = "/page/" + Number(n); }
+`, function(effects) {
+  // The function's analysis produces binop("/page/", coerce(number, param-0))
+  // which substitution at call sites can fold to const "/page/<n>". Verify
+  // the structure-preservation: the effect's value should contain a `coerce`
+  // AV with to:"number" referring to param 0.
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "s") {
+      var v = effects[i].value;
+      if (!v) return false;
+      var stack = [v];
+      while (stack.length > 0) {
+        var av = stack.pop();
+        if (!av) continue;
+        if (av.kind === "coerce" && av.to === "number" &&
+            av.arg && av.arg.kind === "param" && av.arg.idx === 0) return true;
+        if (av.kind === "or") { stack.push(av.left); stack.push(av.right); }
+        if (av.kind === "binop") { stack.push(av.left); stack.push(av.right); }
+        if (av.kind === "template" && av.exprs) {
+          for (var qei = 0; qei < av.exprs.length; qei++) stack.push(av.exprs[qei]);
+        }
+      }
+      return false;
+    }
+  }
+  return false;
+});
+
 specTest("§ 14.1.20 RestParameter: tagged template with interpolation via ...vals", `
   function f() { this.s = html\`/api/\${"users"}\`; }
   function html(strs, ...vals) { return strs[0] + vals[0] + strs[1]; }
