@@ -7015,6 +7015,35 @@ function _ravStep(F) {
       }
     }
   }
+  // Form 1d: `document.getElementById("X").getAttribute("Y")` — direct
+  // attribute access. Returns the matching data-/href/src/action value.
+  if (skip < 1 && _t.isCallExpression(node) &&
+      _t.isMemberExpression(node.callee) && !node.callee.computed &&
+      _t.isIdentifier(node.callee.property, { name: "getAttribute" }) &&
+      node.arguments.length === 1 &&
+      _t.isStringLiteral(node.arguments[0]) &&
+      _t.isCallExpression(node.callee.object) &&
+      _t.isMemberExpression(node.callee.object.callee) && !node.callee.object.callee.computed &&
+      _t.isIdentifier(node.callee.object.callee.object, { name: "document" }) &&
+      !path.scope.getBinding("document") &&
+      _t.isIdentifier(node.callee.object.callee.property, { name: "getElementById" }) &&
+      node.callee.object.arguments.length === 1 &&
+      _t.isStringLiteral(node.callee.object.arguments[0])) {
+    var gaId = node.callee.object.arguments[0].value;
+    var gaAttr = node.arguments[0].value;
+    if (_domContext && _domContext.byId &&
+        Object.prototype.hasOwnProperty.call(_domContext.byId, gaId)) {
+      var gaInfo = _domContext.byId[gaId];
+      // Standard attribute names map directly to byId properties.
+      if (gaAttr === "href" && gaInfo.href != null) return { done: [gaInfo.href] };
+      if (gaAttr === "src" && gaInfo.src != null) return { done: [gaInfo.src] };
+      if (gaAttr === "action" && gaInfo.action != null) return { done: [gaInfo.action] };
+      // data-* attribute names match dataAttrs keys directly.
+      if (gaAttr.indexOf("data-") === 0 && gaInfo.dataAttrs && gaInfo.dataAttrs[gaAttr.slice(5)] != null) {
+        return { done: [gaInfo.dataAttrs[gaAttr.slice(5)]] };
+      }
+    }
+  }
   // Form 1c: `document.getElementById("X").dataset.<key>` — for any
   // data-* attribute on the byId-tracked element. WHATWG HTML §
   // 7.5.5 dataset property reflects data-* attributes (camelCased).
