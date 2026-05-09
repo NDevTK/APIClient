@@ -2862,6 +2862,20 @@ test("DOM context: getElementById('X').href resolves via byId lookup", `
   return result.fetchCallSites[0].url === "/api/foo";
 }, { domContext: { byId: { link1: { href: "/api/foo", src: null, action: null, dataAttrs: null } } } });
 
+test("DOM context: Stimulus pattern URL surfaced via domEndpoints (data-X-Y-value)", `
+  class T { performDismiss() { fetch(this.endpointValue, {method:"POST"}); } }
+`, function(result) {
+  // The JS-side this.endpointValue can't resolve without recognizing
+  // the Stimulus framework getter (banned). But the URL value IS in
+  // the page markup and surfaces in result.domEndpoints.
+  if (!result.domEndpoints || result.domEndpoints.length === 0) return false;
+  for (var i = 0; i < result.domEndpoints.length; i++) {
+    if (result.domEndpoints[i].url === "/posts/123/dismiss" &&
+        result.domEndpoints[i].source === "html-data") return true;
+  }
+  return false;
+}, { domContext: { dataAttrs: { 0: { "controller": "se-dismiss", "se-dismiss-endpoint-value": "/posts/123/dismiss" } } } });
+
 test("DOM context: inline handler with .replace() applies the transform", `
   function hidestory(el, id) {
     fetch(el.href.replace("hide", "snip-story"));
