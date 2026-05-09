@@ -4684,6 +4684,19 @@ specTest("§ 15.7.3 nested extends: grandparent ctor's this.X reaches grandchild
   return false;
 });
 
+specTest("§ 13.3.11 TaggedTemplateExpression dispatches via function-ref + memo", `
+  function f() { this.s = r\`/api\`; }
+  function r(strs) { return strs[0]; }
+`, function(effects) {
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "s") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api";
+    }
+  }
+  return false;
+});
+
 specTest("§ 13.3.5 PrivateName access: this.#X resolves to ClassPrivateProperty value", `
   class C {
     #url = "/api";

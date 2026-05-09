@@ -6223,9 +6223,11 @@ function _specPostorderExprPaths(rootPath) {
         stack.push(p.get("expressions." + ti));
       }
     } else if (_t.isTaggedTemplateExpression(n)) {
-      // § 13.3.11 TaggedTemplateExpression — evaluate the tag's callee
-      // chain (so receiver-based dispatch works) and the quasi's expr
-      // children (their side-effects matter for property flow).
+      // § 13.3.11 TaggedTemplateExpression — evaluate the tag (so its
+      // AV is in vals when _specEvalLeaf sees the TaggedTemplate node)
+      // and the quasi's expression children (their side-effects matter
+      // for property flow + their AVs feed into call-arg substitution).
+      stack.push(p.get("tag"));
       if (_t.isMemberExpression(n.tag) || _t.isOptionalMemberExpression(n.tag)) {
         stack.push(p.get("tag.object"));
         if (n.tag.computed) stack.push(p.get("tag.property"));
@@ -7179,6 +7181,33 @@ function _specEvalLeaf(path, state, vals, effects) {
     // recover the function path through closure write-back state.
     return { kind: "function-ref", funcNode: n };
   }
+  if (_t.isTaggedTemplateExpression(n)) {
+    // § 13.3.11 TaggedTemplateExpression: `tag\`q1\${e1}q2\`` is
+    // semantically `tag(quasiArr, e1)` where quasiArr is an array-lit
+    // with elements [q1, q2]. Resolve via existing function-ref
+    // CallExpression dispatch: build a synthetic quasiArr AV + caller-
+    // arg AVs from interpolations, then look up _specReturnValueMemo
+    // and substitute. No name-based pattern matching — purely
+    // structural routing through spec eval.
+    var ttTagAv = vals.get(n.tag);
+    if (ttTagAv && ttTagAv.kind === "function-ref" && ttTagAv.funcNode &&
+        _specReturnValueMemo.has(ttTagAv.funcNode)) {
+      var ttQuasiElems = [];
+      for (var ttqi = 0; ttqi < n.quasi.quasis.length; ttqi++) {
+        var ttq = n.quasi.quasis[ttqi];
+        var ttCooked = ttq && ttq.value && typeof ttq.value.cooked === "string" ? ttq.value.cooked : "";
+        ttQuasiElems.push({ kind: "const", value: ttCooked });
+      }
+      var ttQuasiArr = { kind: "array-lit", elements: ttQuasiElems };
+      var ttCallArgs = [ttQuasiArr];
+      for (var ttei = 0; ttei < n.quasi.expressions.length; ttei++) {
+        ttCallArgs.push(vals.get(n.quasi.expressions[ttei]) || { kind: "top" });
+      }
+      var ttRetMemo = _specReturnValueMemo.get(ttTagAv.funcNode);
+      if (ttRetMemo) return _specInstantiateAv(ttRetMemo, ttCallArgs);
+    }
+    return { kind: "top" };
+  }
   if (_t.isTemplateLiteral(n)) {
     // § 13.2.8.6 Template Literal Evaluation: composes cooked quasis
     // with stringified expression results. Each expression's result
@@ -7301,6 +7330,19 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (_t.isVariableDeclarator(bn) && bn.init && _t.isClassExpression(bn.init) &&
           bn.init.body && _t.isClassBody(bn.init.body)) {
         return _specBuildClassStaticAv(bn.init, idBinding.path.get("init"));
+      }
+      // § 15.2 FunctionDeclaration: the Identifier resolves to a function
+      // value. Return function-ref so callers (CallExpression dispatch,
+      // TaggedTemplateExpression dispatch) can substitute via
+      // _specReturnValueMemo + _specInstantiateAv.
+      if (_t.isFunctionDeclaration(bn)) {
+        return { kind: "function-ref", funcNode: bn };
+      }
+      // § 15.2 FunctionExpression / § 15.3 ArrowFunctionExpression as a
+      // VariableDeclarator init: same — function-ref AV.
+      if (_t.isVariableDeclarator(bn) && bn.init &&
+          (_t.isFunctionExpression(bn.init) || _t.isArrowFunctionExpression(bn.init))) {
+        return { kind: "function-ref", funcNode: bn.init };
       }
       // ECMA § 9.1.1 closure capture: outer-scope `var X = init` bindings
       // that this function's body references are pre-loaded into entryState
@@ -8197,6 +8239,8 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
     if (node.kind === "member") {
       // Substitute obj/key; reduce if the substituted form is
       // obj-lit + Const-key (look up the prop) per § 13.10 PropertyAccess.
+      // Also reduce array-lit + Const-numeric-key per § 23.1.4 indexed
+      // element access.
       var subObj = subs.get(node.obj) || node.obj;
       var subKey = subs.get(node.key) || node.key;
       if (subObj && subObj.kind === "obj-lit" && subObj.props &&
@@ -8204,6 +8248,10 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
           (typeof subKey.value === "string" || typeof subKey.value === "number") &&
           Object.prototype.hasOwnProperty.call(subObj.props, subKey.value)) {
         subs.set(node, subObj.props[subKey.value]);
+      } else if (subObj && subObj.kind === "array-lit" && subObj.elements &&
+          subKey && subKey.kind === "const" && typeof subKey.value === "number" &&
+          subKey.value >= 0 && subKey.value < subObj.elements.length) {
+        subs.set(node, subObj.elements[subKey.value]);
       } else {
         subs.set(node, { kind: "member", obj: subObj, key: subKey });
       }
@@ -8215,13 +8263,49 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
     }
     if (node.kind === "binop") {
       // Substitute operands; if both reduce to Const, evaluate the op
-      // per § 13.8.1 (string concat or Number::add). Otherwise preserve
-      // the binop AV so further substitutions can reduce.
+      // per § 13.8.1 (string concat or Number::add). When operands are
+      // or-trees of consts, distribute per § 13.8.1 distribution
+      // semantics (matches BinaryExpression eval at the AST level).
+      // Otherwise preserve the binop AV so further substitutions can
+      // reduce upstream.
       var bopL = subs.get(node.left) || node.left;
       var bopR = subs.get(node.right) || node.right;
       if (bopL && bopL.kind === "const" && bopR && bopR.kind === "const") {
         var bopRes = _evalBinaryConstConst(bopL.value, bopR.value, node.op);
         subs.set(node, bopRes || { kind: "top" });
+      } else if (bopL && bopR && (bopL.kind === "or" || bopR.kind === "or")) {
+        // Distribute: each pair of leaves contributes; const-const pairs
+        // evaluate via _evalBinaryConstConst, others contribute top.
+        var bopLLeaves = bopL.kind === "or" ? _avFlattenOrLeaves(bopL) : [bopL];
+        var bopRLeaves = bopR.kind === "or" ? _avFlattenOrLeaves(bopR) : [bopR];
+        if (bopLLeaves && bopRLeaves && bopLLeaves.length > 0 && bopRLeaves.length > 0) {
+          var bopAlts = [];
+          for (var bopLi = 0; bopLi < bopLLeaves.length; bopLi++) {
+            for (var bopRi = 0; bopRi < bopRLeaves.length; bopRi++) {
+              var bopL2 = bopLLeaves[bopLi], bopR2 = bopRLeaves[bopRi];
+              if (bopL2 && bopL2.kind === "const" && bopR2 && bopR2.kind === "const") {
+                var bopAlt = _evalBinaryConstConst(bopL2.value, bopR2.value, node.op);
+                if (bopAlt) bopAlts.push(bopAlt);
+                else bopAlts.push({ kind: "top" });
+              } else {
+                bopAlts.push({ kind: "binop", op: node.op, left: bopL2, right: bopR2 });
+              }
+            }
+          }
+          if (bopAlts.length === 1) {
+            subs.set(node, bopAlts[0]);
+          } else if (bopAlts.length > 1) {
+            var bopOr = bopAlts[0];
+            for (var bopAi = 1; bopAi < bopAlts.length; bopAi++) {
+              bopOr = _specSetUnionAv(bopOr, bopAlts[bopAi]);
+            }
+            subs.set(node, bopOr);
+          } else {
+            subs.set(node, { kind: "binop", op: node.op, left: bopL, right: bopR });
+          }
+        } else {
+          subs.set(node, { kind: "binop", op: node.op, left: bopL, right: bopR });
+        }
       } else {
         subs.set(node, { kind: "binop", op: node.op, left: bopL, right: bopR });
       }
