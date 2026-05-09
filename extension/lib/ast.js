@@ -5251,7 +5251,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       // each per-call value as an alternative.
       for (var pci = 1; pci < perCallAvs.length; pci++) paramAv = _specSetUnionAv(paramAv, perCallAvs[pci]);
     } else {
-      paramAv = { kind: "param", idx: i, fn: null };
+      paramAv = { kind: "param", idx: i, fn: funcNode };
     }
     if (p.type === "Identifier") {
       state[p.name] = paramAv;
@@ -5284,7 +5284,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         if (bindIdent && bindIdent.type === "Identifier") {
           state[bindIdent.name] = {
             kind: "member",
-            obj: { kind: "param", idx: i, fn: null },
+            obj: { kind: "param", idx: i, fn: funcNode },
             key: { kind: "const", value: keyName }
           };
         }
@@ -5300,7 +5300,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         if (ae && ae.type === "Identifier") {
           state[ae.name] = {
             kind: "member",
-            obj: { kind: "param", idx: i, fn: null },
+            obj: { kind: "param", idx: i, fn: funcNode },
             key: { kind: "const", value: ai }
           };
         }
