@@ -5771,24 +5771,42 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
       callersOf.get(calleeNode).add(callerNode);
     }
   });
+  // Per-function snapshot of side-effect summary + return-value AV.
+  // Stored as the AV trees themselves (small refs) — comparison via
+  // structural _specEqualAv. No JSON.stringify (can allocate huge
+  // strings for deep or-trees, ballooning memory across all functions).
   var sigByFn = new Map();
-  function _ssSig(fnNode) {
-    var seSig = "";
-    if (_specSideEffectMemo.has(fnNode)) {
-      var seSummary = _specSideEffectMemo.get(fnNode);
-      var seKeys = Object.keys(seSummary).sort();
-      for (var ski = 0; ski < seKeys.length; ski++) seSig += seKeys[ski] + ":" + JSON.stringify(seSummary[seKeys[ski]]) + ";";
-    }
-    var rvSig = _specReturnValueMemo.has(fnNode) ? JSON.stringify(_specReturnValueMemo.get(fnNode)) : "";
-    return seSig + "|" + rvSig;
+  function _ssSnapshot(fnNode) {
+    return {
+      sideEffects: _specSideEffectMemo.get(fnNode) || null,
+      returnValue: _specReturnValueMemo.get(fnNode) || null
+    };
   }
-  // Pass 1: analyse every function, record signature.
+  function _ssChanged(prevSnap, currSnap) {
+    if (!prevSnap) return true;
+    var pse = prevSnap.sideEffects, cse = currSnap.sideEffects;
+    if (!pse !== !cse) return true;
+    if (pse && cse) {
+      var pkeys = Object.keys(pse), ckeys = Object.keys(cse);
+      if (pkeys.length !== ckeys.length) return true;
+      for (var ki = 0; ki < ckeys.length; ki++) {
+        var k = ckeys[ki];
+        if (!Object.prototype.hasOwnProperty.call(pse, k)) return true;
+        if (!_specEqualAv(pse[k], cse[k])) return true;
+      }
+    }
+    if (!prevSnap.returnValue !== !currSnap.returnValue) return true;
+    if (prevSnap.returnValue && currSnap.returnValue && !_specEqualAv(prevSnap.returnValue, currSnap.returnValue)) return true;
+    return false;
+  }
+  // Pass 1: analyse every function. Record snapshot for subsequent
+  // pass comparisons (no comparison on pass 1 — everyone is freshly
+  // memoised).
   var pendingNodes = new Set();
   for (var ip = 0; ip < fnPaths.length; ip++) {
     var ipFp = fnPaths[ip];
     _specAnalyzePropertyFlow(ipFp, true);
-    var ipSig = _ssSig(ipFp.node);
-    sigByFn.set(ipFp.node, ipSig);
+    sigByFn.set(ipFp.node, _ssSnapshot(ipFp.node));
   }
   // Build initial worklist from any function whose memo affected its callers.
   // (After pass 1, all sigs are "fresh" — we treat all as potentially affecting callers.)
@@ -5798,7 +5816,10 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
       callerSet.forEach(function(c) { pendingNodes.add(c); });
     }
   }
-  // Worklist loop: re-analyse pending callers, add their callers if their sig changed.
+  // Worklist loop: re-analyse pending callers, propagate to their
+  // callers if the side-effect summary or return-value AV changed
+  // structurally (via _specEqualAv on AV trees — bounded comparison
+  // cost, no string allocation).
   var nodeToPath = new Map();
   for (var npi = 0; npi < fnPaths.length; npi++) nodeToPath.set(fnPaths[npi].node, fnPaths[npi]);
   while (pendingNodes.size > 0) {
@@ -5809,9 +5830,9 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
       var fp = nodeToPath.get(node);
       if (!fp) continue;
       _specAnalyzePropertyFlow(fp, true);
-      var newSig = _ssSig(node);
-      if (sigByFn.get(node) !== newSig) {
-        sigByFn.set(node, newSig);
+      var newSnap = _ssSnapshot(node);
+      if (_ssChanged(sigByFn.get(node), newSnap)) {
+        sigByFn.set(node, newSnap);
         if (callersOf.has(node)) {
           callersOf.get(node).forEach(function(c) { pendingNodes.add(c); });
         }
