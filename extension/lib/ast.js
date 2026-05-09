@@ -7441,8 +7441,9 @@ function _ravStep(F) {
     // etc.). Walk receiver chain iteratively, then trace the leaf via
     // sub-frame.
     if (_t.isMemberExpression(node.callee) && !node.callee.computed) {
-      var _smPassNames = { replace: 1, trim: 1, toLowerCase: 1, toUpperCase: 1,
-                            slice: 1, substring: 1, substr: 1, toString: 1, valueOf: 1 };
+      var _smPassNames = { replace: 1, replaceAll: 1, trim: 1, toLowerCase: 1, toUpperCase: 1,
+                            slice: 1, substring: 1, substr: 1, toString: 1, valueOf: 1,
+                            concat: 1, padStart: 1, padEnd: 1, repeat: 1, normalize: 1 };
       var smName = _t.isIdentifier(node.callee.property) ? node.callee.property.name : null;
       if (smName && _smPassNames[smName]) {
         // Walk down the chain collecting transforms in order. After
@@ -8337,6 +8338,36 @@ function _ravStep(F) {
                 else if (ch.name === "replace" && ch.args.length === 2 &&
                          _t.isStringLiteral(ch.args[0]) && _t.isStringLiteral(ch.args[1])) {
                   transformed = sv.replace(ch.args[0].value, ch.args[1].value);
+                }
+                else if (ch.name === "replaceAll" && ch.args.length === 2 &&
+                         _t.isStringLiteral(ch.args[0]) && _t.isStringLiteral(ch.args[1])) {
+                  transformed = sv.replaceAll(ch.args[0].value, ch.args[1].value);
+                }
+                else if (ch.name === "concat") {
+                  // Variadic; each arg must be a StringLit.
+                  var concatOk = true;
+                  var concatRes = sv;
+                  for (var ci = 0; ci < ch.args.length; ci++) {
+                    if (!_t.isStringLiteral(ch.args[ci])) { concatOk = false; break; }
+                    concatRes += ch.args[ci].value;
+                  }
+                  if (concatOk) transformed = concatRes;
+                }
+                else if (ch.name === "padStart" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
+                  var psFill = " ";
+                  if (ch.args.length >= 2 && _t.isStringLiteral(ch.args[1])) psFill = ch.args[1].value;
+                  transformed = sv.padStart(ch.args[0].value, psFill);
+                }
+                else if (ch.name === "padEnd" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
+                  var peFill = " ";
+                  if (ch.args.length >= 2 && _t.isStringLiteral(ch.args[1])) peFill = ch.args[1].value;
+                  transformed = sv.padEnd(ch.args[0].value, peFill);
+                }
+                else if (ch.name === "repeat" && ch.args.length === 1 && _t.isNumericLiteral(ch.args[0])) {
+                  try { transformed = sv.repeat(ch.args[0].value); } catch (_e) { /* RangeError on negative */ }
+                }
+                else if (ch.name === "normalize" && ch.args.length === 0) {
+                  transformed = sv.normalize();
                 }
                 else if (ch.name === "slice" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
                   if (ch.args.length === 1) transformed = sv.slice(ch.args[0].value);
