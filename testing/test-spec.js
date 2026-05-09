@@ -4371,6 +4371,36 @@ specTest("§ 13.15.5 ??=: defined lhs (even falsy) leaves lhs unchanged", `
   return av && av.kind === "const" && av.value === "";
 });
 
+specTest("§ 9.1.1 closure write-back: callee mutates outer-captured array; caller sees the new element", `
+  var handlers = [];
+  function register(handler) { handlers.push(handler); }
+  function f() {
+    register("/api/x");
+    this.first = handlers[0];
+  }
+`, function(effects, result) {
+  // Pre-warm both side functions so register's side-effect memo exists
+  // when f's analysis reaches the register(...) call site.
+  if (!result || !result._ast) return false;
+  var fnPaths = [];
+  globalThis.BabelBundle.traverse(result._ast, {
+    FunctionDeclaration: function(p) { fnPaths.push(p); p.skip(); }
+  });
+  // Last-wins: re-analyze 'register' first, then 'f'.
+  var registerPath = fnPaths.find(function(p) { return p.node.id && p.node.id.name === "register"; });
+  var fPath = fnPaths.find(function(p) { return p.node.id && p.node.id.name === "f"; });
+  if (!registerPath || !fPath) return false;
+  globalThis._specAnalyzePropertyFlow(registerPath);
+  var fEffects = globalThis._specAnalyzePropertyFlow(fPath);
+  // f writes this.first; expect it to be "/api/x" (the pushed value).
+  var firstEffects = fEffects.filter(function(e) {
+    return e.key && e.key.kind === "const" && e.key.value === "first";
+  });
+  if (firstEffects.length === 0) return false;
+  var av = firstEffects[0].value;
+  return av && av.kind === "const" && av.value === "/api/x";
+});
+
 specTest("§ 28.1.13 Reflect.ownKeys: returns array-lit of obj-lit keys", `
   function f() {
     var o = { foo: 1, bar: 2 };

@@ -4243,8 +4243,40 @@ function _specStateCreate(initBindings) {
   return s;
 }
 function _specStateClone(state) {
-  return _specStateCreate(state);
+  var c = _specStateCreate(state);
+  // Carry the outer-imports set across clones per § 9.1.1 — closure
+  // captures persist through branch state clones (if/loop bodies).
+  var srcImports = _specStateOuterImports.get(state);
+  if (srcImports) _specStateOuterImports.set(c, new Set(srcImports));
+  return c;
 }
+
+// Per-state Set of binding names that were lazy-loaded from an outer
+// scope (closure captures per ECMA § 9.1.1). When state[name] is
+// rebound and `name` is in this set, the mutation is a side effect on
+// the outer scope that must propagate back to the caller after the
+// function returns. WeakMap keyed by state object so cloning works
+// without surface-level state pollution (no Symbol/property leaks
+// into for-in iteration).
+var _specStateOuterImports = new WeakMap();
+
+// Per-function memo of side effects on outer-scope bindings. Populated
+// at the end of _specAnalyzePropertyFlow with the final state's
+// values for each outer-imported name. Applied in _specEvalLeaf's
+// CallExpression handler to update the caller's state per § 9.1.1
+// closure write-back semantics. Keyed by funcNode.
+var _specSideEffectMemo = new WeakMap();
+
+// Cycle-break for the outer-import lazy-load: when evaluating
+// init expression for a binding currently being lazy-loaded, return
+// top to avoid infinite recursion on patterns like `var a = b; var b = a;`.
+var _specOuterImportInFlight = null;
+
+// Cycle-break for on-demand callee analysis: tracks function nodes
+// currently being analyzed so a mutually-recursive call doesn't
+// re-trigger _specAnalyzePropertyFlow on a function that's already on
+// the analysis stack.
+var _specAnalysisInFlight = new WeakSet();
 
 // § 10.2.10 FunctionDeclarationInstantiation (simplified for our domain).
 // Each formal parameter is bound to its abstract param-reference; `this`
@@ -5670,6 +5702,26 @@ function _specAnalyzePropertyFlow(funcPath) {
     _specReturnAvAccum.length = returnAvBaseLen;  // pop our slice
     _specReturnValueMemo.set(fnNode, joinedRet);
   }
+  // Compute side-effect summary per ECMA § 9.1.1: for each outer-imported
+  // binding that was lazy-loaded into entryState during analysis, capture
+  // its final AV. CallExpression handler will apply this to the caller's
+  // state to model closure write-back.
+  var ssOuterImports = _specStateOuterImports.get(entryState);
+  if (ssOuterImports && ssOuterImports.size > 0) {
+    var ssSummary = {};
+    var ssIter = ssOuterImports.values();
+    var ssNext = ssIter.next();
+    while (!ssNext.done) {
+      var ssName = ssNext.value;
+      if (Object.prototype.hasOwnProperty.call(entryState, ssName)) {
+        ssSummary[ssName] = entryState[ssName];
+      }
+      ssNext = ssIter.next();
+    }
+    if (Object.keys(ssSummary).length > 0) {
+      _specSideEffectMemo.set(fnNode, ssSummary);
+    }
+  }
   _specEffectsMemo.set(fnNode, effects);
   return effects;
 }
@@ -5942,10 +5994,46 @@ function _specEvalLeaf(path, state, vals, effects) {
             initN.quasis.length === 1) {
           return { kind: "const", value: initN.quasis[0].value.cooked };
         }
-        // For non-literal binding inits, state evolution via
-        // _specApplyStatement populates state[name] when the var
-        // declaration is processed. If we reach this point, state
-        // wasn't populated — fall through to top.
+      }
+      // ECMA § 9.1.1 Closure capture: this identifier is bound in an
+      // outer EnvironmentRecord (the binding's scope is not the current
+      // function's). Lazy-load its current AV into our state and mark it
+      // as outer-imported so subsequent mutations propagate back to the
+      // caller via the side-effect memo. Skip for params (already in
+      // entry state) and inner locals (own binding in current scope).
+      // Only lazy-load if the binding's Identifier itself isn't reassigned
+      // (idBinding.constant) — direct assignments to the binding would
+      // make the init value stale; method calls on the bound value
+      // (e.g. `arr.push(x)`) preserve constness per Babel semantics.
+      if (_t.isVariableDeclarator(bn) && bn.init &&
+          idBinding.constant && !path.scope.hasOwnBinding(n.name)) {
+        // Bound in outer scope → lazy-load its init AV. Use a fresh
+        // analysis state so we don't cross-contaminate; the init is
+        // evaluated in the binding's scope, which closes over only its
+        // own outer chain.
+        var initPath = idBinding.path.get("init");
+        if (initPath && initPath.node) {
+          // Bound recursion: skip if we're already in the middle of
+          // evaluating this same binding's init (cycle break).
+          if (_specOuterImportInFlight && _specOuterImportInFlight.has(bn)) {
+            return { kind: "top" };
+          }
+          if (!_specOuterImportInFlight) _specOuterImportInFlight = new Set();
+          _specOuterImportInFlight.add(bn);
+          var importedAv;
+          try {
+            importedAv = _specEvalExpression(initPath, _specStateCreate({}), []);
+          } finally {
+            _specOuterImportInFlight.delete(bn);
+          }
+          if (importedAv && importedAv.kind !== "top") {
+            state[n.name] = importedAv;
+            var outerImports = _specStateOuterImports.get(state);
+            if (!outerImports) { outerImports = new Set(); _specStateOuterImports.set(state, outerImports); }
+            outerImports.add(n.name);
+            return importedAv;
+          }
+        }
       }
     }
     return { kind: "top" };
@@ -6663,6 +6751,32 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
+    // ECMA § 9.1.1 closure write-back: ensure the callee was analyzed so
+    // its side-effect memo (mutations on outer-scope captures) is
+    // available, then replay the mutations on caller's state with
+    // caller-arg AVs substituted. On-demand analysis with cycle guard:
+    // mutually-recursive functions (A→B→A) skip the inner re-analysis
+    // and return what's already memoised (or no side effects on first hit).
+    if (calleeFnPath && calleeFnPath.node && state) {
+      if (!_specSideEffectMemo.has(calleeFnPath.node) && !_specEffectsMemo.has(calleeFnPath.node) &&
+          !_specAnalysisInFlight.has(calleeFnPath.node)) {
+        _specAnalysisInFlight.add(calleeFnPath.node);
+        try { _specAnalyzePropertyFlow(calleeFnPath); }
+        finally { _specAnalysisInFlight.delete(calleeFnPath.node); }
+      }
+      if (_specSideEffectMemo.has(calleeFnPath.node)) {
+        var ssApply = _specSideEffectMemo.get(calleeFnPath.node);
+        var ssCallerArgs = [];
+        for (var ssai = 0; ssai < n.arguments.length; ssai++) {
+          ssCallerArgs.push(vals.get(n.arguments[ssai]) || { kind: "top" });
+        }
+        for (var ssN in ssApply) {
+          if (!Object.prototype.hasOwnProperty.call(ssApply, ssN)) continue;
+          // Substitute Param(N) refs in the side-effect AV with caller's args.
+          state[ssN] = _specInstantiateAv(ssApply[ssN], ssCallerArgs);
+        }
+      }
+    }
     // Single-statement fast path FIRST: when callee body is a single
     // `return EXPR`, evaluate EXPR with caller-arg substitution via
     // _specEvalReturnArgWithCallerArgs. Handles literal/Identifier-of-
@@ -6741,6 +6855,18 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
         stack.push(av.props[k]);
       }
     }
+    else if (av.kind === "array-lit" && av.elements) {
+      for (var ali = 0; ali < av.elements.length; ali++) stack.push(av.elements[ali]);
+    }
+    else if (av.kind === "map-instance" && av.entries) {
+      for (var mei = 0; mei < av.entries.length; mei++) {
+        stack.push(av.entries[mei][0]);
+        stack.push(av.entries[mei][1]);
+      }
+    }
+    else if (av.kind === "set-instance" && av.items) {
+      for (var sii = 0; sii < av.items.length; sii++) stack.push(av.items[sii]);
+    }
   }
   preorder.reverse();
   // Bottom-up substitute, storing each sub-av's substituted value in the map.
@@ -6803,6 +6929,37 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
         newProps[pk] = subs.get(node.props[pk]) || node.props[pk];
       }
       subs.set(node, { kind: "obj-lit", props: newProps });
+      continue;
+    }
+    if (node.kind === "array-lit" && node.elements) {
+      var newElems = [];
+      for (var nei = 0; nei < node.elements.length; nei++) {
+        newElems.push(subs.get(node.elements[nei]) || node.elements[nei]);
+      }
+      subs.set(node, { kind: "array-lit", elements: newElems });
+      continue;
+    }
+    if (node.kind === "map-instance" && node.entries) {
+      var newEntries = [];
+      for (var nmi = 0; nmi < node.entries.length; nmi++) {
+        newEntries.push([
+          subs.get(node.entries[nmi][0]) || node.entries[nmi][0],
+          subs.get(node.entries[nmi][1]) || node.entries[nmi][1]
+        ]);
+      }
+      var newMap = { kind: "map-instance", entries: newEntries };
+      if (node.unknownInit) newMap.unknownInit = true;
+      subs.set(node, newMap);
+      continue;
+    }
+    if (node.kind === "set-instance" && node.items) {
+      var newSetItems = [];
+      for (var nsi = 0; nsi < node.items.length; nsi++) {
+        newSetItems.push(subs.get(node.items[nsi]) || node.items[nsi]);
+      }
+      var newSet = { kind: "set-instance", items: newSetItems };
+      if (node.unknownInit) newSet.unknownInit = true;
+      subs.set(node, newSet);
       continue;
     }
     subs.set(node, node);
