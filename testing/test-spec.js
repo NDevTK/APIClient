@@ -749,6 +749,40 @@ specTest("§ 14.3.3: VariableDeclarator destructuring `var {a, b} = obj`", `
          byKey.y.key.kind === "const" && byKey.y.key.value === "bar";
 });
 
+specTest("§ 13.3.6 + § 15.2: IIFE with literal-return body folds to const", `
+  function f() {
+    var u = (function () { return "/api/foo"; })();
+    this.url = u;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "const" && v.value === "/api/foo";
+});
+
+specTest("§ 13.3.6 + § 15.3.5.13: arrow IIFE concise body folds to const", `
+  function f() {
+    var u = (() => "/api/arrow")();
+    this.url = u;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "const" && v.value === "/api/arrow";
+});
+
+specTest("§ 13.16 + § 13.3.6: SequenceExpression callee `(0, fn)(arg)` dispatches to fn", `
+  function f() {
+    var n = { id: function (x) { return x; } };
+    var u = (0, n.id)("/api/seq");
+    this.url = u;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  return v && v.kind === "const" && v.value === "/api/seq";
+});
+
 specTest("§ 13.10 + § 14.3.3: ObjectPattern distributes over or-tree of obj-lits", `
   function f(b) {
     var o = b ? { url: "/api/a" } : { url: "/api/b" };

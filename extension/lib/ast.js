@@ -6538,16 +6538,23 @@ function _specPostorderExprPaths(rootPath) {
       // so its AV resolves before the call dispatch runs:
       //   - Identifier callee → globalThis registry lookup per § 19
       //   - MemberExpression callee → prototype chain per § 13.10
-      // Both produce a builtin-method AV when applicable.
+      //   - SequenceExpression callee per § 13.16 — comma operator
+      //     returns last operand; pre-walk recurses through pushed
+      //     callee path into its expressions (handled by Sequence case
+      //     below in the same loop)
+      //   - FunctionExpression / ArrowFunctionExpression callee — IIFE
+      //     pattern; pushing the callee lets _specEvalLeaf detect it
+      // For NewExpression with non-Identifier callee, push it too so
+      // class-expression / member-class new-target binds.
       for (var ai = n.arguments.length - 1; ai >= 0; ai--) {
         stack.push(p.get("arguments." + ai));
       }
-      if (_t.isMemberExpression(n.callee) || _t.isOptionalMemberExpression(n.callee)) {
+      if (n.callee) {
         stack.push(p.get("callee"));
-        stack.push(p.get("callee.object"));
-        if (n.callee.computed) stack.push(p.get("callee.property"));
-      } else if (_t.isIdentifier(n.callee)) {
-        stack.push(p.get("callee"));
+        if (_t.isMemberExpression(n.callee) || _t.isOptionalMemberExpression(n.callee)) {
+          stack.push(p.get("callee.object"));
+          if (n.callee.computed) stack.push(p.get("callee.property"));
+        }
       }
     } else if (_t.isBinaryExpression(n)) {
       stack.push(p.get("left"));
@@ -8190,6 +8197,42 @@ function _specEvalLeaf(path, state, vals, effects) {
     // This is the spec-grounded path — no per-method shape matching at
     // the call site; everything routes through identifier/prototype
     // lookup + central dispatch.
+    // IIFE per § 13.3.6 + § 15.2/.3: when the callee is a syntactically
+    // present FunctionExpression / ArrowFunctionExpression, evaluate the
+    // function's body return value (memoised by the program-level
+    // fixpoint pass) and substitute caller args. Inline-bound functions
+    // never have a binding identifier, so the function-ref path below
+    // can't reach them — handle them directly off the AST node.
+    if ((_t.isFunctionExpression(n.callee) || _t.isArrowFunctionExpression(n.callee))) {
+      var iifeFn = n.callee;
+      var iifeRet = _specReturnValueMemo.get(iifeFn);
+      if (iifeRet) {
+        var iifeArgAvs = [];
+        for (var iiai = 0; iiai < n.arguments.length; iiai++) {
+          iifeArgAvs.push(vals.get(n.arguments[iiai]) || { kind: "top" });
+        }
+        return _specInstantiateAv(iifeRet, iifeArgAvs);
+      }
+      // First-pass fast path: the program-level fixpoint hasn't yet
+      // populated _specReturnValueMemo. Fold simple-literal returns from
+      // both BlockStatement bodies (single ReturnStatement) and
+      // ArrowFunction concise bodies. Avoids re-entering _specEvalLeaf
+      // recursively per the recursion ban — the second fixpoint pass
+      // picks up the memo and the iifeRet path covers complex cases.
+      var iifeRetArg = null;
+      if (_t.isBlockStatement(iifeFn.body) && iifeFn.body.body.length === 1 &&
+          _t.isReturnStatement(iifeFn.body.body[0]) && iifeFn.body.body[0].argument) {
+        iifeRetArg = iifeFn.body.body[0].argument;
+      } else if (_t.isArrowFunctionExpression(iifeFn) && iifeFn.body && !_t.isBlockStatement(iifeFn.body)) {
+        iifeRetArg = iifeFn.body;
+      }
+      if (iifeRetArg) {
+        if (_t.isStringLiteral(iifeRetArg)) return { kind: "const", value: iifeRetArg.value };
+        if (_t.isNumericLiteral(iifeRetArg)) return { kind: "const", value: iifeRetArg.value };
+        if (_t.isBooleanLiteral(iifeRetArg)) return { kind: "const", value: iifeRetArg.value };
+        if (_t.isNullLiteral(iifeRetArg)) return { kind: "const", value: null };
+      }
+    }
     var bmRecvAv = null, bmCalleeAv = null;
     if (_t.isMemberExpression(n.callee) && !n.callee.computed) {
       bmRecvAv = vals.get(n.callee.object);
@@ -8199,6 +8242,24 @@ function _specEvalLeaf(path, state, vals, effects) {
       // callee resolves via globalThis registry. recvAv is the global.
       bmCalleeAv = vals.get(n.callee);
       bmRecvAv = null;
+    } else if (_t.isSequenceExpression(n.callee) && n.callee.expressions.length > 0) {
+      // SequenceExpression callee per § 13.16: comma operator returns
+      // the last operand's value. `(0, n.RD)(arg)` is equivalent to
+      // `n.RD.call(undefined, arg)` — used by minifiers to strip method
+      // binding. The callee value at runtime is the last expression's
+      // AV; route bmCalleeAv off it so the function-ref / builtin-method
+      // dispatch below fires.
+      var lastExpr = n.callee.expressions[n.callee.expressions.length - 1];
+      bmCalleeAv = vals.get(lastExpr);
+      // Member-form last expression: `(0, obj.method)(arg)` — recvAv
+      // would normally be obj.method's receiver, but the comma operator
+      // strips the binding so the call has undefined `this`. For pure
+      // / non-`this`-using methods (which the minifier preserves) the
+      // distinction doesn't matter for property-flow; pass bmRecvAv as
+      // the object's AV so prototype dispatch still resolves.
+      if (_t.isMemberExpression(lastExpr) && !lastExpr.computed) {
+        bmRecvAv = vals.get(lastExpr.object);
+      }
     }
     if (bmCalleeAv) {
       // function-ref dispatch per § 13.3.6: when callee AV is a function-
