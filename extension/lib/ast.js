@@ -6945,6 +6945,42 @@ function _resolveBoundDomElementId(path, idNode) {
   return null;
 }
 
+// Flatten an AbstractValue (from _specEvalExpression) into a list of
+// string-typed leaves. Walks `or` (alternation) trees and returns every
+// reachable Const value whose type is "string". Ignores non-string leaves
+// (numbers, booleans, top, params, etc.). Iterative — no recursion per
+// CLAUDE.md L29-L31.
+//
+// This is the projection function that connects the spec-eval engine
+// (which produces AbstractValues for any expression per ECMA-262) to
+// the URL-extraction layer (which wants string URL candidates). With it,
+// _resolveAllValues callers can rely on the spec eval as the single
+// abstract-interpretation engine, then project strings here.
+function _avFlattenStringLeaves(rootAv) {
+  if (!rootAv) return [];
+  var out = [];
+  var stack = [rootAv];
+  while (stack.length > 0) {
+    var av = stack.pop();
+    if (!av) continue;
+    if (av.kind === "const") {
+      if (typeof av.value === "string") out.push(av.value);
+      continue;
+    }
+    if (av.kind === "or") {
+      // OR has {left, right} per _specLogicalOrAv shape.
+      if (av.left) stack.push(av.left);
+      if (av.right) stack.push(av.right);
+      continue;
+    }
+    // Other kinds (top, param, member, this, obj-lit, array-lit,
+    // keys-of, loop-key, args-elt, args-len) have no statically-known
+    // string leaf for the URL projection — they're either opaque or
+    // structurally typed beyond a single string.
+  }
+  return out;
+}
+
 // Apply a global URI/Base64 transform (encodeURIComponent/decodeURIComponent/
 // encodeURI/decodeURI/btoa/atob) per § 19.2.6 to a Const string. Returns
 // the transformed string or undefined if not applicable / errored.
