@@ -2392,6 +2392,23 @@ function _specElementPrototypeAv() {
   return _SPEC_ELEMENT_PROTO_AV;
 }
 
+// Object.prototype per ECMA § 20.1.3 — methods inherited by every object.
+// Used as the [[Prototype]] for obj-lit AVs, and indirectly for any AV
+// kind whose own prototype's parent chain reaches Object.prototype.
+var _SPEC_OBJECT_PROTO_AV = null;
+function _specObjectPrototypeAv() {
+  if (!_SPEC_OBJECT_PROTO_AV) {
+    var props = {};
+    var objMethodNames = ["hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
+      "toString", "valueOf", "toLocaleString"];
+    for (var omi = 0; omi < objMethodNames.length; omi++) {
+      props[objMethodNames[omi]] = { kind: "builtin-method", id: "Object.prototype." + objMethodNames[omi] };
+    }
+    _SPEC_OBJECT_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_OBJECT_PROTO_AV;
+}
+
 // Number.prototype per ECMA § 21.1.3 — pure. All methods route through
 // _applyNumberMethodToConst from _specApplyBuiltinMethod.
 var _SPEC_NUMBER_PROTO_AV = null;
@@ -2506,6 +2523,10 @@ function _specGetPrototypeOfAv(av) {
   if (av.kind === "weakmap-instance") return _specWeakMapPrototypeAv();
   if (av.kind === "weakset-instance") return _specWeakSetPrototypeAv();
   if (av.kind === "regex-instance") return _specRegExpPrototypeAv();
+  // ECMA § 20.1.3 Object.prototype — implicit prototype for every obj-lit
+  // (and inherited up the prototype chain by string/array/etc.). Provides
+  // hasOwnProperty / toString / valueOf / isPrototypeOf etc. dispatch.
+  if (av.kind === "obj-lit") return _specObjectPrototypeAv();
   // For or-trees whose every leaf shares a [[Prototype]], return that
   // prototype. Member access then dispatches per shared method via
   // _specApplyBuiltinMethod (which distributes over leaves itself).
@@ -3832,6 +3853,61 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   if (methodId === "Symbol.keyFor") {
     // § 20.4.2.5 — registry-key lookup; opaque without registry tracking.
+    return { kind: "top" };
+  }
+  // Object.prototype.* per ECMA § 20.1.3 — methods inherited by every
+  // object. Routed via prototype-chain dispatch (recv → Object.prototype
+  // obj-lit → builtin-method id "Object.prototype.X").
+  if (methodId.indexOf("Object.prototype.") === 0) {
+    var opMeth = methodId.slice("Object.prototype.".length);
+    if (opMeth === "hasOwnProperty") {
+      // § 20.1.3.2 — boolean per HasOwnProperty.
+      if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+      var hopKey = argAvs[0].value;
+      if (typeof hopKey !== "string" && typeof hopKey !== "number") return { kind: "top" };
+      if (recvAv && recvAv.kind === "obj-lit" && recvAv.props) {
+        return { kind: "const", value: Object.prototype.hasOwnProperty.call(recvAv.props, hopKey) };
+      }
+      if (recvAv && recvAv.kind === "array-lit" && recvAv.elements) {
+        if (typeof hopKey === "number") {
+          return { kind: "const", value: hopKey >= 0 && hopKey < recvAv.elements.length };
+        }
+        if (hopKey === "length") return { kind: "const", value: true };
+      }
+      return { kind: "top" };
+    }
+    if (opMeth === "isPrototypeOf") {
+      // § 20.1.3.3 — boolean. Without prototype-chain modeling beyond
+      // the immediate prototype, return or(true,false).
+      return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    }
+    if (opMeth === "propertyIsEnumerable") {
+      // § 20.1.3.4 — boolean per [[GetOwnProperty]].enumerable. For
+      // obj-lit literal props, all are enumerable per § 13.2.5.
+      if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+      if (recvAv && recvAv.kind === "obj-lit" && recvAv.props &&
+          Object.prototype.hasOwnProperty.call(recvAv.props, argAvs[0].value)) {
+        return { kind: "const", value: true };
+      }
+      return { kind: "const", value: false };
+    }
+    if (opMeth === "toString") {
+      // § 20.1.3.6 — Object.prototype.toString returns "[object X]" with
+      // X derived from internal [[Class]]. For obj-lit: "[object Object]".
+      if (recvAv && recvAv.kind === "obj-lit") return { kind: "const", value: "[object Object]" };
+      if (recvAv && recvAv.kind === "array-lit") return { kind: "const", value: "[object Array]" };
+      if (recvAv && recvAv.kind === "regex-instance") return { kind: "const", value: "[object RegExp]" };
+      return { kind: "top" };
+    }
+    if (opMeth === "valueOf") {
+      // § 20.1.3.7 — returns this (the receiver).
+      return recvAv || { kind: "top" };
+    }
+    if (opMeth === "toLocaleString") {
+      // § 20.1.3.5 — equivalent to this.toString() per spec step 1.
+      if (recvAv && recvAv.kind === "obj-lit") return { kind: "const", value: "[object Object]" };
+      return { kind: "top" };
+    }
     return { kind: "top" };
   }
   // Date.* statics per ECMA § 21.4.3.

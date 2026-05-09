@@ -4510,6 +4510,39 @@ specTest("§ 24.2.3.6 Set.prototype.forEach: cb body's writes propagate via item
   return leaves.indexOf("/api/foo") >= 0 && leaves.indexOf("/api/bar") >= 0;
 });
 
+specTest("§ 20.1.3.2 obj.hasOwnProperty: present prop returns true via Object.prototype dispatch", `
+  function f() {
+    var o = { a: 1 };
+    this.flag = o.hasOwnProperty("a");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === true;
+});
+
+specTest("§ 20.1.3.2 obj.hasOwnProperty: missing prop returns false", `
+  function f() {
+    var o = { a: 1 };
+    this.flag = o.hasOwnProperty("z");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === false;
+});
+
+specTest("§ 20.1.3.6 obj.toString: returns '[object Object]'", `
+  function f() {
+    var o = {};
+    this.s = o.toString();
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "[object Object]";
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");
