@@ -4462,7 +4462,8 @@ async function analyzeScript(tabId, scriptUrl, code) {
   var response;
   try {
     response = await sendToOffscreen({
-      type: "AST_ANALYZE", code: code, sourceUrl: scriptUrl
+      type: "AST_ANALYZE", code: code, sourceUrl: scriptUrl,
+      domContext: getTab(tabId).domContext || null,
     });
   } catch (e) {
     console.debug("[AST] sendToOffscreen failed for %s: %s", scriptUrl, e.message || e);
