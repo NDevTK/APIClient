@@ -4114,6 +4114,39 @@ specTest("§ 22.2.1 new RegExp(Const, flags): builds regex-instance, dispatches 
   return av && av.kind === "const" && av.value === true;
 });
 
+specTest("§ 22.1.3.13 String.prototype.replace(RegExp, str): regex arg dispatches host replace", `
+  function f() {
+    this.s = "abc-DEF".replace(/[A-Z]+/, "xxx");
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "abc-xxx";
+});
+
+specTest("§ 22.1.3.10 String.prototype.match(RegExp): returns array-lit of captures", `
+  function f() {
+    this.m = "alpha-beta".match(/^(\\w+)-(\\w+)$/);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "array-lit" || (av.elements || []).length !== 3) return false;
+  return av.elements[1].kind === "const" && av.elements[1].value === "alpha" &&
+         av.elements[2].kind === "const" && av.elements[2].value === "beta";
+});
+
+specTest("§ 22.1.3.18 String.prototype.split(RegExp): returns array-lit of parts", `
+  function f() {
+    this.parts = "one,two;three".split(/[,;]/);
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  if (!av || av.kind !== "array-lit" || (av.elements || []).length !== 3) return false;
+  return av.elements[0].value === "one" && av.elements[1].value === "two" && av.elements[2].value === "three";
+});
+
 // ═════════════════════════════════════════════════════════════════════
 // § 28.1 Reflect — statics
 // ═════════════════════════════════════════════════════════════════════

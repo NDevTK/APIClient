@@ -2139,7 +2139,11 @@ function _specStringPrototypeAv() {
       "replace", "replaceAll", "concat", "slice", "substring", "substr",
       "padStart", "padEnd", "repeat", "split", "codePointAt",
       "indexOf", "lastIndexOf", "includes", "startsWith", "endsWith",
-      "charAt", "charCodeAt", "at"
+      "charAt", "charCodeAt", "at",
+      // RegExp-accepting methods per § 22.1.3.10/11/16 — dispatched via
+      // the shared String.prototype.* path which detects regex-instance
+      // first arg and routes to the host engine.
+      "match", "matchAll", "search"
     ];
     for (var smi = 0; smi < stringMethodNames.length; smi++) {
       props[stringMethodNames[smi]] = { kind: "builtin-method", id: "String.prototype." + stringMethodNames[smi] };
@@ -3872,6 +3876,27 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     var sep, lim;
     if (argAvs.length >= 1) {
       var sepAv = argAvs[0];
+      // § 22.1.3.18 step 4 — regex-instance arg: use the host RegExp engine.
+      if (sepAv && sepAv.kind === "regex-instance") {
+        try {
+          var splitRe = new RegExp(sepAv.pattern, sepAv.flags);
+          var splitRePerLeaf = [];
+          for (var spli = 0; spli < splitLeaves.length; spli++) {
+            var splitReRes = splitLeaves[spli].split(splitRe);
+            var splitReElems = [];
+            for (var sprei = 0; sprei < splitReRes.length; sprei++) {
+              splitReElems.push({ kind: "const", value: splitReRes[sprei] });
+            }
+            splitRePerLeaf.push({ kind: "array-lit", elements: splitReElems });
+          }
+          if (splitRePerLeaf.length === 1) return splitRePerLeaf[0];
+          var splitReOr = splitRePerLeaf[0];
+          for (var spro = 1; spro < splitRePerLeaf.length; spro++) {
+            splitReOr = _specLogicalOrAv(splitReOr, splitRePerLeaf[spro]);
+          }
+          return splitReOr;
+        } catch (_) { return { kind: "top" }; }
+      }
       if (sepAv && sepAv.kind === "const") {
         if (typeof sepAv.value === "string") sep = sepAv.value;
         else if (sepAv.value === undefined) sep = undefined;
@@ -3898,6 +3923,118 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // Distribute over alternation when recv is an or-tree of Const strings.
   if (methodId.indexOf("String.prototype.") === 0) {
     var strMethName = methodId.slice("String.prototype.".length);
+    // Special path for methods that accept a RegExp first arg per spec
+    // § 22.1.3.13 (.replace), § 22.1.3.14 (.replaceAll), § 22.1.3.10
+    // (.match), § 22.1.3.11 (.matchAll), § 22.1.3.16 (.search). When
+    // arg 0 is a regex-instance, dispatch host RegExp-aware string
+    // method directly on each Const-string receiver leaf.
+    if ((strMethName === "replace" || strMethName === "replaceAll" ||
+         strMethName === "match" || strMethName === "matchAll" ||
+         strMethName === "search" || strMethName === "split") &&
+        argAvs.length >= 1 && argAvs[0] && argAvs[0].kind === "regex-instance") {
+      var rsRecvLeaves = recvAv && recvAv.kind === "const" && typeof recvAv.value === "string"
+        ? [recvAv.value]
+        : (recvAv ? _avFlattenStringLeaves(recvAv) : []);
+      if (!rsRecvLeaves || rsRecvLeaves.length === 0) return { kind: "top" };
+      try {
+        var rsRe = new RegExp(argAvs[0].pattern, argAvs[0].flags);
+        if (strMethName === "replace" || strMethName === "replaceAll") {
+          // Need replacement arg; if it's not Const string, skip.
+          if (argAvs.length < 2 || !argAvs[1] || argAvs[1].kind !== "const" || typeof argAvs[1].value !== "string") {
+            return { kind: "top" };
+          }
+          var rsResults = [];
+          for (var rsi = 0; rsi < rsRecvLeaves.length; rsi++) {
+            rsResults.push(strMethName === "replaceAll"
+              ? rsRecvLeaves[rsi].replaceAll(rsRe, argAvs[1].value)
+              : rsRecvLeaves[rsi].replace(rsRe, argAvs[1].value));
+          }
+          if (rsResults.length === 1) return { kind: "const", value: rsResults[0] };
+          var rsOr = { kind: "const", value: rsResults[0] };
+          for (var rso = 1; rso < rsResults.length; rso++) {
+            rsOr = _specLogicalOrAv(rsOr, { kind: "const", value: rsResults[rso] });
+          }
+          return rsOr;
+        }
+        if (strMethName === "search") {
+          // § 22.1.3.16 — returns numeric index or -1.
+          var rsSearchResults = [];
+          for (var rssi = 0; rssi < rsRecvLeaves.length; rssi++) {
+            rsSearchResults.push(rsRecvLeaves[rssi].search(rsRe));
+          }
+          if (rsSearchResults.length === 1) return { kind: "const", value: rsSearchResults[0] };
+          var rsSearchOr = { kind: "const", value: rsSearchResults[0] };
+          for (var rsso = 1; rsso < rsSearchResults.length; rsso++) {
+            rsSearchOr = _specLogicalOrAv(rsSearchOr, { kind: "const", value: rsSearchResults[rsso] });
+          }
+          return rsSearchOr;
+        }
+        if (strMethName === "match") {
+          // § 22.1.3.10 — returns array-lit of captures or null. For
+          // each receiver leaf, compute and join.
+          var rsMatchPerLeaf = [];
+          for (var rsmli = 0; rsmli < rsRecvLeaves.length; rsmli++) {
+            var rsMatchRes = rsRecvLeaves[rsmli].match(rsRe);
+            if (rsMatchRes === null) {
+              rsMatchPerLeaf.push({ kind: "const", value: null });
+            } else {
+              var rsMatchElems = [];
+              for (var rsmi = 0; rsmi < rsMatchRes.length; rsmi++) {
+                rsMatchElems.push({ kind: "const", value: rsMatchRes[rsmi] });
+              }
+              rsMatchPerLeaf.push({ kind: "array-lit", elements: rsMatchElems });
+            }
+          }
+          if (rsMatchPerLeaf.length === 1) return rsMatchPerLeaf[0];
+          var rsMatchOr = rsMatchPerLeaf[0];
+          for (var rsmo = 1; rsmo < rsMatchPerLeaf.length; rsmo++) {
+            rsMatchOr = _specLogicalOrAv(rsMatchOr, rsMatchPerLeaf[rsmo]);
+          }
+          return rsMatchOr;
+        }
+        if (strMethName === "split") {
+          // § 22.1.3.18 — returns array of split parts. Per leaf, joined.
+          var rsSplitPerLeaf = [];
+          for (var rspli = 0; rspli < rsRecvLeaves.length; rspli++) {
+            var rsSplitRes = rsRecvLeaves[rspli].split(rsRe);
+            var rsSplitElems = [];
+            for (var rspi = 0; rspi < rsSplitRes.length; rspi++) {
+              rsSplitElems.push({ kind: "const", value: rsSplitRes[rspi] });
+            }
+            rsSplitPerLeaf.push({ kind: "array-lit", elements: rsSplitElems });
+          }
+          if (rsSplitPerLeaf.length === 1) return rsSplitPerLeaf[0];
+          var rsSplitOr = rsSplitPerLeaf[0];
+          for (var rspo = 1; rspo < rsSplitPerLeaf.length; rspo++) {
+            rsSplitOr = _specLogicalOrAv(rsSplitOr, rsSplitPerLeaf[rspo]);
+          }
+          return rsSplitOr;
+        }
+        // matchAll returns iterator — model as array-lit of match arrays.
+        if (strMethName === "matchAll") {
+          var rsAllPerLeaf = [];
+          for (var rsalli = 0; rsalli < rsRecvLeaves.length; rsalli++) {
+            var rsAllRes = Array.from(rsRecvLeaves[rsalli].matchAll(rsRe));
+            var rsAllElems = [];
+            for (var rsai = 0; rsai < rsAllRes.length; rsai++) {
+              var oneMatch = rsAllRes[rsai];
+              var oneMatchElems = [];
+              for (var rsami = 0; rsami < oneMatch.length; rsami++) {
+                oneMatchElems.push({ kind: "const", value: oneMatch[rsami] });
+              }
+              rsAllElems.push({ kind: "array-lit", elements: oneMatchElems });
+            }
+            rsAllPerLeaf.push({ kind: "array-lit", elements: rsAllElems });
+          }
+          if (rsAllPerLeaf.length === 1) return rsAllPerLeaf[0];
+          var rsAllOr = rsAllPerLeaf[0];
+          for (var rsao = 1; rsao < rsAllPerLeaf.length; rsao++) {
+            rsAllOr = _specLogicalOrAv(rsAllOr, rsAllPerLeaf[rsao]);
+          }
+          return rsAllOr;
+        }
+      } catch (_) { return { kind: "top" }; }
+    }
     // Pre-extract Const arg literals.
     var strArgLits = [];
     var strArgsOk = true;
