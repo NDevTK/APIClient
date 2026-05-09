@@ -4088,12 +4088,12 @@ function _specEvalLeaf(path, state, vals, effects) {
     if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
         _t.isIdentifier(n.callee.property)) {
       var recvAv = vals.get(n.callee.object);
-      if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "string") {
+      // § 22.1.3 String.prototype on Const-string OR or-tree of Const-strings.
+      // Methods distribute over alternation: `or(A, B).replace(x, y)` →
+      // `or(A.replace(x, y), B.replace(x, y))`.
+      if (recvAv && (recvAv.kind === "const" && typeof recvAv.value === "string") || (recvAv && recvAv.kind === "or")) {
         var meth = n.callee.property.name;
-        var s = recvAv.value;
-        // § 22.1.3 String.prototype methods that take Const literal args
-        // and produce a Const string. Routed through the shared helper
-        // so spec eval and URL resolver share one implementation.
+        // Pre-extract Const args.
         var seArgLits = [];
         var seArgsOk = true;
         for (var seai = 0; seai < n.arguments.length; seai++) {
@@ -4102,15 +4102,31 @@ function _specEvalLeaf(path, state, vals, effects) {
           seArgLits.push(seav.value);
         }
         if (seArgsOk) {
-          var seTransformed = _applyStringMethodToConst(s, meth, seArgLits);
-          if (seTransformed !== undefined) {
-            // Return type depends on method: string for transform-style,
-            // number for indexOf/lastIndexOf/charCodeAt, boolean for
-            // includes/startsWith/endsWith. The helper returns the raw
-            // value; we just wrap as Const.
-            return { kind: "const", value: seTransformed };
+          // Collect string-typed receiver leaves (may be one if Const,
+          // many if or-tree).
+          var recvLeaves = recvAv.kind === "const" ? [recvAv.value] : _avFlattenStringLeaves(recvAv);
+          if (recvLeaves && recvLeaves.length > 0) {
+            var seResults = [];
+            var seAllOk = true;
+            for (var rli = 0; rli < recvLeaves.length; rli++) {
+              var t = _applyStringMethodToConst(recvLeaves[rli], meth, seArgLits);
+              if (t === undefined) { seAllOk = false; break; }
+              seResults.push(t);
+            }
+            if (seAllOk && seResults.length === 1) return { kind: "const", value: seResults[0] };
+            if (seAllOk && seResults.length > 1) {
+              var seOr = { kind: "const", value: seResults[0] };
+              for (var sri = 1; sri < seResults.length; sri++) {
+                seOr = _specLogicalOrAv(seOr, { kind: "const", value: seResults[sri] });
+              }
+              return seOr;
+            }
           }
         }
+      }
+      if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "string") {
+        var splitS = recvAv.value;
+        var meth = n.callee.property.name;
         // § 22.1.3.23 String.prototype.split(separator [, limit]) — array-lit
         // (return type is array, not handled by the const-returning helper).
         if (meth === "split") {
@@ -4128,7 +4144,7 @@ function _specEvalLeaf(path, state, vals, effects) {
             if (slAv && slAv.kind === "const" && typeof slAv.value === "number") splitLim = slAv.value;
             else return { kind: "top" };
           }
-          var splitRes = (splitSep === undefined) ? [s] : s.split(splitSep, splitLim);
+          var splitRes = (splitSep === undefined) ? [splitS] : splitS.split(splitSep, splitLim);
           var splitElems = [];
           for (var spi = 0; spi < splitRes.length; spi++) splitElems.push({ kind: "const", value: splitRes[spi] });
           return { kind: "array-lit", elements: splitElems };
