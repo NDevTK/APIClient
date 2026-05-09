@@ -3281,10 +3281,16 @@ var _hofPendingDispatches = [];
 function _specAnalyzePropertyFlow(funcPath) {
   if (!funcPath || !funcPath.node) return [];
   var fnNode = funcPath.node;
-  if (!_t.isFunction(fnNode)) return [];
+  // ECMA § 16.1 Scripts: a Program is analyzed top-to-bottom in the
+  // global scope. Spec eval treats it like a function body with no
+  // params for state-evolution purposes (var declarations, expression
+  // statements with side-effects propagate state across statements).
+  if (!_t.isFunction(fnNode) && !_t.isProgram(fnNode)) return [];
   if (_specEffectsMemo.has(fnNode)) return _specEffectsMemo.get(fnNode);
 
-  var bodyPath = funcPath.get("body");
+  // For Program, the "body" is the Program itself's body array.
+  // For Function, the body is the function body block.
+  var bodyPath = _t.isProgram(fnNode) ? funcPath : funcPath.get("body");
   if (!bodyPath || !bodyPath.node) {
     _specEffectsMemo.set(fnNode, []);
     return [];
@@ -3297,7 +3303,9 @@ function _specAnalyzePropertyFlow(funcPath) {
   var entryState = _specInitialFunctionBodyState(fnNode, funcPath);
   var effects = [];
   var stack;
-  if (_t.isBlockStatement(bodyPath.node)) {
+  if (_t.isBlockStatement(bodyPath.node) || _t.isProgram(bodyPath.node)) {
+    // BlockStatement bodies and Program have the same shape: a `.body`
+    // array of Statements. Same iterative driver per § 14.2 / § 16.1.
     stack = [{ stmts: bodyPath.node.body, idx: 0, state: entryState, parentPath: bodyPath }];
   } else {
     // ArrowFunctionExpression concise body per § 15.3.5.13: the body
@@ -7690,9 +7698,22 @@ function _resolveAllValues(initialPath, initialDepth) {
       var subLeaves = _resolveAvBySubstitutingCallerArgs(encFn, memoAv);
       if (subLeaves && subLeaves.length > 0) return subLeaves;
     }
+  } else {
+    // Module-level (no enclosing function) per ECMA § 16.1 Scripts:
+    // walk the Program body to populate per-expression AVs (state-evolving
+    // var bindings, expressions). Find the Program by walking parent paths.
+    var programPath = initialPath;
+    while (programPath && programPath.parentPath) programPath = programPath.parentPath;
+    if (programPath && programPath.node && _t.isProgram(programPath.node)) {
+      _specAnalyzePropertyFlow(programPath);
+      var pMemoAv = _specPathValMemo.get(initialPath.node);
+      if (pMemoAv) {
+        var pMemoLeaves = _avFlattenStringLeaves(pMemoAv);
+        if (pMemoLeaves.length > 0) return pMemoLeaves;
+      }
+    }
   }
-  // Module-level path or memo-miss: ad-hoc evaluate. State is empty
-  // (top-level scope params don't exist).
+  // Module-level path or memo-miss: ad-hoc evaluate. State is empty.
   try {
     var av = _specEvalExpression(initialPath, _specStateCreate({}), []);
     return av ? _avFlattenStringLeaves(av) : [];
