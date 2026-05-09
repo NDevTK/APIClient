@@ -3559,6 +3559,15 @@ specTest("ECMA § 15.7: `new MyClass(arg)` instantiates obj-lit from constructor
   return av && av.kind === "const" && av.value === "/api/v3";
 });
 
+test("§ 13.8.1 + § 10.2.10 + § 13.10: end-to-end binop preserved through inter-proc and reduced via member-of-obj-lit caller arg", `
+  function send(cfg) {
+    fetch(cfg.base + cfg.path);
+  }
+  send({base: "/api", path: "/items"});
+`, function(r) {
+  return r.fetchCallSites && r.fetchCallSites.some(function(s) { return s.url === "/api/items"; });
+});
+
 specTest("ECMA § 15.7: `new MyClass()` with literal-only constructor body", `
   class Constants {
     constructor() {
