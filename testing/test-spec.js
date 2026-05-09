@@ -4626,6 +4626,21 @@ specTest("§ 15.7.4 ClassMethod kind 'get': getter return value visible via this
   return false;
 });
 
+specTest("§ 15.7.5 ClassProperty (class field): initialiser visible via this", `
+  class C {
+    url = "/api";
+    doFetch() { this.flag = this.url; }
+  }
+`, function(effects) {
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api";
+    }
+  }
+  return false;
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");

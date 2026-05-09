@@ -4633,6 +4633,34 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
       props[keyV] = existing ? _specLogicalOrAv(existing, eff.value) : eff.value;
     }
   }
+  // ECMA § 15.7.5 ClassProperty (class fields) — `class C { url = "/api"; }`
+  // is semantically shorthand for `constructor() { this.url = "/api"; }`.
+  // Walk the ClassBody for ClassProperty / ClassPrivateProperty members
+  // and add their initialised values as initial this.X props. The
+  // initializer is evaluated in a fresh state since field initialisers
+  // can't reference instance state at declaration time (per § 15.7.5,
+  // they're evaluated in the class scope, not the constructor's).
+  if ((_t.isClassMethod(funcNode) || _t.isClassPrivateMethod(funcNode)) &&
+      classBodyPath && _t.isClassBody(classBodyPath.node)) {
+    var fieldsArr = classBodyPath.node.body;
+    for (var fi = 0; fi < fieldsArr.length; fi++) {
+      var field = fieldsArr[fi];
+      var isProp = _t.isClassProperty && _t.isClassProperty(field);
+      var isPrivProp = _t.isClassPrivateProperty && _t.isClassPrivateProperty(field);
+      if (!isProp && !isPrivProp) continue;
+      if (field.computed || !field.value) continue;
+      var fName = isProp
+        ? (_t.isIdentifier(field.key) ? field.key.name :
+           (_t.isStringLiteral(field.key) ? field.key.value : null))
+        : (field.key && field.key.id ? "#" + field.key.id.name : null);
+      if (fName === null) continue;
+      if (Object.prototype.hasOwnProperty.call(props, fName)) continue;
+      try {
+        var fAv = _specEvalExpression(classBodyPath.get("body." + fi + ".value"), _specStateCreate({}), [], true);
+        if (fAv) props[fName] = fAv;
+      } catch (_) { /* skip field when eval fails */ }
+    }
+  }
   // ECMA § 15.7.4 ClassMethod with kind "get" — sibling getters of the
   // method being analysed contribute getter-return-values as instance
   // properties accessible via `this.<getterName>`. Locate the ClassBody
