@@ -10992,6 +10992,14 @@ function _extractFetchCall(path, result, type) {
     responseType = _detectResponseParsing(funcParent);
   }
 
+  // ── Position-aware URL identifier classification per WHATWG URL § 4.4
+  // Built once for the URL expression; used by both funcParams loop
+  // (to classify wrapper params used in the URL string) and
+  // urlTemplateParams loop (to classify template holes). Identifiers
+  // appearing after `?` are query params; after `#` are fragments;
+  // otherwise path.
+  var _urlIdLocations = _classifyUrlIdentifiersByPosition(args[0]);
+
   // ── Enclosing function params — determine location from usage in the fetch call ──
   var funcInfo = funcParent ? _extractFuncParams(funcParent.node) : null;
   var funcParams = [];
@@ -11060,7 +11068,12 @@ function _extractFetchCall(path, result, type) {
       }
       if (!matched && !fParam.rest) {
         var loc = "unknown";
-        if (_usedAsUrl.has(fParam.name)) loc = "path";
+        if (_usedAsUrl.has(fParam.name)) {
+          // Position-aware: per WHATWG URL § 4.4, identifiers after `?`
+          // in the URL expression are query params, not path params.
+          var posClass = _urlIdLocations.get(fParam.name);
+          loc = (posClass === "query" || posClass === "fragment") ? posClass : "path";
+        }
         else if (_usedAsMethod.has(fParam.name)) loc = "method";
         else if (_usedAsBody.has(fParam.name)) loc = "body";
         else if (_usedAsOpts.has(fParam.name)) loc = "options";
@@ -11198,15 +11211,30 @@ function _extractFetchCall(path, result, type) {
   }
 
   // ── Build param list ──
+  // Dedup by (name, location) — urlTemplateParams adds raw template
+  // hole names with their position; funcParams covers the full enclosing
+  // function's params with the same position classification, so a wrapper
+  // param used as a template hole would otherwise appear twice.
   var params = [];
+  var paramKeys = new Set();
+  function pushParam(p) {
+    var key = p.name + ":" + (p.location || "");
+    if (paramKeys.has(key)) return;
+    paramKeys.add(key);
+    params.push(p);
+  }
   for (var tp = 0; tp < urlTemplateParams.length; tp++) {
-    params.push({ name: urlTemplateParams[tp], location: "path", required: true });
+    // Use position-aware classification per WHATWG URL § 4.4: a template
+    // hole after `?` is a query param, after `#` is a fragment.
+    var tpPos = _urlIdLocations.get(urlTemplateParams[tp]);
+    var tpLoc = (tpPos === "query" || tpPos === "fragment") ? tpPos : "path";
+    pushParam({ name: urlTemplateParams[tp], location: tpLoc, required: true });
   }
   for (var bp = 0; bp < bodyParams.length; bp++) {
-    params.push(bodyParams[bp]);
+    pushParam(bodyParams[bp]);
   }
   for (var fpi = 0; fpi < funcParams.length; fpi++) {
-    params.push(funcParams[fpi]);
+    pushParam(funcParams[fpi]);
   }
 
   // ── Cross-reference params with value constraints ──
@@ -24853,6 +24881,138 @@ function _collectIdentifiers(node, set) {
       stack.push(n.object);
     }
   }
+}
+
+// Classify identifiers in a URL expression by their structural position
+// per WHATWG URL § 4.4 (path / query / fragment). Walks the AST in
+// source order and tracks whether the running static-string prefix has
+// crossed `?` (query) or `#` (fragment); identifiers encountered after
+// the marker get the corresponding location, otherwise "path".
+//
+// Handles BinaryExpression `+` concat (§ 13.8.1), TemplateLiteral
+// quasi/expression interleaving (§ 13.2.8), ConditionalExpression
+// branches (each branch independently), and nested expressions.
+// Returns Map<name, "path" | "query" | "fragment">. Names that appear
+// in multiple positions get the most-restrictive (later) classification.
+function _classifyUrlIdentifiersByPosition(node) {
+  var classification = new Map();
+  if (!node) return classification;
+  // Each work item: { node, mode }. Mode tracks the running URL section
+  // when entering this subtree. Children of a `+` are visited left then
+  // right with mode propagating; an extracted query-marker in the left
+  // subtree's accumulated string flips mode for the right subtree.
+  var stack = [{ node: node, mode: "path" }];
+  // Inline accumulator for a single concat chain — when we enter a
+  // BinaryExpression `+`, we walk leaves in source order and track the
+  // accumulated static string. Iterative traversal is via an inner
+  // "leaves" stack flattened from the binary tree.
+  function flattenConcat(rootNode) {
+    var out = [];
+    var s = [rootNode];
+    while (s.length > 0) {
+      var nn = s.pop();
+      if (_t.isBinaryExpression(nn) && nn.operator === "+") {
+        // push right then left so left pops first
+        s.push(nn.right);
+        s.push(nn.left);
+      } else {
+        out.push(nn);
+      }
+    }
+    return out;
+  }
+  function modeAfterStr(currentMode, str) {
+    if (currentMode === "fragment") return "fragment";
+    var hashAt = str.indexOf("#");
+    if (currentMode === "query") {
+      return hashAt >= 0 ? "fragment" : "query";
+    }
+    var qAt = str.indexOf("?");
+    if (qAt >= 0) {
+      var rest = str.slice(qAt + 1);
+      return rest.indexOf("#") >= 0 ? "fragment" : "query";
+    }
+    if (hashAt >= 0) return "fragment";
+    return "path";
+  }
+  function record(name, mode) {
+    var prev = classification.get(name);
+    // Most-restrictive policy: query overrides path; fragment overrides
+    // query. (A name that appears in both path and query is genuinely
+    // a query param — its query usage is the load-bearing one.)
+    var rank = function(m) { return m === "fragment" ? 2 : (m === "query" ? 1 : 0); };
+    if (!prev || rank(mode) > rank(prev)) classification.set(name, mode);
+  }
+  while (stack.length > 0) {
+    var item = stack.pop();
+    var n = item.node;
+    var mode = item.mode;
+    if (!n) continue;
+    if (_t.isStringLiteral(n)) continue;  // contributes to mode tracking via parent walk
+    if (_t.isNumericLiteral(n) || _t.isBooleanLiteral(n) || _t.isNullLiteral(n)) continue;
+    if (_t.isIdentifier(n)) { record(n.name, mode); continue; }
+    if (_t.isBinaryExpression(n) && n.operator === "+") {
+      // Walk concat in source order with running mode.
+      var leaves = flattenConcat(n);
+      var curMode = mode;
+      for (var li = 0; li < leaves.length; li++) {
+        var leaf = leaves[li];
+        if (_t.isStringLiteral(leaf)) {
+          curMode = modeAfterStr(curMode, leaf.value);
+        } else {
+          // Non-literal leaf — descend with current mode.
+          stack.push({ node: leaf, mode: curMode });
+        }
+      }
+      continue;
+    }
+    if (_t.isTemplateLiteral(n)) {
+      // Quasis interleaved with expressions per § 13.2.8.
+      var curMode2 = mode;
+      for (var qi = 0; qi < n.quasis.length; qi++) {
+        var quasi = n.quasis[qi];
+        if (quasi && quasi.value) curMode2 = modeAfterStr(curMode2, quasi.value.cooked || "");
+        if (qi < n.expressions.length) {
+          stack.push({ node: n.expressions[qi], mode: curMode2 });
+        }
+      }
+      continue;
+    }
+    if (_t.isConditionalExpression(n)) {
+      // Each branch independent; both inherit the entry mode.
+      stack.push({ node: n.consequent, mode: mode });
+      stack.push({ node: n.alternate, mode: mode });
+      continue;
+    }
+    if (_t.isLogicalExpression(n)) {
+      // a || b — value is a or b; both contribute potentially.
+      stack.push({ node: n.left, mode: mode });
+      stack.push({ node: n.right, mode: mode });
+      continue;
+    }
+    if (_t.isCallExpression(n)) {
+      // Identifiers inside the args contribute to whatever section the
+      // call's return value lands in (caller's mode). encodeURIComponent,
+      // String, etc. don't change the position.
+      for (var ci = 0; ci < n.arguments.length; ci++) {
+        stack.push({ node: n.arguments[ci], mode: mode });
+      }
+      continue;
+    }
+    if (_t.isNewExpression(n)) {
+      for (var ni = 0; ni < n.arguments.length; ni++) {
+        stack.push({ node: n.arguments[ni], mode: mode });
+      }
+      continue;
+    }
+    if (_t.isMemberExpression(n)) {
+      // The MemberExpression's value lives at this URL section; the
+      // object identifier is what we're naming.
+      stack.push({ node: n.object, mode: mode });
+      continue;
+    }
+  }
+  return classification;
 }
 
 // Iterative MemberExpression chain walk: collect prop names leaf→root,

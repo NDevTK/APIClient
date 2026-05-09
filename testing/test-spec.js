@@ -749,6 +749,76 @@ specTest("§ 14.3.3: VariableDeclarator destructuring `var {a, b} = obj`", `
          byKey.y.key.kind === "const" && byKey.y.key.value === "bar";
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// WHATWG URL § 4.4 — Position-aware param classification
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== WHATWG URL § 4.4 position-aware param classification ===\n");
+
+specTest("WHATWG URL § 4.4: GET query AND POST body fields traced together via wrapper", `
+  function send(role, name) {
+    fetch("/api/x?role=" + role, {
+      method: "POST",
+      body: JSON.stringify({ name: name })
+    });
+  }
+  send("admin", "alice");
+  send("guest", "bob");
+`, function(effects, result) {
+  var sites = (result && result.fetchCallSites) || [];
+  if (sites.length !== 2) return false;
+  for (var si = 0; si < sites.length; si++) {
+    var s = sites[si];
+    if (s.method !== "POST") return false;
+    var p = s.params || [];
+    var roleP = null, nameP = null;
+    for (var pi = 0; pi < p.length; pi++) {
+      if (p[pi].name === "role") roleP = p[pi];
+      if (p[pi].name === "name") nameP = p[pi];
+    }
+    if (!roleP || roleP.location !== "query") return false;
+    if (!nameP || nameP.location !== "body") return false;
+    if (!nameP.validValues || nameP.validValues.indexOf("alice") < 0 || nameP.validValues.indexOf("bob") < 0) return false;
+  }
+  return true;
+});
+
+specTest("WHATWG URL § 4.4: path + query mixed correctly classifies each param", `
+  function send(uid, role) {
+    fetch("/api/users/" + uid + "?role=" + role);
+  }
+  send("u1", "admin");
+  send("u2", "guest");
+`, function(effects, result) {
+  var sites = (result && result.fetchCallSites) || [];
+  if (sites.length !== 2) return false;
+  for (var si = 0; si < sites.length; si++) {
+    var p = sites[si].params || [];
+    var uidP = null, roleP = null;
+    for (var pi = 0; pi < p.length; pi++) {
+      if (p[pi].name === "uid") uidP = p[pi];
+      if (p[pi].name === "role") roleP = p[pi];
+    }
+    if (!uidP || uidP.location !== "path") return false;
+    if (!roleP || roleP.location !== "query") return false;
+  }
+  return true;
+});
+
+specTest("WHATWG URL § 4.4: fragment identifier classified as fragment", `
+  function send(anchor) {
+    fetch("/page#" + anchor);
+  }
+  send("top");
+`, function(effects, result) {
+  var sites = (result && result.fetchCallSites) || [];
+  if (sites.length !== 1) return false;
+  var p = sites[0].params || [];
+  for (var pi = 0; pi < p.length; pi++) {
+    if (p[pi].name === "anchor") return p[pi].location === "fragment";
+  }
+  return false;
+});
+
 specTest("§ 10.2.10: multi-level caller-arg substitution through wrapper functions", `
   function f() {
     var n = { id: function (x) { return x; } };
