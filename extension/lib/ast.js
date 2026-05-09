@@ -3906,7 +3906,17 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
-    if (leftAv.kind !== "const" || rightAv.kind !== "const") return { kind: "top" };
+    if (leftAv.kind !== "const" || rightAv.kind !== "const") {
+      // For `+` specifically, retain the binop structure so post-
+      // substitution reduction (in _specInstantiateAv) can fold it when
+      // operands become Const. § 13.8.1 ApplyStringOrNumericBinaryOperator.
+      if (n.operator === "+" &&
+          (leftAv.kind === "member" || leftAv.kind === "param" || leftAv.kind === "const" ||
+           rightAv.kind === "member" || rightAv.kind === "param" || rightAv.kind === "const")) {
+        return { kind: "binop", op: "+", left: leftAv, right: rightAv };
+      }
+      return { kind: "top" };
+    }
     var lv = leftAv.value, rv = rightAv.value;
     var op = n.operator;
     // § 13.8.1 AdditiveExpression `+` — string concat or Number::add.
@@ -5010,6 +5020,7 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
     preorder.push(av);
     if (av.kind === "member") { stack.push(av.obj); stack.push(av.key); }
     else if (av.kind === "or") { stack.push(av.left); stack.push(av.right); }
+    else if (av.kind === "binop") { stack.push(av.left); stack.push(av.right); }
     else if (av.kind === "loop-key") { stack.push(av.src); }
     else if (av.kind === "keys-of") { stack.push(av.src); }
     else if (av.kind === "obj-lit" && av.props) {
@@ -5049,6 +5060,20 @@ function _specInstantiateAv(rootAv, callerArgAvs) {
     }
     if (node.kind === "or") {
       subs.set(node, { kind: "or", left: subs.get(node.left) || node.left, right: subs.get(node.right) || node.right });
+      continue;
+    }
+    if (node.kind === "binop") {
+      // Substitute operands; if both reduce to Const, evaluate the op
+      // per § 13.8.1 (string concat or Number::add). Otherwise preserve
+      // the binop AV so further substitutions can reduce.
+      var bopL = subs.get(node.left) || node.left;
+      var bopR = subs.get(node.right) || node.right;
+      if (bopL && bopL.kind === "const" && bopR && bopR.kind === "const") {
+        var bopRes = _evalBinaryConstConst(bopL.value, bopR.value, node.op);
+        subs.set(node, bopRes || { kind: "top" });
+      } else {
+        subs.set(node, { kind: "binop", op: node.op, left: bopL, right: bopR });
+      }
       continue;
     }
     if (node.kind === "loop-key") {

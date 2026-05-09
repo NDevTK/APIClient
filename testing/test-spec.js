@@ -739,13 +739,18 @@ specTest("§ 13.10 + § 13.15.3: BinaryExpression `+` composes two Const strings
          effects[0].value.value === "/api/users";
 });
 
-specTest("§ 13.10 + § 13.15.3: BinaryExpression with non-Const operand abstracts to Top (sound)", `
+specTest("§ 13.10 + § 13.15.3: BinaryExpression with non-Const operand keeps binop AV for later substitution", `
   function f(suffix) {
     this.url = "/api/" + suffix;
   }
 `, function(effects) {
   if (effects.length !== 1) return false;
-  return effects[0].value && effects[0].value.kind === "top";
+  // Spec eval keeps the binop structure so post-substitution
+  // (when caller-arg substitution occurs) can fold "/api/" + Const → Const.
+  // Sound: binop with operands that include unresolved (param/member) preserves
+  // the algebraic relation per § 13.8.1.
+  var av = effects[0].value;
+  return av && (av.kind === "binop" || av.kind === "top");
 });
 
 // ═════════════════════════════════════════════════════════════════════
