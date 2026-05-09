@@ -4710,6 +4710,22 @@ specTest("§ 14.1.20 RestParameter: tagged template with interpolation via ...va
   return false;
 });
 
+specTest("§ 15.7.4 setter dispatch: this.X = expr runs setter, flow-sensitive", `
+  class C {
+    set url(v) { this._url = v; }
+    doFetch() { this.url = "/api"; this.flag = this._url; }
+  }
+`, function(effects) {
+  // Find the `flag` effect from doFetch.
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api";
+    }
+  }
+  return false;
+});
+
 specTest("§ 13.3.5 PrivateName access: this.#X resolves to ClassPrivateProperty value", `
   class C {
     #url = "/api";

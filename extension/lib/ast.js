@@ -4915,9 +4915,14 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
       }
     }
   }
-  var hasAnyKey = false;
-  for (var pk in props) { if (Object.prototype.hasOwnProperty.call(props, pk)) { hasAnyKey = true; break; } }
-  var instanceAv = hasAnyKey ? { kind: "obj-lit", props: props } : null;
+  // Always return an obj-lit (possibly empty) for class methods so
+  // flow-sensitive `this` updates from in-method writes (e.g. setter
+  // dispatches projecting `this._url = v`) have a target to mutate.
+  // For non-class contexts (no classBodyPath), null preserves the
+  // legacy behaviour where state["this"] isn't set.
+  var instanceAv = (classBodyPath || (_t.isClassMethod(funcNode) || _t.isClassPrivateMethod(funcNode)))
+    ? { kind: "obj-lit", props: props }
+    : null;
   _specThisInstanceCache.set(cacheKey, instanceAv);
   return instanceAv;
 }
@@ -5951,27 +5956,74 @@ function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, 
       // enclosing class has a `set X(v)` accessor for the key, the
       // assignment runs the setter's body with v=rhsAv. Project the
       // setter's stored this-effects (substituting param 0 → rhsAv)
-      // into caller's effects, instead of the raw `this.X = rhs`.
-      if (path && _t.isThisExpression(left.object) && lhsKeyAv &&
+      // into caller's effects AND apply them flow-sensitively to
+      // state["this"] so subsequent reads in the same method observe
+      // the new shape.
+      var thisEffectsToApply = null;
+      if (_t.isThisExpression(left.object) && lhsKeyAv &&
           lhsKeyAv.kind === "const" && typeof lhsKeyAv.value === "string") {
-        var setterPath = _specFindSetterForKey(path, lhsKeyAv.value);
-        if (setterPath && setterPath.node) {
-          var setterThisEffects = _specThisEffectsMemo.get(setterPath.node);
-          if (setterThisEffects && setterThisEffects.length > 0) {
-            for (var sei = 0; sei < setterThisEffects.length; sei++) {
-              var setterEff = setterThisEffects[sei];
-              if (!setterEff) continue;
-              effects.push({
-                target: _specInstantiateAv(setterEff.target, [rhsAv]),
-                key: _specInstantiateAv(setterEff.key, [rhsAv]),
-                value: _specInstantiateAv(setterEff.value, [rhsAv])
-              });
+        if (path) {
+          var setterPath = _specFindSetterForKey(path, lhsKeyAv.value);
+          if (setterPath && setterPath.node) {
+            var setterThisEffects = _specThisEffectsMemo.get(setterPath.node);
+            if (setterThisEffects && setterThisEffects.length > 0) {
+              thisEffectsToApply = [];
+              for (var sei = 0; sei < setterThisEffects.length; sei++) {
+                var setterEff = setterThisEffects[sei];
+                if (!setterEff) continue;
+                var subEff = {
+                  target: _specInstantiateAv(setterEff.target, [rhsAv]),
+                  key: _specInstantiateAv(setterEff.key, [rhsAv]),
+                  value: _specInstantiateAv(setterEff.value, [rhsAv])
+                };
+                effects.push(subEff);
+                thisEffectsToApply.push(subEff);
+              }
             }
-            return rhsAv;
           }
         }
+        // Direct write (no setter): record both the effect and apply
+        // flow-sensitively to state["this"] so subsequent reads see it.
+        // Normalise target to {kind:"this"} (regardless of whether
+        // state["this"] is bound to an obj-lit) so _specThisEffectsMemo
+        // can be filtered consistently and substituted at setter
+        // dispatch time without relying on obj-lit identity.
+        if (!thisEffectsToApply) {
+          var directEff = { target: { kind: "this" }, key: lhsKeyAv, value: rhsAv };
+          effects.push(directEff);
+          thisEffectsToApply = [directEff];
+        }
+      } else {
+        effects.push({ target: lhsObjAv, key: lhsKeyAv, value: rhsAv });
       }
-      effects.push({ target: lhsObjAv, key: lhsKeyAv, value: rhsAv });
+      // § 9.2.1 OrdinaryCallEvaluation refinement: maintain state["this"]
+      // as a flow-sensitive instance shape. When an effect's target is
+      // `this` and key is a const string/number, update the obj-lit's
+      // props (cloned to avoid mutating the cached entry shared across
+      // method analyses).
+      if (thisEffectsToApply && state && Object.prototype.hasOwnProperty.call(state, "this")) {
+        var thisAv = state["this"];
+        if (thisAv && thisAv.kind === "obj-lit" && thisAv.props) {
+          var anyApplied = false;
+          var newProps = null;
+          for (var teai = 0; teai < thisEffectsToApply.length; teai++) {
+            var teaEff = thisEffectsToApply[teai];
+            if (!teaEff || !teaEff.target || teaEff.target.kind !== "this") continue;
+            if (!teaEff.key || teaEff.key.kind !== "const") continue;
+            var teaK = teaEff.key.value;
+            if (typeof teaK !== "string" && typeof teaK !== "number") continue;
+            if (newProps === null) {
+              newProps = Object.create(null);
+              for (var tpk in thisAv.props) {
+                if (Object.prototype.hasOwnProperty.call(thisAv.props, tpk)) newProps[tpk] = thisAv.props[tpk];
+              }
+            }
+            newProps[teaK] = teaEff.value;
+            anyApplied = true;
+          }
+          if (anyApplied) state["this"] = { kind: "obj-lit", props: newProps };
+        }
+      }
       return rhsAv;
     }
     return rhsAv;
