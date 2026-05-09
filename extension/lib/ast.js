@@ -4844,6 +4844,47 @@ function _specLogicalOrAv(leftAv, rightAv) {
   return { kind: "or", left: leftAv, right: rightAv };
 }
 
+// Explicit alternation per spec evaluation distribution. Used when the
+// caller has computed multiple statically-possible alternatives (e.g.
+// distributing BinaryExpression `+` per § 13.8.1 over an or-tree
+// receiver, or distributing String.prototype.replace per § 22.1.3.13
+// over per-leaf receiver strings) and wants ALL of them surfaced —
+// including top branches alongside concrete leaves. Differs from
+// _specLogicalOrAv: does NOT absorb top, so `or(top, const "x")` stays
+// representable. Consumers like _avFlattenStringLeaves project the
+// concrete branches; the top branch contributes no string but doesn't
+// suppress the others. Idempotent on equal operands and on or-tree-leaf
+// containment, so repeated applications don't grow when distribution is
+// stable across iterations.
+//
+// Use _specLogicalOrAv (top-absorbing widening) for control-flow merges
+// (if/else, loop body, return-value joins, || / ??) where fixpoint
+// termination is required; use _specSetUnionAv (precision-preserving)
+// for spec-distribution alternatives where each leaf is a concrete
+// statically-possible value at runtime.
+function _specSetUnionAv(leftAv, rightAv) {
+  if (!leftAv) return rightAv;
+  if (!rightAv) return leftAv;
+  if (_specEqualAv(leftAv, rightAv)) return leftAv;
+  if (leftAv.kind === "or") {
+    var ulLeaves = _avFlattenOrLeaves(leftAv);
+    if (ulLeaves) {
+      for (var uli = 0; uli < ulLeaves.length; uli++) {
+        if (_specEqualAv(ulLeaves[uli], rightAv)) return leftAv;
+      }
+    }
+  }
+  if (rightAv.kind === "or") {
+    var urLeaves = _avFlattenOrLeaves(rightAv);
+    if (urLeaves) {
+      for (var urli = 0; urli < urLeaves.length; urli++) {
+        if (_specEqualAv(urLeaves[urli], leftAv)) return rightAv;
+      }
+    }
+  }
+  return { kind: "or", left: leftAv, right: rightAv };
+}
+
 // Build the dataset obj-lit AV from a domContext element's dataAttrs.
 // Per HTML5 § 7.5.5 — the markup attribute `data-foo-bar` becomes
 // `element.dataset.fooBar`. Input keys may be either kebab (markup form)
@@ -6662,8 +6703,15 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
         if (sawAny) {
           if (alts.length === 1) return alts[0];
+          // _specSetUnionAv (not _specLogicalOrAv) per § 13.8.1
+          // distribution semantics: at runtime ONE of the alternatives
+          // is realised, so we surface ALL of them — including pairs
+          // that produced top alongside pairs that produced concrete
+          // values. Lattice widening (top-absorbing) here would erase
+          // the concrete branches whenever any pair is unresolved,
+          // defeating distribution.
           var orRes = alts[0];
-          for (var ai = 1; ai < alts.length; ai++) orRes = _specLogicalOrAv(orRes, alts[ai]);
+          for (var ai = 1; ai < alts.length; ai++) orRes = _specSetUnionAv(orRes, alts[ai]);
           return orRes;
         }
       }
