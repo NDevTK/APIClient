@@ -3530,6 +3530,11 @@ function _specEvalLeaf(path, state, vals, effects) {
         if (_t.isNumericLiteral(initN)) return { kind: "const", value: initN.value };
         if (_t.isBooleanLiteral(initN)) return { kind: "const", value: initN.value };
         if (_t.isNullLiteral(initN)) return { kind: "const", value: null };
+        // § 13.2.8.6 TemplateLiteral with no interpolations — single quasi.
+        if (_t.isTemplateLiteral(initN) && initN.expressions.length === 0 &&
+            initN.quasis.length === 1) {
+          return { kind: "const", value: initN.quasis[0].value.cooked };
+        }
       }
     }
     return { kind: "top" };
