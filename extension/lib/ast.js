@@ -2215,6 +2215,11 @@ function _specGlobalThisAv() {
     resolve: { kind: "builtin-method", id: "Promise.resolve" },
     reject: { kind: "builtin-method", id: "Promise.reject" },
   };
+  // WHATWG document host object per DOM § 4.5 — Document interface.
+  var documentProps = {
+    getElementById: { kind: "builtin-method", id: "document.getElementById" },
+    querySelector: { kind: "builtin-method", id: "document.querySelector" },
+  };
   // Object namespace per § 20.1.2 — statics.
   var objectProps = {
     keys: { kind: "builtin-method", id: "Object.keys" },
@@ -2238,6 +2243,7 @@ function _specGlobalThisAv() {
       JSON: { kind: "obj-lit", props: jsonProps },
       Object: { kind: "obj-lit", props: objectProps },
       Promise: { kind: "obj-lit", props: promiseProps },
+      document: { kind: "obj-lit", props: documentProps },
       // Global functions per § 19.2.
       encodeURI: { kind: "builtin-method", id: "global.encodeURI" },
       encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
@@ -2560,6 +2566,36 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // for our analysis (await/then unwrap).
   if (methodId === "Promise.resolve" || methodId === "Promise.reject") {
     return argAvs.length >= 1 ? argAvs[0] : { kind: "const", value: undefined };
+  }
+  // WHATWG DOM § 4.5 Document.getElementById / Document.querySelector.
+  // Looks up the page-DOM context (provided by content.js) for the
+  // requested element id. Returns the element obj-lit (with href/src/
+  // action/dataset props) when found.
+  if (methodId === "document.getElementById" || methodId === "document.querySelector") {
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" ||
+        typeof argAvs[0].value !== "string") return { kind: "top" };
+    var domLookupId = null;
+    if (methodId === "document.getElementById") {
+      domLookupId = argAvs[0].value;
+    } else {
+      // CSS Selectors L4 `#id` form.
+      var qsIdMatch = argAvs[0].value.match(/^#([A-Za-z][\w:.-]*)$/);
+      if (qsIdMatch) domLookupId = qsIdMatch[1];
+      // CSS Selectors L4 attribute form `meta[name=X]` for CSRF-token pattern.
+      var metaMatch = argAvs[0].value.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
+      if (metaMatch && _domContext && _domContext.metaTags &&
+          Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaMatch[1])) {
+        return {
+          kind: "obj-lit",
+          props: { content: { kind: "const", value: String(_domContext.metaTags[metaMatch[1]]) } }
+        };
+      }
+    }
+    if (domLookupId !== null && _domContext && _domContext.byId &&
+        Object.prototype.hasOwnProperty.call(_domContext.byId, domLookupId)) {
+      return _specBuildDomElementObjLit(_domContext.byId[domLookupId]);
+    }
+    return { kind: "top" };
   }
   // Object.* statics per § 20.1.2.
   if (methodId === "Object.keys") {
@@ -5127,46 +5163,9 @@ function _specEvalLeaf(path, state, vals, effects) {
     }
     // Promise.resolve / Promise.reject dispatched via globalThis.Promise
     // registry. Per § 27.2.4. Inline shape match removed.
-    // WHATWG DOM § 4.2.6 — document.getElementById(id) on scope-checked
-    // unshadowed `document`. Returns an obj-lit AV built from the page's
-    // _domContext.byId entry for the given id, with href/src/action/dataset
-    // sub-properties as Const strings. Subsequent `.href` etc. resolves
-    // through obj-lit prop access.
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.object, { name: "document" }) &&
-        !path.scope.getBinding("document") &&
-        _t.isIdentifier(n.callee.property)) {
-      var docMethName = n.callee.property.name;
-      var domLookupId = null;
-      if (docMethName === "getElementById" && n.arguments.length === 1) {
-        var gbiArgAv = vals.get(n.arguments[0]);
-        if (gbiArgAv && gbiArgAv.kind === "const" && typeof gbiArgAv.value === "string") {
-          domLookupId = gbiArgAv.value;
-        }
-      } else if (docMethName === "querySelector" && n.arguments.length === 1) {
-        var qsArgAv = vals.get(n.arguments[0]);
-        if (qsArgAv && qsArgAv.kind === "const" && typeof qsArgAv.value === "string") {
-          // CSS Selectors L4: `#id` form.
-          var qsIdMatch = qsArgAv.value.match(/^#([A-Za-z][\w:.-]*)$/);
-          if (qsIdMatch) domLookupId = qsIdMatch[1];
-          // CSS Selectors L4 attribute form `meta[name=X]` → return obj-lit
-          // with .content from _domContext.metaTags[X]. Common CSRF-token
-          // pattern: `document.querySelector("meta[name=csrf-token]").content`.
-          var metaMatch = qsArgAv.value.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
-          if (metaMatch && _domContext && _domContext.metaTags &&
-              Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaMatch[1])) {
-            return {
-              kind: "obj-lit",
-              props: { content: { kind: "const", value: String(_domContext.metaTags[metaMatch[1]]) } }
-            };
-          }
-        }
-      }
-      if (domLookupId !== null && _domContext && _domContext.byId &&
-          Object.prototype.hasOwnProperty.call(_domContext.byId, domLookupId)) {
-        return _specBuildDomElementObjLit(_domContext.byId[domLookupId]);
-      }
-    }
+    // document.getElementById / document.querySelector dispatched via
+    // globalThis.document registry per WHATWG DOM § 4.5. ONE central
+    // dispatch.
     // § 25.5.2 JSON.parse(text) — when text is a Const string literal
     // that's syntactically valid JSON, evaluate to the parsed value as
     // an abstract value per the resulting JS type.
