@@ -5710,6 +5710,19 @@ var _specReturnAvAccum = [];
 // cycle _specEvalLeaf → _specAnalyzePropertyFlow → … → _specEvalLeaf
 // that would otherwise violate the recursion ban.
 var _hofPendingDispatches = [];
+// Walk up from any Babel path to the enclosing Program node and ensure
+// the program-level closure-write-back fixpoint has run. Idempotent —
+// safe to call from any URL-extraction entry point. Per ECMA § 9.1.1:
+// mutations on outer-scope captures propagate from callees to callers,
+// which the URL extractor needs to resolve identifier values that
+// depend on inter-procedural state.
+function _specEnsureProgramFixpoint(anyPath) {
+  if (!anyPath) return;
+  var p = anyPath;
+  while (p && p.parentPath) p = p.parentPath;
+  if (p && p.node && _t.isProgram(p.node)) _specAnalyzeProgramWithFixpoint(p);
+}
+
 // Program-level fixpoint driver: collects all FunctionDeclaration /
 // FunctionExpression / ArrowFunctionExpression paths reachable from a
 // Program node, then iterates _specAnalyzePropertyFlow(force=true) over
