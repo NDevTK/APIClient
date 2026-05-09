@@ -7434,15 +7434,22 @@ function _ravStep(F) {
                             slice: 1, substring: 1, substr: 1, toString: 1, valueOf: 1 };
       var smName = _t.isIdentifier(node.callee.property) ? node.callee.property.name : null;
       if (smName && _smPassNames[smName]) {
+        // Walk down the chain collecting transforms in order. After
+        // tracing the leaf receiver, we'll apply each transform on
+        // the way back up — when args are Const literals.
+        var smChain = [];  // [{ name, args: [...] }, ...] outermost first
+        smChain.push({ name: smName, args: node.arguments });
         var smRecvPath = path.get("callee.object");
         var smRecvNode = smRecvPath.node;
         while (_t.isCallExpression(smRecvNode) &&
                _t.isMemberExpression(smRecvNode.callee) && !smRecvNode.callee.computed &&
                _t.isIdentifier(smRecvNode.callee.property) &&
                _smPassNames[smRecvNode.callee.property.name]) {
+          smChain.push({ name: smRecvNode.callee.property.name, args: smRecvNode.arguments });
           smRecvPath = smRecvPath.get("callee.object");
           smRecvNode = smRecvPath.node;
         }
+        L.smChain = smChain;
         L.branchSkip = 10;
         return { trace: smRecvPath, state: _RAV_CALL_RECV_AFTER };
       }
@@ -8297,10 +8304,48 @@ function _ravStep(F) {
       }
 
       case _RAV_CALL_RECV_AFTER: {
-        // String method passthrough: receiver leaf has been traced.
-        // If non-empty, those ARE the call-expression's values (passthrough);
-        // otherwise fall through to remaining INIT branches.
-        if (F.result.length > 0) return { done: F.result };
+        // String method chain: receiver leaf has been traced. Apply
+        // each transform in the chain (innermost-first) per spec
+        // String.prototype semantics when args are Const literals.
+        if (F.result.length > 0) {
+          var smVals = F.result;
+          if (L.smChain && L.smChain.length > 0) {
+            // smChain[0] is outermost; apply in reverse (innermost first).
+            for (var smChi = L.smChain.length - 1; smChi >= 0; smChi--) {
+              var ch = L.smChain[smChi];
+              var nextSmVals = [];
+              for (var smVi = 0; smVi < smVals.length; smVi++) {
+                var sv = smVals[smVi];
+                if (typeof sv !== "string") { nextSmVals.push(sv); continue; }
+                var transformed = sv;
+                if (ch.name === "trim" && ch.args.length === 0) transformed = sv.trim();
+                else if (ch.name === "toLowerCase" && ch.args.length === 0) transformed = sv.toLowerCase();
+                else if (ch.name === "toUpperCase" && ch.args.length === 0) transformed = sv.toUpperCase();
+                else if (ch.name === "toString" && ch.args.length === 0) transformed = sv.toString();
+                else if (ch.name === "valueOf" && ch.args.length === 0) transformed = sv;
+                else if (ch.name === "replace" && ch.args.length === 2 &&
+                         _t.isStringLiteral(ch.args[0]) && _t.isStringLiteral(ch.args[1])) {
+                  transformed = sv.replace(ch.args[0].value, ch.args[1].value);
+                }
+                else if (ch.name === "slice" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
+                  if (ch.args.length === 1) transformed = sv.slice(ch.args[0].value);
+                  else if (_t.isNumericLiteral(ch.args[1])) transformed = sv.slice(ch.args[0].value, ch.args[1].value);
+                }
+                else if (ch.name === "substring" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
+                  if (ch.args.length === 1) transformed = sv.substring(ch.args[0].value);
+                  else if (_t.isNumericLiteral(ch.args[1])) transformed = sv.substring(ch.args[0].value, ch.args[1].value);
+                }
+                else if (ch.name === "substr" && ch.args.length >= 1 && _t.isNumericLiteral(ch.args[0])) {
+                  if (ch.args.length === 1) transformed = sv.substr(ch.args[0].value);
+                  else if (_t.isNumericLiteral(ch.args[1])) transformed = sv.substr(ch.args[0].value, ch.args[1].value);
+                }
+                nextSmVals.push(transformed);
+              }
+              smVals = nextSmVals;
+            }
+          }
+          return { done: smVals };
+        }
         L.branchSkip = 11;
         F.state = _RAV_INIT;
         continue;
