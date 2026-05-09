@@ -4397,11 +4397,206 @@ var _specCallSitesByFn = new WeakMap();
 
 
 
+// § 9.2.1 OrdinaryCallEvaluation: locate the constructor whose `this.X = ...`
+// assignments define the receiver shape for this method's `this`. Three
+// structural shapes per ECMA spec:
+//   - ES6 class instance method: funcPath.parent is a ClassBody and a
+//     sibling ClassMethod has kind === "constructor" (§ 15.7).
+//   - Prototype-assigned method: funcPath.parent is an AssignmentExpression
+//     `Ctor.prototype.X = funcExpr` where Ctor resolves via scope.getBinding
+//     to a FunctionDeclaration / VariableDeclarator-with-FunctionExpression
+//     init (§ 15.2). The FunctionDeclaration body IS the constructor.
+//   - ES6 class constructor itself: same body it's analysing — recursing
+//     would loop, so skip.
+// Returns the constructor's funcPath, or null if no constructor is
+// resolvable / function isn't a method receiver.
+function _specFindConstructorForMethod(funcNode, funcPath) {
+  if (!funcNode || !funcPath || !funcPath.parentPath) return null;
+  // ES6 ClassMethod / ClassPrivateMethod: parentPath.node is the class
+  // method node itself (key+value); its parent is a ClassBody. Skip
+  // when this IS the constructor.
+  if (_t.isClassMethod(funcPath.parent) || _t.isClassPrivateMethod(funcPath.parent)) {
+    if (funcPath.parent.kind === "constructor") return null;
+    var classBodyPath = funcPath.parentPath.parentPath;
+    if (classBodyPath && _t.isClassBody(classBodyPath.node)) {
+      var bodyArr = classBodyPath.node.body;
+      for (var ci = 0; ci < bodyArr.length; ci++) {
+        var member = bodyArr[ci];
+        if (_t.isClassMethod(member) && member.kind === "constructor") {
+          return classBodyPath.get("body." + ci);
+        }
+      }
+    }
+    return null;
+  }
+  // Prototype-assigned: `Ctor.prototype.X = function(){...}` —
+  // funcPath.parent is AssignmentExpression with right === funcNode.
+  if (_t.isAssignmentExpression(funcPath.parent) && funcPath.parent.right === funcNode) {
+    var assignLeft = funcPath.parent.left;
+    if (_t.isMemberExpression(assignLeft) && !assignLeft.computed &&
+        _t.isMemberExpression(assignLeft.object) && !assignLeft.object.computed &&
+        _t.isIdentifier(assignLeft.object.property, { name: "prototype" })) {
+      var ctorIdent = assignLeft.object.object;
+      if (_t.isIdentifier(ctorIdent)) {
+        var ctorBinding = funcPath.scope.getBinding(ctorIdent.name);
+        if (ctorBinding && ctorBinding.path && ctorBinding.path.node) {
+          if (_t.isFunctionDeclaration(ctorBinding.path.node)) return ctorBinding.path;
+          if (_t.isVariableDeclarator(ctorBinding.path.node) && ctorBinding.path.node.init &&
+              (_t.isFunctionExpression(ctorBinding.path.node.init) ||
+               _t.isArrowFunctionExpression(ctorBinding.path.node.init))) {
+            return ctorBinding.path.get("init");
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Detect whether a function is a method whose `this` binding can be
+// derived from a constructor — used to gate the (potentially expensive)
+// _specBuildThisInstanceAv call. Returns true iff a constructor is
+// reachable per the rules in _specFindConstructorForMethod.
+function _specCanResolveThisInstance(funcNode, funcPath) {
+  return _specFindConstructorForMethod(funcNode, funcPath) !== null;
+}
+
+// Per-constructor cache: same constructor produces the same instance
+// shape regardless of which method's `this` is being resolved.
+var _specThisInstanceCache = new WeakMap();
+
+// § 9.2.1 OrdinaryCallEvaluation, refined: build the receiver-shape
+// obj-lit AV for the instance whose constructor is `ctorPath`. Run spec
+// eval on the constructor body in a fresh state (params bound abstractly
+// per the existing _specInitialFunctionBodyState path), collect the
+// effects array (which already records `this.X = rhsAv` per assignment
+// statement driver), and merge keys into a "this-instance" obj-lit AV
+// readable by _specMemberAccessOnObjLeaf's obj-lit branch.
+//
+// Method `this` ≈ obj-lit. The same obj-lit lookup logic already in
+// _specMemberAccessOnObjLeaf handles `.X` access; no separate dispatch.
+//
+// Returns null when the constructor can't be analysed (ill-formed, or
+// no useful this.X writes).
+function _specBuildThisInstanceAv(funcNode, funcPath) {
+  var ctorPath = _specFindConstructorForMethod(funcNode, funcPath);
+  if (!ctorPath || !ctorPath.node) return null;
+  var ctorNode = ctorPath.node;
+  if (_specThisInstanceCache.has(ctorNode)) return _specThisInstanceCache.get(ctorNode);
+  // Mark cache early to break a self-reference cycle: a constructor that
+  // reads `this.X` (inside the same scope being built) gets {kind:"this"}
+  // — the eventual obj-lit value is computed once and used afterward.
+  _specThisInstanceCache.set(ctorNode, null);
+  var props = Object.create(null);
+  // Walk the constructor body's statements via the iterative
+  // _specApplyStatement driver; collect effects whose target.kind === "this"
+  // and key.kind === "const". Per § 9.2.1, the constructor's effects on
+  // `this` define the instance's own properties.
+  //
+  // We can't call _specInitialFunctionBodyState here — that would form a
+  // static call-graph cycle with this function (init builds this-state by
+  // calling us). Inline the param-binding minimum: each formal param is
+  // bound to its abstract param-reference per § 10.2.10. The closure-
+  // capture pre-load and inline-handler binding aren't needed for the
+  // constructor body's `this.X = ...` projection, which only depends on
+  // the constructor's formal-param state.
+  var ctorState = _specStateCreate();
+  var ctorParams = ctorNode.params || [];
+  for (var cpi = 0; cpi < ctorParams.length; cpi++) {
+    var cp = ctorParams[cpi];
+    if (!cp) continue;
+    var cpAv = { kind: "param", idx: cpi };
+    if (cp.type === "Identifier") {
+      ctorState[cp.name] = cpAv;
+    } else if (cp.type === "AssignmentPattern" && cp.left && cp.left.type === "Identifier") {
+      ctorState[cp.left.name] = cpAv;
+    } else if (cp.type === "ObjectPattern") {
+      for (var cppi = 0; cppi < cp.properties.length; cppi++) {
+        var cpop = cp.properties[cppi];
+        if (!cpop || cpop.type !== "ObjectProperty" || cpop.computed) continue;
+        var cpKeyName = cpop.key && (cpop.key.type === "Identifier" ? cpop.key.name :
+          (cpop.key.type === "StringLiteral" ? cpop.key.value : null));
+        if (!cpKeyName) continue;
+        var cpBindIdent = cpop.value;
+        if (cpBindIdent && cpBindIdent.type === "AssignmentPattern") cpBindIdent = cpBindIdent.left;
+        if (cpBindIdent && cpBindIdent.type === "Identifier") {
+          ctorState[cpBindIdent.name] = {
+            kind: "member",
+            obj: { kind: "param", idx: cpi },
+            key: { kind: "const", value: cpKeyName }
+          };
+        }
+      }
+    } else if (cp.type === "ArrayPattern") {
+      for (var cpai = 0; cpai < cp.elements.length; cpai++) {
+        var cpae = cp.elements[cpai];
+        if (!cpae) continue;
+        if (cpae.type === "AssignmentPattern") cpae = cpae.left;
+        if (cpae && cpae.type === "Identifier") {
+          ctorState[cpae.name] = {
+            kind: "member",
+            obj: { kind: "param", idx: cpi },
+            key: { kind: "const", value: cpai }
+          };
+        }
+      }
+    }
+  }
+  var effects = [];
+  // Body iteration uses the same statement-driver pattern as
+  // _specAnalyzePropertyFlow but inlined here to avoid creating a memo
+  // entry that would mistake the constructor's own analysis for a
+  // separate one (the program-level fixpoint analyses constructors in
+  // their own right via the funcPaths list).
+  var bodyN = ctorNode.body;
+  if (bodyN && _t.isBlockStatement(bodyN)) {
+    var stack = [{ stmts: bodyN.body, idx: 0, state: ctorState, parentPath: ctorPath.get("body") }];
+    while (stack.length > 0) {
+      var top = stack[stack.length - 1];
+      if (top._isMergeFrame) {
+        var joined = top.baseState;
+        for (var bi = 0; bi < top.branchEndStates.length; bi++) joined = _specJoinState(joined, top.branchEndStates[bi]);
+        if (top.parentFrame) top.parentFrame.state = joined;
+        stack.pop();
+        continue;
+      }
+      if (top._returned || top.idx >= top.stmts.length) {
+        if (top._reportTo) top._reportTo.branchEndStates.push(top.state);
+        stack.pop();
+        continue;
+      }
+      var stmtIdx = top.idx;
+      top.idx++;
+      var stmtPath;
+      if (top._explicitStmtPath) stmtPath = top._explicitStmtPath;
+      else if (top._wrapBody) stmtPath = top.parentPath.get("body");
+      else if (top._pathField) stmtPath = top.parentPath.get(top._pathField + "." + stmtIdx);
+      else stmtPath = top.parentPath.get("body." + stmtIdx);
+      _specApplyStatement(stmtPath, top.state, effects, stack);
+    }
+  }
+  for (var ei = 0; ei < effects.length; ei++) {
+    var eff = effects[ei];
+    if (!eff || !eff.target || eff.target.kind !== "this") continue;
+    if (!eff.key || eff.key.kind !== "const") continue;
+    var keyV = eff.key.value;
+    if (typeof keyV !== "string" && typeof keyV !== "number") continue;
+    var existing = Object.prototype.hasOwnProperty.call(props, keyV) ? props[keyV] : null;
+    props[keyV] = existing ? _specLogicalOrAv(existing, eff.value) : eff.value;
+  }
+  var hasAnyKey = false;
+  for (var pk in props) { if (Object.prototype.hasOwnProperty.call(props, pk)) { hasAnyKey = true; break; } }
+  var instanceAv = hasAnyKey ? { kind: "obj-lit", props: props } : null;
+  _specThisInstanceCache.set(ctorNode, instanceAv);
+  return instanceAv;
+}
+
 // § 10.2.10 FunctionDeclarationInstantiation (simplified for our domain).
 // Each formal parameter is bound to its abstract param-reference; `this`
-// is implicit (the analyser checks `ThisExpression` directly via the
-// `{kind:"this"}` constructor in expression eval — no explicit "this"
-// state slot is required).
+// is bound to a constructor-derived obj-lit when the function is a class
+// method or prototype method (per § 9.2.1 OrdinaryCallEvaluation). When
+// it isn't, ThisExpression eval falls back to {kind:"this"} (no explicit
+// state slot consulted).
 function _specInitialFunctionBodyState(funcNode, funcPath) {
   var state = _specStateCreate();
   if (!funcNode || !funcNode.params) return state;
@@ -4523,6 +4718,25 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         }
       }
     }
+  }
+  // ECMA § 9.2.1 OrdinaryCallEvaluation: bind `this` to the receiver.
+  // For class instance methods, prototype methods, and ES5-style
+  // constructor function methods, the receiver is an instance whose own
+  // properties are set by the constructor's `this.X = ...` assignments.
+  // Pre-compute an instance shape obj-lit by evaluating the constructor's
+  // body in a fresh state and projecting `this.X` writes from its
+  // effects. The result populates state["this"] (a synthetic key the
+  // ThisExpression eval consults before falling back to {kind:"this"}).
+  //
+  // No shape matching: detection is purely structural — find the ClassBody
+  // / FunctionDeclaration that owns this function, locate its constructor
+  // body, and run spec eval on that body. The effects record `this.X = av`
+  // entries via the existing assignment-statement driver; merge by key
+  // into an obj-lit AV and bind to state["this"] as a "this-instance"
+  // (treated like obj-lit by member access dispatch).
+  if (funcPath && funcPath.get && _specCanResolveThisInstance(funcNode, funcPath)) {
+    var ctorAv = _specBuildThisInstanceAv(funcNode, funcPath);
+    if (ctorAv) state["this"] = ctorAv;
   }
   // ECMA § 9.1.1 Closure capture pre-load: scan the function body for
   // free Identifier references that resolve via path.scope to outer
@@ -6364,7 +6578,18 @@ function _avToJsonValue(rootAv) {
 // or `effects` (property writes) happens here for AssignmentExpression.
 function _specEvalLeaf(path, state, vals, effects) {
   var n = path.node;
-  if (_t.isThisExpression(n)) return { kind: "this" };
+  if (_t.isThisExpression(n)) {
+    // § 9.2.1 OrdinaryCallEvaluation: `this` is bound at function-call
+    // entry. _specInitialFunctionBodyState pre-computes the receiver-shape
+    // obj-lit AV for class/prototype methods and stores it under
+    // state["this"] (synthetic key — no JS variable can shadow it because
+    // "this" is a syntactic ThisExpression node, not an Identifier). When
+    // present, return the resolved instance shape so `this.X` member access
+    // dispatches via _specMemberAccessOnObjLeaf's obj-lit branch. Falls
+    // back to {kind:"this"} when no constructor was resolvable.
+    if (state && Object.prototype.hasOwnProperty.call(state, "this")) return state["this"];
+    return { kind: "this" };
+  }
   if (_t.isStringLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isNumericLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isBooleanLiteral(n)) return { kind: "const", value: n.value };
