@@ -23,7 +23,8 @@ new Function(astCode +
   "\nglobalThis._specEvalExpression = _specEvalExpression;" +
   "\nglobalThis._specEqualAv = _specEqualAv;" +
   "\nglobalThis._specDetectPropagationFromEffects = _specDetectPropagationFromEffects;" +
-  "\nglobalThis._specInstantiateEffects = _specInstantiateEffects;").call(globalThis);
+  "\nglobalThis._specInstantiateEffects = _specInstantiateEffects;" +
+  "\nglobalThis._t = _t;").call(globalThis);
 
 var passed = 0, failed = 0, total = 0;
 
@@ -51,13 +52,26 @@ function specTest(name, code, check, opts) {
     var result = analyzeJSBundle(code, "test://" + name, true, opts || null);
     var fnPath = null;
     var allFnPaths = [];
+    // Test entry-point selection: prefer the first non-constructor method,
+    // since most spec tests probe the test method's effects (this.flag = …).
+    // For class-syntax tests, that's a ClassMethod with kind!=="constructor".
+    // For function-syntax tests, that's the first FunctionDeclaration.
+    // Constructors are still added to allFnPaths for fixpoint coverage.
+    var firstNonCtor = null;
+    var firstAny = null;
     globalThis.BabelBundle.traverse(result._ast, {
-      FunctionDeclaration: function(p) {
-        if (!fnPath) fnPath = p;
+      "FunctionDeclaration|ClassMethod|ClassPrivateMethod|ObjectMethod": function(p) {
+        if (!firstAny) firstAny = p;
+        if (!firstNonCtor) {
+          var isCtor = (_t.isClassMethod(p.node) || _t.isClassPrivateMethod(p.node)) && p.node.kind === "constructor";
+          if (!isCtor) firstNonCtor = p;
+        }
         allFnPaths.push(p);
-        p.skip();
+        // Don't skip — we want nested functions in allFnPaths too for
+        // fixpoint coverage. Babel descends naturally.
       }
     });
+    fnPath = firstNonCtor || firstAny;
     if (!fnPath) { failed++; console.log("  FAIL: " + name + " — no function found"); return; }
     // Fixpoint analysis: each pass re-analyses every function with
     // force=true so callee memos (_specReturnValueMemo, _specSideEffectMemo)
@@ -4541,6 +4555,54 @@ specTest("§ 20.1.3.6 obj.toString: returns '[object Object]'", `
   if (effects.length !== 1) return false;
   var av = effects[0].value;
   return av && av.kind === "const" && av.value === "[object Object]";
+});
+
+specTest("§ 9.2.1 ClassMethod this: ctor's this.X visible in instance method", `
+  class C {
+    constructor() { this.url = "/api"; }
+    doFetch() { this.flag = this.url; }
+  }
+`, function(effects) {
+  // Check that doFetch's this.flag effect resolves to const "/api".
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api";
+    }
+  }
+  return false;
+});
+
+specTest("§ 15.7.3 ClassHeritage: extends inherits parent's this.X", `
+  class P {
+    constructor() { this.url = "/api"; }
+  }
+  class C extends P {
+    doFetch() { this.flag = this.url; }
+  }
+`, function(effects) {
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api";
+    }
+  }
+  return false;
+});
+
+specTest("§ 13.3.1 ObjectMethod this: literal sibling props visible", `
+  var obj = {
+    url: "/api",
+    doFetch() { this.flag = this.url; }
+  };
+`, function(effects) {
+  for (var i = 0; i < effects.length; i++) {
+    if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
+      var v = effects[i].value;
+      return v && v.kind === "const" && v.value === "/api";
+    }
+  }
+  return false;
 });
 
 // ── Summary ──

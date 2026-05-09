@@ -4412,18 +4412,46 @@ var _specCallSitesByFn = new WeakMap();
 // resolvable / function isn't a method receiver.
 function _specFindConstructorForMethod(funcNode, funcPath) {
   if (!funcNode || !funcPath || !funcPath.parentPath) return null;
-  // ES6 ClassMethod / ClassPrivateMethod: parentPath.node is the class
-  // method node itself (key+value); its parent is a ClassBody. Skip
-  // when this IS the constructor.
-  if (_t.isClassMethod(funcPath.parent) || _t.isClassPrivateMethod(funcPath.parent)) {
-    if (funcPath.parent.kind === "constructor") return null;
-    var classBodyPath = funcPath.parentPath.parentPath;
+  // ES6 ClassMethod / ClassPrivateMethod: funcNode IS the method (has
+  // its own .params and .body); funcPath.parent is the enclosing
+  // ClassBody. Skip when this IS the constructor.
+  if (_t.isClassMethod(funcNode) || _t.isClassPrivateMethod(funcNode)) {
+    if (funcNode.kind === "constructor") return null;
+    var classBodyPath = funcPath.parentPath;
     if (classBodyPath && _t.isClassBody(classBodyPath.node)) {
       var bodyArr = classBodyPath.node.body;
       for (var ci = 0; ci < bodyArr.length; ci++) {
         var member = bodyArr[ci];
         if (_t.isClassMethod(member) && member.kind === "constructor") {
           return classBodyPath.get("body." + ci);
+        }
+      }
+      // No own constructor: per § 15.7.2.1 default constructor `(...args)
+      // => super(...args)`. Inherit instance shape from extends chain.
+      // Walk superClass per § 15.7.3 and find its constructor.
+      var classNode = classBodyPath.parent;
+      if (classNode && (_t.isClassDeclaration(classNode) || _t.isClassExpression(classNode)) &&
+          classNode.superClass && _t.isIdentifier(classNode.superClass)) {
+        var superBinding = funcPath.scope.getBinding(classNode.superClass.name);
+        if (superBinding && superBinding.path && superBinding.path.node) {
+          var superNode = superBinding.path.node;
+          var superClassPath = null;
+          if (_t.isClassDeclaration(superNode)) superClassPath = superBinding.path;
+          else if (_t.isVariableDeclarator(superNode) && superNode.init &&
+                   _t.isClassExpression(superNode.init)) {
+            superClassPath = superBinding.path.get("init");
+          }
+          if (superClassPath && superClassPath.node) {
+            var superBody = superClassPath.node.body;
+            if (_t.isClassBody(superBody)) {
+              for (var sci = 0; sci < superBody.body.length; sci++) {
+                var sm = superBody.body[sci];
+                if (_t.isClassMethod(sm) && sm.kind === "constructor") {
+                  return superClassPath.get("body.body." + sci);
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -6228,8 +6256,14 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
   if (_specProgramFixpointDone.has(programPath.node)) return;
   _specProgramFixpointDone.add(programPath.node);
   var fnPaths = [programPath];
+  // Per § 14.1 / § 15.2 / § 15.3 / § 15.7 every kind of function-like
+  // production carries its own function body that the analyser needs to
+  // visit: FunctionDeclaration, FunctionExpression, ArrowFunctionExpression
+  // (§ 15.3.5), ObjectMethod (§ 13.2.5 shorthand `{foo() {}}`), ClassMethod
+  // and ClassPrivateMethod (§ 15.7 class body). All produce a function
+  // node whose params + body the property-flow analysis is meaningful on.
   programPath.traverse({
-    "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression": function(p) {
+    "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
       fnPaths.push(p);
     }
   });
