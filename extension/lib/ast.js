@@ -20683,6 +20683,14 @@ function _valueHasSameOriginPrefix(valuePath, visited) {
 }
 
 function _pushSink(result, node, type, sink, src, path, options) {
+  // Trigger spec-eval program fixpoint per ECMA § 9.1.1 closure write-
+  // back so taint/sink analysis sees side effects from any callee that
+  // mutates outer-scope captures. Same single system as URL extraction.
+  // Idempotent — runs once per program. Triggered only at confirmed
+  // sinks (called with a real `src`), not at every CallExpression, so
+  // bundles without confirmed sinks don't pay the per-function analysis
+  // cost.
+  if (path) _specEnsureProgramFixpoint(path);
   // Dimensional gate for sinks whose attack vector requires attacker
   // control of the URL scheme. If the taint's `origin` dim is false
   // (e.g. `new URL(x, location.href).toString()` locks the scheme
