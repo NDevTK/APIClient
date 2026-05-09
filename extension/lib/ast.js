@@ -3516,6 +3516,22 @@ function _specEvalLeaf(path, state, vals, effects) {
     if (n.name === "arguments" && !path.scope.getBinding("arguments")) {
       return { kind: "top" }; // arguments object — handled at member access
     }
+    // ECMA § 13.1.3 IdentifierReference: resolve via path.scope.getBinding.
+    // For a `const`/`let`/`var` binding whose init is a literal we can
+    // emit, return the AV. This matches spec semantics — the identifier
+    // resolves to the EnvironmentRecord binding's value at this scope.
+    var idBinding = path.scope.getBinding(n.name);
+    if (idBinding && idBinding.path && idBinding.path.node) {
+      var bn = idBinding.path.node;
+      if (_t.isVariableDeclarator(bn) && bn.init && idBinding.constant) {
+        var initN = bn.init;
+        // Direct literal binds — § 13.2 PrimaryExpression literals.
+        if (_t.isStringLiteral(initN)) return { kind: "const", value: initN.value };
+        if (_t.isNumericLiteral(initN)) return { kind: "const", value: initN.value };
+        if (_t.isBooleanLiteral(initN)) return { kind: "const", value: initN.value };
+        if (_t.isNullLiteral(initN)) return { kind: "const", value: null };
+      }
+    }
     return { kind: "top" };
   }
   if (_t.isMemberExpression(n) || _t.isOptionalMemberExpression(n)) {

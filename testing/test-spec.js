@@ -3514,6 +3514,30 @@ specTest("ECMA § 22.1.1.1: shadowed `String` does NOT coerce", `
   return !(av && av.kind === "const" && av.value === "42");
 });
 
+specTest("ECMA § 13.1.3: identifier resolves to const-bind init via path.scope.getBinding", `
+  var URL_PREFIX = "/api/v2";
+  function f() {
+    this.u = URL_PREFIX;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "/api/v2";
+});
+
+specTest("ECMA § 13.1.3: reassigned var does NOT resolve via init (binding.constant=false)", `
+  var URL_PREFIX = "/api/v2";
+  URL_PREFIX = "mutated";
+  function f() {
+    this.u = URL_PREFIX;
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  // var is reassigned, so binding.constant=false; init should NOT be used.
+  return !(av && av.kind === "const" && av.value === "/api/v2");
+});
+
 specTest("§ 14.10 multi-stmt return with param: `if(p) return p; return 'default';`", `
   function f() {
     this.u = orDefault("/api/foo");
