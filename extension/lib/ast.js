@@ -2146,6 +2146,21 @@ function _specStringPrototypeAv() {
   return _SPEC_STRING_PROTO_AV;
 }
 
+// Number.prototype per ECMA § 21.1.3 — pure. All methods route through
+// _applyNumberMethodToConst from _specApplyBuiltinMethod.
+var _SPEC_NUMBER_PROTO_AV = null;
+function _specNumberPrototypeAv() {
+  if (!_SPEC_NUMBER_PROTO_AV) {
+    var props = {};
+    var numMethodNames = ["toString", "toFixed", "toExponential", "toPrecision", "valueOf"];
+    for (var nmi = 0; nmi < numMethodNames.length; nmi++) {
+      props[numMethodNames[nmi]] = { kind: "builtin-method", id: "Number.prototype." + numMethodNames[nmi] };
+    }
+    _SPEC_NUMBER_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_NUMBER_PROTO_AV;
+}
+
 // Return the prototype AV for a given AV kind, or null. Per ECMA-262
 // each value has an implicit [[Prototype]]; member access falls through
 // to it when own-property lookup misses. Currently models Array.prototype
@@ -2155,20 +2170,23 @@ function _specGetPrototypeOfAv(av) {
   if (!av) return null;
   if (av.kind === "array-lit") return _specArrayPrototypeAv();
   if (av.kind === "const" && typeof av.value === "string") return _specStringPrototypeAv();
-  // For or-trees whose every leaf is a Const string, the [[Prototype]]
-  // is uniformly String.prototype. Member access then distributes per-leaf
-  // when the dispatch sees a String.prototype builtin-method.
+  if (av.kind === "const" && typeof av.value === "number") return _specNumberPrototypeAv();
+  // For or-trees whose every leaf is a Const of a uniform primitive type,
+  // the [[Prototype]] is shared. Member access then distributes per-leaf
+  // when the dispatch sees a corresponding builtin-method AV.
   if (av.kind === "or") {
     var leaves = _avFlattenOrLeaves(av);
-    if (leaves) {
-      var allStringConst = leaves.length > 0;
+    if (leaves && leaves.length > 0) {
+      var allStringConst = true;
+      var allNumberConst = true;
       for (var li = 0; li < leaves.length; li++) {
-        if (!leaves[li] || leaves[li].kind !== "const" || typeof leaves[li].value !== "string") {
-          allStringConst = false;
-          break;
-        }
+        var leaf = leaves[li];
+        if (!leaf || leaf.kind !== "const") { allStringConst = false; allNumberConst = false; break; }
+        if (typeof leaf.value !== "string") allStringConst = false;
+        if (typeof leaf.value !== "number") allNumberConst = false;
       }
       if (allStringConst) return _specStringPrototypeAv();
+      if (allNumberConst) return _specNumberPrototypeAv();
     }
   }
   return null;
@@ -2227,6 +2245,43 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       state[recvName] = { kind: "array-lit", elements: usElements };
     }
     return { kind: "const", value: usElements.length };
+  }
+  // Number.prototype methods per § 21.1.3 — pure (no state mutation).
+  if (methodId.indexOf("Number.prototype.") === 0) {
+    var numMethName = methodId.slice("Number.prototype.".length);
+    var numArgLits = [];
+    var numArgsOk = true;
+    for (var nai = 0; nai < argAvs.length; nai++) {
+      var nav = argAvs[nai];
+      if (!nav || nav.kind !== "const") { numArgsOk = false; break; }
+      numArgLits.push(nav.value);
+    }
+    if (!numArgsOk) return { kind: "top" };
+    var numRecvLeaves;
+    if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "number") {
+      numRecvLeaves = [recvAv.value];
+    } else if (recvAv && recvAv.kind === "or") {
+      var orNumLeaves = _avFlattenAnyConstLeaves(recvAv);
+      numRecvLeaves = orNumLeaves ? orNumLeaves.filter(function(v) { return typeof v === "number"; }) : null;
+      if (!orNumLeaves || numRecvLeaves.length !== orNumLeaves.length) numRecvLeaves = null;
+    } else {
+      numRecvLeaves = null;
+    }
+    if (!numRecvLeaves || numRecvLeaves.length === 0) return { kind: "top" };
+    var numResults = [];
+    var numAllOk = true;
+    for (var nrli = 0; nrli < numRecvLeaves.length; nrli++) {
+      var nt = _applyNumberMethodToConst(numRecvLeaves[nrli], numMethName, numArgLits);
+      if (nt === undefined) { numAllOk = false; break; }
+      numResults.push(nt);
+    }
+    if (!numAllOk) return { kind: "top" };
+    if (numResults.length === 1) return { kind: "const", value: numResults[0] };
+    var numOr = { kind: "const", value: numResults[0] };
+    for (var nri = 1; nri < numResults.length; nri++) {
+      numOr = _specLogicalOrAv(numOr, { kind: "const", value: numResults[nri] });
+    }
+    return numOr;
   }
   // String.prototype methods per § 22.1.3 — pure (no state mutation).
   // Distribute over alternation when recv is an or-tree of Const strings.
@@ -4427,13 +4482,31 @@ function _specEvalLeaf(path, state, vals, effects) {
     if (_t.isMemberExpression(n.callee) && !n.callee.computed) {
       var bmRecvAv = vals.get(n.callee.object);
       var bmCalleeAv = vals.get(n.callee);
-      if (bmCalleeAv && bmCalleeAv.kind === "builtin-method") {
+      // Resolve the builtin-method id, even when callee AV is an or-tree
+      // of identical builtin-methods (happens when receiver is or-tree of
+      // same-prototype values per § 13.10 distribution).
+      var bmId = null;
+      if (bmCalleeAv && bmCalleeAv.kind === "builtin-method") bmId = bmCalleeAv.id;
+      else if (bmCalleeAv && bmCalleeAv.kind === "or") {
+        var bmOrLeaves = _avFlattenOrLeaves(bmCalleeAv);
+        if (bmOrLeaves && bmOrLeaves.length > 0) {
+          var firstId = (bmOrLeaves[0] && bmOrLeaves[0].kind === "builtin-method") ? bmOrLeaves[0].id : null;
+          var allSame = !!firstId;
+          for (var blo = 1; allSame && blo < bmOrLeaves.length; blo++) {
+            if (!bmOrLeaves[blo] || bmOrLeaves[blo].kind !== "builtin-method" || bmOrLeaves[blo].id !== firstId) {
+              allSame = false;
+            }
+          }
+          if (allSame) bmId = firstId;
+        }
+      }
+      if (bmId) {
         var bmArgAvs = [];
         for (var bmai = 0; bmai < n.arguments.length; bmai++) {
           bmArgAvs.push(vals.get(n.arguments[bmai]) || { kind: "top" });
         }
         var bmRecvName = _t.isIdentifier(n.callee.object) ? n.callee.object.name : null;
-        return _specApplyBuiltinMethod(bmCalleeAv.id, bmRecvAv, bmRecvName, bmArgAvs, state);
+        return _specApplyBuiltinMethod(bmId, bmRecvAv, bmRecvName, bmArgAvs, state);
       }
     }
     // § 20.1.2.{19,5,24,7} — Object.{keys,entries,values,fromEntries}.
@@ -5084,47 +5157,9 @@ function _specEvalLeaf(path, state, vals, effects) {
           }
         }
       }
-      // Number built-ins per § 21.1.3 — receiver Const number, or
-      // or-tree of Const numbers (distributes per leaf).
-      if (recvAv && ((recvAv.kind === "const" && typeof recvAv.value === "number") || recvAv.kind === "or")) {
-        var nMeth = n.callee.property.name;
-        // Pre-extract Const args.
-        var nArgLits = [];
-        var nArgsOk = true;
-        for (var nai = 0; nai < n.arguments.length; nai++) {
-          var nav = vals.get(n.arguments[nai]);
-          if (!nav || nav.kind !== "const") { nArgsOk = false; break; }
-          nArgLits.push(nav.value);
-        }
-        if (nArgsOk) {
-          // Collect numeric receiver leaves.
-          var numRecvLeaves;
-          if (recvAv.kind === "const") {
-            numRecvLeaves = [recvAv.value];
-          } else {
-            var numAnyLeaves = _avFlattenAnyConstLeaves(recvAv);
-            numRecvLeaves = (numAnyLeaves || []).filter(function(v) { return typeof v === "number"; });
-            if (!numAnyLeaves || numRecvLeaves.length !== numAnyLeaves.length) numRecvLeaves = null;
-          }
-          if (numRecvLeaves && numRecvLeaves.length > 0) {
-            var nResults = [];
-            var nAllOk = true;
-            for (var nrli = 0; nrli < numRecvLeaves.length; nrli++) {
-              var nt = _applyNumberMethodToConst(numRecvLeaves[nrli], nMeth, nArgLits);
-              if (nt === undefined) { nAllOk = false; break; }
-              nResults.push(nt);
-            }
-            if (nAllOk && nResults.length === 1) return { kind: "const", value: nResults[0] };
-            if (nAllOk && nResults.length > 1) {
-              var nOr = { kind: "const", value: nResults[0] };
-              for (var nri = 1; nri < nResults.length; nri++) {
-                nOr = _specLogicalOrAv(nOr, { kind: "const", value: nResults[nri] });
-              }
-              return nOr;
-            }
-          }
-        }
-      }
+      // Number.prototype now dispatched via prototype-chain at the top
+      // of CallExpression handler (_specApplyBuiltinMethod). No inline
+      // shape match here.
     }
     // § 13.3.6 CallExpression: when the call resolves to a function
     // whose body is a single ReturnStatement, the call's value is the
