@@ -745,12 +745,14 @@ specTest("§ 13.10 + § 13.15.3: BinaryExpression with non-Const operand keeps b
   }
 `, function(effects) {
   if (effects.length !== 1) return false;
-  // Spec eval keeps the binop structure so post-substitution
-  // (when caller-arg substitution occurs) can fold "/api/" + Const → Const.
-  // Sound: binop with operands that include unresolved (param/member) preserves
-  // the algebraic relation per § 13.8.1.
+  // Spec eval emits a binop AV preserving the algebraic relation per
+  // § 13.8.1, so post-substitution (when caller-arg substitution occurs)
+  // can fold "/api/" + Const → Const. Asserts the exact shape: binop +
+  // with const "/api/" left + param 0 right.
   var av = effects[0].value;
-  return av && (av.kind === "binop" || av.kind === "top");
+  return av && av.kind === "binop" && av.op === "+" &&
+         av.left && av.left.kind === "const" && av.left.value === "/api/" &&
+         av.right && av.right.kind === "param" && av.right.idx === 0;
 });
 
 // ═════════════════════════════════════════════════════════════════════
