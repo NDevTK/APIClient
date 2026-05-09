@@ -3153,6 +3153,29 @@ function createSingleInput(fieldDef, initialValue = null) {
     return sel;
   }
 
+  // AST-discovered valid values (e.g. role=admin/role=guest in different
+  // code branches) — render as <select> dropdown so users pick from the
+  // actual literal values the bundle assigns. Per user directive:
+  // 'this should get shown as extension drop down options'.
+  if (fieldDef._astValidValues && fieldDef._astValidValues.length > 0) {
+    const sel = document.createElement("select");
+    sel.className = "form-input form-input-select";
+    const emptyOpt = document.createElement("option");
+    emptyOpt.value = "";
+    emptyOpt.textContent = "-- select --";
+    sel.appendChild(emptyOpt);
+    for (let i = 0; i < fieldDef._astValidValues.length; i++) {
+      const opt = document.createElement("option");
+      opt.value = String(fieldDef._astValidValues[i]);
+      opt.textContent = String(fieldDef._astValidValues[i]);
+      if (initialValue !== null && String(initialValue) === String(fieldDef._astValidValues[i])) {
+        opt.selected = true;
+      }
+      sel.appendChild(opt);
+    }
+    return sel;
+  }
+
   switch (type) {
     case "bool": {
       const cb = document.createElement("input");
