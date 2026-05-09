@@ -2204,6 +2204,19 @@ function _specGlobalThisAv() {
     parse: { kind: "builtin-method", id: "JSON.parse" },
     stringify: { kind: "builtin-method", id: "JSON.stringify" },
   };
+  // Object namespace per § 20.1.2 — statics.
+  var objectProps = {
+    keys: { kind: "builtin-method", id: "Object.keys" },
+    values: { kind: "builtin-method", id: "Object.values" },
+    entries: { kind: "builtin-method", id: "Object.entries" },
+    fromEntries: { kind: "builtin-method", id: "Object.fromEntries" },
+    assign: { kind: "builtin-method", id: "Object.assign" },
+    is: { kind: "builtin-method", id: "Object.is" },
+    freeze: { kind: "builtin-method", id: "Object.freeze" },
+    getPrototypeOf: { kind: "builtin-method", id: "Object.getPrototypeOf" },
+    getOwnPropertyNames: { kind: "builtin-method", id: "Object.getOwnPropertyNames" },
+    create: { kind: "builtin-method", id: "Object.create" },
+  };
   _SPEC_GLOBAL_AV = {
     kind: "obj-lit",
     props: {
@@ -2212,6 +2225,7 @@ function _specGlobalThisAv() {
       Array: { kind: "obj-lit", props: arrayProps },
       String: { kind: "obj-lit", props: stringProps },
       JSON: { kind: "obj-lit", props: jsonProps },
+      Object: { kind: "obj-lit", props: objectProps },
       // Global functions per § 19.2.
       encodeURI: { kind: "builtin-method", id: "global.encodeURI" },
       encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
@@ -2502,6 +2516,111 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       }
       if (globalName === "isNaN") return { kind: "const", value: isNaN(ga) };
       if (globalName === "isFinite") return { kind: "const", value: isFinite(ga) };
+    }
+    return { kind: "top" };
+  }
+  // Object.* statics per § 20.1.2.
+  if (methodId === "Object.keys") {
+    if (argAvs.length === 0) return { kind: "top" };
+    return { kind: "keys-of", src: argAvs[0] || { kind: "top" } };
+  }
+  if (methodId === "Object.entries") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var entriesSrc = argAvs[0];
+    if (entriesSrc && entriesSrc.kind === "obj-lit" && entriesSrc.props) {
+      var entriesArr = [];
+      var entryKeys = Object.keys(entriesSrc.props);
+      for (var eki = 0; eki < entryKeys.length; eki++) {
+        var ek = entryKeys[eki];
+        entriesArr.push({
+          kind: "array-lit",
+          elements: [{ kind: "const", value: ek }, entriesSrc.props[ek]]
+        });
+      }
+      return { kind: "array-lit", elements: entriesArr };
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Object.values") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var valuesSrc = argAvs[0];
+    if (valuesSrc && valuesSrc.kind === "obj-lit" && valuesSrc.props) {
+      var valuesArr = [];
+      var valueKeys = Object.keys(valuesSrc.props);
+      for (var vki = 0; vki < valueKeys.length; vki++) {
+        valuesArr.push(valuesSrc.props[valueKeys[vki]]);
+      }
+      return { kind: "array-lit", elements: valuesArr };
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Object.fromEntries") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var feSrc = argAvs[0];
+    if (feSrc && feSrc.kind === "array-lit" && feSrc.elements) {
+      var feProps = Object.create(null);
+      for (var fei = 0; fei < feSrc.elements.length; fei++) {
+        var pair = feSrc.elements[fei];
+        if (!pair || pair.kind !== "array-lit" || !pair.elements || pair.elements.length < 2) return { kind: "top" };
+        var pk = pair.elements[0];
+        if (!pk || pk.kind !== "const" || (typeof pk.value !== "string" && typeof pk.value !== "number")) return { kind: "top" };
+        feProps[String(pk.value)] = pair.elements[1];
+      }
+      return { kind: "obj-lit", props: feProps };
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Object.assign") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var oaTarget = argAvs[0];
+    if (!oaTarget || oaTarget.kind !== "obj-lit" || !oaTarget.props) return { kind: "top" };
+    var oaMerged = Object.create(null);
+    for (var oapk in oaTarget.props) {
+      if (Object.prototype.hasOwnProperty.call(oaTarget.props, oapk)) oaMerged[oapk] = oaTarget.props[oapk];
+    }
+    for (var oai = 1; oai < argAvs.length; oai++) {
+      var oaSrc = argAvs[oai];
+      if (!oaSrc || oaSrc.kind !== "obj-lit" || !oaSrc.props) return { kind: "top" };
+      for (var oask in oaSrc.props) {
+        if (Object.prototype.hasOwnProperty.call(oaSrc.props, oask)) oaMerged[oask] = oaSrc.props[oask];
+      }
+    }
+    return { kind: "obj-lit", props: oaMerged };
+  }
+  if (methodId === "Object.is") {
+    if (argAvs.length !== 2) return { kind: "top" };
+    var oiA = argAvs[0], oiB = argAvs[1];
+    if (oiA && oiA.kind === "const" && oiB && oiB.kind === "const") {
+      return { kind: "const", value: Object.is(oiA.value, oiB.value) };
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Object.freeze") {
+    return argAvs[0] || { kind: "top" };
+  }
+  if (methodId === "Object.getPrototypeOf") {
+    return { kind: "top" };
+  }
+  if (methodId === "Object.getOwnPropertyNames") {
+    if (argAvs.length === 0) return { kind: "top" };
+    var opnArg = argAvs[0];
+    if (opnArg && opnArg.kind === "obj-lit" && opnArg.props) {
+      var opnElems = [];
+      var opnKeys = Object.keys(opnArg.props);
+      for (var opni = 0; opni < opnKeys.length; opni++) {
+        opnElems.push({ kind: "const", value: opnKeys[opni] });
+      }
+      return { kind: "array-lit", elements: opnElems };
+    }
+    return { kind: "top" };
+  }
+  if (methodId === "Object.create") {
+    if (argAvs.length === 1) {
+      var ocProto = argAvs[0];
+      if ((ocProto && ocProto.kind === "const" && ocProto.value === null) ||
+          (ocProto && ocProto.kind === "obj-lit")) {
+        return { kind: "obj-lit", props: Object.create(null) };
+      }
     }
     return { kind: "top" };
   }
@@ -4870,151 +4989,10 @@ function _specEvalLeaf(path, state, vals, effects) {
         return _specApplyBuiltinMethod(bmId, bmRecvAv, bmRecvName, bmArgAvs, state);
       }
     }
-    // § 20.1.2.{19,5,24,7} — Object.{keys,entries,values,fromEntries}.
-    // Scope-checked unshadowed `Object` global identifier (§ 8.1.1).
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.object, { name: "Object" }) &&
-        !path.scope.getBinding("Object") &&
-        _t.isIdentifier(n.callee.property)) {
-      var objBuiltin = n.callee.property.name;
-      // § 20.1.2.19 Object.keys(src) — array of src's enumerable own
-      // string keys. Tracked as a special abstract value `keys-of(src)`
-      // that downstream consumers (forEach dispatch, member access) recognise.
-      if (objBuiltin === "keys" && n.arguments.length >= 1) {
-        var srcAv = vals.get(n.arguments[0]) || { kind: "top" };
-        return { kind: "keys-of", src: srcAv };
-      }
-      // § 20.1.2.5 Object.entries(src) — array of [key, value] pairs.
-      // For obj-lit src: build array-lit of [Const(key), value-av] pairs.
-      if (objBuiltin === "entries" && n.arguments.length >= 1) {
-        var entriesSrc = vals.get(n.arguments[0]);
-        if (entriesSrc && entriesSrc.kind === "obj-lit" && entriesSrc.props) {
-          var entriesArr = [];
-          var entryKeys = Object.keys(entriesSrc.props);
-          for (var eki = 0; eki < entryKeys.length; eki++) {
-            var ek = entryKeys[eki];
-            entriesArr.push({
-              kind: "array-lit",
-              elements: [{ kind: "const", value: ek }, entriesSrc.props[ek]]
-            });
-          }
-          return { kind: "array-lit", elements: entriesArr };
-        }
-        return { kind: "top" };
-      }
-      // § 20.1.2.24 Object.values(src) — array of own enumerable values.
-      // For obj-lit src: build array-lit of value-avs (in insertion order
-      // per § 7.3.21 EnumerableOwnPropertyNames).
-      if (objBuiltin === "values" && n.arguments.length >= 1) {
-        var valuesSrc = vals.get(n.arguments[0]);
-        if (valuesSrc && valuesSrc.kind === "obj-lit" && valuesSrc.props) {
-          var valuesArr = [];
-          var valueKeys = Object.keys(valuesSrc.props);
-          for (var vki = 0; vki < valueKeys.length; vki++) {
-            valuesArr.push(valuesSrc.props[valueKeys[vki]]);
-          }
-          return { kind: "array-lit", elements: valuesArr };
-        }
-        return { kind: "top" };
-      }
-      // § 20.1.2.7 Object.fromEntries(iterable) — inverse of entries.
-      // Per spec the iterable must yield [key, value] pairs. For our
-      // analyser: when arg is an array-lit whose elements are array-lit
-      // [Const(key), value-av] pairs, build the obj-lit.
-      if (objBuiltin === "fromEntries" && n.arguments.length >= 1) {
-        var feSrc = vals.get(n.arguments[0]);
-        if (feSrc && feSrc.kind === "array-lit" && feSrc.elements) {
-          var feProps = Object.create(null);
-          var feOk = true;
-          for (var fei = 0; fei < feSrc.elements.length; fei++) {
-            var pair = feSrc.elements[fei];
-            if (!pair || pair.kind !== "array-lit" || !pair.elements ||
-                pair.elements.length < 2) { feOk = false; break; }
-            var pk = pair.elements[0];
-            if (!pk || pk.kind !== "const" ||
-                (typeof pk.value !== "string" && typeof pk.value !== "number")) { feOk = false; break; }
-            feProps[String(pk.value)] = pair.elements[1];
-          }
-          if (feOk) return { kind: "obj-lit", props: feProps };
-        }
-        return { kind: "top" };
-      }
-      // § 20.1.2.15 Object.is(value1, value2) — SameValue per § 7.2.10.
-      // Const-Const args evaluate; everything else abstracts to top.
-      if (objBuiltin === "is" && n.arguments.length === 2) {
-        var oiA = vals.get(n.arguments[0]);
-        var oiB = vals.get(n.arguments[1]);
-        if (oiA && oiA.kind === "const" && oiB && oiB.kind === "const") {
-          return { kind: "const", value: Object.is(oiA.value, oiB.value) };
-        }
-      }
-      // § 20.1.2.6 Object.freeze(obj) — returns obj. For our value
-      // lattice: passthrough the obj-lit value (we don't track mutability,
-      // and downstream property reads on the returned obj see the same shape).
-      if (objBuiltin === "freeze" && n.arguments.length === 1) {
-        var ofArg = vals.get(n.arguments[0]);
-        if (ofArg) return ofArg;
-      }
-      // § 20.1.2.12 Object.getPrototypeOf(obj) — proto of obj. Without
-      // tracking prototype chains we return Top (sound — null/object are
-      // both possible without instance tracking).
-      if (objBuiltin === "getPrototypeOf" && n.arguments.length === 1) {
-        return { kind: "top" };
-      }
-      // § 20.1.2.10 Object.getOwnPropertyNames(obj-lit) — array-lit of
-      // own string property names of obj-lit. (For non-obj-lit, top.)
-      if (objBuiltin === "getOwnPropertyNames" && n.arguments.length === 1) {
-        var opnArg = vals.get(n.arguments[0]);
-        if (opnArg && opnArg.kind === "obj-lit" && opnArg.props) {
-          var opnElems = [];
-          var opnKeys = Object.keys(opnArg.props);
-          for (var opni = 0; opni < opnKeys.length; opni++) {
-            opnElems.push({ kind: "const", value: opnKeys[opni] });
-          }
-          return { kind: "array-lit", elements: opnElems };
-        }
-        return { kind: "top" };
-      }
-      // § 20.1.2.2 Object.create(proto, [properties]) — single-arg with
-      // null prototype creates an empty obj. With known proto and no
-      // properties: empty obj-lit.
-      if (objBuiltin === "create") {
-        if (n.arguments.length === 1) {
-          var ocProto = vals.get(n.arguments[0]);
-          if (ocProto && (ocProto.kind === "const" && ocProto.value === null) ||
-              (ocProto && ocProto.kind === "obj-lit")) {
-            return { kind: "obj-lit", props: Object.create(null) };
-          }
-        }
-        return { kind: "top" };
-      }
-      // § 20.1.2.1 Object.assign(target, ...sources) — merges enumerable
-      // own props of each source into target. Returns target.
-      if (objBuiltin === "assign" && n.arguments.length >= 1) {
-        var oaTargetAv = vals.get(n.arguments[0]) || { kind: "top" };
-        if (oaTargetAv.kind !== "obj-lit") return { kind: "top" };
-        var oaMerged = Object.create(null);
-        for (var omk in oaTargetAv.props) {
-          if (Object.prototype.hasOwnProperty.call(oaTargetAv.props, omk)) {
-            oaMerged[omk] = oaTargetAv.props[omk];
-          }
-        }
-        for (var oai = 1; oai < n.arguments.length; oai++) {
-          var oaSrc = vals.get(n.arguments[oai]);
-          if (!oaSrc || oaSrc.kind !== "obj-lit" || !oaSrc.props) {
-            // Unknown source — sound result is target with possibly more
-            // unknown keys; abstract to top to avoid claiming a complete shape.
-            return { kind: "top" };
-          }
-          for (var omk2 in oaSrc.props) {
-            if (Object.prototype.hasOwnProperty.call(oaSrc.props, omk2)) {
-              oaMerged[omk2] = oaSrc.props[omk2];
-            }
-          }
-        }
-        return { kind: "obj-lit", props: oaMerged };
-      }
-    }
+    // Object.* dispatched via globalThis.Object registry now —
+    // Identifier(Object) → globalThis.Object obj-lit; .keys etc. is
+    // a builtin-method AV that _specApplyBuiltinMethod handles per
+    // § 20.1.2. Inline shape match disabled.
     // Global encoding/parse built-ins per § 19.2 dispatched via the
     // globalThis registry now (encodeURI/encodeURIComponent/decodeURI/
     // decodeURIComponent/btoa/atob/parseInt/parseFloat). Inline shape
