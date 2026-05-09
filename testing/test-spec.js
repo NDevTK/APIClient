@@ -3275,6 +3275,17 @@ specTest("WHATWG URL shadowed `URL` does NOT fire", `
   return !(av && av.kind === "const" && av.value === "https://x.com/api");
 });
 
+specTest("Fetch § 5.2: `new Headers({'Content-Type':'application/json'})` exposes header obj-lit", `
+  function f() {
+    var h = new Headers({"Content-Type": "application/json"});
+    this.t = h["Content-Type"];
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var av = effects[0].value;
+  return av && av.kind === "const" && av.value === "application/json";
+});
+
 specTest("Fetch § 5.5: `new Request('/api', {method:'POST'}).url` → '/api'", `
   function f() {
     this.u = new Request("/api", { method: "POST" }).url;

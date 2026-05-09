@@ -4030,6 +4030,20 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
         return { kind: "top" };
       }
+      // Fetch spec § 5.2 — new Headers(init). Returns a Headers instance.
+      // For abstract analysis: emit obj-lit mirroring init when init is
+      // an obj-lit (each header name → value). Used as the receiver for
+      // .get(name) lookups. Scope-checked.
+      if (ctorName === "Headers" && n.arguments.length >= 1) {
+        var hdrInitAv = vals.get(n.arguments[0]);
+        if (hdrInitAv && hdrInitAv.kind === "obj-lit" && hdrInitAv.props) {
+          // Pass through the obj-lit; props are case-sensitive header names
+          // per how the user wrote them. Real Headers normalises lower-case
+          // — caller's downstream .get usually uses the same case.
+          return hdrInitAv;
+        }
+        return { kind: "top" };
+      }
       // Fetch spec § 5.5 — new Request(input [, init]) returns a Request.
       // The .url property derives from `input` per the constructor:
       //   - When input is a USVString → parse as URL (relative to current document)
