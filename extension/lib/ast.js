@@ -4484,7 +4484,65 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
   } else if (left && left.type === "Identifier") {
     loopVarName = left.name;
   }
-  if (loopVarName) bodyState[loopVarName] = { kind: "loop-key", src: rhsAv };
+  if (!loopVarName) return bodyState;
+  // Per § 14.7.5: for-in yields string KEYS (EnumerateObjectProperties);
+  // for-of yields VALUES via iterator protocol (§ 7.4.6 IteratorStep /
+  // § 7.4.7 IteratorValue). Distinguish by stmt kind so each binds the
+  // loop var to its spec-correct AV.
+  if (_t.isForOfStatement(stmtNode)) {
+    // for-of: loop var is the iterated VALUE.
+    if (rhsAv && rhsAv.kind === "array-lit" && rhsAv.elements && rhsAv.elements.length > 0) {
+      // § 23.1.5.1 Array iterator yields each element in index order.
+      var ofVal = rhsAv.elements[0];
+      for (var oei = 1; oei < rhsAv.elements.length; oei++) {
+        ofVal = _specLogicalOrAv(ofVal, rhsAv.elements[oei]);
+      }
+      bodyState[loopVarName] = ofVal;
+      return bodyState;
+    }
+    if (rhsAv && rhsAv.kind === "set-instance" && rhsAv.items && rhsAv.items.length > 0) {
+      // § 24.2.5.1 Set iterator yields each item in insertion order.
+      var siVal = rhsAv.items[0];
+      for (var sii = 1; sii < rhsAv.items.length; sii++) {
+        siVal = _specLogicalOrAv(siVal, rhsAv.items[sii]);
+      }
+      bodyState[loopVarName] = siVal;
+      return bodyState;
+    }
+    if (rhsAv && rhsAv.kind === "map-instance" && rhsAv.entries && rhsAv.entries.length > 0) {
+      // § 24.1.5.1 Map default iterator yields [key, value] pairs.
+      var mePairs = [];
+      for (var mei = 0; mei < rhsAv.entries.length; mei++) {
+        mePairs.push({ kind: "array-lit", elements: [rhsAv.entries[mei][0], rhsAv.entries[mei][1]] });
+      }
+      var mePair = mePairs[0];
+      for (var mep = 1; mep < mePairs.length; mep++) {
+        mePair = _specLogicalOrAv(mePair, mePairs[mep]);
+      }
+      bodyState[loopVarName] = mePair;
+      return bodyState;
+    }
+    // Const string source → § 22.1.5.1 String iterator yields each
+    // code-point as a string. Use Array.from to handle surrogate pairs
+    // per spec (§ 22.1.5.1.1 step 2.b CodePointAt).
+    if (rhsAv && rhsAv.kind === "const" && typeof rhsAv.value === "string") {
+      var codePoints = Array.from(rhsAv.value);
+      if (codePoints.length === 0) {
+        bodyState[loopVarName] = { kind: "top" };
+        return bodyState;
+      }
+      var cpVal = { kind: "const", value: codePoints[0] };
+      for (var cpi = 1; cpi < codePoints.length; cpi++) {
+        cpVal = _specLogicalOrAv(cpVal, { kind: "const", value: codePoints[cpi] });
+      }
+      bodyState[loopVarName] = cpVal;
+      return bodyState;
+    }
+    bodyState[loopVarName] = { kind: "top" };
+    return bodyState;
+  }
+  // for-in: loop var is a STRING KEY drawn from rhsAv.
+  bodyState[loopVarName] = { kind: "loop-key", src: rhsAv };
   return bodyState;
 }
 

@@ -821,7 +821,30 @@ specTest("§ 13.2.5: shorthand `{ x }` binds property to identifier's value", `
 // ═════════════════════════════════════════════════════════════════════
 console.log("\n=== § 25.1 for-of element binding ===\n");
 
-specTest("§ 14.7.5 for-of: loop var bound to loop-key over iterated value", `
+specTest("§ 14.7.5 + § 23.1.5.1 for-of array-lit: loop var bound to joined elements", `
+  function f() {
+    for (var item of ["alpha", "beta", "gamma"]) {
+      this.element = item;
+    }
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  // Per § 14.7.5 ForOfStatement + § 23.1.5.1 Array iterator: loop var
+  // takes each element value in turn — joined as or-tree of all elems.
+  if (!v) return false;
+  var leaves = [];
+  var stack = [v];
+  while (stack.length) {
+    var x = stack.pop();
+    if (!x) continue;
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.indexOf("alpha") >= 0 && leaves.indexOf("beta") >= 0 && leaves.indexOf("gamma") >= 0;
+});
+
+specTest("§ 14.7.5 for-of opaque source (param): loop var falls back to top", `
   function f(arr) {
     for (var item of arr) {
       this.element = item;
@@ -830,8 +853,47 @@ specTest("§ 14.7.5 for-of: loop var bound to loop-key over iterated value", `
 `, function(effects) {
   if (effects.length !== 1) return false;
   var v = effects[0].value;
-  return v && v.kind === "loop-key" &&
-         v.src && v.src.kind === "param" && v.src.idx === 0;
+  // Param source isn't statically iterable to known elements — sound
+  // top per spec (could be any value).
+  return v && v.kind === "top";
+});
+
+specTest("§ 22.1.5.1 for-of Const string: loop var binds joined code-points", `
+  function f() {
+    for (var ch of "abc") {
+      this.ch = ch;
+    }
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  var leaves = [];
+  var stack = [v];
+  while (stack.length) {
+    var x = stack.pop();
+    if (!x) continue;
+    if (x.kind === "const") leaves.push(x.value);
+    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
+  }
+  return leaves.indexOf("a") >= 0 && leaves.indexOf("b") >= 0 && leaves.indexOf("c") >= 0;
+});
+
+specTest("§ 24.1.5.1 for-of Map: loop var binds joined [key,value] array-lit pairs", `
+  function f() {
+    var m = new Map();
+    m.set("k", "v");
+    for (var entry of m) {
+      this.first = entry;
+    }
+  }
+`, function(effects) {
+  if (effects.length !== 1) return false;
+  var v = effects[0].value;
+  // Single entry → array-lit ["k", "v"].
+  if (!v || v.kind !== "array-lit" || (v.elements || []).length !== 2) return false;
+  var k = v.elements[0], val = v.elements[1];
+  return k && k.kind === "const" && k.value === "k" &&
+         val && val.kind === "const" && val.value === "v";
 });
 
 // ═════════════════════════════════════════════════════════════════════
