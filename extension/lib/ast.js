@@ -2148,6 +2148,55 @@ function _specStringPrototypeAv() {
   return _SPEC_STRING_PROTO_AV;
 }
 
+// Global object per ECMA § 19 — globalThis exposes the standard built-in
+// constructors and namespaces. Modeled as an obj-lit-like AV with each
+// property mapping to an `obj-lit` (for namespaces like Math) or a
+// `builtin-method` (for callable globals). Spec-grounded dispatch:
+// `Object.keys(...)` resolves Identifier(Object) → global obj-lit's
+// "Object" prop (a namespace obj-lit), then .keys → builtin-method,
+// then call dispatch via _specApplyBuiltinMethod.
+var _SPEC_GLOBAL_AV = null;
+function _specGlobalThisAv() {
+  if (_SPEC_GLOBAL_AV) return _SPEC_GLOBAL_AV;
+  // Math namespace per § 21.3 — both constants and methods.
+  var mathProps = {
+    E: { kind: "const", value: Math.E },
+    PI: { kind: "const", value: Math.PI },
+    LN2: { kind: "const", value: Math.LN2 },
+    LN10: { kind: "const", value: Math.LN10 },
+    LOG2E: { kind: "const", value: Math.LOG2E },
+    LOG10E: { kind: "const", value: Math.LOG10E },
+    SQRT1_2: { kind: "const", value: Math.SQRT1_2 },
+    SQRT2: { kind: "const", value: Math.SQRT2 },
+  };
+  var mathMethodNames = ["floor", "ceil", "abs", "round", "trunc", "sign", "sqrt",
+    "log", "log2", "log10", "exp", "sin", "cos", "tan", "asin", "acos", "atan",
+    "min", "max", "pow"];
+  for (var mmi = 0; mmi < mathMethodNames.length; mmi++) {
+    mathProps[mathMethodNames[mmi]] = { kind: "builtin-method", id: "Math." + mathMethodNames[mmi] };
+  }
+  // Number namespace per § 21.1.2 — constants only (statics handled
+  // here; callable Number(x) coercion handled at CallExpression entry).
+  var numberProps = {
+    EPSILON: { kind: "const", value: Number.EPSILON },
+    MAX_SAFE_INTEGER: { kind: "const", value: Number.MAX_SAFE_INTEGER },
+    MIN_SAFE_INTEGER: { kind: "const", value: Number.MIN_SAFE_INTEGER },
+    MAX_VALUE: { kind: "const", value: Number.MAX_VALUE },
+    MIN_VALUE: { kind: "const", value: Number.MIN_VALUE },
+    POSITIVE_INFINITY: { kind: "const", value: Number.POSITIVE_INFINITY },
+    NEGATIVE_INFINITY: { kind: "const", value: Number.NEGATIVE_INFINITY },
+    NaN: { kind: "const", value: Number.NaN },
+  };
+  _SPEC_GLOBAL_AV = {
+    kind: "obj-lit",
+    props: {
+      Math: { kind: "obj-lit", props: mathProps },
+      Number: { kind: "obj-lit", props: numberProps },
+    }
+  };
+  return _SPEC_GLOBAL_AV;
+}
+
 // Number.prototype per ECMA § 21.1.3 — pure. All methods route through
 // _applyNumberMethodToConst from _specApplyBuiltinMethod.
 var _SPEC_NUMBER_PROTO_AV = null;
@@ -2397,6 +2446,43 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   if (pureArrayIds.indexOf(methodId) >= 0) {
     return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
+  }
+  // Math.* per ECMA § 21.3.2: pure functions on numeric args. Single-arg
+  // math methods take a Const number, multi-arg take Const numbers.
+  if (methodId.indexOf("Math.") === 0) {
+    var mMethName = methodId.slice("Math.".length);
+    var mNumArgs = [];
+    for (var mai = 0; mai < argAvs.length; mai++) {
+      var ma = argAvs[mai];
+      if (!ma || ma.kind !== "const" || typeof ma.value !== "number") return { kind: "top" };
+      mNumArgs.push(ma.value);
+    }
+    try {
+      var mResult;
+      // § 21.3.2.{16,10,1,29,36,32,33,21,13,...}
+      if (mMethName === "floor") mResult = Math.floor(mNumArgs[0]);
+      else if (mMethName === "ceil") mResult = Math.ceil(mNumArgs[0]);
+      else if (mMethName === "abs") mResult = Math.abs(mNumArgs[0]);
+      else if (mMethName === "round") mResult = Math.round(mNumArgs[0]);
+      else if (mMethName === "trunc") mResult = Math.trunc(mNumArgs[0]);
+      else if (mMethName === "sign") mResult = Math.sign(mNumArgs[0]);
+      else if (mMethName === "sqrt") mResult = Math.sqrt(mNumArgs[0]);
+      else if (mMethName === "log") mResult = Math.log(mNumArgs[0]);
+      else if (mMethName === "log2") mResult = Math.log2(mNumArgs[0]);
+      else if (mMethName === "log10") mResult = Math.log10(mNumArgs[0]);
+      else if (mMethName === "exp") mResult = Math.exp(mNumArgs[0]);
+      else if (mMethName === "sin") mResult = Math.sin(mNumArgs[0]);
+      else if (mMethName === "cos") mResult = Math.cos(mNumArgs[0]);
+      else if (mMethName === "tan") mResult = Math.tan(mNumArgs[0]);
+      else if (mMethName === "asin") mResult = Math.asin(mNumArgs[0]);
+      else if (mMethName === "acos") mResult = Math.acos(mNumArgs[0]);
+      else if (mMethName === "atan") mResult = Math.atan(mNumArgs[0]);
+      else if (mMethName === "min") mResult = Math.min.apply(Math, mNumArgs);
+      else if (mMethName === "max") mResult = Math.max.apply(Math, mNumArgs);
+      else if (mMethName === "pow") mResult = Math.pow(mNumArgs[0], mNumArgs[1]);
+      else return { kind: "top" };
+      return { kind: "const", value: mResult };
+    } catch (_) { return { kind: "top" }; }
   }
   // Number.prototype methods per § 21.1.3 — pure (no state mutation).
   if (methodId.indexOf("Number.prototype.") === 0) {
@@ -4011,6 +4097,17 @@ function _specEvalLeaf(path, state, vals, effects) {
     if (n.name === "arguments" && !path.scope.getBinding("arguments")) {
       return { kind: "top" }; // arguments object — handled at member access
     }
+    // ECMA § 19 globalThis: when an Identifier is unbound at the current
+    // scope (no local/var/let/const), it resolves to globalThis.<name>
+    // per the spec scope chain. The global registry has Math, Number,
+    // and other built-in namespaces that further dispatch via the
+    // prototype-chain mechanism.
+    if (!path.scope.getBinding(n.name)) {
+      var globalAv = _specGlobalThisAv();
+      if (globalAv && globalAv.props && Object.prototype.hasOwnProperty.call(globalAv.props, n.name)) {
+        return globalAv.props[n.name];
+      }
+    }
     // ECMA § 13.1.3 IdentifierReference: resolve via path.scope.getBinding.
     // For a `const`/`let`/`var` binding whose init is a literal we can
     // emit, return the AV. This matches spec semantics — the identifier
@@ -4056,33 +4153,11 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "top" };
   }
   if (_t.isMemberExpression(n) || _t.isOptionalMemberExpression(n)) {
-    // § 21.3.1 Math constants — scope-checked unshadowed `Math` identifier.
-    // AST-shape based (independent of objAv kind), so checked first.
-    if (!n.computed && _t.isIdentifier(n.object, { name: "Math" }) &&
-        !path.scope.getBinding("Math") && _t.isIdentifier(n.property)) {
-      var mathProp = n.property.name;
-      if (mathProp === "E") return { kind: "const", value: Math.E };
-      if (mathProp === "PI") return { kind: "const", value: Math.PI };
-      if (mathProp === "LN2") return { kind: "const", value: Math.LN2 };
-      if (mathProp === "LN10") return { kind: "const", value: Math.LN10 };
-      if (mathProp === "LOG2E") return { kind: "const", value: Math.LOG2E };
-      if (mathProp === "LOG10E") return { kind: "const", value: Math.LOG10E };
-      if (mathProp === "SQRT1_2") return { kind: "const", value: Math.SQRT1_2 };
-      if (mathProp === "SQRT2") return { kind: "const", value: Math.SQRT2 };
-    }
-    // § 21.1.1 Number constants — scope-checked unshadowed `Number` identifier.
-    if (!n.computed && _t.isIdentifier(n.object, { name: "Number" }) &&
-        !path.scope.getBinding("Number") && _t.isIdentifier(n.property)) {
-      var numProp = n.property.name;
-      if (numProp === "EPSILON") return { kind: "const", value: Number.EPSILON };
-      if (numProp === "MAX_SAFE_INTEGER") return { kind: "const", value: Number.MAX_SAFE_INTEGER };
-      if (numProp === "MIN_SAFE_INTEGER") return { kind: "const", value: Number.MIN_SAFE_INTEGER };
-      if (numProp === "MAX_VALUE") return { kind: "const", value: Number.MAX_VALUE };
-      if (numProp === "MIN_VALUE") return { kind: "const", value: Number.MIN_VALUE };
-      if (numProp === "POSITIVE_INFINITY") return { kind: "const", value: Number.POSITIVE_INFINITY };
-      if (numProp === "NEGATIVE_INFINITY") return { kind: "const", value: Number.NEGATIVE_INFINITY };
-      if (numProp === "NaN") return { kind: "const", value: Number.NaN };
-    }
+    // § 21.3.1 Math constants and § 21.1.1 Number constants are now
+    // resolved via the globalThis registry: Identifier(Math) →
+    // globalThis.Math (an obj-lit with all constants and method markers);
+    // .E etc. is plain obj-lit prop access. Inline shape-matched
+    // dispatches removed.
     var objAv = vals.get(n.object) || { kind: "top" };
     // Distribute over alternation: `or(a, b).prop` → `or(a.prop, b.prop)`.
     // Pure projection — no operand semantics changes, just per-leaf access.
@@ -4653,10 +4728,9 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
       if (bmId) {
-        var bmArgAvs = [];
-        for (var bmai = 0; bmai < n.arguments.length; bmai++) {
-          bmArgAvs.push(vals.get(n.arguments[bmai]) || { kind: "top" });
-        }
+        // Expand spread arguments per § 13.3.6.1 ArgumentListEvaluation.
+        var bmArgAvs = _specExpandCallArgs(n.arguments, vals);
+        if (bmArgAvs === null) return { kind: "top" };  // unknown spread source
         var bmRecvName = _t.isIdentifier(n.callee.object) ? n.callee.object.name : null;
         return _specApplyBuiltinMethod(bmId, bmRecvAv, bmRecvName, bmArgAvs, state);
       }
@@ -4850,68 +4924,10 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
-    // Math.* built-ins per § 21.3.2 — scope-checked unshadowed `Math`
-    // identifier with Const numeric args, evaluate per spec abstract op.
-    if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.object, { name: "Math" }) &&
-        !path.scope.getBinding("Math") &&
-        _t.isIdentifier(n.callee.property)) {
-      var mMeth = n.callee.property.name;
-      // Single-arg numeric Math methods: floor, ceil, abs, round, trunc, sign, sqrt, log, log2, log10, exp, sin, cos, tan, asin, acos, atan
-      if (n.arguments.length === 1) {
-        var mArg = vals.get(n.arguments[0]);
-        if (mArg && mArg.kind === "const" && typeof mArg.value === "number") {
-          // § 21.3.2.16 Math.floor
-          if (mMeth === "floor") return { kind: "const", value: Math.floor(mArg.value) };
-          // § 21.3.2.10 Math.ceil
-          if (mMeth === "ceil") return { kind: "const", value: Math.ceil(mArg.value) };
-          // § 21.3.2.1 Math.abs
-          if (mMeth === "abs") return { kind: "const", value: Math.abs(mArg.value) };
-          // § 21.3.2.29 Math.round
-          if (mMeth === "round") return { kind: "const", value: Math.round(mArg.value) };
-          // § 21.3.2.36 Math.trunc
-          if (mMeth === "trunc") return { kind: "const", value: Math.trunc(mArg.value) };
-          // § 21.3.2.32 Math.sign
-          if (mMeth === "sign") return { kind: "const", value: Math.sign(mArg.value) };
-          // § 21.3.2.33 Math.sqrt
-          if (mMeth === "sqrt") return { kind: "const", value: Math.sqrt(mArg.value) };
-          // § 21.3.2.21 Math.log
-          if (mMeth === "log") return { kind: "const", value: Math.log(mArg.value) };
-          // § 21.3.2.13 Math.exp
-          if (mMeth === "exp") return { kind: "const", value: Math.exp(mArg.value) };
-        }
-      }
-      // Variadic numeric Math methods: max, min — all args must be Const numbers
-      if (mMeth === "max" || mMeth === "min") {
-        var mExpanded = _specExpandCallArgs(n.arguments, vals);
-        if (mExpanded === null) return { kind: "top" };  // unknown spread
-        var mvNums = [];
-        var mvOk = true;
-        for (var mai = 0; mai < mExpanded.length; mai++) {
-          var mav = mExpanded[mai];
-          if (!mav || mav.kind !== "const" || typeof mav.value !== "number") { mvOk = false; break; }
-          mvNums.push(mav.value);
-        }
-        if (mvOk && mvNums.length > 0) {
-          // § 21.3.2.25 Math.max — Math.max() with no args returns -Infinity
-          // § 21.3.2.26 Math.min — Math.min() with no args returns +Infinity
-          if (mMeth === "max") return { kind: "const", value: Math.max.apply(Math, mvNums) };
-          if (mMeth === "min") return { kind: "const", value: Math.min.apply(Math, mvNums) };
-        }
-      }
-      // Two-arg Math methods: pow, atan2
-      if (n.arguments.length === 2) {
-        var mA0 = vals.get(n.arguments[0]);
-        var mA1 = vals.get(n.arguments[1]);
-        if (mA0 && mA0.kind === "const" && typeof mA0.value === "number" &&
-            mA1 && mA1.kind === "const" && typeof mA1.value === "number") {
-          // § 21.3.2.27 Math.pow
-          if (mMeth === "pow") return { kind: "const", value: Math.pow(mA0.value, mA1.value) };
-          // § 21.3.2.6 Math.atan2
-          if (mMeth === "atan2") return { kind: "const", value: Math.atan2(mA0.value, mA1.value) };
-        }
-      }
-    }
+    // Math.* dispatched via globalThis.Math obj-lit registry now —
+    // Identifier(Math) resolves to globalThis.Math, then .floor etc. is
+    // a builtin-method AV that _specApplyBuiltinMethod handles per
+    // § 21.3.2. No inline shape-matched Math dispatch.
     // Array.* static methods per § 23.1.2 — scope-checked unshadowed `Array`.
     if (_t.isMemberExpression(n.callee) && !n.callee.computed &&
         _t.isIdentifier(n.callee.object, { name: "Array" }) &&
