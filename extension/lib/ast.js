@@ -13955,31 +13955,6 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
 // driver to push a new frame via {trace: subPath, state: AFTER_X}.
 // Internal-goto via F.state = X; continue; mimics the original
 // "if (X) {…} if (Y) {…}" sequential dispatch fall-through.
-// Resolve an Identifier node to a DOM element id when its binding's
-// init is `document.getElementById("X")` or `document.querySelector("#X")`.
-// Returns the id string or null. Pure spec-grounded: scope-checked
-// document, CSS L4 id selector form.
-function _resolveBoundDomElementId(path, idNode) {
-  if (!_t.isIdentifier(idNode)) return null;
-  var b = path.scope.getBinding(idNode.name);
-  if (!b || !_t.isVariableDeclarator(b.path.node) || !b.path.node.init) return null;
-  var ini = b.path.node.init;
-  if (!_t.isCallExpression(ini)) return null;
-  if (!_t.isMemberExpression(ini.callee) || ini.callee.computed) return null;
-  if (!_t.isIdentifier(ini.callee.object, { name: "document" })) return null;
-  if (path.scope.getBinding("document")) return null;
-  if (ini.arguments.length !== 1 || !_t.isStringLiteral(ini.arguments[0])) return null;
-  if (_t.isIdentifier(ini.callee.property, { name: "getElementById" })) {
-    return ini.arguments[0].value;
-  }
-  if (_t.isIdentifier(ini.callee.property, { name: "querySelector" })) {
-    var sel = ini.arguments[0].value;
-    var idm = sel.match(/^#([A-Za-z][\w:.-]*)$/);
-    if (idm) return idm[1];
-  }
-  return null;
-}
-
 // Flatten an AbstractValue (from _specEvalExpression) into a list of
 // string-typed leaves. Walks `or` (alternation) trees and returns every
 // reachable Const value whose type is "string". Ignores non-string leaves
@@ -14490,61 +14465,6 @@ function _probePropertyOnExpr(objExprPath, propName, depth) {
     }
   }
   return null;
-}
-
-// Find Object.defineProperty effects on the value RETURNED by a call
-// expression. Resolve callee's body, find each return statement's
-// argument expression, then collect defineProperty effects on that
-// argument's heap identity (which includes effects from other call
-// sites in the function body that pass the returned value as an arg).
-//
-// Real-world shape: webpack's `f(id)` returns `b[id].exports`, an object
-// that gets mutated by `d[id].call(b[id].exports, ...)` earlier in f's
-// body. So `f(id).url` reads happen on the same object that the call
-// installs `url` on.
-function _collectDefinePropertyEffectsOnCallReturn(callPath, propName, depth, visited) {
-  if (!callPath || !callPath.isCallExpression()) return [];
-  if (visited.has(callPath.node)) return [];
-  visited.add(callPath.node);
-  // Memoize: same (callPath, propName) repeated across a bundle returns
-  // the same effects (function bodies are immutable in the AST). Without
-  // this, every MemberExpression-on-CallExpression in github's 6MB
-  // bundle re-traverses the same callee bodies — quadratic work that
-  // appears as a hang. The cache is per-analysis (cleared via
-  // _nodePathCache reset at analyzeJSBundle entry).
-  var memoKey = callPath.node;
-  var memoSlot = _callReturnEffectMemo.get(memoKey);
-  if (memoSlot && propName in memoSlot) return memoSlot[propName];
-  // Use the global resolver-guard set ALSO so cross-call cycles are
-  // caught even when each top-level entry creates its own per-call
-  // visited Set. Without this, _resolveAllValues recursing into
-  // _readDefinePropertyDescriptor → _resolveAllValues → here would
-  // re-enter this function with a fresh visited Set and fail to
-  // detect that the same call site is already being processed.
-  if (!_resolver.guard("DPCR:" + propName + ":", callPath.node)) return [];
-  try {
-  var calleeFunc = _resolveExprToFunctionPath(callPath.get("callee"), depth);
-  if (!calleeFunc) return [];
-  var body = calleeFunc.node.body;
-  if (!_t.isBlockStatement(body)) return [];
-  var results = [];
-  try {
-    calleeFunc.get("body").traverse(Object.assign({
-      ReturnStatement: function(retPath) {
-        if (!retPath.node.argument) return;
-        var argPath = retPath.get("argument");
-        if (_t.isIdentifier(argPath.node) || _t.isMemberExpression(argPath.node)) {
-          var effects = _collectDefinePropertyEffects(argPath, propName, depth, visited);
-          results = results.concat(effects);
-        }
-      },
-    }, _SKIP_NESTED_FUNCS));
-  } catch (e) { _resolver.collectError(e, "definePropertyOnCallReturn"); }
-  // Memoize for subsequent (callPath, propName) lookups.
-  if (!memoSlot) { memoSlot = {}; _callReturnEffectMemo.set(memoKey, memoSlot); }
-  memoSlot[propName] = results;
-  return results;
-  } finally { _resolver.unguard("DPCR:" + propName + ":", callPath.node); }
 }
 
 // Inter-procedural collector: find all `Object.defineProperty(_, propName, _)`
