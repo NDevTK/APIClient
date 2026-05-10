@@ -2715,6 +2715,13 @@ function _specGlobalThisAv() {
       importScripts: { kind: "builtin-method", id: "global.importScripts" },
       setTimeout: { kind: "builtin-method", id: "Window.prototype.setTimeout" },
       setInterval: { kind: "builtin-method", id: "Window.prototype.setInterval" },
+      // ECMA § 19.1.1.3 undefined — the global property whose value is the
+      // undefined value (read-only, non-enumerable, non-configurable).
+      undefined: { kind: "const", value: undefined },
+      // ECMA § 19.1.1.1 NaN, § 19.1.1.2 Infinity — the global properties
+      // for the IEEE-754 NaN and ∞ values (read-only).
+      NaN: { kind: "const", value: NaN },
+      Infinity: { kind: "const", value: Infinity },
     }
   };
   return _SPEC_GLOBAL_AV;
@@ -8876,12 +8883,13 @@ function _specEvalLeaf(path, state, vals, effects) {
   }
   if (_t.isIdentifier(n)) {
     if (Object.prototype.hasOwnProperty.call(state, n.name)) return state[n.name];
-    if (n.name === "undefined" && !path.scope.getBinding("undefined")) {
-      return { kind: "const", value: undefined };
-    }
-    // arguments references — § 10.4.4
+    // ECMA § 10.4.4 arguments — implicit ArgumentsExoticObject in every
+    // non-arrow function. Modeled as opaque (top); MemberExpression
+    // handler resolves arguments.length / arguments[N] specifically.
+    // Identifier-name dispatch is spec-mandated since `arguments` is an
+    // implicit binding (not user-bound), checked via scope-shadow guard.
     if (n.name === "arguments" && !path.scope.getBinding("arguments")) {
-      return { kind: "top" }; // arguments object — handled at member access
+      return { kind: "top" };
     }
     // ECMA § 19 globalThis: when an Identifier is unbound at the current
     // scope (no local/var/let/const), it resolves to globalThis.<name>
