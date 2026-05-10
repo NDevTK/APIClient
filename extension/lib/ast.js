@@ -8377,6 +8377,40 @@ function _specEnsureProgramGlobalsPrepass(anyPath) {
       // / § 15.7: every function-shape node has a fixed identity by its
       // syntactic position; the AST guarantees node uniqueness.
       _specFuncPathByNode.set(fnPath.node, fnPath);
+    },
+    CallExpression: {
+      exit: function(callPath) {
+        // Targeted prepass: register addEventListener("type", cb) so the
+        // cb's body analysis (which may run via per-fn-only triggering
+        // in _traceValueSource) sees the cb's MessageEvent param shape
+        // without requiring the full program fixpoint. Cheap because
+        // the prepass populates AVs bottom-up and we only check the
+        // resolved member-method AV — no shape match on identifier names.
+        // Per WHATWG DOM § 4.4: addEventListener is a method of the
+        // EventTarget interface (Window/Document/Element/...).
+        var n = callPath.node;
+        if (n.arguments.length < 2) return;
+        var calleeAv = _specPathValMemo.get(n.callee);
+        if (!calleeAv || calleeAv.kind !== "builtin-method" ||
+            calleeAv.id !== "EventTarget.prototype.addEventListener") return;
+        var typeArg = n.arguments[0];
+        if (!_t.isStringLiteral(typeArg)) return;
+        var cbArg = n.arguments[1];
+        if (_t.isFunctionExpression(cbArg) || _t.isArrowFunctionExpression(cbArg)) {
+          _specEventHandlerType.set(cbArg, typeArg.value);
+        } else if (_t.isIdentifier(cbArg)) {
+          var bnd = callPath.scope.getBinding(cbArg.name);
+          if (bnd && bnd.path && bnd.path.node) {
+            if (_t.isFunctionDeclaration(bnd.path.node)) {
+              _specEventHandlerType.set(bnd.path.node, typeArg.value);
+            } else if (_t.isVariableDeclarator(bnd.path.node) && bnd.path.node.init &&
+                       (_t.isFunctionExpression(bnd.path.node.init) ||
+                        _t.isArrowFunctionExpression(bnd.path.node.init))) {
+              _specEventHandlerType.set(bnd.path.node.init, typeArg.value);
+            }
+          }
+        }
+      }
     }
   });
 }
@@ -19205,17 +19239,20 @@ function _traceValueSource(path, _unused) {
       return bM;
     }
   }
-  // Trigger the program fixpoint (idempotent) so cross-function side-effect
-  // summaries (event handler types from addEventListener("message", cb)
-  // dispatch, prototype method registrations, etc.) populate before this
-  // function's body is analysed. Without this, a callback's enclosing
-  // function-scope analysis would fire before the addEventListener call
-  // at the program level had registered the cb's MessageEvent param shape,
-  // missing event.data taint.
+  // Idempotent globals prepass populates _specFuncPathByNode for every
+  // function in the program — required so the AV walker's param-caller
+  // transition can resolve fnNode -> fnPath in O(1) (no fallback traverse).
   _specEnsureProgramGlobalsPrepass(path);
-  var pp = path; while (pp && pp.parentPath) pp = pp.parentPath;
-  if (pp && pp.node && _t.isProgram(pp.node)) {
-    try { _specAnalyzeProgramWithFixpoint(pp); } catch (_) {}
+  if (path.getFunctionParent) {
+    var encFn = path.getFunctionParent();
+    if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
+      try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+    } else if (!encFn) {
+      var pp = path; while (pp && pp.parentPath) pp = pp.parentPath;
+      if (pp && pp.node && _t.isProgram(pp.node)) {
+        try { _specAnalyzeProgramWithFixpoint(pp); } catch (_) {}
+      }
+    }
   }
   var av = _specPathValMemo.get(node);
   var result = av ? _avProjectToTaintDescriptor(av, path) : { sourceType: "dynamic", source: null };
@@ -19357,6 +19394,26 @@ function _avTaintTransitions(av, ctxPath) {
         if (av.idx >= callRef.node.arguments.length) continue;
         var argNode = callRef.node.arguments[av.idx];
         var argAv = _specPathValMemo.get(argNode);
+        if (!argAv) {
+          // The caller's enclosing scope hasn't been analysed by spec
+          // eval — analyse it on-demand so the arg's AV populates.
+          // Targeted: only the SPECIFIC caller's scope, not full program
+          // fixpoint. Per ECMA § 10.2.10: caller arg AVs are computed
+          // by evaluating the caller's enclosing function body.
+          var callerEnc = callRef.getFunctionParent && callRef.getFunctionParent();
+          if (callerEnc && _t.isFunction(callerEnc.node) && !_specEffectsMemo.has(callerEnc.node)) {
+            try { _specAnalyzePropertyFlow(callerEnc); } catch (_) {}
+            argAv = _specPathValMemo.get(argNode);
+          } else if (!callerEnc) {
+            // Caller is at module-top — evaluate just the call's argument
+            // expression directly so its AV populates without analysing
+            // the full program.
+            try {
+              var callerArgPath = callRef.get("arguments." + av.idx);
+              argAv = _specEvalExpression(callerArgPath, _specStateCreate({}), []);
+            } catch (_) {}
+          }
+        }
         if (!argAv) continue;
         out.push({ to: argAv, kind: "param-caller", desc: "param @ arg " + av.idx, atNode: argNode });
       }
