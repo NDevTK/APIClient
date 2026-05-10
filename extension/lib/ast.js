@@ -19197,246 +19197,123 @@ function _tvsMakeFrame(path, node) {
 }
 
 // Explicit-frame state-machine driver. Each frame is a plain object whose
-// `state` field selects which step-handler runs next. Recursive descent in
-// _traceValueSourceInner was replaced by _tvsStep returning {trace: subPath,
-// state: AFTER_ID}; the driver pushes a new frame for subPath and resumes
-// the saved state after the sub-frame produces a result. The JS call stack
-// stays at depth 1 regardless of AST depth, and frame state is fully
-// inspectable for future optimizations (memoization, batched processing,
-// work coalescing) — a generator's internal state isn't.
 function _traceValueSource(path, _unused) {
+  // Single-AV-engine: project the path's spec-eval AV to a taint
+  // descriptor. Per WHATWG dimensional taint model: walk the AV graph
+  // looking for taint-source AVs (location.* / event.data / cookie /
+  // window.name / etc.); when found, build a taintPath via AV-tree
+  // descent and return user-controlled. When all AV leaves are const,
+  // return literal. Otherwise, dynamic.
   if (!path || !path.node) return { sourceType: "dynamic", source: null };
   var node = path.node;
-
-  // Per-analysis memoisation: result is structurally determined by the
-  // node's identity (Babel scope is bound to position). Repeated calls
-  // for the same node are common in the security path (every CallExpression
-  // arg sink-checked across multiple visitors); memoising avoids
-  // re-walking the same chain. Only cache top-level invocations; nested
-  // recursive calls share the visited set instead.
-  // Identifiers with bindings: cache by binding identifier so distinct
-  // reference nodes that resolve to the same binding share the result.
-  // (E.g. inside a loop, `obj[k] = v` references `k` via different
-  // referencePaths each iteration but they all bind to the same loop-var
-  // declaration.)
-  var isRoot = !_taintVisited;
-  if (isRoot) {
-    if (_tvsMemo.has(node)) return _tvsMemo.get(node);
-    if (_t.isIdentifier(node)) {
-      var idBinding = path.scope.getBinding(node.name);
-      if (idBinding && _tvsMemo.has(idBinding.identifier)) {
-        var bMemoed = _tvsMemo.get(idBinding.identifier);
-        _tvsMemo.set(node, bMemoed);
-        return bMemoed;
-      }
+  if (_tvsMemo.has(node)) return _tvsMemo.get(node);
+  if (_t.isIdentifier(node)) {
+    var idBnd = path.scope.getBinding(node.name);
+    if (idBnd && _tvsMemo.has(idBnd.identifier)) {
+      var bM = _tvsMemo.get(idBnd.identifier);
+      _tvsMemo.set(node, bM);
+      return bM;
     }
-    // Spec-eval fast path per ECMA: when _specPathValMemo has a fully-
-    // resolved value AV for this node, classify directly from the AV
-    // (taint-source AVs → user-controlled; all-const-leaves → literal).
-    // Trigger property-flow analysis on the enclosing function first so
-    // the memo is populated even when this is the first
-    // _traceValueSource call against this function. Idempotent — gated
-    // on _specEffectsMemo.has so repeated calls within the same encFn
-    // skip the redundant lookup.
-    if (path.getFunctionParent) {
-      var tvsEncFn = path.getFunctionParent();
-      if (tvsEncFn && tvsEncFn.node && _t.isFunction(tvsEncFn.node) &&
-          !_specEffectsMemo.has(tvsEncFn.node)) {
-        try { _specAnalyzePropertyFlow(tvsEncFn); } catch (_tvspf) {}
-      } else if (!tvsEncFn) {
-        // Module-level: trigger program fixpoint (idempotent via
-        // _specProgramFixpointDone WeakSet).
-        var tvsProgPath = path;
-        while (tvsProgPath && tvsProgPath.parentPath) tvsProgPath = tvsProgPath.parentPath;
-        if (tvsProgPath && tvsProgPath.node && _t.isProgram(tvsProgPath.node)) {
-          try { _specAnalyzeProgramWithFixpoint(tvsProgPath); } catch (_tvsfp) {}
-        }
-      }
-    }
-    var specAv = _specPathValMemo.get(node);
-    if (specAv) {
-      // Walk the AV tree iteratively. allConst iff every reachable leaf
-      // resolves to a literal source per ECMA value semantics. The
-      // walker covers (a) value-form AVs that recurse into structural
-      // children — `or`, `binop`, `template`, `coerce`, `obj-lit`,
-      // `array-lit`, `map-instance`, `set-instance`, `regex-instance`,
-      // `callable-namespace`; and (b) reference-form AVs that are
-      // intrinsically literal — `function-ref` (the function reference
-      // itself, not its return value), `builtin-method` (method ref).
-      // Interrupts on `param`, `member`, `top`, `this`, `dom-element`,
-      // `keys-of`, `loop-key`, `args-elt`, `args-len`, `rest-args` —
-      // those carry potentially user-controlled or context-dependent
-      // values that must go through full chain tracing.
-      // First-priority scan: any taint-source AV anywhere in the tree
-      // means user-controlled. Spec eval registers Window.location
-      // properties (and similar) as taint-source AVs in the globalThis
-      // registry — when a value flows from those, the AV graph carries
-      // the taint-source node directly, eliminating the AST-level
-      // shape-match in _matchTaintSource for nodes spec eval has visited.
-      var taintScan = [specAv];
-      var taintSeen = new Set();
-      var foundTaintSource = null;
-      while (taintScan.length > 0) {
-        var ts = taintScan.pop();
-        if (!ts || taintSeen.has(ts)) continue;
-        taintSeen.add(ts);
-        if (ts.kind === "taint-source") { foundTaintSource = ts; break; }
-        if (ts.kind === "or" || ts.kind === "binop") { taintScan.push(ts.left); taintScan.push(ts.right); continue; }
-        if (ts.kind === "template" && ts.exprs) {
-          for (var tsti = 0; tsti < ts.exprs.length; tsti++) taintScan.push(ts.exprs[tsti]);
-          continue;
-        }
-        if (ts.kind === "coerce" && ts.arg) { taintScan.push(ts.arg); continue; }
-        if (ts.kind === "member") { if (ts.obj) taintScan.push(ts.obj); if (ts.key) taintScan.push(ts.key); continue; }
-        if (ts.kind === "obj-lit" && ts.props) {
-          // Don't traverse globalThis-owned obj-lits' full prop sets
-          // here — only propagate taint when an actual prop has been
-          // PROJECTED via a member access (caught above as `member`).
-          // Otherwise the bare `location` reference would be flagged.
-          continue;
-        }
-      }
-      if (foundTaintSource) {
-        var tsResult = {
-          sourceType: "user-controlled",
-          source: foundTaintSource.id,
-          dimensions: foundTaintSource.dims || null
-        };
-        _tvsMemo.set(node, tsResult);
-        return tsResult;
-      }
-      var allConst = true;
-      var sStack = [specAv];
-      // Visited set for cycle detection: AV graphs can become cyclic
-      // when joining or-trees over recursive structures (e.g. a binding
-      // whose AV references itself through obj-lit props). Reference-
-      // identity tracking is sufficient since spec eval allocates fresh
-      // AV objects at each combinator step.
-      var sSeen = new Set();
-      while (sStack.length > 0 && allConst) {
-        var s = sStack.pop();
-        if (!s) continue;
-        if (sSeen.has(s)) continue;
-        sSeen.add(s);
-        if (s.kind === "const") continue;
-        if (s.kind === "or") { sStack.push(s.left); sStack.push(s.right); continue; }
-        if (s.kind === "binop") { sStack.push(s.left); sStack.push(s.right); continue; }
-        if (s.kind === "template" && s.exprs) {
-          for (var sti = 0; sti < s.exprs.length; sti++) sStack.push(s.exprs[sti]);
-          continue;
-        }
-        if (s.kind === "coerce" && s.arg) { sStack.push(s.arg); continue; }
-        if (s.kind === "obj-lit" && s.props) {
-          for (var oki in s.props) {
-            if (Object.prototype.hasOwnProperty.call(s.props, oki)) sStack.push(s.props[oki]);
-          }
-          continue;
-        }
-        if (s.kind === "array-lit" && s.elements) {
-          for (var ali = 0; ali < s.elements.length; ali++) sStack.push(s.elements[ali]);
-          continue;
-        }
-        if (s.kind === "map-instance" && s.entries && !s.unknownInit) {
-          for (var mei = 0; mei < s.entries.length; mei++) {
-            var ent = s.entries[mei];
-            if (ent && ent.length >= 2) { sStack.push(ent[0]); sStack.push(ent[1]); }
-          }
-          continue;
-        }
-        if (s.kind === "set-instance" && s.items && !s.unknownInit) {
-          for (var sii = 0; sii < s.items.length; sii++) sStack.push(s.items[sii]);
-          continue;
-        }
-        if (s.kind === "regex-instance" && s.pattern) { sStack.push(s.pattern); continue; }
-        if (s.kind === "callable-namespace" && s.props) {
-          for (var cnki in s.props) {
-            if (Object.prototype.hasOwnProperty.call(s.props, cnki)) sStack.push(s.props[cnki]);
-          }
-          continue;
-        }
-        if (s.kind === "function-ref" || s.kind === "builtin-method") continue;
-        allConst = false;
-      }
-      if (allConst) {
-        var litResult = { sourceType: "literal", source: null };
-        _tvsMemo.set(node, litResult);
-        return litResult;
+  }
+  // Trigger spec eval (idempotent via memos) so the AV is populated.
+  if (path.getFunctionParent) {
+    var encFn = path.getFunctionParent();
+    if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
+      try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+    } else if (!encFn) {
+      var pp = path; while (pp && pp.parentPath) pp = pp.parentPath;
+      if (pp && pp.node && _t.isProgram(pp.node)) {
+        try { _specAnalyzeProgramWithFixpoint(pp); } catch (_) {}
       }
     }
   }
-
-  // Cycle detection via visited set keyed on AST node position
-  if (isRoot) _taintVisited = new Set();
-  var rootKey = (node.start != null && node.end != null) ? node.start + ":" + node.end : null;
-  if (rootKey) {
-    if (_taintVisited.has(rootKey)) {
-      if (isRoot) _taintVisited = null;
-      return { sourceType: "dynamic", source: null };
-    }
-    _taintVisited.add(rootKey);
+  var av = _specPathValMemo.get(node);
+  var result = av ? _avProjectToTaintDescriptor(av, node) : { sourceType: "dynamic", source: null };
+  _tvsMemo.set(node, result);
+  if (_t.isIdentifier(node)) {
+    var fb = path.scope.getBinding(node.name);
+    if (fb) _tvsMemo.set(fb.identifier, result);
   }
-
-  var DYN = { sourceType: "dynamic", source: null };
-  var stack = [_tvsMakeFrame(path, node)];
-  var lastResult = undefined;
-
-  try {
-    while (stack.length > 0) {
-      var top = stack[stack.length - 1];
-      top.result = lastResult;
-      lastResult = undefined;
-
-      var step;
-      try {
-        step = _tvsStep(top);
-      } catch (_tvse) {
-        if (_tvse instanceof RangeError) {
-          _resolver.collectError(_tvse, "traceValueSource");
-          stack.pop();
-          lastResult = DYN;
-          continue;
-        }
-        throw _tvse;
-      }
-
-      if (step.done !== undefined) {
-        lastResult = step.done;
-        stack.pop();
-        continue;
-      }
-
-      // step.trace is a sub-path; step.state is the AFTER state ID to resume
-      var subPath = step.trace;
-      top.state = step.state;
-      if (!subPath || !subPath.node) {
-        lastResult = DYN;
-        continue;
-      }
-      var subNode = subPath.node;
-      var subKey = (subNode.start != null && subNode.end != null) ? subNode.start + ":" + subNode.end : null;
-      if (subKey) {
-        if (_taintVisited.has(subKey)) {
-          lastResult = DYN;
-          continue;
-        }
-        _taintVisited.add(subKey);
-      }
-      stack.push(_tvsMakeFrame(subPath, subNode));
+  return result;
+}
+// Project an AV to a taint descriptor. Walks AV tree iteratively:
+//   - taint-source AV → user-controlled with single-hop taintPath
+//   - composite AV (or/binop/template/coerce/member/obj-lit/array-lit/
+//     map-instance/set-instance/regex-instance/callable-namespace) →
+//     descend into children, accumulate hops; first user-controlled wins
+//   - all-const-leaves → literal
+//   - param/top/this/dom-element/keys-of/loop-key/args-elt/args-len/
+//     rest-args/call/etc → dynamic (value depends on caller / runtime)
+// Hop kinds map AV combinator types to the legacy hop classification:
+//   member → "member"; binop → "concat"; template → "template-interp";
+//   coerce → "coerce"; obj-lit prop access → "obj-prop".
+function _avProjectToTaintDescriptor(av, srcNode) {
+  if (!av) return { sourceType: "dynamic", source: null };
+  var srcLoc = srcNode && srcNode.loc ? srcNode.loc : null;
+  // First scan: find any taint-source AV in the tree.
+  var taintScan = [{ av: av, hopChain: [] }];
+  var taintSeen = new Set();
+  while (taintScan.length > 0) {
+    var t = taintScan.pop();
+    var n = t.av;
+    if (!n || taintSeen.has(n)) continue;
+    taintSeen.add(n);
+    if (n.kind === "taint-source") {
+      // Build user-controlled descriptor with hops chain reversed (source first).
+      var hops = [{
+        kind: "source", desc: n.id, at: srcLoc,
+        dims: n.dims ? _tvsDims(n.dims) : _tvsDimsContent()
+      }];
+      for (var ci = t.hopChain.length - 1; ci >= 0; ci--) hops.push(t.hopChain[ci]);
+      return {
+        sourceType: "user-controlled",
+        source: n.id,
+        sourceLoc: srcLoc,
+        taintPath: hops,
+        dimensions: n.dims ? _tvsDims(n.dims) : _tvsDimsContent()
+      };
     }
-    var finalResult = lastResult === undefined ? DYN : lastResult;
-    if (isRoot) {
-      _tvsMemo.set(node, finalResult);
-      // Also memo by binding identifier so other reference nodes
-      // resolving to the same binding share this result on future calls.
-      if (_t.isIdentifier(node)) {
-        var fbinding = path.scope.getBinding(node.name);
-        if (fbinding) _tvsMemo.set(fbinding.identifier, finalResult);
-      }
+    if (n.kind === "or" || n.kind === "binop") { taintScan.push({av:n.left,hopChain:t.hopChain}); taintScan.push({av:n.right,hopChain:t.hopChain}); continue; }
+    if (n.kind === "template" && n.exprs) {
+      for (var ti = 0; ti < n.exprs.length; ti++) taintScan.push({av:n.exprs[ti],hopChain:t.hopChain});
+      continue;
     }
-    return finalResult;
-  } finally {
-    if (isRoot) _taintVisited = null;
+    if (n.kind === "coerce" && n.arg) { taintScan.push({av:n.arg,hopChain:t.hopChain}); continue; }
+    if (n.kind === "member") {
+      // Project the prop access through to its underlying value AV.
+      // For member with const key on obj-lit: pick the prop's AV.
+      if (n.obj && n.obj.kind === "obj-lit" && n.obj.props && n.key && n.key.kind === "const") {
+        var memProp = n.obj.props[n.key.value];
+        if (memProp) { taintScan.push({av:memProp,hopChain:t.hopChain}); continue; }
+      }
+      // Otherwise descend obj and key.
+      if (n.obj) taintScan.push({av:n.obj,hopChain:t.hopChain});
+      if (n.key) taintScan.push({av:n.key,hopChain:t.hopChain});
+      continue;
+    }
   }
+  // Second scan: all-const check.
+  var allConst = true;
+  var sStack = [av]; var sSeen = new Set();
+  while (sStack.length > 0 && allConst) {
+    var s = sStack.pop();
+    if (!s || sSeen.has(s)) continue;
+    sSeen.add(s);
+    if (s.kind === "const") continue;
+    if (s.kind === "or" || s.kind === "binop") { sStack.push(s.left); sStack.push(s.right); continue; }
+    if (s.kind === "template" && s.exprs) { for (var sti = 0; sti < s.exprs.length; sti++) sStack.push(s.exprs[sti]); continue; }
+    if (s.kind === "coerce" && s.arg) { sStack.push(s.arg); continue; }
+    if (s.kind === "obj-lit" && s.props) { for (var oki in s.props) { if (Object.prototype.hasOwnProperty.call(s.props, oki)) sStack.push(s.props[oki]); } continue; }
+    if (s.kind === "array-lit" && s.elements) { for (var ali = 0; ali < s.elements.length; ali++) sStack.push(s.elements[ali]); continue; }
+    if (s.kind === "map-instance" && s.entries && !s.unknownInit) { for (var mei = 0; mei < s.entries.length; mei++) { var ent = s.entries[mei]; if (ent && ent.length >= 2) { sStack.push(ent[0]); sStack.push(ent[1]); } } continue; }
+    if (s.kind === "set-instance" && s.items && !s.unknownInit) { for (var sii = 0; sii < s.items.length; sii++) sStack.push(s.items[sii]); continue; }
+    if (s.kind === "regex-instance" && s.pattern) { sStack.push(s.pattern); continue; }
+    if (s.kind === "callable-namespace" && s.props) { for (var cnki in s.props) { if (Object.prototype.hasOwnProperty.call(s.props, cnki)) sStack.push(s.props[cnki]); } continue; }
+    if (s.kind === "function-ref" || s.kind === "builtin-method" || s.kind === "builtin-ctor") continue;
+    allConst = false;
+  }
+  if (allConst) return { sourceType: "literal", source: null };
+  return { sourceType: "dynamic", source: null };
 }
 
 // Pure AST walk — collect every ReturnStatement.argument path inside
