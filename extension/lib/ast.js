@@ -15486,14 +15486,15 @@ function _rcfpStep(F) {
                 }
               }
               // Object.assign(obj, {key: value}) — built-in property
-              // propagation per ECMA § 20.1.2.1. Scope-checked on the
-              // unshadowed `Object` global.
+              // propagation per ECMA § 20.1.2.1. AV-grounded callee
+              // identity via builtin-method "Object.assign" (windowSelfAv
+              // .props.Object.props.assign).
+              var rpCalleeAv = (rpParent && _t.isCallExpression(rpParent)) ?
+                _specPathValMemo.get(rpParent.callee) : null;
               if (rpParent && _t.isCallExpression(rpParent) &&
                   rpParent.arguments[0] === rp.node &&
-                  _t.isMemberExpression(rpParent.callee) && !rpParent.callee.computed &&
-                  _t.isIdentifier(rpParent.callee.object, { name: "Object" }) &&
-                  !rp.scope.getBinding("Object") &&
-                  _t.isIdentifier(rpParent.callee.property, { name: "assign" })) {
+                  rpCalleeAv && rpCalleeAv.kind === "builtin-method" &&
+                  rpCalleeAv.id === "Object.assign") {
                 for (var oai = 1; oai < rpParent.arguments.length; oai++) {
                   var oas = rpParent.arguments[oai];
                   if (!_t.isObjectExpression(oas)) continue;
