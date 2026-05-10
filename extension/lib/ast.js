@@ -20734,60 +20734,13 @@ var _URL_INSTANCE_PROPS = {
   "host":1, "hostname":1, "port":1, "pathname":1, "search":1, "hash":1,
 };
 
-// Scope-aware taint source classification using structural AST matching.
-// Replaces _describeNode() + _TAINT_SOURCES string lookup.
-// Returns taint source string (e.g., "location.hash") if matched, or null.
-function _matchTaintSource(path, node) {
-  // Accept both `.` and optional-chained `?.` access — they're
-  // semantically equivalent as taint sources; the only difference is
-  // short-circuit on nullish.
-  if ((!_t.isMemberExpression(node) && !_t.isOptionalMemberExpression(node)) || node.computed) return null;
-
-  // Collect the member chain as AST property names: [root, prop1, prop2, ...]
-  var chain = [];
-  var current = node;
-  while ((_t.isMemberExpression(current) || _t.isOptionalMemberExpression(current)) &&
-         !current.computed && _t.isIdentifier(current.property)) {
-    chain.unshift(current.property.name);
-    current = current.object;
-  }
-  if (!_t.isIdentifier(current)) return null;
-  var rootName = current.name;
-
-  // Verify root identifier is unbound (not shadowed by local binding)
-  if (path.scope.getBinding(rootName)) return null;
-
-  // Normalize: strip "window." or "self." prefix if root is the global window/self
-  // Canonicalize so `window.location.href`, `self.location.href`, and
-  // `location.href` all produce the SAME source name. This removes any
-  // need for callers (e.g. `_dimsForSource`) to carry aliases for each
-  // alternative root. Without normalization, `window.location` would
-  // produce obj="window", prop="location" — a different source name
-  // than bare `location`, breaking downstream dim lookups.
-  var objName, propName;
-  if ((rootName === "window" || rootName === "self") && chain.length >= 2) {
-    objName = chain[0];
-    propName = chain[1];
-  } else if ((rootName === "window" || rootName === "self") && chain.length === 1 && chain[0] === "location") {
-    // `window.location` or `self.location` (no further property) — same
-    // runtime object as bare `location`; canonicalize source name.
-    return "location";
-  } else if (chain.length >= 1) {
-    objName = rootName;
-    propName = chain[0];
-  } else {
-    return null;
-  }
-
-  // Match against patterns
-  for (var pi = 0; pi < _TAINT_PATTERNS.length; pi++) {
-    var pat = _TAINT_PATTERNS[pi];
-    if (pat.obj === objName && pat.props[propName]) {
-      return objName + "." + propName;
-    }
-  }
-  return null;
-}
+// _matchTaintSource removed — taint source classification is now done
+// via spec eval AV inspection. Window.location / document.* / window
+// aliases are registered in the globalThis registry as obj-lits whose
+// props are taint-source AVs (WHATWG HTML § 7.7 / WHATWG DOM § 4.5);
+// the prototype-dispatched member access naturally projects to those
+// AVs. _traceValueSource consults _specPathValMemo for taint-source
+// kinds before falling through to the legacy chain walker.
 
 // Lightweight taint tracker: classifies where a value originates.
 // Returns { sourceType: "user-controlled"|"dynamic"|"literal", source: string|null,
