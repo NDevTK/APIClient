@@ -11351,14 +11351,21 @@ function _trackTypeFromDeclarator(path) {
       return;
     }
   }
-  // document.createElement(tag) → Element, document.getElementById(id) → Element
+  // document.createElement(tag) → Element, document.getElementById(id) → Element.
+  // AV-grounded receiver identity via globalThis.props.document; method
+  // name dispatched via property name (every Document instance has these
+  // as spec-defined IDL slots per WHATWG DOM § 4.5).
   if (_t.isCallExpression(init) && _t.isMemberExpression(init.callee) && !init.callee.computed &&
-      _t.isIdentifier(init.callee.object, { name: "document" }) && _t.isIdentifier(init.callee.property) &&
-      !path.scope.getBinding("document")) {
-    var docMeth = init.callee.property.name;
-    if (docMeth === "createElement" || docMeth === "getElementById" || docMeth === "querySelector" ||
-        docMeth === "getElementsByTagName" || docMeth === "getElementsByClassName") {
-      _setType(path.scope, name, "Element");
+      _t.isIdentifier(init.callee.property)) {
+    _specEnsureProgramFixpoint(path);
+    var docRecvAv = _specPathValMemo.get(init.callee.object);
+    var gThisDoc = _specGlobalThisAv();
+    if (docRecvAv && gThisDoc && gThisDoc.props && docRecvAv === gThisDoc.props.document) {
+      var docMeth = init.callee.property.name;
+      if (docMeth === "createElement" || docMeth === "getElementById" || docMeth === "querySelector" ||
+          docMeth === "getElementsByTagName" || docMeth === "getElementsByClassName") {
+        _setType(path.scope, name, "Element");
+      }
     }
   }
 }
