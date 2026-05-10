@@ -11527,13 +11527,14 @@ function _extractSinkInfo(fetchPath) {
         info.headers = _extractHeaders(val);
         info.headersNode = val;  // Store raw node for scope-aware resolution later
       }
-      // `headers: new Headers({...})` — W3C Headers constructor wraps the
-      // same object-literal shape. Unwrap to the inner object for header
-      // extraction. `new Headers(arrayOfPairs)` form not extracted (rarely
-      // used; would need a separate pair-iteration path).
+      // `headers: new Headers({...})` — WHATWG Fetch Headers constructor
+      // wraps the same object-literal shape. AV-grounded callee identity
+      // via builtin-ctor "Fetch.Headers". `new Headers(arrayOfPairs)` form
+      // not extracted (rarely used; would need a separate pair-iteration path).
+      var hdrCallee2Av = (key === "headers" && _t.isNewExpression(val)) ?
+        _specPathValMemo.get(val.callee) : null;
       if (key === "headers" && _t.isNewExpression(val) &&
-          _t.isIdentifier(val.callee, { name: "Headers" }) &&
-          !fetchPath.scope.getBinding("Headers") &&
+          hdrCallee2Av && hdrCallee2Av.kind === "builtin-ctor" && hdrCallee2Av.id === "Fetch.Headers" &&
           val.arguments.length >= 1 && _t.isObjectExpression(val.arguments[0])) {
         info.headers = _extractHeaders(val.arguments[0]);
         info.headersNode = val.arguments[0];
@@ -12186,11 +12187,13 @@ function _extractFetchCall(path, result, type) {
         try { hdrPath = optsPath.get("properties." + o + ".value"); } catch (_he) { _resolver.collectError(_he, "fetchHeadersPath"); }
         headers = _extractHeaders(optVal, hdrPath);
       }
-      // `headers: new Headers({...})` — W3C Headers constructor wraps the
-      // header object. Unwrap to extract the same shape.
+      // `headers: new Headers({...})` — WHATWG Fetch Headers constructor
+      // wraps the header object. AV-grounded callee identity via builtin-ctor
+      // "Fetch.Headers" (installed on globalThis registry).
+      var hdrCalleeAv = (optName === "headers" && _t.isNewExpression(optVal)) ?
+        _specPathValMemo.get(optVal.callee) : null;
       if (optName === "headers" && _t.isNewExpression(optVal) &&
-          _t.isIdentifier(optVal.callee, { name: "Headers" }) &&
-          !path.scope.getBinding("Headers") &&
+          hdrCalleeAv && hdrCalleeAv.kind === "builtin-ctor" && hdrCalleeAv.id === "Fetch.Headers" &&
           optVal.arguments.length >= 1 && _t.isObjectExpression(optVal.arguments[0])) {
         var hdrInnerPath = null;
         try { hdrInnerPath = optsPath.get("properties." + o + ".value.arguments.0"); } catch (_he2) { _resolver.collectError(_he2, "fetchHeadersInnerPath"); }
