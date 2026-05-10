@@ -2135,6 +2135,21 @@ function _specArrayPrototypeAv() {
 // from _specApplyBuiltinMethod, distributing over alternation when recv
 // is an or-tree of Const strings.
 var _SPEC_STRING_PROTO_AV = null;
+// WHATWG URL § 5.2 URLSearchParams interface — accessor methods.
+// .get / .getAll / .has return values DERIVED from constructor input;
+// when input is tainted, accessor results inherit the taint.
+var _SPEC_USP_PROTO_AV = null;
+function _specUrlSearchParamsPrototypeAv() {
+  if (!_SPEC_USP_PROTO_AV) {
+    var props = {};
+    var uspMethodNames = ["get", "getAll", "has", "toString", "keys", "values", "entries", "forEach", "size", "append", "set", "delete", "sort"];
+    for (var uspmi = 0; uspmi < uspMethodNames.length; uspmi++) {
+      props[uspMethodNames[uspmi]] = { kind: "builtin-method", id: "URLSearchParams.prototype." + uspMethodNames[uspmi] };
+    }
+    _SPEC_USP_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_USP_PROTO_AV;
+}
 function _specStringPrototypeAv() {
   if (!_SPEC_STRING_PROTO_AV) {
     var props = {};
@@ -2916,6 +2931,7 @@ function _specGetPrototypeOfAv(av) {
   // receiver) represents an opaque string value with same semantics.
   if (av.kind === "taint-source" && av.type === "string") return _specStringPrototypeAv();
   if (av.kind === "coerce" && av.to === "string") return _specStringPrototypeAv();
+  if (av.kind === "coerce" && av.to === "urlsearchparams") return _specUrlSearchParamsPrototypeAv();
   if (av.kind === "map-instance") return _specMapPrototypeAv();
   if (av.kind === "set-instance") return _specSetPrototypeAv();
   if (av.kind === "weakmap-instance") return _specWeakMapPrototypeAv();
@@ -3167,7 +3183,13 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       }
       if (uspOk) return { kind: "const", value: uspParts.join("&") };
     }
-    return { kind: "top" };
+    // Per WHATWG URL § 5.2.2: USP construction copies the input's
+    // values into the instance. .get(name) / .getAll(name) / .has(name)
+    // / .toString() etc. all derive from the original input. When the
+    // input isn't const-resolvable but carries taint provenance, return
+    // a coerce AV so the input's taint propagates through subsequent
+    // method calls (which dispatch via _specGetPrototypeOfAv on coerce).
+    return { kind: "coerce", to: "urlsearchparams", arg: uspArgAv };
   }
   if (ctorId === "Fetch.Headers") {
     if (argAvs.length === 0) return { kind: "top" };
@@ -5398,6 +5420,29 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       strOr = _specSetUnionAv(strOr, { kind: "const", value: strResults[sri] });
     }
     return strOr;
+  }
+  // WHATWG URL § 5.2.2/3/4 URLSearchParams accessor methods. .get/.getAll/
+  // .has/.toString return values DERIVED from the constructor's input.
+  // When recv is a coerce(to:"urlsearchparams", arg:input) — produced by
+  // _specApplyBuiltinCtor for non-const input — the returned value carries
+  // input's taint via a coerce(to:"string") wrapper. Walker descends to
+  // arg to find taint source. Per § 5.2.2 step 1: GetUSP from recv; per
+  // step 3: return value from list (derived from input).
+  if (methodId.indexOf("URLSearchParams.prototype.") === 0) {
+    var uspMethod = methodId.slice("URLSearchParams.prototype.".length);
+    if (uspMethod === "get" || uspMethod === "getAll" || uspMethod === "toString") {
+      // .get returns the first value or null; .getAll returns array; .toString returns query string.
+      // For simplicity all return string-typed result with recv's taint.
+      if (recvAv && recvAv.kind === "coerce" && recvAv.to === "urlsearchparams" && recvAv.arg) {
+        return { kind: "coerce", to: "string", arg: recvAv.arg };
+      }
+      return { kind: "top" };
+    }
+    if (uspMethod === "has") {
+      // .has returns boolean — value is determined by attacker-controlled
+      // params but the boolean itself isn't a content-injection sink.
+      return { kind: "top" };
+    }
   }
   return { kind: "top" };
 }
