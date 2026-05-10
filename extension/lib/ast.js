@@ -14068,14 +14068,15 @@ function _ravStep(F) {
         if (rcVals.length > 0) return { done: rcVals };
       }
       // 12c: `<urlExpr>.<URL-prop>` — extract WHATWG URL instance properties.
+      // AV-grounded: receiver resolves to a URL ctor result obj-lit (which
+      // carries href/pathname/origin/etc. as const props per
+      // _specApplyBuiltinCtor("WHATWG.URL", ...)). Recognised structurally
+      // by the presence of href on the obj-lit AV — the URL ctor is the
+      // sole producer of that shape.
       if (memSubSkip < 1 && _URL_INSTANCE_PROPS[propName]) {
-        var canExtract = false;
-        if (_t.isNewExpression(node.object) && _t.isIdentifier(node.object.callee, { name: "URL" }) &&
-            !path.scope.getBinding("URL")) {
-          canExtract = true;
-        } else if (_t.isIdentifier(node.object) && _getTrackedType(path, node.object) === "URL") {
-          canExtract = true;
-        }
+        var urlRecvAv = _specPathValMemo.get(node.object);
+        var canExtract = !!(urlRecvAv && urlRecvAv.kind === "obj-lit" &&
+                            urlRecvAv.props && urlRecvAv.props.href);
         if (canExtract) {
           L.urlPropName = propName;
           // Don't set branchSkip yet — sub-case might fall through to next sub-case.
