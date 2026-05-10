@@ -13544,18 +13544,17 @@ function _ravStep(F) {
     L.branchSkip = 1;
     return { trace: path.get("argument"), state: _RAV_PROMISE_AFTER };
   }
-  // BRANCH 1a: Promise.resolve(value) — per § 27.2.4.7, returns a
+  // BRANCH 1a: Promise.resolve(value) — per ECMA § 27.2.4.7, returns a
   // Promise resolved with value. For the URL resolver, await/then unwrap
   // recovers the original value, so Promise.resolve is passthrough on
-  // its argument's resolved values.
-  if (skip < 1 && _t.isCallExpression(node) &&
-      _t.isMemberExpression(node.callee) && !node.callee.computed &&
-      _t.isIdentifier(node.callee.object, { name: "Promise" }) &&
-      !path.scope.getBinding("Promise") &&
-      _t.isIdentifier(node.callee.property, { name: "resolve" }) &&
-      node.arguments.length === 1) {
-    L.branchSkip = 1;
-    return { trace: path.get("arguments.0"), state: _RAV_PROMISE_AFTER };
+  // its argument's resolved values. AV-grounded callee identity via
+  // builtin-method "Promise.resolve" (windowSelfAv → Promise → resolve).
+  if (skip < 1 && _t.isCallExpression(node) && node.arguments.length === 1) {
+    var promCalleeAv = _specPathValMemo.get(node.callee);
+    if (promCalleeAv && promCalleeAv.kind === "builtin-method" && promCalleeAv.id === "Promise.resolve") {
+      L.branchSkip = 1;
+      return { trace: path.get("arguments.0"), state: _RAV_PROMISE_AFTER };
+    }
   }
   // BRANCH 1: String-encoding transforms (encodeURIComponent / encodeURI /
   // decodeURIComponent / decodeURI / btoa / atob) per § 19.2.6.
