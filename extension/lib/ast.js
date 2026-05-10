@@ -3547,11 +3547,11 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     };
   }
   // WHATWG XHR § 4 — XMLHttpRequest ctor returns an XHR instance.
-  // open/send/setRequestHeader are the request-shaping methods; the
-  // legacy URL extractor's _isXhrObject identifies XHR receivers via
-  // type tracking. Modeling here as a builtin-ctor returning an
-  // obj-lit lets the same identification go through AV reference
-  // comparison.
+  // open/send/setRequestHeader are the request-shaping methods.
+  // Modeling here as a builtin-ctor returning an obj-lit lets all
+  // XHR-receiver identification go through AV reference comparison
+  // (callee.id === "XMLHttpRequest.prototype.open" etc.) without a
+  // separate type-tracker pass.
   if (ctorId === "WHATWG.XMLHttpRequest") {
     return {
       kind: "obj-lit",
@@ -8119,9 +8119,8 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
       // arguments back to their literal-built shape. Pure metadata —
       // doesn't affect equality on AbstractValue. Preserve _ctorId
       // (set by _specApplyBuiltinCtor for WHATWG instance ctors) so
-      // AV-based ctor identity checks (e.g. _isCrossOriginMsgReceiver,
-      // _isXhrObject) still see the constructor identity through the
-      // var binding.
+      // AV-based ctor identity checks (e.g. _isCrossOriginMsgReceiver)
+      // still see the constructor identity through the var binding.
       if (initAv && initAv.kind === "obj-lit" && d.id && d.id.type === "Identifier") {
         initAv = { kind: "obj-lit", props: initAv.props, _bindingName: d.id.name, _ctorId: initAv._ctorId };
       }
@@ -8477,7 +8476,7 @@ function _specEnsureProgramFixpoint(anyPath) {
 // Lightweight pre-pass for AV-grounded identity checks: populate
 // `_specPathValMemo` for unbound-global Identifier and MemberExpression
 // nodes so callers like `_isGlobalObject` / `_isLocationObject` /
-// `_isXhrObject` / etc. can resolve via spec-eval AVs without paying for
+// builtin-method id checks can resolve via spec-eval AVs without paying for
 // the full program-level fixpoint analysis. Per WHATWG HTML § 7.2.1
 // the global object IS the Window IDL interface — bare unbound names
 // resolve via globalThis registry → windowSelfAv.props. Member access
