@@ -13380,6 +13380,19 @@ function _specFindCallSites(funcPath) {
       funcPath.parent.right === fnNode && _t.isIdentifier(funcPath.parent.left)) {
     fnBindingId = funcPath.parent.left.name;
   }
+  // Class constructor: per ECMA § 15.7.1, ClassMethod with kind="constructor"
+  // is invoked via NewExpression on the class binding. Find the enclosing
+  // class declaration's binding and look up `new ClassName(...)` references.
+  var isCtor = _t.isClassMethod(fnNode) && fnNode.kind === "constructor";
+  var ctorClassBindingId = null;
+  if (isCtor) {
+    var clsBodyPath = funcPath.parentPath;  // ClassBody
+    var clsPath = clsBodyPath && clsBodyPath.parentPath;  // ClassDeclaration / ClassExpression
+    if (clsPath && (_t.isClassDeclaration(clsPath.node) || _t.isClassExpression(clsPath.node)) &&
+        clsPath.node.id) {
+      ctorClassBindingId = clsPath.node.id.name;
+    }
+  }
   var callExprPaths = [];
   if (fnBindingId) {
     var lookupScope = funcPath.parentPath && funcPath.parentPath.scope;
@@ -13391,6 +13404,22 @@ function _specFindCallSites(funcPath) {
           var brefParent = bref.parentPath && bref.parentPath.node;
           if (brefParent && _t.isCallExpression(brefParent) && brefParent.callee === bref.node) {
             callExprPaths.push(bref.parentPath);
+          }
+        }
+      }
+    }
+  }
+  if (ctorClassBindingId) {
+    var ctorScope = funcPath.scope && funcPath.scope.parent;
+    while (ctorScope && !ctorScope.getBinding(ctorClassBindingId)) ctorScope = ctorScope.parent;
+    if (ctorScope) {
+      var ctorBinding = ctorScope.getBinding(ctorClassBindingId);
+      if (ctorBinding && ctorBinding.referencePaths) {
+        for (var cri = 0; cri < ctorBinding.referencePaths.length; cri++) {
+          var cref = ctorBinding.referencePaths[cri];
+          var crefParent = cref.parentPath && cref.parentPath.node;
+          if (crefParent && _t.isNewExpression(crefParent) && crefParent.callee === cref.node) {
+            callExprPaths.push(cref.parentPath);
           }
         }
       }
@@ -19416,7 +19445,9 @@ function _avTaintTransitions(av, ctxPath) {
       var callSites = _specFindCallSites(fnPath);
       for (var ci = 0; ci < callSites.length; ci++) {
         var callRef = callSites[ci];
-        if (!_t.isCallExpression(callRef.node)) continue;
+        // Class constructors are invoked via NewExpression per ECMA § 13.3.5;
+        // accept both CallExpression and NewExpression as caller sites.
+        if (!_t.isCallExpression(callRef.node) && !_t.isNewExpression(callRef.node)) continue;
         if (av.idx >= callRef.node.arguments.length) continue;
         var argNode = callRef.node.arguments[av.idx];
         var argAv = _specPathValMemo.get(argNode);
