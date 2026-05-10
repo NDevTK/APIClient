@@ -2763,6 +2763,22 @@ function _specGlobalThisAv() {
       Infinity: { kind: "const", value: Infinity },
     }
   };
+  // WHATWG HTML § 7.2.1 — the global object IS the Window. Every global
+  // is accessible via `window.X` / `self.X` / `globalThis.X` because the
+  // expression evaluates the same `[[Get]]` on the same object. Mirror
+  // _SPEC_GLOBAL_AV.props onto windowSelfAv.props for keys windowSelfAv
+  // didn't already define (window-specific entries like `location`,
+  // `name`, the navigator/storage interfaces win — they're set above
+  // with their per-attribute taint metadata). After this, MemberExpression
+  // evaluation of `window.XMLHttpRequest`, `window.fetch`,
+  // `globalThis.encodeURIComponent`, etc. resolves to the SAME
+  // builtin-ctor / builtin-method AV as the bare identifier reference.
+  for (var _gpk in _SPEC_GLOBAL_AV.props) {
+    if (Object.prototype.hasOwnProperty.call(_SPEC_GLOBAL_AV.props, _gpk) &&
+        !Object.prototype.hasOwnProperty.call(windowSelfAv.props, _gpk)) {
+      windowSelfAv.props[_gpk] = _SPEC_GLOBAL_AV.props[_gpk];
+    }
+  }
   return _SPEC_GLOBAL_AV;
 }
 
@@ -9816,13 +9832,17 @@ function _specEvalLeaf(path, state, vals, effects) {
     // Callee resolves through scope/globalThis registry. When AV is a
     // builtin-ctor (URL/Request/URLSearchParams/Headers), dispatch via
     // _specApplyBuiltinCtor.
-    if (_t.isIdentifier(n.callee)) {
-      var newCalleeAv = vals.get(n.callee);
-      if (newCalleeAv && newCalleeAv.kind === "builtin-ctor") {
-        var newArgAvs = _specExpandCallArgs(n.arguments, vals);
-        if (newArgAvs === null) return { kind: "top" };
-        return _specApplyBuiltinCtor(newCalleeAv.id, newArgAvs);
-      }
+    //
+    // Callee can be Identifier (`new XMLHttpRequest()`) or MemberExpression
+    // (`new window.XMLHttpRequest()`, `new globalThis.URL()`). Both
+    // resolve to the SAME builtin-ctor AV via spec eval's MemberExpression
+    // evaluation against globalThis.props — read whichever applies from
+    // `vals` and dispatch identically per § 13.3.5.
+    var newCalleeAv = vals.get(n.callee);
+    if (newCalleeAv && newCalleeAv.kind === "builtin-ctor") {
+      var newArgAvs = _specExpandCallArgs(n.arguments, vals);
+      if (newArgAvs === null) return { kind: "top" };
+      return _specApplyBuiltinCtor(newCalleeAv.id, newArgAvs);
     }
     // Per-class spec semantics for built-in constructors not yet in the
     // ctor registry (Array, Number/String/Boolean wrappers).
