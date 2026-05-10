@@ -23395,63 +23395,21 @@ function _checkSanitization(path) {
 }
 
 // Return a per-call classification for the sanitizer decision the
-// analyzer just made. This extends _isSanitizerCall's boolean with a
-// short label + the reason the call was accepted or rejected, so a
-// finding auditor can see WHICH calls the classifier considered and
-// WHY each was or wasn't treated as a sanitizer.
-//
-// Returns null for a call that isn't a sanitizer candidate at all
-// (i.e., the call's shape doesn't even resemble the sanitizer set —
-// most calls in real code fall here, so we don't flood the output).
+// analyzer just made. AV-direct: reads the callee's spec-eval AV from
+// _specPathValMemo and matches its builtin-method id against the same
+// _SANITIZER_AV_IDS set _isSanitizerCall uses. Returns null for non-
+// sanitizer calls (most calls in real code).
 function _classifySanitizerCall(node, path) {
-  if (!_t.isCallExpression(node)) return null;
-  var callee = node.callee;
-  if (_t.isIdentifier(callee)) {
-    if (!_SANITIZER_GLOBALS[callee.name]) return null;
-    var shadowed = !!(path && path.scope && path.scope.getBinding(callee.name));
-    return {
-      label: callee.name + "()",
-      matched: !shadowed,
-      matchReason: shadowed
-        ? "'" + callee.name + "' is a known sanitizer global but shadowed in this scope — can't verify behavior"
-        : "known sanitizer global '" + callee.name + "' (unbound — real global)",
-    };
-  }
-  if (_t.isMemberExpression(callee) && !callee.computed && _t.isIdentifier(callee.property)) {
-    var methodName = callee.property.name;
-    var methodKnown = !!_SANITIZER_METHODS[methodName];
-    var objIsIdent = _t.isIdentifier(callee.object);
-    var objName = objIsIdent ? callee.object.name : null;
-    var objKnown = objIsIdent && !!_SANITIZER_OBJECTS[objName];
-    if (methodKnown && objKnown) {
-      var shadowedObj = !!(path && path.scope && path.scope.getBinding(objName));
-      return {
-        label: objName + "." + methodName + "()",
-        matched: !shadowedObj,
-        matchReason: shadowedObj
-          ? "object '" + objName + "' is a known sanitizer but shadowed — can't verify this call is the real one"
-          : "known sanitizer method '" + methodName + "' on known object '" + objName + "'",
-      };
-    }
-    if (methodKnown) {
-      return {
-        label: (objName || "<expr>") + "." + methodName + "()",
-        matched: true,
-        matchReason: "method name '" + methodName + "' is in the known-sanitizer-method set (object not verified)",
-      };
-    }
-    if (objKnown) {
-      var shadowedObj2 = !!(path && path.scope && path.scope.getBinding(objName));
-      return {
-        label: objName + "." + methodName + "()",
-        matched: !shadowedObj2,
-        matchReason: shadowedObj2
-          ? "sanitizer object '" + objName + "' is shadowed — can't verify"
-          : "any method call on known sanitizer object '" + objName + "'",
-      };
-    }
-  }
-  return null;
+  if (!_t.isCallExpression(node) || !path) return null;
+  _specEnsureProgramGlobalsPrepass(path);
+  var calleeAv = _specPathValMemo.get(node.callee);
+  if (!calleeAv || calleeAv.kind !== "builtin-method") return null;
+  if (!_SANITIZER_AV_IDS[calleeAv.id]) return null;
+  return {
+    label: calleeAv.id + "()",
+    matched: true,
+    matchReason: "callee resolves via spec-eval to ECMA sanitizer '" + calleeAv.id + "'",
+  };
 }
 
 // Build a structured audit report for the sanitizer decision around a
