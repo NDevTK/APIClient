@@ -22397,10 +22397,9 @@ function _tvsStep(F) {
                   }
                 }
               }
-              if (_t.isCallExpression(_objInit) && _t.isMemberExpression(_objInit.callee) &&
-                  !_objInit.callee.computed && _t.isIdentifier(_objInit.callee.property, { name: "assign" }) &&
-                  _t.isIdentifier(_objInit.callee.object, { name: "Object" }) &&
-                  !path.scope.getBinding("Object") && _objInit.arguments.length >= 2) {
+              var _objInitCalleeAv = _t.isCallExpression(_objInit) ? _specPathValMemo.get(_objInit.callee) : null;
+              if (_objInitCalleeAv && _objInitCalleeAv.kind === "builtin-method" &&
+                  _objInitCalleeAv.id === "Object.assign" && _objInit.arguments.length >= 2) {
                 L.objBinding = objBinding;
                 L.objPropName = objPropName;
                 L.objInit = _objInit;
@@ -22881,10 +22880,9 @@ function _tvsStep(F) {
         var _fallObjBinding = path.scope.getBinding(node.object.name);
         if (_fallObjBinding && _fallObjBinding.path.isVariableDeclarator() && _fallObjBinding.path.node.init) {
           var _fObjInit = _fallObjBinding.path.node.init;
-          if (_t.isCallExpression(_fObjInit) && _t.isMemberExpression(_fObjInit.callee) &&
-              !_fObjInit.callee.computed && _t.isIdentifier(_fObjInit.callee.property, { name: "assign" }) &&
-              _t.isIdentifier(_fObjInit.callee.object, { name: "Object" }) &&
-              !path.scope.getBinding("Object") && _fObjInit.arguments.length >= 2) {
+          var _fObjInitCalleeAv = _t.isCallExpression(_fObjInit) ? _specPathValMemo.get(_fObjInit.callee) : null;
+          if (_fObjInitCalleeAv && _fObjInitCalleeAv.kind === "builtin-method" &&
+              _fObjInitCalleeAv.id === "Object.assign" && _fObjInit.arguments.length >= 2) {
             L.objBinding = _fallObjBinding;
             L.objInit = _fObjInit;
             L.oaPI = 1;
