@@ -25373,9 +25373,15 @@ function _processDangerousPattern(path, result) {
   // Only flag when the receiver is a possibly cross-origin window — skip
   // BroadcastChannel, Worker, SharedWorker, MessageChannel, EventSource
   // which are same-origin-by-spec and don't carry cross-origin messages.
+  // AV-grounded callee identity for the bare-call form via builtin-method
+  // "EventTarget.prototype.addEventListener" (windowSelfAv → addEventListener
+  // via Window props fallthrough); MemberExpression form is property-name
+  // dispatch (any object's .addEventListener is the spec-defined IDL slot).
+  _specEnsureProgramFixpoint(path);
+  var _bareAelAv = _t.isIdentifier(callee) ? _specPathValMemo.get(callee) : null;
   var _isMsgAddListener =
     (_t.isMemberExpression(callee) && _t.isIdentifier(callee.property, { name: "addEventListener" })) ||
-    (_t.isIdentifier(callee, { name: "addEventListener" }) && !path.scope.getBinding("addEventListener"));
+    (_bareAelAv && _bareAelAv.kind === "builtin-method" && _bareAelAv.id === "EventTarget.prototype.addEventListener");
   if (_isMsgAddListener &&
       node.arguments.length >= 2 && _t.isStringLiteral(node.arguments[0], { value: "message" })) {
     if (_isCrossOriginMsgReceiver(callee, path)) {
