@@ -8114,21 +8114,17 @@ function _specPathOfFunc(funcNode, ctxPath) {
   if (ctxPath) _specEnsureProgramGlobalsPrepass(ctxPath);
   return _specFuncPathByNode.get(funcNode) || null;
 }
-// Spec-eval-direct AV for a Babel path. Always runs the program-globals
-// prepass first (idempotent — populates _specFuncPathByNode for AV→path
-// projection without traverse-during-traverse hazards), then runs
-// property-flow on the enclosing function for per-statement state-evolved
-// AVs. Falls back to ad-hoc _specEvalExpression for paths neither pass
-// visited. Single entry point consumers use to get an AV from a path.
+// Spec-eval-direct AV for a Babel path. Triggers the globals prepass
+// + per-function property flow (both idempotent), then reads the AV
+// from _specPathValMemo. After triggering, every reachable expression's
+// AV is populated; cache miss returns null and indicates a spec eval
+// coverage gap (not a runtime fallback to hide).
 function _avAtPath(path) {
   if (!path || !path.node) return null;
   _specEnsureProgramGlobalsPrepass(path);
   var encFn = path.getFunctionParent && path.getFunctionParent();
   if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
-  var av = _specPathValMemo.get(path.node);
-  if (av) return av;
-  try { return _specEvalExpression(path, _specStateCreate({}), []); }
-  catch (_) { return null; }
+  return _specPathValMemo.get(path.node) || null;
 }
 // Walk an AV to its underlying obj-lit (through or-AV alternatives).
 // Returns the first obj-lit reached, or null when the AV doesn't
