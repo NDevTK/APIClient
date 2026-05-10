@@ -2322,6 +2322,10 @@ function _specGlobalThisAv() {
   var fileReaderCtorAv = { kind: "builtin-ctor", id: "WHATWG.FileReader" };
   // WHATWG XHR FormData ctor — multipart/form-data builder.
   var formDataCtorAv = { kind: "builtin-ctor", id: "WHATWG.FormData" };
+  // ECMA § 20.2.1 Function constructor — `new Function(...args, body)`
+  // creates a function from string source. Body argument is run as code
+  // on first call — direct eval-equivalent gadget.
+  var functionCtorAv = { kind: "builtin-ctor", id: "ECMA.Function" };
   // WHATWG HTML § 9.5 BroadcastChannel — same-origin postMessage.
   var broadcastChannelCtorAv = { kind: "builtin-ctor", id: "WHATWG.BroadcastChannel" };
   // WHATWG HTML § 10 Web Workers / Channel Messaging. Worker / SharedWorker
@@ -2591,6 +2595,7 @@ function _specGlobalThisAv() {
       Worker: workerCtorAv,
       SharedWorker: sharedWorkerCtorAv,
       MessageChannel: messageChannelCtorAv,
+      Function: functionCtorAv,
       Uint8Array: uint8ArrayCtorAv,
       Uint16Array: uint16ArrayCtorAv,
       Uint32Array: uint32ArrayCtorAv,
@@ -25054,13 +25059,29 @@ function _processSecurityCallSink(path, result) {
 }
 
 // NewExpression sinks: new Function(value), new RegExp(value), new Worker(url), etc.
+// AV-grounded callee identification via builtin-ctor id (ECMA.Function,
+// ECMA.RegExp, WHATWG.Worker, WHATWG.SharedWorker, WHATWG.WebSocket,
+// WHATWG.EventSource — all installed on globalThis registry by
+// _specGlobalThisAv). Member-access forms (window.Function, etc.) project
+// to the same builtin-ctor AV via spec eval MemberExpression dispatch.
+var _BUILTIN_NEW_SINKS = {
+  "ECMA.Function":         { type: "eval", sink: "new Function" },
+  "WHATWG.Worker":         { type: "eval", sink: "new Worker" },
+  "WHATWG.SharedWorker":   { type: "eval", sink: "new SharedWorker" },
+  "WHATWG.WebSocket":      { type: "request-forgery", sink: "new WebSocket" },
+  "WHATWG.EventSource":    { type: "request-forgery", sink: "new EventSource" },
+};
 function _processSecurityNewSink(path, result) {
   var node = path.node;
-  var ctorName = _t.isIdentifier(node.callee) ? node.callee.name : null;
-  if (!ctorName || path.scope.getBinding(ctorName) || node.arguments.length === 0) return;
+  if (node.arguments.length === 0) return;
+  _specEnsureProgramFixpoint(path);
+  var calleeAv = _specPathValMemo.get(node.callee);
+  if (!calleeAv || calleeAv.kind !== "builtin-ctor") return;
 
-  // new Function(code) — only flag user-controlled
-  if (ctorName === "Function") {
+  // ECMA § 20.2.1.1 Function(p1, ..., pn, body): the LAST argument is
+  // the function body source — flagged when user-controlled (and not a
+  // literal source).
+  if (calleeAv.id === "ECMA.Function") {
     var lastArg = node.arguments[node.arguments.length - 1];
     if (!_t.isStringLiteral(lastArg)) {
       var fnSource = _traceValueSource(path.get("arguments." + (node.arguments.length - 1)), 0);
@@ -25069,8 +25090,9 @@ function _processSecurityNewSink(path, result) {
     return;
   }
 
-  // new RegExp(dynamicPattern) — ReDoS risk
-  if (ctorName === "RegExp") {
+  // ECMA § 22.2.3 new RegExp(dynamicPattern) — ReDoS risk when pattern
+  // is attacker-controlled.
+  if (calleeAv.id === "ECMA.RegExp") {
     if (!_t.isStringLiteral(node.arguments[0])) {
       var reSource = _traceValueSource(path.get("arguments.0"), 0);
       if (reSource.sourceType === "user-controlled") {
@@ -25081,16 +25103,13 @@ function _processSecurityNewSink(path, result) {
     return;
   }
 
-  // new Worker/SharedWorker/WebSocket/EventSource(url) — skip string literals
-  if (ctorName === "Worker" || ctorName === "SharedWorker" ||
-      ctorName === "WebSocket" || ctorName === "EventSource") {
+  // WHATWG ctors that take a URL/script-URL first arg.
+  var sinkInfo = _BUILTIN_NEW_SINKS[calleeAv.id];
+  if (sinkInfo) {
     if (_t.isStringLiteral(node.arguments[0])) return;
     var _newSrc = _traceValueSource(path.get("arguments.0"), 0);
     if (_newSrc.sourceType !== "user-controlled") return;
-    var _isNetwork = ctorName === "WebSocket" || ctorName === "EventSource";
-    _pushSink(result, node,
-      _isNetwork ? "request-forgery" : "eval",
-      "new " + ctorName, _newSrc, path);
+    _pushSink(result, node, sinkInfo.type, sinkInfo.sink, _newSrc, path);
   }
 }
 
