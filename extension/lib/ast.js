@@ -4520,24 +4520,56 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "document.createTextNode" || methodId === "document.createDocumentFragment") {
     return { kind: "dom-element", attached: false, props: {} };
   }
-  // WHATWG DOM § 4.2.5 Node.appendChild(node) / .insertBefore /
-  // .replaceChild / .append / .prepend — when receiver is a tree-mounted
-  // dom-element, the inserted node becomes attached. Mutation flag
-  // propagation is sound regardless of how many children the receiver
-  // already has.
+  // WHATWG DOM § 4.2.5 insert / Node.appendChild / .insertBefore /
+  // .replaceChild / .append / .prepend. When the receiver is a tree-
+  // mounted dom-element, the inserted node — and all of its descendants
+  // tracked so far — become connected (§ 4.4 "connected" attribute).
+  // When the receiver is detached, the inserted node stays detached but
+  // we record the parent->child link; a later insertion of THIS receiver
+  // into an attached parent must propagate the connected flag through
+  // every recorded descendant. Iterative worklist over the recorded
+  // child tree — JS call stack stays at depth 1.
   if (methodId === "Element.prototype.appendChild" ||
       methodId === "Element.prototype.insertBefore" ||
       methodId === "Element.prototype.replaceChild" ||
       methodId === "Element.prototype.append" ||
       methodId === "Element.prototype.prepend") {
-    if (recvAv && recvAv.kind === "dom-element" && recvAv.attached === true) {
-      // Mutate the inserted node's `attached` flag in-place. Subsequent
-      // method calls on the inserted node (via the same binding) see the
-      // updated state. Per WHATWG DOM § 4.2.5: insertion makes the node
-      // and all its descendants part of the tree.
-      for (var apI = 0; apI < argAvs.length; apI++) {
+    if (recvAv && recvAv.kind === "dom-element") {
+      if (!recvAv.children) recvAv.children = [];
+      // Argument shapes per § 4.2.5 step 1:
+      //   appendChild(node)     — args[0] is the node.
+      //   insertBefore(node, _) — args[0] is the node.
+      //   replaceChild(new, _)  — args[0] is the new node.
+      //   append(...nodes)      — every arg is a node.
+      //   prepend(...nodes)     — every arg is a node.
+      var startIdx = 0;
+      var endIdx = argAvs.length;
+      if (methodId === "Element.prototype.appendChild" ||
+          methodId === "Element.prototype.insertBefore" ||
+          methodId === "Element.prototype.replaceChild") {
+        endIdx = Math.min(1, argAvs.length);
+      }
+      for (var apI = startIdx; apI < endIdx; apI++) {
         var apA = argAvs[apI];
-        if (apA && apA.kind === "dom-element") apA.attached = true;
+        if (!apA || apA.kind !== "dom-element") continue;
+        if (recvAv.children.indexOf(apA) < 0) recvAv.children.push(apA);
+        if (recvAv.attached === true) {
+          // Worklist: mark apA attached, propagate to its recorded
+          // descendants. Visited set prevents cycles (DOM trees are
+          // acyclic but appendChild on the same node twice would
+          // re-enqueue without it).
+          var stack = [apA];
+          var seen = new Set();
+          while (stack.length > 0) {
+            var cur = stack.pop();
+            if (!cur || seen.has(cur) || cur.kind !== "dom-element") continue;
+            seen.add(cur);
+            cur.attached = true;
+            if (cur.children) {
+              for (var cci = 0; cci < cur.children.length; cci++) stack.push(cur.children[cci]);
+            }
+          }
+        }
       }
     }
     return argAvs[0] || { kind: "const", value: undefined };

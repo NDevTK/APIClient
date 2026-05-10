@@ -623,6 +623,39 @@ xss("ATTACHED via appendChild chain: body.appendChild(el).innerHTML = taint", `
   return false;
 });
 
+xss("FORWARD-PROPAGATION: child appended to detached parent later attached - IS XSS", `
+  var inner = document.createElement("span");
+  var outer = document.createElement("div");
+  outer.appendChild(inner);
+  document.body.appendChild(outer);
+  inner.innerHTML = location.hash;
+`, function(sinks) {
+  // Per WHATWG DOM § 4.4 "connected": when a node's ancestor becomes
+  // connected, every descendant becomes connected too. inner is appended
+  // to outer (still detached), then outer is appended to body (live);
+  // inner is now in the tree, innerHTML write IS executable XSS.
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "innerHTML" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+xss("DETACHED-SIBLING: child appended to detached parent never attached - NOT XSS", `
+  var inner = document.createElement("span");
+  var outer = document.createElement("div");
+  outer.appendChild(inner);
+  inner.innerHTML = location.hash;
+`, function(sinks) {
+  // outer never reaches the document tree; inner stays disconnected;
+  // innerHTML writes don't execute. Sink suppressed.
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "innerHTML" && s.source === "location.hash") return false;
+  }
+  return true;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);
