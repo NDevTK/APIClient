@@ -19129,6 +19129,10 @@ function _traceValueSource(path, _unused) {
       return bM;
     }
   }
+  // Idempotent globals prepass populates _specFuncPathByNode for every
+  // function in the program — required so the AV walker's param-caller
+  // transition can resolve fnNode -> fnPath in O(1) (no fallback traverse).
+  _specEnsureProgramGlobalsPrepass(path);
   if (path.getFunctionParent) {
     var encFn = path.getFunctionParent();
     if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
