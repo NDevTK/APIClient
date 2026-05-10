@@ -6675,9 +6675,17 @@ function _specDataAttrsToDatasetObjLit(dataAttrs) {
 function _specBuildDomElementObjLit(domEl) {
   var props = Object.create(null);
   if (domEl) {
-    if (domEl.href != null) props.href = { kind: "const", value: String(domEl.href) };
-    if (domEl.src != null) props.src = { kind: "const", value: String(domEl.src) };
-    if (domEl.action != null) props.action = { kind: "const", value: String(domEl.action) };
+    // All DOM-context attributes become const-string props per WHATWG DOM
+    // § 4.9 (Element interface — attributes are accessible as IDL attributes).
+    // Iterating every captured key (href/src/action/content/value/etc.)
+    // lets `el.<anyAttr>` resolve to the DOM-context value through spec
+    // eval projection, no per-attribute special-case needed.
+    for (var k in domEl) {
+      if (k === "dataAttrs") continue;
+      var v = domEl[k];
+      if (v == null) continue;
+      props[k] = { kind: "const", value: String(v) };
+    }
     if (domEl.dataAttrs && typeof domEl.dataAttrs === "object") {
       props.dataset = _specDataAttrsToDatasetObjLit(domEl.dataAttrs);
     }
@@ -13393,43 +13401,18 @@ function _ravStep(F) {
     var mm = sel.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
     return mm ? mm[1] : null;
   }
-  // Form 1: `document.querySelector("meta[name=X]").content`
-  if (skip < 1 && _t.isMemberExpression(node) && !node.computed &&
-      _t.isIdentifier(node.property, { name: "content" }) &&
-      _t.isCallExpression(node.object) &&
-      _t.isMemberExpression(node.object.callee) && !node.object.callee.computed &&
-      _t.isIdentifier(node.object.callee.object, { name: "document" }) &&
-      !path.scope.getBinding("document") &&
-      _t.isIdentifier(node.object.callee.property, { name: "querySelector" }) &&
-      node.object.arguments.length === 1 &&
-      _t.isStringLiteral(node.object.arguments[0])) {
-    var metaName1 = _ravParseMetaNameSelector(node.object.arguments[0].value);
-    if (metaName1 && _domContext && _domContext.metaTags &&
-        Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaName1)) {
-      return { done: [_domContext.metaTags[metaName1]] };
-    }
-  }
-  // Form 1b: `document.getElementById("X").href` / .src / .action
-  // — when HTML has an element with id=X, look up the matching
-  // attribute via _domContext.byId. WHATWG DOM: getElementById is a
-  // standard Document method.
-  if (skip < 1 && _t.isMemberExpression(node) && !node.computed &&
-      _t.isIdentifier(node.property) &&
-      _t.isCallExpression(node.object) &&
-      _t.isMemberExpression(node.object.callee) && !node.object.callee.computed &&
-      _t.isIdentifier(node.object.callee.object, { name: "document" }) &&
-      !path.scope.getBinding("document") &&
-      _t.isIdentifier(node.object.callee.property, { name: "getElementById" }) &&
-      node.object.arguments.length === 1 &&
-      _t.isStringLiteral(node.object.arguments[0])) {
-    var gbiId = node.object.arguments[0].value;
-    var gbiProp = node.property.name;
-    if (_domContext && _domContext.byId &&
-        Object.prototype.hasOwnProperty.call(_domContext.byId, gbiId)) {
-      var elInfo = _domContext.byId[gbiId];
-      if (elInfo && elInfo[gbiProp] != null) {
-        return { done: [elInfo[gbiProp]] };
-      }
+  // Forms 1/1b/1e: spec eval already projects DOM lookups
+  // (`document.querySelector("meta[name=X]").content`,
+  // `document.getElementById("X").href`, `document.querySelector("#X").<prop>`)
+  // through documentProps + _specApplyBuiltinMethod's DOM context probe
+  // to a const string AV. Use that directly instead of re-walking the AST
+  // shape — same lookup, AV-grounded callee identity (no name-based
+  // shape match on `document` / `querySelector` / `getElementById`).
+  if (skip < 1 && _t.isMemberExpression(node) && !node.computed && _t.isIdentifier(node.property)) {
+    _specEnsureProgramFixpoint(path);
+    var domNodeAv = _specPathValMemo.get(node);
+    if (domNodeAv && domNodeAv.kind === "const" && typeof domNodeAv.value === "string") {
+      return { done: [domNodeAv.value] };
     }
   }
   // Form 1e: `document.querySelector("#X").<prop>` — CSS id selector.
