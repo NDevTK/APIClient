@@ -585,6 +585,40 @@ xss("UNATTACHED: createElement + outerHTML (no append) — suppressed", `
   return true;
 });
 
+console.log("\n=== innerHTML attachment ===\n");
+
+xss("ATTACHED: document.body.innerHTML = taint", `
+  document.body.innerHTML = location.hash;
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "innerHTML" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+xss("UNATTACHED: createElement + innerHTML (no append) — suppressed", `
+  var el = document.createElement("div");
+  el.innerHTML = location.hash;
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "innerHTML" && s.source === "location.hash") return false;
+  }
+  return true;
+});
+
+xss("ATTACHED via appendChild chain: body.appendChild(el).innerHTML = taint", `
+  var el = document.createElement("div");
+  document.body.appendChild(el).innerHTML = location.hash;
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "innerHTML" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);
