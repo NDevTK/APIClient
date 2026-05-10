@@ -25329,10 +25329,9 @@ function _processDangerousPattern(path, result) {
   // URL value. Narrow to sources whose structure actually admits arbitrary
   // attacker-chosen keys: JSON.parse(tainted), Object.fromEntries(tainted),
   // or a spread/destructure from one of those.
-  if (_t.isMemberExpression(callee) && !callee.computed &&
-      _t.isIdentifier(callee.property, { name: "assign" }) &&
-      _t.isIdentifier(callee.object, { name: "Object" }) && !path.scope.getBinding("Object") &&
-      node.arguments.length >= 2) {
+  // Object.assign(target, ...sources) — merge attacker-shaped object into
+  // target. AV-grounded callee identity via Object.assign builtin-method.
+  if (_dpBuiltinId === "Object.assign" && node.arguments.length >= 2) {
     for (var _oaI = 1; _oaI < node.arguments.length; _oaI++) {
       var _oaArgPath = path.get("arguments." + _oaI);
       var _oaSrc = _isArbitraryKeyObjectSource(_oaArgPath);
