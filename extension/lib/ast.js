@@ -11356,8 +11356,11 @@ function _containsNetworkSink(funcPath) {
     },
     NewExpression: function(innerPath) {
       if (found) { innerPath.stop(); return; }
-      if (_t.isIdentifier(innerPath.node.callee, { name: "XMLHttpRequest" }) &&
-          !innerPath.scope.getBinding("XMLHttpRequest")) {
+      // AV-grounded ctor identity via builtin-ctor "WHATWG.XMLHttpRequest"
+      // installed by _specGlobalThisAv.
+      _specEnsureProgramFixpoint(innerPath);
+      var newCalleeAv = _specPathValMemo.get(innerPath.node.callee);
+      if (newCalleeAv && newCalleeAv.kind === "builtin-ctor" && newCalleeAv.id === "WHATWG.XMLHttpRequest") {
         found = true; innerPath.stop();
       }
     },
