@@ -26111,15 +26111,25 @@ function _findDestructuredKey(objPattern, bindingName) {
   return null;
 }
 
+// Spec-eval AV-driven check: is the call JSON.stringify(...) per
+// ECMA § 25.5.2? When the callee's AV is the canonical builtin-method
+// with id "JSON.stringify" (registered in globalThis JSON.props),
+// dispatch matches the spec one. Triggers spec eval on enclosing
+// function (idempotent), inspects callee AV.
 function _isJsonStringify(node, path) {
-  if (!node || !_t.isCallExpression(node)) return false;
-  var c = node.callee;
-  if (!_t.isMemberExpression(c) ||
-      !_t.isIdentifier(c.object, { name: "JSON" }) ||
-      !_t.isIdentifier(c.property, { name: "stringify" })) return false;
-  // Verify JSON is the global, not a shadowed local
-  if (path && path.scope.getBinding("JSON")) return false;
-  return true;
+  if (!node || !_t.isCallExpression(node) || !path) return false;
+  var encFn = path.getFunctionParent && path.getFunctionParent();
+  if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
+    try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+  } else if (!encFn) {
+    var progPath = path;
+    while (progPath && progPath.parentPath) progPath = progPath.parentPath;
+    if (progPath && progPath.node && _t.isProgram(progPath.node)) {
+      try { _specAnalyzeProgramWithFixpoint(progPath); } catch (_) {}
+    }
+  }
+  var calleeAv = _specPathValMemo.get(node.callee);
+  return !!(calleeAv && calleeAv.kind === "builtin-method" && calleeAv.id === "JSON.stringify");
 }
 
 function _extractLiteralArray(node) {
