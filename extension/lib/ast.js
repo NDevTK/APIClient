@@ -2527,6 +2527,24 @@ function _specGlobalThisAv() {
       // HTML § 2.7.5 structuredClone — deep-clones any structured-cloneable
       // value (including nested objects with attacker-chosen keys).
       structuredClone: { kind: "builtin-method", id: "global.structuredClone" },
+      // W3C Trusted Types Level 1 — TrustedTypePolicyFactory exposed as
+      // window.trustedTypes. createPolicy registers a policy whose
+      // createHTML/createScript/createScriptURL transforms gate sink
+      // writes when the document Trust Types CSP directive is enforced.
+      trustedTypes: {
+        kind: "obj-lit",
+        props: {
+          createPolicy: { kind: "builtin-method", id: "TrustedTypePolicyFactory.prototype.createPolicy" },
+          isHTML: { kind: "builtin-method", id: "TrustedTypePolicyFactory.prototype.isHTML" },
+          isScript: { kind: "builtin-method", id: "TrustedTypePolicyFactory.prototype.isScript" },
+          isScriptURL: { kind: "builtin-method", id: "TrustedTypePolicyFactory.prototype.isScriptURL" },
+          getAttributeType: { kind: "builtin-method", id: "TrustedTypePolicyFactory.prototype.getAttributeType" },
+          getPropertyType: { kind: "builtin-method", id: "TrustedTypePolicyFactory.prototype.getPropertyType" },
+          emptyHTML: { kind: "top" },
+          emptyScript: { kind: "top" },
+          defaultPolicy: { kind: "top" },
+        }
+      },
       // ECMA § 19.2.1 eval — direct eval (when bare `eval(x)` is the call
       // form, scope-checked unbound). Indirect eval (`(0,eval)(x)`) flows
       // through SequenceExpression eval semantics; spec eval evaluates
@@ -25343,10 +25361,11 @@ function _processDangerousPattern(path, result) {
     return;
   }
 
-  // trustedTypes.createPolicy with passthrough identity functions — defeats Trusted Types
-  if (_t.isMemberExpression(callee) && !callee.computed &&
-      _t.isIdentifier(callee.property, { name: "createPolicy" }) &&
-      _t.isIdentifier(callee.object, { name: "trustedTypes" }) && !path.scope.getBinding("trustedTypes") &&
+  // trustedTypes.createPolicy with passthrough identity functions — defeats
+  // Trusted Types. AV-grounded callee identity via
+  // TrustedTypePolicyFactory.prototype.createPolicy builtin-method (W3C
+  // Trusted Types Level 1) installed on windowSelfAv.props.trustedTypes.
+  if (_dpBuiltinId === "TrustedTypePolicyFactory.prototype.createPolicy" &&
       node.arguments.length >= 2 && _t.isObjectExpression(node.arguments[1])) {
     var _ttProps = node.arguments[1].properties;
     for (var _tti = 0; _tti < _ttProps.length; _tti++) {
