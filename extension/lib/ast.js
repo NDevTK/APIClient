@@ -4397,18 +4397,8 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       methodId === "FileReader.prototype.abort") {
     return { kind: "const", value: undefined };
   }
-  // WHATWG XHR FormData — append/set/delete return undefined per spec.
-  // get/getAll return the stored values (caller-controlled).
-  if (methodId === "FormData.prototype.append" ||
-      methodId === "FormData.prototype.delete" ||
-      methodId === "FormData.prototype.set") {
-    return { kind: "const", value: undefined };
-  }
-  if (methodId === "FormData.prototype.get" || methodId === "FormData.prototype.getAll" ||
-      methodId === "FormData.prototype.has" || methodId === "FormData.prototype.entries" ||
-      methodId === "FormData.prototype.keys" || methodId === "FormData.prototype.values") {
-    return { kind: "top" };
-  }
+  // FormData.prototype handlers moved below — they need recvName/state
+  // to mutate the formdata-instance entries on .append/.set/.delete.
   // WHATWG HTML § 9.5 BroadcastChannel.
   if (methodId === "BroadcastChannel.prototype.postMessage" ||
       methodId === "BroadcastChannel.prototype.close") {
@@ -18169,38 +18159,39 @@ function _extractBodyParams(rootNode, rootScope) {
     if (key && visited.has(key)) continue;
     if (key) visited.add(key);
 
-    // Identifier with binding: read spec-eval AV. formdata-instance is
-    // produced by `new FormData()` and mutated by .append/.set per
-    // WHATWG XHR § 5.2 — entries directly project to body params with
-    // no AST shape matching needed.
+    // AV-direct check: when this body expression's spec-eval AV is a
+    // formdata-instance, project entries to body params per WHATWG
+    // XHR § 5.2. Trigger spec eval first so the AV is populated when
+    // we read it. Idempotent.
+    var bodyEncFn = scope && scope.getFunctionParent && scope.getFunctionParent();
+    if (bodyEncFn && _t.isFunction(bodyEncFn.node) && !_specEffectsMemo.has(bodyEncFn.node)) {
+      try { _specAnalyzePropertyFlow(bodyEncFn); } catch (_) {}
+    }
+    var nodeAv = _specPathValMemo.get(node);
+    if (nodeAv && nodeAv.kind === "formdata-instance" && nodeAv.entries) {
+      var fdParams = [];
+      for (var fdei = 0; fdei < nodeAv.entries.length; fdei++) {
+        var fde = nodeAv.entries[fdei];
+        if (!fde.name || fde.name.kind !== "const" || typeof fde.name.value !== "string" || !fde.name.value) continue;
+        var fdAlreadyHave = false;
+        for (var fdpi = 0; fdpi < fdParams.length; fdpi++) {
+          if (fdParams[fdpi].name === fde.name.value) { fdAlreadyHave = true; break; }
+        }
+        if (fdAlreadyHave) continue;
+        var fdField = { name: fde.name.value, required: true, location: "body" };
+        if (fde.value && fde.value.kind === "const" && typeof fde.value.value === "string") {
+          fdField.defaultValue = fde.value.value;
+          fdField.type = "string";
+        }
+        fdParams.push(fdField);
+      }
+      if (fdParams.length > 0) { pushAccum(fdParams); continue; }
+    }
+
+    // Identifier with binding: alias chain or function-param caller loop.
     if (_t.isIdentifier(node) && scope && scope.scope) {
       var bnd = scope.scope.getBinding(node.name);
       if (bnd) {
-        // AV-direct: read formdata-instance entries from the binding's
-        // current spec-eval state. Spec eval propagates state through
-        // .append/.set call sites via _specApplyBuiltinMethod's mutation
-        // of state[recvName]. _specPathValMemo on the identifier node
-        // is populated when the enclosing body is analysed.
-        var nodeAv = _specPathValMemo.get(node);
-        if (nodeAv && nodeAv.kind === "formdata-instance" && nodeAv.entries) {
-          var fdParams = [];
-          for (var fdei = 0; fdei < nodeAv.entries.length; fdei++) {
-            var fde = nodeAv.entries[fdei];
-            if (!fde.name || fde.name.kind !== "const" || typeof fde.name.value !== "string" || !fde.name.value) continue;
-            var fdAlreadyHave = false;
-            for (var fdpi = 0; fdpi < fdParams.length; fdpi++) {
-              if (fdParams[fdpi].name === fde.name.value) { fdAlreadyHave = true; break; }
-            }
-            if (fdAlreadyHave) continue;
-            var fdField = { name: fde.name.value, required: true, location: "body" };
-            if (fde.value && fde.value.kind === "const" && typeof fde.value.value === "string") {
-              fdField.defaultValue = fde.value.value;
-              fdField.type = "string";
-            }
-            fdParams.push(fdField);
-          }
-          if (fdParams.length > 0) { pushAccum(fdParams); continue; }
-        }
         if (_t.isVariableDeclarator(bnd.path.node) && bnd.path.node.init) {
           stack.push({ node: bnd.path.node.init, scope: bnd.path });
           continue;
