@@ -2313,6 +2313,20 @@ function _specGlobalThisAv() {
   // TextEncoder.prototype.encode(string) → Uint8Array (carries string content).
   var textDecoderCtorAv = { kind: "builtin-ctor", id: "WHATWG.TextDecoder" };
   var textEncoderCtorAv = { kind: "builtin-ctor", id: "WHATWG.TextEncoder" };
+  // ECMA § 25.1 TypedArray ctors. All variants share the same value-flow
+  // behaviour for our purposes (binary array; opaque to string-flow but
+  // valid receiver for prototype methods like .slice / .set).
+  var uint8ArrayCtorAv = { kind: "builtin-ctor", id: "ECMA.Uint8Array" };
+  var uint16ArrayCtorAv = { kind: "builtin-ctor", id: "ECMA.Uint16Array" };
+  var uint32ArrayCtorAv = { kind: "builtin-ctor", id: "ECMA.Uint32Array" };
+  var int8ArrayCtorAv = { kind: "builtin-ctor", id: "ECMA.Int8Array" };
+  var int16ArrayCtorAv = { kind: "builtin-ctor", id: "ECMA.Int16Array" };
+  var int32ArrayCtorAv = { kind: "builtin-ctor", id: "ECMA.Int32Array" };
+  var float32ArrayCtorAv = { kind: "builtin-ctor", id: "ECMA.Float32Array" };
+  var float64ArrayCtorAv = { kind: "builtin-ctor", id: "ECMA.Float64Array" };
+  var uint8ClampedArrayCtorAv = { kind: "builtin-ctor", id: "ECMA.Uint8ClampedArray" };
+  var arrayBufferCtorAv = { kind: "builtin-ctor", id: "ECMA.ArrayBuffer" };
+  var dataViewCtorAv = { kind: "builtin-ctor", id: "ECMA.DataView" };
   // Symbol namespace per ECMA § 20.4. Symbol value identity isn't
   // statically tracked (each call to Symbol(desc) is unique per spec
   // § 20.4.1.1); we model the well-known symbols as opaque obj-lit
@@ -2490,6 +2504,17 @@ function _specGlobalThisAv() {
       RegExp: regExpCtorAv,
       TextDecoder: textDecoderCtorAv,
       TextEncoder: textEncoderCtorAv,
+      Uint8Array: uint8ArrayCtorAv,
+      Uint16Array: uint16ArrayCtorAv,
+      Uint32Array: uint32ArrayCtorAv,
+      Int8Array: int8ArrayCtorAv,
+      Int16Array: int16ArrayCtorAv,
+      Int32Array: int32ArrayCtorAv,
+      Float32Array: float32ArrayCtorAv,
+      Float64Array: float64ArrayCtorAv,
+      Uint8ClampedArray: uint8ClampedArrayCtorAv,
+      ArrayBuffer: arrayBufferCtorAv,
+      DataView: dataViewCtorAv,
       // Global functions per § 19.2.
       encodeURI: { kind: "builtin-method", id: "global.encodeURI" },
       encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
@@ -3065,6 +3090,64 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         encode: { kind: "builtin-method", id: "TextEncoder.prototype.encode" },
         encodeInto: { kind: "builtin-method", id: "TextEncoder.prototype.encodeInto" },
         encoding: { kind: "const", value: "utf-8" },
+      }
+    };
+  }
+  // ECMA § 25.1 TypedArray ctors. All variants return an obj-lit AV
+  // exposing the shared TypedArray.prototype methods. Length is opaque
+  // (depends on ctor arg shape); slice/subarray/set are common methods.
+  if (ctorId === "ECMA.Uint8Array" || ctorId === "ECMA.Uint16Array" ||
+      ctorId === "ECMA.Uint32Array" || ctorId === "ECMA.Int8Array" ||
+      ctorId === "ECMA.Int16Array" || ctorId === "ECMA.Int32Array" ||
+      ctorId === "ECMA.Float32Array" || ctorId === "ECMA.Float64Array" ||
+      ctorId === "ECMA.Uint8ClampedArray") {
+    return {
+      kind: "obj-lit",
+      props: {
+        length: { kind: "top" },
+        byteLength: { kind: "top" },
+        byteOffset: { kind: "top" },
+        buffer: { kind: "top" },
+        slice: { kind: "builtin-method", id: "TypedArray.prototype.slice" },
+        subarray: { kind: "builtin-method", id: "TypedArray.prototype.subarray" },
+        set: { kind: "builtin-method", id: "TypedArray.prototype.set" },
+        fill: { kind: "builtin-method", id: "TypedArray.prototype.fill" },
+        forEach: { kind: "builtin-method", id: "TypedArray.prototype.forEach" },
+      }
+    };
+  }
+  if (ctorId === "ECMA.ArrayBuffer") {
+    return {
+      kind: "obj-lit",
+      props: {
+        byteLength: { kind: "top" },
+        slice: { kind: "builtin-method", id: "ArrayBuffer.prototype.slice" },
+      }
+    };
+  }
+  if (ctorId === "ECMA.DataView") {
+    return {
+      kind: "obj-lit",
+      props: {
+        byteLength: { kind: "top" },
+        byteOffset: { kind: "top" },
+        buffer: { kind: "top" },
+        getInt8: { kind: "builtin-method", id: "DataView.prototype.getInt8" },
+        getUint8: { kind: "builtin-method", id: "DataView.prototype.getUint8" },
+        getInt16: { kind: "builtin-method", id: "DataView.prototype.getInt16" },
+        getUint16: { kind: "builtin-method", id: "DataView.prototype.getUint16" },
+        getInt32: { kind: "builtin-method", id: "DataView.prototype.getInt32" },
+        getUint32: { kind: "builtin-method", id: "DataView.prototype.getUint32" },
+        getFloat32: { kind: "builtin-method", id: "DataView.prototype.getFloat32" },
+        getFloat64: { kind: "builtin-method", id: "DataView.prototype.getFloat64" },
+        setInt8: { kind: "builtin-method", id: "DataView.prototype.setInt8" },
+        setUint8: { kind: "builtin-method", id: "DataView.prototype.setUint8" },
+        setInt16: { kind: "builtin-method", id: "DataView.prototype.setInt16" },
+        setUint16: { kind: "builtin-method", id: "DataView.prototype.setUint16" },
+        setInt32: { kind: "builtin-method", id: "DataView.prototype.setInt32" },
+        setUint32: { kind: "builtin-method", id: "DataView.prototype.setUint32" },
+        setFloat32: { kind: "builtin-method", id: "DataView.prototype.setFloat32" },
+        setFloat64: { kind: "builtin-method", id: "DataView.prototype.setFloat64" },
       }
     };
   }
@@ -3668,6 +3751,36 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "TextEncoder.prototype.encode" ||
       methodId === "TextEncoder.prototype.encodeInto") {
     return { kind: "top" };
+  }
+  // ECMA § 25.1 TypedArray.prototype methods. slice/subarray return new
+  // TypedArray instance (modeled as another opaque obj-lit per ctor);
+  // set/fill mutate in place; forEach is a HOF (cb dispatched elsewhere).
+  // Return top — the binary buffer's content is opaque to string-flow
+  // unless a TextDecoder.decode follows, which is also top.
+  if (methodId === "TypedArray.prototype.slice" ||
+      methodId === "TypedArray.prototype.subarray" ||
+      methodId === "ArrayBuffer.prototype.slice") {
+    return { kind: "top" };
+  }
+  if (methodId === "TypedArray.prototype.set" ||
+      methodId === "TypedArray.prototype.fill" ||
+      methodId === "TypedArray.prototype.forEach") {
+    return { kind: "const", value: undefined };
+  }
+  // ECMA § 25.3 DataView.prototype getters/setters. Getters return
+  // numeric values (opaque without buffer-AV tracking); setters return
+  // undefined.
+  if (methodId === "DataView.prototype.getInt8" || methodId === "DataView.prototype.getUint8" ||
+      methodId === "DataView.prototype.getInt16" || methodId === "DataView.prototype.getUint16" ||
+      methodId === "DataView.prototype.getInt32" || methodId === "DataView.prototype.getUint32" ||
+      methodId === "DataView.prototype.getFloat32" || methodId === "DataView.prototype.getFloat64") {
+    return { kind: "top" };
+  }
+  if (methodId === "DataView.prototype.setInt8" || methodId === "DataView.prototype.setUint8" ||
+      methodId === "DataView.prototype.setInt16" || methodId === "DataView.prototype.setUint16" ||
+      methodId === "DataView.prototype.setInt32" || methodId === "DataView.prototype.setUint32" ||
+      methodId === "DataView.prototype.setFloat32" || methodId === "DataView.prototype.setFloat64") {
+    return { kind: "const", value: undefined };
   }
   // WHATWG WebCrypto § 2.2 Crypto.randomUUID() → DOMString (UUID v4).
   // The returned UUID is generated by the browser's CSPRNG — not
