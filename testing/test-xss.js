@@ -436,6 +436,21 @@ xss("safe: literal template in eval", `
   return true;
 });
 
+console.log("\n=== Dim upgrade via slice ===\n");
+
+xss("fetch(location.hash.slice(1)) - dim upgrade strips # marker", `
+  fetch(location.hash.slice(1));
+`, function(sinks) {
+  // Per CLAUDE.md: slice(N>=1) on location.hash strips the # marker —
+  // result CAN be a full attacker URL. Origin dim upgrades to true,
+  // request-forgery filter no longer suppresses.
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "request-forgery" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
 console.log("\n=== Closure-captured taint ===\n");
 
 xss("closure-captured taint var", `
