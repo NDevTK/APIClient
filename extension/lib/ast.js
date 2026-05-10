@@ -16033,13 +16033,27 @@ function _collectExprUses(exprPath) {
   return [];
 }
 
+// Spec-eval AV-driven check: is callPath an Object.defineProperty
+// call? Per ECMA § 20.1.2.4, Object.defineProperty is registered in
+// the globalThis registry as a builtin-method AV with id
+// "Object.defineProperty". When the callee's AV matches that
+// builtin-method, the dispatch is the spec one. Trigger spec eval
+// on enclosing function (idempotent) and inspect the callee's AV.
 function _isObjectDefineProperty(callPath) {
-  var c = callPath.node.callee;
-  if (!_t.isMemberExpression(c) || c.computed) return false;
-  if (!_t.isIdentifier(c.property, { name: "defineProperty" })) return false;
-  if (!_t.isIdentifier(c.object, { name: "Object" })) return false;
-  if (callPath.scope.getBinding("Object")) return false;
-  return callPath.node.arguments.length >= 3;
+  if (callPath.node.arguments.length < 3) return false;
+  var encFn = callPath.getFunctionParent && callPath.getFunctionParent();
+  if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
+    try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+  } else if (!encFn) {
+    var progPath = callPath;
+    while (progPath && progPath.parentPath) progPath = progPath.parentPath;
+    if (progPath && progPath.node && _t.isProgram(progPath.node)) {
+      try { _specAnalyzeProgramWithFixpoint(progPath); } catch (_) {}
+    }
+  }
+  var calleeAv = _specPathValMemo.get(callPath.node.callee);
+  if (calleeAv && calleeAv.kind === "builtin-method" && calleeAv.id === "Object.defineProperty") return true;
+  return false;
 }
 
 // Read the descriptor at arg[2] of an Object.defineProperty call. If the
