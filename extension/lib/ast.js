@@ -1807,8 +1807,11 @@ function _processNetworkSink(path, result) {
 function _processNewExpressionSink(path, result) {
   var node = path.node;
   var callee = node.callee;
-  // new EventSource(url)
-  if (_t.isIdentifier(callee, { name: "EventSource" }) && !path.scope.getBinding("EventSource") &&
+  // new EventSource(url) — AV-grounded callee identity via builtin-ctor
+  // "WHATWG.EventSource" (installed on globalThis registry).
+  _specEnsureProgramFixpoint(path);
+  var esCalleeAv = _specPathValMemo.get(callee);
+  if (esCalleeAv && esCalleeAv.kind === "builtin-ctor" && esCalleeAv.id === "WHATWG.EventSource" &&
       node.arguments.length >= 1) {
     var urls = _resolveAllValues(path.get("arguments.0"), 0);
     for (var i = 0; i < urls.length; i++) {
@@ -1824,10 +1827,12 @@ function _processImageSrcSink(path, result) {
   var left = node.left;
   if (!_t.isMemberExpression(left) || left.computed || !_t.isIdentifier(left.property, { name: "src" })) return;
   if (!_t.isIdentifier(left.object)) return;
-  var binding = path.scope.getBinding(left.object.name);
-  if (!binding || !_t.isVariableDeclarator(binding.path.node) || !binding.path.node.init) return;
-  var init = binding.path.node.init;
-  if (!_t.isNewExpression(init) || !_t.isIdentifier(init.callee, { name: "Image" }) || path.scope.getBinding("Image")) return;
+  // AV-grounded receiver identity via builtin-ctor "WHATWG.Image" — the
+  // var binding's init was `new Image()`. Spec eval propagates the ctor
+  // result through VariableDeclarator binding tag (preserving _ctorId).
+  _specEnsureProgramFixpoint(path);
+  var imgRecvAv = _specPathValMemo.get(left.object);
+  if (!imgRecvAv || imgRecvAv.kind !== "obj-lit" || imgRecvAv._ctorId !== "WHATWG.Image") return;
   var urls = _resolveAllValues(path.get("right"), 0);
   for (var i = 0; i < urls.length; i++) {
     _pushFetchSite(result, _buildFetchSite(urls[i], "GET", {}, "pixel"));
@@ -2331,6 +2336,10 @@ function _specGlobalThisAv() {
   // creates a function from string source. Body argument is run as code
   // on first call — direct eval-equivalent gadget.
   var functionCtorAv = { kind: "builtin-ctor", id: "ECMA.Function" };
+  // WHATWG HTML § 4.8.4 HTMLImageElement — `new Image()` constructs an
+  // <img> element. Setting .src triggers an image GET (legacy beacon /
+  // pixel tracker pattern; classified by URL extractor as `pixel` sink).
+  var imageCtorAv = { kind: "builtin-ctor", id: "WHATWG.Image" };
   // WHATWG HTML § 9.5 BroadcastChannel — same-origin postMessage.
   var broadcastChannelCtorAv = { kind: "builtin-ctor", id: "WHATWG.BroadcastChannel" };
   // WHATWG HTML § 10 Web Workers / Channel Messaging. Worker / SharedWorker
@@ -2656,6 +2665,7 @@ function _specGlobalThisAv() {
       SharedWorker: sharedWorkerCtorAv,
       MessageChannel: messageChannelCtorAv,
       Function: functionCtorAv,
+      Image: imageCtorAv,
       Uint8Array: uint8ArrayCtorAv,
       Uint16Array: uint16ArrayCtorAv,
       Uint32Array: uint32ArrayCtorAv,
@@ -3418,6 +3428,22 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     };
   }
   // WHATWG HTML § 9.5 BroadcastChannel — same-origin postMessage.
+  // WHATWG HTML § 4.8.4 HTMLImageElement (`new Image()`).
+  if (ctorId === "WHATWG.Image") {
+    return {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.Image",
+      props: {
+        src: { kind: "top" },
+        alt: { kind: "top" },
+        width: { kind: "top" },
+        height: { kind: "top" },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+      }
+    };
+  }
   if (ctorId === "WHATWG.BroadcastChannel") {
     return {
       kind: "obj-lit",
