@@ -2257,10 +2257,28 @@ function _specGlobalThisAv() {
     parse: { kind: "builtin-method", id: "Date.parse" },
     UTC: { kind: "builtin-method", id: "Date.UTC" },
   };
+  // WHATWG DOM § 4.3.1 Document.body / .head / .documentElement —
+  // these are root-mounted DOM elements per HTML spec (always in the
+  // document tree when document is loaded). dom-element AVs with
+  // attached:true so security-sink dispatch (setAttribute event-handler
+  // injection, etc.) recognises them as executable sinks.
+  var documentBodyEl = { kind: "dom-element", attached: true, props: { _idlName: { kind: "const", value: "HTMLBodyElement" } } };
+  var documentHeadEl = { kind: "dom-element", attached: true, props: { _idlName: { kind: "const", value: "HTMLHeadElement" } } };
+  var documentRootEl = { kind: "dom-element", attached: true, props: { _idlName: { kind: "const", value: "HTMLHtmlElement" } } };
   // WHATWG document host object per DOM § 4.5 — Document interface.
   var documentProps = {
     getElementById: { kind: "builtin-method", id: "document.getElementById" },
     querySelector: { kind: "builtin-method", id: "document.querySelector" },
+    // WHATWG DOM § 4.5 / HTML § 4.3.1 root-mounted Document children.
+    body: documentBodyEl,
+    head: documentHeadEl,
+    documentElement: documentRootEl,
+    // WHATWG DOM § 4.5.3 Document.createElement — creates a new
+    // unattached Element. attached:false until appendChild on attached parent.
+    createElement: { kind: "builtin-method", id: "document.createElement" },
+    createElementNS: { kind: "builtin-method", id: "document.createElementNS" },
+    createTextNode: { kind: "builtin-method", id: "document.createTextNode" },
+    createDocumentFragment: { kind: "builtin-method", id: "document.createDocumentFragment" },
     // WHATWG HTML § 4.10.4 Document.write / Document.writeln — DOM XSS sink.
     write: { kind: "builtin-method", id: "Document.prototype.write" },
     writeln: { kind: "builtin-method", id: "Document.prototype.writeln" },
@@ -4465,6 +4483,42 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     return { kind: "const", value: undefined };
   }
   // WHATWG DOM § 4.9.1 Element.getAttribute(qualifiedName). When recv
+  // WHATWG DOM § 4.5.3 Document.createElement(localName) — returns a
+  // newly-created Element NOT in the document tree. attached:false
+  // until parent.appendChild(el) on a tree-mounted parent. Setting
+  // event handlers / innerHTML on a detached element doesn't trigger
+  // execution (no rendering, no event dispatch).
+  if (methodId === "document.createElement" || methodId === "document.createElementNS") {
+    return { kind: "dom-element", attached: false, props: {} };
+  }
+  // WHATWG DOM § 4.2.5 Document.createTextNode / DocumentFragment —
+  // text/fragment nodes; not attribute-bearing but still in the dom-
+  // element family for tree-mount tracking.
+  if (methodId === "document.createTextNode" || methodId === "document.createDocumentFragment") {
+    return { kind: "dom-element", attached: false, props: {} };
+  }
+  // WHATWG DOM § 4.2.5 Node.appendChild(node) / .insertBefore /
+  // .replaceChild / .append / .prepend — when receiver is a tree-mounted
+  // dom-element, the inserted node becomes attached. Mutation flag
+  // propagation is sound regardless of how many children the receiver
+  // already has.
+  if (methodId === "Element.prototype.appendChild" ||
+      methodId === "Element.prototype.insertBefore" ||
+      methodId === "Element.prototype.replaceChild" ||
+      methodId === "Element.prototype.append" ||
+      methodId === "Element.prototype.prepend") {
+    if (recvAv && recvAv.kind === "dom-element" && recvAv.attached === true) {
+      // Mutate the inserted node's `attached` flag in-place. Subsequent
+      // method calls on the inserted node (via the same binding) see the
+      // updated state. Per WHATWG DOM § 4.2.5: insertion makes the node
+      // and all its descendants part of the tree.
+      for (var apI = 0; apI < argAvs.length; apI++) {
+        var apA = argAvs[apI];
+        if (apA && apA.kind === "dom-element") apA.attached = true;
+      }
+    }
+    return argAvs[0] || { kind: "const", value: undefined };
+  }
   // is a dom-element, return the matching prop AV. Maps "data-X" to
   // dataset.X per HTML5 § 7.5.5.
   if (methodId === "Element.prototype.getAttribute") {
@@ -20807,12 +20861,22 @@ function _processSecurityCallSink(path, result) {
   }
 
   // element.setAttribute("onclick"/href/src/action/style, value)
+  // DOM attachment gate per WHATWG DOM § 4.2: setAttribute on a
+  // detached element doesn't trigger script execution (no rendering,
+  // no event dispatch). _traceValueSource below triggers spec eval
+  // which populates the recv AV; check after to ensure populated.
   if (methName === "setAttribute" && node.arguments.length >= 2 && _t.isStringLiteral(node.arguments[0])) {
     var attrName = node.arguments[0].value.toLowerCase();
     if (attrName.startsWith("on") || attrName === "href" || attrName === "src" ||
         attrName === "action" || attrName === "style") {
       var saSource = _traceValueSource(path.get("arguments.1"), 0);
-      if (saSource.sourceType === "user-controlled") _pushSink(result, node, "xss", "setAttribute:" + attrName, saSource, path);
+      if (saSource.sourceType === "user-controlled") {
+        // Now that spec eval has run, recv AV is populated. Suppress
+        // when receiver is a dom-element with attached:false.
+        var saRecvAv = node.callee && node.callee.object ? _specPathValMemo.get(node.callee.object) : null;
+        if (saRecvAv && saRecvAv.kind === "dom-element" && saRecvAv.attached === false) return;
+        _pushSink(result, node, "xss", "setAttribute:" + attrName, saSource, path);
+      }
       return;
     }
   }

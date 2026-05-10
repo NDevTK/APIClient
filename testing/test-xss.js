@@ -506,11 +506,42 @@ xss("postMessage(taint, '*')", `
   return false;
 });
 
-console.log("\n=== Element-set XSS via setAttribute on'event' ===\n");
+console.log("\n=== DOM attachment tracking ===\n");
 
-xss("setAttribute('onclick', taint)", `
+xss("ATTACHED: document.body.setAttribute('onclick', taint) — body is in DOM", `
   document.body.setAttribute("onclick", location.hash);
 `, function(sinks) {
+  // document.body is the BODY element of the current document — always
+  // in the DOM tree per HTML spec § 4.3.1. setAttribute on attached
+  // element with event handler taint IS executable XSS.
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink && s.sink.indexOf("setAttribute") === 0 && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+xss("UNATTACHED: createElement + setAttribute (never appended) — NOT XSS", `
+  var el = document.createElement("div");
+  el.setAttribute("onclick", location.hash);
+`, function(sinks) {
+  // Element created via document.createElement is detached. Setting
+  // event handlers on a detached element never fires — not an
+  // executable XSS path. Analyzer should suppress (or not flag at all).
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink && s.sink.indexOf("setAttribute") === 0 && s.source === "location.hash") return false;
+  }
+  return true;
+});
+
+xss("ATTACHED via appendChild: createElement + appendChild + setAttribute IS XSS", `
+  var el = document.createElement("div");
+  document.body.appendChild(el);
+  el.setAttribute("onclick", location.hash);
+`, function(sinks) {
+  // After appendChild on a DOM-attached parent, el is in the tree;
+  // setAttribute event handler with taint IS executable.
   for (var i = 0; i < sinks.length; i++) {
     var s = sinks[i];
     if (s.sink && s.sink.indexOf("setAttribute") === 0 && s.source === "location.hash") return true;
