@@ -12066,9 +12066,10 @@ function _extractFetchCall(path, result, type) {
   // the same way as `fetch(url, init)`.
   var optsNode = args[1] || null;
   var optsPath = args[1] ? path.get("arguments.1") : null;
+  // AV-grounded callee identity via builtin-ctor "Fetch.Request".
+  var reqArgCalleeAv = _t.isNewExpression(args[0]) ? _specPathValMemo.get(args[0].callee) : null;
   if (!optsNode && _t.isNewExpression(args[0]) &&
-      _t.isIdentifier(args[0].callee, { name: "Request" }) &&
-      !path.scope.getBinding("Request") &&
+      reqArgCalleeAv && reqArgCalleeAv.kind === "builtin-ctor" && reqArgCalleeAv.id === "Fetch.Request" &&
       args[0].arguments.length >= 2) {
     optsNode = args[0].arguments[1];
     optsPath = path.get("arguments.0.arguments.1");
