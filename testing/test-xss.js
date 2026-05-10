@@ -506,6 +506,31 @@ xss("postMessage(taint, '*')", `
   return false;
 });
 
+console.log("\n=== Element-set XSS via setAttribute on'event' ===\n");
+
+xss("setAttribute('onclick', taint)", `
+  document.body.setAttribute("onclick", location.hash);
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink && s.sink.indexOf("setAttribute") === 0 && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+console.log("\n=== Open redirect via window.location indirect ===\n");
+
+xss("var loc = window.location; loc.href = taint", `
+  var loc = window.location;
+  loc.href = document.cookie;
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "redirect" && s.source === "document.cookie") return true;
+  }
+  return false;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);

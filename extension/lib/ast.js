@@ -20729,9 +20729,17 @@ function _processSecurityCallSink(path, result) {
     if (_bSink) {
       var _bSrc = _traceValueSource(path.get("arguments.0"), 0);
       if (_bSrc.sourceType === "user-controlled") {
-        var _bOpts = (_bSink.type === "redirect" && _taintFlowsOnlyIntoUrlQueryOrHash(path.get("arguments.0")))
-          ? { severity: "medium", notes: "taint flows only into query/hash of an untainted URL prefix — scheme locked" }
-          : null;
+        // Same-origin-prefix downgrade applies to URL-receiving sinks
+        // (request-forgery / redirect / open). Per WHATWG URL parser:
+        // when the URL string begins with a literal absolute path
+        // (e.g. "/api?q=") or scheme+host of the current origin, fetch
+        // / window.open / location.assign can ONLY navigate within the
+        // current origin regardless of the appended attacker content.
+        var _bOpts = null;
+        if ((_bSink.type === "redirect" || _bSink.type === "request-forgery") &&
+            _taintFlowsOnlyIntoUrlQueryOrHash(path.get("arguments.0"))) {
+          _bOpts = { severity: "medium", notes: "taint flows only into query/hash of an untainted URL prefix — scheme locked" };
+        }
         _pushSink(result, node, _bSink.type, _bSink.sink, _bSrc, path, _bOpts);
       }
       return;
