@@ -454,16 +454,24 @@ function _isGlobalObject(path, node) {
 // recursive `left || right` recursion that grew the JS stack linearly
 // with chain length.
 function _isGlobalFetchCall(callee, scope, path) {
-  var stack = [callee];
-  while (stack.length > 0) {
-    var c = stack.pop();
-    if (!c) continue;
-    if (_t.isIdentifier(c, { name: "fetch" }) && !scope.getBinding("fetch")) return true;
-    if (_t.isMemberExpression(c) && _t.isIdentifier(c.property, { name: "fetch" }) &&
-        _t.isIdentifier(c.object) && _isGlobalObject(path, c.object)) return true;
-    if (_t.isLogicalExpression(c)) {
-      stack.push(c.right);
-      stack.push(c.left);
+  // AV-direct: spec eval resolves bare `fetch`, `window.fetch`,
+  // `self.fetch`, `globalThis.fetch`, `(0, fetch)` etc. through scope/
+  // prototype lookup to the SAME builtin-method AV (id "global.fetch")
+  // registered in _specGlobalThisAv. No shape match on identifier name.
+  if (!path) return false;
+  _specEnsureProgramGlobalsPrepass(path);
+  var calleeAv = _specPathValMemo.get(callee);
+  if (calleeAv && calleeAv.kind === "builtin-method" && calleeAv.id === "global.fetch") return true;
+  // Logical expression callee per § 13.13: `(window.fetch || globalThis.fetch)(url)`.
+  // Distribute over alternation — fire when any leaf resolves to fetch.
+  if (_t.isLogicalExpression(callee)) {
+    var stack = [callee.left, callee.right];
+    while (stack.length > 0) {
+      var c = stack.pop();
+      if (!c) continue;
+      var cAv = _specPathValMemo.get(c);
+      if (cAv && cAv.kind === "builtin-method" && cAv.id === "global.fetch") return true;
+      if (_t.isLogicalExpression(c)) { stack.push(c.left); stack.push(c.right); }
     }
   }
   return false;
