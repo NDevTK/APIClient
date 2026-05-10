@@ -1465,12 +1465,16 @@ function _processNetworkSink(path, result) {
   // through factory returns + Window/globalThis member access via the
   // unified globalThis registry per WHATWG HTML § 7.2.1). Reading
   // calleeAv from _specPathValMemo subsumes the prior name-based shape
-  // match (`callee.property.name === "open"`) and the receiver-typing
-  // shortcuts (string-literal HTTP method, factory binding init walk,
-  // _isXhrObject check). One AV identity check; no shape match.
+  // match. One AV identity check; no shape match.
+  //
+  // _avAtPath triggers prepass + per-enclosing-function property
+  // flow on demand — cheaper than the whole-program fixpoint. For
+  // `new XMLHttpRequest(); x.open(...)` and factory-returned
+  // instances the per-function analysis is enough to populate the
+  // callee AV; whole-program fixpoint is only needed for inter-
+  // procedural class-method dispatch (handled by fetch's branch).
   if (_t.isMemberExpression(callee) && node.arguments.length >= 2) {
-    _specEnsureProgramFixpoint(path);
-    var _xhrCalleeAv = _specPathValMemo.get(callee);
+    var _xhrCalleeAv = _avAtPath(path.get("callee"));
     var isXhr = _xhrCalleeAv && _xhrCalleeAv.kind === "builtin-method" &&
                 _xhrCalleeAv.id === "XMLHttpRequest.prototype.open";
     var methodArg = node.arguments[0];
@@ -8149,7 +8153,7 @@ function _specNarrowKeyIn(keyPath, collPath, state) {
   if (!collAv) return;
   var alts = _specCollectKeyOrElementLiterals(collAv);
   if (!alts || alts.length === 0) return;
-  state[name] = alts.length === 1 ? alts[0] : { kind: "or", alternatives: alts };
+  state[name] = _specOrFromAlternatives(alts);
 }
 
 // `obj[k]` truthy ⟹ k is a key whose value is truthy in obj.
@@ -8173,7 +8177,22 @@ function _specNarrowMemberTruthy(keyPath, objPath, state) {
     if (include) truthyKeys.push({ kind: "const", value: k });
   }
   if (truthyKeys.length === 0) return;
-  state[name] = truthyKeys.length === 1 ? truthyKeys[0] : { kind: "or", alternatives: truthyKeys };
+  state[name] = _specOrFromAlternatives(truthyKeys);
+}
+
+// Build an `or` AV in the canonical `{kind:"or", left, right}` shape
+// per ECMA § 13.13. For 1 alternative, returns it directly. For 2+,
+// folds into a left-biased binary tree so downstream walkers (which
+// recurse on .left/.right) traverse every alternative correctly. Pure
+// helper — no narrowing-specific logic.
+function _specOrFromAlternatives(alts) {
+  if (!alts || alts.length === 0) return { kind: "top" };
+  if (alts.length === 1) return alts[0];
+  var av = alts[0];
+  for (var i = 1; i < alts.length; i++) {
+    av = { kind: "or", left: av, right: alts[i] };
+  }
+  return av;
 }
 
 // Collect the const-literal keys (for objects / Sets / Maps) or
