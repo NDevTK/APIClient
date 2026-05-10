@@ -382,6 +382,60 @@ xss("escape() URL-encodes < and > so it's safe for innerHTML — sink suppressed
   return sinks.length === 0;
 });
 
+console.log("\n=== Class instance method taint ===\n");
+
+xss("class method: this.url=taint, then fetch(this.url) - request forgery", `
+  class API {
+    constructor(u) { this.url = u; }
+    fetch() { return fetch(this.url); }
+  }
+  new API(document.cookie).fetch();
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "request-forgery" && s.source === "document.cookie") return true;
+  }
+  return false;
+});
+
+console.log("\n=== Promise chain taint ===\n");
+
+xss("Promise.then(cb): cb(taint) -> innerHTML", `
+  Promise.resolve(location.hash).then(function(v) {
+    document.body.innerHTML = v;
+  });
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "innerHTML" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+console.log("\n=== Template literal injection ===\n");
+
+xss("template literal in eval", `
+  var name = location.hash.slice(1);
+  eval(\`var x = \${name};\`);
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "eval" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+console.log("\n=== Negative: literal-only template ===\n");
+
+xss("safe: literal template in eval", `
+  eval(\`var x = 1;\`);
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    if (sinks[i].sink === "eval" && sinks[i].severity !== "info") return false;
+  }
+  return true;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);
