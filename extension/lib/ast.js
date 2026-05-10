@@ -13497,7 +13497,8 @@ function _avFlattenStringLeavesImpl(rootAv) {
   // keys-of, loop-key, args-elt, args-len, taint-source-not-page-origin)
   // have no statically-known string leaf — return empty without allocation.
   if (rootAv.kind !== "or" && rootAv.kind !== "binop" &&
-      rootAv.kind !== "template" && rootAv.kind !== "call") {
+      rootAv.kind !== "template" && rootAv.kind !== "call" &&
+      rootAv.kind !== "deferred-ctor") {
     return [];
   }
   // Composite AV — fall through to full two-pass tree walk.
