@@ -13276,9 +13276,15 @@ function _resolveAllValues(initialPath, initialDepth) {
       }
     }
   }
-  // Module-level path or memo-miss: ad-hoc evaluate. State is empty.
+  // Module-level path or memo-miss: ad-hoc evaluate with EMPTY state.
+  // Pass noWriteMemo=true so this stateless eval doesn't overwrite per-
+  // function _specPathValMemo entries that were populated with proper
+  // state (e.g. state["this"]=obj-lit for class methods). Without
+  // noWriteMemo, this would clobber `this.url` AV inside a class method
+  // with a state-empty member({kind:"this"}, "url"), breaking taint
+  // detection for fetch(this.url) etc.
   try {
-    var av = _specEvalExpression(initialPath, _specStateCreate({}), []);
+    var av = _specEvalExpression(initialPath, _specStateCreate({}), [], true);
     return av ? _avFlattenStringLeaves(av) : [];
   } catch (_) { return []; }
 }
