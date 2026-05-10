@@ -22303,22 +22303,17 @@ function _tvsStep(F) {
           if (subAv && subAv.kind === "taint-source") {
             return { done: _tvsSource(subAv.id, nodeLoc, subAv.dims || _dimsForSource(subAv.id)) };
           }
-          // _matchTaintSource AST shape walker removed; spec eval AV
-          // inspection above covers all real-bundle cases via the
-          // globalThis registry's taint-source AVs (location/document/
-          // window/self/globalThis). If a node here has no taint-source
-          // AV, the legacy chain walk continues normally and may still
-          // discover taint via binding chains.
-          if (_t.isIdentifier(node.object, { name: "location" }) && !path.scope.getBinding("location") &&
-              _t.isIdentifier(node.property) && _LOCATION_SAFE_PROPS[node.property.name]) {
-            return { done: LIT };
-          }
-          if (_t.isMemberExpression(node.object) && !node.object.computed &&
-              _t.isIdentifier(node.object.object) &&
-              (node.object.object.name === "window" || node.object.object.name === "self") &&
-              !path.scope.getBinding(node.object.object.name) &&
-              _t.isIdentifier(node.object.property, { name: "location" }) &&
-              _t.isIdentifier(node.property) && _LOCATION_SAFE_PROPS[node.property.name]) {
+          // Safe location properties (origin/hostname/host/protocol/port/
+          // ancestorOrigins) — the attacker cannot influence their content
+          // per WHATWG URL § 4.4. AV-grounded: spec eval projects these
+          // through the locationAv as taint-source AVs whose dims are all
+          // false (origin/path/query/hash/content all false → unactionable
+          // per the dimensional taint model). Same identification path for
+          // bare `location.X` and `window.location.X` / `self.location.X` /
+          // aliased variants — all project to the same locationAv prop.
+          if (subAv && subAv.kind === "taint-source" && subAv.dims &&
+              !subAv.dims.origin && !subAv.dims.path && !subAv.dims.query &&
+              !subAv.dims.hash && !subAv.dims.content) {
             return { done: LIT };
           }
         }
