@@ -2341,6 +2341,10 @@ function _specGlobalThisAv() {
   for (var swki = 0; swki < symbolWellKnownNames.length; swki++) {
     symbolWellKnown[symbolWellKnownNames[swki]] = { kind: "obj-lit", props: {} };
   }
+  // Cache the well-known symbol AVs at module scope so other call sites
+  // (ObjectExpression's computed key handling, for-of's iterator dispatch)
+  // can compare by reference identity to detect Symbol.iterator etc.
+  _SPEC_WELLKNOWN_SYMBOLS = symbolWellKnown;
   // Symbol.for / Symbol.keyFor per § 20.4.2.1 / .5.
   symbolWellKnown.for = { kind: "builtin-method", id: "Symbol.for" };
   symbolWellKnown.keyFor = { kind: "builtin-method", id: "Symbol.keyFor" };
@@ -5511,6 +5515,15 @@ function _specBuildClassStaticAv(classNode, classPath) {
 // Per-ObjectExpression cache: same literal produces the same shape
 // regardless of which method's `this` is being resolved.
 var _specObjectMethodThisCache = new WeakMap();
+// ECMA § 19.4 well-known Symbol singletons — populated lazily by
+// _specGlobalThisAv. Stable AV references for reference-identity
+// comparison in computed-key handling (`{[Symbol.iterator]: fn}`)
+// and for-of iterator dispatch.
+var _SPEC_WELLKNOWN_SYMBOLS = null;
+function _specWellKnownSymbol(name) {
+  if (!_SPEC_WELLKNOWN_SYMBOLS) _specGlobalThisAv();
+  return _SPEC_WELLKNOWN_SYMBOLS && _SPEC_WELLKNOWN_SYMBOLS[name];
+}
 // WHATWG DOM § 4.4 EventTarget — fn-node → event-type for callbacks
 // registered via EventTarget.prototype.addEventListener. Spec eval's
 // _specInitialFunctionBodyState consults this to inject the right
@@ -6824,6 +6837,29 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
   // § 7.4.7 IteratorValue). Distinguish by stmt kind so each binds the
   // loop var to its spec-correct AV.
   if (_t.isForOfStatement(stmtNode)) {
+    // for-of per § 14.7.5.6 GetIterator: when rhsAv is an obj-lit with
+    // a registered @@iterator prop (set when ObjectExpression encountered
+    // a `[Symbol.iterator]: fn` computed property), invoke the iterator
+    // function and treat the iteration as the function's yields.
+    // Generator functions are already supported via _specReturnValueMemo
+    // (storing array-lit of accumulated yields per § 15.5).
+    if (rhsAv && rhsAv.kind === "obj-lit" && rhsAv.props &&
+        Object.prototype.hasOwnProperty.call(rhsAv.props, "@@iterator")) {
+      var itFn = rhsAv.props["@@iterator"];
+      if (itFn && itFn.kind === "function-ref" && itFn.funcNode) {
+        var itRet = _specReturnValueMemo.get(itFn.funcNode);
+        if (itRet && itRet.kind === "array-lit" && itRet.elements && itRet.elements.length > 0) {
+          // Generator's yields collected into array-lit; treat as for-of
+          // over those yields.
+          var itVal = itRet.elements[0];
+          for (var ity = 1; ity < itRet.elements.length; ity++) {
+            itVal = _specLogicalOrAv(itVal, itRet.elements[ity]);
+          }
+          bindLoopVar(itVal);
+          return bodyState;
+        }
+      }
+    }
     // for-of: loop var is the iterated VALUE.
     if (rhsAv && rhsAv.kind === "array-lit" && rhsAv.elements && rhsAv.elements.length > 0) {
       // § 23.1.5.1 Array iterator yields each element in index order.
@@ -8626,22 +8662,41 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
         continue;
       }
-      if (!_t.isObjectProperty(prop)) continue;
+      if (!_t.isObjectProperty(prop) && !_t.isObjectMethod(prop)) continue;
       var k = null;
       if (prop.computed) {
         // § 13.2.5.4 ComputedPropertyName: evaluate the key expression;
         // when it resolves to a Const string/number, use that as the key.
+        // Per ECMA § 19.4 well-known Symbols (Symbol.iterator etc.):
+        // when the key AV is one of the registered well-known symbol
+        // marker AVs (obj-lit values from the Symbol callable namespace),
+        // store under the canonical "@@<name>" key — the for-of /
+        // for-await-of dispatch reads that key as the iterator hook.
         var keyAv = vals.get(prop.key);
         if (keyAv && keyAv.kind === "const" &&
             (typeof keyAv.value === "string" || typeof keyAv.value === "number")) {
           k = keyAv.value;
+        } else if (keyAv && keyAv.kind === "obj-lit" &&
+                   keyAv === _specWellKnownSymbol("iterator")) {
+          k = "@@iterator";
+        } else if (keyAv && keyAv.kind === "obj-lit" &&
+                   keyAv === _specWellKnownSymbol("asyncIterator")) {
+          k = "@@asyncIterator";
         }
       } else {
         k = _t.isIdentifier(prop.key) ? prop.key.name :
           _t.isStringLiteral(prop.key) ? prop.key.value :
           _t.isNumericLiteral(prop.key) ? prop.key.value : null;
       }
-      if (k !== null) props[k] = vals.get(prop.value) || { kind: "top" };
+      if (k !== null) {
+        // For ObjectMethod (shorthand `{foo() {}}`), the function-ref
+        // is the property's value (the method node itself).
+        if (_t.isObjectMethod(prop)) {
+          props[k] = { kind: "function-ref", funcNode: prop };
+        } else {
+          props[k] = vals.get(prop.value) || { kind: "top" };
+        }
+      }
     }
     return { kind: "obj-lit", props: props };
   }
