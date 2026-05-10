@@ -9106,8 +9106,12 @@ function _specEvalLeaf(path, state, vals, effects) {
         var qeAv = vals.get(n.expressions[qei]);
         if (!qeAv) qeAv = { kind: "top" };
         exprAvs.push(qeAv);
+        // Structured AVs that need template-shape preservation per
+        // § 13.2.8.6 so taint walking transitions through interpolations.
         if (qeAv.kind === "param" || qeAv.kind === "member" || qeAv.kind === "binop" ||
-            qeAv.kind === "template" || qeAv.kind === "or") anyStructured = true;
+            qeAv.kind === "template" || qeAv.kind === "or" ||
+            qeAv.kind === "taint-source" || qeAv.kind === "coerce" ||
+            qeAv.kind === "call" || qeAv.kind === "this") anyStructured = true;
       }
       if (anyStructured) {
         return { kind: "template", quasis: quasiStrs, exprs: exprAvs };
