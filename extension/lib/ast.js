@@ -25950,12 +25950,10 @@ function _processDangerousAssignment(path, result) {
   if (node.operator !== "=") return;
   var left = node.left;
 
-  // window.onmessage = handler / self.onmessage = handler — postMessage handler
+  // window.onmessage = handler / self.onmessage = handler — postMessage handler.
+  // AV-grounded receiver identity via _isGlobalObject (canonical window AV).
   if (_t.isMemberExpression(left) && !left.computed && _t.isIdentifier(left.property, { name: "onmessage" })) {
-    var _omBase = left.object;
-    var _isGlobal = (_t.isIdentifier(_omBase, { name: "window" }) && !path.scope.getBinding("window")) ||
-                    (_t.isIdentifier(_omBase, { name: "self" }) && !path.scope.getBinding("self"));
-    if (_isGlobal) {
+    if (_isGlobalObject(path, left.object)) {
       var _omResolved = _resolveHandlerFunc(path.get("right"));
       if (_omResolved && _omResolved.node.body) _classifyAndReportMessageHandler(_omResolved, node, result);
       return;
