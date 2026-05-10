@@ -1773,9 +1773,14 @@ function _processNetworkSink(path, result) {
   }
 
   // ── navigator.sendBeacon(url, data) ──
-  if (_t.isMemberExpression(callee) && _t.isIdentifier(callee.property, { name: "sendBeacon" }) &&
-      node.arguments.length >= 1 &&
-      _t.isIdentifier(callee.object, { name: "navigator" }) && !path.scope.getBinding("navigator")) {
+  // AV-grounded callee identity via Navigator.prototype.sendBeacon
+  // builtin-method (installed on windowSelfAv.props.navigator.props.sendBeacon).
+  // Both `navigator.sendBeacon` and `window.navigator.sendBeacon` project
+  // to the same builtin-method through MemberExpression spec eval.
+  _specEnsureProgramFixpoint(path);
+  var _beaconCalleeAv = _specPathValMemo.get(callee);
+  if (_beaconCalleeAv && _beaconCalleeAv.kind === "builtin-method" &&
+      _beaconCalleeAv.id === "Navigator.prototype.sendBeacon" && node.arguments.length >= 1) {
     var beaconUrls = _resolveAllValues(path.get("arguments.0"), 0);
     for (var bi = 0; bi < beaconUrls.length; bi++) {
       var bParams = node.arguments.length > 1 ? _extractBodyParams(node.arguments[1], path) : [];
