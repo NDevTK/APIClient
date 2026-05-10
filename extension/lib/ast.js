@@ -2347,6 +2347,16 @@ function _specGlobalThisAv() {
   var imageCtorAv = { kind: "builtin-ctor", id: "WHATWG.Image" };
   // WHATWG HTML § 9.5 BroadcastChannel — same-origin postMessage.
   var broadcastChannelCtorAv = { kind: "builtin-ctor", id: "WHATWG.BroadcastChannel" };
+  // WHATWG Streams § 4 ReadableStream / § 5 WritableStream / § 6 TransformStream.
+  var readableStreamCtorAv = { kind: "builtin-ctor", id: "WHATWG.ReadableStream" };
+  var writableStreamCtorAv = { kind: "builtin-ctor", id: "WHATWG.WritableStream" };
+  var transformStreamCtorAv = { kind: "builtin-ctor", id: "WHATWG.TransformStream" };
+  // WHATWG DOM § 4.4 AbortController / AbortSignal — request cancellation.
+  var abortControllerCtorAv = { kind: "builtin-ctor", id: "WHATWG.AbortController" };
+  // WHATWG DOM § 4.6 MutationObserver — DOM observation.
+  var mutationObserverCtorAv = { kind: "builtin-ctor", id: "WHATWG.MutationObserver" };
+  // WHATWG IndexedDB § 5 IDBRequest opens go through indexedDB global.
+  // (modeled at globalThis.indexedDB level; no `new IDBDatabase()` sites.)
   // WHATWG HTML § 10 Web Workers / Channel Messaging. Worker / SharedWorker
   // run a same-origin script; their postMessage / message events ride a
   // channel the page itself created — no third-party origin involved. Same
@@ -2671,6 +2681,11 @@ function _specGlobalThisAv() {
       MessageChannel: messageChannelCtorAv,
       Function: functionCtorAv,
       Image: imageCtorAv,
+      ReadableStream: readableStreamCtorAv,
+      WritableStream: writableStreamCtorAv,
+      TransformStream: transformStreamCtorAv,
+      AbortController: abortControllerCtorAv,
+      MutationObserver: mutationObserverCtorAv,
       Uint8Array: uint8ArrayCtorAv,
       Uint16Array: uint16ArrayCtorAv,
       Uint32Array: uint32ArrayCtorAv,
@@ -3385,6 +3400,79 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       kind: "obj-lit",
       _ctorId: "WHATWG.MessageChannel",
       props: { port1: msgPortAv, port2: msgPortAv }
+    };
+  }
+  // WHATWG Streams § 4 ReadableStream — pull-based async byte/value source.
+  if (ctorId === "WHATWG.ReadableStream") {
+    return {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.ReadableStream",
+      props: {
+        getReader: { kind: "builtin-method", id: "ReadableStream.prototype.getReader" },
+        pipeTo: { kind: "builtin-method", id: "ReadableStream.prototype.pipeTo" },
+        pipeThrough: { kind: "builtin-method", id: "ReadableStream.prototype.pipeThrough" },
+        tee: { kind: "builtin-method", id: "ReadableStream.prototype.tee" },
+        cancel: { kind: "builtin-method", id: "ReadableStream.prototype.cancel" },
+        locked: { kind: "top" },
+      }
+    };
+  }
+  // WHATWG Streams § 5 WritableStream — push-based async byte/value sink.
+  if (ctorId === "WHATWG.WritableStream") {
+    return {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.WritableStream",
+      props: {
+        getWriter: { kind: "builtin-method", id: "WritableStream.prototype.getWriter" },
+        abort: { kind: "builtin-method", id: "WritableStream.prototype.abort" },
+        close: { kind: "builtin-method", id: "WritableStream.prototype.close" },
+        locked: { kind: "top" },
+      }
+    };
+  }
+  // WHATWG Streams § 6 TransformStream — readable/writable pair.
+  if (ctorId === "WHATWG.TransformStream") {
+    return {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.TransformStream",
+      props: {
+        readable: { kind: "top" },
+        writable: { kind: "top" },
+      }
+    };
+  }
+  // WHATWG DOM § 4.4 AbortController — fetch-cancel signal source.
+  if (ctorId === "WHATWG.AbortController") {
+    return {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.AbortController",
+      props: {
+        abort: { kind: "builtin-method", id: "AbortController.prototype.abort" },
+        signal: {
+          kind: "obj-lit",
+          _ctorId: "WHATWG.AbortSignal",
+          props: {
+            aborted: { kind: "top" },
+            reason: { kind: "top" },
+            addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+            removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+            dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+            throwIfAborted: { kind: "builtin-method", id: "AbortSignal.prototype.throwIfAborted" },
+          }
+        },
+      }
+    };
+  }
+  // WHATWG DOM § 4.6 MutationObserver — async DOM observation.
+  if (ctorId === "WHATWG.MutationObserver") {
+    return {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.MutationObserver",
+      props: {
+        observe: { kind: "builtin-method", id: "MutationObserver.prototype.observe" },
+        disconnect: { kind: "builtin-method", id: "MutationObserver.prototype.disconnect" },
+        takeRecords: { kind: "builtin-method", id: "MutationObserver.prototype.takeRecords" },
+      }
     };
   }
   // WHATWG File API § 5 Blob / § 6 File / § 7 FileReader.
