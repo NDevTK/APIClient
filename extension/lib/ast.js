@@ -2496,6 +2496,10 @@ function _specGlobalThisAv() {
       addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
       removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
       dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+      // WHATWG HTML § 9.4.1 Window.postMessage(message, targetOrigin) —
+      // cross-origin message channel. Sending tainted/sensitive data with
+      // targetOrigin "*" is a data-leak sink.
+      postMessage: { kind: "builtin-method", id: "Window.prototype.postMessage" },
       // WHATWG HTML § 11 Web Storage — both attributes inherit Storage interface.
       localStorage: storageAv,
       sessionStorage: storageAv,
@@ -20700,6 +20704,12 @@ var _BUILTIN_CALL_SINKS = {
   "Window.prototype.open": { type: "redirect", sink: "window.open" },
   "global.fetch":         { type: "request-forgery", sink: "fetch" },
   "global.importScripts": { type: "eval", sink: "importScripts" },
+  // WHATWG HTML § 9.4.1 Window.postMessage(message, targetOrigin) — when
+  // message contains attacker-controlled / sensitive content sent to
+  // targetOrigin "*" (or any origin not the listener's), it's a data
+  // disclosure sink. Severity refined per second-arg's targetOrigin
+  // value in the per-call handler.
+  "Window.prototype.postMessage": { type: "data-leak", sink: "postMessage" },
 };
 
 // Call-based sinks: eval(), document.write(), setTimeout(string), insertAdjacentHTML, setAttribute("on*")
