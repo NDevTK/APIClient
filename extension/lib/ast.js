@@ -8066,7 +8066,13 @@ function _specNarrowStateForTest(testPath, state, assumeTrue) {
       continue;
     }
     // § 7.2.11 / § 7.2.10 strict and loose equality.
+    // `x === c` true ⟹ x = c. `x !== c` false ⟹ x = c.
     if (_t.isBinaryExpression(n) && (n.operator === "===" || n.operator === "==") && at) {
+      _specNarrowEquality(p.get("left"), p.get("right"), state);
+      _specNarrowEquality(p.get("right"), p.get("left"), state);
+      continue;
+    }
+    if (_t.isBinaryExpression(n) && (n.operator === "!==" || n.operator === "!=") && !at) {
       _specNarrowEquality(p.get("left"), p.get("right"), state);
       _specNarrowEquality(p.get("right"), p.get("left"), state);
       continue;
@@ -8331,8 +8337,18 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     // It's the frame currently on top of the stack — branchStack[length-1].
     var ifParent = branchStack.length > 0 ? branchStack[branchStack.length - 1] : null;
     if (!ifParent) return;
-    // Save base state for branches that don't execute (alternate-less if).
+    // Save base state for the implicit "test was false" branch when the
+    // if has no alternate (per ECMA § 14.6.7 step 5: if no alternate,
+    // the post-if statement runs unchanged when the test was false).
+    // Narrow baseState as `assumeTrue:false` so the post-if state
+    // reflects the early-return / fall-through pattern:
+    //   if (!ALLOW.has(k)) return;
+    //   obj[k] = v;            // post-if: k is narrowed to ALLOW
+    // The consequent's `return` doesn't contribute (handled by
+    // _isIfMerge below); the only path reaching post-if is the test=
+    // false branch, whose state is narrowed-for-false.
     var ifPreState = _specStateClone(state);
+    _specNarrowStateForTest(stmtPath.get("test"), ifPreState, /*assumeTrue*/ false);
     // Merge frame: pushed first (so it executes LAST due to LIFO).
     // _isIfMerge marks this as an IfStatement merge so break/continue/
     // return-halted branches don't contribute their post-narrowed state
@@ -22213,16 +22229,16 @@ function _processDangerousAssignment(path, result) {
   if (_t.isMemberExpression(left) && left.computed) {
     var keyNode = left.property;
     if (!_t.isStringLiteral(keyNode) && !_t.isNumericLiteral(keyNode)) {
+      // _traceValueSource consults _specPathValMemo for the key node;
+      // spec-eval narrowing per ECMA § 14.6 IfStatement (in
+      // _specNarrowStateForTest) populates the per-reference AV with
+      // the narrowed value when the key passed through an allow-list /
+      // equality / membership / truthy-MemberExpression / negation gate.
+      // A narrowed key reads as const / or-of-consts (not user-
+      // controlled), so the danger is naturally suppressed without a
+      // separate CFG-based validator pass.
       var keySource = _traceValueSource(path.get("left.property"), 0);
       if (keySource.sourceType === "user-controlled") {
-        // An ancestor allowlist guard with a non-tainted collection
-        // dominates the sink → downgrade to "info". See _checkKeyValidation
-        // for the safety requirements enforced (scope-aware identifier
-        // matching + collection-purity check).
-        var keyValidated = false;
-        try { keyValidated = _checkKeyValidation(path, keyNode); }
-        catch (e) { _resolver.collectError(e, "checkKeyValidation"); }
-
         // Severity depends on BOTH the key (already user-controlled) AND
         // the value shape. Per ES spec:
         //   obj["__proto__"] = <primitive>  → NO-OP (spec-defined)
@@ -22239,10 +22255,7 @@ function _processDangerousAssignment(path, result) {
         var valueShape = _classifyAssignmentValueShape(path.get("right"));
         var isNested = _t.isMemberExpression(path.parent) || _t.isMemberExpression(left.object) && left.object.computed;
         var severity, description;
-        if (keyValidated) {
-          severity = "info";
-          description = "Dynamic property assignment, key validated against non-tainted allowlist";
-        } else if (valueShape === "object" || isNested) {
+        if (valueShape === "object" || isNested) {
           severity = "high";
           description = "Dynamic property assignment with user-controlled key (object value — prototype pollution)";
         } else {
@@ -22762,17 +22775,13 @@ var _SANITIZER_AV_IDS = Object.assign(Object.create(null), {
   "global.btoa": 1,
 });
 
-// Check if a single call expression node is a known sanitizer.
-// AV-direct: read the callee's spec-eval AV; sanitiser polarity is
-// determined by the callee's resolved identity, not by name-matching
-// the source-text identifier. Scope shadowing, prototype dispatch, and
-// alias chains all fall out of spec eval's scope lookup automatically.
+// Check if a single call expression node is a known sanitizer. Thin
+// boolean wrapper over _classifySanitizerCall — the classifier returns
+// the audit-trail object (or null), the boolean check ignores the
+// detail. Single AV-direct dispatch shared between sink-detection
+// (boolean) and finding-report builders (detail).
 function _isSanitizerCall(node, path) {
-  if (!_t.isCallExpression(node) || !path) return false;
-  _specEnsureProgramGlobalsPrepass(path);
-  var calleeAv = _specPathValMemo.get(node.callee);
-  if (!calleeAv || calleeAv.kind !== "builtin-method") return false;
-  return !!_SANITIZER_AV_IDS[calleeAv.id];
+  return !!_classifySanitizerCall(node, path);
 }
 
 // Check if a statement path contains a sanitizer call at this level only.
@@ -23174,191 +23183,6 @@ function _hasSanitizerOnAllPaths(cfg, sinkBlockId, sanitizerBlocks) {
   visited[cfg.entry] = true;
   dfs(cfg.entry, visited, false);
   return found && allSanitized;
-}
-
-// ─── Allowlist-key validation (for prototype-pollution downgrade) ──────────
-//
-// Same CFG infrastructure as _checkSanitization, but with validator
-// blocks identified by a predicate that matches the sink's dynamic key.
-// Uses `_buildCFG` + `_hasSanitizerOnAllPaths` unchanged; only the block
-// matcher differs.
-//
-// Requirements enforced:
-//   1. Argument of `.includes(X)` / `.has(X)` / `X in coll` must resolve
-//      to the same binding as the sink's dynamic key, via scope.getBinding
-//      (not string-name comparison).
-//   2. Receiver (collection) must NOT trace back to user-controlled data
-//      per _traceValueSource — a tainted allowlist isn't sanitization.
-//   3. Only recognized predicates count: `.includes`, `.has`,
-//      `.hasOwnProperty`, and the `in` operator. Avoids false "sanitized"
-//      on `.indexOf()` without `>= 0`, `Array.from()`, etc.
-
-function _keyNodeToIdentifierName(keyNode) {
-  if (_t.isIdentifier(keyNode)) return keyNode.name;
-  // Sink key can be a call like `k.toLowerCase()` or `k.trim()` — underlying
-  // binding is the callee's object.
-  if (_t.isCallExpression(keyNode) && _t.isMemberExpression(keyNode.callee) &&
-      !keyNode.callee.computed && _t.isIdentifier(keyNode.callee.object)) {
-    return keyNode.callee.object.name;
-  }
-  return null;
-}
-
-function _keyArgMatches(argExpr, argPath, keyIdent, keyBinding) {
-  if (!argExpr) return false;
-  var name;
-  if (_t.isIdentifier(argExpr)) {
-    name = argExpr.name;
-  } else if (_t.isCallExpression(argExpr) && _t.isMemberExpression(argExpr.callee) &&
-             !argExpr.callee.computed && _t.isIdentifier(argExpr.callee.object)) {
-    name = argExpr.callee.object.name;
-  } else {
-    return false;
-  }
-  if (name !== keyIdent) return false;
-  // Scope-aware binding comparison: the validator's identifier must resolve
-  // to the same binding as the sink's key. Prevents shadowing FPs.
-  if (keyBinding && argPath && argPath.scope) {
-    var argBinding = argPath.scope.getBinding(name);
-    if (argBinding) return argBinding === keyBinding;
-  }
-  // If either binding is unavailable, fall back to name equality (rare —
-  // but don't crash on unbound locals).
-  return true;
-}
-
-// Does `testPath` validate the sink's key against a non-tainted collection?
-function _testValidatesKey(testPath, keyIdent, keyBinding) {
-  if (!testPath || !testPath.node) return false;
-  var found = false;
-  function matchesOne(subPath) {
-    if (found || !subPath || !subPath.node) return;
-    var n = subPath.node;
-    // `key in collection`
-    if (_t.isBinaryExpression(n) && n.operator === "in") {
-      if (_keyArgMatches(n.left, subPath.get("left"), keyIdent, keyBinding)) {
-        var srcIn = _traceValueSource(subPath.get("right"));
-        if (srcIn.sourceType !== "user-controlled") { found = true; return; }
-      }
-    }
-    // `collection.<validator>(key)`
-    if (_t.isCallExpression(n) && _t.isMemberExpression(n.callee) && !n.callee.computed &&
-        _t.isIdentifier(n.callee.property)) {
-      var m = n.callee.property.name;
-      if (m === "includes" || m === "has" || m === "hasOwnProperty") {
-        var arg = n.arguments[0];
-        if (arg) {
-          var argPath = subPath.get("arguments.0");
-          if (_keyArgMatches(arg, argPath, keyIdent, keyBinding)) {
-            var srcColl = _traceValueSource(subPath.get("callee.object"));
-            if (srcColl.sourceType !== "user-controlled") { found = true; return; }
-          }
-        }
-      }
-    }
-  }
-  matchesOne(testPath);
-  if (found) return true;
-  testPath.traverse({
-    LogicalExpression: function(p) {
-      if (found) { p.stop(); return; }
-      matchesOne(p.get("left"));
-      if (!found) matchesOne(p.get("right"));
-      if (found) p.stop();
-    },
-    CallExpression: function(p) { if (found) { p.stop(); return; } matchesOne(p); if (found) p.stop(); },
-    BinaryExpression: function(p) { if (found) { p.stop(); return; } matchesOne(p); if (found) p.stop(); },
-  });
-  return found;
-}
-
-// Mark a block as a validator if it's the consequent-entry of an
-// IfStatement whose test validates the sink's key. Only consequent
-// branches count — the if-block itself is shared by paths that bypass
-// the consequent (e.g. statements after the if), so treating the if-block
-// as a validator would incorrectly whitelist unvalidated sinks.
-function _findKeyValidatorBlocks(cfg, keyIdent, keyBinding) {
-  var out = {};
-  if (!cfg) return out;
-  var keys = Object.keys(cfg.blocks);
-  for (var i = 0; i < keys.length; i++) {
-    var blk = cfg.blocks[keys[i]];
-    var gate = blk._gatedByTestOf;
-    if (gate && gate.node && _t.isIfStatement(gate.node) &&
-        _testValidatesKey(gate.get("test"), keyIdent, keyBinding)) {
-      out[blk.id] = true;
-    }
-  }
-  return out;
-}
-
-// Inline short-circuit check: is the sink's expression positioned as the
-// RHS of a `&&` (or consequent arm of `?:`) whose test validates the key?
-// JavaScript's short-circuit semantics guarantee the sink won't evaluate
-// unless the test passed — so this is true sanitization even though the
-// CFG puts both in one block.
-function _isInlineShortCircuitGuarded(sinkPath, keyIdent, keyBinding) {
-  var cur = sinkPath;
-  while (cur && cur.parentPath) {
-    var parent = cur.parentPath;
-    var p = parent.node;
-    // Stop walking once we leave the expression context.
-    if (_t.isStatement(p) && !_t.isExpressionStatement(p)) return false;
-    // `TEST && (sink)` — sink is on the right of &&
-    if (_t.isLogicalExpression(p) && p.operator === "&&" && p.right === cur.node) {
-      if (_testValidatesKey(parent.get("left"), keyIdent, keyBinding)) return true;
-    }
-    // `TEST ? sink : fallback` — sink is in consequent
-    if (_t.isConditionalExpression(p) && p.consequent === cur.node) {
-      if (_testValidatesKey(parent.get("test"), keyIdent, keyBinding)) return true;
-    }
-    cur = parent;
-  }
-  return false;
-}
-
-// Check if every control-flow path from the function entry to the sink's
-// block passes through a block that validates the sink's key against a
-// non-tainted allowlist. Uses the same _hasSanitizerOnAllPaths engine as
-// the existing sanitizer analysis, with one fix-up: when the validator is
-// inline with the sink (`validator && sink`), short-circuit semantics
-// cover it even though both share a CFG block.
-function _checkKeyValidation(sinkPath, keyNode) {
-  var keyIdent = _keyNodeToIdentifierName(keyNode);
-  if (!keyIdent) return false;
-  var keyBinding = sinkPath.scope.getBinding(keyIdent);
-
-  // Fast path: inline `validator && sink` / `validator ? sink : …` — the
-  // validator is literally an operand of the same expression that
-  // contains the sink, so short-circuit evaluation dominates the sink.
-  if (_isInlineShortCircuitGuarded(sinkPath, keyIdent, keyBinding)) return true;
-
-  // Slower path: validator is in an earlier statement. Use the shared
-  // CFG + _hasSanitizerOnAllPaths engine. Per ECMA § 16.1 Scripts the
-  // program body has the same statement-sequence shape as a function
-  // block; CFG construction works on either. Fall back to the enclosing
-  // Program when there's no function context (module-top sinks).
-  var funcPath = sinkPath.getFunctionParent();
-  var bodyPath = null;
-  if (funcPath) {
-    if (!_t.isBlockStatement(funcPath.node.body)) return false;
-    bodyPath = funcPath.get("body");
-  } else {
-    var pp = sinkPath; while (pp && pp.parentPath && !_t.isProgram(pp.node)) pp = pp.parentPath;
-    if (pp && pp.node && _t.isProgram(pp.node)) bodyPath = pp;
-    else return false;
-  }
-  var cfg = _buildCFG(bodyPath);
-  if (!cfg) return false;
-  var validatorBlocks = _findKeyValidatorBlocks(cfg, keyIdent, keyBinding);
-  if (Object.keys(validatorBlocks).length === 0) return false;
-  // Path-based block lookup via AST node identity. Reliable for minified
-  // single-line bundles (every statement shares line=1, making line-based
-  // lookup ambiguous). The CFG stores the same statement paths whose
-  // .node identity uniquely names each block.
-  var sinkBlockId = _findBlockForPath(cfg, sinkPath);
-  if (sinkBlockId === -1) return false;
-  return _hasSanitizerOnAllPaths(cfg, sinkBlockId, validatorBlocks);
 }
 
 // Check if the sink at the given path is sanitized on all control flow paths
