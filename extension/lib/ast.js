@@ -477,27 +477,6 @@ function _isGlobalFetchCall(callee, scope, path) {
   return false;
 }
 
-// Check if a MemberExpression's object node traces to an XMLHttpRequest instance.
-// Uses the type tracker first, then falls back to binding init resolution.
-// For factory call inits (`var x = factory.someMethod()`), resolves the
-// callee through scope to its function definition and checks whether
-// any return statement yields `new XMLHttpRequest()` — pure spec-grounded
-// data flow per ECMA-262 § 15.3 (FunctionBody) and § 13.3.2
-// (NewExpression). No method-name shortcut.
-// Spec-eval AV-driven check: is objectNode's spec-eval AV an XHR
-// instance? Per WHATWG XHR § 4 the constructor returns an obj-lit
-// AV tagged with _ctorId === "WHATWG.XMLHttpRequest" (set by
-// _specApplyBuiltinCtor). Same dispatch as _isLocationObject —
-// trigger property-flow analysis on the enclosing function and
-// inspect the AV. Replaces the prior AST shape-walk over factory
-// function bodies.
-function _isXhrObject(path, objectNode) {
-  if (!objectNode) return false;
-  _specEnsureProgramGlobalsPrepass(path);
-  var av = _specPathValMemo.get(objectNode);
-  return !!(av && av.kind === "obj-lit" && av._ctorId === "WHATWG.XMLHttpRequest");
-}
-
 // Find the parameter index for a named parameter in a function's params array.
 // Handles both plain identifiers and default values (AssignmentPattern).
 // Returns -1 if not found.
