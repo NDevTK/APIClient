@@ -2322,6 +2322,14 @@ function _specGlobalThisAv() {
   // WHATWG XHR § 4 XMLHttpRequest ctor — open/send/setRequestHeader
   // dispatch through prototype chain on the XHR instance.
   var xmlHttpRequestCtorAv = { kind: "builtin-ctor", id: "WHATWG.XMLHttpRequest" };
+  // WHATWG File API — Blob, File, FileReader.
+  var blobCtorAv = { kind: "builtin-ctor", id: "WHATWG.Blob" };
+  var fileCtorAv = { kind: "builtin-ctor", id: "WHATWG.File" };
+  var fileReaderCtorAv = { kind: "builtin-ctor", id: "WHATWG.FileReader" };
+  // WHATWG XHR FormData ctor — multipart/form-data builder.
+  var formDataCtorAv = { kind: "builtin-ctor", id: "WHATWG.FormData" };
+  // WHATWG HTML § 9.5 BroadcastChannel — same-origin postMessage.
+  var broadcastChannelCtorAv = { kind: "builtin-ctor", id: "WHATWG.BroadcastChannel" };
   // ECMA § 25.1 TypedArray ctors. All variants share the same value-flow
   // behaviour for our purposes (binary array; opaque to string-flow but
   // valid receiver for prototype methods like .slice / .set).
@@ -2546,6 +2554,11 @@ function _specGlobalThisAv() {
       WebSocket: webSocketCtorAv,
       EventSource: eventSourceCtorAv,
       XMLHttpRequest: xmlHttpRequestCtorAv,
+      Blob: blobCtorAv,
+      File: fileCtorAv,
+      FileReader: fileReaderCtorAv,
+      FormData: formDataCtorAv,
+      BroadcastChannel: broadcastChannelCtorAv,
       Uint8Array: uint8ArrayCtorAv,
       Uint16Array: uint16ArrayCtorAv,
       Uint32Array: uint32ArrayCtorAv,
@@ -3167,6 +3180,88 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         readyState: { kind: "top" },
         url: { kind: "top" },
         withCredentials: { kind: "top" },
+      }
+    };
+  }
+  // WHATWG File API § 5 Blob / § 6 File / § 7 FileReader.
+  if (ctorId === "WHATWG.Blob") {
+    return {
+      kind: "obj-lit",
+      props: {
+        size: { kind: "top" },
+        type: { kind: "top" },
+        slice: { kind: "builtin-method", id: "Blob.prototype.slice" },
+        text: { kind: "builtin-method", id: "Blob.prototype.text" },
+        arrayBuffer: { kind: "builtin-method", id: "Blob.prototype.arrayBuffer" },
+        stream: { kind: "builtin-method", id: "Blob.prototype.stream" },
+      }
+    };
+  }
+  if (ctorId === "WHATWG.File") {
+    return {
+      kind: "obj-lit",
+      props: {
+        // File extends Blob per § 6.
+        name: { kind: "taint-source", id: "File.name",
+          dims: { origin: false, path: false, query: false, hash: false, content: true } },
+        lastModified: { kind: "top" },
+        size: { kind: "top" },
+        type: { kind: "top" },
+        slice: { kind: "builtin-method", id: "Blob.prototype.slice" },
+        text: { kind: "builtin-method", id: "Blob.prototype.text" },
+        arrayBuffer: { kind: "builtin-method", id: "Blob.prototype.arrayBuffer" },
+        stream: { kind: "builtin-method", id: "Blob.prototype.stream" },
+      }
+    };
+  }
+  if (ctorId === "WHATWG.FileReader") {
+    return {
+      kind: "obj-lit",
+      props: {
+        readAsText: { kind: "builtin-method", id: "FileReader.prototype.readAsText" },
+        readAsDataURL: { kind: "builtin-method", id: "FileReader.prototype.readAsDataURL" },
+        readAsArrayBuffer: { kind: "builtin-method", id: "FileReader.prototype.readAsArrayBuffer" },
+        readAsBinaryString: { kind: "builtin-method", id: "FileReader.prototype.readAsBinaryString" },
+        abort: { kind: "builtin-method", id: "FileReader.prototype.abort" },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        readyState: { kind: "top" },
+        // result is the read content — tainted (file content from disk
+        // can be attacker-influenced via file-input on cross-origin sites).
+        result: { kind: "taint-source", id: "FileReader.result",
+          dims: { origin: false, path: false, query: false, hash: false, content: true } },
+        error: { kind: "top" },
+      }
+    };
+  }
+  // WHATWG XHR § 5 FormData — multipart/form-data builder.
+  if (ctorId === "WHATWG.FormData") {
+    return {
+      kind: "obj-lit",
+      props: {
+        append: { kind: "builtin-method", id: "FormData.prototype.append" },
+        delete: { kind: "builtin-method", id: "FormData.prototype.delete" },
+        get: { kind: "builtin-method", id: "FormData.prototype.get" },
+        getAll: { kind: "builtin-method", id: "FormData.prototype.getAll" },
+        has: { kind: "builtin-method", id: "FormData.prototype.has" },
+        set: { kind: "builtin-method", id: "FormData.prototype.set" },
+        entries: { kind: "builtin-method", id: "FormData.prototype.entries" },
+        keys: { kind: "builtin-method", id: "FormData.prototype.keys" },
+        values: { kind: "builtin-method", id: "FormData.prototype.values" },
+      }
+    };
+  }
+  // WHATWG HTML § 9.5 BroadcastChannel — same-origin postMessage.
+  if (ctorId === "WHATWG.BroadcastChannel") {
+    return {
+      kind: "obj-lit",
+      props: {
+        postMessage: { kind: "builtin-method", id: "BroadcastChannel.prototype.postMessage" },
+        close: { kind: "builtin-method", id: "BroadcastChannel.prototype.close" },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+        name: { kind: "top" },
       }
     };
   }
@@ -3883,6 +3978,37 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       methodId === "XMLHttpRequest.prototype.getAllResponseHeaders") {
     return { kind: "taint-source", id: "XMLHttpRequest." + methodId.split(".").pop(),
       dims: { origin: false, path: false, query: false, hash: false, content: true } };
+  }
+  // WHATWG File API § 5/§ 6 Blob/File methods.
+  if (methodId === "Blob.prototype.text" || methodId === "Blob.prototype.arrayBuffer" ||
+      methodId === "Blob.prototype.stream" || methodId === "Blob.prototype.slice") {
+    return { kind: "top" };
+  }
+  // WHATWG File API § 7 FileReader read methods — async; results
+  // accessed via .result prop (which is a taint-source AV).
+  if (methodId === "FileReader.prototype.readAsText" ||
+      methodId === "FileReader.prototype.readAsDataURL" ||
+      methodId === "FileReader.prototype.readAsArrayBuffer" ||
+      methodId === "FileReader.prototype.readAsBinaryString" ||
+      methodId === "FileReader.prototype.abort") {
+    return { kind: "const", value: undefined };
+  }
+  // WHATWG XHR FormData — append/set/delete return undefined per spec.
+  // get/getAll return the stored values (caller-controlled).
+  if (methodId === "FormData.prototype.append" ||
+      methodId === "FormData.prototype.delete" ||
+      methodId === "FormData.prototype.set") {
+    return { kind: "const", value: undefined };
+  }
+  if (methodId === "FormData.prototype.get" || methodId === "FormData.prototype.getAll" ||
+      methodId === "FormData.prototype.has" || methodId === "FormData.prototype.entries" ||
+      methodId === "FormData.prototype.keys" || methodId === "FormData.prototype.values") {
+    return { kind: "top" };
+  }
+  // WHATWG HTML § 9.5 BroadcastChannel.
+  if (methodId === "BroadcastChannel.prototype.postMessage" ||
+      methodId === "BroadcastChannel.prototype.close") {
+    return { kind: "const", value: undefined };
   }
   // ECMA § 25.1 TypedArray.prototype methods. slice/subarray return new
   // TypedArray instance (modeled as another opaque obj-lit per ctor);
