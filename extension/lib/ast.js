@@ -1015,6 +1015,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _specObjectMethodThisCache = new WeakMap();
   _tvsMemo = new WeakMap();
   _cfgMemo = new WeakMap();
+  _specEventHandlerType = new WeakMap();
   // Page DOM context: when the analyser runs against a page (HTML +
   // bundled JS), the host can pass static DOM-derived values that the
   // resolver uses to close gaps that JS source alone can't bridge.
@@ -2263,6 +2264,10 @@ function _specGlobalThisAv() {
   var documentProps = {
     getElementById: { kind: "builtin-method", id: "document.getElementById" },
     querySelector: { kind: "builtin-method", id: "document.querySelector" },
+    // WHATWG DOM § 4.4 EventTarget interface — Document inherits.
+    addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+    removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+    dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
     // WHATWG DOM § 4.5 user-controllable Document properties — each
     // reflects URL/HTTP-header/UA state attacker can influence. Same
     // taint-source AV scheme as Window.location for spec-eval-driven
@@ -2400,6 +2405,10 @@ function _specGlobalThisAv() {
       location: locationAv,
       name: { kind: "taint-source", id: "window.name",
         dims: { origin: false, path: false, query: false, hash: false, content: true } },
+      // WHATWG DOM § 4.4 EventTarget — Window inherits via IDL chain.
+      addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+      removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+      dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
     }
   };
   _SPEC_GLOBAL_AV = {
@@ -2451,10 +2460,31 @@ function _specGlobalThisAv() {
   return _SPEC_GLOBAL_AV;
 }
 
+// WHATWG DOM § 4.4 EventTarget.prototype methods. Inherited by every
+// EventTarget — Window, Document, Element, etc. addEventListener
+// registration is dispatched via the prototype chain (window → Window
+// → EventTarget → addEventListener).
+var _SPEC_EVENTTARGET_PROTO_AV = null;
+function _specEventTargetPrototypeAv() {
+  if (!_SPEC_EVENTTARGET_PROTO_AV) {
+    _SPEC_EVENTTARGET_PROTO_AV = {
+      kind: "obj-lit",
+      props: {
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+      }
+    };
+  }
+  return _SPEC_EVENTTARGET_PROTO_AV;
+}
+
 // WHATWG DOM § 4.9 Element.prototype methods. Exposed via the [[Prototype]]
 // chain on obj-lit AVs returned from getElementById/querySelector
 // (recognised structurally — those builders emit obj-lits with the
 // standard Element-attribute keys: href, src, action, dataset).
+// Element.prototype's own [[Prototype]] is EventTarget.prototype per
+// the IDL inheritance chain.
 var _SPEC_ELEMENT_PROTO_AV = null;
 function _specElementPrototypeAv() {
   if (!_SPEC_ELEMENT_PROTO_AV) {
@@ -2462,6 +2492,9 @@ function _specElementPrototypeAv() {
       kind: "obj-lit",
       props: {
         getAttribute: { kind: "builtin-method", id: "Element.prototype.getAttribute" },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
       }
     };
   }
@@ -3535,6 +3568,25 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // for our analysis (await/then unwrap).
   if (methodId === "Promise.resolve" || methodId === "Promise.reject") {
     return argAvs.length >= 1 ? argAvs[0] : { kind: "const", value: undefined };
+  }
+  // WHATWG DOM § 4.4 EventTarget.prototype.addEventListener(type, cb).
+  // When dispatched via the prototype chain on an EventTarget instance
+  // (Window / Document / Element / etc. — already routed here through
+  // the prototype lookup, no AST shape match), register the callback's
+  // funcNode → type so spec eval's _specInitialFunctionBodyState can
+  // tag the cb's first param with the appropriate Event sub-shape
+  // (MessageEvent.data taint-source for type === "message", etc.).
+  if (methodId === "EventTarget.prototype.addEventListener") {
+    if (argAvs.length >= 2 &&
+        argAvs[0] && argAvs[0].kind === "const" && typeof argAvs[0].value === "string" &&
+        argAvs[1] && argAvs[1].kind === "function-ref" && argAvs[1].funcNode) {
+      _specEventHandlerType.set(argAvs[1].funcNode, argAvs[0].value);
+    }
+    return { kind: "const", value: undefined };
+  }
+  if (methodId === "EventTarget.prototype.removeEventListener" ||
+      methodId === "EventTarget.prototype.dispatchEvent") {
+    return { kind: "const", value: undefined };
   }
   // WHATWG DOM § 4.9.1 Element.getAttribute(qualifiedName). When recv
   // is a dom-element, return the matching prop AV. Maps "data-X" to
@@ -5195,6 +5247,14 @@ function _specBuildClassStaticAv(classNode, classPath) {
 // Per-ObjectExpression cache: same literal produces the same shape
 // regardless of which method's `this` is being resolved.
 var _specObjectMethodThisCache = new WeakMap();
+// WHATWG DOM § 4.4 EventTarget — fn-node → event-type for callbacks
+// registered via EventTarget.prototype.addEventListener. Spec eval's
+// _specInitialFunctionBodyState consults this to inject the right
+// param shape (e.g. MessageEvent.data taint-source for "message").
+// Populated only by the prototype-dispatched addEventListener builtin
+// (no AST shape match — the dispatch happens through the prototype
+// chain on EventTarget instances).
+var _specEventHandlerType = new WeakMap();
 function _specBuildThisFromObjectLiteral(funcNode, funcPath) {
   if (!funcPath || !funcPath.parentPath) return null;
   // The function is the value of an ObjectProperty, OR is an ObjectMethod
@@ -5337,6 +5397,25 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       for (var pci = 1; pci < perCallAvs.length; pci++) paramAv = _specSetUnionAv(paramAv, perCallAvs[pci]);
     } else {
       paramAv = { kind: "param", idx: i, fn: funcNode };
+      // WHATWG DOM § 4.4 / WHATWG HTML § 9.4.1: when funcNode was
+      // registered as an event handler via the prototype-dispatched
+      // EventTarget.prototype.addEventListener (no shape match — the
+      // dispatch routes through the receiver's prototype chain), the
+      // first param is an Event instance whose shape is type-specific.
+      var evtType = _specEventHandlerType.get(funcNode);
+      if (i === 0 && evtType === "message") {
+        // MessageEvent per § 9.4.1 — `data` is cross-origin payload.
+        paramAv = {
+          kind: "obj-lit",
+          props: {
+            data: { kind: "taint-source", id: "event.data",
+              dims: { origin: false, path: false, query: false, hash: false, content: true } },
+            origin: { kind: "taint-source", id: "event.origin",
+              dims: { origin: false, path: false, query: false, hash: false, content: false } },
+            source: { kind: "top" },
+          }
+        };
+      }
     }
     if (p.type === "Identifier") {
       state[p.name] = paramAv;
