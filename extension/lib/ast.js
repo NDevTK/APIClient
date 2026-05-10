@@ -8272,8 +8272,10 @@ function _funcPathFromAv(av, ctxPath) {
 }
 function _specEnsureProgramGlobalsPrepass(anyPath) {
   if (!anyPath) return;
+  // Walk up to the Program node. Babel wraps Program inside a File node;
+  // stop at Program (not File) so _t.isProgram(p.node) check matches.
   var p = anyPath;
-  while (p && p.parentPath) p = p.parentPath;
+  while (p && p.parentPath && !_t.isProgram(p.node)) p = p.parentPath;
   if (!p || !p.node || !_t.isProgram(p.node)) return;
   if (_specProgramGlobalsPrepassDone.has(p.node)) return;
   _specProgramGlobalsPrepassDone.add(p.node);
@@ -12671,7 +12673,7 @@ function _extractFetchCall(path, result, type) {
         _specAnalyzePropertyFlow(spreadEncFn);
       } else {
         var spreadProgPath = optsPath;
-        while (spreadProgPath && spreadProgPath.parentPath) spreadProgPath = spreadProgPath.parentPath;
+        while (spreadProgPath && spreadProgPath.parentPath && !_t.isProgram(spreadProgPath.node)) spreadProgPath = spreadProgPath.parentPath;
         if (spreadProgPath && spreadProgPath.node && _t.isProgram(spreadProgPath.node)) {
           _specAnalyzeProgramWithFixpoint(spreadProgPath);
         }
@@ -13255,7 +13257,7 @@ function _resolveAllValues(initialPath, initialDepth) {
     // walk the Program body to populate per-expression AVs (state-evolving
     // var bindings, expressions). Find the Program by walking parent paths.
     var programPath = initialPath;
-    while (programPath && programPath.parentPath) programPath = programPath.parentPath;
+    while (programPath && programPath.parentPath && !_t.isProgram(programPath.node)) programPath = programPath.parentPath;
     if (programPath && programPath.node && _t.isProgram(programPath.node)) {
       // Use the fixpoint driver so closure write-back side effects from
       // any function in the program propagate to all callers regardless
@@ -17890,7 +17892,7 @@ function _extractHeaders(objNode, objPath) {
       _specAnalyzePropertyFlow(encFn);
     } else {
       var progPath = objPath;
-      while (progPath && progPath.parentPath) progPath = progPath.parentPath;
+      while (progPath && progPath.parentPath && !_t.isProgram(progPath.node)) progPath = progPath.parentPath;
       if (progPath && progPath.node && _t.isProgram(progPath.node)) {
         _specAnalyzeProgramWithFixpoint(progPath);
       }
@@ -19261,14 +19263,14 @@ function _traceValueSource(path, _unused) {
         if (outerEnc && outerEnc.node && _t.isFunction(outerEnc.node) && !_specEffectsMemo.has(outerEnc.node)) {
           try { _specAnalyzePropertyFlow(outerEnc); } catch (_) {}
         } else if (!outerEnc) {
-          var ppHof = encFn.parentPath; while (ppHof && ppHof.parentPath) ppHof = ppHof.parentPath;
+          var ppHof = encFn.parentPath; while (ppHof && ppHof.parentPath && !_t.isProgram(ppHof.node)) ppHof = ppHof.parentPath;
           if (ppHof && ppHof.node && _t.isProgram(ppHof.node) && !_specEffectsMemo.has(ppHof.node)) {
             try { _specAnalyzePropertyFlow(ppHof); } catch (_) {}
           }
         }
       }
     } else if (!encFn) {
-      var pp = path; while (pp && pp.parentPath) pp = pp.parentPath;
+      var pp = path; while (pp && pp.parentPath && !_t.isProgram(pp.node)) pp = pp.parentPath;
       if (pp && pp.node && _t.isProgram(pp.node)) {
         try { _specAnalyzeProgramWithFixpoint(pp); } catch (_) {}
       }
@@ -22851,7 +22853,7 @@ function _checkSanitization(path) {
     if (!_t.isBlockStatement(funcBody)) return false;
     bodyPath = funcPath.get("body");
   } else {
-    var pp = path; while (pp && pp.parentPath) pp = pp.parentPath;
+    var pp = path; while (pp && pp.parentPath && !_t.isProgram(pp.node)) pp = pp.parentPath;
     if (pp && pp.node && _t.isProgram(pp.node)) bodyPath = pp;
     else return false;
   }
