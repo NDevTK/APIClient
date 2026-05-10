@@ -2255,6 +2255,9 @@ function _specGlobalThisAv() {
   var documentProps = {
     getElementById: { kind: "builtin-method", id: "document.getElementById" },
     querySelector: { kind: "builtin-method", id: "document.querySelector" },
+    // WHATWG HTML § 4.10.4 Document.write / Document.writeln — DOM XSS sink.
+    write: { kind: "builtin-method", id: "Document.prototype.write" },
+    writeln: { kind: "builtin-method", id: "Document.prototype.writeln" },
     // WHATWG DOM § 4.4 EventTarget interface — Document inherits.
     addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
     removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
@@ -2513,6 +2516,24 @@ function _specGlobalThisAv() {
       // HTML § 2.7.5 structuredClone — deep-clones any structured-cloneable
       // value (including nested objects with attacker-chosen keys).
       structuredClone: { kind: "builtin-method", id: "global.structuredClone" },
+      // ECMA § 19.2.1 eval — direct eval (when bare `eval(x)` is the call
+      // form, scope-checked unbound). Indirect eval (`(0,eval)(x)`) flows
+      // through SequenceExpression eval semantics; spec eval evaluates
+      // the SequenceExpression to its last element's AV (the eval ref).
+      eval: { kind: "builtin-method", id: "global.eval" },
+      // WHATWG HTML § 7.3.6 Window.open — open a new browsing context.
+      // The first arg is a URL — open redirect / request-forgery sink.
+      open: { kind: "builtin-method", id: "Window.prototype.open" },
+      // WHATWG Fetch § 5.5 globalThis.fetch — same builtin used by both
+      // Window and WorkerGlobalScope per IDL.
+      fetch: { kind: "builtin-method", id: "global.fetch" },
+      // WHATWG HTML § 10.2.5.4 importScripts (WorkerGlobalScope only,
+      // but the global namespace lookup applies in worker context).
+      importScripts: { kind: "builtin-method", id: "global.importScripts" },
+      // WHATWG DOM § 4.5 document is a Window property — projects to
+      // the same documentProps AV so window.document.write etc. dispatches
+      // identically to bare `document.write(...)`.
+      document: { kind: "obj-lit", props: documentProps },
     }
   };
   _SPEC_GLOBAL_AV = {
@@ -2586,6 +2607,12 @@ function _specGlobalThisAv() {
       isNaN: { kind: "builtin-method", id: "global.isNaN" },
       isFinite: { kind: "builtin-method", id: "global.isFinite" },
       structuredClone: { kind: "builtin-method", id: "global.structuredClone" },
+      eval: { kind: "builtin-method", id: "global.eval" },
+      open: { kind: "builtin-method", id: "Window.prototype.open" },
+      fetch: { kind: "builtin-method", id: "global.fetch" },
+      importScripts: { kind: "builtin-method", id: "global.importScripts" },
+      setTimeout: { kind: "builtin-method", id: "Window.prototype.setTimeout" },
+      setInterval: { kind: "builtin-method", id: "Window.prototype.setInterval" },
     }
   };
   return _SPEC_GLOBAL_AV;
@@ -24784,11 +24811,19 @@ function _processSecurityAssignSink(path, result) {
 // DOM injection by tracing `$(value)` to jQuery's actual function body
 // (which calls `.parseHTML` → `insertBefore` etc.), not by matching the
 // global identifier's name.
-var _GLOBAL_CALL_SINKS = {
-  "eval": { type: "eval", sink: "eval" },
-  "open": { type: "redirect", sink: "window.open" },
-  "fetch": { type: "request-forgery", sink: "fetch" },
-  "importScripts": { type: "eval", sink: "importScripts" },
+// Builtin-method id → sink classification. Keyed by the AV id installed
+// on globalThis by _specGlobalThisAv (so callee identity is via spec eval,
+// not name-based AST shape match). The id namespace mirrors the spec:
+// "global.eval" per ECMA § 19.2.1, "Window.prototype.open" per WHATWG
+// HTML § 7.3.6, "global.fetch" per WHATWG Fetch § 5.5,
+// "global.importScripts" per WHATWG HTML § 10.2.5.4. Both bare-call
+// (`eval(x)`) and member-access (`window.eval(x)`) projections through
+// the global registry produce the same builtin-method AV → same sink id.
+var _BUILTIN_CALL_SINKS = {
+  "global.eval":          { type: "eval", sink: "eval" },
+  "Window.prototype.open": { type: "redirect", sink: "window.open" },
+  "global.fetch":         { type: "request-forgery", sink: "fetch" },
+  "global.importScripts": { type: "eval", sink: "importScripts" },
 };
 
 // Call-based sinks: eval(), document.write(), setTimeout(string), insertAdjacentHTML, setAttribute("on*")
@@ -24796,46 +24831,44 @@ function _processSecurityCallSink(path, result) {
   var node = path.node;
   var callee = node.callee;
 
-  // Indirect eval: (0, eval)(value) — SequenceExpression whose last element is eval
-  if (_t.isSequenceExpression(callee) && callee.expressions.length > 0 && node.arguments.length > 0) {
-    var _seqLast = callee.expressions[callee.expressions.length - 1];
-    if (_t.isIdentifier(_seqLast, { name: "eval" }) && !path.scope.getBinding("eval")) {
-      var _indEvalSrc = _traceValueSource(path.get("arguments.0"), 0);
-      if (_indEvalSrc.sourceType === "user-controlled") _pushSink(result, node, "eval", "eval", _indEvalSrc, path);
-      return;
-    }
-  }
-
-  // Table-driven global identifier sinks: eval, open, fetch, importScripts
-  if (_t.isIdentifier(callee) && node.arguments.length > 0) {
-    var _gSink = _GLOBAL_CALL_SINKS[callee.name];
-    if (_gSink && !path.scope.getBinding(callee.name)) {
-      var _gSrc = _traceValueSource(path.get("arguments.0"), 0);
-      if (_gSrc.sourceType === "user-controlled") {
-        var _gOpts = (_gSink.type === "redirect" && _taintFlowsOnlyIntoUrlQueryOrHash(path.get("arguments.0")))
+  // AV-grounded callee identity. Indirect eval `(0, eval)(value)` flows
+  // through SequenceExpression's spec semantics (§ 13.16) — the result
+  // is the last expression's value (eval ref), so the callee AV is the
+  // builtin-method "global.eval" identical to bare-call eval. Same for
+  // `window.eval`, `self.eval`, IIFE-aliased `e.eval`, etc.
+  if (path) _specEnsureProgramFixpoint(path);
+  var _calleeAv = _specPathValMemo.get(callee);
+  if (_calleeAv && _calleeAv.kind === "builtin-method" && node.arguments.length > 0) {
+    var _bSink = _BUILTIN_CALL_SINKS[_calleeAv.id];
+    if (_bSink) {
+      var _bSrc = _traceValueSource(path.get("arguments.0"), 0);
+      if (_bSrc.sourceType === "user-controlled") {
+        var _bOpts = (_bSink.type === "redirect" && _taintFlowsOnlyIntoUrlQueryOrHash(path.get("arguments.0")))
           ? { severity: "medium", notes: "taint flows only into query/hash of an untainted URL prefix — scheme locked" }
           : null;
-        _pushSink(result, node, _gSink.type, _gSink.sink, _gSrc, path, _gOpts);
+        _pushSink(result, node, _bSink.type, _bSink.sink, _bSrc, path, _bOpts);
       }
       return;
     }
-  }
-
-  // setTimeout/setInterval with string first arg (not a function)
-  if (_t.isIdentifier(callee) && (callee.name === "setTimeout" || callee.name === "setInterval") &&
-      !path.scope.getBinding(callee.name) && node.arguments.length > 0) {
-    var firstArg = node.arguments[0];
-    // Skip only if the arg is definitely a function (expression, arrow, or identifier resolving to one)
-    var isFunc = _t.isFunctionExpression(firstArg) || _t.isArrowFunctionExpression(firstArg);
-    if (!isFunc && _t.isIdentifier(firstArg)) {
-      var timerBinding = path.scope.getBinding(firstArg.name);
-      if (timerBinding && timerBinding.path.node.init && (_t.isFunctionExpression(timerBinding.path.node.init) || _t.isArrowFunctionExpression(timerBinding.path.node.init)))
-        isFunc = true;
-    }
-    if (!isFunc) {
-      var timerSource = _traceValueSource(path.get("arguments.0"), 0);
-      if (timerSource.sourceType !== "user-controlled") return;
-      _pushSink(result, node, "eval", callee.name, timerSource, path);
+    // setTimeout / setInterval with string first arg per WHATWG HTML
+    // § 8.6.5 (Window timer steps): if handler is a string, runs as eval.
+    // The function-arg check skips `setTimeout(function(){…}, 0)` — only
+    // string handlers are eval gadgets. Function detection via AV: arrow
+    // / function expression resolves to function-ref AV; identifier to
+    // a function binding likewise resolves through scope.
+    if (_calleeAv.id === "Window.prototype.setTimeout" || _calleeAv.id === "Window.prototype.setInterval") {
+      var firstArgAv = _specPathValMemo.get(node.arguments[0]);
+      var isFunc = !!(firstArgAv && firstArgAv.kind === "function-ref");
+      if (!isFunc) {
+        var firstArg = node.arguments[0];
+        if (_t.isFunctionExpression(firstArg) || _t.isArrowFunctionExpression(firstArg)) isFunc = true;
+      }
+      if (!isFunc) {
+        var timerSource = _traceValueSource(path.get("arguments.0"), 0);
+        if (timerSource.sourceType !== "user-controlled") return;
+        var timerSinkName = _calleeAv.id === "Window.prototype.setTimeout" ? "setTimeout" : "setInterval";
+        _pushSink(result, node, "eval", timerSinkName, timerSource, path);
+      }
       return;
     }
   }
@@ -24844,21 +24877,10 @@ function _processSecurityCallSink(path, result) {
   var methName = _t.isIdentifier(callee.property) ? callee.property.name : null;
   if (!methName) return;
 
-  // window.open(url) / self.open(url) — open redirect (member expression form)
-  if (methName === "open" && node.arguments.length > 0) {
-    var _isWin = (_t.isIdentifier(callee.object, { name: "window" }) && !path.scope.getBinding("window")) ||
-                 (_t.isIdentifier(callee.object, { name: "self" }) && !path.scope.getBinding("self"));
-    if (_isWin) {
-      var _woSrc2 = _traceValueSource(path.get("arguments.0"), 0);
-      if (_woSrc2.sourceType === "user-controlled") {
-        var _woOpts = _taintFlowsOnlyIntoUrlQueryOrHash(path.get("arguments.0"))
-          ? { severity: "medium", notes: "taint flows only into query/hash of an untainted URL prefix — scheme locked" }
-          : null;
-        _pushSink(result, node, "redirect", "window.open", _woSrc2, path, _woOpts);
-      }
-      return;
-    }
-  }
+  // (window.open(url) / self.open(url) is handled by the AV-driven
+  // _BUILTIN_CALL_SINKS["Window.prototype.open"] dispatch above —
+  // spec eval projects `window.open` through windowSelfAv.props.open
+  // to the same builtin-method AV as the bare `open(...)` call.)
 
   // Simple method sinks: method name → { type, sink, argIdx }
   // Handles setHTMLUnsafe, parseHTMLUnsafe, insertAdjacentHTML, createContextualFragment
@@ -24870,11 +24892,16 @@ function _processSecurityCallSink(path, result) {
     return;
   }
 
-  // document.write(value) / document.writeln(value)
-  if ((methName === "write" || methName === "writeln") && _t.isIdentifier(callee.object, { name: "document" }) &&
-      !path.scope.getBinding("document") && node.arguments.length > 0) {
+  // document.write / document.writeln — AV-grounded callee identity
+  // (Document.prototype.write / Document.prototype.writeln on documentProps;
+  // window.document.write projects through windowSelfAv.props.document so
+  // both bare and window-prefixed forms unify to the same builtin-method).
+  if ((_calleeAv && _calleeAv.kind === "builtin-method" &&
+       (_calleeAv.id === "Document.prototype.write" || _calleeAv.id === "Document.prototype.writeln")) &&
+      node.arguments.length > 0) {
     var dwSource = _traceValueSource(path.get("arguments.0"), 0);
-    if (dwSource.sourceType === "user-controlled") _pushSink(result, node, "xss", "document." + methName, dwSource, path);
+    if (dwSource.sourceType === "user-controlled") _pushSink(result, node, "xss",
+      _calleeAv.id === "Document.prototype.write" ? "document.write" : "document.writeln", dwSource, path);
     return;
   }
 
