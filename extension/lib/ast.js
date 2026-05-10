@@ -2396,6 +2396,21 @@ function _specGlobalThisAv() {
         dims: { origin: false, path: false, query: false, hash: false, content: false } },
     }
   };
+  // WHATWG HTML § 11 Storage — localStorage / sessionStorage. getItem
+  // returns user-controlled string per Storage interface; modeled as
+  // a Storage instance obj-lit whose getItem is a builtin-method
+  // routed through _specApplyBuiltinMethod (returns taint-source AV).
+  var storageAv = {
+    kind: "obj-lit",
+    props: {
+      getItem: { kind: "builtin-method", id: "Storage.prototype.getItem" },
+      setItem: { kind: "builtin-method", id: "Storage.prototype.setItem" },
+      removeItem: { kind: "builtin-method", id: "Storage.prototype.removeItem" },
+      clear: { kind: "builtin-method", id: "Storage.prototype.clear" },
+      key: { kind: "builtin-method", id: "Storage.prototype.key" },
+      length: { kind: "top" },
+    }
+  };
   // window / self / globalThis WHATWG HTML § 7.2 alias of the global —
   // shared AV so member projections through any of them resolve to the
   // same location / name / etc. AVs.
@@ -2409,12 +2424,17 @@ function _specGlobalThisAv() {
       addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
       removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
       dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+      // WHATWG HTML § 11 Web Storage — both attributes inherit Storage interface.
+      localStorage: storageAv,
+      sessionStorage: storageAv,
     }
   };
   _SPEC_GLOBAL_AV = {
     kind: "obj-lit",
     props: {
       location: locationAv,
+      localStorage: storageAv,
+      sessionStorage: storageAv,
       // window / self / globalThis — WHATWG HTML § 7.2 — same global
       // object; aliases for `location`, `name`. Spec eval projects
       // `window.location` / `self.location` / `globalThis.location`
@@ -3568,6 +3588,21 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // for our analysis (await/then unwrap).
   if (methodId === "Promise.resolve" || methodId === "Promise.reject") {
     return argAvs.length >= 1 ? argAvs[0] : { kind: "const", value: undefined };
+  }
+  // WHATWG HTML § 11 Storage.prototype.getItem(key) → string?. The
+  // returned string is whatever was previously stored under `key` —
+  // attacker may have written it in a prior session, so it's
+  // user-controlled (per OWASP Top 10 A03 Insecure Direct Object
+  // References). Modeled as a taint-source AV with content dim only.
+  // setItem/removeItem/clear are state mutations returning undefined;
+  // key(n) returns nth key (also user-controlled if attacker stored).
+  if (methodId === "Storage.prototype.getItem" || methodId === "Storage.prototype.key") {
+    return { kind: "taint-source", id: methodId === "Storage.prototype.getItem" ? "storage.getItem" : "storage.key",
+      dims: { origin: false, path: false, query: false, hash: false, content: true } };
+  }
+  if (methodId === "Storage.prototype.setItem" || methodId === "Storage.prototype.removeItem" ||
+      methodId === "Storage.prototype.clear") {
+    return { kind: "const", value: undefined };
   }
   // WHATWG DOM § 4.4 EventTarget.prototype.addEventListener(type, cb).
   // When dispatched via the prototype chain on an EventTarget instance
