@@ -13401,132 +13401,23 @@ function _ravStep(F) {
     var mm = sel.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
     return mm ? mm[1] : null;
   }
-  // Forms 1/1b/1e: spec eval already projects DOM lookups
-  // (`document.querySelector("meta[name=X]").content`,
-  // `document.getElementById("X").href`, `document.querySelector("#X").<prop>`)
+  // Unified DOM-context value resolution: spec eval projects all DOM lookups
+  // — `document.querySelector("meta[name=X]").content`,
+  // `document.getElementById("X").<prop>`, `document.querySelector("#X").<prop>`,
+  // `el.getAttribute("Y")`, `el.dataset.<key>`,
+  // `document.querySelector("meta[name=X]").getAttribute("content")` —
   // through documentProps + _specApplyBuiltinMethod's DOM context probe
-  // to a const string AV. Use that directly instead of re-walking the AST
-  // shape — same lookup, AV-grounded callee identity (no name-based
-  // shape match on `document` / `querySelector` / `getElementById`).
-  if (skip < 1 && _t.isMemberExpression(node) && !node.computed && _t.isIdentifier(node.property)) {
+  // (document.getElementById/querySelector → dom-element AV;
+  // Element.prototype.getAttribute → const string from the dom-element).
+  // ANY MemberExpression or CallExpression whose AV resolves to a const
+  // string is the resolved URL value — same lookup, AV-grounded callee
+  // identity (no name-based shape match on `document` / `querySelector` /
+  // `getElementById` / `getAttribute`), uniform across bare/prefixed/aliased.
+  if (skip < 1 && (_t.isMemberExpression(node) || _t.isCallExpression(node))) {
     _specEnsureProgramFixpoint(path);
     var domNodeAv = _specPathValMemo.get(node);
     if (domNodeAv && domNodeAv.kind === "const" && typeof domNodeAv.value === "string") {
       return { done: [domNodeAv.value] };
-    }
-  }
-  // Form 1e: `document.querySelector("#X").<prop>` — CSS id selector.
-  // Same lookup as getElementById, just via querySelector. WHATWG DOM
-  // querySelector accepts CSS Selectors L4 syntax.
-  if (skip < 1 && _t.isMemberExpression(node) && !node.computed &&
-      _t.isIdentifier(node.property) &&
-      _t.isCallExpression(node.object) &&
-      _t.isMemberExpression(node.object.callee) && !node.object.callee.computed &&
-      _t.isIdentifier(node.object.callee.object, { name: "document" }) &&
-      !path.scope.getBinding("document") &&
-      _t.isIdentifier(node.object.callee.property, { name: "querySelector" }) &&
-      node.object.arguments.length === 1 &&
-      _t.isStringLiteral(node.object.arguments[0])) {
-    var qsSel = node.object.arguments[0].value;
-    var qsIdMatch = qsSel.match(/^#([A-Za-z][\w:.-]*)$/);
-    if (qsIdMatch) {
-      var qsId = qsIdMatch[1];
-      var qsProp = node.property.name;
-      if (_domContext && _domContext.byId &&
-          Object.prototype.hasOwnProperty.call(_domContext.byId, qsId)) {
-        var qsInfo = _domContext.byId[qsId];
-        if (qsInfo && qsInfo[qsProp] != null) {
-          return { done: [qsInfo[qsProp]] };
-        }
-      }
-    }
-  }
-  // Form 1d: `<el>.getAttribute("Y")` where <el> is either an inline
-  // getElementById/querySelector call or an Identifier bound to one.
-  // Returns the matching data-/href/src/action value via byId.
-  if (skip < 1 && _t.isCallExpression(node) &&
-      _t.isMemberExpression(node.callee) && !node.callee.computed &&
-      _t.isIdentifier(node.callee.property, { name: "getAttribute" }) &&
-      node.arguments.length === 1 &&
-      _t.isStringLiteral(node.arguments[0])) {
-    var gaId = null;
-    var receiver = node.callee.object;
-    // Inline form: document.getElementById("X").getAttribute("Y")
-    if (_t.isCallExpression(receiver) &&
-        _t.isMemberExpression(receiver.callee) && !receiver.callee.computed &&
-        _t.isIdentifier(receiver.callee.object, { name: "document" }) &&
-        !path.scope.getBinding("document") &&
-        receiver.arguments.length === 1 &&
-        _t.isStringLiteral(receiver.arguments[0])) {
-      if (_t.isIdentifier(receiver.callee.property, { name: "getElementById" })) {
-        gaId = receiver.arguments[0].value;
-      } else if (_t.isIdentifier(receiver.callee.property, { name: "querySelector" })) {
-        var gaSel = receiver.arguments[0].value;
-        var gaIdMatch = gaSel.match(/^#([A-Za-z][\w:.-]*)$/);
-        if (gaIdMatch) gaId = gaIdMatch[1];
-      }
-    } else if (_t.isIdentifier(receiver)) {
-      // Variable-bound form: var el = getElementById("X"); el.getAttribute("Y")
-      gaId = _resolveBoundDomElementId(path, receiver);
-    }
-    if (gaId && _domContext && _domContext.byId &&
-        Object.prototype.hasOwnProperty.call(_domContext.byId, gaId)) {
-      var gaInfo = _domContext.byId[gaId];
-      var gaAttr = node.arguments[0].value;
-      // Standard attribute names map directly to byId properties.
-      if (gaAttr === "href" && gaInfo.href != null) return { done: [gaInfo.href] };
-      if (gaAttr === "src" && gaInfo.src != null) return { done: [gaInfo.src] };
-      if (gaAttr === "action" && gaInfo.action != null) return { done: [gaInfo.action] };
-      // data-* attribute names match dataAttrs keys directly.
-      if (gaAttr.indexOf("data-") === 0 && gaInfo.dataAttrs && gaInfo.dataAttrs[gaAttr.slice(5)] != null) {
-        return { done: [gaInfo.dataAttrs[gaAttr.slice(5)]] };
-      }
-    }
-  }
-  // Form 1c: `document.getElementById("X").dataset.<key>` — for any
-  // data-* attribute on the byId-tracked element. WHATWG HTML §
-  // 7.5.5 dataset property reflects data-* attributes (camelCased).
-  if (skip < 1 && _t.isMemberExpression(node) && !node.computed &&
-      _t.isIdentifier(node.property) &&
-      _t.isMemberExpression(node.object) && !node.object.computed &&
-      _t.isIdentifier(node.object.property, { name: "dataset" }) &&
-      _t.isCallExpression(node.object.object) &&
-      _t.isMemberExpression(node.object.object.callee) && !node.object.object.callee.computed &&
-      _t.isIdentifier(node.object.object.callee.object, { name: "document" }) &&
-      !path.scope.getBinding("document") &&
-      _t.isIdentifier(node.object.object.callee.property, { name: "getElementById" }) &&
-      node.object.object.arguments.length === 1 &&
-      _t.isStringLiteral(node.object.object.arguments[0])) {
-    var gbiDsId = node.object.object.arguments[0].value;
-    var gbiDsKey = node.property.name;
-    // dataset uses camelCase per HTML spec; markup uses kebab-case.
-    var gbiDsKebab = gbiDsKey.replace(/[A-Z]/g, function(c) { return "-" + c.toLowerCase(); });
-    if (_domContext && _domContext.byId &&
-        Object.prototype.hasOwnProperty.call(_domContext.byId, gbiDsId)) {
-      var dsInfo = _domContext.byId[gbiDsId];
-      if (dsInfo && dsInfo.dataAttrs && dsInfo.dataAttrs[gbiDsKebab] != null) {
-        return { done: [dsInfo.dataAttrs[gbiDsKebab]] };
-      }
-    }
-  }
-  // Form 2: `document.querySelector("meta[name=X]").getAttribute("content")`
-  if (skip < 1 && _t.isCallExpression(node) &&
-      _t.isMemberExpression(node.callee) && !node.callee.computed &&
-      _t.isIdentifier(node.callee.property, { name: "getAttribute" }) &&
-      node.arguments.length === 1 &&
-      _t.isStringLiteral(node.arguments[0]) &&
-      node.arguments[0].value === "content" &&
-      _t.isCallExpression(node.callee.object) &&
-      _t.isMemberExpression(node.callee.object.callee) && !node.callee.object.callee.computed &&
-      _t.isIdentifier(node.callee.object.callee.object, { name: "document" }) &&
-      !path.scope.getBinding("document") &&
-      _t.isIdentifier(node.callee.object.callee.property, { name: "querySelector" }) &&
-      node.callee.object.arguments.length === 1 &&
-      _t.isStringLiteral(node.callee.object.arguments[0])) {
-    var metaName2 = _ravParseMetaNameSelector(node.callee.object.arguments[0].value);
-    if (metaName2 && _domContext && _domContext.metaTags &&
-        Object.prototype.hasOwnProperty.call(_domContext.metaTags, metaName2)) {
-      return { done: [_domContext.metaTags[metaName2]] };
     }
   }
 
