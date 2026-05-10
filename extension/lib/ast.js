@@ -18,7 +18,6 @@ var _stats = null;
 var _globalAssignments = {};  // name → { valuePath, valueNode } — tracks window.X = value
 var _windowAliases = new Set();  // parameter names known to alias window/self/globalThis
 var _unboundIdRefs = null;  // name → [Path, ...] of unbound-global identifier references; populated by pre-pass
-var _lastIIFEFuncPath = null;  // scope context from last _resolveIIFEReturnedProperty resolution
 var _sourceCode = null;  // original source text for code context extraction
 var _sourceUrl = null;   // tabUrl when analyzing via live pipeline; gives us
                          // `location.origin` etc. at analysis time.
@@ -1934,78 +1933,6 @@ function _trackGlobalAssignment(path) {
     valueNode: node.right,
   };
   _stats.globalAssignments++;
-}
-
-// Resolve a property on the return value of an IIFE.
-// Handles: var e = function(){ n.get = function(url){...}; return n; }(); e.get(url)
-// Also handles SequenceExpression returns: return (t=t||{}, n.get=fn, n)
-function _resolveIIFEReturnedProperty(callExprPath, propName) {
-  var callee = callExprPath.node.callee;
-  var funcNode = null;
-  var funcPath = null;
-
-  // Direct IIFE: (function(){...})()
-  if (_t.isFunctionExpression(callee) || _t.isArrowFunctionExpression(callee)) {
-    funcNode = callee;
-    funcPath = callExprPath.get("callee");
-  }
-  // Named function: factoryFn()
-  if (!funcNode && _t.isIdentifier(callee)) {
-    var binding = callExprPath.scope.getBinding(callee.name);
-    if (binding) {
-      if (_t.isFunctionDeclaration(binding.path.node)) {
-        funcNode = binding.path.node;
-        funcPath = binding.path;
-      } else if (_t.isVariableDeclarator(binding.path.node) && binding.path.node.init &&
-                 (_t.isFunctionExpression(binding.path.node.init) || _t.isArrowFunctionExpression(binding.path.node.init))) {
-        funcNode = binding.path.node.init;
-        funcPath = binding.path.get("init");
-      }
-    }
-  }
-  if (!funcNode || !funcPath) return null;
-
-  // Find the returned identifier name
-  var returnedName = null;
-  try {
-    funcPath.traverse(Object.assign({
-      ReturnStatement: function(retPath) {
-        if (returnedName) return;
-        var arg = retPath.node.argument;
-        if (!arg) return;
-        // Direct return: return n
-        if (_t.isIdentifier(arg)) {
-          returnedName = arg.name;
-        }
-        // SequenceExpression: return (a=..., n.get=fn, n)
-        if (_t.isSequenceExpression(arg)) {
-          var last = arg.expressions[arg.expressions.length - 1];
-          if (_t.isIdentifier(last)) returnedName = last.name;
-        }
-      },
-    }, _SKIP_NESTED_FUNCS));
-  } catch (e) { _resolver.collectError(e, "iifeReturnName"); }
-  if (!returnedName) return null;
-
-  // Find returnedName.propName = function(){} assignments inside the IIFE
-  var foundFuncPath = null;
-  try {
-    funcPath.traverse(Object.assign({
-      AssignmentExpression: function(assignPath) {
-        if (foundFuncPath) return;
-        var left = assignPath.node.left;
-        if (!_t.isMemberExpression(left) || left.computed) return;
-        if (!_t.isIdentifier(left.object) || left.object.name !== returnedName) return;
-        if (!_t.isIdentifier(left.property) || left.property.name !== propName) return;
-        var right = assignPath.node.right;
-        if (_t.isFunctionExpression(right) || _t.isArrowFunctionExpression(right)) {
-          foundFuncPath = assignPath.get("right");
-        }
-      },
-    }, _SKIP_NESTED_FUNCS));
-  } catch (e) { _resolver.collectError(e, "iifePropertyAssignment"); }
-  if (foundFuncPath) _lastIIFEFuncPath = funcPath;
-  return foundFuncPath;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -11593,12 +11520,6 @@ function _traceChainedWrapper(callPath, funcNode, result) {
   if (_t.isIdentifier(innerCallee)) {
     // Check if the inner callee resolves to a function containing a network sink
     var innerBinding = callPath.scope.getBinding(innerCallee.name);
-    // Try the IIFE scope (when the wrapper was resolved from _resolveIIFEReturnedProperty)
-    if (!innerBinding && _lastIIFEFuncPath) {
-      try {
-        innerBinding = _lastIIFEFuncPath.scope.getBinding(innerCallee.name);
-      } catch(e) { _resolver.collectError(e, "iifeChainedScope"); }
-    }
     if (innerBinding) {
       if (_t.isFunctionDeclaration(innerBinding.path.node)) innerFuncPath = innerBinding.path;
       else if (_t.isVariableDeclarator(innerBinding.path.node) && innerBinding.path.node.init &&
@@ -17462,9 +17383,6 @@ function _resolveParamFromPrototypeMethodCallers(funcPath, ctorName, methodName,
 function _resolveThisPropXhrCorrelated(fromPath, ctorName, methodProp, urlProp, headers, bodyParams) {
   var sites = [];
   var ctorBinding = fromPath.scope.getBinding(ctorName);
-  if (!ctorBinding && _lastIIFEFuncPath) {
-    try { ctorBinding = _lastIIFEFuncPath.scope.getBinding(ctorName); } catch(e) { _resolver.collectError(e, "xhrCtorIIFEScope"); }
-  }
   if (!ctorBinding) return sites;
   var ctorNode = null, ctorPath = null;
   if (_t.isFunctionDeclaration(ctorBinding.path.node)) { ctorNode = ctorBinding.path.node; ctorPath = ctorBinding.path; }
