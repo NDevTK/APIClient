@@ -18555,20 +18555,6 @@ function _extractTemplateParams(node) {
   return params;
 }
 
-function _templateToUrl(node) {
-  if (!_t.isTemplateLiteral(node)) return null;
-  var parts = [];
-  for (var i = 0; i < node.quasis.length; i++) {
-    parts.push(node.quasis[i].value.raw || node.quasis[i].value.cooked || "");
-    if (i < node.expressions.length) {
-      var expr = node.expressions[i];
-      var name = _t.isIdentifier(expr) ? expr.name : "param" + i;
-      parts.push("{" + name + "}");
-    }
-  }
-  return parts.join("");
-}
-
 function _extractFuncParams(funcNode) {
   if (!funcNode || !funcNode.params) return null;
   var params = [];
@@ -19501,56 +19487,11 @@ function _tvsHop(sub, kind, desc, at) {
 
 
 // Source-name → dimensions. These are facts about what each browser
-// taint source intrinsically carries. The taint source's name comes
-// from _matchTaintSource's pattern table and is the canonical form
-// (`location.href`, `window.name`, `event.data`, etc.).
-//
-// The `origin` dim captures: attacker can cause a fetch() of this value
-// to resolve to a CROSS-origin target. It is NOT the same as "attacker
-// picked the URL the victim visits" — location.href is always the
-// current origin, and fetch(location.href) is a same-origin request
-// regardless of which URL the attacker lured the victim to.
-function _dimsForSource(srcName) {
-  switch (srcName) {
-    case "location":
-    case "location.href":
-    case "document.URL":
-    case "document.documentURI":
-      // Full URL of the current page. Its origin portion IS the current
-      // origin (browser guarantee) — fetch(location.href) is same-origin.
-      // Path/query/hash portions are attacker-influenced (user's URL).
-      return { path: true, query: true, hash: true, content: true };
-    case "location.origin":
-    case "location.host":
-    case "location.hostname":
-    case "location.port":
-    case "location.protocol":
-    case "document.domain":
-      // These are the current origin/parts-of-origin. fetch(location.origin)
-      // is same-origin. Value is content for concatenation purposes.
-      return { content: true };
-    case "location.pathname":
-      return { path: true, content: true };
-    case "location.search":
-      return { query: true, content: true };
-    case "location.hash":
-      return { hash: true, content: true };
-    case "document.referrer":
-      // Referring page's URL. Attacker can host a site with a link here,
-      // so the entire URL (including origin) is attacker-controlled. Browsers
-      // strip the fragment from Referer per RFC — no hash dim.
-      return { origin: true, path: true, query: true, content: true };
-    case "document.baseURI":
-      // Controlled by <base href="…">. Attacker can inject/set this tag
-      // if they have any DOM write; origin is attacker-controllable.
-      return { origin: true, path: true, content: true };
-    default:
-      // event.data, window.name, document.cookie, storage.getItem, etc.
-      // Free-form attacker-supplied string. When used as a fetch URL,
-      // the attacker can specify ANY URL including any origin/scheme.
-      return { origin: true, content: true };
-  }
-}
+// Per-taint-source dim metadata is now embedded directly in the
+// taint-source AVs in _specGlobalThisAv (locationAv, documentProps,
+// windowSelfAv etc.). The legacy switch-based _dimsForSource lookup
+// was a duplicate of that registry — removed once spec eval owned
+// the dim assignments at AV construction time.
 // State IDs for the _tvsStep state machine. INIT (0) is the entry state
 // for every new frame; from there, the dispatch falls through type-checks
 // in source order. Each case either:
