@@ -2135,6 +2135,21 @@ function _specArrayPrototypeAv() {
 // from _specApplyBuiltinMethod, distributing over alternation when recv
 // is an or-tree of Const strings.
 var _SPEC_STRING_PROTO_AV = null;
+// WHATWG XHR § 5.2 FormData interface — entry-list with append/set/get.
+// .get returns first matching value's AV; .getAll returns array-lit of
+// matching values; the entry list is held on the formdata-instance AV.
+var _SPEC_FORMDATA_PROTO_AV = null;
+function _specFormDataPrototypeAv() {
+  if (!_SPEC_FORMDATA_PROTO_AV) {
+    var props = {};
+    var fdMethodNames = ["append", "delete", "get", "getAll", "has", "set", "entries", "keys", "values", "forEach"];
+    for (var fdmi = 0; fdmi < fdMethodNames.length; fdmi++) {
+      props[fdMethodNames[fdmi]] = { kind: "builtin-method", id: "FormData.prototype." + fdMethodNames[fdmi] };
+    }
+    _SPEC_FORMDATA_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_FORMDATA_PROTO_AV;
+}
 // WHATWG URL § 5.2 URLSearchParams interface — accessor methods.
 // .get / .getAll / .has return values DERIVED from constructor input;
 // when input is tainted, accessor results inherit the taint.
@@ -2954,6 +2969,7 @@ function _specGetPrototypeOfAv(av) {
   if (av.kind === "taint-source" && av.type === "string") return _specStringPrototypeAv();
   if (av.kind === "coerce" && av.to === "string") return _specStringPrototypeAv();
   if (av.kind === "coerce" && av.to === "urlsearchparams") return _specUrlSearchParamsPrototypeAv();
+  if (av.kind === "formdata-instance") return _specFormDataPrototypeAv();
   if (av.kind === "map-instance") return _specMapPrototypeAv();
   if (av.kind === "set-instance") return _specSetPrototypeAv();
   if (av.kind === "weakmap-instance") return _specWeakMapPrototypeAv();
@@ -3601,20 +3617,10 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
   }
   // WHATWG XHR § 5 FormData — multipart/form-data builder.
   if (ctorId === "WHATWG.FormData") {
-    return {
-      kind: "obj-lit",
-      props: {
-        append: { kind: "builtin-method", id: "FormData.prototype.append" },
-        delete: { kind: "builtin-method", id: "FormData.prototype.delete" },
-        get: { kind: "builtin-method", id: "FormData.prototype.get" },
-        getAll: { kind: "builtin-method", id: "FormData.prototype.getAll" },
-        has: { kind: "builtin-method", id: "FormData.prototype.has" },
-        set: { kind: "builtin-method", id: "FormData.prototype.set" },
-        entries: { kind: "builtin-method", id: "FormData.prototype.entries" },
-        keys: { kind: "builtin-method", id: "FormData.prototype.keys" },
-        values: { kind: "builtin-method", id: "FormData.prototype.values" },
-      }
-    };
+    // Per WHATWG XHR § 5.2 — FormData is an entry list that .append/.set
+    // mutates. Model as formdata-instance AV with `entries` array; method
+    // dispatch goes through _specGetPrototypeOfAv → FormData.prototype.
+    return { kind: "formdata-instance", entries: [] };
   }
   // WHATWG HTML § 9.5 BroadcastChannel — same-origin postMessage.
   // WHATWG HTML § 4.8.4 HTMLImageElement (`new Image()`).
@@ -5514,6 +5520,86 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       strOr = _specSetUnionAv(strOr, { kind: "const", value: strResults[sri] });
     }
     return strOr;
+  }
+  // WHATWG XHR § 5.2 FormData entry list mutation/accessors. .append /
+  // .set / .delete mutate the entries array on the instance; .get /
+  // .getAll / .has read it. State propagation via state[recvName]
+  // rebinding mirrors the Array.prototype.push pattern.
+  if (methodId.indexOf("FormData.prototype.") === 0) {
+    var fdMethod = methodId.slice("FormData.prototype.".length);
+    if (!recvAv || recvAv.kind !== "formdata-instance") return { kind: "top" };
+    if (fdMethod === "append" || fdMethod === "set") {
+      // .append/.set(name, value) — name and value AVs go into entry list.
+      // Per § 5.2.2/3 step 4: append adds to list; set removes existing
+      // entries with same name then appends. Both observable via .get.
+      var fdNameAv = argAvs[0] || { kind: "top" };
+      var fdValAv = argAvs[1] || { kind: "top" };
+      var newEntries = (recvAv.entries || []).slice();
+      if (fdMethod === "set") {
+        // Remove existing entries matching name (when name is const).
+        if (fdNameAv.kind === "const") {
+          newEntries = newEntries.filter(function(e) {
+            return !(e.name && e.name.kind === "const" && e.name.value === fdNameAv.value);
+          });
+        }
+      }
+      newEntries.push({ name: fdNameAv, value: fdValAv });
+      var newFdInst = { kind: "formdata-instance", entries: newEntries };
+      if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+        state[recvName] = newFdInst;
+      }
+      return { kind: "const", value: undefined };
+    }
+    if (fdMethod === "delete") {
+      // .delete(name) — remove all entries with this name.
+      var fdDelName = argAvs[0];
+      var fdDelEntries = (recvAv.entries || []).slice();
+      if (fdDelName && fdDelName.kind === "const") {
+        fdDelEntries = fdDelEntries.filter(function(e) {
+          return !(e.name && e.name.kind === "const" && e.name.value === fdDelName.value);
+        });
+      }
+      if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
+        state[recvName] = { kind: "formdata-instance", entries: fdDelEntries };
+      }
+      return { kind: "const", value: undefined };
+    }
+    if (fdMethod === "get") {
+      // .get(name) — return first matching entry's value.
+      var fdGetName = argAvs[0];
+      if (!fdGetName || fdGetName.kind !== "const") return { kind: "top" };
+      for (var fdgi = 0; fdgi < (recvAv.entries || []).length; fdgi++) {
+        var fde = recvAv.entries[fdgi];
+        if (fde.name && fde.name.kind === "const" && fde.name.value === fdGetName.value) {
+          return fde.value || { kind: "const", value: null };
+        }
+      }
+      return { kind: "const", value: null };
+    }
+    if (fdMethod === "getAll") {
+      var fdGAName = argAvs[0];
+      if (!fdGAName || fdGAName.kind !== "const") return { kind: "top" };
+      var fdGAOut = [];
+      for (var fdgai = 0; fdgai < (recvAv.entries || []).length; fdgai++) {
+        var fdgae = recvAv.entries[fdgai];
+        if (fdgae.name && fdgae.name.kind === "const" && fdgae.name.value === fdGAName.value) {
+          fdGAOut.push(fdgae.value || { kind: "const", value: null });
+        }
+      }
+      return { kind: "array-lit", elements: fdGAOut };
+    }
+    if (fdMethod === "has") {
+      var fdHasName = argAvs[0];
+      if (!fdHasName || fdHasName.kind !== "const") return { kind: "top" };
+      for (var fdhi = 0; fdhi < (recvAv.entries || []).length; fdhi++) {
+        var fdhe = recvAv.entries[fdhi];
+        if (fdhe.name && fdhe.name.kind === "const" && fdhe.name.value === fdHasName.value) {
+          return { kind: "const", value: true };
+        }
+      }
+      return { kind: "const", value: false };
+    }
+    return { kind: "top" };
   }
   // WHATWG URL § 5.2.2/3/4 URLSearchParams accessor methods. .get/.getAll/
   // .has/.toString return values DERIVED from the constructor's input.
@@ -18083,43 +18169,35 @@ function _extractBodyParams(rootNode, rootScope) {
     if (key && visited.has(key)) continue;
     if (key) visited.add(key);
 
-    // Identifier with binding: FormData/URLSearchParams accumulator,
-    // alias chain, or function-param caller loop.
+    // Identifier with binding: read spec-eval AV. formdata-instance is
+    // produced by `new FormData()` and mutated by .append/.set per
+    // WHATWG XHR § 5.2 — entries directly project to body params with
+    // no AST shape matching needed.
     if (_t.isIdentifier(node) && scope && scope.scope) {
       var bnd = scope.scope.getBinding(node.name);
       if (bnd) {
-        var bnInit = _t.isVariableDeclarator(bnd.path.node) ? bnd.path.node.init : null;
-        var bnType = bnInit && _t.isNewExpression(bnInit) && _t.isIdentifier(bnInit.callee) ? bnInit.callee.name : null;
-        if ((bnType === "FormData" || bnType === "URLSearchParams") &&
-            !bnd.path.scope.getBinding(bnType) && bnd.referencePaths) {
+        // AV-direct: read formdata-instance entries from the binding's
+        // current spec-eval state. Spec eval propagates state through
+        // .append/.set call sites via _specApplyBuiltinMethod's mutation
+        // of state[recvName]. _specPathValMemo on the identifier node
+        // is populated when the enclosing body is analysed.
+        var nodeAv = _specPathValMemo.get(node);
+        if (nodeAv && nodeAv.kind === "formdata-instance" && nodeAv.entries) {
           var fdParams = [];
-          for (var fdri = 0; fdri < bnd.referencePaths.length; fdri++) {
-            var fdRef = bnd.referencePaths[fdri];
-            var fdMem = fdRef.parentPath;
-            if (!fdMem || !fdMem.isMemberExpression() || fdMem.node.object !== fdRef.node || fdMem.node.computed) continue;
-            var fdMethod = _t.isIdentifier(fdMem.node.property) ? fdMem.node.property.name : null;
-            if (fdMethod !== "append" && fdMethod !== "set") continue;
-            var fdCall = fdMem.parentPath;
-            if (!fdCall || !fdCall.isCallExpression() || fdCall.node.callee !== fdMem.node ||
-                fdCall.node.arguments.length < 1) continue;
-            var fdNameVals = _resolveAllValues(fdCall.get("arguments.0"), 0);
-            for (var fdni = 0; fdni < fdNameVals.length; fdni++) {
-              if (typeof fdNameVals[fdni] !== "string" || !fdNameVals[fdni]) continue;
-              var fdAlreadyHave = false;
-              for (var fdpi = 0; fdpi < fdParams.length; fdpi++) {
-                if (fdParams[fdpi].name === fdNameVals[fdni]) { fdAlreadyHave = true; break; }
-              }
-              if (fdAlreadyHave) continue;
-              var fdField = { name: fdNameVals[fdni], required: true, location: "body" };
-              if (fdCall.node.arguments.length >= 2) {
-                var fdValVals = _resolveAllValues(fdCall.get("arguments.1"), 0);
-                if (fdValVals.length > 0 && typeof fdValVals[0] === "string") {
-                  fdField.defaultValue = fdValVals[0];
-                  fdField.type = "string";
-                }
-              }
-              fdParams.push(fdField);
+          for (var fdei = 0; fdei < nodeAv.entries.length; fdei++) {
+            var fde = nodeAv.entries[fdei];
+            if (!fde.name || fde.name.kind !== "const" || typeof fde.name.value !== "string" || !fde.name.value) continue;
+            var fdAlreadyHave = false;
+            for (var fdpi = 0; fdpi < fdParams.length; fdpi++) {
+              if (fdParams[fdpi].name === fde.name.value) { fdAlreadyHave = true; break; }
             }
+            if (fdAlreadyHave) continue;
+            var fdField = { name: fde.name.value, required: true, location: "body" };
+            if (fde.value && fde.value.kind === "const" && typeof fde.value.value === "string") {
+              fdField.defaultValue = fde.value.value;
+              fdField.type = "string";
+            }
+            fdParams.push(fdField);
           }
           if (fdParams.length > 0) { pushAccum(fdParams); continue; }
         }
