@@ -7270,11 +7270,17 @@ function _specPostorderExprPaths(rootPath) {
     } else if (_t.isAssignmentExpression(n)) {
       // RHS is evaluated; LHS computed/object branches eval'd separately by
       // the assignment-statement driver, since they participate in the
-      // effect tuple, not in the assignment's own value.
+      // effect tuple, not in the assignment's own value. LHS Identifier is
+      // also pushed so its pre-write value AV (per § 13.1.3 IdentifierReference
+      // resolution against the current scope/state) gets memoized — needed
+      // by AV-based receiver checks (e.g. `_isLocationObject`) on assignment
+      // targets like `location = x`.
       stack.push(p.get("right"));
       if (_t.isMemberExpression(n.left)) {
         stack.push(p.get("left.object"));
         if (n.left.computed) stack.push(p.get("left.property"));
+      } else if (_t.isIdentifier(n.left)) {
+        stack.push(p.get("left"));
       }
     } else if (_t.isObjectExpression(n)) {
       for (var pi = n.properties.length - 1; pi >= 0; pi--) {
@@ -24667,12 +24673,14 @@ function _processSecurityAssignSink(path, result) {
   if (node.operator !== "=" && node.operator !== "+=") return;
   var left = node.left;
 
-  // Bare location = taint → open redirect (Identifier, not MemberExpression)
-  if (_t.isIdentifier(left, { name: "location" }) && !path.scope.getBinding("location")) {
+  // Bare location = taint → open redirect (Identifier, not MemberExpression).
+  // AV-grounded via _isLocationObject (canonical location AV identity check).
+  if (_t.isIdentifier(left) && _isLocationObject(left, path)) {
     var _bLocSrc = _traceValueSource(path.get("right"), 0);
     if (_bLocSrc.sourceType !== "user-controlled") return;
-    // location = location is a reload, not an open redirect
-    if (_t.isIdentifier(node.right, { name: "location" }) && !path.scope.getBinding("location")) return;
+    // location = location is a reload, not an open redirect — RHS AV
+    // also resolves to the canonical location AV via the same path.
+    if (_t.isIdentifier(node.right) && _isLocationObject(node.right, path)) return;
     _pushSink(result, node, "redirect", "location", _bLocSrc, path);
     return;
   }
@@ -24720,12 +24728,18 @@ function _processSecurityAssignSink(path, result) {
     sinkType = "redirect";
   }
 
-  // document.location = taint / window.location = taint → open redirect
+  // document.location = taint / window.location = taint → open redirect.
+  // AV-grounded: spec-eval resolves left.object to the global `document` /
+  // `window` / `self` / `globalThis` AV (all share windowSelfAv / documentProps),
+  // identifiable via global registry props identity.
   if (!sinkType && propName === "location") {
-    var _isDocWin = (_t.isIdentifier(left.object, { name: "document" }) && !path.scope.getBinding("document")) ||
-                    (_t.isIdentifier(left.object, { name: "window" }) && !path.scope.getBinding("window")) ||
-                    (_t.isIdentifier(left.object, { name: "self" }) && !path.scope.getBinding("self"));
-    if (_isDocWin) sinkType = "redirect";
+    _specEnsureProgramFixpoint(path);
+    var _lObjAv = _specPathValMemo.get(left.object);
+    var _gThis = _specGlobalThisAv();
+    if (_lObjAv && _gThis && _gThis.props &&
+        (_lObjAv === _gThis.props.window || _lObjAv === _gThis.props.document)) {
+      sinkType = "redirect";
+    }
   }
 
   if (!sinkType) return;
