@@ -22364,9 +22364,11 @@ function _tvsStep(F) {
           }
         }
 
-        // ── Branch 3: Computed location access ────────────────────────
+        // ── Branch 3: Computed location access (location[X]) ─────────
+        // AV-grounded receiver identity via _isLocationObject (canonical
+        // location AV); covers bare/window-prefixed/aliased forms.
         if (skip < 3 && _t.isMemberExpression(node) && node.computed &&
-            _t.isIdentifier(node.object, { name: "location" }) && !path.scope.getBinding("location")) {
+            _isLocationObject(node.object, path)) {
           return { done: DYN };
         }
 
