@@ -3044,30 +3044,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     var urlBaseAv = argAvs.length >= 2 ? (argAvs[1] || { kind: "top" }) : null;
     var urlInputLeaves = _avFlattenStringLeaves(urlInputAv);
     var urlBaseLeaves = urlBaseAv ? _avFlattenStringLeaves(urlBaseAv) : [undefined];
-    // Deferred ctor when args don't statically resolve: produce a
-    // structural URL obj-lit whose .href is a deferred-ctor AV. Downstream
-    // _avFlattenStringLeaves on the deferred-ctor will retry the WHATWG URL
-    // parser per § 6.1 once caller-arg substitution makes the input/base
-    // AVs flatten to const strings. No partial-concat — the full URL
-    // parser runs only when both args are concrete; until then no .href
-    // string leaves are emitted.
-    if (urlInputLeaves.length === 0 || urlBaseLeaves.length === 0) {
-      var deferredHrefAv = { kind: "deferred-ctor", id: "WHATWG.URL.href",
-                              args: urlBaseAv ? [urlInputAv, urlBaseAv] : [urlInputAv] };
-      return {
-        kind: "obj-lit",
-        _ctorId: "WHATWG.URL",
-        props: {
-          href: deferredHrefAv,
-          toString: { kind: "builtin-method", id: "URL.prototype.toString" },
-          pathname: { kind: "top" }, origin: { kind: "top" },
-          search: { kind: "top" }, hash: { kind: "top" },
-          host: { kind: "top" }, hostname: { kind: "top" },
-          port: { kind: "top" }, protocol: { kind: "top" },
-          username: { kind: "top" }, password: { kind: "top" },
-        }
-      };
-    }
+    if (urlInputLeaves.length === 0 || urlBaseLeaves.length === 0) return { kind: "top" };
     var urlResults = [];
     var urlAllOk = true;
     for (var uili = 0; uili < urlInputLeaves.length; uili++) {
@@ -9890,9 +9867,6 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
     else if (av.kind === "template" && av.exprs) {
       for (var tii = 0; tii < av.exprs.length; tii++) stack.push(av.exprs[tii]);
     }
-    else if (av.kind === "deferred-ctor" && av.args) {
-      for (var dcii = 0; dcii < av.args.length; dcii++) stack.push(av.args[dcii]);
-    }
     else if (av.kind === "coerce" && av.arg) { stack.push(av.arg); }
     else if (av.kind === "loop-key") { stack.push(av.src); }
     else if (av.kind === "keys-of") { stack.push(av.src); }
@@ -10095,19 +10069,6 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       } else {
         subs.set(node, { kind: "template", quasis: node.quasis, exprs: tplExprsSubbed });
       }
-      continue;
-    }
-    if (node.kind === "deferred-ctor" && node.args) {
-      // Substitute each arg; preserve deferred-ctor shape with substituted
-      // args. The URL parser invocation runs at _avFlattenStringLeaves
-      // time (when string leaves are projected) so this layer doesn't
-      // need to call back into flattening (avoids indirect-recursion
-      // cycle per CLAUDE.md L29-L31).
-      var dcArgsSubbed = [];
-      for (var dcsi = 0; dcsi < node.args.length; dcsi++) {
-        dcArgsSubbed.push(subs.get(node.args[dcsi]) || node.args[dcsi]);
-      }
-      subs.set(node, { kind: "deferred-ctor", id: node.id, args: dcArgsSubbed });
       continue;
     }
     if (node.kind === "coerce") {
@@ -13382,10 +13343,6 @@ function _avFlattenStringLeaves(rootAv) {
       for (var tei = 0; tei < n.exprs.length; tei++) {
         if (n.exprs[tei]) enumStack.push(n.exprs[tei]);
       }
-    } else if (n.kind === "deferred-ctor" && n.args) {
-      for (var dai = 0; dai < n.args.length; dai++) {
-        if (n.args[dai]) enumStack.push(n.args[dai]);
-      }
     } else if (n.kind === "call" && n.callee && n.callee.kind === "function-ref" && n.callee.funcNode) {
       // Lazy-call dispatch — substitute and push the result.
       var lcRet = _specReturnValueMemo.get(n.callee.funcNode);
@@ -13442,22 +13399,6 @@ function _avFlattenStringLeaves(rootAv) {
           tplAcc = nextAcc;
         }
         for (var tci = 0; tci < tplAcc.length; tci++) leaves.push(tplAcc[tci]);
-      }
-    } else if (av.kind === "deferred-ctor" && av.id === "WHATWG.URL.href" && av.args) {
-      // WHATWG URL § 6.1: re-run the URL parser now that args may have
-      // resolved through caller-arg substitution. Cross-product input × base.
-      var dcInputLeaves = av.args[0] ? (leavesOf.get(av.args[0]) || []) : [];
-      var dcBaseLeaves = av.args.length >= 2 ?
-        (av.args[1] ? (leavesOf.get(av.args[1]) || []) : []) : [undefined];
-      for (var dii = 0; dii < dcInputLeaves.length; dii++) {
-        for (var dbi = 0; dbi < dcBaseLeaves.length; dbi++) {
-          try {
-            var dcU = (dcBaseLeaves[dbi] === undefined) ?
-              new URL(dcInputLeaves[dii]) :
-              new URL(dcInputLeaves[dii], dcBaseLeaves[dbi]);
-            leaves.push(dcU.href);
-          } catch (_) { /* invalid URL — skip */ }
-        }
       }
     } else if (av.kind === "call" && av.callee && av.callee.kind === "function-ref" && av.callee.funcNode) {
       // Lazy-call result was enumerated in pass 1; re-substitute and look
