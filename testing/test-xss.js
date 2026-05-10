@@ -303,6 +303,48 @@ xssDanger("prototype pollution: obj[userKey] = val with tainted key", `
   return dangerCheck(result, "prototype-pollution") || dangerCheck(result, "proto-pollution");
 });
 
+xssDanger("proto-pollution NEGATIVE: includes() gate via spec-eval narrowing", `
+  var key = location.hash.slice(1);
+  var ALLOW = ["a", "b"];
+  var obj = {};
+  if (ALLOW.includes(key)) { obj[key] = "value"; }
+`, function(result) {
+  // ECMA § 22.1.3.13 Array.prototype.includes(true) ⇒ key narrowed to
+  // ALLOW's elements (const literals). Per ECMA § 14.6 IfStatement
+  // path-condition narrowing in spec eval: the consequent's reference
+  // to `key` reads the narrowed AV (no longer user-controlled), so
+  // _processDangerousAssignment doesn't fire. No CFG-based key-validator
+  // pass needed.
+  return !dangerCheck(result, "prototype-pollution") && !dangerCheck(result, "proto-pollution");
+});
+
+xssDanger("proto-pollution NEGATIVE: ALLOW[key] truthy gate (DOMPurify-style)", `
+  var key = location.hash.slice(1);
+  var ALLOW = { a:1, b:1 };
+  var obj = {};
+  if (ALLOW[key]) { obj[key] = "value"; }
+`, function(result) {
+  // ECMA § 7.3.10 GetV truthy gate: consequent runs only when
+  // ALLOW[key] is truthy ⇒ key is one of ALLOW's truthy-value keys.
+  return !dangerCheck(result, "prototype-pollution") && !dangerCheck(result, "proto-pollution");
+});
+
+xssDanger("proto-pollution NEGATIVE: early-return validator (!includes ⇒ return)", `
+  function f() {
+    var key = location.hash.slice(1);
+    var ALLOW = ["a", "b"];
+    if (!ALLOW.includes(key)) return;
+    var obj = {};
+    obj[key] = "value";
+  }
+`, function(result) {
+  // Early-return narrowing per ECMA § 14.6.7 step 5: post-if state
+  // reflects the test=false branch. baseState is narrowed for
+  // assumeTrue=false on `!ALLOW.includes(key)` ⇒ assumeTrue=true on
+  // `ALLOW.includes(key)`, narrowing key to ALLOW's elements.
+  return !dangerCheck(result, "prototype-pollution") && !dangerCheck(result, "proto-pollution");
+});
+
 xssDanger("dynamic RegExp with tainted pattern", `
   var pattern = location.hash.slice(1);
   var re = new RegExp(pattern);
