@@ -656,6 +656,91 @@ xss("DETACHED-SIBLING: child appended to detached parent never attached - NOT XS
   return true;
 });
 
+console.log("\n=== Path-condition narrowing (ECMA § 14.6) ===\n");
+
+xss("narrow: t === 'safe' makes t a const in consequent — sink suppressed", `
+  function f() {
+    var t = location.hash;
+    if (t === "safe") { document.body.innerHTML = t; }
+  }
+`, function(sinks) {
+  // ECMA § 7.2.11 IsStrictlyEqual: if test is true, t IS the literal.
+  return sinks.length === 0;
+});
+
+xss("narrow: NEGATIVE control — t !== 'safe' opposite branch still tainted", `
+  function f() {
+    var t = location.hash;
+    if (t !== "safe") { document.body.innerHTML = t; }
+  }
+`, function(sinks) {
+  // The branch executes when t is NOT "safe" — t still attacker-controlled.
+  for (var i = 0; i < sinks.length; i++) {
+    if (sinks[i].sink === "innerHTML" && sinks[i].source === "location.hash") return true;
+  }
+  return false;
+});
+
+xss("narrow: t in ALLOW (object) — sink suppressed", `
+  function f() {
+    var ALLOW = { a:1, b:1 };
+    var t = location.hash;
+    if (t in ALLOW) { document.body.innerHTML = t; }
+  }
+`, function(sinks) {
+  // ECMA § 13.10 RelationalExpression `in`: if true, t is one of ALLOW's keys.
+  return sinks.length === 0;
+});
+
+xss("narrow: ALLOW[t] truthy gate (DOMPurify allow-list pattern) — sink suppressed", `
+  function f() {
+    var ALLOW = { a:1, b:1 };
+    var t = location.hash;
+    if (ALLOW[t]) { document.body.innerHTML = t; }
+  }
+`, function(sinks) {
+  // ECMA § 7.3.10 GetV truthy: if true, t is one of ALLOW's keys
+  // with truthy value. Per the user directive: don't pattern-match
+  // libraries — narrow when filter is provable from the test condition.
+  return sinks.length === 0;
+});
+
+xss("narrow: Array.prototype.includes — sink suppressed", `
+  function f() {
+    var ALLOW = ["a", "b"];
+    var t = location.hash;
+    if (ALLOW.includes(t)) { document.body.innerHTML = t; }
+  }
+`, function(sinks) {
+  // ECMA § 22.1.3.13: if true, t is one of ALLOW's elements.
+  return sinks.length === 0;
+});
+
+xss("narrow: logical && — both operands narrow", `
+  function f() {
+    var ALLOW = { a:1, b:1 };
+    var t = location.hash;
+    if (ALLOW[t] && t.length > 0) { document.body.innerHTML = t; }
+  }
+`, function(sinks) {
+  // ECMA § 13.13 LogicalExpression: && true ⇒ both operands true.
+  return sinks.length === 0;
+});
+
+xss("narrow: ! flips — !cond branch corresponds to false test", `
+  function f() {
+    var t = location.hash;
+    if (!(t === "safe")) { document.body.innerHTML = t; }
+  }
+`, function(sinks) {
+  // ECMA § 13.5.3 UnaryExpression !: branch entered when t !== "safe".
+  // Tainted, sink fires.
+  for (var i = 0; i < sinks.length; i++) {
+    if (sinks[i].sink === "innerHTML" && sinks[i].source === "location.hash") return true;
+  }
+  return false;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);

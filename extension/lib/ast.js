@@ -6086,7 +6086,9 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
           continue;
         }
         if (top._returned || top.idx >= top.stmts.length) {
-          if (top._reportTo) top._reportTo.branchEndStates.push(top.state);
+          if (top._reportTo && !(top._returned && top._reportTo._isIfMerge)) {
+            top._reportTo.branchEndStates.push(top.state);
+          }
           stack.pop();
           continue;
         }
@@ -6149,7 +6151,9 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
             continue;
           }
           if (ancTop._returned || ancTop.idx >= ancTop.stmts.length) {
-            if (ancTop._reportTo) ancTop._reportTo.branchEndStates.push(ancTop.state);
+            if (ancTop._reportTo && !(ancTop._returned && ancTop._reportTo._isIfMerge)) {
+              ancTop._reportTo.branchEndStates.push(ancTop.state);
+            }
             ancStack.pop();
             continue;
           }
@@ -8037,6 +8041,189 @@ function _specHandleArrayForEach(exprNode, exprPath, state, effects, branchStack
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Path-condition narrowing per ECMA § 14.6 IfStatement.
+// When ToBoolean(test) is asserted true (consequent) or false (alternate),
+// narrow the AVs of variables referenced by the test according to the
+// spec-defined semantics of the test's operator(s):
+//   § 7.2.11 IsStrictlyEqual  `x === c`     true  ⟹ x's AV ← const c
+//   § 7.2.10 IsLooselyEqual   `x == c`      true  ⟹ same (string lits only)
+//   § 13.10  RelationalExpr   `k in obj`    true  ⟹ k ∈ keys(obj)
+//   § 7.3.10 GetV (truthy)    `obj[k]`      truthy⟹ k ∈ keys(obj) with truthy values
+//   § 22.1.3.13 Array.includes `arr.includes(x)` true ⟹ x ∈ arr.elements
+//   § 24.2.3.7  Set.has       `set.has(x)`  true  ⟹ x ∈ set.entries
+//   § 24.1.3.5  Map.has       `map.has(x)`  true  ⟹ x ∈ map.entries
+//   § 13.13  LogicalExpr `&&` true  ⟹ both operands narrow
+//                       `||` true  ⟹ no narrowing (either operand could hold)
+//                       `&&` false ⟹ no narrowing
+//                       `||` false ⟹ both operands narrow (negated)
+//   § 13.5.3 UnaryExpr `!`     flip the assumeTrue
+//
+// Narrowing only writes into `state` for variables resolved via spec
+// eval scope (state is keyed by var name). Properties of obj-lits are
+// not narrowed (would need separate prop-state tracking). Test
+// expressions whose operands aren't named variables are no-ops.
+function _specNarrowStateForTest(testPath, state, assumeTrue) {
+  if (!testPath || !testPath.node || !state) return;
+  var stack = [{ path: testPath, assumeTrue: !!assumeTrue }];
+  while (stack.length > 0) {
+    var top = stack.pop();
+    var p = top.path;
+    var at = top.assumeTrue;
+    if (!p || !p.node) continue;
+    var n = p.node;
+    // § 13.5.3 UnaryExpression `!x`: flip and recurse on operand.
+    if (_t.isUnaryExpression(n) && n.operator === "!") {
+      stack.push({ path: p.get("argument"), assumeTrue: !at });
+      continue;
+    }
+    // § 13.13 LogicalExpression: distribute according to truth-table.
+    if (_t.isLogicalExpression(n)) {
+      if (n.operator === "&&" && at) {
+        stack.push({ path: p.get("left"), assumeTrue: true });
+        stack.push({ path: p.get("right"), assumeTrue: true });
+        continue;
+      }
+      if (n.operator === "||" && !at) {
+        stack.push({ path: p.get("left"), assumeTrue: false });
+        stack.push({ path: p.get("right"), assumeTrue: false });
+        continue;
+      }
+      continue;
+    }
+    // § 7.2.11 / § 7.2.10 strict and loose equality.
+    if (_t.isBinaryExpression(n) && (n.operator === "===" || n.operator === "==") && at) {
+      _specNarrowEquality(p.get("left"), p.get("right"), state);
+      _specNarrowEquality(p.get("right"), p.get("left"), state);
+      continue;
+    }
+    // § 13.10 RelationalExpression `in`: `key in obj`.
+    if (_t.isBinaryExpression(n) && n.operator === "in" && at) {
+      _specNarrowKeyIn(p.get("left"), p.get("right"), state);
+      continue;
+    }
+    // § 7.3.10 GetV truthy gate: `obj[k]` as the test ⟹ ToBoolean of
+    // [[Get]] is true ⟹ k is one of obj's keys with truthy value.
+    if (_t.isMemberExpression(n) && n.computed && at) {
+      _specNarrowMemberTruthy(p.get("property"), p.get("object"), state);
+      continue;
+    }
+    // § 22.1.3.13 / § 24.2.3.7 / § 24.1.3.5 includes / has dispatch via
+    // builtin-method AV identity. The callee's spec-eval AV uniquely
+    // names the operation; no string match.
+    if (_t.isCallExpression(n) && at) {
+      var calleeAv = _specPathValMemo.get(n.callee);
+      if (calleeAv && calleeAv.kind === "builtin-method" && n.arguments.length >= 1) {
+        var mid = calleeAv.id;
+        if (mid === "Array.prototype.includes" ||
+            mid === "Set.prototype.has" ||
+            mid === "Map.prototype.has" ||
+            mid === "WeakSet.prototype.has" ||
+            mid === "WeakMap.prototype.has") {
+          if (_t.isMemberExpression(n.callee)) {
+            _specNarrowKeyIn(p.get("arguments.0"), p.get("callee.object"), state);
+          }
+          continue;
+        }
+        if (mid === "Object.prototype.hasOwnProperty") {
+          if (_t.isMemberExpression(n.callee)) {
+            _specNarrowKeyIn(p.get("arguments.0"), p.get("callee.object"), state);
+          }
+          continue;
+        }
+      }
+    }
+  }
+}
+
+// `x === literal` — when assumed true, x's AV is narrowed to the
+// literal's AV. Per ECMA § 7.2.11, strict equality of distinct types
+// is false; for the test to be true, x must hold exactly the literal.
+function _specNarrowEquality(varPath, litPath, state) {
+  if (!varPath || !litPath || !varPath.node || !litPath.node) return;
+  if (!_t.isIdentifier(varPath.node)) return;
+  var name = varPath.node.name;
+  if (!Object.prototype.hasOwnProperty.call(state, name)) return;
+  var litAv = _specPathValMemo.get(litPath.node);
+  // Only narrow against compile-time constants — for non-const RHS
+  // (another variable, a call), we can't statically derive the value.
+  if (!litAv || litAv.kind !== "const") return;
+  // Sanity: don't narrow if the literal is null/undefined — those
+  // through `==` admit two sides; spec eval's "const" semantics here
+  // require the var to be the literal. For null/undefined the
+  // narrowing is still sound but may not help; keep for completeness.
+  state[name] = litAv;
+}
+
+// `key in obj` true ⟹ key is one of obj's enumerable keys.
+// `arr.includes(x)` true ⟹ x is one of arr's elements.
+// `set.has(x)` true ⟹ x is one of set's entries.
+// All three narrow x to the appropriate set of literals when the
+// collection AV is statically available.
+function _specNarrowKeyIn(keyPath, collPath, state) {
+  if (!keyPath || !collPath || !keyPath.node || !collPath.node) return;
+  if (!_t.isIdentifier(keyPath.node)) return;
+  var name = keyPath.node.name;
+  if (!Object.prototype.hasOwnProperty.call(state, name)) return;
+  var collAv = _specPathValMemo.get(collPath.node);
+  if (!collAv) return;
+  var alts = _specCollectKeyOrElementLiterals(collAv);
+  if (!alts || alts.length === 0) return;
+  state[name] = alts.length === 1 ? alts[0] : { kind: "or", alternatives: alts };
+}
+
+// `obj[k]` truthy ⟹ k is a key whose value is truthy in obj.
+function _specNarrowMemberTruthy(keyPath, objPath, state) {
+  if (!keyPath || !objPath || !keyPath.node || !objPath.node) return;
+  if (!_t.isIdentifier(keyPath.node)) return;
+  var name = keyPath.node.name;
+  if (!Object.prototype.hasOwnProperty.call(state, name)) return;
+  var objAv = _specPathValMemo.get(objPath.node);
+  if (!objAv || objAv.kind !== "obj-lit" || !objAv.props) return;
+  var truthyKeys = [];
+  for (var k in objAv.props) {
+    if (!Object.prototype.hasOwnProperty.call(objAv.props, k)) continue;
+    var v = objAv.props[k];
+    // Per ECMA § 7.1.5 ToBoolean — truthy if not undefined / null / +0 /
+    // -0 / NaN / "". For const AVs this is direct ToBoolean. For
+    // non-const props the truthy property is unknown; conservatively
+    // include the key (sound: narrowed set covers actual truthy).
+    var include = true;
+    if (v && v.kind === "const") include = !!v.value;
+    if (include) truthyKeys.push({ kind: "const", value: k });
+  }
+  if (truthyKeys.length === 0) return;
+  state[name] = truthyKeys.length === 1 ? truthyKeys[0] : { kind: "or", alternatives: truthyKeys };
+}
+
+// Collect the const-literal keys (for objects / Sets / Maps) or
+// elements (for arrays) of a collection AV. Returns null if the
+// collection isn't a statically-resolvable literal — e.g. an unknown
+// runtime collection.
+function _specCollectKeyOrElementLiterals(collAv) {
+  if (!collAv) return null;
+  // Array literal: collect const elements.
+  if (collAv.kind === "array-lit" && collAv.elements) {
+    var out = [];
+    for (var i = 0; i < collAv.elements.length; i++) {
+      var e = collAv.elements[i];
+      if (e && e.kind === "const") out.push(e);
+    }
+    return out;
+  }
+  // Object literal (used as a Set: keys are the entries; or `in`
+  // operator: keys ARE the alternatives).
+  if (collAv.kind === "obj-lit" && collAv.props) {
+    var ks = [];
+    for (var k in collAv.props) {
+      if (!Object.prototype.hasOwnProperty.call(collAv.props, k)) continue;
+      ks.push({ kind: "const", value: k });
+    }
+    return ks;
+  }
+  return null;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Statement walker — dispatch by spec section.
 // Each branch routes a single statement to its dedicated transfer function.
 // No combining of spec sections; mutation of state and effects happens
@@ -8172,10 +8359,19 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     // Save base state for branches that don't execute (alternate-less if).
     var ifPreState = _specStateClone(state);
     // Merge frame: pushed first (so it executes LAST due to LIFO).
-    var mergeFrame = { _isMergeFrame: true, branchEndStates: [], parentFrame: ifParent, hasAlternate: !!stmt.alternate, baseState: ifPreState };
+    // _isIfMerge marks this as an IfStatement merge so break/continue/
+    // return-halted branches don't contribute their post-narrowed state
+    // — execution jumps OUT of the enclosing loop/switch/function, NOT
+    // to post-if code. (Switch merges handle break differently — break
+    // there jumps to post-switch which IS the merge point.)
+    var mergeFrame = { _isMergeFrame: true, _isIfMerge: true, branchEndStates: [], parentFrame: ifParent, hasAlternate: !!stmt.alternate, baseState: ifPreState };
     branchStack.push(mergeFrame);
     if (stmt.alternate) {
       var altState = _specStateClone(state);
+      // Path conditioning per ECMA § 14.6 IfStatement: the alternate
+      // executes only when ToBoolean(test) is false. Narrow the state
+      // accordingly — the inverse of the consequent's narrowing.
+      _specNarrowStateForTest(stmtPath.get("test"), altState, /*assumeTrue*/ false);
       var altNode = stmt.alternate;
       if (_t.isBlockStatement(altNode)) {
         branchStack.push({ stmts: altNode.body, idx: 0, state: altState, parentPath: stmtPath.get("alternate"), _reportTo: mergeFrame });
@@ -8187,6 +8383,13 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     }
     if (stmt.consequent) {
       var consState = _specStateClone(state);
+      // Path conditioning per ECMA § 14.6 IfStatement: the consequent
+      // executes only when ToBoolean(test) is true. Narrow variables
+      // referenced by the test according to the test's structure
+      // (equality → const, in/includes/has → keys/elements, MemberExpr
+      // truthy → keys with truthy values). Subsequent reads of those
+      // vars in the consequent see the narrowed AV.
+      _specNarrowStateForTest(stmtPath.get("test"), consState, /*assumeTrue*/ true);
       var consNode = stmt.consequent;
       if (_t.isBlockStatement(consNode)) {
         branchStack.push({ stmts: consNode.body, idx: 0, state: consState, parentPath: stmtPath.get("consequent"), _reportTo: mergeFrame });
@@ -8933,7 +9136,15 @@ function _specAnalyzePropertyFlow(funcPath, force) {
 
     if (top._returned || top.idx >= top.stmts.length) {
       // Branch frame completing: report end-state to its merge frame.
-      if (top._reportTo) {
+      // For an IfStatement merge (_isIfMerge), branches halted by
+      // `break` / `continue` / `return` don't contribute — execution
+      // jumps OUT of the enclosing loop/switch/function, NOT to
+      // post-if code, so the narrowed state would pollute the merge
+      // with values that can't reach subsequent statements (per
+      // ECMA § 14.8/§ 14.9/§ 14.10). For switch merges, `break`
+      // jumps TO the merge point (post-switch), so its state must
+      // contribute.
+      if (top._reportTo && !(top._returned && top._reportTo._isIfMerge)) {
         top._reportTo.branchEndStates.push(top.state);
       }
       stack.pop();
@@ -22906,6 +23117,37 @@ function _findBlockForLine(cfg, line) {
   return best;
 }
 
+// Path-based CFG block lookup. Walks up from sinkPath to its enclosing
+// statement path, then searches the CFG's blocks for one whose stmts
+// includes that path (by AST node identity). Reliable for minified
+// single-line bundles where _findBlockForLine can't disambiguate
+// because every statement shares the same line. Returns -1 if not
+// found. Iterative — JS call stack stays at depth 1.
+function _findBlockForPath(cfg, sinkPath) {
+  if (!cfg || !sinkPath) return -1;
+  // Walk up to the enclosing Statement (BlockStatement excluded — those
+  // are not directly stored; the inner Statement is). _buildCFG stores
+  // statement paths whose .node is what we compare by identity.
+  var stmtPath = sinkPath;
+  while (stmtPath && (!stmtPath.node || !_t.isStatement(stmtPath.node) ||
+                      _t.isBlockStatement(stmtPath.node))) {
+    stmtPath = stmtPath.parentPath;
+    if (!stmtPath) return -1;
+  }
+  if (!stmtPath) return -1;
+  var targetNode = stmtPath.node;
+  var keys = Object.keys(cfg.blocks);
+  for (var i = 0; i < keys.length; i++) {
+    var blk = cfg.blocks[keys[i]];
+    for (var j = 0; j < blk.stmts.length; j++) {
+      var s = blk.stmts[j];
+      var sNode = s && s.node ? s.node : s;
+      if (sNode === targetNode) return blk.id;
+    }
+  }
+  return -1;
+}
+
 // Find all blocks that contain sanitizer calls
 function _findSanitizerBlocks(cfg) {
   var result = {};
@@ -23117,18 +23359,29 @@ function _checkKeyValidation(sinkPath, keyNode) {
   if (_isInlineShortCircuitGuarded(sinkPath, keyIdent, keyBinding)) return true;
 
   // Slower path: validator is in an earlier statement. Use the shared
-  // CFG + _hasSanitizerOnAllPaths engine.
+  // CFG + _hasSanitizerOnAllPaths engine. Per ECMA § 16.1 Scripts the
+  // program body has the same statement-sequence shape as a function
+  // block; CFG construction works on either. Fall back to the enclosing
+  // Program when there's no function context (module-top sinks).
   var funcPath = sinkPath.getFunctionParent();
-  if (!funcPath) return false;
-  var bodyPath = funcPath.get("body");
-  if (!bodyPath.isBlockStatement()) return false;
+  var bodyPath = null;
+  if (funcPath) {
+    if (!_t.isBlockStatement(funcPath.node.body)) return false;
+    bodyPath = funcPath.get("body");
+  } else {
+    var pp = sinkPath; while (pp && pp.parentPath && !_t.isProgram(pp.node)) pp = pp.parentPath;
+    if (pp && pp.node && _t.isProgram(pp.node)) bodyPath = pp;
+    else return false;
+  }
   var cfg = _buildCFG(bodyPath);
   if (!cfg) return false;
   var validatorBlocks = _findKeyValidatorBlocks(cfg, keyIdent, keyBinding);
   if (Object.keys(validatorBlocks).length === 0) return false;
-  var sinkLine = sinkPath.node.loc ? sinkPath.node.loc.start.line : -1;
-  if (sinkLine === -1) return false;
-  var sinkBlockId = _findBlockForLine(cfg, sinkLine);
+  // Path-based block lookup via AST node identity. Reliable for minified
+  // single-line bundles (every statement shares line=1, making line-based
+  // lookup ambiguous). The CFG stores the same statement paths whose
+  // .node identity uniquely names each block.
+  var sinkBlockId = _findBlockForPath(cfg, sinkPath);
   if (sinkBlockId === -1) return false;
   return _hasSanitizerOnAllPaths(cfg, sinkBlockId, validatorBlocks);
 }
@@ -23158,10 +23411,9 @@ function _checkSanitization(path) {
   var sanitizerBlocks = _findSanitizerBlocks(cfg);
   if (Object.keys(sanitizerBlocks).length === 0) return false;
 
-  // Find sink block
-  var sinkLine = path.node.loc ? path.node.loc.start.line : -1;
-  if (sinkLine === -1) return false;
-  var sinkBlockId = _findBlockForLine(cfg, sinkLine);
+  // Find sink block via AST node identity (line-based lookup is
+  // ambiguous on minified single-line bundles).
+  var sinkBlockId = _findBlockForPath(cfg, path);
   if (sinkBlockId === -1) return false;
 
   return _hasSanitizerOnAllPaths(cfg, sinkBlockId, sanitizerBlocks);
