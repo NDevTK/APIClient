@@ -13292,12 +13292,6 @@ function _evalBinaryConstConst(lv, rv, op) {
 
 function _avFlattenStringLeaves(rootAv) {
   if (!rootAv) return [];
-  var out = [];
-  var stack = [rootAv];
-  // Visited set to break cycles in lazy-call dispatch (recursive
-  // function-ref unwinding could otherwise loop on self-referential
-  // module require chains).
-  var seen = new Set();
   // WHATWG URL § 4.4 page-origin substitution: location.{origin,protocol,
   // hostname,host} taint sources are page-locked (dims.origin === false).
   // Substitute the analysis tab's URL parts as const string leaves.
@@ -13313,45 +13307,104 @@ function _avFlattenStringLeaves(rootAv) {
       };
     } catch (_) { pageUrlParts = null; }
   }
-  while (stack.length > 0) {
-    var av = stack.pop();
-    if (!av) continue;
-    if (typeof av === "object") {
-      if (seen.has(av)) continue;
-      seen.add(av);
+  // Two-pass post-order eval on explicit stack.
+  // Pass 1: enumerate reachable AVs preorder (each AV visited once via seen Set).
+  var nodes = [];
+  var enumStack = [rootAv];
+  var seen = new Set();
+  while (enumStack.length > 0) {
+    var n = enumStack.pop();
+    if (!n) continue;
+    if (typeof n === "object") {
+      if (seen.has(n)) continue;
+      seen.add(n);
     }
-    if (av.kind === "const") {
-      if (typeof av.value === "string") out.push(av.value);
-      continue;
-    }
-    if (av.kind === "or") {
-      // OR has {left, right} per _specLogicalOrAv shape.
-      if (av.left) stack.push(av.left);
-      if (av.right) stack.push(av.right);
-      continue;
-    }
-    if (av.kind === "taint-source" && pageUrlParts && Object.prototype.hasOwnProperty.call(pageUrlParts, av.id)) {
-      out.push(pageUrlParts[av.id]);
-      continue;
-    }
-    if (av.kind === "call" && av.callee && av.callee.kind === "function-ref" && av.callee.funcNode) {
-      // Lazy-call dispatch deferred from _specInstantiateAv per
-      // § 13.3.6 — now that we're flattening leaves, the function-ref's
-      // return memo (if available) can be substituted with the call's
-      // args and pushed onto the stack to continue flattening.
-      var lcRet = _specReturnValueMemo.get(av.callee.funcNode);
-      if (lcRet) {
-        var lcSubst = _specInstantiateAv(lcRet, av.args || [], undefined, av.callee.funcNode);
-        if (lcSubst) stack.push(lcSubst);
+    nodes.push(n);
+    if (n.kind === "or") {
+      if (n.left) enumStack.push(n.left);
+      if (n.right) enumStack.push(n.right);
+    } else if (n.kind === "binop" && n.op === "+") {
+      if (n.left) enumStack.push(n.left);
+      if (n.right) enumStack.push(n.right);
+    } else if (n.kind === "template" && n.exprs) {
+      for (var tei = 0; tei < n.exprs.length; tei++) {
+        if (n.exprs[tei]) enumStack.push(n.exprs[tei]);
       }
-      continue;
+    } else if (n.kind === "call" && n.callee && n.callee.kind === "function-ref" && n.callee.funcNode) {
+      // Lazy-call dispatch — substitute and push the result.
+      var lcRet = _specReturnValueMemo.get(n.callee.funcNode);
+      if (lcRet) {
+        var lcSubst = _specInstantiateAv(lcRet, n.args || [], undefined, n.callee.funcNode);
+        if (lcSubst) enumStack.push(lcSubst);
+      }
+    }
+  }
+  // Pass 2: bottom-up — compute string leaves for each node using already-
+  // computed leaves of its children. Reverse order ensures children
+  // before parents.
+  var leavesOf = new Map();
+  for (var ri = nodes.length - 1; ri >= 0; ri--) {
+    var av = nodes[ri];
+    if (leavesOf.has(av)) continue;
+    var leaves = [];
+    if (av.kind === "const") {
+      if (typeof av.value === "string") leaves.push(av.value);
+    } else if (av.kind === "or") {
+      var orLeftLeaves = av.left ? (leavesOf.get(av.left) || []) : [];
+      var orRightLeaves = av.right ? (leavesOf.get(av.right) || []) : [];
+      for (var oli = 0; oli < orLeftLeaves.length; oli++) leaves.push(orLeftLeaves[oli]);
+      for (var ori = 0; ori < orRightLeaves.length; ori++) leaves.push(orRightLeaves[ori]);
+    } else if (av.kind === "taint-source" && pageUrlParts && Object.prototype.hasOwnProperty.call(pageUrlParts, av.id)) {
+      leaves.push(pageUrlParts[av.id]);
+    } else if (av.kind === "binop" && av.op === "+") {
+      // ECMA § 13.10: cross-product of left × right concat results.
+      var bopL = av.left ? (leavesOf.get(av.left) || []) : [];
+      var bopR = av.right ? (leavesOf.get(av.right) || []) : [];
+      for (var bli = 0; bli < bopL.length; bli++) {
+        for (var bri = 0; bri < bopR.length; bri++) {
+          leaves.push(bopL[bli] + bopR[bri]);
+        }
+      }
+    } else if (av.kind === "template" && av.quasis && av.exprs) {
+      // ECMA § 13.2.8.6: every interpolation must have leaves; compose.
+      var tplExprLeaves = [];
+      var tplOk = true;
+      for (var tej = 0; tej < av.exprs.length; tej++) {
+        var teLeaves = av.exprs[tej] ? (leavesOf.get(av.exprs[tej]) || []) : [];
+        if (teLeaves.length === 0) { tplOk = false; break; }
+        tplExprLeaves.push(teLeaves);
+      }
+      if (tplOk) {
+        var tplAcc = [av.quasis[0] || ""];
+        for (var tj = 0; tj < tplExprLeaves.length; tj++) {
+          var nextAcc = [];
+          for (var tai = 0; tai < tplAcc.length; tai++) {
+            for (var tbi = 0; tbi < tplExprLeaves[tj].length; tbi++) {
+              nextAcc.push(tplAcc[tai] + tplExprLeaves[tj][tbi] + (av.quasis[tj + 1] || ""));
+            }
+          }
+          tplAcc = nextAcc;
+        }
+        for (var tci = 0; tci < tplAcc.length; tci++) leaves.push(tplAcc[tci]);
+      }
+    } else if (av.kind === "call" && av.callee && av.callee.kind === "function-ref" && av.callee.funcNode) {
+      // Lazy-call result was enumerated in pass 1; re-substitute and look
+      // up its leaves from the cache.
+      var lcRet2 = _specReturnValueMemo.get(av.callee.funcNode);
+      if (lcRet2) {
+        var lcSubst2 = _specInstantiateAv(lcRet2, av.args || [], undefined, av.callee.funcNode);
+        if (lcSubst2) {
+          var lcLeaves = leavesOf.get(lcSubst2) || [];
+          for (var lci = 0; lci < lcLeaves.length; lci++) leaves.push(lcLeaves[lci]);
+        }
+      }
     }
     // Other kinds (top, param, member, this, obj-lit, array-lit,
     // keys-of, loop-key, args-elt, args-len) have no statically-known
-    // string leaf for the URL projection — they're either opaque or
-    // structurally typed beyond a single string.
+    // string leaf for the URL projection — leaves stays empty.
+    leavesOf.set(av, leaves);
   }
-  return out;
+  return leavesOf.get(rootAv) || [];
 }
 
 // Flatten an or-tree into its leaf AbstractValues (any kind, not just
