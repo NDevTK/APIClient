@@ -432,9 +432,19 @@ function _generateCode(node, maxLines) {
 
 // Check if an identifier name refers to a global window-like object (window, self, globalThis)
 // that is not shadowed by a local binding, or a known window alias from IIFE detection.
-function _isGlobalObject(name, scope) {
-  if ((name === "window" || name === "self" || name === "globalThis") && !scope.getBinding(name)) return true;
-  return _windowAliases.has(name);
+// Spec-eval AV-driven check: is the identifier `name` (in `scope`,
+// at `node`/`path`) a reference to the Window global object?
+// Per WHATWG HTML § 7.2, window / self / globalThis are aliases for
+// the same global; spec eval registers them in _SPEC_GLOBAL_AV.props
+// pointing to the shared windowSelfAv. AV reference identity is the
+// sole detection path. IIFE-bound aliases are also handled because
+// spec eval's IIFE dispatch substitutes caller args (window) into
+// the param's AV.
+function _isGlobalObject(path, node) {
+  _specEnsureProgramFixpoint(path);
+  var nodeAv = _specPathValMemo.get(node);
+  var globalAv = _specGlobalThisAv();
+  return !!(nodeAv && globalAv && globalAv.props && nodeAv === globalAv.props.window);
 }
 
 // Check if a callee node is a call to the global fetch function.
@@ -443,14 +453,14 @@ function _isGlobalObject(name, scope) {
 // Iterative work-stack walk over LogicalExpression nodes. Replaces the
 // recursive `left || right` recursion that grew the JS stack linearly
 // with chain length.
-function _isGlobalFetchCall(callee, scope) {
+function _isGlobalFetchCall(callee, scope, path) {
   var stack = [callee];
   while (stack.length > 0) {
     var c = stack.pop();
     if (!c) continue;
     if (_t.isIdentifier(c, { name: "fetch" }) && !scope.getBinding("fetch")) return true;
     if (_t.isMemberExpression(c) && _t.isIdentifier(c.property, { name: "fetch" }) &&
-        _t.isIdentifier(c.object) && _isGlobalObject(c.object.name, scope)) return true;
+        _t.isIdentifier(c.object) && _isGlobalObject(path, c.object)) return true;
     if (_t.isLogicalExpression(c)) {
       stack.push(c.right);
       stack.push(c.left);
@@ -475,27 +485,9 @@ function _isGlobalFetchCall(callee, scope) {
 // function bodies.
 function _isXhrObject(path, objectNode) {
   if (!objectNode) return false;
-  // Trigger spec eval analysis on the enclosing function (idempotent).
-  var encFn = path.getFunctionParent && path.getFunctionParent();
-  if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
-    try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
-  } else if (!encFn) {
-    var progPath = path;
-    while (progPath && progPath.parentPath) progPath = progPath.parentPath;
-    if (progPath && progPath.node && _t.isProgram(progPath.node)) {
-      try { _specAnalyzeProgramWithFixpoint(progPath); } catch (_) {}
-    }
-  }
+  _specEnsureProgramFixpoint(path);
   var av = _specPathValMemo.get(objectNode);
-  if (av && av.kind === "obj-lit" && av._ctorId === "WHATWG.XMLHttpRequest") return true;
-  // Fall back to type tracking for cases spec eval hasn't visited
-  // (this preserves the existing _getTrackedType integration without
-  // the AST factory-pattern walk; type tracking is itself spec-aware).
-  if (_t.isIdentifier(objectNode)) {
-    var objType = _getTrackedType(path, objectNode);
-    if (objType === "XMLHttpRequest") return true;
-  }
-  return false;
+  return !!(av && av.kind === "obj-lit" && av._ctorId === "WHATWG.XMLHttpRequest");
 }
 
 // Find the parameter index for a named parameter in a function's params array.
@@ -1468,7 +1460,7 @@ function _processNetworkSink(path, result) {
   var callee = node.callee;
 
   // ── Identify fetch() / window.fetch() — verify these are actual globals via scope ──
-  if (_isGlobalFetchCall(callee, path.scope)) {
+  if (_isGlobalFetchCall(callee, path.scope, path)) {
     // Trigger spec-eval program fixpoint per ECMA § 9.1.1 closure
     // write-back so URL extraction sees side effects from any callee
     // that mutates outer-scope captures. Idempotent — runs once per
@@ -1885,7 +1877,7 @@ function _processIIFE(path) {
     var argNode = args[i];
 
     // Direct window/self/globalThis reference
-    if (_t.isIdentifier(argNode) && _isGlobalObject(argNode.name, path.scope)) {
+    if (_t.isIdentifier(argNode) && _isGlobalObject(path, argNode)) {
       _windowAliases.add(paramName);
       _stats.windowAliases++;
       continue;
@@ -1926,7 +1918,7 @@ function _hasWindowBranch(node, path) {
   var stack = [node];
   while (stack.length > 0) {
     var n = stack.pop();
-    if (_t.isIdentifier(n) && _isGlobalObject(n.name, path.scope)) return true;
+    if (_t.isIdentifier(n) && _isGlobalObject(path, n)) return true;
     if (_t.isThisExpression(n)) return true;
     if (_t.isConditionalExpression(n)) {
       stack.push(n.consequent, n.alternate);
@@ -1942,6 +1934,7 @@ function _trackGlobalAssignment(path) {
   if (!_t.isMemberExpression(left) || left.computed) return;
 
   var objName = _t.isIdentifier(left.object) ? left.object.name : null;
+  var objNode = _t.isIdentifier(left.object) ? left.object : null;
   if (!objName) {
     // Handle (windowAlias || self).prop = value (UMD pattern)
     if (_t.isLogicalExpression(left.object)) {
@@ -1949,22 +1942,31 @@ function _trackGlobalAssignment(path) {
       var logRight = left.object.right;
       if (_t.isIdentifier(logLeft) && _windowAliases.has(logLeft.name)) {
         objName = logLeft.name;
+        objNode = logLeft;
       } else if (_t.isIdentifier(logRight) && _windowAliases.has(logRight.name)) {
         objName = logRight.name;
-      } else if (_t.isIdentifier(logLeft) && _isGlobalObject(logLeft.name, path.scope)) {
+        objNode = logRight;
+      } else if (_t.isIdentifier(logLeft) && _isGlobalObject(path, logLeft)) {
         objName = logLeft.name;
-      } else if (_t.isIdentifier(logRight) && _isGlobalObject(logRight.name, path.scope)) {
+        objNode = logLeft;
+      } else if (_t.isIdentifier(logRight) && _isGlobalObject(path, logRight)) {
         objName = logRight.name;
+        objNode = logRight;
       }
     }
     // Handle ConditionalExpression: (typeof window !== "undefined" ? window : ...).prop = value (UMD)
     if (!objName && _t.isConditionalExpression(left.object)) {
-      if (_hasWindowBranch(left.object, path)) objName = "window";
+      if (_hasWindowBranch(left.object, path)) {
+        objName = "window";
+        objNode = _t.isIdentifier(left.object.consequent, { name: "window" }) ? left.object.consequent
+                : _t.isIdentifier(left.object.alternate, { name: "window" }) ? left.object.alternate
+                : left.object;
+      }
     }
     if (!objName) return;
   }
 
-  var isGlobalObj = _isGlobalObject(objName, path.scope);
+  var isGlobalObj = _isGlobalObject(path, objNode);
   if (!isGlobalObj) return;
 
   var propName = _t.isIdentifier(left.property) ? left.property.name : null;
@@ -2319,6 +2321,13 @@ function _specGlobalThisAv() {
   var formDataCtorAv = { kind: "builtin-ctor", id: "WHATWG.FormData" };
   // WHATWG HTML § 9.5 BroadcastChannel — same-origin postMessage.
   var broadcastChannelCtorAv = { kind: "builtin-ctor", id: "WHATWG.BroadcastChannel" };
+  // WHATWG HTML § 10 Web Workers / Channel Messaging. Worker / SharedWorker
+  // run a same-origin script; their postMessage / message events ride a
+  // channel the page itself created — no third-party origin involved. Same
+  // for MessageChannel (channel between two ports the page constructed).
+  var workerCtorAv = { kind: "builtin-ctor", id: "WHATWG.Worker" };
+  var sharedWorkerCtorAv = { kind: "builtin-ctor", id: "WHATWG.SharedWorker" };
+  var messageChannelCtorAv = { kind: "builtin-ctor", id: "WHATWG.MessageChannel" };
   // ECMA § 25.1 TypedArray ctors. All variants share the same value-flow
   // behaviour for our purposes (binary array; opaque to string-flow but
   // valid receiver for prototype methods like .slice / .set).
@@ -2501,6 +2510,9 @@ function _specGlobalThisAv() {
       queueMicrotask: { kind: "builtin-method", id: "Window.prototype.queueMicrotask" },
       requestAnimationFrame: { kind: "builtin-method", id: "Window.prototype.requestAnimationFrame" },
       cancelAnimationFrame: { kind: "builtin-method", id: "Window.prototype.cancelAnimationFrame" },
+      // HTML § 2.7.5 structuredClone — deep-clones any structured-cloneable
+      // value (including nested objects with attacker-chosen keys).
+      structuredClone: { kind: "builtin-method", id: "global.structuredClone" },
     }
   };
   _SPEC_GLOBAL_AV = {
@@ -2548,6 +2560,9 @@ function _specGlobalThisAv() {
       FileReader: fileReaderCtorAv,
       FormData: formDataCtorAv,
       BroadcastChannel: broadcastChannelCtorAv,
+      Worker: workerCtorAv,
+      SharedWorker: sharedWorkerCtorAv,
+      MessageChannel: messageChannelCtorAv,
       Uint8Array: uint8ArrayCtorAv,
       Uint16Array: uint16ArrayCtorAv,
       Uint32Array: uint32ArrayCtorAv,
@@ -2570,6 +2585,7 @@ function _specGlobalThisAv() {
       parseFloat: { kind: "builtin-method", id: "global.parseFloat" },
       isNaN: { kind: "builtin-method", id: "global.isNaN" },
       isFinite: { kind: "builtin-method", id: "global.isFinite" },
+      structuredClone: { kind: "builtin-method", id: "global.structuredClone" },
     }
   };
   return _SPEC_GLOBAL_AV;
@@ -3144,6 +3160,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
   if (ctorId === "WHATWG.WebSocket") {
     return {
       kind: "obj-lit",
+      _ctorId: "WHATWG.WebSocket",
       props: {
         send: { kind: "builtin-method", id: "WebSocket.prototype.send" },
         close: { kind: "builtin-method", id: "WebSocket.prototype.close" },
@@ -3161,6 +3178,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
   if (ctorId === "WHATWG.EventSource") {
     return {
       kind: "obj-lit",
+      _ctorId: "WHATWG.EventSource",
       props: {
         close: { kind: "builtin-method", id: "EventSource.prototype.close" },
         addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
@@ -3170,6 +3188,66 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         url: { kind: "top" },
         withCredentials: { kind: "top" },
       }
+    };
+  }
+  // WHATWG HTML § 10.2 Worker / § 10.3 SharedWorker / § 9.4 MessageChannel.
+  // Each carries _ctorId so AV-based receiver identification (e.g. in
+  // _isCrossOriginMsgReceiver) recognises the same-origin channel without
+  // a name-based shape match. SharedWorker exposes its message channel via
+  // .port; Worker/MessageChannel expose ports via .port1/.port2.
+  if (ctorId === "WHATWG.Worker") {
+    return {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.Worker",
+      props: {
+        postMessage: { kind: "builtin-method", id: "Worker.prototype.postMessage" },
+        terminate: { kind: "builtin-method", id: "Worker.prototype.terminate" },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+      }
+    };
+  }
+  if (ctorId === "WHATWG.SharedWorker") {
+    return {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.SharedWorker",
+      props: {
+        port: {
+          kind: "obj-lit",
+          _ctorId: "WHATWG.MessagePort",
+          props: {
+            postMessage: { kind: "builtin-method", id: "MessagePort.prototype.postMessage" },
+            start: { kind: "builtin-method", id: "MessagePort.prototype.start" },
+            close: { kind: "builtin-method", id: "MessagePort.prototype.close" },
+            addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+            removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+            dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+          }
+        },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+      }
+    };
+  }
+  if (ctorId === "WHATWG.MessageChannel") {
+    var msgPortAv = {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.MessagePort",
+      props: {
+        postMessage: { kind: "builtin-method", id: "MessagePort.prototype.postMessage" },
+        start: { kind: "builtin-method", id: "MessagePort.prototype.start" },
+        close: { kind: "builtin-method", id: "MessagePort.prototype.close" },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+      }
+    };
+    return {
+      kind: "obj-lit",
+      _ctorId: "WHATWG.MessageChannel",
+      props: { port1: msgPortAv, port2: msgPortAv }
     };
   }
   // WHATWG File API § 5 Blob / § 6 File / § 7 FileReader.
@@ -3244,6 +3322,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
   if (ctorId === "WHATWG.BroadcastChannel") {
     return {
       kind: "obj-lit",
+      _ctorId: "WHATWG.BroadcastChannel",
       props: {
         postMessage: { kind: "builtin-method", id: "BroadcastChannel.prototype.postMessage" },
         close: { kind: "builtin-method", id: "BroadcastChannel.prototype.close" },
@@ -7391,9 +7470,13 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
       // Tag obj-lit values with the local var name they're bound to so
       // downstream consumers can match `JSON.stringify(varName)` body
       // arguments back to their literal-built shape. Pure metadata —
-      // doesn't affect equality on AbstractValue.
+      // doesn't affect equality on AbstractValue. Preserve _ctorId
+      // (set by _specApplyBuiltinCtor for WHATWG instance ctors) so
+      // AV-based ctor identity checks (e.g. _isCrossOriginMsgReceiver,
+      // _isXhrObject) still see the constructor identity through the
+      // var binding.
       if (initAv && initAv.kind === "obj-lit" && d.id && d.id.type === "Identifier") {
-        initAv = { kind: "obj-lit", props: initAv.props, _bindingName: d.id.name };
+        initAv = { kind: "obj-lit", props: initAv.props, _bindingName: d.id.name, _ctorId: initAv._ctorId };
       }
       _specVariableDeclaratorBind(d.id, initAv, state);
     }
@@ -10622,7 +10705,7 @@ function _findSinkInFunction(funcPath) {
       var c = innerPath.node.callee;
 
       // fetch() / window.fetch() / (s.fetch || fetch)() — only if fetch is the global
-      var isFetch = _isGlobalFetchCall(c, innerPath.scope);
+      var isFetch = _isGlobalFetchCall(c, innerPath.scope, innerPath);
 
       if (isFetch && innerPath.node.arguments.length >= 1) {
         sinkInfo = _extractSinkInfo(innerPath);
@@ -11117,7 +11200,7 @@ function _containsNetworkSink(funcPath) {
       if (found) { innerPath.stop(); return; }
       var c = innerPath.node.callee;
       // fetch() / window.fetch() / (s.fetch || fetch)() — only if fetch is the global
-      if (_isGlobalFetchCall(c, innerPath.scope)) { found = true; innerPath.stop(); return; }
+      if (_isGlobalFetchCall(c, innerPath.scope, innerPath)) { found = true; innerPath.stop(); return; }
       // .open() — only a network sink if object traces to XMLHttpRequest
       if (_t.isMemberExpression(c) && _t.isIdentifier(c.property, { name: "open" }) &&
           innerPath.node.arguments.length >= 2 && _isXhrObject(innerPath, c.object)) {
@@ -11151,7 +11234,7 @@ function _findDeepSinkPropertyMap(funcPath) {
 
       // fetch(url, opts) or window.fetch(url, opts) — only if not shadowed
       // fetch() / window.fetch() / (s.fetch || fetch)() — only if fetch is the global
-      if (_isGlobalFetchCall(c, innerPath.scope) && innerPath.node.arguments.length >= 1) {
+      if (_isGlobalFetchCall(c, innerPath.scope, innerPath) && innerPath.node.arguments.length >= 1) {
         propMap = _extractSinkPropertyMap(innerPath, "fetch");
         if (propMap && propMap.urlProps.length === 0 && !propMap.urlLiteral) propMap = null;
         if (propMap) innerPath.stop();
@@ -16041,19 +16124,9 @@ function _collectExprUses(exprPath) {
 // on enclosing function (idempotent) and inspect the callee's AV.
 function _isObjectDefineProperty(callPath) {
   if (callPath.node.arguments.length < 3) return false;
-  var encFn = callPath.getFunctionParent && callPath.getFunctionParent();
-  if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
-    try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
-  } else if (!encFn) {
-    var progPath = callPath;
-    while (progPath && progPath.parentPath) progPath = progPath.parentPath;
-    if (progPath && progPath.node && _t.isProgram(progPath.node)) {
-      try { _specAnalyzeProgramWithFixpoint(progPath); } catch (_) {}
-    }
-  }
+  _specEnsureProgramFixpoint(callPath);
   var calleeAv = _specPathValMemo.get(callPath.node.callee);
-  if (calleeAv && calleeAv.kind === "builtin-method" && calleeAv.id === "Object.defineProperty") return true;
-  return false;
+  return !!(calleeAv && calleeAv.kind === "builtin-method" && calleeAv.id === "Object.defineProperty");
 }
 
 // Read the descriptor at arg[2] of an Object.defineProperty call. If the
@@ -17144,7 +17217,7 @@ function _resolveParamFromCallersUncached(binding, depth, propName) {
       // The function is called as doFetch(...) — a bare identifier call with no binding.
       // Use _globalAssignments to confirm this is a known global, then find callers
       // by scanning the AST for bare identifier calls matching the assigned name.
-      var isGlobalTarget = _isGlobalObject(assignObj.name, funcPath.scope);
+      var isGlobalTarget = _isGlobalObject(funcPath, assignObj);
       if (isGlobalTarget && _globalAssignments[assignMethodName]) {
         return _resolveParamFromGlobalCallers(funcPath, assignMethodName, paramIdx, depth, propName);
       }
@@ -18402,7 +18475,7 @@ function _traceParamToArgsRoutes(binding, queue) {
         return _collectMethodCallerArgs(assignObjBinding.referencePaths, assignMethodName, paramIdx, queue);
       }
       // Global: window.X = function() {} or known alias
-      var isGlobalTarget = _isGlobalObject(assignObj.name, funcPath.scope);
+      var isGlobalTarget = _isGlobalObject(funcPath, assignObj);
       if (isGlobalTarget && _globalAssignments[assignMethodName]) {
         return _collectGlobalCallerArgs(funcPath, assignMethodName, paramIdx);
       }
@@ -23862,7 +23935,7 @@ function _valueHasSameOriginPrefix(valuePath, visited) {
       }
       return false;
     }
-    return _isSameOriginBaseExpr(node, scope);
+    return _isSameOriginBaseExpr(valuePath, node);
   }
 }
 
@@ -24284,14 +24357,10 @@ function _isNetworkProducingCall(callPath) {
     if (!_t.isCallExpression(node)) return false;
     var callee = node.callee;
 
-    // Direct fetch.
-    var isBareFetch = _t.isIdentifier(callee, { name: "fetch" }) && !callPath.scope.getBinding("fetch");
-    var isScopedFetch = _t.isMemberExpression(callee) && !callee.computed &&
-      _t.isIdentifier(callee.property, { name: "fetch" }) &&
-      _t.isIdentifier(callee.object) &&
-      (callee.object.name === "window" || callee.object.name === "self" || callee.object.name === "globalThis") &&
-      !callPath.scope.getBinding(callee.object.name);
-    if (isBareFetch || isScopedFetch) {
+    // Direct fetch — AV-grounded via _isGlobalFetchCall (which routes
+    // window.fetch / self.fetch / globalThis.fetch through _isGlobalObject's
+    // spec-eval AV identity check). No name-based shape match here.
+    if (_isGlobalFetchCall(callee, callPath.scope, callPath)) {
       if (node.arguments.length === 0) return false;
       return _isSameOriginFetchTarget(callPath.get("arguments.0"));
     }
@@ -24362,21 +24431,27 @@ function _isSameOriginFetchTarget(argPath) {
   // relative strings override). Only recognize the input-is-safe case
   // when we can see it's a relative literal or relative-prefixed template.
   // Deeper question of "can attacker control origin" is answered by the
-  // dimensional taint model at the sink layer, not here.
-  if (_t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URL" }) &&
-      !argPath.scope.getBinding("URL") && node.arguments.length >= 2) {
-    var baseArg = node.arguments[1];
-    if (_isSameOriginBaseExpr(baseArg, argPath.scope)) {
-      var inputArg = node.arguments[0];
-      if (_t.isStringLiteral(inputArg) && !/^https?:/i.test(inputArg.value) && !inputArg.value.startsWith("//")) {
-        return true;
+  // dimensional taint model at the sink layer, not here. Callee identity
+  // is determined via AV (urlCtorAv = {kind: "builtin-ctor", id: "WHATWG.URL"}
+  // installed on the global by _specGlobalThisAv) — no name-based shape
+  // match. Spec eval is triggered if not yet run on this scope.
+  if (_t.isNewExpression(node) && node.arguments.length >= 2) {
+    _specEnsureProgramFixpoint(argPath);
+    var calleeAv = _specPathValMemo.get(node.callee);
+    if (calleeAv && calleeAv.kind === "builtin-ctor" && calleeAv.id === "WHATWG.URL") {
+      var baseArg = node.arguments[1];
+      if (_isSameOriginBaseExpr(argPath.get("arguments.1"), baseArg)) {
+        var inputArg = node.arguments[0];
+        if (_t.isStringLiteral(inputArg) && !/^https?:/i.test(inputArg.value) && !inputArg.value.startsWith("//")) {
+          return true;
+        }
+        if (_t.isTemplateLiteral(inputArg)) {
+          var qs = inputArg.quasis;
+          var ihead = (qs[0] && qs[0].value && qs[0].value.raw) || "";
+          if (!/^https?:/i.test(ihead) && !ihead.startsWith("//") && ihead !== "") return true;
+        }
+        return false;
       }
-      if (_t.isTemplateLiteral(inputArg)) {
-        var qs = inputArg.quasis;
-        var ihead = (qs[0] && qs[0].value && qs[0].value.raw) || "";
-        if (!/^https?:/i.test(ihead) && !ihead.startsWith("//") && ihead !== "") return true;
-      }
-      return false;
     }
   }
 
@@ -24418,58 +24493,47 @@ function _isSameOriginFetchTarget(argPath) {
   }
 }
 
+// AV identity check: does this AV resolve to a URL/URL-component whose
+// origin is locked to the current page? Per WHATWG URL § 4.4 partition
+// model + the dimensional taint scheme: location.* and document.URL /
+// document.baseURI / document.documentURI are all current-origin reads
+// (their `dims.origin === false`). location.toString() and the toString
+// builtin-method on a location read also yield same-origin URL strings
+// (handled by spec eval projecting toString through the locationAv).
+// Pure AV inspection — no AST shape walk, no name match.
+function _isSameOriginBaseAv(av) {
+  if (!av || av.kind !== "taint-source" || !av.id) return false;
+  if (av.id.indexOf("location.") === 0) return true;
+  return av.id === "document.URL" || av.id === "document.baseURI" || av.id === "document.documentURI";
+}
+
 // Base argument to new URL(...) — is it a known same-origin value?
-// Recognizes: location.origin, location.href, window.location.origin/href,
-// self.location.origin/href, document.baseURI, document.URL.
-function _isSameOriginBaseExpr(node, scope) {
-  if (!node) return false;
-  // `location.origin` / `location.href` / `location.toString()`.
-  if (_t.isMemberExpression(node) && !node.computed &&
-      _t.isIdentifier(node.object, { name: "location" }) &&
-      scope && !scope.getBinding("location")) {
-    return _isSameOriginLocationProp(node.property);
-  }
-  // `window.location.origin`, `self.location.origin`, `globalThis.location.origin`.
-  if (_t.isMemberExpression(node) && !node.computed &&
-      _t.isMemberExpression(node.object) && !node.object.computed &&
-      _t.isIdentifier(node.object.object) &&
-      (node.object.object.name === "window" || node.object.object.name === "self" || node.object.object.name === "globalThis") &&
-      scope && !scope.getBinding(node.object.object.name) &&
-      _t.isIdentifier(node.object.property, { name: "location" })) {
-    return _isSameOriginLocationProp(node.property);
-  }
-  // `document.baseURI` / `document.URL` — reflect current page's URL.
-  if (_t.isMemberExpression(node) && !node.computed &&
-      _t.isIdentifier(node.object, { name: "document" }) &&
-      scope && !scope.getBinding("document") &&
-      _t.isIdentifier(node.property) &&
-      (node.property.name === "baseURI" || node.property.name === "URL" || node.property.name === "documentURI")) {
-    return true;
-  }
-  return false;
+// Spec-eval driven: trigger property-flow analysis so the AV for the base
+// expression is computed (handles plain location.origin, window.location.href,
+// self.location.host, aliases via var/IIFE, document.baseURI, etc. uniformly
+// through MemberExpression projection on the shared locationAv/documentProps
+// AVs in _specGlobalThisAv). Replaces the prior shape-walk over
+// `location` / `window.location` / `document.X` patterns.
+function _isSameOriginBaseExpr(path, node) {
+  if (!path || !node) return false;
+  _specEnsureProgramFixpoint(path);
+  return _isSameOriginBaseAv(_specPathValMemo.get(node));
 }
 
-function _isSameOriginLocationProp(propNode) {
-  if (!_t.isIdentifier(propNode)) return false;
-  var name = propNode.name;
-  // origin/host/hostname/protocol/port: all reflect the current page origin.
-  // href/pathname: contain current origin too, plus path. Still same-origin base.
-  return name === "origin" || name === "href" || name === "host" ||
-         name === "hostname" || name === "protocol" || name === "port" ||
-         name === "pathname" || name === "toString";
-}
-
-// Same-origin-by-spec channels — their "message" events never carry data
-// from a different origin, so the usual `event.origin` check doesn't
-// apply. Observed as FP class on github (BroadcastChannel listeners).
-var _SAME_ORIGIN_CHANNEL_CONSTRUCTORS = {
-  "BroadcastChannel": 1,
-  "Worker": 1,
-  "SharedWorker": 1,
-  "MessageChannel": 1,
-  // NOTE: MessagePort messages CAN come from another origin (the port was
-  // transferred across postMessage). Intentionally NOT in this list.
-  "EventSource": 1,
+// Same-origin-by-spec channel ctor IDs — their "message" events never
+// carry data from a different origin, so the usual `event.origin` check
+// doesn't apply. Observed as FP class on github (BroadcastChannel
+// listeners). NOTE: WHATWG.MessagePort is excluded — a MessagePort can
+// be transferred across postMessage so its messages CAN come from another
+// origin. The Worker/SharedWorker/MessageChannel-spawned ports are detected
+// via the structural channel-ctor (the port AV is reached via .port /
+// .port1 / .port2 from a known-channel obj-lit).
+var _SAME_ORIGIN_CHANNEL_CTOR_IDS = {
+  "WHATWG.BroadcastChannel": 1,
+  "WHATWG.Worker": 1,
+  "WHATWG.SharedWorker": 1,
+  "WHATWG.MessageChannel": 1,
+  "WHATWG.EventSource": 1,
 };
 
 // Given a bare addEventListener callee — typically `<receiver>.addEventListener`
@@ -24478,6 +24542,13 @@ var _SAME_ORIGIN_CHANNEL_CONSTRUCTORS = {
 // event.origin; same-origin-only receivers (BroadcastChannel, Worker,
 // SharedWorker, MessageChannel, EventSource) do not need it.
 //
+// Spec-eval driven: trigger property-flow analysis so the receiver's AV
+// is computed (handles direct constructor, var/IIFE alias, .port chain
+// uniformly through MemberExpression projection on the channel ctor's
+// instance obj-lit). The AV's _ctorId field — set by _specApplyBuiltinCtor
+// for WHATWG.BroadcastChannel/Worker/SharedWorker/MessageChannel/EventSource
+// instances — identifies same-origin-only channels.
+//
 // Returns true when the receiver is (or could be) a cross-origin window,
 // false when it's provably a same-origin-only channel.
 function _isCrossOriginMsgReceiver(callee, callPath) {
@@ -24485,49 +24556,33 @@ function _isCrossOriginMsgReceiver(callee, callPath) {
   if (_t.isIdentifier(callee)) return true;
   if (!_t.isMemberExpression(callee)) return false;
   var receiver = callee.object;
-  // `window.addEventListener`, `self.addEventListener`, etc.
-  if (_t.isIdentifier(receiver)) {
-    var name = receiver.name;
-    if (_SAME_ORIGIN_CHANNEL_CONSTRUCTORS[name]) return false;
-    // Cross-origin-capable globals.
-    if (name === "window" || name === "self" || name === "globalThis" ||
-        name === "top" || name === "parent" || name === "opener") return true;
-    // Resolve the binding — if it traces to a same-origin-only constructor,
-    // skip. Otherwise conservatively assume cross-origin (e.g. a stored
-    // reference to parent frame).
-    var tracked = _getTrackedType(callPath, receiver);
-    if (tracked && _SAME_ORIGIN_CHANNEL_CONSTRUCTORS[tracked]) return false;
-    return true;
-  }
-  // `new BroadcastChannel("x").addEventListener(...)` and similar — the
-  // receiver is a NewExpression whose constructor we can inspect.
-  if (_t.isNewExpression(receiver) && _t.isIdentifier(receiver.callee) &&
-      !callPath.scope.getBinding(receiver.callee.name) &&
-      _SAME_ORIGIN_CHANNEL_CONSTRUCTORS[receiver.callee.name]) {
+  // Trigger program fixpoint (idempotent) so receiver AV is populated.
+  _specEnsureProgramFixpoint(callPath);
+  var receiverAv = _specPathValMemo.get(receiver);
+  // Same-origin channel instance — _ctorId set by _specApplyBuiltinCtor.
+  if (receiverAv && receiverAv.kind === "obj-lit" && receiverAv._ctorId &&
+      _SAME_ORIGIN_CHANNEL_CTOR_IDS[receiverAv._ctorId]) {
     return false;
   }
-  // `worker.port.addEventListener(...)` where `worker = new SharedWorker(...)`.
-  // The MessagePort exposed by a Worker/SharedWorker the current script
-  // created is a same-origin channel — the port connects this page to the
-  // worker script, no third party can send messages through it. Walk
-  // MemberExpression one more level when the leaf property is `.port` and
-  // the base is a same-origin-only worker constructor (either directly or
-  // via scope-tracked type).
-  if (_t.isMemberExpression(receiver) && !receiver.computed &&
-      _t.isIdentifier(receiver.property, { name: "port" })) {
-    var portBase = receiver.object;
-    if (_t.isNewExpression(portBase) && _t.isIdentifier(portBase.callee) &&
-        !callPath.scope.getBinding(portBase.callee.name) &&
-        _SAME_ORIGIN_CHANNEL_CONSTRUCTORS[portBase.callee.name]) {
+  // MessagePort reached via .port / .port1 / .port2 from a same-origin
+  // channel: spec eval projects the port AV (with _ctorId
+  // "WHATWG.MessagePort") through the channel obj-lit's port props. The
+  // port obj-lit is shared with the channel's instance, so its ancestry
+  // is preserved. Only ports REACHED FROM channel ctors created in this
+  // bundle are same-origin; transferred-via-postMessage ports remain
+  // cross-origin (their AV is never linked to a known channel ctor).
+  // We confirm by checking that the receiver AV is the well-known
+  // MessagePort obj-lit AND the immediate parent expression chain bottoms
+  // out in a known channel ctor.
+  if (receiverAv && receiverAv.kind === "obj-lit" &&
+      receiverAv._ctorId === "WHATWG.MessagePort" &&
+      _t.isMemberExpression(receiver) && !receiver.computed) {
+    var portParentAv = _specPathValMemo.get(receiver.object);
+    if (portParentAv && portParentAv.kind === "obj-lit" && portParentAv._ctorId &&
+        _SAME_ORIGIN_CHANNEL_CTOR_IDS[portParentAv._ctorId]) {
       return false;
     }
-    if (_t.isIdentifier(portBase)) {
-      var portBaseType = _getTrackedType(callPath, portBase);
-      if (portBaseType && _SAME_ORIGIN_CHANNEL_CONSTRUCTORS[portBaseType]) return false;
-    }
   }
-  // `window.frames[N].addEventListener(...)`, `iframe.contentWindow.addEventListener(...)`,
-  // `somePort.addEventListener(...)`, etc. — conservatively flag.
   return true;
 }
 
@@ -24569,24 +24624,12 @@ function _targetTraceIsEventOrigin(src) {
 // comparison: trigger property-flow analysis on the enclosing
 // function (idempotent), look up _specPathValMemo, compare.
 function _isLocationObject(objNode, path) {
-  // Enclosing-function spec eval trigger (memo idempotent).
-  var encFn = path.getFunctionParent && path.getFunctionParent();
-  if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
-    try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
-  } else if (!encFn) {
-    var progPath = path;
-    while (progPath && progPath.parentPath) progPath = progPath.parentPath;
-    if (progPath && progPath.node && _t.isProgram(progPath.node)) {
-      try { _specAnalyzeProgramWithFixpoint(progPath); } catch (_) {}
-    }
-  }
+  _specEnsureProgramFixpoint(path);
   var av = _specPathValMemo.get(objNode);
   if (!av) return false;
-  // Look up the canonical location AV from the globalThis registry.
   var globalAv = _specGlobalThisAv();
   var canonicalLocation = globalAv && globalAv.props && globalAv.props.location;
-  if (!canonicalLocation) return false;
-  return av === canonicalLocation;
+  return !!(canonicalLocation && av === canonicalLocation);
 }
 
 // ─── Security Analysis: DOM XSS Sink Detection ─────────────────────────────
@@ -25077,37 +25120,36 @@ function _isArbitraryKeyObjectSource(path) {
     }
 
     if (_t.isCallExpression(n)) {
-      var callee = n.callee;
-      var jsonParse = _t.isMemberExpression(callee) && !callee.computed &&
-        _t.isIdentifier(callee.property, { name: "parse" }) &&
-        _t.isIdentifier(callee.object, { name: "JSON" }) && !p.scope.getBinding("JSON");
-      if (jsonParse && n.arguments.length >= 1) {
+      // AV-grounded callee identification per ECMA-262 spec eval.
+      // _specGlobalThisAv populates JSON.parse / Object.fromEntries /
+      // Object.assign / global.structuredClone as builtin-method AVs;
+      // member-access projection through scope-resolved JSON / Object /
+      // structuredClone identifiers (all unbound globals) returns the
+      // installed builtin-method AV. No name-based shape match — the
+      // identity check is on the AV's `.id` set at registry time.
+      var calleeNode = n.callee;
+      _specEnsureProgramFixpoint(p);
+      var calleeAv = _specPathValMemo.get(calleeNode);
+      var calleeBuiltinId = (calleeAv && calleeAv.kind === "builtin-method") ? calleeAv.id : null;
+      if (calleeBuiltinId === "JSON.parse" && n.arguments.length >= 1) {
         var argSrc = _traceValueSource(p.get("arguments.0"), 0);
         if (argSrc.sourceType === "user-controlled") {
           return _tvsHop(argSrc, "json-parse", "JSON.parse(…)", n.loc ? { line: n.loc.start.line, column: n.loc.start.column } : null);
         }
         continue;
       }
-      var objFromEntries = _t.isMemberExpression(callee) && !callee.computed &&
-        _t.isIdentifier(callee.property, { name: "fromEntries" }) &&
-        _t.isIdentifier(callee.object, { name: "Object" }) && !p.scope.getBinding("Object");
-      if (objFromEntries && n.arguments.length >= 1) {
+      if (calleeBuiltinId === "Object.fromEntries" && n.arguments.length >= 1) {
         var feSrc = _traceValueSource(p.get("arguments.0"), 0);
         if (feSrc.sourceType === "user-controlled") {
           return _tvsHop(feSrc, "object-fromEntries", "Object.fromEntries(…)", n.loc ? { line: n.loc.start.line, column: n.loc.start.column } : null);
         }
         continue;
       }
-      var structuredCloneCall =
-        _t.isIdentifier(callee, { name: "structuredClone" }) && !p.scope.getBinding("structuredClone");
-      if (structuredCloneCall && n.arguments.length >= 1) {
+      if (calleeBuiltinId === "global.structuredClone" && n.arguments.length >= 1) {
         stack.push(p.get("arguments.0"));
         continue;
       }
-      var objAssignCall = _t.isMemberExpression(callee) && !callee.computed &&
-        _t.isIdentifier(callee.property, { name: "assign" }) &&
-        _t.isIdentifier(callee.object, { name: "Object" }) && !p.scope.getBinding("Object");
-      if (objAssignCall) {
+      if (calleeBuiltinId === "Object.assign") {
         for (var oa = 1; oa < n.arguments.length; oa++) stack.push(p.get("arguments." + oa));
         continue;
       }
@@ -25170,23 +25212,24 @@ function _processDangerousPattern(path, result) {
     }
   }
 
-  // Object.defineProperty(obj, userControlledKey, desc) — prototype pollution
-  if (_t.isMemberExpression(callee) && !callee.computed &&
-      _t.isIdentifier(callee.property, { name: "defineProperty" }) &&
-      _t.isIdentifier(callee.object, { name: "Object" }) && !path.scope.getBinding("Object") &&
-      node.arguments.length >= 3) {
+  // Object.defineProperty / Reflect.set — attacker-chosen key writes a
+  // property on `obj`, classic prototype-pollution gadget. Callee identity
+  // via spec-eval AV (builtin-method id installed by _specGlobalThisAv on
+  // globalThis.Object.defineProperty / globalThis.Reflect.set). Program
+  // fixpoint is triggered ONCE per program via _specEnsureProgramFixpoint
+  // — running per-function spec eval inline here would race with the
+  // outer fixpoint's call-graph ordering and produce stale callee returns.
+  if (path) _specEnsureProgramFixpoint(path);
+  var _dpCalleeAv = _specPathValMemo.get(callee);
+  var _dpBuiltinId = (_dpCalleeAv && _dpCalleeAv.kind === "builtin-method") ? _dpCalleeAv.id : null;
+  if (_dpBuiltinId === "Object.defineProperty" && node.arguments.length >= 3) {
     var _dpKeySrc = _traceValueSource(path.get("arguments.1"), 0);
     if (_dpKeySrc.sourceType === "user-controlled") {
       _pushDangerous(result, node, "prototype-pollution", "Object.defineProperty with user-controlled key", "high", _dpKeySrc);
     }
     return;
   }
-
-  // Reflect.set(obj, userControlledKey, val) — prototype pollution
-  if (_t.isMemberExpression(callee) && !callee.computed &&
-      _t.isIdentifier(callee.property, { name: "set" }) &&
-      _t.isIdentifier(callee.object, { name: "Reflect" }) && !path.scope.getBinding("Reflect") &&
-      node.arguments.length >= 3) {
+  if (_dpBuiltinId === "Reflect.set" && node.arguments.length >= 3) {
     var _rsKeySrc = _traceValueSource(path.get("arguments.1"), 0);
     if (_rsKeySrc.sourceType === "user-controlled") {
       _pushDangerous(result, node, "prototype-pollution", "Reflect.set with user-controlled key", "high", _rsKeySrc);
@@ -26118,16 +26161,7 @@ function _findDestructuredKey(objPattern, bindingName) {
 // function (idempotent), inspects callee AV.
 function _isJsonStringify(node, path) {
   if (!node || !_t.isCallExpression(node) || !path) return false;
-  var encFn = path.getFunctionParent && path.getFunctionParent();
-  if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
-    try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
-  } else if (!encFn) {
-    var progPath = path;
-    while (progPath && progPath.parentPath) progPath = progPath.parentPath;
-    if (progPath && progPath.node && _t.isProgram(progPath.node)) {
-      try { _specAnalyzeProgramWithFixpoint(progPath); } catch (_) {}
-    }
-  }
+  _specEnsureProgramFixpoint(path);
   var calleeAv = _specPathValMemo.get(node.callee);
   return !!(calleeAv && calleeAv.kind === "builtin-method" && calleeAv.id === "JSON.stringify");
 }
