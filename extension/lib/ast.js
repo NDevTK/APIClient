@@ -7623,6 +7623,16 @@ function _specPostorderExprPaths(rootPath) {
   return preorder;
 }
 
+// AV → source AST node index. Per-AV provenance: when spec eval evaluates
+// an expression's path and produces an AV, the AV's "source position" is
+// that path's node. Walkers that need to emit per-AV hops (e.g. taint
+// chain construction in _traceValueSource) read this map to recover the
+// source location of any AV they encounter during a tree walk. Last write
+// wins (acceptable since AVs are usually freshly constructed per eval site
+// — the legacy `_node` backref on obj-lit/array-lit AVs is the same idea
+// but generalized). Pure index, no AV mutation, identity comparisons
+// preserved.
+var _avSourceNode = new WeakMap();
 // Evaluate an expression to its abstract value.
 // `state` is read-only here; assignment side effects are recorded into
 // `effects` and the state map is mutated by `_specAssignmentExpressionApply`.
@@ -7634,6 +7644,7 @@ function _specEvalExpression(rootPath, state, effects, noWriteMemo) {
     var p = paths[i];
     var av = _specEvalLeaf(p, state, vals, effects);
     vals.set(p.node, av);
+    if (av && typeof av === "object") _avSourceNode.set(av, p.node);
     // Cross-call memo: lets URL extraction / security taint look up the
     // spec-computed AV for any node without re-running spec eval. Last
     // write wins — for nodes seen in multiple states (e.g. via inter-
