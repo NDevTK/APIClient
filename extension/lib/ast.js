@@ -14575,11 +14575,42 @@ function _resolveCallReturnValues(callPath, depth) {
   return out;
 }
 
+// Resolve a call expression whose return value is a function — returns
+// {node, _path} for the resolved function or null. Per ECMA § 13.3.6
+// EvaluateCall combined with § 15.2 FunctionExpression: when a call
+// returns a function-ref AV (from _specReturnValueMemo on the callee's
+// funcNode), recover the function path via _specPathOfFunc. AV-direct;
+// no parallel state machine.
+function _resolveCallReturnToFunction(callPath, depth) {
+  if (!callPath || !callPath.node) return null;
+  var fnAv = null;
+  var callAv = _specPathValMemo.get(callPath.node);
+  if (callAv && callAv.kind === "function-ref") fnAv = callAv;
+  else if (callPath.node.callee) {
+    var calleeAv = _specPathValMemo.get(callPath.node.callee);
+    if (calleeAv) {
+      var stack = [calleeAv]; var seen = new Set();
+      while (stack.length > 0) {
+        var c = stack.pop();
+        if (!c || seen.has(c)) continue;
+        seen.add(c);
+        if (c.kind === "function-ref" && c.funcNode && _specReturnValueMemo.has(c.funcNode)) {
+          var ret = _specReturnValueMemo.get(c.funcNode);
+          if (ret && ret.kind === "function-ref") { fnAv = ret; break; }
+        } else if (c.kind === "or" && c.alternatives) {
+          for (var i = 0; i < c.alternatives.length; i++) stack.push(c.alternatives[i]);
+        } else if (c.kind === "or") {
+          if (c.left) stack.push(c.left);
+          if (c.right) stack.push(c.right);
+        }
+      }
+    }
+  }
+  if (!fnAv || !fnAv.funcNode) return null;
+  return { node: fnAv.funcNode, _path: _specPathOfFunc(fnAv.funcNode, callPath) };
+}
+
 // Resolve a call expression to its returned ObjectExpression (if any)
-// State IDs for _rcrtoStep (state machine for _resolveCallReturnToObject).
-
-
-
 function _resolveCallReturnToObject(callPath, depth) {
   // Single-AV-engine: project the call's spec-eval AV to its source
   // ObjectExpression node. Per ECMA § 13.3.6 EvaluateCall: spec eval
@@ -18943,7 +18974,6 @@ var _URL_INSTANCE_PROPS = {
 // sourceLoc records where the taint source was found (for source-to-sink context).
 // Uses a visited-node set instead of depth limits to prevent infinite recursion while
 // allowing unlimited tracing depth through variable chains, function params, and object properties.
-var _taintVisited = null;
 var _tvsMemo = new WeakMap();
 
 // Dimension-set constructors used across the module so the shape stays
@@ -18958,38 +18988,13 @@ function _tvsDims(o) {
     content: !!(o && o.content),
   };
 }
-function _tvsDimsAll() { return _tvsDims({ origin: true, path: true, query: true, hash: true, content: true }); }
 function _tvsDimsContent() { return _tvsDims({ content: true }); }
-function _tvsDimsUnion(a, b) {
-  if (!a) return b ? _tvsDims(b) : _tvsDimsContent();
-  if (!b) return _tvsDims(a);
-  return _tvsDims({
-    origin: a.origin || b.origin,
-    path: a.path || b.path,
-    query: a.query || b.query,
-    hash: a.hash || b.hash,
-    content: a.content || b.content,
-  });
-}
 
 // Build a user-controlled result with a single-hop taintPath rooted at the
 // taint source. Every direct taint-source emission in _traceValueSourceInner
 // goes through this, so downstream reviewers see where the taint starts.
 // `dims` declares which parts of the value are attacker-controllable; when
 // omitted, defaults to content-only (conservative for non-URL sources).
-function _tvsSource(source, loc, dims) {
-  var d = dims ? _tvsDims(dims) : _tvsDimsContent();
-  var hop = { kind: "source", desc: String(source), at: loc || null, dims: d };
-  var code = _snippetAtLoc(loc);
-  if (code) hop.code = code;
-  return {
-    sourceType: "user-controlled",
-    source: source,
-    sourceLoc: loc || null,
-    taintPath: [hop],
-    dimensions: d,
-  };
-}
 
 // Propagate a sub-trace one hop outward. `kind` classifies the hop
 // (binding | member | call-arg | template-expr | concat | ...), `desc` is a
@@ -19035,24 +19040,7 @@ function _tvsHop(sub, kind, desc, at) {
 
 // Same as _tvsHop but replaces the dimensions on the way out. Records
 // both before and after on the hop so reviewers see the transition.
-function _tvsHopDims(sub, kind, desc, at, dims) {
-  var h = _tvsHop(sub, kind, desc, at);
-  if (!h || h.sourceType !== "user-controlled") return h;
-  var newDims = _tvsDims(dims || { content: true });
-  var oldDims = sub && sub.dimensions ? _tvsDims(sub.dimensions) : null;
-  h.dimensions = newDims;
-  var lastHop = h.taintPath[h.taintPath.length - 1];
-  lastHop.dims = newDims;
-  // Record `dimsBefore` only when it differs — keeps small cases clean.
-  if (oldDims && _dimsDiffer(oldDims, newDims)) lastHop.dimsBefore = oldDims;
-  return h;
-}
 
-function _dimsDiffer(a, b) {
-  if (!a || !b) return !!(a || b);
-  return a.origin !== b.origin || a.path !== b.path || a.query !== b.query ||
-         a.hash !== b.hash || a.content !== b.content;
-}
 
 // Source-name → dimensions. These are facts about what each browser
 // taint source intrinsically carries. The taint source's name comes
