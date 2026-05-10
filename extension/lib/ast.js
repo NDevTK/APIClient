@@ -22680,6 +22680,32 @@ function _tvsStep(F) {
       case _TVS_INIT: {
         var skip = L.branchSkip || 0;
 
+        // ── Spec-eval-first: any node whose AV is a taint-source returns
+        // its source classification directly — no AST shape walk needed.
+        // Per the single-AV-engine design, taint sources are first-class
+        // AV kind installed by spec eval through globalThis registry +
+        // member/identifier projection. Aliased forms (`var l = location;
+        // l.href`) project through the same locationAv reference and reach
+        // here as taint-source AVs.
+        if (skip < 1) {
+          _specEnsureProgramGlobalsPrepass(path);
+          var topAv = _specPathValMemo.get(node);
+          if (topAv && topAv.kind === "taint-source") {
+            // All-dims-false → no attacker reach (e.g. location.origin
+            // alone, no transform); classify as literal-equivalent.
+            if (topAv.dims && !topAv.dims.origin && !topAv.dims.path &&
+                !topAv.dims.query && !topAv.dims.hash && !topAv.dims.content) {
+              return { done: LIT };
+            }
+            return { done: _tvsSource(topAv.id, nodeLoc, topAv.dims || _dimsForSource(topAv.id)) };
+          }
+          if (topAv && topAv.kind === "const") {
+            // Spec eval fully resolved to a const value — no taint
+            // (constants can't be attacker-influenced statically).
+            return { done: LIT };
+          }
+        }
+
         // ── Branch 1: Literals ────────────────────────────────────────
         if (skip < 1 && (_t.isStringLiteral(node) || _t.isNumericLiteral(node) ||
             _t.isBooleanLiteral(node) || _t.isNullLiteral(node) ||
