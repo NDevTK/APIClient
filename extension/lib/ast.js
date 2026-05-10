@@ -2435,6 +2435,13 @@ function _specGlobalThisAv() {
         dims: { origin: false, path: false, query: false, hash: false, content: false } },
       port: { kind: "taint-source", id: "location.port",
         dims: { origin: false, path: false, query: false, hash: false, content: false } },
+      // WHATWG HTML § 7.7.5 Location interface — assign/replace navigate
+      // the document to the supplied URL (open-redirect sink). reload
+      // re-loads the current page (no URL arg).
+      assign: { kind: "builtin-method", id: "Location.prototype.assign" },
+      replace: { kind: "builtin-method", id: "Location.prototype.replace" },
+      reload: { kind: "builtin-method", id: "Location.prototype.reload" },
+      toString: { kind: "builtin-method", id: "Location.prototype.toString" },
     }
   };
   // WHATWG HTML § 11 Storage — localStorage / sessionStorage. getItem
@@ -25006,9 +25013,14 @@ function _processSecurityCallSink(path, result) {
     }
   }
 
-  // location.assign(value) / location.replace(value) — open redirect
-  if ((methName === "assign" || methName === "replace") && node.arguments.length > 0) {
-    if (!_isLocationObject(callee.object, path)) return;
+  // location.assign(value) / location.replace(value) — open redirect.
+  // AV-grounded callee identity via Location.prototype.assign / replace
+  // builtin-methods on the locationAv. Both `location.X` and aliases
+  // (`var l = location; l.assign(x)`) project through the canonical AV.
+  if (_calleeAv && _calleeAv.kind === "builtin-method" &&
+      (_calleeAv.id === "Location.prototype.assign" || _calleeAv.id === "Location.prototype.replace") &&
+      node.arguments.length > 0) {
+    var _locMethName = _calleeAv.id === "Location.prototype.assign" ? "assign" : "replace";
     var _locArgPath = path.get("arguments.0");
     var locSource = _traceValueSource(_locArgPath, 0);
     if (locSource.sourceType !== "user-controlled") return;
@@ -25037,7 +25049,7 @@ function _processSecurityCallSink(path, result) {
     } else if (_dimsRetainUrlPartNoOrigin(locSource)) {
       locOpts = { severity: "medium", notes: "taint source retains URL-part structural prefix — taint can't reach scheme/host" };
     }
-    _pushSink(result, node, "redirect", "location." + methName, locSource, path, locOpts);
+    _pushSink(result, node, "redirect", "location." + _locMethName, locSource, path, locOpts);
   }
 }
 
