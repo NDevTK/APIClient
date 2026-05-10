@@ -13945,21 +13945,22 @@ function _ravStep(F) {
     var mm = sel.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
     return mm ? mm[1] : null;
   }
-  // Unified spec-eval AV resolution for value-producing nodes:
-  // - MemberExpression: DOM lookups (document.querySelector(...).content,
-  //   document.getElementById(...).<prop>, .dataset.<key>, etc.) all
-  //   project through documentProps + dom-element AVs to const strings
-  //   when the DOM context resolves them.
-  // - CallExpression: Element.prototype.getAttribute and similar.
-  // - NewExpression: WHATWG URLSearchParams encoding, WHATWG URL.href.
-  // ANY value-node whose AV resolves to a const string is the URL value;
-  // AV-grounded callee identity (no name-based shape match on `document`/
-  // `URL`/`URLSearchParams`/etc.), uniform across bare/prefixed/aliased.
-  if (skip < 1 && (_t.isMemberExpression(node) || _t.isCallExpression(node) || _t.isNewExpression(node))) {
+  // Unified spec-eval-first resolution: project the node's AV through
+  // _avFlattenStringLeaves (handles const, or, binop, template,
+  // deferred-ctor, page-origin taint-source substitution, lazy-call
+  // dispatch). If spec eval already produced string leaves, return them
+  // directly — no need to re-traverse via the URL-resolver branches
+  // below. Per the single-AV-engine design: spec eval is the source
+  // of truth, and this resolver only adds AST-level walks for cases
+  // spec eval's AV doesn't yet capture (alias-chain inits, binding
+  // referencePaths-based caller-arg substitution, DOM context lookups
+  // beyond what _specApplyBuiltinMethod knows).
+  if (skip < 1) {
     _specEnsureProgramGlobalsPrepass(path);
-    var domNodeAv = _specPathValMemo.get(node);
-    if (domNodeAv && domNodeAv.kind === "const" && typeof domNodeAv.value === "string") {
-      return { done: [domNodeAv.value] };
+    var nodeAv = _specPathValMemo.get(node);
+    if (nodeAv) {
+      var avLeaves = _avFlattenStringLeaves(nodeAv);
+      if (avLeaves.length > 0) return { done: avLeaves };
     }
   }
 
