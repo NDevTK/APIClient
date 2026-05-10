@@ -13080,58 +13080,6 @@ function _extractFetchCall(path, result, type) {
 // State IDs for _ravStep (state machine for _resolveAllValues).
 // INIT (0) is the entry case; every recursive site has a corresponding
 // AFTER state where F.result holds the sub-trace's array result.
-var _RAV_INIT = 0;
-var _RAV_ENC_AFTER = 100;
-var _RAV_TL_LOOP = 110;
-var _RAV_BIN_LOOP = 120;
-var _RAV_COND_LOOP = 130;
-var _RAV_LOG_LOOP = 140;
-var _RAV_NEW_REQ_AFTER = 150;
-var _RAV_NEW_URL_INPUT_AFTER = 160;
-var _RAV_NEW_URL_BASE_AFTER = 161;
-var _RAV_USP_LOOP = 170;
-var _RAV_CALL_RETVAL_AFTER = 199;       // call-return resolution via _rcrvStep
-var _RAV_CALL_RECV_AFTER = 200;        // string method passthrough chain
-var _RAV_CALL_GA_LOOP = 210;            // .getAttribute roundtrip loop
-var _RAV_CALL_JOIN_LOOP = 220;          // .join elements loop
-var _RAV_IDENT_GLOBAL_AFTER = 300;
-var _RAV_IDENT_CONST_AFTER = 310;
-var _RAV_IDENT_NONCONST_INIT_AFTER = 320;
-var _RAV_IDENT_NONCONST_CV_LOOP = 321;
-var _RAV_IDENT_FOROF_LOOP = 330;
-var _RAV_IDENT_DESTR_ARR_AFTER = 340;
-var _RAV_IDENT_DESTR_ARR_RESOLVED_AFTER = 341;
-var _RAV_IDENT_DESTR_OBJ_AFTER = 350;
-var _RAV_IDENT_DESTR_OBJ_RESOLVED_AFTER = 351;
-var _RAV_MEM_URL_PROP_AFTER = 410;
-var _RAV_MEM_DS_LOOP = 420;
-var _RAV_MEM_THIS_OBJ_LOOP = 430;
-var _RAV_MEM_THIS_GETTER_LOOP = 440;
-var _RAV_MEM_OBJ_LOOP = 450;
-var _RAV_MEM_PROPASSIGN_LOOP = 460;
-var _RAV_MEM_ARR_PROP_LOOP = 480;
-var _RAV_COMP_MU_KEY_AFTER = 500;
-var _RAV_COMP_MU_LOOP = 501;
-var _RAV_COMP_MU_AKEY_AFTER = 502;
-var _RAV_COMP_MU_RHS_AFTER = 503;
-var _RAV_COMP_OBJ_KEY_AFTER = 510;
-var _RAV_COMP_OBJ_PROP_LOOP = 511;
-var _RAV_COMP_OBJ_DISC_LOOP = 512;
-var _RAV_COMP_OBJ_ALL_LOOP = 520;
-var _RAV_COMP_ARR_LOOP = 530;
-var _RAV_PROMISE_AFTER = 540;
-
-function _ravMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, defaultResult) {
-  return {
-    path: path, node: node, depth: depth || 0,
-    state: _RAV_INIT, L: {}, result: defaultResult !== undefined ? defaultResult : [],
-    stepFn: stepFn || _ravStep,
-    makeFrame: _ravMakeFrame,
-    shortCircuit: shortCircuit || _ravShortCircuit,
-    guardPrefix: guardPrefix !== undefined ? guardPrefix : "V",
-    defaultResult: defaultResult !== undefined ? defaultResult : [],
-  };
-}
 
 // Explicit-frame state-machine driver for _ravStep. JS call stack stays
 // at depth 1 regardless of AST depth. Cycle detection via _resolver.guard
@@ -13150,69 +13098,9 @@ function _ravMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, def
 //
 // The driver runs ONE loop, processing all frames regardless of step
 // function. Cross-function "recursion" never grows the JS call stack.
-function _runResolverStack(initialFrame) {
-  var stack = [initialFrame];
-  var lastResult = initialFrame.defaultResult;
-  try {
-    while (stack.length > 0) {
-      var top = stack[stack.length - 1];
-      top.result = lastResult;
-      lastResult = top.defaultResult;
-      var step;
-      try { step = top.stepFn(top); }
-      catch (e) {
-        if (e instanceof RangeError) {
-          _resolver.collectError(e, "runResolverStack");
-          if (top.guardPrefix) _resolver.unguard(top.guardPrefix, top.node);
-          stack.pop();
-          lastResult = top.defaultResult;
-          continue;
-        }
-        throw e;
-      }
-      if (step.done !== undefined) {
-        lastResult = step.done;
-        if (top.guardPrefix) _resolver.unguard(top.guardPrefix, top.node);
-        stack.pop();
-        continue;
-      }
-      var subPath = step.trace;
-      top.state = step.state;
-      if (!subPath || !subPath.node) { lastResult = top.defaultResult; continue; }
-      // Inherit parent's config when not overridden by step.
-      var subStepFn = step.stepFn || top.stepFn;
-      var subMakeFrame = step.makeFrame || top.makeFrame;
-      var subGuardPrefix = step.guardPrefix !== undefined ? step.guardPrefix : top.guardPrefix;
-      var subShortCircuit = step.shortCircuit !== undefined ? step.shortCircuit : top.shortCircuit;
-      var subDefaultResult = step.defaultResult !== undefined ? step.defaultResult : top.defaultResult;
-      var subNode = subPath.node;
-      // Per-resolver short-circuit (literals etc.) before frame allocation.
-      if (subShortCircuit) {
-        var sc = subShortCircuit(subNode, subPath);
-        if (sc !== undefined) { lastResult = sc; continue; }
-      }
-      if (subGuardPrefix && !_resolver.guard(subGuardPrefix, subNode)) {
-        lastResult = subDefaultResult;
-        continue;
-      }
-      stack.push(subMakeFrame(subPath, subNode, top.depth + 1, subStepFn, subShortCircuit, subGuardPrefix, subDefaultResult));
-    }
-    return lastResult;
-  } finally {
-    while (stack.length > 0) {
-      var f = stack.pop();
-      if (f.guardPrefix) _resolver.unguard(f.guardPrefix, f.node);
-    }
-  }
-}
 
 // _resolveAllValues short-circuit: literals resolve directly without
 // allocating a frame.
-function _ravShortCircuit(node, path) {
-  if (_t.isStringLiteral(node)) return [node.value];
-  if (_t.isNumericLiteral(node)) return [String(node.value)];
-  return undefined;  // no short-circuit, push frame
-}
 
 function _resolveAllValues(initialPath, initialDepth) {
   if (!initialPath || !initialPath.node) return [];
@@ -14027,32 +13915,12 @@ function _applyNumberMethodToConst(nv, methodName, argLits) {
 // eval (`_specEvalLeaf` + `_specApplyBuiltinCtor` + `_specApplyBuiltinMethod`
 // + closure write-back fixpoint). `_avFlattenStringLeaves` projects the
 // resulting AV to const string leaves.
-function _ravStep(F) {
-  if (!F || !F.node) return { done: [] };
-  if (F.path) _specEnsureProgramGlobalsPrepass(F.path);
-  var av = _specPathValMemo.get(F.node);
-  if (!av) return { done: [] };
-  return { done: _avFlattenStringLeaves(av) };
-}
 
 // Resolve a call expression's callee to its function path (with scope info).
 // Covers the common cases: identifier → scope binding, member expr → object property.
 // Returns the Babel path to the function node, or null.
 // State IDs for _rcfpStep (state machine for _resolveCalleeFuncPath).
-var _RCFP_INIT = 0;
-var _RCFP_OBJ_AFTER = 100;
 
-function _rcfpMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, defaultResult) {
-  return {
-    path: path, node: node, depth: depth || 0,
-    state: _RCFP_INIT, L: {}, result: null,
-    stepFn: stepFn || _rcfpStep,
-    makeFrame: _rcfpMakeFrame,
-    shortCircuit: shortCircuit,
-    guardPrefix: guardPrefix !== undefined ? guardPrefix : "C",
-    defaultResult: defaultResult !== undefined ? defaultResult : null,
-  };
-}
 
 // Per-analysis memo for _resolveCalleeFuncPath. Each top-level invocation
 // re-walks the resolver state machine; without memoization, repeated
@@ -14083,26 +13951,6 @@ function _resolveCalleeFuncPath(callPath, depth) {
   return result;
 }
 
-function _rcfpStep(F) {
-  // Single-AV-engine: thin spec-eval projection. F.path is the
-  // CallExpression; project its callee AV to a Babel function path.
-  // Per ECMAScript § 13.3.6 CallExpression evaluation: the callee is
-  // an expression whose value, if a function, is invoked. Spec eval
-  // produces the callee's AV via _specEvalExpression / _specApplyStatement
-  // tracking; this projection recovers the function path from a
-  // function-ref AV (or first resolvable leaf of an or-AV union).
-  if (!F || !F.path || !F.path.node || !F.path.node.callee) return { done: null };
-  var encFn = F.path.getFunctionParent && F.path.getFunctionParent();
-  if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
-  else _specEnsureProgramGlobalsPrepass(F.path);
-  var calleePath = F.path.get("callee");
-  var av = _specPathValMemo.get(calleePath.node);
-  if (!av) {
-    try { av = _specEvalExpression(calleePath, _specStateCreate({}), []); }
-    catch (_) { return { done: null }; }
-  }
-  return { done: _funcPathFromAv(av, F.path) };
-}
 
 // Resolve an expression to a function path when possible. Accepts:
 //   - Identifier bound to FunctionDeclaration / FunctionExpression init
@@ -14115,24 +13963,7 @@ function _rcfpStep(F) {
 // Used by Function.prototype.call / .apply resolution and dynamic
 // property access into module tables.
 // State IDs for _retfpStep (state machine for _resolveExprToFunctionPath).
-var _RETFP_INIT = 0;          // pull next candidate from queue, dispatch by node type
-var _RETFP_MEM_KEY_AFTER = 100;  // after _resolveAllValues for computed key
-var _RETFP_MEM_OBJ_AFTER = 110;  // after _resolveToObject for object
-var _RETFP_REF_LOOP = 120;       // walk objBind.referencePaths (sub-loop with possible key dispatch)
-var _RETFP_REF_KEY_AFTER = 121;  // after _resolveAllValues for ref-walk computed property
 
-function _retfpMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, defaultResult) {
-  return {
-    path: path, node: node, depth: depth || 0,
-    state: _RETFP_INIT, L: { queue: [path], seen: new Set() },
-    result: null,
-    stepFn: stepFn || _retfpStep,
-    makeFrame: _retfpMakeFrame,
-    shortCircuit: shortCircuit,
-    guardPrefix: guardPrefix !== undefined ? guardPrefix : "F",
-    defaultResult: defaultResult !== undefined ? defaultResult : null,
-  };
-}
 
 function _resolveExprToFunctionPath(initialExprPath, depth) {
   // Single-AV-engine: read the expression's spec-eval AV from
@@ -14150,125 +13981,6 @@ function _resolveExprToFunctionPath(initialExprPath, depth) {
 // f. Walk callee.object while we see .bind() calls. Pure ECMAScript:
 // Function.prototype.bind returns a callable that when invoked behaves
 // as the receiver function.
-function _retfpUnwrapBindChain(p) {
-  while (p && p.node &&
-         _t.isCallExpression(p.node) &&
-         _t.isMemberExpression(p.node.callee) && !p.node.callee.computed &&
-         _t.isIdentifier(p.node.callee.property, { name: "bind" })) {
-    p = p.get("callee.object");
-  }
-  return p;
-}
-
-// Identifier alias chain walk for `var f = g; var g = h; var h = function() {}`.
-// Returns a Babel path or null. Each iteration follows one alias level;
-// the loop is bounded by the seen-set on binding identifiers (not on
-// arbitrary node identity, since the same Identifier node can appear in
-// multiple references).
-function _retfpWalkAliasChain(initExprPath) {
-  var exprPath = initExprPath;
-  var node = exprPath.node;
-  var seenBindings = new Set();
-  while (true) {
-    var b = exprPath.scope.getBinding(node.name);
-    if (!b) return null;
-    if (seenBindings.has(b.identifier)) return null;
-    seenBindings.add(b.identifier);
-    if (_t.isFunctionDeclaration(b.path.node)) return b.path;
-    if (!_t.isVariableDeclarator(b.path.node) || !b.path.node.init) return null;
-    var init = b.path.node.init;
-    if (_t.isFunctionExpression(init) || _t.isArrowFunctionExpression(init)) {
-      return b.path.get("init");
-    }
-    // `.bind(…)` on init — unwrap iteratively to get back to a function.
-    if (_t.isCallExpression(init) && _t.isMemberExpression(init.callee) && !init.callee.computed &&
-        _t.isIdentifier(init.callee.property, { name: "bind" })) {
-      var bindPath = _retfpUnwrapBindChain(b.path.get("init"));
-      if (bindPath && _t.isIdentifier(bindPath.node)) {
-        exprPath = bindPath;
-        node = bindPath.node;
-        continue;
-      }
-      if (bindPath && (_t.isFunctionExpression(bindPath.node) || _t.isArrowFunctionExpression(bindPath.node))) {
-        return bindPath;
-      }
-      return null;
-    }
-    // init is not a passthrough — chain ends.
-    return null;
-  }
-}
-
-// Param-substitution branch (synchronous): caller passes some expression
-// as the corresponding arg; that expression is what `obj.key` resolves
-// against. For each caller's arg, probe argP.keyName for a function.
-function _retfpResolveParamSub(node, exprPath, keyName, depth) {
-  if (!_t.isIdentifier(node.object)) return null;
-  var objBind = exprPath.scope.getBinding(node.object.name);
-  if (!objBind || objBind.kind !== "param") return null;
-  var paramName = node.object.name;
-  var hostFunc = objBind.scope.path;
-  if (!hostFunc || !hostFunc.node.params) return null;
-  var paramIdx = -1;
-  for (var pi = 0; pi < hostFunc.node.params.length; pi++) {
-    if (_t.isIdentifier(hostFunc.node.params[pi], { name: paramName })) { paramIdx = pi; break; }
-  }
-  if (paramIdx < 0) return null;
-  var callerArgs = _findFunctionCallerArgs(hostFunc);
-  for (var ci = 0; ci < callerArgs.length; ci++) {
-    if (paramIdx >= callerArgs[ci].length) continue;
-    var argP = callerArgs[ci][paramIdx];
-    if (!argP) continue;
-    // Probe argP directly with the same key-resolution logic — _probePropertyOnExpr
-    // doesn't re-enter _resolveExprToFunctionPath, so no recursion concern.
-    var argSubFn = _probePropertyOnExpr(argP, keyName, depth);
-    if (argSubFn) return argSubFn;
-  }
-  return null;
-}
-
-function _retfpStep(F) {
-  // Single-AV-engine: thin spec-eval projection. F.path is the
-  // expression to resolve to a function path. Per ECMA § 13.1.3
-  // IdentifierReference / § 13.3.2 MemberExpression: spec eval
-  // evaluates the expression's AV through scope chain, member
-  // projection, and bind/call/apply semantics; this projector
-  // recovers the function path from a function-ref AV.
-  if (!F || !F.path || !F.path.node) return { done: null };
-  var encFn = F.path.getFunctionParent && F.path.getFunctionParent();
-  if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
-  else _specEnsureProgramGlobalsPrepass(F.path);
-  var av = _specPathValMemo.get(F.path.node);
-  if (!av) {
-    try { av = _specEvalExpression(F.path, _specStateCreate({}), []); }
-    catch (_) { return { done: null }; }
-  }
-  return { done: _funcPathFromAv(av, F.path) };
-}
-
-// Process an `obj.key = rhs` assignment match: if RHS is a function,
-// return its path. If RHS is a CallExpression / MemberExpression /
-// Identifier that itself resolves to a function, queue it for the outer
-// candidate loop to try next.
-function _retfpHandleRefAssignment(rp, queue) {
-  var rpParent = rp.parent;
-  var assignNode = rp.parentPath ? rp.parentPath.parent : null;
-  if (!assignNode || !_t.isAssignmentExpression(assignNode) || assignNode.operator !== "=" ||
-      assignNode.left !== rpParent) return null;
-  var rhsNode = assignNode.right;
-  var rhsPath = rp.parentPath.parentPath.get("right");
-  if (_t.isFunctionExpression(rhsNode) || _t.isArrowFunctionExpression(rhsNode)) {
-    return rhsPath;
-  }
-  // RHS is a CallExpression / MemberExpression / Identifier that itself
-  // resolves to a function — e.g. `c.push = a.bind(null, …)`. Queue
-  // for next outer-candidate iteration; the alias/bind logic in
-  // _RETFP_INIT handles unwinding.
-  if (_t.isCallExpression(rhsNode) || _t.isMemberExpression(rhsNode) || _t.isIdentifier(rhsNode)) {
-    queue.push(rhsPath);
-  }
-  return null;
-}
 
 // Probe whether `objExprPath.<propName>` resolves to a function path,
 // using the same logic as _resolveExprToFunctionPath's MemberExpression
@@ -14816,67 +14528,8 @@ function _resolveDefinePropertyDescFromGetExpr(callPath, defsValPath, loopVarNam
 // Traces into function definitions to find what they return.
 // Handles: getUrl() → "https://...", buildUrl(base, path) → base + "/" + path
 // State IDs for _rcrvStep (state machine for _resolveCallReturnValues).
-var _RCRV_INIT = 0;
-var _RCRV_ARROW_AFTER = 100;
-var _RCRV_LOOP = 110;
 
-function _rcrvMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, defaultResult) {
-  return {
-    path: path, node: node, depth: depth || 0,
-    state: _RCRV_INIT, L: {},
-    result: defaultResult !== undefined ? defaultResult : [],
-    stepFn: stepFn || _rcrvStep,
-    makeFrame: _rcrvMakeFrame,
-    shortCircuit: shortCircuit,
-    guardPrefix: guardPrefix !== undefined ? guardPrefix : "R",
-    defaultResult: defaultResult !== undefined ? defaultResult : [],
-  };
-}
 
-function _rcrvStep(F) {
-  // Single-AV-engine: thin spec-eval projection. F.path is the
-  // CallExpression. Per ECMA § 13.3.6 EvaluateCall: the call returns the
-  // value of the [[Call]] internal method, which spec eval models per
-  // function as the joined AV stored in _specReturnValueMemo. Resolve
-  // the callee to a function node, look up its return AV, and flatten
-  // to string leaves via _avFlattenStringLeaves.
-  if (!F || !F.path || !F.path.node) return { done: [] };
-  var encFn = F.path.getFunctionParent && F.path.getFunctionParent();
-  if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
-  else _specEnsureProgramGlobalsPrepass(F.path);
-  // The CallExpression's own AV is the return value (spec eval
-  // computes call results into _specPathValMemo for the call node).
-  var callAv = _specPathValMemo.get(F.path.node);
-  if (callAv) {
-    var pageOriginLeaves = _resolvePageOriginAv(callAv);
-    if (pageOriginLeaves) return { done: pageOriginLeaves };
-    var leaves = _avFlattenStringLeaves(callAv);
-    if (leaves.length > 0) return { done: leaves };
-  }
-  // Fallback: walk to the callee, project to function-ref, look up
-  // _specReturnValueMemo for the funcNode. Covers cases where the call
-  // node's AV wasn't directly memoised (e.g. cross-function dispatch
-  // where only the callee path was visited).
-  var calleePath = F.path.get("callee");
-  var calleeAv = _specPathValMemo.get(calleePath.node);
-  if (calleeAv) {
-    var stack = [calleeAv]; var seen = new Set(); var out = [];
-    while (stack.length > 0) {
-      var n = stack.pop(); if (!n || seen.has(n)) continue; seen.add(n);
-      if (n.kind === "function-ref" && n.funcNode && _specReturnValueMemo.has(n.funcNode)) {
-        var retAv = _specReturnValueMemo.get(n.funcNode);
-        var po = _resolvePageOriginAv(retAv);
-        if (po) { for (var i = 0; i < po.length; i++) out.push(po[i]); continue; }
-        var leaves2 = _avFlattenStringLeaves(retAv);
-        for (var j = 0; j < leaves2.length; j++) out.push(leaves2[j]);
-      } else if (n.kind === "or" && n.alternatives) {
-        for (var k = 0; k < n.alternatives.length; k++) stack.push(n.alternatives[k]);
-      }
-    }
-    if (out.length > 0) return { done: out };
-  }
-  return { done: [] };
-}
 
 function _resolveCallReturnValues(callPath, depth) {
   // Single-AV-engine: project the call's spec-eval AV to string leaves.
@@ -14913,97 +14566,8 @@ function _resolveCallReturnValues(callPath, depth) {
 
 // Resolve a call expression to its returned ObjectExpression (if any)
 // State IDs for _rcrtoStep (state machine for _resolveCallReturnToObject).
-var _RCRTO_INIT = 0;
-var _RCRTO_ARROW_AFTER = 100;
-var _RCRTO_LOOP = 110;
 
-function _rcrtoMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, defaultResult) {
-  return {
-    path: path, node: node, depth: depth || 0,
-    state: _RCRTO_INIT, L: {},
-    result: defaultResult !== undefined ? defaultResult : null,
-    stepFn: stepFn || _rcrtoStep,
-    makeFrame: _rcrtoMakeFrame,
-    shortCircuit: shortCircuit,
-    guardPrefix: guardPrefix !== undefined ? guardPrefix : "O",
-    defaultResult: defaultResult !== undefined ? defaultResult : null,
-  };
-}
 
-function _rcrtoStep(F) {
-  var path = F.path, depth = F.depth, L = F.L;
-  while (true) {
-    switch (F.state) {
-      case _RCRTO_INIT: {
-        var funcPath = _resolveCalleeFuncPath(path, depth);
-        if (!funcPath) return { done: null };
-
-        // Arrow function with expression body
-        if (_t.isArrowFunctionExpression(funcPath.node) && !_t.isBlockStatement(funcPath.node.body)) {
-          var bodyPath = funcPath.get("body");
-          if (_t.isObjectExpression(bodyPath.node)) {
-            bodyPath.node._path = bodyPath;
-            return { done: bodyPath.node };
-          }
-          // Dispatch via shared driver to _rtoiStep — keeps the JS call
-          // stack flat across mutual _resolveCallReturnToObject ↔
-          // _resolveToObject recursion.
-          return {
-            trace: bodyPath, state: _RCRTO_ARROW_AFTER,
-            stepFn: _rtoiStep, makeFrame: _rtoiMakeFrame,
-            shortCircuit: _rtoiShortCircuit, guardPrefix: "T", defaultResult: null,
-          };
-        }
-
-        // Block body — pre-collect ReturnStatement arg paths and iterate
-        // via the state machine. First non-null result wins (matches the
-        // original `if (result) return;` early exit).
-        var retPaths = [];
-        try {
-          funcPath.traverse(Object.assign({
-            ReturnStatement: function(retPath) {
-              if (retPath.node.argument) retPaths.push(retPath.get("argument"));
-            },
-          }, _SKIP_NESTED_FUNCS));
-        } catch (e) { _resolver.collectError(e, "rcrtoCollect"); }
-        if (retPaths.length === 0) return { done: null };
-
-        L.retPaths = retPaths;
-        L.ri = 0;
-        F.state = _RCRTO_LOOP;
-        continue;
-      }
-
-      case _RCRTO_ARROW_AFTER:
-        return { done: F.result };
-
-      case _RCRTO_LOOP: {
-        // If just returned from a sub-trace, check result first.
-        if (L.justTraced) {
-          L.justTraced = false;
-          if (F.result) return { done: F.result };
-        }
-        while (L.ri < L.retPaths.length) {
-          var argPath = L.retPaths[L.ri];
-          L.ri++;
-          if (_t.isObjectExpression(argPath.node)) {
-            argPath.node._path = argPath;
-            return { done: argPath.node };
-          }
-          L.justTraced = true;
-          return {
-            trace: argPath, state: _RCRTO_LOOP,
-            stepFn: _rtoiStep, makeFrame: _rtoiMakeFrame,
-            shortCircuit: _rtoiShortCircuit, guardPrefix: "T", defaultResult: null,
-          };
-        }
-        return { done: null };
-      }
-
-      default: return { done: null };
-    }
-  }
-}
 
 function _resolveCallReturnToObject(callPath, depth) {
   // Single-AV-engine: project the call's spec-eval AV to its source
@@ -15041,51 +14605,14 @@ function _resolveCallReturnToObject(callPath, depth) {
 // _resolver.guard at frame push.
 //
 // State IDs for _rtoiStep (state machine for _resolveToObject).
-var _RTOI_INIT = 0;
-// Identifier branch
-var _RTOI_ID_CALL_INIT_AFTER = 100;
-var _RTOI_ID_ARR_ELEM_AFTER = 110;
-var _RTOI_ID_ARR_RESOLVED_AFTER = 120;
-var _RTOI_ID_OBJ_PROP_DIRECT_AFTER = 130;
-var _RTOI_ID_OBJ_INIT_AFTER = 140;
-var _RTOI_ID_OBJ_PROP_RESOLVED_AFTER = 150;
-var _RTOI_ID_PARAM_LOOP = 160;
-// Generic CallExpression branch
-var _RTOI_GENERIC_CALL_AFTER = 210;
-// MemberExpression branch
-var _RTOI_MEMBER_THIS_RHS_AFTER = 300;
-var _RTOI_MEMBER_PARENT_AFTER = 310;
 
-function _rtoiMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, defaultResult) {
-  return {
-    path: path, node: node, depth: depth || 0,
-    state: _RTOI_INIT, L: {}, result: null,
-    stepFn: stepFn || _rtoiStep,
-    makeFrame: _rtoiMakeFrame,
-    shortCircuit: shortCircuit || _rtoiShortCircuit,
-    guardPrefix: guardPrefix !== undefined ? guardPrefix : "T",
-    defaultResult: defaultResult !== undefined ? defaultResult : null,
-  };
-}
 
 // Short-circuit: literal ObjectExpression resolves directly without a
 // frame, and memo-cached results bypass dispatch entirely.
-function _rtoiShortCircuit(node, path) {
-  if (_resolveToObjectMemo.has(node)) return _resolveToObjectMemo.get(node);
-  if (_t.isObjectExpression(node)) {
-    node._path = path;
-    return node;
-  }
-  return undefined;
-}
 
 // Memoize on completion. The driver does not own per-resolver memo
 // tables; centralizing the write keeps every `return _rtoiDone(F, X)`
 // inside _rtoiStep consistent with the entry-point cache.
-function _rtoiDone(F, value) {
-  _resolveToObjectMemo.set(F.node, value);
-  return { done: value };
-}
 
 function _resolveToObject(initialPath, initialDepth) {
   // Single-AV-engine: project the expression's spec-eval AV to its
@@ -15116,391 +14643,11 @@ function _resolveToObject(initialPath, initialDepth) {
 // Walks class binding refs and indirect ctor-arg sources without any
 // _resolveToObject recursion — every value pulled is a literal object
 // at the new ClassName(...) call site, so no sub-trace is needed.
-function _rtoiResolveAssignedRich(F, path, depth) {
-  var L = F.L;
-  var ctorMethod = L.ctorMethod;
-  var ctorMethodNode = L.ctorMethodNode;
-  var classDecl = L.classDecl;
-  var className = L.className;
-  var propName = L.memberPropName;
-  if (!ctorMethod || !ctorMethodNode || !classDecl) return null;
-  var _assignedRich = _findThisAssignedParamRich(ctorMethod, propName);
-  if (!_assignedRich) return null;
-  var _ctrMatch = _findCtorParamOrDestr(ctorMethodNode.params, _assignedRich.paramName);
-  if (!_ctrMatch) return null;
-  var paramIdx = _ctrMatch.idx;
-  var _destrKey = _assignedRich.propFromParam || _ctrMatch.key || null;
-  function _pullObj(ctorArgPath) {
-    if (!_destrKey) {
-      if (_t.isObjectExpression(ctorArgPath.node)) {
-        ctorArgPath.node._path = ctorArgPath;
-        return ctorArgPath.node;
-      }
-      return null;
-    }
-    if (_t.isObjectExpression(ctorArgPath.node)) {
-      for (var pi = 0; pi < ctorArgPath.node.properties.length; pi++) {
-        var op = ctorArgPath.node.properties[pi];
-        if (!_t.isObjectProperty(op) || op.computed) continue;
-        var opKey = _t.isIdentifier(op.key) ? op.key.name :
-          (_t.isStringLiteral(op.key) ? op.key.value : null);
-        if (opKey === _destrKey && _t.isObjectExpression(op.value)) {
-          op.value._path = ctorArgPath.get("properties." + pi + ".value");
-          return op.value;
-        }
-      }
-    }
-    return null;
-  }
-  var classBinding = path.scope.getBinding(className) || classDecl.scope.getBinding(className);
-  if (classBinding && classBinding.referencePaths) {
-    for (var cri = 0; cri < classBinding.referencePaths.length; cri++) {
-      var cref = classBinding.referencePaths[cri];
-      if (cref.parent && _t.isNewExpression(cref.parent) && cref.parent.callee === cref.node &&
-          paramIdx < cref.parent.arguments.length) {
-        var ctorArgPath = cref.parentPath.get("arguments." + paramIdx);
-        var _pulled = _pullObj(ctorArgPath);
-        if (_pulled) return _pulled;
-      }
-    }
-    var _indirect = _findClassIndirectCtorArgs(classBinding, classDecl, paramIdx, depth);
-    for (var _ii = 0; _ii < _indirect.length; _ii++) {
-      var _pulledI = _pullObj(_indirect[_ii]);
-      if (_pulledI) return _pulledI;
-    }
-  }
-  return null;
-}
 
-function _rtoiStep(F) {
-  var path = F.path, node = F.node, depth = F.depth, L = F.L;
-  while (true) {
-    switch (F.state) {
-      case _RTOI_INIT: {
-        // Identifier branch
-        if (_t.isIdentifier(node)) {
-          var binding = path.scope.getBinding(node.name);
-          if (!binding) {
-            var globalDef = _globalAssignments[node.name];
-            if (globalDef && _t.isObjectExpression(globalDef.valueNode)) {
-              globalDef.valueNode._path = globalDef.valuePath;
-              return _rtoiDone(F, globalDef.valueNode);
-            }
-            return _rtoiDone(F, null);
-          }
-          if (_t.isVariableDeclarator(binding.path.node) && binding.path.node.init) {
-            if (_t.isObjectExpression(binding.path.node.init)) {
-              binding.path.node.init._path = binding.path.get("init");
-              return _rtoiDone(F, binding.path.node.init);
-            }
-            // var cfg = getConfig() — dispatch through _rcrtoStep on the
-            // shared driver so the JS call stack stays flat across
-            // mutual call/object resolution.
-            if (_t.isCallExpression(binding.path.node.init)) {
-              return {
-                trace: binding.path.get("init"),
-                state: _RTOI_ID_CALL_INIT_AFTER,
-                stepFn: _rcrtoStep, makeFrame: _rcrtoMakeFrame,
-                shortCircuit: null, guardPrefix: "O", defaultResult: null,
-              };
-            }
-            // ArrayPattern destructuring: `var [a, modules] = data`.
-            if (_t.isArrayPattern(binding.path.node.id)) {
-              var arrPat2 = binding.path.node.id;
-              var elemIdx2 = -1;
-              for (var dei = 0; dei < arrPat2.elements.length; dei++) {
-                var dEl = arrPat2.elements[dei];
-                if (_t.isIdentifier(dEl, { name: node.name })) { elemIdx2 = dei; break; }
-                if (_t.isAssignmentPattern(dEl) && _t.isIdentifier(dEl.left, { name: node.name })) { elemIdx2 = dei; break; }
-              }
-              if (elemIdx2 >= 0) {
-                var initE = binding.path.node.init;
-                if (_t.isArrayExpression(initE) && elemIdx2 < initE.elements.length && initE.elements[elemIdx2]) {
-                  return {
-                    trace: binding.path.get("init.elements." + elemIdx2),
-                    state: _RTOI_ID_ARR_ELEM_AFTER,
-                  };
-                }
-                // _resolveToArray is itself a state-machine driver; one
-                // wrapper frame, no recursion through _rtoiStep.
-                var arrI = _resolveToArray(binding.path.get("init"), depth);
-                if (arrI && arrI._path && elemIdx2 < arrI.elements.length && arrI.elements[elemIdx2]) {
-                  return {
-                    trace: arrI._path.get("elements." + elemIdx2),
-                    state: _RTOI_ID_ARR_RESOLVED_AFTER,
-                  };
-                }
-              }
-            }
-            // ObjectPattern destructuring: `var {key} = obj`.
-            if (_t.isObjectPattern(binding.path.node.id)) {
-              var keyForName2 = _findDestructuredKey(binding.path.node.id, node.name);
-              if (keyForName2) {
-                L.opKey = keyForName2;
-                var initO = binding.path.node.init;
-                if (_t.isObjectExpression(initO)) {
-                  for (var oki2 = 0; oki2 < initO.properties.length; oki2++) {
-                    var okp2 = initO.properties[oki2];
-                    if (_t.isObjectProperty(okp2) && !okp2.computed && _getKeyName(okp2.key) === keyForName2) {
-                      return {
-                        trace: binding.path.get("init.properties." + oki2 + ".value"),
-                        state: _RTOI_ID_OBJ_PROP_DIRECT_AFTER,
-                      };
-                    }
-                  }
-                }
-                // Init isn't a literal object — resolve it, then look up
-                // keyForName2 in the result. Two-step sub-trace.
-                return {
-                  trace: binding.path.get("init"),
-                  state: _RTOI_ID_OBJ_INIT_AFTER,
-                };
-              }
-            }
-          }
-          // Param: resolve from caller's arg.
-          if (binding.kind === "param" && binding.path.parentPath) {
-            var paramFnPath = binding.path.parentPath;
-            if (_t.isFunction(paramFnPath.node)) {
-              var pIdxObj = -1;
-              for (var pi = 0; pi < paramFnPath.node.params.length; pi++) {
-                if (_t.isIdentifier(paramFnPath.node.params[pi], { name: node.name })) { pIdxObj = pi; break; }
-              }
-              if (pIdxObj >= 0) {
-                var fbObj = _getFunctionBinding(paramFnPath);
-                if (fbObj && fbObj.referencePaths) {
-                  L.paramRefs = fbObj.referencePaths;
-                  L.paramPIdx = pIdxObj;
-                  L.paramRi = 0;
-                  L.paramJustTraced = false;
-                  F.state = _RTOI_ID_PARAM_LOOP;
-                  continue;
-                }
-              }
-            }
-          }
-        }
-        // Object.assign({}, src1, src2, ...) — merge all object args.
-        // AV-grounded callee identity via builtin-method "Object.assign"
-        // (windowSelfAv.props.Object.props.assign).
-        // The synthesized merged object can't have a single Babel _path
-        // (no underlying node owns a .properties array matching the
-        // merged set). Per-property _path is attached at synthesis time
-        // so downstream consumers reading prop.value._path see the
-        // actual source location; node-level _path is omitted to keep
-        // navigation safe.
-        var rtoiCalleeAv = _t.isCallExpression(node) ? _specPathValMemo.get(node.callee) : null;
-        if (rtoiCalleeAv && rtoiCalleeAv.kind === "builtin-method" && rtoiCalleeAv.id === "Object.assign" &&
-            node.arguments.length >= 2) {
-          var mergedProps = [];
-          for (var oai = 0; oai < node.arguments.length; oai++) {
-            var oaArg = node.arguments[oai];
-            var oaObj = null;
-            var oaObjPath = null;
-            if (_t.isObjectExpression(oaArg)) {
-              oaObj = oaArg;
-              oaObjPath = path.get("arguments." + oai);
-            } else if (_t.isIdentifier(oaArg)) {
-              var oaBinding = path.scope.getBinding(oaArg.name);
-              if (oaBinding && _t.isVariableDeclarator(oaBinding.path.node) && _t.isObjectExpression(oaBinding.path.node.init)) {
-                oaObj = oaBinding.path.node.init;
-                oaObjPath = oaBinding.path.get("init");
-              }
-            }
-            if (oaObj && oaObjPath) {
-              for (var oap = 0; oap < oaObj.properties.length; oap++) {
-                var oaProp = oaObj.properties[oap];
-                if (!_t.isObjectProperty(oaProp) || oaProp.computed) continue;
-                var oaKey = _getKeyName(oaProp.key);
-                if (oaKey) {
-                  // _path is a shared mutable AST field; overwriting on
-                  // every Object.assign visit causes pathological
-                  // re-traversal in bundles where the same value node
-                  // is reachable from many sources.
-                  if (oaProp.value && _t.isObjectExpression(oaProp.value) && !oaProp.value._path) {
-                    oaProp.value._path = oaObjPath.get("properties." + oap + ".value");
-                  }
-                  // Later args override earlier ones (Object.assign semantics).
-                  mergedProps = mergedProps.filter(function(mp) {
-                    var mpKey = _getKeyName(mp.key);
-                    return mpKey !== oaKey;
-                  });
-                  mergedProps.push(oaProp);
-                }
-              }
-            }
-          }
-          if (mergedProps.length > 0) {
-            var synObj = { type: "ObjectExpression", properties: mergedProps };
-            return _rtoiDone(F, synObj);
-          }
-        }
-        // Generic CallExpression — resolve through the callee's return
-        // value(s). Symmetric with the `var x = call()` Identifier
-        // branch above. Placed AFTER Object.assign so its merge handling
-        // runs first.
-        if (_t.isCallExpression(node)) {
-          return {
-            trace: path,
-            state: _RTOI_GENERIC_CALL_AFTER,
-            stepFn: _rcrtoStep, makeFrame: _rcrtoMakeFrame,
-            shortCircuit: null, guardPrefix: "O", defaultResult: null,
-          };
-        }
-        // MemberExpression: obj.prop where prop's value is an ObjectExpression.
-        if (_t.isMemberExpression(node) && !node.computed) {
-          var propName = _t.isIdentifier(node.property) ? node.property.name : null;
-          if (propName) {
-            L.memberPropName = propName;
-            // `this.prop` inside a class method: trace through the
-            // constructor's `this.prop = expr` / `this.prop = param`
-            // assignment and pick up the object literal at a
-            // `new C({...})` call site.
-            if (_t.isThisExpression(node.object)) {
-              var thisFuncPath = path.getFunctionParent && path.getFunctionParent();
-              if (thisFuncPath && _t.isClassMethod(thisFuncPath.node) && _t.isClassBody(thisFuncPath.parent)) {
-                var classDecl = thisFuncPath.parentPath.parentPath;
-                if (classDecl && (_t.isClassDeclaration(classDecl.node) || _t.isClassExpression(classDecl.node)) && classDecl.node.id) {
-                  var className = classDecl.node.id.name;
-                  var ctorMethod = null, ctorMethodNode = null;
-                  for (var cmi = 0; cmi < classDecl.node.body.body.length; cmi++) {
-                    if (_t.isClassMethod(classDecl.node.body.body[cmi]) && classDecl.node.body.body[cmi].kind === "constructor") {
-                      ctorMethod = classDecl.get("body.body." + cmi);
-                      ctorMethodNode = classDecl.node.body.body[cmi];
-                      break;
-                    }
-                  }
-                  if (ctorMethod && ctorMethodNode) {
-                    L.ctorMethod = ctorMethod;
-                    L.ctorMethodNode = ctorMethodNode;
-                    L.classDecl = classDecl;
-                    L.className = className;
-                    // Fast path: this.X = expr where expr is a closure
-                    // value. Dispatch the RHS through _rtoiStep on the
-                    // shared driver.
-                    var _ctorRhs = _findThisAssignmentRhsPath(ctorMethod, propName);
-                    if (_ctorRhs) {
-                      return {
-                        trace: _ctorRhs,
-                        state: _RTOI_MEMBER_THIS_RHS_AFTER,
-                      };
-                    }
-                    // No this.X = expr; try the param-substitution branch
-                    // inline (no recursion required).
-                    var _assignedObj = _rtoiResolveAssignedRich(F, path, depth);
-                    if (_assignedObj) return _rtoiDone(F, _assignedObj);
-                  }
-                }
-              }
-            }
-            // Resolve parent object then look up propName in its properties.
-            return {
-              trace: path.get("object"),
-              state: _RTOI_MEMBER_PARENT_AFTER,
-            };
-          }
-        }
-        return _rtoiDone(F, null);
-      }
-
-      case _RTOI_ID_CALL_INIT_AFTER:
-      case _RTOI_ID_ARR_ELEM_AFTER:
-      case _RTOI_ID_ARR_RESOLVED_AFTER:
-      case _RTOI_ID_OBJ_PROP_DIRECT_AFTER:
-      case _RTOI_ID_OBJ_PROP_RESOLVED_AFTER:
-      case _RTOI_GENERIC_CALL_AFTER:
-        return _rtoiDone(F, F.result);
-
-      case _RTOI_ID_OBJ_INIT_AFTER: {
-        var initOO = F.result;
-        if (initOO && initOO._path) {
-          for (var oki3 = 0; oki3 < initOO.properties.length; oki3++) {
-            var okp3 = initOO.properties[oki3];
-            if (_t.isObjectProperty(okp3) && !okp3.computed && _getKeyName(okp3.key) === L.opKey) {
-              return {
-                trace: initOO._path.get("properties." + oki3 + ".value"),
-                state: _RTOI_ID_OBJ_PROP_RESOLVED_AFTER,
-              };
-            }
-          }
-        }
-        return _rtoiDone(F, null);
-      }
-
-      case _RTOI_ID_PARAM_LOOP: {
-        // First non-null caller-arg result wins (matches the original
-        // `if (pObj) return pObj;` early exit).
-        if (L.paramJustTraced) {
-          L.paramJustTraced = false;
-          if (F.result) return _rtoiDone(F, F.result);
-        }
-        while (L.paramRi < L.paramRefs.length) {
-          var refO = L.paramRefs[L.paramRi];
-          L.paramRi++;
-          if (_t.isCallExpression(refO.parent) && refO.parent.callee === refO.node &&
-              L.paramPIdx < refO.parent.arguments.length) {
-            var argP = refO.parentPath.get("arguments." + L.paramPIdx);
-            L.paramJustTraced = true;
-            return {
-              trace: argP,
-              state: _RTOI_ID_PARAM_LOOP,
-            };
-          }
-        }
-        return _rtoiDone(F, null);
-      }
-
-      case _RTOI_MEMBER_THIS_RHS_AFTER: {
-        if (F.result) return _rtoiDone(F, F.result);
-        // RHS didn't resolve to an object — fall through to the param
-        // substitution branch (no recursion required).
-        var _assignedObj2 = _rtoiResolveAssignedRich(F, path, depth);
-        if (_assignedObj2) return _rtoiDone(F, _assignedObj2);
-        // Then fall through to parent lookup so `this.x.y` on a class
-        // whose ctor doesn't initialize `x` still resolves through the
-        // outer expression's parent.
-        return {
-          trace: path.get("object"),
-          state: _RTOI_MEMBER_PARENT_AFTER,
-        };
-      }
-
-      case _RTOI_MEMBER_PARENT_AFTER: {
-        var parentObj = F.result;
-        if (parentObj) {
-          for (var i = 0; i < parentObj.properties.length; i++) {
-            var prop = parentObj.properties[i];
-            if (!_t.isObjectProperty(prop) || prop.computed) continue;
-            var key = _t.isIdentifier(prop.key) ? prop.key.name :
-              (_t.isStringLiteral(prop.key) ? prop.key.value : null);
-            if (key === L.memberPropName && _t.isObjectExpression(prop.value)) {
-              // Synthetic Object.assign-merged parentObj has no
-              // node-level _path — per-property _path was set at
-              // synthesis time, so don't overwrite. For real
-              // ObjectExpression, derive child path from parent.
-              if (parentObj._path) {
-                prop.value._path = parentObj._path.get("properties." + i + ".value");
-              }
-              return _rtoiDone(F, prop.value);
-            }
-          }
-        }
-        return _rtoiDone(F, null);
-      }
-
-      default: return _rtoiDone(F, null);
-    }
-  }
-}
 
 // Resolve an expression to its ArrayExpression node (if it's a variable pointing to one)
 // State IDs for _rtaStep (state machine for _resolveToArray).
-var _RTA_INIT = 0;
-var _RTA_PARAM_LOOP = 100;
 
-function _rtaMakeFrame(path, node, depth) {
-  return { path: path, node: node, depth: depth || 0, state: _RTA_INIT, L: {}, result: null };
-}
 
 // Explicit-frame state-machine driver for _resolveToArray.
 // Returns ArrayExpression node (with _path attached) or null.
@@ -15524,69 +14671,6 @@ function _resolveToArray(initialPath, initialDepth) {
   return null;
 }
 
-function _rtaStep(F) {
-  var path = F.path, node = F.node, L = F.L;
-  while (true) {
-    switch (F.state) {
-      case _RTA_INIT: {
-        if (!_t.isIdentifier(node)) return { done: null };
-        var binding = path.scope.getBinding(node.name);
-        if (!binding) return { done: null };
-        if (_t.isVariableDeclarator(binding.path.node) && binding.path.node.init &&
-            _t.isArrayExpression(binding.path.node.init)) {
-          binding.path.node.init._path = binding.path.get("init");
-          return { done: binding.path.node.init };
-        }
-        // Parameter: resolve from callers via state-machine loop.
-        if (binding.kind === "param") {
-          var paramFuncPath = binding.scope.path;
-          if (_t.isFunction(paramFuncPath.node)) {
-            var pIdx = _findParamIndex(paramFuncPath.node.params, node.name);
-            if (pIdx >= 0) {
-              var fb = null;
-              if (paramFuncPath.node.id) fb = (paramFuncPath.scope.parent || paramFuncPath.scope).getBinding(paramFuncPath.node.id.name);
-              if (!fb && _t.isVariableDeclarator(paramFuncPath.parent)) fb = (paramFuncPath.scope.parent || paramFuncPath.scope).getBinding(paramFuncPath.parent.id.name);
-              if (fb && fb.referencePaths) {
-                L.paramRefs = fb.referencePaths;
-                L.paramPIdx = pIdx;
-                L.paramRi = 0;
-                L.paramJustTraced = false;
-                F.state = _RTA_PARAM_LOOP;
-                continue;
-              }
-            }
-          }
-        }
-        return { done: null };
-      }
-
-      case _RTA_PARAM_LOOP: {
-        // If just returned from a sub-trace, check result; non-null wins.
-        if (L.paramJustTraced) {
-          L.paramJustTraced = false;
-          if (F.result) return { done: F.result };
-        }
-        while (L.paramRi < L.paramRefs.length) {
-          var ref = L.paramRefs[L.paramRi];
-          L.paramRi++;
-          if (_t.isCallExpression(ref.parent) && ref.parent.callee === ref.node && L.paramPIdx < ref.parent.arguments.length) {
-            var argPath = ref.parentPath.get("arguments." + L.paramPIdx);
-            if (_t.isArrayExpression(argPath.node)) {
-              argPath.node._path = argPath;
-              return { done: argPath.node };
-            }
-            L.paramJustTraced = true;
-            return { trace: argPath, state: _RTA_PARAM_LOOP };
-          }
-        }
-        return { done: null };
-      }
-
-      default:
-        return { done: null };
-    }
-  }
-}
 
 function _resolveParamFromCallers(binding, depth, propName) {
   // Per-analysis memo keyed by (binding identifier, propName). Same
@@ -16778,54 +15862,6 @@ function _resolveItemCallsFromParam(funcPath, containerParamName, paramIdx, dept
 }
 
 // Resolve a call expression to the function it returns (for callback-arg tracing)
-function _resolveCallReturnToFunction(callPath, depth) {
-  if (!_resolver.guard("F", callPath.node)) return null;
-  try {
-  var callee = callPath.node.callee;
-  var funcPath = _resolveCalleeFuncPath(callPath, depth);
-  // Param binding: callee is a function parameter (e.g., n() in IIFE)
-  if (!funcPath && _t.isIdentifier(callee)) {
-    var binding = callPath.scope.getBinding(callee.name);
-    if (binding && binding.kind === "param") {
-      var encFn = binding.path.findParent(function(p) { return p.isFunction(); });
-      if (encFn) {
-        var pIdx = -1;
-        for (var pi = 0; pi < encFn.node.params.length; pi++) {
-          if (encFn.node.params[pi] === binding.path.node) { pIdx = pi; break; }
-          if (_t.isIdentifier(encFn.node.params[pi]) && encFn.node.params[pi].name === callee.name) { pIdx = pi; break; }
-        }
-        if (pIdx >= 0 && encFn.parentPath && _t.isCallExpression(encFn.parent) &&
-            encFn.parent.callee === encFn.node && pIdx < encFn.parent.arguments.length) {
-          var iifeArg = encFn.parent.arguments[pIdx];
-          if (_t.isFunctionExpression(iifeArg) || _t.isArrowFunctionExpression(iifeArg)) {
-            funcPath = encFn.parentPath.get("arguments." + pIdx);
-          }
-        }
-      }
-    }
-  }
-  if (!funcPath) return null;
-
-  // Find return statements that return a function
-  var result = null;
-  try {
-    funcPath.traverse(Object.assign({
-      ReturnStatement: function(retPath) {
-        if (result) return;
-        var arg = retPath.node.argument;
-        if (!arg) return;
-        if (_t.isFunctionExpression(arg) || _t.isArrowFunctionExpression(arg)) {
-          result = { node: arg, _path: retPath.get("argument") };
-        }
-      },
-    }, _SKIP_NESTED_FUNCS));
-  } catch (e) { _resolver.collectError(e, "resolveCallReturnToFunction"); }
-  return result;
-  } catch (_rfe) {
-    if (_rfe instanceof RangeError) { _resolver.collectError(_rfe, "resolveCallReturnToFunction"); return null; }
-    throw _rfe;
-  } finally { _resolver.unguard("F", callPath.node); }
-}
 
 // Get the scope binding for a function (by name, variable declarator, or assignment)
 function _getFunctionBinding(funcPath) {
@@ -18737,258 +17773,193 @@ function _extractHeaders(objNode, objPath) {
 // State IDs use semantic ranges matching the rest of the file's
 // convention (_RAV_INIT = 0, group AFTER states by hundreds). 0 is
 // the entry; 100/200/300/400/500 are the per-route AFTER groups.
-var _EBP_INIT = 0;
-var _EBP_ALIAS_AFTER = 100;       // alias-chain recursion result — REPLACE
-var _EBP_PARAM_LOOP = 200;        // caller loop for param-bound identifiers
-var _EBP_PARAM_AFTER = 201;       // caller-arg result accumulator
-var _EBP_JSON_AFTER = 300;        // JSON.stringify(ident) recursion result — REPLACE
-var _EBP_TOSTRING_AFTER = 400;    // .toString() unwrap recursion result — REPLACE
-var _EBP_OPTS_LOOP = 500;         // opts.data candidate × property loop
-var _EBP_OPTS_AFTER = 501;        // first non-empty wins
 
 function _extractBodyParams(rootNode, rootScope) {
-  // Iterative driver replacing the prior wrapper/inner mutual
-  // recursion with a state-machine stack. Each frame represents one
-  // extraction task; sub-frames (for alias chains, JSON.stringify on
-  // identifiers, .toString() unwraps, function-param caller loops,
-  // and opts.data property walks) are pushed onto the same stack.
-  // The visited set is per-call (lives on the driver, not the
-  // module) so concurrent calls don't share state.
+  // Single-AV-engine: project body-shape source patterns to body param
+  // descriptors. Iterative worklist stack handles unwrap chains
+  // (alias / JSON.stringify / .toString() / new URLSearchParams /
+  // function-param caller loops) without recursion. The terminal
+  // projection reads obj-lit AV from _specPathValMemo when the source
+  // is a non-literal expression (e.g. opts.data, var x = {...}; x).
+  // FormData/URLSearchParams accumulator patterns walk binding
+  // referencePaths for .append/.set call collection (per WHATWG XHR
+  // / Fetch spec body kinds).
   if (!rootNode) return [];
   var visited = new Set();
-  var stack = [{ state: _EBP_INIT, node: rootNode, scope: rootScope,
-                  L: {}, result: undefined }];
-  var lastResult = [];
-  while (stack.length > 0) {
-    var top = stack[stack.length - 1];
-    top.result = lastResult;
-    lastResult = [];
-    var step = _ebpStep(top);
-    if (step.done !== undefined) {
-      lastResult = step.done;
-      stack.pop();
-      continue;
+  var stack = [{ node: rootNode, scope: rootScope }];
+  // Shared accumulator: every terminal pattern adds its params here; the
+  // worklist drains over all reachable body shapes (including all caller
+  // arg branches for the param case). De-dup by name so multiple branches
+  // contributing the same field don't double-count.
+  var accumulator = [];
+  function pushAccum(arr) {
+    for (var ai = 0; ai < arr.length; ai++) {
+      var p = arr[ai];
+      var dup = false;
+      for (var di = 0; di < accumulator.length; di++) {
+        if (accumulator[di].name === p.name) { dup = true; break; }
+      }
+      if (!dup) accumulator.push(p);
     }
-    top.state = step.state;
-    var subNode = step.trace.node;
-    var subScope = step.trace.scope;
-    var subKey = (subNode.start != null && subNode.end != null) ? "B" + subNode.start + ":" + subNode.end : null;
-    if (subKey && visited.has(subKey)) {
-      lastResult = [];
-      continue;
-    }
-    if (subKey) visited.add(subKey);
-    stack.push({ state: _EBP_INIT, node: subNode, scope: subScope,
-                  L: {}, result: undefined });
   }
-  return lastResult;
-}
+  while (stack.length > 0) {
+    var top = stack.pop();
+    var node = top.node;
+    var scope = top.scope;
+    var key = (node.start != null && node.end != null) ? "B" + node.start + ":" + node.end : null;
+    if (key && visited.has(key)) continue;
+    if (key) visited.add(key);
 
-function _ebpStep(F) {
-  var node = F.node, scopePath = F.scope, L = F.L;
-  while (true) {
-    switch (F.state) {
-      case _EBP_INIT: {
-        // CASE A: Identifier with scope binding — FormData/URLSearchParams
-        // accumulator walk, alias chain, or function-param caller loop.
-        if (_t.isIdentifier(node) && scopePath && scopePath.scope) {
-          var bpBinding = scopePath.scope.getBinding(node.name);
-          if (bpBinding) {
-            var bpInit = _t.isVariableDeclarator(bpBinding.path.node) ? bpBinding.path.node.init : null;
-            var bpType = bpInit && _t.isNewExpression(bpInit) && _t.isIdentifier(bpInit.callee) ? bpInit.callee.name : null;
-            if ((bpType === "FormData" || bpType === "URLSearchParams") &&
-                !bpBinding.path.scope.getBinding(bpType) && bpBinding.referencePaths) {
-              var fdParams = [];
-              for (var fdri = 0; fdri < bpBinding.referencePaths.length; fdri++) {
-                var fdRef = bpBinding.referencePaths[fdri];
-                var fdMem = fdRef.parentPath;
-                if (!fdMem || !fdMem.isMemberExpression() || fdMem.node.object !== fdRef.node || fdMem.node.computed) continue;
-                var fdMethod = _t.isIdentifier(fdMem.node.property) ? fdMem.node.property.name : null;
-                if (fdMethod !== "append" && fdMethod !== "set") continue;
-                var fdCall = fdMem.parentPath;
-                if (!fdCall || !fdCall.isCallExpression() || fdCall.node.callee !== fdMem.node ||
-                    fdCall.node.arguments.length < 1) continue;
-                var fdNameVals = _resolveAllValues(fdCall.get("arguments.0"), 0);
-                for (var fdni = 0; fdni < fdNameVals.length; fdni++) {
-                  if (typeof fdNameVals[fdni] !== "string" || !fdNameVals[fdni]) continue;
-                  var fdAlreadyHave = false;
-                  for (var fdpi = 0; fdpi < fdParams.length; fdpi++) {
-                    if (fdParams[fdpi].name === fdNameVals[fdni]) { fdAlreadyHave = true; break; }
-                  }
-                  if (fdAlreadyHave) continue;
-                  var fdField = { name: fdNameVals[fdni], required: true, location: "body" };
-                  if (fdCall.node.arguments.length >= 2) {
-                    var fdValVals = _resolveAllValues(fdCall.get("arguments.1"), 0);
-                    if (fdValVals.length > 0 && typeof fdValVals[0] === "string") {
-                      fdField.defaultValue = fdValVals[0];
-                      fdField.type = "string";
-                    }
-                  }
-                  fdParams.push(fdField);
+    // Identifier with binding: FormData/URLSearchParams accumulator,
+    // alias chain, or function-param caller loop.
+    if (_t.isIdentifier(node) && scope && scope.scope) {
+      var bnd = scope.scope.getBinding(node.name);
+      if (bnd) {
+        var bnInit = _t.isVariableDeclarator(bnd.path.node) ? bnd.path.node.init : null;
+        var bnType = bnInit && _t.isNewExpression(bnInit) && _t.isIdentifier(bnInit.callee) ? bnInit.callee.name : null;
+        if ((bnType === "FormData" || bnType === "URLSearchParams") &&
+            !bnd.path.scope.getBinding(bnType) && bnd.referencePaths) {
+          var fdParams = [];
+          for (var fdri = 0; fdri < bnd.referencePaths.length; fdri++) {
+            var fdRef = bnd.referencePaths[fdri];
+            var fdMem = fdRef.parentPath;
+            if (!fdMem || !fdMem.isMemberExpression() || fdMem.node.object !== fdRef.node || fdMem.node.computed) continue;
+            var fdMethod = _t.isIdentifier(fdMem.node.property) ? fdMem.node.property.name : null;
+            if (fdMethod !== "append" && fdMethod !== "set") continue;
+            var fdCall = fdMem.parentPath;
+            if (!fdCall || !fdCall.isCallExpression() || fdCall.node.callee !== fdMem.node ||
+                fdCall.node.arguments.length < 1) continue;
+            var fdNameVals = _resolveAllValues(fdCall.get("arguments.0"), 0);
+            for (var fdni = 0; fdni < fdNameVals.length; fdni++) {
+              if (typeof fdNameVals[fdni] !== "string" || !fdNameVals[fdni]) continue;
+              var fdAlreadyHave = false;
+              for (var fdpi = 0; fdpi < fdParams.length; fdpi++) {
+                if (fdParams[fdpi].name === fdNameVals[fdni]) { fdAlreadyHave = true; break; }
+              }
+              if (fdAlreadyHave) continue;
+              var fdField = { name: fdNameVals[fdni], required: true, location: "body" };
+              if (fdCall.node.arguments.length >= 2) {
+                var fdValVals = _resolveAllValues(fdCall.get("arguments.1"), 0);
+                if (fdValVals.length > 0 && typeof fdValVals[0] === "string") {
+                  fdField.defaultValue = fdValVals[0];
+                  fdField.type = "string";
                 }
               }
-              if (fdParams.length > 0) return { done: fdParams };
+              fdParams.push(fdField);
             }
-            if (_t.isVariableDeclarator(bpBinding.path.node) && bpBinding.path.node.init) {
-              return { trace: { node: bpBinding.path.node.init, scope: bpBinding.path },
-                        state: _EBP_ALIAS_AFTER };
-            }
-            if (bpBinding.kind === "param") {
-              var bpFuncPath = bpBinding.scope.path;
-              var bpFuncB = null;
-              if (bpFuncPath.node.id) bpFuncB = bpFuncPath.scope.parent ? bpFuncPath.scope.parent.getBinding(bpFuncPath.node.id.name) : null;
-              if (!bpFuncB && _t.isVariableDeclarator(bpFuncPath.parent)) bpFuncB = bpFuncPath.scope.parent ? bpFuncPath.scope.parent.getBinding(bpFuncPath.parent.id.name) : null;
-              if (bpFuncB && bpFuncB.referencePaths) {
-                var bpIdx = _findParamIndex(bpFuncPath.node.params, node.name);
-                if (bpIdx >= 0) {
-                  L.bpRefs = bpFuncB.referencePaths;
-                  L.bpArgIdx = bpIdx;
-                  L.bri = 0;
-                  L.params = [];
-                  F.state = _EBP_PARAM_LOOP;
-                  continue;
+          }
+          if (fdParams.length > 0) { pushAccum(fdParams); continue; }
+        }
+        if (_t.isVariableDeclarator(bnd.path.node) && bnd.path.node.init) {
+          stack.push({ node: bnd.path.node.init, scope: bnd.path });
+          continue;
+        }
+        if (bnd.kind === "param") {
+          var fnP = bnd.scope.path;
+          var fnB = null;
+          if (fnP.node.id) fnB = fnP.scope.parent ? fnP.scope.parent.getBinding(fnP.node.id.name) : null;
+          if (!fnB && _t.isVariableDeclarator(fnP.parent)) fnB = fnP.scope.parent ? fnP.scope.parent.getBinding(fnP.parent.id.name) : null;
+          if (fnB && fnB.referencePaths) {
+            var pIdx = _findParamIndex(fnP.node.params, node.name);
+            if (pIdx >= 0) {
+              // Push every caller arg path onto the worklist; the
+              // shared visited+accumulator semantics handle unions
+              // iteratively (no self-recursion).
+              for (var pri = 0; pri < fnB.referencePaths.length; pri++) {
+                var pRef = fnB.referencePaths[pri];
+                if (_t.isCallExpression(pRef.parent) && pRef.parent.callee === pRef.node &&
+                    pIdx < pRef.parent.arguments.length) {
+                  stack.push({ node: pRef.parent.arguments[pIdx], scope: pRef.parentPath });
                 }
               }
-            }
-          }
-        }
-        // CASE B: JSON.stringify
-        if (_isJsonStringify(node, scopePath)) {
-          if (node.arguments[0] && _t.isObjectExpression(node.arguments[0])) {
-            var jsonParams = _extractObjectProperties(node.arguments[0]);
-            for (var i = 0; i < jsonParams.length; i++) jsonParams[i].location = "body";
-            return { done: jsonParams };
-          }
-          if (node.arguments[0] && _t.isIdentifier(node.arguments[0]) && scopePath) {
-            return { trace: { node: node.arguments[0], scope: scopePath },
-                      state: _EBP_JSON_AFTER };
-          }
-          return { done: [] };
-        }
-        // CASE C: new URLSearchParams({...})
-        // AV-grounded callee identity via builtin-ctor "WHATWG.URLSearchParams".
-        var uspCalleeAv = _t.isNewExpression(node) ? _specPathValMemo.get(node.callee) : null;
-        if (_t.isNewExpression(node) &&
-            uspCalleeAv && uspCalleeAv.kind === "builtin-ctor" && uspCalleeAv.id === "WHATWG.URLSearchParams" &&
-            node.arguments[0] && _t.isObjectExpression(node.arguments[0])) {
-          var uspParams = _extractObjectProperties(node.arguments[0]);
-          for (var j = 0; j < uspParams.length; j++) uspParams[j].location = "body";
-          return { done: uspParams };
-        }
-        // CASE D: .toString() unwrap
-        if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) &&
-            !node.callee.computed && _t.isIdentifier(node.callee.property, { name: "toString" }) &&
-            scopePath) {
-          return { trace: { node: node.callee.object, scope: scopePath },
-                    state: _EBP_TOSTRING_AFTER };
-        }
-        // CASE E: ObjectExpression
-        if (_t.isObjectExpression(node)) {
-          var oeParams = _extractObjectProperties(node);
-          for (var k = 0; k < oeParams.length; k++) oeParams[k].location = "body";
-          return { done: oeParams };
-        }
-        // CASE F: opts.data MemberExpression
-        if (_t.isMemberExpression(node) && !node.computed &&
-            _t.isIdentifier(node.object) && _t.isIdentifier(node.property) &&
-            scopePath && scopePath.scope) {
-          var objName = node.object.name;
-          var propName = node.property.name;
-          var objBinding = scopePath.scope.getBinding(objName);
-          if (objBinding) {
-            var objCandidates = [];
-            if (_t.isVariableDeclarator(objBinding.path.node) && objBinding.path.node.init) {
-              var localObj = _resolveToObject(objBinding.path.get("init"), 0);
-              if (localObj) objCandidates.push({ obj: localObj, path: objBinding.path.get("init") });
-            } else if (objBinding.kind === "param") {
-              var pFnPath = objBinding.scope.path;
-              var pIdx = _findParamIndex(pFnPath.node.params, objName);
-              if (pIdx >= 0) {
-                var callerArgPaths = _findFunctionCallerArgs(pFnPath);
-                for (var pri = 0; pri < callerArgPaths.length; pri++) {
-                  if (pIdx < callerArgPaths[pri].length) {
-                    var argPath = callerArgPaths[pri][pIdx];
-                    var callerObj = _resolveToObject(argPath, 0);
-                    if (callerObj) objCandidates.push({ obj: callerObj, path: argPath });
-                  }
-                }
-              }
-            }
-            if (objCandidates.length > 0) {
-              L.objCandidates = objCandidates;
-              L.propName = propName;
-              L.fci = 0;
-              L.fpi = 0;
-              F.state = _EBP_OPTS_LOOP;
               continue;
             }
           }
         }
-        return { done: [] };
       }
-
-      case _EBP_ALIAS_AFTER:
-      case _EBP_JSON_AFTER:
-      case _EBP_TOSTRING_AFTER: {
-        // REPLACE — child's result becomes this frame's result.
-        return { done: F.result || [] };
-      }
-
-      case _EBP_PARAM_LOOP: {
-        while (L.bri < L.bpRefs.length) {
-          var bRef = L.bpRefs[L.bri++];
-          if (_t.isCallExpression(bRef.parent) && bRef.parent.callee === bRef.node &&
-              L.bpArgIdx < bRef.parent.arguments.length) {
-            return {
-              trace: { node: bRef.parent.arguments[L.bpArgIdx], scope: bRef.parentPath },
-              state: _EBP_PARAM_AFTER
-            };
+    }
+    // JSON.stringify(arg) — recurse into arg.
+    if (_isJsonStringify(node, scope)) {
+      if (node.arguments[0]) stack.push({ node: node.arguments[0], scope: scope });
+      continue;
+    }
+    // new URLSearchParams({...}) — recurse into args[0].
+    var uspCalleeAv = _t.isNewExpression(node) ? _specPathValMemo.get(node.callee) : null;
+    if (_t.isNewExpression(node) &&
+        uspCalleeAv && uspCalleeAv.kind === "builtin-ctor" && uspCalleeAv.id === "WHATWG.URLSearchParams" &&
+        node.arguments[0]) {
+      stack.push({ node: node.arguments[0], scope: scope });
+      continue;
+    }
+    // .toString() — recurse into receiver.
+    if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) &&
+        !node.callee.computed && _t.isIdentifier(node.callee.property, { name: "toString" }) &&
+        scope) {
+      stack.push({ node: node.callee.object, scope: scope });
+      continue;
+    }
+    // ObjectExpression literal — direct extraction.
+    if (_t.isObjectExpression(node)) {
+      var oeParams = _extractObjectProperties(node);
+      for (var oi = 0; oi < oeParams.length; oi++) oeParams[oi].location = "body";
+      if (oeParams.length > 0) pushAccum(oeParams);
+      continue;
+    }
+    // opts.data MemberExpression — read obj-lit AV from spec eval.
+    if (_t.isMemberExpression(node) && !node.computed &&
+        _t.isIdentifier(node.object) && _t.isIdentifier(node.property) &&
+        scope && scope.scope) {
+      var objName = node.object.name;
+      var propName = node.property.name;
+      var objBnd = scope.scope.getBinding(objName);
+      if (objBnd) {
+        var objCands = [];
+        if (_t.isVariableDeclarator(objBnd.path.node) && objBnd.path.node.init) {
+          var localObj = _resolveToObject(objBnd.path.get("init"), 0);
+          if (localObj) objCands.push({ obj: localObj, path: objBnd.path.get("init") });
+        } else if (objBnd.kind === "param") {
+          var pFnP = objBnd.scope.path;
+          var pIdx2 = _findParamIndex(pFnP.node.params, objName);
+          if (pIdx2 >= 0) {
+            var callerArgs = _findFunctionCallerArgs(pFnP);
+            for (var cai = 0; cai < callerArgs.length; cai++) {
+              if (pIdx2 < callerArgs[cai].length) {
+                var caP = callerArgs[cai][pIdx2];
+                var caObj = _resolveToObject(caP, 0);
+                if (caObj) objCands.push({ obj: caObj, path: caP });
+              }
+            }
           }
         }
-        return { done: L.params };
-      }
-
-      case _EBP_PARAM_AFTER: {
-        // Accumulate caller's result; loop to next caller.
-        var pSub = F.result || [];
-        for (var pci = 0; pci < pSub.length; pci++) L.params.push(pSub[pci]);
-        F.state = _EBP_PARAM_LOOP;
-        continue;
-      }
-
-      case _EBP_OPTS_LOOP: {
-        // Iterate candidates × matching properties; first non-empty wins.
-        while (L.fci < L.objCandidates.length) {
-          var cur = L.objCandidates[L.fci];
-          if (!cur.obj.properties) { L.fci++; L.fpi = 0; continue; }
-          while (L.fpi < cur.obj.properties.length) {
-            var pp = cur.obj.properties[L.fpi];
-            var ppi = L.fpi;
-            L.fpi++;
+        for (var ci = 0; ci < objCands.length; ci++) {
+          var cur = objCands[ci];
+          if (!cur.obj.properties) continue;
+          for (var ppi = 0; ppi < cur.obj.properties.length; ppi++) {
+            var pp = cur.obj.properties[ppi];
             if (!_t.isObjectProperty(pp) || pp.computed) continue;
             var pk = _t.isIdentifier(pp.key) ? pp.key.name :
               (_t.isStringLiteral(pp.key) ? pp.key.value : null);
-            if (pk !== L.propName) continue;
+            if (pk !== propName) continue;
             var subScope = cur.obj._path ? cur.obj._path.get("properties." + ppi + ".value") : cur.path;
-            return { trace: { node: pp.value, scope: subScope },
-                      state: _EBP_OPTS_AFTER };
+            stack.push({ node: pp.value, scope: subScope });
+            break;
           }
-          L.fci++;
-          L.fpi = 0;
         }
-        return { done: [] };
-      }
-
-      case _EBP_OPTS_AFTER: {
-        var oSub = F.result || [];
-        if (oSub.length > 0) return { done: oSub };
-        F.state = _EBP_OPTS_LOOP;
         continue;
       }
     }
-    return { done: [] };
+    // Default: project obj-lit AV's source node when available.
+    var av = _specPathValMemo.get(node);
+    var ol = _avResolveToObjLit(av);
+    if (ol && ol.node) {
+      var avParams = _extractObjectProperties(ol.node);
+      for (var ai = 0; ai < avParams.length; ai++) avParams[ai].location = "body";
+      if (avParams.length > 0) pushAccum(avParams);
+    }
   }
+  return accumulator;
 }
+
 
 function _extractObjectProperties(node, objExprPath) {
   if (!node || !_t.isObjectExpression(node)) return [];
