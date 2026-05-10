@@ -8103,26 +8103,16 @@ var _specProgramGlobalsPrepassDone = new WeakSet();
 // projector need to recover paths. Populated lazily by the prepass below
 // for every function reachable from a Program. O(1) lookup post-prepass.
 var _specFuncPathByNode = new WeakMap();
-// Recover the Babel path for a function node. Returns null when the node
-// hasn't been indexed yet (e.g. the prepass hasn't run for the enclosing
-// program). Callers that need the path before prepass can pass `ctxPath`
-// to drive a one-shot guided traverse from the program root.
+// Recover the Babel path for a function node. Triggers the program-globals
+// prepass via ctxPath (idempotent) which populates _specFuncPathByNode for
+// every function in the program. After the prepass, lookup is O(1).
+// Returns null when funcNode isn't part of the same program as ctxPath
+// (genuinely impossible — the funcNode came from spec eval which only
+// processes nodes in the analysed program).
 function _specPathOfFunc(funcNode, ctxPath) {
   if (!funcNode) return null;
-  var cached = _specFuncPathByNode.get(funcNode);
-  if (cached) return cached;
-  if (!ctxPath || !ctxPath.node) return null;
-  var rootP = ctxPath;
-  while (rootP.parentPath) rootP = rootP.parentPath;
-  if (!rootP || !rootP.node) return null;
-  var found = null;
-  rootP.traverse({
-    "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
-      if (p.node === funcNode) { found = p; p.stop(); }
-    }
-  });
-  if (found) _specFuncPathByNode.set(funcNode, found);
-  return found;
+  if (ctxPath) _specEnsureProgramGlobalsPrepass(ctxPath);
+  return _specFuncPathByNode.get(funcNode) || null;
 }
 // Spec-eval-direct AV for a Babel path. Always runs the program-globals
 // prepass first (idempotent — populates _specFuncPathByNode for AV→path
@@ -19158,9 +19148,33 @@ function _traceValueSource(path, _unused) {
 // inter-procedural param->caller-arg, inter-procedural call->return-AV.
 // taint-source reachable -> user-controlled with full taintPath built
 // from BFS parent chain. All-const-leaves -> literal. Otherwise dynamic.
+//
+// Per-AV classification memo (_avTaintClassMemo) short-circuits repeat
+// classification of the same AV across many call sites. The classification
+// (sourceType + source + dimensions) is invariant per AV; only taintPath
+// positions vary by rootNode and are rebuilt per call.
+var _avTaintClassMemo = new WeakMap();
 function _avProjectToTaintDescriptor(rootAv, rootPath) {
   if (!rootAv) return { sourceType: "dynamic", source: null };
   var rootNode = rootPath && rootPath.node ? rootPath.node : null;
+  var rootLoc = rootNode && rootNode.loc ? rootNode.loc : null;
+  // Classification fast path: memo lookup.
+  var cached = _avTaintClassMemo.get(rootAv);
+  if (cached) {
+    if (cached.sourceType === "user-controlled" && cached.taintAv) {
+      // Rebuild taintPath fresh per call (positions depend on rootNode).
+      var fpParents = cached.parentsBuilder ? cached.parentsBuilder(rootPath) : null;
+      var freshPath = fpParents ? _avBuildTaintPath(rootAv, cached.taintAv, fpParents, rootLoc) : null;
+      return {
+        sourceType: "user-controlled",
+        source: cached.taintAv.id,
+        sourceLoc: rootLoc,
+        taintPath: freshPath || [],
+        dimensions: cached.taintAv.dims ? _tvsDims(cached.taintAv.dims) : _tvsDimsContent()
+      };
+    }
+    return { sourceType: cached.sourceType, source: cached.source };
+  }
   var taintAv = null;
   var parents = new Map();
   var visited = new Set([rootAv]);
@@ -19179,17 +19193,27 @@ function _avProjectToTaintDescriptor(rootAv, rootPath) {
     }
   }
   if (taintAv) {
-    var rootLoc = rootNode && rootNode.loc ? rootNode.loc : null;
     var taintPath = _avBuildTaintPath(rootAv, taintAv, parents, rootLoc);
+    var dims = taintAv.dims ? _tvsDims(taintAv.dims) : _tvsDimsContent();
+    // Memo: cache the taintAv reference and a parents-builder closure
+    // that rebuilds the parent map for fresh taintPath construction.
+    // The parents map references rootPath via transitions[].atNode which
+    // are AST nodes (cross-call stable), so reusing the SAME parents
+    // map gives the same hop kinds + locs regardless of caller.
+    _avTaintClassMemo.set(rootAv, {
+      sourceType: "user-controlled", source: taintAv.id, dimensions: dims,
+      taintAv: taintAv, parentsBuilder: function() { return parents; }
+    });
     return {
-      sourceType: "user-controlled",
-      source: taintAv.id,
-      sourceLoc: rootLoc,
-      taintPath: taintPath,
-      dimensions: taintAv.dims ? _tvsDims(taintAv.dims) : _tvsDimsContent()
+      sourceType: "user-controlled", source: taintAv.id, sourceLoc: rootLoc,
+      taintPath: taintPath, dimensions: dims
     };
   }
-  if (_avAllConst(rootAv)) return { sourceType: "literal", source: null };
+  if (_avAllConst(rootAv)) {
+    _avTaintClassMemo.set(rootAv, { sourceType: "literal", source: null });
+    return { sourceType: "literal", source: null };
+  }
+  _avTaintClassMemo.set(rootAv, { sourceType: "dynamic", source: null });
   return { sourceType: "dynamic", source: null };
 }
 // Enumerate AV transitions for taint reachability. Each transition is
