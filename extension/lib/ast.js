@@ -22777,12 +22777,22 @@ function _tvsStep(F) {
 
         // ── Branch 16: Call expression ─────────────────────────────────
         if (skip < 16 && (_t.isCallExpression(node) || _t.isOptionalCallExpression(node))) {
-          // localStorage.getItem / sessionStorage.getItem
+          // localStorage.getItem / sessionStorage.getItem. The two are
+          // distinct names in the global registry but bind to the SAME
+          // storageAv obj-lit (per WHATWG HTML § 11 the Storage IDL is
+          // shared); to discriminate at source-naming time we keep the
+          // receiver identifier name. AV-grounded guard verifies the
+          // receiver actually IS the global Storage (not a custom obj
+          // with a getItem method).
           if (_t.isMemberExpression(node.callee) && !node.callee.computed &&
-              _t.isIdentifier(node.callee.property, { name: "getItem" })) {
+              _t.isIdentifier(node.callee.property, { name: "getItem" }) &&
+              _t.isIdentifier(node.callee.object)) {
             var _storObj = node.callee.object;
-            if ((_t.isIdentifier(_storObj, { name: "localStorage" }) && !path.scope.getBinding("localStorage")) ||
-                (_t.isIdentifier(_storObj, { name: "sessionStorage" }) && !path.scope.getBinding("sessionStorage"))) {
+            var _storObjAv = _specPathValMemo.get(_storObj);
+            var _gThisStor = _specGlobalThisAv();
+            if (_gThisStor && _gThisStor.props &&
+                (_storObjAv === _gThisStor.props.localStorage ||
+                 _storObjAv === _gThisStor.props.sessionStorage)) {
               return { done: _tvsSource(_storObj.name + ".getItem", nodeLoc, _dimsForSource(_storObj.name + ".getItem")) };
             }
           }
