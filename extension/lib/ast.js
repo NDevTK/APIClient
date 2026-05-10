@@ -14787,96 +14787,48 @@ function _rcrvMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, de
 }
 
 function _rcrvStep(F) {
-  var path = F.path, depth = F.depth, L = F.L;
-  while (true) {
-    switch (F.state) {
-      case _RCRV_INIT: {
-        var funcPath = _resolveCalleeFuncPath(path, depth);
-        if (!funcPath) {
-          var callee = path.node.callee;
-          if (_t.isFunctionExpression(callee) || _t.isArrowFunctionExpression(callee)) {
-            funcPath = path.get("callee");
-          } else if (_t.isSequenceExpression(callee) && callee.expressions.length > 0) {
-            var lastIdx = callee.expressions.length - 1;
-            var last = callee.expressions[lastIdx];
-            if (_t.isFunctionExpression(last) || _t.isArrowFunctionExpression(last)) {
-              funcPath = path.get("callee.expressions." + lastIdx);
-            } else if (_t.isIdentifier(last)) {
-              var seqBinding = path.scope.getBinding(last.name);
-              if (seqBinding) {
-                if (_t.isFunctionDeclaration(seqBinding.path.node)) funcPath = seqBinding.path;
-                else if (_t.isVariableDeclarator(seqBinding.path.node) && seqBinding.path.node.init &&
-                    (_t.isFunctionExpression(seqBinding.path.node.init) || _t.isArrowFunctionExpression(seqBinding.path.node.init))) {
-                  funcPath = seqBinding.path.get("init");
-                }
-              }
-            }
-          }
-        }
-        if (!funcPath) return { done: [] };
-
-        // Arrow function with expression body — single sub-trace via _ravStep.
-        if (_t.isArrowFunctionExpression(funcPath.node) && !_t.isBlockStatement(funcPath.node.body)) {
-          return {
-            trace: funcPath.get("body"),
-            state: _RCRV_ARROW_AFTER,
-            stepFn: _ravStep,
-            makeFrame: _ravMakeFrame,
-            shortCircuit: _ravShortCircuit,
-            guardPrefix: "V",
-            defaultResult: [],
-          };
-        }
-
-        // Block body — pre-collect ReturnStatement arg paths via traverse,
-        // then iterate via state-machine sub-traces.
-        var retPaths = [];
-        try {
-          funcPath.traverse(Object.assign({
-            ReturnStatement: function(retPath) {
-              if (retPath.node.argument) retPaths.push(retPath.get("argument"));
-            },
-          }, _SKIP_NESTED_FUNCS));
-        } catch (e) { _resolver.collectError(e, "rcrvCollect"); }
-        if (retPaths.length === 0) return { done: [] };
-        L.retPaths = retPaths;
-        L.values = [];
-        L.ri = 0;
-        return {
-          trace: retPaths[0],
-          state: _RCRV_LOOP,
-          stepFn: _ravStep,
-          makeFrame: _ravMakeFrame,
-          shortCircuit: _ravShortCircuit,
-          guardPrefix: "V",
-          defaultResult: [],
-        };
-      }
-
-      case _RCRV_ARROW_AFTER: {
-        return { done: F.result || [] };
-      }
-
-      case _RCRV_LOOP: {
-        L.values = L.values.concat(F.result || []);
-        L.ri++;
-        if (L.ri < L.retPaths.length) {
-          return {
-            trace: L.retPaths[L.ri],
-            state: _RCRV_LOOP,
-            stepFn: _ravStep,
-            makeFrame: _ravMakeFrame,
-            shortCircuit: _ravShortCircuit,
-            guardPrefix: "V",
-            defaultResult: [],
-          };
-        }
-        return { done: L.values };
-      }
-
-      default: return { done: [] };
-    }
+  // Single-AV-engine: thin spec-eval projection. F.path is the
+  // CallExpression. Per ECMA § 13.3.6 EvaluateCall: the call returns the
+  // value of the [[Call]] internal method, which spec eval models per
+  // function as the joined AV stored in _specReturnValueMemo. Resolve
+  // the callee to a function node, look up its return AV, and flatten
+  // to string leaves via _avFlattenStringLeaves.
+  if (!F || !F.path || !F.path.node) return { done: [] };
+  var encFn = F.path.getFunctionParent && F.path.getFunctionParent();
+  if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
+  else _specEnsureProgramGlobalsPrepass(F.path);
+  // The CallExpression's own AV is the return value (spec eval
+  // computes call results into _specPathValMemo for the call node).
+  var callAv = _specPathValMemo.get(F.path.node);
+  if (callAv) {
+    var pageOriginLeaves = _resolvePageOriginAv(callAv);
+    if (pageOriginLeaves) return { done: pageOriginLeaves };
+    var leaves = _avFlattenStringLeaves(callAv);
+    if (leaves.length > 0) return { done: leaves };
   }
+  // Fallback: walk to the callee, project to function-ref, look up
+  // _specReturnValueMemo for the funcNode. Covers cases where the call
+  // node's AV wasn't directly memoised (e.g. cross-function dispatch
+  // where only the callee path was visited).
+  var calleePath = F.path.get("callee");
+  var calleeAv = _specPathValMemo.get(calleePath.node);
+  if (calleeAv) {
+    var stack = [calleeAv]; var seen = new Set(); var out = [];
+    while (stack.length > 0) {
+      var n = stack.pop(); if (!n || seen.has(n)) continue; seen.add(n);
+      if (n.kind === "function-ref" && n.funcNode && _specReturnValueMemo.has(n.funcNode)) {
+        var retAv = _specReturnValueMemo.get(n.funcNode);
+        var po = _resolvePageOriginAv(retAv);
+        if (po) { for (var i = 0; i < po.length; i++) out.push(po[i]); continue; }
+        var leaves2 = _avFlattenStringLeaves(retAv);
+        for (var j = 0; j < leaves2.length; j++) out.push(leaves2[j]);
+      } else if (n.kind === "or" && n.alternatives) {
+        for (var k = 0; k < n.alternatives.length; k++) stack.push(n.alternatives[k]);
+      }
+    }
+    if (out.length > 0) return { done: out };
+  }
+  return { done: [] };
 }
 
 function _resolveCallReturnValues(callPath, depth) {
