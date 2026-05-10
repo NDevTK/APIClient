@@ -23097,43 +23097,10 @@ function _buildCFG(bodyPath) {
 // Find which block contains a statement at a given line. When several blocks
 // contain the line (e.g. `if (x) assign();` puts both the IfStatement and
 // the inner ExpressionStatement on the same source line but in different
-// CFG blocks), prefer the block with the TIGHTEST line range — that's the
-// innermost statement and the one that actually contains the sink. Ties
-// broken by preferring non-compound statements (leaf > container), since
-// a leaf statement is what physically executes at the sink.
-function _findBlockForLine(cfg, line) {
-  if (!cfg) return -1;
-  var best = -1;
-  var bestSpan = Infinity;
-  var bestIsLeaf = false;
-  var keys = Object.keys(cfg.blocks);
-  for (var i = 0; i < keys.length; i++) {
-    var blk = cfg.blocks[keys[i]];
-    for (var j = 0; j < blk.stmts.length; j++) {
-      var s = blk.stmts[j];
-      var sNode = s && s.node ? s.node : s;
-      if (!sNode || !sNode.loc) continue;
-      if (!(sNode.loc.start.line <= line && sNode.loc.end.line >= line)) continue;
-      var span = sNode.loc.end.line - sNode.loc.start.line;
-      var isLeaf = !_t.isIfStatement(sNode) && !_t.isForStatement(sNode) &&
-                   !_t.isForInStatement(sNode) && !_t.isForOfStatement(sNode) &&
-                   !_t.isWhileStatement(sNode) && !_t.isDoWhileStatement(sNode) &&
-                   !_t.isTryStatement(sNode) && !_t.isSwitchStatement(sNode) &&
-                   !_t.isBlockStatement(sNode);
-      if (span < bestSpan || (span === bestSpan && isLeaf && !bestIsLeaf)) {
-        best = blk.id;
-        bestSpan = span;
-        bestIsLeaf = isLeaf;
-      }
-    }
-  }
-  return best;
-}
-
 // Path-based CFG block lookup. Walks up from sinkPath to its enclosing
 // statement path, then searches the CFG's blocks for one whose stmts
 // includes that path (by AST node identity). Reliable for minified
-// single-line bundles where _findBlockForLine can't disambiguate
+// single-line bundles where line-based lookup can't disambiguate
 // because every statement shares the same line. Returns -1 if not
 // found. Iterative — JS call stack stays at depth 1.
 function _findBlockForPath(cfg, sinkPath) {
@@ -23272,10 +23239,20 @@ function _classifySanitizerCall(node, path) {
 // on the finding so an auditor can see the classifier's work without
 // reading the minified source.
 function _buildSanitizerReport(sinkPath) {
+  // Per ECMA § 16.1 Scripts the program body has the same statement
+  // sequence shape as a function block; the sanitizer report works on
+  // either context. Match _checkSanitization's bodyPath resolution so
+  // module-top sinks aren't reported as "no-function-scope".
   var funcPath = sinkPath.getFunctionParent();
-  if (!funcPath) return { decision: "no-function-scope", candidates: [] };
-  if (!_t.isBlockStatement(funcPath.node.body)) return { decision: "no-block-body", candidates: [] };
-  var bodyPath = funcPath.get("body");
+  var bodyPath = null;
+  if (funcPath) {
+    if (!_t.isBlockStatement(funcPath.node.body)) return { decision: "no-block-body", candidates: [] };
+    bodyPath = funcPath.get("body");
+  } else {
+    var pp = sinkPath; while (pp && pp.parentPath && !_t.isProgram(pp.node)) pp = pp.parentPath;
+    if (pp && pp.node && _t.isProgram(pp.node)) bodyPath = pp;
+    else return { decision: "no-function-scope", candidates: [] };
+  }
   var candidates = [];
   try {
     bodyPath.traverse({
@@ -23288,6 +23265,7 @@ function _buildSanitizerReport(sinkPath) {
           matched: c.matched,
           matchReason: c.matchReason,
           onPath: null,
+          _path: p,  // retained for _findBlockForPath; stripped from output below.
         });
       },
     });
@@ -23295,18 +23273,17 @@ function _buildSanitizerReport(sinkPath) {
   if (candidates.length === 0) return { decision: "no-candidates", candidates: [] };
 
   // Compute on-path: is this candidate's block visited by every path
-  // from entry to the sink's block? A sanitizer that only fires in one
-  // branch (if/else) doesn't sanitize the sink — it must dominate.
+  // from entry to the sink's block? Path-based block lookup via AST
+  // node identity — reliable on minified single-line bundles.
   var cfg = _buildCFG(bodyPath);
   var anyMatchedOnPath = false;
   if (cfg) {
-    var sinkLine = sinkPath.node.loc ? sinkPath.node.loc.start.line : -1;
-    var sinkBlockId = sinkLine !== -1 ? _findBlockForLine(cfg, sinkLine) : -1;
+    var sinkBlockId = _findBlockForPath(cfg, sinkPath);
     if (sinkBlockId !== -1) {
       for (var i = 0; i < candidates.length; i++) {
         var c = candidates[i];
-        if (!c.matched || !c.loc) { c.onPath = false; continue; }
-        var candBlockId = _findBlockForLine(cfg, c.loc.line);
+        if (!c.matched || !c._path) { c.onPath = false; continue; }
+        var candBlockId = _findBlockForPath(cfg, c._path);
         if (candBlockId === -1) { c.onPath = false; continue; }
         var singleton = {}; singleton[candBlockId] = true;
         c.onPath = _hasSanitizerOnAllPaths(cfg, sinkBlockId, singleton);
@@ -23314,6 +23291,9 @@ function _buildSanitizerReport(sinkPath) {
       }
     }
   }
+  // Strip retained internal _path before returning — the report is
+  // surfaced to reviewers, internal fields shouldn't leak.
+  for (var ci = 0; ci < candidates.length; ci++) delete candidates[ci]._path;
   return {
     decision: anyMatchedOnPath ? "fires-on-all-paths" : "missing-on-some-paths",
     candidates: candidates,
