@@ -19104,7 +19104,97 @@ function _dimsForSource(srcName) {
 // then either resolve, request another sub-trace, or fall through via the
 // internal-goto pattern. State IDs are grouped by AST node type for
 // readability — gaps are intentional and reserved for future sub-states.
+var _TVS_INIT = 0;
+// Non-recursive early-return checks all live within INIT.
+// Object property access (MemberExpression with Identifier object).
+var _TVS_OBJ_EXPR_PROP_AFTER = 100;
+var _TVS_OBJ_ASSIGN_OUTER = 110;       // outer arg loop (idx _oaPI)
+var _TVS_OBJ_ASSIGN_SRC_AFTER = 112;
+var _TVS_OBJ_ASSIGN_INL_AFTER = 114;
+// Non-computed MemberExpression chain leaf trace.
+var _TVS_NCMC_AFTER_LEAF = 200;
+// Computed MemberExpression chain leaf trace.
+var _TVS_CMC_AFTER_LEAF = 300;
+// Identifier branches.
+var _TVS_IDENT_AFTER_INIT = 400;
+var _TVS_IDENT_CV_LOOP = 401;
+var _TVS_IDENT_CV_AFTER = 402;
+var _TVS_IDENT_UCV_LOOP = 410;
+var _TVS_IDENT_UCV_AFTER = 411;
+var _TVS_IDENT_FOR_ITER_AFTER = 420;
+var _TVS_IDENT_DESTR_OBJ_AFTER = 421;
+var _TVS_IDENT_DESTR_OBJ_FOR_AFTER = 422;
+var _TVS_IDENT_DESTR_ARR_AFTER = 423;
+var _TVS_IDENT_DESTR_ARR_FOR_AFTER = 424;
+var _TVS_IDENT_PARAM_IIFE_AFTER = 425;
+var _TVS_IDENT_PARAM_CALLERS_LOOP = 430;
+var _TVS_IDENT_PARAM_CALLERS_AFTER = 431;
+var _TVS_IDENT_PARAM_ITER_REF_LOOP = 440;
+var _TVS_IDENT_PARAM_ITER_REF_LOOP_INNER = 441;
+var _TVS_IDENT_PARAM_ITER_AFTER = 442;
+var _TVS_IDENT_PARAM_ITER_REF_AFTER = 443;
+var _TVS_IDENT_PARAM_REDUCE_AFTER = 444;
+// Fall-through dispatcher used by UCV_LOOP exhaust → for-iter / destructure /
+// param checks (matches original generator's "if (X) … if (Y) …" sequence).
+var _TVS_IDENT_TRY_OTHER = 445;
+// After all param recursive paths fail — runs msg-handler check (no recursion).
+var _TVS_IDENT_PARAM_TRY_MSG = 446;
+// Template literal expressions loop.
+var _TVS_TL_AFTER = 501;
+// Tagged template expressions loop.
+var _TVS_TT_AFTER = 511;
+// Binary expression iterative chain-walk.
+var _TVS_BIN_AFTER_LEAF = 600;
+var _TVS_BIN_RIGHTS_AFTER = 602;
+// Conditional expression.
+var _TVS_COND_AFTER_CONS = 700;
+var _TVS_COND_AFTER_ALT = 701;
+// Logical expression iterative chain-walk.
+var _TVS_LOG_AFTER_LEAF = 800;
+var _TVS_LOG_RIGHTS_AFTER = 802;
+// Single-trace branches (sequence, await, spread, assignment-rhs).
+var _TVS_SEQ_AFTER = 900;
+var _TVS_AWAIT_AFTER = 901;
+var _TVS_SPREAD_AFTER = 902;
+var _TVS_ASSIGN_RHS_AFTER = 903;
+// Call expression branches.
+var _TVS_CALL_METHOD_AFTER_OBJ = 1000;
+var _TVS_CALL_OA_LOOP = 1010;
+var _TVS_CALL_OA_AFTER = 1011;
+var _TVS_CALL_GETHAS_AFTER = 1020;
+var _TVS_CALL_GENERIC_AFTER = 1021;
+var _TVS_CALL_GENERIC_AFTER_DISPATCH = 1030;
+var _TVS_CALL_GENERIC_AFTER_DISPATCH_FN_RETURN = 1031;
+// new URL(input, base?).
+var _TVS_NEW_URL_AFTER_INPUT = 1100;
+var _TVS_NEW_URL_AFTER_BASE = 1101;
+var _TVS_NEW_URL_RESOLVE = 1102;
+// NewExpression args loop.
+var _TVS_NEW_AFTER = 1201;
+// ArrayExpression elements loop.
+var _TVS_ARR_AFTER = 1301;
+// ObjectExpression properties loop.
+var _TVS_OBJ_LOOP = 1400;
+var _TVS_OBJ_PROP_AFTER = 1401;
+var _TVS_OBJ_SPREAD_AFTER = 1402;
 
+// Function-return resolution: walk a callee's body for ReturnStatement
+// nodes, then dispatch each return-arg as a TVS sub-frame. Replaces the
+// prior synchronous call to _traceReturnsInBlock from inside _tvsStep,
+// which created a static call cycle TVS ↔ _traceReturnsInBlock.
+var _TVS_FN_RETURN_LOOP = 1500;
+var _TVS_FN_RETURN_AFTER = 1501;
+
+function _tvsMakeFrame(path, node) {
+  return {
+    path: path,
+    node: node,
+    nodeLoc: node && node.loc ? { line: node.loc.start.line, column: node.loc.start.column } : null,
+    state: _TVS_INIT,
+    L: {},        // saved locals between sub-traces
+    result: undefined,
+  };
+}
 
 // Explicit-frame state-machine driver. Each frame is a plain object whose
 // `state` field selects which step-handler runs next. Recursive descent in
@@ -19355,6 +19445,70 @@ function _traceValueSource(path, _unused) {
 // path enumeration. Used by _tvsStep's function-return resolution
 // state in lieu of a synchronous _traceReturnsInBlock call (which
 // would create a static call cycle TVS ↔ _traceReturnsInBlock).
+function _collectReturnArgPaths(blockPath) {
+  if (!blockPath || !blockPath.node) return [];
+  var argPaths = [];
+  var worklist = [blockPath];
+  while (worklist.length > 0) {
+    var curBlock = worklist.shift();
+    if (!curBlock || !curBlock.node) continue;
+    var stmts = curBlock.node.body;
+    if (!stmts) continue;
+    for (var i = 0; i < stmts.length; i++) {
+      var stmt = stmts[i];
+      var stmtPath = curBlock.get("body." + i);
+      if (_t.isReturnStatement(stmt) && stmt.argument) {
+        argPaths.push(stmtPath.get("argument"));
+      } else if (_t.isIfStatement(stmt)) {
+        if (stmt.consequent && _t.isBlockStatement(stmt.consequent)) {
+          worklist.push(stmtPath.get("consequent"));
+        }
+        if (stmt.alternate) {
+          if (_t.isBlockStatement(stmt.alternate)) {
+            worklist.push(stmtPath.get("alternate"));
+          } else if (_t.isIfStatement(stmt.alternate)) {
+            var elseIfPath = stmtPath.get("alternate");
+            while (elseIfPath && elseIfPath.node && _t.isIfStatement(elseIfPath.node)) {
+              if (elseIfPath.node.consequent && _t.isBlockStatement(elseIfPath.node.consequent)) {
+                worklist.push(elseIfPath.get("consequent"));
+              }
+              if (!elseIfPath.node.alternate) break;
+              if (_t.isBlockStatement(elseIfPath.node.alternate)) {
+                worklist.push(elseIfPath.get("alternate"));
+                break;
+              }
+              if (_t.isIfStatement(elseIfPath.node.alternate)) {
+                elseIfPath = elseIfPath.get("alternate");
+                continue;
+              }
+              break;
+            }
+          }
+        }
+      } else if (_t.isSwitchStatement(stmt)) {
+        for (var ci = 0; ci < stmt.cases.length; ci++) {
+          var c = stmt.cases[ci];
+          for (var cj = 0; cj < c.consequent.length; cj++) {
+            var cs = c.consequent[cj];
+            if (_t.isReturnStatement(cs) && cs.argument) {
+              argPaths.push(stmtPath.get("cases." + ci + ".consequent." + cj + ".argument"));
+            } else if (_t.isBlockStatement(cs)) {
+              worklist.push(stmtPath.get("cases." + ci + ".consequent." + cj));
+            }
+          }
+        }
+      } else if (_t.isTryStatement(stmt)) {
+        if (stmt.block) worklist.push(stmtPath.get("block"));
+        if (stmt.handler && stmt.handler.body) worklist.push(stmtPath.get("handler.body"));
+      } else if (_t.isBlockStatement(stmt)) {
+        worklist.push(stmtPath);
+      } else if (stmt.body && _t.isBlockStatement(stmt.body)) {
+        worklist.push(stmtPath.get("body"));
+      }
+    }
+  }
+  return argPaths;
+}
 
 // Recursively walk a block statement to find all ReturnStatement nodes,
 // including those inside if/else, switch/case, try/catch, for/while, etc.
@@ -19474,6 +19628,1710 @@ function _traceReturnsInIfChain(ifPath) {
 // state transitions; the JS call stack stays at depth 1 regardless of
 // AST depth, and frame state (F.L, F.state, F.result) is fully visible
 // for future optimizations.
+function _tvsStep(F) {
+  var path = F.path, node = F.node, nodeLoc = F.nodeLoc, L = F.L;
+  var DYN = { sourceType: "dynamic", source: null };
+  var LIT = { sourceType: "literal", source: null };
+
+  while (true) {
+    switch (F.state) {
+      case _TVS_INIT: {
+        var skip = L.branchSkip || 0;
+
+        // ── Spec-eval-first: any node whose AV is a taint-source returns
+        // its source classification directly — no AST shape walk needed.
+        // Per the single-AV-engine design, taint sources are first-class
+        // AV kind installed by spec eval through globalThis registry +
+        // member/identifier projection. Aliased forms (`var l = location;
+        // l.href`) project through the same locationAv reference and reach
+        // here as taint-source AVs.
+        if (skip < 1) {
+          _specEnsureProgramGlobalsPrepass(path);
+          var topAv = _specPathValMemo.get(node);
+          if (topAv && topAv.kind === "taint-source") {
+            // All-dims-false → no attacker reach (e.g. location.origin
+            // alone, no transform); classify as literal-equivalent.
+            if (topAv.dims && !topAv.dims.origin && !topAv.dims.path &&
+                !topAv.dims.query && !topAv.dims.hash && !topAv.dims.content) {
+              return { done: LIT };
+            }
+            return { done: _tvsSource(topAv.id, nodeLoc, topAv.dims || _dimsForSource(topAv.id)) };
+          }
+          if (topAv && topAv.kind === "const") {
+            // Spec eval fully resolved to a const value — no taint
+            // (constants can't be attacker-influenced statically).
+            return { done: LIT };
+          }
+        }
+
+        // ── Branch 1: Literals ────────────────────────────────────────
+        if (skip < 1 && (_t.isStringLiteral(node) || _t.isNumericLiteral(node) ||
+            _t.isBooleanLiteral(node) || _t.isNullLiteral(node) ||
+            (_t.isTemplateLiteral(node) && node.expressions.length === 0))) {
+          return { done: LIT };
+        }
+
+        // ── Branch 2: MemberExpression — known taint sources ───────────
+        if (skip < 2 && (_t.isMemberExpression(node) || _t.isOptionalMemberExpression(node)) && !node.computed) {
+          // Spec-eval-driven taint source detection per WHATWG HTML
+          // § 7.2 / § 7.7 / WHATWG DOM § 4.5: when spec eval has
+          // projected this MemberExpression to a taint-source AV
+          // (e.g. window.location.href → location.href taint-source),
+          // use that directly without AST shape matching. Trigger
+          // property-flow analysis on the enclosing function first so
+          // sub-traces (where the top-level _traceValueSource already
+          // ran for a different path) still see the memo.
+          if (path.getFunctionParent) {
+            var subEncFn = path.getFunctionParent();
+            if (subEncFn && subEncFn.node && _t.isFunction(subEncFn.node)) {
+              try { _specAnalyzePropertyFlow(subEncFn); } catch (_subspf) {}
+            }
+          }
+          var subAv = _specPathValMemo.get(node);
+          if (subAv && subAv.kind === "taint-source") {
+            return { done: _tvsSource(subAv.id, nodeLoc, subAv.dims || _dimsForSource(subAv.id)) };
+          }
+          // Safe location properties (origin/hostname/host/protocol/port/
+          // ancestorOrigins) — the attacker cannot influence their content
+          // per WHATWG URL § 4.4. AV-grounded: spec eval projects these
+          // through the locationAv as taint-source AVs whose dims are all
+          // false (origin/path/query/hash/content all false → unactionable
+          // per the dimensional taint model). Same identification path for
+          // bare `location.X` and `window.location.X` / `self.location.X` /
+          // aliased variants — all project to the same locationAv prop.
+          if (subAv && subAv.kind === "taint-source" && subAv.dims &&
+              !subAv.dims.origin && !subAv.dims.path && !subAv.dims.query &&
+              !subAv.dims.hash && !subAv.dims.content) {
+            return { done: LIT };
+          }
+        }
+
+        // ── Branch 3: Computed location access (location[X]) ─────────
+        // AV-grounded receiver identity via _isLocationObject (canonical
+        // location AV); covers bare/window-prefixed/aliased forms.
+        if (skip < 3 && _t.isMemberExpression(node) && node.computed &&
+            _isLocationObject(node.object, path)) {
+          return { done: DYN };
+        }
+
+        // ── Branch 4: Object property access (cfg.redirectUrl) ─────────
+        if (skip < 4 && _t.isMemberExpression(node) && !node.computed && _t.isIdentifier(node.object)) {
+          var objPropName = _t.isIdentifier(node.property) ? node.property.name : null;
+          if (objPropName) {
+            var objBinding = path.scope.getBinding(node.object.name);
+            if (objBinding && objBinding.path.isVariableDeclarator() && objBinding.path.node.init) {
+              var _objInit = objBinding.path.node.init;
+              if (_t.isObjectExpression(_objInit)) {
+                for (var oi = 0; oi < _objInit.properties.length; oi++) {
+                  var op = _objInit.properties[oi];
+                  if (_t.isObjectProperty(op) &&
+                      ((_t.isIdentifier(op.key) && op.key.name === objPropName) ||
+                       (_t.isStringLiteral(op.key) && op.key.value === objPropName))) {
+                    L.objBinding = objBinding;
+                    L.objPropName = objPropName;
+                    L.objProps = _objInit.properties;
+                    L.oi = oi;
+                    L.branchSkip = 4;
+                    return {
+                      trace: objBinding.path.get("init.properties." + oi + ".value"),
+                      state: _TVS_OBJ_EXPR_PROP_AFTER,
+                    };
+                  }
+                }
+              }
+              var _objInitCalleeAv = _t.isCallExpression(_objInit) ? _specPathValMemo.get(_objInit.callee) : null;
+              if (_objInitCalleeAv && _objInitCalleeAv.kind === "builtin-method" &&
+                  _objInitCalleeAv.id === "Object.assign" && _objInit.arguments.length >= 2) {
+                L.objBinding = objBinding;
+                L.objPropName = objPropName;
+                L.objInit = _objInit;
+                L.oaPI = 1;
+                L.branchSkip = 4;
+                F.state = _TVS_OBJ_ASSIGN_OUTER;
+                continue;
+              }
+            }
+          }
+        }
+
+        // ── Branch 5: Non-computed MemberExpression chain ─────────────
+        if (skip < 5 && (_t.isMemberExpression(node) || _t.isOptionalMemberExpression(node)) && !node.computed) {
+          var _chainProps = [];
+          var _chainPath = path;
+          var _chainNode = node;
+          while ((_t.isMemberExpression(_chainNode) || _t.isOptionalMemberExpression(_chainNode)) &&
+                 !_chainNode.computed) {
+            _chainProps.push({
+              name: _t.isIdentifier(_chainNode.property) ? _chainNode.property.name : "?",
+              loc: _chainNode.loc ? { line: _chainNode.loc.start.line, column: _chainNode.loc.start.column } : null,
+            });
+            _chainPath = _chainPath.get("object");
+            _chainNode = _chainPath.node;
+          }
+          L.chainProps = _chainProps;
+          L.branchSkip = 5;
+          return { trace: _chainPath, state: _TVS_NCMC_AFTER_LEAF };
+        }
+
+        // ── Branch 6: Computed MemberExpression chain ─────────────────
+        if (skip < 6 && (_t.isMemberExpression(node) || _t.isOptionalMemberExpression(node)) && node.computed) {
+          var _compHops = 0;
+          var _compPath = path;
+          var _compNode = node;
+          while ((_t.isMemberExpression(_compNode) || _t.isOptionalMemberExpression(_compNode)) && _compNode.computed) {
+            _compHops++;
+            _compPath = _compPath.get("object");
+            _compNode = _compPath.node;
+          }
+          L.compHops = _compHops;
+          L.branchSkip = 6;
+          return { trace: _compPath, state: _TVS_CMC_AFTER_LEAF };
+        }
+
+        // ── Branch 7: Identifier (multi-recursive) ─────────────────────
+        if (skip < 7 && _t.isIdentifier(node)) {
+          var binding = path.scope.getBinding(node.name);
+          if (binding) {
+            // Variable initializer + reassignments
+            if (binding.path.isVariableDeclarator() && binding.path.node.init) {
+              L.identBinding = binding;
+              L.identName = node.name;
+              L.branchSkip = 7;
+              return { trace: binding.path.get("init"), state: _TVS_IDENT_AFTER_INIT };
+            }
+            // Uninitialized declaration with reassignments
+            if (binding.path.isVariableDeclarator() && !binding.path.node.init &&
+                binding.constantViolations && binding.constantViolations.length > 0) {
+              L.identBinding = binding;
+              L.identName = node.name;
+              L.identUcvI = 0;
+              L.branchSkip = 7;
+              F.state = _TVS_IDENT_UCV_LOOP;
+              continue;
+            }
+            // For-in/for-of loop variable
+            if (binding.path.isVariableDeclarator() && !binding.path.node.init) {
+              var _forParent = binding.path.parentPath && binding.path.parentPath.parentPath;
+              if (_forParent && (_t.isForInStatement(_forParent.node) || _t.isForOfStatement(_forParent.node)) &&
+                  _forParent.node.left === binding.path.parent) {
+                L.identName = node.name;
+                L.branchSkip = 7;
+                return { trace: _forParent.get("right"), state: _TVS_IDENT_FOR_ITER_AFTER };
+              }
+            }
+            // Destructured ObjectProperty/RestElement
+            if (_t.isObjectProperty(binding.path.node) || _t.isRestElement(binding.path.node)) {
+              var _destrParent = binding.path.parentPath;
+              while (_destrParent && !_destrParent.isVariableDeclarator()) {
+                _destrParent = _destrParent.parentPath;
+              }
+              if (_destrParent && _destrParent.node.init) {
+                L.identName = node.name;
+                L.branchSkip = 7;
+                return { trace: _destrParent.get("init"), state: _TVS_IDENT_DESTR_OBJ_AFTER };
+              }
+              if (_destrParent && !_destrParent.node.init) {
+                var _forOwner = _destrParent.parentPath && _destrParent.parentPath.parentPath;
+                if (_forOwner && (_t.isForOfStatement(_forOwner.node) || _t.isForInStatement(_forOwner.node))) {
+                  L.identName = node.name;
+                  L.branchSkip = 7;
+                  return { trace: _forOwner.get("right"), state: _TVS_IDENT_DESTR_OBJ_FOR_AFTER };
+                }
+              }
+            }
+            // Destructured ArrayPattern element
+            if (_t.isArrayPattern(binding.path.parent)) {
+              var _arrDestrParent = binding.path.parentPath;
+              while (_arrDestrParent && !_arrDestrParent.isVariableDeclarator()) {
+                _arrDestrParent = _arrDestrParent.parentPath;
+              }
+              if (_arrDestrParent && _arrDestrParent.node.init) {
+                L.identName = node.name;
+                L.branchSkip = 7;
+                return { trace: _arrDestrParent.get("init"), state: _TVS_IDENT_DESTR_ARR_AFTER };
+              }
+              if (_arrDestrParent && !_arrDestrParent.node.init) {
+                var _forOwner2 = _arrDestrParent.parentPath && _arrDestrParent.parentPath.parentPath;
+                if (_forOwner2 && (_t.isForOfStatement(_forOwner2.node) || _t.isForInStatement(_forOwner2.node))) {
+                  L.identName = node.name;
+                  L.branchSkip = 7;
+                  return { trace: _forOwner2.get("right"), state: _TVS_IDENT_DESTR_ARR_FOR_AFTER };
+                }
+              }
+            }
+            // Function parameter
+            if (binding.kind === "param") {
+              var paramIdx = -1;
+              var funcPath = binding.scope.path;
+              if (funcPath && funcPath.node.params) {
+                for (var pi = 0; pi < funcPath.node.params.length; pi++) {
+                  if (_t.isIdentifier(funcPath.node.params[pi], { name: node.name })) { paramIdx = pi; break; }
+                }
+                if (paramIdx === -1) {
+                  for (var _dpi = 0; _dpi < funcPath.node.params.length; _dpi++) {
+                    var _dpParam = funcPath.node.params[_dpi];
+                    if (_t.isObjectPattern(_dpParam)) {
+                      if (_findDestructuredKey(_dpParam, node.name)) { paramIdx = _dpi; break; }
+                    }
+                    if (_t.isAssignmentPattern(_dpParam) && _t.isObjectPattern(_dpParam.left)) {
+                      if (_findDestructuredKey(_dpParam.left, node.name)) { paramIdx = _dpi; break; }
+                    }
+                  }
+                }
+              }
+              if (paramIdx >= 0 && funcPath) {
+                var _iifeParent = funcPath.parentPath;
+                if (_iifeParent && _t.isCallExpression(_iifeParent.node) && _iifeParent.node.callee === funcPath.node &&
+                    paramIdx < _iifeParent.node.arguments.length) {
+                  L.identName = node.name;
+                  L.paramIdx = paramIdx;
+                  L.funcPath = funcPath;
+                  L.branchSkip = 7;
+                  return {
+                    trace: _iifeParent.get("arguments." + paramIdx),
+                    state: _TVS_IDENT_PARAM_IIFE_AFTER,
+                  };
+                }
+                L.identName = node.name;
+                L.paramIdx = paramIdx;
+                L.funcPath = funcPath;
+                L.callerArgs = _findFunctionCallerArgs(funcPath);
+                L.callerArgsCi = 0;
+                L.branchSkip = 7;
+                F.state = _TVS_IDENT_PARAM_CALLERS_LOOP;
+                continue;
+              }
+              // Message handler detection (no recursion — entirely structural)
+              if (paramIdx === 0 && funcPath) {
+                var _isMsgHandler = false;
+                var _mhParent = funcPath.parentPath;
+                if (_mhParent) {
+                  if (_mhParent.isCallExpression()) {
+                    var _aeNode = _mhParent.node;
+                    if (_aeNode.arguments.length >= 2 && _aeNode.arguments[1] === funcPath.node &&
+                        _t.isStringLiteral(_aeNode.arguments[0], { value: "message" })) {
+                      var _aeCal = _aeNode.callee;
+                      if ((_t.isMemberExpression(_aeCal) && !_aeCal.computed &&
+                           _t.isIdentifier(_aeCal.property, { name: "addEventListener" })) ||
+                          (_t.isIdentifier(_aeCal, { name: "addEventListener" }) &&
+                           !funcPath.scope.getBinding("addEventListener"))) {
+                        if (_isCrossOriginMsgReceiver(_aeCal, _mhParent)) _isMsgHandler = true;
+                      }
+                    }
+                  }
+                  if (_mhParent.isAssignmentExpression() && _mhParent.node.right === funcPath.node) {
+                    var _omLeft = _mhParent.node.left;
+                    if (_t.isMemberExpression(_omLeft) && !_omLeft.computed &&
+                        _t.isIdentifier(_omLeft.property, { name: "onmessage" })) {
+                      if (_isCrossOriginMsgReceiver(_omLeft, _mhParent)) _isMsgHandler = true;
+                    }
+                  }
+                  if (!_isMsgHandler && _t.isReturnStatement(_mhParent.node)) {
+                    var _mhEncFunc = funcPath.findParent(function(p) { return p.isFunction() && p !== funcPath; });
+                    if (_mhEncFunc) {
+                      var _mhEncBinding = null;
+                      if (_t.isFunctionDeclaration(_mhEncFunc.node) && _t.isIdentifier(_mhEncFunc.node.id)) {
+                        _mhEncBinding = _mhEncFunc.parentPath.scope.getBinding(_mhEncFunc.node.id.name);
+                      } else if (_mhEncFunc.parentPath && _mhEncFunc.parentPath.isVariableDeclarator()) {
+                        _mhEncBinding = _mhEncFunc.parentPath.scope.getBinding(_mhEncFunc.parentPath.node.id.name);
+                      }
+                      if (_mhEncBinding) {
+                        var _mhRefs = _mhEncBinding.referencePaths || [];
+                        for (var _mhri = 0; _mhri < _mhRefs.length && !_isMsgHandler; _mhri++) {
+                          var _mhRefParent = _mhRefs[_mhri].parentPath;
+                          if (_mhRefParent && _mhRefParent.isCallExpression() && _mhRefParent.node.callee === _mhRefs[_mhri].node) {
+                            var _mhCallParent = _mhRefParent.parentPath;
+                            if (_mhCallParent && _mhCallParent.isCallExpression()) {
+                              var _mhOuterCall = _mhCallParent.node;
+                              if (_mhOuterCall.arguments.length >= 2 && _mhOuterCall.arguments[1] === _mhRefParent.node &&
+                                  _t.isStringLiteral(_mhOuterCall.arguments[0], { value: "message" })) {
+                                var _mhOuterCallee = _mhOuterCall.callee;
+                                if ((_t.isMemberExpression(_mhOuterCallee) && !_mhOuterCallee.computed &&
+                                     _t.isIdentifier(_mhOuterCallee.property, { name: "addEventListener" })) ||
+                                    (_t.isIdentifier(_mhOuterCallee, { name: "addEventListener" }) &&
+                                     !_mhCallParent.scope.getBinding("addEventListener"))) {
+                                  if (_isCrossOriginMsgReceiver(_mhOuterCallee, _mhCallParent)) _isMsgHandler = true;
+                                }
+                              }
+                            }
+                            if (_mhCallParent && _mhCallParent.isAssignmentExpression() && _mhCallParent.node.right === _mhRefParent.node) {
+                              var _mhOmLeft2 = _mhCallParent.node.left;
+                              if (_t.isMemberExpression(_mhOmLeft2) && !_mhOmLeft2.computed &&
+                                  _t.isIdentifier(_mhOmLeft2.property, { name: "onmessage" })) {
+                                _isMsgHandler = true;
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                if (!_isMsgHandler && _mhParent) {
+                  var _namedBinding = null;
+                  if (_mhParent.isVariableDeclarator() && _t.isIdentifier(_mhParent.node.id)) {
+                    _namedBinding = _mhParent.scope.getBinding(_mhParent.node.id.name);
+                  } else if (_mhParent.isAssignmentExpression() && _t.isIdentifier(_mhParent.node.left) &&
+                             _mhParent.node.right === funcPath.node) {
+                    _namedBinding = _mhParent.scope.getBinding(_mhParent.node.left.name);
+                  }
+                  if (_namedBinding) {
+                    var _nbRefs = _namedBinding.referencePaths || [];
+                    for (var _nbri = 0; _nbri < _nbRefs.length && !_isMsgHandler; _nbri++) {
+                      var _nbRef = _nbRefs[_nbri];
+                      var _nbRefP = _nbRef.parentPath;
+                      if (!_nbRefP) continue;
+                      if (_nbRefP.isCallExpression() && _nbRefP.node.arguments.length >= 2 &&
+                          _nbRefP.node.arguments[1] === _nbRef.node &&
+                          _t.isStringLiteral(_nbRefP.node.arguments[0], { value: "message" })) {
+                        var _nbCal = _nbRefP.node.callee;
+                        if ((_t.isMemberExpression(_nbCal) && !_nbCal.computed &&
+                             _t.isIdentifier(_nbCal.property, { name: "addEventListener" })) ||
+                            (_t.isIdentifier(_nbCal, { name: "addEventListener" }) &&
+                             !_nbRefP.scope.getBinding("addEventListener"))) {
+                          if (_isCrossOriginMsgReceiver(_nbCal, _nbRefP)) _isMsgHandler = true;
+                        }
+                      }
+                      if (_nbRefP.isAssignmentExpression() && _nbRefP.node.right === _nbRef.node) {
+                        var _nbOmL = _nbRefP.node.left;
+                        if (_t.isMemberExpression(_nbOmL) && !_nbOmL.computed &&
+                            _t.isIdentifier(_nbOmL.property, { name: "onmessage" })) {
+                          _isMsgHandler = true;
+                        }
+                      }
+                    }
+                  }
+                }
+                if (_isMsgHandler) {
+                  return { done: _tvsSource("event.data", nodeLoc, _dimsForSource("event.data")) };
+                }
+              }
+              // No caller args found — return DYN
+              return { done: DYN };
+            }
+          }
+          // Bare `location` identifier (unbound)
+          if (node.name === "location") return { done: _tvsSource("location", nodeLoc, _dimsForSource("location")) };
+          return { done: DYN };
+        }
+
+        // ── Branch 8: TemplateLiteral with expressions ─────────────────
+        if (skip < 8 && _t.isTemplateLiteral(node)) {
+          var _tmplStripsOrigin = false;
+          var _q0 = node.quasis && node.quasis[0];
+          var _q0Raw = _q0 && _q0.value ? _q0.value.raw : "";
+          if (_q0Raw && !/^https?:/i.test(_q0Raw) && !_q0Raw.startsWith("//") &&
+              (_q0Raw.startsWith("/") || _q0Raw.startsWith("./") || _q0Raw.startsWith("../"))) {
+            _tmplStripsOrigin = true;
+          }
+          if (node.expressions.length === 0) return { done: LIT };
+          L.tmplStripsOrigin = _tmplStripsOrigin;
+          L.tlTi = 0;
+          L.tlExprCount = node.expressions.length;
+          L.branchSkip = 8;
+          return { trace: path.get("expressions.0"), state: _TVS_TL_AFTER };
+        }
+
+        // ── Branch 9: TaggedTemplateExpression ─────────────────────────
+        if (skip < 9 && _t.isTaggedTemplateExpression(node)) {
+          if (node.quasi.expressions.length > 0) {
+            L.ttQuasiPath = path.get("quasi");
+            L.ttTi = 0;
+            L.ttExprCount = node.quasi.expressions.length;
+            L.branchSkip = 9;
+            return { trace: L.ttQuasiPath.get("expressions.0"), state: _TVS_TT_AFTER };
+          }
+        }
+
+        // ── Branch 10: Binary expression (iterative left-chain walk) ───
+        if (skip < 10 && _t.isBinaryExpression(node) && node.operator === "+") {
+          var _binRights = [];
+          var _binPath = path;
+          var _binNode = node;
+          while (_t.isBinaryExpression(_binNode) && _binNode.operator === "+") {
+            _binRights.push({
+              path: _binPath.get("right"),
+              loc: _binNode.loc ? { line: _binNode.loc.start.line, column: _binNode.loc.start.column } : nodeLoc,
+            });
+            _binPath = _binPath.get("left");
+            _binNode = _binPath.node;
+          }
+          L.binRights = _binRights;
+          L.concatStripsOrigin = _leftmostLiteralIsSameOriginPrefix(path);
+          L.branchSkip = 10;
+          return { trace: _binPath, state: _TVS_BIN_AFTER_LEAF };
+        }
+
+        // ── Branch 11: Conditional expression ──────────────────────────
+        if (skip < 11 && _t.isConditionalExpression(node)) {
+          L.branchSkip = 11;
+          return { trace: path.get("consequent"), state: _TVS_COND_AFTER_CONS };
+        }
+
+        // ── Branch 12: Logical expression (iterative left-chain walk) ──
+        if (skip < 12 && _t.isLogicalExpression(node)) {
+          var _logRights = [];
+          var _logPath = path;
+          var _logNode = node;
+          while (_t.isLogicalExpression(_logNode)) {
+            _logRights.push({
+              path: _logPath.get("right"),
+              op: _logNode.operator,
+              loc: _logNode.loc ? { line: _logNode.loc.start.line, column: _logNode.loc.start.column } : nodeLoc,
+            });
+            _logPath = _logPath.get("left");
+            _logNode = _logPath.node;
+          }
+          L.logRights = _logRights;
+          L.branchSkip = 12;
+          return { trace: _logPath, state: _TVS_LOG_AFTER_LEAF };
+        }
+
+        // ── Branch 13: Sequence expression (last expr) ─────────────────
+        if (skip < 13 && _t.isSequenceExpression(node) && node.expressions.length > 0) {
+          var _lastIdx = node.expressions.length - 1;
+          L.branchSkip = 13;
+          return { trace: path.get("expressions." + _lastIdx), state: _TVS_SEQ_AFTER };
+        }
+
+        // ── Branch 14: Await ───────────────────────────────────────────
+        if (skip < 14 && _t.isAwaitExpression(node)) {
+          L.branchSkip = 14;
+          return { trace: path.get("argument"), state: _TVS_AWAIT_AFTER };
+        }
+
+        // ── Branch 15: Spread element ──────────────────────────────────
+        if (skip < 15 && _t.isSpreadElement(node)) {
+          L.branchSkip = 15;
+          return { trace: path.get("argument"), state: _TVS_SPREAD_AFTER };
+        }
+
+        // ── Branch 16: Call expression ─────────────────────────────────
+        if (skip < 16 && (_t.isCallExpression(node) || _t.isOptionalCallExpression(node))) {
+          // localStorage.getItem / sessionStorage.getItem. The two are
+          // distinct names in the global registry but bind to the SAME
+          // storageAv obj-lit (per WHATWG HTML § 11 the Storage IDL is
+          // shared); to discriminate at source-naming time we keep the
+          // receiver identifier name. AV-grounded guard verifies the
+          // receiver actually IS the global Storage (not a custom obj
+          // with a getItem method).
+          if (_t.isMemberExpression(node.callee) && !node.callee.computed &&
+              _t.isIdentifier(node.callee.property, { name: "getItem" }) &&
+              _t.isIdentifier(node.callee.object)) {
+            var _storObj = node.callee.object;
+            var _storObjAv = _specPathValMemo.get(_storObj);
+            var _gThisStor = _specGlobalThisAv();
+            if (_gThisStor && _gThisStor.props &&
+                (_storObjAv === _gThisStor.props.localStorage ||
+                 _storObjAv === _gThisStor.props.sessionStorage)) {
+              return { done: _tvsSource(_storObj.name + ".getItem", nodeLoc, _dimsForSource(_storObj.name + ".getItem")) };
+            }
+          }
+          // Method call on tainted object (callee.object trace)
+          if ((_t.isMemberExpression(node.callee) || _t.isOptionalMemberExpression(node.callee)) && !node.callee.computed) {
+            L.branchSkip = 16;
+            // Stash method-call context for the AFTER state
+            L.callMethodName = _t.isIdentifier(node.callee.property) ? node.callee.property.name : "?";
+            var _ca0 = null;
+            if (node.arguments.length > 0) {
+              var _ca0n = node.arguments[0];
+              if (_t.isStringLiteral(_ca0n)) _ca0 = _ca0n.value;
+              else if (_t.isTemplateLiteral(_ca0n) && _ca0n.expressions.length === 0 && _ca0n.quasis.length === 1) {
+                _ca0 = _ca0n.quasis[0].value.cooked;
+              }
+            }
+            L.callArgLit = _ca0;
+            return { trace: path.get("callee.object"), state: _TVS_CALL_METHOD_AFTER_OBJ };
+          }
+          // (Object.assign / call-arg / function-return are all covered by
+          // the call-arg branch since the method-call branch above didn't
+          // match for non-MemberExpression callees. Set up Object.assign
+          // and call-arg processing through state transitions.)
+          L.callNode = node;
+          L.branchSkip = 16;
+          F.state = _TVS_CALL_OA_LOOP;
+          continue;
+        }
+
+        // ── Branch 17: new URL(input, base?) ───────────────────────────
+        // AV-grounded callee identity via builtin-ctor "WHATWG.URL".
+        var newUrlCalleeAv = _t.isNewExpression(node) ? _specPathValMemo.get(node.callee) : null;
+        if (skip < 17 && _t.isNewExpression(node) &&
+            newUrlCalleeAv && newUrlCalleeAv.kind === "builtin-ctor" && newUrlCalleeAv.id === "WHATWG.URL" &&
+            node.arguments.length >= 1) {
+          L.urlInputPath = path.get("arguments.0");
+          L.urlInputNode = node.arguments[0];
+          L.urlBasePath = node.arguments.length >= 2 ? path.get("arguments.1") : null;
+          L.branchSkip = 17;
+          return { trace: L.urlInputPath, state: _TVS_NEW_URL_AFTER_INPUT };
+        }
+
+        // ── Branch 18: NewExpression args loop ─────────────────────────
+        if (skip < 18 && _t.isNewExpression(node) && node.arguments.length > 0) {
+          L.newCalleeName = _t.isIdentifier(node.callee) ? node.callee.name : "ctor";
+          L.newNi = 0;
+          L.newArgCount = node.arguments.length;
+          L.branchSkip = 18;
+          return { trace: path.get("arguments.0"), state: _TVS_NEW_AFTER };
+        }
+
+        // ── Branch 19: ArrayExpression elements loop ───────────────────
+        if (skip < 19 && _t.isArrayExpression(node) && node.elements.length > 0) {
+          L.arrAi = 0;
+          L.arrElCount = node.elements.length;
+          L.branchSkip = 19;
+          // Skip null elements
+          while (L.arrAi < L.arrElCount && !node.elements[L.arrAi]) L.arrAi++;
+          if (L.arrAi >= L.arrElCount) {
+            L.branchSkip = 20;
+            F.state = _TVS_INIT;
+            continue;
+          }
+          return { trace: path.get("elements." + L.arrAi), state: _TVS_ARR_AFTER };
+        }
+
+        // ── Branch 20: ObjectExpression properties loop ────────────────
+        if (skip < 20 && _t.isObjectExpression(node) && node.properties.length > 0) {
+          L.objExprOpi = 0;
+          L.objExprPropsCount = node.properties.length;
+          L.branchSkip = 20;
+          F.state = _TVS_OBJ_LOOP;
+          continue;
+        }
+
+        // ── Branch 21: AssignmentExpression right side ─────────────────
+        if (skip < 21 && _t.isAssignmentExpression(node)) {
+          L.branchSkip = 21;
+          return { trace: path.get("right"), state: _TVS_ASSIGN_RHS_AFTER };
+        }
+
+        // No branch matched
+        return { done: DYN };
+      }
+
+      // ── AFTER states ────────────────────────────────────────────────
+
+      case _TVS_OBJ_EXPR_PROP_AFTER: {
+        var src = F.result;
+        if (src && src.sourceType === "user-controlled") {
+          return { done: _tvsHop(src, "obj-prop", "." + L.objPropName, nodeLoc) };
+        }
+        // Continue scanning for next matching prop
+        L.oi++;
+        while (L.oi < L.objProps.length) {
+          var pp = L.objProps[L.oi];
+          if (_t.isObjectProperty(pp) &&
+              ((_t.isIdentifier(pp.key) && pp.key.name === L.objPropName) ||
+               (_t.isStringLiteral(pp.key) && pp.key.value === L.objPropName))) {
+            return {
+              trace: L.objBinding.path.get("init.properties." + L.oi + ".value"),
+              state: _TVS_OBJ_EXPR_PROP_AFTER,
+            };
+          }
+          L.oi++;
+        }
+        // Fall through to next branch — Object.assign init? Member chain?
+        // Check if the object property branch's Object.assign sub-branch applies
+        var _fallObjBinding = path.scope.getBinding(node.object.name);
+        if (_fallObjBinding && _fallObjBinding.path.isVariableDeclarator() && _fallObjBinding.path.node.init) {
+          var _fObjInit = _fallObjBinding.path.node.init;
+          var _fObjInitCalleeAv = _t.isCallExpression(_fObjInit) ? _specPathValMemo.get(_fObjInit.callee) : null;
+          if (_fObjInitCalleeAv && _fObjInitCalleeAv.kind === "builtin-method" &&
+              _fObjInitCalleeAv.id === "Object.assign" && _fObjInit.arguments.length >= 2) {
+            L.objBinding = _fallObjBinding;
+            L.objInit = _fObjInit;
+            L.oaPI = 1;
+            F.state = _TVS_OBJ_ASSIGN_OUTER;
+            continue;
+          }
+        }
+        L.branchSkip = 5;  // skip past obj prop access (4)
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_OBJ_ASSIGN_OUTER: {
+        // Outer arg loop: idx L.oaPI from 1 to length-1.
+        // For each arg, check Identifier-source or inline-ObjectExpression sub-cases.
+        if (L.oaPI >= L.objInit.arguments.length) {
+          // Done — fall through past Branch 4
+          L.branchSkip = 5;
+          F.state = _TVS_INIT;
+          continue;
+        }
+        var _oaSrcArg = L.objInit.arguments[L.oaPI];
+        // Identifier-source sub-case
+        if (_t.isIdentifier(_oaSrcArg)) {
+          var _oaSrcBind = path.scope.getBinding(_oaSrcArg.name);
+          if (_oaSrcBind && _oaSrcBind.path.isVariableDeclarator() && _oaSrcBind.path.node.init &&
+              _t.isObjectExpression(_oaSrcBind.path.node.init)) {
+            var _oaSrcProps = _oaSrcBind.path.node.init.properties;
+            for (var _oaSPI = 0; _oaSPI < _oaSrcProps.length; _oaSPI++) {
+              if (_t.isObjectProperty(_oaSrcProps[_oaSPI]) &&
+                  ((_t.isIdentifier(_oaSrcProps[_oaSPI].key) && _oaSrcProps[_oaSPI].key.name === L.objPropName) ||
+                   (_t.isStringLiteral(_oaSrcProps[_oaSPI].key) && _oaSrcProps[_oaSPI].key.value === L.objPropName))) {
+                L.oaSrcBind = _oaSrcBind;
+                L.oaSrcProps = _oaSrcProps;
+                L.oaSPI = _oaSPI;
+                return {
+                  trace: _oaSrcBind.path.get("init.properties." + _oaSPI + ".value"),
+                  state: _TVS_OBJ_ASSIGN_SRC_AFTER,
+                };
+              }
+            }
+          }
+        }
+        // Inline ObjectExpression sub-case
+        if (_t.isObjectExpression(_oaSrcArg)) {
+          for (var _oaInlI = 0; _oaInlI < _oaSrcArg.properties.length; _oaInlI++) {
+            if (_t.isObjectProperty(_oaSrcArg.properties[_oaInlI]) &&
+                ((_t.isIdentifier(_oaSrcArg.properties[_oaInlI].key) && _oaSrcArg.properties[_oaInlI].key.name === L.objPropName) ||
+                 (_t.isStringLiteral(_oaSrcArg.properties[_oaInlI].key) && _oaSrcArg.properties[_oaInlI].key.value === L.objPropName))) {
+              L.oaInlI = _oaInlI;
+              return {
+                trace: L.objBinding.path.get("init.arguments." + L.oaPI + ".properties." + _oaInlI + ".value"),
+                state: _TVS_OBJ_ASSIGN_INL_AFTER,
+              };
+            }
+          }
+        }
+        // Neither matched — advance outer
+        L.oaPI++;
+        F.state = _TVS_OBJ_ASSIGN_OUTER;
+        continue;
+      }
+
+      case _TVS_OBJ_ASSIGN_SRC_AFTER: {
+        var _oaPropSrc = F.result;
+        if (_oaPropSrc && _oaPropSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_oaPropSrc, "obj-assign-prop", "." + L.objPropName + " (via Object.assign)", nodeLoc) };
+        }
+        // Continue scanning the same source's remaining props
+        L.oaSPI++;
+        while (L.oaSPI < L.oaSrcProps.length) {
+          if (_t.isObjectProperty(L.oaSrcProps[L.oaSPI]) &&
+              ((_t.isIdentifier(L.oaSrcProps[L.oaSPI].key) && L.oaSrcProps[L.oaSPI].key.name === L.objPropName) ||
+               (_t.isStringLiteral(L.oaSrcProps[L.oaSPI].key) && L.oaSrcProps[L.oaSPI].key.value === L.objPropName))) {
+            return {
+              trace: L.oaSrcBind.path.get("init.properties." + L.oaSPI + ".value"),
+              state: _TVS_OBJ_ASSIGN_SRC_AFTER,
+            };
+          }
+          L.oaSPI++;
+        }
+        // Done with this source's props — also try inline sub-case for current arg
+        var _oaSrcArg2 = L.objInit.arguments[L.oaPI];
+        if (_t.isObjectExpression(_oaSrcArg2)) {
+          for (var _oaInlI2 = 0; _oaInlI2 < _oaSrcArg2.properties.length; _oaInlI2++) {
+            if (_t.isObjectProperty(_oaSrcArg2.properties[_oaInlI2]) &&
+                ((_t.isIdentifier(_oaSrcArg2.properties[_oaInlI2].key) && _oaSrcArg2.properties[_oaInlI2].key.name === L.objPropName) ||
+                 (_t.isStringLiteral(_oaSrcArg2.properties[_oaInlI2].key) && _oaSrcArg2.properties[_oaInlI2].key.value === L.objPropName))) {
+              L.oaInlI = _oaInlI2;
+              return {
+                trace: L.objBinding.path.get("init.arguments." + L.oaPI + ".properties." + _oaInlI2 + ".value"),
+                state: _TVS_OBJ_ASSIGN_INL_AFTER,
+              };
+            }
+          }
+        }
+        // Advance outer
+        L.oaPI++;
+        F.state = _TVS_OBJ_ASSIGN_OUTER;
+        continue;
+      }
+
+      case _TVS_OBJ_ASSIGN_INL_AFTER: {
+        var _oaInlSrc = F.result;
+        if (_oaInlSrc && _oaInlSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_oaInlSrc, "obj-assign-prop", "." + L.objPropName + " (via Object.assign inline)", nodeLoc) };
+        }
+        // Continue scanning inline props of current arg
+        var _oaSrcArg3 = L.objInit.arguments[L.oaPI];
+        L.oaInlI++;
+        while (L.oaInlI < _oaSrcArg3.properties.length) {
+          if (_t.isObjectProperty(_oaSrcArg3.properties[L.oaInlI]) &&
+              ((_t.isIdentifier(_oaSrcArg3.properties[L.oaInlI].key) && _oaSrcArg3.properties[L.oaInlI].key.name === L.objPropName) ||
+               (_t.isStringLiteral(_oaSrcArg3.properties[L.oaInlI].key) && _oaSrcArg3.properties[L.oaInlI].key.value === L.objPropName))) {
+            return {
+              trace: L.objBinding.path.get("init.arguments." + L.oaPI + ".properties." + L.oaInlI + ".value"),
+              state: _TVS_OBJ_ASSIGN_INL_AFTER,
+            };
+          }
+          L.oaInlI++;
+        }
+        // Advance outer
+        L.oaPI++;
+        F.state = _TVS_OBJ_ASSIGN_OUTER;
+        continue;
+      }
+
+      case _TVS_NCMC_AFTER_LEAF: {
+        var _deepObjSource = F.result;
+        if (_deepObjSource && _deepObjSource.sourceType === "user-controlled" && L.chainProps.length > 0) {
+          var _curSource = _deepObjSource;
+          for (var _cpi = L.chainProps.length - 1; _cpi >= 0; _cpi--) {
+            var _deepPropName = L.chainProps[_cpi].name;
+            var _propLoc = L.chainProps[_cpi].loc || nodeLoc;
+            var _srcDims = _curSource.dimensions || _tvsDimsContent();
+            var _projDims = null;
+            switch (_deepPropName) {
+              case "origin": case "host": case "hostname": case "protocol": case "port":
+                _projDims = { origin: _srcDims.origin, content: _srcDims.origin }; break;
+              case "pathname":
+                _projDims = { path: _srcDims.path, content: _srcDims.path }; break;
+              case "search": case "searchParams":
+                _projDims = { query: _srcDims.query, content: _srcDims.query }; break;
+              case "hash":
+                _projDims = { hash: _srcDims.hash, content: _srcDims.hash }; break;
+              case "href":
+                _projDims = _srcDims; break;
+            }
+            if (_projDims) _curSource = _tvsHopDims(_curSource, "member", "." + _deepPropName, _propLoc, _projDims);
+            else _curSource = _tvsHop(_curSource, "member", "." + _deepPropName, _propLoc);
+          }
+          return { done: _curSource };
+        }
+        // Fall through to next branch
+        L.branchSkip = 6;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_CMC_AFTER_LEAF: {
+        var compObjSource = F.result;
+        if (compObjSource && compObjSource.sourceType === "user-controlled") {
+          var _compRes = compObjSource;
+          for (var _chi = 0; _chi < L.compHops; _chi++) {
+            _compRes = _tvsHop(_compRes, "member-computed", "[…]", nodeLoc);
+          }
+          return { done: _compRes };
+        }
+        L.branchSkip = 7;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_IDENT_AFTER_INIT: {
+        var initSrc = F.result;
+        if (initSrc && initSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(initSrc, "binding", L.identName, nodeLoc) };
+        }
+        // Process constantViolations if present
+        if (L.identBinding.constantViolations && L.identBinding.constantViolations.length > 0) {
+          L.identInitSrc = initSrc;
+          L.identCvi = 0;
+          F.state = _TVS_IDENT_CV_LOOP;
+          continue;
+        }
+        // No CV — return initSrc as final
+        return { done: initSrc };
+      }
+
+      case _TVS_IDENT_CV_LOOP: {
+        // Find next AssignmentExpression CV to trace
+        while (L.identCvi < L.identBinding.constantViolations.length) {
+          var _cvPath = L.identBinding.constantViolations[L.identCvi];
+          if (_cvPath && _cvPath.isAssignmentExpression()) {
+            return { trace: _cvPath.get("right"), state: _TVS_IDENT_CV_AFTER };
+          }
+          L.identCvi++;
+        }
+        // Done — return initSrc
+        return { done: L.identInitSrc };
+      }
+
+      case _TVS_IDENT_CV_AFTER: {
+        var _cvSrc = F.result;
+        if (_cvSrc && _cvSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_cvSrc, "reassign", L.identName, nodeLoc) };
+        }
+        L.identCvi++;
+        F.state = _TVS_IDENT_CV_LOOP;
+        continue;
+      }
+
+      case _TVS_IDENT_UCV_LOOP: {
+        while (L.identUcvI < L.identBinding.constantViolations.length) {
+          var _cvnPath = L.identBinding.constantViolations[L.identUcvI];
+          if (_cvnPath && _cvnPath.isAssignmentExpression()) {
+            return { trace: _cvnPath.get("right"), state: _TVS_IDENT_UCV_AFTER };
+          }
+          L.identUcvI++;
+        }
+        // CVs exhausted without user-controlled — fall through to for-iter /
+        // destructure / param checks (matches original generator's sequence).
+        F.state = _TVS_IDENT_TRY_OTHER;
+        continue;
+      }
+
+      case _TVS_IDENT_UCV_AFTER: {
+        var _cvnSrc = F.result;
+        if (_cvnSrc && _cvnSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_cvnSrc, "reassign-uninit", L.identName, nodeLoc) };
+        }
+        L.identUcvI++;
+        F.state = _TVS_IDENT_UCV_LOOP;
+        continue;
+      }
+
+      case _TVS_IDENT_FOR_ITER_AFTER: {
+        return { done: _tvsHop(F.result, "for-iter", "iterates " + L.identName, nodeLoc) };
+      }
+
+      case _TVS_IDENT_DESTR_OBJ_AFTER: {
+        return { done: _tvsHop(F.result, "destructure-obj", "{" + L.identName + "}", nodeLoc) };
+      }
+
+      case _TVS_IDENT_DESTR_OBJ_FOR_AFTER: {
+        return { done: _tvsHop(F.result, "destructure-obj-for", "{" + L.identName + "} of …", nodeLoc) };
+      }
+
+      case _TVS_IDENT_DESTR_ARR_AFTER: {
+        return { done: _tvsHop(F.result, "destructure-arr", "[…" + L.identName + "…]", nodeLoc) };
+      }
+
+      case _TVS_IDENT_DESTR_ARR_FOR_AFTER: {
+        return { done: _tvsHop(F.result, "destructure-arr-for", "[…" + L.identName + "…] of …", nodeLoc) };
+      }
+
+      case _TVS_IDENT_PARAM_IIFE_AFTER: {
+        var _iifeArgSrc = F.result;
+        if (_iifeArgSrc && _iifeArgSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_iifeArgSrc, "param-iife", "param " + L.identName + " @ arg " + L.paramIdx, nodeLoc) };
+        }
+        // Continue with caller args loop
+        L.callerArgs = _findFunctionCallerArgs(L.funcPath);
+        L.callerArgsCi = 0;
+        F.state = _TVS_IDENT_PARAM_CALLERS_LOOP;
+        continue;
+      }
+
+      case _TVS_IDENT_PARAM_CALLERS_LOOP: {
+        while (L.callerArgsCi < L.callerArgs.length) {
+          if (L.paramIdx < L.callerArgs[L.callerArgsCi].length) {
+            return {
+              trace: L.callerArgs[L.callerArgsCi][L.paramIdx],
+              state: _TVS_IDENT_PARAM_CALLERS_AFTER,
+            };
+          }
+          L.callerArgsCi++;
+        }
+        // Done — try iter-callback (paramIdx === 0) or reduce (paramIdx === 1)
+        // For simplicity, dispatch to an additional state:
+        F.state = _TVS_IDENT_PARAM_ITER_REF_LOOP;
+        continue;
+      }
+
+      case _TVS_IDENT_PARAM_CALLERS_AFTER: {
+        var argSource = F.result;
+        if (argSource && argSource.sourceType === "user-controlled") {
+          return { done: _tvsHop(argSource, "param-caller", "param " + L.identName + " @ arg " + L.paramIdx, nodeLoc) };
+        }
+        L.callerArgsCi++;
+        F.state = _TVS_IDENT_PARAM_CALLERS_LOOP;
+        continue;
+      }
+
+      case _TVS_IDENT_PARAM_ITER_REF_LOOP: {
+        // Cover the iter-callback / iter-callback-ref / reduce-element paths
+        // from the original. These traced the array (callee.object) when
+        // paramIdx satisfied the iter pattern. Without these, deeply
+        // wrapped iteration callbacks lose taint propagation.
+        if (L.paramIdx === 0) {
+          var _iterParent = L.funcPath.parentPath;
+          if (_iterParent && _iterParent.isCallExpression() &&
+              _t.isMemberExpression(_iterParent.node.callee) && !_iterParent.node.callee.computed &&
+              _iterParent.node.arguments.length >= 1 && _iterParent.node.arguments[0] === L.funcPath.node) {
+            var _iterMethod = _t.isIdentifier(_iterParent.node.callee.property)
+              ? _iterParent.node.callee.property.name : null;
+            if (_ITERATION_METHODS[_iterMethod] || _iterMethod === "then" || _iterMethod === "catch") {
+              var _iterObjType = _getTrackedType(_iterParent.get("callee.object"), _iterParent.node.callee.object);
+              if ((_iterMethod === "then" || _iterMethod === "catch") &&
+                  _isNetworkProducingCall(_iterParent.get("callee.object"))) {
+                // skip
+              } else if (!(_ITERATION_METHODS[_iterMethod] && _iterObjType && _NON_ITERABLE_TYPES[_iterObjType])) {
+                L.iterMethod = _iterMethod;
+                return { trace: _iterParent.get("callee.object"), state: _TVS_IDENT_PARAM_ITER_AFTER };
+              }
+            }
+          }
+          // Iter-callback via reference: find function binding's reference paths
+          var _iterBinding = _getFunctionBinding(L.funcPath);
+          if (_iterBinding && _iterBinding.referencePaths) {
+            L.iterRefBinding = _iterBinding;
+            L.iterRefIri = 0;
+            F.state = _TVS_IDENT_PARAM_ITER_REF_LOOP_INNER;
+            continue;
+          }
+        }
+        // reduce(fn, init): paramIdx === 1
+        if (L.paramIdx === 1) {
+          var _redParent = L.funcPath.parentPath;
+          if (_redParent && _redParent.isCallExpression() &&
+              _t.isMemberExpression(_redParent.node.callee) && !_redParent.node.callee.computed &&
+              _redParent.node.arguments.length >= 1 && _redParent.node.arguments[0] === L.funcPath.node) {
+            var _redMethod = _t.isIdentifier(_redParent.node.callee.property)
+              ? _redParent.node.callee.property.name : null;
+            if (_redMethod === "reduce" || _redMethod === "reduceRight") {
+              var _redObjType = _getTrackedType(_redParent.get("callee.object"), _redParent.node.callee.object);
+              if (!(_redObjType && _NON_ITERABLE_TYPES[_redObjType])) {
+                L.iterMethod = _redMethod;
+                return { trace: _redParent.get("callee.object"), state: _TVS_IDENT_PARAM_REDUCE_AFTER };
+              }
+            }
+          }
+        }
+        // No iter / reduce match — fall through to msg-handler check.
+        F.state = _TVS_IDENT_PARAM_TRY_MSG;
+        continue;
+      }
+
+      case _TVS_IDENT_PARAM_ITER_REF_LOOP_INNER: {
+        while (L.iterRefIri < L.iterRefBinding.referencePaths.length) {
+          var _irRef = L.iterRefBinding.referencePaths[L.iterRefIri];
+          var _irParent = _irRef.parentPath;
+          if (_irParent && _irParent.isCallExpression() &&
+              _t.isMemberExpression(_irParent.node.callee) && !_irParent.node.callee.computed &&
+              _irParent.node.arguments.length >= 1 && _irParent.node.arguments[0] === _irRef.node) {
+            var _irMethod = _t.isIdentifier(_irParent.node.callee.property)
+              ? _irParent.node.callee.property.name : null;
+            if (_ITERATION_METHODS[_irMethod] || _irMethod === "then" || _irMethod === "catch") {
+              var _irObjType = _getTrackedType(_irParent.get("callee.object"), _irParent.node.callee.object);
+              if ((_irMethod === "then" || _irMethod === "catch") &&
+                  _isNetworkProducingCall(_irParent.get("callee.object"))) {
+                // skip
+              } else if (!(_ITERATION_METHODS[_irMethod] && _irObjType && _NON_ITERABLE_TYPES[_irObjType])) {
+                L.iterMethod = _irMethod;
+                return { trace: _irParent.get("callee.object"), state: _TVS_IDENT_PARAM_ITER_REF_AFTER };
+              }
+            }
+          }
+          L.iterRefIri++;
+        }
+        F.state = _TVS_IDENT_PARAM_TRY_MSG;
+        continue;
+      }
+
+      case _TVS_IDENT_PARAM_ITER_AFTER: {
+        var _iterObjSrc = F.result;
+        if (_iterObjSrc && _iterObjSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_iterObjSrc, "iter-callback", "." + L.iterMethod + " element", nodeLoc) };
+        }
+        // Continue with iter-callback-ref loop
+        var _iterBindingP = _getFunctionBinding(L.funcPath);
+        if (_iterBindingP && _iterBindingP.referencePaths) {
+          L.iterRefBinding = _iterBindingP;
+          L.iterRefIri = 0;
+          F.state = _TVS_IDENT_PARAM_ITER_REF_LOOP_INNER;
+          continue;
+        }
+        F.state = _TVS_IDENT_PARAM_TRY_MSG;
+        continue;
+      }
+
+      case _TVS_IDENT_PARAM_ITER_REF_AFTER: {
+        var _irObjSrc = F.result;
+        if (_irObjSrc && _irObjSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_irObjSrc, "iter-callback-ref", "." + L.iterMethod + " element (via ref)", nodeLoc) };
+        }
+        L.iterRefIri++;
+        F.state = _TVS_IDENT_PARAM_ITER_REF_LOOP_INNER;
+        continue;
+      }
+
+      case _TVS_IDENT_PARAM_REDUCE_AFTER: {
+        var _redObjSrc = F.result;
+        if (_redObjSrc && _redObjSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_redObjSrc, "reduce-element", "." + L.iterMethod + " element", nodeLoc) };
+        }
+        F.state = _TVS_IDENT_PARAM_TRY_MSG;
+        continue;
+      }
+
+      case _TVS_IDENT_TRY_OTHER: {
+        // Fall-through dispatcher: tries for-iter, destructure-obj/rest,
+        // destructure-arr, and param branches in source order. Entered
+        // after UCV_LOOP exhausted without finding a user-controlled
+        // reassignment. Each sub-branch either returns trace + state or
+        // falls through to the next via the local `if` chain below.
+        var binding = L.identBinding;
+        // For-in/for-of loop variable: for (var key in obj) → key inherits taint of obj.
+        if (binding.path.isVariableDeclarator() && !binding.path.node.init) {
+          var _forParent = binding.path.parentPath && binding.path.parentPath.parentPath;
+          if (_forParent && (_t.isForInStatement(_forParent.node) || _t.isForOfStatement(_forParent.node)) &&
+              _forParent.node.left === binding.path.parent) {
+            L.identName = node.name;
+            return { trace: _forParent.get("right"), state: _TVS_IDENT_FOR_ITER_AFTER };
+          }
+        }
+        // Destructured ObjectProperty / RestElement
+        if (_t.isObjectProperty(binding.path.node) || _t.isRestElement(binding.path.node)) {
+          var _destrParent = binding.path.parentPath;
+          while (_destrParent && !_destrParent.isVariableDeclarator()) {
+            _destrParent = _destrParent.parentPath;
+          }
+          if (_destrParent && _destrParent.node.init) {
+            L.identName = node.name;
+            return { trace: _destrParent.get("init"), state: _TVS_IDENT_DESTR_OBJ_AFTER };
+          }
+          if (_destrParent && !_destrParent.node.init) {
+            var _forOwner = _destrParent.parentPath && _destrParent.parentPath.parentPath;
+            if (_forOwner && (_t.isForOfStatement(_forOwner.node) || _t.isForInStatement(_forOwner.node))) {
+              L.identName = node.name;
+              return { trace: _forOwner.get("right"), state: _TVS_IDENT_DESTR_OBJ_FOR_AFTER };
+            }
+          }
+        }
+        // Destructured ArrayPattern element
+        if (_t.isArrayPattern(binding.path.parent)) {
+          var _arrDestrParent = binding.path.parentPath;
+          while (_arrDestrParent && !_arrDestrParent.isVariableDeclarator()) {
+            _arrDestrParent = _arrDestrParent.parentPath;
+          }
+          if (_arrDestrParent && _arrDestrParent.node.init) {
+            L.identName = node.name;
+            return { trace: _arrDestrParent.get("init"), state: _TVS_IDENT_DESTR_ARR_AFTER };
+          }
+          if (_arrDestrParent && !_arrDestrParent.node.init) {
+            var _forOwner2 = _arrDestrParent.parentPath && _arrDestrParent.parentPath.parentPath;
+            if (_forOwner2 && (_t.isForOfStatement(_forOwner2.node) || _t.isForInStatement(_forOwner2.node))) {
+              L.identName = node.name;
+              return { trace: _forOwner2.get("right"), state: _TVS_IDENT_DESTR_ARR_FOR_AFTER };
+            }
+          }
+        }
+        // Function parameter
+        if (binding.kind === "param") {
+          var paramIdx = -1;
+          var funcPath = binding.scope.path;
+          if (funcPath && funcPath.node.params) {
+            for (var pi = 0; pi < funcPath.node.params.length; pi++) {
+              if (_t.isIdentifier(funcPath.node.params[pi], { name: node.name })) { paramIdx = pi; break; }
+            }
+            if (paramIdx === -1) {
+              for (var _dpi = 0; _dpi < funcPath.node.params.length; _dpi++) {
+                var _dpParam = funcPath.node.params[_dpi];
+                if (_t.isObjectPattern(_dpParam)) {
+                  if (_findDestructuredKey(_dpParam, node.name)) { paramIdx = _dpi; break; }
+                }
+                if (_t.isAssignmentPattern(_dpParam) && _t.isObjectPattern(_dpParam.left)) {
+                  if (_findDestructuredKey(_dpParam.left, node.name)) { paramIdx = _dpi; break; }
+                }
+              }
+            }
+          }
+          if (paramIdx >= 0 && funcPath) {
+            L.identName = node.name;
+            L.paramIdx = paramIdx;
+            L.funcPath = funcPath;
+            var _iifeParent = funcPath.parentPath;
+            if (_iifeParent && _t.isCallExpression(_iifeParent.node) && _iifeParent.node.callee === funcPath.node &&
+                paramIdx < _iifeParent.node.arguments.length) {
+              return {
+                trace: _iifeParent.get("arguments." + paramIdx),
+                state: _TVS_IDENT_PARAM_IIFE_AFTER,
+              };
+            }
+            L.callerArgs = _findFunctionCallerArgs(funcPath);
+            L.callerArgsCi = 0;
+            F.state = _TVS_IDENT_PARAM_CALLERS_LOOP;
+            continue;
+          }
+          // No paramIdx — only msg-handler check applies if paramIdx === 0,
+          // which it isn't here. Return DYN.
+          return { done: DYN };
+        }
+        // Bare `location` identifier (unbound) — already handled in INIT
+        return { done: DYN };
+      }
+
+      case _TVS_IDENT_PARAM_TRY_MSG: {
+        // Final fallback for param-typed identifiers: cross-origin message
+        // handler detection. paramIdx must be 0 and the function must be
+        // attached as a "message" event handler. No recursion — purely
+        // structural via _isCrossOriginMsgReceiver.
+        if (L.paramIdx === 0 && L.funcPath) {
+          var _isMsgHandler = false;
+          var _mhParent = L.funcPath.parentPath;
+          if (_mhParent) {
+            if (_mhParent.isCallExpression()) {
+              var _aeNode = _mhParent.node;
+              if (_aeNode.arguments.length >= 2 && _aeNode.arguments[1] === L.funcPath.node &&
+                  _t.isStringLiteral(_aeNode.arguments[0], { value: "message" })) {
+                var _aeCal = _aeNode.callee;
+                if ((_t.isMemberExpression(_aeCal) && !_aeCal.computed &&
+                     _t.isIdentifier(_aeCal.property, { name: "addEventListener" })) ||
+                    (_t.isIdentifier(_aeCal, { name: "addEventListener" }) &&
+                     !L.funcPath.scope.getBinding("addEventListener"))) {
+                  if (_isCrossOriginMsgReceiver(_aeCal, _mhParent)) _isMsgHandler = true;
+                }
+              }
+            }
+            if (_mhParent.isAssignmentExpression() && _mhParent.node.right === L.funcPath.node) {
+              var _omLeft = _mhParent.node.left;
+              if (_t.isMemberExpression(_omLeft) && !_omLeft.computed &&
+                  _t.isIdentifier(_omLeft.property, { name: "onmessage" })) {
+                if (_isCrossOriginMsgReceiver(_omLeft, _mhParent)) _isMsgHandler = true;
+              }
+            }
+            if (!_isMsgHandler && _t.isReturnStatement(_mhParent.node)) {
+              var _mhEncFunc = L.funcPath.findParent(function(p) { return p.isFunction() && p !== L.funcPath; });
+              if (_mhEncFunc) {
+                var _mhEncBinding = null;
+                if (_t.isFunctionDeclaration(_mhEncFunc.node) && _t.isIdentifier(_mhEncFunc.node.id)) {
+                  _mhEncBinding = _mhEncFunc.parentPath.scope.getBinding(_mhEncFunc.node.id.name);
+                } else if (_mhEncFunc.parentPath && _mhEncFunc.parentPath.isVariableDeclarator()) {
+                  _mhEncBinding = _mhEncFunc.parentPath.scope.getBinding(_mhEncFunc.parentPath.node.id.name);
+                }
+                if (_mhEncBinding) {
+                  var _mhRefs = _mhEncBinding.referencePaths || [];
+                  for (var _mhri = 0; _mhri < _mhRefs.length && !_isMsgHandler; _mhri++) {
+                    var _mhRefParent = _mhRefs[_mhri].parentPath;
+                    if (_mhRefParent && _mhRefParent.isCallExpression() && _mhRefParent.node.callee === _mhRefs[_mhri].node) {
+                      var _mhCallParent = _mhRefParent.parentPath;
+                      if (_mhCallParent && _mhCallParent.isCallExpression()) {
+                        var _mhOuterCall = _mhCallParent.node;
+                        if (_mhOuterCall.arguments.length >= 2 && _mhOuterCall.arguments[1] === _mhRefParent.node &&
+                            _t.isStringLiteral(_mhOuterCall.arguments[0], { value: "message" })) {
+                          var _mhOuterCallee = _mhOuterCall.callee;
+                          if ((_t.isMemberExpression(_mhOuterCallee) && !_mhOuterCallee.computed &&
+                               _t.isIdentifier(_mhOuterCallee.property, { name: "addEventListener" })) ||
+                              (_t.isIdentifier(_mhOuterCallee, { name: "addEventListener" }) &&
+                               !_mhCallParent.scope.getBinding("addEventListener"))) {
+                            if (_isCrossOriginMsgReceiver(_mhOuterCallee, _mhCallParent)) _isMsgHandler = true;
+                          }
+                        }
+                      }
+                      if (_mhCallParent && _mhCallParent.isAssignmentExpression() && _mhCallParent.node.right === _mhRefParent.node) {
+                        var _mhOmLeft2 = _mhCallParent.node.left;
+                        if (_t.isMemberExpression(_mhOmLeft2) && !_mhOmLeft2.computed &&
+                            _t.isIdentifier(_mhOmLeft2.property, { name: "onmessage" })) {
+                          _isMsgHandler = true;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if (!_isMsgHandler && _mhParent) {
+            var _namedBinding = null;
+            if (_mhParent.isVariableDeclarator() && _t.isIdentifier(_mhParent.node.id)) {
+              _namedBinding = _mhParent.scope.getBinding(_mhParent.node.id.name);
+            } else if (_mhParent.isAssignmentExpression() && _t.isIdentifier(_mhParent.node.left) &&
+                       _mhParent.node.right === L.funcPath.node) {
+              _namedBinding = _mhParent.scope.getBinding(_mhParent.node.left.name);
+            }
+            if (_namedBinding) {
+              var _nbRefs = _namedBinding.referencePaths || [];
+              for (var _nbri = 0; _nbri < _nbRefs.length && !_isMsgHandler; _nbri++) {
+                var _nbRef = _nbRefs[_nbri];
+                var _nbRefP = _nbRef.parentPath;
+                if (!_nbRefP) continue;
+                if (_nbRefP.isCallExpression() && _nbRefP.node.arguments.length >= 2 &&
+                    _nbRefP.node.arguments[1] === _nbRef.node &&
+                    _t.isStringLiteral(_nbRefP.node.arguments[0], { value: "message" })) {
+                  var _nbCal = _nbRefP.node.callee;
+                  if ((_t.isMemberExpression(_nbCal) && !_nbCal.computed &&
+                       _t.isIdentifier(_nbCal.property, { name: "addEventListener" })) ||
+                      (_t.isIdentifier(_nbCal, { name: "addEventListener" }) &&
+                       !_nbRefP.scope.getBinding("addEventListener"))) {
+                    if (_isCrossOriginMsgReceiver(_nbCal, _nbRefP)) _isMsgHandler = true;
+                  }
+                }
+                if (_nbRefP.isAssignmentExpression() && _nbRefP.node.right === _nbRef.node) {
+                  var _nbOmL = _nbRefP.node.left;
+                  if (_t.isMemberExpression(_nbOmL) && !_nbOmL.computed &&
+                      _t.isIdentifier(_nbOmL.property, { name: "onmessage" })) {
+                    _isMsgHandler = true;
+                  }
+                }
+              }
+            }
+          }
+          if (_isMsgHandler) {
+            return { done: _tvsSource("event.data", nodeLoc, _dimsForSource("event.data")) };
+          }
+        }
+        return { done: DYN };
+      }
+
+      case _TVS_TL_AFTER: {
+        var exprSource = F.result;
+        if (exprSource && exprSource.sourceType === "user-controlled") {
+          var _hopT = _tvsHop(exprSource, "template-interp", "`…${" + L.tlTi + "}…`", nodeLoc);
+          if (L.tmplStripsOrigin && _hopT && _hopT.dimensions) {
+            _hopT.dimensions = _tvsDims({
+              path: _hopT.dimensions.path, query: _hopT.dimensions.query, hash: _hopT.dimensions.hash, content: true,
+            });
+          }
+          return { done: _hopT };
+        }
+        L.tlTi++;
+        if (L.tlTi < L.tlExprCount) {
+          return { trace: path.get("expressions." + L.tlTi), state: _TVS_TL_AFTER };
+        }
+        return { done: L.tlExprCount > 0 ? DYN : LIT };
+      }
+
+      case _TVS_TT_AFTER: {
+        var _ttExprSrc = F.result;
+        if (_ttExprSrc && _ttExprSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_ttExprSrc, "tagged-template", "tag`…${" + L.ttTi + "}…`", nodeLoc) };
+        }
+        L.ttTi++;
+        if (L.ttTi < L.ttExprCount) {
+          return { trace: L.ttQuasiPath.get("expressions." + L.ttTi), state: _TVS_TT_AFTER };
+        }
+        // Fall through to next branch
+        L.branchSkip = 10;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_BIN_AFTER_LEAF: {
+        var _binLeafSrc = F.result;
+        var _binStrip = function(_h) {
+          if (L.concatStripsOrigin && _h && _h.dimensions) {
+            _h.dimensions = _tvsDims({
+              path: _h.dimensions.path, query: _h.dimensions.query, hash: _h.dimensions.hash, content: true,
+            });
+          }
+          return _h;
+        };
+        if (_binLeafSrc && _binLeafSrc.sourceType === "user-controlled") {
+          var _binRes = _binLeafSrc;
+          for (var _bli = L.binRights.length - 1; _bli >= 0; _bli--) {
+            _binRes = _binStrip(_tvsHop(_binRes, "concat-left", "… + …", L.binRights[_bli].loc));
+          }
+          return { done: _binRes };
+        }
+        L.binBrj = L.binRights.length - 1;
+        if (L.binBrj < 0) return { done: DYN };
+        return { trace: L.binRights[L.binBrj].path, state: _TVS_BIN_RIGHTS_AFTER };
+      }
+
+      case _TVS_BIN_RIGHTS_AFTER: {
+        var _brSrc = F.result;
+        var _binStrip2 = function(_h) {
+          if (L.concatStripsOrigin && _h && _h.dimensions) {
+            _h.dimensions = _tvsDims({
+              path: _h.dimensions.path, query: _h.dimensions.query, hash: _h.dimensions.hash, content: true,
+            });
+          }
+          return _h;
+        };
+        if (_brSrc && _brSrc.sourceType === "user-controlled") {
+          var _brRes = _binStrip2(_tvsHop(_brSrc, "concat-right", "… + …", L.binRights[L.binBrj].loc));
+          for (var _blk = L.binBrj - 1; _blk >= 0; _blk--) {
+            _brRes = _binStrip2(_tvsHop(_brRes, "concat-left", "… + …", L.binRights[_blk].loc));
+          }
+          return { done: _brRes };
+        }
+        L.binBrj--;
+        if (L.binBrj >= 0) {
+          return { trace: L.binRights[L.binBrj].path, state: _TVS_BIN_RIGHTS_AFTER };
+        }
+        return { done: DYN };
+      }
+
+      case _TVS_COND_AFTER_CONS: {
+        var consSource = F.result;
+        if (consSource && consSource.sourceType === "user-controlled") {
+          return { done: _tvsHop(consSource, "ternary-then", "? … : _", nodeLoc) };
+        }
+        return { trace: path.get("alternate"), state: _TVS_COND_AFTER_ALT };
+      }
+
+      case _TVS_COND_AFTER_ALT: {
+        var altSource = F.result;
+        if (altSource && altSource.sourceType === "user-controlled") {
+          return { done: _tvsHop(altSource, "ternary-else", "? _ : …", nodeLoc) };
+        }
+        // Fall through to next branch
+        L.branchSkip = 12;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_LOG_AFTER_LEAF: {
+        var _logLeafSrc = F.result;
+        if (_logLeafSrc && _logLeafSrc.sourceType === "user-controlled") {
+          var _logRes = _logLeafSrc;
+          for (var _lli = L.logRights.length - 1; _lli >= 0; _lli--) {
+            _logRes = _tvsHop(_logRes, "logical-left", "… " + L.logRights[_lli].op + " …", L.logRights[_lli].loc);
+          }
+          return { done: _logRes };
+        }
+        L.logLrj = L.logRights.length - 1;
+        if (L.logLrj < 0) {
+          L.branchSkip = 13;
+          F.state = _TVS_INIT;
+          continue;
+        }
+        return { trace: L.logRights[L.logLrj].path, state: _TVS_LOG_RIGHTS_AFTER };
+      }
+
+      case _TVS_LOG_RIGHTS_AFTER: {
+        var _lrSrc = F.result;
+        if (_lrSrc && _lrSrc.sourceType === "user-controlled") {
+          var _lrRes = _tvsHop(_lrSrc, "logical-right", "… " + L.logRights[L.logLrj].op + " …", L.logRights[L.logLrj].loc);
+          for (var _llk = L.logLrj - 1; _llk >= 0; _llk--) {
+            _lrRes = _tvsHop(_lrRes, "logical-left", "… " + L.logRights[_llk].op + " …", L.logRights[_llk].loc);
+          }
+          return { done: _lrRes };
+        }
+        L.logLrj--;
+        if (L.logLrj >= 0) {
+          return { trace: L.logRights[L.logLrj].path, state: _TVS_LOG_RIGHTS_AFTER };
+        }
+        // Fall through
+        L.branchSkip = 13;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_SEQ_AFTER: {
+        return { done: _tvsHop(F.result, "sequence", "(_, …)", nodeLoc) };
+      }
+
+      case _TVS_AWAIT_AFTER: {
+        return { done: _tvsHop(F.result, "await", "await …", nodeLoc) };
+      }
+
+      case _TVS_SPREAD_AFTER: {
+        return { done: _tvsHop(F.result, "spread", "…value", nodeLoc) };
+      }
+
+      case _TVS_ASSIGN_RHS_AFTER: {
+        return { done: _tvsHop(F.result, "assignment-rhs", "lhs = …", nodeLoc) };
+      }
+
+      case _TVS_CALL_METHOD_AFTER_OBJ: {
+        var callObjSource = F.result;
+        if (callObjSource && callObjSource.sourceType === "user-controlled") {
+          var _callMethodName = L.callMethodName;
+          var _argLit = L.callArgLit;
+          var _hopDesc = "." + _callMethodName + "(" + (_argLit !== null ? JSON.stringify(_argLit) : "") + ")";
+          var _sdM = callObjSource.dimensions || _tvsDimsContent();
+          var _hasUrlPartDim = !!(_sdM.hash || _sdM.query || _sdM.path);
+          var _mcProjDims;
+          var _isPrefixPreservingName =
+            _callMethodName === "toString" || _callMethodName === "valueOf" ||
+            _callMethodName === "toLowerCase" || _callMethodName === "toUpperCase" ||
+            _callMethodName === "normalize" ||
+            _callMethodName === "trim" || _callMethodName === "trimStart" || _callMethodName === "trimEnd";
+          var _isSliceFamily = _callMethodName === "slice" || _callMethodName === "substring" || _callMethodName === "substr";
+          var _sliceStartZero = _isSliceFamily && node.arguments.length >= 1 &&
+            _t.isNumericLiteral(node.arguments[0]) && node.arguments[0].value === 0;
+          var _hasAnyAttackerDim = !!(_sdM.origin || _sdM.path || _sdM.query || _sdM.hash || _sdM.content);
+          if (!_hasAnyAttackerDim) {
+            _mcProjDims = { origin: false, content: false };
+          } else if (_isPrefixPreservingName || _sliceStartZero) {
+            _mcProjDims = {
+              origin: _sdM.origin, path: _sdM.path, query: _sdM.query, hash: _sdM.hash,
+              content: _sdM.origin || _sdM.path || _sdM.query || _sdM.hash || _sdM.content,
+            };
+          } else if (_callMethodName === "get" || _callMethodName === "getAll" || _callMethodName === "has") {
+            _mcProjDims = { origin: _sdM.origin || _hasUrlPartDim, content: true };
+          } else {
+            _mcProjDims = { origin: _sdM.origin || _hasUrlPartDim, content: true };
+          }
+          var _hop = _mcProjDims
+            ? _tvsHopDims(callObjSource, "method-call", _hopDesc, nodeLoc, _mcProjDims)
+            : _tvsHop(callObjSource, "method-call", _hopDesc, nodeLoc);
+          if (_argLit !== null && _hop && _hop.taintPath && _hop.taintPath.length) {
+            _hop.taintPath[_hop.taintPath.length - 1].arg = _argLit;
+            _hop.taintPath[_hop.taintPath.length - 1].method = _callMethodName;
+          }
+          return { done: _hop };
+        }
+        // Fall through to Object.assign / call-arg / function-return
+        L.callNode = node;
+        F.state = _TVS_CALL_OA_LOOP;
+        continue;
+      }
+
+      case _TVS_CALL_OA_LOOP: {
+        // Object.assign(target, ...sources): trace each arg.
+        // AV-grounded callee identity via builtin-method "Object.assign".
+        var oaCalleeAv = _specPathValMemo.get(node.callee);
+        if (oaCalleeAv && oaCalleeAv.kind === "builtin-method" && oaCalleeAv.id === "Object.assign" &&
+            node.arguments.length >= 2) {
+          if (L.callOaIdx === undefined) L.callOaIdx = 0;
+          if (L.callOaIdx < node.arguments.length) {
+            return { trace: path.get("arguments." + L.callOaIdx), state: _TVS_CALL_OA_AFTER };
+          }
+        }
+        // Call-arg processing
+        F.state = _TVS_CALL_GENERIC_AFTER_DISPATCH;
+        continue;
+      }
+
+      case _TVS_CALL_OA_AFTER: {
+        var _oaArgSrc = F.result;
+        if (_oaArgSrc && _oaArgSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_oaArgSrc, "object-assign-arg", "Object.assign arg " + L.callOaIdx, nodeLoc) };
+        }
+        L.callOaIdx++;
+        F.state = _TVS_CALL_OA_LOOP;
+        continue;
+      }
+
+      case _TVS_CALL_GENERIC_AFTER_DISPATCH: {
+        // arg0 trace, with .get/.has gating
+        if (node.arguments.length > 0) {
+          if (_t.isMemberExpression(node.callee) && !node.callee.computed &&
+              _t.isIdentifier(node.callee.property) &&
+              (node.callee.property.name === "get" || node.callee.property.name === "has")) {
+            var _ccmRecvType = _getTrackedType(path, node.callee.object);
+            var _isUrlLikeLookup = _ccmRecvType === "URLSearchParams" ||
+              _ccmRecvType === "Headers" || _ccmRecvType === "Request" || _ccmRecvType === "Response";
+            if (_isUrlLikeLookup) {
+              return { trace: path.get("arguments.0"), state: _TVS_CALL_GETHAS_AFTER };
+            }
+            // else fall through to function-return
+          } else {
+            return { trace: path.get("arguments.0"), state: _TVS_CALL_GENERIC_AFTER };
+          }
+        }
+        // Function-return resolution (no recursion via _traceValueSource — uses _traceReturnsInBlock)
+        var _calleeNode = node.callee;
+        var _calleeFuncPath = null;
+        if (_t.isIdentifier(_calleeNode)) {
+          var _calleeBinding = path.scope.getBinding(_calleeNode.name);
+          if (_calleeBinding) {
+            if (_t.isFunctionDeclaration(_calleeBinding.path.node)) {
+              _calleeFuncPath = _calleeBinding.path;
+            } else if (_calleeBinding.path.isVariableDeclarator() && _calleeBinding.path.node.init &&
+                       _t.isFunction(_calleeBinding.path.node.init)) {
+              _calleeFuncPath = _calleeBinding.path.get("init");
+            }
+          }
+        }
+        if (_calleeFuncPath && _calleeFuncPath.node.body && _t.isBlockStatement(_calleeFuncPath.node.body)) {
+          // Defer the function-return scan to the FN_RETURN_LOOP
+          // state machine — collects return-arg paths and dispatches
+          // each as a TVS sub-frame. Replaces a synchronous
+          // _traceReturnsInBlock call that would close a static
+          // recursion cycle TVS ↔ _traceReturnsInBlock.
+          L.fnReturnArgPaths = _collectReturnArgPaths(_calleeFuncPath.get("body"));
+          L.fnReturnAi = 0;
+          L.fnReturnCalleeName = _t.isIdentifier(_calleeNode) ? _calleeNode.name + "()" : "call()";
+          F.state = _TVS_FN_RETURN_LOOP;
+          continue;
+        }
+        // Done with call branch — fall through to next branch
+        L.branchSkip = 17;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_CALL_GETHAS_AFTER: {
+        var argSourceGH = F.result;
+        if (argSourceGH && argSourceGH.sourceType === "user-controlled") {
+          var _callCalleeNameGH = "." + node.callee.property.name + "()";
+          return { done: _tvsHop(argSourceGH, "call-arg", _callCalleeNameGH + " arg 0", nodeLoc) };
+        }
+        // Fall through to function-return
+        L.callOaIdx = node.arguments.length;  // skip OA loop
+        F.state = _TVS_CALL_GENERIC_AFTER_DISPATCH_FN_RETURN;
+        continue;
+      }
+
+      case _TVS_CALL_GENERIC_AFTER: {
+        var argSourceG = F.result;
+        if (argSourceG && argSourceG.sourceType === "user-controlled") {
+          var _callCalleeNameG = _t.isIdentifier(node.callee) ? node.callee.name + "()" :
+            (_t.isMemberExpression(node.callee) && _t.isIdentifier(node.callee.property) ? "." + node.callee.property.name + "()" : "call()");
+          return { done: _tvsHop(argSourceG, "call-arg", _callCalleeNameG + " arg 0", nodeLoc) };
+        }
+        // Fall through to function-return
+        F.state = _TVS_CALL_GENERIC_AFTER_DISPATCH_FN_RETURN;
+        continue;
+      }
+
+      case _TVS_CALL_GENERIC_AFTER_DISPATCH_FN_RETURN: {
+        var _calleeNodeF = node.callee;
+        var _calleeFuncPathF = null;
+        if (_t.isIdentifier(_calleeNodeF)) {
+          var _calleeBindingF = path.scope.getBinding(_calleeNodeF.name);
+          if (_calleeBindingF) {
+            if (_t.isFunctionDeclaration(_calleeBindingF.path.node)) {
+              _calleeFuncPathF = _calleeBindingF.path;
+            } else if (_calleeBindingF.path.isVariableDeclarator() && _calleeBindingF.path.node.init &&
+                       _t.isFunction(_calleeBindingF.path.node.init)) {
+              _calleeFuncPathF = _calleeBindingF.path.get("init");
+            }
+          }
+        }
+        if (_calleeFuncPathF && _calleeFuncPathF.node.body && _t.isBlockStatement(_calleeFuncPathF.node.body)) {
+          L.fnReturnArgPaths = _collectReturnArgPaths(_calleeFuncPathF.get("body"));
+          L.fnReturnAi = 0;
+          L.fnReturnCalleeName = _t.isIdentifier(_calleeNodeF) ? _calleeNodeF.name + "()" : "call()";
+          F.state = _TVS_FN_RETURN_LOOP;
+          continue;
+        }
+        L.branchSkip = 17;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_FN_RETURN_LOOP: {
+        if (L.fnReturnAi < L.fnReturnArgPaths.length) {
+          return { trace: L.fnReturnArgPaths[L.fnReturnAi++], state: _TVS_FN_RETURN_AFTER };
+        }
+        // No tainted return found — fall through to next branch.
+        L.branchSkip = 17;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_FN_RETURN_AFTER: {
+        var _retArgSrc = F.result;
+        if (_retArgSrc && _retArgSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_retArgSrc, "function-return", "return of " + L.fnReturnCalleeName, nodeLoc) };
+        }
+        F.state = _TVS_FN_RETURN_LOOP;
+        continue;
+      }
+
+      case _TVS_NEW_URL_AFTER_INPUT: {
+        L.urlInputSrc = F.result;
+        if (L.urlBasePath) {
+          return { trace: L.urlBasePath, state: _TVS_NEW_URL_AFTER_BASE };
+        }
+        L.urlBaseSrc = null;
+        F.state = _TVS_NEW_URL_RESOLVE;
+        continue;
+      }
+
+      case _TVS_NEW_URL_AFTER_BASE: {
+        L.urlBaseSrc = F.result;
+        F.state = _TVS_NEW_URL_RESOLVE;
+        continue;
+      }
+
+      case _TVS_NEW_URL_RESOLVE: {
+        var _urlInputNode = L.urlInputNode;
+        var _urlInputSrc = L.urlInputSrc;
+        var _urlBaseSrc = L.urlBaseSrc;
+        var _urlInputIsRelative =
+          (_t.isStringLiteral(_urlInputNode) &&
+            !/^https?:/i.test(_urlInputNode.value) &&
+            !_urlInputNode.value.startsWith("//")) ||
+          (_t.isTemplateLiteral(_urlInputNode) && (function () {
+            var q = _urlInputNode.quasis;
+            var h = (q[0] && q[0].value && q[0].value.raw) || "";
+            return h !== "" && !/^https?:/i.test(h) && !h.startsWith("//");
+          })());
+        var _inputDims = _urlInputSrc && _urlInputSrc.dimensions ? _urlInputSrc.dimensions : null;
+        var _baseDims = _urlBaseSrc && _urlBaseSrc.dimensions ? _urlBaseSrc.dimensions : null;
+        var _outDims = {
+          origin: _urlInputIsRelative
+            ? !!(_baseDims && _baseDims.origin)
+            : !!((_inputDims && _inputDims.origin) || (_baseDims && _baseDims.origin && !_urlInputIsRelative && !_urlInputSrc)),
+          path: !!(_inputDims && _inputDims.path),
+          query: !!(_inputDims && _inputDims.query),
+          hash: !!(_inputDims && _inputDims.hash),
+          content: !!((_inputDims && _inputDims.content) || (_baseDims && _baseDims.content && _urlInputIsRelative)),
+        };
+        if (_urlInputSrc && _urlInputSrc.sourceType === "user-controlled") {
+          var h1 = _tvsHop(_urlInputSrc, "new-url-input", "new URL(input, …)", nodeLoc);
+          if (h1) h1.dimensions = _tvsDims(_outDims);
+          return { done: h1 };
+        }
+        if (_urlBaseSrc && _urlBaseSrc.sourceType === "user-controlled") {
+          var h2 = _tvsHop(_urlBaseSrc, "new-url-base", "new URL(_, base)", nodeLoc);
+          if (h2) h2.dimensions = _tvsDims(_outDims);
+          return { done: h2 };
+        }
+        L.branchSkip = 18;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_NEW_AFTER: {
+        var _nArgSrc = F.result;
+        if (_nArgSrc && _nArgSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_nArgSrc, "new-arg", "new " + L.newCalleeName + " arg " + L.newNi, nodeLoc) };
+        }
+        L.newNi++;
+        if (L.newNi < L.newArgCount) {
+          return { trace: path.get("arguments." + L.newNi), state: _TVS_NEW_AFTER };
+        }
+        L.branchSkip = 19;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_ARR_AFTER: {
+        var _aElSrc = F.result;
+        if (_aElSrc && _aElSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_aElSrc, "array-elem", "[…" + L.arrAi + "…]", nodeLoc) };
+        }
+        L.arrAi++;
+        while (L.arrAi < L.arrElCount && !node.elements[L.arrAi]) L.arrAi++;
+        if (L.arrAi < L.arrElCount) {
+          return { trace: path.get("elements." + L.arrAi), state: _TVS_ARR_AFTER };
+        }
+        L.branchSkip = 20;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_OBJ_LOOP: {
+        // Find next ObjectProperty with traceable value (or SpreadElement)
+        while (L.objExprOpi < L.objExprPropsCount) {
+          var _opProp = node.properties[L.objExprOpi];
+          if (_t.isObjectProperty(_opProp)) {
+            return {
+              trace: path.get("properties." + L.objExprOpi + ".value"),
+              state: _TVS_OBJ_PROP_AFTER,
+            };
+          }
+          if (_t.isSpreadElement(_opProp)) {
+            return {
+              trace: path.get("properties." + L.objExprOpi + ".argument"),
+              state: _TVS_OBJ_SPREAD_AFTER,
+            };
+          }
+          L.objExprOpi++;
+        }
+        L.branchSkip = 21;
+        F.state = _TVS_INIT;
+        continue;
+      }
+
+      case _TVS_OBJ_PROP_AFTER: {
+        var _opValSrc = F.result;
+        if (_opValSrc && _opValSrc.sourceType === "user-controlled") {
+          var _opProp2 = node.properties[L.objExprOpi];
+          var _opPropKey = _t.isIdentifier(_opProp2.key) ? _opProp2.key.name :
+            _t.isStringLiteral(_opProp2.key) ? _opProp2.key.value : "?";
+          return { done: _tvsHop(_opValSrc, "obj-prop-value", "{" + _opPropKey + ": …}", nodeLoc) };
+        }
+        L.objExprOpi++;
+        F.state = _TVS_OBJ_LOOP;
+        continue;
+      }
+
+      case _TVS_OBJ_SPREAD_AFTER: {
+        var _opSpreadSrc = F.result;
+        if (_opSpreadSrc && _opSpreadSrc.sourceType === "user-controlled") {
+          return { done: _tvsHop(_opSpreadSrc, "obj-spread", "{...…}", nodeLoc) };
+        }
+        L.objExprOpi++;
+        F.state = _TVS_OBJ_LOOP;
+        continue;
+      }
+
+      default:
+        return { done: DYN };
+    }
+  }
+}
 
 // ─── Security Analysis: Helpers ──────────────────────────────────────────────
 
