@@ -436,6 +436,61 @@ xss("safe: literal template in eval", `
   return true;
 });
 
+console.log("\n=== Closure-captured taint ===\n");
+
+xss("closure-captured taint var", `
+  var url = location.hash.slice(1);
+  function send() { fetch(url); }
+  send();
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "request-forgery" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+console.log("\n=== Reassignment and conditional ===\n");
+
+xss("reassignment-then-fetch", `
+  var u;
+  u = location.hash;
+  fetch(u);
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "request-forgery" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+xss("conditional-assignment with taint in one branch", `
+  var u;
+  if (Math.random() > 0.5) { u = location.hash; } else { u = "/safe"; }
+  fetch(u);
+`, function(sinks) {
+  // One branch is tainted — should flag (or-AV with taint leaf).
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "request-forgery" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+console.log("\n=== Object-literal body with tainted field ===\n");
+
+xss("postMessage(taint, '*')", `
+  window.postMessage(location.hash, "*");
+`, function(sinks) {
+  // postMessage with tainted data is leak; check for either request-forgery
+  // (target host) or eval/xss (depending on classification).
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.source === "location.hash") return true;
+  }
+  return false;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);
