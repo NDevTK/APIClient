@@ -441,7 +441,7 @@ function _generateCode(node, maxLines) {
 // spec eval's IIFE dispatch substitutes caller args (window) into
 // the param's AV.
 function _isGlobalObject(path, node) {
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   var nodeAv = _specPathValMemo.get(node);
   var globalAv = _specGlobalThisAv();
   return !!(nodeAv && globalAv && globalAv.props && nodeAv === globalAv.props.window);
@@ -485,7 +485,7 @@ function _isGlobalFetchCall(callee, scope, path) {
 // function bodies.
 function _isXhrObject(path, objectNode) {
   if (!objectNode) return false;
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   var av = _specPathValMemo.get(objectNode);
   return !!(av && av.kind === "obj-lit" && av._ctorId === "WHATWG.XMLHttpRequest");
 }
@@ -1461,10 +1461,13 @@ function _processNetworkSink(path, result) {
 
   // ── Identify fetch() / window.fetch() — verify these are actual globals via scope ──
   if (_isGlobalFetchCall(callee, path.scope, path)) {
-    // Trigger spec-eval program fixpoint per ECMA § 9.1.1 closure
+    // Trigger spec-eval program FIXPOINT per ECMA § 9.1.1 closure
     // write-back so URL extraction sees side effects from any callee
-    // that mutates outer-scope captures. Idempotent — runs once per
-    // program. Only invoked from confirmed fetch sites so bundles
+    // that mutates outer-scope captures, AND class-method dispatch
+    // (`new C(arg).method()` resolves URL through this-substitution
+    // via _resolveAvBySubstitutingCallerArgs which needs the
+    // call-graph populated by the fixpoint). Idempotent — runs once
+    // per program. Only invoked from confirmed fetch sites so bundles
     // without fetch don't pay the per-function analysis cost.
     _specEnsureProgramFixpoint(path);
     _extractFetchCall(path, result, "fetch");
@@ -1777,7 +1780,7 @@ function _processNetworkSink(path, result) {
   // builtin-method (installed on windowSelfAv.props.navigator.props.sendBeacon).
   // Both `navigator.sendBeacon` and `window.navigator.sendBeacon` project
   // to the same builtin-method through MemberExpression spec eval.
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   var _beaconCalleeAv = _specPathValMemo.get(callee);
   if (_beaconCalleeAv && _beaconCalleeAv.kind === "builtin-method" &&
       _beaconCalleeAv.id === "Navigator.prototype.sendBeacon" && node.arguments.length >= 1) {
@@ -1809,7 +1812,7 @@ function _processNewExpressionSink(path, result) {
   var callee = node.callee;
   // new EventSource(url) — AV-grounded callee identity via builtin-ctor
   // "WHATWG.EventSource" (installed on globalThis registry).
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   var esCalleeAv = _specPathValMemo.get(callee);
   if (esCalleeAv && esCalleeAv.kind === "builtin-ctor" && esCalleeAv.id === "WHATWG.EventSource" &&
       node.arguments.length >= 1) {
@@ -1830,7 +1833,7 @@ function _processImageSrcSink(path, result) {
   // AV-grounded receiver identity via builtin-ctor "WHATWG.Image" — the
   // var binding's init was `new Image()`. Spec eval propagates the ctor
   // result through VariableDeclarator binding tag (preserving _ctorId).
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   var imgRecvAv = _specPathValMemo.get(left.object);
   if (!imgRecvAv || imgRecvAv.kind !== "obj-lit" || imgRecvAv._ctorId !== "WHATWG.Image") return;
   var urls = _resolveAllValues(path.get("right"), 0);
@@ -7942,6 +7945,121 @@ function _specEnsureProgramFixpoint(anyPath) {
   if (p && p.node && _t.isProgram(p.node)) _specAnalyzeProgramWithFixpoint(p);
 }
 
+// Lightweight pre-pass for AV-grounded identity checks: populate
+// `_specPathValMemo` for unbound-global Identifier and MemberExpression
+// nodes so callers like `_isGlobalObject` / `_isLocationObject` /
+// `_isXhrObject` / etc. can resolve via spec-eval AVs without paying for
+// the full program-level fixpoint analysis. Per WHATWG HTML § 7.2.1
+// the global object IS the Window IDL interface — bare unbound names
+// resolve via globalThis registry → windowSelfAv.props. Member access
+// on those resolves via prop projection. Idempotent per program; runs
+// at most O(program-AST). Triggered by AV-identity callers that don't
+// need closure write-back fixpoint, only the static globals registry.
+var _specProgramGlobalsPrepassDone = new WeakSet();
+function _specEnsureProgramGlobalsPrepass(anyPath) {
+  if (!anyPath) return;
+  var p = anyPath;
+  while (p && p.parentPath) p = p.parentPath;
+  if (!p || !p.node || !_t.isProgram(p.node)) return;
+  if (_specProgramGlobalsPrepassDone.has(p.node)) return;
+  _specProgramGlobalsPrepassDone.add(p.node);
+  var globalAv = _specGlobalThisAv();
+  if (!globalAv || !globalAv.props) return;
+  var windowAv = globalAv.props.window;
+  // Per WHATWG HTML § 7.2.1 globalThis IS Window — fall through to
+  // windowSelfAv for names not directly on the global registry.
+  function resolveGlobalProp(name) {
+    if (Object.prototype.hasOwnProperty.call(globalAv.props, name)) {
+      return globalAv.props[name];
+    }
+    if (windowAv && windowAv.props && Object.prototype.hasOwnProperty.call(windowAv.props, name)) {
+      return windowAv.props[name];
+    }
+    return null;
+  }
+  p.traverse({
+    Identifier: function(idPath) {
+      var n = idPath.node;
+      // Skip declaration-position identifiers (var X = ..., function X() {}, etc).
+      var parent = idPath.parent;
+      if (!parent) return;
+      if (_t.isVariableDeclarator(parent) && parent.id === n) return;
+      if (_t.isFunctionDeclaration(parent) && parent.id === n) return;
+      if (_t.isFunctionExpression(parent) && parent.id === n) return;
+      if (_t.isClassDeclaration(parent) && parent.id === n) return;
+      if (_t.isClassExpression(parent) && parent.id === n) return;
+      if (_t.isMemberExpression(parent) && parent.property === n && !parent.computed) return;
+      if (_t.isObjectProperty(parent) && parent.key === n && !parent.computed) return;
+      if (_t.isObjectMethod(parent) && parent.key === n && !parent.computed) return;
+      if (_t.isClassMethod(parent) && parent.key === n && !parent.computed) return;
+      if (_t.isClassProperty(parent) && parent.key === n && !parent.computed) return;
+      if (_t.isLabeledStatement(parent) && parent.label === n) return;
+      if (_t.isBreakStatement(parent) && parent.label === n) return;
+      if (_t.isContinueStatement(parent) && parent.label === n) return;
+      if (_t.isImportSpecifier(parent)) return;
+      if (_t.isImportDefaultSpecifier(parent)) return;
+      if (_t.isImportNamespaceSpecifier(parent)) return;
+      // Function param positions (not references).
+      if ((_t.isFunctionDeclaration(parent) || _t.isFunctionExpression(parent) ||
+           _t.isArrowFunctionExpression(parent) || _t.isObjectMethod(parent) ||
+           _t.isClassMethod(parent)) && parent.params && parent.params.indexOf(n) >= 0) return;
+      if (_t.isAssignmentPattern(parent) && parent.left === n) return;
+      // Skip if already memoised by spec eval.
+      if (_specPathValMemo.has(n)) return;
+      var binding = idPath.scope && idPath.scope.getBinding(n.name);
+      if (!binding) {
+        // Unbound — resolve through globalThis + Window fallthrough per § 7.2.1.
+        var gAv = resolveGlobalProp(n.name);
+        if (gAv) _specPathValMemo.set(n, gAv);
+        return;
+      }
+      // ECMA § 13.1.3 IdentifierReference: const-init binding propagation.
+      // For `var X = expr;` or `let/const X = expr;`, propagate expr's AV
+      // when expr's AV has been pre-computed (init reads of unbound globals
+      // / member projections / new-expressions on builtin ctors). Only
+      // applies to single-write bindings (binding.constant true).
+      if (binding.constant && binding.path && _t.isVariableDeclarator(binding.path.node) &&
+          binding.path.node.init) {
+        var initAv = _specPathValMemo.get(binding.path.node.init);
+        if (initAv) _specPathValMemo.set(n, initAv);
+      }
+    },
+    MemberExpression: {
+      exit: function(memPath) {
+        var n = memPath.node;
+        if (n.computed) return;
+        if (_specPathValMemo.has(n)) return;
+        var objAv = _specPathValMemo.get(n.object);
+        if (!objAv || objAv.kind !== "obj-lit" || !objAv.props) return;
+        var keyName = _t.isIdentifier(n.property) ? n.property.name :
+                       (_t.isStringLiteral(n.property) ? n.property.value : null);
+        if (!keyName) return;
+        if (Object.prototype.hasOwnProperty.call(objAv.props, keyName)) {
+          _specPathValMemo.set(n, objAv.props[keyName]);
+        }
+      }
+    },
+    NewExpression: {
+      exit: function(newPath) {
+        var n = newPath.node;
+        if (_specPathValMemo.has(n)) return;
+        var calleeAv = _specPathValMemo.get(n.callee);
+        if (!calleeAv || calleeAv.kind !== "builtin-ctor") return;
+        // Only invoke ctor when ALL arg AVs are pre-computed (otherwise
+        // _specApplyBuiltinCtor returns top for missing args anyway).
+        var argAvs = [];
+        for (var ni = 0; ni < n.arguments.length; ni++) {
+          var argAv = _specPathValMemo.get(n.arguments[ni]);
+          argAvs.push(argAv || { kind: "top" });
+        }
+        var ctorRes = null;
+        try { ctorRes = _specApplyBuiltinCtor(calleeAv.id, argAvs); } catch (_) {}
+        if (ctorRes) _specPathValMemo.set(n, ctorRes);
+      }
+    }
+  });
+}
+
 // Program-level fixpoint driver: collects all FunctionDeclaration /
 // FunctionExpression / ArrowFunctionExpression paths reachable from a
 // Program node, then iterates _specAnalyzePropertyFlow(force=true) over
@@ -11318,7 +11436,7 @@ function _trackTypeFromDeclarator(path) {
   // as spec-defined IDL slots per WHATWG DOM § 4.5).
   if (_t.isCallExpression(init) && _t.isMemberExpression(init.callee) && !init.callee.computed &&
       _t.isIdentifier(init.callee.property)) {
-    _specEnsureProgramFixpoint(path);
+    _specEnsureProgramGlobalsPrepass(path);
     var docRecvAv = _specPathValMemo.get(init.callee.object);
     var gThisDoc = _specGlobalThisAv();
     if (docRecvAv && gThisDoc && gThisDoc.props && docRecvAv === gThisDoc.props.document) {
@@ -11367,7 +11485,7 @@ function _containsNetworkSink(funcPath) {
       if (found) { innerPath.stop(); return; }
       // AV-grounded ctor identity via builtin-ctor "WHATWG.XMLHttpRequest"
       // installed by _specGlobalThisAv.
-      _specEnsureProgramFixpoint(innerPath);
+      _specEnsureProgramGlobalsPrepass(innerPath);
       var newCalleeAv = _specPathValMemo.get(innerPath.node.callee);
       if (newCalleeAv && newCalleeAv.kind === "builtin-ctor" && newCalleeAv.id === "WHATWG.XMLHttpRequest") {
         found = true; innerPath.stop();
@@ -13303,28 +13421,54 @@ function _evalBinaryConstConst(lv, rv, op) {
   return null;
 }
 
+var _avFlattenPageUrlPartsCacheKey = null;
+var _avFlattenPageUrlPartsCache = null;
 function _avFlattenStringLeaves(rootAv) {
-  if (!rootAv) return [];
-  // WHATWG URL § 4.4 page-origin substitution: location.{origin,protocol,
-  // hostname,host} taint sources are page-locked (dims.origin === false).
-  // Substitute the analysis tab's URL parts as const string leaves.
-  var pageUrlParts = null;
-  if (_sourceUrl) {
-    try {
-      var pageUrlForSubst = new URL(_sourceUrl);
-      pageUrlParts = {
-        "location.origin":   pageUrlForSubst.origin,
-        "location.protocol": pageUrlForSubst.protocol,
-        "location.hostname": pageUrlForSubst.hostname,
-        "location.host":     pageUrlForSubst.host,
-      };
-    } catch (_) { pageUrlParts = null; }
+  if (_sourceUrl !== _avFlattenPageUrlPartsCacheKey) {
+    _avFlattenPageUrlPartsCacheKey = _sourceUrl;
+    _avFlattenPageUrlPartsCache = null;
+    if (_sourceUrl) {
+      try {
+        var _pageUrlForCache = new URL(_sourceUrl);
+        _avFlattenPageUrlPartsCache = {
+          "location.origin":   _pageUrlForCache.origin,
+          "location.protocol": _pageUrlForCache.protocol,
+          "location.hostname": _pageUrlForCache.hostname,
+          "location.host":     _pageUrlForCache.host,
+        };
+      } catch (_) { /* invalid sourceUrl — leave cache null */ }
+    }
   }
-  // Two-pass post-order eval on explicit stack.
+  return _avFlattenStringLeavesImpl(rootAv);
+}
+function _avFlattenStringLeavesImpl(rootAv) {
+  if (!rootAv) return [];
+  var pageUrlParts = _avFlattenPageUrlPartsCache;
+  // Fast-path for the overwhelmingly-common cases (single AV with no
+  // sub-structure that requires a tree walk). Avoids Map/Set allocation
+  // when the AV is trivially classifiable.
+  if (rootAv.kind === "const") {
+    return typeof rootAv.value === "string" ? [rootAv.value] : [];
+  }
+  if (rootAv.kind === "taint-source" && pageUrlParts &&
+      Object.prototype.hasOwnProperty.call(pageUrlParts, rootAv.id)) {
+    return [pageUrlParts[rootAv.id]];
+  }
+  // Other singleton kinds (top, param, member, this, obj-lit, array-lit,
+  // keys-of, loop-key, args-elt, args-len, taint-source-not-page-origin)
+  // have no statically-known string leaf — return empty without allocation.
+  if (rootAv.kind !== "or" && rootAv.kind !== "binop" &&
+      rootAv.kind !== "template" && rootAv.kind !== "call") {
+    return [];
+  }
+  // Composite AV — fall through to full two-pass tree walk.
   // Pass 1: enumerate reachable AVs preorder (each AV visited once via seen Set).
   var nodes = [];
   var enumStack = [rootAv];
   var seen = new Set();
+  // lazy-call substitution cache: avoid running _specInstantiateAv twice
+  // (once in pass 1 for enumeration, once in pass 2 for leaf lookup).
+  var lazyCallSubst = new Map();
   while (enumStack.length > 0) {
     var n = enumStack.pop();
     if (!n) continue;
@@ -13344,11 +13488,14 @@ function _avFlattenStringLeaves(rootAv) {
         if (n.exprs[tei]) enumStack.push(n.exprs[tei]);
       }
     } else if (n.kind === "call" && n.callee && n.callee.kind === "function-ref" && n.callee.funcNode) {
-      // Lazy-call dispatch — substitute and push the result.
+      // Lazy-call dispatch — substitute once and cache the result for pass 2.
       var lcRet = _specReturnValueMemo.get(n.callee.funcNode);
       if (lcRet) {
         var lcSubst = _specInstantiateAv(lcRet, n.args || [], undefined, n.callee.funcNode);
-        if (lcSubst) enumStack.push(lcSubst);
+        if (lcSubst) {
+          lazyCallSubst.set(n, lcSubst);
+          enumStack.push(lcSubst);
+        }
       }
     }
   }
@@ -13401,15 +13548,11 @@ function _avFlattenStringLeaves(rootAv) {
         for (var tci = 0; tci < tplAcc.length; tci++) leaves.push(tplAcc[tci]);
       }
     } else if (av.kind === "call" && av.callee && av.callee.kind === "function-ref" && av.callee.funcNode) {
-      // Lazy-call result was enumerated in pass 1; re-substitute and look
-      // up its leaves from the cache.
-      var lcRet2 = _specReturnValueMemo.get(av.callee.funcNode);
-      if (lcRet2) {
-        var lcSubst2 = _specInstantiateAv(lcRet2, av.args || [], undefined, av.callee.funcNode);
-        if (lcSubst2) {
-          var lcLeaves = leavesOf.get(lcSubst2) || [];
-          for (var lci = 0; lci < lcLeaves.length; lci++) leaves.push(lcLeaves[lci]);
-        }
+      // Lazy-call result was substituted in pass 1; look up cached result.
+      var lcCached = lazyCallSubst.get(av);
+      if (lcCached) {
+        var lcLeaves = leavesOf.get(lcCached) || [];
+        for (var lci = 0; lci < lcLeaves.length; lci++) leaves.push(lcLeaves[lci]);
       }
     }
     // Other kinds (top, param, member, this, obj-lit, array-lit,
@@ -13619,7 +13762,7 @@ function _ravStep(F) {
   // AV-grounded callee identity (no name-based shape match on `document`/
   // `URL`/`URLSearchParams`/etc.), uniform across bare/prefixed/aliased.
   if (skip < 1 && (_t.isMemberExpression(node) || _t.isCallExpression(node) || _t.isNewExpression(node))) {
-    _specEnsureProgramFixpoint(path);
+    _specEnsureProgramGlobalsPrepass(path);
     var domNodeAv = _specPathValMemo.get(node);
     if (domNodeAv && domNodeAv.kind === "const" && typeof domNodeAv.value === "string") {
       return { done: [domNodeAv.value] };
@@ -16301,7 +16444,7 @@ function _collectExprUses(exprPath) {
 // on enclosing function (idempotent) and inspect the callee's AV.
 function _isObjectDefineProperty(callPath) {
   if (callPath.node.arguments.length < 3) return false;
-  _specEnsureProgramFixpoint(callPath);
+  _specEnsureProgramGlobalsPrepass(callPath);
   var calleeAv = _specPathValMemo.get(callPath.node.callee);
   return !!(calleeAv && calleeAv.kind === "builtin-method" && calleeAv.id === "Object.defineProperty");
 }
@@ -24133,7 +24276,9 @@ function _pushSink(result, node, type, sink, src, path, options) {
   // Idempotent — runs once per program. Triggered only at confirmed
   // sinks (called with a real `src`), not at every CallExpression, so
   // bundles without confirmed sinks don't pay the per-function analysis
-  // cost.
+  // cost. NOTE: pushes need the FULL fixpoint (call-graph + closure
+  // write-back), not just the lightweight globals pre-pass — taint
+  // analysis depends on inter-procedural propagation.
   if (path) _specEnsureProgramFixpoint(path);
   // Dimensional gate for sinks whose attack vector requires attacker
   // control of the URL scheme. If the taint's `origin` dim is false
@@ -24623,7 +24768,7 @@ function _isSameOriginFetchTarget(argPath) {
   // installed on the global by _specGlobalThisAv) — no name-based shape
   // match. Spec eval is triggered if not yet run on this scope.
   if (_t.isNewExpression(node) && node.arguments.length >= 2) {
-    _specEnsureProgramFixpoint(argPath);
+    _specEnsureProgramGlobalsPrepass(argPath);
     var calleeAv = _specPathValMemo.get(node.callee);
     if (calleeAv && calleeAv.kind === "builtin-ctor" && calleeAv.id === "WHATWG.URL") {
       var baseArg = node.arguments[1];
@@ -24703,7 +24848,7 @@ function _isSameOriginBaseAv(av) {
 // `location` / `window.location` / `document.X` patterns.
 function _isSameOriginBaseExpr(path, node) {
   if (!path || !node) return false;
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   return _isSameOriginBaseAv(_specPathValMemo.get(node));
 }
 
@@ -24744,7 +24889,7 @@ function _isCrossOriginMsgReceiver(callee, callPath) {
   if (!_t.isMemberExpression(callee)) return false;
   var receiver = callee.object;
   // Trigger program fixpoint (idempotent) so receiver AV is populated.
-  _specEnsureProgramFixpoint(callPath);
+  _specEnsureProgramGlobalsPrepass(callPath);
   var receiverAv = _specPathValMemo.get(receiver);
   // Same-origin channel instance — _ctorId set by _specApplyBuiltinCtor.
   if (receiverAv && receiverAv.kind === "obj-lit" && receiverAv._ctorId &&
@@ -24811,7 +24956,7 @@ function _targetTraceIsEventOrigin(src) {
 // comparison: trigger property-flow analysis on the enclosing
 // function (idempotent), look up _specPathValMemo, compare.
 function _isLocationObject(objNode, path) {
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   var av = _specPathValMemo.get(objNode);
   if (!av) return false;
   var globalAv = _specGlobalThisAv();
@@ -24887,7 +25032,7 @@ function _processSecurityAssignSink(path, result) {
   // `window` / `self` / `globalThis` AV (all share windowSelfAv / documentProps),
   // identifiable via global registry props identity.
   if (!sinkType && propName === "location") {
-    _specEnsureProgramFixpoint(path);
+    _specEnsureProgramGlobalsPrepass(path);
     var _lObjAv = _specPathValMemo.get(left.object);
     var _gThis = _specGlobalThisAv();
     if (_lObjAv && _gThis && _gThis.props &&
@@ -25004,7 +25149,7 @@ function _processSecurityCallSink(path, result) {
   // is the last expression's value (eval ref), so the callee AV is the
   // builtin-method "global.eval" identical to bare-call eval. Same for
   // `window.eval`, `self.eval`, IIFE-aliased `e.eval`, etc.
-  if (path) _specEnsureProgramFixpoint(path);
+  if (path) _specEnsureProgramGlobalsPrepass(path);
   var _calleeAv = _specPathValMemo.get(callee);
   if (_calleeAv && _calleeAv.kind === "builtin-method" && node.arguments.length > 0) {
     var _bSink = _BUILTIN_CALL_SINKS[_calleeAv.id];
@@ -25206,7 +25351,7 @@ var _BUILTIN_NEW_SINKS = {
 function _processSecurityNewSink(path, result) {
   var node = path.node;
   if (node.arguments.length === 0) return;
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   var calleeAv = _specPathValMemo.get(node.callee);
   if (!calleeAv || calleeAv.kind !== "builtin-ctor") return;
 
@@ -25342,7 +25487,7 @@ function _isArbitraryKeyObjectSource(path) {
       // installed builtin-method AV. No name-based shape match — the
       // identity check is on the AV's `.id` set at registry time.
       var calleeNode = n.callee;
-      _specEnsureProgramFixpoint(p);
+      _specEnsureProgramGlobalsPrepass(p);
       var calleeAv = _specPathValMemo.get(calleeNode);
       var calleeBuiltinId = (calleeAv && calleeAv.kind === "builtin-method") ? calleeAv.id : null;
       if (calleeBuiltinId === "JSON.parse" && n.arguments.length >= 1) {
@@ -25386,7 +25531,7 @@ function _processDangerousPattern(path, result) {
   // "EventTarget.prototype.addEventListener" (windowSelfAv → addEventListener
   // via Window props fallthrough); MemberExpression form is property-name
   // dispatch (any object's .addEventListener is the spec-defined IDL slot).
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   var _bareAelAv = _t.isIdentifier(callee) ? _specPathValMemo.get(callee) : null;
   var _isMsgAddListener =
     (_t.isMemberExpression(callee) && _t.isIdentifier(callee.property, { name: "addEventListener" })) ||
@@ -25439,7 +25584,7 @@ function _processDangerousPattern(path, result) {
   // fixpoint is triggered ONCE per program via _specEnsureProgramFixpoint
   // — running per-function spec eval inline here would race with the
   // outer fixpoint's call-graph ordering and produce stale callee returns.
-  if (path) _specEnsureProgramFixpoint(path);
+  if (path) _specEnsureProgramGlobalsPrepass(path);
   var _dpCalleeAv = _specPathValMemo.get(callee);
   var _dpBuiltinId = (_dpCalleeAv && _dpCalleeAv.kind === "builtin-method") ? _dpCalleeAv.id : null;
   if (_dpBuiltinId === "Object.defineProperty" && node.arguments.length >= 3) {
@@ -26392,7 +26537,7 @@ function _findDestructuredKey(objPattern, bindingName) {
 // function (idempotent), inspects callee AV.
 function _isJsonStringify(node, path) {
   if (!node || !_t.isCallExpression(node) || !path) return false;
-  _specEnsureProgramFixpoint(path);
+  _specEnsureProgramGlobalsPrepass(path);
   var calleeAv = _specPathValMemo.get(node.callee);
   return !!(calleeAv && calleeAv.kind === "builtin-method" && calleeAv.id === "JSON.stringify");
 }
