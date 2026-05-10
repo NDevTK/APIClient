@@ -5416,6 +5416,28 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     // `location.hash.slice(1)` would lose its taint-source provenance
     // because slice returns an opaque string, not a const.
     if (!strArgsOk || !strRecvLeaves || strRecvLeaves.length === 0) {
+      // Per CLAUDE.md dim model: transforms strip URL-part dims and
+      // upgrade origin when the structural marker is removed.
+      // location.hash.slice(N>=1) strips the # prefix so the result is
+      // arbitrary user-controlled content (CAN be a full URL with any
+      // scheme/host). Same for location.search.slice(N>=1) (?) and
+      // location.pathname.slice(N>=1) (/). Return a NEW taint-source AV
+      // preserving the original id (for downstream display/sanitizer
+      // matching) but with origin upgraded so request-forgery /
+      // open-redirect filters fire correctly.
+      if ((strMethName === "slice" || strMethName === "substring" || strMethName === "substr") &&
+          recvAv && recvAv.kind === "taint-source" && recvAv.dims &&
+          argAvs.length >= 1 && argAvs[0] && argAvs[0].kind === "const" &&
+          typeof argAvs[0].value === "number" && argAvs[0].value >= 1 &&
+          (recvAv.id === "location.hash" || recvAv.id === "location.search" ||
+           recvAv.id === "location.pathname")) {
+        return {
+          kind: "taint-source",
+          id: recvAv.id,
+          type: "string",
+          dims: { origin: true, path: true, query: true, hash: true, content: true }
+        };
+      }
       if (recvAv) return { kind: "coerce", to: "string", arg: recvAv };
       return { kind: "top" };
     }
@@ -20370,6 +20392,12 @@ function _isSameOriginFetchTarget(argPath) {
 // Pure AV inspection — no AST shape walk, no name match.
 function _isSameOriginBaseAv(av) {
   if (!av || av.kind !== "taint-source" || !av.id) return false;
+  // Same-origin claim depends on origin dim: a taint source whose
+  // origin dim was upgraded (e.g. location.hash.slice(1) which strips
+  // the # marker so the value can hold a full attacker URL) is NO
+  // LONGER same-origin-locked. Only the original URL-part-bound dims
+  // (origin:false) qualify as same-origin base.
+  if (av.dims && av.dims.origin) return false;
   if (av.id.indexOf("location.") === 0) return true;
   return av.id === "document.URL" || av.id === "document.baseURI" || av.id === "document.documentURI";
 }
