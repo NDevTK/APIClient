@@ -14181,186 +14181,22 @@ function _retfpResolveParamSub(node, exprPath, keyName, depth) {
 }
 
 function _retfpStep(F) {
-  var depth = F.depth, L = F.L;
-  while (true) {
-    switch (F.state) {
-      case _RETFP_INIT: {
-        // Pull next candidate from queue. Skip seen, drained, or null entries.
-        var exprPath = null;
-        while (L.queue.length > 0) {
-          var cand = L.queue.shift();
-          if (!cand || !cand.node) continue;
-          if (L.seen.has(cand.node)) continue;
-          L.seen.add(cand.node);
-          exprPath = _retfpUnwrapBindChain(cand);
-          if (exprPath && exprPath.node) break;
-          exprPath = null;
-        }
-        if (!exprPath) return { done: null };
-
-        var node = exprPath.node;
-        if (_t.isFunctionExpression(node) || _t.isArrowFunctionExpression(node)) {
-          return { done: exprPath };
-        }
-        if (_t.isIdentifier(node)) {
-          // Alias chain walk is purely synchronous — no recursion concern.
-          // Original semantics: a failing alias walk returns null (aborts
-          // the whole search) — preserved verbatim. Callers depend on
-          // this short-circuit; relaxing it surfaces partial matches that
-          // don't actually point at executable functions.
-          var aliasResult = _retfpWalkAliasChain(exprPath);
-          if (aliasResult) return { done: aliasResult };
-          return { done: null };
-        }
-        if (_t.isMemberExpression(node)) {
-          L.exprPath = exprPath;
-          L.node = node;
-          L.keyName = null;
-          if (!node.computed && _t.isIdentifier(node.property)) {
-            L.keyName = node.property.name;
-            // Skip key dispatch — go straight to object resolution.
-            return {
-              trace: exprPath.get("object"),
-              state: _RETFP_MEM_OBJ_AFTER,
-              stepFn: _rtoiStep, makeFrame: _rtoiMakeFrame,
-              shortCircuit: _rtoiShortCircuit, guardPrefix: "T", defaultResult: null,
-            };
-          }
-          if (node.computed) {
-            return {
-              trace: exprPath.get("property"),
-              state: _RETFP_MEM_KEY_AFTER,
-              stepFn: _ravStep, makeFrame: _ravMakeFrame,
-              shortCircuit: _ravShortCircuit, guardPrefix: "V", defaultResult: [],
-            };
-          }
-        }
-        // Other node types — no resolution path.
-        continue;
-      }
-
-      case _RETFP_MEM_KEY_AFTER: {
-        var keyVals = F.result;
-        if (Array.isArray(keyVals) && keyVals.length > 0) L.keyName = String(keyVals[0]);
-        // Original semantics: !keyName returns null (aborts). Preserved.
-        if (!L.keyName) return { done: null };
-        return {
-          trace: L.exprPath.get("object"),
-          state: _RETFP_MEM_OBJ_AFTER,
-          stepFn: _rtoiStep, makeFrame: _rtoiMakeFrame,
-          shortCircuit: _rtoiShortCircuit, guardPrefix: "T", defaultResult: null,
-        };
-      }
-
-      case _RETFP_MEM_OBJ_AFTER: {
-        var objNode = F.result;
-        var keyName = L.keyName;
-        if (objNode && objNode._path) {
-          for (var i = 0; i < objNode.properties.length; i++) {
-            var p = objNode.properties[i];
-            if (_t.isObjectProperty(p) && !p.computed) {
-              var k = _t.isIdentifier(p.key) ? p.key.name :
-                (_t.isStringLiteral(p.key) ? p.key.value : (_t.isNumericLiteral(p.key) ? String(p.key.value) : null));
-              if (k === keyName && (_t.isFunctionExpression(p.value) || _t.isArrowFunctionExpression(p.value))) {
-                return { done: objNode._path.get("properties." + i + ".value") };
-              }
-            }
-            if (_t.isObjectMethod(p) && !p.computed) {
-              var mk = _t.isIdentifier(p.key) ? p.key.name :
-                (_t.isStringLiteral(p.key) ? p.key.value : (_t.isNumericLiteral(p.key) ? String(p.key.value) : null));
-              if (mk === keyName) return { done: objNode._path.get("properties." + i) };
-            }
-          }
-        }
-        // Fall through to receiver-reference walk: `obj.key = function/arrow`
-        // assignments via the receiver's referencePaths (mutation after
-        // initial declaration). Used by webpack-style `f.d = (e, a) => {...}`
-        // and module-table installs `d[97088] = function(...) {...}`.
-        if (_t.isIdentifier(L.node.object)) {
-          var objBind = L.exprPath.scope.getBinding(L.node.object.name);
-          if (objBind && objBind.referencePaths) {
-            L.objBind = objBind;
-            L.refIdx = 0;
-            F.state = _RETFP_REF_LOOP;
-            continue;
-          }
-        }
-        // No ref walk for this object — try param-substitution branch.
-        var paramFn = _retfpResolveParamSub(L.node, L.exprPath, keyName, depth);
-        if (paramFn) return { done: paramFn };
-        // Original semantics: no match → done(null). Queue continuation
-        // is reserved for ref-walk RHS fallbacks (handled inside REF_LOOP).
-        return { done: null };
-      }
-
-      case _RETFP_REF_LOOP: {
-        // If returning from a sub-trace for a computed key, integrate the
-        // result into propMatches state.
-        if (L.refKeyJustTraced) {
-          L.refKeyJustTraced = false;
-          var rpKeyVals = F.result;
-          var matched = Array.isArray(rpKeyVals) && rpKeyVals.length > 0 && String(rpKeyVals[0]) === L.keyName;
-          if (matched) {
-            // Recover the ref-walk state we paused on; check assignment.
-            var resumed = _retfpHandleRefAssignment(L.pausedRp, L.queue);
-            if (resumed) return { done: resumed };
-          }
-          // Either non-match or assignment had no usable RHS — fall through
-          // to next ref iteration.
-        }
-        var refs = L.objBind.referencePaths;
-        while (L.refIdx < refs.length) {
-          var rp = refs[L.refIdx];
-          L.refIdx++;
-          var rpParent = rp.parent;
-          if (!rpParent || !_t.isMemberExpression(rpParent) || rpParent.object !== rp.node) continue;
-          var keyName2 = L.keyName;
-          // Synchronous match check first (literal/identifier key).
-          if (!rpParent.computed && _t.isIdentifier(rpParent.property, { name: keyName2 })) {
-            var done1 = _retfpHandleRefAssignment(rp, L.queue);
-            if (done1) return { done: done1 };
-            continue;
-          }
-          if (rpParent.computed) {
-            if (_t.isStringLiteral(rpParent.property) && rpParent.property.value === keyName2) {
-              var done2 = _retfpHandleRefAssignment(rp, L.queue);
-              if (done2) return { done: done2 };
-              continue;
-            }
-            if (_t.isNumericLiteral(rpParent.property) && String(rpParent.property.value) === keyName2) {
-              var done3 = _retfpHandleRefAssignment(rp, L.queue);
-              if (done3) return { done: done3 };
-              continue;
-            }
-            // Computed key with non-literal property — dispatch _resolveAllValues.
-            L.pausedRp = rp;
-            L.refKeyJustTraced = true;
-            return {
-              trace: rp.parentPath.get("property"),
-              state: _RETFP_REF_KEY_AFTER,
-              stepFn: _ravStep, makeFrame: _ravMakeFrame,
-              shortCircuit: _ravShortCircuit, guardPrefix: "V", defaultResult: [],
-            };
-          }
-        }
-        // Ref walk done — try param-substitution branch.
-        var paramFn2 = _retfpResolveParamSub(L.node, L.exprPath, L.keyName, depth);
-        if (paramFn2) return { done: paramFn2 };
-        // No match for this candidate — try next queued.
-        F.state = _RETFP_INIT;
-        continue;
-      }
-
-      case _RETFP_REF_KEY_AFTER: {
-        // Sub-trace returned to the loop; control falls back through
-        // _RETFP_REF_LOOP via L.refKeyJustTraced flag.
-        F.state = _RETFP_REF_LOOP;
-        continue;
-      }
-
-      default: return { done: null };
-    }
+  // Single-AV-engine: thin spec-eval projection. F.path is the
+  // expression to resolve to a function path. Per ECMA § 13.1.3
+  // IdentifierReference / § 13.3.2 MemberExpression: spec eval
+  // evaluates the expression's AV through scope chain, member
+  // projection, and bind/call/apply semantics; this projector
+  // recovers the function path from a function-ref AV.
+  if (!F || !F.path || !F.path.node) return { done: null };
+  var encFn = F.path.getFunctionParent && F.path.getFunctionParent();
+  if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
+  else _specEnsureProgramGlobalsPrepass(F.path);
+  var av = _specPathValMemo.get(F.path.node);
+  if (!av) {
+    try { av = _specEvalExpression(F.path, _specStateCreate({}), []); }
+    catch (_) { return { done: null }; }
   }
+  return { done: _funcPathFromAv(av, F.path) };
 }
 
 // Process an `obj.key = rhs` assignment match: if RHS is a function,
