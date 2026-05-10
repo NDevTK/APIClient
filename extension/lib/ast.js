@@ -4256,6 +4256,20 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       // § 20.3.1.1 Boolean(x) coercion.
       if (globalName === "Boolean") return { kind: "const", value: Boolean(ga) };
     }
+    // Non-const arg: encoding/coercion globals are pure functions OF the
+    // arg per ECMA § 19.2 / § 22.1.1.1 / § 21.1.1.1 / § 20.3.1.1. Result
+    // value is derived from the arg and propagates taint. Without this,
+    // `encodeURIComponent(location.hash)` would lose taint provenance.
+    // Note: encoding != sanitization — encoded HTML in innerHTML is
+    // still XSS-able; the taint walker correctly flags this case.
+    if (argAvs.length >= 1 && argAvs[0]) {
+      if (globalName === "encodeURI" || globalName === "encodeURIComponent" ||
+          globalName === "decodeURI" || globalName === "decodeURIComponent" ||
+          globalName === "btoa" || globalName === "atob" ||
+          globalName === "String") {
+        return { kind: "coerce", to: "string", arg: argAvs[0] };
+      }
+    }
     return { kind: "top" };
   }
   // Number.* statics per § 21.1.2 — DISTINCT from globals: no coercion.
@@ -19191,20 +19205,17 @@ function _traceValueSource(path, _unused) {
       return bM;
     }
   }
-  // Idempotent globals prepass populates _specFuncPathByNode for every
-  // function in the program — required so the AV walker's param-caller
-  // transition can resolve fnNode -> fnPath in O(1) (no fallback traverse).
+  // Trigger the program fixpoint (idempotent) so cross-function side-effect
+  // summaries (event handler types from addEventListener("message", cb)
+  // dispatch, prototype method registrations, etc.) populate before this
+  // function's body is analysed. Without this, a callback's enclosing
+  // function-scope analysis would fire before the addEventListener call
+  // at the program level had registered the cb's MessageEvent param shape,
+  // missing event.data taint.
   _specEnsureProgramGlobalsPrepass(path);
-  if (path.getFunctionParent) {
-    var encFn = path.getFunctionParent();
-    if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
-      try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
-    } else if (!encFn) {
-      var pp = path; while (pp && pp.parentPath) pp = pp.parentPath;
-      if (pp && pp.node && _t.isProgram(pp.node)) {
-        try { _specAnalyzeProgramWithFixpoint(pp); } catch (_) {}
-      }
-    }
+  var pp = path; while (pp && pp.parentPath) pp = pp.parentPath;
+  if (pp && pp.node && _t.isProgram(pp.node)) {
+    try { _specAnalyzeProgramWithFixpoint(pp); } catch (_) {}
   }
   var av = _specPathValMemo.get(node);
   var result = av ? _avProjectToTaintDescriptor(av, path) : { sourceType: "dynamic", source: null };
