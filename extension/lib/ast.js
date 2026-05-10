@@ -13746,13 +13746,17 @@ function _ravStep(F) {
 
   // BRANCH 7: new Request(input, init?). Iterative passthrough chain:
   // new Request(new Request(...(url))) resolves to the innermost url.
-  // After chain walk the leaf input is traced via sub-frame.
-  if (skip < 7 && _t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "Request" }) &&
-      !path.scope.getBinding("Request") && node.arguments.length >= 1) {
+  // After chain walk the leaf input is traced via sub-frame. AV-grounded
+  // callee identity via builtin-ctor "Fetch.Request".
+  var newReqCalleeAv = _t.isNewExpression(node) ? _specPathValMemo.get(node.callee) : null;
+  if (skip < 7 && _t.isNewExpression(node) &&
+      newReqCalleeAv && newReqCalleeAv.kind === "builtin-ctor" && newReqCalleeAv.id === "Fetch.Request" &&
+      node.arguments.length >= 1) {
     var reqPath = path.get("arguments.0");
     var reqNode = reqPath.node;
-    while (_t.isNewExpression(reqNode) && _t.isIdentifier(reqNode.callee, { name: "Request" }) &&
-           !reqPath.scope.getBinding("Request") && reqNode.arguments.length >= 1) {
+    while (_t.isNewExpression(reqNode) && reqNode.arguments.length >= 1) {
+      var innerCalleeAv = _specPathValMemo.get(reqNode.callee);
+      if (!innerCalleeAv || innerCalleeAv.kind !== "builtin-ctor" || innerCalleeAv.id !== "Fetch.Request") break;
       reqPath = reqPath.get("arguments.0");
       reqNode = reqPath.node;
     }
