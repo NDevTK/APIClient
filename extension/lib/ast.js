@@ -2319,6 +2319,9 @@ function _specGlobalThisAv() {
   // methods + send/close (WebSocket only).
   var webSocketCtorAv = { kind: "builtin-ctor", id: "WHATWG.WebSocket" };
   var eventSourceCtorAv = { kind: "builtin-ctor", id: "WHATWG.EventSource" };
+  // WHATWG XHR § 4 XMLHttpRequest ctor — open/send/setRequestHeader
+  // dispatch through prototype chain on the XHR instance.
+  var xmlHttpRequestCtorAv = { kind: "builtin-ctor", id: "WHATWG.XMLHttpRequest" };
   // ECMA § 25.1 TypedArray ctors. All variants share the same value-flow
   // behaviour for our purposes (binary array; opaque to string-flow but
   // valid receiver for prototype methods like .slice / .set).
@@ -2542,6 +2545,7 @@ function _specGlobalThisAv() {
       TextEncoder: textEncoderCtorAv,
       WebSocket: webSocketCtorAv,
       EventSource: eventSourceCtorAv,
+      XMLHttpRequest: xmlHttpRequestCtorAv,
       Uint8Array: uint8ArrayCtorAv,
       Uint16Array: uint16ArrayCtorAv,
       Uint32Array: uint32ArrayCtorAv,
@@ -3162,6 +3166,39 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
         readyState: { kind: "top" },
         url: { kind: "top" },
+        withCredentials: { kind: "top" },
+      }
+    };
+  }
+  // WHATWG XHR § 4 — XMLHttpRequest ctor returns an XHR instance.
+  // open/send/setRequestHeader are the request-shaping methods; the
+  // legacy URL extractor's _isXhrObject identifies XHR receivers via
+  // type tracking. Modeling here as a builtin-ctor returning an
+  // obj-lit lets the same identification go through AV reference
+  // comparison.
+  if (ctorId === "WHATWG.XMLHttpRequest") {
+    return {
+      kind: "obj-lit",
+      props: {
+        open: { kind: "builtin-method", id: "XMLHttpRequest.prototype.open" },
+        send: { kind: "builtin-method", id: "XMLHttpRequest.prototype.send" },
+        setRequestHeader: { kind: "builtin-method", id: "XMLHttpRequest.prototype.setRequestHeader" },
+        abort: { kind: "builtin-method", id: "XMLHttpRequest.prototype.abort" },
+        getResponseHeader: { kind: "builtin-method", id: "XMLHttpRequest.prototype.getResponseHeader" },
+        getAllResponseHeaders: { kind: "builtin-method", id: "XMLHttpRequest.prototype.getAllResponseHeaders" },
+        overrideMimeType: { kind: "builtin-method", id: "XMLHttpRequest.prototype.overrideMimeType" },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+        readyState: { kind: "top" },
+        status: { kind: "top" },
+        statusText: { kind: "top" },
+        responseText: { kind: "taint-source", id: "XMLHttpRequest.responseText",
+          dims: { origin: false, path: false, query: false, hash: false, content: true } },
+        response: { kind: "top" },
+        responseURL: { kind: "top" },
+        responseType: { kind: "top" },
+        timeout: { kind: "top" },
         withCredentials: { kind: "top" },
       }
     };
@@ -3830,6 +3867,22 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       methodId === "WebSocket.prototype.close" ||
       methodId === "EventSource.prototype.close") {
     return { kind: "const", value: undefined };
+  }
+  // WHATWG XHR § 4 prototype methods. Most are state mutations
+  // (open / send / setRequestHeader / abort) returning undefined.
+  // Response-related methods (getResponseHeader / getAllResponseHeaders)
+  // return server-controlled strings (taint-source content dim).
+  if (methodId === "XMLHttpRequest.prototype.open" ||
+      methodId === "XMLHttpRequest.prototype.send" ||
+      methodId === "XMLHttpRequest.prototype.setRequestHeader" ||
+      methodId === "XMLHttpRequest.prototype.abort" ||
+      methodId === "XMLHttpRequest.prototype.overrideMimeType") {
+    return { kind: "const", value: undefined };
+  }
+  if (methodId === "XMLHttpRequest.prototype.getResponseHeader" ||
+      methodId === "XMLHttpRequest.prototype.getAllResponseHeaders") {
+    return { kind: "taint-source", id: "XMLHttpRequest." + methodId.split(".").pop(),
+      dims: { origin: false, path: false, query: false, hash: false, content: true } };
   }
   // ECMA § 25.1 TypedArray.prototype methods. slice/subarray return new
   // TypedArray instance (modeled as another opaque obj-lit per ctor);
