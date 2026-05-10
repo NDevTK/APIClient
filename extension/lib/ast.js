@@ -9301,6 +9301,22 @@ function _specEvalLeaf(path, state, vals, effects) {
         return _specInstantiateAv(memoRet, callArgAvs);
       }
     }
+    // Lazy-call deferral per § 13.3.6 — when bmCalleeAv is a `member`
+    // AV whose key is symbolic (param-derived), the dispatch can't
+    // resolve at this analysis time. Preserve the call structure so
+    // _specInstantiateAv can fold it once params are substituted (the
+    // member access then projects to a function-ref, then we dispatch
+    // through the function-ref's return memo). Closes recursive
+    // dispatch patterns like `function require(id){return modules[id]();}`
+    // where modules is a known obj-lit but id is a param.
+    if (bmCalleeAv && bmCalleeAv.kind === "member" && bmCalleeAv.obj &&
+        bmCalleeAv.obj.kind === "obj-lit") {
+      var lazyCallArgs = [];
+      for (var lcai = 0; lcai < n.arguments.length; lcai++) {
+        lazyCallArgs.push(vals.get(n.arguments[lcai]) || { kind: "top" });
+      }
+      return { kind: "call", callee: bmCalleeAv, args: lazyCallArgs };
+    }
     return { kind: "top" }; // Other call returns abstract to Top.
   }
   // Unmodelled expression kinds abstract to Top — sound conservative answer.
@@ -9366,6 +9382,12 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
     else if (av.kind === "set-instance" && av.items) {
       for (var sii = 0; sii < av.items.length; sii++) stack.push(av.items[sii]);
     }
+    else if (av.kind === "call") {
+      if (av.callee) stack.push(av.callee);
+      if (av.args) {
+        for (var cai = 0; cai < av.args.length; cai++) stack.push(av.args[cai]);
+      }
+    }
   }
   preorder.reverse();
   // Bottom-up substitute, storing each sub-av's substituted value in the map.
@@ -9423,6 +9445,24 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       } else {
         subs.set(node, { kind: "member", obj: subObj, key: subKey });
       }
+      continue;
+    }
+    if (node.kind === "call") {
+      // Lazy-call deferral per § 13.3.6: substitute callee + args.
+      // After substitution, if callee folded to a function-ref the call
+      // is now ready to dispatch — but we don't recurse into
+      // _specInstantiateAv here (recursion ban). Instead we preserve
+      // the call AV with the substituted callee/args; upstream
+      // consumers who walk the AV (e.g. _avFlattenStringLeaves) can
+      // detect call(function-ref) and fold via a separate dispatch
+      // path. For builtin-method callees (no receiver context here),
+      // bail to top.
+      var subCallee = subs.get(node.callee) || node.callee;
+      var subCallArgs = [];
+      for (var sci = 0; sci < node.args.length; sci++) {
+        subCallArgs.push(subs.get(node.args[sci]) || node.args[sci]);
+      }
+      subs.set(node, { kind: "call", callee: subCallee, args: subCallArgs });
       continue;
     }
     if (node.kind === "or") {
@@ -12655,9 +12695,17 @@ function _avFlattenStringLeaves(rootAv) {
   if (!rootAv) return [];
   var out = [];
   var stack = [rootAv];
+  // Visited set to break cycles in lazy-call dispatch (recursive
+  // function-ref unwinding could otherwise loop on self-referential
+  // module require chains).
+  var seen = new Set();
   while (stack.length > 0) {
     var av = stack.pop();
     if (!av) continue;
+    if (typeof av === "object") {
+      if (seen.has(av)) continue;
+      seen.add(av);
+    }
     if (av.kind === "const") {
       if (typeof av.value === "string") out.push(av.value);
       continue;
@@ -12666,6 +12714,18 @@ function _avFlattenStringLeaves(rootAv) {
       // OR has {left, right} per _specLogicalOrAv shape.
       if (av.left) stack.push(av.left);
       if (av.right) stack.push(av.right);
+      continue;
+    }
+    if (av.kind === "call" && av.callee && av.callee.kind === "function-ref" && av.callee.funcNode) {
+      // Lazy-call dispatch deferred from _specInstantiateAv per
+      // § 13.3.6 — now that we're flattening leaves, the function-ref's
+      // return memo (if available) can be substituted with the call's
+      // args and pushed onto the stack to continue flattening.
+      var lcRet = _specReturnValueMemo.get(av.callee.funcNode);
+      if (lcRet) {
+        var lcSubst = _specInstantiateAv(lcRet, av.args || [], undefined, av.callee.funcNode);
+        if (lcSubst) stack.push(lcSubst);
+      }
       continue;
     }
     // Other kinds (top, param, member, this, obj-lit, array-lit,
