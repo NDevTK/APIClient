@@ -13655,8 +13655,10 @@ function _ravStep(F) {
 
   // BRANCH 8: new URL(input, base?). Trace input first, then base (if
   // present); cross-product the resolved strings via URL constructor.
-  if (skip < 8 && _t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URL" }) &&
-      !path.scope.getBinding("URL") && node.arguments.length >= 1) {
+  // AV-grounded callee identity via builtin-ctor "WHATWG.URL".
+  var ravCalleeAv = (_t.isNewExpression(node) || _t.isCallExpression(node)) ? _specPathValMemo.get(node.callee) : null;
+  if (skip < 8 && _t.isNewExpression(node) && ravCalleeAv && ravCalleeAv.kind === "builtin-ctor" &&
+      ravCalleeAv.id === "WHATWG.URL" && node.arguments.length >= 1) {
     L.urlHasBase = node.arguments.length >= 2;
     L.branchSkip = 8;
     return { trace: path.get("arguments.0"), state: _RAV_NEW_URL_INPUT_AFTER };
@@ -13668,11 +13670,10 @@ function _ravStep(F) {
   // URL. Every value term must resolve; if the analyzer can't trace
   // one of them that's a resolver gap, surfaced by the concat-level
   // throw below once control returns here.
-  // BRANCH 9: new URLSearchParams({k: v, ...}) / new URLSearchParams("a=1&b=2").
-  // Object-literal form requires every value to resolve via sub-trace; loop
-  // collects encoded key=value pairs. String-literal form returns directly.
-  if (skip < 9 && _t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URLSearchParams" }) &&
-      !path.scope.getBinding("URLSearchParams")) {
+  // BRANCH 9: new URLSearchParams(...). AV-grounded callee identity via
+  // builtin-ctor "WHATWG.URLSearchParams".
+  if (skip < 9 && _t.isNewExpression(node) && ravCalleeAv && ravCalleeAv.kind === "builtin-ctor" &&
+      ravCalleeAv.id === "WHATWG.URLSearchParams") {
     var uspArg = node.arguments && node.arguments[0];
     if (uspArg && _t.isObjectExpression(uspArg)) {
       // Pre-validate keys (no recursion needed); if any computed/missing
