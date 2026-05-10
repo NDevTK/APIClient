@@ -1476,7 +1476,11 @@ function _processNetworkSink(path, result) {
     var methodArg = node.arguments[0];
     var _xhrArg1 = node.arguments[1];
     if (isXhr) {
-      // Extract headers and body from .setRequestHeader() and .send()
+      // Extract headers and body from .setRequestHeader() and .send().
+      // Walk the XHR variable's referencePaths and dispatch on each
+      // member-call via the callee's spec-eval AV id — the same
+      // XMLHttpRequest.prototype.* AVs the .open() check uses. No
+      // identifier-name match.
       var xhrHeaders = {};
       var xhrBodyParams = [];
       if (_t.isIdentifier(callee.object)) {
@@ -1486,12 +1490,13 @@ function _processNetworkSink(path, result) {
             var ref = xhrBinding.referencePaths[ri];
             var refParent = ref.parentPath;
             if (!refParent || !_t.isMemberExpression(refParent.node) || refParent.node.object !== ref.node) continue;
-            var memberName = _t.isIdentifier(refParent.node.property) ? refParent.node.property.name : null;
             var callPath = refParent.parentPath;
             if (!callPath || !_t.isCallExpression(callPath.node) || callPath.node.callee !== refParent.node) continue;
-            if (memberName === "send" && callPath.node.arguments.length > 0)
+            var refCalleeAv = _specPathValMemo.get(refParent.node);
+            if (!refCalleeAv || refCalleeAv.kind !== "builtin-method") continue;
+            if (refCalleeAv.id === "XMLHttpRequest.prototype.send" && callPath.node.arguments.length > 0)
               xhrBodyParams = _extractBodyParams(callPath.node.arguments[0], callPath);
-            if (memberName === "setRequestHeader" && callPath.node.arguments.length >= 2) {
+            if (refCalleeAv.id === "XMLHttpRequest.prototype.setRequestHeader" && callPath.node.arguments.length >= 2) {
               var hdrName = _t.isStringLiteral(callPath.node.arguments[0]) ? callPath.node.arguments[0].value : null;
               var hdrVal = _t.isStringLiteral(callPath.node.arguments[1]) ? callPath.node.arguments[1].value : null;
               if (hdrName) xhrHeaders[hdrName.toLowerCase()] = hdrVal || "(dynamic)";
