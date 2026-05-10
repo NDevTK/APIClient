@@ -2758,10 +2758,48 @@ function _specElementPrototypeAv() {
     _SPEC_ELEMENT_PROTO_AV = {
       kind: "obj-lit",
       props: {
+        // WHATWG DOM § 4.9 Element interface — attribute accessors.
         getAttribute: { kind: "builtin-method", id: "Element.prototype.getAttribute" },
+        getAttributeNS: { kind: "builtin-method", id: "Element.prototype.getAttributeNS" },
+        setAttribute: { kind: "builtin-method", id: "Element.prototype.setAttribute" },
+        setAttributeNS: { kind: "builtin-method", id: "Element.prototype.setAttributeNS" },
+        removeAttribute: { kind: "builtin-method", id: "Element.prototype.removeAttribute" },
+        hasAttribute: { kind: "builtin-method", id: "Element.prototype.hasAttribute" },
+        toggleAttribute: { kind: "builtin-method", id: "Element.prototype.toggleAttribute" },
+        // WHATWG DOM § 4.9 query/traversal.
+        querySelector: { kind: "builtin-method", id: "Element.prototype.querySelector" },
+        querySelectorAll: { kind: "builtin-method", id: "Element.prototype.querySelectorAll" },
+        getElementsByTagName: { kind: "builtin-method", id: "Element.prototype.getElementsByTagName" },
+        getElementsByClassName: { kind: "builtin-method", id: "Element.prototype.getElementsByClassName" },
+        closest: { kind: "builtin-method", id: "Element.prototype.closest" },
+        matches: { kind: "builtin-method", id: "Element.prototype.matches" },
+        // WHATWG DOM § 4.2.6 ChildNode / ParentNode interfaces.
+        append: { kind: "builtin-method", id: "Element.prototype.append" },
+        prepend: { kind: "builtin-method", id: "Element.prototype.prepend" },
+        appendChild: { kind: "builtin-method", id: "Element.prototype.appendChild" },
+        insertBefore: { kind: "builtin-method", id: "Element.prototype.insertBefore" },
+        replaceChild: { kind: "builtin-method", id: "Element.prototype.replaceChild" },
+        removeChild: { kind: "builtin-method", id: "Element.prototype.removeChild" },
+        remove: { kind: "builtin-method", id: "Element.prototype.remove" },
+        replaceWith: { kind: "builtin-method", id: "Element.prototype.replaceWith" },
+        before: { kind: "builtin-method", id: "Element.prototype.before" },
+        after: { kind: "builtin-method", id: "Element.prototype.after" },
+        // WHATWG HTML § 6.2.5 setHTMLUnsafe (DOM XSS sink) /
+        // § 6.2.4 insertAdjacentHTML.
+        insertAdjacentHTML: { kind: "builtin-method", id: "Element.prototype.insertAdjacentHTML" },
+        insertAdjacentText: { kind: "builtin-method", id: "Element.prototype.insertAdjacentText" },
+        insertAdjacentElement: { kind: "builtin-method", id: "Element.prototype.insertAdjacentElement" },
+        setHTMLUnsafe: { kind: "builtin-method", id: "Element.prototype.setHTMLUnsafe" },
+        // WHATWG DOM § 4.4 EventTarget — Element inherits.
         addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
         removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
         dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+        // ARIA / shadow DOM / focus.
+        focus: { kind: "builtin-method", id: "Element.prototype.focus" },
+        blur: { kind: "builtin-method", id: "Element.prototype.blur" },
+        scrollIntoView: { kind: "builtin-method", id: "Element.prototype.scrollIntoView" },
+        click: { kind: "builtin-method", id: "Element.prototype.click" },
+        getBoundingClientRect: { kind: "builtin-method", id: "Element.prototype.getBoundingClientRect" },
       }
     };
   }
