@@ -1458,53 +1458,23 @@ function _processNetworkSink(path, result) {
     return;
   }
 
-  // ── Identify XMLHttpRequest.open(method, url) ──
-  if (_t.isMemberExpression(callee) &&
-      _t.isIdentifier(callee.property, { name: "open" }) &&
-      node.arguments.length >= 2) {
-
-    // Debug: describe what we found
-    var _xhrObjDesc = _t.isIdentifier(callee.object) ? callee.object.name : callee.object.type;
+  // ── Identify XMLHttpRequest.open(method, url) — AV-direct ──
+  // Spec eval resolves `xhr.open` to the XMLHttpRequest.prototype.open
+  // builtin-method AV when the receiver's AV is an XHR instance (set by
+  // _specApplyBuiltinCtor for `new XMLHttpRequest()` and propagated
+  // through factory returns + Window/globalThis member access via the
+  // unified globalThis registry per WHATWG HTML § 7.2.1). Reading
+  // calleeAv from _specPathValMemo subsumes the prior name-based shape
+  // match (`callee.property.name === "open"`) and the receiver-typing
+  // shortcuts (string-literal HTTP method, factory binding init walk,
+  // _isXhrObject check). One AV identity check; no shape match.
+  if (_t.isMemberExpression(callee) && node.arguments.length >= 2) {
+    _specEnsureProgramFixpoint(path);
+    var _xhrCalleeAv = _specPathValMemo.get(callee);
+    var isXhr = _xhrCalleeAv && _xhrCalleeAv.kind === "builtin-method" &&
+                _xhrCalleeAv.id === "XMLHttpRequest.prototype.open";
     var methodArg = node.arguments[0];
-    var _xhrArg0Desc = _t.isStringLiteral(methodArg) ? '"' + methodArg.value + '"' :
-      (_t.isMemberExpression(methodArg) && _t.isIdentifier(methodArg.object) && _t.isIdentifier(methodArg.property)
-        ? methodArg.object.name + "." + methodArg.property.name : methodArg.type);
     var _xhrArg1 = node.arguments[1];
-    var _xhrArg1Desc = _t.isStringLiteral(_xhrArg1) ? '"' + _xhrArg1.value + '"' :
-      (_t.isMemberExpression(_xhrArg1) && _t.isIdentifier(_xhrArg1.object) && _t.isIdentifier(_xhrArg1.property)
-        ? _xhrArg1.object.name + "." + _xhrArg1.property.name : _xhrArg1.type);
-    console.debug("[AST:trace] .open() found: %s.open(%s, %s) at line %d",
-      _xhrObjDesc, _xhrArg0Desc, _xhrArg1Desc, node.loc ? node.loc.start.line : -1);
-
-    // Verify the object is an XMLHttpRequest (new XMLHttpRequest() or factory.xhr())
-    var isXhr = false;
-    if (_t.isStringLiteral(methodArg) && _HTTP_METHODS_LC[methodArg.value.toLowerCase()]) {
-      isXhr = true; // String literal method ⇒ almost certainly XHR
-    }
-    if (!isXhr && _t.isIdentifier(callee.object)) {
-      // Delegate to _isXhrObject which does spec-grounded trace
-      // through factory return statements (no method-name shortcut).
-      if (_isXhrObject(path, callee.object)) isXhr = true;
-    }
-    // Try resolving method to confirm — but skip if the object is provably NOT XHR
-    // (e.g., bound to `new BroadcastChannel()`, `new URL()`, or other known non-XHR constructors)
-    if (!isXhr && _t.isIdentifier(callee.object)) {
-      var _xhrFallbackBinding = path.scope.getBinding(callee.object.name);
-      var _knownNonXhr = false;
-      if (_xhrFallbackBinding && _t.isVariableDeclarator(_xhrFallbackBinding.path.node) && _xhrFallbackBinding.path.node.init) {
-        var _fbInit = _xhrFallbackBinding.path.node.init;
-        // If init is `new SomeConstructor()` and it's NOT XMLHttpRequest, this is NOT XHR
-        if (_t.isNewExpression(_fbInit) && _t.isIdentifier(_fbInit.callee) &&
-            _fbInit.callee.name !== "XMLHttpRequest") {
-          _knownNonXhr = true;
-        }
-      }
-      if (!_knownNonXhr) {
-        var testVals = _resolveAllValues(path.get("arguments.0"), 0);
-        if (testVals.length > 0 && typeof testVals[0] === "string" && _HTTP_METHODS_LC[testVals[0].toLowerCase()]) isXhr = true;
-      }
-    }
-
     if (isXhr) {
       // Extract headers and body from .setRequestHeader() and .send()
       var xhrHeaders = {};
