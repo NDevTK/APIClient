@@ -2308,6 +2308,11 @@ function _specGlobalThisAv() {
   var weakSetCtorAv = { kind: "builtin-ctor", id: "ECMA.WeakSet" };
   // ECMA § 22.2.1 RegExp ctor.
   var regExpCtorAv = { kind: "builtin-ctor", id: "ECMA.RegExp" };
+  // WHATWG Encoding § 6 TextDecoder / § 7 TextEncoder.
+  // TextDecoder.prototype.decode(buffer) → string (carries buffer content).
+  // TextEncoder.prototype.encode(string) → Uint8Array (carries string content).
+  var textDecoderCtorAv = { kind: "builtin-ctor", id: "WHATWG.TextDecoder" };
+  var textEncoderCtorAv = { kind: "builtin-ctor", id: "WHATWG.TextEncoder" };
   // Symbol namespace per ECMA § 20.4. Symbol value identity isn't
   // statically tracked (each call to Symbol(desc) is unique per spec
   // § 20.4.1.1); we model the well-known symbols as opaque obj-lit
@@ -2464,6 +2469,8 @@ function _specGlobalThisAv() {
       WeakMap: weakMapCtorAv,
       WeakSet: weakSetCtorAv,
       RegExp: regExpCtorAv,
+      TextDecoder: textDecoderCtorAv,
+      TextEncoder: textEncoderCtorAv,
       // Global functions per § 19.2.
       encodeURI: { kind: "builtin-method", id: "global.encodeURI" },
       encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
@@ -3017,6 +3024,30 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       } catch (_) { return { kind: "top" }; }
     }
     return { kind: "top" };
+  }
+  // WHATWG Encoding § 6.2 / § 7.2 ctors. Return obj-lit instances
+  // exposing the prototype methods as builtin-method AVs so subsequent
+  // member projection routes through _specApplyBuiltinMethod.
+  if (ctorId === "WHATWG.TextDecoder") {
+    return {
+      kind: "obj-lit",
+      props: {
+        decode: { kind: "builtin-method", id: "TextDecoder.prototype.decode" },
+        encoding: { kind: "top" },
+        fatal: { kind: "top" },
+        ignoreBOM: { kind: "top" },
+      }
+    };
+  }
+  if (ctorId === "WHATWG.TextEncoder") {
+    return {
+      kind: "obj-lit",
+      props: {
+        encode: { kind: "builtin-method", id: "TextEncoder.prototype.encode" },
+        encodeInto: { kind: "builtin-method", id: "TextEncoder.prototype.encodeInto" },
+        encoding: { kind: "const", value: "utf-8" },
+      }
+    };
   }
   if (ctorId === "ECMA.WeakSet") {
     var wsInputAv = argAvs.length >= 1 ? argAvs[0] : null;
@@ -3603,6 +3634,21 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "Storage.prototype.setItem" || methodId === "Storage.prototype.removeItem" ||
       methodId === "Storage.prototype.clear") {
     return { kind: "const", value: undefined };
+  }
+  // WHATWG Encoding § 6.2.1 TextDecoder.decode(buffer) → DOMString.
+  // Returned string carries the buffer's content; without buffer-taint
+  // tracking we abstract to top. (Most decode usage is on fetch
+  // response bodies — the response is current-origin, so the resulting
+  // string isn't a generic taint source.)
+  if (methodId === "TextDecoder.prototype.decode") {
+    return { kind: "top" };
+  }
+  // WHATWG Encoding § 7.2.1 TextEncoder.encode(string) → Uint8Array
+  // (binary encoding of the input). § 7.2.2 encodeInto writes into a
+  // caller-provided Uint8Array. Both opaque to string-flow analysis.
+  if (methodId === "TextEncoder.prototype.encode" ||
+      methodId === "TextEncoder.prototype.encodeInto") {
+    return { kind: "top" };
   }
   // WHATWG DOM § 4.4 EventTarget.prototype.addEventListener(type, cb).
   // When dispatched via the prototype chain on an EventTarget instance
