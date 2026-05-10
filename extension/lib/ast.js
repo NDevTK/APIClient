@@ -22803,8 +22803,11 @@ function _tvsStep(F) {
         }
 
         // ── Branch 17: new URL(input, base?) ───────────────────────────
-        if (skip < 17 && _t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URL" }) &&
-            !path.scope.getBinding("URL") && node.arguments.length >= 1) {
+        // AV-grounded callee identity via builtin-ctor "WHATWG.URL".
+        var newUrlCalleeAv = _t.isNewExpression(node) ? _specPathValMemo.get(node.callee) : null;
+        if (skip < 17 && _t.isNewExpression(node) &&
+            newUrlCalleeAv && newUrlCalleeAv.kind === "builtin-ctor" && newUrlCalleeAv.id === "WHATWG.URL" &&
+            node.arguments.length >= 1) {
           L.urlInputPath = path.get("arguments.0");
           L.urlInputNode = node.arguments[0];
           L.urlBasePath = node.arguments.length >= 2 ? path.get("arguments.1") : null;
