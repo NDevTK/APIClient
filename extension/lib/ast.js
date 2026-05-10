@@ -13488,19 +13488,17 @@ function _ravStep(F) {
     var mm = sel.match(/^meta\[name\s*=\s*['"]?([^'"\]]+)['"]?\]$/);
     return mm ? mm[1] : null;
   }
-  // Unified DOM-context value resolution: spec eval projects all DOM lookups
-  // — `document.querySelector("meta[name=X]").content`,
-  // `document.getElementById("X").<prop>`, `document.querySelector("#X").<prop>`,
-  // `el.getAttribute("Y")`, `el.dataset.<key>`,
-  // `document.querySelector("meta[name=X]").getAttribute("content")` —
-  // through documentProps + _specApplyBuiltinMethod's DOM context probe
-  // (document.getElementById/querySelector → dom-element AV;
-  // Element.prototype.getAttribute → const string from the dom-element).
-  // ANY MemberExpression or CallExpression whose AV resolves to a const
-  // string is the resolved URL value — same lookup, AV-grounded callee
-  // identity (no name-based shape match on `document` / `querySelector` /
-  // `getElementById` / `getAttribute`), uniform across bare/prefixed/aliased.
-  if (skip < 1 && (_t.isMemberExpression(node) || _t.isCallExpression(node))) {
+  // Unified spec-eval AV resolution for value-producing nodes:
+  // - MemberExpression: DOM lookups (document.querySelector(...).content,
+  //   document.getElementById(...).<prop>, .dataset.<key>, etc.) all
+  //   project through documentProps + dom-element AVs to const strings
+  //   when the DOM context resolves them.
+  // - CallExpression: Element.prototype.getAttribute and similar.
+  // - NewExpression: WHATWG URLSearchParams encoding, WHATWG URL.href.
+  // ANY value-node whose AV resolves to a const string is the URL value;
+  // AV-grounded callee identity (no name-based shape match on `document`/
+  // `URL`/`URLSearchParams`/etc.), uniform across bare/prefixed/aliased.
+  if (skip < 1 && (_t.isMemberExpression(node) || _t.isCallExpression(node) || _t.isNewExpression(node))) {
     _specEnsureProgramFixpoint(path);
     var domNodeAv = _specPathValMemo.get(node);
     if (domNodeAv && domNodeAv.kind === "const" && typeof domNodeAv.value === "string") {
