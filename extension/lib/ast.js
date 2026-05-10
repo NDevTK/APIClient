@@ -466,45 +466,34 @@ function _isGlobalFetchCall(callee, scope) {
 // any return statement yields `new XMLHttpRequest()` — pure spec-grounded
 // data flow per ECMA-262 § 15.3 (FunctionBody) and § 13.3.2
 // (NewExpression). No method-name shortcut.
+// Spec-eval AV-driven check: is objectNode's spec-eval AV an XHR
+// instance? Per WHATWG XHR § 4 the constructor returns an obj-lit
+// AV tagged with _ctorId === "WHATWG.XMLHttpRequest" (set by
+// _specApplyBuiltinCtor). Same dispatch as _isLocationObject —
+// trigger property-flow analysis on the enclosing function and
+// inspect the AV. Replaces the prior AST shape-walk over factory
+// function bodies.
 function _isXhrObject(path, objectNode) {
-  if (!_t.isIdentifier(objectNode)) return false;
-  var objType = _getTrackedType(path, objectNode);
-  if (objType === "XMLHttpRequest") return true;
-  if (objType) return false;
-  var binding = path.scope.getBinding(objectNode.name);
-  if (!binding || !_t.isVariableDeclarator(binding.path.node) || !binding.path.node.init) return false;
-  var init = binding.path.node.init;
-  if (_t.isNewExpression(init) && _t.isIdentifier(init.callee, { name: "XMLHttpRequest" }) &&
-      !path.scope.getBinding("XMLHttpRequest")) return true;
-  if (_t.isCallExpression(init) || _t.isOptionalCallExpression(init)) {
-    var initPath = binding.path.get("init");
-    var calleeFn = _resolveCalleeFuncPath(initPath, 0);
-    if (calleeFn && calleeFn.node && _t.isFunction(calleeFn.node) && calleeFn.node.body) {
-      // Scan body for `return new XMLHttpRequest()` — scope-checked
-      // global. Stop at first match. Spec: function-body return
-      // statements per § 15.3 produce the call result.
-      var foundXhr = false;
-      try {
-        calleeFn.traverse({
-          ReturnStatement: function(retPath) {
-            if (foundXhr) return;
-            var arg = retPath.node.argument;
-            if (arg && _t.isNewExpression(arg) &&
-                _t.isIdentifier(arg.callee, { name: "XMLHttpRequest" }) &&
-                !retPath.scope.getBinding("XMLHttpRequest")) {
-              foundXhr = true;
-            }
-          },
-          // Stop into nested functions — their returns are for them, not us.
-          FunctionDeclaration: function(p) { p.skip(); },
-          FunctionExpression: function(p) { p.skip(); },
-          ArrowFunctionExpression: function(p) { p.skip(); },
-          ClassMethod: function(p) { p.skip(); },
-          ObjectMethod: function(p) { p.skip(); },
-        });
-      } catch (e) { _resolver.collectError(e, "isXhrObjectFactoryReturn"); }
-      if (foundXhr) return true;
+  if (!objectNode) return false;
+  // Trigger spec eval analysis on the enclosing function (idempotent).
+  var encFn = path.getFunctionParent && path.getFunctionParent();
+  if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
+    try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+  } else if (!encFn) {
+    var progPath = path;
+    while (progPath && progPath.parentPath) progPath = progPath.parentPath;
+    if (progPath && progPath.node && _t.isProgram(progPath.node)) {
+      try { _specAnalyzeProgramWithFixpoint(progPath); } catch (_) {}
     }
+  }
+  var av = _specPathValMemo.get(objectNode);
+  if (av && av.kind === "obj-lit" && av._ctorId === "WHATWG.XMLHttpRequest") return true;
+  // Fall back to type tracking for cases spec eval hasn't visited
+  // (this preserves the existing _getTrackedType integration without
+  // the AST factory-pattern walk; type tracking is itself spec-aware).
+  if (_t.isIdentifier(objectNode)) {
+    var objType = _getTrackedType(path, objectNode);
+    if (objType === "XMLHttpRequest") return true;
   }
   return false;
 }
@@ -3274,6 +3263,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
   if (ctorId === "WHATWG.XMLHttpRequest") {
     return {
       kind: "obj-lit",
+      _ctorId: "WHATWG.XMLHttpRequest",
       props: {
         open: { kind: "builtin-method", id: "XMLHttpRequest.prototype.open" },
         send: { kind: "builtin-method", id: "XMLHttpRequest.prototype.send" },
