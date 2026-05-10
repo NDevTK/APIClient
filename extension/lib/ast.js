@@ -11824,22 +11824,25 @@ function _resolveUrlStructuralShape(urlArgPath) {
   while (urlArgPath && urlArgPath.node) {
     var nu = urlArgPath.node;
     // `new URL(input, base).href` / `.toString()` — MemberExpression form.
+    // AV-grounded callee identity via builtin-ctor "WHATWG.URL".
     if (_t.isMemberExpression(nu) && !nu.computed &&
         _t.isIdentifier(nu.property) && (nu.property.name === "href" || nu.property.name === "toString") &&
-        _t.isNewExpression(nu.object) && _t.isIdentifier(nu.object.callee, { name: "URL" }) &&
-        !urlArgPath.scope.getBinding("URL") &&
-        nu.object.arguments.length >= 1) {
-      urlArgPath = urlArgPath.get("object.arguments.0");
-      continue;
+        _t.isNewExpression(nu.object) && nu.object.arguments.length >= 1) {
+      var nuObjCalleeAv = _specPathValMemo.get(nu.object.callee);
+      if (nuObjCalleeAv && nuObjCalleeAv.kind === "builtin-ctor" && nuObjCalleeAv.id === "WHATWG.URL") {
+        urlArgPath = urlArgPath.get("object.arguments.0");
+        continue;
+      }
     }
     // `(new URL(input, base)).toString()` — CallExpression form.
     if (_t.isCallExpression(nu) && _t.isMemberExpression(nu.callee) && !nu.callee.computed &&
         _t.isIdentifier(nu.callee.property, { name: "toString" }) &&
-        _t.isNewExpression(nu.callee.object) && _t.isIdentifier(nu.callee.object.callee, { name: "URL" }) &&
-        !urlArgPath.scope.getBinding("URL") &&
-        nu.callee.object.arguments.length >= 1) {
-      urlArgPath = urlArgPath.get("callee.object.arguments.0");
-      continue;
+        _t.isNewExpression(nu.callee.object) && nu.callee.object.arguments.length >= 1) {
+      var nuCallObjCalleeAv = _specPathValMemo.get(nu.callee.object.callee);
+      if (nuCallObjCalleeAv && nuCallObjCalleeAv.kind === "builtin-ctor" && nuCallObjCalleeAv.id === "WHATWG.URL") {
+        urlArgPath = urlArgPath.get("callee.object.arguments.0");
+        continue;
+      }
     }
     break;
   }
