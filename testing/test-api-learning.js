@@ -129,6 +129,52 @@ api("safe: fetch with literal absolute URL doesn't false-positive", `
   return sites.length === 1 && sites[0].url === "https://api.example.com/endpoint";
 });
 
+console.log("\n=== URLSearchParams body ===\n");
+
+api("fetch with URLSearchParams body", `
+  fetch("/api/x", {
+    method: "POST",
+    body: new URLSearchParams({ key1: "v1", key2: "v2" })
+  });
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  // URLSearchParams from object literal — body params should reflect keys
+  // OR the body might be serialised as a string. Either is OK; for now
+  // just verify the fetch site exists.
+  return sites[0].url === "/api/x" && sites[0].method === "POST";
+});
+
+console.log("\n=== Headers extraction ===\n");
+
+api("fetch with headers literal", `
+  fetch("/api/x", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Custom": "val" },
+    body: JSON.stringify({ a: 1 })
+  });
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var s = sites[0];
+  return s.headers && (s.headers["Content-Type"] === "application/json" || s.headers["content-type"] === "application/json");
+});
+
+console.log("\n=== Class-method API client ===\n");
+
+api("API client class with constructor URL", `
+  class Client {
+    constructor(base) { this.base = base; }
+    list() { return fetch(this.base + "/list"); }
+  }
+  new Client("/api").list();
+`, function(sites) {
+  // Class constructor caller-arg substitution: this.base = "/api",
+  // fetch URL = "/api/list".
+  for (var i = 0; i < sites.length; i++) {
+    if (sites[i].url === "/api/list") return true;
+  }
+  return false;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);
