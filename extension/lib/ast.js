@@ -16905,16 +16905,16 @@ function _rtoiStep(F) {
           }
         }
         // Object.assign({}, src1, src2, ...) — merge all object args.
+        // AV-grounded callee identity via builtin-method "Object.assign"
+        // (windowSelfAv.props.Object.props.assign).
         // The synthesized merged object can't have a single Babel _path
         // (no underlying node owns a .properties array matching the
         // merged set). Per-property _path is attached at synthesis time
         // so downstream consumers reading prop.value._path see the
         // actual source location; node-level _path is omitted to keep
         // navigation safe.
-        if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) &&
-            _t.isIdentifier(node.callee.object, { name: "Object" }) &&
-            !path.scope.getBinding("Object") &&
-            _t.isIdentifier(node.callee.property, { name: "assign" }) &&
+        var rtoiCalleeAv = _t.isCallExpression(node) ? _specPathValMemo.get(node.callee) : null;
+        if (rtoiCalleeAv && rtoiCalleeAv.kind === "builtin-method" && rtoiCalleeAv.id === "Object.assign" &&
             node.arguments.length >= 2) {
           var mergedProps = [];
           for (var oai = 0; oai < node.arguments.length; oai++) {
