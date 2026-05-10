@@ -20670,6 +20670,17 @@ function _processSecurityAssignSink(path, result) {
   // innerHTML = expr constantly for legitimate DOM updates).
   if (valueSource.sourceType !== "user-controlled") return;
 
+  // DOM attachment gate per WHATWG DOM § 4.2: innerHTML / outerHTML /
+  // srcdoc / formAction assignments on a detached element don't trigger
+  // execution (no rendering, no script eval, no navigation). When recv's
+  // spec-eval AV is dom-element with attached:false, suppress the sink.
+  // Only applies to xss sinks on element receivers; redirect (location.*)
+  // is unaffected since location is always tree-mounted.
+  if (sinkType === "xss") {
+    var lhsRecvAv = _specPathValMemo.get(left.object);
+    if (lhsRecvAv && lhsRecvAv.kind === "dom-element" && lhsRecvAv.attached === false) return;
+  }
+
   // Self-assignment on location properties (e.g. location.href = location.href,
   // document.location = document.location) is a page reload, not an open redirect.
   if (sinkType === "redirect") {

@@ -562,6 +562,29 @@ xss("var loc = window.location; loc.href = taint", `
   return false;
 });
 
+console.log("\n=== outerHTML ===\n");
+
+xss("ATTACHED: document.body.outerHTML = taint", `
+  document.body.outerHTML = location.hash;
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "outerHTML" && s.source === "location.hash") return true;
+  }
+  return false;
+});
+
+xss("UNATTACHED: createElement + outerHTML (no append) — suppressed", `
+  var el = document.createElement("div");
+  el.outerHTML = location.hash;
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "outerHTML" && s.source === "location.hash") return false;
+  }
+  return true;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);
