@@ -8112,6 +8112,53 @@ function _specEnsureProgramFixpoint(anyPath) {
 // at most O(program-AST). Triggered by AV-identity callers that don't
 // need closure write-back fixpoint, only the static globals registry.
 var _specProgramGlobalsPrepassDone = new WeakSet();
+// Function-node → Babel path index. Spec eval AVs reference function nodes
+// (the `funcNode` field on function-ref AVs); consumers like the AV→path
+// projector need to recover paths. Populated lazily by the prepass below
+// for every function reachable from a Program. O(1) lookup post-prepass.
+var _specFuncPathByNode = new WeakMap();
+// Recover the Babel path for a function node. Returns null when the node
+// hasn't been indexed yet (e.g. the prepass hasn't run for the enclosing
+// program). Callers that need the path before prepass can pass `ctxPath`
+// to drive a one-shot guided traverse from the program root.
+function _specPathOfFunc(funcNode, ctxPath) {
+  if (!funcNode) return null;
+  var cached = _specFuncPathByNode.get(funcNode);
+  if (cached) return cached;
+  if (!ctxPath || !ctxPath.node) return null;
+  var rootP = ctxPath;
+  while (rootP.parentPath) rootP = rootP.parentPath;
+  if (!rootP || !rootP.node) return null;
+  var found = null;
+  rootP.traverse({
+    "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
+      if (p.node === funcNode) { found = p; p.stop(); }
+    }
+  });
+  if (found) _specFuncPathByNode.set(funcNode, found);
+  return found;
+}
+// Project a spec-eval AV to a Babel function path. Walks function-ref
+// AVs (and or-AV unions, picking the first leaf with a resolvable path).
+// Iterative worklist — JS call stack stays at depth 1 regardless of AV
+// nesting depth. Returns null when no leaf resolves to a function.
+function _funcPathFromAv(av, ctxPath) {
+  if (!av) return null;
+  var stack = [av];
+  var seen = new Set();
+  while (stack.length > 0) {
+    var n = stack.pop();
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    if (n.kind === "function-ref" && n.funcNode) {
+      var path = _specPathOfFunc(n.funcNode, ctxPath);
+      if (path) return path;
+    } else if (n.kind === "or" && n.alternatives) {
+      for (var i = 0; i < n.alternatives.length; i++) stack.push(n.alternatives[i]);
+    }
+  }
+  return null;
+}
 function _specEnsureProgramGlobalsPrepass(anyPath) {
   if (!anyPath) return;
   var p = anyPath;
@@ -8212,6 +8259,13 @@ function _specEnsureProgramGlobalsPrepass(anyPath) {
         try { ctorRes = _specApplyBuiltinCtor(calleeAv.id, argAvs); } catch (_) {}
         if (ctorRes) _specPathValMemo.set(n, ctorRes);
       }
+    },
+    "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(fnPath) {
+      // Index funcNode → funcPath so consumers projecting a function-ref
+      // AV can recover the Babel path in O(1). Per § 15.2 / § 15.3 / § 15.4
+      // / § 15.7: every function-shape node has a fixed identity by its
+      // syntactic position; the AST guarantees node uniqueness.
+      _specFuncPathByNode.set(fnPath.node, fnPath);
     }
   });
 }
@@ -13987,351 +14041,24 @@ function _resolveCalleeFuncPath(callPath, depth) {
 }
 
 function _rcfpStep(F) {
-  var callPath = F.path, depth = F.depth, L = F.L;
-  while (true) {
-    switch (F.state) {
-      case _RCFP_INIT: {
-        var callee = callPath.node.callee;
-        // Branch 1 (Identifier): direct function binding.
-        if (_t.isIdentifier(callee)) {
-          var binding = callPath.scope.getBinding(callee.name);
-          if (binding) {
-            if (_t.isFunctionDeclaration(binding.path.node)) return { done: binding.path };
-            if (_t.isVariableDeclarator(binding.path.node) && binding.path.node.init) {
-              var init = binding.path.node.init;
-              if (_t.isFunctionExpression(init) || _t.isArrowFunctionExpression(init))
-                return { done: binding.path.get("init") };
-            }
-          }
-          // Branch 3 (Identifier aliases a callable): `var f = X.bind(Y); f()`
-          // or `var f = obj.method; f()`. Only follow through CallExpression
-          // init (e.g. .bind chains) — direct function-init already covered
-          // by branch 1 above.
-          if (binding && _t.isVariableDeclarator(binding.path.node) && binding.path.node.init) {
-            var initNode2 = binding.path.node.init;
-            if (_t.isCallExpression(initNode2)) {
-              // _resolveExprToFunctionPath is iterative; one wrapper frame.
-              return { done: _resolveExprToFunctionPath(binding.path.get("init"), depth || 0) };
-            }
-          }
-          // Branch 4 (no binding — unbound identifier resolves via global
-          // assignments): handles `window.X = function() {…}` then a later
-          // call site referencing `X` directly. Module-scope aliases via
-          // _globalAssignments per the analyser's global tracking.
-          if (!binding) {
-            var globalDef = _globalAssignments[callee.name];
-            if (globalDef && globalDef.valueNode && globalDef.valuePath) {
-              if (_t.isFunctionExpression(globalDef.valueNode) || _t.isArrowFunctionExpression(globalDef.valueNode)) {
-                return { done: globalDef.valuePath };
-              }
-              if (_t.isCallExpression(globalDef.valueNode)) {
-                var gRetFunc = _resolveCallReturnToFunction(globalDef.valuePath, depth || 0);
-                if (gRetFunc && gRetFunc._path) return { done: gRetFunc._path };
-              }
-            }
-          }
-          // Branch 5 (higher-order: `var f = factory()`): when no direct
-          // function-init match but the binding is `var = call(...)`, the
-          // call's return may be a function per ECMA § 13.3.
-          if (binding && _t.isVariableDeclarator(binding.path.node) && binding.path.node.init &&
-              _t.isCallExpression(binding.path.node.init)) {
-            var bRetFunc = _resolveCallReturnToFunction(binding.path.get("init"), depth || 0);
-            if (bRetFunc && bRetFunc._path) return { done: bRetFunc._path };
-          }
-          return { done: null };
-        }
-        // Branch 2 (MemberExpression callee).
-        if (_t.isMemberExpression(callee) && !callee.computed) {
-          var propName = _t.isIdentifier(callee.property) ? callee.property.name : null;
-          if (!propName) return { done: null };
-          L.propName = propName;
-          // Function.prototype.call / .apply — `f.call(thisArg, ...args)`
-          // invokes f with args. Native ECMAScript semantics: callee.object
-          // IS the function. Resolve receiver to function path.
-          if (propName === "call" || propName === "apply") {
-            var recvFunc = _resolveExprToFunctionPath(callPath.get("callee.object"), depth || 0);
-            if (recvFunc) return { done: recvFunc };
-          }
-          // Dispatch _resolveToObject via shared driver — keeps the JS
-          // call stack flat across mutual call/object resolution.
-          return {
-            trace: callPath.get("callee.object"),
-            state: _RCFP_OBJ_AFTER,
-            stepFn: _rtoiStep, makeFrame: _rtoiMakeFrame,
-            shortCircuit: _rtoiShortCircuit, guardPrefix: "T", defaultResult: null,
-          };
-        }
-        // Branch 2c (computed MemberExpression callee): `arr[N]()` or
-        // `obj[key]()`. Resolve via spec-eval state per § 9.1.1: if the
-        // object is an array-lit AV (e.g. produced by closure write-back
-        // on `handlers.push(fn)`) and the key is a Const number, look
-        // up the element. If it's a function-ref AV, return its path.
-        if (_t.isMemberExpression(callee) && callee.computed) {
-          var memoObjAv = _specPathValMemo.get(callee.object);
-          var memoKeyAv = _specPathValMemo.get(callee.property);
-          if (memoObjAv && memoObjAv.kind === "array-lit" && memoObjAv.elements &&
-              memoKeyAv && memoKeyAv.kind === "const" && typeof memoKeyAv.value === "number" &&
-              memoKeyAv.value >= 0 && memoKeyAv.value < memoObjAv.elements.length) {
-            var elemAv = memoObjAv.elements[memoKeyAv.value];
-            if (elemAv && elemAv.kind === "function-ref" && elemAv.funcNode) {
-              // Find a Babel path for the function node by walking from
-              // the program root via parent links — Babel doesn't index
-              // node→path globally; the function node lives inside the
-              // AST so a guided traversal locates it.
-              var found = null;
-              var rootP = callPath;
-              while (rootP.parentPath) rootP = rootP.parentPath;
-              if (rootP && rootP.node) {
-                rootP.traverse({
-                  "FunctionExpression|ArrowFunctionExpression|FunctionDeclaration": function(p) {
-                    if (p.node === elemAv.funcNode) { found = p; p.stop(); }
-                  }
-                });
-              }
-              if (found) return { done: found };
-            }
-          }
-        }
-        return { done: null };
-      }
-
-      case _RCFP_OBJ_AFTER: {
-        var callee2 = callPath.node.callee;
-        var propName2 = L.propName;
-        var objNode = F.result;
-        if (objNode) {
-          for (var i = 0; i < objNode.properties.length; i++) {
-            var prop = objNode.properties[i];
-            if (!_t.isObjectProperty(prop) || prop.computed) continue;
-            var key = _t.isIdentifier(prop.key) ? prop.key.name :
-              (_t.isStringLiteral(prop.key) ? prop.key.value : null);
-            if (key === propName2 && (_t.isFunctionExpression(prop.value) || _t.isArrowFunctionExpression(prop.value))) {
-              return { done: objNode._path ? objNode._path.get("properties." + i + ".value") : null };
-            }
-          }
-        }
-        // Class instance method: `new C().method()` per § 15.7
-        // (ClassDeclaration). Resolve the constructor identifier to its
-        // class declaration and look up the method.
-        if (_t.isNewExpression(callee2.object) && _t.isIdentifier(callee2.object.callee)) {
-          var ctorName = callee2.object.callee.name;
-          var ctorBind = callPath.scope.getBinding(ctorName);
-          if (ctorBind && ctorBind.path) {
-            var classNode = ctorBind.path.node;
-            if (_t.isClassDeclaration(classNode) || _t.isClassExpression(classNode)) {
-              var classBody = classNode.body;
-              if (classBody && classBody.body) {
-                for (var ci = 0; ci < classBody.body.length; ci++) {
-                  var classMember = classBody.body[ci];
-                  if (!_t.isClassMethod(classMember) || classMember.computed) continue;
-                  if (classMember.kind !== "method") continue;
-                  var memberKey = _t.isIdentifier(classMember.key) ? classMember.key.name :
-                    (_t.isStringLiteral(classMember.key) ? classMember.key.value : null);
-                  if (memberKey === propName2) {
-                    return { done: ctorBind.path.get("body.body." + ci) };
-                  }
-                }
-              }
-            }
-          }
-        }
-        // Variable bound to a class instance: `var c = new C(); c.method()`
-        // — same lookup as above but obj is an Identifier whose binding
-        // is `var c = new C()`.
-        if (_t.isIdentifier(callee2.object)) {
-          var instBind = callPath.scope.getBinding(callee2.object.name);
-          if (instBind && _t.isVariableDeclarator(instBind.path.node) &&
-              instBind.path.node.init && _t.isNewExpression(instBind.path.node.init) &&
-              _t.isIdentifier(instBind.path.node.init.callee)) {
-            var instCtorName = instBind.path.node.init.callee.name;
-            var instCtorBind = callPath.scope.getBinding(instCtorName);
-            if (instCtorBind && instCtorBind.path) {
-              var iClassNode = instCtorBind.path.node;
-              if (_t.isClassDeclaration(iClassNode) || _t.isClassExpression(iClassNode)) {
-                var iClassBody = iClassNode.body;
-                if (iClassBody && iClassBody.body) {
-                  for (var ici = 0; ici < iClassBody.body.length; ici++) {
-                    var iMember = iClassBody.body[ici];
-                    if (!_t.isClassMethod(iMember) || iMember.computed) continue;
-                    if (iMember.kind !== "method") continue;
-                    var iKey = _t.isIdentifier(iMember.key) ? iMember.key.name :
-                      (_t.isStringLiteral(iMember.key) ? iMember.key.value : null);
-                    if (iKey === propName2) {
-                      return { done: instCtorBind.path.get("body.body." + ici) };
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        // IIFE-returned property: `var e = function(){…n.X=fn…return n}()`
-        // followed by `e.X(…)`. The IIFE's return value is an object
-        // whose internal mutations include `X`; resolve through.
-        if (_t.isIdentifier(callee2.object)) {
-          var iifeBind = callPath.scope.getBinding(callee2.object.name);
-          if (iifeBind && _t.isVariableDeclarator(iifeBind.path.node) &&
-              iifeBind.path.node.init && _t.isCallExpression(iifeBind.path.node.init)) {
-            var iifePropFn = _resolveIIFEReturnedProperty(iifeBind.path.get("init"), propName2);
-            if (iifePropFn) return { done: iifePropFn };
-          }
-          // Global-assigned IIFE: `window.X = function(){…}()` then `X.method()`.
-          if (!iifeBind) {
-            var iifeGDef = _globalAssignments[callee2.object.name];
-            if (iifeGDef && iifeGDef.valuePath && _t.isCallExpression(iifeGDef.valueNode)) {
-              var iifeGFn = _resolveIIFEReturnedProperty(iifeGDef.valuePath, propName2);
-              if (iifeGFn) return { done: iifeGFn };
-            }
-          }
-        }
-        // Global-alias unwrap: `window.jQuery = jQuery` (chained
-        // assignments) — the receiver's binding isn't local so resolve
-        // through `_globalAssignments` to find the underlying binding,
-        // then continue with the standard ref-walk routes below.
-        if (_t.isIdentifier(callee2.object) && !callPath.scope.getBinding(callee2.object.name)) {
-          var aliasGDef = _globalAssignments[callee2.object.name];
-          if (aliasGDef && aliasGDef.valueNode) {
-            var aliasVal = aliasGDef.valueNode;
-            while (_t.isAssignmentExpression(aliasVal)) aliasVal = aliasVal.right;
-            if (_t.isIdentifier(aliasVal)) {
-              var aliasBind = aliasGDef.valuePath.scope.getBinding(aliasVal.name);
-              if (aliasBind) {
-                // Re-run the same search on the aliased binding's refs.
-                callee2 = { object: { type: "Identifier", name: aliasVal.name }, property: callee2.property, computed: false };
-                // Note: synthetic callee2 — only object.name is used by the
-                // ref-walk below, so it's safe.
-              }
-            }
-          }
-        }
-        // `obj.key = function/arrow` mutation pattern — walk the
-        // receiver identifier's referencePaths for assignment expressions
-        // whose left side is `obj.key` and right side is a function.
-        // Native ECMAScript scope/value flow — same mechanism that backs
-        // module-exports (`t.fn = function() {...}`) and prototype
-        // patterns (`Ctor.prototype.method = function() {...}`).
-        if (_t.isIdentifier(callee2.object)) {
-          var rcvBind = callPath.scope.getBinding(callee2.object.name);
-          if (rcvBind && rcvBind.referencePaths) {
-            for (var ri = 0; ri < rcvBind.referencePaths.length; ri++) {
-              var rp = rcvBind.referencePaths[ri];
-              var rpParent = rp.parent;
-              // Direct assignment `obj.key = …`
-              if (rpParent && _t.isMemberExpression(rpParent) && rpParent.object === rp.node &&
-                  !rpParent.computed && _t.isIdentifier(rpParent.property, { name: propName2 })) {
-                var assn = rp.parentPath ? rp.parentPath.parent : null;
-                if (assn && _t.isAssignmentExpression(assn) && assn.operator === "=" && assn.left === rpParent) {
-                  // Chained-assignment unwrap per § 13.15.4: in
-                  // `a = b = expr`, the rightmost expr provides the value;
-                  // intermediate AssignmentExpressions cascade their result.
-                  // Walk through nested AssignmentExpressions to reach
-                  // the actual RHS function/factory.
-                  var rhs = assn.right;
-                  var rhsPath = rp.parentPath.parentPath.get("right");
-                  while (_t.isAssignmentExpression(rhs) && rhs.operator === "=") {
-                    rhs = rhs.right;
-                    rhsPath = rhsPath.get("right");
-                  }
-                  if (_t.isFunctionExpression(rhs) || _t.isArrowFunctionExpression(rhs)) {
-                    return { done: rhsPath };
-                  }
-                  // Factory-call value: `obj.key = factory(...)` per § 13.3.
-                  if (_t.isCallExpression(rhs)) {
-                    var rhsRetFn = _resolveCallReturnToFunction(rhsPath, depth + 1);
-                    if (rhsRetFn && rhsRetFn._path) return { done: rhsRetFn._path };
-                    if (rhsRetFn && rhsRetFn.node && _t.isFunction(rhsRetFn.node)) return { done: rhsPath };
-                  }
-                }
-              }
-              // Object.assign(obj, {key: value}) — built-in property
-              // propagation per ECMA § 20.1.2.1. AV-grounded callee
-              // identity via builtin-method "Object.assign" (windowSelfAv
-              // .props.Object.props.assign).
-              var rpCalleeAv = (rpParent && _t.isCallExpression(rpParent)) ?
-                _specPathValMemo.get(rpParent.callee) : null;
-              if (rpParent && _t.isCallExpression(rpParent) &&
-                  rpParent.arguments[0] === rp.node &&
-                  rpCalleeAv && rpCalleeAv.kind === "builtin-method" &&
-                  rpCalleeAv.id === "Object.assign") {
-                for (var oai = 1; oai < rpParent.arguments.length; oai++) {
-                  var oas = rpParent.arguments[oai];
-                  if (!_t.isObjectExpression(oas)) continue;
-                  for (var oap = 0; oap < oas.properties.length; oap++) {
-                    var oapp = oas.properties[oap];
-                    if (!_t.isObjectProperty(oapp) || oapp.computed) continue;
-                    var oapk = _t.isIdentifier(oapp.key) ? oapp.key.name :
-                      (_t.isStringLiteral(oapp.key) ? oapp.key.value : null);
-                    if (oapk === propName2) {
-                      var oavp = rp.parentPath.get("arguments." + oai + ".properties." + oap + ".value");
-                      if (_t.isFunctionExpression(oapp.value) || _t.isArrowFunctionExpression(oapp.value)) {
-                        return { done: oavp };
-                      }
-                      if (_t.isCallExpression(oapp.value)) {
-                        var oart = _resolveCallReturnToFunction(oavp, depth + 1);
-                        if (oart && oart._path) return { done: oart._path };
-                        if (oart && oart.node && _t.isFunction(oart.node)) return { done: oavp };
-                      }
-                    }
-                  }
-                }
-              }
-              // Property-flow propagation: `obj.copier(srcLit)` where
-              // copier's body has Object.assign-equivalent dataflow
-              // (target=this, source=param[0]/args-elt). The function is
-              // resolved via the analyser's effect detection — pure
-              // spec-grounded data flow per ECMA § 20.1.2.1 semantics
-              // expressed via for-in / Object.keys.forEach copy patterns.
-              if (rpParent && _t.isMemberExpression(rpParent) && rpParent.object === rp.node && !rpParent.computed) {
-                var copyCallPath = rp.parentPath ? rp.parentPath.parentPath : null;
-                var copyCallNode = copyCallPath ? copyCallPath.node : null;
-                if (copyCallNode && _t.isCallExpression(copyCallNode) && copyCallNode.callee === rpParent) {
-                  var copyFn = _resolveCalleeFuncPath(copyCallPath, depth + 1);
-                  if (copyFn) {
-                    var copyEffects = _specAnalyzePropertyFlow(copyFn);
-                    var pp = _specDetectPropagationFromEffects(copyEffects);
-                    if (pp && pp.target.kind === "this") {
-                      var ppArgIdx = -1;
-                      if (pp.source.kind === "param") ppArgIdx = pp.source.idx;
-                      else if (pp.source.kind === "args-elt" &&
-                               pp.source.idx && pp.source.idx.kind === "const" &&
-                               typeof pp.source.idx.value === "number") {
-                        ppArgIdx = pp.source.idx.value;
-                      }
-                      if (ppArgIdx >= 0 && ppArgIdx < copyCallNode.arguments.length) {
-                        var ppArg = copyCallNode.arguments[ppArgIdx];
-                        if (_t.isObjectExpression(ppArg)) {
-                          for (var ppe = 0; ppe < ppArg.properties.length; ppe++) {
-                            var ppp = ppArg.properties[ppe];
-                            if (!_t.isObjectProperty(ppp) || ppp.computed) continue;
-                            var ppk = _t.isIdentifier(ppp.key) ? ppp.key.name :
-                              (_t.isStringLiteral(ppp.key) ? ppp.key.value : null);
-                            if (ppk === propName2) {
-                              var ppvp = copyCallPath.get("arguments." + ppArgIdx + ".properties." + ppe + ".value");
-                              if (_t.isFunctionExpression(ppp.value) || _t.isArrowFunctionExpression(ppp.value)) {
-                                return { done: ppvp };
-                              }
-                              if (_t.isCallExpression(ppp.value)) {
-                                var ppr = _resolveCallReturnToFunction(ppvp, depth + 1);
-                                if (ppr && ppr._path) return { done: ppr._path };
-                                if (ppr && ppr.node && _t.isFunction(ppr.node)) return { done: ppvp };
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        return { done: null };
-      }
-
-      default: return { done: null };
-    }
+  // Single-AV-engine: thin spec-eval projection. F.path is the
+  // CallExpression; project its callee AV to a Babel function path.
+  // Per ECMAScript § 13.3.6 CallExpression evaluation: the callee is
+  // an expression whose value, if a function, is invoked. Spec eval
+  // produces the callee's AV via _specEvalExpression / _specApplyStatement
+  // tracking; this projection recovers the function path from a
+  // function-ref AV (or first resolvable leaf of an or-AV union).
+  if (!F || !F.path || !F.path.node || !F.path.node.callee) return { done: null };
+  var encFn = F.path.getFunctionParent && F.path.getFunctionParent();
+  if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
+  else _specEnsureProgramGlobalsPrepass(F.path);
+  var calleePath = F.path.get("callee");
+  var av = _specPathValMemo.get(calleePath.node);
+  if (!av) {
+    try { av = _specEvalExpression(calleePath, _specStateCreate({}), []); }
+    catch (_) { return { done: null }; }
   }
+  return { done: _funcPathFromAv(av, F.path) };
 }
 
 // Resolve an expression to a function path when possible. Accepts:
