@@ -14100,21 +14100,10 @@ function _ravStep(F) {
           }
         }
       }
-      // 12e: location.{origin,protocol,hostname,host} — resolvable from the
-      // analysis tab URL. AV-grounded receiver identity via _isLocationObject
-      // (canonical location AV); covers bare/window-prefixed/self-prefixed/
-      // globalThis-prefixed/aliased forms uniformly.
-      if (memSubSkip < 3 && _sourceUrl && (propName === "origin" || propName === "protocol" || propName === "hostname" || propName === "host")) {
-        if (_isLocationObject(node.object, path)) {
-          try {
-            var pageUrl = new URL(_sourceUrl);
-            if (propName === "origin") return { done: [pageUrl.origin] };
-            if (propName === "protocol") return { done: [pageUrl.protocol] };
-            if (propName === "hostname") return { done: [pageUrl.hostname] };
-            if (propName === "host") return { done: [pageUrl.host] };
-          } catch (_) { /* sourceUrl wasn't a parseable URL — fall through */ }
-        }
-      }
+      // (12e: location.{origin,protocol,hostname,host} substitution handled
+      // at the AV layer by _resolvePageOriginAv in _resolveAllValues —
+      // covers bare/prefixed/aliased/template-embedded forms uniformly via
+      // spec eval projection. No AST shape walk needed here.)
       // 12f/g/h: this.prop — multiple sub-shapes (object literal method,
       // prototype method, ES6 class method/getter/constructor).
       if (memSubSkip < 4 && _t.isThisExpression(node.object)) {
