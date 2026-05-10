@@ -21549,10 +21549,12 @@ function _tvsStep(F) {
           if (subAv && subAv.kind === "taint-source") {
             return { done: _tvsSource(subAv.id, nodeLoc, subAv.dims || _dimsForSource(subAv.id)) };
           }
-          var taintMatch = _matchTaintSource(path, node);
-          if (taintMatch) {
-            return { done: _tvsSource(taintMatch, nodeLoc, _dimsForSource(taintMatch)) };
-          }
+          // _matchTaintSource AST shape walker removed; spec eval AV
+          // inspection above covers all real-bundle cases via the
+          // globalThis registry's taint-source AVs (location/document/
+          // window/self/globalThis). If a node here has no taint-source
+          // AV, the legacy chain walk continues normally and may still
+          // discover taint via binding chains.
           if (_t.isIdentifier(node.object, { name: "location" }) && !path.scope.getBinding("location") &&
               _t.isIdentifier(node.property) && _LOCATION_SAFE_PROPS[node.property.name]) {
             return { done: LIT };
