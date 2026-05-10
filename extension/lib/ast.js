@@ -23699,10 +23699,10 @@ function _tvsStep(F) {
       }
 
       case _TVS_CALL_OA_LOOP: {
-        // Object.assign(target, ...sources): trace each arg
-        if (_t.isMemberExpression(node.callee) && !node.callee.computed &&
-            _t.isIdentifier(node.callee.property, { name: "assign" }) &&
-            _t.isIdentifier(node.callee.object, { name: "Object" }) && !path.scope.getBinding("Object") &&
+        // Object.assign(target, ...sources): trace each arg.
+        // AV-grounded callee identity via builtin-method "Object.assign".
+        var oaCalleeAv = _specPathValMemo.get(node.callee);
+        if (oaCalleeAv && oaCalleeAv.kind === "builtin-method" && oaCalleeAv.id === "Object.assign" &&
             node.arguments.length >= 2) {
           if (L.callOaIdx === undefined) L.callOaIdx = 0;
           if (L.callOaIdx < node.arguments.length) {
