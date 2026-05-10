@@ -534,40 +534,18 @@ function _findCtorParamOrDestr(params, name) {
 // and pull the property. Returns a [values] array.
 function _resolveCtorArgDestrProp(argPath, key, depth) {
   if (!argPath) return [];
-  if (_t.isObjectExpression(argPath.node)) {
-    var props = argPath.node.properties;
-    for (var pi = 0; pi < props.length; pi++) {
-      var op = props[pi];
-      if (!_t.isObjectProperty(op) || op.computed) continue;
-      var opKey = _t.isIdentifier(op.key) ? op.key.name :
-        (_t.isStringLiteral(op.key) ? op.key.value : null);
-      if (opKey === key) {
-        return _resolveAllValues(argPath.get("properties." + pi + ".value"), depth + 1);
-      }
-    }
-  }
-  var obj = _resolveToObject(argPath, depth);
-  if (obj && obj.properties) {
-    for (var pi2 = 0; pi2 < obj.properties.length; pi2++) {
-      var op2 = obj.properties[pi2];
-      if (!_t.isObjectProperty(op2) || op2.computed) continue;
-      var op2Key = _t.isIdentifier(op2.key) ? op2.key.name :
-        (_t.isStringLiteral(op2.key) ? op2.key.value : null);
-      if (op2Key === key) {
-        // Object.assign-merged synthetic obj has no node-level _path
-        // (no Babel path owns the merged set). Each property's value
-        // carries its own _path attached at synthesis time, so prefer
-        // that. For real ObjectExpression obj, derive from obj._path.
-        if (op2.value && op2.value._path) {
-          return _resolveAllValues(op2.value._path, depth + 1);
-        }
-        if (obj._path) {
-          return _resolveAllValues(obj._path.get("properties." + pi2 + ".value"), depth + 1);
-        }
-      }
-    }
-  }
-  return [];
+  // Spec eval is the single engine: read the arg's AV from
+  // _specPathValMemo, look up `key` on the obj-lit, and flatten the
+  // prop's AV to string leaves. Per ECMA § 7.3.10 GetV; covers both
+  // ObjectExpression literals and synthetic merges (Object.assign,
+  // spread, closure prop assigns) since spec eval models all of them
+  // as obj-lit AVs uniformly.
+  var av = _avAtPath(argPath);
+  var propAv = _avObjPropLookup(av, key);
+  if (!propAv) return [];
+  var pageOriginLeaves = _resolvePageOriginAv(propAv);
+  if (pageOriginLeaves) return pageOriginLeaves;
+  return _avFlattenStringLeaves(propAv);
 }
 
 // Find indirect constructor-call arg paths for a class exposed via
@@ -8137,6 +8115,58 @@ function _specPathOfFunc(funcNode, ctxPath) {
   });
   if (found) _specFuncPathByNode.set(funcNode, found);
   return found;
+}
+// Spec-eval-direct AV for a Babel path. Runs property flow on the
+// enclosing function (or program-globals prepass for module-level paths)
+// to populate _specPathValMemo, then reads the AV. Falls back to ad-hoc
+// _specEvalExpression for paths the prepass didn't visit. This is the
+// single entry point consumers use to get an AV from a Babel path.
+function _avAtPath(path) {
+  if (!path || !path.node) return null;
+  var encFn = path.getFunctionParent && path.getFunctionParent();
+  if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
+  else _specEnsureProgramGlobalsPrepass(path);
+  var av = _specPathValMemo.get(path.node);
+  if (av) return av;
+  try { return _specEvalExpression(path, _specStateCreate({}), []); }
+  catch (_) { return null; }
+}
+// Walk an AV to its underlying obj-lit (through or-AV alternatives).
+// Returns the first obj-lit reached, or null when the AV doesn't
+// resolve to one. Iterative worklist; JS call stack stays at depth 1.
+function _avResolveToObjLit(av) {
+  if (!av) return null;
+  var stack = [av]; var seen = new Set();
+  while (stack.length > 0) {
+    var n = stack.pop(); if (!n || seen.has(n)) continue; seen.add(n);
+    if (n.kind === "obj-lit") return n;
+    if (n.kind === "or" && n.alternatives) {
+      for (var i = 0; i < n.alternatives.length; i++) stack.push(n.alternatives[i]);
+    }
+  }
+  return null;
+}
+// Walk an AV to its underlying array-lit (through or-AV alternatives).
+function _avResolveToArrayLit(av) {
+  if (!av) return null;
+  var stack = [av]; var seen = new Set();
+  while (stack.length > 0) {
+    var n = stack.pop(); if (!n || seen.has(n)) continue; seen.add(n);
+    if (n.kind === "array-lit") return n;
+    if (n.kind === "or" && n.alternatives) {
+      for (var i = 0; i < n.alternatives.length; i++) stack.push(n.alternatives[i]);
+    }
+  }
+  return null;
+}
+// Look up a single property's AV on an obj-lit AV (walking or-AVs).
+// Per ECMA § 7.3.10 GetV: returns the property's value AV when present,
+// null when absent.
+function _avObjPropLookup(av, key) {
+  var obj = _avResolveToObjLit(av);
+  if (!obj || !obj.props) return null;
+  if (Object.prototype.hasOwnProperty.call(obj.props, key)) return obj.props[key];
+  return null;
 }
 // Project a spec-eval AV to a Babel function path. Walks function-ref
 // AVs (and or-AV unions, picking the first leaf with a resolvable path).
