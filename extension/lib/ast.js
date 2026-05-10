@@ -12294,9 +12294,11 @@ function _containsNetworkSink(funcPath) {
       var c = innerPath.node.callee;
       // fetch() / window.fetch() / (s.fetch || fetch)() — only if fetch is the global
       if (_isGlobalFetchCall(c, innerPath.scope, innerPath)) { found = true; innerPath.stop(); return; }
-      // .open() — only a network sink if object traces to XMLHttpRequest
-      if (_t.isMemberExpression(c) && _t.isIdentifier(c.property, { name: "open" }) &&
-          innerPath.node.arguments.length >= 2 && _isXhrObject(innerPath, c.object)) {
+      // XHR.open(method, url) — AV-direct via builtin-method id.
+      var _xhrOpenAv = _t.isMemberExpression(c) ? _specPathValMemo.get(c) : null;
+      if (_xhrOpenAv && _xhrOpenAv.kind === "builtin-method" &&
+          _xhrOpenAv.id === "XMLHttpRequest.prototype.open" &&
+          innerPath.node.arguments.length >= 2) {
         found = true; innerPath.stop(); return;
       }
     },
@@ -12337,9 +12339,11 @@ function _findDeepSinkPropertyMap(funcPath) {
         return;
       }
 
-      // xhr.open(method, url) — verify object traces to XMLHttpRequest
-      if (_t.isMemberExpression(c) && _t.isIdentifier(c.property, { name: "open" }) &&
-          innerPath.node.arguments.length >= 2 && _isXhrObject(innerPath, c.object)) {
+      // XHR.open(method, url) — AV-direct via builtin-method id.
+      var _xhrOpenAv2 = _t.isMemberExpression(c) ? _specPathValMemo.get(c) : null;
+      if (_xhrOpenAv2 && _xhrOpenAv2.kind === "builtin-method" &&
+          _xhrOpenAv2.id === "XMLHttpRequest.prototype.open" &&
+          innerPath.node.arguments.length >= 2) {
         propMap = _extractSinkPropertyMap(innerPath, "xhr");
         if (propMap && propMap.urlProps.length === 0 && !propMap.urlLiteral) propMap = null;
         if (propMap) innerPath.stop();
