@@ -20532,8 +20532,10 @@ function _ebpStep(F) {
           return { done: [] };
         }
         // CASE C: new URLSearchParams({...})
-        if (_t.isNewExpression(node) && _t.isIdentifier(node.callee, { name: "URLSearchParams" }) &&
-            (!scopePath || !scopePath.scope.getBinding("URLSearchParams")) &&
+        // AV-grounded callee identity via builtin-ctor "WHATWG.URLSearchParams".
+        var uspCalleeAv = _t.isNewExpression(node) ? _specPathValMemo.get(node.callee) : null;
+        if (_t.isNewExpression(node) &&
+            uspCalleeAv && uspCalleeAv.kind === "builtin-ctor" && uspCalleeAv.id === "WHATWG.URLSearchParams" &&
             node.arguments[0] && _t.isObjectExpression(node.arguments[0])) {
           var uspParams = _extractObjectProperties(node.arguments[0]);
           for (var j = 0; j < uspParams.length; j++) uspParams[j].location = "body";
