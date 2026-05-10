@@ -11642,11 +11642,14 @@ function _unwrapGapToRootCause(argPath, visited) {
       }
       return argPath;
     }
-    // new Request(URL, init) — URL arg is what matters
-    if (_t.isNewExpression(n) && _t.isIdentifier(n.callee, { name: "Request" }) &&
-        !argPath.scope.getBinding("Request") && n.arguments.length >= 1) {
-      argPath = argPath.get("arguments.0");
-      continue;
+    // new Request(URL, init) — URL arg is what matters. AV-grounded callee
+    // identity via builtin-ctor "Fetch.Request".
+    if (_t.isNewExpression(n) && n.arguments.length >= 1) {
+      var reqCalleeAv = _specPathValMemo.get(n.callee);
+      if (reqCalleeAv && reqCalleeAv.kind === "builtin-ctor" && reqCalleeAv.id === "Fetch.Request") {
+        argPath = argPath.get("arguments.0");
+        continue;
+      }
     }
     // x.toString() / x.valueOf() — receiver is what matters
     if (_t.isCallExpression(n) && _t.isMemberExpression(n.callee) && !n.callee.computed &&
