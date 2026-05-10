@@ -13298,6 +13298,21 @@ function _avFlattenStringLeaves(rootAv) {
   // function-ref unwinding could otherwise loop on self-referential
   // module require chains).
   var seen = new Set();
+  // WHATWG URL § 4.4 page-origin substitution: location.{origin,protocol,
+  // hostname,host} taint sources are page-locked (dims.origin === false).
+  // Substitute the analysis tab's URL parts as const string leaves.
+  var pageUrlParts = null;
+  if (_sourceUrl) {
+    try {
+      var pageUrlForSubst = new URL(_sourceUrl);
+      pageUrlParts = {
+        "location.origin":   pageUrlForSubst.origin,
+        "location.protocol": pageUrlForSubst.protocol,
+        "location.hostname": pageUrlForSubst.hostname,
+        "location.host":     pageUrlForSubst.host,
+      };
+    } catch (_) { pageUrlParts = null; }
+  }
   while (stack.length > 0) {
     var av = stack.pop();
     if (!av) continue;
@@ -13313,6 +13328,10 @@ function _avFlattenStringLeaves(rootAv) {
       // OR has {left, right} per _specLogicalOrAv shape.
       if (av.left) stack.push(av.left);
       if (av.right) stack.push(av.right);
+      continue;
+    }
+    if (av.kind === "taint-source" && pageUrlParts && Object.prototype.hasOwnProperty.call(pageUrlParts, av.id)) {
+      out.push(pageUrlParts[av.id]);
       continue;
     }
     if (av.kind === "call" && av.callee && av.callee.kind === "function-ref" && av.callee.funcNode) {
