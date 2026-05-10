@@ -19247,6 +19247,26 @@ function _traceValueSource(path, _unused) {
     var encFn = path.getFunctionParent();
     if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
       try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+      // HOF callback: encFn's parent is a CallExpression with member
+      // callee like arr.forEach/map/filter (per § 23.1.3.7+). Analyse
+      // the OUTER scope where the array is built so the receiver's AV
+      // populates AND the HOF dispatch fires, binding cb's param to
+      // the joined element AV. The outer pass writes the bound-state
+      // AVs into _specPathValMemo for cb body sub-nodes; do NOT re-
+      // analyse encFn standalone afterwards — that would re-evaluate
+      // cb body with default param AVs and overwrite the bound memo.
+      if (encFn.parentPath && _t.isCallExpression(encFn.parent) &&
+          _t.isMemberExpression(encFn.parent.callee)) {
+        var outerEnc = encFn.parentPath.getFunctionParent && encFn.parentPath.getFunctionParent();
+        if (outerEnc && outerEnc.node && _t.isFunction(outerEnc.node) && !_specEffectsMemo.has(outerEnc.node)) {
+          try { _specAnalyzePropertyFlow(outerEnc); } catch (_) {}
+        } else if (!outerEnc) {
+          var ppHof = encFn.parentPath; while (ppHof && ppHof.parentPath) ppHof = ppHof.parentPath;
+          if (ppHof && ppHof.node && _t.isProgram(ppHof.node) && !_specEffectsMemo.has(ppHof.node)) {
+            try { _specAnalyzePropertyFlow(ppHof); } catch (_) {}
+          }
+        }
+      }
     } else if (!encFn) {
       var pp = path; while (pp && pp.parentPath) pp = pp.parentPath;
       if (pp && pp.node && _t.isProgram(pp.node)) {
