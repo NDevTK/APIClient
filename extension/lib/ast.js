@@ -959,6 +959,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _rcfpMemo = new WeakMap();
   _specEffectsMemo = new WeakMap();
   _specPathValMemo = new WeakMap();
+  _specPostorderMemo = new WeakMap();
   _specReturnValueMemo = new WeakMap();
   _specSideEffectMemo = new WeakMap();
   _specThisEffectsMemo = new WeakMap();
@@ -7494,8 +7495,15 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
 // Literal, ThisExpression) appear before their parents; composite nodes
 // appear after their children. Used by `_specEvalExpression` to drive the
 // bottom-up evaluation without recursion.
+// Per-analysis memo: rootPath.node -> postorder path array. Postorder is
+// invariant per AST node (child structure stable per ECMA § 13.x); cached
+// list is reusable across multiple evaluation states. Cleared per
+// analyzeJSBundle via WeakMap reassignment.
+var _specPostorderMemo = new WeakMap();
 function _specPostorderExprPaths(rootPath) {
   if (!rootPath || !rootPath.node) return [];
+  var cached = _specPostorderMemo.get(rootPath.node);
+  if (cached) return cached;
   var preorder = [];
   var stack = [rootPath];
   while (stack.length > 0) {
@@ -7620,6 +7628,7 @@ function _specPostorderExprPaths(rootPath) {
   // first; postorder = reverse of the popped-order's reverse. Simpler to
   // just reverse preorder once.
   preorder.reverse();
+  _specPostorderMemo.set(rootPath.node, preorder);
   return preorder;
 }
 
