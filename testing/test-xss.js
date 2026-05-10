@@ -318,6 +318,70 @@ xssDanger("postMessage handler WITH origin check", `
   return !dangerCheck(result, "postmessage-no-origin") && !dangerCheck(result, "postmessage");
 });
 
+console.log("\n=== Open redirect via window.open ===\n");
+
+xss("window.open(taint) - open redirect", `
+  window.open(location.hash.slice(1), "_blank");
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "redirect" && s.source === "location.hash" && assertPopupShape(s)) return true;
+  }
+  return false;
+});
+
+console.log("\n=== Network sinks (request forgery) ===\n");
+
+xss("fetch(taint) - request forgery", `
+  fetch(document.cookie);
+`, function(sinks) {
+  // document.cookie has origin dim → user-controlled; fetch with that
+  // is request-forgery.
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "request-forgery" && s.source === "document.cookie" && assertPopupShape(s)) return true;
+  }
+  return false;
+});
+
+xss("XMLHttpRequest.open(method, taintUrl) - request forgery", `
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", document.cookie);
+`, function(sinks) {
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "request-forgery" && s.source === "document.cookie" && assertPopupShape(s)) return true;
+  }
+  return false;
+});
+
+console.log("\n=== Inter-proc through array element ===\n");
+
+xss("inter-proc: array.push tainted, then forEach -> innerHTML", `
+  var items = [];
+  items.push(location.hash.slice(1));
+  items.forEach(function(v) { document.body.innerHTML = v; });
+`, function(sinks) {
+  // HOF dispatch: forEach binds cb's param to array element.
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.sink === "innerHTML" && s.source === "location.hash" && assertPopupShape(s)) return true;
+  }
+  return false;
+});
+
+console.log("\n=== Sanitizer recognition ===\n");
+
+xss("escape() URL-encodes < and > so it's safe for innerHTML — sink suppressed", `
+  document.body.innerHTML = escape(location.hash);
+`, function(sinks) {
+  // Per ECMA Annex B § B.2.1: escape() URL-encodes < > & = etc. to
+  // %XX. The encoded string in innerHTML renders as literal text — no
+  // HTML parsing. Analyzer's CFG sanitizer recognition correctly
+  // suppresses the sink.
+  return sinks.length === 0;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);

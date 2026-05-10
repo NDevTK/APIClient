@@ -2281,7 +2281,7 @@ function _specGlobalThisAv() {
     baseURI: { kind: "taint-source", id: "document.baseURI", type: "string",
       dims: { origin: false, path: true, query: true, hash: true, content: true } },
     cookie: { kind: "taint-source", id: "document.cookie", type: "string",
-      dims: { origin: false, path: false, query: false, hash: false, content: true } },
+      dims: { origin: true, path: true, query: true, hash: true, content: true } },
     domain: { kind: "taint-source", id: "document.domain", type: "string",
       dims: { origin: false, path: false, query: false, hash: false, content: false } },
     title: { kind: "taint-source", id: "document.title", type: "string",
@@ -2491,7 +2491,7 @@ function _specGlobalThisAv() {
     props: {
       location: locationAv,
       name: { kind: "taint-source", id: "window.name", type: "string",
-        dims: { origin: false, path: false, query: false, hash: false, content: true } },
+        dims: { origin: true, path: true, query: true, hash: true, content: true } },
       // WHATWG DOM § 4.4 EventTarget — Window inherits via IDL chain.
       addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
       removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
@@ -4312,7 +4312,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "Storage.prototype.getItem" || methodId === "Storage.prototype.key") {
     return { kind: "taint-source", id: methodId === "Storage.prototype.getItem" ? "storage.getItem" : "storage.key",
       type: "string",
-      dims: { origin: false, path: false, query: false, hash: false, content: true } };
+      dims: { origin: true, path: true, query: true, hash: true, content: true } };
   }
   if (methodId === "Storage.prototype.setItem" || methodId === "Storage.prototype.removeItem" ||
       methodId === "Storage.prototype.clear") {
@@ -6322,7 +6322,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
           kind: "obj-lit",
           props: {
             data: { kind: "taint-source", id: "event.data",
-              dims: { origin: false, path: false, query: false, hash: false, content: true } },
+              dims: { origin: true, path: true, query: true, hash: true, content: true } },
             origin: { kind: "taint-source", id: "event.origin",
               dims: { origin: false, path: false, query: false, hash: false, content: false } },
             source: { kind: "top" },
