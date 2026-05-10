@@ -2313,6 +2313,12 @@ function _specGlobalThisAv() {
   // TextEncoder.prototype.encode(string) → Uint8Array (carries string content).
   var textDecoderCtorAv = { kind: "builtin-ctor", id: "WHATWG.TextDecoder" };
   var textEncoderCtorAv = { kind: "builtin-ctor", id: "WHATWG.TextEncoder" };
+  // WHATWG WebSocket § 5 ctor + EventSource § 9.2 ctor. Each takes
+  // a URL string; the resulting instance is an EventTarget that
+  // produces network messages. Modeled as an obj-lit with EventTarget
+  // methods + send/close (WebSocket only).
+  var webSocketCtorAv = { kind: "builtin-ctor", id: "WHATWG.WebSocket" };
+  var eventSourceCtorAv = { kind: "builtin-ctor", id: "WHATWG.EventSource" };
   // ECMA § 25.1 TypedArray ctors. All variants share the same value-flow
   // behaviour for our purposes (binary array; opaque to string-flow but
   // valid receiver for prototype methods like .slice / .set).
@@ -2534,6 +2540,8 @@ function _specGlobalThisAv() {
       RegExp: regExpCtorAv,
       TextDecoder: textDecoderCtorAv,
       TextEncoder: textEncoderCtorAv,
+      WebSocket: webSocketCtorAv,
+      EventSource: eventSourceCtorAv,
       Uint8Array: uint8ArrayCtorAv,
       Uint16Array: uint16ArrayCtorAv,
       Uint32Array: uint32ArrayCtorAv,
@@ -3120,6 +3128,41 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         encode: { kind: "builtin-method", id: "TextEncoder.prototype.encode" },
         encodeInto: { kind: "builtin-method", id: "TextEncoder.prototype.encodeInto" },
         encoding: { kind: "const", value: "utf-8" },
+      }
+    };
+  }
+  // WHATWG WebSocket § 5 / EventSource § 9.2 — ctor takes URL string.
+  // Returned instance is an EventTarget that fires "message" events;
+  // .send/.close on WebSocket. Modeled with EventTarget methods +
+  // type-specific operations.
+  if (ctorId === "WHATWG.WebSocket") {
+    return {
+      kind: "obj-lit",
+      props: {
+        send: { kind: "builtin-method", id: "WebSocket.prototype.send" },
+        close: { kind: "builtin-method", id: "WebSocket.prototype.close" },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+        readyState: { kind: "top" },
+        url: { kind: "top" },
+        protocol: { kind: "top" },
+        bufferedAmount: { kind: "top" },
+        binaryType: { kind: "top" },
+      }
+    };
+  }
+  if (ctorId === "WHATWG.EventSource") {
+    return {
+      kind: "obj-lit",
+      props: {
+        close: { kind: "builtin-method", id: "EventSource.prototype.close" },
+        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+        readyState: { kind: "top" },
+        url: { kind: "top" },
+        withCredentials: { kind: "top" },
       }
     };
   }
@@ -3781,6 +3824,12 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "TextEncoder.prototype.encode" ||
       methodId === "TextEncoder.prototype.encodeInto") {
     return { kind: "top" };
+  }
+  // WHATWG WebSocket § 5 send / close — state mutations returning undefined.
+  if (methodId === "WebSocket.prototype.send" ||
+      methodId === "WebSocket.prototype.close" ||
+      methodId === "EventSource.prototype.close") {
+    return { kind: "const", value: undefined };
   }
   // ECMA § 25.1 TypedArray.prototype methods. slice/subarray return new
   // TypedArray instance (modeled as another opaque obj-lit per ctor);
