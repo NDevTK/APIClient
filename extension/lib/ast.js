@@ -11793,9 +11793,13 @@ function _findSinkInFunction(funcPath) {
         return;
       }
 
-      // XHR.open(method, url) — verify object traces to XMLHttpRequest
-      if (_t.isMemberExpression(c) && _t.isIdentifier(c.property, { name: "open" }) &&
-          innerPath.node.arguments.length >= 2 && _isXhrObject(innerPath, c.object)) {
+      // XHR.open(method, url) — AV-direct: spec eval resolves `xhr.open`
+      // to the XMLHttpRequest.prototype.open builtin-method AV when the
+      // receiver is an XHR instance. One identity check; no shape match.
+      var _xhrOpenAv = _t.isMemberExpression(c) ? _specPathValMemo.get(c) : null;
+      if (_xhrOpenAv && _xhrOpenAv.kind === "builtin-method" &&
+          _xhrOpenAv.id === "XMLHttpRequest.prototype.open" &&
+          innerPath.node.arguments.length >= 2) {
         var xhrM = innerPath.node.arguments[0];
         var xhrMethodStr = null;
         var xhrMethodParam = null;
@@ -11844,8 +11848,10 @@ function _findSinkInFunction(funcPath) {
                 var sendMember = sendRef.parentPath;
                 if (!sendMember || !sendMember.isMemberExpression() ||
                     sendMember.node.object !== sendRef.node ||
-                    sendMember.node.computed ||
-                    !_t.isIdentifier(sendMember.node.property, { name: "send" })) continue;
+                    sendMember.node.computed) continue;
+                var _sendAv = _specPathValMemo.get(sendMember.node);
+                if (!_sendAv || _sendAv.kind !== "builtin-method" ||
+                    _sendAv.id !== "XMLHttpRequest.prototype.send") continue;
                 var sendCall = sendMember.parentPath;
                 if (!sendCall || !sendCall.isCallExpression() ||
                     sendCall.node.callee !== sendMember.node ||
