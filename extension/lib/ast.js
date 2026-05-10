@@ -2667,25 +2667,6 @@ function _specGlobalThisAv() {
   return _SPEC_GLOBAL_AV;
 }
 
-// WHATWG DOM § 4.4 EventTarget.prototype methods. Inherited by every
-// EventTarget — Window, Document, Element, etc. addEventListener
-// registration is dispatched via the prototype chain (window → Window
-// → EventTarget → addEventListener).
-var _SPEC_EVENTTARGET_PROTO_AV = null;
-function _specEventTargetPrototypeAv() {
-  if (!_SPEC_EVENTTARGET_PROTO_AV) {
-    _SPEC_EVENTTARGET_PROTO_AV = {
-      kind: "obj-lit",
-      props: {
-        addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
-        removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
-        dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
-      }
-    };
-  }
-  return _SPEC_EVENTTARGET_PROTO_AV;
-}
-
 // WHATWG DOM § 4.9 Element.prototype methods. Exposed via the [[Prototype]]
 // chain on obj-lit AVs returned from getElementById/querySelector
 // (recognised structurally — those builders emit obj-lits with the
