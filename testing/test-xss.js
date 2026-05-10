@@ -439,13 +439,13 @@ xss("safe: literal template in eval", `
 console.log("\n=== Closure-captured taint ===\n");
 
 xss("closure-captured taint var", `
-  var url = location.hash.slice(1);
+  var url = document.cookie;
   function send() { fetch(url); }
   send();
 `, function(sinks) {
   for (var i = 0; i < sinks.length; i++) {
     var s = sinks[i];
-    if (s.type === "request-forgery" && s.source === "location.hash") return true;
+    if (s.type === "request-forgery" && s.source === "document.cookie") return true;
   }
   return false;
 });
@@ -454,25 +454,25 @@ console.log("\n=== Reassignment and conditional ===\n");
 
 xss("reassignment-then-fetch", `
   var u;
-  u = location.hash;
+  u = document.cookie;
   fetch(u);
 `, function(sinks) {
   for (var i = 0; i < sinks.length; i++) {
     var s = sinks[i];
-    if (s.type === "request-forgery" && s.source === "location.hash") return true;
+    if (s.type === "request-forgery" && s.source === "document.cookie") return true;
   }
   return false;
 });
 
 xss("conditional-assignment with taint in one branch", `
   var u;
-  if (Math.random() > 0.5) { u = location.hash; } else { u = "/safe"; }
+  if (Math.random() > 0.5) { u = document.cookie; } else { u = "/safe"; }
   fetch(u);
 `, function(sinks) {
   // One branch is tainted — should flag (or-AV with taint leaf).
   for (var i = 0; i < sinks.length; i++) {
     var s = sinks[i];
-    if (s.type === "request-forgery" && s.source === "location.hash") return true;
+    if (s.type === "request-forgery" && s.source === "document.cookie") return true;
   }
   return false;
 });
