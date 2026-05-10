@@ -2257,19 +2257,19 @@ function _specGlobalThisAv() {
     // reflects URL/HTTP-header/UA state attacker can influence. Same
     // taint-source AV scheme as Window.location for spec-eval-driven
     // taint classification (no AST shape match needed).
-    referrer: { kind: "taint-source", id: "document.referrer",
+    referrer: { kind: "taint-source", id: "document.referrer", type: "string",
       dims: { origin: true, path: true, query: true, hash: true, content: true } },
-    URL: { kind: "taint-source", id: "document.URL",
+    URL: { kind: "taint-source", id: "document.URL", type: "string",
       dims: { origin: false, path: true, query: true, hash: true, content: true } },
-    documentURI: { kind: "taint-source", id: "document.documentURI",
+    documentURI: { kind: "taint-source", id: "document.documentURI", type: "string",
       dims: { origin: false, path: true, query: true, hash: true, content: true } },
-    baseURI: { kind: "taint-source", id: "document.baseURI",
+    baseURI: { kind: "taint-source", id: "document.baseURI", type: "string",
       dims: { origin: false, path: true, query: true, hash: true, content: true } },
-    cookie: { kind: "taint-source", id: "document.cookie",
+    cookie: { kind: "taint-source", id: "document.cookie", type: "string",
       dims: { origin: false, path: false, query: false, hash: false, content: true } },
-    domain: { kind: "taint-source", id: "document.domain",
+    domain: { kind: "taint-source", id: "document.domain", type: "string",
       dims: { origin: false, path: false, query: false, hash: false, content: false } },
-    title: { kind: "taint-source", id: "document.title",
+    title: { kind: "taint-source", id: "document.title", type: "string",
       dims: { origin: false, path: false, query: false, hash: false, content: true } },
   };
   // Constructable globals — modeled as `{kind:"builtin-ctor", id}` AVs.
@@ -2426,23 +2426,23 @@ function _specGlobalThisAv() {
   var locationAv = {
     kind: "obj-lit",
     props: {
-      href: { kind: "taint-source", id: "location.href",
+      href: { kind: "taint-source", id: "location.href", type: "string",
         dims: { origin: false, path: true, query: true, hash: true, content: true } },
-      hash: { kind: "taint-source", id: "location.hash",
+      hash: { kind: "taint-source", id: "location.hash", type: "string",
         dims: { origin: false, path: false, query: false, hash: true, content: true } },
-      search: { kind: "taint-source", id: "location.search",
+      search: { kind: "taint-source", id: "location.search", type: "string",
         dims: { origin: false, path: false, query: true, hash: false, content: true } },
-      pathname: { kind: "taint-source", id: "location.pathname",
+      pathname: { kind: "taint-source", id: "location.pathname", type: "string",
         dims: { origin: false, path: true, query: false, hash: false, content: true } },
-      origin: { kind: "taint-source", id: "location.origin",
+      origin: { kind: "taint-source", id: "location.origin", type: "string",
         dims: { origin: false, path: false, query: false, hash: false, content: false } },
-      host: { kind: "taint-source", id: "location.host",
+      host: { kind: "taint-source", id: "location.host", type: "string",
         dims: { origin: false, path: false, query: false, hash: false, content: false } },
-      hostname: { kind: "taint-source", id: "location.hostname",
+      hostname: { kind: "taint-source", id: "location.hostname", type: "string",
         dims: { origin: false, path: false, query: false, hash: false, content: false } },
-      protocol: { kind: "taint-source", id: "location.protocol",
+      protocol: { kind: "taint-source", id: "location.protocol", type: "string",
         dims: { origin: false, path: false, query: false, hash: false, content: false } },
-      port: { kind: "taint-source", id: "location.port",
+      port: { kind: "taint-source", id: "location.port", type: "string",
         dims: { origin: false, path: false, query: false, hash: false, content: false } },
       // WHATWG HTML § 7.7.5 Location interface — assign/replace navigate
       // the document to the supplied URL (open-redirect sink). reload
@@ -2475,7 +2475,7 @@ function _specGlobalThisAv() {
     kind: "obj-lit",
     props: {
       location: locationAv,
-      name: { kind: "taint-source", id: "window.name",
+      name: { kind: "taint-source", id: "window.name", type: "string",
         dims: { origin: false, path: false, query: false, hash: false, content: true } },
       // WHATWG DOM § 4.4 EventTarget — Window inherits via IDL chain.
       addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
@@ -2490,15 +2490,15 @@ function _specGlobalThisAv() {
       navigator: {
         kind: "obj-lit",
         props: {
-          userAgent: { kind: "taint-source", id: "navigator.userAgent",
+          userAgent: { kind: "taint-source", id: "navigator.userAgent", type: "string",
             dims: { origin: false, path: false, query: false, hash: false, content: true } },
-          platform: { kind: "taint-source", id: "navigator.platform",
+          platform: { kind: "taint-source", id: "navigator.platform", type: "string",
             dims: { origin: false, path: false, query: false, hash: false, content: false } },
-          language: { kind: "taint-source", id: "navigator.language",
+          language: { kind: "taint-source", id: "navigator.language", type: "string",
             dims: { origin: false, path: false, query: false, hash: false, content: false } },
           languages: { kind: "top" },
           appName: { kind: "top" },
-          appVersion: { kind: "taint-source", id: "navigator.appVersion",
+          appVersion: { kind: "taint-source", id: "navigator.appVersion", type: "string",
             dims: { origin: false, path: false, query: false, hash: false, content: false } },
           vendor: { kind: "top" },
           product: { kind: "top" },
@@ -2908,6 +2908,14 @@ function _specGetPrototypeOfAv(av) {
   if (av.kind === "dom-element") return _specElementPrototypeAv();
   if (av.kind === "const" && typeof av.value === "string") return _specStringPrototypeAv();
   if (av.kind === "const" && typeof av.value === "number") return _specNumberPrototypeAv();
+  // String-typed taint sources carry `type: "string"` annotation per
+  // their WHATWG IDL definition (Location.* DOMString, Document.referrer
+  // USVString, Storage.getItem DOMString, etc.). Method dispatch on
+  // these resolves through String.prototype (slice / replace / split).
+  // The 'coerce' AV with to:"string" (string-method result on opaque
+  // receiver) represents an opaque string value with same semantics.
+  if (av.kind === "taint-source" && av.type === "string") return _specStringPrototypeAv();
+  if (av.kind === "coerce" && av.to === "string") return _specStringPrototypeAv();
   if (av.kind === "map-instance") return _specMapPrototypeAv();
   if (av.kind === "set-instance") return _specSetPrototypeAv();
   if (av.kind === "weakmap-instance") return _specWeakMapPrototypeAv();
@@ -3515,7 +3523,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       kind: "obj-lit",
       props: {
         // File extends Blob per § 6.
-        name: { kind: "taint-source", id: "File.name",
+        name: { kind: "taint-source", id: "File.name", type: "string",
           dims: { origin: false, path: false, query: false, hash: false, content: true } },
         lastModified: { kind: "top" },
         size: { kind: "top" },
@@ -3541,7 +3549,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         readyState: { kind: "top" },
         // result is the read content — tainted (file content from disk
         // can be attacker-influenced via file-input on cross-origin sites).
-        result: { kind: "taint-source", id: "FileReader.result",
+        result: { kind: "taint-source", id: "FileReader.result", type: "string",
           dims: { origin: false, path: false, query: false, hash: false, content: true } },
         error: { kind: "top" },
       }
@@ -3619,7 +3627,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         readyState: { kind: "top" },
         status: { kind: "top" },
         statusText: { kind: "top" },
-        responseText: { kind: "taint-source", id: "XMLHttpRequest.responseText",
+        responseText: { kind: "taint-source", id: "XMLHttpRequest.responseText", type: "string",
           dims: { origin: false, path: false, query: false, hash: false, content: true } },
         response: { kind: "top" },
         responseURL: { kind: "top" },
@@ -4267,6 +4275,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // key(n) returns nth key (also user-controlled if attacker stored).
   if (methodId === "Storage.prototype.getItem" || methodId === "Storage.prototype.key") {
     return { kind: "taint-source", id: methodId === "Storage.prototype.getItem" ? "storage.getItem" : "storage.key",
+      type: "string",
       dims: { origin: false, path: false, query: false, hash: false, content: true } };
   }
   if (methodId === "Storage.prototype.setItem" || methodId === "Storage.prototype.removeItem" ||
@@ -5359,12 +5368,21 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (!sav || sav.kind !== "const") { strArgsOk = false; break; }
       strArgLits.push(sav.value);
     }
-    if (!strArgsOk) return { kind: "top" };
     // Collect string-typed receiver leaves.
     var strRecvLeaves = recvAv && recvAv.kind === "const" && typeof recvAv.value === "string"
       ? [recvAv.value]
       : (recvAv ? _avFlattenStringLeaves(recvAv) : []);
-    if (!strRecvLeaves || strRecvLeaves.length === 0) return { kind: "top" };
+    // When args or receiver aren't fully const-resolvable, return a
+    // coerce AV pointing at recvAv so the result preserves taint
+    // provenance. Per ECMA § 22.1.3 string methods are pure functions
+    // OF the receiver — the result's value is derived from the receiver
+    // and propagates whatever taint the receiver carries. Without this,
+    // `location.hash.slice(1)` would lose its taint-source provenance
+    // because slice returns an opaque string, not a const.
+    if (!strArgsOk || !strRecvLeaves || strRecvLeaves.length === 0) {
+      if (recvAv) return { kind: "coerce", to: "string", arg: recvAv };
+      return { kind: "top" };
+    }
     var strResults = [];
     var strAllOk = true;
     for (var srli = 0; srli < strRecvLeaves.length; srli++) {
