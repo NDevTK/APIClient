@@ -14135,11 +14135,15 @@ function _retfpMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, d
 }
 
 function _resolveExprToFunctionPath(initialExprPath, depth) {
+  // Single-AV-engine: read the expression's spec-eval AV from
+  // _specPathValMemo and project to a Babel function path. Per ECMA
+  // § 13.1.3 IdentifierReference / § 13.3.2 MemberExpression: spec eval
+  // already evaluates the expression through scope chain, member
+  // projection, and bind/call/apply semantics. Direct memo read keeps
+  // this resolver out of spec eval's static call graph (no recursion).
   if (!initialExprPath || !initialExprPath.node) return null;
-  if (!_resolver.guard("F", initialExprPath.node)) return null;
-  var initialFrame = _retfpMakeFrame(initialExprPath, initialExprPath.node, depth || 0,
-    _retfpStep, null, "F", null);
-  return _runResolverStack(initialFrame);
+  var av = _specPathValMemo.get(initialExprPath.node);
+  return av ? _funcPathFromAv(av, initialExprPath) : null;
 }
 
 // Iterative .bind chain unwind: f.bind(t1).bind(t2).bind(t3) resolves to
@@ -14875,12 +14879,36 @@ function _rcrvStep(F) {
 }
 
 function _resolveCallReturnValues(callPath, depth) {
-  var node = callPath && callPath.node;
-  if (!node) return [];
-  if (!_resolver.guard("R", node)) return [];
-  var initialFrame = _rcrvMakeFrame(callPath, node, depth || 0,
-    _rcrvStep, null, "R", []);
-  return _runResolverStack(initialFrame);
+  // Single-AV-engine: project the call's spec-eval AV to string leaves.
+  // Per ECMA § 13.3.6 EvaluateCall: spec eval models the call result as
+  // either the call node's own AV (when memoised) or as the joined return
+  // AV from _specReturnValueMemo (per function). Direct memo read keeps
+  // this resolver out of spec eval's static call graph.
+  if (!callPath || !callPath.node) return [];
+  var callAv = _specPathValMemo.get(callPath.node);
+  if (callAv) {
+    var pageOriginLeaves = _resolvePageOriginAv(callAv);
+    if (pageOriginLeaves) return pageOriginLeaves;
+    var leaves = _avFlattenStringLeaves(callAv);
+    if (leaves.length > 0) return leaves;
+  }
+  // Fallback: walk the callee's function-ref AV(s) and read each
+  // function's _specReturnValueMemo.
+  var calleeAv = _specPathValMemo.get(callPath.node.callee);
+  if (!calleeAv) return [];
+  var stack = [calleeAv]; var seen = new Set(); var out = [];
+  while (stack.length > 0) {
+    var n = stack.pop(); if (!n || seen.has(n)) continue; seen.add(n);
+    if (n.kind === "function-ref" && n.funcNode && _specReturnValueMemo.has(n.funcNode)) {
+      var retAv = _specReturnValueMemo.get(n.funcNode);
+      var po = _resolvePageOriginAv(retAv);
+      if (po) { for (var i = 0; i < po.length; i++) out.push(po[i]); }
+      else { var lvs = _avFlattenStringLeaves(retAv); for (var j = 0; j < lvs.length; j++) out.push(lvs[j]); }
+    } else if (n.kind === "or" && n.alternatives) {
+      for (var k = 0; k < n.alternatives.length; k++) stack.push(n.alternatives[k]);
+    }
+  }
+  return out;
 }
 
 // Resolve a call expression to its returned ObjectExpression (if any)
@@ -14978,12 +15006,31 @@ function _rcrtoStep(F) {
 }
 
 function _resolveCallReturnToObject(callPath, depth) {
-  var node = callPath && callPath.node;
-  if (!node) return null;
-  if (!_resolver.guard("O", node)) return null;
-  var initialFrame = _rcrtoMakeFrame(callPath, node, depth || 0,
-    _rcrtoStep, null, "O", null);
-  return _runResolverStack(initialFrame);
+  // Single-AV-engine: project the call's spec-eval AV to its source
+  // ObjectExpression node. Per ECMA § 13.3.6 EvaluateCall: spec eval
+  // models the call result as either the call node's own AV or as the
+  // return AV from _specReturnValueMemo. The obj-lit AV's `node` backref
+  // (set in _specEvalLeaf) recovers the source ObjectExpression in O(1).
+  // Synthetic obj-lits (Object.assign / spread) have no source node and
+  // are not projectable here — consumers must read AVs directly.
+  if (!callPath || !callPath.node) return null;
+  var callAv = _specPathValMemo.get(callPath.node);
+  var ol = _avResolveToObjLit(callAv);
+  if (ol && ol.node) return ol.node;
+  // Fallback: walk callee → function-ref → _specReturnValueMemo.
+  var calleeAv = _specPathValMemo.get(callPath.node.callee);
+  if (!calleeAv) return null;
+  var stack = [calleeAv]; var seen = new Set();
+  while (stack.length > 0) {
+    var n = stack.pop(); if (!n || seen.has(n)) continue; seen.add(n);
+    if (n.kind === "function-ref" && n.funcNode && _specReturnValueMemo.has(n.funcNode)) {
+      var retOl = _avResolveToObjLit(_specReturnValueMemo.get(n.funcNode));
+      if (retOl && retOl.node) return retOl.node;
+    } else if (n.kind === "or" && n.alternatives) {
+      for (var i = 0; i < n.alternatives.length; i++) stack.push(n.alternatives[i]);
+    }
+  }
+  return null;
 }
 
 // Resolve an expression to its ObjectExpression node (if it's a variable pointing to one).
@@ -15041,14 +15088,26 @@ function _rtoiDone(F, value) {
 }
 
 function _resolveToObject(initialPath, initialDepth) {
-  var initialNode = initialPath && initialPath.node;
-  if (!initialNode) return null;
-  var sc = _rtoiShortCircuit(initialNode, initialPath);
-  if (sc !== undefined) return sc;
-  if (!_resolver.guard("T", initialNode)) return null;
-  var initialFrame = _rtoiMakeFrame(initialPath, initialNode, initialDepth || 0,
-    _rtoiStep, _rtoiShortCircuit, "T", null);
-  var result = _runResolverStack(initialFrame);
+  // Single-AV-engine: project the expression's spec-eval AV to its
+  // source ObjectExpression node. Per ECMA § 13.1.3 IdentifierReference
+  // / § 13.3.2 MemberExpression: spec eval evaluates the expression to
+  // an obj-lit AV through scope chain, member projection, and
+  // Object.assign / spread merge semantics. The obj-lit AV's `node`
+  // backref recovers the source ObjectExpression in O(1). Synthetic
+  // obj-lits (Object.assign / spread) genuinely have no source node
+  // and must be read AV-direct.
+  if (!initialPath || !initialPath.node) return null;
+  var initialNode = initialPath.node;
+  if (_resolveToObjectMemo.has(initialNode)) return _resolveToObjectMemo.get(initialNode);
+  if (_t.isObjectExpression(initialNode)) {
+    initialNode._path = initialPath;
+    _resolveToObjectMemo.set(initialNode, initialNode);
+    return initialNode;
+  }
+  var av = _specPathValMemo.get(initialNode);
+  var ol = _avResolveToObjLit(av);
+  var result = (ol && ol.node) ? ol.node : null;
+  if (result && !result._path) result._path = initialPath;
   _resolveToObjectMemo.set(initialNode, result);
   return result;
 }
@@ -15446,56 +15505,23 @@ function _rtaMakeFrame(path, node, depth) {
 // Explicit-frame state-machine driver for _resolveToArray.
 // Returns ArrayExpression node (with _path attached) or null.
 function _resolveToArray(initialPath, initialDepth) {
-  var initialNode = initialPath && initialPath.node;
-  if (!initialNode) return null;
-  if (_t.isArrayExpression(initialNode)) {
-    initialNode._path = initialPath;
-    return initialNode;
+  // Single-AV-engine: project the expression's spec-eval AV to its
+  // source ArrayExpression node. Per ECMA § 13.2.4 ArrayLiteral
+  // evaluation: spec eval models the array via array-lit AV with a
+  // `node` backref to the source ArrayExpression. Synthetic array-lits
+  // (.slice / .concat / spread) genuinely have no source node.
+  if (!initialPath || !initialPath.node) return null;
+  if (_t.isArrayExpression(initialPath.node)) {
+    initialPath.node._path = initialPath;
+    return initialPath.node;
   }
-  if (!_resolver.guard("A", initialNode)) return null;
-
-  var stack = [_rtaMakeFrame(initialPath, initialNode, initialDepth || 0)];
-  var lastResult = null;
-  try {
-    while (stack.length > 0) {
-      var top = stack[stack.length - 1];
-      top.result = lastResult;
-      lastResult = null;
-      var step;
-      try { step = _rtaStep(top); }
-      catch (e) {
-        if (e instanceof RangeError) {
-          _resolver.collectError(e, "resolveToArray");
-          _resolver.unguard("A", top.node);
-          stack.pop();
-          lastResult = null;
-          continue;
-        }
-        throw e;
-      }
-      if (step.done !== undefined) {
-        lastResult = step.done;
-        _resolver.unguard("A", top.node);
-        stack.pop();
-        continue;
-      }
-      var subPath = step.trace;
-      top.state = step.state;
-      if (!subPath || !subPath.node) { lastResult = null; continue; }
-      var subNode = subPath.node;
-      // ArrayExpression short-circuit — no frame needed, no guard.
-      if (_t.isArrayExpression(subNode)) {
-        subNode._path = subPath;
-        lastResult = subNode;
-        continue;
-      }
-      if (!_resolver.guard("A", subNode)) { lastResult = null; continue; }
-      stack.push(_rtaMakeFrame(subPath, subNode, top.depth + 1));
-    }
-    return lastResult;
-  } finally {
-    while (stack.length > 0) _resolver.unguard("A", stack.pop().node);
+  var av = _specPathValMemo.get(initialPath.node);
+  var al = _avResolveToArrayLit(av);
+  if (al && al.node) {
+    if (!al.node._path) al.node._path = initialPath;
+    return al.node;
   }
+  return null;
 }
 
 function _rtaStep(F) {
