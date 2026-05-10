@@ -678,30 +678,27 @@ function _findClassIndirectCtorArgs(classBinding, classDecl, paramIdx, depth) {
       // defs literal.
       var forIn = _findEnclosingForIn(defCall);
       if (forIn && _getForInLoopVarName(forIn) === keyArg.name) {
-        var defsExpr = forIn.get("right");
-        var defsObj2 = _resolveToObject(defsExpr, depth);
-        if (defsObj2 && defsObj2.properties) {
-          for (var di = 0; di < defsObj2.properties.length; di++) {
-            var dp = defsObj2.properties[di];
-            if (!_t.isObjectProperty(dp) || dp.computed) continue;
+        // Spec eval: read the defs obj-lit AV and iterate its prop AVs.
+        // Per ECMA § 14.7.5.6 ForInOfLoopEvaluation: the iteration values
+        // are the obj's enumerable own keys; spec eval models them as
+        // obj-lit.props uniformly across literal / Object.assign / spread.
+        var defsAv = _avAtPath(forIn.get("right"));
+        var defsObjLit = _avResolveToObjLit(defsAv);
+        if (defsObjLit && defsObjLit.props) {
+          for (var dKey in defsObjLit.props) {
+            if (!Object.prototype.hasOwnProperty.call(defsObjLit.props, dKey)) continue;
             // Verify this descriptor's value-expression is `defs[loopVar]`.
             var getValNode = prop.node.value;
             if (!(getValNode && _t.isMemberExpression(getValNode) && getValNode.computed &&
                   _t.isIdentifier(getValNode.property, { name: keyArg.name }))) continue;
-            // For each defs key, find consumers reading that key as a constructor target.
-            var dKey = _t.isIdentifier(dp.key) ? dp.key.name :
-              (_t.isStringLiteral(dp.key) ? dp.key.value : null);
-            if (!dKey) continue;
-            // The class i shows up only at the value-position of THIS
-            // defs entry — so the `<aliasOf(target)>.<dKey>` consumers
-            // construct THIS class.
-            var dpVal = dp.value;
-            // Confirm: the dp value is itself an arrow or a Reference
-            // that resolves to our class. If it's a literal `() => i`
-            // arrow with body `i`, the Identifier matches our class
-            // binding's own identifier.
-            if (_t.isArrowFunctionExpression(dpVal) && _t.isIdentifier(dpVal.body) &&
-                dpVal.body.name === (classDecl.node.id && classDecl.node.id.name)) {
+            // The class shows up at the value-position of THIS defs entry.
+            // Confirm via function-ref AV: arrow `() => CLASS` body's
+            // identifier matches the class decl's binding name.
+            var dpAv = defsObjLit.props[dKey];
+            if (dpAv && dpAv.kind === "function-ref" && dpAv.funcNode &&
+                _t.isArrowFunctionExpression(dpAv.funcNode) &&
+                _t.isIdentifier(dpAv.funcNode.body) &&
+                dpAv.funcNode.body.name === (classDecl.node.id && classDecl.node.id.name)) {
               _findCallersOfPropertyOnTarget(defCall, dKey, paramIdx, argPaths, visited, depth);
             }
           }
@@ -8116,16 +8113,17 @@ function _specPathOfFunc(funcNode, ctxPath) {
   if (found) _specFuncPathByNode.set(funcNode, found);
   return found;
 }
-// Spec-eval-direct AV for a Babel path. Runs property flow on the
-// enclosing function (or program-globals prepass for module-level paths)
-// to populate _specPathValMemo, then reads the AV. Falls back to ad-hoc
-// _specEvalExpression for paths the prepass didn't visit. This is the
-// single entry point consumers use to get an AV from a Babel path.
+// Spec-eval-direct AV for a Babel path. Always runs the program-globals
+// prepass first (idempotent — populates _specFuncPathByNode for AV→path
+// projection without traverse-during-traverse hazards), then runs
+// property-flow on the enclosing function for per-statement state-evolved
+// AVs. Falls back to ad-hoc _specEvalExpression for paths neither pass
+// visited. Single entry point consumers use to get an AV from a path.
 function _avAtPath(path) {
   if (!path || !path.node) return null;
+  _specEnsureProgramGlobalsPrepass(path);
   var encFn = path.getFunctionParent && path.getFunctionParent();
   if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
-  else _specEnsureProgramGlobalsPrepass(path);
   var av = _specPathValMemo.get(path.node);
   if (av) return av;
   try { return _specEvalExpression(path, _specStateCreate({}), []); }
@@ -9450,7 +9448,12 @@ function _specEvalLeaf(path, state, vals, effects) {
       elems.push(vals.get(elN) || { kind: "top" });
     }
     if (arrayBail) return { kind: "top" };
-    return { kind: "array-lit", elements: elems };
+    // node:n backref so AV→ArrayExpression projection (consumers like
+    // _resolveToArray) can recover the source AST node. Per § 13.2.4
+    // an ArrayLiteral's identity is its syntactic position. Synthetic
+    // array-lits produced by .slice/.concat/etc. don't have a source
+    // node — those consumers must read AVs directly.
+    return { kind: "array-lit", elements: elems, node: n };
   }
   if (_t.isObjectExpression(n)) {
     var props = Object.create(null);
@@ -9507,7 +9510,12 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
-    return { kind: "obj-lit", props: props };
+    // node:n backref so AV→ObjectExpression projection (consumers like
+    // _resolveToObject) can recover the source AST node. Per § 13.2.5
+    // an ObjectLiteral's identity is its syntactic position. Synthetic
+    // obj-lits produced by Object.assign / spread don't have a source
+    // node — those consumers must read AVs directly.
+    return { kind: "obj-lit", props: props, node: n };
   }
   if (_t.isNewExpression(n)) {
     // § 13.3.5 NewExpression — invokes the constructor as [[Construct]].
@@ -14056,17 +14064,22 @@ function _rcfpMakeFrame(path, node, depth, stepFn, shortCircuit, guardPrefix, de
 var _rcfpMemo = new WeakMap();
 var _RCFP_MISS = { _miss: true };
 function _resolveCalleeFuncPath(callPath, depth) {
-  var node = callPath && callPath.node;
-  if (!node) return null;
-  if (_rcfpMemo.has(node)) {
-    var memoed = _rcfpMemo.get(node);
-    return memoed === _RCFP_MISS ? null : memoed;
+  // Single-AV-engine: read the callee's spec-eval AV from _specPathValMemo
+  // and project to a Babel function path. Per ECMA § 13.3.6 CallExpression
+  // evaluation: the callee is an expression whose value, if a function,
+  // is invoked. Spec eval populates the memo during its own traversal
+  // (called from the analyzer's pre-pass before consumers run); this
+  // reader stays out of the spec-eval call graph entirely so there's
+  // no static recursion cycle. _funcPathFromAv recovers the function
+  // path from a function-ref AV (or first leaf of an or-AV).
+  if (!callPath || !callPath.node || !callPath.node.callee) return null;
+  if (_rcfpMemo.has(callPath.node)) {
+    var m = _rcfpMemo.get(callPath.node);
+    return m === _RCFP_MISS ? null : m;
   }
-  if (!_resolver.guard("C", node)) return null;
-  var initialFrame = _rcfpMakeFrame(callPath, node, depth || 0,
-    _rcfpStep, null, "C", null);
-  var result = _runResolverStack(initialFrame);
-  _rcfpMemo.set(node, result === null ? _RCFP_MISS : result);
+  var calleeAv = _specPathValMemo.get(callPath.node.callee);
+  var result = calleeAv ? _funcPathFromAv(calleeAv, callPath) : null;
+  _rcfpMemo.set(callPath.node, result === null ? _RCFP_MISS : result);
   return result;
 }
 
