@@ -24378,18 +24378,32 @@ function _targetTraceIsEventOrigin(src) {
 
 // Check if an AST node refers to the global location object:
 // location, window.location, self.location, document.location
+// Spec-eval AV-driven check: is objNode's spec-eval AV the registered
+// Window.location instance? Per WHATWG HTML § 7.7, window/self/
+// globalThis.location all alias the same Location object — the AV
+// they project to is locationAv (single shared reference in
+// _SPEC_GLOBAL_AV.props). Detection becomes pure AV reference
+// comparison: trigger property-flow analysis on the enclosing
+// function (idempotent), look up _specPathValMemo, compare.
 function _isLocationObject(objNode, path) {
-  if (_t.isIdentifier(objNode, { name: "location" }) && !path.scope.getBinding("location")) return true;
-  if (_t.isMemberExpression(objNode) && !objNode.computed &&
-      _t.isIdentifier(objNode.property, { name: "location" })) {
-    var base = objNode.object;
-    if ((_t.isIdentifier(base, { name: "window" }) && !path.scope.getBinding("window")) ||
-        (_t.isIdentifier(base, { name: "self" }) && !path.scope.getBinding("self")) ||
-        (_t.isIdentifier(base, { name: "document" }) && !path.scope.getBinding("document"))) {
-      return true;
+  // Enclosing-function spec eval trigger (memo idempotent).
+  var encFn = path.getFunctionParent && path.getFunctionParent();
+  if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
+    try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+  } else if (!encFn) {
+    var progPath = path;
+    while (progPath && progPath.parentPath) progPath = progPath.parentPath;
+    if (progPath && progPath.node && _t.isProgram(progPath.node)) {
+      try { _specAnalyzeProgramWithFixpoint(progPath); } catch (_) {}
     }
   }
-  return false;
+  var av = _specPathValMemo.get(objNode);
+  if (!av) return false;
+  // Look up the canonical location AV from the globalThis registry.
+  var globalAv = _specGlobalThisAv();
+  var canonicalLocation = globalAv && globalAv.props && globalAv.props.location;
+  if (!canonicalLocation) return false;
+  return av === canonicalLocation;
 }
 
 // ─── Security Analysis: DOM XSS Sink Detection ─────────────────────────────
