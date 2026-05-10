@@ -22356,7 +22356,9 @@ function _exprContainsSanitizer(exprPath) {
 var _cfgMemo = new WeakMap();
 function _buildCFG(bodyPath) {
   if (!bodyPath || !bodyPath.node) return null;
-  if (!_t.isBlockStatement(bodyPath.node)) return null;
+  // Per ECMA § 14.2 BlockStatement / § 16.1 Scripts: both have a `.body`
+  // array of Statements; same CFG construction applies.
+  if (!_t.isBlockStatement(bodyPath.node) && !_t.isProgram(bodyPath.node)) return null;
   // Per-analysis memo on the BlockStatement node. Three callers
   // (_checkSanitization, _checkKeyValidation, sanitizer-related)
   // independently rebuild the CFG for the same function body
@@ -22617,26 +22619,29 @@ function _hasSanitizerOnAllPaths(cfg, sinkBlockId, sanitizerBlocks) {
 
   function dfs(blockId, visited, sawSanitizer) {
     if (!allSanitized) return;
+    // Credit THIS block's own sanitizer status before terminating —
+    // sanitizer call in the same block as the sink (e.g.
+    // `location.assign(encodeURIComponent(u))`) sanitizes the sink.
+    var thisBlockSanitizer = sawSanitizer || !!sanitizerBlocks[blockId];
     if (blockId === sinkBlockId) {
       found = true;
-      if (!sawSanitizer) allSanitized = false;
+      if (!thisBlockSanitizer) allSanitized = false;
       return;
     }
     var blk = cfg.blocks[blockId];
     if (!blk) return;
-    var nextSanitizer = sawSanitizer || !!sanitizerBlocks[blockId];
     for (var i = 0; i < blk.succs.length; i++) {
       var next = blk.succs[i];
       if (visited[next]) continue;
       visited[next] = true;
-      dfs(next, visited, nextSanitizer);
+      dfs(next, visited, thisBlockSanitizer);
       visited[next] = false;
     }
   }
 
   var visited = {};
   visited[cfg.entry] = true;
-  dfs(cfg.entry, visited, !!sanitizerBlocks[cfg.entry]);
+  dfs(cfg.entry, visited, false);
   return found && allSanitized;
 }
 
@@ -22816,14 +22821,22 @@ function _checkKeyValidation(sinkPath, keyNode) {
 
 // Check if the sink at the given path is sanitized on all control flow paths
 function _checkSanitization(path) {
-  // Find the enclosing function
+  // Find the enclosing scope: function body or module-top program.
+  // Per ECMA § 16.1 Scripts: the program body has the same statement
+  // sequence shape as a function block; CFG construction works on either.
   var funcPath = path.getFunctionParent();
-  if (!funcPath) return false;
-  var funcBody = funcPath.node.body;
-  if (!_t.isBlockStatement(funcBody)) return false;
+  var bodyPath = null;
+  if (funcPath) {
+    var funcBody = funcPath.node.body;
+    if (!_t.isBlockStatement(funcBody)) return false;
+    bodyPath = funcPath.get("body");
+  } else {
+    var pp = path; while (pp && pp.parentPath) pp = pp.parentPath;
+    if (pp && pp.node && _t.isProgram(pp.node)) bodyPath = pp;
+    else return false;
+  }
 
   // Build CFG from body path (stores statement paths for scope-aware sanitizer detection)
-  var bodyPath = funcPath.get("body");
   var cfg = _buildCFG(bodyPath);
   if (!cfg) return false;
 

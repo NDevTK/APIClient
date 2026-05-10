@@ -229,6 +229,95 @@ xss("safe: location.href to fetch (current-origin URL is not a sink)", `
   return true;
 });
 
+console.log("\n=== Sanitizer detection (CFG-based) ===\n");
+
+xss("DOMPurify.sanitize on all paths - sink suppressed", `
+  document.body.innerHTML = DOMPurify.sanitize(location.hash);
+`, function(sinks) {
+  // DOMPurify CFG-sanitization on all paths suppresses the sink entirely.
+  return sinks.length === 0;
+});
+
+xss("encodeURIComponent on URL going to location.assign IS sanitization", `
+  var u = location.hash.slice(1);
+  location.assign(encodeURIComponent(u));
+`, function(sinks) {
+  // encodeURIComponent encodes ":" and "/" so the encoded string can't
+  // be a cross-origin URL — location.assign treats it as a path under
+  // current origin. Per dim model + sanitizer recognition: should be
+  // fully suppressed OR downgraded to info/low (not medium/high).
+  for (var i = 0; i < sinks.length; i++) {
+    var s = sinks[i];
+    if (s.type === "redirect" && (s.severity === "high" || s.severity === "medium")) return false;
+  }
+  return true;
+});
+
+console.log("\n=== Dangerous patterns ===\n");
+
+function dangerCheck(result, expectedType) {
+  var dangers = result.dangerousPatterns || [];
+  for (var i = 0; i < dangers.length; i++) {
+    if (dangers[i].type === expectedType || dangers[i].sink === expectedType) return true;
+  }
+  return false;
+}
+
+function xssDanger(name, code, check) {
+  total++;
+  try {
+    var result = analyzeJSBundle(code, "test://" + name, true, null);
+    if (check(result)) {
+      passed++;
+      console.log("  PASS: " + name);
+    } else {
+      failed++;
+      console.log("  FAIL: " + name);
+      console.log("    dangerousPatterns=" + JSON.stringify((result.dangerousPatterns||[]).map(function(d) {
+        return { type: d.type, sink: d.sink, severity: d.severity };
+      })).slice(0, 500));
+    }
+  } catch (e) {
+    failed++;
+    console.log("  ERROR: " + name + " — " + e.message);
+  }
+}
+
+xssDanger("postMessage handler without origin check", `
+  window.addEventListener("message", function(e) {
+    if (typeof e.data === "object") doSomething(e.data);
+  });
+`, function(result) {
+  return dangerCheck(result, "postmessage-no-origin") || dangerCheck(result, "postmessage");
+});
+
+xssDanger("prototype pollution: obj[userKey] = val with tainted key", `
+  var key = location.hash.slice(1);
+  var obj = {};
+  obj[key] = "value";
+`, function(result) {
+  return dangerCheck(result, "prototype-pollution") || dangerCheck(result, "proto-pollution");
+});
+
+xssDanger("dynamic RegExp with tainted pattern", `
+  var pattern = location.hash.slice(1);
+  var re = new RegExp(pattern);
+`, function(result) {
+  return dangerCheck(result, "regex-dynamic") || dangerCheck(result, "regex-redos");
+});
+
+console.log("\n=== Negative: postMessage WITH origin check should not flag ===\n");
+
+xssDanger("postMessage handler WITH origin check", `
+  window.addEventListener("message", function(e) {
+    if (e.origin !== "https://trusted.example.com") return;
+    doSomething(e.data);
+  });
+`, function(result) {
+  // Should NOT flag postmessage-no-origin when origin check is present.
+  return !dangerCheck(result, "postmessage-no-origin") && !dangerCheck(result, "postmessage");
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);
