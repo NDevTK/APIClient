@@ -2446,6 +2446,32 @@ function _specGlobalThisAv() {
       // WHATWG HTML § 11 Web Storage — both attributes inherit Storage interface.
       localStorage: storageAv,
       sessionStorage: storageAv,
+      // WHATWG HTML § 8.6 Navigator interface — user-agent identification.
+      // userAgent is the User-Agent string the browser sends; attacker can
+      // partially control via spoofing extensions or test environments.
+      navigator: {
+        kind: "obj-lit",
+        props: {
+          userAgent: { kind: "taint-source", id: "navigator.userAgent",
+            dims: { origin: false, path: false, query: false, hash: false, content: true } },
+          platform: { kind: "taint-source", id: "navigator.platform",
+            dims: { origin: false, path: false, query: false, hash: false, content: false } },
+          language: { kind: "taint-source", id: "navigator.language",
+            dims: { origin: false, path: false, query: false, hash: false, content: false } },
+          languages: { kind: "top" },
+          appName: { kind: "top" },
+          appVersion: { kind: "taint-source", id: "navigator.appVersion",
+            dims: { origin: false, path: false, query: false, hash: false, content: false } },
+          vendor: { kind: "top" },
+          product: { kind: "top" },
+          productSub: { kind: "top" },
+          // navigator.cookieEnabled / navigator.onLine — booleans.
+          cookieEnabled: { kind: "top" },
+          onLine: { kind: "top" },
+          // navigator.sendBeacon — POST data to URL (no response).
+          sendBeacon: { kind: "builtin-method", id: "Navigator.prototype.sendBeacon" },
+        }
+      },
       // WHATWG WebCrypto § 2 Crypto interface (window.crypto).
       crypto: {
         kind: "obj-lit",
