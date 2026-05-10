@@ -1898,11 +1898,13 @@ function _processIIFE(path) {
       _stats.windowAliases++;
       continue;
     }
-    // typeof window !== "undefined" ? window : this  (UMD pattern)
+    // typeof window !== "undefined" ? window : this  (UMD pattern).
+    // AV-grounded receiver identity via _isGlobalObject (canonical window
+    // AV); covers any consequent/alternate that resolves to the global
+    // object (window/self/globalThis/aliased).
     if (_t.isConditionalExpression(argNode)) {
-      var hasWindow = (_t.isIdentifier(argNode.consequent, { name: "window" }) ||
-                       _t.isIdentifier(argNode.alternate, { name: "window" })) &&
-                      !path.scope.getBinding("window");
+      var hasWindow = (_t.isIdentifier(argNode.consequent) && _isGlobalObject(path, argNode.consequent)) ||
+                      (_t.isIdentifier(argNode.alternate) && _isGlobalObject(path, argNode.alternate));
       var hasThis = (_t.isThisExpression(argNode.consequent) || _t.isThisExpression(argNode.alternate));
       if (hasWindow || hasThis) {
         _windowAliases.add(paramName);
