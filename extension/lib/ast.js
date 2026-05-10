@@ -12795,6 +12795,12 @@ function _resolveAllValues(initialPath, initialDepth) {
     _specAnalyzePropertyFlow(encFn);  // memoised — cheap on repeat call
     var memoAv = _specPathValMemo.get(initialPath.node);
     if (memoAv) {
+      // Page-origin substitution per WHATWG URL § 4.4: location.{origin,
+      // protocol,hostname,host} reads on the page resolve to the analysis
+      // tab's URL parts. Apply BEFORE _avFlattenStringLeaves so taint-source
+      // AVs (which have no const string) become const string leaves.
+      var pageOriginLeaves = _resolvePageOriginAv(memoAv);
+      if (pageOriginLeaves) return pageOriginLeaves;
       var memoLeaves = _avFlattenStringLeaves(memoAv);
       if (memoLeaves.length > 0) return memoLeaves;
       // Param-substitution path per § 10.2.10 FunctionDeclarationInstantiation:
@@ -12817,6 +12823,8 @@ function _resolveAllValues(initialPath, initialDepth) {
       _specAnalyzeProgramWithFixpoint(programPath);
       var pMemoAv = _specPathValMemo.get(initialPath.node);
       if (pMemoAv) {
+        var pageOriginLeavesP = _resolvePageOriginAv(pMemoAv);
+        if (pageOriginLeavesP) return pageOriginLeavesP;
         var pMemoLeaves = _avFlattenStringLeaves(pMemoAv);
         if (pMemoLeaves.length > 0) return pMemoLeaves;
       }
@@ -12827,6 +12835,85 @@ function _resolveAllValues(initialPath, initialDepth) {
     var av = _specEvalExpression(initialPath, _specStateCreate({}), []);
     return av ? _avFlattenStringLeaves(av) : [];
   } catch (_) { return []; }
+}
+
+// Resolve location.{origin,protocol,hostname,host} taint-source AVs (and
+// composites like binop concat / template embedding them) to string leaves
+// from the analysis tab's URL. Per WHATWG URL § 4.4 these are page-locked
+// (dims.origin === false), so substituting the analysis tab's URL parts is
+// a sound static resolution. Returns null when no substitution applies.
+//
+// Iterative tree-rebuild: two-pass post-order on an explicit stack — pass
+// 1 enumerates the AV's reachable subtree; pass 2 rebuilds bottom-up using
+// each node's already-rebuilt children. JS call stack stays at depth 1.
+function _resolvePageOriginAv(av) {
+  if (!av || !_sourceUrl) return null;
+  var pageUrl;
+  try { pageUrl = new URL(_sourceUrl); } catch (_) { return null; }
+  var subs = {
+    "location.origin":   pageUrl.origin,
+    "location.protocol": pageUrl.protocol,
+    "location.hostname": pageUrl.hostname,
+    "location.host":     pageUrl.host,
+  };
+  // Pass 1 — preorder enumerate (post-order finalization handled in pass 2).
+  var nodes = [];
+  var enumStack = [av];
+  while (enumStack.length > 0) {
+    var n = enumStack.pop();
+    if (!n) continue;
+    nodes.push(n);
+    if (n.kind === "or") {
+      if (n.left) enumStack.push(n.left);
+      if (n.right) enumStack.push(n.right);
+    } else if (n.kind === "binop" && n.op === "+") {
+      if (n.left) enumStack.push(n.left);
+      if (n.right) enumStack.push(n.right);
+    } else if (n.kind === "template" && n.exprs) {
+      for (var ei = 0; ei < n.exprs.length; ei++) {
+        if (n.exprs[ei]) enumStack.push(n.exprs[ei]);
+      }
+    }
+  }
+  // Pass 2 — bottom-up rebuild using a per-node rebuilt-AV map. Reverse
+  // order ensures children are rebuilt before parents.
+  var rebuilt = new Map();
+  var didSub = false;
+  for (var ri = nodes.length - 1; ri >= 0; ri--) {
+    var a = nodes[ri];
+    if (rebuilt.has(a)) continue;
+    if (a.kind === "taint-source" && Object.prototype.hasOwnProperty.call(subs, a.id)) {
+      rebuilt.set(a, { kind: "const", value: subs[a.id] });
+      didSub = true;
+    } else if (a.kind === "or") {
+      rebuilt.set(a, { kind: "or",
+        left: a.left ? (rebuilt.get(a.left) || a.left) : a.left,
+        right: a.right ? (rebuilt.get(a.right) || a.right) : a.right });
+    } else if (a.kind === "binop" && a.op === "+") {
+      var bopL = a.left ? (rebuilt.get(a.left) || a.left) : a.left;
+      var bopR = a.right ? (rebuilt.get(a.right) || a.right) : a.right;
+      // Fold const + const to const per ECMA § 13.10.1 BinaryExpression
+      // Evaluation step 5 (ApplyStringOrNumericBinaryOperator) — when both
+      // operands are string consts, concatenate.
+      if (bopL && bopR && bopL.kind === "const" && bopR.kind === "const" &&
+          typeof bopL.value === "string" && typeof bopR.value === "string") {
+        rebuilt.set(a, { kind: "const", value: bopL.value + bopR.value });
+      } else {
+        rebuilt.set(a, { kind: "binop", op: "+", left: bopL, right: bopR });
+      }
+    } else if (a.kind === "template" && a.exprs) {
+      var newExprs = [];
+      for (var tei = 0; tei < a.exprs.length; tei++) {
+        newExprs.push(a.exprs[tei] ? (rebuilt.get(a.exprs[tei]) || a.exprs[tei]) : a.exprs[tei]);
+      }
+      rebuilt.set(a, { kind: "template", quasis: a.quasis, exprs: newExprs });
+    } else {
+      rebuilt.set(a, a);
+    }
+  }
+  if (!didSub) return null;
+  var leaves = _avFlattenStringLeaves(rebuilt.get(av) || av);
+  return leaves.length > 0 ? leaves : null;
 }
 
 // Find every CallExpression that calls funcPath. Combines identifier-
@@ -14013,22 +14100,12 @@ function _ravStep(F) {
           }
         }
       }
-      // 12e: `location.origin` / `window.location.origin` / `self.location.origin`
-      // — non-recursive; resolvable from the analysis tab URL.
+      // 12e: location.{origin,protocol,hostname,host} — resolvable from the
+      // analysis tab URL. AV-grounded receiver identity via _isLocationObject
+      // (canonical location AV); covers bare/window-prefixed/self-prefixed/
+      // globalThis-prefixed/aliased forms uniformly.
       if (memSubSkip < 3 && _sourceUrl && (propName === "origin" || propName === "protocol" || propName === "hostname" || propName === "host")) {
-        var locNode = node.object;
-        var locGlobal = false;
-        if (_t.isIdentifier(locNode, { name: "location" }) && !path.scope.getBinding("location")) locGlobal = true;
-        else if (_t.isMemberExpression(locNode) && !locNode.computed &&
-            _t.isIdentifier(locNode.property, { name: "location" })) {
-          var locBase = locNode.object;
-          if ((_t.isIdentifier(locBase, { name: "window" }) && !path.scope.getBinding("window")) ||
-              (_t.isIdentifier(locBase, { name: "self" }) && !path.scope.getBinding("self")) ||
-              (_t.isIdentifier(locBase, { name: "document" }) && !path.scope.getBinding("document"))) {
-            locGlobal = true;
-          }
-        }
-        if (locGlobal) {
+        if (_isLocationObject(node.object, path)) {
           try {
             var pageUrl = new URL(_sourceUrl);
             if (propName === "origin") return { done: [pageUrl.origin] };
