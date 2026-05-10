@@ -8317,6 +8317,10 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
   programPath.traverse({
     "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
       fnPaths.push(p);
+      // funcNode -> funcPath index for AV walkers (param-caller transitions,
+      // function-ref AV path recovery). Mirrors the prepass's Function
+      // visitor so the fixpoint is self-sufficient.
+      _specFuncPathByNode.set(p.node, p);
     }
   });
   // Worklist-based fixpoint: pass 1 analyses every function. Subsequent
