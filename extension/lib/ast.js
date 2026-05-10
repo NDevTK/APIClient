@@ -8548,13 +8548,21 @@ function _specEvalLeaf(path, state, vals, effects) {
     }
     // ECMA § 19 globalThis: when an Identifier is unbound at the current
     // scope (no local/var/let/const), it resolves to globalThis.<name>
-    // per the spec scope chain. The global registry has Math, Number,
-    // and other built-in namespaces that further dispatch via the
-    // prototype-chain mechanism.
+    // per the spec scope chain. Per WHATWG HTML § 7.2.1 the global object
+    // IS the Window IDL interface, so any prop on the Window AV is also
+    // accessible bare — fall through to windowSelfAv (globalAv.props.window)
+    // for names not directly on the global registry (e.g. navigator,
+    // location, addEventListener, setTimeout, ...).
     if (!path.scope.getBinding(n.name)) {
       var globalAv = _specGlobalThisAv();
-      if (globalAv && globalAv.props && Object.prototype.hasOwnProperty.call(globalAv.props, n.name)) {
-        return globalAv.props[n.name];
+      if (globalAv && globalAv.props) {
+        if (Object.prototype.hasOwnProperty.call(globalAv.props, n.name)) {
+          return globalAv.props[n.name];
+        }
+        var windowAv = globalAv.props.window;
+        if (windowAv && windowAv.props && Object.prototype.hasOwnProperty.call(windowAv.props, n.name)) {
+          return windowAv.props[n.name];
+        }
       }
     }
     // ECMA § 13.1.3 IdentifierReference: resolve via path.scope.getBinding.
@@ -24957,10 +24965,13 @@ function _processSecurityCallSink(path, result) {
     return;
   }
 
-  // navigator.sendBeacon(url, data) — request forgery / data exfiltration.
+  // navigator.sendBeacon(url, data) — AV-grounded callee identity via
+  // Navigator.prototype.sendBeacon builtin-method (installed on
+  // windowSelfAv.props.navigator.props.sendBeacon — both `navigator.sendBeacon`
+  // and `window.navigator.sendBeacon` project to the same builtin-method).
   // Dim gate applied by _pushSink (suppresses when !dims.origin).
-  if (methName === "sendBeacon" && node.arguments.length > 0 &&
-      _t.isIdentifier(callee.object, { name: "navigator" }) && !path.scope.getBinding("navigator")) {
+  if (_calleeAv && _calleeAv.kind === "builtin-method" &&
+      _calleeAv.id === "Navigator.prototype.sendBeacon" && node.arguments.length > 0) {
     var _sbSrc = _traceValueSource(path.get("arguments.0"), 0);
     if (_sbSrc.sourceType === "user-controlled") {
       _pushSink(result, node, "request-forgery", "navigator.sendBeacon", _sbSrc, path);
@@ -24968,18 +24979,17 @@ function _processSecurityCallSink(path, result) {
     return;
   }
 
-  // XMLHttpRequest.open(method, url) — request forgery via user-controlled URL.
-  // Origin-dim check: same rule as fetch — only an attacker-controlled
-  // ORIGIN redirects the request to a different server.
-  if (methName === "open" && node.arguments.length >= 2) {
-    // Exclude window.open / self.open (handled above as redirect)
-    var _isXhrOpen = !(_t.isIdentifier(callee.object, { name: "window" }) && !path.scope.getBinding("window")) &&
-                     !(_t.isIdentifier(callee.object, { name: "self" }) && !path.scope.getBinding("self"));
-    if (_isXhrOpen) {
-      var _xhrUrlSrc = _traceValueSource(path.get("arguments.1"), 0);
-      if (_xhrUrlSrc.sourceType === "user-controlled") {
-        _pushSink(result, node, "request-forgery", "XMLHttpRequest.open", _xhrUrlSrc, path);
-      }
+  // XMLHttpRequest.open(method, url) — AV-grounded callee identity via
+  // XMLHttpRequest.prototype.open builtin-method on the XHR ctor's
+  // instance obj-lit. Origin-dim check applies same as fetch: only an
+  // attacker-controlled ORIGIN redirects the request to a different
+  // server. (window.open / self.open dispatches to Window.prototype.open
+  // builtin-method, handled by _BUILTIN_CALL_SINKS above.)
+  if (_calleeAv && _calleeAv.kind === "builtin-method" &&
+      _calleeAv.id === "XMLHttpRequest.prototype.open" && node.arguments.length >= 2) {
+    var _xhrUrlSrc = _traceValueSource(path.get("arguments.1"), 0);
+    if (_xhrUrlSrc.sourceType === "user-controlled") {
+      _pushSink(result, node, "request-forgery", "XMLHttpRequest.open", _xhrUrlSrc, path);
     }
     return;
   }
