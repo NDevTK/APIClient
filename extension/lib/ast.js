@@ -2738,6 +2738,9 @@ function _specGlobalThisAv() {
       encodeURIComponent: { kind: "builtin-method", id: "global.encodeURIComponent" },
       decodeURI: { kind: "builtin-method", id: "global.decodeURI" },
       decodeURIComponent: { kind: "builtin-method", id: "global.decodeURIComponent" },
+      // ECMA § B.2.1 legacy escape / unescape.
+      escape: { kind: "builtin-method", id: "global.escape" },
+      unescape: { kind: "builtin-method", id: "global.unescape" },
       btoa: { kind: "builtin-method", id: "global.btoa" },
       atob: { kind: "builtin-method", id: "global.atob" },
       parseInt: { kind: "builtin-method", id: "global.parseInt" },
@@ -22488,52 +22491,50 @@ function _describeNode(node) {
 
 // ─── CFG Builder + Sanitizer Path Analysis ──────────────────────────────────
 
-// Known sanitizer globals — calling these on tainted data neutralizes it
-// Use Object.create(null) so prototype methods like toString /
-// hasOwnProperty / valueOf don't shadow-match the sanitizer set. An
-// earlier implementation used plain object literals which made
-// `_SANITIZER_METHODS["toString"]` truthy (inherited prototype
-// function), silently downgrading real XSS findings where the taint
-// chain passed through `.toString()` (observed on the GitHub
-// remote-input-element bundle).
-var _SANITIZER_GLOBALS = Object.assign(Object.create(null),
-  { "encodeURIComponent":1, "encodeURI":1, "parseInt":1, "parseFloat":1, "escape":1, "btoa":1 });
-
-// Known sanitizer methods — obj.sanitize(), obj.encode(), DOMPurify.sanitize()
-var _SANITIZER_METHODS = Object.assign(Object.create(null), { "sanitize":1, "encode":1 });
-
-// Known sanitizer objects — DOMPurify.sanitize()
-var _SANITIZER_OBJECTS = Object.assign(Object.create(null), { "DOMPurify":1 });
+// Sanitizer builtin-method AV ids — only ECMA-defined globals whose
+// per-spec semantics neutralise an attacker-controlled string for the
+// sinks we track (innerHTML / outerHTML / location.* / eval-family).
+// Spec eval registers each of these in `_specGlobalThisAv`; reading
+// the callee node's AV from `_specPathValMemo` and checking its `id`
+// covers scope shadowing (a local `var encodeURIComponent = …` binds
+// to a different AV), alias chains (`var enc = encodeURIComponent;
+// enc(s)`), and member dispatch (`window.encodeURIComponent(s)`,
+// `globalThis.encodeURIComponent(s)`) uniformly with no name-based
+// shape match.
+//
+// ECMA § 19.2.6 encodeURIComponent / § 19.2.5 encodeURI escape URL-
+// reserved bytes (incl. `<`, `>`, `&`, `"`, `'` in encodeURIComponent's
+// case). ECMA § 19.2.2 parseInt / § 19.2.3 parseFloat coerce to number
+// — any HTML payload becomes NaN. ECMA § B.2.1 legacy `escape` hex-
+// escapes non-alphanumeric. § 18.2.1.1 btoa base64-wraps (no HTML-
+// active output bytes).
+//
+// Excluded: decodeURI* — they invert the encoding and pass attacker
+// bytes through unchanged. Library sanitisers (DOMPurify, sanitize-
+// html, etc.) are NOT in any spec; the analyser does not name-match
+// them. A real-source bundle that loads such a library statically
+// (rare) would have its source in the bundle and the wrapper would
+// trace through to the underlying string transforms via spec eval.
+var _SANITIZER_AV_IDS = Object.assign(Object.create(null), {
+  "global.encodeURI": 1,
+  "global.encodeURIComponent": 1,
+  "global.parseInt": 1,
+  "global.parseFloat": 1,
+  "global.escape": 1,
+  "global.btoa": 1,
+});
 
 // Check if a single call expression node is a known sanitizer.
-// When a path is provided, verifies that sanitizer globals aren't shadowed by local bindings.
+// AV-direct: read the callee's spec-eval AV; sanitiser polarity is
+// determined by the callee's resolved identity, not by name-matching
+// the source-text identifier. Scope shadowing, prototype dispatch, and
+// alias chains all fall out of spec eval's scope lookup automatically.
 function _isSanitizerCall(node, path) {
-  if (!_t.isCallExpression(node)) return false;
-  var callee = node.callee;
-  // Global sanitizer functions: encodeURIComponent, parseInt, etc.
-  if (_t.isIdentifier(callee) && _SANITIZER_GLOBALS[callee.name]) {
-    // If path available, verify the identifier isn't shadowed
-    if (path && path.scope) {
-      return !path.scope.getBinding(callee.name);
-    }
-    return true;
-  }
-  // Method sanitizers: DOMPurify.sanitize(), obj.encode(), etc.
-  if (_t.isMemberExpression(callee) && !callee.computed && _t.isIdentifier(callee.property)) {
-    if (_SANITIZER_METHODS[callee.property.name]) {
-      // For known sanitizer objects (DOMPurify), verify the object isn't shadowed
-      if (_t.isIdentifier(callee.object) && _SANITIZER_OBJECTS[callee.object.name]) {
-        if (path && path.scope) return !path.scope.getBinding(callee.object.name);
-        return true;
-      }
-      return true;
-    }
-    if (_t.isIdentifier(callee.object) && _SANITIZER_OBJECTS[callee.object.name]) {
-      if (path && path.scope) return !path.scope.getBinding(callee.object.name);
-      return true;
-    }
-  }
-  return false;
+  if (!_t.isCallExpression(node) || !path) return false;
+  _specEnsureProgramGlobalsPrepass(path);
+  var calleeAv = _specPathValMemo.get(node.callee);
+  if (!calleeAv || calleeAv.kind !== "builtin-method") return false;
+  return !!_SANITIZER_AV_IDS[calleeAv.id];
 }
 
 // Check if a statement path contains a sanitizer call at this level only.

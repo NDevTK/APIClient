@@ -231,11 +231,15 @@ xss("safe: location.href to fetch (current-origin URL is not a sink)", `
 
 console.log("\n=== Sanitizer detection (CFG-based) ===\n");
 
-xss("DOMPurify.sanitize on all paths - sink suppressed", `
-  document.body.innerHTML = DOMPurify.sanitize(location.hash);
+xss("encodeURIComponent on all paths to innerHTML - severity downgraded to info", `
+  document.body.innerHTML = encodeURIComponent(location.hash);
 `, function(sinks) {
-  // DOMPurify CFG-sanitization on all paths suppresses the sink entirely.
-  return sinks.length === 0;
+  // ECMA § 19.2.6 encodeURIComponent escapes URL-reserved bytes incl.
+  // <, >, &, ", ' — every HTML-active char becomes a percent-encoded
+  // sequence. CFG-sanitization on all paths downgrades severity to
+  // "info" (not suppressed, per CLAUDE.md sanitizer policy).
+  if (sinks.length !== 1) return false;
+  return sinks[0].severity === "info" && sinks[0].sanitized === true;
 });
 
 xss("encodeURIComponent on URL going to location.assign IS sanitization", `
