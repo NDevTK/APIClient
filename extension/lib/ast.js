@@ -26119,14 +26119,27 @@ function _classifyAssignmentValueShape(rightPath) {
         !rightPath.scope.getBinding(node.callee.name) &&
         (node.callee.name === "Object" || node.callee.name === "Array" ||
          node.callee.name === "Set" || node.callee.name === "Map")) return "object";
-    if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) && !node.callee.computed &&
-        _t.isIdentifier(node.callee.object) && _t.isIdentifier(node.callee.property)) {
-      var obj = node.callee.object.name;
-      var meth = node.callee.property.name;
-      if (obj === "JSON" && meth === "parse" && !rightPath.scope.getBinding("JSON")) return "object";
-      if (obj === "Object" && (meth === "assign" || meth === "create" || meth === "fromEntries") &&
-          !rightPath.scope.getBinding("Object")) return "object";
-      if (meth === "toString" || meth === "toLowerCase" || meth === "toUpperCase" || meth === "trim") {
+    if (_t.isCallExpression(node) && _t.isMemberExpression(node.callee) && !node.callee.computed) {
+      // AV-grounded callee identity for object-returning builtins per
+      // ECMA-262: JSON.parse (§ 25.5.2), Object.assign (§ 20.1.2.1),
+      // Object.create (§ 20.1.2.2), Object.fromEntries (§ 20.1.2.7).
+      var clCalleeAv = _specPathValMemo.get(node.callee);
+      if (clCalleeAv && clCalleeAv.kind === "builtin-method") {
+        if (clCalleeAv.id === "JSON.parse" || clCalleeAv.id === "Object.assign" ||
+            clCalleeAv.id === "Object.create" || clCalleeAv.id === "Object.fromEntries") {
+          return "object";
+        }
+      }
+      // String-method primitive classifications use property-name on the
+      // method ID (every prototype's toString/toLowerCase/toUpperCase/trim
+      // returns a primitive). Identify via AV when possible, fall back to
+      // property-name otherwise (legitimate per the spec — these methods
+      // are defined as string-returning across types).
+      if (_t.isIdentifier(node.callee.property) && (
+            node.callee.property.name === "toString" ||
+            node.callee.property.name === "toLowerCase" ||
+            node.callee.property.name === "toUpperCase" ||
+            node.callee.property.name === "trim")) {
         return "primitive";
       }
     }
