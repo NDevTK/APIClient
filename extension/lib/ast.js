@@ -6805,20 +6805,6 @@ function _specJoinAv(a, b) {
   return { kind: "or", left: a, right: b };
 }
 
-// State equality (shallow) — used by the worklist's fixed-point detection.
-function _specEqualState(a, b) {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  for (var k in a) if (Object.prototype.hasOwnProperty.call(a, k)) {
-    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
-    if (!_specEqualAv(a[k], b[k])) return false;
-  }
-  for (var k2 in b) if (Object.prototype.hasOwnProperty.call(b, k2)) {
-    if (!Object.prototype.hasOwnProperty.call(a, k2)) return false;
-  }
-  return true;
-}
-
 // State LUB — pointwise on each binding name; missing bindings remain
 // missing (Bottom).
 function _specJoinState(a, b) {
@@ -20622,51 +20608,6 @@ function _pushDangerous(result, node, type, description, severity, src) {
   }
   if (src && src.taintPath && src.taintPath.length > 0) entry.taintPath = src.taintPath;
   result.dangerousPatterns.push(entry);
-}
-
-// Does this CallExpression path produce a Promise whose resolved value is a
-// server-controlled response where the SERVER'S ORIGIN cannot be chosen
-// by an attacker? If yes, taint doesn't propagate from the URL argument
-// to the `.then(response)` callback — the response bytes come from YOUR
-// server (reflected XSS is a server-side bug, not a client DOM sink).
-//
-// If NO — i.e. the URL's origin could be attacker-controlled (e.g.
-// `fetch(location.hash)`, `fetch(attackerInput)`) — taint MUST propagate
-// because the attacker can host the response on their own server.
-//
-// Conservative default: return false (keep taint) unless we can prove the
-// fetch target is same-origin.
-// Iterative .then/.catch/.finally chain unwind. The original recursed
-// once per chain link; minified Promise pipelines can be deep.
-function _isNetworkProducingCall(callPath) {
-  if (!callPath || !callPath.node) return false;
-  while (true) {
-    if (!callPath || !callPath.node) return false;
-    var node = callPath.node;
-    if (!_t.isCallExpression(node)) return false;
-    var callee = node.callee;
-
-    // Direct fetch — AV-grounded via _isGlobalFetchCall (which routes
-    // window.fetch / self.fetch / globalThis.fetch through _isGlobalObject's
-    // spec-eval AV identity check). No name-based shape match here.
-    if (_isGlobalFetchCall(callee, callPath.scope, callPath)) {
-      if (node.arguments.length === 0) return false;
-      return _isSameOriginFetchTarget(callPath.get("arguments.0"));
-    }
-
-    // Promise chain: unwrap to receiver via loop continuation.
-    if (_t.isMemberExpression(callee) && !callee.computed && _t.isIdentifier(callee.property)) {
-      var m = callee.property.name;
-      if (m === "then" || m === "catch" || m === "finally") {
-        callPath = callPath.get("callee.object");
-        continue;
-      }
-      if (m === "json" || m === "text" || m === "blob" || m === "arrayBuffer" || m === "formData") {
-        return false;
-      }
-    }
-    return false;
-  }
 }
 
 // Does the URL argument to fetch() provably target a same-origin resource?
