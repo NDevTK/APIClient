@@ -2508,6 +2508,43 @@ function _specGlobalThisAv() {
           onLine: { kind: "top" },
           // navigator.sendBeacon — POST data to URL (no response).
           sendBeacon: { kind: "builtin-method", id: "Navigator.prototype.sendBeacon" },
+          // WHATWG ServiceWorker API § 4 — ServiceWorkerContainer interface.
+          // navigator.serviceWorker.register(url) registers a worker that
+          // intercepts every fetch within scope (full-bundle MITM gadget
+          // when url is attacker-controlled).
+          serviceWorker: {
+            kind: "obj-lit",
+            props: {
+              register: { kind: "builtin-method", id: "ServiceWorkerContainer.prototype.register" },
+              getRegistration: { kind: "builtin-method", id: "ServiceWorkerContainer.prototype.getRegistration" },
+              getRegistrations: { kind: "builtin-method", id: "ServiceWorkerContainer.prototype.getRegistrations" },
+              addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
+              removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
+              dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
+              controller: { kind: "top" },
+              ready: { kind: "top" },
+            }
+          },
+          // WHATWG Service Workers § Permissions.query / WHATWG HTML §
+          // Permissions API.
+          permissions: {
+            kind: "obj-lit",
+            props: {
+              query: { kind: "builtin-method", id: "Permissions.prototype.query" },
+              request: { kind: "builtin-method", id: "Permissions.prototype.request" },
+              revoke: { kind: "builtin-method", id: "Permissions.prototype.revoke" },
+            }
+          },
+          // WHATWG Clipboard API § 3 — read/write attacker-influenced data.
+          clipboard: {
+            kind: "obj-lit",
+            props: {
+              read: { kind: "builtin-method", id: "Clipboard.prototype.read" },
+              readText: { kind: "builtin-method", id: "Clipboard.prototype.readText" },
+              write: { kind: "builtin-method", id: "Clipboard.prototype.write" },
+              writeText: { kind: "builtin-method", id: "Clipboard.prototype.writeText" },
+            }
+          },
         }
       },
       // WHATWG WebCrypto § 2 Crypto interface (window.crypto).
@@ -25029,16 +25066,14 @@ function _processSecurityCallSink(path, result) {
     return;
   }
 
-  // navigator.serviceWorker.register(url) — service worker hijacking
-  if (methName === "register" && node.arguments.length > 0 &&
-      _t.isMemberExpression(callee.object) && !callee.object.computed &&
-      _t.isIdentifier(callee.object.property, { name: "serviceWorker" })) {
-    var _swBase = callee.object.object;
-    if (_t.isIdentifier(_swBase, { name: "navigator" }) && !path.scope.getBinding("navigator")) {
-      var _swSrc = _traceValueSource(path.get("arguments.0"), 0);
-      if (_swSrc.sourceType === "user-controlled") _pushSink(result, node, "eval", "serviceWorker.register", _swSrc, path);
-      return;
-    }
+  // navigator.serviceWorker.register(url) — service worker hijacking.
+  // AV-grounded callee identity via ServiceWorkerContainer.prototype.register
+  // builtin-method (windowSelfAv.props.navigator.props.serviceWorker.props.register).
+  if (_calleeAv && _calleeAv.kind === "builtin-method" &&
+      _calleeAv.id === "ServiceWorkerContainer.prototype.register" && node.arguments.length > 0) {
+    var _swSrc = _traceValueSource(path.get("arguments.0"), 0);
+    if (_swSrc.sourceType === "user-controlled") _pushSink(result, node, "eval", "serviceWorker.register", _swSrc, path);
+    return;
   }
 
   // location.assign(value) / location.replace(value) — open redirect.
