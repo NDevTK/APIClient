@@ -655,6 +655,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _specStateOuterImports = new WeakMap();
   _specProgramFixpointDone = new WeakSet();
   _specSliceFns = new WeakSet();
+  _specFnContainsSlice = new WeakSet();
   _specSliceComputedDone = new WeakSet();
   _specAnalyzeInProgress = new WeakSet();
   _specPendingAnalyses = [];
@@ -872,17 +873,25 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
 
   try {
   _babelTraverse(ast, {
-    // Slice-gating: skip descent into non-slice function bodies entirely.
-    // Babel's default traversal visits every AST node; non-slice fns
-    // contribute no sink dispatches and their visitor work bottoms out
-    // at the _isPathInSlice gate inside each visitor. Skipping at the
-    // function-enter level saves the cumulative descent + visitor
+    // Slice-gating: skip descent into function bodies that contain NO
+    // slice fns transitively (neither itself nor any nested function).
+    // Babel's default traversal visits every AST node; for a fn whose
+    // entire subtree is outside the slice, all visitor work bottoms
+    // out at the _isPathInSlice gate inside each visitor. Skipping at
+    // the function-enter level saves cumulative descent + visitor
     // dispatch cost over potentially 100K+ AST nodes per fn body.
-    // Pure structural gate — the slice already captures every fn that
-    // can contribute to a sink via the call-graph reachability check.
+    // Pure structural gate via the pre-computed `containsSlice` flag
+    // (set during slice build for every fn whose subtree contains an
+    // entry or a transitive callee). Lexical containment is separate
+    // from the call-graph reachability — a fn might lexically contain
+    // a slice fn (which the traversal must reach) without itself being
+    // a transitive caller in the static call graph.
     "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": {
       enter: function (path) {
-        if (!_isPathInSlice(path)) path.skip();
+        if (_specCallGraphCallersOf && !_specSliceFns.has(path.node) &&
+            !_specFnContainsSlice.has(path.node)) {
+          path.skip();
+        }
       }
     },
     // ── Value constraint collection ──
@@ -5555,6 +5564,7 @@ var _specContextCallerArgs = new Map();
 // main-pass sink processors (they contain no sinks structurally, so
 // AV-grounded dispatch in them would always bottom out).
 var _specSliceFns = new WeakSet();
+var _specFnContainsSlice = new WeakSet();
 var _specSliceComputedDone = new WeakSet();
 // Functions currently being analysed by _specAnalyzePropertyFlow.
 // Explicit cycle guard for demand-driven mutual recursion — see the
@@ -9127,7 +9137,15 @@ function _avAtPath(path) {
   var memo = _specPathValMemo.get(path.node);
   if (memo) return memo;
   var encFn = path.getFunctionParent && path.getFunctionParent();
-  if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
+  // Gate per-fn analysis on slice membership: paths inside non-slice
+  // fns can't contribute to a sink, so triggering O(body) per-fn
+  // analysis just to populate memo for an unreachable expression is
+  // wasted work. The slice already captures every fn whose AVs can
+  // reach a sink via the call-graph reachability check.
+  if (encFn && _t.isFunction(encFn.node) &&
+      (!_specCallGraphCallersOf || _specSliceFns.has(encFn.node))) {
+    _specAnalyzePropertyFlow(encFn);
+  }
   return _specPathValMemo.get(path.node) || null;
 }
 // Walk an AV to its underlying obj-lit (through or-AV alternatives).
@@ -9667,6 +9685,25 @@ function _specBuildSlice(programPath) {
   slice.forEach(function(fn) { _specSliceFns.add(fn); });
   _specCallGraphCallersOf = _cgCallersOf;
   _specCallGraphCalleesOf = _cgCalleesOf;
+  // Mark every fn whose lexical subtree contains a slice fn. Walk each
+  // slice fn upward through parentPath, marking each enclosing function
+  // until we hit a fn already marked or the Program root. The main-pass
+  // slice gate uses this to keep descending into outer fns that
+  // lexically contain in-slice nested fns (e.g. a webpack module wrapper
+  // whose body contains the fetch call site as a nested helper). Pure
+  // structural: lexical AST topology, no name matching.
+  for (var fpi = 0; fpi < fnPaths.length; fpi++) {
+    var fnp = fnPaths[fpi];
+    if (!slice.has(fnp.node)) continue;
+    var fnpp = fnp.parentPath;
+    while (fnpp && fnpp.node) {
+      if (_t.isFunction(fnpp.node)) {
+        if (_specFnContainsSlice.has(fnpp.node)) break;
+        _specFnContainsSlice.add(fnpp.node);
+      }
+      fnpp = fnpp.parentPath;
+    }
+  }
   var slicePaths = [];
   var entryPaths = [];
   for (var spi = 0; spi < fnPaths.length; spi++) {
