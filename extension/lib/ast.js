@@ -2816,11 +2816,10 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     }
     if (!urlAllOk || urlResults.length === 0) return _AV_TOP;
     if (urlResults.length === 1) return urlResults[0];
-    var urlOr = urlResults[0];
-    // _specSetUnionAv per WHATWG URL constructor distribution: each
-    // (input, base) pair produces a statically-possible URL value.
-    for (var uri = 1; uri < urlResults.length; uri++) urlOr = _specSetUnionAv(urlOr, urlResults[uri]);
-    return urlOr;
+    // Batch join per WHATWG URL constructor distribution: each (input,
+    // base) pair produces a statically-possible URL value. Build the
+    // or-AV in O(N) via _specJoinAllAv instead of O(N²) incremental.
+    return _specJoinAllAv(urlResults) || _AV_TOP;
   }
   if (ctorId === "WHATWG.URLSearchParams") {
     if (argAvs.length === 0) return _AV_TOP;
@@ -2881,10 +2880,8 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       });
     }
     if (reqResults.length === 1) return reqResults[0];
-    var reqOr = reqResults[0];
-    // _specSetUnionAv per Request constructor distribution.
-    for (var rri = 1; rri < reqResults.length; rri++) reqOr = _specSetUnionAv(reqOr, reqResults[rri]);
-    return reqOr;
+    // Batch join per Request constructor distribution.
+    return _specJoinAllAv(reqResults) || _AV_TOP;
   }
   // ECMA § 24.1.1 new Map([iterable]). Per spec step 8: if iterable is
   // null/undefined, return empty Map. Otherwise iterate; for each entry,
@@ -3892,15 +3889,11 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
           perLeafResults.push(leafRes);
         }
         if (perLeafResults.length === 1) return perLeafResults[0];
-        // _specSetUnionAv per § 23.1.3 method distribution: at
-        // runtime exactly one receiver leaf is realised, so all leaves'
-        // results are statically possible — preserve concrete branches
-        // even when some leaves' methods returned top.
-        var arrOr = perLeafResults[0];
-        for (var aori = 1; aori < perLeafResults.length; aori++) {
-          arrOr = _specSetUnionAv(arrOr, perLeafResults[aori]);
-        }
-        return arrOr;
+        // Batch join per § 23.1.3 method distribution: at runtime
+        // exactly one receiver leaf is realised, so all leaves' results
+        // are statically possible. _specJoinAllAv preserves concrete
+        // branches in O(N) instead of O(N²) incremental.
+        return _specJoinAllAv(perLeafResults) || _AV_TOP;
       }
     }
   }
@@ -3965,10 +3958,8 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             mapPerRes.push(_specApplyMapMethodOnInst(methodId, mapOrLeaves[mori], recvName, argAvs, state));
           }
           if (mapPerRes.length === 1) return mapPerRes[0];
-          // _specSetUnionAv per § 24.1.3 distribution.
-          var mapResOr = mapPerRes[0];
-          for (var mri = 1; mri < mapPerRes.length; mri++) mapResOr = _specSetUnionAv(mapResOr, mapPerRes[mri]);
-          return mapResOr;
+          // Batch join per § 24.1.3 distribution.
+          return _specJoinAllAv(mapPerRes) || _AV_TOP;
         }
       }
     }
@@ -3996,9 +3987,8 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             setPerRes.push(_specApplySetMethodOnInst(methodId, setOrLeaves[sori], recvName, argAvs, state));
           }
           if (setPerRes.length === 1) return setPerRes[0];
-          // _specSetUnionAv per § 24.2.3 / § 24.4.3 distribution.
-          var setResOr = setPerRes[0];
-          for (var sri = 1; sri < setPerRes.length; sri++) setResOr = _specSetUnionAv(setResOr, setPerRes[sri]);
+          // Batch join per § 24.2.3 / § 24.4.3 distribution.
+          var setResOr = _specJoinAllAv(setPerRes) || _AV_TOP;
           return setResOr;
         }
       }
