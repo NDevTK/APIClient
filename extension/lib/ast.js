@@ -12249,39 +12249,48 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
     enumSeen.add(av);
     inProgress.add(av);
     stack.push(av);  // re-pop after children finalize → emits to preorder
-    if (av.kind === "member") { stack.push(av.obj); stack.push(av.key); }
-    else if (av.kind === "or") { stack.push(av.left); stack.push(av.right); }
-    else if (av.kind === "binop") { stack.push(av.left); stack.push(av.right); }
+    // Children push: skip sub-AVs whose subtree contains NO substitutable
+    // nodes. The substitute-pass's fallback (`subs.get(child) || child`)
+    // returns the original AV for any child not in subs — which is
+    // structurally identical to what the walk would compute when no
+    // substitutables exist. For huge or-trees populated by joining many
+    // distinct caller args, this skips O(or-tree leaves) walking when
+    // only one branch carries params. Each `_avHasSubstitutableCheck` is
+    // memoised — first call per AV is O(subtree); subsequent O(1).
+    function _pushIfSub(c) { if (c && _avHasSubstitutableCheck(c)) stack.push(c); }
+    if (av.kind === "member") { _pushIfSub(av.obj); _pushIfSub(av.key); }
+    else if (av.kind === "or") { _pushIfSub(av.left); _pushIfSub(av.right); }
+    else if (av.kind === "binop") { _pushIfSub(av.left); _pushIfSub(av.right); }
     else if (av.kind === "template" && av.exprs) {
-      for (var tii = 0; tii < av.exprs.length; tii++) stack.push(av.exprs[tii]);
+      for (var tii = 0; tii < av.exprs.length; tii++) _pushIfSub(av.exprs[tii]);
     }
     else if (av.kind === "deferred-ctor" && av.args) {
-      for (var dcii = 0; dcii < av.args.length; dcii++) stack.push(av.args[dcii]);
+      for (var dcii = 0; dcii < av.args.length; dcii++) _pushIfSub(av.args[dcii]);
     }
-    else if (av.kind === "coerce" && av.arg) { stack.push(av.arg); }
-    else if (av.kind === "loop-key") { stack.push(av.src); }
-    else if (av.kind === "keys-of") { stack.push(av.src); }
+    else if (av.kind === "coerce" && av.arg) { _pushIfSub(av.arg); }
+    else if (av.kind === "loop-key") { _pushIfSub(av.src); }
+    else if (av.kind === "keys-of") { _pushIfSub(av.src); }
     else if (av.kind === "obj-lit" && av.props) {
       for (var k in av.props) if (Object.prototype.hasOwnProperty.call(av.props, k)) {
-        stack.push(av.props[k]);
+        _pushIfSub(av.props[k]);
       }
     }
     else if (av.kind === "array-lit" && av.elements) {
-      for (var ali = 0; ali < av.elements.length; ali++) stack.push(av.elements[ali]);
+      for (var ali = 0; ali < av.elements.length; ali++) _pushIfSub(av.elements[ali]);
     }
     else if (av.kind === "map-instance" && av.entries) {
       for (var mei = 0; mei < av.entries.length; mei++) {
-        stack.push(av.entries[mei][0]);
-        stack.push(av.entries[mei][1]);
+        _pushIfSub(av.entries[mei][0]);
+        _pushIfSub(av.entries[mei][1]);
       }
     }
     else if (av.kind === "set-instance" && av.items) {
-      for (var sii = 0; sii < av.items.length; sii++) stack.push(av.items[sii]);
+      for (var sii = 0; sii < av.items.length; sii++) _pushIfSub(av.items[sii]);
     }
     else if (av.kind === "call") {
-      if (av.callee) stack.push(av.callee);
+      if (av.callee) _pushIfSub(av.callee);
       if (av.args) {
-        for (var cai = 0; cai < av.args.length; cai++) stack.push(av.args[cai]);
+        for (var cai = 0; cai < av.args.length; cai++) _pushIfSub(av.args[cai]);
       }
     }
   }
