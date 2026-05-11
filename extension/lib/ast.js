@@ -6555,19 +6555,39 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
           if (globalAv && globalAv.props && Object.prototype.hasOwnProperty.call(globalAv.props, nm)) return;
           var b = idPath.scope.getBinding(nm);
           if (!b || !b.path || !b.path.node) return;
-          if (!_t.isVariableDeclarator(b.path.node) || !b.path.node.init) return;
           if (funcPath.scope.hasOwnBinding(nm)) return;
-          seenOuterNames[nm] = true;
-          var initSourcePaths = [b.path.get("init")];
-          if (!b.constant && b.constantViolations) {
-            for (var cvi = 0; cvi < b.constantViolations.length; cvi++) {
-              var cv = b.constantViolations[cvi];
-              if (cv.isAssignmentExpression() && cv.node.operator === "=") {
-                initSourcePaths.push(cv.get("right"));
+          // § 9.1.1 closure capture forms two cases:
+          //   (a) outer VariableDeclarator binding — pre-evaluate `init`
+          //       (and any AssignmentExpression rebinds) and bind name to
+          //       the joined AV. Mutations propagate via outerImports.
+          //   (b) outer FormalParameter binding — capture as a param AV
+          //       `{kind:"param", idx, fn: outerFnNode}` referencing the
+          //       enclosing function's params. When the enclosing function
+          //       is called, its caller's arg AVs flow in via
+          //       _specInstantiateAv at substitution time, folding the
+          //       inner function's return AV to a concrete value.
+          if (_t.isVariableDeclarator(b.path.node) && b.path.node.init) {
+            seenOuterNames[nm] = true;
+            var initSourcePaths = [b.path.get("init")];
+            if (!b.constant && b.constantViolations) {
+              for (var cvi = 0; cvi < b.constantViolations.length; cvi++) {
+                var cv = b.constantViolations[cvi];
+                if (cv.isAssignmentExpression() && cv.node.operator === "=") {
+                  initSourcePaths.push(cv.get("right"));
+                }
               }
             }
+            outerBindingsToImport.push({ name: nm, initSourcePaths: initSourcePaths, declaratorNode: b.path.node, kind: "var" });
+            return;
           }
-          outerBindingsToImport.push({ name: nm, initSourcePaths: initSourcePaths, declaratorNode: b.path.node });
+          if (b.kind === "param" && b.scope && b.scope.path && _t.isFunction(b.scope.path.node)) {
+            var outerFnNode = b.scope.path.node;
+            var paramIdx = _findParamIndex(outerFnNode.params, nm);
+            if (paramIdx < 0) return;
+            seenOuterNames[nm] = true;
+            outerBindingsToImport.push({ name: nm, kind: "param", outerFnNode: outerFnNode, paramIdx: paramIdx });
+            return;
+          }
         }
       });
       _specOuterImportsListCache.set(funcNode, outerBindingsToImport);
@@ -6587,6 +6607,16 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         if (!outerImports) { outerImports = new Set(); _specStateOuterImports.set(state, outerImports); }
         for (var oii = 0; oii < outerBindingsToImport.length; oii++) {
           var entry = outerBindingsToImport[oii];
+          // § 9.1.1 captured FormalParameter — bind name to a param AV
+          // referencing the OUTER function's params. _specInstantiateAv
+          // (called when the inner function-ref's return is substituted
+          // at the outer caller's site) recognises matching `fn`
+          // identity and substitutes the outer's caller arg.
+          if (entry.kind === "param") {
+            state[entry.name] = { kind: "param", idx: entry.paramIdx, fn: entry.outerFnNode };
+            outerImports.add(entry.name);
+            continue;
+          }
           var declNode = entry.declaratorNode;
           var joinedAv = _specBindingInitAvCache.get(declNode);
           if (joinedAv === undefined) {
@@ -13617,6 +13647,41 @@ function _specAvHasParamLeaf(av) {
   return result;
 }
 
+// Collect the set of `fn` identity FunctionNodes referenced by all
+// `param` leaves in the AV tree. Param leaves tag their owning function
+// per ECMA § 9.1.1 closure capture so substitution can target the
+// correct function's call sites. Returns a Set<FunctionNode>; an empty
+// Set means no fn-tagged params (legacy untagged or no params at all).
+function _specCollectParamFnNodes(rootAv) {
+  var fns = new Set();
+  if (!rootAv) return fns;
+  var stack = [rootAv];
+  var seen = new Set();
+  while (stack.length > 0) {
+    var s = stack.pop();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    if (s.kind === "param" && s.fn) { fns.add(s.fn); continue; }
+    if (s.kind === "or" || s.kind === "binop") { if (s.left) stack.push(s.left); if (s.right) stack.push(s.right); continue; }
+    if (s.kind === "template" && s.exprs) { for (var ti = 0; ti < s.exprs.length; ti++) stack.push(s.exprs[ti]); continue; }
+    if (s.kind === "coerce" && s.arg) { stack.push(s.arg); continue; }
+    if (s.kind === "obj-lit" && s.props) {
+      for (var oki in s.props) if (Object.prototype.hasOwnProperty.call(s.props, oki)) stack.push(s.props[oki]);
+      continue;
+    }
+    if (s.kind === "array-lit" && s.elements) { for (var ai = 0; ai < s.elements.length; ai++) stack.push(s.elements[ai]); continue; }
+    if (s.kind === "member") { if (s.obj) stack.push(s.obj); if (s.key) stack.push(s.key); continue; }
+    if (s.kind === "call") { if (s.callee) stack.push(s.callee); if (s.args) for (var caii = 0; caii < s.args.length; caii++) stack.push(s.args[caii]); continue; }
+    if (s.kind === "bound-function") {
+      if (s.target) stack.push(s.target);
+      if (s.thisArg) stack.push(s.thisArg);
+      if (s.preArgs) for (var bpaii = 0; bpaii < s.preArgs.length; bpaii++) stack.push(s.preArgs[bpaii]);
+      continue;
+    }
+  }
+  return fns;
+}
+
 // Walk encFn's call sites via path.scope binding referencePaths.
 // For each call, evaluate its argument AVs through spec eval, then
 // substitute into avWithParamRefs via _specInstantiateAv. Project each
@@ -13634,7 +13699,47 @@ function _specAvHasParamLeaf(av) {
 function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
   if (!funcPath || !funcPath.node || !avWithParamRefs) return null;
   var allLeaves = [];
-  var worklist = [{ funcPath: funcPath, av: avWithParamRefs }];
+  // § 9.1.1 closure capture re-routing: when the AV's param leaves carry
+  // `fn` identities of OUTER functions that lexically ENCLOSE funcPath
+  // (the function containing the consumption site), the worklist must
+  // walk callers of those outer functions — that's where the captured
+  // params flow in.
+  //
+  // When funcPath.node already appears in the AV's param fn set, OR the
+  // param's fn is a sibling within funcPath's enclosing class (ctor-
+  // param flowing through `this` into a method), keep funcPath as the
+  // seed so the existing call-site / NewExpression-ctor routing fires
+  // through funcPath's call sites. Pure structural lexical check — no
+  // name matching.
+  var worklist = [];
+  var initialFnNodes = _specCollectParamFnNodes(avWithParamRefs);
+  var allEnclose = initialFnNodes.size > 0;
+  if (allEnclose) {
+    var efnIter = initialFnNodes.values();
+    for (var efnStep = efnIter.next(); !efnStep.done; efnStep = efnIter.next()) {
+      var efnNode = efnStep.value;
+      if (efnNode === funcPath.node) { allEnclose = false; break; }
+      // Lexical-enclosure test: walk funcPath up via parentPath until we
+      // find a Function node whose `.node === efnNode`. If we never
+      // encounter it, efnNode does NOT lexically enclose funcPath, so
+      // we don't re-route through it.
+      var encloses = false;
+      var p = funcPath.parentPath;
+      while (p) {
+        if (p.node === efnNode) { encloses = true; break; }
+        p = p.parentPath;
+      }
+      if (!encloses) { allEnclose = false; break; }
+    }
+  }
+  if (allEnclose) {
+    var fnIter = initialFnNodes.values();
+    for (var fnStep = fnIter.next(); !fnStep.done; fnStep = fnIter.next()) {
+      var seedFnPath = _specPathOfFunc(fnStep.value, funcPath);
+      if (seedFnPath) worklist.push({ funcPath: seedFnPath, av: avWithParamRefs });
+    }
+  }
+  if (worklist.length === 0) worklist.push({ funcPath: funcPath, av: avWithParamRefs });
   // Cycle break-up: _specInstantiateAv allocates fresh AVs at each
   // substitution step, so reference identity (WeakSet per func) catches
   // cycles where the SAME post-substitution AV is encountered for the
@@ -13857,12 +13962,25 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
       for (var li = 0; li < leaves.length; li++) {
         if (allLeaves.indexOf(leaves[li]) < 0) allLeaves.push(leaves[li]);
       }
-      // If substituted still has params, the caller's args were
-      // themselves params — recurse via the worklist into the caller's
-      // call sites. callerEncFn must be a Function for there to be
-      // further callers; module-level callers terminate.
-      if (callerEncFn && _t.isFunction(callerEncFn.node) && _specAvHasParamLeaf(substituted)) {
-        worklist.push({ funcPath: callerEncFn, av: substituted });
+      // If substituted still has params, recurse via the worklist.
+      // Route to the FUNCTION whose params remain unresolved (via the
+      // `fn` tag on each param leaf, per § 9.1.1 closure capture). This
+      // handles the closure case: substitution of the inner fn's
+      // params doesn't touch outer-fn-tagged params, so the next step
+      // must walk the outer fn's callers. Falls back to callerEncFn
+      // for legacy untagged params (no `fn` field).
+      if (_specAvHasParamLeaf(substituted)) {
+        var nextFnNodes = _specCollectParamFnNodes(substituted);
+        if (nextFnNodes.size > 0) {
+          var nfnIter = nextFnNodes.values();
+          for (var nfnStep = nfnIter.next(); !nfnStep.done; nfnStep = nfnIter.next()) {
+            var nextFnNode = nfnStep.value;
+            var nextFnPath = _specPathOfFunc(nextFnNode, ref);
+            if (nextFnPath) worklist.push({ funcPath: nextFnPath, av: substituted });
+          }
+        } else if (callerEncFn && _t.isFunction(callerEncFn.node)) {
+          worklist.push({ funcPath: callerEncFn, av: substituted });
+        }
       }
     }
   }
