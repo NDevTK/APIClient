@@ -518,7 +518,16 @@ function _buildFetchSite(url, method, headers, type, params, opts) {
   // `{name}` placeholders for unresolved expressions and we'd
   // misattribute the placeholder as a real value.
   var extracted = params && params.slice ? params.slice() : (params ? params.slice() : []);
-  if (opts && opts.urlIsLiteral && typeof url === "string" && url.length > 0 && url.indexOf("?") >= 0) {
+  // Query-string param extraction: lift `?k=v` pairs into AST-observed
+  // params. Previously gated on `opts.urlIsLiteral` (pure StringLiteral
+  // source) to avoid lifting placeholder text from template URLs. But
+  // when spec eval fully resolves a template literal (no `{name}`
+  // placeholder remains in the output), the resulting URL string is as
+  // authoritative as a pure literal — extract from it. The placeholder
+  // check is the SOUND criterion; "was the source a StringLiteral" is
+  // too conservative and misses real values from resolved templates.
+  if (typeof url === "string" && url.length > 0 && url.indexOf("?") >= 0 &&
+      url.indexOf("{") < 0) {
     try {
       var parsed = url.match(/^[a-z][a-z0-9+.-]*:/i) ? new URL(url) : new URL(url, "https://_ast_placeholder/");
       if (parsed && parsed.searchParams && typeof parsed.searchParams.entries === "function") {
@@ -598,8 +607,11 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _specSliceFns = new WeakSet();
   _specSliceComputedDone = new WeakSet();
   _specAnalyzeInProgress = new WeakSet();
+  _specPendingAnalyses = [];
+  _specPendingAnalysesSeen = new WeakSet();
   _specCallGraphCallersOf = null;
   _specCallGraphCalleesOf = null;
+  _specEntryPathsByProgram = new WeakMap();
   _specBindingInitAvCache = new WeakMap();
   _specOuterImportsListCache = new WeakMap();
   _specCallSitesByFn = new WeakMap();
@@ -722,9 +734,6 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
     CallExpression: function(path) {
       _processIIFE(path);
       _trackCallForCallGraph(path);
-    },
-    MemberExpression: function(path) {
-      _trackMemberPropAccess(path);
     },
     AssignmentExpression: function(path) {
       _trackGlobalAssignment(path);
@@ -850,8 +859,14 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
       }
     },
     CallExpression: function(path) {
-      _collectIncludesConstraints(path);
-      _collectIterationConstraints(path);
+      // Constraint collection feeds AV narrowing (scope-local), only used
+      // by sink dispatch inside slice functions. Non-slice fns never run
+      // sink dispatch (gated below in _processSecurity*) so their
+      // constraints are dead weight — gate the collection too.
+      if (_isPathInSlice(path)) {
+        _collectIncludesConstraints(path);
+        _collectIterationConstraints(path);
+      }
       _processIIFE(path);
       _processNetworkSink(path, result);
       _processExportMethodCall(path, result);
@@ -1826,6 +1841,12 @@ function _specGlobalThisAv() {
     getOwnPropertyDescriptor: { kind: "builtin-method", id: "Reflect.getOwnPropertyDescriptor" },
     isExtensible: { kind: "builtin-method", id: "Reflect.isExtensible" },
     preventExtensions: { kind: "builtin-method", id: "Reflect.preventExtensions" },
+    // ECMA § 28.1.1 Reflect.apply(target, thisArg, args) — alternative
+    // dispatch for Function.prototype.apply. Same value-flow semantics.
+    apply: { kind: "builtin-method", id: "Reflect.apply" },
+    // ECMA § 28.1.2 Reflect.construct(target, args, newTarget) — `new`
+    // equivalent. Not yet dispatched; preserve identity for slice + AV.
+    construct: { kind: "builtin-method", id: "Reflect.construct" },
   };
   // Object namespace per § 20.1.2 — statics.
   var objectProps = {
@@ -2257,6 +2278,24 @@ function _specRangePrototypeAv() {
   return _SPEC_RANGE_PROTO_AV;
 }
 
+// Function.prototype per ECMA § 20.2.3 — methods on every callable.
+// bind / call / apply are the partial-application + this-rebinding
+// operations. Used by axios interceptors, jQuery deferred dispatch,
+// redux thunks. Receiver-type gate: only function-ref AVs route to
+// Function.prototype.* via prototype-chain dispatch.
+var _SPEC_FUNCTION_PROTO_AV = null;
+function _specFunctionPrototypeAv() {
+  if (!_SPEC_FUNCTION_PROTO_AV) {
+    var props = {};
+    var fnMethodNames = ["bind", "call", "apply", "toString"];
+    for (var fmi = 0; fmi < fnMethodNames.length; fmi++) {
+      props[fnMethodNames[fmi]] = { kind: "builtin-method", id: "Function.prototype." + fnMethodNames[fmi] };
+    }
+    _SPEC_FUNCTION_PROTO_AV = { kind: "obj-lit", props: props };
+  }
+  return _SPEC_FUNCTION_PROTO_AV;
+}
+
 // Object.prototype per ECMA § 20.1.3 — methods inherited by every object.
 // Used as the [[Prototype]] for obj-lit AVs, and indirectly for any AV
 // kind whose own prototype's parent chain reaches Object.prototype.
@@ -2399,6 +2438,16 @@ function _specGetPrototypeOfAv(av) {
   if (av.kind === "weakset-instance") return _specWeakSetPrototypeAv();
   if (av.kind === "regex-instance") return _specRegExpPrototypeAv();
   if (av.kind === "range-instance") return _specRangePrototypeAv();
+  // ECMA § 20.2.3 Function.prototype — function-ref AVs (user functions
+  // resolved to their funcNode) and builtin-method / builtin-ctor /
+  // callable-namespace / bound-function AVs (built-in + bound callables)
+  // all inherit Function.prototype. Routes .bind / .call / .apply through
+  // the spec-eval dispatch.
+  if (av.kind === "function-ref" || av.kind === "builtin-method" ||
+      av.kind === "builtin-ctor" || av.kind === "callable-namespace" ||
+      av.kind === "bound-function") {
+    return _specFunctionPrototypeAv();
+  }
   // ECMA § 20.1.3 Object.prototype — implicit prototype for every obj-lit
   // (and inherited up the prototype chain by string/array/etc.). Provides
   // hasOwnProperty / toString / valueOf / isPrototypeOf etc. dispatch.
@@ -3452,6 +3501,102 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     }
     return coerceOr;
   }
+  // ECMA § 20.2.3.3 Function.prototype.call (thisArg, ...args)
+  // ECMA § 20.2.3.1 Function.prototype.apply (thisArg, argArray)
+  // Both invoke the receiver function with explicit thisArg and args.
+  // Iterative unwrap: if receiver is itself .call/.apply, the dispatch
+  // peels one layer at a time. After unwrap, function-ref delegates to
+  // its return memo with caller-arg substitution per ECMA § 10.2.10.
+  // builtin-method receiver routes through this same dispatch table on
+  // a later iteration without self-recursion (the loop's next pass
+  // sees the new methodId).
+  if (methodId === "Function.prototype.call" ||
+      methodId === "Function.prototype.apply") {
+    var fcMid = methodId, fcRecv = recvAv, fcArgs = argAvs;
+    var fcVisited = new Set(); // cycle break on identical (method, recv) pair
+    while (true) {
+      if (!fcRecv) return { kind: "top" };
+      var fcKey = fcMid + "|";
+      if (fcVisited.has(fcRecv) && fcVisited.has(fcKey)) return { kind: "top" };
+      fcVisited.add(fcRecv); fcVisited.add(fcKey);
+      var fnCallArgs = [];
+      if (fcMid === "Function.prototype.call") {
+        for (var fcai = 1; fcai < fcArgs.length; fcai++) fnCallArgs.push(fcArgs[fcai]);
+      } else {
+        var applyArr = fcArgs[1];
+        if (!applyArr || applyArr.kind !== "array-lit" || !applyArr.elements) return { kind: "top" };
+        for (var fcai2 = 0; fcai2 < applyArr.elements.length; fcai2++) fnCallArgs.push(applyArr.elements[fcai2]);
+      }
+      // function-ref recv — read return memo with arg substitution.
+      if (fcRecv.kind === "function-ref" && fcRecv.funcNode) {
+        var fcRetMemo = _specReturnValueMemo.get(fcRecv.funcNode);
+        if (fcRetMemo) return _specInstantiateAv(fcRetMemo, fnCallArgs, undefined, fcRecv.funcNode);
+        return { kind: "top" };
+      }
+      // builtin-method recv that's itself .call/.apply — peel and loop.
+      if (fcRecv.kind === "builtin-method" &&
+          (fcRecv.id === "Function.prototype.call" || fcRecv.id === "Function.prototype.apply")) {
+        fcMid = fcRecv.id;
+        fcRecv = fnCallArgs[0] || { kind: "top" };
+        fcArgs = fnCallArgs;
+        continue;
+      }
+      // builtin-method recv (Array.prototype.push.call(arr, x) etc.) —
+      // the dispatch table for that method is THIS function's body. To
+      // dispatch without violating the recursion ban, callers should
+      // route through CallExpression's own dispatch (which handles all
+      // builtin-method ids uniformly). Returning the underlying
+      // builtin-method AV as a `call` AV preserves provenance so
+      // taint walkers and downstream consumers can pick up the chain
+      // without losing structural information.
+      if (fcRecv.kind === "builtin-method") {
+        return { kind: "call", callee: fcRecv, args: fnCallArgs };
+      }
+      return { kind: "top" };
+    }
+  }
+
+  // ECMA § 28.1.1 Reflect.apply(target, thisArg, argumentsList) —
+  // equivalent to Function.prototype.apply but via the Reflect API.
+  // argAvs: [target, thisArg, argsArray]. We treat it as a direct
+  // function invocation on target with the array's elements as args.
+  if (methodId === "Reflect.apply") {
+    if (argAvs.length < 1) return { kind: "top" };
+    var raTarget = argAvs[0];
+    var raArgs = [];
+    if (argAvs.length >= 3 && argAvs[2] && argAvs[2].kind === "array-lit" && argAvs[2].elements) {
+      for (var raei = 0; raei < argAvs[2].elements.length; raei++) raArgs.push(argAvs[2].elements[raei]);
+    }
+    if (raTarget && raTarget.kind === "function-ref" && raTarget.funcNode) {
+      var raRetMemo = _specReturnValueMemo.get(raTarget.funcNode);
+      if (raRetMemo) return _specInstantiateAv(raRetMemo, raArgs, undefined, raTarget.funcNode);
+      return { kind: "top" };
+    }
+    if (raTarget && raTarget.kind === "builtin-method") {
+      return { kind: "call", callee: raTarget, args: raArgs };
+    }
+    return { kind: "top" };
+  }
+
+  // ECMA § 20.2.3.2 Function.prototype.bind (thisArg, ...preArgs)
+  // Returns a new function that, when called with args, invokes the
+  // target with [...preArgs, ...args] and the bound thisArg. Modeled
+  // as a `bound-function` AV so downstream CallExpression dispatch can
+  // unfold the wrapper. Identity-preserving: each bind call produces a
+  // distinct bound-function AV, structurally compared via _specEqualAv
+  // for fixpoint convergence.
+  if (methodId === "Function.prototype.bind") {
+    if (!recvAv) return { kind: "top" };
+    var bindPreArgs = [];
+    for (var bpi = 1; bpi < argAvs.length; bpi++) bindPreArgs.push(argAvs[bpi]);
+    return {
+      kind: "bound-function",
+      target: recvAv,
+      thisArg: argAvs[0] || { kind: "top" },
+      preArgs: bindPreArgs,
+    };
+  }
+
   // § 23.1.3.20 Array.prototype.push: appends arguments to `this`,
   // returns the new length. Models state mutation when receiver is a
   // tracked Identifier and resolves to array-lit.
@@ -5163,11 +5308,33 @@ var _specSliceComputedDone = new WeakSet();
 // Explicit cycle guard for demand-driven mutual recursion — see the
 // guard at the top of _specAnalyzePropertyFlow for the rationale.
 var _specAnalyzeInProgress = new WeakSet();
+// Trampoline state: callee functions discovered during a property-flow
+// analysis whose memos weren't yet populated. Instead of recursing into
+// _specAnalyzePropertyFlow from within _specApplyStatement (which would
+// form a static call cycle and violate the recursion ban), we ENQUEUE
+// the callee here and let the fixpoint driver pop the queue after the
+// current analysis returns. This converts the eager pass-2 ("analyse
+// every slice fn upfront") into a demand-driven walk seeded by the
+// entry-point functions: only callees actually reachable through some
+// caller's analysis get analysed.
+var _specPendingAnalyses = [];
+var _specPendingAnalysesSeen = new WeakSet();
+function _specEnqueueAnalysis(fnNode, fnPath) {
+  if (!fnNode || !fnPath) return;
+  if (_specPendingAnalysesSeen.has(fnNode)) return;
+  if (_specEffectsMemo.has(fnNode)) return;
+  if (_specAnalyzeInProgress.has(fnNode)) return;
+  _specPendingAnalysesSeen.add(fnNode);
+  _specPendingAnalyses.push(fnPath);
+}
 // Reverse + forward call graphs built during slice computation.
 // Persisted so _specAnalyzeProgramWithFixpoint's pass-2/worklist can
 // reuse them without re-traversing.
 var _specCallGraphCallersOf = null;
 var _specCallGraphCalleesOf = null;
+// Per-program cached entry paths — used by the trampoline driver to
+// re-seed on repeat invocation without re-walking the program.
+var _specEntryPathsByProgram = new WeakMap();
 
 // Check whether a path's enclosing function (or Program for top-level)
 // is in the slice computed by _specBuildSlice. Used by main-pass sink
@@ -6026,13 +6193,45 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         if (!keyName) continue;
         var bindIdent = op.value;
         // Default in destructured: `{a = 1}` parses as AssignmentPattern.
-        if (bindIdent && bindIdent.type === "AssignmentPattern") bindIdent = bindIdent.left;
+        // Per § 14.3.3 the bound value is the property when present,
+        // otherwise the default expression. Abstract over-approx:
+        // _specSetUnionAv of (member-access AV, default AV).
+        var defaultAv = null;
+        if (bindIdent && bindIdent.type === "AssignmentPattern") {
+          // Per ECMA § 14.3.3: when the property is undefined the
+          // default expression is evaluated. Project the default through
+          // _specPathValMemo (populated by the prepass for literals
+          // and globals); for un-memoised expressions we read the AV
+          // from the value memo, which spec eval has populated for any
+          // expression reachable through the function-body analysis.
+          var dft = bindIdent.right;
+          if (dft) {
+            defaultAv = _specPathValMemo.get(dft) || null;
+            // Direct literals don't always have their AV pre-memoised
+            // when binding fires (binding happens before the body's
+            // expressions are walked). Read literal value directly per
+            // ECMA § 13.2.3.
+            if (!defaultAv) {
+              if (dft.type === "StringLiteral" || dft.type === "NumericLiteral" || dft.type === "BooleanLiteral") {
+                defaultAv = { kind: "const", value: dft.value };
+              } else if (dft.type === "NullLiteral") {
+                defaultAv = { kind: "const", value: null };
+              } else if (dft.type === "ObjectExpression" && dft.properties.length === 0) {
+                defaultAv = { kind: "obj-lit", props: Object.create(null) };
+              } else if (dft.type === "ArrayExpression" && dft.elements.length === 0) {
+                defaultAv = { kind: "array-lit", elements: [] };
+              }
+            }
+          }
+          bindIdent = bindIdent.left;
+        }
         if (bindIdent && bindIdent.type === "Identifier") {
-          state[bindIdent.name] = {
+          var memberAv = {
             kind: "member",
             obj: { kind: "param", idx: i, fn: funcNode },
             key: { kind: "const", value: keyName }
           };
+          state[bindIdent.name] = defaultAv ? _specSetUnionAv(memberAv, defaultAv) : memberAv;
         }
       }
     } else if (p.type === "ArrayPattern") {
@@ -6357,6 +6556,52 @@ function _specEqualAv(a, b) {
       case "regex-instance":
         if (x.pattern !== y.pattern || x.flags !== y.flags) return false;
         break;
+      // formdata-instance: structural equality on entries (WHATWG XHR § 5.2
+      // FormData internal slots). Required so worklist sees post-fixpoint
+      // FormData accumulator state as stable.
+      case "formdata-instance": {
+        var xfe = x.entries || []; var yfe = y.entries || [];
+        if (xfe.length !== yfe.length) return false;
+        for (var fei = 0; fei < xfe.length; fei++) {
+          pairs.push([xfe[fei].name, yfe[fei].name]);
+          pairs.push([xfe[fei].value, yfe[fei].value]);
+        }
+        break;
+      }
+      // range-instance: a marker AV per WHATWG DOM § 5.5; no internal
+      // state distinguishes two Ranges for the purposes of dataflow
+      // (createContextualFragment sink dispatch is receiver-type only).
+      case "range-instance":
+        break;
+      // promise-instance: when present, structural equality on resolved
+      // value (recursive). Per ECMA § 27.2 a Promise's identity is its
+      // [[PromiseState]] + [[PromiseResult]]; we only model the result.
+      case "promise-instance":
+        if (!!x.resolved !== !!y.resolved) return false;
+        if (x.resolved && y.resolved) pairs.push([x.resolved, y.resolved]);
+        break;
+      // call: lazy {callee, args} AV produced when a builtin-method
+      // call's exact return is opaque but its callee identity + args
+      // are still useful for sink dispatch. Two such AVs are equal
+      // when callee + args match per ECMA § 13.3.6 EvaluateCall.
+      case "call": {
+        if (!x.args || !y.args || x.args.length !== y.args.length) return false;
+        pairs.push([x.callee, y.callee]);
+        for (var caei = 0; caei < x.args.length; caei++) {
+          pairs.push([x.args[caei], y.args[caei]]);
+        }
+        break;
+      }
+      // bound-function: ECMA § 10.4.1 Bound Function Exotic Objects.
+      // Two are equal when target + thisArg + preArgs all match.
+      case "bound-function": {
+        pairs.push([x.target, y.target]);
+        pairs.push([x.thisArg, y.thisArg]);
+        var xpa = x.preArgs || [], ypa = y.preArgs || [];
+        if (xpa.length !== ypa.length) return false;
+        for (var bpaei = 0; bpaei < xpa.length; bpaei++) pairs.push([xpa[bpaei], ypa[bpaei]]);
+        break;
+      }
       default: return false;
     }
   }
@@ -8401,6 +8646,8 @@ function _specBuildSlice(programPath) {
     // Re-derive fnPaths from the index. Caller doesn't depend on the
     // exact array contents for correctness — just for the fixpoint
     // driver's iteration order (top-down via Babel traverse order).
+    // entryPaths is preserved on the program node itself so the
+    // trampoline driver can re-seed from it on repeat invocation.
     var existing = [programPath];
     programPath.traverse({
       "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
@@ -8411,7 +8658,7 @@ function _specBuildSlice(programPath) {
     for (var ei = 0; ei < existing.length; ei++) {
       if (_specSliceFns.has(existing[ei].node)) existingSlice.push(existing[ei]);
     }
-    return { fnPaths: existing, slicePaths: existingSlice };
+    return { fnPaths: existing, slicePaths: existingSlice, entryPaths: _specEntryPathsByProgram.get(programPath.node) || [programPath] };
   }
   _specSliceComputedDone.add(programPath.node);
   var fnPaths = [programPath];
@@ -8509,6 +8756,27 @@ function _specBuildSlice(programPath) {
                        clsB2.path.node.init && _t.isClassExpression(clsB2.path.node.init)) {
               classDeclNode = clsB2.path.node.init;
             }
+          }
+        } else if (_t.isThisExpression(recv)) {
+          // `this.method(...)` from inside a class method body — the
+          // receiver is the SAME class instance. Walk up to the
+          // enclosing class method, then to its ClassBody. Per ECMA
+          // § 9.2.1 OrdinaryCallBindThis, `this` inside a non-arrow
+          // class method is the instance.
+          var thisEnc = p.getFunctionParent && p.getFunctionParent();
+          while (thisEnc && thisEnc.node) {
+            if (_t.isClassMethod(thisEnc.node) || _t.isClassPrivateMethod(thisEnc.node)) break;
+            // Arrow inside class method captures lexical `this` — walk
+            // up to find the class method ancestor.
+            if (_t.isArrowFunctionExpression(thisEnc.node)) {
+              thisEnc = thisEnc.parentPath && thisEnc.parentPath.getFunctionParent &&
+                thisEnc.parentPath.getFunctionParent();
+              continue;
+            }
+            break;
+          }
+          if (thisEnc && thisEnc.parentPath && _t.isClassBody(thisEnc.parent)) {
+            classDeclNode = { body: thisEnc.parent };
           }
         }
         if (classDeclNode && classDeclNode.body && _t.isClassBody(classDeclNode.body)) {
@@ -8630,10 +8898,17 @@ function _specBuildSlice(programPath) {
   _specCallGraphCallersOf = _cgCallersOf;
   _specCallGraphCalleesOf = _cgCalleesOf;
   var slicePaths = [];
+  var entryPaths = [];
   for (var spi = 0; spi < fnPaths.length; spi++) {
     if (slice.has(fnPaths[spi].node)) slicePaths.push(fnPaths[spi]);
+    if (entryFns.has(fnPaths[spi].node)) entryPaths.push(fnPaths[spi]);
   }
-  return { fnPaths: fnPaths, slicePaths: slicePaths };
+  // The Program itself is implicitly an entry point — top-level
+  // statements drive module bootstrapping (var declarations, IIFE
+  // invocations). Always seed the trampoline from it too.
+  entryPaths.push(programPath);
+  _specEntryPathsByProgram.set(programPath.node, entryPaths);
+  return { fnPaths: fnPaths, slicePaths: slicePaths, entryPaths: entryPaths };
 }
 
 // Program-level fixpoint driver: runs the bottom-up pass-2 + worklist
@@ -8677,45 +8952,82 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
     if (prevSnap.returnValue && currSnap.returnValue && !_specEqualAv(prevSnap.returnValue, currSnap.returnValue)) return true;
     return false;
   }
-  // Single bottom-up pass over the slice: inner functions first so outer
-  // functions read populated memos.
+  // Trampoline-driven fixpoint: instead of analysing every slice fn
+  // upfront (the previous "pass-2"), seed the queue from entry-point
+  // functions (those directly containing sinks/sources + Program for
+  // top-level state). _specApplyStatement enqueues callees it
+  // encounters whose memo isn't yet populated. The driver drains the
+  // queue and then loops on signature changes (worklist convergence).
+  // Functions in the slice that are never reached by any seed's
+  // transitive call-effect chain are NEVER analysed — saves work on
+  // slice members that are reachable in the call graph but whose AVs
+  // aren't actually consumed by sink dispatch.
+  var entryPaths = sliceResult.entryPaths || [];
+  var nodeToPath = new Map();
+  for (var npi = 0; npi < slicePaths.length; npi++) nodeToPath.set(slicePaths[npi].node, slicePaths[npi]);
+  // The Program's own funcNode → funcPath mapping isn't in slicePaths
+  // (slicePaths is sorted from fnPaths which excludes the Program), but
+  // entryPaths includes the Program. Index it explicitly.
+  nodeToPath.set(programPath.node, programPath);
   var pendingNodes = new Set();
   var _t_pass2_start = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-  for (var ip2nd = slicePaths.length - 1; ip2nd >= 0; ip2nd--) {
-    _specAnalyzePropertyFlow(slicePaths[ip2nd], true);
-    sigByFn.set(slicePaths[ip2nd].node, _ssSnapshot(slicePaths[ip2nd].node));
+  // Seed the trampoline queue with entry-point functions.
+  for (var epi = 0; epi < entryPaths.length; epi++) {
+    _specEnqueueAnalysis(entryPaths[epi].node, entryPaths[epi]);
   }
-  var _t_worklist_start = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-  // Worklist seeded from slice. Signature-flap propagation only pulls
-  // callers into the worklist if they are themselves in the slice
-  // (callers outside the slice have no readers we care about).
-  for (var ip3 = 0; ip3 < slicePaths.length; ip3++) {
-    if (callersOf.has(slicePaths[ip3].node)) {
-      callersOf.get(slicePaths[ip3].node).forEach(function(c) {
-        if (_specSliceFns.has(c)) pendingNodes.add(c);
+  var _worklistRounds = 0;
+  var _worklistAnalyses = 0;
+  // Drain the trampoline queue. Each analysis may enqueue more callees
+  // (via _specApplyStatement). The loop continues until no more callees
+  // are discovered. Mutual recursion is bounded by _specAnalyzeInProgress.
+  while (_specPendingAnalyses.length > 0) {
+    var fp = _specPendingAnalyses.shift();
+    if (!fp || !fp.node) continue;
+    _specAnalyzePropertyFlow(fp, true);
+    _worklistAnalyses++;
+    sigByFn.set(fp.node, _ssSnapshot(fp.node));
+    // Any caller of this fn that's already analysed needs re-checking —
+    // its body's call-site processing produced a side-effect summary
+    // based on this fn's PREVIOUS (empty) memo. Now that the memo is
+    // populated, re-analyse the caller.
+    if (callersOf.has(fp.node)) {
+      callersOf.get(fp.node).forEach(function(c) {
+        if (_specSliceFns.has(c) && sigByFn.has(c)) pendingNodes.add(c);
       });
     }
   }
-  var nodeToPath = new Map();
-  for (var npi = 0; npi < slicePaths.length; npi++) nodeToPath.set(slicePaths[npi].node, slicePaths[npi]);
-  var _worklistRounds = 0;
-  var _worklistAnalyses = 0;
+  var _t_worklist_start = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  // Worklist convergence: re-analyse callers whose callee signature
+  // changed. Pulls in further callers if their own signature changes.
   while (pendingNodes.size > 0) {
     var batch = Array.from(pendingNodes);
     pendingNodes.clear();
     _worklistRounds++;
     for (var bi = 0; bi < batch.length; bi++) {
       var node = batch[bi];
-      var fp = nodeToPath.get(node);
-      if (!fp) continue;
-      _specAnalyzePropertyFlow(fp, true);
+      var fp2 = nodeToPath.get(node);
+      if (!fp2) continue;
+      _specAnalyzePropertyFlow(fp2, true);
       _worklistAnalyses++;
+      // Drain pendings that this re-analysis enqueued.
+      while (_specPendingAnalyses.length > 0) {
+        var ppfp = _specPendingAnalyses.shift();
+        if (!ppfp || !ppfp.node) continue;
+        _specAnalyzePropertyFlow(ppfp, true);
+        _worklistAnalyses++;
+        sigByFn.set(ppfp.node, _ssSnapshot(ppfp.node));
+        if (callersOf.has(ppfp.node)) {
+          callersOf.get(ppfp.node).forEach(function(c) {
+            if (_specSliceFns.has(c) && sigByFn.has(c)) pendingNodes.add(c);
+          });
+        }
+      }
       var newSnap = _ssSnapshot(node);
       if (_ssChanged(sigByFn.get(node), newSnap)) {
         sigByFn.set(node, newSnap);
         if (callersOf.has(node)) {
           callersOf.get(node).forEach(function(c) {
-            if (_specSliceFns.has(c)) pendingNodes.add(c);
+            if (_specSliceFns.has(c) && sigByFn.has(c)) pendingNodes.add(c);
           });
         }
       }
@@ -8726,6 +9038,7 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
     globalThis._lastFixpointTimings = {
       fnCount: fnPaths.length,
       sliceCount: slicePaths.length,
+      analysedCount: sigByFn.size,
       pass1Ms: 0,
       pass2Ms: Math.round(_t_worklist_start - _t_pass2_start),
       worklistMs: Math.round(_t_worklist_end - _t_worklist_start),
@@ -8743,11 +9056,65 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
     "CallExpression|NewExpression": function(p) {
       var calleeNode = p.node.callee;
       var calleeAv = _specPathValMemo.get(calleeNode);
-      if (!calleeAv || calleeAv.kind !== "function-ref" || !calleeAv.funcNode) return;
-      var fn = calleeAv.funcNode;
-      if (!_specCallSitesByFn.has(fn)) _specCallSitesByFn.set(fn, []);
-      var existing = _specCallSitesByFn.get(fn);
-      if (existing.indexOf(p) < 0) existing.push(p);
+      if (!calleeAv) return;
+      // ECMA § 13.3.6 — function-ref callee: direct index.
+      if (calleeAv.kind === "function-ref" && calleeAv.funcNode) {
+        var fn = calleeAv.funcNode;
+        if (!_specCallSitesByFn.has(fn)) _specCallSitesByFn.set(fn, []);
+        var existing = _specCallSitesByFn.get(fn);
+        if (existing.indexOf(p) < 0) existing.push(p);
+        return;
+      }
+      // ECMA § 10.4.1.1 — bound-function callee: unfold to the
+      // underlying target so caller-arg substitution finds this call
+      // site when walking the target's callers. Iterative unwrap
+      // chained binds, cycle-safe via visited Set.
+      if (calleeAv.kind === "bound-function") {
+        var bft = calleeAv;
+        var bfSeen2 = new Set();
+        while (bft && bft.kind === "bound-function") {
+          if (bfSeen2.has(bft)) return;
+          bfSeen2.add(bft);
+          bft = bft.target;
+        }
+        if (bft && bft.kind === "function-ref" && bft.funcNode) {
+          var bfFn = bft.funcNode;
+          if (!_specCallSitesByFn.has(bfFn)) _specCallSitesByFn.set(bfFn, []);
+          var bfExisting = _specCallSitesByFn.get(bfFn);
+          if (bfExisting.indexOf(p) < 0) bfExisting.push(p);
+        }
+        return;
+      }
+      // ECMA § 20.2.3.3 / .1 — `fn.call(thisArg, ...args)` and
+      // `fn.apply(thisArg, argsArr)`: the underlying `fn` is invoked
+      // with explicit args. Index the call site against fn so
+      // caller-arg substitution finds these invocations when walking
+      // fn's callers. The receiver of `.call/.apply` is the MemberExpr's
+      // object, whose AV is the function being invoked.
+      if (calleeAv.kind === "builtin-method" &&
+          (calleeAv.id === "Function.prototype.call" || calleeAv.id === "Function.prototype.apply") &&
+          _t.isMemberExpression(calleeNode) && calleeNode.object) {
+        var caRecvAv = _specPathValMemo.get(calleeNode.object);
+        if (caRecvAv && caRecvAv.kind === "function-ref" && caRecvAv.funcNode) {
+          var caFn = caRecvAv.funcNode;
+          if (!_specCallSitesByFn.has(caFn)) _specCallSitesByFn.set(caFn, []);
+          var caExisting = _specCallSitesByFn.get(caFn);
+          if (caExisting.indexOf(p) < 0) caExisting.push(p);
+        }
+      }
+      // ECMA § 28.1.1 Reflect.apply(target, thisArg, args) — same
+      // indexing as Function.prototype.apply, but the target is the
+      // FIRST argument (not the receiver).
+      if (calleeAv.kind === "builtin-method" && calleeAv.id === "Reflect.apply" &&
+          p.node.arguments && p.node.arguments.length >= 1) {
+        var raTargetAv = _specPathValMemo.get(p.node.arguments[0]);
+        if (raTargetAv && raTargetAv.kind === "function-ref" && raTargetAv.funcNode) {
+          var raFn = raTargetAv.funcNode;
+          if (!_specCallSitesByFn.has(raFn)) _specCallSitesByFn.set(raFn, []);
+          var raExisting = _specCallSitesByFn.get(raFn);
+          if (raExisting.indexOf(p) < 0) raExisting.push(p);
+        }
+      }
     }
   });
 }
@@ -9931,6 +10298,44 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "top" };
   }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
+    // ECMA § 10.4.1.1 [[Call]] for Bound Function Exotic Objects:
+    // when the callee resolves to a bound-function AV, unfold by
+    // calling target with [...preArgs, ...callerArgs] and the bound
+    // thisArg. Iterative unfold for chained binds (`fn.bind(x).bind(y)`).
+    // Cycle-safe via visited Set on the AV reference.
+    var bfCallee = vals.get(n.callee);
+    if (bfCallee && bfCallee.kind === "bound-function") {
+      var bfTarget = bfCallee;
+      var bfPreArgs = [];
+      var bfSeen = new Set();
+      while (bfTarget && bfTarget.kind === "bound-function") {
+        if (bfSeen.has(bfTarget)) return { kind: "top" };
+        bfSeen.add(bfTarget);
+        // ECMA § 10.4.1.1 step 4: F.[[BoundArguments]] is prepended.
+        // We collect from inner-most to outer-most so the final order
+        // is [outer.preArgs, ..., inner.preArgs, ..., callerArgs].
+        bfPreArgs = (bfTarget.preArgs || []).concat(bfPreArgs);
+        bfTarget = bfTarget.target;
+      }
+      var bfCallerArgs = [];
+      for (var bfai = 0; bfai < n.arguments.length; bfai++) {
+        bfCallerArgs.push(vals.get(n.arguments[bfai]) || { kind: "top" });
+      }
+      var bfFinalArgs = bfPreArgs.concat(bfCallerArgs);
+      // Dispatch on the unwrapped target.
+      if (bfTarget && bfTarget.kind === "function-ref" && bfTarget.funcNode) {
+        var bfRetMemo = _specReturnValueMemo.get(bfTarget.funcNode);
+        if (bfRetMemo) return _specInstantiateAv(bfRetMemo, bfFinalArgs, undefined, bfTarget.funcNode);
+        return { kind: "top" };
+      }
+      if (bfTarget && bfTarget.kind === "builtin-method") {
+        // Defer to a `call` AV — downstream consumers (taint walker,
+        // sink dispatch) handle the builtin-method+args composition.
+        return { kind: "call", callee: bfTarget, args: bfFinalArgs };
+      }
+      return { kind: "top" };
+    }
+
     // ECMA § 13.3.6 Call: when callee resolves through prototype chain
     // OR through globalThis identifier resolution to a built-in method
     // AV, dispatch through the central _specApplyBuiltinMethod table.
@@ -10019,6 +10424,16 @@ function _specEvalLeaf(path, state, vals, effects) {
       // the case where the callee was an obj-lit member access.
       if (bmCalleeAv.kind === "function-ref" && bmCalleeAv.funcNode) {
         var frFn = bmCalleeAv.funcNode;
+        // Trampoline: when callee's return memo is missing, enqueue
+        // the callee for analysis by the outer driver. _specEvalLeaf
+        // can't recurse into _specAnalyzePropertyFlow (recursion ban);
+        // the queue drain ensures the callee is analyzed before the
+        // worklist re-runs this caller. Use _specPathOfFunc to find
+        // the funcPath; skip enqueue if path unavailable.
+        if (!_specReturnValueMemo.has(frFn)) {
+          var frFnPath = _specFuncPathByNode.get(frFn);
+          if (frFnPath) _specEnqueueAnalysis(frFn, frFnPath);
+        }
         var frRet = _specReturnValueMemo.get(frFn);
         if (frRet) {
           var frArgAvs = [];
@@ -10368,21 +10783,26 @@ function _specEvalLeaf(path, state, vals, effects) {
     // ECMA § 9.1.1 closure write-back: when the callee was previously
     // analyzed (memo exists) and its body mutated outer-scope captures,
     // replay the mutations on caller's state with caller-arg AVs
-    // substituted. The memo is populated by _specAnalyzePropertyFlow
-    // when the callee's body is analyzed; the caller's analysis driver
-    // is responsible for analysing callees before their call sites
-    // (no on-demand call here, to keep the static call graph acyclic
-    // per CLAUDE.md recursion ban).
-    if (calleeFnPath && calleeFnPath.node && state && _specSideEffectMemo.has(calleeFnPath.node)) {
-      var ssApply = _specSideEffectMemo.get(calleeFnPath.node);
-      var ssCallerArgs = [];
-      for (var ssai = 0; ssai < n.arguments.length; ssai++) {
-        ssCallerArgs.push(vals.get(n.arguments[ssai]) || { kind: "top" });
-      }
-      for (var ssN in ssApply) {
-        if (!Object.prototype.hasOwnProperty.call(ssApply, ssN)) continue;
-        // Substitute Param(N) refs in the side-effect AV with caller's args.
-        state[ssN] = _specInstantiateAv(ssApply[ssN], ssCallerArgs);
+    // substituted. Trampoline: if memo is missing, enqueue the callee
+    // for analysis by the outer driver. _specApplyStatement cannot call
+    // _specAnalyzePropertyFlow directly (would form a static call cycle
+    // and violate the recursion ban) — the queue is drained by the
+    // fixpoint driver after this analysis returns; the caller is then
+    // re-analysed (worklist) once the callee's signature is available.
+    if (calleeFnPath && calleeFnPath.node && state) {
+      if (!_specSideEffectMemo.has(calleeFnPath.node)) {
+        _specEnqueueAnalysis(calleeFnPath.node, calleeFnPath);
+      } else {
+        var ssApply = _specSideEffectMemo.get(calleeFnPath.node);
+        var ssCallerArgs = [];
+        for (var ssai = 0; ssai < n.arguments.length; ssai++) {
+          ssCallerArgs.push(vals.get(n.arguments[ssai]) || { kind: "top" });
+        }
+        for (var ssN in ssApply) {
+          if (!Object.prototype.hasOwnProperty.call(ssApply, ssN)) continue;
+          // Substitute Param(N) refs in the side-effect AV with caller's args.
+          state[ssN] = _specInstantiateAv(ssApply[ssN], ssCallerArgs);
+        }
       }
     }
     // Single-statement fast path FIRST: when callee body is a single
@@ -12297,11 +12717,18 @@ function _extractFetchCall(path, result, type) {
     params.push(p);
   }
   for (var tp = 0; tp < urlTemplateParams.length; tp++) {
-    // Use position-aware classification per WHATWG URL § 4.4: a template
-    // hole after `?` is a query param, after `#` is a fragment.
+    // Use position-aware classification per WHATWG URL § 4.4. ONLY emit
+    // PATH-positioned template holes — their JS variable name IS the
+    // path-param convention (e.g. `/users/${userId}` → path-param "userId"
+    // per REST/OpenAPI). For QUERY-positioned holes, the JS variable
+    // name is shape-matching: real query keys come from the URL literal
+    // BEFORE the `=` (e.g. `?user_id=${jsVar}` has key "user_id", not
+    // "jsVar"). Query-key extraction is handled by _buildFetchSite's
+    // resolved-URL parse and by _resolveUrlStructuralShape's literal
+    // scan — both read the actual key from the URL string.
     var tpPos = _urlIdLocations.get(urlTemplateParams[tp]);
-    var tpLoc = (tpPos === "query" || tpPos === "fragment") ? tpPos : "path";
-    pushParam({ name: urlTemplateParams[tp], location: tpLoc, required: true });
+    if (tpPos === "query" || tpPos === "fragment") continue;
+    pushParam({ name: urlTemplateParams[tp], location: "path", required: true });
   }
   for (var bp = 0; bp < bodyParams.length; bp++) {
     pushParam(bodyParams[bp]);
@@ -12753,15 +13180,83 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
         _specAnalyzePropertyFlow(callerEncFn);
       }
       var callerArgAvs = [];
-      for (var ai = 0; ai < refParent.arguments.length; ai++) {
-        var argNode = refParent.arguments[ai];
-        var argAv = _specPathValMemo.get(argNode);
-        if (!argAv) {
-          try {
-            argAv = _specEvalExpression(ref.get("arguments." + ai), callerState, []);
-          } catch (_) { argAv = null; }
+      // ECMA § 10.4.1.1 [[Call]]: when the call site's callee resolves
+      // to a bound-function AV, the effective args are [...preArgs,
+      // ...arguments] in source order, with chained binds prepending
+      // outermost-first. Detect bound-function callee and prepend the
+      // accumulated preArgs.
+      var refCalleeAv = refParent.callee ? _specPathValMemo.get(refParent.callee) : null;
+      if (refCalleeAv && refCalleeAv.kind === "bound-function") {
+        var bfBound = refCalleeAv;
+        var bfBoundSeen = new Set();
+        var prependArgs = [];
+        while (bfBound && bfBound.kind === "bound-function") {
+          if (bfBoundSeen.has(bfBound)) break;
+          bfBoundSeen.add(bfBound);
+          prependArgs = (bfBound.preArgs || []).concat(prependArgs);
+          bfBound = bfBound.target;
         }
-        callerArgAvs.push(argAv || { kind: "top" });
+        for (var bpi2 = 0; bpi2 < prependArgs.length; bpi2++) callerArgAvs.push(prependArgs[bpi2] || { kind: "top" });
+      }
+      // ECMA § 20.2.3.3 Function.prototype.call: args[0] is thisArg,
+      // args[1..] are forwarded. Skip args[0].
+      // ECMA § 20.2.3.1 Function.prototype.apply: args[0] is thisArg,
+      // args[1] is an iterable; we accept array-lit and project its
+      // elements as the forwarded args.
+      var isCallApply = refCalleeAv && refCalleeAv.kind === "builtin-method" &&
+        (refCalleeAv.id === "Function.prototype.call" || refCalleeAv.id === "Function.prototype.apply");
+      var isReflectApply = refCalleeAv && refCalleeAv.kind === "builtin-method" &&
+        refCalleeAv.id === "Reflect.apply";
+      if (isCallApply) {
+        if (refCalleeAv.id === "Function.prototype.call") {
+          for (var caai = 1; caai < refParent.arguments.length; caai++) {
+            var caArgNode = refParent.arguments[caai];
+            var caArgAv = _specPathValMemo.get(caArgNode);
+            if (!caArgAv) {
+              try { caArgAv = _specEvalExpression(ref.get("arguments." + caai), callerState, []); } catch (_) { caArgAv = null; }
+            }
+            callerArgAvs.push(caArgAv || { kind: "top" });
+          }
+        } else {
+          // .apply: args[1] is the array.
+          if (refParent.arguments.length >= 2) {
+            var applyArrAv = _specPathValMemo.get(refParent.arguments[1]);
+            if (!applyArrAv) {
+              try { applyArrAv = _specEvalExpression(ref.get("arguments.1"), callerState, []); } catch (_) { applyArrAv = null; }
+            }
+            if (applyArrAv && applyArrAv.kind === "array-lit" && applyArrAv.elements) {
+              for (var aaei = 0; aaei < applyArrAv.elements.length; aaei++) {
+                callerArgAvs.push(applyArrAv.elements[aaei] || { kind: "top" });
+              }
+            }
+          }
+        }
+      } else if (isReflectApply) {
+        // ECMA § 28.1.1 Reflect.apply(target, thisArg, argumentsList).
+        // args[0] = target (skipped — already identified as recv),
+        // args[1] = thisArg (skipped), args[2] = forwarded args array.
+        if (refParent.arguments.length >= 3) {
+          var raCsArr = _specPathValMemo.get(refParent.arguments[2]);
+          if (!raCsArr) {
+            try { raCsArr = _specEvalExpression(ref.get("arguments.2"), callerState, []); } catch (_) { raCsArr = null; }
+          }
+          if (raCsArr && raCsArr.kind === "array-lit" && raCsArr.elements) {
+            for (var raei2 = 0; raei2 < raCsArr.elements.length; raei2++) {
+              callerArgAvs.push(raCsArr.elements[raei2] || { kind: "top" });
+            }
+          }
+        }
+      } else {
+        for (var ai = 0; ai < refParent.arguments.length; ai++) {
+          var argNode = refParent.arguments[ai];
+          var argAv = _specPathValMemo.get(argNode);
+          if (!argAv) {
+            try {
+              argAv = _specEvalExpression(ref.get("arguments." + ai), callerState, []);
+            } catch (_) { argAv = null; }
+          }
+          callerArgAvs.push(argAv || { kind: "top" });
+        }
       }
       // Pass the function being substituted as fnContext so only
       // params tagged with this funcNode get replaced. Constructor-
@@ -12824,6 +13319,28 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
                       else if (_t.isNumericLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: na3.value };
                       else if (_t.isBooleanLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: na3.value };
                       else if (_t.isNullLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: null };
+                    }
+                  }
+                  // ECMA § 9.2.1 OrdinaryCallBindThis: build the instance
+                  // AV for the class and substitute `this` references in
+                  // the AV so multi-level chains (`this.method(p)` →
+                  // `this.base + p`) resolve. Without this, `member(this,
+                  // "base")` stays abstract even after ctor-param sub.
+                  var ctorPathForThis = null;
+                  for (var cpti = 0; cpti < clsBodyForCtor.body.length; cpti++) {
+                    if (clsBodyForCtor.body[cpti] === cmR) {
+                      // Find the ClassBody path; ref.scope traversal will
+                      // give us a path to the class binding from which we
+                      // can derive the ctor path.
+                      var cbPath = _specPathOfFunc(cmR, ref);
+                      if (cbPath) ctorPathForThis = cbPath;
+                      break;
+                    }
+                  }
+                  if (ctorPathForThis) {
+                    var instanceAv = _specBuildThisInstanceAv(cmR, ctorPathForThis);
+                    if (instanceAv) {
+                      substituted = _specInstantiateAv(substituted, [], instanceAv, null);
                     }
                   }
                   substituted = _specInstantiateAv(substituted, ctorArgAvs, undefined, cmR);
@@ -17188,86 +17705,45 @@ function _extractBodyParams(rootNode, rootScope) {
         continue;
       }
     }
-    // Default: project obj-lit AV's source node when available.
+    // Default: project obj-lit AV via spec eval. When the AV's source
+    // node exists, use _extractObjectProperties for full literal-aware
+    // resolution. Otherwise (synthetic obj-lit from Object.assign /
+    // spread merge / etc.), walk the AV's props map directly — each
+    // prop's value is already an AV; lower via _avToJsonValue.
     var av = _specPathValMemo.get(node);
     var ol = _avResolveToObjLit(av);
-    if (ol && ol.node) {
-      var avParams = _extractObjectProperties(ol.node);
-      for (var ai = 0; ai < avParams.length; ai++) avParams[ai].location = "body";
-      if (avParams.length > 0) pushAccum(avParams);
+    if (ol) {
+      if (ol.node) {
+        var avParams = _extractObjectProperties(ol.node);
+        for (var ai = 0; ai < avParams.length; ai++) avParams[ai].location = "body";
+        if (avParams.length > 0) pushAccum(avParams);
+      } else if (ol.props) {
+        // Synthetic obj-lit AV (no source node) — Object.assign output,
+        // spread merge, etc. Build params from props directly.
+        var synthParams = [];
+        for (var olK in ol.props) {
+          if (!Object.prototype.hasOwnProperty.call(ol.props, olK)) continue;
+          var olV = ol.props[olK];
+          var synthP = { name: olK, required: true, location: "body" };
+          if (olV && olV.kind === "const") {
+            if (olV.value === null) synthP.type = "null";
+            else {
+              var olVt = typeof olV.value;
+              if (olVt === "string" || olVt === "number" || olVt === "boolean") synthP.type = olVt;
+            }
+          } else if (olV && olV.kind === "array-lit") synthP.type = "array";
+          else if (olV && olV.kind === "obj-lit") synthP.type = "object";
+          var olLow = olV ? _avToJsonValue(olV) : null;
+          if (olLow && olLow.ok) synthP.defaultValue = olLow.value;
+          synthParams.push(synthP);
+        }
+        if (synthParams.length > 0) pushAccum(synthParams);
+      }
     }
   }
   return accumulator;
 }
 
-
-// Convert a fully-literal ArrayExpression / ObjectExpression / nested
-// composite to a plain JSON value. Returns undefined when any descendant
-// isn't statically resolvable (no synthesised values — per the project
-// rule that example values come from real literals or observed traffic).
-// Iterative post-order: pass 1 enumerates the subtree in pre-order onto
-// a "post" list; pass 2 walks the list in reverse and computes each
-// node's value from children whose values are already computed.
-function _astLiteralToValue(root) {
-  if (!root) return undefined;
-  var post = []; // [{ node, kind }]
-  var stack = [root];
-  while (stack.length > 0) {
-    var n = stack.pop();
-    if (!n) continue;
-    post.push(n);
-    if (_t.isArrayExpression(n)) {
-      for (var i = 0; i < n.elements.length; i++) {
-        if (n.elements[i] != null) stack.push(n.elements[i]);
-      }
-    } else if (_t.isObjectExpression(n)) {
-      for (var pi = 0; pi < n.properties.length; pi++) {
-        var prop = n.properties[pi];
-        if (!_t.isObjectProperty(prop) || prop.computed) continue;
-        if (prop.value != null) stack.push(prop.value);
-      }
-    }
-  }
-  // Compute values bottom-up via reverse iteration.
-  var valByNode = new Map();
-  for (var pp = post.length - 1; pp >= 0; pp--) {
-    var nd = post[pp];
-    if (_t.isStringLiteral(nd) || _t.isNumericLiteral(nd) || _t.isBooleanLiteral(nd)) {
-      valByNode.set(nd, nd.value);
-    } else if (_t.isNullLiteral(nd)) {
-      valByNode.set(nd, null);
-    } else if (_t.isArrayExpression(nd)) {
-      var arr = [];
-      var ok = true;
-      for (var ei = 0; ei < nd.elements.length; ei++) {
-        var el = nd.elements[ei];
-        if (el == null) { arr.push(null); continue; }
-        if (!valByNode.has(el)) { ok = false; break; }
-        arr.push(valByNode.get(el));
-      }
-      if (ok) valByNode.set(nd, arr);
-    } else if (_t.isObjectExpression(nd)) {
-      var obj = {};
-      var ok2 = true;
-      for (var opi = 0; opi < nd.properties.length; opi++) {
-        var op = nd.properties[opi];
-        if (!_t.isObjectProperty(op) || op.computed) { ok2 = false; break; }
-        var kn = _getKeyName(op.key);
-        if (!kn) { ok2 = false; break; }
-        if (op.value == null || !valByNode.has(op.value)) { ok2 = false; break; }
-        obj[kn] = valByNode.get(op.value);
-      }
-      if (ok2) valByNode.set(nd, obj);
-    }
-  }
-  return valByNode.has(root) ? valByNode.get(root) : undefined;
-}
-function _arrayLiteralToValue(node) {
-  return _t.isArrayExpression(node) ? _astLiteralToValue(node) : undefined;
-}
-function _objectLiteralToValue(node) {
-  return _t.isObjectExpression(node) ? _astLiteralToValue(node) : undefined;
-}
 
 function _extractObjectProperties(node, objExprPath) {
   if (!node || !_t.isObjectExpression(node)) return [];
@@ -17286,50 +17762,79 @@ function _extractObjectProperties(node, objExprPath) {
     var prop = { name: keyName, required: true };
     var val = p.value;
 
-    if (p.shorthand && _t.isIdentifier(val)) {
+    // Source identifier — describes WHERE the value reads from. Pure
+    // structural read for the reviewer label, doesn't influence the
+    // resolved value (that goes through spec eval below).
+    if ((p.shorthand && _t.isIdentifier(val)) || _t.isIdentifier(val)) {
       prop.source = val.name;
-    } else if (_t.isIdentifier(val)) {
-      prop.source = val.name;
+    } else if (_t.isLogicalExpression(val) && (val.operator === "||" || val.operator === "??") &&
+               _t.isIdentifier(val.left)) {
+      prop.source = val.left.name;
+    }
+    // Conditional/logical default markers: structurally-detected absence
+    // (the field has an `|| default` or `cond ? a : b` shape so it's
+    // optional). The actual VALUE comes from spec eval AV below.
+    if ((_t.isLogicalExpression(val) && (val.operator === "||" || val.operator === "??")) ||
+        _t.isConditionalExpression(val)) {
+      prop.required = false;
     }
 
-    if (_t.isLogicalExpression(val) && (val.operator === "||" || val.operator === "??")) {
-      prop.required = false;
-      if (_t.isStringLiteral(val.right) || _t.isNumericLiteral(val.right)) prop.defaultValue = val.right.value;
-      if (_t.isIdentifier(val.left)) prop.source = val.left.name;
-    }
-    if (_t.isConditionalExpression(val)) {
-      prop.required = false;
-      var alt = val.alternate;
-      if (_t.isStringLiteral(alt) || _t.isNumericLiteral(alt)) prop.defaultValue = alt.value;
-    }
-    if (_t.isStringLiteral(val) || _t.isNumericLiteral(val)) {
-      prop.defaultValue = val.value;
-      prop.type = typeof val.value;
-    }
-    if (_t.isBooleanLiteral(val)) {
-      prop.defaultValue = val.value;
-      prop.type = "boolean";
-    }
-    if (_t.isNullLiteral(val)) {
-      prop.defaultValue = null;
-      prop.type = "null";
-    }
-    // ArrayExpression / ObjectExpression body fields per JSON schema:
-    // capture the structural type AND a literal-built example when all
-    // descendants are statically-resolvable literals. Non-literal /
-    // nested-non-literal children leave defaultValue absent (no
-    // synthesised values) but type is still recorded — schema learners
-    // need the type to render the field even when no observed value
-    // exists.
-    if (_t.isArrayExpression(val)) {
-      prop.type = "array";
-      var arrLit = _arrayLiteralToValue(val);
-      if (arrLit !== undefined) prop.defaultValue = arrLit;
-    }
-    if (_t.isObjectExpression(val)) {
-      prop.type = "object";
-      var objLit = _objectLiteralToValue(val);
-      if (objLit !== undefined) prop.defaultValue = objLit;
+    // Single spec-eval state machine: read the value's AV from
+    // _specPathValMemo (populated by the enclosing function's
+    // property-flow analysis) and project it to a JS value via the
+    // shared _avToJsonValue lower. Same engine used for XSS taint
+    // tracing — improvements to spec eval (more ECMA semantics modeled)
+    // help both XSS detection and API learning. No parallel shape
+    // matching on raw AST nodes for literal extraction.
+    var valAv = _specPathValMemo.get(val);
+    if (valAv) {
+      // Type tag from AV kind per ECMA § 6.1 ECMAScript Language Types.
+      if (valAv.kind === "array-lit") prop.type = "array";
+      else if (valAv.kind === "obj-lit") prop.type = "object";
+      else if (valAv.kind === "const") {
+        if (valAv.value === null) prop.type = "null";
+        else {
+          var ct = typeof valAv.value;
+          if (ct === "string" || ct === "number" || ct === "boolean") prop.type = ct;
+        }
+      }
+      // Taint sources carry a WHATWG IDL-defined type (e.g. document.URL
+      // is DOMString per HTML § 4.5). Use it so the schema records the
+      // correct primitive type even when the runtime value is opaque.
+      else if (valAv.kind === "taint-source" && valAv.type) prop.type = valAv.type;
+      // Lower to JS value. _avToJsonValue handles const + array-lit +
+      // obj-lit recursively; or / param / member / top return {ok:false}
+      // and fall through to the caller-arg substitution path below.
+      var lowered = _avToJsonValue(valAv);
+      if (lowered && lowered.ok) prop.defaultValue = lowered.value;
+      // Or-AV (conditional / logical / branch join) — enumerate all
+      // lowerable alternatives. First becomes defaultValue; all become
+      // validValues. Per ECMA § 13.13 / § 14.6 abstract-interpretation:
+      // branches that merge produce an `or` AV with all reachable values.
+      else if (valAv.kind === "or") {
+        var orStack = [valAv]; var orSeen = new Set();
+        var orVals = [];
+        while (orStack.length > 0) {
+          var orC = orStack.pop();
+          if (!orC || orSeen.has(orC)) continue;
+          orSeen.add(orC);
+          if (orC.kind === "or") {
+            if (orC.left) orStack.push(orC.left);
+            if (orC.right) orStack.push(orC.right);
+            if (orC.alternatives) for (var oai = 0; oai < orC.alternatives.length; oai++) orStack.push(orC.alternatives[oai]);
+            continue;
+          }
+          var orLow = _avToJsonValue(orC);
+          if (orLow && orLow.ok && orVals.indexOf(orLow.value) < 0) orVals.push(orLow.value);
+        }
+        if (orVals.length > 0) {
+          prop.defaultValue = orVals[0];
+          if (orVals.length > 1) prop.validValues = orVals;
+          var orFirstType = typeof orVals[0];
+          if (orVals[0] === null) prop.type = "null";
+          else if (orFirstType === "string" || orFirstType === "number" || orFirstType === "boolean") prop.type = orFirstType;
+        }
+      }
     }
 
     // When a path is available and the value didn't resolve to a
@@ -17367,13 +17872,44 @@ function _extractObjectProperties(node, objExprPath) {
     // captures values that flow into the field through variable chains
     // / caller args / etc. — without requiring a path argument here.
     // Same authoritative source as _resolveAllValues, just without
-    // re-triggering analysis.
+    // re-triggering analysis. For `param` AVs that have no statically-
+    // known leaves (caller-arg substitution wasn't done), invoke
+    // _resolveAvBySubstitutingCallerArgs with the param's owning
+    // function — walks the param's call sites and joins caller arg AVs.
     if (prop.defaultValue === undefined && !_t.isStringLiteral(val) &&
         !_t.isNumericLiteral(val) && !_t.isBooleanLiteral(val) &&
         !_t.isArrayExpression(val) && !_t.isObjectExpression(val)) {
       var valAv = _specPathValMemo.get(val);
       if (valAv) {
         var avLeaves = _avFlattenStringLeaves(valAv);
+        // String-leaf fallback returned empty AND the AV is a `param`
+        // — substitute caller args manually per ECMA § 10.2.10 then
+        // flatten ANY-typed const leaves (not just string). The existing
+        // _resolveAvBySubstitutingCallerArgs collects only string leaves
+        // (used for URL extraction); for body fields we want every
+        // primitive type a caller may supply.
+        if (avLeaves.length === 0 && valAv.kind === "param" && valAv.fn) {
+          var paramFnPath = _specFuncPathByNode.get(valAv.fn);
+          if (paramFnPath && _specCallSitesByFn.has(valAv.fn)) {
+            var callSites = _specCallSitesByFn.get(valAv.fn);
+            var subPrims = [];
+            for (var csi = 0; csi < callSites.length; csi++) {
+              var csRef = callSites[csi];
+              if (!csRef.node || !_t.isCallExpression(csRef.node) && !_t.isNewExpression(csRef.node)) continue;
+              if (valAv.idx >= csRef.node.arguments.length) continue;
+              var argNode = csRef.node.arguments[valAv.idx];
+              if (!argNode) continue;
+              var argAv = _specPathValMemo.get(argNode);
+              if (!argAv) continue;
+              if (argAv.kind === "const") {
+                var av0 = argAv.value;
+                if ((typeof av0 === "string" || typeof av0 === "number" || typeof av0 === "boolean") &&
+                    subPrims.indexOf(av0) < 0) subPrims.push(av0);
+              }
+            }
+            if (subPrims.length > 0) avLeaves = subPrims;
+          }
+        }
         var avPrim = [];
         for (var li = 0; li < avLeaves.length; li++) {
           var lv = avLeaves[li];
@@ -18418,6 +18954,15 @@ function _traceValueSource(path, _unused) {
         try { _specAnalyzeProgramWithFixpoint(pp); } catch (_) {}
       }
     }
+  }
+  // Drain any trampoline pendings enqueued by the lazy analyses above.
+  // _specApplyStatement enqueues callees whose memos weren't populated;
+  // without this drain those analyses would never run, leaking incomplete
+  // memos across queries. Cycle-safe via _specAnalyzeInProgress guard.
+  while (_specPendingAnalyses.length > 0) {
+    var pendingFp = _specPendingAnalyses.shift();
+    if (!pendingFp || !pendingFp.node) continue;
+    try { _specAnalyzePropertyFlow(pendingFp, true); } catch (_) {}
   }
   var av = _specPathValMemo.get(node);
   var result = av ? _avProjectToTaintDescriptor(av, path) : { sourceType: "dynamic", source: null };

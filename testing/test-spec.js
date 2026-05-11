@@ -5026,6 +5026,332 @@ specTest("§ 13.8.1 BinaryExpression `+` distribution: const + or(top,'') keeps 
   return false;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// Real-world example-value-flow patterns
+// Each test exercises ONE way websites pass values into fetch APIs;
+// failures pinpoint missing ECMA semantics in the resolver.
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== Real-world example-value flow ===\n");
+
+test("§ 20.2.3.2 Function.prototype.bind: URL preArg flows to fetch", `
+  function send(url, opts) { return fetch(url, opts); }
+  var post = send.bind(null, "/api/users");
+  post({ method: "POST" });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/users"; });
+});
+
+test("§ 20.2.3.3 Function.prototype.call: URL arg flows", `
+  function send(url) { return fetch(url); }
+  send.call(null, "/api/things");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/things"; });
+});
+
+test("§ 20.2.3.1 Function.prototype.apply: URL via argArray flows", `
+  function send(url) { return fetch(url); }
+  send.apply(null, ["/api/widgets"]);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/widgets"; });
+});
+
+test("§ 13.3.6 class chained: new C().getter.method() with URL from ctor arg", `
+  class API {
+    constructor(base) { this.base = base; }
+    getPath(p) { return this.base + p; }
+    fetch(p) { return fetch(this.getPath(p)); }
+  }
+  new API("/api/v1").fetch("/users");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v1/users"; });
+});
+
+test("§ 20.1.2.1 Object.assign merging defaults + overrides for body", `
+  var defaults = { type: "json", page: 1 };
+  var override = { page: 5 };
+  var body = Object.assign({}, defaults, override);
+  fetch("/api/x", { method: "POST", body: JSON.stringify(body) });
+`, function(r) {
+  var s = r.fetchCallSites[0]; if (!s || !s.params) return false;
+  var t = s.params.find(function(p) { return p.name === "type" && p.location === "body"; });
+  var pg = s.params.find(function(p) { return p.name === "page" && p.location === "body"; });
+  return t && t.defaultValue === "json" && pg && pg.defaultValue === 5;
+});
+
+test("§ 13.2.5 object spread overrides default in body literal", `
+  var defaults = { mode: "fast" };
+  fetch("/api/x", { method: "POST", body: JSON.stringify({ ...defaults, mode: "slow" }) });
+`, function(r) {
+  var s = r.fetchCallSites[0]; if (!s || !s.params) return false;
+  var m = s.params.find(function(p) { return p.name === "mode" && p.location === "body"; });
+  return m && m.defaultValue === "slow";
+});
+
+test("§ 14.7.5 ForOf: array.forEach building body field from iteration var", `
+  ["a", "b", "c"].forEach(function(item) {
+    fetch("/api/log", { method: "POST", body: JSON.stringify({ item: item }) });
+  });
+`, function(r) {
+  if (!r.fetchCallSites.length) return false;
+  var s = r.fetchCallSites[0];
+  if (s.url !== "/api/log") return false;
+  var item = (s.params || []).find(function(p) { return p.name === "item"; });
+  return item && Array.isArray(item.validValues) &&
+    item.validValues.indexOf("a") >= 0 && item.validValues.indexOf("b") >= 0;
+});
+
+test("§ 14.3.3 destructuring default: {a = \"x\"} = obj — defaulted value", `
+  function send({ region = "us-east" } = {}) {
+    fetch("/api/x", { method: "POST", body: JSON.stringify({ region: region }) });
+  }
+  send({});
+`, function(r) {
+  var s = r.fetchCallSites[0]; if (!s) return false;
+  var rg = (s.params || []).find(function(p) { return p.name === "region" && p.location === "body"; });
+  return rg && rg.defaultValue === "us-east";
+});
+
+test("§ 27.7 async/await: awaited value flows into next fetch body", `
+  async function flow() {
+    var token = await getToken();
+    fetch("/api/x", { method: "POST", body: JSON.stringify({ token: token }) });
+  }
+  function getToken() { return "abc123"; }
+  flow();
+`, function(r) {
+  var s = r.fetchCallSites.find(function(x) { return x.url === "/api/x"; });
+  if (!s) return false;
+  var t = (s.params || []).find(function(p) { return p.name === "token" && p.location === "body"; });
+  return t && t.defaultValue === "abc123";
+});
+
+test("§ 27.2 Promise.resolve().then: resolved value flows through then-callback", `
+  Promise.resolve("done").then(function(v) {
+    fetch("/api/x", { method: "POST", body: JSON.stringify({ status: v }) });
+  });
+`, function(r) {
+  var s = r.fetchCallSites.find(function(x) { return x.url === "/api/x"; });
+  if (!s) return false;
+  var st = (s.params || []).find(function(p) { return p.name === "status" && p.location === "body"; });
+  return st && st.defaultValue === "done";
+});
+
+test("§ 13.13 ?? nullish coalescing default in body field", `
+  function send(name) {
+    fetch("/api/x", { method: "POST", body: JSON.stringify({ name: name ?? "anon" }) });
+  }
+  send(null);
+`, function(r) {
+  var s = r.fetchCallSites[0]; if (!s) return false;
+  var n = (s.params || []).find(function(p) { return p.name === "name" && p.location === "body"; });
+  return n && (n.defaultValue === "anon" || (n.validValues && n.validValues.indexOf("anon") >= 0));
+});
+
+test("§ 13.3.6 + § 9.1.1 module-style: const builder closure captures BASE", `
+  var BASE = "/api/v2";
+  function makeURL(p) { return BASE + p; }
+  fetch(makeURL("/users"));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v2/users"; });
+});
+
+test("§ 22.1.3.13 String.prototype.replace with literal args in URL build", `
+  var path = "/api/{id}/data".replace("{id}", "42");
+  fetch(path);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/42/data"; });
+});
+
+test("§ 22.1.3.21 Array.prototype.join in URL path build", `
+  var parts = ["users", "42", "posts"];
+  fetch("/api/" + parts.join("/"));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/users/42/posts"; });
+});
+
+test("§ 21.1.3.6 Number.prototype.toString(36) for ID generation", `
+  var id = (12345).toString(36);
+  fetch("/api/x?id=" + id);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/x?id=9ix"; });
+});
+
+test("§ 24.5.1 JSON.parse on a const string config", `
+  var cfg = JSON.parse('{"base": "/api/v3"}');
+  fetch(cfg.base + "/users");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v3/users"; });
+});
+
+// ── More real-world ECMA value-flow patterns ──
+
+test("§ 15.7.3 super in class extends — base ctor flows through derived", `
+  class Base { constructor(b) { this.base = b; } get() { return fetch(this.base + "/get"); } }
+  class Derived extends Base { constructor(b) { super(b); } }
+  new Derived("/api/v4").get();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v4/get"; });
+});
+
+test("§ 15.7.4 static class method invoked on class object", `
+  class API { static fetchPath(p) { return fetch("/api/static" + p); } }
+  API.fetchPath("/x");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/static/x"; });
+});
+
+test("§ 15.7.5 class getter property returns derived value", `
+  class API {
+    constructor(b) { this._base = b; }
+    get base() { return this._base; }
+    send(p) { return fetch(this.base + p); }
+  }
+  new API("/api/v5").send("/users");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v5/users"; });
+});
+
+test("§ 15.7 class method shorthand on object literal", `
+  var api = {
+    base: "/api/v6",
+    send(p) { return fetch(this.base + p); },
+  };
+  api.send("/users");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v6/users"; });
+});
+
+test("§ 14.3.3 array-destructuring with default flows to URL", `
+  function send([first = "/api/v7"]) { return fetch(first); }
+  send([undefined]);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v7"; });
+});
+
+test("§ 14.3.3 rest parameter in destructuring", `
+  function send(...args) { return fetch("/api/v8/" + args.join("/")); }
+  send("users", "42");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v8/users/42"; });
+});
+
+test("§ 13.16 SequenceExpression: callee is comma-expr last value", `
+  var send = function(u) { return fetch(u); };
+  (0, send)("/api/v9/seq");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v9/seq"; });
+});
+
+test("§ 23.1.3.18 Array.prototype.map returning URL parts", `
+  var parts = ["users", "42"].map(function(s) { return s.toLowerCase(); });
+  fetch("/api/" + parts.join("/"));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/users/42"; });
+});
+
+test("§ 23.1.3.10 Array.prototype.filter returning truthy items", `
+  var parts = ["users", null, "42"].filter(function(x) { return x; });
+  fetch("/api/" + parts.join("/"));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/users/42"; });
+});
+
+test("§ 28.1.6 Reflect.apply forwards to target with args", `
+  function send(u) { return fetch(u); }
+  Reflect.apply(send, null, ["/api/v11/reflect"]);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v11/reflect"; });
+});
+
+test("§ 22.1.3 method chain: trim + slice + concat builds URL", `
+  var u = "  /api/v12/things  ".trim();
+  fetch(u);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v12/things"; });
+});
+
+test("§ 13.3.6 method call result used as URL part", `
+  function getBase() { return "/api/v13"; }
+  fetch(getBase() + "/users");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v13/users"; });
+});
+
+test("§ 13.13 short-circuit && fallback", `
+  var enabled = true;
+  fetch(enabled && "/api/v14/enabled");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v14/enabled"; });
+});
+
+test("§ 13.5.4 template-literal with multi-line interpolation", `
+  var host = "example.com";
+  var port = 8080;
+  fetch(\`https://\${host}:\${port}/api/v15\`);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://example.com:8080/api/v15"; });
+});
+
+test("§ 23.1.3.27 Array.prototype.find — find matching URL", `
+  var endpoints = ["/api/v16/a", "/api/v16/b"];
+  var u = endpoints.find(function(e) { return e.endsWith("b"); });
+  fetch(u);
+`, function(r) {
+  // Find returning a single string element. Sound over-approx: array element of array-lit
+  // is either alternative. _avFlattenStringLeaves may give union — at least one should match.
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v16/b" || s.url === "/api/v16/a"; });
+});
+
+test("§ 24.5.1 JSON.parse nested object access", `
+  var cfg = JSON.parse('{"endpoints":{"users":"/api/v17/users"}}');
+  fetch(cfg.endpoints.users);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v17/users"; });
+});
+
+test("§ 13.3.6 callback passed as default fn body field source", `
+  function build(formatter) {
+    return fetch("/api/v18", { method: "POST", body: JSON.stringify({ name: formatter("alice") }) });
+  }
+  build(function(s) { return s.toUpperCase(); });
+`, function(r) {
+  var s = r.fetchCallSites[0];
+  if (!s || !s.params) return false;
+  var n = s.params.find(function(p) { return p.name === "name" && p.location === "body"; });
+  // formatter is a function-ref AV applied to "alice"; result is ALICE (uppercase). Or top if unresolved.
+  return n && (n.defaultValue === "ALICE" || n.type === "string");
+});
+
+test("§ 14.7.5 for-of over const array — iteration var collects values", `
+  for (var part of ["/users", "/posts"]) {
+    fetch("/api/v19" + part);
+  }
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v19/users"; }) &&
+    r.fetchCallSites.some(function(s) { return s.url === "/api/v19/posts"; });
+});
+
+test("§ 7.1.17 String coercion via String() callable", `
+  var id = String(42);
+  fetch("/api/v20?id=" + id);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v20?id=42"; });
+});
+
+test("§ 23.1.3.11 Array.prototype.flat removes nesting", `
+  var u = ["/api", "/v21/data"].flat().join("");
+  fetch(u);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v21/data"; });
+});
+
+test("§ 13.3.6 method called via local alias", `
+  var f = fetch;
+  f("/api/v22/alias");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v22/alias"; });
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");

@@ -1281,9 +1281,19 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
     }
     if (merged) {
       const ex = pickExampleValue(target, null);
-      target._exampleValue = ex.value;
-      target._exampleValueSource = ex.source;
-      if (ex.confidence != null) target._exampleConfidence = ex.confidence;
+      if (ex) {
+        target._exampleValue = ex.value;
+        target._exampleValueSource = ex.source;
+        if (ex.confidence != null) target._exampleConfidence = ex.confidence;
+      } else {
+        // No real value was traceable — leave the field without an
+        // example so callers can surface the gap rather than acting on
+        // a synthesised type-default that nothing in the bundle
+        // produced.
+        delete target._exampleValue;
+        delete target._exampleValueSource;
+        delete target._exampleConfidence;
+      }
     }
   };
 
@@ -1884,15 +1894,24 @@ function _applyBodyFieldStats(m, doc, bodyFieldStats, requestCount) {
         // Example value + provenance on the field def so the form
         // renderer can prefill without a second pass.
         const ex = pickExampleValue(def, fs);
-        def._exampleValue = ex.value;
-        def._exampleValueSource = ex.source;
-        if (ex.confidence != null) def._exampleConfidence = ex.confidence;
+        if (ex) {
+          def._exampleValue = ex.value;
+          def._exampleValueSource = ex.source;
+          if (ex.confidence != null) def._exampleConfidence = ex.confidence;
+        } else {
+          delete def._exampleValue;
+          delete def._exampleValueSource;
+          delete def._exampleConfidence;
+        }
       } else {
-        // No observation for this specific field — still pick a synthetic
-        // example from the schema shape so the UI never has nothing.
         const ex = pickExampleValue(def, null);
-        def._exampleValue = ex.value;
-        def._exampleValueSource = ex.source;
+        if (ex) {
+          def._exampleValue = ex.value;
+          def._exampleValueSource = ex.source;
+        } else {
+          delete def._exampleValue;
+          delete def._exampleValueSource;
+        }
       }
       // Recurse into sub-schemas. Track visited refs per-walk to prevent
       // infinite loops on recursive schemas (e.g. tree-shaped messages).
@@ -1945,10 +1964,16 @@ function applyStatsToMethod(m, doc) {
   for (const [name, param] of Object.entries(m.parameters || {})) {
     const paramStats = (stats.params || {})[name] || null;
     const ex = pickExampleValue(param, paramStats);
-    param._exampleValue = ex.value;
-    param._exampleValueSource = ex.source;
-    if (ex.confidence != null) param._exampleConfidence = ex.confidence;
-    else delete param._exampleConfidence;
+    if (ex) {
+      param._exampleValue = ex.value;
+      param._exampleValueSource = ex.source;
+      if (ex.confidence != null) param._exampleConfidence = ex.confidence;
+      else delete param._exampleConfidence;
+    } else {
+      delete param._exampleValue;
+      delete param._exampleValueSource;
+      delete param._exampleConfidence;
+    }
   }
 
   // Body fields: the schema tree lives in doc.schemas — walk it and

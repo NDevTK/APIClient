@@ -216,42 +216,9 @@ function _coerceToFieldType(value, type) {
   return value;
 }
 
-// The canonical type-default for a field with no other signal. Used as
-// the last-resort fallback in pickExampleValue — a reviewer can tell
-// from `source: "type-default"` that the extension is guessing.
-function _typeDefault(type) {
-  if (!type) return "";
-  switch (type) {
-    case "string": case "bytes": case "enum": return "";
-    case "number": case "integer":
-    case "int32": case "int64": case "uint32": case "uint64":
-    case "sint32": case "sint64": case "double": case "float":
-    case "fixed32": case "fixed64": case "sfixed32": case "sfixed64":
-      return 0;
-    case "boolean": case "bool": return false;
-    case "array": return [];
-    case "object": return {};
-    default: return "";
-  }
-}
-
-// Format-to-example synthesis. Used only when no observed or AST value
-// exists. Values are deliberately recognizable-dummy so the user (and
-// the server, during verification) can tell this was synthesized.
-function _syntheticForFormat(format) {
-  switch (format) {
-    case "uuid": return "00000000-0000-0000-0000-000000000000";
-    case "email": return "example@example.com";
-    case "uri": return "https://example.com/";
-    case "date-time": return new Date(0).toISOString();
-    case "integer": return 0;
-    default: return null;
-  }
-}
-
 // Return ONE example value for a field, with provenance, so the UI and
 // request-builder can always present a usable value. Priority is
-// observed-facts → AST-facts → declared-schema → synthesis:
+// observed-facts → AST-facts → declared-schema:
 //   1. "observed-default" — stats distribution was dominant enough for
 //      analyzeDefault() to fire (>=80% of observations).
 //   2. "observed-top"     — most-frequent observed value, even at low
@@ -262,14 +229,13 @@ function _syntheticForFormat(format) {
 //   3. "ast-constraint"   — _astValidValues from AST (switch/case,
 //      .includes, equality chains). Facts about the client's code,
 //      but may list values the server never actually receives.
-//   4. "enum"             — first declared enum value.
-//   5. "format-synth"     — a dummy value matching the detected format.
-//   6. "range-min"        — lowest end of numericRange.
-//   7. "type-default"     — empty string / 0 / false / [] / {}.
+//   4. "enum"             — first declared enum value (spec-level data).
 //
-// The `source` label is attached so a reviewer can see WHY this value
-// was chosen and judge whether the classifier's claim is load-bearing
-// on real traffic or synthesized defaults.
+// Removed (legacy): "format-synth", "range-min", "type-default" — these
+// synthesised placeholder values when no real source existed, violating
+// the project rule "no placeholders / opaque fallbacks". A field with
+// no traceable value returns null so callers surface the gap honestly
+// instead of acting on fabricated data.
 function pickExampleValue(field, stats) {
   const type = field && field.type ? field.type : null;
 
@@ -307,16 +273,9 @@ function pickExampleValue(field, stats) {
   if (field && Array.isArray(field.enum) && field.enum.length) {
     return { value: _coerceToFieldType(field.enum[0], type), source: "enum" };
   }
-  // 5. format-synth — from field.format or from stats' dominant hint
-  const fmt = (field && field.format) || (stats ? analyzeFormat(stats) : null);
-  const syn = _syntheticForFormat(fmt);
-  if (syn != null) return { value: syn, source: "format-synth", format: fmt };
-  // 6. range-min — numeric ranges give us a valid small number
-  if (stats && stats.numericRange && typeof stats.numericRange.min === "number") {
-    return { value: stats.numericRange.min, source: "range-min" };
-  }
-  // 7. type-default
-  return { value: _typeDefault(type), source: "type-default" };
+  // No real value could be derived from observed traffic, AST analysis,
+  // or declared schema. Return null — callers must handle absence.
+  return null;
 }
 
 function mergeParamStats(a, b) {
