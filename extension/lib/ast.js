@@ -9881,23 +9881,44 @@ function _specAnalyzePropertyFlow(funcPath, force) {
 // body onto `stack` with cb's parameters bound to the caller's
 // abstract values per § 23.1.3.21 step 6.c CallbackInvocation.
 function _drainHofQueueIntoStack(stack, hofQueueBaseLen, effects) {
+  // § 23.1.3.15 sequential dispatches (forEach with state-mutating cb):
+  // process ONE at a time. The driver re-calls drain after each cb
+  // body's stmts complete; the next sequential dispatch fires then with
+  // the now-mutated state. Without this, all sequential frames stack up
+  // first and the cb-param binding for the LAST-pushed dispatch leaks
+  // into all earlier cb bodies via the shared state.
   while (_hofPendingDispatches.length > hofQueueBaseLen) {
+    var nextIsSequential = _hofPendingDispatches[_hofPendingDispatches.length - 1]._sequential;
     var dispatch = _hofPendingDispatches.pop();
     var cbPath = dispatch.cbPath;
     var paramAvs = dispatch.paramAvs || [];
     if (!cbPath || !cbPath.node) continue;
     if (!_t.isFunctionExpression(cbPath.node) && !_t.isArrowFunctionExpression(cbPath.node)) continue;
-    var cbState = {};
-    // Inherit closure-captured bindings from the outer function's state
-    // per § 9.1.1 lexical environments: cb body resolves free variables
-    // through the cb's [[Environment]] outer chain. Sound snapshot at
-    // dispatch-time (cb is called synchronously during forEach/map/etc.,
-    // per the spec algorithms in § 23.1.3 — no later modifications
-    // before the first cb invocation are observable).
-    if (dispatch.outerState) {
-      for (var osk in dispatch.outerState) {
-        if (Object.prototype.hasOwnProperty.call(dispatch.outerState, osk)) {
-          cbState[osk] = dispatch.outerState[osk];
+    var cbState;
+    if (dispatch._sequential && dispatch.outerState) {
+      // § 23.1.3.15 forEach + per-element sequential dispatch: share state
+      // with the outer scope so closure-captured-var mutations (e.g.
+      // urlVar.searchParams.set(...)) persist across iterations. Each cb
+      // invocation mutates the same state reference; the next iteration
+      // sees the prior iteration's mutations. Cb params are bound onto
+      // the shared state below (clobbering any same-named outer binding —
+      // per § 14.1.20 the cb's FormalParameter shadows outer; restoration
+      // not implemented since forEach returns undefined and cb params
+      // aren't visible to outer scope post-completion).
+      cbState = dispatch.outerState;
+    } else {
+      cbState = {};
+      // Inherit closure-captured bindings from the outer function's state
+      // per § 9.1.1 lexical environments: cb body resolves free variables
+      // through the cb's [[Environment]] outer chain. Sound snapshot at
+      // dispatch-time (cb is called synchronously during forEach/map/etc.,
+      // per the spec algorithms in § 23.1.3 — no later modifications
+      // before the first cb invocation are observable).
+      if (dispatch.outerState) {
+        for (var osk in dispatch.outerState) {
+          if (Object.prototype.hasOwnProperty.call(dispatch.outerState, osk)) {
+            cbState[osk] = dispatch.outerState[osk];
+          }
         }
       }
     }
@@ -9922,6 +9943,11 @@ function _drainHofQueueIntoStack(stack, hofQueueBaseLen, effects) {
       // bound state. Effects from sub-expressions land in `effects`.
       _specEvalExpression(cbBodyPath, cbState, effects);
     }
+    // Sequential dispatch: process ONE iteration per drain so cb-param
+    // binding doesn't get clobbered by a later iteration's bind before
+    // the earlier cb body runs. The next sequential dispatch is drained
+    // on the next drain call (after cb body's stmts complete).
+    if (nextIsSequential) break;
   }
 }
 
@@ -11251,6 +11277,50 @@ function _specEvalLeaf(path, state, vals, effects) {
           hofMeth === "some" || hofMeth === "every" ||
           hofMeth === "flatMap" || hofMeth === "forEach";
         var hofIsReduce = hofMeth === "reduce" || hofMeth === "reduceRight";
+        // § 23.1.3.15 forEach + array-lit: per-element sequential dispatch
+        // when cb body's effects depend on order (WHATWG URL § 5.5
+        // searchParams.set/append/delete state mutation on a closure-
+        // captured URL var — each iteration MUST see the prior
+        // iteration's URL state). For non-order-dependent cbs (the
+        // common case: `this.X = computeFromElement(e)`), the joined-
+        // element path below is sound (cb runs N times with each
+        // statically-possible element value). Detection is structural:
+        // any CallExpression in cb body whose callee chain ends in
+        // `.searchParams.<set|append|delete>` triggers sequential.
+        if (hofMeth === "forEach" && recvAv.kind === "array-lit" &&
+            recvAv.elements && recvAv.elements.length > 0 &&
+            n.arguments.length >= 1 &&
+            (_t.isFunctionExpression(n.arguments[0]) || _t.isArrowFunctionExpression(n.arguments[0]))) {
+          var feCb = n.arguments[0];
+          var feHasUspMut = false;
+          try {
+            path.get("arguments.0").traverse({
+              CallExpression: function(cep) {
+                if (feHasUspMut) { cep.skip(); return; }
+                var cec = cep.node.callee;
+                if (!_t.isMemberExpression(cec) || cec.computed) return;
+                if (!_t.isIdentifier(cec.property)) return;
+                var mn2 = cec.property.name;
+                if (mn2 !== "set" && mn2 !== "append" && mn2 !== "delete") return;
+                var spc = cec.object;
+                if (!_t.isMemberExpression(spc) || spc.computed) return;
+                if (!_t.isIdentifier(spc.property, { name: "searchParams" })) return;
+                feHasUspMut = true;
+              }
+            });
+          } catch (_) { /* ignore */ }
+          if (feHasUspMut) {
+            for (var feRevIdx = recvAv.elements.length - 1; feRevIdx >= 0; feRevIdx--) {
+              _hofPendingDispatches.push({
+                cbPath: path.get("arguments.0"),
+                paramAvs: [recvAv.elements[feRevIdx] || { kind: "top" }],
+                outerState: state,
+                _sequential: true
+              });
+            }
+            return { kind: "const", value: undefined };
+          }
+        }
         if ((hofIsHigherOrder || hofIsReduce) && n.arguments.length >= 1) {
           var hofCb = n.arguments[0];
           if (_t.isFunctionExpression(hofCb) || _t.isArrowFunctionExpression(hofCb)) {
