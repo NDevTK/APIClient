@@ -37,7 +37,39 @@ var _AV_TOP = { kind: "top" };
 var _AV_UNDEFINED = { kind: "const", value: undefined };
 var _AV_NULL = { kind: "const", value: null };
 var _AV_TRUE = { kind: "const", value: true };
-var _AV_FALSE = { kind: "const", value: false };   // node → resolved ObjectExpression (or null) — caches _resolveToObject result so repeated lookups on the same node are O(1)
+var _AV_FALSE = { kind: "const", value: false };
+// Hash-cons const AVs by primitive value. Most spec-eval paths build
+// `{kind:"const", value: x}` ad-hoc for string concat, builtin-method
+// returns, member-access projections — same string value at different
+// sites would otherwise be distinct AV objects, defeating identity-
+// based downstream optimisations (_specEqualAv x===y short-circuit,
+// _hcOr's pair-cache hit rate). Pool by value: strings & numbers in
+// a Map; booleans/null/undefined have dedicated singletons above.
+var _hcConstString = new Map();
+var _hcConstNumber = new Map();
+function _hcConst(value) {
+  if (value === undefined) return _AV_UNDEFINED;
+  if (value === null) return _AV_NULL;
+  if (value === true) return _AV_TRUE;
+  if (value === false) return _AV_FALSE;
+  if (typeof value === "string") {
+    var cached = _hcConstString.get(value);
+    if (cached) return cached;
+    var av = { kind: "const", value: value };
+    _hcConstString.set(value, av);
+    return av;
+  }
+  if (typeof value === "number") {
+    var ncached = _hcConstNumber.get(value);
+    if (ncached) return ncached;
+    var nav = { kind: "const", value: value };
+    _hcConstNumber.set(value, nav);
+    return nav;
+  }
+  // Other primitive types (bigint, symbol) — return fresh; hash-cons
+  // not needed since rare.
+  return { kind: "const", value: value };
+}   // node → resolved ObjectExpression (or null) — caches _resolveToObject result so repeated lookups on the same node are O(1)
 
 // Hash-cons param/this/args-len/rest-args AVs by (fn, idx). Param AVs
 // are immutable post-construction (.idx and .fn are read but never
@@ -643,6 +675,9 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcThisByFn = new WeakMap();
   _hcArgsLenByFn = new WeakMap();
   _hcRestArgsByFn = new WeakMap();
+  _hcOrByPair = new WeakMap();
+  _hcConstString = new Map();
+  _hcConstNumber = new Map();
   _specEnclosingFnsCache = new WeakMap();
   _specEnclFnByNode = new WeakMap();
   _specProgramGlobalsPrepassDoneGlobal = null;
@@ -7403,23 +7438,43 @@ function _specJoinAllAv(leaves) {
   return level[0];
 }
 
+// Hash-cons or-AV constructor: identical (left, right) pairs produce
+// identical AV objects across calls. Two-level WeakMap keyed first by
+// leftAv, then by rightAv. Identity preservation is the key fixpoint
+// property — `_ssChanged`'s `_specEqualAv` short-circuits on `x === y`
+// when join results stay canonical, so the worklist converges in 1
+// extra pass when content stabilises (vs O(iterations) full structural
+// walks of huge or-trees).
+var _hcOrByPair = new WeakMap();
+function _hcOr(leftAv, rightAv) {
+  var rMap = _hcOrByPair.get(leftAv);
+  if (rMap) {
+    var cached = rMap.get(rightAv);
+    if (cached) return cached;
+  } else {
+    rMap = new WeakMap();
+    _hcOrByPair.set(leftAv, rMap);
+  }
+  var newOr = { kind: "or", left: leftAv, right: rightAv };
+  rMap.set(rightAv, newOr);
+  return newOr;
+}
+
 function _specLogicalOrAv(leftAv, rightAv) {
   // Idempotent join per ECMA lattice semantics: a ⊔ a = a. Without
   // deduplication, recursive function fixpoint diverges (each iteration
-  // wraps another or-layer indefinitely instead of saturating). Use
-  // structural _specEqualAv to detect identical operands.
+  // wraps another or-layer indefinitely instead of saturating).
   if (!leftAv) return rightAv;
   if (!rightAv) return leftAv;
-  if (_specEqualAv(leftAv, rightAv)) return leftAv;
+  if (leftAv === rightAv) return leftAv;
   if (leftAv.kind === "top" || rightAv.kind === "top") return _AV_TOP;
+  if (_specEqualAv(leftAv, rightAv)) return leftAv;
   // Check if rightAv is already a leaf of leftAv's or-tree (or vice versa).
-  // Walk leaves iteratively; if rightAv equals any leaf, leftAv already
-  // covers it. Same for the reverse.
   if (leftAv.kind === "or") {
     var lLeaves = _avFlattenOrLeaves(leftAv);
     if (lLeaves) {
       for (var li = 0; li < lLeaves.length; li++) {
-        if (_specEqualAv(lLeaves[li], rightAv)) return leftAv;
+        if (lLeaves[li] === rightAv || _specEqualAv(lLeaves[li], rightAv)) return leftAv;
       }
     }
   }
@@ -7427,11 +7482,11 @@ function _specLogicalOrAv(leftAv, rightAv) {
     var rLeaves = _avFlattenOrLeaves(rightAv);
     if (rLeaves) {
       for (var rli = 0; rli < rLeaves.length; rli++) {
-        if (_specEqualAv(rLeaves[rli], leftAv)) return rightAv;
+        if (rLeaves[rli] === leftAv || _specEqualAv(rLeaves[rli], leftAv)) return rightAv;
       }
     }
   }
-  return { kind: "or", left: leftAv, right: rightAv };
+  return _hcOr(leftAv, rightAv);
 }
 
 // Explicit alternation per spec evaluation distribution. Used when the
@@ -7455,12 +7510,13 @@ function _specLogicalOrAv(leftAv, rightAv) {
 function _specSetUnionAv(leftAv, rightAv) {
   if (!leftAv) return rightAv;
   if (!rightAv) return leftAv;
+  if (leftAv === rightAv) return leftAv;
   if (_specEqualAv(leftAv, rightAv)) return leftAv;
   if (leftAv.kind === "or") {
     var ulLeaves = _avFlattenOrLeaves(leftAv);
     if (ulLeaves) {
       for (var uli = 0; uli < ulLeaves.length; uli++) {
-        if (_specEqualAv(ulLeaves[uli], rightAv)) return leftAv;
+        if (ulLeaves[uli] === rightAv || _specEqualAv(ulLeaves[uli], rightAv)) return leftAv;
       }
     }
   }
@@ -7468,11 +7524,11 @@ function _specSetUnionAv(leftAv, rightAv) {
     var urLeaves = _avFlattenOrLeaves(rightAv);
     if (urLeaves) {
       for (var urli = 0; urli < urLeaves.length; urli++) {
-        if (_specEqualAv(urLeaves[urli], leftAv)) return rightAv;
+        if (urLeaves[urli] === leftAv || _specEqualAv(urLeaves[urli], leftAv)) return rightAv;
       }
     }
   }
-  return { kind: "or", left: leftAv, right: rightAv };
+  return _hcOr(leftAv, rightAv);
 }
 
 // Build the dataset obj-lit AV from a domContext element's dataAttrs.
@@ -8460,8 +8516,8 @@ function _specEvalExpression(rootPath, state, effects, noWriteMemo) {
     // _specEvalLeaf dispatch (which type-checks across ~50 node kinds)
     // saves significant cumulative time on bundles with large literal
     // initializer arrays (Stripe's index.js stmt 3: 1.3M leaf evals).
-    if (_t.isStringLiteral(n)) av = { kind: "const", value: n.value };
-    else if (_t.isNumericLiteral(n)) av = { kind: "const", value: n.value };
+    if (_t.isStringLiteral(n)) av = _hcConst(n.value);
+    else if (_t.isNumericLiteral(n)) av = _hcConst(n.value);
     else if (_t.isBooleanLiteral(n)) av = n.value === true ? _AV_TRUE : _AV_FALSE;
     else if (_t.isNullLiteral(n)) av = _AV_NULL;
     else av = _specEvalLeaf(p, state, vals, effects);
