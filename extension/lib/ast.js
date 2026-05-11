@@ -18284,7 +18284,16 @@ function _traceValueSource(path, _unused) {
   while (_specPendingAnalyses.length > 0) {
     var pendingFp = _specPendingAnalyses.shift();
     if (!pendingFp || !pendingFp.node) continue;
-    try { _specAnalyzePropertyFlow(pendingFp, true); } catch (_) {}
+    // force=false: _specEnqueueAnalysis only enqueues fns NOT already in
+    // _specEffectsMemo, so the analysis runs once on first drain.
+    // force=true here was a holdover from the fixpoint worklist where
+    // re-runs are intended; in the main-pass _traceValueSource drain,
+    // every queued fn is first-time analysis — force=true would re-run
+    // on the next drain if the fn somehow re-enters the queue (and the
+    // fn's own analysis enqueues its callees, cascading O(callees ×
+    // body) work per _traceValueSource call). force=false memo-hits
+    // after the first analysis completes.
+    try { _specAnalyzePropertyFlow(pendingFp, false); } catch (_) {}
   }
   var av = _specPathValMemo.get(node);
   var result = av ? _avProjectToTaintDescriptor(av, path) : { sourceType: "dynamic", source: null };
