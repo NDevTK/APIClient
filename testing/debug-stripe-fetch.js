@@ -66,9 +66,30 @@ programPath.traverse({
 });
 console.log("[stats] totalFns=" + totalFns + " inSlice=" + inSlice + " hasSlice=" + hasSlice + " skipped=" + skipped);
 
-// Run analyzeJSBundle to test main pass detection
-var result = globalThis.analyzeJSBundle(code, "https://test.example.com/index.js", true, null);
-console.log("[7] analyzeJSBundle done");
+// Skip the long analyzeJSBundle call. Instead manually simulate the
+// main pass to see what's slow.
+console.log("[before main pass] " + new Date().toISOString());
+
+// First time the main pass traversal alone (program already analyzed via fixpoint above)
+var mainPassStart = Date.now();
+var visitCount = 0;
+var skipCount = 0;
+programPath.traverse({
+  "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": {
+    enter: function (path) {
+      if (!globalThis._specSliceFns.has(path.node) && !globalThis._specFnContainsSlice.has(path.node)) {
+        skipCount++;
+        path.skip();
+      }
+    }
+  },
+  CallExpression: function(p) { visitCount++; }
+});
+console.log("[main-pass-traversal-only] " + (Date.now() - mainPassStart) + "ms, " + visitCount + " CallExpression visits, " + skipCount + " skipped fns");
+
+// Just for verification
+var result = { _phaseTimings: null };
+if (result._phaseTimings) console.log("[phases]", JSON.stringify(result._phaseTimings));
 console.log("[8] fetchCallSites:", (result.fetchCallSites || []).length);
 console.log("[9] securitySinks:", (result.securitySinks || []).length);
 console.log("[10] resolverErrors:", (result.resolverErrors || []).length);
