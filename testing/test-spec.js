@@ -4089,17 +4089,13 @@ specTest("§ 23.1.3.21 Array.prototype.map: cb single-stmt return resolves array
   if (effects.length !== 1) return false;
   var av = effects[0].value;
   if (!av || av.kind !== "array-lit") return false;
-  // Element is the joined cb-applied AV ("/api/a" or "/api/b").
-  var el0 = av.elements[0];
-  if (!el0 || el0.kind !== "or") return false;
-  var leaves = [];
-  var stack = [el0];
-  while (stack.length) {
-    var x = stack.pop();
-    if (x.kind === "const") leaves.push(x.value);
-    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
-  }
-  return leaves.indexOf("/api/a") >= 0 && leaves.indexOf("/api/b") >= 0;
+  // Per ECMA § 23.1.3.18 map preserves element count: source has 2,
+  // result has 2, each transformed by cb. Element 0 = "/api/a",
+  // element 1 = "/api/b".
+  if (av.elements.length !== 2) return false;
+  var e0 = av.elements[0], e1 = av.elements[1];
+  return e0 && e0.kind === "const" && e0.value === "/api/a" &&
+         e1 && e1.kind === "const" && e1.value === "/api/b";
 });
 
 specTest("§ 23.1.3.21 Array.prototype.map: arrow concise body with String.prototype call resolves array-lit element", `
@@ -4110,16 +4106,11 @@ specTest("§ 23.1.3.21 Array.prototype.map: arrow concise body with String.proto
   if (effects.length !== 1) return false;
   var av = effects[0].value;
   if (!av || av.kind !== "array-lit") return false;
-  var el0 = av.elements[0];
-  if (!el0 || el0.kind !== "or") return false;
-  var leaves = [];
-  var stack = [el0];
-  while (stack.length) {
-    var x = stack.pop();
-    if (x.kind === "const") leaves.push(x.value);
-    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
-  }
-  return leaves.indexOf("A") >= 0 && leaves.indexOf("B") >= 0;
+  if (av.elements.length !== 2) return false;
+  var ae0 = av.elements[0], ae1 = av.elements[1];
+  // toUpperCase: "a" → "A", "b" → "B".
+  return ae0 && ae0.kind === "const" && ae0.value === "A" &&
+         ae1 && ae1.kind === "const" && ae1.value === "B";
 });
 
 // ═════════════════════════════════════════════════════════════════════
@@ -5329,6 +5320,67 @@ test("§ 14.7.5 for-of over const array — iteration var collects values", `
 `, function(r) {
   return r.fetchCallSites.some(function(s) { return s.url === "/api/v19/users"; }) &&
     r.fetchCallSites.some(function(s) { return s.url === "/api/v19/posts"; });
+});
+
+test("§ 13.10 nested HOF call+member: parser(x).join(y) chains through cb's return", `
+  function build(parser) {
+    return fetch("/api/" + parser("users,42").join("/"));
+  }
+  build(function(s) { return s.split(","); });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/users/42"; });
+});
+
+test("WHATWG Fetch § 5.1: fetch(new URL(...)) coerces to href", `
+  var u = new URL("https://api.example.com/items");
+  fetch(u);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/items"; });
+});
+
+test("WHATWG Fetch § 4: fetch(new Request(...)) projects .url", `
+  var req = new Request("https://api.example.com/users");
+  fetch(req);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/users"; });
+});
+
+test("WHATWG Fetch nested: fetch(new Request(new URL(path, base)))", `
+  fetch(new Request(new URL("/api/v23", "https://x.com")));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://x.com/api/v23"; });
+});
+
+test("§ 23.1.3.18 + § 23.1.5.1: Object.entries→map(e=>e[0]+\"=\"+e[1])→join (real query-string builder)", `
+  var qs = Object.entries({role: "admin", page: "1"}).map(function(e) { return e[0] + "=" + e[1]; }).join("&");
+  fetch("/api/v24?" + qs);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v24?role=admin&page=1"; });
+});
+
+test("§ 23.1.5.1: indexed access on per-element array pair in cb body", `
+  var url = [["users","42"]].map(function(p) { return p[0] + "/" + p[1]; }).join(",");
+  fetch("/api/v25/" + url);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v25/users/42"; });
+});
+
+test("§ 22.1.3.4 String.prototype.concat with caller-arg-substituted param", `
+  function build(suffix) {
+    return fetch("/api/v26/".concat(suffix));
+  }
+  build("users");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v26/users"; });
+});
+
+test("§ 22.1.3.4 String.prototype.concat with multiple param args", `
+  function build(seg, q) {
+    return fetch("https://api.example.com/".concat(seg, "?q=", q));
+  }
+  build("items", "active");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/items?q=active"; });
 });
 
 test("§ 7.1.17 String coercion via String() callable", `

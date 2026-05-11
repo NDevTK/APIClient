@@ -1558,22 +1558,32 @@ function _specUrlSearchParamsPrototypeAv() {
   }
   return _SPEC_USP_PROTO_AV;
 }
+// ECMA § 22.1.3 String.prototype methods → return type. Single source of
+// truth: prototype registry props are built from this table; post-sub
+// dispatch reads returnType directly from the builtin-method AV (DRY).
+// RegExp-accepting methods (match, matchAll, search) per § 22.1.3.10/11/16
+// dispatched via the shared String.prototype.* path which detects
+// regex-instance first arg and routes to the host engine.
+var _STRING_PROTO_METHODS = {
+  trim: "string", trimStart: "string", trimEnd: "string",
+  toLowerCase: "string", toUpperCase: "string", toString: "string",
+  valueOf: "string", normalize: "string",
+  replace: "string", replaceAll: "string", concat: "string",
+  slice: "string", substring: "string", substr: "string",
+  padStart: "string", padEnd: "string", repeat: "string",
+  charAt: "string", at: "string",
+  codePointAt: "number", indexOf: "number", lastIndexOf: "number",
+  charCodeAt: "number", search: "number",
+  includes: "boolean", startsWith: "boolean", endsWith: "boolean",
+  split: "array", match: "array", matchAll: "array",
+};
 function _specStringPrototypeAv() {
   if (!_SPEC_STRING_PROTO_AV) {
     var props = {};
-    var stringMethodNames = [
-      "trim", "trimStart", "trimEnd", "toLowerCase", "toUpperCase", "toString", "valueOf", "normalize",
-      "replace", "replaceAll", "concat", "slice", "substring", "substr",
-      "padStart", "padEnd", "repeat", "split", "codePointAt",
-      "indexOf", "lastIndexOf", "includes", "startsWith", "endsWith",
-      "charAt", "charCodeAt", "at",
-      // RegExp-accepting methods per § 22.1.3.10/11/16 — dispatched via
-      // the shared String.prototype.* path which detects regex-instance
-      // first arg and routes to the host engine.
-      "match", "matchAll", "search"
-    ];
-    for (var smi = 0; smi < stringMethodNames.length; smi++) {
-      props[stringMethodNames[smi]] = { kind: "builtin-method", id: "String.prototype." + stringMethodNames[smi] };
+    for (var smn in _STRING_PROTO_METHODS) {
+      if (Object.prototype.hasOwnProperty.call(_STRING_PROTO_METHODS, smn)) {
+        props[smn] = { kind: "builtin-method", id: "String.prototype." + smn, returnType: _STRING_PROTO_METHODS[smn] };
+      }
     }
     _SPEC_STRING_PROTO_AV = { kind: "obj-lit", props: props };
   }
@@ -2316,12 +2326,20 @@ function _specObjectPrototypeAv() {
 // Number.prototype per ECMA § 21.1.3 — pure. All methods route through
 // _applyNumberMethodToConst from _specApplyBuiltinMethod.
 var _SPEC_NUMBER_PROTO_AV = null;
+// ECMA § 21.1.3 Number.prototype methods → return type. Single source of
+// truth: registry props built from this, post-sub dispatch reads returnType.
+var _NUMBER_PROTO_METHODS = {
+  toString: "string", toFixed: "string", toExponential: "string",
+  toPrecision: "string", toLocaleString: "string",
+  valueOf: "number",
+};
 function _specNumberPrototypeAv() {
   if (!_SPEC_NUMBER_PROTO_AV) {
     var props = {};
-    var numMethodNames = ["toString", "toFixed", "toExponential", "toPrecision", "valueOf", "toLocaleString"];
-    for (var nmi = 0; nmi < numMethodNames.length; nmi++) {
-      props[numMethodNames[nmi]] = { kind: "builtin-method", id: "Number.prototype." + numMethodNames[nmi] };
+    for (var nmn in _NUMBER_PROTO_METHODS) {
+      if (Object.prototype.hasOwnProperty.call(_NUMBER_PROTO_METHODS, nmn)) {
+        props[nmn] = { kind: "builtin-method", id: "Number.prototype." + nmn, returnType: _NUMBER_PROTO_METHODS[nmn] };
+      }
     }
     _SPEC_NUMBER_PROTO_AV = { kind: "obj-lit", props: props };
   }
@@ -2651,6 +2669,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
           var u = (ub === undefined) ? new URL(urlInputLeaves[uili]) : new URL(urlInputLeaves[uili], ub);
           urlResults.push({
             kind: "obj-lit",
+            _ctorId: "WHATWG.URL",
             props: {
               href: { kind: "const", value: u.href },
               pathname: { kind: "const", value: u.pathname },
@@ -2722,6 +2741,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     for (var rli = 0; rli < reqInputLeaves.length; rli++) {
       reqResults.push({
         kind: "obj-lit",
+        _ctorId: "Fetch.Request",
         props: {
           url: { kind: "const", value: reqInputLeaves[rli] },
           method: reqMethodAv,
@@ -5106,6 +5126,20 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
           dims: { origin: true, path: true, query: true, hash: true, content: true }
         };
       }
+      // ECMA § 22.1.3.4 String.prototype.concat with partially-known
+      // args: preserve the CONCAT STRUCTURE as a binop chain so further
+      // caller-arg substitution can fold it when params resolve. Without
+      // this the analyser collapses "prefix".concat(userParam) to an
+      // opaque coerce, losing userParam's later-resolvable structure.
+      // Per spec the result is recv + arg0 + arg1 + ... ToString-coerced.
+      if (strMethName === "concat" && recvAv) {
+        var concatAcc = recvAv;
+        for (var concati = 0; concati < argAvs.length; concati++) {
+          var concatArg = argAvs[concati] || { kind: "top" };
+          concatAcc = { kind: "binop", op: "+", left: concatAcc, right: concatArg };
+        }
+        return concatAcc;
+      }
       if (recvAv) return { kind: "coerce", to: "string", arg: recvAv };
       return { kind: "top" };
     }
@@ -5438,6 +5472,112 @@ function _specCollectAncestorCtors(classNode, scope) {
   return ctors;
 }
 
+// ECMA § 15.7.3 ClassHeritage / § 15.7.10 SuperCall: project a derived
+// constructor's caller args through the super(...) chain to compute each
+// ancestor ctor's effective args. Walks from derivedCtor up via the
+// extends chain. For each ancestor, scans the IMMEDIATE descendant's
+// ctor body for super(arg1, arg2, ...) calls; each super arg that's an
+// Identifier of a descendant param resolves to the descendant's
+// corresponding effective arg.
+//
+// Returns Map<ctorNode, args[]> mapping each ancestor ctor (in
+// derived-to-base order) to its effective AV args. The derivedCtor
+// itself is NOT included (caller has already substituted it).
+//
+// Non-Identifier super args (literal / member / call) resolve via the
+// descendant's ctorState — falls back to `top` when unresolvable, so
+// downstream substitution still proceeds for the args that resolved.
+function _specProjectArgsThroughSuperChain(derivedCtorNode, derivedArgs) {
+  if (!derivedCtorNode || !_t.isClassMethod(derivedCtorNode) ||
+      derivedCtorNode.kind !== "constructor") return null;
+  var result = new Map();
+  // Locate the derived ctor's enclosing ClassBody by walking up.
+  // We need ClassBody → Class → ClassBody (ancestor)... so use the
+  // function-path lookup table.
+  var derivedFuncPath = _specFuncPathByNode.get(derivedCtorNode);
+  if (!derivedFuncPath) return null;
+  var classBodyPath = derivedFuncPath.parentPath;
+  if (!classBodyPath || !_t.isClassBody(classBodyPath.node)) return null;
+  // Walk up: for each level, find the super(...) call in the
+  // descendant's body and project its args.
+  var descCtorNode = derivedCtorNode;
+  var descArgs = derivedArgs;
+  var descClassBody = classBodyPath.node;
+  var descClassParent = classBodyPath.parent;
+  var visited = new Set();
+  while (descClassParent && !visited.has(descClassParent)) {
+    visited.add(descClassParent);
+    if (!(_t.isClassDeclaration(descClassParent) || _t.isClassExpression(descClassParent))) break;
+    if (!descClassParent.superClass || !_t.isIdentifier(descClassParent.superClass)) break;
+    // Resolve superClass to its ClassBody + ctor.
+    var supScope = derivedFuncPath.scope;
+    var supBinding = supScope && supScope.getBinding(descClassParent.superClass.name);
+    if (!supBinding || !supBinding.path || !supBinding.path.node) break;
+    var supNode = supBinding.path.node;
+    var supBody = null;
+    var supClass = null;
+    if (_t.isClassDeclaration(supNode)) { supBody = supNode.body; supClass = supNode; }
+    else if (_t.isVariableDeclarator(supNode) && supNode.init && _t.isClassExpression(supNode.init)) {
+      supBody = supNode.init.body; supClass = supNode.init;
+    }
+    if (!supBody || !_t.isClassBody(supBody)) break;
+    var supCtor = null;
+    for (var sci = 0; sci < supBody.body.length; sci++) {
+      var sm = supBody.body[sci];
+      if (_t.isClassMethod(sm) && sm.kind === "constructor") { supCtor = sm; break; }
+    }
+    if (!supCtor) break;
+    // Scan descendant's body for super(...) call to extract its args.
+    var supCallArgs = null;
+    if (descCtorNode.body && _t.isBlockStatement(descCtorNode.body)) {
+      var descStmts = descCtorNode.body.body;
+      for (var dsi = 0; dsi < descStmts.length && !supCallArgs; dsi++) {
+        var ds = descStmts[dsi];
+        if (_t.isExpressionStatement(ds) && ds.expression &&
+            _t.isCallExpression(ds.expression) && _t.isSuper(ds.expression.callee)) {
+          supCallArgs = ds.expression.arguments;
+        }
+      }
+    }
+    // Project each super arg to the ancestor's param via the descendant's
+    // param index. Identifier super arg → look up in descArgs by param idx.
+    var ancEffectiveArgs = [];
+    var supParams = supCtor.params || [];
+    for (var spi = 0; spi < supParams.length; spi++) {
+      var ancArgAv = { kind: "top" };
+      if (supCallArgs && spi < supCallArgs.length) {
+        var saNode = supCallArgs[spi];
+        if (saNode && _t.isIdentifier(saNode)) {
+          // Find which descendant param this Identifier names; use
+          // descArgs[paramIdx] as the effective ancestor arg.
+          var descParams = descCtorNode.params || [];
+          for (var dpi = 0; dpi < descParams.length; dpi++) {
+            var dp = descParams[dpi];
+            var dpName = null;
+            if (_t.isIdentifier(dp)) dpName = dp.name;
+            else if (_t.isAssignmentPattern(dp) && _t.isIdentifier(dp.left)) dpName = dp.left.name;
+            if (dpName === saNode.name && dpi < descArgs.length) {
+              ancArgAv = descArgs[dpi];
+              break;
+            }
+          }
+        } else if (_t.isStringLiteral(saNode)) ancArgAv = { kind: "const", value: saNode.value };
+        else if (_t.isNumericLiteral(saNode)) ancArgAv = { kind: "const", value: saNode.value };
+        else if (_t.isBooleanLiteral(saNode)) ancArgAv = { kind: "const", value: saNode.value };
+        else if (_t.isNullLiteral(saNode)) ancArgAv = { kind: "const", value: null };
+      }
+      ancEffectiveArgs.push(ancArgAv);
+    }
+    result.set(supCtor, ancEffectiveArgs);
+    // Move up one level: descendant becomes the ancestor we just processed.
+    descCtorNode = supCtor;
+    descArgs = ancEffectiveArgs;
+    descClassParent = supClass;
+    descClassBody = supBody;
+  }
+  return result.size > 0 ? result : null;
+}
+
 // § 9.2.1 OrdinaryCallEvaluation: locate the constructor whose `this.X = ...`
 // assignments define the receiver shape for this method's `this`. Three
 // structural shapes per ECMA spec:
@@ -5746,13 +5886,54 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
       var ancCtorNode = ancCtorPath.node;
       var ancCtorState = _specStateCreate();
       var ancParams = ancCtorNode.params || [];
+      // ECMA § 13.3.6.3 SuperCall: when the derived ctor body contains
+      // `super(arg1, arg2, ...)`, the ancestor ctor's params bind to
+      // those args. Scan the derived ctor body for the first super call
+      // and project its args onto the ancestor's param state. This
+      // makes effects like `this.base = b` in Base resolve to whatever
+      // Derived passed as the super arg (a param-of-Derived ref, which
+      // later resolves via ctor-arg substitution at the call site).
+      var superArgs = null;
+      if (ctorPath && ctorPath.node && ctorPath.node.body && _t.isBlockStatement(ctorPath.node.body)) {
+        var ctorStmts = ctorPath.node.body.body;
+        for (var csi = 0; csi < ctorStmts.length && !superArgs; csi++) {
+          var cs = ctorStmts[csi];
+          var superCall = null;
+          if (_t.isExpressionStatement(cs) && cs.expression &&
+              _t.isCallExpression(cs.expression) && _t.isSuper(cs.expression.callee)) {
+            superCall = cs.expression;
+          }
+          if (superCall) superArgs = superCall.arguments;
+        }
+      }
       for (var apii = 0; apii < ancParams.length; apii++) {
         var ap = ancParams[apii];
         if (!ap) continue;
-        if (ap.type === "Identifier") ancCtorState[ap.name] = { kind: "param", idx: apii, fn: null };
-        else if (ap.type === "AssignmentPattern" && ap.left && ap.left.type === "Identifier") {
-          ancCtorState[ap.left.name] = { kind: "param", idx: apii, fn: null };
+        var apName = null;
+        if (ap.type === "Identifier") apName = ap.name;
+        else if (ap.type === "AssignmentPattern" && ap.left && ap.left.type === "Identifier") apName = ap.left.name;
+        if (!apName) continue;
+        var apAv = null;
+        if (superArgs && apii < superArgs.length) {
+          // Map super-call arg expression to its AV. For an Identifier
+          // arg (`super(b)` where `b` is derived ctor's param), look up
+          // the corresponding derived-ctor param AV from ctorState.
+          var sa = superArgs[apii];
+          if (sa && sa.type === "Identifier" && Object.prototype.hasOwnProperty.call(ctorState, sa.name)) {
+            apAv = ctorState[sa.name];
+          } else if (sa) {
+            // Literal / other expression: read its prepass AV or
+            // fall back to abstract.
+            apAv = _specPathValMemo.get(sa);
+            if (!apAv) {
+              if (_t.isStringLiteral(sa)) apAv = { kind: "const", value: sa.value };
+              else if (_t.isNumericLiteral(sa)) apAv = { kind: "const", value: sa.value };
+              else if (_t.isBooleanLiteral(sa)) apAv = { kind: "const", value: sa.value };
+              else if (_t.isNullLiteral(sa)) apAv = { kind: "const", value: null };
+            }
+          }
         }
+        ancCtorState[apName] = apAv || { kind: "param", idx: apii, fn: ancCtorNode };
       }
       var ancEffects = [];
       var ancBody = ancCtorNode.body;
@@ -5794,6 +5975,25 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
         // only fill in props the child didn't define.
         if (Object.prototype.hasOwnProperty.call(props, ancKey)) continue;
         props[ancKey] = ancEff.value;
+      }
+      // ECMA § 15.7.5 ClassHeritage: inherited methods. Index Base's
+      // class methods on the instance so `derivedInstance.baseMethod()`
+      // dispatches correctly. Walk ancestor's ClassBody for kind="method"
+      // members (skip static), expose as function-ref AVs. Per the
+      // MRO: child overrides parent — only inherit when child didn't
+      // already define the same name.
+      var ancClassNode = ancCtorPath.parentPath && ancCtorPath.parent;
+      if (ancClassNode && _t.isClassBody(ancClassNode)) {
+        var ancMembers = ancClassNode.body;
+        for (var ammi = 0; ammi < ancMembers.length; ammi++) {
+          var amm = ancMembers[ammi];
+          if (!_t.isClassMethod(amm) || amm.kind !== "method" || amm.static || amm.computed) continue;
+          var ammName = _t.isIdentifier(amm.key) ? amm.key.name :
+            (_t.isStringLiteral(amm.key) ? amm.key.value : null);
+          if (ammName === null) continue;
+          if (Object.prototype.hasOwnProperty.call(props, ammName)) continue;
+          props[ammName] = { kind: "function-ref", funcNode: amm, methodOf: ancClassNode.parent };
+        }
       }
     }
   }
@@ -6238,16 +6438,38 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       // Destructured array param `function f([a, b])` per § 14.3.3 /
       // § 8.6.2 ArrayBindingPattern: each element binds to
       // `member(param-i, idx)` where idx is the position as a const.
+      // Defaults `[a = "x"]` per ECMA § 14.3.3: when the array slot is
+      // undefined, the default expression's value is used. Abstract
+      // over-approx: union of (member-access, default).
       for (var ai = 0; ai < p.elements.length; ai++) {
         var ae = p.elements[ai];
         if (!ae) continue;
-        if (ae.type === "AssignmentPattern") ae = ae.left;
+        var aeDefault = null;
+        if (ae.type === "AssignmentPattern") {
+          var aeDft = ae.right;
+          if (aeDft) {
+            aeDefault = _specPathValMemo.get(aeDft) || null;
+            if (!aeDefault) {
+              if (aeDft.type === "StringLiteral" || aeDft.type === "NumericLiteral" || aeDft.type === "BooleanLiteral") {
+                aeDefault = { kind: "const", value: aeDft.value };
+              } else if (aeDft.type === "NullLiteral") {
+                aeDefault = { kind: "const", value: null };
+              } else if (aeDft.type === "ObjectExpression" && aeDft.properties.length === 0) {
+                aeDefault = { kind: "obj-lit", props: Object.create(null) };
+              } else if (aeDft.type === "ArrayExpression" && aeDft.elements.length === 0) {
+                aeDefault = { kind: "array-lit", elements: [] };
+              }
+            }
+          }
+          ae = ae.left;
+        }
         if (ae && ae.type === "Identifier") {
-          state[ae.name] = {
+          var aMember = {
             kind: "member",
             obj: { kind: "param", idx: i, fn: funcNode },
             key: { kind: "const", value: ai }
           };
+          state[ae.name] = aeDefault ? _specSetUnionAv(aMember, aeDefault) : aMember;
         }
       }
     } else if (p.type === "RestElement" && p.argument && p.argument.type === "Identifier") {
@@ -6947,6 +7169,74 @@ function _specResolveLeafInCalleeContext(node, calleeFnPath, callExpr, vals) {
     }
     return null;
   }
+  // ECMA § 13.10 PropertyAccess on a leaf-resolvable receiver: when the
+  // member's obj resolves to an array-lit (e.g. cb param substituted from
+  // map's per-element array entry) and the key is a const-numeric in
+  // range, project to that element. Same rule applies to const-string-key
+  // access on obj-lit. Required for HOF callbacks like
+  // `arr.map(e => e[0] + "=" + e[1])` where e is the array element.
+  // Iterative chain walk: build the MemberExpression spine bottom-up
+  // (leaf first, outermost last), then resolve leaf and apply each step.
+  if (_t.isMemberExpression(node)) {
+    var memSpine = [];
+    var memCursor = node;
+    while (_t.isMemberExpression(memCursor)) {
+      memSpine.push(memCursor);
+      memCursor = memCursor.object;
+    }
+    var memLeafNode = memCursor;
+    // Resolve the leaf (Identifier / literal) using the non-recursive branches above.
+    var memBaseAv = null;
+    if (_t.isStringLiteral(memLeafNode)) memBaseAv = { kind: "const", value: memLeafNode.value };
+    else if (_t.isNumericLiteral(memLeafNode)) memBaseAv = { kind: "const", value: memLeafNode.value };
+    else if (_t.isBooleanLiteral(memLeafNode)) memBaseAv = { kind: "const", value: memLeafNode.value };
+    else if (_t.isNullLiteral(memLeafNode)) memBaseAv = { kind: "const", value: null };
+    else if (_t.isIdentifier(memLeafNode)) {
+      var mlb = calleeFnPath.scope.getBinding(memLeafNode.name);
+      if (mlb && mlb.kind === "param") {
+        var mlps = calleeFnPath.node.params;
+        for (var mlpi = 0; mlpi < mlps.length; mlpi++) {
+          var mlpar = mlps[mlpi];
+          var mlbid = _t.isAssignmentPattern(mlpar) ? mlpar.left : mlpar;
+          if (mlb.identifier === mlbid) {
+            memBaseAv = mlpi < callExpr.arguments.length ?
+              (vals.get(callExpr.arguments[mlpi]) || { kind: "top" }) :
+              { kind: "const", value: undefined };
+            break;
+          }
+        }
+      }
+    }
+    if (!memBaseAv) return null;
+    // Apply each member step from innermost (leaf-adjacent) to outermost.
+    for (var msi = memSpine.length - 1; msi >= 0 && memBaseAv; msi--) {
+      var memStep = memSpine[msi];
+      var memStepKey = null;
+      if (memStep.computed) {
+        if (_t.isStringLiteral(memStep.property)) memStepKey = { kind: "const", value: memStep.property.value };
+        else if (_t.isNumericLiteral(memStep.property)) memStepKey = { kind: "const", value: memStep.property.value };
+        // Non-literal computed keys: only the param-Identifier case is
+        // resolvable inline (without re-entering this function). Defer
+        // to the spec-eval main pass via vals.get.
+        else if (vals && vals.get) memStepKey = vals.get(memStep.property) || null;
+      } else if (_t.isIdentifier(memStep.property)) {
+        memStepKey = { kind: "const", value: memStep.property.name };
+      }
+      if (!memStepKey || memStepKey.kind !== "const") return null;
+      var prevAv = memBaseAv;
+      memBaseAv = null;
+      if (prevAv.kind === "array-lit" && prevAv.elements &&
+          typeof memStepKey.value === "number" &&
+          memStepKey.value >= 0 && memStepKey.value < prevAv.elements.length) {
+        memBaseAv = prevAv.elements[memStepKey.value];
+      } else if (prevAv.kind === "obj-lit" && prevAv.props &&
+          (typeof memStepKey.value === "string" || typeof memStepKey.value === "number") &&
+          Object.prototype.hasOwnProperty.call(prevAv.props, memStepKey.value)) {
+        memBaseAv = prevAv.props[memStepKey.value];
+      }
+    }
+    return memBaseAv;
+  }
   return null;
 }
 
@@ -6967,33 +7257,66 @@ function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) 
   // Leaf.
   var leafAv = _specResolveLeafInCalleeContext(retArg, calleeFnPath, callExpr, vals);
   if (leafAv !== null) return leafAv;
-  // BinaryExpression `+` per § 13.8.1.
+  // BinaryExpression `+` per § 13.8.1. Operands may themselves be
+  // BinaryExpressions (e.g. `a + "=" + b`); iterative postorder tree
+  // walk resolves them via the same leaf rule. Cycle-free by AST
+  // structure (BinaryExpression children are AST descendants).
   if (_t.isBinaryExpression(retArg) && retArg.operator === "+") {
-    var leftAv = _specResolveLeafInCalleeContext(retArg.left, calleeFnPath, callExpr, vals);
-    var rightAv = _specResolveLeafInCalleeContext(retArg.right, calleeFnPath, callExpr, vals);
-    if (leftAv === null || rightAv === null) return null;
-    var leftLeaves = _avFlattenAnyConstLeaves(leftAv);
-    var rightLeaves = _avFlattenAnyConstLeaves(rightAv);
-    if (leftLeaves === null || rightLeaves === null) return null;
-    var concatResults = [];
-    for (var ll = 0; ll < leftLeaves.length; ll++) {
-      for (var rr = 0; rr < rightLeaves.length; rr++) {
-        var lv = leftLeaves[ll], rv = rightLeaves[rr];
-        // ToString per § 7.1.17 when either operand is string.
-        if (typeof lv === "string" || typeof rv === "string") {
-          concatResults.push({ kind: "const", value: String(lv) + String(rv) });
-        } else if (typeof lv === "number" && typeof rv === "number") {
-          concatResults.push({ kind: "const", value: lv + rv });
-        } else {
-          return null;  // unsupported types
+    // Build postorder traversal: each BinaryExpression node appears
+    // AFTER its operands. We then compute AVs bottom-up.
+    var binopOrder = [];
+    var binopStack = [{ node: retArg, state: 0 }];
+    while (binopStack.length > 0) {
+      var bsTop = binopStack[binopStack.length - 1];
+      if (bsTop.state === 0) {
+        bsTop.state = 1;
+        if (_t.isBinaryExpression(bsTop.node) && bsTop.node.operator === "+") {
+          binopStack.push({ node: bsTop.node.right, state: 0 });
+          binopStack.push({ node: bsTop.node.left, state: 0 });
         }
+      } else {
+        binopOrder.push(bsTop.node);
+        binopStack.pop();
       }
     }
-    if (concatResults.length === 1) return concatResults[0];
-    var concatOr = concatResults[0];
-    // _specSetUnionAv per § 13.8.1 BinaryExpression `+` distribution.
-    for (var ci = 1; ci < concatResults.length; ci++) concatOr = _specSetUnionAv(concatOr, concatResults[ci]);
-    return concatOr;
+    var binopAv = new Map();
+    for (var bopi = 0; bopi < binopOrder.length; bopi++) {
+      var bn = binopOrder[bopi];
+      if (_t.isBinaryExpression(bn) && bn.operator === "+") {
+        binopAv.set(bn, null); // placeholder; resolved below
+      } else {
+        var leafAvNested = _specResolveLeafInCalleeContext(bn, calleeFnPath, callExpr, vals);
+        if (leafAvNested === null) return null;
+        binopAv.set(bn, leafAvNested);
+      }
+    }
+    // Bottom-up reduce binops using already-computed children.
+    for (var bopi2 = 0; bopi2 < binopOrder.length; bopi2++) {
+      var bn2 = binopOrder[bopi2];
+      if (!_t.isBinaryExpression(bn2) || bn2.operator !== "+") continue;
+      var bnLeftAv = binopAv.get(bn2.left);
+      var bnRightAv = binopAv.get(bn2.right);
+      if (!bnLeftAv || !bnRightAv) return null;
+      var bnLeftL = _avFlattenAnyConstLeaves(bnLeftAv);
+      var bnRightL = _avFlattenAnyConstLeaves(bnRightAv);
+      if (bnLeftL === null || bnRightL === null) return null;
+      var bnResults = [];
+      for (var bli2 = 0; bli2 < bnLeftL.length; bli2++) {
+        for (var bri2 = 0; bri2 < bnRightL.length; bri2++) {
+          var blv = bnLeftL[bli2], brv = bnRightL[bri2];
+          if (typeof blv === "string" || typeof brv === "string") {
+            bnResults.push({ kind: "const", value: String(blv) + String(brv) });
+          } else if (typeof blv === "number" && typeof brv === "number") {
+            bnResults.push({ kind: "const", value: blv + brv });
+          } else return null;
+        }
+      }
+      if (bnResults.length === 0) return null;
+      var bnReduced = bnResults[0];
+      for (var bri3 = 1; bri3 < bnResults.length; bri3++) bnReduced = _specSetUnionAv(bnReduced, bnResults[bri3]);
+      binopAv.set(bn2, bnReduced);
+    }
+    return binopAv.get(retArg);
   }
   // TemplateLiteral per § 13.2.8.6: quasis interspersed with expressions.
   if (_t.isTemplateLiteral(retArg)) {
@@ -8789,6 +9112,40 @@ function _specBuildSlice(programPath) {
               break;
             }
           }
+          // ECMA § 15.7.3 ClassHeritage: when own class body doesn't define
+          // the method, walk the extends chain. `new Derived(...).get()`
+          // dispatches to Base.get when Derived inherits from Base without
+          // overriding. Iterate ancestors via the class's superClass
+          // binding; stop when found OR chain ends.
+          if (!calleeNode && classDeclNode.superClass && _t.isIdentifier(classDeclNode.superClass)) {
+            var ancCls = classDeclNode;
+            var ancSeen = new Set();
+            while (ancCls && !calleeNode) {
+              if (ancSeen.has(ancCls)) break;
+              ancSeen.add(ancCls);
+              if (!ancCls.superClass || !_t.isIdentifier(ancCls.superClass)) break;
+              var ancB = p.scope.getBinding(ancCls.superClass.name);
+              if (!ancB || !ancB.path || !ancB.path.node) break;
+              var ancN = ancB.path.node;
+              var ancClsBody = null;
+              if (_t.isClassDeclaration(ancN) && ancN.body) {
+                ancClsBody = ancN.body; ancCls = ancN;
+              } else if (_t.isVariableDeclarator(ancN) && ancN.init &&
+                         _t.isClassExpression(ancN.init) && ancN.init.body) {
+                ancClsBody = ancN.init.body; ancCls = ancN.init;
+              } else break;
+              if (!_t.isClassBody(ancClsBody)) break;
+              for (var ancmi = 0; ancmi < ancClsBody.body.length; ancmi++) {
+                var ancM = ancClsBody.body[ancmi];
+                if (_t.isClassMethod(ancM) && !ancM.static && !ancM.computed &&
+                    ancM.kind === "method" && _t.isIdentifier(ancM.key) &&
+                    ancM.key.name === methName2) {
+                  calleeNode = ancM;
+                  break;
+                }
+              }
+            }
+          }
         }
       }
       if (calleeNode) {
@@ -8902,6 +9259,17 @@ function _specBuildSlice(programPath) {
   for (var spi = 0; spi < fnPaths.length; spi++) {
     if (slice.has(fnPaths[spi].node)) slicePaths.push(fnPaths[spi]);
     if (entryFns.has(fnPaths[spi].node)) entryPaths.push(fnPaths[spi]);
+  }
+  // Function literals passed as HOF args (callbacks: forEach, map,
+  // build(cb), etc.) also need their return memo populated so caller-
+  // arg substitution can dispatch through them via `call` AVs. Seed
+  // the trampoline from them so the inline cb's body is analysed
+  // without relying on a sink/source within the cb itself.
+  for (var hai2 = 0; hai2 < hofArgFns.length; hai2++) {
+    var hafn = hofArgFns[hai2].fnNode;
+    for (var hpi2 = 0; hpi2 < fnPaths.length; hpi2++) {
+      if (fnPaths[hpi2].node === hafn) { entryPaths.push(fnPaths[hpi2]); break; }
+    }
   }
   // The Program itself is implicitly an entry point — top-level
   // statements drive module bootstrapping (var declarations, IIFE
@@ -10416,6 +10784,19 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
     }
     if (bmCalleeAv) {
+      // ECMA § 13.3.6 EvaluateCall on a param-typed callee — the param
+      // refers to a function passed by the caller. Without caller
+      // context the actual function is unknown; produce a lazy `call`
+      // AV whose callee/args will be substituted by caller-arg sub.
+      // When the substitution lands on a function-ref, downstream
+      // _avFlattenStringLeaves dispatches through the return memo.
+      if (bmCalleeAv.kind === "param") {
+        var paramCallArgs = [];
+        for (var pcai = 0; pcai < n.arguments.length; pcai++) {
+          paramCallArgs.push(vals.get(n.arguments[pcai]) || { kind: "top" });
+        }
+        return { kind: "call", callee: bmCalleeAv, args: paramCallArgs };
+      }
       // function-ref dispatch per § 13.3.6: when callee AV is a function-
       // ref (produced by class static-method resolution, ObjectExpression
       // method capture, or closure write-back of stored callbacks), look
@@ -10706,7 +11087,42 @@ function _specEvalLeaf(path, state, vals, effects) {
             //   reduce/flatMap → Top (return type varies by cb and
             //     accumulator semantics; future work)
             if (hofMeth === "forEach") return { kind: "const", value: undefined };
-            if (hofMeth === "filter") return { kind: "array-lit", elements: [hofElementAv] };
+            if (hofMeth === "filter") {
+              // ECMA § 23.1.3.10 Array.prototype.filter — keep elements
+              // where cb returns a truthy value. When source is a
+              // concrete array-lit and cb is single-stmt resolvable,
+              // evaluate per-element: keep when cb-result is truthy
+              // const, drop when falsy const, KEEP when uncertain
+              // (sound over-approximation — runtime decision may keep
+              // either way). Otherwise fall back to single-element
+              // joined.
+              var filterCbBody = hofCb.body;
+              var filterCbRetExpr = null;
+              if (_t.isBlockStatement(filterCbBody) && filterCbBody.body.length === 1 &&
+                  _t.isReturnStatement(filterCbBody.body[0]) && filterCbBody.body[0].argument) {
+                filterCbRetExpr = filterCbBody.body[0].argument;
+              } else if (!_t.isBlockStatement(filterCbBody)) {
+                filterCbRetExpr = filterCbBody;
+              }
+              if (filterCbRetExpr && recvAv.kind === "array-lit" && recvAv.elements) {
+                var filterResults = [];
+                var allFilterOk = true;
+                for (var fei = 0; fei < recvAv.elements.length; fei++) {
+                  var feElem = recvAv.elements[fei];
+                  var feSynVals = new Map();
+                  var feSynCall = { arguments: [filterCbRetExpr] };
+                  feSynVals.set(filterCbRetExpr, feElem);
+                  var feRet = _specEvalReturnArgWithCallerArgs(
+                    filterCbRetExpr, path.get("arguments.0"), feSynCall, feSynVals);
+                  if (feRet === null) { allFilterOk = false; break; }
+                  // Drop when cb-result is a provably falsy const; otherwise keep.
+                  if (feRet.kind === "const" && !feRet.value) continue;
+                  filterResults.push(feElem);
+                }
+                if (allFilterOk) return { kind: "array-lit", elements: filterResults };
+              }
+              return { kind: "array-lit", elements: [hofElementAv] };
+            }
             if (hofMeth === "find" || hofMeth === "findLast") {
               return _specLogicalOrAv(hofElementAv, { kind: "const", value: undefined });
             }
@@ -10724,28 +11140,44 @@ function _specEvalLeaf(path, state, vals, effects) {
               return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
             }
             if (hofMeth === "map") {
-              // Compute cb's return AV via single-stmt fast path.
+              // ECMA § 23.1.3.18 Array.prototype.map — produce an
+              // array-lit of the SAME length as the source, where each
+              // element is cb's return AV evaluated with the source
+              // element as the first arg. This preserves the element
+              // count so downstream .join/.length see the correct shape.
+              // Falls back to single-element [joined] when source isn't
+              // a concrete array-lit (keys-of, opaque) or when cb's
+              // body isn't single-statement-resolvable.
               var mapCbBody = hofCb.body;
+              var mapCbRetExpr = null;
               if (_t.isBlockStatement(mapCbBody) && mapCbBody.body.length === 1 &&
                   _t.isReturnStatement(mapCbBody.body[0]) && mapCbBody.body[0].argument) {
-                // Construct synthetic callExpr with hofElementAv as arg 0.
-                var syntheticVals = new Map();
-                var syntheticArg = mapCbBody.body[0].argument;  // unused as key, just placeholder
-                var syntheticCall = { arguments: [syntheticArg] };
-                syntheticVals.set(syntheticArg, hofElementAv);
-                var mapRet = _specEvalReturnArgWithCallerArgs(
-                  mapCbBody.body[0].argument, path.get("arguments.0"), syntheticCall, syntheticVals);
-                if (mapRet !== null) return { kind: "array-lit", elements: [mapRet] };
+                mapCbRetExpr = mapCbBody.body[0].argument;
+              } else if (!_t.isBlockStatement(mapCbBody)) {
+                mapCbRetExpr = mapCbBody;
               }
-              // Concise arrow body — single expression is implicit return.
-              if (!_t.isBlockStatement(mapCbBody)) {
-                var syntheticVals2 = new Map();
-                var syntheticArg2 = mapCbBody;
-                var syntheticCall2 = { arguments: [syntheticArg2] };
-                syntheticVals2.set(syntheticArg2, hofElementAv);
-                var mapRet2 = _specEvalReturnArgWithCallerArgs(
-                  mapCbBody, path.get("arguments.0"), syntheticCall2, syntheticVals2);
-                if (mapRet2 !== null) return { kind: "array-lit", elements: [mapRet2] };
+              if (mapCbRetExpr && recvAv.kind === "array-lit" && recvAv.elements && recvAv.elements.length > 0) {
+                var perElemResults = [];
+                var allElemOk = true;
+                for (var mei = 0; mei < recvAv.elements.length; mei++) {
+                  var elemSynVals = new Map();
+                  var elemSynCall = { arguments: [mapCbRetExpr] };
+                  elemSynVals.set(mapCbRetExpr, recvAv.elements[mei]);
+                  var elemRet = _specEvalReturnArgWithCallerArgs(
+                    mapCbRetExpr, path.get("arguments.0"), elemSynCall, elemSynVals);
+                  if (elemRet === null) { allElemOk = false; break; }
+                  perElemResults.push(elemRet);
+                }
+                if (allElemOk) return { kind: "array-lit", elements: perElemResults };
+              }
+              // Fallback: single-element with joined cb-return AV.
+              if (mapCbRetExpr) {
+                var syntheticVals = new Map();
+                var syntheticCall = { arguments: [mapCbRetExpr] };
+                syntheticVals.set(mapCbRetExpr, hofElementAv);
+                var mapRet = _specEvalReturnArgWithCallerArgs(
+                  mapCbRetExpr, path.get("arguments.0"), syntheticCall, syntheticVals);
+                if (mapRet !== null) return { kind: "array-lit", elements: [mapRet] };
               }
             }
             return { kind: "top" };
@@ -10847,15 +11279,15 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
     }
     // Lazy-call deferral per § 13.3.6 — when bmCalleeAv is a `member`
-    // AV whose key is symbolic (param-derived), the dispatch can't
-    // resolve at this analysis time. Preserve the call structure so
+    // AV that can't dispatch at this analysis time (key is symbolic
+    // OR obj is unresolved), preserve the call structure so
     // _specInstantiateAv can fold it once params are substituted (the
-    // member access then projects to a function-ref, then we dispatch
-    // through the function-ref's return memo). Closes recursive
-    // dispatch patterns like `function require(id){return modules[id]();}`
-    // where modules is a known obj-lit but id is a param.
-    if (bmCalleeAv && bmCalleeAv.kind === "member" && bmCalleeAv.obj &&
-        bmCalleeAv.obj.kind === "obj-lit") {
+    // member's obj resolves to a typed receiver, the key resolves to a
+    // const method name, then prototype-chain dispatch fires). Closes
+    // both `function require(id){return modules[id]();}` (obj-lit obj
+    // + param key) AND `function(s){return s.toUpperCase()}` (param
+    // obj + const key — receiver type unknown until caller substitutes).
+    if (bmCalleeAv && bmCalleeAv.kind === "member") {
       var lazyCallArgs = [];
       for (var lcai = 0; lcai < n.arguments.length; lcai++) {
         lazyCallArgs.push(vals.get(n.arguments[lcai]) || { kind: "top" });
@@ -10997,7 +11429,12 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       // Substitute obj/key; reduce if the substituted form is
       // obj-lit + Const-key (look up the prop) per § 13.10 PropertyAccess.
       // Also reduce array-lit + Const-numeric-key per § 23.1.4 indexed
-      // element access.
+      // element access. Falls through to a prototype-chain lookup when
+      // subObj has a known [[Prototype]] (const-string → String.prototype,
+      // const-number → Number.prototype, etc.) and subKey is a const
+      // string matching the prototype's method registry — produces the
+      // builtin-method AV bound to subObj so the call substitution
+      // dispatches via _specApplyBuiltinMethod.
       var subObj = subs.get(node.obj) || node.obj;
       var subKey = subs.get(node.key) || node.key;
       if (subObj && subObj.kind === "obj-lit" && subObj.props &&
@@ -11009,25 +11446,54 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
           subKey && subKey.kind === "const" && typeof subKey.value === "number" &&
           subKey.value >= 0 && subKey.value < subObj.elements.length) {
         subs.set(node, subObj.elements[subKey.value]);
+      } else if (subObj && subKey && subKey.kind === "const" &&
+          typeof subKey.value === "string") {
+        // Prototype-chain lookup per § 13.10 PropertyAccess: walk subObj's
+        // [[Prototype]] (registered in _specGetPrototypeOfAv) and project
+        // the method AV. The receiver is preserved structurally — when
+        // the call substitution sees `call(builtin-method, args)` with
+        // a known receiver from the original member node, it dispatches.
+        var protoSub = _specGetPrototypeOfAv(subObj);
+        if (protoSub && protoSub.kind === "obj-lit" && protoSub.props &&
+            Object.prototype.hasOwnProperty.call(protoSub.props, subKey.value)) {
+          subs.set(node, protoSub.props[subKey.value]);
+        } else {
+          subs.set(node, { kind: "member", obj: subObj, key: subKey });
+        }
       } else {
         subs.set(node, { kind: "member", obj: subObj, key: subKey });
       }
       continue;
     }
     if (node.kind === "call") {
-      // Lazy-call deferral per § 13.3.6: substitute callee + args.
-      // After substitution, if callee folded to a function-ref the call
-      // is now ready to dispatch — but we don't recurse into
-      // _specInstantiateAv here (recursion ban). Instead we preserve
-      // the call AV with the substituted callee/args; upstream
-      // consumers who walk the AV (e.g. _avFlattenStringLeaves) can
-      // detect call(function-ref) and fold via a separate dispatch
-      // path. For builtin-method callees (no receiver context here),
-      // bail to top.
+      // Lazy-call deferral per § 13.3.6: substitute callee + args. After
+      // substitution, dispatch:
+      //   – call(function-ref) → still deferred to _avFlattenStringLeaves
+      //     (which reads the callee's return memo + substitutes args).
+      //   – call(builtin-method) with a substituted receiver from the
+      //     original member access → fold via the pure helper bank
+      //     (_applyStringMethodToConst / _applyNumberMethodToConst) when
+      //     the receiver folds to a const value of the right type. When
+      //     the receiver is opaque-but-typed (param / member / binop /
+      //     template / coerce(string)), emit a coerce AV so the schema
+      //     records the method's return type per ECMA-262. We don't call
+      //     _specApplyBuiltinMethod from here — that would form an
+      //     indirect recursion cycle through the .call/.apply paths.
       var subCallee = subs.get(node.callee) || node.callee;
       var subCallArgs = [];
       for (var sci = 0; sci < node.args.length; sci++) {
         subCallArgs.push(subs.get(node.args[sci]) || node.args[sci]);
+      }
+      if (subCallee && subCallee.kind === "builtin-method" && subCallee.id) {
+        var recvForBuiltin = null;
+        if (node.callee && node.callee.kind === "member") {
+          recvForBuiltin = subs.get(node.callee.obj) || node.callee.obj;
+        }
+        var dispatched = _specReduceBuiltinCallPostSub(subCallee, recvForBuiltin, subCallArgs);
+        if (dispatched) {
+          subs.set(node, dispatched);
+          continue;
+        }
       }
       subs.set(node, { kind: "call", callee: subCallee, args: subCallArgs });
       continue;
@@ -12348,6 +12814,13 @@ function _extractFetchCall(path, result, type) {
       } catch (_) { /* fall through — process inline props only */ }
     }
     var opts = optsNode.properties;
+    // Index of the LAST SpreadElement so inline props with the same key
+    // can decide who wins per ECMA § 13.2.5 source order: an inline
+    // property at index i overrides a spread at j only when i > j.
+    var lastSpreadIdx = -1;
+    for (var lsi = 0; lsi < opts.length; lsi++) {
+      if (_t.isSpreadElement(opts[lsi])) lastSpreadIdx = lsi;
+    }
     for (var o = 0; o < opts.length; o++) {
       if (_t.isSpreadElement(opts[o])) continue;  // handled via spec-eval merge above
       if (!_t.isObjectProperty(opts[o]) || opts[o].computed) continue;
@@ -12355,6 +12828,11 @@ function _extractFetchCall(path, result, type) {
       var optVal = opts[o].value;
 
       if (optName === "method") {
+        // When a spread appears AFTER this inline prop, the spread's
+        // method overrides per § 13.2.5. spreadMethod (captured above
+        // from the merged spec-eval AV) IS that override. Skip the
+        // inline extraction so the merged value wins.
+        if (lastSpreadIdx > o && spreadMethod && spreadMethod.length > 0) continue;
         var methodPath = null;
         try { methodPath = optsPath.get("properties." + o + ".value"); } catch(e) { _resolver.collectError(e, "fetchMethodPath"); }
         var methodVals = [];
@@ -13127,6 +13605,20 @@ function _specAvHasParamLeaf(av) {
       if (s.key) stack.push(s.key);
       continue;
     }
+    if (s.kind === "call") {
+      // ECMA § 13.3.6 lazy-call AV: param leaves can live in the callee
+      // (`paramFn(args)` shape) or in any arg. Descend into both.
+      if (s.callee) stack.push(s.callee);
+      if (s.args) for (var caii = 0; caii < s.args.length; caii++) stack.push(s.args[caii]);
+      continue;
+    }
+    if (s.kind === "bound-function") {
+      // ECMA § 10.4.1 bound-function preArgs / target may carry params.
+      if (s.target) stack.push(s.target);
+      if (s.thisArg) stack.push(s.thisArg);
+      if (s.preArgs) for (var bpaii = 0; bpaii < s.preArgs.length; bpaii++) stack.push(s.preArgs[bpaii]);
+      continue;
+    }
   }
   if (typeof av === "object") _specAvHasParamLeafCache.set(av, result);
   return result;
@@ -13344,6 +13836,23 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
                     }
                   }
                   substituted = _specInstantiateAv(substituted, ctorArgAvs, undefined, cmR);
+                  // ECMA § 15.7.3 ClassHeritage SuperCall propagation: when
+                  // the receiver class extends another, the URL/body AV
+                  // might carry param refs tagged with an ANCESTOR ctor
+                  // (Base's ctor wrote `this.X = b` referencing Base.b at
+                  // standalone analysis time; the receiver instance was
+                  // built for Derived). Walk the extends chain and project
+                  // the NewExpression args through each super(...) call to
+                  // produce per-ctor effective args, then substitute.
+                  var superArgsMap = _specProjectArgsThroughSuperChain(cmR, ctorArgAvs);
+                  if (superArgsMap) {
+                    var smapKeys = superArgsMap.keys();
+                    for (var smk = smapKeys.next(); !smk.done; smk = smapKeys.next()) {
+                      var ancCtorNode = smk.value;
+                      var ancEffectiveArgs = superArgsMap.get(ancCtorNode);
+                      substituted = _specInstantiateAv(substituted, ancEffectiveArgs, undefined, ancCtorNode);
+                    }
+                  }
                   break;
                 }
               }
@@ -13478,6 +13987,26 @@ function _avFlattenStringLeavesImpl(rootAv) {
       Object.prototype.hasOwnProperty.call(pageUrlParts, rootAv.id)) {
     return [pageUrlParts[rootAv.id]];
   }
+  // WHATWG Fetch § 5.1 step 4: when the input passed to fetch is a URL
+  // instance, ToString-coerce per WHATWG URL § 6.4 toString() which
+  // returns href. For Request instance per Fetch § 4, the canonical
+  // string is .url. Iteratively unwrap nested URL/Request instances
+  // (e.g. Request(URL(...)) chains) until rootAv is the canonical
+  // string AV. Loop bounded by AV graph depth with cycle guard.
+  var ctorUnwrapSeen = null;
+  while (rootAv && rootAv.kind === "obj-lit" && rootAv._ctorId && rootAv.props) {
+    if (!ctorUnwrapSeen) ctorUnwrapSeen = new Set();
+    if (ctorUnwrapSeen.has(rootAv)) break;
+    ctorUnwrapSeen.add(rootAv);
+    if (rootAv._ctorId === "WHATWG.URL" && rootAv.props.href) {
+      rootAv = rootAv.props.href;
+    } else if (rootAv._ctorId === "Fetch.Request" && rootAv.props.url) {
+      rootAv = rootAv.props.url;
+    } else break;
+  }
+  if (rootAv && rootAv.kind === "const") {
+    return typeof rootAv.value === "string" ? [rootAv.value] : [];
+  }
   // Other singleton kinds (top, param, member, this, obj-lit, array-lit,
   // keys-of, loop-key, args-elt, args-len, taint-source-not-page-origin)
   // have no statically-known string leaf — return empty without allocation.
@@ -13515,6 +14044,38 @@ function _avFlattenStringLeavesImpl(rootAv) {
     } else if (n.kind === "deferred-ctor" && n.args) {
       for (var dai = 0; dai < n.args.length; dai++) {
         if (n.args[dai]) enumStack.push(n.args[dai]);
+      }
+    } else if (n.kind === "call" && n.callee && n.callee.kind === "member" &&
+               n.callee.obj && n.callee.obj.kind === "call" &&
+               n.callee.obj.callee && n.callee.obj.callee.kind === "function-ref" &&
+               n.callee.obj.callee.funcNode &&
+               n.callee.key && n.callee.key.kind === "const" &&
+               typeof n.callee.key.value === "string") {
+      // ECMA § 13.10 nested call+member: `f(x).method(args)` where f is a
+      // function-ref. The inner call's return memo substitutes to a typed
+      // receiver, then prototype-chain lookup dispatches the outer method.
+      // Resolves nested HOF chains where the cb returns an array / string
+      // and the caller chains a method onto the result (split→join etc.).
+      var innerCall = n.callee.obj;
+      var innerRet = _specReturnValueMemo.get(innerCall.callee.funcNode);
+      if (innerRet) {
+        var innerSubst = _specInstantiateAv(innerRet, innerCall.args || [], undefined, innerCall.callee.funcNode);
+        if (innerSubst) {
+          lazyCallSubst.set(innerCall, innerSubst);
+          var protoNcm = _specGetPrototypeOfAv(innerSubst);
+          if (protoNcm && protoNcm.kind === "obj-lit" && protoNcm.props &&
+              Object.prototype.hasOwnProperty.call(protoNcm.props, n.callee.key.value)) {
+            var methodNcm = protoNcm.props[n.callee.key.value];
+            if (methodNcm && methodNcm.kind === "builtin-method") {
+              var dispNcm = _specReduceBuiltinCallPostSub(methodNcm, innerSubst, n.args || []);
+              if (dispNcm) {
+                lazyCallSubst.set(n, dispNcm);
+                enumStack.push(dispNcm);
+                continue;
+              }
+            }
+          }
+        }
       }
     } else if (n.kind === "call" && n.callee && n.callee.kind === "function-ref" && n.callee.funcNode) {
       // Lazy-call dispatch — substitute once and cache the result for pass 2.
@@ -13598,6 +14159,16 @@ function _avFlattenStringLeavesImpl(rootAv) {
       if (lcCached) {
         var lcLeaves = leavesOf.get(lcCached) || [];
         for (var lci = 0; lci < lcLeaves.length; lci++) leaves.push(lcLeaves[lci]);
+      }
+    } else if (av.kind === "call" && av.callee && av.callee.kind === "member" &&
+               av.callee.obj && av.callee.obj.kind === "call" &&
+               av.callee.obj.callee && av.callee.obj.callee.kind === "function-ref" &&
+               av.callee.obj.callee.funcNode) {
+      // Nested call+member: outer dispatch result was cached in pass 1.
+      var ncmCached = lazyCallSubst.get(av);
+      if (ncmCached) {
+        var ncmLeaves = leavesOf.get(ncmCached) || [];
+        for (var ncmi = 0; ncmi < ncmLeaves.length; ncmi++) leaves.push(ncmLeaves[ncmi]);
       }
     }
     // Other kinds (top, param, member, this, obj-lit, array-lit,
@@ -13772,6 +14343,97 @@ function _applyNumberMethodToConst(nv, methodName, argLits) {
     try { return nv.toLocaleString(); } catch (_) { return undefined; }
   }
   return undefined;
+}
+
+// Post-substitution reduction for a `call(builtin-method, args)` AV.
+// Invoked from _specInstantiateAv after substitution has folded the
+// receiver and args. Does NOT call back into _specApplyBuiltinMethod
+// (which would form an indirect recursion cycle through .call/.apply
+// dispatch); instead routes through the pure const-fold helpers
+// (_applyStringMethodToConst / _applyNumberMethodToConst) and emits
+// coerce AVs for opaque-but-typed receivers per ECMA spec return types.
+// Returns the reduced AV, or null when the call can't be reduced
+// (caller preserves the lazy call structure for further substitution).
+function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
+  if (!methodAv || methodAv.kind !== "builtin-method" || !methodAv.id) return null;
+  var methodId = methodAv.id;
+  // Project args to literal values for the pure helpers. If any arg is
+  // not const, the helper can't fold — but we may still emit a coerce
+  // AV based on the method's return type (read from the builtin-method
+  // AV; populated by the prototype registry — _STRING_PROTO_METHODS /
+  // _NUMBER_PROTO_METHODS are the single source of truth, DRY).
+  var argLits = [];
+  var allArgsConst = true;
+  for (var ai = 0; ai < argAvs.length; ai++) {
+    var a = argAvs[ai];
+    if (a && a.kind === "const") argLits.push(a.value);
+    else { allArgsConst = false; break; }
+  }
+  // ECMA § 22.1.3 — String.prototype.* dispatched here. The methodId is
+  // produced by the prototype-chain lookup in _specGetPrototypeOfAv and
+  // is structurally derived from the registry (no name matching).
+  if (methodId.indexOf("String.prototype.") === 0) {
+    var smName = methodId.slice("String.prototype.".length);
+    if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "string" && allArgsConst) {
+      var smRes = _applyStringMethodToConst(recvAv.value, smName, argLits);
+      if (smRes !== undefined) return { kind: "const", value: smRes };
+    }
+    // Const recv + const args, array-returning methods — invoke the
+    // host engine directly to project the result as array-lit. Covers
+    // split / match / matchAll over fully-resolved input. Per
+    // § 22.1.3.23 String.prototype.split's result is a host-native
+    // string[] which lowers to const-leaf array-lit.
+    if (methodAv.returnType === "array" && recvAv && recvAv.kind === "const" &&
+        typeof recvAv.value === "string" && allArgsConst) {
+      try {
+        var hostRes = null;
+        if (smName === "split") {
+          if (argLits.length === 0) hostRes = [recvAv.value];
+          else if (argLits.length === 1 && (typeof argLits[0] === "string" || argLits[0] instanceof RegExp)) {
+            hostRes = recvAv.value.split(argLits[0]);
+          } else if (argLits.length === 2 && typeof argLits[1] === "number") {
+            hostRes = recvAv.value.split(argLits[0], argLits[1]);
+          }
+        }
+        if (hostRes && Array.isArray(hostRes)) {
+          var splitEls = [];
+          for (var hri = 0; hri < hostRes.length; hri++) {
+            splitEls.push({ kind: "const", value: hostRes[hri] });
+          }
+          return { kind: "array-lit", elements: splitEls };
+        }
+      } catch (_) { /* fall through to coerce/top */ }
+    }
+    // Opaque-but-typed receiver: emit a coerce AV with the method's
+    // ECMA-262 return type from the registry. Routes through
+    // _specGetPrototypeOfAv since coerce(to=string) has String.prototype,
+    // so further .method() calls keep folding.
+    if (methodAv.returnType && recvAv) {
+      if (methodAv.returnType === "array") return { kind: "top" };  // opaque recv → can't enumerate
+      return { kind: "coerce", to: methodAv.returnType, arg: recvAv };
+    }
+    return null;
+  }
+  // ECMA § 21.1.3 — Number.prototype.* dispatched here.
+  if (methodId.indexOf("Number.prototype.") === 0) {
+    var nmName = methodId.slice("Number.prototype.".length);
+    if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "number" && allArgsConst) {
+      var nmRes = _applyNumberMethodToConst(recvAv.value, nmName, argLits);
+      if (nmRes !== undefined) return { kind: "const", value: nmRes };
+    }
+    if (methodAv.returnType && recvAv) return { kind: "coerce", to: methodAv.returnType, arg: recvAv };
+    return null;
+  }
+  // ECMA § 23.1.3 — Array.prototype.* dispatched here via the existing
+  // pure helper. Covers join / concat / slice / includes / indexOf /
+  // etc. on array-lit receivers. The helper returns const for fully-
+  // reducible methods (join with all-const elements) or array-lit for
+  // structural methods (concat/slice).
+  if (methodId.indexOf("Array.prototype.") === 0 &&
+      recvAv && recvAv.kind === "array-lit") {
+    return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
+  }
+  return null;
 }
 
 // Single-AV-engine: _ravStep is a thin spec-eval projection. Spec eval
@@ -17802,6 +18464,11 @@ function _extractObjectProperties(node, objExprPath) {
       // is DOMString per HTML § 4.5). Use it so the schema records the
       // correct primitive type even when the runtime value is opaque.
       else if (valAv.kind === "taint-source" && valAv.type) prop.type = valAv.type;
+      // ECMA § 7.1.17 ToString / § 7.1.4 ToNumber: `coerce` AVs carry
+      // the target type even when the underlying value is opaque (e.g.
+      // String(x), x.toUpperCase()). Use the type tag so the schema
+      // records the correct primitive type.
+      else if (valAv.kind === "coerce" && valAv.to) prop.type = valAv.to;
       // Lower to JS value. _avToJsonValue handles const + array-lit +
       // obj-lit recursively; or / param / member / top return {ok:false}
       // and fall through to the caller-arg substitution path below.
@@ -17882,6 +18549,39 @@ function _extractObjectProperties(node, objExprPath) {
       var valAv = _specPathValMemo.get(val);
       if (valAv) {
         var avLeaves = _avFlattenStringLeaves(valAv);
+        // When no leaves yet AND the AV references params (directly or
+        // nested in a `call` AV whose callee is a param), invoke
+        // _resolveAvBySubstitutingCallerArgs to walk enclosing fn's
+        // call sites and substitute. The walker returns string leaves;
+        // for any-primitive body fields we also project const-leaf
+        // numeric/boolean below.
+        if (avLeaves.length === 0 && _specAvHasParamLeaf && _specAvHasParamLeaf(valAv)) {
+          // Find the enclosing function whose params this AV references.
+          // For top-level `_extractObjectProperties` we don't have a
+          // scope path, but we can read the param's `fn` field from any
+          // descendant param AV. Walk valAv to find one.
+          var paramFn = null;
+          var pfStack = [valAv]; var pfSeen = new Set();
+          while (pfStack.length > 0 && !paramFn) {
+            var pfn = pfStack.pop();
+            if (!pfn || pfSeen.has(pfn)) continue;
+            pfSeen.add(pfn);
+            if (pfn.kind === "param" && pfn.fn) { paramFn = pfn.fn; break; }
+            if (pfn.kind === "binop") { if (pfn.left) pfStack.push(pfn.left); if (pfn.right) pfStack.push(pfn.right); }
+            else if (pfn.kind === "template" && pfn.exprs) { for (var pti = 0; pti < pfn.exprs.length; pti++) pfStack.push(pfn.exprs[pti]); }
+            else if (pfn.kind === "or") { if (pfn.left) pfStack.push(pfn.left); if (pfn.right) pfStack.push(pfn.right); if (pfn.alternatives) for (var pai = 0; pai < pfn.alternatives.length; pai++) pfStack.push(pfn.alternatives[pai]); }
+            else if (pfn.kind === "coerce" && pfn.arg) pfStack.push(pfn.arg);
+            else if (pfn.kind === "call") { if (pfn.callee) pfStack.push(pfn.callee); if (pfn.args) for (var pai2 = 0; pai2 < pfn.args.length; pai2++) pfStack.push(pfn.args[pai2]); }
+            else if (pfn.kind === "member") { if (pfn.obj) pfStack.push(pfn.obj); if (pfn.key) pfStack.push(pfn.key); }
+          }
+          if (paramFn) {
+            var paramFnPath2 = _specFuncPathByNode.get(paramFn);
+            if (paramFnPath2) {
+              var subLeaves2 = _resolveAvBySubstitutingCallerArgs(paramFnPath2, valAv);
+              if (subLeaves2 && subLeaves2.length > 0) avLeaves = subLeaves2;
+            }
+          }
+        }
         // String-leaf fallback returned empty AND the AV is a `param`
         // — substitute caller args manually per ECMA § 10.2.10 then
         // flatten ANY-typed const leaves (not just string). The existing
