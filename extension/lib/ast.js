@@ -644,6 +644,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcArgsLenByFn = new WeakMap();
   _hcRestArgsByFn = new WeakMap();
   _specEnclosingFnsCache = new WeakMap();
+  _specEnclFnByNode = new WeakMap();
   _specEffectsMemo = new WeakMap();
   _specPathValMemo = new WeakMap();
   _specPostorderMemo = new WeakMap();
@@ -5574,17 +5575,32 @@ var _specEntryPathsByProgram = new WeakMap();
 // When the slice hasn't been computed (e.g. individual-script analysis
 // path before _specBuildSlice runs), returns true (no gate — preserves
 // behaviour). Idempotent — uses cached WeakSet lookup.
+// Resolve any AST node to its enclosing function via the pre-populated
+// _specEnclFnByNode map (built once by _specBuildSlice). O(1) lookup
+// replaces Babel's getFunctionParent() O(depth) parent-walk. Falls back
+// to the program-walk for nodes not in the map (paths from a later
+// transformation, etc.).
+var _specEnclFnByNode = new WeakMap();
 function _isPathInSlice(path) {
   if (!path) return true;
   // Slice not yet computed (or analysis path bypassed _specBuildSlice):
   // gate is open, preserving prior behaviour.
   if (!_specCallGraphCallersOf) return true;
+  var encNode = path.node ? _specEnclFnByNode.get(path.node) : null;
+  if (encNode) return _specSliceFns.has(encNode);
+  // Pre-pass didn't visit this node (newly synthesised path). Fall back
+  // to Babel's getFunctionParent walk + cache the result for next time.
   var enc = path.getFunctionParent && path.getFunctionParent();
-  if (enc && enc.node) return _specSliceFns.has(enc.node);
-  var p = path;
-  while (p && p.parentPath && !_t.isProgram(p.node)) p = p.parentPath;
-  if (p && p.node && _t.isProgram(p.node)) return _specSliceFns.has(p.node);
-  return true;
+  var fnNode;
+  if (enc && enc.node) {
+    fnNode = enc.node;
+  } else {
+    var p = path;
+    while (p && p.parentPath && !_t.isProgram(p.node)) p = p.parentPath;
+    fnNode = (p && p.node && _t.isProgram(p.node)) ? p.node : null;
+  }
+  if (path.node && fnNode) _specEnclFnByNode.set(path.node, fnNode);
+  return fnNode ? _specSliceFns.has(fnNode) : true;
 }
 
 
@@ -9325,6 +9341,24 @@ function _specBuildSlice(programPath) {
     var enc = p.getFunctionParent();
     entryFns.add(enc && enc.node ? enc.node : programPath.node);
   }
+  // Pre-populate enclosing-fn map for every AST node. Babel's
+  // getFunctionParent() walks parentPath O(depth) per query; with a
+  // deeply-nested minified bundle (1MB+) main-pass visitor dispatch
+  // pays that walk on every CallExpression. A single program-level
+  // pre-pass with a function-stack records every node's enclosing
+  // function in O(program-size) total, giving _isPathInSlice an O(1)
+  // lookup. Pure structural: no name matching, no slice-membership
+  // gating, just AST topology.
+  var encFnStack = [programPath.node];
+  programPath.traverse({
+    enter: function(p) {
+      _specEnclFnByNode.set(p.node, encFnStack[encFnStack.length - 1]);
+      if (_t.isFunction(p.node)) encFnStack.push(p.node);
+    },
+    exit: function(p) {
+      if (_t.isFunction(p.node)) encFnStack.pop();
+    }
+  });
   programPath.traverse({
     "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
       fnPaths.push(p);
