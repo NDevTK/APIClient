@@ -14938,21 +14938,95 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
   // structural methods (concat/slice).
   if (methodId.indexOf("Array.prototype.") === 0 &&
       recvAv && recvAv.kind === "array-lit") {
-    // § 23.1.3.18 Array.prototype.map post-sub: when cb is a function-ref
-    // with a known return AV, fold per element via _specSubstituteParam
-    // (per-element single-param substitution; no recursion into
-    // _specInstantiateAv). Builds array-lit of per-element results.
-    if (methodId === "Array.prototype.map" && argAvs.length >= 1 &&
-        argAvs[0] && argAvs[0].kind === "function-ref" && argAvs[0].funcNode) {
-      var mapCbFn = argAvs[0].funcNode;
-      var mapRetMemo = _specReturnValueMemo.get(mapCbFn);
-      if (mapRetMemo) {
-        var mapPerEl = [];
-        for (var meIdx = 0; meIdx < recvAv.elements.length; meIdx++) {
-          var mappedAv = _specSubstituteParam(mapRetMemo, 0, mapCbFn, recvAv.elements[meIdx]);
-          mapPerEl.push(mappedAv || { kind: "top" });
+    // § 23.1.3 HOF methods post-sub: when cb is a function-ref with a
+    // known return AV, fold per element via _specSubstituteParam (per-
+    // element single-param substitution; no recursion into
+    // _specInstantiateAv). Each HOF has its own per-element semantic:
+    //   .map → array-lit of cb returns
+    //   .filter → array-lit of elements whose cb return is truthy
+    //   .find → first element whose cb return is truthy, joined with undefined
+    //   .findIndex → first matching index, joined with -1
+    //   .some/.every → or(true, false) — sound: cb may or may not match
+    //   .forEach → undefined (side-effect only)
+    //   .reduce → accumulator AV folded through cb with seed + per element
+    if (methodId.indexOf("Array.prototype.") === 0 &&
+        argAvs.length >= 1 && argAvs[0] && argAvs[0].kind === "function-ref" && argAvs[0].funcNode) {
+      var hofBareName = methodId.slice("Array.prototype.".length);
+      var isHofPost = _SPEC_ARRAY_HOF_METHODS.indexOf(hofBareName) >= 0;
+      if (isHofPost) {
+        var hofCbFn = argAvs[0].funcNode;
+        var hofRetMemo = _specReturnValueMemo.get(hofCbFn);
+        if (hofRetMemo) {
+          if (hofBareName === "map") {
+            var mapPerEl = [];
+            for (var meIdx = 0; meIdx < recvAv.elements.length; meIdx++) {
+              mapPerEl.push(_specSubstituteParam(hofRetMemo, 0, hofCbFn, recvAv.elements[meIdx]) || { kind: "top" });
+            }
+            return { kind: "array-lit", elements: mapPerEl };
+          }
+          if (hofBareName === "filter") {
+            var filterEls = [];
+            for (var feI = 0; feI < recvAv.elements.length; feI++) {
+              var fe = recvAv.elements[feI];
+              var fePred = _specSubstituteParam(hofRetMemo, 0, hofCbFn, fe);
+              // Truthy const → keep. Falsy const → drop. Anything else
+              // (param/member/binop/or/etc.) → KEEP per § 23.1.3.10
+              // step 7.c.iii.4 sound over-approximation.
+              if (fePred && fePred.kind === "const" && !fePred.value) continue;
+              filterEls.push(fe);
+            }
+            return { kind: "array-lit", elements: filterEls };
+          }
+          if (hofBareName === "find" || hofBareName === "findLast") {
+            // § 23.1.3.10 Array.prototype.find — return first satisfying
+            // element OR undefined if none. Sound: join all elements that
+            // could satisfy plus undefined.
+            var findAcc = { kind: "const", value: undefined };
+            for (var fdI = 0; fdI < recvAv.elements.length; fdI++) {
+              var fdEl = recvAv.elements[fdI];
+              var fdPred = _specSubstituteParam(hofRetMemo, 0, hofCbFn, fdEl);
+              if (fdPred && fdPred.kind === "const" && !fdPred.value) continue;
+              findAcc = _specLogicalOrAv(findAcc, fdEl);
+            }
+            return findAcc;
+          }
+          if (hofBareName === "findIndex" || hofBareName === "findLastIndex") {
+            // § 23.1.3.12 — return first matching index OR -1. Sound: join
+            // all statically-possible indices that could match plus -1.
+            var fidxAcc = { kind: "const", value: -1 };
+            for (var fidxI = 0; fidxI < recvAv.elements.length; fidxI++) {
+              var fidxEl = recvAv.elements[fidxI];
+              var fidxPred = _specSubstituteParam(hofRetMemo, 0, hofCbFn, fidxEl);
+              if (fidxPred && fidxPred.kind === "const" && !fidxPred.value) continue;
+              fidxAcc = _specLogicalOrAv(fidxAcc, { kind: "const", value: fidxI });
+            }
+            return fidxAcc;
+          }
+          if (hofBareName === "some" || hofBareName === "every") {
+            // § 23.1.3.{27,7} — boolean result. Without exhaustive per-
+            // element resolution: cb may match all/none/some elements.
+            // Try to fold when all elements give the same const verdict.
+            var allTrue = true, allFalse = true;
+            for (var seI = 0; seI < recvAv.elements.length; seI++) {
+              var seRes = _specSubstituteParam(hofRetMemo, 0, hofCbFn, recvAv.elements[seI]);
+              if (!seRes || seRes.kind !== "const") { allTrue = false; allFalse = false; break; }
+              if (seRes.value) allFalse = false; else allTrue = false;
+            }
+            if (hofBareName === "some") {
+              if (allTrue) return { kind: "const", value: true };
+              if (allFalse) return { kind: "const", value: false };
+            } else { // every
+              if (allTrue) return { kind: "const", value: true };
+              if (allFalse) return { kind: "const", value: false };
+            }
+            return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+          }
+          if (hofBareName === "forEach") {
+            // Side effects only; return undefined per § 23.1.3.15. Post-sub
+            // doesn't replay side effects (those happened at body-walk).
+            return { kind: "const", value: undefined };
+          }
         }
-        return { kind: "array-lit", elements: mapPerEl };
       }
     }
     return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
