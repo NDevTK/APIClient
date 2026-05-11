@@ -645,6 +645,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcRestArgsByFn = new WeakMap();
   _specEnclosingFnsCache = new WeakMap();
   _specEnclFnByNode = new WeakMap();
+  _specProgramGlobalsPrepassDoneGlobal = null;
   _specEffectsMemo = new WeakMap();
   _specPathValMemo = new WeakMap();
   _specPostorderMemo = new WeakMap();
@@ -9165,15 +9166,35 @@ function _funcPathFromAv(av, ctxPath) {
   }
   return null;
 }
+// Fast-skip: once the program-level globals prepass has run, subsequent
+// callers don't need to walk parentPath up to the Program node just to
+// verify it's done. _specProgramGlobalsPrepassDoneGlobal tracks the
+// most-recently-completed Program node so the common case (every caller
+// passing a path in the same program) short-circuits immediately.
+var _specProgramGlobalsPrepassDoneGlobal = null;
 function _specEnsureProgramGlobalsPrepass(anyPath) {
   if (!anyPath) return;
+  // Fast path: when the current path's _specPathValMemo (per WHATWG HTML
+  // § 7.2.1 globalThis = Window) suggests the prepass already ran for
+  // this program, skip the parentPath walk entirely. The WeakSet check
+  // requires a Program node reference; we keep a single global pointer
+  // for the most-recently-prepass'd program. Same-program callers hit
+  // immediately; different-program callers fall through to the
+  // walk-and-check below. Sound: globals prepass is idempotent per
+  // program, so the worst case is one extra walk + idempotent re-call.
+  if (_specProgramGlobalsPrepassDoneGlobal &&
+      _specProgramGlobalsPrepassDone.has(_specProgramGlobalsPrepassDoneGlobal)) return;
   // Walk up to the Program node. Babel wraps Program inside a File node;
   // stop at Program (not File) so _t.isProgram(p.node) check matches.
   var p = anyPath;
   while (p && p.parentPath && !_t.isProgram(p.node)) p = p.parentPath;
   if (!p || !p.node || !_t.isProgram(p.node)) return;
-  if (_specProgramGlobalsPrepassDone.has(p.node)) return;
+  if (_specProgramGlobalsPrepassDone.has(p.node)) {
+    _specProgramGlobalsPrepassDoneGlobal = p.node;
+    return;
+  }
   _specProgramGlobalsPrepassDone.add(p.node);
+  _specProgramGlobalsPrepassDoneGlobal = p.node;
   var globalAv = _specGlobalThisAv();
   if (!globalAv || !globalAv.props) return;
   var windowAv = globalAv.props.window;
