@@ -10348,13 +10348,20 @@ function _specAnalyzePropertyFlow(funcPath, force, stopAfterStmtIdx) {
   // return statements fired (or all were `return;`), the value is
   // undefined per § 14.10.
   if (_specReturnAvAccum.length > returnAvBaseLen) {
-    // Batch join per ECMA lattice semantics (idempotent join):
-    // collect all returns and dedup via identity Set in O(N) rather
-    // than O(N²) incremental pairwise comparisons. Top absorbs.
-    var retSlice = _specReturnAvAccum.slice(returnAvBaseLen);
-    var joinedRet = _specJoinAllAv(retSlice);
+    // Incremental pairwise join preserves identity when returns are
+    // unchanged across fixpoint iterations: _specLogicalOrAv returns
+    // leftAv when rightAv is already a leaf, so the result object
+    // stays canonical and `_ssChanged`'s `_specEqualAv` short-circuits
+    // on `x === y`. Batched union with a fresh balanced tree breaks
+    // this — every iteration builds a new top-level or-AV identity
+    // even when content is structurally equal, forcing worklist
+    // re-analysis to do the full structural walk.
+    var joinedRet = _specReturnAvAccum[returnAvBaseLen];
+    for (var rai = returnAvBaseLen + 1; rai < _specReturnAvAccum.length; rai++) {
+      joinedRet = _specLogicalOrAv(joinedRet, _specReturnAvAccum[rai]);
+    }
     _specReturnAvAccum.length = returnAvBaseLen;  // pop our slice
-    if (joinedRet) _specReturnValueMemo.set(fnNode, joinedRet);
+    _specReturnValueMemo.set(fnNode, joinedRet);
   }
   // § 15.5 GeneratorFunction: when this function is a generator
   // (`function* g() { … }`), assemble an array-lit AV from accumulated
