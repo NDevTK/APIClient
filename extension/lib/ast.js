@@ -12127,25 +12127,41 @@ function _specEvalLeaf(path, state, vals, effects) {
 // Iterative DFS with visited-set; JS call stack stays at depth 1
 // regardless of AV nesting depth (recursion-ban compliance).
 var _avHasSubstitutable = new WeakMap();
+// Two-pass iterative DFS:
+//   1. Postorder enumeration with shared-subtree dedup (two-Set scheme),
+//      respecting existing cache entries (don't re-explore cached AVs).
+//   2. Bottom-up flag computation: each AV's substitutable status is
+//      its own kind check OR-ed with the OR of children's cached flags.
+//      Every visited AV is written to the cache so subsequent calls
+//      hit O(1) regardless of which sub-AV is queried.
+// Per-call cost: O(uncached AVs reachable from rootAv). Cumulative cost
+// across all calls: O(total distinct AVs in program). This replaces the
+// "break-early, cache root-only-on-false" variant which re-walked
+// shared substitutable-bearing subtrees on every new root.
 function _avHasSubstitutableCheck(rootAv) {
   if (!rootAv || typeof rootAv !== "object") return false;
   if (_avHasSubstitutable.has(rootAv)) return _avHasSubstitutable.get(rootAv);
+  // Two-Set scheme: enumSeen prevents re-push of shared subtrees;
+  // inProgress marks "visited but children not yet finalised", so the
+  // re-pop emits to preorder.
+  var preorder = [];
+  var enumSeen = new Set();
+  var inProgress = new Set();
   var stack = [rootAv];
-  var seen = new Set();
-  var found = false;
   while (stack.length > 0) {
     var n = stack.pop();
-    if (!n || typeof n !== "object" || seen.has(n)) continue;
-    seen.add(n);
-    // Memo hit on a sub-AV's previously-computed result: propagate.
-    if (_avHasSubstitutable.has(n)) {
-      if (_avHasSubstitutable.get(n)) { found = true; break; }
+    if (!n || typeof n !== "object") continue;
+    if (inProgress.has(n)) {
+      inProgress.delete(n);
+      preorder.push(n);
       continue;
     }
-    if (n.kind === "param" || n.kind === "this" ||
-        n.kind === "rest-args" || n.kind === "args-elt") {
-      found = true; break;
-    }
+    if (enumSeen.has(n)) continue;
+    enumSeen.add(n);
+    // Cached: don't re-explore subtree; the value is already known.
+    if (_avHasSubstitutable.has(n)) continue;
+    inProgress.add(n);
+    stack.push(n);
     if (n.kind === "member") { if (n.obj) stack.push(n.obj); if (n.key) stack.push(n.key); }
     else if (n.kind === "or") {
       if (n.left) stack.push(n.left);
@@ -12181,16 +12197,70 @@ function _avHasSubstitutableCheck(rootAv) {
       for (var di = 0; di < n.args.length; di++) stack.push(n.args[di]);
     }
   }
-  _avHasSubstitutable.set(rootAv, found);
-  // Propagate false to every sub-AV we visited — they're guaranteed
-  // free of substitutables too. (Don't propagate true: a parent with a
-  // substitutable subtree doesn't imply all descendants are unsubstit-
-  // utable; but a parent with no substitutables transitively had none
-  // in any descendant we visited.)
-  if (!found) {
-    seen.forEach(function(sn) { _avHasSubstitutable.set(sn, false); });
+  // Bottom-up flag computation in postorder. Each AV's flag is its own
+  // substitutable-kind check OR-ed with its children's already-cached
+  // flags (children precede parents in postorder).
+  for (var pi = 0; pi < preorder.length; pi++) {
+    var av = preorder[pi];
+    var f = false;
+    if (av.kind === "param" || av.kind === "this" ||
+        av.kind === "rest-args" || av.kind === "args-elt") {
+      f = true;
+    } else if (av.kind === "member") {
+      f = (av.obj && _avHasSubstitutable.get(av.obj)) || (av.key && _avHasSubstitutable.get(av.key)) || false;
+    } else if (av.kind === "or") {
+      f = (av.left && _avHasSubstitutable.get(av.left)) || (av.right && _avHasSubstitutable.get(av.right)) || false;
+      if (!f && av.alternatives) {
+        for (var aoi = 0; aoi < av.alternatives.length; aoi++) {
+          if (_avHasSubstitutable.get(av.alternatives[aoi])) { f = true; break; }
+        }
+      }
+    } else if (av.kind === "binop") {
+      f = (av.left && _avHasSubstitutable.get(av.left)) || (av.right && _avHasSubstitutable.get(av.right)) || false;
+    } else if (av.kind === "template" && av.exprs) {
+      for (var pti = 0; pti < av.exprs.length; pti++) {
+        if (_avHasSubstitutable.get(av.exprs[pti])) { f = true; break; }
+      }
+    } else if (av.kind === "coerce") {
+      f = !!(av.arg && _avHasSubstitutable.get(av.arg));
+    } else if (av.kind === "loop-key") {
+      f = !!(av.src && _avHasSubstitutable.get(av.src));
+    } else if (av.kind === "keys-of") {
+      f = !!(av.src && _avHasSubstitutable.get(av.src));
+    } else if (av.kind === "obj-lit" && av.props) {
+      for (var pk in av.props) if (Object.prototype.hasOwnProperty.call(av.props, pk)) {
+        if (_avHasSubstitutable.get(av.props[pk])) { f = true; break; }
+      }
+    } else if (av.kind === "array-lit" && av.elements) {
+      for (var pei = 0; pei < av.elements.length; pei++) {
+        if (_avHasSubstitutable.get(av.elements[pei])) { f = true; break; }
+      }
+    } else if (av.kind === "map-instance" && av.entries) {
+      for (var pmei = 0; pmei < av.entries.length; pmei++) {
+        if (av.entries[pmei] && (_avHasSubstitutable.get(av.entries[pmei][0]) ||
+                                  _avHasSubstitutable.get(av.entries[pmei][1]))) {
+          f = true; break;
+        }
+      }
+    } else if (av.kind === "set-instance" && av.items) {
+      for (var psi = 0; psi < av.items.length; psi++) {
+        if (_avHasSubstitutable.get(av.items[psi])) { f = true; break; }
+      }
+    } else if (av.kind === "call") {
+      f = !!(av.callee && _avHasSubstitutable.get(av.callee));
+      if (!f && av.args) {
+        for (var pai = 0; pai < av.args.length; pai++) {
+          if (_avHasSubstitutable.get(av.args[pai])) { f = true; break; }
+        }
+      }
+    } else if (av.kind === "deferred-ctor" && av.args) {
+      for (var pdi = 0; pdi < av.args.length; pdi++) {
+        if (_avHasSubstitutable.get(av.args[pdi])) { f = true; break; }
+      }
+    }
+    _avHasSubstitutable.set(av, !!f);
   }
-  return found;
+  return _avHasSubstitutable.get(rootAv) === true;
 }
 
 function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
