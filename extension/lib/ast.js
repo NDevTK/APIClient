@@ -5357,11 +5357,11 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       strResults.push(st);
     }
     if (!strAllOk) return _AV_TOP;
-    if (strResults.length === 1) return { kind: "const", value: strResults[0] };
+    if (strResults.length === 1) return _hcConst(strResults[0]);
     // _specSetUnionAv per § 22.1.3 distribution.
-    var strOr = { kind: "const", value: strResults[0] };
+    var strOr = _hcConst(strResults[0]);
     for (var sri = 1; sri < strResults.length; sri++) {
-      strOr = _specSetUnionAv(strOr, { kind: "const", value: strResults[sri] });
+      strOr = _specSetUnionAv(strOr, _hcConst(strResults[sri]));
     }
     return strOr;
   }
@@ -16221,7 +16221,7 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
     var smName = methodId.slice("String.prototype.".length);
     if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "string" && allArgsConst) {
       var smRes = _applyStringMethodToConst(recvAv.value, smName, argLits);
-      if (smRes !== undefined) return { kind: "const", value: smRes };
+      if (smRes !== undefined) return _hcConst(smRes);
     }
     // Const recv + const args, array-returning methods — invoke the
     // host engine directly to project the result as array-lit. Covers
