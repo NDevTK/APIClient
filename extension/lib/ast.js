@@ -7010,6 +7010,26 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
         }
         return loopJoinAv;
       }
+      // § 13.10 PropertyAccess with non-const computed key: when the
+      // receiver is an obj-lit with a STATICALLY-KNOWN set of own
+      // properties, `obj[k]` for any opaque k can only resolve to one
+      // of those own properties' values (or undefined). Sound over-
+      // approximation: join all own values. At runtime exactly one
+      // value is realized per the key chosen; consumers see every
+      // statically-possible value via the or-tree.
+      // _hasUnknownExtraProps flag is set by Object.assign / spread
+      // merge with opaque sources — when true, more props than the
+      // known ones may exist, so distribution would be unsound.
+      if (keyAvO && keyAvO.kind !== "const" && !objAv._hasUnknownExtraProps) {
+        var allKeys = Object.keys(objAv.props);
+        if (allKeys.length > 0) {
+          var distJoin = objAv.props[allKeys[0]];
+          for (var dki = 1; dki < allKeys.length; dki++) {
+            distJoin = _specSetUnionAv(distJoin, objAv.props[allKeys[dki]]);
+          }
+          return distJoin;
+        }
+      }
     }
   }
   // arguments.length per § 10.4.4.6 / arguments[N] per § 10.4.4
