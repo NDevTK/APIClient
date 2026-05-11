@@ -678,6 +678,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcOrByPair = new WeakMap();
   _hcConstString = new Map();
   _hcConstNumber = new Map();
+  _specEqualAvCache = new WeakMap();
   _specEnclosingFnsCache = new WeakMap();
   _specEnclFnByNode = new WeakMap();
   _specProgramGlobalsPrepassDoneGlobal = null;
@@ -6988,7 +6989,32 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
 // Structural equality on AbstractValues — iterative worklist over
 // (a, b) pairs. Termination is structural: every pushed pair is a strict
 // subterm of a popped pair, and AbstractValue terms are finite trees.
+// Memoize structural equality results per (a, b) pair. AV graphs are
+// immutable across the analysis lifetime; the same pair queried at
+// multiple sites (worklist signature checks, leaf-membership scans in
+// joins, return-value joins) reuses the cached result.
+var _specEqualAvCache = new WeakMap();
 function _specEqualAv(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  // Two-level WeakMap cache. Symmetric: result for (a, b) is identical
+  // to (b, a), but we only set one direction to keep cache O(1) writes.
+  var aMap = _specEqualAvCache.get(a);
+  if (aMap) {
+    var cached = aMap.get(b);
+    if (cached !== undefined) return cached;
+  }
+  var bMap = _specEqualAvCache.get(b);
+  if (bMap) {
+    var cachedRev = bMap.get(a);
+    if (cachedRev !== undefined) return cachedRev;
+  }
+  var result = _specEqualAvCompute(a, b);
+  if (!aMap) { aMap = new WeakMap(); _specEqualAvCache.set(a, aMap); }
+  aMap.set(b, result);
+  return result;
+}
+function _specEqualAvCompute(a, b) {
   var pairs = [[a, b]];
   while (pairs.length > 0) {
     var pair = pairs.pop();
