@@ -872,6 +872,19 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
 
   try {
   _babelTraverse(ast, {
+    // Slice-gating: skip descent into non-slice function bodies entirely.
+    // Babel's default traversal visits every AST node; non-slice fns
+    // contribute no sink dispatches and their visitor work bottoms out
+    // at the _isPathInSlice gate inside each visitor. Skipping at the
+    // function-enter level saves the cumulative descent + visitor
+    // dispatch cost over potentially 100K+ AST nodes per fn body.
+    // Pure structural gate — the slice already captures every fn that
+    // can contribute to a sink via the call-graph reachability check.
+    "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": {
+      enter: function (path) {
+        if (!_isPathInSlice(path)) path.skip();
+      }
+    },
     // ── Value constraint collection ──
     SwitchStatement: function(path) {
       _collectSwitchConstraints(path);
