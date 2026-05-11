@@ -679,7 +679,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcConstString = new Map();
   _hcConstNumber = new Map();
   _specEqualAvCache = new WeakMap();
-  _specInstantiateAvCache = new Map();
+  _specInstantiateAvCache = new WeakMap();
   _avIdMap = new WeakMap();
   _avNextId = 1;
   _specEnclosingFnsCache = new WeakMap();
@@ -12434,9 +12434,19 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
   // walk is deterministic in its inputs. Cache key composed of object
   // identities: a string built from per-AV identity-stable lookup IDs.
   // Cheap when cache hits; first-miss does the full walk + records.
-  var memoKey = _specInstantiateAvKey(rootAv, callerArgAvs, thisAv, fnContext);
-  if (memoKey !== null && _specInstantiateAvCache.has(memoKey)) {
-    return _specInstantiateAvCache.get(memoKey);
+  // WeakMap-keyed cache: outer by rootAv, inner Map<argHashStr, result>.
+  // When rootAv is GC'd, its inner Map (and all cached results) go too.
+  // Without this, a flat Map<string, av> keyed by composed string holds
+  // strong references to potentially millions of AV objects across a
+  // single analysis — OOM on bundles with many distinct (root, args)
+  // tuples.
+  var memoArgKey = _specInstantiateAvArgKey(callerArgAvs, thisAv, fnContext);
+  if (memoArgKey !== null) {
+    var memoInner = _specInstantiateAvCache.get(rootAv);
+    if (memoInner) {
+      var memoCached = memoInner.get(memoArgKey);
+      if (memoCached !== undefined) return memoCached;
+    }
   }
   // True iterative postorder enumeration with dedup. Per § 9.1.1
   // closure write-back fixpoint: AV graphs share sub-trees (an `or`
@@ -12837,7 +12847,11 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
     subs.set(node, node);
   }
   var instResult = subs.get(rootAv) || rootAv;
-  if (memoKey !== null) _specInstantiateAvCache.set(memoKey, instResult);
+  if (memoArgKey !== null) {
+    var memoInner2 = _specInstantiateAvCache.get(rootAv);
+    if (!memoInner2) { memoInner2 = new Map(); _specInstantiateAvCache.set(rootAv, memoInner2); }
+    memoInner2.set(memoArgKey, instResult);
+  }
   return instResult;
 }
 
@@ -12853,13 +12867,13 @@ function _avIdOf(av) {
   if (!id) { id = _avNextId++; _avIdMap.set(av, id); }
   return String(id);
 }
-var _specInstantiateAvCache = new Map();
-function _specInstantiateAvKey(rootAv, callerArgAvs, thisAv, fnContext) {
-  // Compose deterministically from identity IDs. fnContext is an AST
-  // node (also tracked via WeakMap). Hash-cons + identity preservation
-  // guarantee same logical inputs → same IDs → same key.
-  var parts = [_avIdOf(rootAv), thisAv ? _avIdOf(thisAv) : "_",
-               fnContext ? _avIdOf(fnContext) : "_"];
+var _specInstantiateAvCache = new WeakMap();
+function _specInstantiateAvArgKey(callerArgAvs, thisAv, fnContext) {
+  // Compose deterministically from identity IDs of args + this + ctx.
+  // rootAv is the outer WeakMap key — not included in the inner key.
+  // GC: when rootAv is collected, the inner Map (and all entries) are
+  // freed automatically — no unbounded growth across a long analysis.
+  var parts = [thisAv ? _avIdOf(thisAv) : "_", fnContext ? _avIdOf(fnContext) : "_"];
   if (callerArgAvs) {
     for (var i = 0; i < callerArgAvs.length; i++) parts.push(_avIdOf(callerArgAvs[i]));
   }
