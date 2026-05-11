@@ -38,6 +38,45 @@ var _AV_UNDEFINED = { kind: "const", value: undefined };
 var _AV_NULL = { kind: "const", value: null };
 var _AV_TRUE = { kind: "const", value: true };
 var _AV_FALSE = { kind: "const", value: false };   // node → resolved ObjectExpression (or null) — caches _resolveToObject result so repeated lookups on the same node are O(1)
+
+// Hash-cons param/this/args-len/rest-args AVs by (fn, idx). Param AVs
+// are immutable post-construction (.idx and .fn are read but never
+// written) so a per-(fn, idx) singleton produces identical references
+// for identical captures. Reference identity then lets WeakSet dedup
+// catch revisits in the substitution worklist, and the structural-hash
+// cache hits on first lookup. Cleared per-analysis in analyzeJSBundle.
+var _hcParamByFn = new WeakMap();   // fnNode -> Map<idx, av>
+var _hcThisByFn = new WeakMap();    // fnNode -> av
+var _hcArgsLenByFn = new WeakMap(); // fnNode -> av
+var _hcRestArgsByFn = new WeakMap(); // fnNode -> Map<startIdx, av>
+function _hashConsParam(idx, fn) {
+  if (!fn) return { kind: "param", idx: idx, fn: fn };
+  var m = _hcParamByFn.get(fn);
+  if (!m) { m = new Map(); _hcParamByFn.set(fn, m); }
+  var av = m.get(idx);
+  if (!av) { av = { kind: "param", idx: idx, fn: fn }; m.set(idx, av); }
+  return av;
+}
+function _hashConsThis(fn) {
+  if (!fn) return { kind: "this" };
+  var av = _hcThisByFn.get(fn);
+  if (!av) { av = { kind: "this", fn: fn }; _hcThisByFn.set(fn, av); }
+  return av;
+}
+function _hashConsArgsLen(fn) {
+  if (!fn) return { kind: "args-len" };
+  var av = _hcArgsLenByFn.get(fn);
+  if (!av) { av = { kind: "args-len", fn: fn }; _hcArgsLenByFn.set(fn, av); }
+  return av;
+}
+function _hashConsRestArgs(startIdx, fn) {
+  if (!fn) return { kind: "rest-args", startIdx: startIdx };
+  var m = _hcRestArgsByFn.get(fn);
+  if (!m) { m = new Map(); _hcRestArgsByFn.set(fn, m); }
+  var av = m.get(startIdx);
+  if (!av) { av = { kind: "rest-args", startIdx: startIdx, fn: fn }; m.set(startIdx, av); }
+  return av;
+}
 // DOM context for the current analysis. Populated from page HTML so JS
 // access patterns like `document.querySelector("meta[name=X]").content`
 // or `el.dataset.X` (where the value is set in markup, not JS) can
@@ -595,6 +634,16 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _typeEnv = {};
   _resolveToObjectMemo = new WeakMap();
   _rcfpMemo = new WeakMap();
+  _resolveAvBySubMemo = new WeakMap();
+  _avStructHashCache = new WeakMap();
+  _avHashFnIds = new WeakMap();
+  _avHashNextFnId = 1;
+  _specAvHasParamLeafCache = new WeakMap();
+  _hcParamByFn = new WeakMap();
+  _hcThisByFn = new WeakMap();
+  _hcArgsLenByFn = new WeakMap();
+  _hcRestArgsByFn = new WeakMap();
+  _specEnclosingFnsCache = new WeakMap();
   _specEffectsMemo = new WeakMap();
   _specPathValMemo = new WeakMap();
   _specPostorderMemo = new WeakMap();
@@ -5933,7 +5982,7 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
   for (var cpi = 0; cpi < ctorParams.length; cpi++) {
     var cp = ctorParams[cpi];
     if (!cp) continue;
-    var cpAv = { kind: "param", idx: cpi, fn: ctorNode };
+    var cpAv = _hashConsParam(cpi, ctorNode);
     if (cp.type === "Identifier") {
       ctorState[cp.name] = cpAv;
     } else if (cp.type === "AssignmentPattern" && cp.left && cp.left.type === "Identifier") {
@@ -5950,7 +5999,7 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
         if (cpBindIdent && cpBindIdent.type === "Identifier") {
           ctorState[cpBindIdent.name] = {
             kind: "member",
-            obj: { kind: "param", idx: cpi, fn: ctorNode },
+            obj: _hashConsParam(cpi, ctorNode),
             key: { kind: "const", value: cpKeyName }
           };
         }
@@ -5963,7 +6012,7 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
         if (cpae && cpae.type === "Identifier") {
           ctorState[cpae.name] = {
             kind: "member",
-            obj: { kind: "param", idx: cpi, fn: ctorNode },
+            obj: _hashConsParam(cpi, ctorNode),
             key: { kind: "const", value: cpai }
           };
         }
@@ -6079,7 +6128,7 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
             }
           }
         }
-        ancCtorState[apName] = apAv || { kind: "param", idx: apii, fn: ancCtorNode };
+        ancCtorState[apName] = apAv || _hashConsParam(apii, ancCtorNode);
       }
       var ancEffects = [];
       var ancBody = ancCtorNode.body;
@@ -6501,7 +6550,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       if (ctxArgs && i < ctxArgs.length && ctxArgs[i] != null) {
         paramAv = ctxArgs[i];
       } else {
-        paramAv = { kind: "param", idx: i, fn: funcNode };
+        paramAv = _hashConsParam(i, funcNode);
       }
       // WHATWG DOM § 4.4 / WHATWG HTML § 9.4.1: when funcNode was
       // registered as an event handler via the prototype-dispatched
@@ -6585,7 +6634,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         if (bindIdent && bindIdent.type === "Identifier") {
           var memberAv = {
             kind: "member",
-            obj: { kind: "param", idx: i, fn: funcNode },
+            obj: _hashConsParam(i, funcNode),
             key: { kind: "const", value: keyName }
           };
           state[bindIdent.name] = defaultAv ? _specSetUnionAv(memberAv, defaultAv) : memberAv;
@@ -6623,7 +6672,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         if (ae && ae.type === "Identifier") {
           var aMember = {
             kind: "member",
-            obj: { kind: "param", idx: i, fn: funcNode },
+            obj: _hashConsParam(i, funcNode),
             key: { kind: "const", value: ai }
           };
           state[ae.name] = aeDefault ? _specSetUnionAv(aMember, aeDefault) : aMember;
@@ -6635,7 +6684,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       // that _specInstantiateAv knows to expand into an array-lit at
       // call-site substitution time. Without caller context the rest
       // value is opaque (top); inter-procedural substitution refines.
-      state[p.argument.name] = { kind: "rest-args", startIdx: i };
+      state[p.argument.name] = _hashConsRestArgs(i, funcNode);
     }
   }
   // ECMA § 9.2.1 OrdinaryCallEvaluation: bind `this` to the receiver.
@@ -6748,6 +6797,19 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
             var outerFnNode = b.scope.path.node;
             var paramIdx = _findParamIndex(outerFnNode.params, nm);
             if (paramIdx < 0) return;
+            // Slice-gate: closure-capture tagging exists to let outer-
+            // param values flow into inner-fn body's AVs so inter-procedural
+            // substitution at outer's call sites resolves them. This
+            // matters ONLY when the inner fn's body contributes to a sink
+            // (URL/eval/etc.) — i.e. when it's in the analyzer's slice
+            // (_specSliceFns, the transitive closure from entry-point
+            // sinks/sources). For non-slice inner fns, the tag produces
+            // param-AV leaves that propagate through the substitution
+            // worklist but never reach a consumer, so the work is unused.
+            // The slice is the analyzer's structural reachability
+            // criterion — gating closure-capture on it preserves all
+            // consumed analysis output while pruning unused tagging.
+            if (!_specSliceFns.has(funcNode)) return;
             seenOuterNames[nm] = true;
             outerBindingsToImport.push({ name: nm, kind: "param", outerFnNode: outerFnNode, paramIdx: paramIdx });
             return;
@@ -7187,12 +7249,14 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
   if (objAv && objAv.kind === "top" &&
       _t.isIdentifier(n.object, { name: "arguments" }) &&
       !path.scope.getBinding("arguments")) {
+    var argsFnParent = path.getFunctionParent && path.getFunctionParent();
+    var argsFnNode = argsFnParent && argsFnParent.node;
     if (!n.computed && _t.isIdentifier(n.property, { name: "length" })) {
-      return { kind: "args-len" };
+      return _hashConsArgsLen(argsFnNode);
     }
     if (n.computed) {
       var idxAvA = vals.get(n.property) || _AV_TOP;
-      return { kind: "args-elt", idx: idxAvA };
+      return { kind: "args-elt", idx: idxAvA, fn: argsFnNode };
     }
   }
   // § 22.1.4 Properties of String Instances — Const-string receivers:
@@ -10151,7 +10215,8 @@ function _specEvalLeaf(path, state, vals, effects) {
     // dispatches via _specMemberAccessOnObjLeaf's obj-lit branch. Falls
     // back to {kind:"this"} when no constructor was resolvable.
     if (state && Object.prototype.hasOwnProperty.call(state, "this")) return state["this"];
-    return { kind: "this" };
+    var thisFn = path.getFunctionParent && path.getFunctionParent();
+    return _hashConsThis(thisFn && thisFn.node);
   }
   if (_t.isStringLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isNumericLiteral(n)) return { kind: "const", value: n.value };
@@ -11784,6 +11849,9 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
     if (node.kind === "rest-args" && callerArgAvs) {
       // § 14.1.20 RestParameter: collect callerArgAvs[startIdx..] into
       // an array-lit. Empty array when no args remain past startIdx.
+      // Per-function-context substitution per § 10.2.10 (same rule as
+      // param): only substitute when fn matches fnContext.
+      if (node.fn && fnContext && node.fn !== fnContext) continue;
       var restElems = [];
       for (var rri = node.startIdx; rri < callerArgAvs.length; rri++) {
         restElems.push(callerArgAvs[rri] || _AV_TOP);
@@ -14216,6 +14284,206 @@ function _specAvHasParamLeaf(av) {
   return result;
 }
 
+// Stable integer id per FunctionNode for use inside structural hashes.
+// Two AVs that reference the same FunctionNode via `fn`/`classNode` get
+// the same token; different FunctionNodes get distinct tokens. Pure
+// reference identity — no name matching.
+var _avHashFnIds = new WeakMap();
+var _avHashNextFnId = 1;
+function _avHashFnIdFor(fnNode) {
+  if (!fnNode || typeof fnNode !== "object") return "_";
+  var id = _avHashFnIds.get(fnNode);
+  if (id === undefined) {
+    id = _avHashNextFnId++;
+    _avHashFnIds.set(fnNode, id);
+  }
+  return String(id);
+}
+
+// Structural hash of an AV graph. Two AVs that substitute identically
+// at the same fnContext MUST hash equal. Iterative post-order DFS with
+// in-flight cycle markers (or-tree joins can produce cycles when one
+// branch references its own parent's AV via memoised references).
+// Result cached on AV reference; AVs are produced immutable so the cache
+// is stable for the analysis lifetime.
+var _avStructHashCache = new WeakMap();
+function _avStructuralHash(rootAv) {
+  if (rootAv === null) return "n";
+  if (rootAv === undefined) return "u";
+  if (typeof rootAv !== "object") return "p" + typeof rootAv + ":" + String(rootAv);
+  if (_avStructHashCache.has(rootAv)) return _avStructHashCache.get(rootAv);
+  // Iterative post-order: phase 0 schedules children, phase 1 synthesises.
+  // inFlight assigns each in-progress AV a cycle id so back-references emit
+  // a stable marker without infinite recursion.
+  var stack = [{ av: rootAv, phase: 0 }];
+  var inFlight = new Map();
+  var nextCycleId = 1;
+  while (stack.length > 0) {
+    var top = stack[stack.length - 1];
+    var av = top.av;
+    if (av === null || av === undefined || typeof av !== "object") {
+      stack.pop();
+      continue;
+    }
+    if (_avStructHashCache.has(av)) {
+      stack.pop();
+      continue;
+    }
+    if (top.phase === 0) {
+      if (inFlight.has(av)) {
+        // Back-reference: cycle marker stable for this AV.
+        _avStructHashCache.set(av, "@" + inFlight.get(av));
+        stack.pop();
+        continue;
+      }
+      inFlight.set(av, nextCycleId++);
+      top.phase = 1;
+      var kids = _avHashChildList(av);
+      for (var i = kids.length - 1; i >= 0; i--) {
+        var k = kids[i];
+        if (k !== null && k !== undefined && typeof k === "object" && !_avStructHashCache.has(k)) {
+          stack.push({ av: k, phase: 0 });
+        }
+      }
+      continue;
+    }
+    // phase 1: synthesise
+    var leaf = _avHashLeafToken(av);
+    var kids2 = _avHashChildList(av);
+    var parts = [leaf];
+    for (var ci = 0; ci < kids2.length; ci++) {
+      parts.push(_avHashChildOf(kids2[ci]));
+    }
+    var h = "(" + parts.join(",") + ")";
+    _avStructHashCache.set(av, h);
+    inFlight.delete(av);
+    stack.pop();
+  }
+  return _avStructHashCache.get(rootAv);
+}
+
+function _avHashChildOf(av) {
+  if (av === null) return "n";
+  if (av === undefined) return "u";
+  if (typeof av !== "object") return "p" + typeof av + ":" + String(av);
+  var c = _avStructHashCache.get(av);
+  return c !== undefined ? c : "?";
+}
+
+function _avHashLeafToken(av) {
+  switch (av.kind) {
+    case "const":
+      try { return "C:" + JSON.stringify(av.value); }
+      catch (_e) { return "C:?"; }
+    case "top": return "T";
+    case "or": return "O";
+    case "binop": return "B:" + (av.op || "?");
+    case "template":
+      return "TM:" + (av.quasis ? av.quasis.join("") : "");
+    case "coerce":
+      return "CO:" + (av.to || av.coerceType || "?");
+    case "member": return "M";
+    case "obj-lit":
+      return "OL:" + (av.props ? Object.keys(av.props).sort().join("") : "");
+    case "array-lit":
+      return "AR:" + (av.elements ? av.elements.length : 0);
+    case "call": return "CL";
+    case "param":
+      return "PA:" + (av.idx == null ? "?" : av.idx) + ":" + _avHashFnIdFor(av.fn);
+    case "this":
+      return "TH:" + _avHashFnIdFor(av.fn);
+    case "args-elt":
+      return "AE:" + (av.idx == null ? "?" : av.idx) + ":" + _avHashFnIdFor(av.fn);
+    case "args-len":
+      return "AL:" + _avHashFnIdFor(av.fn);
+    case "rest-args":
+      return "RA:" + _avHashFnIdFor(av.fn);
+    case "function-ref":
+      return "FR:" + _avHashFnIdFor(av.fn);
+    case "deferred-ctor":
+      return "DC:" + _avHashFnIdFor(av.classNode);
+    case "builtin-method":
+      return "BM:" + (av.id || "?");
+    case "builtin-ctor":
+      return "BC:" + (av.id || "?");
+    case "callable-namespace":
+      return "CN:" + (av.callId || av.id || "?");
+    case "taint-source":
+      return "TS:" + (av.id || "?");
+    case "dom-element":
+      return "DE:" + (av.id || "?");
+    case "map-instance": return "MI";
+    case "set-instance": return "SI";
+    case "regex-instance": return "RI";
+    case "formdata-instance": return "FI";
+    case "weakmap-instance": return "WMI";
+    case "weakset-instance": return "WSI";
+    case "range-instance": return "RGI";
+    case "bound-function": return "BF";
+    case "keys-of": return "KO";
+    case "loop-key": return "LK";
+    case "branch-join": return "BJ";
+    case "call-return": return "CR";
+    case "concat-left": return "CCL";
+    case "concat-right": return "CCR";
+    case "member-key": return "MK";
+    case "param-caller": return "PC:" + (av.idx == null ? "?" : av.idx);
+    case "source": return "SR:" + (av.id || "?");
+    case "template-interp": return "TI";
+    case "var": return "V:" + (av.name || "?");
+    default: return "K:" + (av.kind || "?");
+  }
+}
+
+function _avHashChildList(av) {
+  var result = [];
+  switch (av.kind) {
+    case "or":
+    case "binop":
+      if (av.left !== undefined) result.push(av.left);
+      if (av.right !== undefined) result.push(av.right);
+      break;
+    case "template":
+      if (av.exprs) for (var ti = 0; ti < av.exprs.length; ti++) result.push(av.exprs[ti]);
+      break;
+    case "coerce":
+      if (av.arg !== undefined) result.push(av.arg);
+      break;
+    case "member":
+      if (av.obj !== undefined) result.push(av.obj);
+      if (av.key !== undefined) result.push(av.key);
+      break;
+    case "obj-lit":
+      if (av.props) {
+        var sortedKeys = Object.keys(av.props).sort();
+        for (var oi = 0; oi < sortedKeys.length; oi++) result.push(av.props[sortedKeys[oi]]);
+      }
+      break;
+    case "array-lit":
+      if (av.elements) for (var ai = 0; ai < av.elements.length; ai++) result.push(av.elements[ai]);
+      break;
+    case "call":
+      if (av.callee !== undefined) result.push(av.callee);
+      if (av.args) for (var caii = 0; caii < av.args.length; caii++) result.push(av.args[caii]);
+      break;
+    case "bound-function":
+      if (av.target !== undefined) result.push(av.target);
+      if (av.thisArg !== undefined) result.push(av.thisArg);
+      if (av.preArgs) for (var bpi = 0; bpi < av.preArgs.length; bpi++) result.push(av.preArgs[bpi]);
+      break;
+    case "keys-of":
+      if (av.obj !== undefined) result.push(av.obj);
+      break;
+    case "loop-key":
+      if (av.src !== undefined) result.push(av.src);
+      break;
+    case "args-elt":
+      if (av.idx !== undefined && typeof av.idx === "object") result.push(av.idx);
+      break;
+  }
+  return result;
+}
+
 // Collect the set of `fn` identity FunctionNodes referenced by all
 // `param` leaves in the AV tree. Param leaves tag their owning function
 // per ECMA § 9.1.1 closure capture so substitution can target the
@@ -14251,6 +14519,39 @@ function _specCollectParamFnNodes(rootAv) {
   return fns;
 }
 
+// Lexical-enclosure relation cache: innerFnNode → Set<outerFnNode>.
+// Babel parentPath walks are O(parent-chain-depth); on a deeply-nested
+// minified bundle this dominates closure-capture routing. Compute the
+// outer-fn chain once per inner fn (lazily on first query) and memoise.
+// Reset per-analysis in analyzeJSBundle.
+var _specEnclosingFnsCache = new WeakMap();
+function _isFnEnclosedBy(innerFnPath, outerFnNode) {
+  if (!innerFnPath || !innerFnPath.node || !outerFnNode) return false;
+  var innerNode = innerFnPath.node;
+  var enclSet = _specEnclosingFnsCache.get(innerNode);
+  if (!enclSet) {
+    enclSet = new Set();
+    var p = innerFnPath.parentPath;
+    while (p) {
+      if (p.node && _t.isFunction(p.node)) enclSet.add(p.node);
+      p = p.parentPath;
+    }
+    _specEnclosingFnsCache.set(innerNode, enclSet);
+  }
+  return enclSet.has(outerFnNode);
+}
+
+// Per-analysis memo for _resolveAvBySubstitutingCallerArgs results.
+// Substitution is deterministic in (funcNode, avWithParamRefs-shape):
+//   - The set of call sites for funcNode is fixed for the program.
+//   - Each call site's arg AVs come from _specPathValMemo, populated
+//     by the program-level fixpoint before any resolver runs.
+//   - _specInstantiateAv is pure on (av, callerArgs, thisAv, fnCtx).
+// So two top-level calls with the same (funcNode, av-structure) yield
+// the same leaves array. Key: funcNode → Map<avStructuralHash, leaves|null>.
+// Reset per analysis in analyzeJSBundle alongside other spec memos.
+var _resolveAvBySubMemo = new WeakMap();
+
 // Walk encFn's call sites via path.scope binding referencePaths.
 // For each call, evaluate its argument AVs through spec eval, then
 // substitute into avWithParamRefs via _specInstantiateAv. Project each
@@ -14267,6 +14568,12 @@ function _specCollectParamFnNodes(rootAv) {
 // recursion through _resolveAvBySubstitutingCallerArgs.
 function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
   if (!funcPath || !funcPath.node || !avWithParamRefs) return null;
+  // Memo lookup: same (funcNode, AV-shape) → same leaves array.
+  var memoKey = _avStructuralHash(avWithParamRefs);
+  var perFnMemo = _resolveAvBySubMemo.get(funcPath.node);
+  if (perFnMemo && perFnMemo.has(memoKey)) {
+    return perFnMemo.get(memoKey);
+  }
   var allLeaves = [];
   // § 9.1.1 closure capture re-routing: when the AV's param leaves carry
   // `fn` identities of OUTER functions that lexically ENCLOSE funcPath
@@ -14289,16 +14596,10 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
       var efnNode = efnStep.value;
       if (efnNode === funcPath.node) { allEnclose = false; break; }
       // Lexical-enclosure test: walk funcPath up via parentPath until we
-      // find a Function node whose `.node === efnNode`. If we never
-      // encounter it, efnNode does NOT lexically enclose funcPath, so
-      // we don't re-route through it.
-      var encloses = false;
-      var p = funcPath.parentPath;
-      while (p) {
-        if (p.node === efnNode) { encloses = true; break; }
-        p = p.parentPath;
-      }
-      if (!encloses) { allEnclose = false; break; }
+      // find a Function node whose `.node === efnNode`. Cached per inner
+      // fn via _specEnclosingFnsCache so deeply-nested fns don't repeat
+      // the walk for every closure-captured param.
+      if (!_isFnEnclosedBy(funcPath, efnNode)) { allEnclose = false; break; }
     }
   }
   if (allEnclose) {
@@ -14553,7 +14854,13 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
       }
     }
   }
-  return allLeaves.length > 0 ? allLeaves : null;
+  var memoResult = allLeaves.length > 0 ? allLeaves : null;
+  if (!perFnMemo) {
+    perFnMemo = new Map();
+    _resolveAvBySubMemo.set(funcPath.node, perFnMemo);
+  }
+  perFnMemo.set(memoKey, memoResult);
+  return memoResult;
 }
 
 // Step function for the _resolveAllValues state machine. Each branch from
