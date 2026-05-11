@@ -5352,75 +5352,55 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       // params but the boolean itself isn't a content-injection sink.
       return _AV_TOP;
     }
+    // WHATWG URL § 5.5.1-3 URLSearchParams.set/append/delete: the
+    // receiver was projected from `<urlVar>.searchParams` via
+    // _specMemberAccessOnObjLeaf, which tags the coerce AV with
+    // `_parentVarName` (the URL variable's Identifier name) +
+    // `_parentHref` (the current href string). When both args are const
+    // (and key is const for delete), apply the mutation through the
+    // host WHATWG URL parser (spec-correct encoding + reorder) and
+    // rebind state[_parentVarName] to a new URL obj-lit. Returns
+    // undefined per spec.
+    if ((uspMethod === "set" || uspMethod === "append" || uspMethod === "delete") &&
+        state && recvAv && recvAv.kind === "coerce" && recvAv.to === "urlsearchparams" &&
+        recvAv._parentVarName && typeof recvAv._parentHref === "string" &&
+        Object.prototype.hasOwnProperty.call(state, recvAv._parentVarName)) {
+      var uspKeyAv = argAvs[0];
+      var uspValAv = argAvs.length >= 2 ? argAvs[1] : null;
+      if (uspKeyAv && uspKeyAv.kind === "const") {
+        var uspKeyConst = String(uspKeyAv.value);
+        var uspValConst = null;
+        if (uspMethod !== "delete") {
+          if (!uspValAv || uspValAv.kind !== "const") return _AV_UNDEFINED;
+          uspValConst = String(uspValAv.value);
+        }
+        try {
+          var uspUrl = new URL(recvAv._parentHref);
+          if (uspMethod === "set") uspUrl.searchParams.set(uspKeyConst, uspValConst);
+          else if (uspMethod === "append") uspUrl.searchParams.append(uspKeyConst, uspValConst);
+          else if (uspMethod === "delete") uspUrl.searchParams.delete(uspKeyConst);
+          state[recvAv._parentVarName] = {
+            kind: "obj-lit", _ctorId: "WHATWG.URL",
+            props: {
+              href: { kind: "const", value: uspUrl.href },
+              pathname: { kind: "const", value: uspUrl.pathname },
+              origin: { kind: "const", value: uspUrl.origin },
+              search: { kind: "const", value: uspUrl.search },
+              hash: { kind: "const", value: uspUrl.hash },
+              host: { kind: "const", value: uspUrl.host },
+              hostname: { kind: "const", value: uspUrl.hostname },
+              port: { kind: "const", value: uspUrl.port },
+              protocol: { kind: "const", value: uspUrl.protocol },
+              username: { kind: "const", value: uspUrl.username },
+              password: { kind: "const", value: uspUrl.password }
+            }
+          };
+        } catch (_) { /* malformed href — leave state untouched */ }
+      }
+      return _AV_UNDEFINED;
+    }
   }
   return _AV_TOP;
-}
-
-// WHATWG URL § 5.5.1-3 URLSearchParams.set/append/delete: when the
-// callee chain is `<urlVar>.searchParams.<set|append|delete>(...)` and
-// urlVar resolves through state to a URL obj-lit (with const href),
-// apply the mutation per spec and rebind state[urlVar] to a new URL
-// obj-lit with all derived props (href/search/pathname/etc.) refreshed
-// per § 4.4 partition. Returns true if the mutation fired; the caller
-// suppresses the regular dispatch and emits undefined per spec.
-//
-// Structural detection from the CallExpression node + scope-resolved
-// urlVar binding lookup — no string-name matching. The .searchParams
-// property and the mutation method names are spec-defined identifiers
-// (WHATWG URL § 5.2.2 / § 5.5).
-function _specApplyUrlSearchParamsMutation(callNode, callPath, state) {
-  if (!callNode || !callPath || !state) return false;
-  var callee = callNode.callee;
-  if (!_t.isMemberExpression(callee) || callee.computed) return false;
-  if (!_t.isIdentifier(callee.property)) return false;
-  var mutName = callee.property.name;
-  if (mutName !== "set" && mutName !== "append" && mutName !== "delete") return false;
-  var spChain = callee.object;
-  if (!_t.isMemberExpression(spChain) || spChain.computed) return false;
-  if (!_t.isIdentifier(spChain.property, { name: "searchParams" })) return false;
-  var urlIdNode = spChain.object;
-  if (!_t.isIdentifier(urlIdNode)) return false;
-  var urlVarName = urlIdNode.name;
-  if (!Object.prototype.hasOwnProperty.call(state, urlVarName)) return false;
-  var urlAv = state[urlVarName];
-  if (!urlAv || urlAv.kind !== "obj-lit" || urlAv._ctorId !== "WHATWG.URL") return false;
-  if (!urlAv.props || !urlAv.props.href || urlAv.props.href.kind !== "const" ||
-      typeof urlAv.props.href.value !== "string") return false;
-  var args = callNode.arguments;
-  if (args.length < 1) return false;
-  var keyArgAv = _specPathValMemo.get(args[0]);
-  if (!keyArgAv || keyArgAv.kind !== "const") return false;
-  var keyConst = String(keyArgAv.value);
-  var valConst = null;
-  if (mutName !== "delete") {
-    if (args.length < 2) return false;
-    var valArgAv = _specPathValMemo.get(args[1]);
-    if (!valArgAv || valArgAv.kind !== "const") return false;
-    valConst = String(valArgAv.value);
-  }
-  try {
-    var mutUrl = new URL(urlAv.props.href.value);
-    if (mutName === "set") mutUrl.searchParams.set(keyConst, valConst);
-    else if (mutName === "append") mutUrl.searchParams.append(keyConst, valConst);
-    else if (mutName === "delete") mutUrl.searchParams.delete(keyConst);
-    state[urlVarName] = {
-      kind: "obj-lit", _ctorId: "WHATWG.URL",
-      props: {
-        href: { kind: "const", value: mutUrl.href },
-        pathname: { kind: "const", value: mutUrl.pathname },
-        origin: { kind: "const", value: mutUrl.origin },
-        search: { kind: "const", value: mutUrl.search },
-        hash: { kind: "const", value: mutUrl.hash },
-        host: { kind: "const", value: mutUrl.host },
-        hostname: { kind: "const", value: mutUrl.hostname },
-        port: { kind: "const", value: mutUrl.port },
-        protocol: { kind: "const", value: mutUrl.protocol },
-        username: { kind: "const", value: mutUrl.username },
-        password: { kind: "const", value: mutUrl.password }
-      }
-    };
-    return true;
-  } catch (_) { return false; }
 }
 
 function _specStateCreate(initBindings) {
@@ -7128,6 +7108,23 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
         return objAv.props[cnsName];
       }
     }
+  }
+  // WHATWG URL § 5.5.1 URL.prototype.searchParams getter: returns the
+  // URL's [[QueryObject]] — a USP instance sharing the URL's
+  // [[InternalList]]. Modeled here as a coerce(urlsearchparams) AV
+  // tagged with the parent URL var name + current href; the prototype
+  // chain (coerce → URLSearchParams.prototype) routes .get/.set/.append/
+  // .delete/.toString through the standard builtin-method dispatch.
+  // When the parent recv is an Identifier bound to a URL obj-lit, the
+  // mutation handlers in _specApplyBuiltinMethod can rebind state[name]
+  // with the URL parsed from the new href.
+  if (objAv && objAv.kind === "obj-lit" && objAv._ctorId === "WHATWG.URL" &&
+      objAv.props && objAv.props.href && objAv.props.href.kind === "const" &&
+      typeof objAv.props.href.value === "string" &&
+      !n.computed && _t.isIdentifier(n.property, { name: "searchParams" }) &&
+      _t.isIdentifier(n.object)) {
+    return { kind: "coerce", to: "urlsearchparams", arg: objAv.props.href,
+             _parentVarName: n.object.name, _parentHref: objAv.props.href.value };
   }
   // Obj-lit / dom-element static property access: `obj.x` returns the
   // stored av. Same shape (props map); separate kinds carry distinct
@@ -10962,14 +10959,6 @@ function _specEvalLeaf(path, state, vals, effects) {
     return _AV_TOP;
   }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
-    // WHATWG URL § 5.5 URLSearchParams mutation dispatch: when callee is
-    // `<urlVar>.searchParams.<set|append|delete>` and urlVar resolves to
-    // a URL obj-lit in state, rebind state[urlVar] to a new URL obj-lit
-    // with the mutation applied per § 4.4 partition. Returns undefined
-    // per spec; downstream dispatch is suppressed.
-    if (_specApplyUrlSearchParamsMutation(n, path, state)) {
-      return _AV_UNDEFINED;
-    }
     // ECMA § 10.4.1.1 [[Call]] for Bound Function Exotic Objects:
     // when the callee resolves to a bound-function AV, unfold by
     // calling target with [...preArgs, ...callerArgs] and the bound
