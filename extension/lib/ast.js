@@ -2502,18 +2502,48 @@ function _specGetPrototypeOfAv(av) {
 function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
   if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
   if (methodId === "Array.prototype.join") {
+    // § 23.1.3.18 ArrayPrototype.join: requires const-string separator.
+    // When all elements are const, fold to a single Const value. When some
+    // elements are opaque (param/member/binop/template/etc.), preserve
+    // structure as a binop("+") chain interleaving the separator. After
+    // caller-arg substitution at _specInstantiateAv time, opaque leaves
+    // fold to consts, and the binop chain collapses to a Const URL.
     var sep = ",";
     if (argAvs.length >= 1) {
       if (argAvs[0] && argAvs[0].kind === "const" && typeof argAvs[0].value === "string") sep = argAvs[0].value;
+      else if (argAvs[0] && argAvs[0].kind === "const") sep = String(argAvs[0].value);
       else return { kind: "top" };
     }
-    var joinParts = [];
-    for (var jei = 0; jei < (recvAv.elements || []).length; jei++) {
-      var je = recvAv.elements[jei];
-      if (!je || je.kind !== "const") return { kind: "top" };
-      joinParts.push(String(je.value));
+    var jElems = recvAv.elements || [];
+    if (jElems.length === 0) return { kind: "const", value: "" };
+    // Fast path: all const → fold directly per § 23.1.3.18.
+    var allConst = true;
+    for (var jeiC = 0; jeiC < jElems.length; jeiC++) {
+      var jeC = jElems[jeiC];
+      if (!jeC || jeC.kind !== "const") { allConst = false; break; }
     }
-    return { kind: "const", value: joinParts.join(sep) };
+    if (allConst) {
+      var joinParts = [];
+      for (var jeiF = 0; jeiF < jElems.length; jeiF++) {
+        joinParts.push(String(jElems[jeiF].value));
+      }
+      return { kind: "const", value: joinParts.join(sep) };
+    }
+    // Structural path: build a left-associative binop("+") chain with
+    // sep interleaved. Per § 13.15.3 BinaryExpression "+", const-string
+    // concat folds, so adjacent const-elements merge naturally when
+    // _avFlattenStringLeaves processes the chain post-substitution.
+    var acc = null;
+    for (var jeiB = 0; jeiB < jElems.length; jeiB++) {
+      var je2 = jElems[jeiB] || { kind: "top" };
+      // Coerce non-string consts (ToString per § 7.1.17) before append.
+      if (je2.kind === "const") je2 = { kind: "const", value: String(je2.value) };
+      if (acc === null) { acc = je2; continue; }
+      // Append separator + element.
+      acc = { kind: "binop", op: "+", left: acc, right: { kind: "const", value: sep } };
+      acc = { kind: "binop", op: "+", left: acc, right: je2 };
+    }
+    return acc;
   }
   if (methodId === "Array.prototype.concat") {
     var concatElems = (recvAv.elements || []).slice();
