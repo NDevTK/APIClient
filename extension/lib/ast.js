@@ -3802,6 +3802,22 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     }
   }
   if (pureArrayIds.indexOf(methodId) >= 0) {
+    // § 23.1.3 Array.prototype.* with non-array-lit recv: when recv is a
+    // deferred call AV (Object.entries/values with opaque src), keys-of
+    // (Object.keys with opaque src), or an opaque param/member that
+    // may resolve to an array via caller substitution, defer too. The
+    // call AV's callee uses a `member` shape so _specInstantiateAv's
+    // member-substitution + prototype-lookup re-binds the callee to
+    // the builtin-method after recv folds to array-lit; the call AV's
+    // post-sub branch then re-dispatches via _specReduceBuiltinCallPostSub.
+    if (recvAv && (recvAv.kind === "call" || recvAv.kind === "keys-of" ||
+                   recvAv.kind === "param" || recvAv.kind === "member")) {
+      var bareMethodName = methodId.slice("Array.prototype.".length);
+      return { kind: "call",
+        callee: { kind: "member", obj: recvAv,
+                  key: { kind: "const", value: bareMethodName } },
+        args: argAvs.slice() };
+    }
     return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
   }
   // ECMA § 24.1.3 Map.prototype.* dispatches. Receiver may be map-instance
@@ -4242,6 +4258,15 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       }
       return { kind: "array-lit", elements: entriesArr };
     }
+    // § 20.1.2.5 Object.entries with non-obj-lit src: defer as a call AV
+    // so caller-arg substitution (when the src is a param resolved to
+    // obj-lit at the caller site) reduces post-sub via
+    // _specReduceBuiltinCallPostSub.
+    if (entriesSrc && entriesSrc.kind !== "top") {
+      return { kind: "call",
+        callee: { kind: "builtin-method", id: "Object.entries" },
+        args: [entriesSrc] };
+    }
     return { kind: "top" };
   }
   if (methodId === "Object.values") {
@@ -4254,6 +4279,12 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         valuesArr.push(valuesSrc.props[valueKeys[vki]]);
       }
       return { kind: "array-lit", elements: valuesArr };
+    }
+    // § 20.1.2.22 Object.values with non-obj-lit src: defer.
+    if (valuesSrc && valuesSrc.kind !== "top") {
+      return { kind: "call",
+        callee: { kind: "builtin-method", id: "Object.values" },
+        args: [valuesSrc] };
     }
     return { kind: "top" };
   }
@@ -11730,7 +11761,17 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       continue;
     }
     if (node.kind === "keys-of") {
-      subs.set(node, { kind: "keys-of", src: subs.get(node.src) || node.src });
+      var koSrc = subs.get(node.src) || node.src;
+      // § 20.1.2.18 Object.keys post-sub fold: when src resolves to
+      // obj-lit, project to an array-lit of const-string keys.
+      if (koSrc && koSrc.kind === "obj-lit" && koSrc.props) {
+        var koKeys = Object.keys(koSrc.props);
+        var koEls = [];
+        for (var koi = 0; koi < koKeys.length; koi++) koEls.push({ kind: "const", value: koKeys[koi] });
+        subs.set(node, { kind: "array-lit", elements: koEls });
+        continue;
+      }
+      subs.set(node, { kind: "keys-of", src: koSrc });
       continue;
     }
     if (node.kind === "obj-lit" && node.props) {
@@ -14593,6 +14634,32 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
   if (methodId.indexOf("Array.prototype.") === 0 &&
       recvAv && recvAv.kind === "array-lit") {
     return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
+  }
+  // ECMA § 20.1.2 Object.* post-substitution: when args resolve to
+  // obj-lit at caller-sub time, dispatch as if at body-walk.
+  if (methodId === "Object.values" && argAvs.length >= 1 &&
+      argAvs[0] && argAvs[0].kind === "obj-lit" && argAvs[0].props) {
+    var ovKeys = Object.keys(argAvs[0].props);
+    var ovEls = [];
+    for (var ovi = 0; ovi < ovKeys.length; ovi++) ovEls.push(argAvs[0].props[ovKeys[ovi]]);
+    return { kind: "array-lit", elements: ovEls };
+  }
+  if (methodId === "Object.keys" && argAvs.length >= 1 &&
+      argAvs[0] && argAvs[0].kind === "obj-lit" && argAvs[0].props) {
+    var okKeys = Object.keys(argAvs[0].props);
+    var okEls = [];
+    for (var oki = 0; oki < okKeys.length; oki++) okEls.push({ kind: "const", value: okKeys[oki] });
+    return { kind: "array-lit", elements: okEls };
+  }
+  if (methodId === "Object.entries" && argAvs.length >= 1 &&
+      argAvs[0] && argAvs[0].kind === "obj-lit" && argAvs[0].props) {
+    var oeKeys = Object.keys(argAvs[0].props);
+    var oeEls = [];
+    for (var oei = 0; oei < oeKeys.length; oei++) {
+      oeEls.push({ kind: "array-lit",
+        elements: [{ kind: "const", value: oeKeys[oei] }, argAvs[0].props[oeKeys[oei]]] });
+    }
+    return { kind: "array-lit", elements: oeEls };
   }
   return null;
 }
