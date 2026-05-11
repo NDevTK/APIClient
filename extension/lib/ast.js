@@ -14591,6 +14591,132 @@ function _applyNumberMethodToConst(nv, methodName, argLits) {
 // coerce AVs for opaque-but-typed receivers per ECMA spec return types.
 // Returns the reduced AV, or null when the call can't be reduced
 // (caller preserves the lazy call structure for further substitution).
+// Substitute a single (param-idx, owning-fn) → replacementAv in an AV
+// tree. Iterative walk over the AV graph (no recursion). Used by HOF
+// post-substitution dispatch where cb's return AV must be folded once
+// per element with the element substituted as cb's first param.
+//
+// Pure tree-rewrite: every reachable param leaf with matching (idx, fn)
+// is replaced; other params, calls, binops, members, etc. are preserved
+// structurally. Calls _specReduceBuiltinCallPostSub for fully-resolved
+// builtin-method calls (e.g. cb body returns `e[0] + "=" + e[1]` which
+// after sub becomes a binop of const strings; the .toString coerce or
+// chained builtin folds at this level). DOES NOT call _specInstantiateAv
+// (would introduce a recursion cycle).
+function _specSubstituteParam(rootAv, paramIdx, paramFn, replacementAv) {
+  if (!rootAv) return rootAv;
+  // Two-pass enumerate + substitute, structured like _specInstantiateAv
+  // but specialized to a single-param substitution.
+  var preorder = [];
+  var enumSeen = new Set();
+  var inProgress = new Set();
+  var stack = [rootAv];
+  while (stack.length > 0) {
+    var av = stack.pop();
+    if (!av) continue;
+    if (inProgress.has(av)) { inProgress.delete(av); preorder.push(av); continue; }
+    if (enumSeen.has(av)) continue;
+    enumSeen.add(av);
+    inProgress.add(av);
+    stack.push(av);
+    if (av.kind === "member") { stack.push(av.obj); stack.push(av.key); }
+    else if (av.kind === "or" || av.kind === "binop") { stack.push(av.left); stack.push(av.right); }
+    else if (av.kind === "template" && av.exprs) { for (var ti = 0; ti < av.exprs.length; ti++) stack.push(av.exprs[ti]); }
+    else if (av.kind === "coerce" && av.arg) { stack.push(av.arg); }
+    else if (av.kind === "obj-lit" && av.props) { for (var ok in av.props) if (Object.prototype.hasOwnProperty.call(av.props, ok)) stack.push(av.props[ok]); }
+    else if (av.kind === "array-lit" && av.elements) { for (var ali = 0; ali < av.elements.length; ali++) stack.push(av.elements[ali]); }
+    else if (av.kind === "call") { if (av.callee) stack.push(av.callee); if (av.args) for (var cai = 0; cai < av.args.length; cai++) stack.push(av.args[cai]); }
+  }
+  var subs = new Map();
+  for (var pi = 0; pi < preorder.length; pi++) {
+    var node = preorder[pi];
+    if (node.kind === "param" && node.idx === paramIdx && node.fn === paramFn) {
+      subs.set(node, replacementAv);
+      continue;
+    }
+    if (node.kind === "member") {
+      var smObj = subs.get(node.obj) || node.obj;
+      var smKey = subs.get(node.key) || node.key;
+      // Member-access fold per § 13.10: obj-lit + const key → prop lookup;
+      // array-lit + const-numeric-key → element lookup; prototype-chain
+      // lookup for const-string keys.
+      if (smObj && smObj.kind === "obj-lit" && smObj.props && smKey && smKey.kind === "const" &&
+          (typeof smKey.value === "string" || typeof smKey.value === "number") &&
+          Object.prototype.hasOwnProperty.call(smObj.props, smKey.value)) {
+        subs.set(node, smObj.props[smKey.value]);
+      } else if (smObj && smObj.kind === "array-lit" && smObj.elements && smKey && smKey.kind === "const" &&
+                 typeof smKey.value === "number" && smKey.value >= 0 && smKey.value < smObj.elements.length) {
+        subs.set(node, smObj.elements[smKey.value]);
+      } else if (smObj && smKey && smKey.kind === "const" && typeof smKey.value === "string") {
+        var sProtoAv = _specGetPrototypeOfAv(smObj);
+        if (sProtoAv && sProtoAv.kind === "obj-lit" && sProtoAv.props &&
+            Object.prototype.hasOwnProperty.call(sProtoAv.props, smKey.value)) {
+          subs.set(node, sProtoAv.props[smKey.value]);
+        } else {
+          subs.set(node, { kind: "member", obj: smObj, key: smKey });
+        }
+      } else {
+        subs.set(node, { kind: "member", obj: smObj, key: smKey });
+      }
+      continue;
+    }
+    if (node.kind === "binop") {
+      var sBL = subs.get(node.left) || node.left;
+      var sBR = subs.get(node.right) || node.right;
+      if (sBL && sBL.kind === "const" && sBR && sBR.kind === "const") {
+        var sBRes = _evalBinaryConstConst(sBL.value, sBR.value, node.op);
+        subs.set(node, sBRes || { kind: "top" });
+      } else {
+        subs.set(node, { kind: "binop", op: node.op, left: sBL, right: sBR });
+      }
+      continue;
+    }
+    if (node.kind === "or") {
+      subs.set(node, { kind: "or", left: subs.get(node.left) || node.left, right: subs.get(node.right) || node.right });
+      continue;
+    }
+    if (node.kind === "template" && node.exprs) {
+      var sExprs = [];
+      for (var nti = 0; nti < node.exprs.length; nti++) sExprs.push(subs.get(node.exprs[nti]) || node.exprs[nti]);
+      subs.set(node, { kind: "template", quasis: node.quasis, exprs: sExprs });
+      continue;
+    }
+    if (node.kind === "coerce") {
+      subs.set(node, { kind: "coerce", to: node.to, arg: subs.get(node.arg) || node.arg });
+      continue;
+    }
+    if (node.kind === "obj-lit" && node.props) {
+      var sObjProps = Object.create(null);
+      for (var oki in node.props) if (Object.prototype.hasOwnProperty.call(node.props, oki)) sObjProps[oki] = subs.get(node.props[oki]) || node.props[oki];
+      subs.set(node, { kind: "obj-lit", props: sObjProps });
+      continue;
+    }
+    if (node.kind === "array-lit" && node.elements) {
+      var sArrEls = [];
+      for (var nai = 0; nai < node.elements.length; nai++) sArrEls.push(subs.get(node.elements[nai]) || node.elements[nai]);
+      subs.set(node, { kind: "array-lit", elements: sArrEls });
+      continue;
+    }
+    if (node.kind === "call") {
+      // Call AV substitution: substitute callee + args. Builtin-method
+      // dispatch (folding) is NOT performed here — that would form an
+      // indirect recursion cycle (_specSubstituteParam →
+      // _specReduceBuiltinCallPostSub → _specSubstituteParam for nested
+      // HOF dispatch). The substituted call AV is left structurally
+      // intact; the outer _specInstantiateAv driver re-folds it when
+      // the per-element map result becomes part of the outer
+      // substitution preorder.
+      var sCallee = subs.get(node.callee) || node.callee;
+      var sArgs = [];
+      for (var sCi = 0; sCi < node.args.length; sCi++) sArgs.push(subs.get(node.args[sCi]) || node.args[sCi]);
+      subs.set(node, { kind: "call", callee: sCallee, args: sArgs });
+      continue;
+    }
+    subs.set(node, node);
+  }
+  return subs.get(rootAv) || rootAv;
+}
+
 function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
   if (!methodAv || methodAv.kind !== "builtin-method" || !methodAv.id) return null;
   var methodId = methodAv.id;
@@ -14669,9 +14795,9 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
   if (methodId.indexOf("Array.prototype.") === 0 &&
       recvAv && recvAv.kind === "array-lit") {
     // § 23.1.3.18 Array.prototype.map post-sub: when cb is a function-ref
-    // with a known return AV, apply per element via _specInstantiateAv.
-    // Each element substitutes for cb's first param (with cbFn as
-    // fnContext so other unrelated params don't get touched).
+    // with a known return AV, fold per element via _specSubstituteParam
+    // (per-element single-param substitution; no recursion into
+    // _specInstantiateAv). Builds array-lit of per-element results.
     if (methodId === "Array.prototype.map" && argAvs.length >= 1 &&
         argAvs[0] && argAvs[0].kind === "function-ref" && argAvs[0].funcNode) {
       var mapCbFn = argAvs[0].funcNode;
@@ -14679,7 +14805,7 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
       if (mapRetMemo) {
         var mapPerEl = [];
         for (var meIdx = 0; meIdx < recvAv.elements.length; meIdx++) {
-          var mappedAv = _specInstantiateAv(mapRetMemo, [recvAv.elements[meIdx]], undefined, mapCbFn);
+          var mappedAv = _specSubstituteParam(mapRetMemo, 0, mapCbFn, recvAv.elements[meIdx]);
           mapPerEl.push(mappedAv || { kind: "top" });
         }
         return { kind: "array-lit", elements: mapPerEl };
