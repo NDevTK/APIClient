@@ -8704,12 +8704,13 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
       // Tag obj-lit values with the local var name they're bound to so
       // downstream consumers can match `JSON.stringify(varName)` body
       // arguments back to their literal-built shape. Pure metadata —
-      // doesn't affect equality on AbstractValue. Preserve _ctorId
-      // (set by _specApplyBuiltinCtor for WHATWG instance ctors) so
-      // AV-based ctor identity checks (e.g. _isCrossOriginMsgReceiver)
-      // still see the constructor identity through the var binding.
-      if (initAv && initAv.kind === "obj-lit" && d.id && d.id.type === "Identifier") {
-        initAv = { kind: "obj-lit", props: initAv.props, _bindingName: d.id.name, _ctorId: initAv._ctorId };
+      // doesn't affect equality on AbstractValue. Wrap fresh user-created
+      // obj-lits (which carry a `node` backref to the source AST) but
+      // skip canonical registry AVs (window.location, etc.) — wrapping
+      // those breaks reference identity that _isLocationObject and
+      // other AV-identity checks rely on per WHATWG HTML § 7.2.1.
+      if (initAv && initAv.kind === "obj-lit" && initAv.node && d.id && d.id.type === "Identifier") {
+        initAv = { kind: "obj-lit", props: initAv.props, _bindingName: d.id.name, _ctorId: initAv._ctorId, node: initAv.node };
       }
       _specVariableDeclaratorBind(d.id, initAv, state);
     }
