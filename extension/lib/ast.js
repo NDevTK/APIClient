@@ -7961,7 +7961,7 @@ function _specVariableDeclaratorBind(idNode, initAv, state) {
 // into post-state below).
 // Returns the loop's body-entry state — the worklist driver consumes it.
 // ───────────────────────────────────────────────────────────────────────────
-function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
+function _specForInBodyEntryState(stmtNode, rhsAv, preState, stmtPath) {
   var bodyState = _specStateClone(preState);
   var loopVarName = null;
   var loopVarPattern = null;
@@ -8016,6 +8016,31 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState) {
           }
           bindLoopVar(itVal);
           return bodyState;
+        }
+        // Memo missing: the generator hasn't been analyzed yet (typical
+        // when @@iterator is set in the same scope as the for-of, so
+        // the slice build hasn't reached the generator before the
+        // program body walk hits this for-of). Enqueue the generator
+        // for analysis AND register a call-graph edge from the
+        // enclosing function to the generator (per § 15.5 / § 7.4.6
+        // GetIterator: for-of's iterator protocol implicitly invokes
+        // the [[GetMethod]]([@@iterator])() — semantically a call from
+        // the enclosing scope). The fixpoint driver re-processes
+        // callers when callee signatures change; without the edge the
+        // generator's yields wouldn't propagate back.
+        var itFnPath = stmtPath ? _specPathOfFunc(itFn.funcNode, stmtPath) : null;
+        if (itFnPath) {
+          _specEnqueueAnalysis(itFn.funcNode, itFnPath);
+          if (_specCallGraphCallersOf && stmtPath) {
+            var encForGen = stmtPath.getFunctionParent ? stmtPath.getFunctionParent() : null;
+            var encGenNode = (encForGen && encForGen.node) ? encForGen.node :
+              (stmtPath.findParent && stmtPath.findParent(function(pp) { return pp.isProgram(); }))
+              ? stmtPath.findParent(function(pp) { return pp.isProgram(); }).node : null;
+            if (encGenNode) {
+              if (!_specCallGraphCallersOf.has(itFn.funcNode)) _specCallGraphCallersOf.set(itFn.funcNode, new Set());
+              _specCallGraphCallersOf.get(itFn.funcNode).add(encGenNode);
+            }
+          }
         }
       }
     }
@@ -8599,7 +8624,7 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     // the runtime-bound value depends on the iterated source, and
     // downstream propagation detection treats them uniformly.
     var rhsAv = _specEvalExpression(stmtPath.get("right"), state, effects);
-    var bodyState = _specForInBodyEntryState(stmt, rhsAv, state);
+    var bodyState = _specForInBodyEntryState(stmt, rhsAv, state, stmtPath);
     var bodyPath = stmtPath.get("body");
     if (bodyPath && bodyPath.node) {
       if (_t.isBlockStatement(bodyPath.node)) {
