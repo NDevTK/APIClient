@@ -5383,6 +5383,175 @@ test("§ 22.1.3.4 String.prototype.concat with multiple param args", `
   return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/items?q=active"; });
 });
 
+test("§ 9.1.1 closure-captured param in returned inner fn (factory pattern, direct)", `
+  function createThunk(endpoint) {
+    return function() { return fetch(endpoint); };
+  }
+  createThunk("/api/v27/sync")();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v27/sync"; });
+});
+
+test("§ 9.1.1 closure-captured param via var-aliased factory", `
+  function createThunk(endpoint) {
+    return function() { return fetch(endpoint); };
+  }
+  var fn = createThunk("/api/v28");
+  fn();
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v28"; });
+});
+
+test("§ 9.1.1 closure-captured param composed with caller arg (build base + arg suffix)", `
+  function build(base) {
+    return function(suffix) { return fetch(base + suffix); };
+  }
+  var fn = build("/api/v29");
+  fn("/items");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v29/items"; });
+});
+
+test("§ 27.2.5.4 Promise.then cb param binding from resolve value", `
+  Promise.resolve("/api/v30").then(function(u) { return fetch(u + "/data"); });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v30/data"; });
+});
+
+test("§ 13.16 + § 13.3.6 SequenceExpression inside fetch arg (comma operator)", `
+  fetch((0, "/api/v31"));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v31"; });
+});
+
+test("§ 13.3.5 + § 9.2.1 class instance method via this.field + caller arg", `
+  class API {
+    constructor() { this.base = "https://api.example.com/v32"; }
+    fetch(path) { return fetch(this.base + path); }
+  }
+  new API().fetch("/items");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "https://api.example.com/v32/items"; });
+});
+
+test("§ 13.2.5.4 spread merge: spread overrides earlier inline per source order", `
+  fetch("/api/v33", { method: "GET", ...{ method: "POST", body: "x" } });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v33" && s.method === "POST"; });
+});
+
+test("§ 13.2.5.4 spread merge: inline overrides earlier spread per source order", `
+  fetch("/api/v34", { ...{ method: "POST" }, method: "PUT" });
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v34" && s.method === "PUT"; });
+});
+
+test("§ 23.1.3.18 Array.prototype.join with opaque element preserved structurally", `
+  function build(id) {
+    var u = ["/api", "v35", id].join("/");
+    return fetch(u);
+  }
+  build("42");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v35/42"; });
+});
+
+test("§ 23.1.3.18 react-query style: buildKey returns array, fetcher joins", `
+  function buildKey(id) { return ["users", id]; }
+  function fetcher(key) { return fetch("/api/v36/" + key.join("/")); }
+  function useUserQuery(id) { return fetcher(buildKey(id)); }
+  useUserQuery("42");
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v36/users/42"; });
+});
+
+test("§ 10.2.10 inter-procedural array compose: f returns array, g joins via f, fetch uses g", `
+  function f(id) { return ["users", id]; }
+  function g(id) { return f(id).join("/"); }
+  fetch("/api/v37/" + g("42"));
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v37/users/42"; });
+});
+
+test("§ 20.1.2.21 Object.values(param-obj).join — deferred call folds at caller-sub", `
+  function build(obj) { return fetch("/api/v38?" + Object.values(obj).join("&")); }
+  build({a: "1", b: "2"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v38?1&2"; });
+});
+
+test("§ 20.1.2.18 Object.keys(param-obj).join — keys-of fold to keys array at sub", `
+  function build(obj) { return fetch("/api/v39?keys=" + Object.keys(obj).join(",")); }
+  build({role: "admin", page: "1"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v39?keys=role,page"; });
+});
+
+test("§ 20.1.2.5 + § 23.1.3.18 Object.entries.map(e[k]=v).join — full query-string builder chain", `
+  function build(obj) {
+    var qs = Object.entries(obj).map(function(e) { return e[0] + "=" + e[1]; }).join("&");
+    return fetch("/api/v40?" + qs);
+  }
+  build({role: "admin", page: "1"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) {
+    return s.url === "/api/v40?role=admin&page=1" &&
+           s.params && s.params.some(function(p) { return p.name === "role" && p.location === "query"; });
+  });
+});
+
+test("§ 13.10 opaque-key obj-lit access distributes over all known props", `
+  var urls = { admin: "/api/v41/admin", user: "/api/v41/user", guest: "/api/v41/guest" };
+  function load(role) { return fetch(urls[role]); }
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v41/admin"; }) &&
+         r.fetchCallSites.some(function(s) { return s.url === "/api/v41/user"; }) &&
+         r.fetchCallSites.some(function(s) { return s.url === "/api/v41/guest"; });
+});
+
+test("WHATWG URL § 5.5 + URLSearchParams.set: chained mutations reflected in href", `
+  var u = new URL("https://api.example.com/v42/items");
+  u.searchParams.set("page", "1");
+  u.searchParams.set("limit", "50");
+  fetch(u.href);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) {
+    return s.url === "https://api.example.com/v42/items?page=1&limit=50";
+  });
+});
+
+test("WHATWG URL § 5.5 + URLSearchParams.append: appended param reflected in href", `
+  var u = new URL("https://api.example.com/v43");
+  u.searchParams.append("role", "admin");
+  fetch(u.href);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) {
+    return s.url === "https://api.example.com/v43?role=admin";
+  });
+});
+
+test("WHATWG URL § 5.5 + URLSearchParams.delete: removes existing param", `
+  var u = new URL("https://api.example.com/v44?token=secret&role=admin");
+  u.searchParams.delete("token");
+  fetch(u.href);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) {
+    return s.url === "https://api.example.com/v44?role=admin";
+  });
+});
+
+test("§ 23.1.3.15 forEach chain: per-iteration searchParams.set across closure-captured URL", `
+  var u = new URL("https://api.example.com/v45/items");
+  Object.entries({page: "1", limit: "50"}).forEach(function(e) {
+    u.searchParams.set(e[0], e[1]);
+  });
+  fetch(u.href);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) {
+    return s.url === "https://api.example.com/v45/items?page=1&limit=50";
+  });
+});
+
 test("§ 7.1.17 String coercion via String() callable", `
   var id = String(42);
   fetch("/api/v20?id=" + id);

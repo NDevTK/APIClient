@@ -15,6 +15,12 @@ function parseSourceMap(sourceMapJson) {
     names: [],
     protoFileNames: [],
     apiClientFiles: [],
+    // Per-line decoded mappings: result.mappings[genLine] = sorted
+    // array of {genCol, srcIdx, srcLine, srcCol, nameIdx?}. nameIdx
+    // present when the mapping segment carries a name reference per
+    // Source Map Spec § 4.4. Used by name-renaming lookup at
+    // (genLine, genCol) → names[nameIdx].
+    mappings: [],
   };
 
   if (!sourceMapJson || typeof sourceMapJson !== "object") return result;
@@ -48,7 +54,115 @@ function parseSourceMap(sourceMapJson) {
     result.names = sourceMapJson.names;
   }
 
+  // VLQ decode of `mappings` per Source Map Spec § 4.4. Each generated
+  // line is delimited by ";"; each segment within a line is delimited
+  // by ",". Segments encode 1, 4, or 5 base64-VLQ fields as relative
+  // deltas: genCol, srcIdx, srcLine, srcCol, nameIdx. nameIdx (5th
+  // field) is what we need for param renaming — when present, the
+  // mapping carries the original name at that generated position.
+  if (typeof sourceMapJson.mappings === "string" && sourceMapJson.mappings.length > 0) {
+    result.mappings = _decodeSourceMapMappings(sourceMapJson.mappings);
+  }
+
   return result;
+}
+
+// Decode the base64-VLQ encoded `mappings` field per Source Map Spec
+// § 4.4. Returns array indexed by genLine; each entry is a sorted
+// array of segment objects. State variables (srcIdx/srcLine/srcCol/
+// nameIdx) carry forward across segments per spec § 4.4 "All values
+// are stored as relative offsets" except genCol resets per line.
+function _decodeSourceMapMappings(mappingsStr) {
+  var lines = mappingsStr.split(";");
+  var out = [];
+  // Persistent state across segments (resets only where spec says):
+  // - genCol: resets per generated line (start of each `;`-delimited line)
+  // - srcIdx/srcLine/srcCol/nameIdx: carry across the entire mappings string
+  var srcIdx = 0, srcLine = 0, srcCol = 0, nameIdx = 0;
+  for (var li = 0; li < lines.length; li++) {
+    var lineSegments = lines[li];
+    var lineOut = [];
+    if (lineSegments.length === 0) { out.push(lineOut); continue; }
+    var segments = lineSegments.split(",");
+    var genCol = 0;
+    for (var si = 0; si < segments.length; si++) {
+      var seg = segments[si];
+      if (seg.length === 0) continue;
+      var fields = _decodeVLQSegment(seg);
+      if (fields === null) continue;
+      // Apply field deltas per spec.
+      if (fields.length >= 1) genCol += fields[0];
+      if (fields.length >= 4) {
+        srcIdx += fields[1];
+        srcLine += fields[2];
+        srcCol += fields[3];
+      }
+      var hasName = fields.length >= 5;
+      if (hasName) nameIdx += fields[4];
+      var segObj = { genCol: genCol, srcIdx: srcIdx, srcLine: srcLine, srcCol: srcCol };
+      if (hasName) segObj.nameIdx = nameIdx;
+      lineOut.push(segObj);
+    }
+    out.push(lineOut);
+  }
+  return out;
+}
+
+// Base64-VLQ decoder per Source Map Spec § 4.4. Reads a segment string
+// of base64 chars; each char contributes 5 bits (lowest 5) plus a
+// continuation bit (bit 6 = 0x20). First group's lowest bit is the
+// sign. Multiple field values may be packed into one segment string;
+// returns an array of the decoded signed integers.
+var _SOURCEMAP_B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+function _decodeVLQSegment(segStr) {
+  var out = [];
+  var i = 0;
+  while (i < segStr.length) {
+    var value = 0;
+    var shift = 0;
+    var cont = true;
+    while (cont && i < segStr.length) {
+      var ch = segStr.charAt(i++);
+      var digit = _SOURCEMAP_B64.indexOf(ch);
+      if (digit < 0) return null;
+      cont = (digit & 0x20) !== 0;
+      digit &= 0x1F;
+      value += (digit << shift);
+      shift += 5;
+    }
+    var sign = (value & 1) === 1;
+    value >>>= 1;
+    if (sign) value = -value;
+    out.push(value);
+  }
+  return out;
+}
+
+// Look up the original name at a given generated (line, col) position
+// from a parsed sourcemap. Returns the original Identifier name string
+// or null when no mapping at that exact position carries a name.
+// Generated line/col are 1-based for `line` (matching Babel) and
+// 0-based for `column` (matching V8 / Babel loc.start.column).
+function lookupOriginalNameAt(parsedMap, genLine1, genCol0) {
+  if (!parsedMap || !parsedMap.mappings || !parsedMap.names) return null;
+  var lineIdx = genLine1 - 1;
+  if (lineIdx < 0 || lineIdx >= parsedMap.mappings.length) return null;
+  var segments = parsedMap.mappings[lineIdx];
+  if (!segments || segments.length === 0) return null;
+  // Binary search for the segment with genCol <= genCol0. The segment
+  // whose genCol is the largest such value is the one covering this
+  // position per Source Map Spec § 4.4 mapping interpretation.
+  var lo = 0, hi = segments.length - 1, best = -1;
+  while (lo <= hi) {
+    var mid = (lo + hi) >>> 1;
+    if (segments[mid].genCol <= genCol0) { best = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  if (best < 0) return null;
+  var seg = segments[best];
+  if (typeof seg.nameIdx !== "number") return null;
+  if (seg.nameIdx < 0 || seg.nameIdx >= parsedMap.names.length) return null;
+  return parsedMap.names[seg.nameIdx];
 }
 
 /**
