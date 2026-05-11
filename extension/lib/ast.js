@@ -9050,6 +9050,19 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
 // Memoised per function node.
 // ───────────────────────────────────────────────────────────────────────────
 var _specEffectsMemo = new WeakMap();
+// Per-fn partial-analysis cursor. When _specAnalyzePropertyFlow runs in
+// partial mode (stopAfterStmtIdx set), it saves the state-after-stmt-K
+// here so subsequent calls with later target indices resume from K+1
+// rather than restarting from stmt 0. Cleared on full completion (when
+// _specEffectsMemo becomes the canonical summary). ECMA § 14.2: state
+// after stmt K fully captures the effect of stmts 0..K, sufficient for
+// stmts K+1..K+M.
+//   { idx: int last-completed-top-stmt-idx,
+//     state: state-after-idx,
+//     effects: effects-array,
+//     returnAvs: slice of _specReturnAvAccum,
+//     yieldAvs: slice of _specYieldAvAccum }
+var _specStmtCursor = new WeakMap();
 // Per-expression-node AbstractValue cache, populated by _specEvalLeaf as
 // it processes nodes inside any _specAnalyzePropertyFlow walk. This lets
 // downstream code (URL extraction, security-taint projection) look up
@@ -9153,9 +9166,54 @@ function _avAtPath(path) {
   if (encFnNode && _t.isFunction(encFnNode) &&
       (!_specCallGraphCallersOf || _specSliceFns.has(encFnNode))) {
     var encFnPath = _specFuncPathByNode.get(encFnNode);
-    if (encFnPath) _specAnalyzePropertyFlow(encFnPath);
+    if (encFnPath) {
+      // Demand-driven partial analysis per ECMA § 14.2: only stmts
+      // lexically before `path`'s enclosing stmt influence its AV.
+      // _specFindEnclosingTopStmtIdx walks parents to find the top-
+      // level stmt index; pass it as stopAfterStmtIdx so the analysis
+      // stops after that stmt. Saves cost on large non-slice / not-
+      // yet-fully-analysed fns where the query position is early in
+      // the body. Returns -1 (no early exit) when the query isn't a
+      // descendant of any top-level stmt — falls back to full body.
+      var topIdx = _specFindEnclosingTopStmtIdx(encFnPath, path);
+      _specAnalyzePropertyFlow(encFnPath, false, topIdx);
+    }
   }
   return _specPathValMemo.get(path.node) || null;
+}
+
+// Find the index of the top-level statement in funcPath's body that
+// lexically contains queryPath. Returns -1 when queryPath isn't a
+// descendant of any top-level stmt (e.g. it's in funcPath's params,
+// or funcPath has a concise-body arrow). Used by demand-driven
+// callers to bound partial analysis at the query's enclosing stmt.
+function _specFindEnclosingTopStmtIdx(funcPath, queryPath) {
+  if (!funcPath || !funcPath.node || !queryPath || !queryPath.node) return -1;
+  // For Programs and function bodies (BlockStatement), the body is an
+  // array of statements at funcPath.node.body or funcPath.node.body.body
+  // respectively. Walk queryPath's parent chain until we find a path
+  // whose parent.node === bodyNode (an array container) — that path
+  // IS the enclosing top-level stmt.
+  var fnNode = funcPath.node;
+  var bodyArrNode;
+  if (_t.isProgram(fnNode)) bodyArrNode = fnNode;
+  else if (fnNode.body && _t.isBlockStatement(fnNode.body)) bodyArrNode = fnNode.body;
+  else return -1;
+  var stmtsArr = bodyArrNode.body;
+  if (!stmtsArr || !stmtsArr.length) return -1;
+  // Walk parent chain. The top-level stmt is the path whose immediate
+  // parent's node === bodyArrNode. Use node identity for the gate
+  // (Babel paths are not cached canonical refs).
+  var p = queryPath;
+  while (p && p.parentPath) {
+    if (p.parentPath.node === bodyArrNode) {
+      // Found: p.node is a direct child of bodyArrNode's body array.
+      var idx = stmtsArr.indexOf(p.node);
+      return idx >= 0 ? idx : -1;
+    }
+    p = p.parentPath;
+  }
+  return -1;
 }
 // Walk an AV to its underlying obj-lit (through or-AV alternatives).
 // Returns the first obj-lit reached, or null when the AV doesn't
@@ -10051,7 +10109,7 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
   });
 }
 
-function _specAnalyzePropertyFlow(funcPath, force) {
+function _specAnalyzePropertyFlow(funcPath, force, stopAfterStmtIdx) {
   if (!funcPath || !funcPath.node) return [];
   var fnNode = funcPath.node;
   // ECMA § 16.1 Scripts: a Program is analyzed top-to-bottom in the
@@ -10060,6 +10118,31 @@ function _specAnalyzePropertyFlow(funcPath, force) {
   // statements with side-effects propagate state across statements).
   if (!_t.isFunction(fnNode) && !_t.isProgram(fnNode)) return [];
   if (!force && _specEffectsMemo.has(fnNode)) return _specEffectsMemo.get(fnNode);
+  // Partial-evaluation mode: when `stopAfterStmtIdx` is set, evaluate
+  // top-level statements 0..stopAfterStmtIdx and stop. Used by demand-
+  // driven callers (e.g. _resolveByContextSensitiveReanalysis) that
+  // only need the per-expression AV at a known location and don't need
+  // statements AFTER the query position. Partial analysis does NOT set
+  // _specEffectsMemo / _specReturnValueMemo / _specSideEffectMemo —
+  // those summaries are only valid after a full-body pass. The caller
+  // reads _specPathValMemo directly for the AVs it queried.
+  var _stopAfterStmtIdx = (typeof stopAfterStmtIdx === "number") ? stopAfterStmtIdx : -1;
+  // Resume cursor: a previous partial run for the same fnNode may have
+  // analysed statements 0..cursor.idx already. If the caller's query
+  // position is at or before cursor.idx, the AVs are already memoised
+  // in _specPathValMemo (written during the prior partial walk) — no
+  // additional work needed; just return. If the query is past cursor.idx,
+  // resume from cursor.state at cursor.idx+1 rather than redoing the
+  // prefix work. ECMA § 14.2 sequential semantics make this sound: the
+  // state after stmt K is sufficient to evaluate stmts K+1..K+M, no
+  // matter how the analysis was sliced. Cleared on full completion so
+  // _specEffectsMemo becomes the canonical summary thereafter.
+  var _stmtCursor = (!force && _stopAfterStmtIdx >= 0)
+    ? _specStmtCursor.get(fnNode) : null;
+  if (_stmtCursor && _stmtCursor.idx >= _stopAfterStmtIdx) {
+    // Already analysed past the target — query's AV is in _specPathValMemo.
+    return _stmtCursor.effects;
+  }
   // Explicit cycle guard. Demand-driven invocation chains (sink
   // dispatch → traceValueSource → _specAnalyzePropertyFlow(encFn) →
   // call-site processing in body → _specAnalyzePropertyFlow(callee) →
@@ -10089,13 +10172,28 @@ function _specAnalyzePropertyFlow(funcPath, force) {
   var hofQueueBaseLen = _hofPendingDispatches.length;
   var returnAvBaseLen = _specReturnAvAccum.length;
   var yieldAvBaseLen = _specYieldAvAccum.length;
-  var entryState = _specInitialFunctionBodyState(fnNode, funcPath);
-  var effects = [];
+  var entryState, effects, startIdx = 0;
+  if (_stmtCursor) {
+    // Resume from cursor: state-after-stmt-K is the entry state for K+1.
+    // Push the cursor's accum slices back onto the global accums so the
+    // continuation analysis sees its previously-accumulated returns/yields
+    // and pops them correctly at full completion.
+    entryState = _stmtCursor.state;
+    effects = _stmtCursor.effects;
+    startIdx = _stmtCursor.idx + 1;
+    for (var rri = 0; rri < _stmtCursor.returnAvs.length; rri++)
+      _specReturnAvAccum.push(_stmtCursor.returnAvs[rri]);
+    for (var ryi = 0; ryi < _stmtCursor.yieldAvs.length; ryi++)
+      _specYieldAvAccum.push(_stmtCursor.yieldAvs[ryi]);
+  } else {
+    entryState = _specInitialFunctionBodyState(fnNode, funcPath);
+    effects = [];
+  }
   var stack;
   if (_t.isBlockStatement(bodyPath.node) || _t.isProgram(bodyPath.node)) {
     // BlockStatement bodies and Program have the same shape: a `.body`
     // array of Statements. Same iterative driver per § 14.2 / § 16.1.
-    stack = [{ stmts: bodyPath.node.body, idx: 0, state: entryState, parentPath: bodyPath }];
+    stack = [{ stmts: bodyPath.node.body, idx: startIdx, state: entryState, parentPath: bodyPath }];
   } else {
     // ArrowFunctionExpression concise body per § 15.3.5.13: the body
     // is a single expression whose value is implicitly returned.
@@ -10110,6 +10208,39 @@ function _specAnalyzePropertyFlow(funcPath, force) {
 
   while (stack.length > 0) {
     var top = stack[stack.length - 1];
+
+    // Partial-evaluation early exit: when we've completed enough top-
+    // level statements to cover the caller's query position, stop. We
+    // only checkpoint at the ROOT frame between top-level stmts —
+    // branch frames (if/switch/loop bodies, HOF cbs) must drain to
+    // completion before exit so state-flow remains consistent. The
+    // condition `stack.length === 1 && stack[0] === rootFrame` confirms
+    // we're back at the root after stmt K's branch frames have all
+    // popped. Per ECMA § 14.2 SequenceOfStatements: stmt K+1's
+    // semantics only see state produced by stmts 0..K.
+    if (_stopAfterStmtIdx >= 0 && stack.length === 1 &&
+        top.stmts && top.idx > _stopAfterStmtIdx) {
+      // Save cursor for subsequent resume: state-after-stmt-K is the
+      // entry for K+1. Slice the global accum arrays for our partial
+      // contribution and pop them so sibling analyses see consistent
+      // base lengths. On resume the slices push back.
+      var returnSlice = _specReturnAvAccum.slice(returnAvBaseLen);
+      var yieldSlice = _specYieldAvAccum.slice(yieldAvBaseLen);
+      _specReturnAvAccum.length = returnAvBaseLen;
+      _specYieldAvAccum.length = yieldAvBaseLen;
+      _hofPendingDispatches.length = hofQueueBaseLen;
+      _specStmtCursor.set(fnNode, {
+        idx: top.idx - 1,   // last fully-processed top stmt index
+        state: top.state,
+        effects: effects,
+        returnAvs: returnSlice,
+        yieldAvs: yieldSlice
+      });
+      _specAnalyzeInProgress.delete(fnNode);
+      // Don't set _specEffectsMemo / _specReturnValueMemo /
+      // _specSideEffectMemo — partial analyses don't have full summary.
+      return effects;
+    }
 
     // Merge frame: branches that report to it have all completed
     // (LIFO ordering — branches were pushed AFTER the merge frame, so
@@ -10234,6 +10365,10 @@ function _specAnalyzePropertyFlow(funcPath, force) {
   }
   if (thisEffects.length > 0) _specThisEffectsMemo.set(fnNode, thisEffects);
   _specEffectsMemo.set(fnNode, effects);
+  // Clear partial-analysis cursor: full pass is now canonical, future
+  // calls (even if requesting partial) hit _specEffectsMemo first and
+  // skip the cursor path entirely.
+  _specStmtCursor.delete(fnNode);
   _specAnalyzeInProgress.delete(fnNode);
   return effects;
 }
@@ -14291,7 +14426,12 @@ function _resolveByContextSensitiveReanalysis(initialPath, encFn) {
       _specPostorderMemo = new WeakMap();
       _specContextCallerArgs.set(encFnNode, ctxArgAvs);
       try {
-        _specAnalyzePropertyFlow(encFn, true);
+        // Partial analysis: only stmts up to initialPath's enclosing
+        // top-level stmt influence its AV. For wrappers with large
+        // bodies and many call sites, this is the dominant savings —
+        // O(callsites × bodysize) becomes O(callsites × prefix size).
+        var ctxTopIdx = _specFindEnclosingTopStmtIdx(encFn, initialPath);
+        _specAnalyzePropertyFlow(encFn, true, ctxTopIdx);
         var ctxAv = _specPathValMemo.get(initialPath.node);
         if (ctxAv) {
           var poL = _resolvePageOriginAv(ctxAv);
@@ -14326,7 +14466,12 @@ function _resolveAllValues(initialPath, initialDepth) {
   // source of truth; this function projects its string leaves.
   var encFn = initialPath.getFunctionParent && initialPath.getFunctionParent();
   if (encFn && _t.isFunction(encFn.node)) {
-    _specAnalyzePropertyFlow(encFn);  // memoised — cheap on repeat call
+    // Partial analysis per ECMA § 14.2: only stmts before initialPath
+    // influence its AV. After fixpoint memoizes encFn, this is O(1)
+    // via the !force memo short-circuit. For non-memoized encFns
+    // (encountered demand-driven), this saves the bulk of body work.
+    var ravTopIdx = _specFindEnclosingTopStmtIdx(encFn, initialPath);
+    _specAnalyzePropertyFlow(encFn, false, ravTopIdx);
     var memoAv = _specPathValMemo.get(initialPath.node);
     if (memoAv) {
       // Page-origin substitution per WHATWG URL § 4.4: location.{origin,
@@ -17857,7 +18002,10 @@ function _traceValueSource(path, _unused) {
         }
       }
       if (!isHofCb) {
-        try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+        // Partial analysis: only stmts before path's enclosing stmt
+        // influence its AV per ECMA § 14.2 sequential semantics.
+        var tvsTopIdx = _specFindEnclosingTopStmtIdx(encFn, path);
+        try { _specAnalyzePropertyFlow(encFn, false, tvsTopIdx); } catch (_) {}
       }
       // HOF callback: encFn's parent is a CallExpression with member
       // callee like arr.forEach/map/filter (per § 23.1.3.7+). Analyse
@@ -18062,7 +18210,13 @@ function _avTaintTransitionsCompute(av, ctxPath) {
           // by evaluating the caller's enclosing function body.
           var callerEnc = callRef.getFunctionParent && callRef.getFunctionParent();
           if (callerEnc && _t.isFunction(callerEnc.node) && !_specEffectsMemo.has(callerEnc.node)) {
-            try { _specAnalyzePropertyFlow(callerEnc); } catch (_) {}
+            // Partial analysis per ECMA § 14.2: only stmts before the
+            // call site influence the arg's AV. Saves cost on large
+            // non-slice callers — common in webpack/library bundles
+            // where popular slice helpers are dispatched from many
+            // unrelated callers via array indexing.
+            var caTopIdx = _specFindEnclosingTopStmtIdx(callerEnc, callRef);
+            try { _specAnalyzePropertyFlow(callerEnc, false, caTopIdx); } catch (_) {}
             argAv = _specPathValMemo.get(argNode);
           } else if (!callerEnc) {
             // Caller is at module-top — evaluate just the call's argument
