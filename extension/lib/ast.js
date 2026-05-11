@@ -7361,6 +7361,58 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
 // preserve both alternatives as `{kind:"or", left, right}` and let consumers
 // (e.g. propagation-detection's target-tracing) unwrap to the truthy operand.
 // ───────────────────────────────────────────────────────────────────────────
+// Batch join: build an or-AV from an array of leaves in O(N) total
+// (vs O(N²) for incremental pairwise _specLogicalOrAv). Dedupes by
+// structural equality via a Set keyed by identity + linear fallback
+// for structurally-equal-but-distinct-object cases (rare in practice
+// because AVs share references heavily via memos). Returns a single
+// AV when all leaves collapse, or a balanced or-tree otherwise.
+// Used by call-sites that already have a known list of alternatives
+// (return-value accumulator, switch-case results, HOF distribution,
+// etc.) — replaces the per-step quadratic membership scan.
+function _specJoinAllAv(leaves) {
+  if (!leaves || leaves.length === 0) return null;
+  // Flatten any or-AVs in the input; collect unique by identity.
+  var unique = [];
+  var seen = new Set();
+  var hasTop = false;
+  for (var i = 0; i < leaves.length; i++) {
+    var l = leaves[i];
+    if (!l) continue;
+    if (l.kind === "top") { hasTop = true; continue; }
+    if (l.kind === "or") {
+      var sub = _avFlattenOrLeaves(l);
+      if (sub) {
+        for (var si = 0; si < sub.length; si++) {
+          var sl = sub[si];
+          if (sl && !seen.has(sl)) { seen.add(sl); unique.push(sl); }
+        }
+      }
+    } else {
+      if (!seen.has(l)) { seen.add(l); unique.push(l); }
+    }
+  }
+  if (hasTop) return _AV_TOP;
+  if (unique.length === 0) return null;
+  if (unique.length === 1) return unique[0];
+  // Build a balanced or-tree from N unique leaves so downstream walkers
+  // see log-depth not linear-depth (a left-leaning chain produces deep
+  // recursion in older walkers). Iterative bottom-up pairing.
+  var level = unique;
+  while (level.length > 1) {
+    var nextLevel = [];
+    for (var li = 0; li < level.length; li += 2) {
+      if (li + 1 < level.length) {
+        nextLevel.push({ kind: "or", left: level[li], right: level[li + 1] });
+      } else {
+        nextLevel.push(level[li]);
+      }
+    }
+    level = nextLevel;
+  }
+  return level[0];
+}
+
 function _specLogicalOrAv(leftAv, rightAv) {
   // Idempotent join per ECMA lattice semantics: a ⊔ a = a. Without
   // deduplication, recursive function fixpoint diverges (each iteration
@@ -10306,12 +10358,13 @@ function _specAnalyzePropertyFlow(funcPath, force, stopAfterStmtIdx) {
   // return statements fired (or all were `return;`), the value is
   // undefined per § 14.10.
   if (_specReturnAvAccum.length > returnAvBaseLen) {
-    var joinedRet = _specReturnAvAccum[returnAvBaseLen];
-    for (var rai = returnAvBaseLen + 1; rai < _specReturnAvAccum.length; rai++) {
-      joinedRet = _specLogicalOrAv(joinedRet, _specReturnAvAccum[rai]);
-    }
+    // Batch join per ECMA lattice semantics (idempotent join):
+    // collect all returns and dedup via identity Set in O(N) rather
+    // than O(N²) incremental pairwise comparisons. Top absorbs.
+    var retSlice = _specReturnAvAccum.slice(returnAvBaseLen);
+    var joinedRet = _specJoinAllAv(retSlice);
     _specReturnAvAccum.length = returnAvBaseLen;  // pop our slice
-    _specReturnValueMemo.set(fnNode, joinedRet);
+    if (joinedRet) _specReturnValueMemo.set(fnNode, joinedRet);
   }
   // § 15.5 GeneratorFunction: when this function is a generator
   // (`function* g() { … }`), assemble an array-lit AV from accumulated
