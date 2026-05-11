@@ -10722,9 +10722,9 @@ function _specEvalLeaf(path, state, vals, effects) {
     var thisFn = path.getFunctionParent && path.getFunctionParent();
     return _hashConsThis(thisFn && thisFn.node);
   }
-  if (_t.isStringLiteral(n)) return { kind: "const", value: n.value };
-  if (_t.isNumericLiteral(n)) return { kind: "const", value: n.value };
-  if (_t.isBooleanLiteral(n)) return { kind: "const", value: n.value };
+  if (_t.isStringLiteral(n)) return _hcConst(n.value);
+  if (_t.isNumericLiteral(n)) return _hcConst(n.value);
+  if (_t.isBooleanLiteral(n)) return _hcConst(n.value);
   if (_t.isNullLiteral(n)) return _AV_NULL;
   if (_t.isBigIntLiteral(n)) {
     // § 21.2.1.1.1 BigInt literal evaluation — produces a BigInt value.
