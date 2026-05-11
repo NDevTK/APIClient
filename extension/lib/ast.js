@@ -2897,7 +2897,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     var reqInputLeaves = _avFlattenStringLeaves(reqInputAv);
     if (reqInputLeaves.length === 0) return _AV_TOP;
     var reqInitAv = argAvs.length >= 2 ? argAvs[1] : null;
-    var reqMethodAv = { kind: "const", value: "GET" };
+    var reqMethodAv = _hcConst("GET");
     if (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.method) {
       reqMethodAv = reqInitAv.props.method;
     }
@@ -2914,7 +2914,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
           body: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.body)
             ? reqInitAv.props.body : _AV_NULL,
           credentials: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.credentials)
-            ? reqInitAv.props.credentials : { kind: "const", value: "same-origin" }
+            ? reqInitAv.props.credentials : _hcConst("same-origin")
         }
       });
     }
@@ -3045,7 +3045,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       props: {
         encode: { kind: "builtin-method", id: "TextEncoder.prototype.encode" },
         encodeInto: { kind: "builtin-method", id: "TextEncoder.prototype.encodeInto" },
-        encoding: { kind: "const", value: "utf-8" },
+        encoding: _hcConst("utf-8"),
       }
     };
   }
@@ -4063,8 +4063,8 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (globalName === "isFinite") return { kind: "const", value: isFinite(ga) };
       // § 22.1.1.1 String(x) coercion (callable form, not constructor).
       if (globalName === "String") {
-        if (ga === undefined) return { kind: "const", value: "undefined" };
-        if (ga === null) return { kind: "const", value: "null" };
+        if (ga === undefined) return _hcConst("undefined");
+        if (ga === null) return _hcConst("null");
         return { kind: "const", value: String(ga) };
       }
       // § 21.1.1.1 Number(x) coercion.
