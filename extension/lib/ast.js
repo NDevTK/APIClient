@@ -860,6 +860,14 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
       _resolver.collectError(_sliceErr, "sliceBuild");
     } else { throw _sliceErr; }
   }
+  try {
+    _babelTraverse(ast, {
+      Program: function(p) { _specAnalyzeProgramWithFixpoint(p); p.stop(); }
+    });
+  } catch (_fpErr) {
+    if (_fpErr instanceof RangeError) _resolver.collectError(_fpErr, "fixpoint");
+    else throw _fpErr;
+  }
   var _t_slice_end = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
 
   try {
@@ -9757,13 +9765,48 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
     });
   }
   // Now Kahn's algorithm over trampolineSet, with in-degree counting
-  // only callees that are also in the set.
+  // only callees that are also in the set. Plus an explicit dependency
+  // edge from each HOF callback's enclosing scope to the cb itself —
+  // the cb must be analysed STANDALONE before the enclosing scope's
+  // HOF dispatch drain (per ECMA § 23.1.3) re-processes cb body with
+  // bound element AVs. Otherwise cb's later standalone analysis
+  // overwrites _specPathValMemo entries with default param AVs.
+  var hofCbToEnc = new Map();
+  // _specEntryPathsByProgram entries don't directly carry the hof->enc
+  // relation; recompute it cheaply by walking entryPaths for
+  // FunctionExpressions that are passed as the first argument to a
+  // CallExpression `arr.method(cb)` where method is in ECMA § 23.1.3's
+  // Array.prototype HOF list. Other cb patterns (addEventListener,
+  // Promise.then, setTimeout) use _specInitialFunctionBodyState to set
+  // cb's param shape via _specEventHandlerType / promiseRecvAv during
+  // standalone analysis — for those the topo order doesn't matter.
+  for (var hepi = 0; hepi < entryPaths.length; hepi++) {
+    var hepFn = entryPaths[hepi].node;
+    var hepParent = entryPaths[hepi].parent;
+    if ((hepFn.type === "FunctionExpression" || hepFn.type === "ArrowFunctionExpression") &&
+        entryPaths[hepi].parentPath && _t.isCallExpression(hepParent) &&
+        _t.isMemberExpression(hepParent.callee) && !hepParent.callee.computed &&
+        _t.isIdentifier(hepParent.callee.property) &&
+        _SPEC_ARRAY_HOF_METHODS.indexOf(hepParent.callee.property.name) >= 0 &&
+        hepParent.arguments[0] === hepFn) {
+      var hepEnc = entryPaths[hepi].getFunctionParent && entryPaths[hepi].getFunctionParent();
+      var hepEncNode = (hepEnc && hepEnc.node) ? hepEnc.node : programPath.node;
+      if (trampolineSet.has(hepEncNode)) hofCbToEnc.set(hepFn, hepEncNode);
+    }
+  }
   var trampIndegree = new Map();
   trampolineSet.forEach(function (fn) {
     var cs = calleesOfMap.get(fn);
     var d = 0;
     if (cs) cs.forEach(function (c) { if (trampolineSet.has(c) && c !== fn) d++; });
     trampIndegree.set(fn, d);
+  });
+  // Add hof-cb → encNode edges: encNode's indegree increments per
+  // dependent cb. encNode (e.g. Program) processed AFTER all its
+  // HOF callbacks have completed standalone analysis.
+  hofCbToEnc.forEach(function (encNode, cbNode) {
+    if (!trampIndegree.has(encNode)) return;
+    trampIndegree.set(encNode, trampIndegree.get(encNode) + 1);
   });
   var trampReady = [];
   trampIndegree.forEach(function (deg, fn) { if (deg === 0) trampReady.push(fn); });
@@ -9779,6 +9822,14 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
         trampIndegree.set(c, newDeg);
         if (newDeg === 0) trampReady.push(c);
       });
+    }
+    // hof-cb → encNode edge: when cb is processed, decrement encNode's
+    // indegree. Maps lookup is O(1) per (cb, encNode) pair.
+    var hofEnc = hofCbToEnc.get(trampFn);
+    if (hofEnc && trampIndegree.has(hofEnc)) {
+      var hofNewDeg = trampIndegree.get(hofEnc) - 1;
+      trampIndegree.set(hofEnc, hofNewDeg);
+      if (hofNewDeg === 0) trampReady.push(hofEnc);
     }
   }
   trampIndegree.forEach(function (deg, fn) { if (deg > 0) trampOrder.push(fn); });
