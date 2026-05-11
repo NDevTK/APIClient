@@ -14606,6 +14606,27 @@ function _resolveByContextSensitiveReanalysis(initialPath, encFn) {
   // encFn's own summary from within its own contextual walk.
   var savedPathVal = _specPathValMemo;
   var savedPostorder = _specPostorderMemo;
+  // Dedup caller-arg tuples by AV identity: two call sites passing
+  // structurally-identical args (i.e. same AV references via hash-cons
+  // identity preservation) produce identical context-sensitive analyses
+  // (deterministic in callee body + arg AVs). Collapses O(call-sites)
+  // re-analyses to O(distinct-identity-tuples). Storage: array of
+  // already-processed tuples; per-tuple comparison is element-by-element
+  // by AV reference identity — sound because hash-cons makes equal-
+  // content AVs share identity.
+  var seenArgTuples = [];
+  function _ctxTupleSeen(t) {
+    for (var ti = 0; ti < seenArgTuples.length; ti++) {
+      var s = seenArgTuples[ti];
+      if (s.length !== t.length) continue;
+      var match = true;
+      for (var ej = 0; ej < t.length; ej++) {
+        if (s[ej] !== t[ej]) { match = false; break; }
+      }
+      if (match) return true;
+    }
+    return false;
+  }
   try {
     for (var csi = 0; csi < callSitePaths.length; csi++) {
       var csp = callSitePaths[csi];
@@ -14632,6 +14653,8 @@ function _resolveByContextSensitiveReanalysis(initialPath, encFn) {
         if (aav && aav.kind !== "top" && aav.kind !== "param") anyConcrete = true;
       }
       if (!anyConcrete) continue;
+      if (_ctxTupleSeen(ctxArgAvs)) continue;
+      seenArgTuples.push(ctxArgAvs);
       // Swap to fresh per-node memos for the contextual walk.
       _specPathValMemo = new WeakMap();
       _specPostorderMemo = new WeakMap();

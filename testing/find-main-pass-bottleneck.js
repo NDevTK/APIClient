@@ -19,7 +19,7 @@ var instrumentation = `
       globalThis._vTime[name] = (globalThis._vTime[name] || 0) + (Date.now() - t0);
       globalThis._vCount[name] = (globalThis._vCount[name] || 0) + 1;
       var total = globalThis._vCount._all = (globalThis._vCount._all || 0) + 1;
-      if (total % 50000 === 0) {
+      if (total % 5000 === 0) {
         console.log("[T+" + (Date.now() - globalThis._anStart) + "ms] " + total + " visitor calls. By time:");
         var keys = Object.keys(globalThis._vTime).sort(function(a,b){ return globalThis._vTime[b] - globalThis._vTime[a]; });
         keys.slice(0, 6).forEach(function(k) {
@@ -29,6 +29,9 @@ var instrumentation = `
       return ret;
     };
   }
+  _specAnalyzePropertyFlow = _instrumented("_specAnalyzePropertyFlow", _specAnalyzePropertyFlow);
+  _resolveAllValues = _instrumented("_resolveAllValues", _resolveAllValues);
+  _avAtPath = _instrumented("_avAtPath", _avAtPath);
   _processNetworkSink = _instrumented("_processNetworkSink", _processNetworkSink);
   _processExportMethodCall = _instrumented("_processExportMethodCall", _processExportMethodCall);
   _processSecurityCallSink = _instrumented("_processSecurityCallSink", _processSecurityCallSink);
