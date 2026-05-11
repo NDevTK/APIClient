@@ -8373,9 +8373,21 @@ function _specEvalExpression(rootPath, state, effects, noWriteMemo) {
   var vals = new Map();
   for (var i = 0; i < paths.length; i++) {
     var p = paths[i];
-    var av = _specEvalLeaf(p, state, vals, effects);
-    vals.set(p.node, av);
-    if (av && typeof av === "object") _avSourceNode.set(av, p.node);
+    var n = p.node;
+    var av;
+    // Fast path for state-independent literal leaves per ECMA § 13.2 —
+    // these have no scope dependencies, no side effects, and the AV
+    // shape is fixed by the syntactic node. Skipping the full
+    // _specEvalLeaf dispatch (which type-checks across ~50 node kinds)
+    // saves significant cumulative time on bundles with large literal
+    // initializer arrays (Stripe's index.js stmt 3: 1.3M leaf evals).
+    if (_t.isStringLiteral(n)) av = { kind: "const", value: n.value };
+    else if (_t.isNumericLiteral(n)) av = { kind: "const", value: n.value };
+    else if (_t.isBooleanLiteral(n)) av = n.value === true ? _AV_TRUE : _AV_FALSE;
+    else if (_t.isNullLiteral(n)) av = _AV_NULL;
+    else av = _specEvalLeaf(p, state, vals, effects);
+    vals.set(n, av);
+    if (av && typeof av === "object") _avSourceNode.set(av, n);
     // Cross-call memo: lets URL extraction / security taint look up the
     // spec-computed AV for any node without re-running spec eval. Last
     // write wins — for nodes seen in multiple states (e.g. via inter-
@@ -8385,7 +8397,7 @@ function _specEvalExpression(rootPath, state, effects, noWriteMemo) {
     // evaluations like Promise.then receiver substitution where the
     // fresh-state eval would pollute later inline-handler-aware analysis
     // of the same nodes).
-    if (!noWriteMemo) _specPathValMemo.set(p.node, av);
+    if (!noWriteMemo) _specPathValMemo.set(n, av);
   }
   return vals.get(rootPath.node);
 }
