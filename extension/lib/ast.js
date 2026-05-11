@@ -679,6 +679,9 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcConstString = new Map();
   _hcConstNumber = new Map();
   _specEqualAvCache = new WeakMap();
+  _specInstantiateAvCache = new Map();
+  _avIdMap = new WeakMap();
+  _avNextId = 1;
   _specEnclosingFnsCache = new WeakMap();
   _specEnclFnByNode = new WeakMap();
   _specProgramGlobalsPrepassDoneGlobal = null;
@@ -12424,6 +12427,17 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
   // check per AV identity (AVs are deduped via hash-cons so identity
   // equality is sufficient; same AV across many callsites caches once).
   if (!_avHasSubstitutableCheck(rootAv)) return rootAv;
+  // Memoize per (rootAv, callerArgAvs identity sequence, thisAv,
+  // fnContext) tuple. Hash-cons + identity-preserving join semantics
+  // mean the same logical (callee summary, caller args) combo at
+  // multiple call sites produces structurally-identical results — the
+  // walk is deterministic in its inputs. Cache key composed of object
+  // identities: a string built from per-AV identity-stable lookup IDs.
+  // Cheap when cache hits; first-miss does the full walk + records.
+  var memoKey = _specInstantiateAvKey(rootAv, callerArgAvs, thisAv, fnContext);
+  if (memoKey !== null && _specInstantiateAvCache.has(memoKey)) {
+    return _specInstantiateAvCache.get(memoKey);
+  }
   // True iterative postorder enumeration with dedup. Per § 9.1.1
   // closure write-back fixpoint: AV graphs share sub-trees (an `or`
   // arm that aliases the binding's prior AV, a `member` that re-uses
@@ -12822,7 +12836,34 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
     }
     subs.set(node, node);
   }
-  return subs.get(rootAv) || rootAv;
+  var instResult = subs.get(rootAv) || rootAv;
+  if (memoKey !== null) _specInstantiateAvCache.set(memoKey, instResult);
+  return instResult;
+}
+
+// Cache key for _specInstantiateAv memo. Composed of identity IDs:
+// rootAv|caller-arg-ids|thisAv|fnContext. Returns null when any input
+// can't be ID'd (defensive — defaults to no-cache, recomputes).
+var _avNextId = 1;
+var _avIdMap = new WeakMap();
+function _avIdOf(av) {
+  if (!av) return "_";
+  if (typeof av !== "object") return "p:" + String(av);
+  var id = _avIdMap.get(av);
+  if (!id) { id = _avNextId++; _avIdMap.set(av, id); }
+  return String(id);
+}
+var _specInstantiateAvCache = new Map();
+function _specInstantiateAvKey(rootAv, callerArgAvs, thisAv, fnContext) {
+  // Compose deterministically from identity IDs. fnContext is an AST
+  // node (also tracked via WeakMap). Hash-cons + identity preservation
+  // guarantee same logical inputs → same IDs → same key.
+  var parts = [_avIdOf(rootAv), thisAv ? _avIdOf(thisAv) : "_",
+               fnContext ? _avIdOf(fnContext) : "_"];
+  if (callerArgAvs) {
+    for (var i = 0; i < callerArgAvs.length; i++) parts.push(_avIdOf(callerArgAvs[i]));
+  }
+  return parts.join("|");
 }
 
 function _specInstantiateEffects(effects, callerArgAvs) {
