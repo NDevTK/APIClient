@@ -11982,6 +11982,82 @@ function _specEvalLeaf(path, state, vals, effects) {
 // executes with parameters bound to arg values per
 // FunctionDeclarationInstantiation.
 // ───────────────────────────────────────────────────────────────────────────
+// Structural check: does the AV tree contain any node kind that
+// _specInstantiateAv would substitute (`param`, `this`, `rest-args`,
+// `args-elt`)? When false, instantiation is the identity function and
+// `_specInstantiateAv` can short-circuit. Memoised per AV identity —
+// AV graphs share sub-trees so children's results carry to parents that
+// don't introduce new substitutables themselves.
+//
+// Iterative DFS with visited-set; JS call stack stays at depth 1
+// regardless of AV nesting depth (recursion-ban compliance).
+var _avHasSubstitutable = new WeakMap();
+function _avHasSubstitutableCheck(rootAv) {
+  if (!rootAv || typeof rootAv !== "object") return false;
+  if (_avHasSubstitutable.has(rootAv)) return _avHasSubstitutable.get(rootAv);
+  var stack = [rootAv];
+  var seen = new Set();
+  var found = false;
+  while (stack.length > 0) {
+    var n = stack.pop();
+    if (!n || typeof n !== "object" || seen.has(n)) continue;
+    seen.add(n);
+    // Memo hit on a sub-AV's previously-computed result: propagate.
+    if (_avHasSubstitutable.has(n)) {
+      if (_avHasSubstitutable.get(n)) { found = true; break; }
+      continue;
+    }
+    if (n.kind === "param" || n.kind === "this" ||
+        n.kind === "rest-args" || n.kind === "args-elt") {
+      found = true; break;
+    }
+    if (n.kind === "member") { if (n.obj) stack.push(n.obj); if (n.key) stack.push(n.key); }
+    else if (n.kind === "or") {
+      if (n.left) stack.push(n.left);
+      if (n.right) stack.push(n.right);
+      if (n.alternatives) for (var oi = 0; oi < n.alternatives.length; oi++) stack.push(n.alternatives[oi]);
+    }
+    else if (n.kind === "binop") { if (n.left) stack.push(n.left); if (n.right) stack.push(n.right); }
+    else if (n.kind === "template" && n.exprs) {
+      for (var ti = 0; ti < n.exprs.length; ti++) stack.push(n.exprs[ti]);
+    }
+    else if (n.kind === "coerce" && n.arg) stack.push(n.arg);
+    else if (n.kind === "loop-key" && n.src) stack.push(n.src);
+    else if (n.kind === "keys-of" && n.src) stack.push(n.src);
+    else if (n.kind === "obj-lit" && n.props) {
+      for (var k in n.props) if (Object.prototype.hasOwnProperty.call(n.props, k)) stack.push(n.props[k]);
+    }
+    else if (n.kind === "array-lit" && n.elements) {
+      for (var ei = 0; ei < n.elements.length; ei++) stack.push(n.elements[ei]);
+    }
+    else if (n.kind === "map-instance" && n.entries) {
+      for (var mei = 0; mei < n.entries.length; mei++) {
+        if (n.entries[mei]) { stack.push(n.entries[mei][0]); stack.push(n.entries[mei][1]); }
+      }
+    }
+    else if (n.kind === "set-instance" && n.items) {
+      for (var si = 0; si < n.items.length; si++) stack.push(n.items[si]);
+    }
+    else if (n.kind === "call") {
+      if (n.callee) stack.push(n.callee);
+      if (n.args) for (var ai = 0; ai < n.args.length; ai++) stack.push(n.args[ai]);
+    }
+    else if (n.kind === "deferred-ctor" && n.args) {
+      for (var di = 0; di < n.args.length; di++) stack.push(n.args[di]);
+    }
+  }
+  _avHasSubstitutable.set(rootAv, found);
+  // Propagate false to every sub-AV we visited — they're guaranteed
+  // free of substitutables too. (Don't propagate true: a parent with a
+  // substitutable subtree doesn't imply all descendants are unsubstit-
+  // utable; but a parent with no substitutables transitively had none
+  // in any descendant we visited.)
+  if (!found) {
+    seen.forEach(function(sn) { _avHasSubstitutable.set(sn, false); });
+  }
+  return found;
+}
+
 function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
   // Iterative tree walk: postorder enumeration, then bottom-up
   // substitution. Termination structural — the AbstractValue tree is
@@ -11999,6 +12075,18 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
   // behaviour) — preserves backward compatibility for call sites that
   // haven't been updated yet.
   if (!rootAv) return rootAv;
+  // Fast path: when the AV tree contains no substitutable nodes
+  // (`param`, `this`, `rest-args`, `args-elt`), instantiation is the
+  // identity function — every leaf passes through unchanged and every
+  // composite node's children pass through unchanged per the algorithm
+  // below, so the result is structurally equal to rootAv. Skipping the
+  // tree walk + Map allocation here cumulatively saves O(AV nodes per
+  // walk × callsites) — on Stripe's index.js this was the dominant
+  // main-pass cost (V8 profiler: ~30% of non-lib ticks in this fn).
+  // The `_avHasSubstitutable` WeakMap memoises the recursive structural
+  // check per AV identity (AVs are deduped via hash-cons so identity
+  // equality is sufficient; same AV across many callsites caches once).
+  if (!_avHasSubstitutableCheck(rootAv)) return rootAv;
   // True iterative postorder enumeration with dedup. Per § 9.1.1
   // closure write-back fixpoint: AV graphs share sub-trees (an `or`
   // arm that aliases the binding's prior AV, a `member` that re-uses
