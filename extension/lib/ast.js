@@ -17637,7 +17637,30 @@ function _traceValueSource(path, _unused) {
   if (path.getFunctionParent) {
     var encFn = path.getFunctionParent();
     if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
-      try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+      // Detect HOF callback per ECMA § 23.1.3: encFn is the first
+      // argument to a CallExpression whose callee is `arr.method`
+      // where method is in the spec's Array.prototype HOF list AND
+      // the receiver `arr` resolves to an array-lit / keys-of AV.
+      // Both checks are needed — receiver-AV-grounding distinguishes
+      // genuine Array.prototype.forEach from user-defined `obj.forEach`.
+      // When detected AND outer scope already analysed (so HOF dispatch
+      // populated cb's bound-state memo entries), skip the standalone
+      // _specAnalyzePropertyFlow on cb that would re-evaluate with
+      // default param AVs and overwrite the bound memo.
+      var isHofCb = false;
+      if (encFn.parentPath && _t.isCallExpression(encFn.parent) &&
+          _t.isMemberExpression(encFn.parent.callee) && !encFn.parent.callee.computed &&
+          _t.isIdentifier(encFn.parent.callee.property) &&
+          _SPEC_ARRAY_HOF_METHODS.indexOf(encFn.parent.callee.property.name) >= 0 &&
+          encFn.parent.arguments[0] === encFn.node) {
+        var hofRecvAv = _specPathValMemo.get(encFn.parent.callee.object);
+        if (hofRecvAv && (hofRecvAv.kind === "array-lit" || hofRecvAv.kind === "keys-of")) {
+          isHofCb = true;
+        }
+      }
+      if (!isHofCb) {
+        try { _specAnalyzePropertyFlow(encFn); } catch (_) {}
+      }
       // HOF callback: encFn's parent is a CallExpression with member
       // callee like arr.forEach/map/filter (per § 23.1.3.7+). Analyse
       // the OUTER scope where the array is built so the receiver's AV
