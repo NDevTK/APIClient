@@ -15026,6 +15026,47 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
             // doesn't replay side effects (those happened at body-walk).
             return { kind: "const", value: undefined };
           }
+          if (hofBareName === "reduce" || hofBareName === "reduceRight") {
+            // § 23.1.3.21 Array.prototype.reduce: fold cb(acc, el, i, arr)
+            // left-to-right (reduceRight: right-to-left), starting from
+            // initialValue (argAvs[1]) or recvAv.elements[0]. Param 0 of
+            // cb is acc, param 1 is element. Substitute both per
+            // iteration via two _specSubstituteParam passes.
+            var redElems = hofBareName === "reduceRight" ? recvAv.elements.slice().reverse() : recvAv.elements;
+            var redAcc;
+            var redStart;
+            if (argAvs.length >= 2 && argAvs[1] != null) {
+              redAcc = argAvs[1];
+              redStart = 0;
+            } else if (redElems.length > 0) {
+              redAcc = redElems[0];
+              redStart = 1;
+            } else {
+              return { kind: "top" }; // empty array + no seed → TypeError per spec
+            }
+            for (var rI = redStart; rI < redElems.length; rI++) {
+              var redIntermediate = _specSubstituteParam(hofRetMemo, 0, hofCbFn, redAcc);
+              var redNext = _specSubstituteParam(redIntermediate, 1, hofCbFn, redElems[rI]);
+              redAcc = redNext || { kind: "top" };
+            }
+            return redAcc;
+          }
+          if (hofBareName === "flatMap") {
+            // § 23.1.3.11 Array.prototype.flatMap: cb returns either an
+            // element or an array; flatMap flattens one level. For each
+            // element, fold cb's return; if array-lit, expand; else
+            // include as-is.
+            var fmEls = [];
+            for (var fmI = 0; fmI < recvAv.elements.length; fmI++) {
+              var fmRet = _specSubstituteParam(hofRetMemo, 0, hofCbFn, recvAv.elements[fmI]);
+              if (fmRet && fmRet.kind === "array-lit" && fmRet.elements) {
+                for (var fmJ = 0; fmJ < fmRet.elements.length; fmJ++) fmEls.push(fmRet.elements[fmJ]);
+              } else {
+                fmEls.push(fmRet || { kind: "top" });
+              }
+            }
+            return { kind: "array-lit", elements: fmEls };
+          }
         }
       }
     }
