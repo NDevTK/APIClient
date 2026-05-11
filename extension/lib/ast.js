@@ -3641,8 +3641,8 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "global.String" || methodId === "global.Number" || methodId === "global.Boolean") {
     if (argAvs.length === 0) {
       // String() → "", Number() → 0, Boolean() → false per spec.
-      if (methodId === "global.String") return { kind: "const", value: "" };
-      if (methodId === "global.Number") return { kind: "const", value: 0 };
+      if (methodId === "global.String") return _hcConst("");
+      if (methodId === "global.Number") return _hcConst(0);
       return _AV_FALSE;
     }
     var coerceArg = argAvs[0];
