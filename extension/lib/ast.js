@@ -15641,34 +15641,34 @@ function _avFlattenAnyConstLeaves(rootAv) {
 function _evalBinaryConstConst(lv, rv, op) {
   if (op === "+") {
     if (typeof lv === "string" || typeof rv === "string") {
-      return { kind: "const", value: String(lv) + String(rv) };
+      return _hcConst(String(lv) + String(rv));
     }
     if (typeof lv === "number" && typeof rv === "number") {
-      return { kind: "const", value: lv + rv };
+      return _hcConst(lv + rv);
     }
     return null;
   }
   if (typeof lv === "number" && typeof rv === "number") {
-    if (op === "-") return { kind: "const", value: lv - rv };
-    if (op === "*") return { kind: "const", value: lv * rv };
-    if (op === "/") return { kind: "const", value: lv / rv };
-    if (op === "%") return { kind: "const", value: lv % rv };
-    if (op === "**") return { kind: "const", value: Math.pow(lv, rv) };
-    if (op === "<<") return { kind: "const", value: lv << rv };
-    if (op === ">>") return { kind: "const", value: lv >> rv };
-    if (op === ">>>") return { kind: "const", value: lv >>> rv };
-    if (op === "&") return { kind: "const", value: lv & rv };
-    if (op === "|") return { kind: "const", value: lv | rv };
-    if (op === "^") return { kind: "const", value: lv ^ rv };
+    if (op === "-") return _hcConst(lv - rv);
+    if (op === "*") return _hcConst(lv * rv);
+    if (op === "/") return _hcConst(lv / rv);
+    if (op === "%") return _hcConst(lv % rv);
+    if (op === "**") return _hcConst(Math.pow(lv, rv));
+    if (op === "<<") return _hcConst(lv << rv);
+    if (op === ">>") return _hcConst(lv >> rv);
+    if (op === ">>>") return _hcConst(lv >>> rv);
+    if (op === "&") return _hcConst(lv & rv);
+    if (op === "|") return _hcConst(lv | rv);
+    if (op === "^") return _hcConst(lv ^ rv);
   }
-  if (op === "<") return { kind: "const", value: lv < rv };
-  if (op === "<=") return { kind: "const", value: lv <= rv };
-  if (op === ">") return { kind: "const", value: lv > rv };
-  if (op === ">=") return { kind: "const", value: lv >= rv };
-  if (op === "==") return { kind: "const", value: lv == rv };
-  if (op === "!=") return { kind: "const", value: lv != rv };
-  if (op === "===") return { kind: "const", value: lv === rv };
-  if (op === "!==") return { kind: "const", value: lv !== rv };
+  if (op === "<") return _hcConst(lv < rv);
+  if (op === "<=") return _hcConst(lv <= rv);
+  if (op === ">") return _hcConst(lv > rv);
+  if (op === ">=") return _hcConst(lv >= rv);
+  if (op === "==") return _hcConst(lv == rv);
+  if (op === "!=") return _hcConst(lv != rv);
+  if (op === "===") return _hcConst(lv === rv);
+  if (op === "!==") return _hcConst(lv !== rv);
   return null;
 }
 
