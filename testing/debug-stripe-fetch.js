@@ -54,6 +54,18 @@ while (anc && anc.node) {
   anc = anc.parentPath;
 }
 
+// Count fns in/out of slice
+var totalFns = 0, inSlice = 0, hasSlice = 0, skipped = 0;
+programPath.traverse({
+  "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
+    totalFns++;
+    if (globalThis._specSliceFns.has(p.node)) inSlice++;
+    if (globalThis._specFnContainsSlice.has(p.node)) hasSlice++;
+    if (!globalThis._specSliceFns.has(p.node) && !globalThis._specFnContainsSlice.has(p.node)) skipped++;
+  }
+});
+console.log("[stats] totalFns=" + totalFns + " inSlice=" + inSlice + " hasSlice=" + hasSlice + " skipped=" + skipped);
+
 // Run analyzeJSBundle to test main pass detection
 var result = globalThis.analyzeJSBundle(code, "https://test.example.com/index.js", true, null);
 console.log("[7] analyzeJSBundle done");
