@@ -9362,24 +9362,12 @@ function _specBuildSlice(programPath) {
     var enc = p.getFunctionParent();
     entryFns.add(enc && enc.node ? enc.node : programPath.node);
   }
-  // Pre-populate enclosing-fn map for every AST node. Babel's
-  // getFunctionParent() walks parentPath O(depth) per query; with a
-  // deeply-nested minified bundle (1MB+) main-pass visitor dispatch
-  // pays that walk on every CallExpression. A single program-level
-  // pre-pass with a function-stack records every node's enclosing
-  // function in O(program-size) total, giving _isPathInSlice an O(1)
-  // lookup. Pure structural: no name matching, no slice-membership
-  // gating, just AST topology.
-  var encFnStack = [programPath.node];
-  programPath.traverse({
-    enter: function(p) {
-      _specEnclFnByNode.set(p.node, encFnStack[encFnStack.length - 1]);
-      if (_t.isFunction(p.node)) encFnStack.push(p.node);
-    },
-    exit: function(p) {
-      if (_t.isFunction(p.node)) encFnStack.pop();
-    }
-  });
+  // _isPathInSlice populates _specEnclFnByNode lazily on first query
+  // (cache miss walks parentPath ONCE and stores). Avoids the upfront
+  // cost of pre-walking every AST node in the program, which on small
+  // bundles dwarfs the slice computation itself. For large bundles,
+  // cumulative on-demand walks total far less than blanket pre-pass
+  // because not every node gets queried by visitors.
   programPath.traverse({
     "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
       fnPaths.push(p);
