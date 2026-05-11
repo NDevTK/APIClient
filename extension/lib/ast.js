@@ -5474,6 +5474,14 @@ var _specOuterImportsListCache = new WeakMap();
 // handlers contains the function via closure write-back).
 var _specCallSitesByFn = new WeakMap();
 
+// § 10.2.10 context-sensitive analysis: when set on a funcNode, the
+// next _specAnalyzePropertyFlow(funcPath, force=true) on that funcNode
+// binds the function's params to the supplied caller arg AVs in entry
+// state. Used by _specAnalyzeContextSensitive to re-analyze a function
+// with concrete caller args so state-mutating loops (Object.entries-
+// .forEach, etc.) produce concrete final values for downstream reads.
+var _specContextCallerArgs = new Map();
+
 // Slice of functions that may transitively contribute to a sink/source
 // reachability path. Computed by _specBuildSlice() before the main
 // pass; entry-point detection is purely structural (WHATWG sink/source
@@ -6489,7 +6497,18 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
       // each per-call value as an alternative.
       for (var pci = 1; pci < perCallAvs.length; pci++) paramAv = _specSetUnionAv(paramAv, perCallAvs[pci]);
     } else {
-      paramAv = { kind: "param", idx: i, fn: funcNode };
+      // § 10.2.10 context-sensitive analysis: when this function is
+      // being re-analyzed for a specific call site (set by
+      // _specAnalyzeContextSensitive), bind the param to the caller's
+      // concrete arg AV instead of the abstract param AV. Lets the
+      // body's state mutations propagate with concrete values across
+      // iterations of loops over caller-arg-dependent iterables.
+      var ctxArgs = _specContextCallerArgs.get(funcNode);
+      if (ctxArgs && i < ctxArgs.length && ctxArgs[i] != null) {
+        paramAv = ctxArgs[i];
+      } else {
+        paramAv = { kind: "param", idx: i, fn: funcNode };
+      }
       // WHATWG DOM § 4.4 / WHATWG HTML § 9.4.1: when funcNode was
       // registered as an event handler via the prototype-dispatched
       // EventTarget.prototype.addEventListener (no shape match — the
@@ -13644,6 +13663,156 @@ function _extractFetchCall(path, result, type) {
 // _resolveAllValues short-circuit: literals resolve directly without
 // allocating a frame.
 
+// § 10.2.10 context-sensitive re-analysis: walks encFn's body once per
+// caller-site that has concrete (non-top) args, with the caller's arg
+// AVs bound to encFn's params in entry state. State-mutating loops
+// over caller-arg-dependent iterables produce concrete final values
+// since the iterable is now obj-lit at body-walk time. Returns the
+// union of string leaves observed at initialPath.node across all
+// per-caller walks. Returns null when no contextual leaves found.
+//
+// Memo isolation: _specPathValMemo, _specEffectsMemo, _specSideEffectMemo,
+// _specReturnValueMemo, _specThisEffectsMemo are swapped for fresh
+// instances during each per-caller walk, then restored. This prevents
+// the contextual walk from clobbering the base (context-insensitive)
+// analysis results that downstream consumers rely on.
+//
+// Cycle prevention: tracks the encFn being processed in
+// _specContextReanalysisInProgress to prevent re-entry when a sink
+// resolution inside the contextual walk would trigger another walk
+// of the same function.
+var _specContextReanalysisInProgress = new WeakSet();
+// Structural check for the wrapper-Object.entries.forEach state-mutation
+// pattern: encFn's body contains a CallExpression whose callee is a
+// MemberExpression `<X>.<hofName>` where hofName is in
+// _SPEC_ARRAY_HOF_METHODS AND the receiver chain references a function
+// parameter (transitively). When present, context-sensitive analysis
+// is profitable because the loop's per-iteration mutations depend on
+// the caller's concrete iterable value.
+// Cached per funcNode (the body shape is fixed for the analysis).
+var _specOpaqueLoopMutationCache = new WeakMap();
+function _specBodyHasOpaqueLoopMutation(funcPath) {
+  if (!funcPath || !funcPath.node) return false;
+  if (_specOpaqueLoopMutationCache.has(funcPath.node)) return _specOpaqueLoopMutationCache.get(funcPath.node);
+  var paramNames = Object.create(null);
+  var params = funcPath.node.params || [];
+  for (var pi = 0; pi < params.length; pi++) {
+    if (params[pi] && params[pi].type === "Identifier") paramNames[params[pi].name] = true;
+  }
+  var found = false;
+  try {
+    funcPath.traverse({
+      CallExpression: function(p) {
+        if (found) { p.skip(); return; }
+        var c = p.node.callee;
+        if (!_t.isMemberExpression(c) || c.computed) return;
+        if (!_t.isIdentifier(c.property)) return;
+        var hofName = c.property.name;
+        if (_SPEC_ARRAY_HOF_METHODS.indexOf(hofName) < 0) return;
+        // Walk the receiver chain looking for a parameter Identifier
+        // (transitively through MemberExpression / CallExpression args).
+        var recvStack = [c.object];
+        var recvSeen = new Set();
+        while (recvStack.length > 0) {
+          var rn = recvStack.pop();
+          if (!rn || recvSeen.has(rn)) continue;
+          recvSeen.add(rn);
+          if (_t.isIdentifier(rn) && paramNames[rn.name]) { found = true; break; }
+          if (_t.isMemberExpression(rn)) { recvStack.push(rn.object); continue; }
+          if (_t.isCallExpression(rn)) {
+            if (rn.callee) recvStack.push(rn.callee);
+            for (var rai = 0; rai < rn.arguments.length; rai++) recvStack.push(rn.arguments[rai]);
+          }
+        }
+        if (found) p.skip();
+      }
+    });
+  } catch (_) { found = false; }
+  _specOpaqueLoopMutationCache.set(funcPath.node, found);
+  return found;
+}
+
+function _resolveByContextSensitiveReanalysis(initialPath, encFn) {
+  if (!encFn || !encFn.node || !_t.isFunction(encFn.node)) return null;
+  var encFnNode = encFn.node;
+  if (_specContextReanalysisInProgress.has(encFnNode)) return null;
+  var callSitePaths = _specFindCallSites(encFn);
+  if (!callSitePaths || callSitePaths.length === 0) return null;
+  var collectedLeaves = [];
+  _specContextReanalysisInProgress.add(encFnNode);
+  // Snapshot module memos so the contextual walk can populate fresh
+  // instances. Per-analysis only — the contextual run is self-contained.
+  var savedPathVal = _specPathValMemo;
+  var savedEffects = _specEffectsMemo;
+  var savedSide = _specSideEffectMemo;
+  var savedReturn = _specReturnValueMemo;
+  var savedThisEff = _specThisEffectsMemo;
+  var savedPostorder = _specPostorderMemo;
+  try {
+    for (var csi = 0; csi < callSitePaths.length; csi++) {
+      var csp = callSitePaths[csi];
+      if (!csp || !csp.node || !csp.node.arguments) continue;
+      // Build caller-arg AVs. Use base analysis's memo (savedPathVal)
+      // for each arg's AV; only proceed if at least one arg is concrete
+      // (non-top, non-param) — otherwise context-sensitive analysis
+      // produces nothing new beyond the base run.
+      var ctxArgAvs = [];
+      var anyConcrete = false;
+      for (var aii = 0; aii < csp.node.arguments.length; aii++) {
+        var argNode = csp.node.arguments[aii];
+        var aav = savedPathVal.get(argNode);
+        if (!aav) {
+          // Eval the arg using base memos still in effect (before swap).
+          try {
+            // Re-bind the savedPathVal temporarily as the active memo
+            // for this eval — we haven't swapped yet at this point in
+            // the loop iteration's setup.
+            aav = _specEvalExpression(csp.get("arguments." + aii), _specStateCreate({}), [], true);
+          } catch (_) { aav = null; }
+        }
+        ctxArgAvs.push(aav || { kind: "top" });
+        if (aav && aav.kind !== "top" && aav.kind !== "param") anyConcrete = true;
+      }
+      if (!anyConcrete) continue;
+      // Swap to fresh memos for the contextual walk.
+      _specPathValMemo = new WeakMap();
+      _specEffectsMemo = new WeakMap();
+      _specSideEffectMemo = new WeakMap();
+      _specReturnValueMemo = new WeakMap();
+      _specThisEffectsMemo = new WeakMap();
+      _specPostorderMemo = new WeakMap();
+      _specContextCallerArgs.set(encFnNode, ctxArgAvs);
+      try {
+        _specAnalyzePropertyFlow(encFn, true);
+        var ctxAv = _specPathValMemo.get(initialPath.node);
+        if (ctxAv) {
+          var poL = _resolvePageOriginAv(ctxAv);
+          if (poL) {
+            for (var pli = 0; pli < poL.length; pli++) {
+              if (collectedLeaves.indexOf(poL[pli]) < 0) collectedLeaves.push(poL[pli]);
+            }
+          } else {
+            var sL = _avFlattenStringLeaves(ctxAv);
+            for (var sli = 0; sli < sL.length; sli++) {
+              if (collectedLeaves.indexOf(sL[sli]) < 0) collectedLeaves.push(sL[sli]);
+            }
+          }
+        }
+      } catch (_) { /* ignore per-caller errors */ }
+      _specContextCallerArgs.delete(encFnNode);
+    }
+  } finally {
+    _specPathValMemo = savedPathVal;
+    _specEffectsMemo = savedEffects;
+    _specSideEffectMemo = savedSide;
+    _specReturnValueMemo = savedReturn;
+    _specThisEffectsMemo = savedThisEff;
+    _specPostorderMemo = savedPostorder;
+    _specContextReanalysisInProgress.delete(encFnNode);
+  }
+  return collectedLeaves.length > 0 ? collectedLeaves : null;
+}
+
 function _resolveAllValues(initialPath, initialDepth) {
   if (!initialPath || !initialPath.node) return [];
   // Run the full property-flow analysis on the enclosing function to
@@ -13663,7 +13832,26 @@ function _resolveAllValues(initialPath, initialDepth) {
       var pageOriginLeaves = _resolvePageOriginAv(memoAv);
       if (pageOriginLeaves) return pageOriginLeaves;
       var memoLeaves = _avFlattenStringLeaves(memoAv);
-      if (memoLeaves.length > 0) return memoLeaves;
+      // § 10.2.10 context-sensitive re-analysis: when encFn's body
+      // contains a state-mutating loop over an opaque iterable (typical
+      // Object.entries(opts).forEach(...) wrapper pattern), the base
+      // analysis can't fold the mutation across iterations. Re-walk
+      // encFn per call site with concrete caller args bound to params
+      // so the loop's per-iteration state mutations propagate. Union
+      // the leaves with the base memoLeaves. Gated on a structural body
+      // check (see _specBodyHasOpaqueLoopMutation) to avoid the
+      // O(callsites × bodysize) walk for the common case where it
+      // produces no new leaves.
+      var combinedLeaves = memoLeaves.slice();
+      if (_specBodyHasOpaqueLoopMutation(encFn)) {
+        var ctxLeavesA = _resolveByContextSensitiveReanalysis(initialPath, encFn);
+        if (ctxLeavesA && ctxLeavesA.length > 0) {
+          for (var cli = 0; cli < ctxLeavesA.length; cli++) {
+            if (combinedLeaves.indexOf(ctxLeavesA[cli]) < 0) combinedLeaves.push(ctxLeavesA[cli]);
+          }
+        }
+      }
+      if (combinedLeaves.length > 0) return combinedLeaves;
       // Param-substitution path per § 10.2.10 FunctionDeclarationInstantiation:
       // when memoAv references encFn's params, walk encFn's call sites and
       // substitute each caller's arg AVs. Returns the union of string leaves
