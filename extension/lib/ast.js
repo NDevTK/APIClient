@@ -23,7 +23,21 @@ var _sourceUrl = null;   // tabUrl when analyzing via live pipeline; gives us
                          // `location.origin` etc. at analysis time.
 var _globalCallerCache = {};  // key → [innerPath, ...] — caches _traverseGlobalCallers results
 var _typeEnv = {};  // scopeUid:varName → type string — lightweight deterministic type tracking
-var _resolveToObjectMemo = new WeakMap();   // node → resolved ObjectExpression (or null) — caches _resolveToObject result so repeated lookups on the same node are O(1)
+var _resolveToObjectMemo = new WeakMap();
+// Hash-consed AV singletons for the most common AV shapes. Sharing
+// reference identity for these AVs reduces ~500 allocations per
+// analysis on real-site bundles (top is created at every unmodelled
+// expression result, undefined/null/true/false at every primitive-
+// literal eval). No mutation is performed on any AV in the codebase
+// (verified by grep — no .kind = / .value = assignments), so sharing
+// identity is safe. _avSourceNode tracking still works per-AV-reference
+// but for unactionable top values the source location isn't consumed
+// by taint walking.
+var _AV_TOP = { kind: "top" };
+var _AV_UNDEFINED = { kind: "const", value: undefined };
+var _AV_NULL = { kind: "const", value: null };
+var _AV_TRUE = { kind: "const", value: true };
+var _AV_FALSE = { kind: "const", value: false };   // node → resolved ObjectExpression (or null) — caches _resolveToObject result so repeated lookups on the same node are O(1)
 // DOM context for the current analysis. Populated from page HTML so JS
 // access patterns like `document.querySelector("meta[name=X]").content`
 // or `el.dataset.X` (where the value is set in markup, not JS) can
@@ -155,7 +169,7 @@ function _buildInlineHandlerCallSites(domContext) {
             else if (_t.isStringLiteral(pa)) paramArgs.push({ kind: "const", value: pa.value });
             else if (_t.isNumericLiteral(pa)) paramArgs.push({ kind: "const", value: pa.value });
             else if (_t.isBooleanLiteral(pa)) paramArgs.push({ kind: "const", value: pa.value });
-            else paramArgs.push({ kind: "top" });
+            else paramArgs.push(_AV_TOP);
           }
           if (!out[fnName]) out[fnName] = [];
           out[fnName].push({ paramArgs: paramArgs, elementAttrs: entry.elementAttrs });
@@ -1458,7 +1472,7 @@ function _trackGlobalAssignment(path) {
 //   { kind: "obj-lit", props }      — object expression with abstract values
 //   { kind: "or", left, right }     — `a || b` (left when truthy per § 13.13)
 //   { kind: "const", value }        — primitive literal
-//   { kind: "top" }                 — unknown
+//   _AV_TOP                 — unknown
 //
 // `_specEqualAv` and `_specJoinAv` operate over this lattice. Bottom is
 // represented by the absence of a state entry for a variable name (not a
@@ -1926,7 +1940,7 @@ function _specGlobalThisAv() {
       removeItem: { kind: "builtin-method", id: "Storage.prototype.removeItem" },
       clear: { kind: "builtin-method", id: "Storage.prototype.clear" },
       key: { kind: "builtin-method", id: "Storage.prototype.key" },
-      length: { kind: "top" },
+      length: _AV_TOP,
     }
   };
   // window / self / globalThis WHATWG HTML § 7.2 alias of the global —
@@ -1961,16 +1975,16 @@ function _specGlobalThisAv() {
             dims: { origin: false, path: false, query: false, hash: false, content: false } },
           language: { kind: "taint-source", id: "navigator.language", type: "string",
             dims: { origin: false, path: false, query: false, hash: false, content: false } },
-          languages: { kind: "top" },
-          appName: { kind: "top" },
+          languages: _AV_TOP,
+          appName: _AV_TOP,
           appVersion: { kind: "taint-source", id: "navigator.appVersion", type: "string",
             dims: { origin: false, path: false, query: false, hash: false, content: false } },
-          vendor: { kind: "top" },
-          product: { kind: "top" },
-          productSub: { kind: "top" },
+          vendor: _AV_TOP,
+          product: _AV_TOP,
+          productSub: _AV_TOP,
           // navigator.cookieEnabled / navigator.onLine — booleans.
-          cookieEnabled: { kind: "top" },
-          onLine: { kind: "top" },
+          cookieEnabled: _AV_TOP,
+          onLine: _AV_TOP,
           // navigator.sendBeacon — POST data to URL (no response).
           sendBeacon: { kind: "builtin-method", id: "Navigator.prototype.sendBeacon" },
           // WHATWG ServiceWorker API § 4 — ServiceWorkerContainer interface.
@@ -1986,8 +2000,8 @@ function _specGlobalThisAv() {
               addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
               removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
               dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
-              controller: { kind: "top" },
-              ready: { kind: "top" },
+              controller: _AV_TOP,
+              ready: _AV_TOP,
             }
           },
           // WHATWG Service Workers § Permissions.query / WHATWG HTML §
@@ -2019,7 +2033,7 @@ function _specGlobalThisAv() {
           randomUUID: { kind: "builtin-method", id: "Crypto.prototype.randomUUID" },
           getRandomValues: { kind: "builtin-method", id: "Crypto.prototype.getRandomValues" },
           // crypto.subtle is the SubtleCrypto interface — opaque for now.
-          subtle: { kind: "top" },
+          subtle: _AV_TOP,
         }
       },
       // WHATWG HTML Window timer/animation methods (most return numeric IDs;
@@ -2047,9 +2061,9 @@ function _specGlobalThisAv() {
           isScriptURL: { kind: "builtin-method", id: "TrustedTypePolicyFactory.prototype.isScriptURL" },
           getAttributeType: { kind: "builtin-method", id: "TrustedTypePolicyFactory.prototype.getAttributeType" },
           getPropertyType: { kind: "builtin-method", id: "TrustedTypePolicyFactory.prototype.getPropertyType" },
-          emptyHTML: { kind: "top" },
-          emptyScript: { kind: "top" },
-          defaultPolicy: { kind: "top" },
+          emptyHTML: _AV_TOP,
+          emptyScript: _AV_TOP,
+          defaultPolicy: _AV_TOP,
         }
       },
       // ECMA § 19.2.1 eval — direct eval (when bare `eval(x)` is the call
@@ -2171,7 +2185,7 @@ function _specGlobalThisAv() {
       setInterval: { kind: "builtin-method", id: "Window.prototype.setInterval" },
       // ECMA § 19.1.1.3 undefined — the global property whose value is the
       // undefined value (read-only, non-enumerable, non-configurable).
-      undefined: { kind: "const", value: undefined },
+      undefined: _AV_UNDEFINED,
       // ECMA § 19.1.1.1 NaN, § 19.1.1.2 Infinity — the global properties
       // for the IEEE-754 NaN and ∞ values (read-only).
       NaN: { kind: "const", value: NaN },
@@ -2503,7 +2517,7 @@ function _specGetPrototypeOfAv(av) {
 // receiver per § 23.1.3 spec algorithms. Used by _specApplyBuiltinMethod
 // for both single-array-lit recv and per-leaf distribution over or-trees.
 function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
-  if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+  if (!recvAv || recvAv.kind !== "array-lit") return _AV_TOP;
   if (methodId === "Array.prototype.join") {
     // § 23.1.3.18 ArrayPrototype.join: requires const-string separator.
     // When all elements are const, fold to a single Const value. When some
@@ -2515,7 +2529,7 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
     if (argAvs.length >= 1) {
       if (argAvs[0] && argAvs[0].kind === "const" && typeof argAvs[0].value === "string") sep = argAvs[0].value;
       else if (argAvs[0] && argAvs[0].kind === "const") sep = String(argAvs[0].value);
-      else return { kind: "top" };
+      else return _AV_TOP;
     }
     var jElems = recvAv.elements || [];
     if (jElems.length === 0) return { kind: "const", value: "" };
@@ -2538,7 +2552,7 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
     // _avFlattenStringLeaves processes the chain post-substitution.
     var acc = null;
     for (var jeiB = 0; jeiB < jElems.length; jeiB++) {
-      var je2 = jElems[jeiB] || { kind: "top" };
+      var je2 = jElems[jeiB] || _AV_TOP;
       // Coerce non-string consts (ToString per § 7.1.17) before append.
       if (je2.kind === "const") je2 = { kind: "const", value: String(je2.value) };
       if (acc === null) { acc = je2; continue; }
@@ -2552,13 +2566,13 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
     var concatElems = (recvAv.elements || []).slice();
     for (var ci = 0; ci < argAvs.length; ci++) {
       var argA = argAvs[ci];
-      if (!argA) return { kind: "top" };
+      if (!argA) return _AV_TOP;
       if (argA.kind === "array-lit" && argA.elements) {
         for (var ai = 0; ai < argA.elements.length; ai++) concatElems.push(argA.elements[ai]);
       } else if (argA.kind === "const" || argA.kind === "obj-lit") {
         concatElems.push(argA);
       } else {
-        return { kind: "top" };
+        return _AV_TOP;
       }
     }
     return { kind: "array-lit", elements: concatElems };
@@ -2571,44 +2585,44 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
       if (sa && sa.kind === "const" && typeof sa.value === "number") {
         sStart = sa.value;
         if (sStart < 0) sStart = Math.max(0, sliceLen + sStart);
-      } else { return { kind: "top" }; }
+      } else { return _AV_TOP; }
     }
     if (argAvs.length >= 2) {
       var ea = argAvs[1];
       if (ea && ea.kind === "const" && typeof ea.value === "number") {
         sEnd = ea.value;
         if (sEnd < 0) sEnd = Math.max(0, sliceLen + sEnd);
-      } else { return { kind: "top" }; }
+      } else { return _AV_TOP; }
     }
     return { kind: "array-lit", elements: (recvAv.elements || []).slice(sStart, sEnd) };
   }
   if (methodId === "Array.prototype.includes") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
     var iSearch = argAvs[0].value;
     for (var inci = 0; inci < (recvAv.elements || []).length; inci++) {
       var iel = recvAv.elements[inci];
-      if (!iel || iel.kind !== "const") return { kind: "top" };
-      if (Number.isNaN(iSearch) && Number.isNaN(iel.value)) return { kind: "const", value: true };
-      if (iel.value === iSearch) return { kind: "const", value: true };
+      if (!iel || iel.kind !== "const") return _AV_TOP;
+      if (Number.isNaN(iSearch) && Number.isNaN(iel.value)) return _AV_TRUE;
+      if (iel.value === iSearch) return _AV_TRUE;
     }
-    return { kind: "const", value: false };
+    return _AV_FALSE;
   }
   if (methodId === "Array.prototype.indexOf") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
     var ioSearch = argAvs[0].value;
     for (var ioi = 0; ioi < (recvAv.elements || []).length; ioi++) {
       var ioe = recvAv.elements[ioi];
-      if (!ioe || ioe.kind !== "const") return { kind: "top" };
+      if (!ioe || ioe.kind !== "const") return _AV_TOP;
       if (ioe.value === ioSearch) return { kind: "const", value: ioi };
     }
     return { kind: "const", value: -1 };
   }
   if (methodId === "Array.prototype.lastIndexOf") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
     var lioSearch = argAvs[0].value;
     for (var lioi = (recvAv.elements || []).length - 1; lioi >= 0; lioi--) {
       var lioe = recvAv.elements[lioi];
-      if (!lioe || lioe.kind !== "const") return { kind: "top" };
+      if (!lioe || lioe.kind !== "const") return _AV_TOP;
       if (lioe.value === lioSearch) return { kind: "const", value: lioi };
     }
     return { kind: "const", value: -1 };
@@ -2617,18 +2631,18 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
     return { kind: "array-lit", elements: (recvAv.elements || []).slice().reverse() };
   }
   if (methodId === "Array.prototype.at") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "number") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "number") return _AV_TOP;
     var atLen = (recvAv.elements || []).length;
     var atIdx = argAvs[0].value < 0 ? atLen + argAvs[0].value : argAvs[0].value;
     if (atIdx >= 0 && atIdx < atLen) return recvAv.elements[atIdx];
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   if (methodId === "Array.prototype.flat") {
     var flatDepth = 1;
     if (argAvs.length >= 1) {
       var fa = argAvs[0];
       if (fa && fa.kind === "const" && typeof fa.value === "number") flatDepth = fa.value;
-      else return { kind: "top" };
+      else return _AV_TOP;
     }
     var flatRes = [];
     var flatStack = [];
@@ -2648,7 +2662,7 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
     }
     return { kind: "array-lit", elements: flatRes };
   }
-  return { kind: "top" };
+  return _AV_TOP;
 }
 
 // Apply a built-in constructor per its spec algorithm. Receives:
@@ -2657,9 +2671,9 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
 // Returns the new instance's AbstractValue per the constructor's spec.
 function _specApplyBuiltinCtor(ctorId, argAvs) {
   if (ctorId === "WHATWG.URL") {
-    if (argAvs.length === 0) return { kind: "top" };
-    var urlInputAv = argAvs[0] || { kind: "top" };
-    var urlBaseAv = argAvs.length >= 2 ? (argAvs[1] || { kind: "top" }) : null;
+    if (argAvs.length === 0) return _AV_TOP;
+    var urlInputAv = argAvs[0] || _AV_TOP;
+    var urlBaseAv = argAvs.length >= 2 ? (argAvs[1] || _AV_TOP) : null;
     var urlInputLeaves = _avFlattenStringLeaves(urlInputAv);
     var urlBaseLeaves = urlBaseAv ? _avFlattenStringLeaves(urlBaseAv) : [undefined];
     // Deferred ctor when args don't statically resolve: produce a
@@ -2678,11 +2692,11 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         props: {
           href: deferredHrefAv,
           toString: { kind: "builtin-method", id: "URL.prototype.toString" },
-          pathname: { kind: "top" }, origin: { kind: "top" },
-          search: { kind: "top" }, hash: { kind: "top" },
-          host: { kind: "top" }, hostname: { kind: "top" },
-          port: { kind: "top" }, protocol: { kind: "top" },
-          username: { kind: "top" }, password: { kind: "top" },
+          pathname: _AV_TOP, origin: _AV_TOP,
+          search: _AV_TOP, hash: _AV_TOP,
+          host: _AV_TOP, hostname: _AV_TOP,
+          port: _AV_TOP, protocol: _AV_TOP,
+          username: _AV_TOP, password: _AV_TOP,
         }
       };
     }
@@ -2714,7 +2728,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       }
       if (!urlAllOk) break;
     }
-    if (!urlAllOk || urlResults.length === 0) return { kind: "top" };
+    if (!urlAllOk || urlResults.length === 0) return _AV_TOP;
     if (urlResults.length === 1) return urlResults[0];
     var urlOr = urlResults[0];
     // _specSetUnionAv per WHATWG URL constructor distribution: each
@@ -2723,7 +2737,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     return urlOr;
   }
   if (ctorId === "WHATWG.URLSearchParams") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var uspArgAv = argAvs[0];
     if (uspArgAv && uspArgAv.kind === "const" && typeof uspArgAv.value === "string") {
       return { kind: "const", value: uspArgAv.value.replace(/^\?/, "") };
@@ -2748,16 +2762,16 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     return { kind: "coerce", to: "urlsearchparams", arg: uspArgAv };
   }
   if (ctorId === "Fetch.Headers") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var hdrInitAv = argAvs[0];
     if (hdrInitAv && hdrInitAv.kind === "obj-lit" && hdrInitAv.props) return hdrInitAv;
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (ctorId === "Fetch.Request") {
-    if (argAvs.length === 0) return { kind: "top" };
-    var reqInputAv = argAvs[0] || { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
+    var reqInputAv = argAvs[0] || _AV_TOP;
     var reqInputLeaves = _avFlattenStringLeaves(reqInputAv);
-    if (reqInputLeaves.length === 0) return { kind: "top" };
+    if (reqInputLeaves.length === 0) return _AV_TOP;
     var reqInitAv = argAvs.length >= 2 ? argAvs[1] : null;
     var reqMethodAv = { kind: "const", value: "GET" };
     if (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.method) {
@@ -2772,9 +2786,9 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
           url: { kind: "const", value: reqInputLeaves[rli] },
           method: reqMethodAv,
           headers: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.headers)
-            ? reqInitAv.props.headers : { kind: "top" },
+            ? reqInitAv.props.headers : _AV_TOP,
           body: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.body)
-            ? reqInitAv.props.body : { kind: "const", value: null },
+            ? reqInitAv.props.body : _AV_NULL,
           credentials: (reqInitAv && reqInitAv.kind === "obj-lit" && reqInitAv.props && reqInitAv.props.credentials)
             ? reqInitAv.props.credentials : { kind: "const", value: "same-origin" }
         }
@@ -2860,7 +2874,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
   // strings (or pattern Const + flags omitted/undefined), build a
   // regex-instance AV that will dispatch RegExp.prototype.test/exec.
   if (ctorId === "ECMA.RegExp") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var rxPatAv = argAvs[0];
     var rxFlagsAv = argAvs.length >= 2 ? argAvs[1] : null;
     if (rxPatAv && rxPatAv.kind === "regex-instance") {
@@ -2877,7 +2891,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       if (rxFlagsAv) {
         if (rxFlagsAv.kind === "const" && typeof rxFlagsAv.value === "string") rxFlagsStr = rxFlagsAv.value;
         else if (rxFlagsAv.kind === "const" && (rxFlagsAv.value === undefined || rxFlagsAv.value === null)) rxFlagsStr = "";
-        else return { kind: "top" };
+        else return _AV_TOP;
       }
       // Verify pattern parses; if it throws (SyntaxError), spec says
       // RegExp ctor throws — return top conservatively (caller will
@@ -2885,9 +2899,9 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       try {
         new RegExp(rxPatAv.value, rxFlagsStr);
         return { kind: "regex-instance", pattern: rxPatAv.value, flags: rxFlagsStr };
-      } catch (_) { return { kind: "top" }; }
+      } catch (_) { return _AV_TOP; }
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // WHATWG Encoding § 6.2 / § 7.2 ctors. Return obj-lit instances
   // exposing the prototype methods as builtin-method AVs so subsequent
@@ -2897,9 +2911,9 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       kind: "obj-lit",
       props: {
         decode: { kind: "builtin-method", id: "TextDecoder.prototype.decode" },
-        encoding: { kind: "top" },
-        fatal: { kind: "top" },
-        ignoreBOM: { kind: "top" },
+        encoding: _AV_TOP,
+        fatal: _AV_TOP,
+        ignoreBOM: _AV_TOP,
       }
     };
   }
@@ -2927,11 +2941,11 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
         removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
         dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
-        readyState: { kind: "top" },
-        url: { kind: "top" },
-        protocol: { kind: "top" },
-        bufferedAmount: { kind: "top" },
-        binaryType: { kind: "top" },
+        readyState: _AV_TOP,
+        url: _AV_TOP,
+        protocol: _AV_TOP,
+        bufferedAmount: _AV_TOP,
+        binaryType: _AV_TOP,
       }
     };
   }
@@ -2944,9 +2958,9 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
         removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
         dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
-        readyState: { kind: "top" },
-        url: { kind: "top" },
-        withCredentials: { kind: "top" },
+        readyState: _AV_TOP,
+        url: _AV_TOP,
+        withCredentials: _AV_TOP,
       }
     };
   }
@@ -3021,7 +3035,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         pipeThrough: { kind: "builtin-method", id: "ReadableStream.prototype.pipeThrough" },
         tee: { kind: "builtin-method", id: "ReadableStream.prototype.tee" },
         cancel: { kind: "builtin-method", id: "ReadableStream.prototype.cancel" },
-        locked: { kind: "top" },
+        locked: _AV_TOP,
       }
     };
   }
@@ -3034,7 +3048,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         getWriter: { kind: "builtin-method", id: "WritableStream.prototype.getWriter" },
         abort: { kind: "builtin-method", id: "WritableStream.prototype.abort" },
         close: { kind: "builtin-method", id: "WritableStream.prototype.close" },
-        locked: { kind: "top" },
+        locked: _AV_TOP,
       }
     };
   }
@@ -3044,8 +3058,8 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       kind: "obj-lit",
       _ctorId: "WHATWG.TransformStream",
       props: {
-        readable: { kind: "top" },
-        writable: { kind: "top" },
+        readable: _AV_TOP,
+        writable: _AV_TOP,
       }
     };
   }
@@ -3060,8 +3074,8 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
           kind: "obj-lit",
           _ctorId: "WHATWG.AbortSignal",
           props: {
-            aborted: { kind: "top" },
-            reason: { kind: "top" },
+            aborted: _AV_TOP,
+            reason: _AV_TOP,
             addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
             removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
             dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
@@ -3096,8 +3110,8 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     return {
       kind: "obj-lit",
       props: {
-        size: { kind: "top" },
-        type: { kind: "top" },
+        size: _AV_TOP,
+        type: _AV_TOP,
         slice: { kind: "builtin-method", id: "Blob.prototype.slice" },
         text: { kind: "builtin-method", id: "Blob.prototype.text" },
         arrayBuffer: { kind: "builtin-method", id: "Blob.prototype.arrayBuffer" },
@@ -3112,9 +3126,9 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         // File extends Blob per § 6.
         name: { kind: "taint-source", id: "File.name", type: "string",
           dims: { origin: false, path: false, query: false, hash: false, content: true } },
-        lastModified: { kind: "top" },
-        size: { kind: "top" },
-        type: { kind: "top" },
+        lastModified: _AV_TOP,
+        size: _AV_TOP,
+        type: _AV_TOP,
         slice: { kind: "builtin-method", id: "Blob.prototype.slice" },
         text: { kind: "builtin-method", id: "Blob.prototype.text" },
         arrayBuffer: { kind: "builtin-method", id: "Blob.prototype.arrayBuffer" },
@@ -3133,12 +3147,12 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         abort: { kind: "builtin-method", id: "FileReader.prototype.abort" },
         addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
         removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
-        readyState: { kind: "top" },
+        readyState: _AV_TOP,
         // result is the read content — tainted (file content from disk
         // can be attacker-influenced via file-input on cross-origin sites).
         result: { kind: "taint-source", id: "FileReader.result", type: "string",
           dims: { origin: false, path: false, query: false, hash: false, content: true } },
-        error: { kind: "top" },
+        error: _AV_TOP,
       }
     };
   }
@@ -3156,10 +3170,10 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
       kind: "obj-lit",
       _ctorId: "WHATWG.Image",
       props: {
-        src: { kind: "top" },
-        alt: { kind: "top" },
-        width: { kind: "top" },
-        height: { kind: "top" },
+        src: _AV_TOP,
+        alt: _AV_TOP,
+        width: _AV_TOP,
+        height: _AV_TOP,
         addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
         removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
         dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
@@ -3176,7 +3190,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
         removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
         dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
-        name: { kind: "top" },
+        name: _AV_TOP,
       }
     };
   }
@@ -3201,16 +3215,16 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         addEventListener: { kind: "builtin-method", id: "EventTarget.prototype.addEventListener" },
         removeEventListener: { kind: "builtin-method", id: "EventTarget.prototype.removeEventListener" },
         dispatchEvent: { kind: "builtin-method", id: "EventTarget.prototype.dispatchEvent" },
-        readyState: { kind: "top" },
-        status: { kind: "top" },
-        statusText: { kind: "top" },
+        readyState: _AV_TOP,
+        status: _AV_TOP,
+        statusText: _AV_TOP,
         responseText: { kind: "taint-source", id: "XMLHttpRequest.responseText", type: "string",
           dims: { origin: false, path: false, query: false, hash: false, content: true } },
-        response: { kind: "top" },
-        responseURL: { kind: "top" },
-        responseType: { kind: "top" },
-        timeout: { kind: "top" },
-        withCredentials: { kind: "top" },
+        response: _AV_TOP,
+        responseURL: _AV_TOP,
+        responseType: _AV_TOP,
+        timeout: _AV_TOP,
+        withCredentials: _AV_TOP,
       }
     };
   }
@@ -3225,10 +3239,10 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     return {
       kind: "obj-lit",
       props: {
-        length: { kind: "top" },
-        byteLength: { kind: "top" },
-        byteOffset: { kind: "top" },
-        buffer: { kind: "top" },
+        length: _AV_TOP,
+        byteLength: _AV_TOP,
+        byteOffset: _AV_TOP,
+        buffer: _AV_TOP,
         slice: { kind: "builtin-method", id: "TypedArray.prototype.slice" },
         subarray: { kind: "builtin-method", id: "TypedArray.prototype.subarray" },
         set: { kind: "builtin-method", id: "TypedArray.prototype.set" },
@@ -3241,7 +3255,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     return {
       kind: "obj-lit",
       props: {
-        byteLength: { kind: "top" },
+        byteLength: _AV_TOP,
         slice: { kind: "builtin-method", id: "ArrayBuffer.prototype.slice" },
       }
     };
@@ -3250,9 +3264,9 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     return {
       kind: "obj-lit",
       props: {
-        byteLength: { kind: "top" },
-        byteOffset: { kind: "top" },
-        buffer: { kind: "top" },
+        byteLength: _AV_TOP,
+        byteOffset: _AV_TOP,
+        buffer: _AV_TOP,
         getInt8: { kind: "builtin-method", id: "DataView.prototype.getInt8" },
         getUint8: { kind: "builtin-method", id: "DataView.prototype.getUint8" },
         getInt16: { kind: "builtin-method", id: "DataView.prototype.getInt16" },
@@ -3282,7 +3296,7 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
     }
     return { kind: "weakset-instance", items: [], unknownInit: true };
   }
-  return { kind: "top" };
+  return _AV_TOP;
 }
 
 // SameValueZero per ECMA § 7.2.10 used by Map/Set for key equality.
@@ -3313,7 +3327,7 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   // SameValueZero, or undefined if none. With unknown init, an unmatched
   // lookup is undefined OR top (any value from the unknown init).
   if (methodName === "get") {
-    var keyAv = argAvs[0] || { kind: "const", value: undefined };
+    var keyAv = argAvs[0] || _AV_UNDEFINED;
     var matched = null, ambiguous = false;
     for (var gi = entries.length - 1; gi >= 0; gi--) {
       var sv = _specSameValueZeroAv(entries[gi][0], keyAv);
@@ -3322,29 +3336,29 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
     }
     if (matched !== null && !ambiguous && !unknownInit) return matched;
     if (matched !== null && (ambiguous || unknownInit)) {
-      return _specLogicalOrAv(matched, { kind: "top" });
+      return _specLogicalOrAv(matched, _AV_TOP);
     }
-    if (ambiguous || unknownInit) return { kind: "top" };
-    return { kind: "const", value: undefined };
+    if (ambiguous || unknownInit) return _AV_TOP;
+    return _AV_UNDEFINED;
   }
   // § 24.1.3.6 has(key) — boolean per SameValueZero.
   if (methodName === "has") {
-    var hasKeyAv = argAvs[0] || { kind: "const", value: undefined };
+    var hasKeyAv = argAvs[0] || _AV_UNDEFINED;
     var hasMatched = false, hasAmbig = false;
     for (var hi = 0; hi < entries.length; hi++) {
       var hsv = _specSameValueZeroAv(entries[hi][0], hasKeyAv);
       if (hsv === true) { hasMatched = true; break; }
       if (hsv === null) hasAmbig = true;
     }
-    if (hasMatched && !unknownInit) return { kind: "const", value: true };
-    if (!hasMatched && !hasAmbig && !unknownInit) return { kind: "const", value: false };
-    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    if (hasMatched && !unknownInit) return _AV_TRUE;
+    if (!hasMatched && !hasAmbig && !unknownInit) return _AV_FALSE;
+    return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
   }
   // § 24.1.3.9 set(key, value) — adds or replaces; returns this. Replaces
   // last matching entry when key is statically known, else appends.
   if (methodName === "set") {
-    var newKeyAv = argAvs[0] || { kind: "const", value: undefined };
-    var newValAv = argAvs[1] || { kind: "const", value: undefined };
+    var newKeyAv = argAvs[0] || _AV_UNDEFINED;
+    var newValAv = argAvs[1] || _AV_UNDEFINED;
     var newEntries = [];
     var replaced = false;
     for (var si = 0; si < entries.length; si++) {
@@ -3362,7 +3376,7 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   }
   // § 24.1.3.3 delete(key) — returns true if removed, false otherwise.
   if (methodName === "delete") {
-    var delKeyAv = argAvs[0] || { kind: "const", value: undefined };
+    var delKeyAv = argAvs[0] || _AV_UNDEFINED;
     var delEntries = [];
     var delHit = false, delAmbig = false;
     for (var di = 0; di < entries.length; di++) {
@@ -3376,9 +3390,9 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = newDelMap;
     }
-    if (delHit && !delAmbig && !unknownInit) return { kind: "const", value: true };
-    if (!delHit && !delAmbig && !unknownInit) return { kind: "const", value: false };
-    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    if (delHit && !delAmbig && !unknownInit) return _AV_TRUE;
+    if (!delHit && !delAmbig && !unknownInit) return _AV_FALSE;
+    return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
   }
   // § 24.1.3.1 clear() — returns undefined; empties entries. unknownInit
   // is also cleared (after clear, the Map is verifiably empty).
@@ -3387,7 +3401,7 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = clearMapAv;
     }
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // § 24.1.3.7 keys() / 24.1.3.10 values() / 24.1.3.2 entries() — return
   // iterators. We model the iterator as an array-lit so .forEach/.map
@@ -3411,8 +3425,8 @@ function _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   }
   // forEach is HOF — handled at the call site (queue cb dispatch).
   // Without that integration, return undefined (the spec return value).
-  if (methodName === "forEach") return { kind: "const", value: undefined };
-  return { kind: "top" };
+  if (methodName === "forEach") return _AV_UNDEFINED;
+  return _AV_TOP;
 }
 
 // Apply Set.prototype.* method on a single set-instance receiver per
@@ -3424,7 +3438,7 @@ function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   var setMethodName = methodId.slice("Set.prototype.".length);
   // § 24.2.3.1 add(value) — adds if absent under SameValueZero; returns this.
   if (setMethodName === "add") {
-    var addValAv = argAvs[0] || { kind: "const", value: undefined };
+    var addValAv = argAvs[0] || _AV_UNDEFINED;
     var addPresent = false;
     for (var ai = 0; ai < items.length; ai++) {
       if (_specSameValueZeroAv(items[ai], addValAv) === true) { addPresent = true; break; }
@@ -3440,20 +3454,20 @@ function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   }
   // § 24.2.3.7 has(value) — boolean per SameValueZero.
   if (setMethodName === "has") {
-    var hasValAv = argAvs[0] || { kind: "const", value: undefined };
+    var hasValAv = argAvs[0] || _AV_UNDEFINED;
     var setMatched = false, setAmbig = false;
     for (var hsi = 0; hsi < items.length; hsi++) {
       var sssv = _specSameValueZeroAv(items[hsi], hasValAv);
       if (sssv === true) { setMatched = true; break; }
       if (sssv === null) setAmbig = true;
     }
-    if (setMatched && !setUnknownInit) return { kind: "const", value: true };
-    if (!setMatched && !setAmbig && !setUnknownInit) return { kind: "const", value: false };
-    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    if (setMatched && !setUnknownInit) return _AV_TRUE;
+    if (!setMatched && !setAmbig && !setUnknownInit) return _AV_FALSE;
+    return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
   }
   // § 24.2.3.3 delete(value) — returns true if removed, false otherwise.
   if (setMethodName === "delete") {
-    var sdValAv = argAvs[0] || { kind: "const", value: undefined };
+    var sdValAv = argAvs[0] || _AV_UNDEFINED;
     var sdItems = [];
     var sdHit = false, sdAmbig = false;
     for (var sdi = 0; sdi < items.length; sdi++) {
@@ -3467,9 +3481,9 @@ function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = newSdSet;
     }
-    if (sdHit && !sdAmbig && !setUnknownInit) return { kind: "const", value: true };
-    if (!sdHit && !sdAmbig && !setUnknownInit) return { kind: "const", value: false };
-    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    if (sdHit && !sdAmbig && !setUnknownInit) return _AV_TRUE;
+    if (!sdHit && !sdAmbig && !setUnknownInit) return _AV_FALSE;
+    return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
   }
   // § 24.2.3.2 clear() — empties items; returns undefined.
   if (setMethodName === "clear") {
@@ -3477,7 +3491,7 @@ function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = clearSetAv;
     }
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // § 24.2.3.4 entries() — array-lit of [v,v] pairs (Set entries are
   // mirrored per spec).
@@ -3492,8 +3506,8 @@ function _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state) {
   if (setMethodName === "values" || setMethodName === "keys") {
     return { kind: "array-lit", elements: items.slice() };
   }
-  if (setMethodName === "forEach") return { kind: "const", value: undefined };
-  return { kind: "top" };
+  if (setMethodName === "forEach") return _AV_UNDEFINED;
+  return _AV_TOP;
 }
 
 function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
@@ -3507,7 +3521,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       // String() → "", Number() → 0, Boolean() → false per spec.
       if (methodId === "global.String") return { kind: "const", value: "" };
       if (methodId === "global.Number") return { kind: "const", value: 0 };
-      return { kind: "const", value: false };
+      return _AV_FALSE;
     }
     var coerceArg = argAvs[0];
     var coerceLeafs = [];
@@ -3527,7 +3541,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
                      methodId === "global.Number" ? "number" : "boolean";
         return { kind: "coerce", to: toType, arg: coerceArg };
       }
-      return { kind: "top" };
+      return _AV_TOP;
     }
     var coerceResults = [];
     for (var ccri = 0; ccri < coerceLeafs.length; ccri++) {
@@ -3538,7 +3552,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         else if (methodId === "global.Number") coerced = Number(cv);
         else coerced = Boolean(cv);
         coerceResults.push({ kind: "const", value: coerced });
-      } catch (_) { return { kind: "top" }; }
+      } catch (_) { return _AV_TOP; }
     }
     if (coerceResults.length === 1) return coerceResults[0];
     var coerceOr = coerceResults[0];
@@ -3561,29 +3575,29 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     var fcMid = methodId, fcRecv = recvAv, fcArgs = argAvs;
     var fcVisited = new Set(); // cycle break on identical (method, recv) pair
     while (true) {
-      if (!fcRecv) return { kind: "top" };
+      if (!fcRecv) return _AV_TOP;
       var fcKey = fcMid + "|";
-      if (fcVisited.has(fcRecv) && fcVisited.has(fcKey)) return { kind: "top" };
+      if (fcVisited.has(fcRecv) && fcVisited.has(fcKey)) return _AV_TOP;
       fcVisited.add(fcRecv); fcVisited.add(fcKey);
       var fnCallArgs = [];
       if (fcMid === "Function.prototype.call") {
         for (var fcai = 1; fcai < fcArgs.length; fcai++) fnCallArgs.push(fcArgs[fcai]);
       } else {
         var applyArr = fcArgs[1];
-        if (!applyArr || applyArr.kind !== "array-lit" || !applyArr.elements) return { kind: "top" };
+        if (!applyArr || applyArr.kind !== "array-lit" || !applyArr.elements) return _AV_TOP;
         for (var fcai2 = 0; fcai2 < applyArr.elements.length; fcai2++) fnCallArgs.push(applyArr.elements[fcai2]);
       }
       // function-ref recv — read return memo with arg substitution.
       if (fcRecv.kind === "function-ref" && fcRecv.funcNode) {
         var fcRetMemo = _specReturnValueMemo.get(fcRecv.funcNode);
         if (fcRetMemo) return _specInstantiateAv(fcRetMemo, fnCallArgs, undefined, fcRecv.funcNode);
-        return { kind: "top" };
+        return _AV_TOP;
       }
       // builtin-method recv that's itself .call/.apply — peel and loop.
       if (fcRecv.kind === "builtin-method" &&
           (fcRecv.id === "Function.prototype.call" || fcRecv.id === "Function.prototype.apply")) {
         fcMid = fcRecv.id;
-        fcRecv = fnCallArgs[0] || { kind: "top" };
+        fcRecv = fnCallArgs[0] || _AV_TOP;
         fcArgs = fnCallArgs;
         continue;
       }
@@ -3598,7 +3612,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (fcRecv.kind === "builtin-method") {
         return { kind: "call", callee: fcRecv, args: fnCallArgs };
       }
-      return { kind: "top" };
+      return _AV_TOP;
     }
   }
 
@@ -3607,7 +3621,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // argAvs: [target, thisArg, argsArray]. We treat it as a direct
   // function invocation on target with the array's elements as args.
   if (methodId === "Reflect.apply") {
-    if (argAvs.length < 1) return { kind: "top" };
+    if (argAvs.length < 1) return _AV_TOP;
     var raTarget = argAvs[0];
     var raArgs = [];
     if (argAvs.length >= 3 && argAvs[2] && argAvs[2].kind === "array-lit" && argAvs[2].elements) {
@@ -3616,12 +3630,12 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     if (raTarget && raTarget.kind === "function-ref" && raTarget.funcNode) {
       var raRetMemo = _specReturnValueMemo.get(raTarget.funcNode);
       if (raRetMemo) return _specInstantiateAv(raRetMemo, raArgs, undefined, raTarget.funcNode);
-      return { kind: "top" };
+      return _AV_TOP;
     }
     if (raTarget && raTarget.kind === "builtin-method") {
       return { kind: "call", callee: raTarget, args: raArgs };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
 
   // ECMA § 20.2.3.2 Function.prototype.bind (thisArg, ...preArgs)
@@ -3632,13 +3646,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // distinct bound-function AV, structurally compared via _specEqualAv
   // for fixpoint convergence.
   if (methodId === "Function.prototype.bind") {
-    if (!recvAv) return { kind: "top" };
+    if (!recvAv) return _AV_TOP;
     var bindPreArgs = [];
     for (var bpi = 1; bpi < argAvs.length; bpi++) bindPreArgs.push(argAvs[bpi]);
     return {
       kind: "bound-function",
       target: recvAv,
-      thisArg: argAvs[0] || { kind: "top" },
+      thisArg: argAvs[0] || _AV_TOP,
       preArgs: bindPreArgs,
     };
   }
@@ -3647,9 +3661,9 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // returns the new length. Models state mutation when receiver is a
   // tracked Identifier and resolves to array-lit.
   if (methodId === "Array.prototype.push") {
-    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    if (!recvAv || recvAv.kind !== "array-lit") return _AV_TOP;
     var newPushElements = (recvAv.elements || []).slice();
-    for (var pi = 0; pi < argAvs.length; pi++) newPushElements.push(argAvs[pi] || { kind: "top" });
+    for (var pi = 0; pi < argAvs.length; pi++) newPushElements.push(argAvs[pi] || _AV_TOP);
     var newPushArr = { kind: "array-lit", elements: newPushElements };
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = newPushArr;
@@ -3658,28 +3672,28 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   // § 23.1.3.19 Array.prototype.pop: removes and returns last element.
   if (methodId === "Array.prototype.pop") {
-    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    if (!recvAv || recvAv.kind !== "array-lit") return _AV_TOP;
     var popElements = (recvAv.elements || []).slice();
-    var popped = popElements.length > 0 ? popElements.pop() : { kind: "const", value: undefined };
+    var popped = popElements.length > 0 ? popElements.pop() : _AV_UNDEFINED;
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = { kind: "array-lit", elements: popElements };
     }
-    return popped || { kind: "const", value: undefined };
+    return popped || _AV_UNDEFINED;
   }
   // § 23.1.3.27 Array.prototype.shift: removes and returns first element.
   if (methodId === "Array.prototype.shift") {
-    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    if (!recvAv || recvAv.kind !== "array-lit") return _AV_TOP;
     var shiftElements = (recvAv.elements || []).slice();
-    var shifted = shiftElements.length > 0 ? shiftElements.shift() : { kind: "const", value: undefined };
+    var shifted = shiftElements.length > 0 ? shiftElements.shift() : _AV_UNDEFINED;
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = { kind: "array-lit", elements: shiftElements };
     }
-    return shifted || { kind: "const", value: undefined };
+    return shifted || _AV_UNDEFINED;
   }
   // § 23.1.3.30 Array.prototype.sort: sorts `this` in place. Without
   // a comparator, default lexicographic on ToString. Returns `this`.
   if (methodId === "Array.prototype.sort") {
-    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    if (!recvAv || recvAv.kind !== "array-lit") return _AV_TOP;
     // Without comparator: only sort if all elements are Const.
     if (argAvs.length === 0) {
       var sortAllConst = true;
@@ -3705,18 +3719,18 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // § 23.1.3.31 Array.prototype.splice: removes/inserts elements. For
   // simple removal/insertion with Const indices, compute the new array.
   if (methodId === "Array.prototype.splice") {
-    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    if (!recvAv || recvAv.kind !== "array-lit") return _AV_TOP;
     var spLen = (recvAv.elements || []).length;
     var spStart = 0, spDel = 0;
     if (argAvs.length >= 1 && argAvs[0] && argAvs[0].kind === "const" && typeof argAvs[0].value === "number") {
       spStart = argAvs[0].value < 0 ? Math.max(0, spLen + argAvs[0].value) : Math.min(spLen, argAvs[0].value);
     } else if (argAvs.length >= 1) {
-      return { kind: "top" };
+      return _AV_TOP;
     }
     if (argAvs.length >= 2 && argAvs[1] && argAvs[1].kind === "const" && typeof argAvs[1].value === "number") {
       spDel = Math.max(0, Math.min(spLen - spStart, argAvs[1].value));
     } else if (argAvs.length >= 2) {
-      return { kind: "top" };
+      return _AV_TOP;
     } else {
       spDel = spLen - spStart;
     }
@@ -3732,14 +3746,14 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // the array. Per spec mutates and returns `this`. Conservative model
   // that keeps the original element set since indices may not resolve.
   if (methodId === "Array.prototype.copyWithin") {
-    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    if (!recvAv || recvAv.kind !== "array-lit") return _AV_TOP;
     return recvAv;
   }
   // § 23.1.3.7 Array.prototype.fill: fills `this` with value from start
   // to end. Per spec mutates and returns `this`.
   if (methodId === "Array.prototype.fill") {
-    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
-    var fillVal = argAvs.length >= 1 ? argAvs[0] : { kind: "const", value: undefined };
+    if (!recvAv || recvAv.kind !== "array-lit") return _AV_TOP;
+    var fillVal = argAvs.length >= 1 ? argAvs[0] : _AV_UNDEFINED;
     var fillLen = (recvAv.elements || []).length;
     var fillStart = 0, fillEnd = fillLen;
     if (argAvs.length >= 2 && argAvs[1] && argAvs[1].kind === "const" && typeof argAvs[1].value === "number") {
@@ -3758,9 +3772,9 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   // § 23.1.3.34 Array.prototype.unshift: prepends, returns new length.
   if (methodId === "Array.prototype.unshift") {
-    if (!recvAv || recvAv.kind !== "array-lit") return { kind: "top" };
+    if (!recvAv || recvAv.kind !== "array-lit") return _AV_TOP;
     var usElements = [];
-    for (var ui = 0; ui < argAvs.length; ui++) usElements.push(argAvs[ui] || { kind: "top" });
+    for (var ui = 0; ui < argAvs.length; ui++) usElements.push(argAvs[ui] || _AV_TOP);
     for (var uei = 0; uei < (recvAv.elements || []).length; uei++) usElements.push(recvAv.elements[uei]);
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = { kind: "array-lit", elements: usElements };
@@ -3875,7 +3889,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     if (recvAv.kind === "map-instance" || recvAv.kind === "weakmap-instance") {
       return _specApplyMapMethodOnInst(methodId, recvAv, recvName, argAvs, state);
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // ECMA § 24.2.3 Set.prototype.* dispatches. Same shape as Map; receiver
   // may be set-instance or weakset-instance (§ 24.4.3 same value-flow).
@@ -3906,7 +3920,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     if (recvAv.kind === "set-instance" || recvAv.kind === "weakset-instance") {
       return _specApplySetMethodOnInst(methodId, recvAv, recvName, argAvs, state);
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // Global URI/Base64 transforms per § 19.2.6 routed through the existing
   // _applyGlobalUriTransform helper.
@@ -3957,37 +3971,37 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         return { kind: "coerce", to: "string", arg: argAvs[0] };
       }
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // Number.* statics per § 21.1.2 — DISTINCT from globals: no coercion.
   if (methodId === "Number.isInteger") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
     return { kind: "const", value: Number.isInteger(argAvs[0].value) };
   }
   if (methodId === "Number.isFinite") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
     return { kind: "const", value: Number.isFinite(argAvs[0].value) };
   }
   if (methodId === "Number.isNaN") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
     return { kind: "const", value: Number.isNaN(argAvs[0].value) };
   }
   if (methodId === "Number.isSafeInteger") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
     return { kind: "const", value: Number.isSafeInteger(argAvs[0].value) };
   }
   if (methodId === "Number.parseInt") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") return _AV_TOP;
     return { kind: "const", value: Number.parseInt(argAvs[0].value) };
   }
   if (methodId === "Number.parseFloat") {
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") return { kind: "top" };
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") return _AV_TOP;
     return { kind: "const", value: Number.parseFloat(argAvs[0].value) };
   }
   // Promise.* statics per § 27.2.4. resolve/reject passthrough the arg
   // for our analysis (await/then unwrap).
   if (methodId === "Promise.resolve" || methodId === "Promise.reject") {
-    return argAvs.length >= 1 ? argAvs[0] : { kind: "const", value: undefined };
+    return argAvs.length >= 1 ? argAvs[0] : _AV_UNDEFINED;
   }
   // WHATWG HTML § 11 Storage.prototype.getItem(key) → string?. The
   // returned string is whatever was previously stored under `key` —
@@ -4003,7 +4017,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   if (methodId === "Storage.prototype.setItem" || methodId === "Storage.prototype.removeItem" ||
       methodId === "Storage.prototype.clear") {
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // WHATWG Encoding § 6.2.1 TextDecoder.decode(buffer) → DOMString.
   // Returned string carries the buffer's content; without buffer-taint
@@ -4011,20 +4025,20 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // response bodies — the response is current-origin, so the resulting
   // string isn't a generic taint source.)
   if (methodId === "TextDecoder.prototype.decode") {
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // WHATWG Encoding § 7.2.1 TextEncoder.encode(string) → Uint8Array
   // (binary encoding of the input). § 7.2.2 encodeInto writes into a
   // caller-provided Uint8Array. Both opaque to string-flow analysis.
   if (methodId === "TextEncoder.prototype.encode" ||
       methodId === "TextEncoder.prototype.encodeInto") {
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // WHATWG WebSocket § 5 send / close — state mutations returning undefined.
   if (methodId === "WebSocket.prototype.send" ||
       methodId === "WebSocket.prototype.close" ||
       methodId === "EventSource.prototype.close") {
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // WHATWG XHR § 4 prototype methods. Most are state mutations
   // (open / send / setRequestHeader / abort) returning undefined.
@@ -4035,7 +4049,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       methodId === "XMLHttpRequest.prototype.setRequestHeader" ||
       methodId === "XMLHttpRequest.prototype.abort" ||
       methodId === "XMLHttpRequest.prototype.overrideMimeType") {
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   if (methodId === "XMLHttpRequest.prototype.getResponseHeader" ||
       methodId === "XMLHttpRequest.prototype.getAllResponseHeaders") {
@@ -4045,7 +4059,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // WHATWG File API § 5/§ 6 Blob/File methods.
   if (methodId === "Blob.prototype.text" || methodId === "Blob.prototype.arrayBuffer" ||
       methodId === "Blob.prototype.stream" || methodId === "Blob.prototype.slice") {
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // WHATWG File API § 7 FileReader read methods — async; results
   // accessed via .result prop (which is a taint-source AV).
@@ -4054,14 +4068,14 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       methodId === "FileReader.prototype.readAsArrayBuffer" ||
       methodId === "FileReader.prototype.readAsBinaryString" ||
       methodId === "FileReader.prototype.abort") {
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // FormData.prototype handlers moved below — they need recvName/state
   // to mutate the formdata-instance entries on .append/.set/.delete.
   // WHATWG HTML § 9.5 BroadcastChannel.
   if (methodId === "BroadcastChannel.prototype.postMessage" ||
       methodId === "BroadcastChannel.prototype.close") {
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // ECMA § 25.1 TypedArray.prototype methods. slice/subarray return new
   // TypedArray instance (modeled as another opaque obj-lit per ctor);
@@ -4071,12 +4085,12 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "TypedArray.prototype.slice" ||
       methodId === "TypedArray.prototype.subarray" ||
       methodId === "ArrayBuffer.prototype.slice") {
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "TypedArray.prototype.set" ||
       methodId === "TypedArray.prototype.fill" ||
       methodId === "TypedArray.prototype.forEach") {
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // ECMA § 25.3 DataView.prototype getters/setters. Getters return
   // numeric values (opaque without buffer-AV tracking); setters return
@@ -4085,22 +4099,22 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       methodId === "DataView.prototype.getInt16" || methodId === "DataView.prototype.getUint16" ||
       methodId === "DataView.prototype.getInt32" || methodId === "DataView.prototype.getUint32" ||
       methodId === "DataView.prototype.getFloat32" || methodId === "DataView.prototype.getFloat64") {
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "DataView.prototype.setInt8" || methodId === "DataView.prototype.setUint8" ||
       methodId === "DataView.prototype.setInt16" || methodId === "DataView.prototype.setUint16" ||
       methodId === "DataView.prototype.setInt32" || methodId === "DataView.prototype.setUint32" ||
       methodId === "DataView.prototype.setFloat32" || methodId === "DataView.prototype.setFloat64") {
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // WHATWG WebCrypto § 2.2 Crypto.randomUUID() → DOMString (UUID v4).
   // The returned UUID is generated by the browser's CSPRNG — not
   // attacker-controlled, but its value is unknown statically.
   if (methodId === "Crypto.prototype.randomUUID") {
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Crypto.prototype.getRandomValues") {
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // WHATWG HTML § 8.7 Window timer methods. setTimeout/setInterval
   // return numeric IDs; the callback is queued as a task. For value-
@@ -4110,13 +4124,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   if (methodId === "Window.prototype.setTimeout" ||
       methodId === "Window.prototype.setInterval" ||
       methodId === "Window.prototype.requestAnimationFrame") {
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Window.prototype.clearTimeout" ||
       methodId === "Window.prototype.clearInterval" ||
       methodId === "Window.prototype.cancelAnimationFrame" ||
       methodId === "Window.prototype.queueMicrotask") {
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // WHATWG DOM § 4.4 EventTarget.prototype.addEventListener(type, cb).
   // When dispatched via the prototype chain on an EventTarget instance
@@ -4131,11 +4145,11 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         argAvs[1] && argAvs[1].kind === "function-ref" && argAvs[1].funcNode) {
       _specEventHandlerType.set(argAvs[1].funcNode, argAvs[0].value);
     }
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   if (methodId === "EventTarget.prototype.removeEventListener" ||
       methodId === "EventTarget.prototype.dispatchEvent") {
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // WHATWG DOM § 4.9.1 Element.getAttribute(qualifiedName). When recv
   // WHATWG DOM § 4.5.3 Document.createElement(localName) — returns a
@@ -4209,13 +4223,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         }
       }
     }
-    return argAvs[0] || { kind: "const", value: undefined };
+    return argAvs[0] || _AV_UNDEFINED;
   }
   // is a dom-element, return the matching prop AV. Maps "data-X" to
   // dataset.X per HTML5 § 7.5.5.
   if (methodId === "Element.prototype.getAttribute") {
-    if (!recvAv || (recvAv.kind !== "dom-element" && recvAv.kind !== "obj-lit") || !recvAv.props) return { kind: "top" };
-    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") return { kind: "top" };
+    if (!recvAv || (recvAv.kind !== "dom-element" && recvAv.kind !== "obj-lit") || !recvAv.props) return _AV_TOP;
+    if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") return _AV_TOP;
     var gaName = argAvs[0].value;
     if (Object.prototype.hasOwnProperty.call(recvAv.props, gaName)) {
       return recvAv.props[gaName];
@@ -4227,7 +4241,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         return recvAv.props.dataset.props[dsKey];
       }
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // WHATWG DOM § 4.5 Document.getElementById / Document.querySelector.
   // Looks up the page-DOM context (provided by content.js) for the
@@ -4235,7 +4249,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // action/dataset props) when found.
   if (methodId === "document.getElementById" || methodId === "document.querySelector") {
     if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" ||
-        typeof argAvs[0].value !== "string") return { kind: "top" };
+        typeof argAvs[0].value !== "string") return _AV_TOP;
     var domLookupId = null;
     if (methodId === "document.getElementById") {
       domLookupId = argAvs[0].value;
@@ -4259,15 +4273,15 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         Object.prototype.hasOwnProperty.call(_domContext.byId, domLookupId)) {
       return _specBuildDomElementObjLit(_domContext.byId[domLookupId]);
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // Object.* statics per § 20.1.2.
   if (methodId === "Object.keys") {
-    if (argAvs.length === 0) return { kind: "top" };
-    return { kind: "keys-of", src: argAvs[0] || { kind: "top" } };
+    if (argAvs.length === 0) return _AV_TOP;
+    return { kind: "keys-of", src: argAvs[0] || _AV_TOP };
   }
   if (methodId === "Object.entries") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var entriesSrc = argAvs[0];
     if (entriesSrc && entriesSrc.kind === "obj-lit" && entriesSrc.props) {
       var entriesArr = [];
@@ -4290,10 +4304,10 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         callee: { kind: "builtin-method", id: "Object.entries" },
         args: [entriesSrc] };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Object.values") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var valuesSrc = argAvs[0];
     if (valuesSrc && valuesSrc.kind === "obj-lit" && valuesSrc.props) {
       var valuesArr = [];
@@ -4309,19 +4323,19 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         callee: { kind: "builtin-method", id: "Object.values" },
         args: [valuesSrc] };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Object.fromEntries") {
     // § 20.1.2.7 — accepts an iterable of [k,v] pairs.
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var feSrc = argAvs[0];
     if (feSrc && feSrc.kind === "array-lit" && feSrc.elements) {
       var feProps = Object.create(null);
       for (var fei = 0; fei < feSrc.elements.length; fei++) {
         var pair = feSrc.elements[fei];
-        if (!pair || pair.kind !== "array-lit" || !pair.elements || pair.elements.length < 2) return { kind: "top" };
+        if (!pair || pair.kind !== "array-lit" || !pair.elements || pair.elements.length < 2) return _AV_TOP;
         var pk = pair.elements[0];
-        if (!pk || pk.kind !== "const" || (typeof pk.value !== "string" && typeof pk.value !== "number")) return { kind: "top" };
+        if (!pk || pk.kind !== "const" || (typeof pk.value !== "string" && typeof pk.value !== "number")) return _AV_TOP;
         feProps[String(pk.value)] = pair.elements[1];
       }
       return { kind: "obj-lit", props: feProps };
@@ -4332,12 +4346,12 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       var feMapProps = Object.create(null);
       for (var fmei = 0; fmei < feSrc.entries.length; fmei++) {
         var fmek = feSrc.entries[fmei][0];
-        if (!fmek || fmek.kind !== "const" || (typeof fmek.value !== "string" && typeof fmek.value !== "number")) return { kind: "top" };
+        if (!fmek || fmek.kind !== "const" || (typeof fmek.value !== "string" && typeof fmek.value !== "number")) return _AV_TOP;
         feMapProps[String(fmek.value)] = feSrc.entries[fmei][1];
       }
       return { kind: "obj-lit", props: feMapProps };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Object.assign") {
     // § 20.1.2.1 Object.assign(target, ...sources). Per spec: copy
@@ -4351,9 +4365,9 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     // overridden, so JOIN with top via _specSetUnionAv (preserves the
     // known value as one alternative). Continuing with subsequent
     // known sources lets concrete defaults still propagate.
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var oaTarget = argAvs[0];
-    if (!oaTarget || oaTarget.kind !== "obj-lit" || !oaTarget.props) return { kind: "top" };
+    if (!oaTarget || oaTarget.kind !== "obj-lit" || !oaTarget.props) return _AV_TOP;
     var oaMerged = Object.create(null);
     for (var oapk in oaTarget.props) {
       if (Object.prototype.hasOwnProperty.call(oaTarget.props, oapk)) oaMerged[oapk] = oaTarget.props[oapk];
@@ -4371,7 +4385,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         // by an unknown value. JOIN with top via set union.
         for (var oadk in oaMerged) {
           if (Object.prototype.hasOwnProperty.call(oaMerged, oadk)) {
-            oaMerged[oadk] = _specSetUnionAv(oaMerged[oadk], { kind: "top" });
+            oaMerged[oadk] = _specSetUnionAv(oaMerged[oadk], _AV_TOP);
           }
         }
       }
@@ -4379,21 +4393,21 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     return { kind: "obj-lit", props: oaMerged };
   }
   if (methodId === "Object.is") {
-    if (argAvs.length !== 2) return { kind: "top" };
+    if (argAvs.length !== 2) return _AV_TOP;
     var oiA = argAvs[0], oiB = argAvs[1];
     if (oiA && oiA.kind === "const" && oiB && oiB.kind === "const") {
       return { kind: "const", value: Object.is(oiA.value, oiB.value) };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Object.freeze") {
-    return argAvs[0] || { kind: "top" };
+    return argAvs[0] || _AV_TOP;
   }
   if (methodId === "Object.getPrototypeOf") {
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Object.getOwnPropertyNames") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var opnArg = argAvs[0];
     if (opnArg && opnArg.kind === "obj-lit" && opnArg.props) {
       var opnElems = [];
@@ -4403,7 +4417,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       }
       return { kind: "array-lit", elements: opnElems };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Object.create") {
     if (argAvs.length === 1) {
@@ -4413,15 +4427,15 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         return { kind: "obj-lit", props: Object.create(null) };
       }
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // § 20.1.2.4 Object.defineProperty(O, P, Descriptor) — returns O. When
   // O is obj-lit + P is Const string + Descriptor has Const `value`,
   // build new obj-lit with the prop set. Otherwise return O unchanged.
   if (methodId === "Object.defineProperty") {
-    if (argAvs.length < 3) return { kind: "top" };
+    if (argAvs.length < 3) return _AV_TOP;
     var dpO = argAvs[0], dpP = argAvs[1], dpD = argAvs[2];
-    if (!dpO || dpO.kind !== "obj-lit") return { kind: "top" };
+    if (!dpO || dpO.kind !== "obj-lit") return _AV_TOP;
     if (!dpP || dpP.kind !== "const") return dpO;
     if (typeof dpP.value !== "string" && typeof dpP.value !== "number") return dpO;
     if (!dpD || dpD.kind !== "obj-lit" || !dpD.props) return dpO;
@@ -4441,20 +4455,20 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (dpGetterRet) {
         dpNew[String(dpP.value)] = dpGetterRet;
       } else {
-        dpNew[String(dpP.value)] = { kind: "top" };
+        dpNew[String(dpP.value)] = _AV_TOP;
       }
     } else {
       // Unknown descriptor shape — bind to top to preserve the prop key.
-      dpNew[String(dpP.value)] = { kind: "top" };
+      dpNew[String(dpP.value)] = _AV_TOP;
     }
     return { kind: "obj-lit", props: dpNew };
   }
   // § 20.1.2.5 Object.defineProperties(O, Properties) — like above but
   // Properties is an obj-lit of {key: descriptor}.
   if (methodId === "Object.defineProperties") {
-    if (argAvs.length < 2) return { kind: "top" };
+    if (argAvs.length < 2) return _AV_TOP;
     var dpsO = argAvs[0], dpsP = argAvs[1];
-    if (!dpsO || dpsO.kind !== "obj-lit") return { kind: "top" };
+    if (!dpsO || dpsO.kind !== "obj-lit") return _AV_TOP;
     if (!dpsP || dpsP.kind !== "obj-lit" || !dpsP.props) return dpsO;
     var dpsNew = Object.create(null);
     for (var dpsk in dpsO.props) {
@@ -4471,17 +4485,17 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   }
   // § 20.1.2.13 Object.hasOwn(O, P) — boolean per HasOwnProperty.
   if (methodId === "Object.hasOwn") {
-    if (argAvs.length < 2) return { kind: "top" };
+    if (argAvs.length < 2) return _AV_TOP;
     var hoO = argAvs[0], hoP = argAvs[1];
     if (hoO && hoO.kind === "obj-lit" && hoO.props &&
         hoP && hoP.kind === "const" && (typeof hoP.value === "string" || typeof hoP.value === "number")) {
       return { kind: "const", value: Object.prototype.hasOwnProperty.call(hoO.props, hoP.value) };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // § 20.1.2.6 Object.getOwnPropertyDescriptor — descriptor obj-lit or undefined.
   if (methodId === "Object.getOwnPropertyDescriptor") {
-    if (argAvs.length < 2) return { kind: "top" };
+    if (argAvs.length < 2) return _AV_TOP;
     var gdO = argAvs[0], gdP = argAvs[1];
     if (gdO && gdO.kind === "obj-lit" && gdO.props &&
         gdP && gdP.kind === "const" &&
@@ -4490,18 +4504,18 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         kind: "obj-lit",
         props: {
           value: gdO.props[gdP.value],
-          writable: { kind: "const", value: true },
-          enumerable: { kind: "const", value: true },
-          configurable: { kind: "const", value: true }
+          writable: _AV_TRUE,
+          enumerable: _AV_TRUE,
+          configurable: _AV_TRUE
         }
       };
     }
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   // § 20.1.2.7 Object.getOwnPropertyDescriptors — obj-lit mapping each
   // own key to its descriptor.
   if (methodId === "Object.getOwnPropertyDescriptors") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var gdsO = argAvs[0];
     if (gdsO && gdsO.kind === "obj-lit" && gdsO.props) {
       var gdsRes = Object.create(null);
@@ -4511,19 +4525,19 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
           kind: "obj-lit",
           props: {
             value: gdsO.props[gdsk],
-            writable: { kind: "const", value: true },
-            enumerable: { kind: "const", value: true },
-            configurable: { kind: "const", value: true }
+            writable: _AV_TRUE,
+            enumerable: _AV_TRUE,
+            configurable: _AV_TRUE
           }
         };
       }
       return { kind: "obj-lit", props: gdsRes };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // § 20.1.2.18 Object.setPrototypeOf — returns O unchanged for our purposes.
   if (methodId === "Object.setPrototypeOf") {
-    return argAvs[0] || { kind: "top" };
+    return argAvs[0] || _AV_TOP;
   }
   // § 20.1.2.14/.15/.10 isFrozen / isSealed / isExtensible — without
   // tracking frozen/sealed state changes through Object.freeze / .seal /
@@ -4532,23 +4546,23 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // objects (Const number/string), spec says return true (not frozen
   // means freezable; primitives are vacuously frozen per § 20.1.2.14).
   if (methodId === "Object.isFrozen" || methodId === "Object.isSealed") {
-    if (argAvs.length === 0) return { kind: "top" };
-    if (argAvs[0] && argAvs[0].kind === "const") return { kind: "const", value: true };
+    if (argAvs.length === 0) return _AV_TOP;
+    if (argAvs[0] && argAvs[0].kind === "const") return _AV_TRUE;
     if (argAvs[0] && argAvs[0].kind === "obj-lit") {
-      return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+      return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Object.isExtensible") {
-    if (argAvs.length === 0) return { kind: "top" };
-    if (argAvs[0] && argAvs[0].kind === "const") return { kind: "const", value: false };
+    if (argAvs.length === 0) return _AV_TOP;
+    if (argAvs[0] && argAvs[0].kind === "const") return _AV_FALSE;
     if (argAvs[0] && argAvs[0].kind === "obj-lit") {
-      return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+      return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Object.seal" || methodId === "Object.preventExtensions") {
-    return argAvs[0] || { kind: "top" };
+    return argAvs[0] || _AV_TOP;
   }
   // Reflect.* statics per ECMA § 28.1. Each delegates to the corresponding
   // [[InternalMethod]] on target — for our value-flow analysis, this means
@@ -4558,20 +4572,20 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     // § 28.1.10 step 4: return ? HasProperty(target, key). Equivalent to
     // `key in target`. For obj-lit/keys-of-known target with const key,
     // statically decidable; otherwise top.
-    if (argAvs.length < 2) return { kind: "top" };
+    if (argAvs.length < 2) return _AV_TOP;
     var rhTarget = argAvs[0], rhKey = argAvs[1];
     if (rhTarget && rhTarget.kind === "obj-lit" && rhTarget.props &&
         rhKey && rhKey.kind === "const" &&
         (typeof rhKey.value === "string" || typeof rhKey.value === "number")) {
       return { kind: "const", value: Object.prototype.hasOwnProperty.call(rhTarget.props, rhKey.value) };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Reflect.get") {
     // § 28.1.6 step 4: return ? target.[[Get]](key, receiver). Equivalent
     // to `target[key]`. Delegates to existing member-access semantics on
     // obj-lit/array-lit/etc.
-    if (argAvs.length < 2) return { kind: "top" };
+    if (argAvs.length < 2) return _AV_TOP;
     var rgTarget = argAvs[0], rgKey = argAvs[1];
     if (rgTarget && rgTarget.kind === "obj-lit" && rgTarget.props &&
         rgKey && rgKey.kind === "const" &&
@@ -4586,22 +4600,22 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       }
       if (rgKey.value === "length") return { kind: "const", value: rgTarget.elements.length };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Reflect.set") {
     // § 28.1.14 step 4: return ? target.[[Set]](key, value, receiver).
     // Returns boolean indicating success. We don't model the side-effect
     // through Reflect.set (would need a tracked-Identifier target).
-    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
   }
   if (methodId === "Reflect.deleteProperty") {
     // § 28.1.4 step 4: return ? target.[[Delete]](key). Returns boolean.
-    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
   }
   if (methodId === "Reflect.ownKeys") {
     // § 28.1.13 step 3: return ? target.[[OwnPropertyKeys]](). For obj-lit,
     // returns string keys.
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var roTarget = argAvs[0];
     if (roTarget && roTarget.kind === "obj-lit" && roTarget.props) {
       var roKeys = Object.keys(roTarget.props);
@@ -4611,25 +4625,25 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       }
       return { kind: "array-lit", elements: roElems };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Reflect.getPrototypeOf") {
     // § 28.1.9. Modeled by _specGetPrototypeOfAv when applicable.
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var rgpResult = _specGetPrototypeOfAv(argAvs[0]);
     if (rgpResult) return rgpResult;
-    return { kind: "const", value: null };
+    return _AV_NULL;
   }
   if (methodId === "Reflect.setPrototypeOf") {
-    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
   }
   if (methodId === "Reflect.defineProperty") {
-    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
   }
   if (methodId === "Reflect.getOwnPropertyDescriptor") {
     // § 28.1.7 — returns a descriptor obj or undefined. For known obj-lit
     // and string key, build a data-property descriptor.
-    if (argAvs.length < 2) return { kind: "top" };
+    if (argAvs.length < 2) return _AV_TOP;
     var rdTarget = argAvs[0], rdKey = argAvs[1];
     if (rdTarget && rdTarget.kind === "obj-lit" && rdTarget.props &&
         rdKey && rdKey.kind === "const" &&
@@ -4638,26 +4652,26 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         kind: "obj-lit",
         props: {
           value: rdTarget.props[rdKey.value],
-          writable: { kind: "const", value: true },
-          enumerable: { kind: "const", value: true },
-          configurable: { kind: "const", value: true }
+          writable: _AV_TRUE,
+          enumerable: _AV_TRUE,
+          configurable: _AV_TRUE
         }
       };
     }
-    return { kind: "const", value: undefined };
+    return _AV_UNDEFINED;
   }
   if (methodId === "Reflect.isExtensible") {
     // § 28.1.11. Without tracking preventExtensions calls, sound answer
     // is or(true, false) for obj-lit (the result depends on prior mutating
     // calls we don't model).
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     if (argAvs[0] && argAvs[0].kind === "obj-lit") {
-      return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+      return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Reflect.preventExtensions") {
-    return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+    return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
   }
   // RegExp.prototype.* per ECMA § 22.2.6 — for static analysis, when both
   // pattern (regex-instance) and the input string are known statically,
@@ -4668,39 +4682,39 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       // § 22.2.6.16: returns boolean. Compute via host RegExp when input
       // arg is Const string.
       if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") {
-        return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+        return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
       }
       try {
         var rxTestRe = new RegExp(recvAv.pattern, recvAv.flags);
         return { kind: "const", value: rxTestRe.test(argAvs[0].value) };
-      } catch (_) { return { kind: "top" }; }
+      } catch (_) { return _AV_TOP; }
     }
     if (rxMeth === "exec") {
       // § 22.2.6.4: returns a match-result array (with index/input props)
       // or null. For Const-string input + static regex, compute the match
       // and build an array-lit of the captures plus null on no match.
       if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") {
-        return { kind: "top" };
+        return _AV_TOP;
       }
       try {
         var rxExecRe = new RegExp(recvAv.pattern, recvAv.flags);
         var rxExecRes = rxExecRe.exec(argAvs[0].value);
-        if (rxExecRes === null) return { kind: "const", value: null };
+        if (rxExecRes === null) return _AV_NULL;
         var rxExecElems = [];
         for (var rei = 0; rei < rxExecRes.length; rei++) {
           rxExecElems.push({ kind: "const", value: rxExecRes[rei] });
         }
         return { kind: "array-lit", elements: rxExecElems };
-      } catch (_) { return { kind: "top" }; }
+      } catch (_) { return _AV_TOP; }
     }
     if (rxMeth === "toString") {
       // § 22.2.6.17: "/" + source + "/" + flags
       try {
         var rxStr = "/" + recvAv.pattern + "/" + recvAv.flags;
         return { kind: "const", value: rxStr };
-      } catch (_) { return { kind: "top" }; }
+      } catch (_) { return _AV_TOP; }
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // Symbol statics per ECMA § 20.4.2. Symbol identity isn't statically
   // tracked so symbol-returning calls produce opaque obj-lit sentinels;
@@ -4710,13 +4724,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     // § 20.4.2.1 — Symbol.for(key) returns a registry symbol. We don't
     // track registry identity, so return an opaque obj-lit sentinel that
     // captures the description.
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var sfDesc = argAvs[0];
     return { kind: "obj-lit", props: { description: sfDesc } };
   }
   if (methodId === "Symbol.keyFor") {
     // § 20.4.2.5 — registry-key lookup; opaque without registry tracking.
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // Object.prototype.* per ECMA § 20.1.3 — methods inherited by every
   // object. Routed via prototype-chain dispatch (recv → Object.prototype
@@ -4725,9 +4739,9 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     var opMeth = methodId.slice("Object.prototype.".length);
     if (opMeth === "hasOwnProperty") {
       // § 20.1.3.2 — boolean per HasOwnProperty.
-      if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+      if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
       var hopKey = argAvs[0].value;
-      if (typeof hopKey !== "string" && typeof hopKey !== "number") return { kind: "top" };
+      if (typeof hopKey !== "string" && typeof hopKey !== "number") return _AV_TOP;
       if (recvAv && recvAv.kind === "obj-lit" && recvAv.props) {
         return { kind: "const", value: Object.prototype.hasOwnProperty.call(recvAv.props, hopKey) };
       }
@@ -4735,24 +4749,24 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         if (typeof hopKey === "number") {
           return { kind: "const", value: hopKey >= 0 && hopKey < recvAv.elements.length };
         }
-        if (hopKey === "length") return { kind: "const", value: true };
+        if (hopKey === "length") return _AV_TRUE;
       }
-      return { kind: "top" };
+      return _AV_TOP;
     }
     if (opMeth === "isPrototypeOf") {
       // § 20.1.3.3 — boolean. Without prototype-chain modeling beyond
       // the immediate prototype, return or(true,false).
-      return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+      return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
     }
     if (opMeth === "propertyIsEnumerable") {
       // § 20.1.3.4 — boolean per [[GetOwnProperty]].enumerable. For
       // obj-lit literal props, all are enumerable per § 13.2.5.
-      if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return { kind: "top" };
+      if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
       if (recvAv && recvAv.kind === "obj-lit" && recvAv.props &&
           Object.prototype.hasOwnProperty.call(recvAv.props, argAvs[0].value)) {
-        return { kind: "const", value: true };
+        return _AV_TRUE;
       }
-      return { kind: "const", value: false };
+      return _AV_FALSE;
     }
     if (opMeth === "toString") {
       // § 20.1.3.6 — Object.prototype.toString returns "[object X]" with
@@ -4760,24 +4774,24 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (recvAv && recvAv.kind === "obj-lit") return { kind: "const", value: "[object Object]" };
       if (recvAv && recvAv.kind === "array-lit") return { kind: "const", value: "[object Array]" };
       if (recvAv && recvAv.kind === "regex-instance") return { kind: "const", value: "[object RegExp]" };
-      return { kind: "top" };
+      return _AV_TOP;
     }
     if (opMeth === "valueOf") {
       // § 20.1.3.7 — returns this (the receiver).
-      return recvAv || { kind: "top" };
+      return recvAv || _AV_TOP;
     }
     if (opMeth === "toLocaleString") {
       // § 20.1.3.5 — equivalent to this.toString() per spec step 1.
       if (recvAv && recvAv.kind === "obj-lit") return { kind: "const", value: "[object Object]" };
-      return { kind: "top" };
+      return _AV_TOP;
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // Date.* statics per ECMA § 21.4.3.
   if (methodId === "Date.now") {
     // § 21.4.3.1 — returns Number ms since epoch from host time. Not
     // statically determinable; sound answer is top in the number domain.
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Date.parse") {
     // § 21.4.3.2 — Per spec, the result depends on host implementation
@@ -4785,7 +4799,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     // (a Number could be NaN or any ms value). When string is statically
     // resolvable, the spec doesn't guarantee a deterministic answer
     // across hosts so top is the sound answer.
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (methodId === "Date.UTC") {
     // § 21.4.3.4 — returns ms since epoch for the given UTC date parts.
@@ -4800,23 +4814,23 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     }
     if (dateUtcAllConst) {
       try { return { kind: "const", value: Date.UTC.apply(Date, dateUtcArgs) }; }
-      catch (_) { return { kind: "top" }; }
+      catch (_) { return _AV_TOP; }
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // Array.* statics per § 23.1.2.
   if (methodId === "Array.isArray") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var aiArg = argAvs[0];
-    if (aiArg && aiArg.kind === "array-lit") return { kind: "const", value: true };
-    if (aiArg && (aiArg.kind === "const" || aiArg.kind === "obj-lit")) return { kind: "const", value: false };
-    return { kind: "top" };
+    if (aiArg && aiArg.kind === "array-lit") return _AV_TRUE;
+    if (aiArg && (aiArg.kind === "const" || aiArg.kind === "obj-lit")) return _AV_FALSE;
+    return _AV_TOP;
   }
   if (methodId === "Array.of") {
     return { kind: "array-lit", elements: argAvs.slice() };
   }
   if (methodId === "Array.from") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var afArg = argAvs[0];
     // § 23.1.2.1 step 6 — iterable: walk via the source's spec iterator.
     if (afArg && afArg.kind === "array-lit" && afArg.elements) {
@@ -4846,18 +4860,18 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       var afLen = afArg.props.length.value;
       var afArrLikeElems = [];
       for (var afli = 0; afli < afLen; afli++) {
-        afArrLikeElems.push(afArg.props[afli] || { kind: "const", value: undefined });
+        afArrLikeElems.push(afArg.props[afli] || _AV_UNDEFINED);
       }
       return { kind: "array-lit", elements: afArrLikeElems };
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // String.* statics per § 22.1.2.
   if (methodId === "String.fromCharCode") {
     var fcArgs = [];
     for (var fci = 0; fci < argAvs.length; fci++) {
       var fca = argAvs[fci];
-      if (!fca || fca.kind !== "const" || typeof fca.value !== "number") return { kind: "top" };
+      if (!fca || fca.kind !== "const" || typeof fca.value !== "number") return _AV_TOP;
       fcArgs.push(fca.value);
     }
     return { kind: "const", value: String.fromCharCode.apply(String, fcArgs) };
@@ -4866,34 +4880,34 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     var fcpArgs = [];
     for (var fcpi = 0; fcpi < argAvs.length; fcpi++) {
       var fcpa = argAvs[fcpi];
-      if (!fcpa || fcpa.kind !== "const" || typeof fcpa.value !== "number") return { kind: "top" };
+      if (!fcpa || fcpa.kind !== "const" || typeof fcpa.value !== "number") return _AV_TOP;
       fcpArgs.push(fcpa.value);
     }
     try { return { kind: "const", value: String.fromCodePoint.apply(String, fcpArgs) }; }
-    catch (_) { return { kind: "top" }; }
+    catch (_) { return _AV_TOP; }
   }
   // JSON.parse per § 25.5.2.
   if (methodId === "JSON.parse") {
     if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const" || typeof argAvs[0].value !== "string") {
-      return { kind: "top" };
+      return _AV_TOP;
     }
     try {
       var parsed = JSON.parse(argAvs[0].value);
       var liftedAv = _liftJsonValueToAv(parsed);
       if (liftedAv) return liftedAv;
     } catch (_) {}
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // JSON.stringify per § 25.5.4. Routes through _avToJsonValue which
   // returns {ok, value} — only stringify if all leaves are concrete.
   if (methodId === "JSON.stringify") {
-    if (argAvs.length === 0) return { kind: "top" };
+    if (argAvs.length === 0) return _AV_TOP;
     var jsonV = _avToJsonValue(argAvs[0]);
     if (jsonV && jsonV.ok) {
       try { return { kind: "const", value: JSON.stringify(jsonV.value) }; }
       catch (_) {}
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // Math.* per ECMA § 21.3.2: pure functions on numeric args. Single-arg
   // math methods take a Const number, multi-arg take Const numbers.
@@ -4902,7 +4916,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     var mNumArgs = [];
     for (var mai = 0; mai < argAvs.length; mai++) {
       var ma = argAvs[mai];
-      if (!ma || ma.kind !== "const" || typeof ma.value !== "number") return { kind: "top" };
+      if (!ma || ma.kind !== "const" || typeof ma.value !== "number") return _AV_TOP;
       mNumArgs.push(ma.value);
     }
     try {
@@ -4942,9 +4956,9 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       else if (mMethName === "min") mResult = Math.min.apply(Math, mNumArgs);
       else if (mMethName === "max") mResult = Math.max.apply(Math, mNumArgs);
       else if (mMethName === "pow") mResult = Math.pow(mNumArgs[0], mNumArgs[1]);
-      else return { kind: "top" };
+      else return _AV_TOP;
       return { kind: "const", value: mResult };
-    } catch (_) { return { kind: "top" }; }
+    } catch (_) { return _AV_TOP; }
   }
   // Number.prototype methods per § 21.1.3 — pure (no state mutation).
   if (methodId.indexOf("Number.prototype.") === 0) {
@@ -4956,7 +4970,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (!nav || nav.kind !== "const") { numArgsOk = false; break; }
       numArgLits.push(nav.value);
     }
-    if (!numArgsOk) return { kind: "top" };
+    if (!numArgsOk) return _AV_TOP;
     var numRecvLeaves;
     if (recvAv && recvAv.kind === "const" && typeof recvAv.value === "number") {
       numRecvLeaves = [recvAv.value];
@@ -4967,7 +4981,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     } else {
       numRecvLeaves = null;
     }
-    if (!numRecvLeaves || numRecvLeaves.length === 0) return { kind: "top" };
+    if (!numRecvLeaves || numRecvLeaves.length === 0) return _AV_TOP;
     var numResults = [];
     var numAllOk = true;
     for (var nrli = 0; nrli < numRecvLeaves.length; nrli++) {
@@ -4975,7 +4989,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (nt === undefined) { numAllOk = false; break; }
       numResults.push(nt);
     }
-    if (!numAllOk) return { kind: "top" };
+    if (!numAllOk) return _AV_TOP;
     if (numResults.length === 1) return { kind: "const", value: numResults[0] };
     // _specSetUnionAv per § 21.1.3 distribution.
     var numOr = { kind: "const", value: numResults[0] };
@@ -4988,11 +5002,11 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // substrings. Doesn't fit the Const→Const _applyStringMethodToConst
   // helper (which is for string-returning methods); handled inline.
   if (methodId === "String.prototype.split") {
-    if (!recvAv) return { kind: "top" };
+    if (!recvAv) return _AV_TOP;
     var splitLeaves = recvAv.kind === "const" && typeof recvAv.value === "string"
       ? [recvAv.value]
       : (recvAv.kind === "or" ? _avFlattenStringLeaves(recvAv) : []);
-    if (!splitLeaves || splitLeaves.length === 0) return { kind: "top" };
+    if (!splitLeaves || splitLeaves.length === 0) return _AV_TOP;
     var sep, lim;
     if (argAvs.length >= 1) {
       var sepAv = argAvs[0];
@@ -5016,18 +5030,18 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
             splitReOr = _specSetUnionAv(splitReOr, splitRePerLeaf[spro]);
           }
           return splitReOr;
-        } catch (_) { return { kind: "top" }; }
+        } catch (_) { return _AV_TOP; }
       }
       if (sepAv && sepAv.kind === "const") {
         if (typeof sepAv.value === "string") sep = sepAv.value;
         else if (sepAv.value === undefined) sep = undefined;
-        else return { kind: "top" };
-      } else { return { kind: "top" }; }
+        else return _AV_TOP;
+      } else { return _AV_TOP; }
     }
     if (argAvs.length >= 2) {
       var limAv = argAvs[1];
       if (limAv && limAv.kind === "const" && typeof limAv.value === "number") lim = limAv.value;
-      else return { kind: "top" };
+      else return _AV_TOP;
     }
     // Per spec: each leaf splits into its own array; for an or-tree recv
     // we'd need to or-distribute the resulting arrays. Single-leaf case
@@ -5038,7 +5052,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       for (var spi = 0; spi < splitRes.length; spi++) splitElems.push({ kind: "const", value: splitRes[spi] });
       return { kind: "array-lit", elements: splitElems };
     }
-    return { kind: "top" };  // multi-leaf split — array-of-arrays not yet modeled
+    return _AV_TOP;  // multi-leaf split — array-of-arrays not yet modeled
   }
   // String.prototype methods per § 22.1.3 — pure (no state mutation).
   // Distribute over alternation when recv is an or-tree of Const strings.
@@ -5056,13 +5070,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       var rsRecvLeaves = recvAv && recvAv.kind === "const" && typeof recvAv.value === "string"
         ? [recvAv.value]
         : (recvAv ? _avFlattenStringLeaves(recvAv) : []);
-      if (!rsRecvLeaves || rsRecvLeaves.length === 0) return { kind: "top" };
+      if (!rsRecvLeaves || rsRecvLeaves.length === 0) return _AV_TOP;
       try {
         var rsRe = new RegExp(argAvs[0].pattern, argAvs[0].flags);
         if (strMethName === "replace" || strMethName === "replaceAll") {
           // Need replacement arg; if it's not Const string, skip.
           if (argAvs.length < 2 || !argAvs[1] || argAvs[1].kind !== "const" || typeof argAvs[1].value !== "string") {
-            return { kind: "top" };
+            return _AV_TOP;
           }
           var rsResults = [];
           for (var rsi = 0; rsi < rsRecvLeaves.length; rsi++) {
@@ -5099,7 +5113,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
           for (var rsmli = 0; rsmli < rsRecvLeaves.length; rsmli++) {
             var rsMatchRes = rsRecvLeaves[rsmli].match(rsRe);
             if (rsMatchRes === null) {
-              rsMatchPerLeaf.push({ kind: "const", value: null });
+              rsMatchPerLeaf.push(_AV_NULL);
             } else {
               var rsMatchElems = [];
               for (var rsmi = 0; rsmi < rsMatchRes.length; rsmi++) {
@@ -5159,7 +5173,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
           }
           return rsAllOr;
         }
-      } catch (_) { return { kind: "top" }; }
+      } catch (_) { return _AV_TOP; }
     }
     // Pre-extract Const arg literals.
     var strArgLits = [];
@@ -5212,13 +5226,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (strMethName === "concat" && recvAv) {
         var concatAcc = recvAv;
         for (var concati = 0; concati < argAvs.length; concati++) {
-          var concatArg = argAvs[concati] || { kind: "top" };
+          var concatArg = argAvs[concati] || _AV_TOP;
           concatAcc = { kind: "binop", op: "+", left: concatAcc, right: concatArg };
         }
         return concatAcc;
       }
       if (recvAv) return { kind: "coerce", to: "string", arg: recvAv };
-      return { kind: "top" };
+      return _AV_TOP;
     }
     var strResults = [];
     var strAllOk = true;
@@ -5227,7 +5241,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (st === undefined) { strAllOk = false; break; }
       strResults.push(st);
     }
-    if (!strAllOk) return { kind: "top" };
+    if (!strAllOk) return _AV_TOP;
     if (strResults.length === 1) return { kind: "const", value: strResults[0] };
     // _specSetUnionAv per § 22.1.3 distribution.
     var strOr = { kind: "const", value: strResults[0] };
@@ -5242,13 +5256,13 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // rebinding mirrors the Array.prototype.push pattern.
   if (methodId.indexOf("FormData.prototype.") === 0) {
     var fdMethod = methodId.slice("FormData.prototype.".length);
-    if (!recvAv || recvAv.kind !== "formdata-instance") return { kind: "top" };
+    if (!recvAv || recvAv.kind !== "formdata-instance") return _AV_TOP;
     if (fdMethod === "append" || fdMethod === "set") {
       // .append/.set(name, value) — name and value AVs go into entry list.
       // Per § 5.2.2/3 step 4: append adds to list; set removes existing
       // entries with same name then appends. Both observable via .get.
-      var fdNameAv = argAvs[0] || { kind: "top" };
-      var fdValAv = argAvs[1] || { kind: "top" };
+      var fdNameAv = argAvs[0] || _AV_TOP;
+      var fdValAv = argAvs[1] || _AV_TOP;
       var newEntries = (recvAv.entries || []).slice();
       if (fdMethod === "set") {
         // Remove existing entries matching name (when name is const).
@@ -5263,7 +5277,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
         state[recvName] = newFdInst;
       }
-      return { kind: "const", value: undefined };
+      return _AV_UNDEFINED;
     }
     if (fdMethod === "delete") {
       // .delete(name) — remove all entries with this name.
@@ -5277,44 +5291,44 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
         state[recvName] = { kind: "formdata-instance", entries: fdDelEntries };
       }
-      return { kind: "const", value: undefined };
+      return _AV_UNDEFINED;
     }
     if (fdMethod === "get") {
       // .get(name) — return first matching entry's value.
       var fdGetName = argAvs[0];
-      if (!fdGetName || fdGetName.kind !== "const") return { kind: "top" };
+      if (!fdGetName || fdGetName.kind !== "const") return _AV_TOP;
       for (var fdgi = 0; fdgi < (recvAv.entries || []).length; fdgi++) {
         var fde = recvAv.entries[fdgi];
         if (fde.name && fde.name.kind === "const" && fde.name.value === fdGetName.value) {
-          return fde.value || { kind: "const", value: null };
+          return fde.value || _AV_NULL;
         }
       }
-      return { kind: "const", value: null };
+      return _AV_NULL;
     }
     if (fdMethod === "getAll") {
       var fdGAName = argAvs[0];
-      if (!fdGAName || fdGAName.kind !== "const") return { kind: "top" };
+      if (!fdGAName || fdGAName.kind !== "const") return _AV_TOP;
       var fdGAOut = [];
       for (var fdgai = 0; fdgai < (recvAv.entries || []).length; fdgai++) {
         var fdgae = recvAv.entries[fdgai];
         if (fdgae.name && fdgae.name.kind === "const" && fdgae.name.value === fdGAName.value) {
-          fdGAOut.push(fdgae.value || { kind: "const", value: null });
+          fdGAOut.push(fdgae.value || _AV_NULL);
         }
       }
       return { kind: "array-lit", elements: fdGAOut };
     }
     if (fdMethod === "has") {
       var fdHasName = argAvs[0];
-      if (!fdHasName || fdHasName.kind !== "const") return { kind: "top" };
+      if (!fdHasName || fdHasName.kind !== "const") return _AV_TOP;
       for (var fdhi = 0; fdhi < (recvAv.entries || []).length; fdhi++) {
         var fdhe = recvAv.entries[fdhi];
         if (fdhe.name && fdhe.name.kind === "const" && fdhe.name.value === fdHasName.value) {
-          return { kind: "const", value: true };
+          return _AV_TRUE;
         }
       }
-      return { kind: "const", value: false };
+      return _AV_FALSE;
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   // WHATWG URL § 5.2.2/3/4 URLSearchParams accessor methods. .get/.getAll/
   // .has/.toString return values DERIVED from the constructor's input.
@@ -5331,15 +5345,15 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
       if (recvAv && recvAv.kind === "coerce" && recvAv.to === "urlsearchparams" && recvAv.arg) {
         return { kind: "coerce", to: "string", arg: recvAv.arg };
       }
-      return { kind: "top" };
+      return _AV_TOP;
     }
     if (uspMethod === "has") {
       // .has returns boolean — value is determined by attacker-controlled
       // params but the boolean itself isn't a content-injection sink.
-      return { kind: "top" };
+      return _AV_TOP;
     }
   }
-  return { kind: "top" };
+  return _AV_TOP;
 }
 
 // WHATWG URL § 5.5.1-3 URLSearchParams.set/append/delete: when the
@@ -5696,7 +5710,7 @@ function _specProjectArgsThroughSuperChain(derivedCtorNode, derivedArgs) {
     var ancEffectiveArgs = [];
     var supParams = supCtor.params || [];
     for (var spi = 0; spi < supParams.length; spi++) {
-      var ancArgAv = { kind: "top" };
+      var ancArgAv = _AV_TOP;
       if (supCallArgs && spi < supCallArgs.length) {
         var saNode = supCallArgs[spi];
         if (saNode && _t.isIdentifier(saNode)) {
@@ -5716,7 +5730,7 @@ function _specProjectArgsThroughSuperChain(derivedCtorNode, derivedArgs) {
         } else if (_t.isStringLiteral(saNode)) ancArgAv = { kind: "const", value: saNode.value };
         else if (_t.isNumericLiteral(saNode)) ancArgAv = { kind: "const", value: saNode.value };
         else if (_t.isBooleanLiteral(saNode)) ancArgAv = { kind: "const", value: saNode.value };
-        else if (_t.isNullLiteral(saNode)) ancArgAv = { kind: "const", value: null };
+        else if (_t.isNullLiteral(saNode)) ancArgAv = _AV_NULL;
       }
       ancEffectiveArgs.push(ancArgAv);
     }
@@ -6081,7 +6095,7 @@ function _specBuildThisInstanceAv(funcNode, funcPath) {
               if (_t.isStringLiteral(sa)) apAv = { kind: "const", value: sa.value };
               else if (_t.isNumericLiteral(sa)) apAv = { kind: "const", value: sa.value };
               else if (_t.isBooleanLiteral(sa)) apAv = { kind: "const", value: sa.value };
-              else if (_t.isNullLiteral(sa)) apAv = { kind: "const", value: null };
+              else if (_t.isNullLiteral(sa)) apAv = _AV_NULL;
             }
           }
         }
@@ -6308,7 +6322,7 @@ function _specBuildClassStaticAv(classNode, classPath) {
       if (_t.isStringLiteral(v)) props[fldName] = { kind: "const", value: v.value };
       else if (_t.isNumericLiteral(v)) props[fldName] = { kind: "const", value: v.value };
       else if (_t.isBooleanLiteral(v)) props[fldName] = { kind: "const", value: v.value };
-      else if (_t.isNullLiteral(v)) props[fldName] = { kind: "const", value: null };
+      else if (_t.isNullLiteral(v)) props[fldName] = _AV_NULL;
       else if (_t.isTemplateLiteral(v) && v.expressions.length === 0 && v.quasis.length === 1) {
         props[fldName] = { kind: "const", value: v.quasis[0].value.cooked };
       }
@@ -6316,7 +6330,7 @@ function _specBuildClassStaticAv(classNode, classPath) {
   }
   var hasAny = false;
   for (var pk in props) { if (Object.prototype.hasOwnProperty.call(props, pk)) { hasAny = true; break; } }
-  var av = hasAny ? { kind: "obj-lit", props: props } : { kind: "top" };
+  var av = hasAny ? { kind: "obj-lit", props: props } : _AV_TOP;
   _specClassStaticAvCache.set(classNode, av);
   return av;
 }
@@ -6488,7 +6502,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
         } else if (pa && pa.kind === "const") {
           perCallAvs.push(pa);
         } else {
-          perCallAvs.push({ kind: "top" });
+          perCallAvs.push(_AV_TOP);
         }
       }
       paramAv = perCallAvs[0];
@@ -6524,7 +6538,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
               dims: { origin: true, path: true, query: true, hash: true, content: true } },
             origin: { kind: "taint-source", id: "event.origin",
               dims: { origin: false, path: false, query: false, hash: false, content: false } },
-            source: { kind: "top" },
+            source: _AV_TOP,
           }
         };
       }
@@ -6578,7 +6592,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
               if (dft.type === "StringLiteral" || dft.type === "NumericLiteral" || dft.type === "BooleanLiteral") {
                 defaultAv = { kind: "const", value: dft.value };
               } else if (dft.type === "NullLiteral") {
-                defaultAv = { kind: "const", value: null };
+                defaultAv = _AV_NULL;
               } else if (dft.type === "ObjectExpression" && dft.properties.length === 0) {
                 defaultAv = { kind: "obj-lit", props: Object.create(null) };
               } else if (dft.type === "ArrayExpression" && dft.elements.length === 0) {
@@ -6616,7 +6630,7 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
               if (aeDft.type === "StringLiteral" || aeDft.type === "NumericLiteral" || aeDft.type === "BooleanLiteral") {
                 aeDefault = { kind: "const", value: aeDft.value };
               } else if (aeDft.type === "NullLiteral") {
-                aeDefault = { kind: "const", value: null };
+                aeDefault = _AV_NULL;
               } else if (aeDft.type === "ObjectExpression" && aeDft.properties.length === 0) {
                 aeDefault = { kind: "obj-lit", props: Object.create(null) };
               } else if (aeDft.type === "ArrayExpression" && aeDft.elements.length === 0) {
@@ -7032,7 +7046,7 @@ function _specJoinAv(a, b) {
   if (!a) return b;
   if (!b) return a;
   if (_specEqualAv(a, b)) return a;
-  if (a.kind === "top" || b.kind === "top") return { kind: "top" };
+  if (a.kind === "top" || b.kind === "top") return _AV_TOP;
   return { kind: "or", left: a, right: b };
 }
 
@@ -7060,16 +7074,16 @@ function _specJoinState(a, b) {
 // handled by § 13.15.4 AssignmentExpression's MemberExpression LHS branch.
 // ───────────────────────────────────────────────────────────────────────────
 function _specMemberExpressionAv(memberNode, objAv, computedKeyAv) {
-  if (!memberNode) return { kind: "top" };
+  if (!memberNode) return _AV_TOP;
   if (memberNode.computed) {
-    return { kind: "member", obj: objAv, key: computedKeyAv || { kind: "top" } };
+    return { kind: "member", obj: objAv, key: computedKeyAv || _AV_TOP };
   }
   // Static accessor: obj.NAME — key is the identifier's name as a const.
   var p = memberNode.property;
   var keyAv;
   if (p && p.type === "Identifier") keyAv = { kind: "const", value: p.name };
   else if (p && p.type === "StringLiteral") keyAv = { kind: "const", value: p.value };
-  else keyAv = { kind: "top" };
+  else keyAv = _AV_TOP;
   return { kind: "member", obj: objAv, key: keyAv };
 }
 
@@ -7143,7 +7157,7 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
       // sound over-approximation is the join of corresponding values.
       if (keyAvO && keyAvO.kind === "loop-key" && keyAvO.src === objAv) {
         var loopKeys = Object.keys(objAv.props);
-        if (loopKeys.length === 0) return { kind: "top" };
+        if (loopKeys.length === 0) return _AV_TOP;
         var loopJoinAv = objAv.props[loopKeys[0]];
         for (var lki = 1; lki < loopKeys.length; lki++) {
           loopJoinAv = _specSetUnionAv(loopJoinAv, objAv.props[loopKeys[lki]]);
@@ -7180,7 +7194,7 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
       return { kind: "args-len" };
     }
     if (n.computed) {
-      var idxAvA = vals.get(n.property) || { kind: "top" };
+      var idxAvA = vals.get(n.property) || _AV_TOP;
       return { kind: "args-elt", idx: idxAvA };
     }
   }
@@ -7222,7 +7236,7 @@ function _specMemberAccessOnObjLeaf(path, n, objAv, vals) {
   }
   // Default — opaque receiver: build a `member` AV that downstream
   // consumers (target tracing, propagation) can reason about.
-  var keyAvComputed = n.computed ? (vals.get(n.property) || { kind: "top" }) : null;
+  var keyAvComputed = n.computed ? (vals.get(n.property) || _AV_TOP) : null;
   return _specMemberExpressionAv(n, objAv, keyAvComputed);
 }
 
@@ -7241,7 +7255,7 @@ function _specLogicalOrAv(leftAv, rightAv) {
   if (!leftAv) return rightAv;
   if (!rightAv) return leftAv;
   if (_specEqualAv(leftAv, rightAv)) return leftAv;
-  if (leftAv.kind === "top" || rightAv.kind === "top") return { kind: "top" };
+  if (leftAv.kind === "top" || rightAv.kind === "top") return _AV_TOP;
   // Check if rightAv is already a leaf of leftAv's or-tree (or vice versa).
   // Walk leaves iteratively; if rightAv equals any leaf, leftAv already
   // covers it. Same for the reverse.
@@ -7365,7 +7379,7 @@ function _specResolveLeafInCalleeContext(node, calleeFnPath, callExpr, vals) {
   if (_t.isStringLiteral(node)) return { kind: "const", value: node.value };
   if (_t.isNumericLiteral(node)) return { kind: "const", value: node.value };
   if (_t.isBooleanLiteral(node)) return { kind: "const", value: node.value };
-  if (_t.isNullLiteral(node)) return { kind: "const", value: null };
+  if (_t.isNullLiteral(node)) return _AV_NULL;
   if (_t.isIdentifier(node)) {
     var b = calleeFnPath.scope.getBinding(node.name);
     if (!b || b.kind !== "param") return null;
@@ -7375,9 +7389,9 @@ function _specResolveLeafInCalleeContext(node, calleeFnPath, callExpr, vals) {
       var bindIdNode = _t.isAssignmentPattern(par) ? par.left : par;
       if (b.identifier === bindIdNode) {
         if (pi < callExpr.arguments.length) {
-          return vals.get(callExpr.arguments[pi]) || { kind: "top" };
+          return vals.get(callExpr.arguments[pi]) || _AV_TOP;
         }
-        return { kind: "const", value: undefined };  // missing arg per § 10.2.10
+        return _AV_UNDEFINED;  // missing arg per § 10.2.10
       }
     }
     return null;
@@ -7403,7 +7417,7 @@ function _specResolveLeafInCalleeContext(node, calleeFnPath, callExpr, vals) {
     if (_t.isStringLiteral(memLeafNode)) memBaseAv = { kind: "const", value: memLeafNode.value };
     else if (_t.isNumericLiteral(memLeafNode)) memBaseAv = { kind: "const", value: memLeafNode.value };
     else if (_t.isBooleanLiteral(memLeafNode)) memBaseAv = { kind: "const", value: memLeafNode.value };
-    else if (_t.isNullLiteral(memLeafNode)) memBaseAv = { kind: "const", value: null };
+    else if (_t.isNullLiteral(memLeafNode)) memBaseAv = _AV_NULL;
     else if (_t.isIdentifier(memLeafNode)) {
       var mlb = calleeFnPath.scope.getBinding(memLeafNode.name);
       if (mlb && mlb.kind === "param") {
@@ -7413,8 +7427,8 @@ function _specResolveLeafInCalleeContext(node, calleeFnPath, callExpr, vals) {
           var mlbid = _t.isAssignmentPattern(mlpar) ? mlpar.left : mlpar;
           if (mlb.identifier === mlbid) {
             memBaseAv = mlpi < callExpr.arguments.length ?
-              (vals.get(callExpr.arguments[mlpi]) || { kind: "top" }) :
-              { kind: "const", value: undefined };
+              (vals.get(callExpr.arguments[mlpi]) || _AV_TOP) :
+              _AV_UNDEFINED;
             break;
           }
         }
@@ -7665,7 +7679,7 @@ function _specFindSetterForKey(path, propName) {
 }
 
 function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, effects, lhsCurrentAv, path) {
-  if (!node) return { kind: "top" };
+  if (!node) return _AV_TOP;
   var op = node.operator;
   var left = node.left;
   // Plain assignment per § 13.15.4 — store rhs into target.
@@ -7766,7 +7780,7 @@ function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, 
       else if (op === "&&=") newAvLogical = lvLog.value ? rhsAv : lvLog;
       else /* ??= */ newAvLogical = (lvLog.value === null || lvLog.value === undefined) ? rhsAv : lvLog;
     } else {
-      newAvLogical = _specLogicalOrAv(lvLog || { kind: "top" }, rhsAv);
+      newAvLogical = _specLogicalOrAv(lvLog || _AV_TOP, rhsAv);
     }
     if (left && left.type === "Identifier") {
       state[left.name] = newAvLogical;
@@ -7781,7 +7795,7 @@ function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, 
   // Numeric / string compound assignments (`+=`, `-=`, `*=`, `/=`, `%=`,
   // `**=`, `<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`).
   var binOp = op.slice(0, op.length - 1);  // strip trailing `=`
-  var newAv = { kind: "top" };
+  var newAv = _AV_TOP;
   var lv = lhsCurrentAv;
   if (lv && lv.kind === "const" && rhsAv && rhsAv.kind === "const") {
     var lvv = lv.value, rvv = rhsAv.value;
@@ -7828,7 +7842,7 @@ function _specAssignmentExpressionApply(node, state, rhsAv, lhsObjAv, lhsKeyAv, 
 // ───────────────────────────────────────────────────────────────────────────
 function _specVariableDeclaratorBind(idNode, initAv, state) {
   if (!idNode) return;
-  var stack = [{ id: idNode, av: initAv === undefined ? { kind: "const", value: undefined } : initAv }];
+  var stack = [{ id: idNode, av: initAv === undefined ? _AV_UNDEFINED : initAv }];
   while (stack.length > 0) {
     var top = stack.pop();
     var id = top.id, av = top.av;
@@ -7845,7 +7859,7 @@ function _specVariableDeclaratorBind(idNode, initAv, state) {
       continue;
     }
     if (id.type === "ObjectPattern") {
-      var srcAv = av || { kind: "top" };
+      var srcAv = av || _AV_TOP;
       for (var pi = id.properties.length - 1; pi >= 0; pi--) {
         var op = id.properties[pi];
         if (!op || op.type !== "ObjectProperty" || op.computed) continue;
@@ -7894,7 +7908,7 @@ function _specVariableDeclaratorBind(idNode, initAv, state) {
       continue;
     }
     if (id.type === "ArrayPattern") {
-      var srcAvA = av || { kind: "top" };
+      var srcAvA = av || _AV_TOP;
       for (var ai = id.elements.length - 1; ai >= 0; ai--) {
         var ae = id.elements[ai];
         if (!ae) continue;
@@ -7943,7 +7957,7 @@ function _specVariableDeclaratorBind(idNode, initAv, state) {
       // key-set tracking, the rest binding's value abstracts to Top
       // (sound conservative answer; a future enhancement can refine
       // by tracking consumed keys).
-      stack.push({ id: id.argument, av: { kind: "top" } });
+      stack.push({ id: id.argument, av: _AV_TOP });
       continue;
     }
   }
@@ -8082,7 +8096,7 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState, stmtPath) {
     if (rhsAv && rhsAv.kind === "const" && typeof rhsAv.value === "string") {
       var codePoints = Array.from(rhsAv.value);
       if (codePoints.length === 0) {
-        bindLoopVar({ kind: "top" });
+        bindLoopVar(_AV_TOP);
         return bodyState;
       }
       var cpVal = { kind: "const", value: codePoints[0] };
@@ -8092,7 +8106,7 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState, stmtPath) {
       bindLoopVar(cpVal);
       return bodyState;
     }
-    bindLoopVar({ kind: "top" });
+    bindLoopVar(_AV_TOP);
     return bodyState;
   }
   // for-in: loop var is a STRING KEY drawn from rhsAv.
@@ -8294,7 +8308,7 @@ function _specExpandCallArgs(argNodes, vals) {
   var out = [];
   for (var i = 0; i < argNodes.length; i++) {
     var an = argNodes[i];
-    if (!an) { out.push({ kind: "top" }); continue; }
+    if (!an) { out.push(_AV_TOP); continue; }
     if (_t.isSpreadElement(an)) {
       var spAv = vals.get(an.argument);
       if (spAv && spAv.kind === "array-lit" && spAv.elements) {
@@ -8303,7 +8317,7 @@ function _specExpandCallArgs(argNodes, vals) {
       }
       return null;  // unknown spread source — caller bails to top
     }
-    out.push(vals.get(an) || { kind: "top" });
+    out.push(vals.get(an) || _AV_TOP);
   }
   return out;
 }
@@ -8528,7 +8542,7 @@ function _specNarrowMemberTruthy(keyPath, objPath, state) {
 // recurse on .left/.right) traverse every alternative correctly. Pure
 // helper — no narrowing-specific logic.
 function _specOrFromAlternatives(alts) {
-  if (!alts || alts.length === 0) return { kind: "top" };
+  if (!alts || alts.length === 0) return _AV_TOP;
   if (alts.length === 1) return alts[0];
   var av = alts[0];
   for (var i = 1; i < alts.length; i++) {
@@ -8674,7 +8688,7 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
     if (loopVarsWithUpdate) {
       loopVarsWithUpdate.forEach(function(vn) {
         if (Object.prototype.hasOwnProperty.call(forBodyState, vn)) {
-          forBodyState[vn] = { kind: "top" };
+          forBodyState[vn] = _AV_TOP;
         }
       });
     }
@@ -8769,7 +8783,7 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
       if (retAv) _specReturnAvAccum.push(retAv);
     } else {
       // `return;` per § 14.10 yields undefined.
-      _specReturnAvAccum.push({ kind: "const", value: undefined });
+      _specReturnAvAccum.push(_AV_UNDEFINED);
     }
     if (branchStack.length > 0) branchStack[branchStack.length - 1]._returned = true;
     return;
@@ -8793,7 +8807,7 @@ function _specApplyStatement(stmtPath, state, effects, branchStack) {
       // Catch param binds to Top (the thrown value's runtime shape isn't
       // tracked). Per § 14.15.2.
       if (stmt.handler.param && stmt.handler.param.type === "Identifier") {
-        catchState[stmt.handler.param.name] = { kind: "top" };
+        catchState[stmt.handler.param.name] = _AV_TOP;
       }
       branchStack.push({ stmts: stmt.handler.body.body, idx: 0, state: catchState, parentPath: stmtPath.get("handler.body") });
     }
@@ -9135,7 +9149,7 @@ function _specEnsureProgramGlobalsPrepass(anyPath) {
         var argAvs = [];
         for (var ni = 0; ni < n.arguments.length; ni++) {
           var argAv = _specPathValMemo.get(n.arguments[ni]);
-          argAvs.push(argAv || { kind: "top" });
+          argAvs.push(argAv || _AV_TOP);
         }
         var ctorRes = null;
         try { ctorRes = _specApplyBuiltinCtor(calleeAv.id, argAvs); } catch (_) {}
@@ -10131,11 +10145,11 @@ function _specEvalLeaf(path, state, vals, effects) {
   if (_t.isStringLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isNumericLiteral(n)) return { kind: "const", value: n.value };
   if (_t.isBooleanLiteral(n)) return { kind: "const", value: n.value };
-  if (_t.isNullLiteral(n)) return { kind: "const", value: null };
+  if (_t.isNullLiteral(n)) return _AV_NULL;
   if (_t.isBigIntLiteral(n)) {
     // § 21.2.1.1.1 BigInt literal evaluation — produces a BigInt value.
     try { return { kind: "const", value: BigInt(n.value) }; }
-    catch (_) { return { kind: "top" }; }
+    catch (_) { return _AV_TOP; }
   }
   if (_t.isRegExpLiteral(n)) {
     // § 13.2.7 RegularExpressionLiteral — produces a RegExp instance per
@@ -10170,12 +10184,12 @@ function _specEvalLeaf(path, state, vals, effects) {
       var ttQuasiArr = { kind: "array-lit", elements: ttQuasiElems };
       var ttCallArgs = [ttQuasiArr];
       for (var ttei = 0; ttei < n.quasi.expressions.length; ttei++) {
-        ttCallArgs.push(vals.get(n.quasi.expressions[ttei]) || { kind: "top" });
+        ttCallArgs.push(vals.get(n.quasi.expressions[ttei]) || _AV_TOP);
       }
       var ttRetMemo = _specReturnValueMemo.get(ttTagAv.funcNode);
       if (ttRetMemo) return _specInstantiateAv(ttRetMemo, ttCallArgs);
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (_t.isTemplateLiteral(n)) {
     // § 13.2.8.6 Template Literal Evaluation: composes cooked quasis
@@ -10225,7 +10239,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       var anyStructured = false;
       for (var qei = 0; qei < n.expressions.length; qei++) {
         var qeAv = vals.get(n.expressions[qei]);
-        if (!qeAv) qeAv = { kind: "top" };
+        if (!qeAv) qeAv = _AV_TOP;
         exprAvs.push(qeAv);
         // Structured AVs that need template-shape preservation per
         // § 13.2.8.6 so taint walking transitions through interpolations.
@@ -10237,7 +10251,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (anyStructured) {
         return { kind: "template", quasis: quasiStrs, exprs: exprAvs };
       }
-      return { kind: "top" };
+      return _AV_TOP;
     }
     if (alts.length === 1) return { kind: "const", value: alts[0] };
     // _specSetUnionAv per § 13.2.8.6 distribution: each cooked-quasi
@@ -10257,7 +10271,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     // Identifier-name dispatch is spec-mandated since `arguments` is an
     // implicit binding (not user-bound), checked via scope-shadow guard.
     if (n.name === "arguments" && !path.scope.getBinding("arguments")) {
-      return { kind: "top" };
+      return _AV_TOP;
     }
     // ECMA § 19 globalThis: when an Identifier is unbound at the current
     // scope (no local/var/let/const), it resolves to globalThis.<name>
@@ -10291,7 +10305,7 @@ function _specEvalLeaf(path, state, vals, effects) {
         if (_t.isStringLiteral(initN)) return { kind: "const", value: initN.value };
         if (_t.isNumericLiteral(initN)) return { kind: "const", value: initN.value };
         if (_t.isBooleanLiteral(initN)) return { kind: "const", value: initN.value };
-        if (_t.isNullLiteral(initN)) return { kind: "const", value: null };
+        if (_t.isNullLiteral(initN)) return _AV_NULL;
         // § 13.2.8.6 TemplateLiteral with no interpolations — single quasi.
         if (_t.isTemplateLiteral(initN) && initN.expressions.length === 0 &&
             initN.quasis.length === 1) {
@@ -10335,7 +10349,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       // local, global on globalThis registry) or its init couldn't be
       // resolved by spec eval. Fall through to top.
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (_t.isMemberExpression(n) || _t.isOptionalMemberExpression(n)) {
     // § 21.3.1 Math constants and § 21.1.1 Number constants are now
@@ -10343,7 +10357,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     // globalThis.Math (an obj-lit with all constants and method markers);
     // .E etc. is plain obj-lit prop access. Inline shape-matched
     // dispatches removed.
-    var objAv = vals.get(n.object) || { kind: "top" };
+    var objAv = vals.get(n.object) || _AV_TOP;
     // Distribute over alternation: `or(a, b).prop` → `or(a.prop, b.prop)`.
     // Pure projection — no operand semantics changes, just per-leaf access.
     var memberLeaves = _avFlattenOrLeaves(objAv);
@@ -10371,8 +10385,8 @@ function _specEvalLeaf(path, state, vals, effects) {
     // short-circuits per ToBoolean / nullish testing. When `left` is a
     // Const we can pick statically per spec; otherwise both arms are
     // possible and we model as or(left, right).
-    var lLeft = vals.get(n.left) || { kind: "top" };
-    var lRight = vals.get(n.right) || { kind: "top" };
+    var lLeft = vals.get(n.left) || _AV_TOP;
+    var lRight = vals.get(n.right) || _AV_TOP;
     if (lLeft.kind === "const") {
       if (n.operator === "||") {
         // § 13.13.2: if ToBoolean(left) is true, return left; else right.
@@ -10392,14 +10406,14 @@ function _specEvalLeaf(path, state, vals, effects) {
     }
   }
   if (_t.isAssignmentExpression(n)) {
-    var rhsAv = vals.get(n.right) || { kind: "top" };
+    var rhsAv = vals.get(n.right) || _AV_TOP;
     var lhsObjAv = null, lhsKeyAv = null;
     if (_t.isMemberExpression(n.left)) {
-      lhsObjAv = vals.get(n.left.object) || { kind: "top" };
-      if (n.left.computed) lhsKeyAv = vals.get(n.left.property) || { kind: "top" };
+      lhsObjAv = vals.get(n.left.object) || _AV_TOP;
+      if (n.left.computed) lhsKeyAv = vals.get(n.left.property) || _AV_TOP;
       else if (_t.isIdentifier(n.left.property)) lhsKeyAv = { kind: "const", value: n.left.property.name };
       else if (_t.isStringLiteral(n.left.property)) lhsKeyAv = { kind: "const", value: n.left.property.value };
-      else lhsKeyAv = { kind: "top" };
+      else lhsKeyAv = _AV_TOP;
     }
     // For compound operators (`+=`, `-=`, …) per § 13.15.3, the binary
     // op needs the LHS's current abstract value as the left operand. Read
@@ -10423,21 +10437,21 @@ function _specEvalLeaf(path, state, vals, effects) {
     var argAv = vals.get(n.argument);
     var oldNum = (argAv && argAv.kind === "const" && typeof argAv.value === "number") ? argAv.value : null;
     var delta = (n.operator === "++") ? 1 : -1;
-    var newVal = (oldNum !== null) ? { kind: "const", value: oldNum + delta } : { kind: "top" };
+    var newVal = (oldNum !== null) ? { kind: "const", value: oldNum + delta } : _AV_TOP;
     if (_t.isIdentifier(n.argument)) {
       state[n.argument.name] = newVal;
     } else if (_t.isMemberExpression(n.argument)) {
-      var upObjAv = vals.get(n.argument.object) || { kind: "top" };
+      var upObjAv = vals.get(n.argument.object) || _AV_TOP;
       var upKeyAv;
-      if (n.argument.computed) upKeyAv = vals.get(n.argument.property) || { kind: "top" };
+      if (n.argument.computed) upKeyAv = vals.get(n.argument.property) || _AV_TOP;
       else if (_t.isIdentifier(n.argument.property)) upKeyAv = { kind: "const", value: n.argument.property.name };
       else if (_t.isStringLiteral(n.argument.property)) upKeyAv = { kind: "const", value: n.argument.property.value };
-      else upKeyAv = { kind: "top" };
+      else upKeyAv = _AV_TOP;
       effects.push({ target: upObjAv, key: upKeyAv, value: newVal });
     }
     // Prefix returns new, postfix returns old (the original value).
     if (n.prefix) return newVal;
-    return (oldNum !== null) ? { kind: "const", value: oldNum } : { kind: "top" };
+    return (oldNum !== null) ? { kind: "const", value: oldNum } : _AV_TOP;
   }
   if (_t.isSequenceExpression(n)) {
     // § 13.16 SequenceExpression — `(a, b, c)` evaluates to c per the
@@ -10447,7 +10461,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       var lastAv = vals.get(n.expressions[n.expressions.length - 1]);
       if (lastAv) return lastAv;
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (_t.isAwaitExpression(n)) {
     // § 14.2.16 AwaitExpression — await unwraps a Promise; the value
@@ -10456,7 +10470,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     // track; otherwise refines later as Promise tracking is added).
     var awaitArgAv = vals.get(n.argument);
     if (awaitArgAv) return awaitArgAv;
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (_t.isYieldExpression(n)) {
     // § 15.5 YieldExpression — yields a value to the iterator's
@@ -10465,7 +10479,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     // accumulator so the generator's iterable shape can be assembled
     // when the body's analysis completes.
     if (n.argument) {
-      var yieldedAv = vals.get(n.argument) || { kind: "top" };
+      var yieldedAv = vals.get(n.argument) || _AV_TOP;
       // yield* delegates: yields all elements of the iterable. When the
       // delegated value is array-lit, push each element separately so
       // the generator's collected yields preserve element shape.
@@ -10477,7 +10491,7 @@ function _specEvalLeaf(path, state, vals, effects) {
         _specYieldAvAccum.push(yieldedAv);
       }
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (_t.isConditionalExpression(n)) {
     // § 13.14 ConditionalExpression — `test ? cons : alt`. If test
@@ -10494,14 +10508,14 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (!truthy && altAv) return altAv;
     }
     if (consAv && altAv) return _specLogicalOrAv(consAv, altAv);
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (_t.isUnaryExpression(n)) {
     // § 13.5 UnaryOperators. Distributes over alternation: `!or(true, false)`
     // → `or(false, true)`. Evaluates per spec-defined operator semantics
     // when operand is Const (or every leaf of an or-tree is Const).
     var argAv = vals.get(n.argument);
-    if (n.operator === "void") return { kind: "const", value: undefined };
+    if (n.operator === "void") return _AV_UNDEFINED;
     if (n.operator === "typeof") {
       // typeof on a Const operand resolves per § 13.5.3.5 typeof.
       // Distribution: typeof or(a, b) → or(typeof a, typeof b).
@@ -10526,7 +10540,7 @@ function _specEvalLeaf(path, state, vals, effects) {
           return typeofOr;
         }
       }
-      return { kind: "top" };
+      return _AV_TOP;
     }
     // Generic alternation distribution for unary ops other than void/typeof.
     var unaryLeaves = _avFlattenAnyConstLeaves(argAv);
@@ -10567,7 +10581,7 @@ function _specEvalLeaf(path, state, vals, effects) {
         if (typeof av === "number") return { kind: "const", value: ~av };
       }
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (_t.isBinaryExpression(n)) {
     // § 13.6–§ 13.13 Binary operators evaluated per their abstract op
@@ -10576,7 +10590,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     // an op), abstract to Top.
     var leftAv = vals.get(n.left);
     var rightAv = vals.get(n.right);
-    if (!leftAv || !rightAv) return { kind: "top" };
+    if (!leftAv || !rightAv) return _AV_TOP;
     // Alternation distribution per spec semantics: `(a | b) + c` is
     // semantically equivalent to `(a + c) | (b + c)` because at runtime
     // exactly one of the alternatives is realised. Distribute the binary
@@ -10598,7 +10612,7 @@ function _specEvalLeaf(path, state, vals, effects) {
               var av = _evalBinaryConstConst(lLeaf.value, rLeaf.value, n.operator);
               if (av) { alts.push(av); sawAny = true; }
             } else {
-              alts.push({ kind: "top" });
+              alts.push(_AV_TOP);
               sawAny = true;
             }
           }
@@ -10627,7 +10641,7 @@ function _specEvalLeaf(path, state, vals, effects) {
            rightAv.kind === "member" || rightAv.kind === "param" || rightAv.kind === "const")) {
         return { kind: "binop", op: "+", left: leftAv, right: rightAv };
       }
-      return { kind: "top" };
+      return _AV_TOP;
     }
     var lv = leftAv.value, rv = rightAv.value;
     var op = n.operator;
@@ -10639,7 +10653,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (typeof lv === "number" && typeof rv === "number") {
         return { kind: "const", value: lv + rv };
       }
-      return { kind: "top" };
+      return _AV_TOP;
     }
     // Numeric-only binary ops require both operands numeric.
     if (typeof lv === "number" && typeof rv === "number") {
@@ -10670,7 +10684,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     if (op === "!=") return { kind: "const", value: lv != rv };
     if (op === "===") return { kind: "const", value: lv === rv };
     if (op === "!==") return { kind: "const", value: lv !== rv };
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (_t.isArrayExpression(n)) {
     // § 13.2.4 ArrayLiteral evaluation. Each element's abstract value
@@ -10682,7 +10696,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     var arrayBail = false;
     for (var aei = 0; aei < n.elements.length; aei++) {
       var elN = n.elements[aei];
-      if (!elN) { elems.push({ kind: "const", value: undefined }); continue; }
+      if (!elN) { elems.push(_AV_UNDEFINED); continue; }
       if (_t.isSpreadElement(elN)) {
         var spreadAv = vals.get(elN.argument);
         if (spreadAv && spreadAv.kind === "array-lit" && spreadAv.elements) {
@@ -10693,9 +10707,9 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
         continue;
       }
-      elems.push(vals.get(elN) || { kind: "top" });
+      elems.push(vals.get(elN) || _AV_TOP);
     }
-    if (arrayBail) return { kind: "top" };
+    if (arrayBail) return _AV_TOP;
     // node:n backref so AV→ArrayExpression projection (consumers like
     // _resolveToArray) can recover the source AST node. Per § 13.2.4
     // an ArrayLiteral's identity is its syntactic position. Synthetic
@@ -10754,7 +10768,7 @@ function _specEvalLeaf(path, state, vals, effects) {
         if (_t.isObjectMethod(prop)) {
           props[k] = { kind: "function-ref", funcNode: prop };
         } else {
-          props[k] = vals.get(prop.value) || { kind: "top" };
+          props[k] = vals.get(prop.value) || _AV_TOP;
         }
       }
     }
@@ -10779,7 +10793,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     var newCalleeAv = vals.get(n.callee);
     if (newCalleeAv && newCalleeAv.kind === "builtin-ctor") {
       var newArgAvs = _specExpandCallArgs(n.arguments, vals);
-      if (newArgAvs === null) return { kind: "top" };
+      if (newArgAvs === null) return _AV_TOP;
       return _specApplyBuiltinCtor(newCalleeAv.id, newArgAvs);
     }
     // Per-class spec semantics for built-in constructors not yet in the
@@ -10804,7 +10818,7 @@ function _specEvalLeaf(path, state, vals, effects) {
           }
           if (!handlerHasTraps) return pTargetAv;
         }
-        return { kind: "top" };
+        return _AV_TOP;
       }
       // § 23.1.1.1 Array(...values)
       if (ctorName === "Array") {
@@ -10817,18 +10831,18 @@ function _specEvalLeaf(path, state, vals, effects) {
           if (lenAv && lenAv.kind === "const" && typeof lenAv.value === "number" &&
               Number.isInteger(lenAv.value) && lenAv.value >= 0) {
             var initElems = new Array(lenAv.value);
-            for (var iei = 0; iei < lenAv.value; iei++) initElems[iei] = { kind: "const", value: undefined };
+            for (var iei = 0; iei < lenAv.value; iei++) initElems[iei] = _AV_UNDEFINED;
             return { kind: "array-lit", elements: initElems };
           }
           // Single non-numeric arg → array containing that single element
           // per § 23.1.1.1 step 6.b.
           if (lenAv) return { kind: "array-lit", elements: [lenAv] };
-          return { kind: "top" };
+          return _AV_TOP;
         }
         // Multi-arg → array of those args per § 23.1.1.1 step 6.
         var newElems = [];
         for (var nai = 0; nai < n.arguments.length; nai++) {
-          newElems.push(vals.get(n.arguments[nai]) || { kind: "top" });
+          newElems.push(vals.get(n.arguments[nai]) || _AV_TOP);
         }
         return { kind: "array-lit", elements: newElems };
       }
@@ -10836,7 +10850,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       // For property-flow analysis, .valueOf() is unwrap; abstract to top
       // since downstream property access won't see the Number prototype.
       if (ctorName === "Number" || ctorName === "String" || ctorName === "Boolean") {
-        return { kind: "top" };
+        return _AV_TOP;
       }
       // URL/Request/URLSearchParams/Headers ctors dispatched via the
       // ctor registry (globalThis.URL etc. → builtin-ctor AV →
@@ -10908,14 +10922,14 @@ function _specEvalLeaf(path, state, vals, effects) {
                 if (_t.isStringLiteral(fv)) instProps2[fName] = { kind: "const", value: fv.value };
                 else if (_t.isNumericLiteral(fv)) instProps2[fName] = { kind: "const", value: fv.value };
                 else if (_t.isBooleanLiteral(fv)) instProps2[fName] = { kind: "const", value: fv.value };
-                else if (_t.isNullLiteral(fv)) instProps2[fName] = { kind: "const", value: null };
+                else if (_t.isNullLiteral(fv)) instProps2[fName] = _AV_NULL;
               }
             }
           }
           if (Object.keys(instProps2).length > 0) {
             var newCallArgAvs = [];
             for (var nai = 0; nai < n.arguments.length; nai++) {
-              newCallArgAvs.push(vals.get(n.arguments[nai]) || { kind: "top" });
+              newCallArgAvs.push(vals.get(n.arguments[nai]) || _AV_TOP);
             }
             var instanceAv = { kind: "obj-lit", props: instProps2 };
             // fnContext = ctorNode2 ensures only ctor-tagged params
@@ -10927,7 +10941,7 @@ function _specEvalLeaf(path, state, vals, effects) {
         }
       }
     }
-    return { kind: "top" };
+    return _AV_TOP;
   }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
     // WHATWG URL § 5.5 URLSearchParams mutation dispatch: when callee is
@@ -10936,7 +10950,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     // with the mutation applied per § 4.4 partition. Returns undefined
     // per spec; downstream dispatch is suppressed.
     if (_specApplyUrlSearchParamsMutation(n, path, state)) {
-      return { kind: "const", value: undefined };
+      return _AV_UNDEFINED;
     }
     // ECMA § 10.4.1.1 [[Call]] for Bound Function Exotic Objects:
     // when the callee resolves to a bound-function AV, unfold by
@@ -10949,7 +10963,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       var bfPreArgs = [];
       var bfSeen = new Set();
       while (bfTarget && bfTarget.kind === "bound-function") {
-        if (bfSeen.has(bfTarget)) return { kind: "top" };
+        if (bfSeen.has(bfTarget)) return _AV_TOP;
         bfSeen.add(bfTarget);
         // ECMA § 10.4.1.1 step 4: F.[[BoundArguments]] is prepended.
         // We collect from inner-most to outer-most so the final order
@@ -10959,21 +10973,21 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
       var bfCallerArgs = [];
       for (var bfai = 0; bfai < n.arguments.length; bfai++) {
-        bfCallerArgs.push(vals.get(n.arguments[bfai]) || { kind: "top" });
+        bfCallerArgs.push(vals.get(n.arguments[bfai]) || _AV_TOP);
       }
       var bfFinalArgs = bfPreArgs.concat(bfCallerArgs);
       // Dispatch on the unwrapped target.
       if (bfTarget && bfTarget.kind === "function-ref" && bfTarget.funcNode) {
         var bfRetMemo = _specReturnValueMemo.get(bfTarget.funcNode);
         if (bfRetMemo) return _specInstantiateAv(bfRetMemo, bfFinalArgs, undefined, bfTarget.funcNode);
-        return { kind: "top" };
+        return _AV_TOP;
       }
       if (bfTarget && bfTarget.kind === "builtin-method") {
         // Defer to a `call` AV — downstream consumers (taint walker,
         // sink dispatch) handle the builtin-method+args composition.
         return { kind: "call", callee: bfTarget, args: bfFinalArgs };
       }
-      return { kind: "top" };
+      return _AV_TOP;
     }
 
     // ECMA § 13.3.6 Call: when callee resolves through prototype chain
@@ -10994,7 +11008,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (iifeRet) {
         var iifeArgAvs = [];
         for (var iiai = 0; iiai < n.arguments.length; iiai++) {
-          iifeArgAvs.push(vals.get(n.arguments[iiai]) || { kind: "top" });
+          iifeArgAvs.push(vals.get(n.arguments[iiai]) || _AV_TOP);
         }
         return _specInstantiateAv(iifeRet, iifeArgAvs);
       }
@@ -11015,7 +11029,7 @@ function _specEvalLeaf(path, state, vals, effects) {
         if (_t.isStringLiteral(iifeRetArg)) return { kind: "const", value: iifeRetArg.value };
         if (_t.isNumericLiteral(iifeRetArg)) return { kind: "const", value: iifeRetArg.value };
         if (_t.isBooleanLiteral(iifeRetArg)) return { kind: "const", value: iifeRetArg.value };
-        if (_t.isNullLiteral(iifeRetArg)) return { kind: "const", value: null };
+        if (_t.isNullLiteral(iifeRetArg)) return _AV_NULL;
       }
     }
     var bmRecvAv = null, bmCalleeAv = null;
@@ -11065,7 +11079,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (bmCalleeAv.kind === "param") {
         var paramCallArgs = [];
         for (var pcai = 0; pcai < n.arguments.length; pcai++) {
-          paramCallArgs.push(vals.get(n.arguments[pcai]) || { kind: "top" });
+          paramCallArgs.push(vals.get(n.arguments[pcai]) || _AV_TOP);
         }
         return { kind: "call", callee: bmCalleeAv, args: paramCallArgs };
       }
@@ -11091,7 +11105,7 @@ function _specEvalLeaf(path, state, vals, effects) {
         if (frRet) {
           var frArgAvs = [];
           for (var frai = 0; frai < n.arguments.length; frai++) {
-            frArgAvs.push(vals.get(n.arguments[frai]) || { kind: "top" });
+            frArgAvs.push(vals.get(n.arguments[frai]) || _AV_TOP);
           }
           // § 9.2.1 OrdinaryCallBindThis: receiver becomes `this` in
           // method body. fnContext = frFn ensures only this method's
@@ -11136,7 +11150,7 @@ function _specEvalLeaf(path, state, vals, effects) {
                 if (ctorArgsFromRecv.length > 0) {
                   // Fill any missing slots with top.
                   for (var fsi = 0; fsi < ctorArgsFromRecv.length; fsi++) {
-                    if (ctorArgsFromRecv[fsi] === undefined) ctorArgsFromRecv[fsi] = { kind: "top" };
+                    if (ctorArgsFromRecv[fsi] === undefined) ctorArgsFromRecv[fsi] = _AV_TOP;
                   }
                   return _specInstantiateAv(firstSub, ctorArgsFromRecv, undefined, ctorOfClass);
                 }
@@ -11154,7 +11168,7 @@ function _specEvalLeaf(path, state, vals, effects) {
           if (_t.isStringLiteral(frArg)) return { kind: "const", value: frArg.value };
           if (_t.isNumericLiteral(frArg)) return { kind: "const", value: frArg.value };
           if (_t.isBooleanLiteral(frArg)) return { kind: "const", value: frArg.value };
-          if (_t.isNullLiteral(frArg)) return { kind: "const", value: null };
+          if (_t.isNullLiteral(frArg)) return _AV_NULL;
         }
       }
       // Resolve the builtin-method id, even when callee AV is an or-tree
@@ -11179,7 +11193,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (bmId) {
         // Expand spread arguments per § 13.3.6.1 ArgumentListEvaluation.
         var bmArgAvs = _specExpandCallArgs(n.arguments, vals);
-        if (bmArgAvs === null) return { kind: "top" };  // unknown spread source
+        if (bmArgAvs === null) return _AV_TOP;  // unknown spread source
         var bmRecvName = (_t.isMemberExpression(n.callee) && _t.isIdentifier(n.callee.object))
           ? n.callee.object.name : null;
         var bmResult = _specApplyBuiltinMethod(bmId, bmRecvAv, bmRecvName, bmArgAvs, state);
@@ -11271,8 +11285,8 @@ function _specEvalLeaf(path, state, vals, effects) {
           n.callee.property.name === "forEach" && n.arguments.length >= 1) {
         var msfCb = n.arguments[0];
         if (_t.isFunctionExpression(msfCb) || _t.isArrowFunctionExpression(msfCb)) {
-          var msfValAv = { kind: "top" };
-          var msfKeyAv = { kind: "top" };
+          var msfValAv = _AV_TOP;
+          var msfKeyAv = _AV_TOP;
           if (recvAv.kind === "map-instance") {
             var msfEntries = recvAv.entries || [];
             if (msfEntries.length > 0) {
@@ -11284,8 +11298,8 @@ function _specEvalLeaf(path, state, vals, effects) {
             }
             if (recvAv.unknownInit) {
               // Unmodeled init entries could be any (key, value); join top.
-              msfValAv = (msfEntries.length > 0) ? _specLogicalOrAv(msfValAv, { kind: "top" }) : { kind: "top" };
-              msfKeyAv = (msfEntries.length > 0) ? _specLogicalOrAv(msfKeyAv, { kind: "top" }) : { kind: "top" };
+              msfValAv = (msfEntries.length > 0) ? _specLogicalOrAv(msfValAv, _AV_TOP) : _AV_TOP;
+              msfKeyAv = (msfEntries.length > 0) ? _specLogicalOrAv(msfKeyAv, _AV_TOP) : _AV_TOP;
             }
           } else {
             var msfItems = recvAv.items || [];
@@ -11297,12 +11311,12 @@ function _specEvalLeaf(path, state, vals, effects) {
               msfKeyAv = msfValAv;  // Set forEach passes value as key per § 24.2.3.6
             }
             if (recvAv.unknownInit) {
-              msfValAv = (msfItems.length > 0) ? _specLogicalOrAv(msfValAv, { kind: "top" }) : { kind: "top" };
+              msfValAv = (msfItems.length > 0) ? _specLogicalOrAv(msfValAv, _AV_TOP) : _AV_TOP;
               msfKeyAv = msfValAv;
             }
           }
           _hofPendingDispatches.push({ cbPath: path.get("arguments.0"), paramAvs: [msfValAv, msfKeyAv], outerState: state });
-          return { kind: "const", value: undefined };
+          return _AV_UNDEFINED;
         }
       }
       if (recvAv && (recvAv.kind === "array-lit" || recvAv.kind === "keys-of")) {
@@ -11349,12 +11363,12 @@ function _specEvalLeaf(path, state, vals, effects) {
             for (var feRevIdx = recvAv.elements.length - 1; feRevIdx >= 0; feRevIdx--) {
               _hofPendingDispatches.push({
                 cbPath: path.get("arguments.0"),
-                paramAvs: [recvAv.elements[feRevIdx] || { kind: "top" }],
+                paramAvs: [recvAv.elements[feRevIdx] || _AV_TOP],
                 outerState: state,
                 _sequential: true
               });
             }
-            return { kind: "const", value: undefined };
+            return _AV_UNDEFINED;
           }
         }
         if ((hofIsHigherOrder || hofIsReduce) && n.arguments.length >= 1) {
@@ -11368,7 +11382,7 @@ function _specEvalLeaf(path, state, vals, effects) {
             if (recvAv.kind === "keys-of") {
               hofElementAv = { kind: "loop-key", src: recvAv.src };
             } else if (recvAv.elements.length === 0) {
-              hofElementAv = { kind: "top" };
+              hofElementAv = _AV_TOP;
             } else {
               hofElementAv = recvAv.elements[0];
               for (var hi = 1; hi < recvAv.elements.length; hi++) {
@@ -11379,7 +11393,7 @@ function _specEvalLeaf(path, state, vals, effects) {
             // is the element. For map/filter/etc., param 0 is the element.
             var hofParamAvs;
             if (hofIsReduce) {
-              var hofInitAv = (n.arguments.length >= 2) ? (vals.get(n.arguments[1]) || { kind: "top" }) : { kind: "top" };
+              var hofInitAv = (n.arguments.length >= 2) ? (vals.get(n.arguments[1]) || _AV_TOP) : _AV_TOP;
               hofParamAvs = [hofInitAv, hofElementAv];
             } else {
               hofParamAvs = [hofElementAv];
@@ -11406,7 +11420,7 @@ function _specEvalLeaf(path, state, vals, effects) {
             //         the joined element AV as cb's first param)
             //   reduce/flatMap → Top (return type varies by cb and
             //     accumulator semantics; future work)
-            if (hofMeth === "forEach") return { kind: "const", value: undefined };
+            if (hofMeth === "forEach") return _AV_UNDEFINED;
             if (hofMeth === "filter") {
               // ECMA § 23.1.3.10 Array.prototype.filter — keep elements
               // where cb returns a truthy value. When source is a
@@ -11444,7 +11458,7 @@ function _specEvalLeaf(path, state, vals, effects) {
               return { kind: "array-lit", elements: [hofElementAv] };
             }
             if (hofMeth === "find" || hofMeth === "findLast") {
-              return _specLogicalOrAv(hofElementAv, { kind: "const", value: undefined });
+              return _specLogicalOrAv(hofElementAv, _AV_UNDEFINED);
             }
             if (hofMeth === "findIndex" || hofMeth === "findLastIndex") {
               if (recvAv.kind === "array-lit") {
@@ -11454,10 +11468,10 @@ function _specEvalLeaf(path, state, vals, effects) {
                 }
                 return idxRet;
               }
-              return { kind: "top" };
+              return _AV_TOP;
             }
             if (hofMeth === "some" || hofMeth === "every") {
-              return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+              return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
             }
             if (hofMeth === "map") {
               // ECMA § 23.1.3.18 Array.prototype.map — produce an
@@ -11500,7 +11514,7 @@ function _specEvalLeaf(path, state, vals, effects) {
                 if (mapRet !== null) return { kind: "array-lit", elements: [mapRet] };
               }
             }
-            return { kind: "top" };
+            return _AV_TOP;
           }
         }
       }
@@ -11548,7 +11562,7 @@ function _specEvalLeaf(path, state, vals, effects) {
         var ssApply = _specSideEffectMemo.get(calleeFnPath.node);
         var ssCallerArgs = [];
         for (var ssai = 0; ssai < n.arguments.length; ssai++) {
-          ssCallerArgs.push(vals.get(n.arguments[ssai]) || { kind: "top" });
+          ssCallerArgs.push(vals.get(n.arguments[ssai]) || _AV_TOP);
         }
         for (var ssN in ssApply) {
           if (!Object.prototype.hasOwnProperty.call(ssApply, ssN)) continue;
@@ -11573,7 +11587,7 @@ function _specEvalLeaf(path, state, vals, effects) {
           if (_t.isStringLiteral(retArg)) return { kind: "const", value: retArg.value };
           if (_t.isNumericLiteral(retArg)) return { kind: "const", value: retArg.value };
           if (_t.isBooleanLiteral(retArg)) return { kind: "const", value: retArg.value };
-          if (_t.isNullLiteral(retArg)) return { kind: "const", value: null };
+          if (_t.isNullLiteral(retArg)) return _AV_NULL;
           // Per § 10.2.10 FunctionDeclarationInstantiation, evaluate the
           // return expression with caller-arg AVs substituted for the
           // callee's params. Helper handles Identifier-of-param (direct
@@ -11593,7 +11607,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (memoRet) {
         var callArgAvs = [];
         for (var ciai = 0; ciai < n.arguments.length; ciai++) {
-          callArgAvs.push(vals.get(n.arguments[ciai]) || { kind: "top" });
+          callArgAvs.push(vals.get(n.arguments[ciai]) || _AV_TOP);
         }
         return _specInstantiateAv(memoRet, callArgAvs);
       }
@@ -11610,14 +11624,14 @@ function _specEvalLeaf(path, state, vals, effects) {
     if (bmCalleeAv && bmCalleeAv.kind === "member") {
       var lazyCallArgs = [];
       for (var lcai = 0; lcai < n.arguments.length; lcai++) {
-        lazyCallArgs.push(vals.get(n.arguments[lcai]) || { kind: "top" });
+        lazyCallArgs.push(vals.get(n.arguments[lcai]) || _AV_TOP);
       }
       return { kind: "call", callee: bmCalleeAv, args: lazyCallArgs };
     }
-    return { kind: "top" }; // Other call returns abstract to Top.
+    return _AV_TOP; // Other call returns abstract to Top.
   }
   // Unmodelled expression kinds abstract to Top — sound conservative answer.
-  return { kind: "top" };
+  return _AV_TOP;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -11735,7 +11749,7 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       // an array-lit. Empty array when no args remain past startIdx.
       var restElems = [];
       for (var rri = node.startIdx; rri < callerArgAvs.length; rri++) {
-        restElems.push(callerArgAvs[rri] || { kind: "top" });
+        restElems.push(callerArgAvs[rri] || _AV_TOP);
       }
       subs.set(node, { kind: "array-lit", elements: restElems });
       continue;
@@ -11834,7 +11848,7 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       var bopR = subs.get(node.right) || node.right;
       if (bopL && bopL.kind === "const" && bopR && bopR.kind === "const") {
         var bopRes = _evalBinaryConstConst(bopL.value, bopR.value, node.op);
-        subs.set(node, bopRes || { kind: "top" });
+        subs.set(node, bopRes || _AV_TOP);
       } else if (bopL && bopR && (bopL.kind === "or" || bopR.kind === "or")) {
         // Distribute: each pair of leaves contributes; const-const pairs
         // evaluate via _evalBinaryConstConst, others contribute top.
@@ -11848,7 +11862,7 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
               if (bopL2 && bopL2.kind === "const" && bopR2 && bopR2.kind === "const") {
                 var bopAlt = _evalBinaryConstConst(bopL2.value, bopR2.value, node.op);
                 if (bopAlt) bopAlts.push(bopAlt);
-                else bopAlts.push({ kind: "top" });
+                else bopAlts.push(_AV_TOP);
               } else {
                 bopAlts.push({ kind: "binop", op: node.op, left: bopL2, right: bopR2 });
               }
@@ -11905,7 +11919,7 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
         var tplFinal = node.quasis[node.quasis.length - 1] || "";
         for (var taj = 0; taj < tplAlts.length; taj++) tplAlts[taj] += tplFinal;
         if (tplAlts.length === 0) {
-          subs.set(node, { kind: "top" });
+          subs.set(node, _AV_TOP);
         } else if (tplAlts.length === 1) {
           subs.set(node, { kind: "const", value: tplAlts[0] });
         } else {
@@ -11948,14 +11962,14 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       };
       if (subCoerceArg && subCoerceArg.kind === "const") {
         var folded = coerceFold(subCoerceArg.value);
-        subs.set(node, folded || { kind: "top" });
+        subs.set(node, folded || _AV_TOP);
       } else if (subCoerceArg && subCoerceArg.kind === "or") {
         var coerceLeavesS = _avFlattenAnyConstLeaves(subCoerceArg);
         if (coerceLeavesS) {
           var coerceFolded = [];
           for (var ccfsi = 0; ccfsi < coerceLeavesS.length; ccfsi++) {
             var foldOne = coerceFold(coerceLeavesS[ccfsi]);
-            coerceFolded.push(foldOne || { kind: "top" });
+            coerceFolded.push(foldOne || _AV_TOP);
           }
           if (coerceFolded.length === 1) subs.set(node, coerceFolded[0]);
           else {
@@ -13796,7 +13810,7 @@ function _resolveByContextSensitiveReanalysis(initialPath, encFn) {
             aav = _specEvalExpression(csp.get("arguments." + aii), _specStateCreate({}), [], true);
           } catch (_) { aav = null; }
         }
-        ctxArgAvs.push(aav || { kind: "top" });
+        ctxArgAvs.push(aav || _AV_TOP);
         if (aav && aav.kind !== "top" && aav.kind !== "param") anyConcrete = true;
       }
       if (!anyConcrete) continue;
@@ -14270,7 +14284,7 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
           prependArgs = (bfBound.preArgs || []).concat(prependArgs);
           bfBound = bfBound.target;
         }
-        for (var bpi2 = 0; bpi2 < prependArgs.length; bpi2++) callerArgAvs.push(prependArgs[bpi2] || { kind: "top" });
+        for (var bpi2 = 0; bpi2 < prependArgs.length; bpi2++) callerArgAvs.push(prependArgs[bpi2] || _AV_TOP);
       }
       // ECMA § 20.2.3.3 Function.prototype.call: args[0] is thisArg,
       // args[1..] are forwarded. Skip args[0].
@@ -14289,7 +14303,7 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
             if (!caArgAv) {
               try { caArgAv = _specEvalExpression(ref.get("arguments." + caai), callerState, []); } catch (_) { caArgAv = null; }
             }
-            callerArgAvs.push(caArgAv || { kind: "top" });
+            callerArgAvs.push(caArgAv || _AV_TOP);
           }
         } else {
           // .apply: args[1] is the array.
@@ -14300,7 +14314,7 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
             }
             if (applyArrAv && applyArrAv.kind === "array-lit" && applyArrAv.elements) {
               for (var aaei = 0; aaei < applyArrAv.elements.length; aaei++) {
-                callerArgAvs.push(applyArrAv.elements[aaei] || { kind: "top" });
+                callerArgAvs.push(applyArrAv.elements[aaei] || _AV_TOP);
               }
             }
           }
@@ -14316,7 +14330,7 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
           }
           if (raCsArr && raCsArr.kind === "array-lit" && raCsArr.elements) {
             for (var raei2 = 0; raei2 < raCsArr.elements.length; raei2++) {
-              callerArgAvs.push(raCsArr.elements[raei2] || { kind: "top" });
+              callerArgAvs.push(raCsArr.elements[raei2] || _AV_TOP);
             }
           }
         }
@@ -14329,7 +14343,7 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
               argAv = _specEvalExpression(ref.get("arguments." + ai), callerState, []);
             } catch (_) { argAv = null; }
           }
-          callerArgAvs.push(argAv || { kind: "top" });
+          callerArgAvs.push(argAv || _AV_TOP);
         }
       }
       // Pass the function being substituted as fnContext so only
@@ -14380,8 +14394,8 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
                         // Find a path for the ctor arg via the program traversal
                         // — not strictly necessary since spec eval is idempotent;
                         // fall back to top when memo miss.
-                        ctorArgAv = { kind: "top" };
-                      } catch (_e2) { ctorArgAv = { kind: "top" }; }
+                        ctorArgAv = _AV_TOP;
+                      } catch (_e2) { ctorArgAv = _AV_TOP; }
                     }
                     ctorArgAvs.push(ctorArgAv);
                   }
@@ -14392,7 +14406,7 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
                       if (_t.isStringLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: na3.value };
                       else if (_t.isNumericLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: na3.value };
                       else if (_t.isBooleanLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: na3.value };
-                      else if (_t.isNullLiteral(na3)) ctorArgAvs[nai3] = { kind: "const", value: null };
+                      else if (_t.isNullLiteral(na3)) ctorArgAvs[nai3] = _AV_NULL;
                     }
                   }
                   // ECMA § 9.2.1 OrdinaryCallBindThis: build the instance
@@ -15024,7 +15038,7 @@ function _specSubstituteParam(rootAv, paramIdx, paramFn, replacementAv) {
       var sBR = subs.get(node.right) || node.right;
       if (sBL && sBL.kind === "const" && sBR && sBR.kind === "const") {
         var sBRes = _evalBinaryConstConst(sBL.value, sBR.value, node.op);
-        subs.set(node, sBRes || { kind: "top" });
+        subs.set(node, sBRes || _AV_TOP);
       } else {
         subs.set(node, { kind: "binop", op: node.op, left: sBL, right: sBR });
       }
@@ -15131,7 +15145,7 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
     // _specGetPrototypeOfAv since coerce(to=string) has String.prototype,
     // so further .method() calls keep folding.
     if (methodAv.returnType && recvAv) {
-      if (methodAv.returnType === "array") return { kind: "top" };  // opaque recv → can't enumerate
+      if (methodAv.returnType === "array") return _AV_TOP;  // opaque recv → can't enumerate
       return { kind: "coerce", to: methodAv.returnType, arg: recvAv };
     }
     return null;
@@ -15175,7 +15189,7 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
           if (hofBareName === "map") {
             var mapPerEl = [];
             for (var meIdx = 0; meIdx < recvAv.elements.length; meIdx++) {
-              mapPerEl.push(_specSubstituteParam(hofRetMemo, 0, hofCbFn, recvAv.elements[meIdx]) || { kind: "top" });
+              mapPerEl.push(_specSubstituteParam(hofRetMemo, 0, hofCbFn, recvAv.elements[meIdx]) || _AV_TOP);
             }
             return { kind: "array-lit", elements: mapPerEl };
           }
@@ -15196,7 +15210,7 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
             // § 23.1.3.10 Array.prototype.find — return first satisfying
             // element OR undefined if none. Sound: join all elements that
             // could satisfy plus undefined.
-            var findAcc = { kind: "const", value: undefined };
+            var findAcc = _AV_UNDEFINED;
             for (var fdI = 0; fdI < recvAv.elements.length; fdI++) {
               var fdEl = recvAv.elements[fdI];
               var fdPred = _specSubstituteParam(hofRetMemo, 0, hofCbFn, fdEl);
@@ -15228,18 +15242,18 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
               if (seRes.value) allFalse = false; else allTrue = false;
             }
             if (hofBareName === "some") {
-              if (allTrue) return { kind: "const", value: true };
-              if (allFalse) return { kind: "const", value: false };
+              if (allTrue) return _AV_TRUE;
+              if (allFalse) return _AV_FALSE;
             } else { // every
-              if (allTrue) return { kind: "const", value: true };
-              if (allFalse) return { kind: "const", value: false };
+              if (allTrue) return _AV_TRUE;
+              if (allFalse) return _AV_FALSE;
             }
-            return _specLogicalOrAv({ kind: "const", value: true }, { kind: "const", value: false });
+            return _specLogicalOrAv(_AV_TRUE, _AV_FALSE);
           }
           if (hofBareName === "forEach") {
             // Side effects only; return undefined per § 23.1.3.15. Post-sub
             // doesn't replay side effects (those happened at body-walk).
-            return { kind: "const", value: undefined };
+            return _AV_UNDEFINED;
           }
           if (hofBareName === "reduce" || hofBareName === "reduceRight") {
             // § 23.1.3.21 Array.prototype.reduce: fold cb(acc, el, i, arr)
@@ -15257,12 +15271,12 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
               redAcc = redElems[0];
               redStart = 1;
             } else {
-              return { kind: "top" }; // empty array + no seed → TypeError per spec
+              return _AV_TOP; // empty array + no seed → TypeError per spec
             }
             for (var rI = redStart; rI < redElems.length; rI++) {
               var redIntermediate = _specSubstituteParam(hofRetMemo, 0, hofCbFn, redAcc);
               var redNext = _specSubstituteParam(redIntermediate, 1, hofCbFn, redElems[rI]);
-              redAcc = redNext || { kind: "top" };
+              redAcc = redNext || _AV_TOP;
             }
             return redAcc;
           }
@@ -15277,7 +15291,7 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
               if (fmRet && fmRet.kind === "array-lit" && fmRet.elements) {
                 for (var fmJ = 0; fmJ < fmRet.elements.length; fmJ++) fmEls.push(fmRet.elements[fmJ]);
               } else {
-                fmEls.push(fmRet || { kind: "top" });
+                fmEls.push(fmRet || _AV_TOP);
               }
             }
             return { kind: "array-lit", elements: fmEls };
