@@ -947,7 +947,10 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
         _collectIncludesConstraints(path);
         _collectIterationConstraints(path);
       }
-      _processIIFE(path);
+      // _processIIFE / window-alias detection already ran in the pre-pass
+      // (line above) — that pass walks every CallExpression in the program
+      // (no slice gate), so _windowAliases is fully populated before this
+      // pass starts. Re-running here is idempotent waste.
       _processNetworkSink(path, result);
       _processExportMethodCall(path, result);
       _processSecurityCallSink(path, result);
@@ -968,7 +971,9 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
       _collectObjectLiteralConstraints(path);
     },
     AssignmentExpression: function(path) {
-      _trackGlobalAssignment(path);
+      // _trackGlobalAssignment already ran in the pre-pass (line above)
+      // for every AssignmentExpression in the program (no slice gate).
+      // _globalAssignments is fully populated before this pass starts.
       _detectProtoFieldAssignment(path, result);
       _processImageSrcSink(path, result);
       _processSecurityAssignSink(path, result);
@@ -17822,6 +17827,7 @@ function _traceValueSource(path, _unused) {
 // (sourceType + source + dimensions) is invariant per AV; only taintPath
 // positions vary by rootNode and are rebuilt per call.
 var _avTaintClassMemo = new WeakMap();
+var _avTaintTransMemo = new WeakMap();
 function _avProjectToTaintDescriptor(rootAv, rootPath) {
   if (!rootAv) return { sourceType: "dynamic", source: null };
   var rootNode = rootPath && rootPath.node ? rootPath.node : null;
@@ -17889,8 +17895,24 @@ function _avProjectToTaintDescriptor(rootAv, rootPath) {
 // Combinator transitions step into structural children. Inter-procedural
 // transitions (param/call) substitute caller args / return values from
 // spec eval memos.
+// Memoize transitions per AV identity. Transitions for any AV are
+// determined by its (kind, fn, idx, fields) structure plus the cross-AV
+// references stored in spec-eval memos — all of which are stable across
+// the lifetime of a single analyzeJSBundle call. The ctxPath argument
+// only triggers the idempotent globals prepass via `_specPathOfFunc`;
+// after the first call's prepass it's effectively unused. Cumulative
+// savings on bundles where a popular helper has many callers and many
+// callsites trigger `_traceValueSource` on its param AVs: each call to
+// `_avTaintTransitions(paramAv)` would otherwise re-walk every caller's
+// arg via `_specFindCallSites` + `_specPathValMemo.get` per call.
 function _avTaintTransitions(av, ctxPath) {
   if (!av) return [];
+  if (_avTaintTransMemo.has(av)) return _avTaintTransMemo.get(av);
+  var out = _avTaintTransitionsCompute(av, ctxPath);
+  _avTaintTransMemo.set(av, out);
+  return out;
+}
+function _avTaintTransitionsCompute(av, ctxPath) {
   var out = [];
   var avNode = _avSourceNode.get(av) || null;
   if (av.kind === "or" && av.alternatives) {
