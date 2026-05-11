@@ -14959,9 +14959,17 @@ function _avHashChildList(av) {
 // per ECMA § 9.1.1 closure capture so substitution can target the
 // correct function's call sites. Returns a Set<FunctionNode>; an empty
 // Set means no fn-tagged params (legacy untagged or no params at all).
+// Memoize param-fn-node collection per AV identity. AV graphs are
+// stable across the analysis lifetime; the set of `param` AVs reachable
+// from a given root never changes (no in-place mutation of AV graphs).
+// Repeat calls — common in _resolveAvBySubstitutingCallerArgs's
+// caller-walk loop — hit the cache and return in O(1).
+var _specCollectParamFnNodesCache = new WeakMap();
 function _specCollectParamFnNodes(rootAv) {
+  if (!rootAv) return new Set();
+  var cached = _specCollectParamFnNodesCache.get(rootAv);
+  if (cached) return cached;
   var fns = new Set();
-  if (!rootAv) return fns;
   var stack = [rootAv];
   var seen = new Set();
   while (stack.length > 0) {
@@ -14986,6 +14994,7 @@ function _specCollectParamFnNodes(rootAv) {
       continue;
     }
   }
+  _specCollectParamFnNodesCache.set(rootAv, fns);
   return fns;
 }
 
