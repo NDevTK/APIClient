@@ -5573,6 +5573,47 @@ test("§ 13.3.6 method called via local alias", `
   return r.fetchCallSites.some(function(s) { return s.url === "/api/v22/alias"; });
 });
 
+test("§ 10.2.10 context-sensitive: wrapper Object.entries.forEach + URL mutation", `
+  function build(params) {
+    var u = new URL("https://api.example.com/v46");
+    Object.entries(params).forEach(function(e) { u.searchParams.set(e[0], e[1]); });
+    return fetch(u.href);
+  }
+  build({role: "admin", page: "1"});
+`, function(r) {
+  return r.fetchCallSites.some(function(s) {
+    return s.url === "https://api.example.com/v46?role=admin&page=1";
+  });
+});
+
+test("§ 15.5 Symbol.iterator synchronous generator over obj-lit + for-of", `
+  var col = { [Symbol.iterator]: function*() { yield "/api/v47/x"; yield "/api/v47/y"; } };
+  for (var u of col) fetch(u);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v47/x"; }) &&
+         r.fetchCallSites.some(function(s) { return s.url === "/api/v47/y"; });
+});
+
+test("§ 23.1.3.21 Array.prototype.reduce — fold accumulator through cb (post-sub)", `
+  function build(arr) {
+    var qs = arr.reduce(function(acc, el) { return acc + "&" + el; }, "");
+    return fetch("/api/v48?" + qs);
+  }
+  build(["a=1", "b=2"]);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v48?&a=1&b=2"; });
+});
+
+test("§ 23.1.3.10 Array.prototype.filter — keep matching elements (post-sub)", `
+  function build(arr) {
+    var keep = arr.filter(function(x) { return x !== "skip"; });
+    return fetch("/api/v49?" + keep.join("&"));
+  }
+  build(["a", "skip", "b"]);
+`, function(r) {
+  return r.fetchCallSites.some(function(s) { return s.url === "/api/v49?a&b"; });
+});
+
 // ── Summary ──
 console.log("\n" + "=".repeat(50));
 console.log("Spec Test Results: " + passed + "/" + total + " passed, " + failed + " failed");

@@ -7484,6 +7484,20 @@ function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) 
   // Leaf.
   var leafAv = _specResolveLeafInCalleeContext(retArg, calleeFnPath, callExpr, vals);
   if (leafAv !== null) return leafAv;
+  // Non-"+" BinaryExpression per § 13.6-§ 13.13 (relational, equality,
+  // logical bitwise, etc.): when both operands resolve to const leaves
+  // in caller context, fold via _evalBinaryConstConst. Used by HOF cb
+  // body fold for predicates like `x !== "skip"` (Array.prototype.filter).
+  if (_t.isBinaryExpression(retArg) && retArg.operator !== "+") {
+    var binNlAv = _specResolveLeafInCalleeContext(retArg.left, calleeFnPath, callExpr, vals);
+    var binNrAv = _specResolveLeafInCalleeContext(retArg.right, calleeFnPath, callExpr, vals);
+    if (!binNlAv || !binNrAv) return null;
+    if (binNlAv.kind === "const" && binNrAv.kind === "const") {
+      var binNRes = _evalBinaryConstConst(binNlAv.value, binNrAv.value, retArg.operator);
+      if (binNRes) return binNRes;
+    }
+    return null;
+  }
   // BinaryExpression `+` per § 13.8.1. Operands may themselves be
   // BinaryExpressions (e.g. `a + "=" + b`); iterative postorder tree
   // walk resolves them via the same leaf rule. Cycle-free by AST
@@ -10633,13 +10647,17 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
     }
     if (leftAv.kind !== "const" || rightAv.kind !== "const") {
-      // For `+` specifically, retain the binop structure so post-
-      // substitution reduction (in _specInstantiateAv) can fold it when
-      // operands become Const. § 13.8.1 ApplyStringOrNumericBinaryOperator.
-      if (n.operator === "+" &&
-          (leftAv.kind === "member" || leftAv.kind === "param" || leftAv.kind === "const" ||
-           rightAv.kind === "member" || rightAv.kind === "param" || rightAv.kind === "const")) {
-        return { kind: "binop", op: "+", left: leftAv, right: rightAv };
+      // Retain binop structure for any operator when at least one
+      // operand has structural form (param/member/const) so post-
+      // substitution reduction (_specInstantiateAv / _specSubstituteParam)
+      // can fold via _evalBinaryConstConst once both operands fold to
+      // const. § 13.8.1 ApplyStringOrNumericBinaryOperator + § 13.11
+      // EqualityExpression / § 13.9 RelationalExpression. Without this,
+      // cb bodies like `x !== "skip"` (filter predicate) would project
+      // to top and lose per-element fold capability at post-sub time.
+      var structuralKinds = { "member": 1, "param": 1, "const": 1, "or": 1, "binop": 1, "template": 1 };
+      if (structuralKinds[leftAv.kind] || structuralKinds[rightAv.kind]) {
+        return { kind: "binop", op: n.operator, left: leftAv, right: rightAv };
       }
       return _AV_TOP;
     }
@@ -13780,13 +13798,15 @@ function _resolveByContextSensitiveReanalysis(initialPath, encFn) {
   if (!callSitePaths || callSitePaths.length === 0) return null;
   var collectedLeaves = [];
   _specContextReanalysisInProgress.add(encFnNode);
-  // Snapshot module memos so the contextual walk can populate fresh
-  // instances. Per-analysis only — the contextual run is self-contained.
+  // Snapshot only the per-node memo. The per-function memos
+  // (_specEffectsMemo, _specSideEffectMemo, _specReturnValueMemo,
+  // _specThisEffectsMemo) hold cross-function summaries (e.g. HOF cb
+  // return AVs) that must STAY shared with the base run so nested-call
+  // dispatch in the contextual walk reads the correct callee summaries.
+  // The contextual walk's writes to those memos for encFn itself
+  // overwrite encFn's base summary; that's fine because we don't read
+  // encFn's own summary from within its own contextual walk.
   var savedPathVal = _specPathValMemo;
-  var savedEffects = _specEffectsMemo;
-  var savedSide = _specSideEffectMemo;
-  var savedReturn = _specReturnValueMemo;
-  var savedThisEff = _specThisEffectsMemo;
   var savedPostorder = _specPostorderMemo;
   try {
     for (var csi = 0; csi < callSitePaths.length; csi++) {
@@ -13814,12 +13834,8 @@ function _resolveByContextSensitiveReanalysis(initialPath, encFn) {
         if (aav && aav.kind !== "top" && aav.kind !== "param") anyConcrete = true;
       }
       if (!anyConcrete) continue;
-      // Swap to fresh memos for the contextual walk.
+      // Swap to fresh per-node memos for the contextual walk.
       _specPathValMemo = new WeakMap();
-      _specEffectsMemo = new WeakMap();
-      _specSideEffectMemo = new WeakMap();
-      _specReturnValueMemo = new WeakMap();
-      _specThisEffectsMemo = new WeakMap();
       _specPostorderMemo = new WeakMap();
       _specContextCallerArgs.set(encFnNode, ctxArgAvs);
       try {
@@ -13843,10 +13859,6 @@ function _resolveByContextSensitiveReanalysis(initialPath, encFn) {
     }
   } finally {
     _specPathValMemo = savedPathVal;
-    _specEffectsMemo = savedEffects;
-    _specSideEffectMemo = savedSide;
-    _specReturnValueMemo = savedReturn;
-    _specThisEffectsMemo = savedThisEff;
     _specPostorderMemo = savedPostorder;
     _specContextReanalysisInProgress.delete(encFnNode);
   }
