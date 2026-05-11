@@ -1491,6 +1491,17 @@ function _trackGlobalAssignment(path) {
 // (Pure / non-mutating array methods like join/concat/slice are still
 // dispatched via the existing pattern elsewhere; they fold over per-leaf
 // distribution and don't need state mutation.)
+// ECMA § 23.1.3 HOF methods — registered separately from the regular
+// Array.prototype obj-lit because _specApplyBuiltinMethod intentionally
+// defers them at body-walk so the inline HOF block (_hofPendingDispatches
+// per § 23.1.3.18 step 7 CallbackInvocation) can bind cb param to each
+// element via spec-eval. Post-substitution dispatch in
+// _specReduceBuiltinCallPostSub uses _specReturnValueMemo to fold cb's
+// per-element return without needing Babel paths.
+var _SPEC_ARRAY_HOF_METHODS = [
+  "map", "filter", "find", "findIndex", "findLast", "findLastIndex",
+  "some", "every", "flatMap", "forEach", "reduce", "reduceRight"
+];
 var _SPEC_ARRAY_PROTO_AV = null;
 function _specArrayPrototypeAv() {
   if (!_SPEC_ARRAY_PROTO_AV) {
@@ -1501,15 +1512,15 @@ function _specArrayPrototypeAv() {
       // Pure (return new value, no mutation):
       "join", "concat", "slice", "includes", "indexOf", "lastIndexOf",
       "reverse", "at", "flat"
-      // HOF-callback methods (filter, map, find, etc.) are dispatched at
-      // the CallExpression level via _hofPendingDispatches per § 23.1.3.7
-      // / .18 / .10 etc. — see the inline handler that pushes the cb
-      // body for inter-procedural per-element analysis. Adding them
-      // here would conflict because _specApplyBuiltinMethod's per-leaf
-      // dispatch can't replicate the cb-body environment binding.
     ];
     for (var ami = 0; ami < arrayMethodNames.length; ami++) {
       props[arrayMethodNames[ami]] = { kind: "builtin-method", id: "Array.prototype." + arrayMethodNames[ami] };
+    }
+    // HOF methods: registered too so substitution member-sub produces a
+    // builtin-method AV for post-sub dispatch. Body-walk path defers in
+    // _specApplyBuiltinMethod (returns null) so the inline HOF block fires.
+    for (var hmi = 0; hmi < _SPEC_ARRAY_HOF_METHODS.length; hmi++) {
+      props[_SPEC_ARRAY_HOF_METHODS[hmi]] = { kind: "builtin-method", id: "Array.prototype." + _SPEC_ARRAY_HOF_METHODS[hmi] };
     }
     _SPEC_ARRAY_PROTO_AV = { kind: "obj-lit", props: props };
   }
@@ -3819,6 +3830,26 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
         args: argAvs.slice() };
     }
     return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
+  }
+  // § 23.1.3 HOF methods (map/filter/find/etc.). When recv is array-lit
+  // or keys-of, the body-walk's inline HOF block (_hofPendingDispatches)
+  // handles per-element cb evaluation via spec eval — return null so the
+  // caller's bmId path falls through. When recv is opaque (call AV / param
+  // / member), defer as a call AV; post-sub dispatch in
+  // _specReduceBuiltinCallPostSub re-applies via cb's _specReturnValueMemo.
+  if (methodId.indexOf("Array.prototype.") === 0) {
+    var arrHofName = methodId.slice("Array.prototype.".length);
+    if (_SPEC_ARRAY_HOF_METHODS.indexOf(arrHofName) >= 0) {
+      if (recvAv && (recvAv.kind === "array-lit" || recvAv.kind === "keys-of")) {
+        return null;  // body-walk HOF block handles via _hofPendingDispatches
+      }
+      if (recvAv && (recvAv.kind === "call" || recvAv.kind === "param" || recvAv.kind === "member")) {
+        return { kind: "call",
+          callee: { kind: "member", obj: recvAv,
+                    key: { kind: "const", value: arrHofName } },
+          args: argAvs.slice() };
+      }
+    }
   }
   // ECMA § 24.1.3 Map.prototype.* dispatches. Receiver may be map-instance
   // (§ 24.1.3) or weakmap-instance (§ 24.3.3 — same value-flow semantics
@@ -11026,7 +11057,11 @@ function _specEvalLeaf(path, state, vals, effects) {
             Object.prototype.hasOwnProperty.call(state, n.arguments[0].name)) {
           state[n.arguments[0].name] = bmResult;
         }
-        return bmResult;
+        // § 23.1.3 HOF dispatch via _hofPendingDispatches: when
+        // _specApplyBuiltinMethod returns null, the method intentionally
+        // declined dispatch so the inline HOF block (per-element cb eval)
+        // can fire. Falls through past this `if (bmId)` block.
+        if (bmResult !== null) return bmResult;
       }
     }
     // Object.* dispatched via globalThis.Object registry now —
@@ -14633,6 +14668,23 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
   // structural methods (concat/slice).
   if (methodId.indexOf("Array.prototype.") === 0 &&
       recvAv && recvAv.kind === "array-lit") {
+    // § 23.1.3.18 Array.prototype.map post-sub: when cb is a function-ref
+    // with a known return AV, apply per element via _specInstantiateAv.
+    // Each element substitutes for cb's first param (with cbFn as
+    // fnContext so other unrelated params don't get touched).
+    if (methodId === "Array.prototype.map" && argAvs.length >= 1 &&
+        argAvs[0] && argAvs[0].kind === "function-ref" && argAvs[0].funcNode) {
+      var mapCbFn = argAvs[0].funcNode;
+      var mapRetMemo = _specReturnValueMemo.get(mapCbFn);
+      if (mapRetMemo) {
+        var mapPerEl = [];
+        for (var meIdx = 0; meIdx < recvAv.elements.length; meIdx++) {
+          var mappedAv = _specInstantiateAv(mapRetMemo, [recvAv.elements[meIdx]], undefined, mapCbFn);
+          mapPerEl.push(mappedAv || { kind: "top" });
+        }
+        return { kind: "array-lit", elements: mapPerEl };
+      }
+    }
     return _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs);
   }
   // ECMA § 20.1.2 Object.* post-substitution: when args resolve to
