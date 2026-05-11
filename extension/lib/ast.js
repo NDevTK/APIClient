@@ -3901,7 +3901,7 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
     if (recvName && state && Object.prototype.hasOwnProperty.call(state, recvName)) {
       state[recvName] = { kind: "array-lit", elements: usElements };
     }
-    return { kind: "const", value: usElements.length };
+    return _hcConst(usElements.length);
   }
   // Array.prototype pure (non-mutating) methods per § 23.1.3.
   // join/concat/slice/includes/indexOf/reverse/at/flat — each implemented
