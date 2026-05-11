@@ -175,6 +175,171 @@ api("API client class with constructor URL", `
   return false;
 });
 
+console.log("\n=== Body schema learning ===\n");
+
+api("body params type-inferred from literal property values", `
+  fetch("/api/create", {
+    method: "POST",
+    body: JSON.stringify({ id: 42, name: "alice", active: true, profile: null })
+  });
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var p = sites[0].params || [];
+  var byName = {};
+  for (var i = 0; i < p.length; i++) byName[p[i].name] = p[i];
+  return byName.id && byName.id.type === "number" && byName.id.defaultValue === 42 &&
+         byName.name && byName.name.type === "string" && byName.name.defaultValue === "alice" &&
+         byName.active && byName.active.type === "boolean" && byName.active.defaultValue === true &&
+         byName.profile && byName.profile.type === "null";
+});
+
+api("body params from caller obj-lit through wrapper fn", `
+  function post(path, data) {
+    return fetch(path, { method: "POST", body: JSON.stringify(data) });
+  }
+  post("/api/save", { title: "hello", count: 7 });
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var s = sites[0];
+  var params = s.params || [];
+  var hasTitle = false, hasCount = false;
+  for (var i = 0; i < params.length; i++) {
+    if (params[i].name === "title" && params[i].defaultValue === "hello") hasTitle = true;
+    if (params[i].name === "count" && params[i].defaultValue === 7) hasCount = true;
+  }
+  return hasTitle && hasCount;
+});
+
+api("query params extracted from URL string", `
+  fetch("/api/search?q=test&limit=10&active=true");
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var p = sites[0].params || [];
+  var hasQ = false, hasLimit = false, hasActive = false;
+  for (var i = 0; i < p.length; i++) {
+    if (p[i].name === "q" && p[i].location === "query") hasQ = true;
+    if (p[i].name === "limit" && p[i].location === "query") hasLimit = true;
+    if (p[i].name === "active" && p[i].location === "query") hasActive = true;
+  }
+  return hasQ && hasLimit && hasActive;
+});
+
+api("headers merged via spread + literal", `
+  var defaults = { "Accept": "application/json", "X-Trace": "default-trace" };
+  fetch("/api/x", {
+    method: "POST",
+    headers: { ...defaults, "Content-Type": "application/json", "X-Trace": "override" },
+    body: "{}"
+  });
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var h = sites[0].headers || {};
+  // spread first, then literal overrides per § 13.2.5.4 CopyDataProperties
+  return h["Accept"] === "application/json" &&
+         h["Content-Type"] === "application/json" &&
+         h["X-Trace"] === "override";
+});
+
+api("method override via variable", `
+  var m = "PATCH";
+  fetch("/api/update", { method: m, body: "{}" });
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  return sites[0].method === "PATCH";
+});
+
+console.log("\n=== Body schema: complex indirect key+value learning ===\n");
+
+api("body keys+values across 3-level wrapper", `
+  function deep(payload) { return fetch("/api/d3", { method: "POST", body: JSON.stringify(payload) }); }
+  function mid(p) { return deep(p); }
+  function top(p) { return mid(p); }
+  top({ user_id: 99, action: "approve" });
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var p = sites[0].params || [];
+  var byName = {};
+  for (var i = 0; i < p.length; i++) byName[p[i].name] = p[i];
+  return byName.user_id && byName.user_id.type === "number" && byName.user_id.defaultValue === 99 &&
+         byName.action && byName.action.type === "string" && byName.action.defaultValue === "approve";
+});
+
+api("body keys+values via Object.assign merge of caller args", `
+  function send(base, extra) {
+    return fetch("/api/merged", {
+      method: "POST",
+      body: JSON.stringify(Object.assign({}, base, extra))
+    });
+  }
+  send({ id: 1, type: "default" }, { name: "alpha", id: 42 });
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var p = sites[0].params || [];
+  var byName = {};
+  for (var i = 0; i < p.length; i++) byName[p[i].name] = p[i];
+  // Per § 20.1.2.1 Object.assign: source overrides target. id from extra (42) wins.
+  return byName.id && byName.id.defaultValue === 42 &&
+         byName.type && byName.type.defaultValue === "default" &&
+         byName.name && byName.name.defaultValue === "alpha";
+});
+
+api("body keys+values via class method using constructor caller args", `
+  class API {
+    constructor(token, version) { this.token = token; this.version = version; }
+    create(item) {
+      return fetch("/api/items", {
+        method: "POST",
+        body: JSON.stringify({ token: this.token, version: this.version, item: item })
+      });
+    }
+  }
+  new API("secret-123", 7).create("widget");
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var p = sites[0].params || [];
+  var byName = {};
+  for (var i = 0; i < p.length; i++) byName[p[i].name] = p[i];
+  return byName.token && byName.token.defaultValue === "secret-123" &&
+         byName.version && byName.version.defaultValue === 7 &&
+         byName.item && byName.item.defaultValue === "widget";
+});
+
+api("body keys+values via shorthand-property + template-literal value", `
+  function update(id, name) {
+    var status = "active";
+    return fetch("/api/upd", {
+      method: "POST",
+      body: JSON.stringify({ id, name, status, ref: \`#\${id}-\${name}\` })
+    });
+  }
+  update(101, "beta");
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var p = sites[0].params || [];
+  var byName = {};
+  for (var i = 0; i < p.length; i++) byName[p[i].name] = p[i];
+  return byName.id && byName.id.defaultValue === 101 &&
+         byName.name && byName.name.defaultValue === "beta" &&
+         byName.status && byName.status.defaultValue === "active" &&
+         byName.ref && byName.ref.defaultValue === "#101-beta";
+});
+
+api("body keys+values via destructured-param wrapper", `
+  function post(path, { method, payload }) {
+    return fetch(path, { method: method, body: JSON.stringify(payload) });
+  }
+  post("/api/destr", { method: "PUT", payload: { kind: "primary", count: 5 } });
+`, function(sites) {
+  if (sites.length !== 1) return false;
+  var s = sites[0];
+  var p = s.params || [];
+  var byName = {};
+  for (var i = 0; i < p.length; i++) byName[p[i].name] = p[i];
+  return s.method === "PUT" &&
+         byName.kind && byName.kind.defaultValue === "primary" &&
+         byName.count && byName.count.defaultValue === 5;
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);

@@ -16122,6 +16122,53 @@ function _extractBodyParams(rootNode, rootScope) {
               }
               continue;
             }
+            // § 14.3.3 BindingPattern destructured param: when
+            // _findParamIndex returns -1, the binding is INSIDE an
+            // ObjectPattern at some params[k]. Locate the outer
+            // ObjectPattern index AND the property key that bound this
+            // name. At each caller site, walk arg[k]'s obj-lit and
+            // push the prop value at the destructure key.
+            var destrParamIdx = -1;
+            var destrKey = null;
+            for (var dpi = 0; dpi < fnP.node.params.length; dpi++) {
+              var dp = fnP.node.params[dpi];
+              var dpInner = (_t.isAssignmentPattern(dp) && dp.left) ? dp.left : dp;
+              if (!_t.isObjectPattern(dpInner)) continue;
+              for (var dppi = 0; dppi < dpInner.properties.length; dppi++) {
+                var dpp = dpInner.properties[dppi];
+                if (!_t.isObjectProperty(dpp) || dpp.computed) continue;
+                var dppVal = dpp.value;
+                if (_t.isAssignmentPattern(dppVal) && dppVal.left) dppVal = dppVal.left;
+                if (_t.isIdentifier(dppVal) && dppVal.name === node.name) {
+                  destrParamIdx = dpi;
+                  destrKey = _t.isIdentifier(dpp.key) ? dpp.key.name :
+                    (_t.isStringLiteral(dpp.key) ? dpp.key.value : null);
+                  break;
+                }
+              }
+              if (destrParamIdx >= 0) break;
+            }
+            if (destrParamIdx >= 0 && destrKey != null) {
+              for (var dri = 0; dri < fnB.referencePaths.length; dri++) {
+                var dRef = fnB.referencePaths[dri];
+                if (!_t.isCallExpression(dRef.parent) || dRef.parent.callee !== dRef.node) continue;
+                if (destrParamIdx >= dRef.parent.arguments.length) continue;
+                var dArg = dRef.parent.arguments[destrParamIdx];
+                if (_t.isObjectExpression(dArg)) {
+                  for (var dapi = 0; dapi < dArg.properties.length; dapi++) {
+                    var dap = dArg.properties[dapi];
+                    if (!_t.isObjectProperty(dap) || dap.computed) continue;
+                    var dapKey = _t.isIdentifier(dap.key) ? dap.key.name :
+                      (_t.isStringLiteral(dap.key) ? dap.key.value : null);
+                    if (dapKey === destrKey) {
+                      stack.push({ node: dap.value, scope: dRef.parentPath });
+                      break;
+                    }
+                  }
+                }
+              }
+              continue;
+            }
           }
         }
       }
@@ -16130,6 +16177,23 @@ function _extractBodyParams(rootNode, rootScope) {
     if (_isJsonStringify(node, scope)) {
       if (node.arguments[0]) stack.push({ node: node.arguments[0], scope: scope });
       continue;
+    }
+    // § 20.1.2.1 Object.assign(target, ...sources): each source's own
+    // properties are copied to target in source order; LATER sources
+    // override earlier ones for duplicate keys. Push args in source
+    // order so the LIFO stack pops the LAST source first; pushAccum's
+    // first-wins dedup then preserves the last-source override per spec.
+    // Detection: callee resolves to builtin-method("Object.assign") via
+    // the spec-eval registry (no name-string match; the callee AV is
+    // produced by the prototype-chain lookup at body-walk).
+    if (_t.isCallExpression(node) && node.arguments.length >= 1) {
+      var oaCalleeAv = _specPathValMemo.get(node.callee);
+      if (oaCalleeAv && oaCalleeAv.kind === "builtin-method" && oaCalleeAv.id === "Object.assign") {
+        for (var oaSi = 0; oaSi < node.arguments.length; oaSi++) {
+          stack.push({ node: node.arguments[oaSi], scope: scope });
+        }
+        continue;
+      }
     }
     // new URLSearchParams({...}) — recurse into args[0].
     var uspCalleeAv = _t.isNewExpression(node) ? _specPathValMemo.get(node.callee) : null;
