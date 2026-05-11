@@ -31,8 +31,10 @@ programPath.traverse({
 });
 console.log("Total fns:", fnPaths.length);
 
-// Time each fn analysis (sort by time)
+// Time each fn analysis
 var timings = [];
+var totalMs = 0;
+var allFnTime = Date.now();
 for (var i = 0; i < fnPaths.length; i++) {
   var fp = fnPaths[i];
   var bodySize = 0;
@@ -42,8 +44,11 @@ for (var i = 0; i < fnPaths.length; i++) {
     globalThis._specAnalyzePropertyFlow(fp);
   } catch (e) { console.error("analyze failed:", e.message); }
   var dt = Date.now() - t0;
+  totalMs += dt;
   if (dt > 5) timings.push({ idx: i, dt: dt, bodyStmts: bodySize, fp: fp, loc: fp.node.loc && fp.node.loc.start });
 }
+console.log("Total time for all " + fnPaths.length + " fn analyses: " + totalMs + "ms");
+console.log("Wall-clock time: " + (Date.now() - allFnTime) + "ms");
 timings.sort(function (a, b) { return b.dt - a.dt; });
 console.log("\nTop 5 slowest fn analyses:");
 for (var ti = 0; ti < Math.min(5, timings.length); ti++) {

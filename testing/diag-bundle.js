@@ -45,16 +45,51 @@ astCode = astCode.replace(
   "function _specAnalyzePropertyFlow(funcPath, isFixpoint) {",
   "var _sapfCount = 0, _sapfTime = 0;\nfunction _specAnalyzePropertyFlow(funcPath, isFixpoint) { _sapfCount++; var _sapfT0 = (typeof performance!=='undefined'?performance.now():Date.now()); if (_sapfCount % 100 === 0) console.log('[sapf] ' + _sapfCount + ' analyses, ' + Math.round(_sapfTime) + 'ms');"
 );
-// Call counter on _resolveAllValues
+// Wrap _resolveAllValues to track time. Real signature is
+// (initialPath, initialDepth). Match precisely.
 astCode = astCode.replace(
-  "function _resolveAllValues(path, depth) {",
-  "var _ravCount = 0;\nfunction _resolveAllValues(path, depth) { _ravCount++; if (_ravCount % 500 === 0) console.log('[rav] ' + _ravCount + ' calls');"
+  "function _resolveAllValues(initialPath, initialDepth) {",
+  "var _ravCount = 0, _ravTime = 0;\nfunction _resolveAllValues_orig(initialPath, initialDepth) {"
 );
-// Call counter on _avAtPath
+astCode += `
+function _resolveAllValues(initialPath, initialDepth) {
+  _ravCount++;
+  var _t0 = (typeof performance!=='undefined'?performance.now():Date.now());
+  try { return _resolveAllValues_orig(initialPath, initialDepth); }
+  finally {
+    _ravTime += ((typeof performance!=='undefined'?performance.now():Date.now()) - _t0);
+    if (_ravCount % 100 === 0) console.log('[rav] ' + _ravCount + ' calls, ' + Math.round(_ravTime) + 'ms');
+  }
+}
+`;
+// Call counter + cumulative time on _avAtPath + _resolveByContextSensitiveReanalysis
 astCode = astCode.replace(
   "function _avAtPath(path) {",
-  "var _avapCount = 0;\nfunction _avAtPath(path) { _avapCount++; if (_avapCount % 1000 === 0) console.log('[avap] ' + _avapCount + ' calls');"
+  "var _avapCount = 0, _avapTime = 0;\nfunction _avAtPath_orig(path) {"
+).replace(
+  "function _resolveByContextSensitiveReanalysis(initialPath, encFn) {",
+  "var _rcsrCount = 0, _rcsrTime = 0;\nfunction _resolveByContextSensitiveReanalysis_orig(initialPath, encFn) {"
 );
+astCode += `
+function _avAtPath(path) {
+  _avapCount++;
+  var _t0 = (typeof performance!=='undefined'?performance.now():Date.now());
+  try { return _avAtPath_orig(path); }
+  finally {
+    _avapTime += ((typeof performance!=='undefined'?performance.now():Date.now()) - _t0);
+    if (_avapCount % 100 === 0) console.log('[avap] ' + _avapCount + ' calls, ' + Math.round(_avapTime) + 'ms');
+  }
+}
+function _resolveByContextSensitiveReanalysis(initialPath, encFn) {
+  _rcsrCount++;
+  var _t0 = (typeof performance!=='undefined'?performance.now():Date.now());
+  try { return _resolveByContextSensitiveReanalysis_orig(initialPath, encFn); }
+  finally {
+    _rcsrTime += ((typeof performance!=='undefined'?performance.now():Date.now()) - _t0);
+    if (_rcsrCount % 10 === 0) console.log('[rcsr] ' + _rcsrCount + ' calls, ' + Math.round(_rcsrTime) + 'ms');
+  }
+}
+`;
 // Call counter on _isPathInSlice + cache-hit/miss
 astCode = astCode.replace(
   "function _isPathInSlice(path) {",
