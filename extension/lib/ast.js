@@ -5350,6 +5350,73 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   return { kind: "top" };
 }
 
+// WHATWG URL § 5.5.1-3 URLSearchParams.set/append/delete: when the
+// callee chain is `<urlVar>.searchParams.<set|append|delete>(...)` and
+// urlVar resolves through state to a URL obj-lit (with const href),
+// apply the mutation per spec and rebind state[urlVar] to a new URL
+// obj-lit with all derived props (href/search/pathname/etc.) refreshed
+// per § 4.4 partition. Returns true if the mutation fired; the caller
+// suppresses the regular dispatch and emits undefined per spec.
+//
+// Structural detection from the CallExpression node + scope-resolved
+// urlVar binding lookup — no string-name matching. The .searchParams
+// property and the mutation method names are spec-defined identifiers
+// (WHATWG URL § 5.2.2 / § 5.5).
+function _specApplyUrlSearchParamsMutation(callNode, callPath, state) {
+  if (!callNode || !callPath || !state) return false;
+  var callee = callNode.callee;
+  if (!_t.isMemberExpression(callee) || callee.computed) return false;
+  if (!_t.isIdentifier(callee.property)) return false;
+  var mutName = callee.property.name;
+  if (mutName !== "set" && mutName !== "append" && mutName !== "delete") return false;
+  var spChain = callee.object;
+  if (!_t.isMemberExpression(spChain) || spChain.computed) return false;
+  if (!_t.isIdentifier(spChain.property, { name: "searchParams" })) return false;
+  var urlIdNode = spChain.object;
+  if (!_t.isIdentifier(urlIdNode)) return false;
+  var urlVarName = urlIdNode.name;
+  if (!Object.prototype.hasOwnProperty.call(state, urlVarName)) return false;
+  var urlAv = state[urlVarName];
+  if (!urlAv || urlAv.kind !== "obj-lit" || urlAv._ctorId !== "WHATWG.URL") return false;
+  if (!urlAv.props || !urlAv.props.href || urlAv.props.href.kind !== "const" ||
+      typeof urlAv.props.href.value !== "string") return false;
+  var args = callNode.arguments;
+  if (args.length < 1) return false;
+  var keyArgAv = _specPathValMemo.get(args[0]);
+  if (!keyArgAv || keyArgAv.kind !== "const") return false;
+  var keyConst = String(keyArgAv.value);
+  var valConst = null;
+  if (mutName !== "delete") {
+    if (args.length < 2) return false;
+    var valArgAv = _specPathValMemo.get(args[1]);
+    if (!valArgAv || valArgAv.kind !== "const") return false;
+    valConst = String(valArgAv.value);
+  }
+  try {
+    var mutUrl = new URL(urlAv.props.href.value);
+    if (mutName === "set") mutUrl.searchParams.set(keyConst, valConst);
+    else if (mutName === "append") mutUrl.searchParams.append(keyConst, valConst);
+    else if (mutName === "delete") mutUrl.searchParams.delete(keyConst);
+    state[urlVarName] = {
+      kind: "obj-lit", _ctorId: "WHATWG.URL",
+      props: {
+        href: { kind: "const", value: mutUrl.href },
+        pathname: { kind: "const", value: mutUrl.pathname },
+        origin: { kind: "const", value: mutUrl.origin },
+        search: { kind: "const", value: mutUrl.search },
+        hash: { kind: "const", value: mutUrl.hash },
+        host: { kind: "const", value: mutUrl.host },
+        hostname: { kind: "const", value: mutUrl.hostname },
+        port: { kind: "const", value: mutUrl.port },
+        protocol: { kind: "const", value: mutUrl.protocol },
+        username: { kind: "const", value: mutUrl.username },
+        password: { kind: "const", value: mutUrl.password }
+      }
+    };
+    return true;
+  } catch (_) { return false; }
+}
+
 function _specStateCreate(initBindings) {
   var s = Object.create(null);
   if (initBindings) {
@@ -10801,6 +10868,14 @@ function _specEvalLeaf(path, state, vals, effects) {
     return { kind: "top" };
   }
   if (_t.isCallExpression(n) || _t.isOptionalCallExpression(n)) {
+    // WHATWG URL § 5.5 URLSearchParams mutation dispatch: when callee is
+    // `<urlVar>.searchParams.<set|append|delete>` and urlVar resolves to
+    // a URL obj-lit in state, rebind state[urlVar] to a new URL obj-lit
+    // with the mutation applied per § 4.4 partition. Returns undefined
+    // per spec; downstream dispatch is suppressed.
+    if (_specApplyUrlSearchParamsMutation(n, path, state)) {
+      return { kind: "const", value: undefined };
+    }
     // ECMA § 10.4.1.1 [[Call]] for Bound Function Exotic Objects:
     // when the callee resolves to a bound-function AV, unfold by
     // calling target with [...preArgs, ...callerArgs] and the bound
