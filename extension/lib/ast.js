@@ -488,300 +488,6 @@ function _findParamIndex(params, name) {
   return -1;
 }
 
-// Match `name` against the ctor's params including destructured ObjectPattern
-// parameters. Returns {idx, key} — idx is the param index, key is the
-// destructured property name when the param is `{key}` / `{key} = {}`, or
-// null for a plain Identifier param. Returns null when no match.
-//
-// Real-world case: `class C { constructor({apiUrl}) { this.apiUrl = apiUrl } }`.
-// `_findThisAssignedParam` spots `this.apiUrl = apiUrl` and reports the RHS
-// name "apiUrl". A plain `_findParamIndex` lookup fails because param[0]
-// is an ObjectPattern, not an Identifier "apiUrl" — so the resolver bails
-// out and the fetch(this.apiUrl, …) site hits a gap even though the value
-// is fully traceable via the caller's object-literal arg.
-function _findCtorParamOrDestr(params, name) {
-  for (var i = 0; i < params.length; i++) {
-    var p = params[i];
-    if (_t.isIdentifier(p) && p.name === name) return { idx: i, key: null };
-    if (_t.isAssignmentPattern(p) && _t.isIdentifier(p.left) && p.left.name === name) return { idx: i, key: null };
-    var pat = _t.isObjectPattern(p) ? p :
-              (_t.isAssignmentPattern(p) && _t.isObjectPattern(p.left) ? p.left : null);
-    if (pat) {
-      var k = _findDestructuredKey(pat, name);
-      if (k) return { idx: i, key: k };
-    }
-  }
-  return null;
-}
-
-// Given a caller's argument path at a `new C(arg)` call, extract the value
-// of a destructured property. If the arg is an ObjectExpression, pull the
-// property value directly; otherwise resolve the arg through _resolveToObject
-// and pull the property. Returns a [values] array.
-function _resolveCtorArgDestrProp(argPath, key, depth) {
-  if (!argPath) return [];
-  // Spec eval is the single engine: read the arg's AV from
-  // _specPathValMemo, look up `key` on the obj-lit, and flatten the
-  // prop's AV to string leaves. Per ECMA § 7.3.10 GetV; covers both
-  // ObjectExpression literals and synthetic merges (Object.assign,
-  // spread, closure prop assigns) since spec eval models all of them
-  // as obj-lit AVs uniformly.
-  var av = _avAtPath(argPath);
-  var propAv = _avObjPropLookup(av, key);
-  if (!propAv) return [];
-  var pageOriginLeaves = _resolvePageOriginAv(propAv);
-  if (pageOriginLeaves) return pageOriginLeaves;
-  return _avFlattenStringLeaves(propAv);
-}
-
-// Find indirect constructor-call arg paths for a class exposed via
-// `Object.defineProperty(target, key, {get: () => CLASS})`. Reads of
-// `<aliasOf(target)>.<key>` invoke the getter (returning the class);
-// `new <expr>.<key>(args)` constructs the class with `args`. Returns
-// the arg-paths at the corresponding constructor positions.
-//
-// Pure ECMAScript: getter invocation semantics + scope-resolved
-// reference walks. No bundler-specific assumptions; the same flow works
-// for any code that exposes a class via Object.defineProperty getter.
-function _findClassIndirectCtorArgs(classBinding, classDecl, paramIdx, depth) {
-  if (!classBinding || !classBinding.referencePaths) return [];
-  var argPaths = [];
-  var visited = new Set();
-  for (var ri = 0; ri < classBinding.referencePaths.length; ri++) {
-    var ref = classBinding.referencePaths[ri];
-    // Match shape `() => CLASS` arrow whose body IS the class identifier.
-    var arrow = ref.parentPath;
-    if (!arrow || !arrow.isArrowFunctionExpression() || arrow.node.body !== ref.node) continue;
-    // Arrow must be the value of an ObjectProperty `{key: arrow}`.
-    var prop = arrow.parentPath;
-    if (!prop || !prop.isObjectProperty() || prop.node.computed) continue;
-    var propKey = _t.isIdentifier(prop.node.key) ? prop.node.key.name :
-      (_t.isStringLiteral(prop.node.key) ? prop.node.key.value : null);
-    if (!propKey) continue;
-    var descObj = prop.parentPath;
-    if (!descObj || !descObj.isObjectExpression()) continue;
-    var defCall = descObj.parentPath;
-    if (!defCall || !defCall.isCallExpression()) continue;
-    // Case A: arrow is the descriptor's `get` AND descriptor is arg[2]
-    // of Object.defineProperty(target, key, descriptor) — direct install.
-    if (propKey === "get" && defCall.node.arguments[2] === descObj.node && _isObjectDefineProperty(defCall)) {
-      // (handled below via instKey extraction)
-    } else {
-      // Case B: arrow is in a defs literal `{propKey: () => CLASS}`
-      // passed to a wrapper call `wrapper(target, defs)` whose body
-      // iterates defs and does `Object.defineProperty(target, k, {get: defs[k]})`
-      // for each key. The effective install is `target.<propKey>` →
-      // CLASS. Trace through the wrapper to find the target arg, then
-      // find consumers.
-      var wrapperFunc = _resolveExprToFunctionPath(defCall.get("callee"), depth);
-      if (!wrapperFunc || !wrapperFunc.node.body || !_t.isBlockStatement(wrapperFunc.node.body)) continue;
-      // Locate which param of wrapperFunc corresponds to defs (the obj
-      // containing our arrow).
-      var defsArgIdx = -1;
-      var wrapperIsCallForm = false;
-      var wcallee = defCall.node.callee;
-      if (_t.isMemberExpression(wcallee) && !wcallee.computed && _t.isIdentifier(wcallee.property, { name: "call" })) {
-        wrapperIsCallForm = true;
-      }
-      var wrapArgOffset = wrapperIsCallForm ? 1 : 0;
-      for (var dai = 0; dai < defCall.node.arguments.length; dai++) {
-        if (defCall.node.arguments[dai] === descObj.node) { defsArgIdx = dai - wrapArgOffset; break; }
-      }
-      if (defsArgIdx < 0 || defsArgIdx >= wrapperFunc.node.params.length) continue;
-      var defsParam = wrapperFunc.node.params[defsArgIdx];
-      if (!_t.isIdentifier(defsParam)) continue;
-      // Inside wrapper body, find Object.defineProperty(<targetParam>, k, {get: defs[k]})
-      // inside `for (var k in defs)` — this is the install pattern.
-      var defsParamBinding = wrapperFunc.scope.getBinding(defsParam.name);
-      if (!defsParamBinding || !defsParamBinding.referencePaths) continue;
-      var foundTargetArgIdx = -1;
-      for (var dpr = 0; dpr < defsParamBinding.referencePaths.length; dpr++) {
-        var dpRef = defsParamBinding.referencePaths[dpr];
-        // defs[k] reads — defs as object of MemberExpression with computed=true and property = loop var
-        var dpMem = dpRef.parentPath;
-        if (!dpMem || !dpMem.isMemberExpression() || dpMem.node.object !== dpRef.node || !dpMem.node.computed) continue;
-        // Walk up to enclosing for..in.
-        var fInside = _findEnclosingForIn(dpMem);
-        if (!fInside) continue;
-        var loopVar = _getForInLoopVarName(fInside);
-        if (!loopVar) continue;
-        if (!_t.isIdentifier(dpMem.node.property, { name: loopVar })) continue;
-        // Containing call: must be the `get` of an Object.defineProperty descriptor.
-        var dpProp = dpMem.parentPath;
-        if (!dpProp || !dpProp.isObjectProperty() || dpProp.node.computed) continue;
-        if (!_t.isIdentifier(dpProp.node.key, { name: "get" }) &&
-            !(_t.isStringLiteral(dpProp.node.key) && dpProp.node.key.value === "get")) continue;
-        var dpDesc = dpProp.parentPath;
-        if (!dpDesc || !dpDesc.isObjectExpression()) continue;
-        var dpDefCall = dpDesc.parentPath;
-        if (!dpDefCall || !dpDefCall.isCallExpression()) continue;
-        if (dpDefCall.node.arguments[2] !== dpDesc.node) continue;
-        if (!_isObjectDefineProperty(dpDefCall)) continue;
-        // The target is dpDefCall arg[0]. Find which wrapperFunc param
-        // corresponds to it (must be a param identifier).
-        var dpTargetNode = dpDefCall.node.arguments[0];
-        if (!_t.isIdentifier(dpTargetNode)) continue;
-        for (var wpi = 0; wpi < wrapperFunc.node.params.length; wpi++) {
-          if (_t.isIdentifier(wrapperFunc.node.params[wpi], { name: dpTargetNode.name })) {
-            foundTargetArgIdx = wpi;
-            break;
-          }
-        }
-        if (foundTargetArgIdx >= 0) break;
-      }
-      if (foundTargetArgIdx < 0) continue;
-      // Map back to the wrapper-call's actual argument position
-      // (account for .call thisArg shift).
-      var callerTargetArgIdx = foundTargetArgIdx + wrapArgOffset;
-      if (callerTargetArgIdx >= defCall.node.arguments.length) continue;
-      var targetArgPath = defCall.get("arguments." + callerTargetArgIdx);
-      if (!_t.isIdentifier(targetArgPath.node)) continue;
-      var targetName = targetArgPath.node.name;
-      var targetBinding = targetArgPath.scope.getBinding(targetName);
-      if (!targetBinding || !targetBinding.referencePaths) continue;
-      // Find `new <targetAlias>.<propKey>(args)` consumers.
-      for (var tri = 0; tri < targetBinding.referencePaths.length; tri++) {
-        var tRef = targetBinding.referencePaths[tri];
-        var tMem = tRef.parentPath;
-        if (!tMem || !tMem.isMemberExpression() || tMem.node.object !== tRef.node) continue;
-        var tMatch = (!tMem.node.computed && _t.isIdentifier(tMem.node.property, { name: propKey })) ||
-          (tMem.node.computed && _t.isStringLiteral(tMem.node.property) && tMem.node.property.value === propKey);
-        if (!tMatch) continue;
-        var tNew = tMem.parentPath;
-        if (!tNew || !tNew.isNewExpression() || tNew.node.callee !== tMem.node) continue;
-        if (paramIdx >= tNew.node.arguments.length) continue;
-        argPaths.push(tNew.get("arguments." + paramIdx));
-      }
-      continue;
-    }
-    // Pull the property key the getter is installed under.
-    var keyArg = defCall.node.arguments[1];
-    var instKey = null;
-    if (_t.isStringLiteral(keyArg)) instKey = keyArg.value;
-    else if (_t.isIdentifier(keyArg)) {
-      // Loop-variable case: defineProperty inside `for (var k in defs)`.
-      // Resolve the loop variable's known iteration values via the
-      // defs literal.
-      var forIn = _findEnclosingForIn(defCall);
-      if (forIn && _getForInLoopVarName(forIn) === keyArg.name) {
-        // Spec eval: read the defs obj-lit AV and iterate its prop AVs.
-        // Per ECMA § 14.7.5.6 ForInOfLoopEvaluation: the iteration values
-        // are the obj's enumerable own keys; spec eval models them as
-        // obj-lit.props uniformly across literal / Object.assign / spread.
-        var defsAv = _avAtPath(forIn.get("right"));
-        var defsObjLit = _avResolveToObjLit(defsAv);
-        if (defsObjLit && defsObjLit.props) {
-          for (var dKey in defsObjLit.props) {
-            if (!Object.prototype.hasOwnProperty.call(defsObjLit.props, dKey)) continue;
-            // Verify this descriptor's value-expression is `defs[loopVar]`.
-            var getValNode = prop.node.value;
-            if (!(getValNode && _t.isMemberExpression(getValNode) && getValNode.computed &&
-                  _t.isIdentifier(getValNode.property, { name: keyArg.name }))) continue;
-            // The class shows up at the value-position of THIS defs entry.
-            // Confirm via function-ref AV: arrow `() => CLASS` body's
-            // identifier matches the class decl's binding name.
-            var dpAv = defsObjLit.props[dKey];
-            if (dpAv && dpAv.kind === "function-ref" && dpAv.funcNode &&
-                _t.isArrowFunctionExpression(dpAv.funcNode) &&
-                _t.isIdentifier(dpAv.funcNode.body) &&
-                dpAv.funcNode.body.name === (classDecl.node.id && classDecl.node.id.name)) {
-              _findCallersOfPropertyOnTarget(defCall, dKey, paramIdx, argPaths, visited, depth);
-            }
-          }
-        }
-        continue;
-      }
-      // Identifier key that's not a for..in loop var — try resolving
-      // through scope. `const KEY = "url"; Object.defineProperty(t, KEY, …)`
-      // is fully resolvable: KEY traces to its var init.
-      var idVals = _resolveAllValues(defCall.get("arguments.1"), depth + 1);
-      if (idVals.length === 1 && typeof idVals[0] === "string") {
-        instKey = idVals[0];
-      } else {
-        continue;
-      }
-    }
-    if (instKey == null) continue;
-    _findCallersOfPropertyOnTarget(defCall, instKey, paramIdx, argPaths, visited, depth);
-  }
-  return argPaths;
-}
-
-// Given an Object.defineProperty call's path and the key it installs,
-// find all `new <aliasOf(target)>.<key>(args)` constructor call sites
-// across the program by tracing target through scope: target is arg[0]
-// of defineProperty; if it's a parameter, follow through caller args
-// (with .call thisArg shift); for each materialized target binding,
-// scan its referencePaths for `.<key>` accesses used as `new` targets.
-// Pushes the matching argPath at paramIdx into out.
-function _findCallersOfPropertyOnTarget(defCall, key, paramIdx, out, visited, depth) {
-  if (visited.has(defCall.node)) return;
-  visited.add(defCall.node);
-  var targetArgPath = defCall.get("arguments.0");
-  // Trace target back to caller-supplied arg if it's a parameter chain.
-  var aliasArgPaths = _traceToCallerArg(targetArgPath, depth);
-  for (var ai = 0; ai < aliasArgPaths.length; ai++) {
-    var aliasPath = aliasArgPaths[ai];
-    if (!_t.isIdentifier(aliasPath.node)) continue;
-    var aliasName = aliasPath.node.name;
-    var aliasBinding = aliasPath.scope.getBinding(aliasName);
-    if (!aliasBinding || !aliasBinding.referencePaths) continue;
-    for (var rj = 0; rj < aliasBinding.referencePaths.length; rj++) {
-      var aRef = aliasBinding.referencePaths[rj];
-      var mem = aRef.parentPath;
-      if (!mem || !mem.isMemberExpression() || mem.node.object !== aRef.node) continue;
-      var matchKey = (!mem.node.computed && _t.isIdentifier(mem.node.property, { name: key })) ||
-        (mem.node.computed && _t.isStringLiteral(mem.node.property) && mem.node.property.value === key);
-      if (!matchKey) continue;
-      var newExpr = mem.parentPath;
-      if (!newExpr || !newExpr.isNewExpression() || newExpr.node.callee !== mem.node) continue;
-      if (paramIdx >= newExpr.node.arguments.length) continue;
-      out.push(newExpr.get("arguments." + paramIdx));
-    }
-  }
-}
-
-// Trace `expr` back through parameter-binding chains to caller-supplied
-// argument paths. If expr is bound to a function param, find that
-// function's callers and return the corresponding arg paths. Both
-// direct calls `fn(args)` and Function.prototype.call form
-// `fn.call(thisArg, args)` are followed; the thisArg shift on .call
-// means params[k] inside the function corresponds to caller arg[k+1].
-function _traceToCallerArg(exprPath, depth) {
-  if (!exprPath || !_t.isIdentifier(exprPath.node)) return exprPath ? [exprPath] : [];
-  var b = exprPath.scope.getBinding(exprPath.node.name);
-  if (!b || b.kind !== "param") return [exprPath];
-  var hostFunc = b.scope.path;
-  if (!hostFunc || !hostFunc.node.params) return [exprPath];
-  var pIdx = -1;
-  for (var i = 0; i < hostFunc.node.params.length; i++) {
-    if (_t.isIdentifier(hostFunc.node.params[i], { name: exprPath.node.name })) { pIdx = i; break; }
-  }
-  if (pIdx < 0) return [exprPath];
-  var out = [];
-  // Direct callers via _findFunctionCallerArgs.
-  var callers = _findFunctionCallerArgs(hostFunc);
-  for (var ci = 0; ci < callers.length; ci++) {
-    if (pIdx < callers[ci].length) out.push(callers[ci][pIdx]);
-  }
-  // .call form: scan the host function's own binding referencePaths
-  // for `<expr>.call(thisArg, ...args)` invocations. The host's
-  // identifier shows up in the call expression's `callee.object` slot.
-  var hostBinding = _getFunctionBinding(hostFunc);
-  if (hostBinding && hostBinding.referencePaths) {
-    for (var hri = 0; hri < hostBinding.referencePaths.length; hri++) {
-      var hRef = hostBinding.referencePaths[hri];
-      var hMem = hRef.parentPath;
-      if (!hMem || !hMem.isMemberExpression() || hMem.node.object !== hRef.node || hMem.node.computed) continue;
-      if (!_t.isIdentifier(hMem.node.property, { name: "call" })) continue;
-      var hCall = hMem.parentPath;
-      if (!hCall || !hCall.isCallExpression() || hCall.node.callee !== hMem.node) continue;
-      var callerIdx = pIdx + 1; // .call thisArg shift
-      if (callerIdx < hCall.node.arguments.length) out.push(hCall.get("arguments." + callerIdx));
-    }
-  }
-  return out.length ? out : [exprPath];
-}
 
 // Build a fetch call site object with standard schema.
 // Tell _buildFetchSite when the URL it was given came from a pure
@@ -867,68 +573,6 @@ function _findThisAssignedParam(funcPath, propName) {
   return assignedParamName;
 }
 
-// Richer variant: returns {paramName, propFromParam} where propFromParam is
-// set when the ctor assigns `this.X = param.X` (or `this.X = param.Y`), a
-// pattern minifiers emit in place of destructured params. Falls back to the
-// simple `this.X = ident` match, where propFromParam is null.
-//
-// Example:
-//   constructor(o) { this.url = o.url; }  → {paramName:"o", propFromParam:"url"}
-//   constructor(u) { this.url = u; }      → {paramName:"u", propFromParam:null}
-//
-// Returns null when neither pattern matches.
-function _findThisAssignedParamRich(funcPath, propName) {
-  var result = null;
-  try {
-    funcPath.traverse(Object.assign({
-      AssignmentExpression: function(aPath) {
-        if (result) { aPath.stop(); return; }
-        if (aPath.node.operator !== "=") return;
-        var left = aPath.node.left;
-        if (!(_t.isMemberExpression(left) && _t.isThisExpression(left.object) && !left.computed &&
-              _t.isIdentifier(left.property, { name: propName }))) return;
-        var right = aPath.node.right;
-        // Case 1: this.X = ident
-        if (_t.isIdentifier(right)) {
-          result = { paramName: right.name, propFromParam: null };
-          return;
-        }
-        // Case 2: this.X = ident.Y (non-computed member access).
-        // Common minifier output for destructured ctor params.
-        if (_t.isMemberExpression(right) && !right.computed &&
-            _t.isIdentifier(right.object) && _t.isIdentifier(right.property)) {
-          result = { paramName: right.object.name, propFromParam: right.property.name };
-          return;
-        }
-      },
-    }, _SKIP_NESTED_FUNCS));
-  } catch (e) { _resolver.collectError(e, "findThisAssignedParamRich"); }
-  return result;
-}
-
-// Return the Babel path of the RHS for the first `this.X = ...` assignment
-// in funcPath's body, regardless of RHS shape. Used to resolve constructor
-// assignments whose RHS is a call/expression (not a param ref) — the value
-// is closed-over in the function's scope, so caller substitution doesn't
-// apply and the RHS resolves directly.
-function _findThisAssignmentRhsPath(funcPath, propName) {
-  var resultPath = null;
-  try {
-    funcPath.traverse(Object.assign({
-      AssignmentExpression: function(aPath) {
-        if (resultPath) { aPath.stop(); return; }
-        if (aPath.node.operator !== "=") return;
-        var left = aPath.node.left;
-        if (!(_t.isMemberExpression(left) && _t.isThisExpression(left.object) && !left.computed &&
-              _t.isIdentifier(left.property, { name: propName }))) return;
-        resultPath = aPath.get("right");
-        aPath.stop();
-      },
-    }, _SKIP_NESTED_FUNCS));
-  } catch (e) { _resolver.collectError(e, "findThisAssignmentRhsPath"); }
-  return resultPath;
-}
-
 function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _constraints = {};
   _stats = { protoMethods: 0, protoMethodsNoField: 0, resolvedUrls: 0, interProcTraces: 0, globalAssignments: 0, windowAliases: 0 };
@@ -951,6 +595,11 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _specThisEffectsMemo = new WeakMap();
   _specStateOuterImports = new WeakMap();
   _specProgramFixpointDone = new WeakSet();
+  _specSliceFns = new WeakSet();
+  _specSliceComputedDone = new WeakSet();
+  _specAnalyzeInProgress = new WeakSet();
+  _specCallGraphCallersOf = null;
+  _specCallGraphCalleesOf = null;
   _specBindingInitAvCache = new WeakMap();
   _specOuterImportsListCache = new WeakMap();
   _specCallSitesByFn = new WeakMap();
@@ -998,6 +647,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   };
 
   var ast = null;
+  var _t_parse_start = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
   try {
     if (forceScript) {
       // Combined cross-script analysis: parse as script (shared global scope, matching browser <script> semantics)
@@ -1013,6 +663,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
       return result;
     }
   }
+  var _t_parse_end = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
 
   // Pre-pass: collect global assignments and window aliases before main analysis
   // so that sink tracing can resolve global aliases (e.g., window.jQuery = lib),
@@ -1131,6 +782,26 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
       console.debug("[AST] Pre-pass overflow on %s (%d chars) — continuing with main pass", sourceUrl, code.length);
     } else { throw _prePassErr; }
   }
+  var _t_prepass_end = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+
+  // Build the slice + static call graph before the main pass so that
+  // sink-dispatch visitors can skip non-slice functions (which by
+  // construction contain no structural sinks/sources, so their AV-
+  // grounded dispatch would always bottom out anyway). The fixpoint
+  // driver consumes the same slice — see _specAnalyzeProgramWithFixpoint.
+  try {
+    var _slicePass = _babelTraverse(ast, {
+      Program: function(p) {
+        _specBuildSlice(p);
+        p.stop();
+      }
+    });
+  } catch (_sliceErr) {
+    if (_sliceErr instanceof RangeError) {
+      _resolver.collectError(_sliceErr, "sliceBuild");
+    } else { throw _sliceErr; }
+  }
+  var _t_slice_end = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
 
   try {
   _babelTraverse(ast, {
@@ -1362,6 +1033,14 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   // minified bundle is the dominant cost of the AST pipeline; halving
   // it pays for the cross-pass carry.
   result._ast = ast;
+  var _t_end = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  result._phaseTimings = {
+    parseMs: Math.round(_t_parse_end - _t_parse_start),
+    prePassMs: Math.round(_t_prepass_end - _t_parse_end),
+    sliceMs: Math.round(_t_slice_end - _t_prepass_end),
+    mainPassMs: Math.round(_t_end - _t_slice_end),
+    totalMs: Math.round(_t_end - _t_parse_start),
+  };
   return result;
 }
 
@@ -1418,6 +1097,7 @@ function _processExportMethodCall(path, result) {
 // ─── Network Sink Detection & Inter-Procedural Tracing ──────────────────────
 
 function _processNetworkSink(path, result) {
+  if (!_isPathInSlice(path)) return;
   var node = path.node;
   var callee = node.callee;
 
@@ -1486,204 +1166,6 @@ function _processNetworkSink(path, result) {
           }
         }
       }
-
-      // ── Correlated resolution: detect shared-base-param pattern ──
-      // When both args are P.prop1 and P.prop2 from the same parameter P, trace P
-      // to concrete caller arguments and extract both properties together per-caller.
-      var methodBase = _t.isMemberExpression(methodArg) && !methodArg.computed && _t.isIdentifier(methodArg.object) ? methodArg.object : null;
-      var urlBase = _t.isMemberExpression(_xhrArg1) && !_xhrArg1.computed && _t.isIdentifier(_xhrArg1.object) ? _xhrArg1.object : null;
-
-      if (methodBase && urlBase && methodBase.name === urlBase.name) {
-        var sharedBinding = path.scope.getBinding(methodBase.name);
-        if (sharedBinding && sharedBinding.kind === "param") {
-          var methodPropName = _t.isIdentifier(methodArg.property) ? methodArg.property.name : null;
-          var urlPropName = _t.isIdentifier(_xhrArg1.property) ? _xhrArg1.property.name : null;
-          if (methodPropName && urlPropName) {
-            console.debug("[AST:trace]   correlated resolution: %s.%s + %s.%s", methodBase.name, methodPropName, urlBase.name, urlPropName);
-            var callerArgs = _resolveParamToCallerArgs(sharedBinding);
-            // Deduplicate caller args by AST node position — the same expression
-            // reached through different trace paths produces identical results
-            var _seenArgNodes = {};
-            var _uniqueArgs = [];
-            for (var dai = 0; dai < callerArgs.length; dai++) {
-              var _akey = callerArgs[dai].node.start + ":" + callerArgs[dai].node.end;
-              if (!_seenArgNodes[_akey]) { _seenArgNodes[_akey] = true; _uniqueArgs.push(callerArgs[dai]); }
-            }
-            callerArgs = _uniqueArgs;
-            console.debug("[AST:trace]   found %d caller arg paths (%d unique)", callerArgs.length, _uniqueArgs.length);
-            // For method, also check alternate property names (method vs type)
-            var methodProps = [methodPropName];
-            if (methodPropName === "type") methodProps.push("method");
-            else if (methodPropName === "method") methodProps.push("type");
-            for (var cai = 0; cai < callerArgs.length; cai++) {
-              var props = _resolvePropsFromArg(callerArgs[cai], methodProps.concat([urlPropName]));
-              var resolvedMethods = [];
-              for (var mpi = 0; mpi < methodProps.length; mpi++) {
-                resolvedMethods = resolvedMethods.concat(props[methodProps[mpi]] || []);
-              }
-              var resolvedUrls = props[urlPropName] || [];
-              // Filter to valid HTTP methods
-              resolvedMethods = resolvedMethods.filter(function(m) { return typeof m === "string" && _HTTP_METHODS_LC[m.toLowerCase()]; });
-              for (var ui = 0; ui < resolvedUrls.length; ui++) {
-                // When methods and URLs have the same count, pair by index — the computed-member
-                // route iterates values in the same order as the iteration variable, so index
-                // correspondence is maintained (e.g., "get"→jQuery.get() callers, "post"→jQuery.post() callers).
-                // When methods and URLs pair 1:1, use index correspondence.
-                // When there are more methods than URLs, emit a site per method for this URL.
-                var methodsForUrl = [];
-                if (resolvedMethods.length === resolvedUrls.length) {
-                  methodsForUrl = [resolvedMethods[ui].toUpperCase()];
-                } else if (resolvedMethods.length > resolvedUrls.length) {
-                  for (var emi = 0; emi < resolvedMethods.length; emi++) methodsForUrl.push(resolvedMethods[emi].toUpperCase());
-                } else if (resolvedMethods.length > 0) {
-                  methodsForUrl = [resolvedMethods[0].toUpperCase()];
-                } else {
-                  methodsForUrl = ["?"];
-                }
-                // Body params come from the XHR-internal trace
-                // (xhrBodyParams) — that's the spec-correct source: it
-                // observes what xhr.send() actually receives, regardless
-                // of the caller-arg property name used. The previous
-                // `cpKey === "data"` framework recognition (jQuery
-                // $.ajax convention) is removed per CLAUDE.md L29.
-                var corrBodyParams = xhrBodyParams.length > 0 ? xhrBodyParams : [];
-                for (var mfi = 0; mfi < methodsForUrl.length; mfi++) {
-                  _pushFetchSite(result, _buildFetchSite(resolvedUrls[ui], methodsForUrl[mfi], xhrHeaders, "xhr", corrBodyParams));
-                  console.debug("[AST:fetch] xhr %s %s", methodsForUrl[mfi], resolvedUrls[ui]);
-                }
-              }
-            }
-            return; // Done — correlated resolution handled it
-          }
-        }
-      }
-
-      // ── Cross-parameter correlated resolution ──
-      // Method and URL come from different parameters of the same function:
-      // function(url, opts) { xhr.open(opts.method||"get", url) }
-      // For each caller, extract both args at their respective param indices.
-      var _methodParamInfo = _identifyParamSource(methodArg, path);
-      var _urlParamInfo = _identifyParamSource(_xhrArg1, path);
-      if (_methodParamInfo && _urlParamInfo &&
-          _methodParamInfo.funcPath === _urlParamInfo.funcPath &&
-          _methodParamInfo.paramIdx !== _urlParamInfo.paramIdx) {
-        var xpFuncPath = _methodParamInfo.funcPath;
-        var xpCallerArgs = _findFunctionCallerArgs(xpFuncPath);
-        if (xpCallerArgs.length > 0) {
-          console.debug("[AST:trace]   cross-param correlated: method=param[%d].%s url=param[%d] (%d callers)",
-            _methodParamInfo.paramIdx, _methodParamInfo.propName || "(direct)", _urlParamInfo.paramIdx, xpCallerArgs.length);
-          for (var xci = 0; xci < xpCallerArgs.length; xci++) {
-            var xpArgs = xpCallerArgs[xci];
-            // Resolve URL from caller
-            var xpUrls = [];
-            if (_urlParamInfo.paramIdx < xpArgs.length) {
-              xpUrls = _resolveAllValues(xpArgs[_urlParamInfo.paramIdx], 0);
-            }
-            // Resolve method from caller
-            var xpMethods = [];
-            if (_methodParamInfo.paramIdx < xpArgs.length) {
-              if (_methodParamInfo.propName) {
-                // opts.method — resolve the opts arg to object, extract the property
-                var xpObj = _resolveToObject(xpArgs[_methodParamInfo.paramIdx], 0);
-                if (xpObj) {
-                  for (var xpi = 0; xpi < xpObj.properties.length; xpi++) {
-                    var xpp = xpObj.properties[xpi];
-                    if (!_t.isObjectProperty(xpp) || xpp.computed) continue;
-                    var xpk = _getKeyName(xpp.key);
-                    if (xpk === _methodParamInfo.propName) {
-                      if (_t.isStringLiteral(xpp.value)) xpMethods.push(xpp.value.value);
-                    }
-                  }
-                }
-              } else {
-                xpMethods = _resolveAllValues(xpArgs[_methodParamInfo.paramIdx], 0);
-              }
-            }
-            // Apply default from LogicalExpression: n.method || "get"
-            if (xpMethods.length === 0 && _methodParamInfo.defaultValue) {
-              xpMethods = [_methodParamInfo.defaultValue];
-            }
-            xpMethods = xpMethods.filter(function(m) { return typeof m === "string" && _HTTP_METHODS_LC[m.toLowerCase()]; });
-            // Resolve body params from caller if available
-            var xpBody = xhrBodyParams.length > 0 ? xhrBodyParams : [];
-            if (xpBody.length === 0 && _methodParamInfo.paramIdx < xpArgs.length && _methodParamInfo.propName) {
-              var xpBodyObj = _resolveToObject(xpArgs[_methodParamInfo.paramIdx], 0);
-              if (xpBodyObj) {
-                for (var xbi = 0; xbi < xpBodyObj.properties.length; xbi++) {
-                  var xbp = xpBodyObj.properties[xbi];
-                  if (!_t.isObjectProperty(xbp) || xbp.computed) continue;
-                  if (_getKeyName(xbp.key) === "body") {
-                    var bodyVal = xbp.value;
-                    bodyVal = _unwrapJsonStringify(bodyVal, path);
-                    if (_t.isObjectExpression(bodyVal)) {
-                      xpBody = _extractObjectProperties(bodyVal);
-                      for (var xbpi = 0; xbpi < xpBody.length; xbpi++) xpBody[xbpi].location = "body";
-                    }
-                    break;
-                  }
-                }
-              }
-            }
-            // Extract headers from caller's opts object (e.g. opts.headers)
-            var xpHeaders = Object.assign({}, xhrHeaders);
-            if (_methodParamInfo.paramIdx < xpArgs.length && _methodParamInfo.propName) {
-              var xpHdrObj = _resolveToObject(xpArgs[_methodParamInfo.paramIdx], 0);
-              if (xpHdrObj) {
-                for (var xhi = 0; xhi < xpHdrObj.properties.length; xhi++) {
-                  var xhp = xpHdrObj.properties[xhi];
-                  if (!_t.isObjectProperty(xhp) || xhp.computed) continue;
-                  if (_getKeyName(xhp.key) === "headers" && _t.isObjectExpression(xhp.value)) {
-                    xpHeaders = Object.assign(xpHeaders, _extractHeaders(xhp.value));
-                    break;
-                  }
-                }
-              }
-            }
-            for (var xui = 0; xui < xpUrls.length; xui++) {
-              var xpMethod = xpMethods.length > 0 ? xpMethods[0].toUpperCase() : "GET";
-              _pushFetchSite(result, _buildFetchSite(xpUrls[xui], xpMethod, xpHeaders, "xhr", xpBody));
-              console.debug("[AST:fetch] xhr %s %s (cross-param)", xpMethod, xpUrls[xui]);
-            }
-          }
-          return;
-        }
-      }
-
-      // ── this.prop XHR correlated resolution (prototype methods) ──
-      // When both args are this.method and this.url, trace through constructor per-caller
-      var _thisMethodProp = null, _thisUrlProp = null;
-      if (_t.isMemberExpression(methodArg) && _t.isThisExpression(methodArg.object) &&
-          _t.isIdentifier(methodArg.property)) _thisMethodProp = methodArg.property.name;
-      if (_t.isMemberExpression(_xhrArg1) && _t.isThisExpression(_xhrArg1.object) &&
-          _t.isIdentifier(_xhrArg1.property)) _thisUrlProp = _xhrArg1.property.name;
-      if (_thisMethodProp && _thisUrlProp) {
-        var _encFunc = path.getFunctionParent();
-        if (_encFunc) {
-          // Find Ctor.prototype.method = function(){...} pattern
-          var _ctorName = null;
-          var _funcParentP = _encFunc.parentPath;
-          if (_funcParentP && _t.isAssignmentExpression(_funcParentP.node) && _funcParentP.node.right === _encFunc.node) {
-            var _aLeft = _funcParentP.node.left;
-            if (_t.isMemberExpression(_aLeft) && _t.isMemberExpression(_aLeft.object) && !_aLeft.object.computed &&
-                (_t.isIdentifier(_aLeft.object.property, {name:"prototype"}) ||
-                 (_t.isStringLiteral(_aLeft.object.property) && _aLeft.object.property.value === "prototype")) &&
-                _t.isIdentifier(_aLeft.object.object)) {
-              _ctorName = _aLeft.object.object.name;
-            }
-          }
-          if (_ctorName) {
-            var _correlatedSites = _resolveThisPropXhrCorrelated(path, _ctorName, _thisMethodProp, _thisUrlProp, xhrHeaders, xhrBodyParams);
-            if (_correlatedSites.length > 0) {
-              for (var _csi = 0; _csi < _correlatedSites.length; _csi++) {
-                var _csSite = _correlatedSites[_csi];
-                if (_csSite && _csSite.url !== "" && _csSite.url != null) result.fetchCallSites.push(_csSite);
-              }
-              return;
-            }
-          }
-        }
-      }
-
       // ── Fallback: independent resolution (for simple cases / non-shared params) ──
       var xhrMethod = null;
       if (_t.isStringLiteral(methodArg) && _HTTP_METHODS_LC[methodArg.value.toLowerCase()]) {
@@ -1734,21 +1216,23 @@ function _processNetworkSink(path, result) {
     return;
   }
 
-  // ── Check if this is a call to a function that contains a network sink ──
-  // Inter-procedural: if callee resolves to a function definition that has fetch/XHR inside
-  var funcPath = _resolveCalleeFuncPath(path, 0);
-  if (funcPath) {
-    // calleeBinding is used for finding OTHER callers (wrapper tracing).
-    // For MemberExpression callees ($.ajax, axios.get), binding is null — we still
-    // trace the current call site's arguments through both direct and deep sink paths.
-    var calleeBinding = _t.isIdentifier(callee) ? path.scope.getBinding(callee.name) : null;
-    _traceWrapperFunction(path, funcPath, calleeBinding, result);
-  }
+  // Inter-procedural fetch / XHR detection through wrapper functions
+  // is handled by spec eval: when the wrapper's body calls fetch /
+  // xhr.open with param-derived URL/method/body AVs, those calls fire
+  // their own _processNetworkSink via the main pass's CallExpression
+  // visitor; _resolveAllValues + _extractBodyParams substitute caller-
+  // arg AVs through the spec-eval call-graph index (_specCallSitesByFn
+  // + _specInstantiateAv per ECMA § 10.2.10 FunctionDeclarationInstanti-
+  // ation). The previous wrapper-trace pipeline duplicated this
+  // substitution via shape-matching with strictly less information —
+  // no closure write-back, no class-method dispatch, no per-statement
+  // narrowing. Spec eval is the canonical resolver.
 }
 
 // ─── Additional Browser Sinks ────────────────────────────────────────────────
 
 function _processNewExpressionSink(path, result) {
+  if (!_isPathInSlice(path)) return;
   var node = path.node;
   var callee = node.callee;
   // new EventSource(url) — AV-grounded callee identity via builtin-ctor
@@ -1766,6 +1250,7 @@ function _processNewExpressionSink(path, result) {
 }
 
 function _processImageSrcSink(path, result) {
+  if (!_isPathInSlice(path)) return;
   var node = path.node;
   if (node.operator !== "=") return;
   var left = node.left;
@@ -2187,6 +1672,9 @@ function _specGlobalThisAv() {
     createElementNS: { kind: "builtin-method", id: "document.createElementNS" },
     createTextNode: { kind: "builtin-method", id: "document.createTextNode" },
     createDocumentFragment: { kind: "builtin-method", id: "document.createDocumentFragment" },
+    // WHATWG DOM § 5.5 Document.createRange — returns a Range instance
+    // whose createContextualFragment(html) is a DOM XSS sink (HTML § 6.2.5).
+    createRange: { kind: "builtin-method", id: "document.createRange" },
     // WHATWG HTML § 4.10.4 Document.write / Document.writeln — DOM XSS sink.
     write: { kind: "builtin-method", id: "Document.prototype.write" },
     writeln: { kind: "builtin-method", id: "Document.prototype.writeln" },
@@ -2272,6 +1760,11 @@ function _specGlobalThisAv() {
   var abortControllerCtorAv = { kind: "builtin-ctor", id: "WHATWG.AbortController" };
   // WHATWG DOM § 4.6 MutationObserver — DOM observation.
   var mutationObserverCtorAv = { kind: "builtin-ctor", id: "WHATWG.MutationObserver" };
+  // WHATWG DOM § 5.5 Range — used both as `new Range()` and returned from
+  // `document.createRange()`. The instance's `.createContextualFragment(html)`
+  // (per HTML § 6.2.5) parses html into a DocumentFragment, exposing the
+  // HTML parser to attacker-controlled markup (DOM XSS sink).
+  var rangeCtorAv = { kind: "builtin-ctor", id: "WHATWG.Range" };
   // WHATWG IndexedDB § 5 IDBRequest opens go through indexedDB global.
   // (modeled at globalThis.indexedDB level; no `new IDBDatabase()` sites.)
   // WHATWG HTML § 10 Web Workers / Channel Messaging. Worker / SharedWorker
@@ -2607,6 +2100,16 @@ function _specGlobalThisAv() {
       TransformStream: transformStreamCtorAv,
       AbortController: abortControllerCtorAv,
       MutationObserver: mutationObserverCtorAv,
+      // WHATWG DOM § 5.5 Range — accessed via `new Range()` (rare) or
+      // `document.createRange()` (common).
+      Range: rangeCtorAv,
+      // WHATWG DOM § 4.5 Document static interface — exposes
+      // Document.parseHTMLUnsafe(html) per HTML § 6.2.5 (DOM XSS sink).
+      // Distinct from the per-instance `document` (lowercase) registered
+      // below.
+      Document: { kind: "obj-lit", props: {
+        parseHTMLUnsafe: { kind: "builtin-method", id: "Document.parseHTMLUnsafe" },
+      } },
       Uint8Array: uint8ArrayCtorAv,
       Uint16Array: uint16ArrayCtorAv,
       Uint32Array: uint32ArrayCtorAv,
@@ -2725,6 +2228,33 @@ function _specElementPrototypeAv() {
     };
   }
   return _SPEC_ELEMENT_PROTO_AV;
+}
+
+// WHATWG DOM § 5.5 Range.prototype — methods on Range instances. The
+// security-relevant entry is createContextualFragment(html) per HTML
+// § 6.2.5 (parses html through the WHATWG HTML parser, exposing the
+// parser to attacker-controlled markup — DOM XSS sink). Spec eval
+// routes dispatch via _specGetPrototypeOfAv on a range-instance recv;
+// AV-id ("Range.prototype.createContextualFragment") makes the
+// receiver-type-correct dispatch independent of method-name match.
+var _SPEC_RANGE_PROTO_AV = null;
+function _specRangePrototypeAv() {
+  if (!_SPEC_RANGE_PROTO_AV) {
+    _SPEC_RANGE_PROTO_AV = {
+      kind: "obj-lit",
+      props: {
+        createContextualFragment: { kind: "builtin-method", id: "Range.prototype.createContextualFragment" },
+        setStart: { kind: "builtin-method", id: "Range.prototype.setStart" },
+        setEnd: { kind: "builtin-method", id: "Range.prototype.setEnd" },
+        selectNode: { kind: "builtin-method", id: "Range.prototype.selectNode" },
+        selectNodeContents: { kind: "builtin-method", id: "Range.prototype.selectNodeContents" },
+        collapse: { kind: "builtin-method", id: "Range.prototype.collapse" },
+        cloneRange: { kind: "builtin-method", id: "Range.prototype.cloneRange" },
+        detach: { kind: "builtin-method", id: "Range.prototype.detach" },
+      }
+    };
+  }
+  return _SPEC_RANGE_PROTO_AV;
 }
 
 // Object.prototype per ECMA § 20.1.3 — methods inherited by every object.
@@ -2868,6 +2398,7 @@ function _specGetPrototypeOfAv(av) {
   if (av.kind === "weakmap-instance") return _specWeakMapPrototypeAv();
   if (av.kind === "weakset-instance") return _specWeakSetPrototypeAv();
   if (av.kind === "regex-instance") return _specRegExpPrototypeAv();
+  if (av.kind === "range-instance") return _specRangePrototypeAv();
   // ECMA § 20.1.3 Object.prototype — implicit prototype for every obj-lit
   // (and inherited up the prototype chain by string/array/etc.). Provides
   // hasOwnProperty / toString / valueOf / isPrototypeOf etc. dispatch.
@@ -3444,6 +2975,14 @@ function _specApplyBuiltinCtor(ctorId, argAvs) {
         },
       }
     };
+  }
+  // WHATWG DOM § 5.5 Range — `new Range()` returns a range-instance.
+  // Prototype-chain dispatch via _specGetPrototypeOfAv routes the
+  // instance's methods through Range.prototype (createContextualFragment
+  // etc.). Distinct kind so dispatch goes through Range.prototype, not
+  // Object.prototype.
+  if (ctorId === "WHATWG.Range") {
+    return { kind: "range-instance" };
   }
   // WHATWG DOM § 4.6 MutationObserver — async DOM observation.
   if (ctorId === "WHATWG.MutationObserver") {
@@ -4385,6 +3924,11 @@ function _specApplyBuiltinMethod(methodId, recvAv, recvName, argAvs, state) {
   // element family for tree-mount tracking.
   if (methodId === "document.createTextNode" || methodId === "document.createDocumentFragment") {
     return { kind: "dom-element", attached: false, props: {} };
+  }
+  // WHATWG DOM § 5.5 Document.createRange — returns Range instance whose
+  // .createContextualFragment is a DOM XSS sink via prototype dispatch.
+  if (methodId === "document.createRange") {
+    return { kind: "range-instance" };
   }
   // WHATWG DOM § 4.2.5 insert / Node.appendChild / .insertBefore /
   // .replaceChild / .append / .prepend. When the receiver is a tree-
@@ -5607,6 +5151,46 @@ var _specOuterImportsListCache = new WeakMap();
 // handlers contains the function via closure write-back).
 var _specCallSitesByFn = new WeakMap();
 
+// Slice of functions that may transitively contribute to a sink/source
+// reachability path. Computed by _specBuildSlice() before the main
+// pass; entry-point detection is purely structural (WHATWG sink/source
+// names, scope-verified). Non-slice functions are skipped by the
+// main-pass sink processors (they contain no sinks structurally, so
+// AV-grounded dispatch in them would always bottom out).
+var _specSliceFns = new WeakSet();
+var _specSliceComputedDone = new WeakSet();
+// Functions currently being analysed by _specAnalyzePropertyFlow.
+// Explicit cycle guard for demand-driven mutual recursion — see the
+// guard at the top of _specAnalyzePropertyFlow for the rationale.
+var _specAnalyzeInProgress = new WeakSet();
+// Reverse + forward call graphs built during slice computation.
+// Persisted so _specAnalyzeProgramWithFixpoint's pass-2/worklist can
+// reuse them without re-traversing.
+var _specCallGraphCallersOf = null;
+var _specCallGraphCalleesOf = null;
+
+// Check whether a path's enclosing function (or Program for top-level)
+// is in the slice computed by _specBuildSlice. Used by main-pass sink
+// processors to skip non-slice functions — those have no structural
+// sinks/sources, so AV-grounded dispatch in them would bottom out at
+// _traceValueSource returning "dynamic" anyway. Skipping at the
+// processor entrance avoids the per-function AV-population cost.
+// When the slice hasn't been computed (e.g. individual-script analysis
+// path before _specBuildSlice runs), returns true (no gate — preserves
+// behaviour). Idempotent — uses cached WeakSet lookup.
+function _isPathInSlice(path) {
+  if (!path) return true;
+  // Slice not yet computed (or analysis path bypassed _specBuildSlice):
+  // gate is open, preserving prior behaviour.
+  if (!_specCallGraphCallersOf) return true;
+  var enc = path.getFunctionParent && path.getFunctionParent();
+  if (enc && enc.node) return _specSliceFns.has(enc.node);
+  var p = path;
+  while (p && p.parentPath && !_t.isProgram(p.node)) p = p.parentPath;
+  if (p && p.node && _t.isProgram(p.node)) return _specSliceFns.has(p.node);
+  return true;
+}
+
 
 
 // § 15.7.3 ClassHeritage: iteratively walk an extends chain to find
@@ -6669,8 +6253,34 @@ function _specEqualAv(a, b) {
       case "this":     break;
       case "args-len": break;
       case "top":      break;
-      case "obj-lit":  return false;  // identity-based
-      case "array-lit": return false;  // identity-based
+      // Structural equality for obj-lit / array-lit. Two evaluations of
+      // the same source ObjectExpression / ArrayExpression produce
+      // freshly-allocated AVs (different identities); without structural
+      // comparison the worklist sees signature drift on every iteration
+      // even when content stabilises. Sorted-key comparison + recursive
+      // prop AV equality matches § 7.4 abstract-interpretation fixpoint
+      // semantics (semantically equal AVs are equal facts).
+      case "obj-lit": {
+        var xP = x.props || {};
+        var yP = y.props || {};
+        var xK = Object.keys(xP).sort();
+        var yK = Object.keys(yP).sort();
+        if (xK.length !== yK.length) return false;
+        for (var oki = 0; oki < xK.length; oki++) {
+          if (xK[oki] !== yK[oki]) return false;
+          pairs.push([xP[xK[oki]], yP[xK[oki]]]);
+        }
+        break;
+      }
+      case "array-lit": {
+        var xEl = x.elements || [];
+        var yEl = y.elements || [];
+        if (xEl.length !== yEl.length) return false;
+        for (var aei = 0; aei < xEl.length; aei++) {
+          pairs.push([xEl[aei], yEl[aei]]);
+        }
+        break;
+      }
       case "const":    if (x.value !== y.value) return false; break;
       case "args-elt": pairs.push([x.idx, y.idx]); break;
       case "loop-key": pairs.push([x.src, y.src]); break;
@@ -6694,6 +6304,59 @@ function _specEqualAv(a, b) {
         }
         break;
       }
+      // Registry-anchored AVs identified by stable spec id. Each is
+      // allocated once by _specGlobalThisAv (canonical singleton) — the
+      // x === y check above catches matches; explicit id compare here
+      // handles separate-but-equivalent allocations from spec-eval
+      // dispatch result builders. Required for fixpoint convergence
+      // when the same builtin is reached via multiple call paths.
+      case "builtin-method":
+      case "builtin-ctor":
+      case "callable-namespace":
+      case "taint-source":
+        if (x.id !== y.id) return false;
+        break;
+      // function-ref identified by its funcNode AST identity.
+      case "function-ref":
+        if (x.funcNode !== y.funcNode) return false;
+        break;
+      // coerce wrappers — same target type + structurally equal arg.
+      case "coerce":
+        if (x.to !== y.to) return false;
+        pairs.push([x.arg, y.arg]);
+        break;
+      // WHATWG DOM § 4.2 dom-element: same attachment state + IDL marker.
+      case "dom-element":
+        if (!!x.attached !== !!y.attached) return false;
+        if (x._idlName !== y._idlName) return false;
+        if (x._ctorId !== y._ctorId) return false;
+        break;
+      // Collection instances: structural equality on entries/items.
+      case "map-instance":
+      case "weakmap-instance": {
+        var xE = x.entries || []; var yE = y.entries || [];
+        if (xE.length !== yE.length) return false;
+        if (!!x.unknownInit !== !!y.unknownInit) return false;
+        for (var mei = 0; mei < xE.length; mei++) {
+          pairs.push([xE[mei][0], yE[mei][0]]);
+          pairs.push([xE[mei][1], yE[mei][1]]);
+        }
+        break;
+      }
+      case "set-instance":
+      case "weakset-instance": {
+        var xI = x.items || []; var yI = y.items || [];
+        if (xI.length !== yI.length) return false;
+        if (!!x.unknownInit !== !!y.unknownInit) return false;
+        for (var sei = 0; sei < xI.length; sei++) {
+          pairs.push([xI[sei], yI[sei]]);
+        }
+        break;
+      }
+      // regex-instance equal when pattern + flags match (§ 22.2.1.1).
+      case "regex-instance":
+        if (x.pattern !== y.pattern || x.flags !== y.flags) return false;
+        break;
       default: return false;
     }
   }
@@ -8717,52 +8380,97 @@ function _specEnsureProgramGlobalsPrepass(anyPath) {
   });
 }
 
-// Program-level fixpoint driver: collects all FunctionDeclaration /
-// FunctionExpression / ArrowFunctionExpression paths reachable from a
-// Program node, then iterates _specAnalyzePropertyFlow(force=true) over
-// each until no function's effects/memos change. This propagates
-// closure write-back side-effect summaries (per ECMA § 9.1.1) and
-// return-value memos across the whole call graph regardless of source
-// order. Idempotent per program node via _specProgramFixpointDone.
-var _specProgramFixpointDone = new WeakSet();
-function _specAnalyzeProgramWithFixpoint(programPath) {
-  if (!programPath || !programPath.node || !_t.isProgram(programPath.node)) return;
-  if (_specProgramFixpointDone.has(programPath.node)) return;
-  _specProgramFixpointDone.add(programPath.node);
+// Slice + call-graph builder. Idempotent per program node. Runs the
+// cheap structural walks (function index, static call-graph edges,
+// WHATWG sink/source detection) and computes the slice = entry-point
+// functions ∪ transitive callers ∪ transitive callees. Designed to
+// run BEFORE the main pass so visitor processors can skip non-slice
+// functions, AND BEFORE the fixpoint so its pass-2/worklist runs only
+// over the slice. State populated:
+//   _specSliceFns         : WeakSet of slice function nodes
+//   _specCallGraphCallersOf : Map<funcNode, Set<callerNode>>
+//   _specCallGraphCalleesOf : Map<funcNode, Set<calleeNode>>
+//   _specCallSitesByFn    : per-callee call-site index
+//   _specFuncPathByNode   : funcNode → funcPath index
+// Returns { fnPaths, slicePaths } so the fixpoint driver can reuse them.
+function _specBuildSlice(programPath) {
+  if (!programPath || !programPath.node || !_t.isProgram(programPath.node)) {
+    return { fnPaths: [], slicePaths: [] };
+  }
+  if (_specSliceComputedDone.has(programPath.node)) {
+    // Re-derive fnPaths from the index. Caller doesn't depend on the
+    // exact array contents for correctness — just for the fixpoint
+    // driver's iteration order (top-down via Babel traverse order).
+    var existing = [programPath];
+    programPath.traverse({
+      "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
+        existing.push(p);
+      }
+    });
+    var existingSlice = [];
+    for (var ei = 0; ei < existing.length; ei++) {
+      if (_specSliceFns.has(existing[ei].node)) existingSlice.push(existing[ei]);
+    }
+    return { fnPaths: existing, slicePaths: existingSlice };
+  }
+  _specSliceComputedDone.add(programPath.node);
   var fnPaths = [programPath];
-  // Per § 14.1 / § 15.2 / § 15.3 / § 15.7 every kind of function-like
-  // production carries its own function body that the analyser needs to
-  // visit: FunctionDeclaration, FunctionExpression, ArrowFunctionExpression
-  // (§ 15.3.5), ObjectMethod (§ 13.2.5 shorthand `{foo() {}}`), ClassMethod
-  // and ClassPrivateMethod (§ 15.7 class body). All produce a function
-  // node whose params + body the property-flow analysis is meaningful on.
+  var _cgCallersOf = new Map();
+  var entryFns = new Set();
+  var hofArgFns = []; // [{ fnNode, encNode }] — function literals passed as call args + their enclosing scope
+  // Single program traverse: collects every signal the slice needs.
+  // Combining what were four separate traversals (function index,
+  // call-graph, entry-point detection, HOF-arg targets) into one walk
+  // halves the upfront cost on large bundles. Per § 14.1 / § 15.2 /
+  // § 15.3 / § 15.7 every function-like production carries its own
+  // body — all six kinds are indexed for the AV walkers.
+  function _addEntryEnclosing(p) {
+    var enc = p.getFunctionParent();
+    entryFns.add(enc && enc.node ? enc.node : programPath.node);
+  }
   programPath.traverse({
     "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod": function(p) {
       fnPaths.push(p);
-      // funcNode -> funcPath index for AV walkers (param-caller transitions,
-      // function-ref AV path recovery). Mirrors the prepass's Function
-      // visitor so the fixpoint is self-sufficient.
       _specFuncPathByNode.set(p.node, p);
-    }
-  });
-  // Worklist-based fixpoint: pass 1 analyses every function. Subsequent
-  // passes only re-analyse functions whose direct callees changed in
-  // the previous pass — bounds total work to O(F * affected-chain-depth)
-  // instead of O(F²). Reverse call graph computed via a SINGLE program-
-  // wide traversal so cost is O(total-AST), not O(total-AST * nesting-
-  // depth) (would be the case if we traversed each function's body
-  // separately — nested function bodies would be visited per ancestor).
-  var callersOf = new Map();   // funcNode → Set of caller funcNodes
-  // Inverse: funcNode → Array of CallExpression paths whose callee
-  // resolves to that function. Populated during this single program
-  // traverse (no extra walk). Used by URL extractor's caller-tracing
-  // to find call sites of stored callbacks (e.g. `handlers[N](args)`
-  // when handlers contains a function-ref AV after closure write-back
-  // fixpoint completes).
-  programPath.traverse({
-    "CallExpression|NewExpression": function(p) {
-      var calleeName = null;
+      // HOF-arg targets: function literals passed as call arguments
+      // (`register(cb)`, `arr.forEach(cb)`, ...) — invoked via aliases
+      // the static call graph can't resolve. Slice membership pulls in
+      // both the function literal AND its enclosing scope.
+      if ((_t.isFunctionExpression(p.node) || _t.isArrowFunctionExpression(p.node)) &&
+          _t.isCallExpression(p.parent) && p.parent.callee !== p.node) {
+        var pargs = p.parent.arguments;
+        for (var ai = 0; ai < pargs.length; ai++) {
+          if (pargs[ai] === p.node) {
+            var enc = p.getFunctionParent();
+            hofArgFns.push({ fnNode: p.node, encNode: enc && enc.node ? enc.node : programPath.node });
+            break;
+          }
+        }
+      }
+    },
+    CallExpression: function(p) {
       var c = p.node.callee;
+      // ── Entry-point detection (structural, scope-verified).
+      if (_t.isIdentifier(c)) {
+        if ((c.name === "fetch" || c.name === "eval" ||
+             c.name === "setTimeout" || c.name === "setInterval") &&
+            !p.scope.getBinding(c.name)) {
+          _addEntryEnclosing(p);
+        }
+      } else if (_t.isMemberExpression(c) && _t.isIdentifier(c.property)) {
+        var mn = c.property.name;
+        if (mn === "fetch" || mn === "eval" ||
+            mn === "setTimeout" || mn === "setInterval" ||
+            mn === "open" || mn === "send" || mn === "write" || mn === "writeln" ||
+            mn === "setHTMLUnsafe" || mn === "parseHTMLUnsafe" || mn === "insertAdjacentHTML" ||
+            mn === "createContextualFragment" || mn === "setAttribute" || mn === "postMessage" ||
+            mn === "addEventListener" || mn === "getItem" || mn === "assign" || mn === "replace" ||
+            mn === "sendBeacon") {
+          _addEntryEnclosing(p);
+        }
+      }
+      // ── Static call-graph build (scope-resolved name lookup).
+      var calleeName = null;
       if (_t.isIdentifier(c)) calleeName = c.name;
       var calleeNode = null;
       if (calleeName) {
@@ -8773,41 +8481,14 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
                    (_t.isFunctionExpression(b.path.node.init) || _t.isArrowFunctionExpression(b.path.node.init))) {
             calleeNode = b.path.node.init;
           }
-          // NewExpression on a ClassDeclaration: the call site indexes the
-          // class's constructor per § 13.3.5 — so the ctor's
-          // _resolveAvBySubstitutingCallerArgs walks back to NewExpression
-          // sites with their args, completing the multi-level chain
-          // (NewExpression → ctor params → method's `this` projections).
-          else if (_t.isNewExpression(p.node)) {
-            var clsBody = null;
-            if (_t.isClassDeclaration(b.path.node) && b.path.node.body) clsBody = b.path.node.body;
-            else if (_t.isVariableDeclarator(b.path.node) && b.path.node.init &&
-                     _t.isClassExpression(b.path.node.init) && b.path.node.init.body) {
-              clsBody = b.path.node.init.body;
-            }
-            if (clsBody && _t.isClassBody(clsBody)) {
-              for (var cmiN = 0; cmiN < clsBody.body.length; cmiN++) {
-                var cmN = clsBody.body[cmiN];
-                if (_t.isClassMethod(cmN) && cmN.kind === "constructor") {
-                  calleeNode = cmN;
-                  break;
-                }
-              }
-            }
-          }
         }
       }
-      // Class method dispatch per § 13.3.6: when callee is `recv.name`
-      // and the receiver resolves to a known class instance (via
-      // NewExpression on a known class binding), index this CallExpression
-      // as a call site of the class's `name` method. Lets URL-extractor
-      // caller-tracing find class-method invocations.
+      // Class method dispatch per § 13.3.6.
       if (!calleeNode && _t.isMemberExpression(c) && !c.computed &&
-          _t.isIdentifier(c.property) && _t.isCallExpression(p.node)) {
-        var methName = c.property.name;
+          _t.isIdentifier(c.property)) {
+        var methName2 = c.property.name;
         var recv = c.object;
         var classDeclNode = null;
-        // recv = new ClassName(...) (direct)
         if (_t.isNewExpression(recv) && _t.isIdentifier(recv.callee)) {
           var clsB = p.scope.getBinding(recv.callee.name);
           if (clsB && clsB.path && _t.isClassDeclaration(clsB.path.node)) {
@@ -8816,9 +8497,7 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
                      clsB.path.node.init && _t.isClassExpression(clsB.path.node.init)) {
             classDeclNode = clsB.path.node.init;
           }
-        }
-        // recv = identifier bound to `new ClassName(...)`
-        else if (_t.isIdentifier(recv)) {
+        } else if (_t.isIdentifier(recv)) {
           var rcvB = p.scope.getBinding(recv.name);
           if (rcvB && rcvB.path && _t.isVariableDeclarator(rcvB.path.node) &&
               rcvB.path.node.init && _t.isNewExpression(rcvB.path.node.init) &&
@@ -8837,7 +8516,7 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
             var cmC = classDeclNode.body.body[cmiC];
             if (_t.isClassMethod(cmC) && !cmC.static && !cmC.computed &&
                 cmC.kind === "method" && _t.isIdentifier(cmC.key) &&
-                cmC.key.name === methName) {
+                cmC.key.name === methName2) {
               calleeNode = cmC;
               break;
             }
@@ -8847,13 +8526,129 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
       if (calleeNode) {
         var enc = p.getFunctionParent();
         var callerNode = (enc && enc.node) ? enc.node : programPath.node;
-        if (!callersOf.has(calleeNode)) callersOf.set(calleeNode, new Set());
-        callersOf.get(calleeNode).add(callerNode);
+        if (!_cgCallersOf.has(calleeNode)) _cgCallersOf.set(calleeNode, new Set());
+        _cgCallersOf.get(calleeNode).add(callerNode);
         if (!_specCallSitesByFn.has(calleeNode)) _specCallSitesByFn.set(calleeNode, []);
         _specCallSitesByFn.get(calleeNode).push(p);
       }
-    }
+    },
+    NewExpression: function(p) {
+      var c = p.node.callee;
+      // Entry-point detection: WHATWG ctors.
+      if (_t.isIdentifier(c) &&
+          (c.name === "XMLHttpRequest" || c.name === "WebSocket" ||
+           c.name === "EventSource" || c.name === "Function" ||
+           c.name === "Request" || c.name === "URL") &&
+          !p.scope.getBinding(c.name)) {
+        _addEntryEnclosing(p);
+      }
+      // Class-ctor call-graph: `new C(...)` indexes C's constructor.
+      if (_t.isIdentifier(c)) {
+        var b2 = p.scope.getBinding(c.name);
+        if (b2 && b2.path && b2.path.node) {
+          var clsBody = null;
+          if (_t.isClassDeclaration(b2.path.node) && b2.path.node.body) clsBody = b2.path.node.body;
+          else if (_t.isVariableDeclarator(b2.path.node) && b2.path.node.init &&
+                   _t.isClassExpression(b2.path.node.init) && b2.path.node.init.body) {
+            clsBody = b2.path.node.init.body;
+          }
+          if (clsBody && _t.isClassBody(clsBody)) {
+            for (var cmiN = 0; cmiN < clsBody.body.length; cmiN++) {
+              var cmN = clsBody.body[cmiN];
+              if (_t.isClassMethod(cmN) && cmN.kind === "constructor") {
+                var enc2 = p.getFunctionParent();
+                var callerNode2 = (enc2 && enc2.node) ? enc2.node : programPath.node;
+                if (!_cgCallersOf.has(cmN)) _cgCallersOf.set(cmN, new Set());
+                _cgCallersOf.get(cmN).add(callerNode2);
+                if (!_specCallSitesByFn.has(cmN)) _specCallSitesByFn.set(cmN, []);
+                _specCallSitesByFn.get(cmN).push(p);
+                break;
+              }
+            }
+          }
+        }
+      }
+    },
+    AssignmentExpression: function(p) {
+      var lhs = p.node.left;
+      if (_t.isMemberExpression(lhs) && _t.isIdentifier(lhs.property)) {
+        var pn = lhs.property.name;
+        if (pn === "innerHTML" || pn === "outerHTML" || pn === "src" ||
+            pn === "href" || pn === "action" || pn === "formAction" ||
+            pn === "data" || (pn.length > 2 && pn.charCodeAt(0) === 111 && pn.charCodeAt(1) === 110)) {
+          _addEntryEnclosing(p);
+        }
+      }
+    },
+    MemberExpression: function(p) {
+      var n = p.node;
+      if (!_t.isIdentifier(n.object) || !_t.isIdentifier(n.property)) return;
+      var on = n.object.name, pn = n.property.name;
+      var isAttackerSource = false;
+      if ((on === "location" || on === "Location") && !p.scope.getBinding(on)) isAttackerSource = true;
+      else if (on === "document" && !p.scope.getBinding("document") &&
+               (pn === "cookie" || pn === "referrer" || pn === "URL" || pn === "documentURI" || pn === "baseURI")) isAttackerSource = true;
+      else if (on === "window" && !p.scope.getBinding("window") && pn === "name") isAttackerSource = true;
+      else if (pn === "responseText" || pn === "response" || pn === "data" || pn === "responseURL") isAttackerSource = true;
+      if (isAttackerSource) _addEntryEnclosing(p);
+    },
   });
+  // Forward call graph: callerNode → Set of callee funcNodes.
+  var _cgCalleesOf = new Map();
+  _cgCallersOf.forEach(function(callerSet, calleeNode) {
+    callerSet.forEach(function(callerNode) {
+      if (!_cgCalleesOf.has(callerNode)) _cgCalleesOf.set(callerNode, new Set());
+      _cgCalleesOf.get(callerNode).add(calleeNode);
+    });
+  });
+  // Seed slice from entry points + Program + HOF-arg targets.
+  var slice = new Set();
+  slice.add(programPath.node);
+  entryFns.forEach(function(fn) { slice.add(fn); });
+  for (var hai = 0; hai < hofArgFns.length; hai++) {
+    slice.add(hofArgFns[hai].fnNode);
+    slice.add(hofArgFns[hai].encNode);
+  }
+  // Slice expansion: transitive callers ∪ callees via BFS.
+  var sliceQueue = [];
+  slice.forEach(function(fn) { sliceQueue.push(fn); });
+  while (sliceQueue.length > 0) {
+    var cur = sliceQueue.shift();
+    if (_cgCallersOf.has(cur)) {
+      _cgCallersOf.get(cur).forEach(function(caller) {
+        if (!slice.has(caller)) { slice.add(caller); sliceQueue.push(caller); }
+      });
+    }
+    if (_cgCalleesOf.has(cur)) {
+      _cgCalleesOf.get(cur).forEach(function(callee) {
+        if (!slice.has(callee)) { slice.add(callee); sliceQueue.push(callee); }
+      });
+    }
+  }
+  // Persist module-level state for the fixpoint driver and visitor gates.
+  slice.forEach(function(fn) { _specSliceFns.add(fn); });
+  _specCallGraphCallersOf = _cgCallersOf;
+  _specCallGraphCalleesOf = _cgCalleesOf;
+  var slicePaths = [];
+  for (var spi = 0; spi < fnPaths.length; spi++) {
+    if (slice.has(fnPaths[spi].node)) slicePaths.push(fnPaths[spi]);
+  }
+  return { fnPaths: fnPaths, slicePaths: slicePaths };
+}
+
+// Program-level fixpoint driver: runs the bottom-up pass-2 + worklist
+// over the pre-computed slice. Slice computation is in _specBuildSlice
+// (called eagerly by analyzeJSBundle before the main pass). Idempotent
+// per program node via _specProgramFixpointDone.
+var _specProgramFixpointDone = new WeakSet();
+function _specAnalyzeProgramWithFixpoint(programPath) {
+  if (!programPath || !programPath.node || !_t.isProgram(programPath.node)) return;
+  if (_specProgramFixpointDone.has(programPath.node)) return;
+  _specProgramFixpointDone.add(programPath.node);
+  var sliceResult = _specBuildSlice(programPath);
+  var fnPaths = sliceResult.fnPaths;
+  var slicePaths = sliceResult.slicePaths;
+  var callersOf = _specCallGraphCallersOf || new Map();
   // Per-function snapshot of side-effect summary + return-value AV.
   // Stored as the AV trees themselves (small refs) — comparison via
   // structural _specEqualAv. No JSON.stringify (can allocate huge
@@ -8882,59 +8677,61 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
     if (prevSnap.returnValue && currSnap.returnValue && !_specEqualAv(prevSnap.returnValue, currSnap.returnValue)) return true;
     return false;
   }
-  // Pass 1: analyse every function. Top-down by source order means
-  // outer functions are analysed before their inner callees / nested
-  // functions whose memos they read (e.g. Object.defineProperty's
-  // getter argument FunctionExpression). Pass 2 below re-analyses
-  // every function once with the now-populated memos so outer
-  // analyses see inner returns. After pass 2, the worklist handles
-  // remaining propagations efficiently.
+  // Single bottom-up pass over the slice: inner functions first so outer
+  // functions read populated memos.
   var pendingNodes = new Set();
-  for (var ip = 0; ip < fnPaths.length; ip++) {
-    var ipFp = fnPaths[ip];
-    _specAnalyzePropertyFlow(ipFp, true);
+  var _t_pass2_start = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  for (var ip2nd = slicePaths.length - 1; ip2nd >= 0; ip2nd--) {
+    _specAnalyzePropertyFlow(slicePaths[ip2nd], true);
+    sigByFn.set(slicePaths[ip2nd].node, _ssSnapshot(slicePaths[ip2nd].node));
   }
-  // Pass 2: bottom-up. Inner functions (later in fnPaths since Babel
-  // traverse is top-down) are revisited first; their callers — which
-  // may now read populated memos — get freshly recomputed memos by
-  // the time we revisit them. After pass 2, snapshot for the
-  // worklist's change-detection.
-  for (var ip2nd = fnPaths.length - 1; ip2nd >= 0; ip2nd--) {
-    var ipFp2 = fnPaths[ip2nd];
-    _specAnalyzePropertyFlow(ipFp2, true);
-    sigByFn.set(ipFp2.node, _ssSnapshot(ipFp2.node));
-  }
-  // Build initial worklist from any function whose memo affected its callers.
-  // (After pass 2, all sigs are populated — we treat all as potentially
-  // affecting callers, modulo the change-detection in the worklist loop.)
-  for (var ip3 = 0; ip3 < fnPaths.length; ip3++) {
-    if (callersOf.has(fnPaths[ip3].node)) {
-      var callerSet = callersOf.get(fnPaths[ip3].node);
-      callerSet.forEach(function(c) { pendingNodes.add(c); });
+  var _t_worklist_start = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  // Worklist seeded from slice. Signature-flap propagation only pulls
+  // callers into the worklist if they are themselves in the slice
+  // (callers outside the slice have no readers we care about).
+  for (var ip3 = 0; ip3 < slicePaths.length; ip3++) {
+    if (callersOf.has(slicePaths[ip3].node)) {
+      callersOf.get(slicePaths[ip3].node).forEach(function(c) {
+        if (_specSliceFns.has(c)) pendingNodes.add(c);
+      });
     }
   }
-  // Worklist loop: re-analyse pending callers, propagate to their
-  // callers if the side-effect summary or return-value AV changed
-  // structurally (via _specEqualAv on AV trees — bounded comparison
-  // cost, no string allocation).
   var nodeToPath = new Map();
-  for (var npi = 0; npi < fnPaths.length; npi++) nodeToPath.set(fnPaths[npi].node, fnPaths[npi]);
+  for (var npi = 0; npi < slicePaths.length; npi++) nodeToPath.set(slicePaths[npi].node, slicePaths[npi]);
+  var _worklistRounds = 0;
+  var _worklistAnalyses = 0;
   while (pendingNodes.size > 0) {
     var batch = Array.from(pendingNodes);
     pendingNodes.clear();
+    _worklistRounds++;
     for (var bi = 0; bi < batch.length; bi++) {
       var node = batch[bi];
       var fp = nodeToPath.get(node);
       if (!fp) continue;
       _specAnalyzePropertyFlow(fp, true);
+      _worklistAnalyses++;
       var newSnap = _ssSnapshot(node);
       if (_ssChanged(sigByFn.get(node), newSnap)) {
         sigByFn.set(node, newSnap);
         if (callersOf.has(node)) {
-          callersOf.get(node).forEach(function(c) { pendingNodes.add(c); });
+          callersOf.get(node).forEach(function(c) {
+            if (_specSliceFns.has(c)) pendingNodes.add(c);
+          });
         }
       }
     }
+  }
+  var _t_worklist_end = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  if (typeof globalThis !== "undefined") {
+    globalThis._lastFixpointTimings = {
+      fnCount: fnPaths.length,
+      sliceCount: slicePaths.length,
+      pass1Ms: 0,
+      pass2Ms: Math.round(_t_worklist_start - _t_pass2_start),
+      worklistMs: Math.round(_t_worklist_end - _t_worklist_start),
+      worklistRounds: _worklistRounds,
+      worklistAnalyses: _worklistAnalyses,
+    };
   }
   // Post-fixpoint pass: extend the call-site index with CallExpressions
   // whose callee resolves through spec-eval state to a function-ref AV.
@@ -8964,12 +8761,27 @@ function _specAnalyzePropertyFlow(funcPath, force) {
   // statements with side-effects propagate state across statements).
   if (!_t.isFunction(fnNode) && !_t.isProgram(fnNode)) return [];
   if (!force && _specEffectsMemo.has(fnNode)) return _specEffectsMemo.get(fnNode);
+  // Explicit cycle guard. Demand-driven invocation chains (sink
+  // dispatch → traceValueSource → _specAnalyzePropertyFlow(encFn) →
+  // call-site processing in body → _specAnalyzePropertyFlow(callee) →
+  // ... → encFn) would re-enter without this guard. Mutual recursion
+  // returns the current memoized effects (incomplete is sound for
+  // fixpoint convergence — § 7.4 abstract interpretation: a recursive
+  // edge has the join of "already known" facts; the worklist will
+  // refine on the next iteration when the recursive callee's signature
+  // changes). Without this guard the JS call stack grows with mutual
+  // recursion depth, violating the recursion ban for adversarial inputs.
+  if (_specAnalyzeInProgress.has(fnNode)) {
+    return _specEffectsMemo.get(fnNode) || [];
+  }
+  _specAnalyzeInProgress.add(fnNode);
 
   // For Program, the "body" is the Program itself's body array.
   // For Function, the body is the function body block.
   var bodyPath = _t.isProgram(fnNode) ? funcPath : funcPath.get("body");
   if (!bodyPath || !bodyPath.node) {
     _specEffectsMemo.set(fnNode, []);
+    _specAnalyzeInProgress.delete(fnNode);
     return [];
   }
 
@@ -8993,6 +8805,7 @@ function _specAnalyzePropertyFlow(funcPath, force) {
     // Drain HOF queue from concise-body eval too.
     _drainHofQueueIntoStack(stack || [], hofQueueBaseLen, effects);
     _specEffectsMemo.set(fnNode, effects);
+    _specAnalyzeInProgress.delete(fnNode);
     return effects;
   }
 
@@ -9122,6 +8935,7 @@ function _specAnalyzePropertyFlow(funcPath, force) {
   }
   if (thisEffects.length > 0) _specThisEffectsMemo.set(fnNode, thisEffects);
   _specEffectsMemo.set(fnNode, effects);
+  _specAnalyzeInProgress.delete(fnNode);
   return effects;
 }
 
@@ -10660,13 +10474,33 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
   // behaviour) — preserves backward compatibility for call sites that
   // haven't been updated yet.
   if (!rootAv) return rootAv;
-  // Enumerate all sub-av nodes in postorder.
+  // True iterative postorder enumeration with dedup. Per § 9.1.1
+  // closure write-back fixpoint: AV graphs share sub-trees (an `or`
+  // arm that aliases the binding's prior AV, a `member` that re-uses
+  // the obj's AV, etc.). Without dedup, sub-trees reached via multiple
+  // parents are pushed repeatedly — on a 6 MB github bundle this
+  // explodes the preorder array past ECMA § 6.1.7.1 max array length
+  // (2^32-1) and aborts the main pass with "Invalid array length".
+  // Two-Set scheme (enumSeen + inProgress) produces TRUE postorder
+  // regardless of share-graph shape: a node is pushed twice — once on
+  // entry (state = "visiting") and once on re-pop (state = "done";
+  // emit to preorder). Children finalize before their parents.
   var preorder = [];
+  var enumSeen = new Set();
+  var inProgress = new Set();
   var stack = [rootAv];
   while (stack.length > 0) {
     var av = stack.pop();
     if (!av) continue;
-    preorder.push(av);
+    if (inProgress.has(av)) {
+      inProgress.delete(av);
+      preorder.push(av);
+      continue;
+    }
+    if (enumSeen.has(av)) continue;
+    enumSeen.add(av);
+    inProgress.add(av);
+    stack.push(av);  // re-pop after children finalize → emits to preorder
     if (av.kind === "member") { stack.push(av.obj); stack.push(av.key); }
     else if (av.kind === "or") { stack.push(av.left); stack.push(av.right); }
     else if (av.kind === "binop") { stack.push(av.left); stack.push(av.right); }
@@ -10703,7 +10537,6 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       }
     }
   }
-  preorder.reverse();
   // Bottom-up substitute, storing each sub-av's substituted value in the map.
   var subs = new Map();
   for (var i = 0; i < preorder.length; i++) {
@@ -11046,719 +10879,6 @@ function _specDetectPropagationFromEffects(effects) {
 // Branch 4 / Branch 5; MemberExpression IIFE-returned property and
 // global-alias unwrap routes are in `_RCFP_OBJ_AFTER`. ONE callee
 // resolver, no fallback chain.)
-
-function _traceWrapperFunction(callPath, funcPath, funcBinding, result) {
-  var funcNode = funcPath.node;
-  // Check if the function body contains a direct fetch/XHR call
-  var sinkInfo = _findSinkInFunction(funcPath);
-  if (!sinkInfo) {
-    // No direct sink — check for deep sink (nested inside closures/callbacks).
-    // This handles libraries like jQuery where $.ajax() → transport.send() → xhr.open()
-    // is buried several levels deep inside nested functions.
-    var deepPropMap = _findDeepSinkPropertyMap(funcPath);
-    if (deepPropMap) {
-      _traceDeepSinkCall(callPath, funcNode, funcBinding, deepPropMap, result);
-    }
-    // Chained wrapper: function(e,t){return n(e,t,"get")} where n() has the sink.
-    // Map caller args through the wrapper to the inner function's args, then trace.
-    if (!deepPropMap) {
-      _traceChainedWrapper(callPath, funcNode, result);
-    }
-    return;
-  }
-
-  _stats.interProcTraces++;
-
-  // Map caller's arguments to function parameters (both resolved values and raw argument paths)
-  var paramBindings = {};  // paramName → string[]
-  var paramArgPaths = {};  // paramName → argPath (for object property extraction)
-  var callArgs = callPath.node.arguments;
-  for (var i = 0; i < funcNode.params.length && i < callArgs.length; i++) {
-    var param = funcNode.params[i];
-    var paramName = _t.isIdentifier(param) ? param.name :
-      (_t.isAssignmentPattern(param) && _t.isIdentifier(param.left) ? param.left.name : null);
-    if (paramName) {
-      var argPath = callPath.get("arguments." + i);
-      paramArgPaths[paramName] = argPath;
-      var resolved = _resolveAllValues(argPath, 1);
-      if (resolved.length > 0) {
-        paramBindings[paramName] = resolved;
-      }
-    }
-  }
-
-  // If function was resolved from a higher-order call (var fn = factory(args)),
-  // also map the factory's params (closure bindings) into paramBindings.
-  if (funcBinding && _t.isVariableDeclarator(funcBinding.path.node) &&
-      funcBinding.path.node.init && _t.isCallExpression(funcBinding.path.node.init)) {
-    var outerCallPath = funcBinding.path.get("init");
-    var outerCallArgs = funcBinding.path.node.init.arguments;
-    var outerCallee = funcBinding.path.node.init.callee;
-    if (_t.isIdentifier(outerCallee)) {
-      var outerBinding = funcBinding.path.scope.getBinding(outerCallee.name);
-      var outerFunc = null;
-      if (outerBinding) {
-        if (_t.isFunctionDeclaration(outerBinding.path.node)) outerFunc = outerBinding.path.node;
-        else if (_t.isVariableDeclarator(outerBinding.path.node) && outerBinding.path.node.init &&
-                 (_t.isFunctionExpression(outerBinding.path.node.init) || _t.isArrowFunctionExpression(outerBinding.path.node.init)))
-          outerFunc = outerBinding.path.node.init;
-      }
-      if (outerFunc) {
-        for (var oi = 0; oi < outerFunc.params.length && oi < outerCallArgs.length; oi++) {
-          var outerParam = outerFunc.params[oi];
-          var outerParamName = _t.isIdentifier(outerParam) ? outerParam.name : null;
-          if (outerParamName && !paramBindings[outerParamName]) {
-            var outerArgResolved = _resolveAllValues(outerCallPath.get("arguments." + oi), 1);
-            if (outerArgResolved.length > 0) paramBindings[outerParamName] = outerArgResolved;
-          }
-        }
-      }
-    }
-  }
-
-  // Re-resolve headers using paramBindings (handles closure variables like "Bearer " + token)
-  if (sinkInfo.headersNode) {
-    var enhancedHeaders = {};
-    for (var hi = 0; hi < sinkInfo.headersNode.properties.length; hi++) {
-      var hProp = sinkInfo.headersNode.properties[hi];
-      if (!_t.isObjectProperty(hProp) || hProp.computed) continue;
-      var hName = _getKeyName(hProp.key);
-      if (!hName) continue;
-      if (_t.isStringLiteral(hProp.value)) {
-        enhancedHeaders[hName] = hProp.value.value;
-      } else {
-        var hResolved = _resolveHeaderValue(hProp.value, paramBindings);
-        if (hResolved !== null) enhancedHeaders[hName] = hResolved;
-      }
-    }
-    sinkInfo.headers = enhancedHeaders;
-  }
-
-  // Build call sites using the sink info + resolved parameter values
-  var urls = [];
-  // Track whether the URL source was a pure StringLiteral — only in
-  // that case can downstream extractors safely treat the URL's query
-  // values as author-written literals (vs. resolver-rendered
-  // placeholders like `{x}` produced when a template expression
-  // couldn't be resolved to a concrete value).
-  var urlsFromLiteral = false;
-  if (sinkInfo.urlParamName && paramBindings[sinkInfo.urlParamName]) {
-    urls = paramBindings[sinkInfo.urlParamName];
-  } else if (sinkInfo.urlLiteral) {
-    urls = [sinkInfo.urlLiteral];
-    urlsFromLiteral = true;
-  } else if (sinkInfo.urlMemberExpr && paramArgPaths[sinkInfo.urlMemberExpr.obj]) {
-    // URL is opts.url — extract .url property from the caller's object argument
-    urls = _resolvePropertyFromArg(paramArgPaths[sinkInfo.urlMemberExpr.obj], sinkInfo.urlMemberExpr.prop, 1);
-  }
-  if (urls.length === 0) return;
-
-  var method = sinkInfo.method || "GET";
-  if (sinkInfo.methodParamName && paramBindings[sinkInfo.methodParamName]) {
-    method = paramBindings[sinkInfo.methodParamName][0];
-    if (typeof method === "string") method = method.toUpperCase();
-    else method = "GET";
-  } else if (sinkInfo.methodMemberExpr && paramArgPaths[sinkInfo.methodMemberExpr.obj]) {
-    // Method is opts.method — extract from caller's object argument
-    var methodVals = _resolvePropertyFromArg(paramArgPaths[sinkInfo.methodMemberExpr.obj], sinkInfo.methodMemberExpr.prop, 1);
-    if (methodVals.length > 0 && typeof methodVals[0] === "string" && _HTTP_METHODS_LC[methodVals[0].toLowerCase()]) {
-      method = methodVals[0].toUpperCase();
-    }
-  }
-
-  // Get enclosing function name for the CALLER
-  var callerFunc = callPath.getFunctionParent();
-  var callerName = null;
-  if (callerFunc && callerFunc.node.id) callerName = callerFunc.node.id.name;
-
-  // ── Resolve caller's body params ──
-  // sinkInfo.params contains params extracted from the wrapper's fetch() body,
-  // which is typically empty (body is a parameter identifier, not an object literal).
-  // Instead, extract body params from the caller's actual argument.
-  var callerBodyParams = sinkInfo.params || [];
-  if (sinkInfo.bodyParamName && paramArgPaths[sinkInfo.bodyParamName]) {
-    var cbp = _extractBodyParams(paramArgPaths[sinkInfo.bodyParamName].node, callPath);
-    if (cbp.length > 0) callerBodyParams = cbp;
-  } else if (sinkInfo.bodyMemberExpr && paramArgPaths[sinkInfo.bodyMemberExpr.obj]) {
-    // Body comes from opts.data / opts.body — resolve the object, extract the property
-    var bodyObjNode = null;
-    try { bodyObjNode = _resolveToObject(paramArgPaths[sinkInfo.bodyMemberExpr.obj], 1); } catch(e) { _resolver.collectError(e, "bodyMemberResolve"); }
-    if (bodyObjNode) {
-      for (var bpi = 0; bpi < bodyObjNode.properties.length; bpi++) {
-        var bp = bodyObjNode.properties[bpi];
-        if (!_t.isObjectProperty(bp) || bp.computed) continue;
-        if (_getKeyName(bp.key) === sinkInfo.bodyMemberExpr.prop) {
-          var bodyPropNode = bp.value;
-          if (_t.isObjectExpression(bodyPropNode)) {
-            callerBodyParams = _extractObjectProperties(bodyPropNode);
-            for (var cbpi = 0; cbpi < callerBodyParams.length; cbpi++) callerBodyParams[cbpi].location = "body";
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  // ── Build function-param metadata (which params are used as path, method, etc.) ──
-  var wrapperFuncParams = [];
-  for (var wpi = 0; wpi < funcNode.params.length; wpi++) {
-    var wp = funcNode.params[wpi];
-    var wpName = _t.isIdentifier(wp) ? wp.name :
-      (_t.isAssignmentPattern(wp) && _t.isIdentifier(wp.left) ? wp.left.name : null);
-    if (!wpName) continue;
-    // Skip params already consumed as URL, method, or body
-    if (wpName === sinkInfo.urlParamName || wpName === sinkInfo.methodParamName || wpName === sinkInfo.bodyParamName) continue;
-    if (sinkInfo.urlMemberExpr && wpName === sinkInfo.urlMemberExpr.obj) continue;
-    if (sinkInfo.methodMemberExpr && wpName === sinkInfo.methodMemberExpr.obj) continue;
-    if (sinkInfo.bodyMemberExpr && wpName === sinkInfo.bodyMemberExpr.obj) continue;
-    // This is a non-consumed param — determine its location
-    if (paramBindings[wpName] && paramBindings[wpName].length > 0) {
-      var wpLoc = "path";  // default: assume it contributes to URL if not body/method
-      var wpRequired = !(_t.isAssignmentPattern(wp));
-      var wpDefault = _t.isAssignmentPattern(wp) && _t.isStringLiteral(wp.right) ? wp.right.value : undefined;
-      wrapperFuncParams.push({ name: wpName, location: wpLoc, required: wpRequired, defaultValue: wpDefault });
-    }
-  }
-
-  // ── Combine params: body params from caller + function-level params ──
-  var allParams = [];
-  for (var abp = 0; abp < callerBodyParams.length; abp++) allParams.push(callerBodyParams[abp]);
-  for (var afp = 0; afp < wrapperFuncParams.length; afp++) allParams.push(wrapperFuncParams[afp]);
-
-  // ── Cross-reference params with value constraints ──
-  for (var vc = 0; vc < allParams.length; vc++) {
-    if (allParams[vc].spread) continue;
-    var pName = allParams[vc].name;
-    var constraint = _getConstraint(callPath, pName);
-    if (!constraint && allParams[vc].source && allParams[vc].source !== pName) {
-      constraint = _getConstraint(callPath, allParams[vc].source);
-    }
-    if (constraint && constraint.values.size >= 1) {
-      var validValues = [];
-      constraint.values.forEach(function(v) { validValues.push(v); });
-      allParams[vc].validValues = validValues;
-    }
-  }
-
-  // ── Property-flow effects → branch-conditional valid values ──
-  // The user directive: "if there's a code path where role=admin and
-  // role=guest we show both as options". The property-flow analyser
-  // already records every property write (including conditional
-  // branches) per § 14.6 IfStatement. Aggregate const-value writes per
-  // body-param key and emit the union as `validValues` so the schema
-  // dropdown surfaces all branch values.
-  var enclosingFnPath = callPath.getFunctionParent();
-  if (enclosingFnPath) {
-    var pfeEffects = _specAnalyzePropertyFlow(enclosingFnPath);
-    if (pfeEffects && pfeEffects.length > 0) {
-      var byKey = Object.create(null);
-      for (var pi = 0; pi < pfeEffects.length; pi++) {
-        var pe = pfeEffects[pi];
-        if (!pe.target || (pe.target.kind !== "this" && pe.target.kind !== "param" && pe.target.kind !== "args-elt")) continue;
-        if (!pe.key || pe.key.kind !== "const") continue;
-        if (!pe.value || pe.value.kind !== "const") continue;
-        // Only keep primitive-valued writes; objects/loop-keys are not
-        // dropdown-displayable values.
-        var v = pe.value.value;
-        if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
-        var k = pe.key.value;
-        if (!byKey[k]) byKey[k] = new Set();
-        byKey[k].add(v);
-      }
-      for (var apIdx = 0; apIdx < allParams.length; apIdx++) {
-        if (allParams[apIdx].spread) continue;
-        var apName = allParams[apIdx].name;
-        if (!byKey[apName]) continue;
-        var pfeVals = [];
-        byKey[apName].forEach(function(vv) { pfeVals.push(vv); });
-        if (pfeVals.length === 0) continue;
-        // Merge with existing validValues (constraint-derived); union of
-        // both sets so neither is lost.
-        if (allParams[apIdx].validValues && allParams[apIdx].validValues.length > 0) {
-          var merged = allParams[apIdx].validValues.slice();
-          for (var mi = 0; mi < pfeVals.length; mi++) {
-            if (merged.indexOf(pfeVals[mi]) < 0) merged.push(pfeVals[mi]);
-          }
-          allParams[apIdx].validValues = merged;
-        } else {
-          allParams[apIdx].validValues = pfeVals;
-        }
-      }
-    }
-  }
-
-  var _callLoc = _nodeLoc(callPath.node);
-  for (var u = 0; u < urls.length; u++) {
-    _pushFetchSite(result, _buildFetchSite(urls[u], method, sinkInfo.headers, "fetch", allParams, { enclosingFunction: callerName, urlIsLiteral: urlsFromLiteral, loc: _callLoc }));
-    console.debug("[AST:fetch] traced %s %s via %s()", method, urls[u],
-      (funcBinding ? funcBinding.identifier.name : _describeNode(callPath.node.callee)) || "?");
-  }
-}
-
-// Trace a "deep sink" call — the callee's function body doesn't have a DIRECT sink,
-// but nested functions inside it eventually reach xhr.open/fetch.
-// Uses property name matching: if the deep sink reads opts.url and opts.type,
-// search the caller's arguments for objects with matching property names.
-function _traceDeepSinkCall(callPath, funcNode, funcBinding, propMap, result) {
-  _stats.interProcTraces++;
-
-  var callArgs = callPath.node.arguments;
-  var urls = [];
-  var method = propMap.methodLiteral || null;
-
-  // If the deep sink has a literal URL, use it directly
-  if (propMap.urlLiteral) {
-    urls = [propMap.urlLiteral];
-  }
-
-  // Search call arguments for objects with matching property names
-  for (var i = 0; i < callArgs.length && i < 5; i++) {
-    var argPath = callPath.get("arguments." + i);
-
-    // Look for URL property matches (e.g., .url on the deep sink → extract .url from caller's arg)
-    if (urls.length === 0 && propMap.urlProps.length > 0) {
-      for (var up = 0; up < propMap.urlProps.length; up++) {
-        var urlVals = _resolvePropertyFromArg(argPath, propMap.urlProps[up], 1);
-        if (urlVals.length > 0) {
-          urls = urlVals;
-          break;
-        }
-      }
-    }
-
-    // Look for method property matches (e.g., .type on the deep sink → extract .type from caller's arg)
-    if (!method && propMap.methodProps.length > 0) {
-      for (var mp = 0; mp < propMap.methodProps.length; mp++) {
-        var methodVals = _resolvePropertyFromArg(argPath, propMap.methodProps[mp], 1);
-        if (methodVals.length > 0 && typeof methodVals[0] === "string" &&
-            _HTTP_METHODS_LC[methodVals[0].toLowerCase()]) {
-          method = methodVals[0].toUpperCase();
-          break;
-        }
-      }
-    }
-  }
-
-  // Fallback: check if any argument is a direct URL string (function takes (url, options) pattern)
-  if (urls.length === 0) {
-    for (var si = 0; si < callArgs.length && si < 3; si++) {
-      var strVals = _resolveAllValues(callPath.get("arguments." + si), 1);
-      for (var sv = 0; sv < strVals.length; sv++) {
-        if (typeof strVals[sv] === "string" && strVals[sv].length > 0 &&
-            (strVals[sv].charAt(0) === "/" || strVals[sv].indexOf("://") > 0)) {
-          urls.push(strVals[sv]);
-        }
-      }
-      if (urls.length > 0) break;
-    }
-  }
-
-  if (urls.length === 0) return;
-  if (!method) method = "GET";
-
-  // ── Extract body params from caller args ──
-  // Properties not consumed as URL or method are potential body/config params.
-  var consumedProps = {};
-  for (var cp = 0; cp < propMap.urlProps.length; cp++) consumedProps[propMap.urlProps[cp]] = true;
-  for (var cm = 0; cm < propMap.methodProps.length; cm++) consumedProps[propMap.methodProps[cm]] = true;
-
-  var deepParams = [];
-  for (var di = 0; di < callArgs.length && di < 5; di++) {
-    var deepArgPath = callPath.get("arguments." + di);
-    var deepArgObj = null;
-    try { deepArgObj = _resolveToObject(deepArgPath, 1); } catch(e) { _resolver.collectError(e, "deepSinkArgResolve"); }
-    if (!deepArgObj) continue;
-    for (var dpi = 0; dpi < deepArgObj.properties.length; dpi++) {
-      var dp = deepArgObj.properties[dpi];
-      if (!_t.isObjectProperty(dp) || dp.computed) continue;
-      var dpKey = _getKeyName(dp.key);
-      if (!dpKey || consumedProps[dpKey]) continue;
-      // Skip spec-defined non-body config properties (Fetch RequestInit
-      // per Fetch Standard § 5.4 + XMLHttpRequest properties per XHR
-      // Standard § 4.5). Framework-specific option names (jQuery's
-      // success / error / complete / beforeSend / dataType / crossDomain /
-      // processData / contentType) are NOT skipped — they fall through
-      // to body extraction. Spec-correct treatment: when the wrapper is
-      // jQuery $.ajax, those options are callbacks/config; when it's an
-      // arbitrary user-defined wrapper, they could legitimately be body
-      // fields. Without trace-through into the wrapper's body to see how
-      // each option is actually used, the analyzer cannot tell — and
-      // CLAUDE.md L29 bans framework-specific name recognition. The
-      // spec-grounded skip list contains only ECMAScript / Fetch / XHR
-      // spec property names.
-      if (dpKey === "headers" ||         // Fetch RequestInit + XHR setRequestHeader
-          dpKey === "method" ||          // Fetch RequestInit
-          dpKey === "mode" ||            // Fetch RequestInit (no-cors / cors / same-origin)
-          dpKey === "credentials" ||     // Fetch RequestInit (omit / same-origin / include)
-          dpKey === "cache" ||           // Fetch RequestInit (cache mode)
-          dpKey === "redirect" ||        // Fetch RequestInit (follow / error / manual)
-          dpKey === "referrer" ||        // Fetch RequestInit
-          dpKey === "referrerPolicy" ||  // Fetch RequestInit
-          dpKey === "integrity" ||       // Fetch RequestInit (subresource integrity)
-          dpKey === "keepalive" ||       // Fetch RequestInit
-          dpKey === "signal" ||          // Fetch RequestInit (AbortSignal)
-          dpKey === "priority" ||        // Fetch RequestInit (priority hints)
-          dpKey === "duplex" ||          // Fetch RequestInit (half / full)
-          dpKey === "window" ||          // Fetch RequestInit (must be null per spec)
-          dpKey === "async" ||           // XHR open()'s third param
-          dpKey === "withCredentials" || // XHR property
-          dpKey === "responseType") continue;  // XHR responseType
-      // (Removed `dpKey === "data"` flatten-as-body-fields special
-      // case — that was jQuery $.ajax convention. Spec-correct
-      // treatment per Fetch Standard § 5.4: the body property is
-      // named `body`, and arbitrary wrapper functions may name their
-      // body argument anything. The wrapper's actual body assignment
-      // is reachable via inter-procedural trace-through; without it,
-      // every non-skip-listed property is added as a single body
-      // field below — which is the spec-grounded fallback when the
-      // wrapper's body extraction semantic isn't known.)
-    }
-  }
-
-  var callerFunc = callPath.getFunctionParent();
-  var callerName = callerFunc && callerFunc.node.id ? callerFunc.node.id.name : null;
-  var calleeName = funcBinding ? funcBinding.identifier.name : _describeNode(callPath.node.callee);
-
-  for (var u = 0; u < urls.length; u++) {
-    _pushFetchSite(result, _buildFetchSite(urls[u], method, {}, propMap.type === "xhr" ? "xhr" : "fetch", deepParams, { enclosingFunction: callerName }));
-    console.debug("[AST:fetch] deep-traced %s %s via %s()", method, urls[u], calleeName || "?");
-  }
-}
-
-// Trace a local variable in a function body back to a function parameter.
-// e.g., function n(e,n,a,o,i){ var u = "string"!=typeof e?(n=e).url:e; ... }
-// _traceLocalVarToParam(funcNode, "u") → "e" (param[0])
-function _traceLocalVarToParam(funcNode, varName) {
-  var stmts = funcNode.body && funcNode.body.body ? funcNode.body.body : [];
-  var initExpr = null;
-  for (var si = 0; si < stmts.length; si++) {
-    if (_t.isVariableDeclaration(stmts[si])) {
-      var decls = stmts[si].declarations;
-      for (var di = 0; di < decls.length; di++) {
-        if (_t.isIdentifier(decls[di].id, {name: varName}) && decls[di].init) {
-          initExpr = decls[di].init;
-          break;
-        }
-      }
-    }
-    if (initExpr) break;
-  }
-  if (!initExpr) return null;
-  // Build param name set
-  var paramNames = {};
-  for (var pi = 0; pi < funcNode.params.length; pi++) {
-    var p = funcNode.params[pi];
-    if (_t.isIdentifier(p)) paramNames[p.name] = true;
-    else if (_t.isAssignmentPattern(p) && _t.isIdentifier(p.left)) paramNames[p.left.name] = true;
-  }
-  return _findParamInExpr(initExpr, paramNames);
-}
-function _findParamInExpr(node, paramNames) {
-  // Iterative: walk expression chains via explicit stack
-  var stack = [node];
-  while (stack.length > 0) {
-    var n = stack.pop();
-    if (!n) continue;
-    if (_t.isIdentifier(n) && paramNames[n.name]) return n.name;
-    if (_t.isConditionalExpression(n)) {
-      stack.push(n.consequent, n.alternate);
-    } else if (_t.isLogicalExpression(n)) {
-      stack.push(n.left, n.right);
-    } else if (_t.isAssignmentExpression(n)) {
-      stack.push(n.right);
-    } else if (_t.isMemberExpression(n)) {
-      stack.push(n.object);
-    }
-  }
-  return null;
-}
-
-// Chained wrapper tracing: function(e,t){return n(e,t,"get")} where n() contains the actual sink.
-// Maps the outer call's arguments through the wrapper's params to the inner call's arguments,
-// then recursively traces the inner function as a wrapper.
-function _traceChainedWrapper(callPath, funcNode, result) {
-  // Find the call expression in the function body (simple return-call or single expression)
-  var innerCall = null;
-  var body = funcNode.body;
-  if (!_t.isBlockStatement(body)) return; // arrow with expression body handled separately
-  var stmts = body.body;
-  for (var si = 0; si < stmts.length; si++) {
-    var stmt = stmts[si];
-    if (_t.isReturnStatement(stmt) && stmt.argument && _t.isCallExpression(stmt.argument)) {
-      innerCall = stmt.argument;
-      break;
-    }
-    if (_t.isExpressionStatement(stmt) && _t.isCallExpression(stmt.expression)) {
-      innerCall = stmt.expression;
-    }
-  }
-  if (!innerCall) { return; }
-
-  // Resolve the inner callee to a function path that contains a sink
-  var innerCallee = innerCall.callee;
-  var innerFuncPath = null;
-  if (_t.isIdentifier(innerCallee)) {
-    // Check if the inner callee resolves to a function containing a network sink
-    var innerBinding = callPath.scope.getBinding(innerCallee.name);
-    if (innerBinding) {
-      if (_t.isFunctionDeclaration(innerBinding.path.node)) innerFuncPath = innerBinding.path;
-      else if (_t.isVariableDeclarator(innerBinding.path.node) && innerBinding.path.node.init &&
-               (_t.isFunctionExpression(innerBinding.path.node.init) || _t.isArrowFunctionExpression(innerBinding.path.node.init)))
-        innerFuncPath = innerBinding.path.get("init");
-    }
-  }
-  if (!innerFuncPath) { return; }
-  if (!_containsNetworkSink(innerFuncPath)) return;
-
-  var innerFuncNode = innerFuncPath.node;
-  // Map outer call args through wrapper params to inner call args
-  // e.g., outerCall: e.get("/api/users") → wrapper: function(e,t){return n(e,t,"get")}
-  // Maps: e→"/api/users", t→undefined, then builds synthetic inner call: n("/api/users", undefined, "get")
-  var paramMap = {}; // wrapper param name → caller arg index
-  for (var pi = 0; pi < funcNode.params.length; pi++) {
-    var p = funcNode.params[pi];
-    var pn = _t.isIdentifier(p) ? p.name : (_t.isAssignmentPattern(p) && _t.isIdentifier(p.left) ? p.left.name : null);
-    if (pn) paramMap[pn] = pi;
-  }
-
-  // Build resolved arg values for the inner call by substituting wrapper params
-  var resolvedArgs = [];
-  for (var ai = 0; ai < innerCall.arguments.length; ai++) {
-    var arg = innerCall.arguments[ai];
-    if (_t.isIdentifier(arg) && paramMap[arg.name] !== undefined) {
-      var outerIdx = paramMap[arg.name];
-      if (outerIdx < callPath.node.arguments.length) {
-        resolvedArgs.push({ fromCaller: true, callerArgIdx: outerIdx });
-      } else {
-        resolvedArgs.push({ literal: null });
-      }
-    } else if (_t.isStringLiteral(arg)) {
-      resolvedArgs.push({ literal: arg.value });
-    } else {
-      resolvedArgs.push({ literal: null });
-    }
-  }
-
-  // Now trace the inner function with the mapped arguments
-  var innerSinkInfo = _findSinkInFunction(innerFuncPath);
-  if (!innerSinkInfo) return;
-
-  // Phase 1a: If URL identifier doesn't match an inner function param, trace through local var assignments
-  // e.g., redaxios: var u = "string"!=typeof e?(n=e).url:e → u traces back to param e
-  if (innerSinkInfo.urlParamName) {
-    var _isUrlParam = false;
-    for (var _iup = 0; _iup < innerFuncNode.params.length; _iup++) {
-      if (_t.isIdentifier(innerFuncNode.params[_iup]) && innerFuncNode.params[_iup].name === innerSinkInfo.urlParamName)
-        _isUrlParam = true;
-    }
-    if (!_isUrlParam) {
-      var _srcParam = _traceLocalVarToParam(innerFuncNode, innerSinkInfo.urlParamName);
-      if (_srcParam) {
-        console.debug("[AST:trace] local var %s → param %s (url)", innerSinkInfo.urlParamName, _srcParam);
-        innerSinkInfo.urlParamName = _srcParam;
-      }
-    }
-  }
-  // Same for methodParamName
-  if (innerSinkInfo.methodParamName) {
-    var _isMethParam = false;
-    for (var _imp = 0; _imp < innerFuncNode.params.length; _imp++) {
-      if (_t.isIdentifier(innerFuncNode.params[_imp]) && innerFuncNode.params[_imp].name === innerSinkInfo.methodParamName)
-        _isMethParam = true;
-    }
-    if (!_isMethParam) {
-      var _srcMethParam = _traceLocalVarToParam(innerFuncNode, innerSinkInfo.methodParamName);
-      if (_srcMethParam) {
-        console.debug("[AST:trace] local var %s → param %s (method)", innerSinkInfo.methodParamName, _srcMethParam);
-        innerSinkInfo.methodParamName = _srcMethParam;
-      }
-    }
-  }
-
-  _stats.interProcTraces++;
-  // Map inner function params to resolved values from the chained call
-  var innerParamBindings = {};
-  for (var ipi = 0; ipi < innerFuncNode.params.length && ipi < resolvedArgs.length; ipi++) {
-    var ip = innerFuncNode.params[ipi];
-    var ipName = _t.isIdentifier(ip) ? ip.name : null;
-    if (!ipName) continue;
-    var ra = resolvedArgs[ipi];
-    if (ra.fromCaller) {
-      var callerArgPath = callPath.get("arguments." + ra.callerArgIdx);
-      var callerVals = _resolveAllValues(callerArgPath, 1);
-      if (callerVals.length > 0) innerParamBindings[ipName] = callerVals;
-    } else if (ra.literal !== null) {
-      innerParamBindings[ipName] = [ra.literal];
-    }
-  }
-
-  // Extract URL, method, body from inner sink using resolved param bindings
-  var url = innerSinkInfo.urlLiteral || null;
-  var method = innerSinkInfo.method || null;
-  if (!url && innerSinkInfo.urlParamName && innerParamBindings[innerSinkInfo.urlParamName])
-    url = innerParamBindings[innerSinkInfo.urlParamName];
-  if (!method && innerSinkInfo.methodParamName && innerParamBindings[innerSinkInfo.methodParamName])
-    method = innerParamBindings[innerSinkInfo.methodParamName];
-  // MemberExpression method (e.g., opts.method) — resolve through param bindings
-  if (!method && innerSinkInfo.methodMemberExpr) {
-    var mmObj = innerSinkInfo.methodMemberExpr.obj;
-    var mmProp = innerSinkInfo.methodMemberExpr.prop;
-    // If the member base is a param, extract the property from caller's arg
-    if (paramMap[mmObj] !== undefined || innerParamBindings[mmObj]) {
-      // Resolve from caller's arg object
-      for (var rai = 0; rai < resolvedArgs.length; rai++) {
-        if (resolvedArgs[rai].fromCaller) {
-          var argP = callPath.get("arguments." + resolvedArgs[rai].callerArgIdx);
-          var propVals = _resolvePropertyFromArg(argP, mmProp, 1);
-          if (propVals.length > 0) { method = propVals; break; }
-        }
-      }
-    }
-  }
-  // MemberExpression URL — similar
-  if (!url && innerSinkInfo.urlMemberExpr) {
-    var umObj = innerSinkInfo.urlMemberExpr.obj;
-    var umProp = innerSinkInfo.urlMemberExpr.prop;
-    if (paramMap[umObj] !== undefined || innerParamBindings[umObj]) {
-      for (var rai2 = 0; rai2 < resolvedArgs.length; rai2++) {
-        if (resolvedArgs[rai2].fromCaller) {
-          var argP2 = callPath.get("arguments." + resolvedArgs[rai2].callerArgIdx);
-          var propVals2 = _resolvePropertyFromArg(argP2, umProp, 1);
-          if (propVals2.length > 0) { url = propVals2; break; }
-        }
-      }
-    }
-  }
-
-  var urls = Array.isArray(url) ? url : (url ? [url] : []);
-  var methods = Array.isArray(method) ? method : (method ? [method] : ["?"]);
-  methods = methods.filter(function(m) { return typeof m === "string"; }).map(function(m) { return m.toUpperCase(); });
-  if (methods.length === 0) methods = ["?"];
-
-  // Extract body params from caller's args mapped through inner params
-  var bodyParams = [];
-  // Check if inner sink has body info in its headers/params tracking
-  if (innerSinkInfo.bodyParamName) {
-    // Body is a direct param — extract from caller's corresponding arg
-    // Don't require innerParamBindings to be set (ObjectExpression args don't resolve to strings)
-    for (var bai = 0; bai < resolvedArgs.length; bai++) {
-      var innerPN = innerFuncNode.params[bai];
-      if (_t.isIdentifier(innerPN) && innerPN.name === innerSinkInfo.bodyParamName && resolvedArgs[bai].fromCaller) {
-        var bArgPath = callPath.get("arguments." + resolvedArgs[bai].callerArgIdx);
-        bodyParams = _extractBodyParams(bArgPath.node, bArgPath);
-        break;
-      }
-    }
-  }
-
-  for (var ui = 0; ui < urls.length; ui++) {
-    if (typeof urls[ui] !== "string") continue;
-    for (var mi = 0; mi < methods.length; mi++) {
-      _pushFetchSite(result, _buildFetchSite(urls[ui], methods[mi], innerSinkInfo.headers, "fetch", bodyParams));
-      console.debug("[AST:fetch] chained %s %s", methods[mi], urls[ui]);
-    }
-  }
-}
-
-function _findSinkInFunction(funcPath) {
-  var sinkInfo = null;
-  // Walk the function body looking for fetch() or XHR.open()
-  // Scope-aware: verify fetch/XMLHttpRequest aren't shadowed by local bindings
-  funcPath.traverse(Object.assign({
-    CallExpression: function(innerPath) {
-      if (sinkInfo) { innerPath.stop(); return; }
-      var c = innerPath.node.callee;
-
-      // fetch() / window.fetch() / (s.fetch || fetch)() — only if fetch is the global
-      var isFetch = _isGlobalFetchCall(c, innerPath.scope, innerPath);
-
-      if (isFetch && innerPath.node.arguments.length >= 1) {
-        sinkInfo = _extractSinkInfo(innerPath);
-        innerPath.stop();
-        return;
-      }
-
-      // XHR.open(method, url) — AV-direct: spec eval resolves `xhr.open`
-      // to the XMLHttpRequest.prototype.open builtin-method AV when the
-      // receiver is an XHR instance. One identity check; no shape match.
-      var _xhrOpenAv = _t.isMemberExpression(c) ? _specPathValMemo.get(c) : null;
-      if (_xhrOpenAv && _xhrOpenAv.kind === "builtin-method" &&
-          _xhrOpenAv.id === "XMLHttpRequest.prototype.open" &&
-          innerPath.node.arguments.length >= 2) {
-        var xhrM = innerPath.node.arguments[0];
-        var xhrMethodStr = null;
-        var xhrMethodParam = null;
-        if (_t.isStringLiteral(xhrM) && _HTTP_METHODS_LC[xhrM.value.toLowerCase()]) {
-          xhrMethodStr = xhrM.value.toUpperCase();
-        } else if (_t.isIdentifier(xhrM)) {
-          xhrMethodParam = xhrM.name;
-        }
-        // V2 fix: handle MemberExpression method arg via direct AST node traversal
-        // instead of _describeNode() string conversion
-        var xhrMethodMember = null;
-        if (_t.isMemberExpression(xhrM) && !xhrM.computed &&
-            _t.isIdentifier(xhrM.object) && _t.isIdentifier(xhrM.property)) {
-          xhrMethodMember = { obj: xhrM.object.name, prop: xhrM.property.name };
-          xhrMethodParam = null; // MemberExpression handled directly
-        }
-        if (xhrMethodStr || xhrMethodParam || xhrMethodMember) {
-          var xhrUrlNode = innerPath.node.arguments[1];
-          var xhrUrlMember = null;
-          if (!_t.isIdentifier(xhrUrlNode) && !_t.isStringLiteral(xhrUrlNode) &&
-              _t.isMemberExpression(xhrUrlNode) && !xhrUrlNode.computed) {
-            var xuObj = _t.isIdentifier(xhrUrlNode.object) ? xhrUrlNode.object.name : null;
-            var xuProp = _t.isIdentifier(xhrUrlNode.property) ? xhrUrlNode.property.name : null;
-            if (xuObj && xuProp) xhrUrlMember = { obj: xuObj, prop: xuProp };
-          }
-          sinkInfo = {
-            method: xhrMethodStr,
-            methodParamName: xhrMethodParam,
-            methodMemberExpr: xhrMethodMember,
-            urlParamName: _t.isIdentifier(xhrUrlNode) ? xhrUrlNode.name : null,
-            urlLiteral: _t.isStringLiteral(xhrUrlNode) ? xhrUrlNode.value : null,
-            urlMemberExpr: xhrUrlMember,
-            headers: {},
-          };
-          // Also locate xhr.send(...) on the SAME xhr binding to capture
-          // body-source shape (Identifier or MemberExpression). The
-          // wrapper-trace then resolves this through caller args to find
-          // the literal body fields. Without this, sinkInfo for XHR
-          // carries no body info and `_traceWrapperFunction`'s caller-
-          // body-extraction branches never fire.
-          if (_t.isIdentifier(c.object)) {
-            var sendXhrBinding = innerPath.scope.getBinding(c.object.name);
-            if (sendXhrBinding && sendXhrBinding.referencePaths) {
-              for (var sri = 0; sri < sendXhrBinding.referencePaths.length; sri++) {
-                var sendRef = sendXhrBinding.referencePaths[sri];
-                var sendMember = sendRef.parentPath;
-                if (!sendMember || !sendMember.isMemberExpression() ||
-                    sendMember.node.object !== sendRef.node ||
-                    sendMember.node.computed) continue;
-                var _sendAv = _specPathValMemo.get(sendMember.node);
-                if (!_sendAv || _sendAv.kind !== "builtin-method" ||
-                    _sendAv.id !== "XMLHttpRequest.prototype.send") continue;
-                var sendCall = sendMember.parentPath;
-                if (!sendCall || !sendCall.isCallExpression() ||
-                    sendCall.node.callee !== sendMember.node ||
-                    sendCall.node.arguments.length === 0) continue;
-                var sendArg = sendCall.node.arguments[0];
-                if (_t.isIdentifier(sendArg)) {
-                  sinkInfo.bodyParamName = sendArg.name;
-                } else if (_t.isMemberExpression(sendArg) && !sendArg.computed &&
-                           _t.isIdentifier(sendArg.object) && _t.isIdentifier(sendArg.property)) {
-                  sinkInfo.bodyMemberExpr = { obj: sendArg.object.name, prop: sendArg.property.name };
-                }
-                break;
-              }
-            }
-          }
-          innerPath.stop();
-        }
-      }
-    },
-  }, _SKIP_NESTED_FUNCS));
-  return sinkInfo;
-}
 
 // ─── Lightweight Type Tracker ────────────────────────────────────────────────
 // Tracks deterministic types from unambiguous patterns (new expressions, array literals).
@@ -12201,225 +11321,6 @@ function _containsNetworkSink(funcPath) {
   });
   return found;
 }
-
-// Find the property names used at deep network sinks (traversing into nested functions).
-// Unlike _findSinkInFunction (which skips nested functions and returns a param-name-based sinkInfo),
-// this searches INTO closures/callbacks and extracts the PROPERTY NAMES used at the sink.
-// E.g., xhr.open(opts.type, opts.url) → { urlProps: ["url"], methodProps: ["type"] }
-// These property names can then be matched against the caller's object arguments.
-function _findDeepSinkPropertyMap(funcPath) {
-  var propMap = null;
-  // Scope-aware: verify fetch/XMLHttpRequest aren't shadowed by local bindings
-  funcPath.traverse({
-    CallExpression: function(innerPath) {
-      if (propMap) { innerPath.stop(); return; }
-      var c = innerPath.node.callee;
-
-      // fetch(url, opts) or window.fetch(url, opts) — only if not shadowed
-      // fetch() / window.fetch() / (s.fetch || fetch)() — only if fetch is the global
-      if (_isGlobalFetchCall(c, innerPath.scope, innerPath) && innerPath.node.arguments.length >= 1) {
-        propMap = _extractSinkPropertyMap(innerPath, "fetch");
-        if (propMap && propMap.urlProps.length === 0 && !propMap.urlLiteral) propMap = null;
-        if (propMap) innerPath.stop();
-        return;
-      }
-
-      // XHR.open(method, url) — AV-direct via builtin-method id.
-      var _xhrOpenAv2 = _t.isMemberExpression(c) ? _specPathValMemo.get(c) : null;
-      if (_xhrOpenAv2 && _xhrOpenAv2.kind === "builtin-method" &&
-          _xhrOpenAv2.id === "XMLHttpRequest.prototype.open" &&
-          innerPath.node.arguments.length >= 2) {
-        propMap = _extractSinkPropertyMap(innerPath, "xhr");
-        if (propMap && propMap.urlProps.length === 0 && !propMap.urlLiteral) propMap = null;
-        if (propMap) innerPath.stop();
-        return;
-      }
-    },
-    // DO search into nested functions — deep sinks are inside closures/callbacks
-  });
-  return propMap;
-}
-
-// Extract property names from a specific network sink's arguments.
-// For xhr.open(method, url): method position → methodProps, url position → urlProps.
-// For fetch(url, {method: M}): url position → urlProps, method from options → methodProps.
-function _extractSinkPropertyMap(sinkPath, sinkType) {
-  var map = {
-    type: sinkType,
-    urlProps: [],
-    methodProps: [],
-    methodLiteral: null,
-    urlLiteral: null,
-  };
-
-  if (sinkType === "xhr") {
-    // xhr.open(method, url)
-    var methodArg = sinkPath.node.arguments[0];
-    var urlArg = sinkPath.node.arguments[1];
-
-    if (_t.isStringLiteral(methodArg) && _HTTP_METHODS_LC[methodArg.value.toLowerCase()]) {
-      map.methodLiteral = methodArg.value.toUpperCase();
-    } else {
-      _collectMemberProps(methodArg, map.methodProps);
-    }
-
-    if (_t.isStringLiteral(urlArg)) {
-      map.urlLiteral = urlArg.value;
-    } else {
-      _collectMemberProps(urlArg, map.urlProps);
-    }
-  } else {
-    // fetch(url, opts)
-    var fetchUrlArg = sinkPath.node.arguments[0];
-
-    if (_t.isStringLiteral(fetchUrlArg)) {
-      map.urlLiteral = fetchUrlArg.value;
-    } else {
-      _collectMemberProps(fetchUrlArg, map.urlProps);
-    }
-
-    // Look for method in options object (second arg)
-    if (sinkPath.node.arguments.length >= 2) {
-      var optsArg = sinkPath.node.arguments[1];
-      if (_t.isObjectExpression(optsArg)) {
-        for (var i = 0; i < optsArg.properties.length; i++) {
-          var prop = optsArg.properties[i];
-          if (!_t.isObjectProperty(prop) || prop.computed) continue;
-          var key = _t.isIdentifier(prop.key) ? prop.key.name : (_t.isStringLiteral(prop.key) ? prop.key.value : null);
-          if (key === "method") {
-            if (_t.isStringLiteral(prop.value) && _HTTP_METHODS_LC[prop.value.value.toLowerCase()]) {
-              map.methodLiteral = prop.value.value.toUpperCase();
-            } else {
-              _collectMemberProps(prop.value, map.methodProps);
-            }
-          }
-        }
-      } else if (_t.isIdentifier(optsArg) || _t.isMemberExpression(optsArg)) {
-        // Options is a variable — record `opts.method` access pattern in
-        // map.methodProps so the inter-procedural resolver can match it
-        // against caller-side object literals and resolve the method
-        // value once a real argument is bound.
-        _collectMemberProps(optsArg, map.methodProps);
-      }
-    }
-  }
-
-  return map;
-}
-
-// Collect terminal property names from MemberExpression chains.
-// E.g., options.url → ["url"], options.type → ["type"]
-// Also handles BinaryExpression (string concat): options.url + path → ["url"]
-function _collectMemberProps(node, out) {
-  // Iterative: walk BinaryExpression(+) chains via explicit stack
-  var stack = [node];
-  while (stack.length > 0) {
-    var n = stack.pop();
-    if (_t.isMemberExpression(n) && !n.computed && _t.isIdentifier(n.property)) {
-      out.push(n.property.name);
-    }
-    // BinaryExpression: options.url + "/path" → still extract "url"
-    if (_t.isBinaryExpression(n) && n.operator === "+") {
-      stack.push(n.left, n.right);
-    }
-  }
-}
-
-function _extractSinkInfo(fetchPath) {
-  var args = fetchPath.node.arguments;
-  var urlNode = args[0];
-  var info = {
-    urlParamName: _t.isIdentifier(urlNode) ? urlNode.name : null,
-    urlLiteral: _t.isStringLiteral(urlNode) ? urlNode.value : null,
-    // MemberExpression URL: fetch(opts.url) → {obj: "opts", prop: "url"}
-    urlMemberExpr: null,
-    method: null,
-    methodParamName: null,
-    // MemberExpression method: fetch(url, {method: opts.method})
-    methodMemberExpr: null,
-    headers: {},
-    params: undefined,
-  };
-  // Capture MemberExpression URL argument (opts.url, config.endpoint, etc.)
-  if (!info.urlParamName && !info.urlLiteral && _t.isMemberExpression(urlNode) && !urlNode.computed) {
-    var urlObj = _t.isIdentifier(urlNode.object) ? urlNode.object.name : null;
-    var urlProp = _t.isIdentifier(urlNode.property) ? urlNode.property.name : null;
-    if (urlObj && urlProp) info.urlMemberExpr = { obj: urlObj, prop: urlProp };
-  }
-
-  // Extract from options object
-  if (args[1] && _t.isObjectExpression(args[1])) {
-    var opts = args[1].properties;
-    for (var i = 0; i < opts.length; i++) {
-      if (!_t.isObjectProperty(opts[i]) || opts[i].computed) continue;
-      var key = _getKeyName(opts[i].key);
-      var val = opts[i].value;
-
-      if (key === "method") {
-        if (_t.isStringLiteral(val)) info.method = val.value.toUpperCase();
-        else if (_t.isIdentifier(val)) info.methodParamName = val.name;
-        else if (_t.isMemberExpression(val) && !val.computed) {
-          var mObj = _t.isIdentifier(val.object) ? val.object.name : null;
-          var mProp = _t.isIdentifier(val.property) ? val.property.name : null;
-          if (mObj && mProp) info.methodMemberExpr = { obj: mObj, prop: mProp };
-        }
-        // Unwrap .toUpperCase()/.toLowerCase() and LogicalExpression chains
-        // e.g., (a||s.method||"get").toUpperCase() → extract param name "a"
-        if (!info.method && !info.methodParamName && !info.methodMemberExpr) {
-          var _mVal = val;
-          if (_t.isCallExpression(_mVal) && _t.isMemberExpression(_mVal.callee) &&
-              _t.isIdentifier(_mVal.callee.property) &&
-              (_mVal.callee.property.name === "toUpperCase" || _mVal.callee.property.name === "toLowerCase")) {
-            _mVal = _mVal.callee.object;
-          }
-          if (_t.isIdentifier(_mVal)) {
-            info.methodParamName = _mVal.name;
-          } else if (_t.isLogicalExpression(_mVal)) {
-            // Walk left-first: (a || b || c) is parsed as ((a || b) || c)
-            var _cur = _mVal;
-            while (_cur) {
-              if (_t.isIdentifier(_cur)) { info.methodParamName = _cur.name; break; }
-              if (_t.isLogicalExpression(_cur)) {
-                if (_t.isIdentifier(_cur.left)) { info.methodParamName = _cur.left.name; break; }
-                _cur = _t.isLogicalExpression(_cur.left) ? _cur.left : _cur.right;
-              } else break;
-            }
-          }
-        }
-      }
-      if (key === "headers" && _t.isObjectExpression(val)) {
-        info.headers = _extractHeaders(val);
-        info.headersNode = val;  // Store raw node for scope-aware resolution later
-      }
-      // `headers: new Headers({...})` — WHATWG Fetch Headers constructor
-      // wraps the same object-literal shape. AV-grounded callee identity
-      // via builtin-ctor "Fetch.Headers". `new Headers(arrayOfPairs)` form
-      // not extracted (rarely used; would need a separate pair-iteration path).
-      var hdrCallee2Av = (key === "headers" && _t.isNewExpression(val)) ?
-        _specPathValMemo.get(val.callee) : null;
-      if (key === "headers" && _t.isNewExpression(val) &&
-          hdrCallee2Av && hdrCallee2Av.kind === "builtin-ctor" && hdrCallee2Av.id === "Fetch.Headers" &&
-          val.arguments.length >= 1 && _t.isObjectExpression(val.arguments[0])) {
-        info.headers = _extractHeaders(val.arguments[0]);
-        info.headersNode = val.arguments[0];
-      }
-      if (key === "body") {
-        info.params = _extractBodyParams(val);
-        // Track body source so _traceWrapperFunction can resolve through caller args
-        var bodyValNode = val;
-        bodyValNode = _unwrapJsonStringify(val, fetchPath);
-        if (_t.isIdentifier(bodyValNode)) info.bodyParamName = bodyValNode.name;
-        else if (_t.isMemberExpression(bodyValNode) && !bodyValNode.computed) {
-          var bObj = _t.isIdentifier(bodyValNode.object) ? bodyValNode.object.name : null;
-          var bProp = _t.isIdentifier(bodyValNode.property) ? bodyValNode.property.name : null;
-          if (bObj && bProp) info.bodyMemberExpr = { obj: bObj, prop: bProp };
-        }
-      }
-    }
-  }
-  return info;
-}
-
 // Record a resolver gap on the fetch URL argument. Cheaper than
 // re-walking to pinpoint the exact leaf — just labels the argument's
 // shape (Identifier name / `.prop` / `call()` / node type) and its
@@ -16999,86 +15900,6 @@ function _traceItemCallsToArgs(callPath, iterArgIdx, paramIdx, queue) {
   } finally { _resolver.unguard("ZI", callPath.node); }
 }
 
-// Resolve correlated properties from caller arguments.
-// Given an argument path (from a caller), resolve multiple properties from it.
-// Returns { prop1: [val1, ...], prop2: [val2, ...] }
-// Iterative worklist version. The original recursed once per
-// CallExpression-arg unwrap and once per Identifier-init-call-arg
-// unwrap; both could chain through wrapper functions of arbitrary depth.
-// Single result accumulator filled across iterations; only empty slots
-// get filled by deferred work, matching original semantics.
-function _resolvePropsFromArg(argPath, propNames) {
-  var result = {};
-  for (var i0 = 0; i0 < propNames.length; i0++) result[propNames[i0]] = [];
-  var queue = [argPath];
-  var queueSeen = new Set();
-  while (queue.length > 0) {
-    var ap = queue.shift();
-    if (!ap || !ap.node) continue;
-    if (queueSeen.has(ap.node)) continue;
-    queueSeen.add(ap.node);
-
-    // Per-property direct resolution at this arg path.
-    for (var i = 0; i < propNames.length; i++) {
-      if (result[propNames[i]].length > 0) continue;
-      result[propNames[i]] = _resolvePropertyFromArg(ap, propNames[i], 0);
-    }
-    if (!allEmpty(result, propNames)) continue;
-
-    // CallExpression arg — push each call arg.
-    if (_t.isCallExpression(ap.node)) {
-      var callArgs = ap.node.arguments;
-      for (var cai = 0; cai < callArgs.length; cai++) {
-        queue.push(ap.get("arguments." + cai));
-      }
-      continue;
-    }
-
-    // Identifier whose binding is initialized from a function call —
-    // push each init call's args; also check property-assignment fallback.
-    if (_t.isIdentifier(ap.node)) {
-      var binding = ap.scope.getBinding(ap.node.name);
-      if (binding && binding.path.isVariableDeclarator && binding.path.isVariableDeclarator()) {
-        var initNode = binding.path.node.init;
-        if (initNode && _t.isCallExpression(initNode)) {
-          var initPath = binding.path.get("init");
-          var initArgs = initNode.arguments;
-          for (var iai = 0; iai < initArgs.length; iai++) {
-            queue.push(initPath.get("arguments." + iai));
-          }
-        }
-      }
-      // Also check property assignments: s.url = ..., s.type = ...
-      if (binding && binding.referencePaths) {
-        for (var pi = 0; pi < propNames.length; pi++) {
-          if (result[propNames[pi]].length > 0) continue;
-          var propN = propNames[pi];
-          var refs = binding.referencePaths;
-          for (var ri = 0; ri < refs.length; ri++) {
-            var refParent = refs[ri].parent;
-            if (_t.isMemberExpression(refParent) && refParent.object === refs[ri].node &&
-                !refParent.computed && _t.isIdentifier(refParent.property, { name: propN })) {
-              var assignNode = refs[ri].parentPath ? refs[ri].parentPath.parent : null;
-              if (assignNode && _t.isAssignmentExpression(assignNode) && assignNode.operator === "=" &&
-                  assignNode.left === refParent) {
-                var rhsVals = _resolveAllValues(refs[ri].parentPath.parentPath.get("right"), 0);
-                result[propN] = result[propN].concat(rhsVals);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return result;
-}
-
-function allEmpty(obj, keys) {
-  for (var i = 0; i < keys.length; i++) {
-    if (obj[keys[i]] && obj[keys[i]].length > 0) return false;
-  }
-  return true;
-}
 
 // Search an object binding's references for obj.method(...) call sites
 var _methodCallVisited = null;
@@ -18380,6 +17201,74 @@ function _extractBodyParams(rootNode, rootScope) {
 }
 
 
+// Convert a fully-literal ArrayExpression / ObjectExpression / nested
+// composite to a plain JSON value. Returns undefined when any descendant
+// isn't statically resolvable (no synthesised values — per the project
+// rule that example values come from real literals or observed traffic).
+// Iterative post-order: pass 1 enumerates the subtree in pre-order onto
+// a "post" list; pass 2 walks the list in reverse and computes each
+// node's value from children whose values are already computed.
+function _astLiteralToValue(root) {
+  if (!root) return undefined;
+  var post = []; // [{ node, kind }]
+  var stack = [root];
+  while (stack.length > 0) {
+    var n = stack.pop();
+    if (!n) continue;
+    post.push(n);
+    if (_t.isArrayExpression(n)) {
+      for (var i = 0; i < n.elements.length; i++) {
+        if (n.elements[i] != null) stack.push(n.elements[i]);
+      }
+    } else if (_t.isObjectExpression(n)) {
+      for (var pi = 0; pi < n.properties.length; pi++) {
+        var prop = n.properties[pi];
+        if (!_t.isObjectProperty(prop) || prop.computed) continue;
+        if (prop.value != null) stack.push(prop.value);
+      }
+    }
+  }
+  // Compute values bottom-up via reverse iteration.
+  var valByNode = new Map();
+  for (var pp = post.length - 1; pp >= 0; pp--) {
+    var nd = post[pp];
+    if (_t.isStringLiteral(nd) || _t.isNumericLiteral(nd) || _t.isBooleanLiteral(nd)) {
+      valByNode.set(nd, nd.value);
+    } else if (_t.isNullLiteral(nd)) {
+      valByNode.set(nd, null);
+    } else if (_t.isArrayExpression(nd)) {
+      var arr = [];
+      var ok = true;
+      for (var ei = 0; ei < nd.elements.length; ei++) {
+        var el = nd.elements[ei];
+        if (el == null) { arr.push(null); continue; }
+        if (!valByNode.has(el)) { ok = false; break; }
+        arr.push(valByNode.get(el));
+      }
+      if (ok) valByNode.set(nd, arr);
+    } else if (_t.isObjectExpression(nd)) {
+      var obj = {};
+      var ok2 = true;
+      for (var opi = 0; opi < nd.properties.length; opi++) {
+        var op = nd.properties[opi];
+        if (!_t.isObjectProperty(op) || op.computed) { ok2 = false; break; }
+        var kn = _getKeyName(op.key);
+        if (!kn) { ok2 = false; break; }
+        if (op.value == null || !valByNode.has(op.value)) { ok2 = false; break; }
+        obj[kn] = valByNode.get(op.value);
+      }
+      if (ok2) valByNode.set(nd, obj);
+    }
+  }
+  return valByNode.has(root) ? valByNode.get(root) : undefined;
+}
+function _arrayLiteralToValue(node) {
+  return _t.isArrayExpression(node) ? _astLiteralToValue(node) : undefined;
+}
+function _objectLiteralToValue(node) {
+  return _t.isObjectExpression(node) ? _astLiteralToValue(node) : undefined;
+}
+
 function _extractObjectProperties(node, objExprPath) {
   if (!node || !_t.isObjectExpression(node)) return [];
   var props = [];
@@ -18421,6 +17310,27 @@ function _extractObjectProperties(node, objExprPath) {
       prop.defaultValue = val.value;
       prop.type = "boolean";
     }
+    if (_t.isNullLiteral(val)) {
+      prop.defaultValue = null;
+      prop.type = "null";
+    }
+    // ArrayExpression / ObjectExpression body fields per JSON schema:
+    // capture the structural type AND a literal-built example when all
+    // descendants are statically-resolvable literals. Non-literal /
+    // nested-non-literal children leave defaultValue absent (no
+    // synthesised values) but type is still recorded — schema learners
+    // need the type to render the field even when no observed value
+    // exists.
+    if (_t.isArrayExpression(val)) {
+      prop.type = "array";
+      var arrLit = _arrayLiteralToValue(val);
+      if (arrLit !== undefined) prop.defaultValue = arrLit;
+    }
+    if (_t.isObjectExpression(val)) {
+      prop.type = "object";
+      var objLit = _objectLiteralToValue(val);
+      if (objLit !== undefined) prop.defaultValue = objLit;
+    }
 
     // When a path is available and the value didn't resolve to a
     // direct literal, run _resolveAllValues on the value path. This
@@ -18450,6 +17360,33 @@ function _extractObjectProperties(node, objExprPath) {
           }
         }
       } catch (e) { _resolver.collectError(e, "extractObjectPropertiesValueResolve"); }
+    }
+    // Path-less path: spec eval may have populated the AV for `val`
+    // already (the enclosing function's analysis populates per-expression
+    // AVs into _specPathValMemo). Reading that AV's string leaves
+    // captures values that flow into the field through variable chains
+    // / caller args / etc. — without requiring a path argument here.
+    // Same authoritative source as _resolveAllValues, just without
+    // re-triggering analysis.
+    if (prop.defaultValue === undefined && !_t.isStringLiteral(val) &&
+        !_t.isNumericLiteral(val) && !_t.isBooleanLiteral(val) &&
+        !_t.isArrayExpression(val) && !_t.isObjectExpression(val)) {
+      var valAv = _specPathValMemo.get(val);
+      if (valAv) {
+        var avLeaves = _avFlattenStringLeaves(valAv);
+        var avPrim = [];
+        for (var li = 0; li < avLeaves.length; li++) {
+          var lv = avLeaves[li];
+          if (typeof lv === "string" || typeof lv === "number" || typeof lv === "boolean") avPrim.push(lv);
+        }
+        if (avPrim.length > 0) {
+          prop.defaultValue = avPrim[0];
+          if (typeof avPrim[0] === "string") prop.type = "string";
+          else if (typeof avPrim[0] === "number") prop.type = "number";
+          else if (typeof avPrim[0] === "boolean") prop.type = "boolean";
+          if (avPrim.length > 1) prop.validValues = avPrim;
+        }
+      }
     }
 
     props.push(prop);
@@ -20533,6 +19470,7 @@ function _isLocationObject(objNode, path) {
 
 // Assignment-based sinks: element.innerHTML = value, element.innerHTML += value
 function _processSecurityAssignSink(path, result) {
+  if (!_isPathInSlice(path)) return;
   var node = path.node;
   if (node.operator !== "=" && node.operator !== "+=") return;
   var left = node.left;
@@ -20708,6 +19646,24 @@ function _processSecurityAssignSink(path, result) {
 // "global.importScripts" per WHATWG HTML § 10.2.5.4. Both bare-call
 // (`eval(x)`) and member-access (`window.eval(x)`) projections through
 // the global registry produce the same builtin-method AV → same sink id.
+
+// Builtin-method id → markup-receiving DOM XSS sink classification.
+// Each entry's argIdx names the argument carrying the HTML string the
+// parser ingests (per WHATWG HTML / DOM specs). Spec eval resolves the
+// callee to the listed AV id through prototype-chain dispatch: dom-
+// element receivers route Element.prototype.setHTMLUnsafe /
+// insertAdjacentHTML, range-instance receivers route
+// Range.prototype.createContextualFragment, the static Document
+// interface routes Document.parseHTMLUnsafe. Receiver type mismatch
+// produces a different AV id and skips dispatch — no method-name
+// shape match.
+var _BUILTIN_HTML_SINKS = {
+  "Element.prototype.setHTMLUnsafe":             { sink: "setHTMLUnsafe", argIdx: 0 },
+  "Element.prototype.insertAdjacentHTML":        { sink: "insertAdjacentHTML", argIdx: 1, requireAttached: true },
+  "Document.parseHTMLUnsafe":                    { sink: "parseHTMLUnsafe", argIdx: 0 },
+  "Range.prototype.createContextualFragment":    { sink: "createContextualFragment", argIdx: 0 },
+};
+
 var _BUILTIN_CALL_SINKS = {
   "global.eval":          { type: "eval", sink: "eval" },
   "Window.prototype.open": { type: "redirect", sink: "window.open" },
@@ -20723,6 +19679,7 @@ var _BUILTIN_CALL_SINKS = {
 
 // Call-based sinks: eval(), document.write(), setTimeout(string), insertAdjacentHTML, setAttribute("on*")
 function _processSecurityCallSink(path, result) {
+  if (!_isPathInSlice(path)) return;
   var node = path.node;
   var callee = node.callee;
 
@@ -20734,6 +19691,27 @@ function _processSecurityCallSink(path, result) {
   if (path) _specEnsureProgramGlobalsPrepass(path);
   var _calleeAv = _specPathValMemo.get(callee);
   if (_calleeAv && _calleeAv.kind === "builtin-method" && node.arguments.length > 0) {
+    // AV-grounded markup-sink dispatch via _BUILTIN_HTML_SINKS:
+    // setHTMLUnsafe / insertAdjacentHTML / parseHTMLUnsafe /
+    // createContextualFragment all flow attacker-controlled HTML to
+    // the WHATWG HTML parser. Receiver type enforced by prototype
+    // dispatch (dom-element → Element.prototype, range-instance →
+    // Range.prototype, static Document → its interface obj-lit).
+    var _hSink = _BUILTIN_HTML_SINKS[_calleeAv.id];
+    if (_hSink && node.arguments.length > _hSink.argIdx) {
+      var _hSrc = _traceValueSource(path.get("arguments." + _hSink.argIdx), 0);
+      if (_hSrc.sourceType === "user-controlled") {
+        // WHATWG DOM § 4.2 attachment gate — markup parsed into an
+        // un-tree-mounted parent doesn't trigger script execution.
+        // Only insertAdjacentHTML's receiver is subject to this gate.
+        if (_hSink.requireAttached) {
+          var _hRecvAv = node.callee && node.callee.object ? _specPathValMemo.get(node.callee.object) : null;
+          if (_hRecvAv && _hRecvAv.kind === "dom-element" && _hRecvAv.attached === false) return;
+        }
+        _pushSink(result, node, "xss", _hSink.sink, _hSrc, path);
+      }
+      return;
+    }
     var _bSink = _BUILTIN_CALL_SINKS[_calleeAv.id];
     if (_bSink) {
       var _bSrc = _traceValueSource(path.get("arguments.0"), 0);
@@ -20785,16 +19763,6 @@ function _processSecurityCallSink(path, result) {
   // spec eval projects `window.open` through windowSelfAv.props.open
   // to the same builtin-method AV as the bare `open(...)` call.)
 
-  // Simple method sinks: method name → { type, sink, argIdx }
-  // Handles setHTMLUnsafe, parseHTMLUnsafe, insertAdjacentHTML, createContextualFragment
-  if (methName === "setHTMLUnsafe" || methName === "parseHTMLUnsafe" || methName === "createContextualFragment") {
-    if (node.arguments.length > 0) {
-      var _htmlSrc = _traceValueSource(path.get("arguments.0"), 0);
-      if (_htmlSrc.sourceType === "user-controlled") _pushSink(result, node, "xss", methName, _htmlSrc, path);
-    }
-    return;
-  }
-
   // document.write / document.writeln — AV-grounded callee identity
   // (Document.prototype.write / Document.prototype.writeln on documentProps;
   // window.document.write projects through windowSelfAv.props.document so
@@ -20805,13 +19773,6 @@ function _processSecurityCallSink(path, result) {
     var dwSource = _traceValueSource(path.get("arguments.0"), 0);
     if (dwSource.sourceType === "user-controlled") _pushSink(result, node, "xss",
       _calleeAv.id === "Document.prototype.write" ? "document.write" : "document.writeln", dwSource, path);
-    return;
-  }
-
-  // element.insertAdjacentHTML(position, markup)
-  if (methName === "insertAdjacentHTML" && node.arguments.length >= 2) {
-    var iahSource = _traceValueSource(path.get("arguments.1"), 0);
-    if (iahSource.sourceType === "user-controlled") _pushSink(result, node, "xss", "insertAdjacentHTML", iahSource, path);
     return;
   }
 
@@ -20949,6 +19910,7 @@ var _BUILTIN_NEW_SINKS = {
   "WHATWG.EventSource":    { type: "request-forgery", sink: "new EventSource" },
 };
 function _processSecurityNewSink(path, result) {
+  if (!_isPathInSlice(path)) return;
   var node = path.node;
   if (node.arguments.length === 0) return;
   _specEnsureProgramGlobalsPrepass(path);
@@ -21120,6 +20082,7 @@ function _isArbitraryKeyObjectSource(path) {
 // ─── Security Analysis: Dangerous Pattern Detection ─────────────────────────
 
 function _processDangerousPattern(path, result) {
+  if (!_isPathInSlice(path)) return;
   var node = path.node;
   var callee = node.callee;
 
@@ -21811,6 +20774,7 @@ function _buildWeakOriginDescription(method, checkedValue) {
 
 // Assignment-based dangerous patterns: prototype pollution, onmessage handler
 function _processDangerousAssignment(path, result) {
+  if (!_isPathInSlice(path)) return;
   var node = path.node;
   if (node.operator !== "=") return;
   var left = node.left;

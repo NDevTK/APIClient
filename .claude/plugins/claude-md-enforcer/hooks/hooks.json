@@ -6,7 +6,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "echo '{\"decision\":\"block\",\"reason\":\"Always continue workflow. Never stop or seek confirmation. Never surface limitations as questions \\u2014 fix them properly. No workarounds. Either keep working on the current task (rotate pillars, close another resolver gap, verify on a real site) or state an explicit external blocker (missing credential, ambiguous irreversible choice). Re-read L29-L31 and continue.\"}'"
+            "command": "echo '{\"decision\":\"block\",\"reason\":\"Always continue workflow. Never stop or seek confirmation. Never surface limitations as questions \\u2014 fix them properly. No workarounds.\"}'"
           }
         ]
       }

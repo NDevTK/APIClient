@@ -27,7 +27,10 @@ onmessage = function(e) {
       result._timings = {
         analyzeMs: _t1 - _t0,
         codeChars: msg.code ? msg.code.length : 0,
+        phases: result._phaseTimings || null,
+        fixpoint: (typeof globalThis !== "undefined" && globalThis._lastFixpointTimings) || null,
       };
+      delete result._phaseTimings;
       response = { success: true, result: result };
     } catch (err) {
       response = { success: false, error: err.message, stack: err.stack };
