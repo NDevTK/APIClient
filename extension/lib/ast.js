@@ -6748,31 +6748,6 @@ function _specInitialFunctionBodyState(funcNode, funcPath) {
             var outerFnNode = b.scope.path.node;
             var paramIdx = _findParamIndex(outerFnNode.params, nm);
             if (paramIdx < 0) return;
-            // § 9.1.1 + § 15.2 escape detection: only tag captured params
-            // when funcNode escapes its outer scope (returned, assigned
-            // to obj prop, stored externally). Non-escaping inner fns
-            // (HOF cbs, immediately-invoked) are analyzed in their cb
-            // dispatch context where the outerState shares closure vars
-            // directly — tagging there would route the substitution
-            // through the outer fn's call sites for every inner-fn AV
-            // read, exploding the worklist on large bundles where many
-            // inner fns reference many outer params. Structural escape
-            // check: the funcNode is at a position where its identity
-            // outlives outer fn's frame (ReturnStatement.argument,
-            // AssignmentExpression.right, VariableDeclarator.init,
-            // ObjectProperty.value).
-            var fnParent = funcPath.parent;
-            var escapes = false;
-            if (fnParent && (
-              (_t.isReturnStatement(fnParent) && fnParent.argument === funcNode) ||
-              (_t.isAssignmentExpression(fnParent) && fnParent.right === funcNode) ||
-              (_t.isVariableDeclarator(fnParent) && fnParent.init === funcNode) ||
-              (_t.isObjectProperty(fnParent) && fnParent.value === funcNode) ||
-              (_t.isArrayExpression(fnParent) && fnParent.elements.indexOf(funcNode) >= 0)
-            )) {
-              escapes = true;
-            }
-            if (!escapes) return;
             seenOuterNames[nm] = true;
             outerBindingsToImport.push({ name: nm, kind: "param", outerFnNode: outerFnNode, paramIdx: paramIdx });
             return;
