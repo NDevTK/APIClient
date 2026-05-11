@@ -9721,54 +9721,69 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
   nodeToPath.set(programPath.node, programPath);
   var pendingNodes = new Set();
   var _t_pass2_start = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-  // Topological ordering of entry points: callee-end first. When the
-  // trampoline analyses entries in callee→caller order, each entry's
-  // body sees its OWN callees' summaries already populated (if those
-  // callees are also entries OR were enqueued + drained earlier). Cuts
-  // worklist re-analysis rounds for the acyclic case to ~0. Pure
-  // structural Kahn over the call graph — no name matching.
+  // Topological pre-seed: compute the set of fns the trampoline WILL
+  // analyse (entries ∪ their transitive callees via the static call
+  // graph), sort by reverse topo order (callees first), and pre-enqueue
+  // in that order. This is the set the trampoline would visit anyway;
+  // we just guarantee they enter the queue in callee→caller order so
+  // each fn's analysis reads stable callee summaries. Cuts worklist
+  // rounds. Pure structural Kahn over the static call graph — no name
+  // matching. SCC residue (mutual recursion) appended at the end;
+  // worklist phase converges those on signature change.
   var calleesOfMap = _specCallGraphCalleesOf || new Map();
-  var entrySet = new Set();
-  for (var epii = 0; epii < entryPaths.length; epii++) entrySet.add(entryPaths[epii].node);
-  // Compute in-degree among entries only (callees outside entrySet
-  // don't block ordering — those get analysed on-demand from inside
-  // entries via _specApplyStatement's discovery).
-  var entryIndegree = new Map();
-  entrySet.forEach(function (fn) {
+  var trampolineSet = new Set();
+  var bfsQ = [];
+  for (var epii = 0; epii < entryPaths.length; epii++) {
+    if (!trampolineSet.has(entryPaths[epii].node)) {
+      trampolineSet.add(entryPaths[epii].node);
+      bfsQ.push(entryPaths[epii].node);
+    }
+  }
+  while (bfsQ.length > 0) {
+    var bfsNode = bfsQ.shift();
+    var bfsCallees = calleesOfMap.get(bfsNode);
+    if (bfsCallees) bfsCallees.forEach(function (c) {
+      if (!trampolineSet.has(c)) { trampolineSet.add(c); bfsQ.push(c); }
+    });
+  }
+  // Now Kahn's algorithm over trampolineSet, with in-degree counting
+  // only callees that are also in the set.
+  var trampIndegree = new Map();
+  trampolineSet.forEach(function (fn) {
     var cs = calleesOfMap.get(fn);
     var d = 0;
-    if (cs) cs.forEach(function (c) { if (entrySet.has(c) && c !== fn) d++; });
-    entryIndegree.set(fn, d);
+    if (cs) cs.forEach(function (c) { if (trampolineSet.has(c) && c !== fn) d++; });
+    trampIndegree.set(fn, d);
   });
-  var entryReady = [];
-  entryIndegree.forEach(function (deg, fn) { if (deg === 0) entryReady.push(fn); });
-  var entryOrder = [];
-  while (entryReady.length > 0) {
-    var topoEFn = entryReady.shift();
-    entryOrder.push(topoEFn);
-    var topoECallers = callersOf.get(topoEFn);
-    if (topoECallers) {
-      topoECallers.forEach(function (c) {
-        if (!entryIndegree.has(c)) return;
-        var newDeg = entryIndegree.get(c) - 1;
-        entryIndegree.set(c, newDeg);
-        if (newDeg === 0) entryReady.push(c);
+  var trampReady = [];
+  trampIndegree.forEach(function (deg, fn) { if (deg === 0) trampReady.push(fn); });
+  var trampOrder = [];
+  while (trampReady.length > 0) {
+    var trampFn = trampReady.shift();
+    trampOrder.push(trampFn);
+    var trampCallers = callersOf.get(trampFn);
+    if (trampCallers) {
+      trampCallers.forEach(function (c) {
+        if (!trampIndegree.has(c)) return;
+        var newDeg = trampIndegree.get(c) - 1;
+        trampIndegree.set(c, newDeg);
+        if (newDeg === 0) trampReady.push(c);
       });
     }
   }
-  // Cycle residue: entries in mutual recursion. Add at the end —
-  // worklist phase handles their convergence.
-  entryIndegree.forEach(function (deg, fn) { if (deg > 0) entryOrder.push(fn); });
-  // Seed entries in topo order. Re-map fn nodes to entryPaths.
+  trampIndegree.forEach(function (deg, fn) { if (deg > 0) trampOrder.push(fn); });
+  // Seed in topo order. Each fn's path comes from slicePaths index;
+  // entryPaths is also indexed for the Program node + hof-arg paths
+  // that may not be in slicePaths.
   var entryPathByNode = new Map();
   for (var epi = 0; epi < entryPaths.length; epi++) entryPathByNode.set(entryPaths[epi].node, entryPaths[epi]);
-  for (var eoi = 0; eoi < entryOrder.length; eoi++) {
-    var eOPath = entryPathByNode.get(entryOrder[eoi]);
-    if (eOPath) _specEnqueueAnalysis(eOPath.node, eOPath);
+  for (var toi = 0; toi < trampOrder.length; toi++) {
+    var topoNode = trampOrder[toi];
+    var topoPath = entryPathByNode.get(topoNode) || nodeToPath.get(topoNode);
+    if (topoPath) _specEnqueueAnalysis(topoNode, topoPath);
   }
-  // Any entry paths not in the topo result (entrySet is a node Set but
-  // entryPaths may have duplicates / Program path) — enqueue too. The
-  // queue is dedup'd via _specPendingAnalysesSeen.
+  // Any entry paths not in the topo result (Program path, hof-arg
+  // callbacks) — enqueue too. Dedup via _specPendingAnalysesSeen.
   for (var epi2 = 0; epi2 < entryPaths.length; epi2++) {
     _specEnqueueAnalysis(entryPaths[epi2].node, entryPaths[epi2]);
   }
