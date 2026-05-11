@@ -23,13 +23,6 @@ var _sourceUrl = null;   // tabUrl when analyzing via live pipeline; gives us
                          // `location.origin` etc. at analysis time.
 var _globalCallerCache = {};  // key → [innerPath, ...] — caches _traverseGlobalCallers results
 var _typeEnv = {};  // scopeUid:varName → type string — lightweight deterministic type tracking
-// Memo for _findPrototypeMethodCallerArgs — keyed by funcPath.node with
-// a sub-map of "ctorName|methodName" → result array. Without memo, run
-// hung past 10 min on 1.4 MB github subset; with memo, 1.4 MB completes
-// in 19 s, full 6 MB github page in 28 s. The instance walk is
-// O(instances × refs) per call; memo bounds it to one walk per
-// (function, class, method) triple.
-var _findPrototypeMethodCallerArgsMemo = new WeakMap();
 var _resolveToObjectMemo = new WeakMap();   // node → resolved ObjectExpression (or null) — caches _resolveToObject result so repeated lookups on the same node are O(1)
 // DOM context for the current analysis. Populated from page HTML so JS
 // access patterns like `document.querySelector("meta[name=X]").content`
@@ -586,7 +579,6 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _resolver = new Resolver();
   _globalCallerCache = {};
   _typeEnv = {};
-  _findPrototypeMethodCallerArgsMemo = new WeakMap();
   _resolveToObjectMemo = new WeakMap();
   _rcfpMemo = new WeakMap();
   _specEffectsMemo = new WeakMap();
@@ -12180,14 +12172,21 @@ function _inferTypeFromAssignments(binding) {
           if (_t.isIdentifier(hostFn.node.params[pii], { name: paramName })) { pIdxT = pii; break; }
         }
         if (pIdxT >= 0) {
-          var callerArgsT = _findFunctionCallerArgs(hostFn);
+          // § 10.2.10 — discover host fn's call sites via the shared
+          // spec-eval index. _specFindCallSites covers binding-resolved
+          // direct calls + class-constructor NewExpressions + the
+          // _specCallSitesByFn cache populated during slice build (which
+          // tracks Identifier-callee invocations program-wide). For
+          // type inference, an arg at the param index is examined; if
+          // every caller passes the same type, that's the inferred type.
+          var callPathsT = _specFindCallSites(hostFn);
           var paramInferred = inferred;
           var sawAny = false;
-          for (var caT = 0; caT < callerArgsT.length; caT++) {
-            if (pIdxT >= callerArgsT[caT].length) continue;
-            var argP = callerArgsT[caT][pIdxT];
-            if (!argP || !argP.node) continue;
-            var argT = _typeOfExpr(argP.node);
+          for (var caT = 0; caT < callPathsT.length; caT++) {
+            var cpT = callPathsT[caT];
+            if (!cpT || !cpT.node || !cpT.node.arguments) continue;
+            if (pIdxT >= cpT.node.arguments.length) continue;
+            var argT = _typeOfExpr(cpT.node.arguments[pIdxT]);
             if (!argT) { paramInferred = null; break; }
             if (paramInferred && paramInferred !== argT) { paramInferred = null; break; }
             paramInferred = argT;
@@ -15811,16 +15810,21 @@ function _extractBodyParams(rootNode, rootScope) {
           var localObj = _resolveToObject(objBnd.path.get("init"), 0);
           if (localObj) objCands.push({ obj: localObj, path: objBnd.path.get("init") });
         } else if (objBnd.kind === "param") {
+          // § 10.2.10 inter-procedural param read: discover the host
+          // function's call sites via the spec-eval index, then read the
+          // arg at the param index. Each caller arg that resolves to an
+          // obj-lit becomes a body-param candidate.
           var pFnP = objBnd.scope.path;
           var pIdx2 = _findParamIndex(pFnP.node.params, objName);
           if (pIdx2 >= 0) {
-            var callerArgs = _findFunctionCallerArgs(pFnP);
-            for (var cai = 0; cai < callerArgs.length; cai++) {
-              if (pIdx2 < callerArgs[cai].length) {
-                var caP = callerArgs[cai][pIdx2];
-                var caObj = _resolveToObject(caP, 0);
-                if (caObj) objCands.push({ obj: caObj, path: caP });
-              }
+            var pCallPaths = _specFindCallSites(pFnP);
+            for (var cai = 0; cai < pCallPaths.length; cai++) {
+              var cpO = pCallPaths[cai];
+              if (!cpO || !cpO.node || !cpO.node.arguments) continue;
+              if (pIdx2 >= cpO.node.arguments.length) continue;
+              var caP = cpO.get("arguments." + pIdx2);
+              var caObj = _resolveToObject(caP, 0);
+              if (caObj) objCands.push({ obj: caObj, path: caP });
             }
           }
         }
@@ -16212,387 +16216,6 @@ function _identifyParamSource(node, path) {
     }
   }
   return null;
-}
-
-// Find all caller argument arrays for a function.
-// Returns array of arrays of paths: [[arg0Path, arg1Path, ...], ...]
-function _findFunctionCallerArgs(funcPath) {
-  var results = [];
-  var funcBinding = null;
-  if (funcPath.node.id) {
-    funcBinding = funcPath.scope.parent ? funcPath.scope.parent.getBinding(funcPath.node.id.name) : null;
-    if (!funcBinding) funcBinding = funcPath.scope.getBinding(funcPath.node.id.name);
-  }
-  if (!funcBinding && _t.isVariableDeclarator(funcPath.parent))
-    funcBinding = funcPath.scope.parent ? funcPath.scope.parent.getBinding(funcPath.parent.id.name) : null;
-  // Handle assignment chains: const X = Y = function(){} — walk up AssignmentExpressions to VariableDeclarator
-  if (!funcBinding && _t.isAssignmentExpression(funcPath.parent)) {
-    var _chain = funcPath.parentPath;
-    while (_chain && _t.isAssignmentExpression(_chain.node)) _chain = _chain.parentPath;
-    if (_chain && _t.isVariableDeclarator(_chain.node) && _t.isIdentifier(_chain.node.id)) {
-      funcBinding = _chain.scope.getBinding(_chain.node.id.name);
-    }
-    // Also try the direct assignment target: Y = function(){} → get binding for Y
-    if (!funcBinding && _t.isIdentifier(funcPath.parent.left)) {
-      funcBinding = funcPath.parentPath.scope.getBinding(funcPath.parent.left.name);
-    }
-    // Prototype method: Ctor.prototype.method = function(params) { ... }
-    // Find callers: instance.method(args) where instance = new Ctor()
-    if (!funcBinding && _t.isMemberExpression(funcPath.parent.left)) {
-      var protoLeft = funcPath.parent.left;
-      // Match X.prototype.Y or X.prototype["Y"]
-      if (_t.isMemberExpression(protoLeft.object) && !protoLeft.object.computed &&
-          _t.isIdentifier(protoLeft.object.property, { name: "prototype" }) &&
-          _t.isIdentifier(protoLeft.object.object)) {
-        var protoCtorName2 = protoLeft.object.object.name;
-        var protoMethodName = _t.isIdentifier(protoLeft.property) ? protoLeft.property.name :
-          (_t.isStringLiteral(protoLeft.property) ? protoLeft.property.value : null);
-        if (protoCtorName2 && protoMethodName) {
-          var protoResults = _findPrototypeMethodCallerArgs(funcPath, protoCtorName2, protoMethodName);
-          if (protoResults.length > 0) return protoResults;
-        }
-      }
-    }
-    // Indexed-property assignment: `obj[K] = function(params) { ... }` or
-    // `obj.K = function(params) { ... }`. Callers reach the function via
-    // `obj[K](args)` / `obj.K(args)` / `obj[K].call(thisArg, args)`.
-    // Walk obj's referencePaths for matching member-access calls.
-    if (!funcBinding && _t.isMemberExpression(funcPath.parent.left)) {
-      var ipLeft = funcPath.parent.left;
-      if (_t.isIdentifier(ipLeft.object)) {
-        var ipKey = null;
-        if (!ipLeft.computed && _t.isIdentifier(ipLeft.property)) ipKey = ipLeft.property.name;
-        else if (ipLeft.computed) {
-          if (_t.isStringLiteral(ipLeft.property)) ipKey = ipLeft.property.value;
-          else if (_t.isNumericLiteral(ipLeft.property)) ipKey = String(ipLeft.property.value);
-        }
-        if (ipKey != null) {
-          var ipObjBinding = funcPath.parentPath.scope.getBinding(ipLeft.object.name);
-          if (ipObjBinding && ipObjBinding.referencePaths) {
-            // Collect references for this object plus any global aliases.
-            // `var ce = {}; ce.post = fn; window.$ = ce;` — `$.post(args)`
-            // reaches ce.post but `$` is a separate global. Walk
-            // _globalAssignments for any global whose value is this
-            // identifier; pull its references from the pre-pass index
-            // (no program-traverse-during-traverse).
-            var ipAllRefs = ipObjBinding.referencePaths.slice();
-            if (_unboundIdRefs) {
-              for (var ipGn in _globalAssignments) {
-                var ipGa = _globalAssignments[ipGn];
-                if (!ipGa || !ipGa.valueNode) continue;
-                var ipGv = ipGa.valueNode;
-                while (_t.isAssignmentExpression(ipGv)) ipGv = ipGv.right;
-                if (_t.isIdentifier(ipGv) && ipGv.name === ipLeft.object.name) {
-                  var aliasRefs = _unboundIdRefs[ipGn];
-                  if (aliasRefs) {
-                    for (var ari2 = 0; ari2 < aliasRefs.length; ari2++) ipAllRefs.push(aliasRefs[ari2]);
-                  }
-                }
-              }
-            }
-            var ipResults = [];
-            for (var iri = 0; iri < ipAllRefs.length; iri++) {
-              var iRef = ipAllRefs[iri];
-              var iMem = iRef.parentPath;
-              if (!iMem || !iMem.isMemberExpression() || iMem.node.object !== iRef.node) continue;
-              var iMatch = (!iMem.node.computed && _t.isIdentifier(iMem.node.property, { name: ipKey })) ||
-                (iMem.node.computed && _t.isStringLiteral(iMem.node.property) && iMem.node.property.value === ipKey) ||
-                (iMem.node.computed && _t.isNumericLiteral(iMem.node.property) && String(iMem.node.property.value) === ipKey);
-              if (!iMatch) continue;
-              // obj.K(args) — direct call
-              var iCall = iMem.parentPath;
-              if (iCall && iCall.isCallExpression() && iCall.node.callee === iMem.node) {
-                var iArgs = [];
-                for (var iai = 0; iai < iCall.node.arguments.length; iai++) iArgs.push(iCall.get("arguments." + iai));
-                ipResults.push(iArgs);
-                continue;
-              }
-              // obj.K.call(thisArg, args) — Function.prototype.call form
-              if (iCall && iCall.isMemberExpression() && iCall.node.object === iMem.node &&
-                  !iCall.node.computed && _t.isIdentifier(iCall.node.property, { name: "call" })) {
-                var iCall2 = iCall.parentPath;
-                if (iCall2 && iCall2.isCallExpression() && iCall2.node.callee === iCall.node) {
-                  var iArgs2 = [];
-                  // Skip thisArg (arg[0]); shift remaining into params
-                  for (var iaj = 1; iaj < iCall2.node.arguments.length; iaj++) iArgs2.push(iCall2.get("arguments." + iaj));
-                  ipResults.push(iArgs2);
-                }
-              }
-            }
-            if (ipResults.length > 0) return ipResults;
-          }
-        }
-      }
-    }
-  }
-  if (funcBinding && funcBinding.referencePaths) {
-    for (var i = 0; i < funcBinding.referencePaths.length; i++) {
-      var ref = funcBinding.referencePaths[i];
-      if (_t.isCallExpression(ref.parent) && ref.parent.callee === ref.node) {
-        var argPaths = [];
-        for (var j = 0; j < ref.parent.arguments.length; j++) argPaths.push(ref.parentPath.get("arguments." + j));
-        results.push(argPaths);
-      }
-      // Function.prototype.bind: `f.bind(thisArg, …preArgs)` returns a
-      // function. Effective callee args at runtime = preArgs prepended
-      // to whatever the bound function is called with. Find:
-      //   var alias = f.bind(null, X, Y);
-      //   alias(Z, W);          // → f(X, Y, Z, W)
-      //   obj.k = f.bind(null, X);
-      //   obj.k(Z);             // → f(X, Z)
-      // Walk one .bind hop and collect aggregated arg lists for the
-      // bound aliases' call sites.
-      if (_t.isMemberExpression(ref.parent) && ref.parent.object === ref.node && !ref.parent.computed &&
-          _t.isIdentifier(ref.parent.property, { name: "bind" })) {
-        var bindCall = ref.parentPath ? ref.parentPath.parent : null;
-        var bindCallPath = ref.parentPath ? ref.parentPath.parentPath : null;
-        if (bindCall && bindCallPath && _t.isCallExpression(bindCall) && bindCall.callee === ref.parent &&
-            bindCall.arguments.length >= 1) {
-          // Pre-args (everything after thisArg).
-          var preArgs = [];
-          for (var bi = 1; bi < bindCall.arguments.length; bi++) preArgs.push(bindCallPath.get("arguments." + bi));
-          // Find what the bind result is assigned to.
-          var bindParent = bindCallPath.parent;
-          if (bindParent && _t.isVariableDeclarator(bindParent) && _t.isIdentifier(bindParent.id) &&
-              bindParent.init === bindCall) {
-            var aliasBinding = bindCallPath.parentPath.scope.getBinding(bindParent.id.name);
-            if (aliasBinding && aliasBinding.referencePaths) {
-              for (var ari = 0; ari < aliasBinding.referencePaths.length; ari++) {
-                var aRef = aliasBinding.referencePaths[ari];
-                if (_t.isCallExpression(aRef.parent) && aRef.parent.callee === aRef.node) {
-                  var combined = preArgs.slice();
-                  for (var aci = 0; aci < aRef.parent.arguments.length; aci++) {
-                    combined.push(aRef.parentPath.get("arguments." + aci));
-                  }
-                  results.push(combined);
-                }
-              }
-            }
-          } else if (bindParent && _t.isAssignmentExpression(bindParent) && bindParent.right === bindCall &&
-                     _t.isMemberExpression(bindParent.left) && _t.isIdentifier(bindParent.left.object)) {
-            // obj.k = f.bind(...) — find obj.k call sites.
-            var asgnLeft = bindParent.left;
-            var asgnObj = asgnLeft.object;
-            var asgnKey = null;
-            if (!asgnLeft.computed && _t.isIdentifier(asgnLeft.property)) asgnKey = asgnLeft.property.name;
-            else if (asgnLeft.computed) {
-              if (_t.isStringLiteral(asgnLeft.property)) asgnKey = asgnLeft.property.value;
-              else if (_t.isNumericLiteral(asgnLeft.property)) asgnKey = String(asgnLeft.property.value);
-            }
-            var asgnObjBinding = bindCallPath.parentPath.scope.getBinding(asgnObj.name);
-            if (asgnKey != null && asgnObjBinding && asgnObjBinding.referencePaths) {
-              for (var aori = 0; aori < asgnObjBinding.referencePaths.length; aori++) {
-                var aoRef = asgnObjBinding.referencePaths[aori];
-                var aoMem = aoRef.parentPath;
-                if (!aoMem || !aoMem.isMemberExpression() || aoMem.node.object !== aoRef.node) continue;
-                var aoMatch = (!aoMem.node.computed && _t.isIdentifier(aoMem.node.property, { name: asgnKey })) ||
-                  (aoMem.node.computed && _t.isStringLiteral(aoMem.node.property) && aoMem.node.property.value === asgnKey) ||
-                  (aoMem.node.computed && _t.isNumericLiteral(aoMem.node.property) && String(aoMem.node.property.value) === asgnKey);
-                if (!aoMatch) continue;
-                var aoCall = aoMem.parentPath;
-                if (aoCall && aoCall.isCallExpression() && aoCall.node.callee === aoMem.node) {
-                  var combined2 = preArgs.slice();
-                  for (var aoaci = 0; aoaci < aoCall.node.arguments.length; aoaci++) {
-                    combined2.push(aoCall.get("arguments." + aoaci));
-                  }
-                  results.push(combined2);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    return results;
-  }
-  // Object-literal method: `var u = {m(e){}}; u.m(tainted);` or
-  // `{m: function(e){}}; `. The function itself has no named binding —
-  // it's reached via `u.m(args)`. Walk up to the ObjectExpression, find
-  // its VariableDeclarator binding, then filter ref usages to calls
-  // through `obj.methodName`.
-  if (!funcBinding) {
-    var objMethodName = null;
-    var objExprPath2 = null;
-    if (funcPath.isObjectMethod && funcPath.isObjectMethod()) {
-      var omK = funcPath.node.key;
-      if (!funcPath.node.computed) {
-        if (_t.isIdentifier(omK)) objMethodName = omK.name;
-        else if (_t.isStringLiteral(omK)) objMethodName = omK.value;
-      }
-      objExprPath2 = funcPath.parentPath;
-    } else if (funcPath.parentPath && _t.isObjectProperty(funcPath.parent)) {
-      var opK = funcPath.parent.key;
-      if (!funcPath.parent.computed) {
-        if (_t.isIdentifier(opK)) objMethodName = opK.name;
-        else if (_t.isStringLiteral(opK)) objMethodName = opK.value;
-      }
-      objExprPath2 = funcPath.parentPath.parentPath;
-    }
-    if (objMethodName && objExprPath2 && objExprPath2.isObjectExpression() &&
-        objExprPath2.parentPath && _t.isVariableDeclarator(objExprPath2.parentPath.node) &&
-        _t.isIdentifier(objExprPath2.parentPath.node.id)) {
-      var objName = objExprPath2.parentPath.node.id.name;
-      var objBind = objExprPath2.scope.getBinding(objName);
-      if (objBind && objBind.referencePaths) {
-        for (var omi = 0; omi < objBind.referencePaths.length; omi++) {
-          var oref = objBind.referencePaths[omi];
-          var mem = oref.parentPath;
-          if (!mem || !mem.isMemberExpression() || mem.node.object !== oref.node || mem.node.computed) continue;
-          var accessName = _t.isIdentifier(mem.node.property) ? mem.node.property.name : null;
-          if (accessName !== objMethodName) continue;
-          var callExpr = mem.parentPath;
-          if (!callExpr || !callExpr.isCallExpression() || callExpr.node.callee !== mem.node) continue;
-          var omArgPaths = [];
-          for (var omj = 0; omj < callExpr.node.arguments.length; omj++) {
-            omArgPaths.push(callExpr.get("arguments." + omj));
-          }
-          results.push(omArgPaths);
-        }
-        if (results.length > 0) return results;
-      }
-    }
-  }
-  // Function passed as argument: makeHandler(function(data) { sink(data); })
-  // If our function is an argument to a call, find the corresponding parameter in the
-  // called function, then find all call sites of that parameter within the function body.
-  if (!funcBinding && funcPath.parentPath && _t.isCallExpression(funcPath.parent) &&
-      funcPath.parent.callee !== funcPath.node) {
-    var _fpaCallNode = funcPath.parent;
-    var _fpaArgIdx = -1;
-    for (var _fpai = 0; _fpai < _fpaCallNode.arguments.length; _fpai++) {
-      if (_fpaCallNode.arguments[_fpai] === funcPath.node) { _fpaArgIdx = _fpai; break; }
-    }
-    if (_fpaArgIdx >= 0) {
-      // Resolve the called function
-      var _fpaCallee = _fpaCallNode.callee;
-      var _fpaCalleeFn = null;
-      var _fpaCalleePath = null;
-      if (_t.isIdentifier(_fpaCallee)) {
-        var _fpaBind = funcPath.scope.getBinding(_fpaCallee.name);
-        if (_fpaBind) {
-          if (_t.isFunctionDeclaration(_fpaBind.path.node)) { _fpaCalleeFn = _fpaBind.path.node; _fpaCalleePath = _fpaBind.path; }
-          else if (_fpaBind.path.isVariableDeclarator() && _fpaBind.path.node.init && _t.isFunction(_fpaBind.path.node.init)) {
-            _fpaCalleeFn = _fpaBind.path.node.init; _fpaCalleePath = _fpaBind.path.get("init");
-          }
-        }
-      } else if (_t.isFunctionExpression(_fpaCallee) || _t.isArrowFunctionExpression(_fpaCallee)) {
-        _fpaCalleeFn = _fpaCallee; _fpaCalleePath = funcPath.parentPath.get("callee");
-      }
-      if (_fpaCalleeFn && _fpaCalleeFn.params && _fpaArgIdx < _fpaCalleeFn.params.length &&
-          _t.isIdentifier(_fpaCalleeFn.params[_fpaArgIdx]) && _fpaCalleePath) {
-        var _fpaParamName = _fpaCalleeFn.params[_fpaArgIdx].name;
-        // Find all call sites of this parameter within the enclosing function body
-        try {
-          _fpaCalleePath.traverse({
-            CallExpression: function(callP) {
-              if (_t.isIdentifier(callP.node.callee, { name: _fpaParamName }) &&
-                  callP.scope.getBinding(_fpaParamName) &&
-                  callP.scope.getBinding(_fpaParamName).scope === _fpaCalleePath.scope) {
-                var _fpaArgPaths = [];
-                for (var _fpaj = 0; _fpaj < callP.node.arguments.length; _fpaj++) _fpaArgPaths.push(callP.get("arguments." + _fpaj));
-                results.push(_fpaArgPaths);
-              }
-            }
-          });
-        } catch (e) { _resolver.collectError(e, "funcParamCallSites"); }
-        if (results.length > 0) return results;
-      }
-    }
-  }
-
-  // IIFE return / UMD: function returned from enclosing function
-  if (_t.isReturnStatement(funcPath.parent)) {
-    var encFunc = funcPath.findParent(function(p) { return p.isFunction() && p !== funcPath; });
-    if (encFunc) {
-      var encParent = encFunc.parentPath;
-      // UMD: encFunc is arg to outer IIFE
-      if (encParent && _t.isCallExpression(encParent.node) && encParent.node.callee !== encFunc.node) {
-        var outerCallee = encParent.node.callee;
-        if (_t.isUnaryExpression(outerCallee)) outerCallee = outerCallee.argument;
-        var argIdx = -1;
-        for (var ai = 0; ai < encParent.node.arguments.length; ai++) {
-          if (encParent.node.arguments[ai] === encFunc.node) { argIdx = ai; break; }
-        }
-        if (argIdx >= 0 && (_t.isFunctionExpression(outerCallee) || _t.isArrowFunctionExpression(outerCallee)) &&
-            argIdx < outerCallee.params.length) {
-          var factoryName = _t.isIdentifier(outerCallee.params[argIdx]) ? outerCallee.params[argIdx].name : null;
-          if (factoryName) {
-            // Find global that calls the factory: (win).X = factory()
-            for (var gn in _globalAssignments) {
-              var ga = _globalAssignments[gn];
-              if (ga.valueNode && _t.isCallExpression(ga.valueNode) &&
-                  _t.isIdentifier(ga.valueNode.callee) && ga.valueNode.callee.name === factoryName) {
-                // Find all global callers: X(url, opts)
-                return _collectGlobalCallerArgArrays(funcPath, gn);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return results;
-}
-
-// Find callers of prototype methods: instance.method(args) where instance = new Ctor()
-function _findPrototypeMethodCallerArgs(funcPath, ctorName, methodName) {
-  // Memo per (funcPath.node, ctorName, methodName). Same triple returns
-  // the same call-site set within one analysis.
-  var memoKey = ctorName + "|" + methodName;
-  var fnMemo = _findPrototypeMethodCallerArgsMemo.get(funcPath.node);
-  if (fnMemo && memoKey in fnMemo) return fnMemo[memoKey];
-  var results = [];
-  // Cache: ctorName instances found via full-program traversal
-  var instCacheKey = "inst:" + ctorName;
-  var instanceEntries = _globalCallerCache[instCacheKey];
-  if (!instanceEntries) {
-    instanceEntries = [];
-    var programPath = funcPath.findParent(function(p) { return p.isProgram(); });
-    if (!programPath) return results;
-    try {
-      programPath.traverse({
-        VariableDeclarator: function(decPath) {
-          var init = decPath.node.init;
-          if (!init || !_t.isNewExpression(init) || !_t.isIdentifier(init.callee, { name: ctorName })) return;
-          var ib = decPath.scope.getBinding(decPath.node.id.name);
-          if (ib) instanceEntries.push(ib);
-        },
-      });
-    } catch(e) { _resolver.collectError(e, "protoInstanceCache"); }
-    _globalCallerCache[instCacheKey] = instanceEntries;
-  }
-  for (var _iei = 0; _iei < instanceEntries.length; _iei++) {
-    var instanceBinding = instanceEntries[_iei];
-    if (!instanceBinding.referencePaths) continue;
-    for (var ri = 0; ri < instanceBinding.referencePaths.length; ri++) {
-      var ref = instanceBinding.referencePaths[ri];
-      if (_t.isMemberExpression(ref.parent) && !ref.parent.computed &&
-          ref.parent.object === ref.node &&
-          _t.isIdentifier(ref.parent.property, { name: methodName }) &&
-          _t.isCallExpression(ref.parentPath.parent) &&
-          ref.parentPath.parent.callee === ref.parent) {
-        var callNode = ref.parentPath.parent;
-        var callPath2 = ref.parentPath.parentPath;
-        var argPaths = [];
-        for (var ai = 0; ai < callNode.arguments.length; ai++) argPaths.push(callPath2.get("arguments." + ai));
-        results.push(argPaths);
-      }
-    }
-  }
-  if (!fnMemo) { fnMemo = {}; _findPrototypeMethodCallerArgsMemo.set(funcPath.node, fnMemo); }
-  fnMemo[memoKey] = results;
-  return results;
-}
-
-// Collect caller argument arrays for global function calls
-function _collectGlobalCallerArgArrays(funcPath, globalName) {
-  var results = [];
-  _traverseGlobalCallers(funcPath, globalName, null, function(callPath) {
-    var argPaths = [];
-    for (var j = 0; j < callPath.node.arguments.length; j++) argPaths.push(callPath.get("arguments." + j));
-    results.push(argPaths);
-  });
-  return results;
 }
 
 // Structural member chain key: walks MemberExpression chain to produce a
