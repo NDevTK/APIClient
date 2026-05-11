@@ -11757,7 +11757,8 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       // dispatches via _specApplyBuiltinMethod.
       var subObj = subs.get(node.obj) || node.obj;
       var subKey = subs.get(node.key) || node.key;
-      if (subObj && subObj.kind === "obj-lit" && subObj.props &&
+      if (subObj && (subObj.kind === "obj-lit" || subObj.kind === "dom-element") &&
+          subObj.props &&
           subKey && subKey.kind === "const" &&
           (typeof subKey.value === "string" || typeof subKey.value === "number") &&
           Object.prototype.hasOwnProperty.call(subObj.props, subKey.value)) {
@@ -14997,7 +14998,8 @@ function _specSubstituteParam(rootAv, paramIdx, paramFn, replacementAv) {
       // Member-access fold per § 13.10: obj-lit + const key → prop lookup;
       // array-lit + const-numeric-key → element lookup; prototype-chain
       // lookup for const-string keys.
-      if (smObj && smObj.kind === "obj-lit" && smObj.props && smKey && smKey.kind === "const" &&
+      if (smObj && (smObj.kind === "obj-lit" || smObj.kind === "dom-element") &&
+          smObj.props && smKey && smKey.kind === "const" &&
           (typeof smKey.value === "string" || typeof smKey.value === "number") &&
           Object.prototype.hasOwnProperty.call(smObj.props, smKey.value)) {
         subs.set(node, smObj.props[smKey.value]);
