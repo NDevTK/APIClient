@@ -12993,19 +12993,59 @@ function _extractFetchCall(path, result, type) {
           var firstElemAv = spreadSrcAv.elements[0];
           var spreadUrls = _avFlattenStringLeaves(firstElemAv);
           if (spreadUrls.length > 0) {
-            // Synthesize a fake urlArgPath wrapper so the rest of the
-            // extraction logic (params parsing, etc.) operates on the
-            // spread's first element. For now, just emit the URLs and
-            // skip body/params learning (which requires deeper rework).
+            // § 13.3.6.1 ArgumentListEvaluation: spread expands to
+            // sequential args. args[1] (second element of spread source)
+            // is the init/options obj-lit per WHATWG Fetch § 5.1.
+            // Extract method from options.method, body params from
+            // options.body, headers from options.headers.
+            var spreadOptsAv = spreadSrcAv.elements.length >= 2 ? spreadSrcAv.elements[1] : null;
+            var spMethod = "GET";
+            var spHeaders = {};
+            var spBodyParams = [];
+            if (spreadOptsAv && spreadOptsAv.kind === "obj-lit" && spreadOptsAv.props) {
+              // Method per WHATWG Fetch § 5.1 step 4.
+              if (spreadOptsAv.props.method && spreadOptsAv.props.method.kind === "const" &&
+                  typeof spreadOptsAv.props.method.value === "string") {
+                spMethod = spreadOptsAv.props.method.value.toUpperCase();
+              }
+              // Headers per Fetch § 5.1 step 24 (Headers init record).
+              if (spreadOptsAv.props.headers && spreadOptsAv.props.headers.kind === "obj-lit" && spreadOptsAv.props.headers.props) {
+                for (var spHk in spreadOptsAv.props.headers.props) {
+                  if (!Object.prototype.hasOwnProperty.call(spreadOptsAv.props.headers.props, spHk)) continue;
+                  var spHv = spreadOptsAv.props.headers.props[spHk];
+                  if (spHv && spHv.kind === "const" && typeof spHv.value === "string") spHeaders[spHk] = spHv.value;
+                }
+              }
+              // Body per Fetch § 5.1 step 38 — when body is an obj-lit
+              // (rare for fetch — usually JSON.stringify(...) wraps), or
+              // when JSON.stringify of an obj-lit, extract props.
+              if (spreadOptsAv.props.body) {
+                var spBodyAv = spreadOptsAv.props.body;
+                // Direct obj-lit body (uncommon but valid).
+                if (spBodyAv.kind === "obj-lit" && spBodyAv.props) {
+                  for (var spBk in spBodyAv.props) {
+                    if (!Object.prototype.hasOwnProperty.call(spBodyAv.props, spBk)) continue;
+                    var spBv = spBodyAv.props[spBk];
+                    var spBp = { name: spBk, location: "body", required: true };
+                    if (spBv && spBv.kind === "const") {
+                      var spBt = typeof spBv.value;
+                      if (spBt === "string" || spBt === "number" || spBt === "boolean") spBp.type = spBt;
+                      spBp.defaultValue = spBv.value;
+                    }
+                    spBodyParams.push(spBp);
+                  }
+                }
+              }
+            }
             for (var spui = 0; spui < spreadUrls.length; spui++) {
               var spreadUrl = spreadUrls[spui];
               if (spreadUrl == null || spreadUrl === "") continue;
               result.fetchCallSites.push({
                 url: String(spreadUrl),
-                method: "GET",
-                headers: {},
+                method: spMethod,
+                headers: spHeaders,
                 type: type || "fetch",
-                params: []
+                params: spBodyParams
               });
             }
             return;
