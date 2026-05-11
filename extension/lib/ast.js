@@ -237,9 +237,9 @@ function _buildInlineHandlerCallSites(domContext) {
           for (var pi = 0; pi < expr.arguments.length; pi++) {
             var pa = expr.arguments[pi];
             if (_t.isThisExpression(pa)) paramArgs.push("this");
-            else if (_t.isStringLiteral(pa)) paramArgs.push({ kind: "const", value: pa.value });
-            else if (_t.isNumericLiteral(pa)) paramArgs.push({ kind: "const", value: pa.value });
-            else if (_t.isBooleanLiteral(pa)) paramArgs.push({ kind: "const", value: pa.value });
+            else if (_t.isStringLiteral(pa)) paramArgs.push(_hcConst(pa.value));
+            else if (_t.isNumericLiteral(pa)) paramArgs.push(_hcConst(pa.value));
+            else if (_t.isBooleanLiteral(pa)) paramArgs.push(_hcConst(pa.value));
             else paramArgs.push(_AV_TOP);
           }
           if (!out[fnName]) out[fnName] = [];
@@ -2657,7 +2657,7 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
       else return _AV_TOP;
     }
     var jElems = recvAv.elements || [];
-    if (jElems.length === 0) return { kind: "const", value: "" };
+    if (jElems.length === 0) return _hcConst("");
     // Fast path: all const → fold directly per § 23.1.3.18.
     var allConst = true;
     for (var jeiC = 0; jeiC < jElems.length; jeiC++) {
@@ -2740,7 +2740,7 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
       if (!ioe || ioe.kind !== "const") return _AV_TOP;
       if (ioe.value === ioSearch) return { kind: "const", value: ioi };
     }
-    return { kind: "const", value: -1 };
+    return _hcConst(-1);
   }
   if (methodId === "Array.prototype.lastIndexOf") {
     if (argAvs.length === 0 || !argAvs[0] || argAvs[0].kind !== "const") return _AV_TOP;
@@ -2750,7 +2750,7 @@ function _specApplyBuiltinMethodOnArrLitRecv(methodId, recvAv, argAvs) {
       if (!lioe || lioe.kind !== "const") return _AV_TOP;
       if (lioe.value === lioSearch) return { kind: "const", value: lioi };
     }
-    return { kind: "const", value: -1 };
+    return _hcConst(-1);
   }
   if (methodId === "Array.prototype.reverse") {
     return { kind: "array-lit", elements: (recvAv.elements || []).slice().reverse() };
@@ -10762,7 +10762,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       for (var ttqi = 0; ttqi < n.quasi.quasis.length; ttqi++) {
         var ttq = n.quasi.quasis[ttqi];
         var ttCooked = ttq && ttq.value && typeof ttq.value.cooked === "string" ? ttq.value.cooked : "";
-        ttQuasiElems.push({ kind: "const", value: ttCooked });
+        ttQuasiElems.push(_hcConst(ttCooked));
       }
       var ttQuasiArr = { kind: "array-lit", elements: ttQuasiElems };
       var ttCallArgs = [ttQuasiArr];
@@ -10836,13 +10836,13 @@ function _specEvalLeaf(path, state, vals, effects) {
       }
       return _AV_TOP;
     }
-    if (alts.length === 1) return { kind: "const", value: alts[0] };
+    if (alts.length === 1) return _hcConst(alts[0]);
     // _specSetUnionAv per § 13.2.8.6 distribution: each cooked-quasi
     // interleaved with each interpolated leaf is a statically-possible
     // runtime value. Preserve all alternatives without top-absorption.
-    var tlOr = { kind: "const", value: alts[0] };
+    var tlOr = _hcConst(alts[0]);
     for (var ti = 1; ti < alts.length; ti++) {
-      tlOr = _specSetUnionAv(tlOr, { kind: "const", value: alts[ti] });
+      tlOr = _specSetUnionAv(tlOr, _hcConst(alts[ti]));
     }
     return tlOr;
   }
@@ -12071,7 +12071,7 @@ function _specEvalLeaf(path, state, vals, effects) {
             }
             if (hofMeth === "findIndex" || hofMeth === "findLastIndex") {
               if (recvAv.kind === "array-lit") {
-                var idxRet = { kind: "const", value: -1 };
+                var idxRet = _hcConst(-1);
                 for (var idxI = 0; idxI < recvAv.elements.length; idxI++) {
                   idxRet = _specLogicalOrAv(idxRet, { kind: "const", value: idxI });
                 }
@@ -16331,7 +16331,7 @@ function _specReduceBuiltinCallPostSub(methodAv, recvAv, argAvs) {
           if (hofBareName === "findIndex" || hofBareName === "findLastIndex") {
             // § 23.1.3.12 — return first matching index OR -1. Sound: join
             // all statically-possible indices that could match plus -1.
-            var fidxAcc = { kind: "const", value: -1 };
+            var fidxAcc = _hcConst(-1);
             for (var fidxI = 0; fidxI < recvAv.elements.length; fidxI++) {
               var fidxEl = recvAv.elements[fidxI];
               var fidxPred = _specSubstituteParam(hofRetMemo, 0, hofCbFn, fidxEl);
