@@ -9130,21 +9130,25 @@ function _avAtPath(path) {
   // After the globals prepass, paths referencing free-globals already
   // have their AV memoised. Short-circuit here: if _specPathValMemo
   // already holds an AV for this path's node, return it without
-  // triggering the full per-function flow analysis. Avoids the
-  // O(fn-body) analysis for the common case of `console.log(...)`,
-  // `globalThis.X.method(...)`, etc. where the receiver chain
-  // bottoms out in unbound globals.
+  // triggering the full per-function flow analysis.
   var memo = _specPathValMemo.get(path.node);
   if (memo) return memo;
-  var encFn = path.getFunctionParent && path.getFunctionParent();
-  // Gate per-fn analysis on slice membership: paths inside non-slice
-  // fns can't contribute to a sink, so triggering O(body) per-fn
-  // analysis just to populate memo for an unreachable expression is
-  // wasted work. The slice already captures every fn whose AVs can
-  // reach a sink via the call-graph reachability check.
-  if (encFn && _t.isFunction(encFn.node) &&
-      (!_specCallGraphCallersOf || _specSliceFns.has(encFn.node))) {
-    _specAnalyzePropertyFlow(encFn);
+  // Gate per-fn analysis on slice membership before walking parents:
+  // paths inside non-slice fns can't contribute to a sink, so
+  // triggering O(body) per-fn analysis just to populate memo for an
+  // unreachable expression is wasted work. Resolve enclosing fn via
+  // the cached _specEnclFnByNode (populated lazily by _isPathInSlice
+  // or other O(1) lookups) instead of Babel's parentPath walk.
+  var encFnNode = _specEnclFnByNode.get(path.node);
+  if (!encFnNode) {
+    var encFn = path.getFunctionParent && path.getFunctionParent();
+    encFnNode = encFn && encFn.node;
+    if (path.node && encFnNode) _specEnclFnByNode.set(path.node, encFnNode);
+  }
+  if (encFnNode && _t.isFunction(encFnNode) &&
+      (!_specCallGraphCallersOf || _specSliceFns.has(encFnNode))) {
+    var encFnPath = _specFuncPathByNode.get(encFnNode);
+    if (encFnPath) _specAnalyzePropertyFlow(encFnPath);
   }
   return _specPathValMemo.get(path.node) || null;
 }
