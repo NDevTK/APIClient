@@ -9082,6 +9082,15 @@ function _specPathOfFunc(funcNode, ctxPath) {
 function _avAtPath(path) {
   if (!path || !path.node) return null;
   _specEnsureProgramGlobalsPrepass(path);
+  // After the globals prepass, paths referencing free-globals already
+  // have their AV memoised. Short-circuit here: if _specPathValMemo
+  // already holds an AV for this path's node, return it without
+  // triggering the full per-function flow analysis. Avoids the
+  // O(fn-body) analysis for the common case of `console.log(...)`,
+  // `globalThis.X.method(...)`, etc. where the receiver chain
+  // bottoms out in unbound globals.
+  var memo = _specPathValMemo.get(path.node);
+  if (memo) return memo;
   var encFn = path.getFunctionParent && path.getFunctionParent();
   if (encFn && _t.isFunction(encFn.node)) _specAnalyzePropertyFlow(encFn);
   return _specPathValMemo.get(path.node) || null;
