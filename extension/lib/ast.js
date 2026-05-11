@@ -11335,38 +11335,68 @@ function _specEvalLeaf(path, state, vals, effects) {
           hofMeth === "flatMap" || hofMeth === "forEach";
         var hofIsReduce = hofMeth === "reduce" || hofMeth === "reduceRight";
         // § 23.1.3.15 forEach + array-lit: per-element sequential dispatch
-        // when cb body's effects depend on order (WHATWG URL § 5.5
-        // searchParams.set/append/delete state mutation on a closure-
-        // captured URL var — each iteration MUST see the prior
-        // iteration's URL state). For non-order-dependent cbs (the
-        // common case: `this.X = computeFromElement(e)`), the joined-
-        // element path below is sound (cb runs N times with each
-        // statically-possible element value). Detection is structural:
-        // any CallExpression in cb body whose callee chain ends in
-        // `.searchParams.<set|append|delete>` triggers sequential.
+        // when cb body has ANY side effect on a closure-captured binding
+        // — assignments to outer-scope Identifier/MemberExpression on
+        // outer-scope Identifier OR method calls on an outer-scope
+        // Identifier (typical mutating-method receivers per spec). For
+        // non-mutating cbs (pure transforms — `return e[0] + "=" + e[1]`),
+        // the joined-element path below is sound. Per § 14.1 the cb's
+        // FormalParameters shadow outer bindings; only non-shadowed
+        // identifier references count as closure-captured.
         if (hofMeth === "forEach" && recvAv.kind === "array-lit" &&
             recvAv.elements && recvAv.elements.length > 0 &&
             n.arguments.length >= 1 &&
             (_t.isFunctionExpression(n.arguments[0]) || _t.isArrowFunctionExpression(n.arguments[0]))) {
           var feCb = n.arguments[0];
-          var feHasUspMut = false;
+          var feHasMut = false;
+          var feCbPath = path.get("arguments.0");
+          // Collect cb's FormalParameter names so we can tell shadowed
+          // from closure-captured identifiers in cb body.
+          var feCbParamNames = Object.create(null);
+          var feCbParams = feCb.params || [];
+          for (var feCpi = 0; feCpi < feCbParams.length; feCpi++) {
+            var feCp = feCbParams[feCpi];
+            if (_t.isIdentifier(feCp)) feCbParamNames[feCp.name] = true;
+            // Destructured / rest params not currently inspected for
+            // captured-name overlap — sound (treats them as shadowed
+            // even for non-overlapping names, dropping false positives).
+          }
           try {
-            path.get("arguments.0").traverse({
+            feCbPath.traverse({
+              "FunctionExpression|ArrowFunctionExpression": function(p) {
+                p.skip();
+              },
+              AssignmentExpression: function(aep) {
+                if (feHasMut) { aep.skip(); return; }
+                // Walk the LHS spine for an outer-scope-bound Identifier
+                // root (closure-captured per § 9.1.1).
+                var lhsRoot = aep.node.left;
+                while (_t.isMemberExpression(lhsRoot)) lhsRoot = lhsRoot.object;
+                if (_t.isIdentifier(lhsRoot) && !feCbParamNames[lhsRoot.name]) {
+                  // Scope-resolved: is this Identifier a closure-captured
+                  // binding (a binding in an enclosing scope that's not a
+                  // cb param)? Verify the binding's scope is NOT cb's own.
+                  var lhsBnd = aep.scope.getBinding(lhsRoot.name);
+                  if (lhsBnd && lhsBnd.scope !== feCbPath.scope) feHasMut = true;
+                }
+              },
               CallExpression: function(cep) {
-                if (feHasUspMut) { cep.skip(); return; }
+                if (feHasMut) { cep.skip(); return; }
                 var cec = cep.node.callee;
-                if (!_t.isMemberExpression(cec) || cec.computed) return;
-                if (!_t.isIdentifier(cec.property)) return;
-                var mn2 = cec.property.name;
-                if (mn2 !== "set" && mn2 !== "append" && mn2 !== "delete") return;
-                var spc = cec.object;
-                if (!_t.isMemberExpression(spc) || spc.computed) return;
-                if (!_t.isIdentifier(spc.property, { name: "searchParams" })) return;
-                feHasUspMut = true;
+                if (!_t.isMemberExpression(cec)) return;
+                // Walk the recv spine for an outer-scope-bound Identifier
+                // root (mutating method dispatched on a closure-captured
+                // var per WHATWG/IDL semantics).
+                var cRoot = cec.object;
+                while (_t.isMemberExpression(cRoot)) cRoot = cRoot.object;
+                if (_t.isIdentifier(cRoot) && !feCbParamNames[cRoot.name]) {
+                  var cBnd = cep.scope.getBinding(cRoot.name);
+                  if (cBnd && cBnd.scope !== feCbPath.scope) feHasMut = true;
+                }
               }
             });
           } catch (_) { /* ignore */ }
-          if (feHasUspMut) {
+          if (feHasMut) {
             for (var feRevIdx = recvAv.elements.length - 1; feRevIdx >= 0; feRevIdx--) {
               _hofPendingDispatches.push({
                 cbPath: path.get("arguments.0"),
