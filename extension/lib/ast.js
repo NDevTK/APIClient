@@ -12612,8 +12612,21 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
     // only one branch carries params. Each `_avHasSubstitutableCheck` is
     // memoised — first call per AV is O(subtree); subsequent O(1).
     function _pushIfSub(c) { if (c && _avHasSubstitutableCheck(c)) stack.push(c); }
+    // For or-AV parents, push flat canonical leaves directly — internal
+    // or-nodes between root and leaves aren't queried by any non-or
+    // parent (only or-AVs aggregate them) and don't need their own
+    // substituted entry. For non-or parents, push or-AV children
+    // normally so they get substituted (any non-or use site queries
+    // `subs.get(orChild)`).
     if (av.kind === "member") { _pushIfSub(av.obj); _pushIfSub(av.key); }
-    else if (av.kind === "or") { _pushIfSub(av.left); _pushIfSub(av.right); }
+    else if (av.kind === "or") {
+      var enumOrLs = _avLeafSet(av);
+      if (enumOrLs) {
+        enumOrLs.forEach(function (leaf) { _pushIfSub(leaf); });
+      } else {
+        _pushIfSub(av.left); _pushIfSub(av.right);
+      }
+    }
     else if (av.kind === "binop") { _pushIfSub(av.left); _pushIfSub(av.right); }
     else if (av.kind === "template" && av.exprs) {
       for (var tii = 0; tii < av.exprs.length; tii++) _pushIfSub(av.exprs[tii]);
