@@ -14784,31 +14784,6 @@ function _extractFetchCall(path, result, type) {
     }
   }
 
-  // ── URL syntactic validity gate per RFC 3986 § 2.2 ─────────────────
-  // Raw space (U+0020) is not in the URL character set — it must be
-  // percent-encoded. A resolved URL value containing a literal space is
-  // syntactically invalid at the WHATWG URL parser boundary AND, in
-  // practice, is the smoking-gun signature of a JS ToString accident:
-  // Object.prototype.toString → "[object Class]" (ECMA § 20.1.3.6),
-  // Function.prototype.toString → "function f() { … }" (ECMA § 20.2.3.5).
-  // The analyzer reaches Object.prototype.toString via the builtin-method
-  // dispatch in _specApplyBuiltinMethod (ECMA-correct for `obj.toString()`
-  // calls in user code), but the resulting string isn't a URL any author
-  // would emit deliberately. Filtering at the system boundary stops the
-  // schema from ingesting garbage methods while leaving spec-eval's
-  // upstream evaluation faithful. Logs a resolver-gap so the reviewer
-  // sees the unresolved-as-URL site.
-  var validUrls = [];
-  for (var ui = 0; ui < urls.length; ui++) {
-    if (typeof urls[ui] !== "string") continue;
-    if (urls[ui].indexOf(" ") >= 0) continue;
-    validUrls.push(urls[ui]);
-  }
-  if (validUrls.length === 0) {
-    _recordUrlResolveGap(urlArgPath);
-    return;
-  }
-  urls = validUrls;
   // ── Create call sites (with per-caller method pairing) ──
   for (var u = 0; u < urls.length; u++) {
     var siteMethod = httpMethods && u < httpMethods.length ? httpMethods[u] : (httpMethod || "GET");
@@ -21455,9 +21430,18 @@ function _collectIdentifiers(node, set) {
     if (_t.isTemplateLiteral(n)) {
       for (var j = 0; j < n.expressions.length; j++) { stack.push(n.expressions[j]); }
     }
-    if (_t.isMemberExpression(n)) {
-      stack.push(n.object);
-    }
+    // MemberExpression: per ECMA § 13.3.2 PropertyAccess, the expression's
+    // VALUE is the prop accessed via the object — the object itself is
+    // the receiver for the lookup, not a value contribution to the parent.
+    // For `fetch(opts.url)`, the URL arg's value comes from `opts.url`;
+    // `opts` is the options-bag receiver, not a URL identifier. Recursing
+    // into `n.object` would falsely mark `opts` as URL-used and surface
+    // it as a spurious "opts:path" param in the learned schema. The
+    // concrete URL extraction via _resolveAllValues already follows the
+    // AV-graph member-access chain to the caller's value; this set is
+    // only consulted for the fallback "which wrapper-param plays which
+    // role" classification when concrete extraction fails.
+    // (No recurse — MemberExpression.object is not a value contributor.)
     if (_t.isUpdateExpression(n) || _t.isUnaryExpression(n)) {
       // § 13.4 UpdateExpression / § 13.5 UnaryExpression: their
       // operand is an Identifier (e.g. `i++` increments `i`); collect
