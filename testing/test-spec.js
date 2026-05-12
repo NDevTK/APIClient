@@ -28,6 +28,66 @@ new Function(astCode +
 
 var passed = 0, failed = 0, total = 0;
 
+// Walk an AV's const-string-leaf set. Descends through `or` AND `binop+`
+// (alternation distribution may be eager — flat `or` tree — or lazy —
+// `binop(+, or-tree, …)` kept compact; semantically equivalent, both
+// shapes are produced by spec eval depending on whether expanding the
+// cross-product is worthwhile). Const string/number leaves accumulate;
+// other kinds (top, member, param, …) skipped. Iterative postorder per
+// CLAUDE.md recursion ban: enumeration pass collects reachable nodes
+// (with seen set for hash-consed shared subtrees), reduction pass walks
+// in reverse order so children's leaves are ready when each parent is
+// processed.
+function _walkConstStringLeaves(rootAv) {
+  if (!rootAv) return [];
+  var nodes = [];
+  var enumStack = [rootAv];
+  var seen = new Set();
+  while (enumStack.length) {
+    var n = enumStack.pop();
+    if (!n || typeof n !== "object" || seen.has(n)) continue;
+    seen.add(n);
+    nodes.push(n);
+    if (n.kind === "or") { if (n.left) enumStack.push(n.left); if (n.right) enumStack.push(n.right); }
+    else if (n.kind === "binop" && n.op === "+") { if (n.left) enumStack.push(n.left); if (n.right) enumStack.push(n.right); }
+  }
+  var leavesOf = new Map();
+  for (var ri = nodes.length - 1; ri >= 0; ri--) {
+    var av = nodes[ri];
+    var out = [];
+    if (av.kind === "const") {
+      if (typeof av.value === "string") out.push(av.value);
+    } else if (av.kind === "or") {
+      var oL = (av.left && leavesOf.get(av.left)) || [];
+      var oR = (av.right && leavesOf.get(av.right)) || [];
+      for (var oi = 0; oi < oL.length; oi++) out.push(oL[oi]);
+      for (var oj = 0; oj < oR.length; oj++) out.push(oR[oj]);
+    } else if (av.kind === "binop" && av.op === "+") {
+      var bL = (av.left && leavesOf.get(av.left)) || [];
+      var bR = (av.right && leavesOf.get(av.right)) || [];
+      for (var bi = 0; bi < bL.length; bi++) for (var bj = 0; bj < bR.length; bj++) out.push(bL[bi] + bR[bj]);
+    }
+    leavesOf.set(av, out);
+  }
+  return leavesOf.get(rootAv) || [];
+}
+// Walk an AV's const leaf set INCLUDING non-string consts (Boolean / Number).
+// Used by spec tests for non-string alternation (e.g. unary `-` over or).
+function _walkConstAnyLeaves(rootAv) {
+  if (!rootAv) return [];
+  var leaves = [];
+  var stack = [rootAv];
+  var seen = new Set();
+  while (stack.length) {
+    var av = stack.pop();
+    if (!av || (typeof av === "object" && seen.has(av))) continue;
+    if (typeof av === "object") seen.add(av);
+    if (av.kind === "const") { leaves.push(av.value); continue; }
+    if (av.kind === "or") { if (av.left) stack.push(av.left); if (av.right) stack.push(av.right); continue; }
+  }
+  return leaves;
+}
+
 function test(name, code, check, opts) {
   total++;
   try {
@@ -3346,15 +3406,14 @@ specTest("§ 13.8.1: alternation distribution `(cond ? 'a' : 'b') + '/x'` → or
 `, function(effects) {
   if (effects.length !== 1) return false;
   var av = effects[0].value;
-  // Should be or('/a/api', '/b/api') in some left/right shape.
-  if (!av || av.kind !== "or") return false;
-  var leaves = [];
-  var stack = [av];
-  while (stack.length) {
-    var x = stack.pop();
-    if (x.kind === "const") leaves.push(x.value);
-    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
-  }
+  // Alternation distribution: both '/a/api' and '/b/api' are statically
+  // recoverable leaves. AV shape may be `or('/a/api','/b/api')` (eager
+  // distribution) OR `binop(+, or('/a','/b'), '/api')` (lazy preservation
+  // — semantically equivalent, avoids O(N×M) cross-product explosion on
+  // multi-concat patterns like THREE.js's UUID `u[a]+u[b]+...`). Both
+  // representations denote the same value set; walker covers both.
+  if (!av) return false;
+  var leaves = _walkConstStringLeaves(av);
   return leaves.length === 2 && leaves.indexOf("/a/api") >= 0 && leaves.indexOf("/b/api") >= 0;
 });
 
@@ -3570,14 +3629,10 @@ specTest("§ 13.8.1 inter-proc concat with caller alternation: `getUrl(cond ? 'a
 `, function(effects) {
   if (effects.length !== 1) return false;
   var av = effects[0].value;
-  if (!av || av.kind !== "or") return false;
-  var leaves = [];
-  var stack = [av];
-  while (stack.length) {
-    var x = stack.pop();
-    if (x.kind === "const") leaves.push(x.value);
-    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
-  }
+  if (!av) return false;
+  // AV shape may be `or` (eager distribution) or `binop+` (lazy preservation);
+  // both denote the same set per § 13.8.1. _walkConstStringLeaves covers both.
+  var leaves = _walkConstStringLeaves(av);
   return leaves.length === 2 && leaves.indexOf("/api/a") >= 0 && leaves.indexOf("/api/b") >= 0;
 });
 
@@ -4704,21 +4759,15 @@ specTest("§ 9.1.1 closure: HOF cb body resolves captured outer var via lexical 
   }
 `, function(effects) {
   // The cb body uses `prefix` which is closed over from f's scope.
-  // With outerState wiring, prefix resolves to "/api/" and the
-  // assigned value is the joined "/api/alpha" || "/api/beta".
+  // With outerState wiring, prefix resolves to "/api/" and the assigned
+  // value is the joined "/api/alpha" || "/api/beta". AV shape may be
+  // flat `or` (eager) or `binop(+, "/api/", or("alpha","beta"))` (lazy);
+  // _walkConstStringLeaves recovers leaves from either.
   var urlEffects = effects.filter(function(e) {
     return e.key && e.key.kind === "const" && e.key.value === "url";
   });
   if (urlEffects.length === 0) return false;
-  var av = urlEffects[0].value;
-  var leaves = [];
-  var stack = [av];
-  while (stack.length) {
-    var x = stack.pop();
-    if (!x) continue;
-    if (x.kind === "const") leaves.push(x.value);
-    else if (x.kind === "or") { stack.push(x.left); stack.push(x.right); }
-  }
+  var leaves = _walkConstStringLeaves(urlEffects[0].value);
   return leaves.indexOf("/api/alpha") >= 0 && leaves.indexOf("/api/beta") >= 0;
 });
 
@@ -4995,23 +5044,15 @@ specTest("§ 13.8.1 BinaryExpression `+` distribution: const + or(top,'') keeps 
     this.flag = url + next;
   }
 `, function(effects) {
-  // url is const "/api"; next is or(top, ""). url + next via set-union
-  // distribution: or("/api"+top, "/api"+"") = or(top, "/api"). Flatten
-  // to string leaves should yield ["/api"]. The effect value should
-  // contain "/api" as a const leaf.
+  // url is const "/api"; next is or(top, ""). url + next denotes the value
+  // set {"/api" + top, "/api" + ""} = {top, "/api"}. AV may be the eager
+  // `or(top, const "/api")` OR the lazy `binop(+, "/api", or(top, ""))`;
+  // both walked by _walkConstStringLeaves which projects string leaves
+  // (top contributes nothing). Either way, "/api" must be recoverable.
   for (var i = 0; i < effects.length; i++) {
     if (effects[i].key && effects[i].key.kind === "const" && effects[i].key.value === "flag") {
-      var v = effects[i].value;
-      if (!v) return false;
-      // Walk or-tree leaves looking for const "/api".
-      var stack = [v];
-      while (stack.length > 0) {
-        var av = stack.pop();
-        if (!av) continue;
-        if (av.kind === "const" && av.value === "/api") return true;
-        if (av.kind === "or") { stack.push(av.left); stack.push(av.right); }
-      }
-      return false;
+      var leaves = _walkConstStringLeaves(effects[i].value);
+      return leaves.indexOf("/api") >= 0;
     }
   }
   return false;

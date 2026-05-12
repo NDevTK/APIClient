@@ -7924,24 +7924,27 @@ function _specEvalReturnArgWithCallerArgs(retArg, calleeFnPath, callExpr, vals) 
       var bnLeftAv = binopAv.get(bn2.left);
       var bnRightAv = binopAv.get(bn2.right);
       if (!bnLeftAv || !bnRightAv) return null;
-      var bnLeftL = _avFlattenAnyConstLeaves(bnLeftAv);
-      var bnRightL = _avFlattenAnyConstLeaves(bnRightAv);
-      if (bnLeftL === null || bnRightL === null) return null;
-      var bnResults = [];
-      for (var bli2 = 0; bli2 < bnLeftL.length; bli2++) {
-        for (var bri2 = 0; bri2 < bnRightL.length; bri2++) {
-          var blv = bnLeftL[bli2], brv = bnRightL[bri2];
-          if (typeof blv === "string" || typeof brv === "string") {
-            bnResults.push({ kind: "const", value: String(blv) + String(brv) });
-          } else if (typeof blv === "number" && typeof brv === "number") {
-            bnResults.push({ kind: "const", value: blv + brv });
-          } else return null;
+      // Const-Const fast path: both operands fold to single Const leaves
+      // → evaluate per § 13.8.1 directly. Avoids the leaf-flatten +
+      // cross-product overhead for the common case.
+      if (bnLeftAv.kind === "const" && bnRightAv.kind === "const") {
+        var bnFastL = bnLeftAv.value, bnFastR = bnRightAv.value;
+        if (typeof bnFastL === "string" || typeof bnFastR === "string") {
+          binopAv.set(bn2, _hcConst(String(bnFastL) + String(bnFastR)));
+          continue;
         }
+        if (typeof bnFastL === "number" && typeof bnFastR === "number") {
+          binopAv.set(bn2, _hcConst(bnFastL + bnFastR));
+          continue;
+        }
+        return null;
       }
-      if (bnResults.length === 0) return null;
-      var bnReduced = bnResults[0];
-      for (var bri3 = 1; bri3 < bnResults.length; bri3++) bnReduced = _specSetUnionAv(bnReduced, bnResults[bri3]);
-      binopAv.set(bn2, bnReduced);
+      // § 13.8.1 with an `or`-tree operand: preserve binop+ structure.
+      // Eager cartesian distribution explodes to O(N×M) leaves (THREE.js
+      // UUID `u[a]+u[b]+...`). The binop+ AV represents the same set;
+      // _avFlattenStringLeaves / downstream consumers distribute on
+      // demand at leaf-query time.
+      binopAv.set(bn2, _hcBinop("+", bnLeftAv, bnRightAv));
     }
     return binopAv.get(retArg);
   }
@@ -11323,13 +11326,31 @@ function _specEvalLeaf(path, state, vals, effects) {
     var leftAv = vals.get(n.left);
     var rightAv = vals.get(n.right);
     if (!leftAv || !rightAv) return _AV_TOP;
-    // Alternation distribution per spec semantics: `(a | b) + c` is
-    // semantically equivalent to `(a + c) | (b + c)` because at runtime
-    // exactly one of the alternatives is realised. Distribute the binary
-    // op across `or` trees to preserve precision. Walks ALL leaves (any
-    // kind), not just Const — when a leaf pair includes a non-Const, the
-    // pair contributes Top to the result, but Const-Const pairs still
-    // produce concrete leaves we can project later.
+    // § 13.8.1 ApplyStringOrNumericBinaryOperator: for `+` with an or-tree
+    // operand, distributing eagerly produces the cartesian product of leaf
+    // pairs — O(N×M) leaves per concat. Chained `+` of array-lookup or-trees
+    // (e.g. THREE.js's UUID generator: `u[a]+u[b]+...+u[n]` with `u` a
+    // 256-element array → 256^30 leaves) blows the AV graph past any heap.
+    // The binop+ AV preserves the same set of statically-possible runtime
+    // values as the distributed or-tree: `binop(+, or(a,b), c)` and
+    // `or(a+c, b+c)` denote the identical value set. `_avFlattenStringLeaves`
+    // / `_specInstantiateAv` / taint trace walk binop+ structurally and
+    // distribute on-demand only when leaf enumeration is actually required
+    // (rare — e.g. URL extraction at a fetch sink). Eager distribution is
+    // skipped; lazy distribution at consume time is the precise equivalent
+    // without retaining the cross-product in memory.
+    if (n.operator === "+" && (leftAv.kind === "or" || rightAv.kind === "or")) {
+      return _hcBinop("+", leftAv, rightAv);
+    }
+    // Alternation distribution per spec semantics: `(a | b) op c` is
+    // semantically equivalent to `(a op c) | (b op c)` because at runtime
+    // exactly one of the alternatives is realised. For non-`+` operators
+    // the result space is bounded — Boolean for comparisons (`===`, `<`,
+    // …), Number for arithmetic (`-`, `*`, `&`, …) — so distribution
+    // doesn't explode. Walks ALL leaves (any kind), not just Const — when
+    // a leaf pair includes a non-Const, the pair contributes Top to the
+    // result, but Const-Const pairs still produce concrete leaves we can
+    // project later.
     if (leftAv.kind === "or" || rightAv.kind === "or") {
       var leftAllLeaves = leftAv.kind === "or" ? _avFlattenOrLeaves(leftAv) : [leftAv];
       var rightAllLeaves = rightAv.kind === "or" ? _avFlattenOrLeaves(rightAv) : [rightAv];
@@ -12832,9 +12853,19 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       if (bopL && bopL.kind === "const" && bopR && bopR.kind === "const") {
         var bopRes = _evalBinaryConstConst(bopL.value, bopR.value, node.op);
         subs.set(node, bopRes || _AV_TOP);
+      } else if (node.op === "+" && bopL && bopR && (bopL.kind === "or" || bopR.kind === "or")) {
+        // § 13.8.1 substitution-time mirror of the spec-eval binop+ rule:
+        // eager cartesian distribution on `or`-tree operands of `+` blows
+        // up to O(N×M) leaves (THREE.js UUID `u[a]+u[b]+...` is the worst
+        // case — 256^k after k concats). The binop+ AV preserves the same
+        // statically-possible value set; consumers traverse it via
+        // _avFlattenStringLeaves which distributes only at leaf-query time.
+        subs.set(node, _hcBinop("+", bopL, bopR));
       } else if (bopL && bopR && (bopL.kind === "or" || bopR.kind === "or")) {
-        // Distribute: each pair of leaves contributes; const-const pairs
-        // evaluate via _evalBinaryConstConst, others contribute top.
+        // Non-`+` operators: result space is bounded (Boolean for comparisons,
+        // Number for arithmetic) so distribution is safe. Each pair of leaves
+        // contributes; const-const pairs evaluate via _evalBinaryConstConst,
+        // others contribute top.
         var bopLLeaves = bopL.kind === "or" ? _avFlattenOrLeaves(bopL) : [bopL];
         var bopRLeaves = bopR.kind === "or" ? _avFlattenOrLeaves(bopR) : [bopR];
         if (bopLLeaves && bopRLeaves && bopLLeaves.length > 0 && bopRLeaves.length > 0) {
