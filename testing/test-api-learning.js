@@ -340,6 +340,160 @@ api("body keys+values via destructured-param wrapper", `
          byName.count && byName.count.defaultValue === 5;
 });
 
+// ═════════════════════════════════════════════════════════════════════
+// Inter-procedural learning through library wrappers (jQuery-shape)
+//
+// The extension's value depends on tracing through library internals
+// (jQuery $.ajax, axios, fetch wrappers) to the native API call so the
+// schema sees the REAL fetch site with the caller's concrete URL +
+// body + method. CLAUDE.md "Framework code is just JavaScript — trace
+// through it, don't recognise it": these tests verify spec-eval
+// reaches the native XMLHttpRequest / fetch through the wrapper, not
+// that we shape-match on `$.ajax` or `ajax`.
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== Inter-procedural library-wrapper tracing ===\n");
+
+api("jquery-shaped $.ajax({url, method, data}) — wrapper traces to XHR", `
+  function ajax(opts) {
+    var xhr = new XMLHttpRequest();
+    xhr.open(opts.method || "GET", opts.url);
+    if (opts.headers) {
+      for (var h in opts.headers) xhr.setRequestHeader(h, opts.headers[h]);
+    }
+    xhr.send(JSON.stringify(opts.data));
+  }
+  ajax({ url: "/api/users", method: "POST", data: { name: "alice", role: "admin" } });
+`, function(sites) {
+  // The wrapper's xhr.open()/send() pair should resolve to a fetch
+  // call site with the caller's URL+method+body fields. Tests that
+  // caller-arg substitution + obj-lit prop access flow through
+  // _specInstantiateAv into _processNetworkSink's XHR dispatch.
+  if (sites.length < 1) return false;
+  var found = sites.find(function(s) { return s.url === "/api/users" && s.method === "POST"; });
+  if (!found) return false;
+  var byName = {};
+  (found.params || []).forEach(function(p) { byName[p.name] = p; });
+  return !!byName.name && byName.name.defaultValue === "alice" &&
+         !!byName.role && byName.role.defaultValue === "admin";
+});
+
+api("axios-shaped wrapper: trace through `request(config)` to native fetch", `
+  function request(config) {
+    return fetch(config.url, { method: config.method || "GET", body: JSON.stringify(config.data) });
+  }
+  request({ url: "/api/posts", method: "PUT", data: { title: "hello", draft: true } });
+`, function(sites) {
+  if (sites.length < 1) return false;
+  var found = sites.find(function(s) { return s.url === "/api/posts" && s.method === "PUT"; });
+  if (!found) return false;
+  var byName = {};
+  (found.params || []).forEach(function(p) { byName[p.name] = p; });
+  return !!byName.title && byName.title.defaultValue === "hello" &&
+         !!byName.draft && byName.draft.defaultValue === true;
+});
+
+api("two-hop wrapper: util.get(path) calls util.request(method, path)", `
+  function request(method, path) {
+    return fetch(path, { method: method });
+  }
+  function get(path) { return request("GET", path); }
+  function post(path, body) { return fetch(path, { method: "POST", body: JSON.stringify(body) }); }
+  get("/api/v1/profile");
+  post("/api/v1/order", { item: "widget", qty: 2 });
+`, function(sites) {
+  // Verifies: convergence allows the wrapper's caller-arg substitution
+  // to propagate through both call levels. The read-edge fix should
+  // keep this working — `get`'s analysis reads `request`'s return
+  // memo and constraints it with caller's args.
+  if (sites.length < 2) return false;
+  var profileSite = sites.find(function(s) { return s.url === "/api/v1/profile" && s.method === "GET"; });
+  var orderSite = sites.find(function(s) { return s.url === "/api/v1/order" && s.method === "POST"; });
+  if (!profileSite || !orderSite) return false;
+  var orderParams = {};
+  (orderSite.params || []).forEach(function(p) { orderParams[p.name] = p; });
+  return !!orderParams.item && orderParams.item.defaultValue === "widget" &&
+         !!orderParams.qty && orderParams.qty.defaultValue === 2;
+});
+
+api("jquery-shaped wrapper returns promise chain; caller's then receives response", `
+  function fetchJson(url, opts) {
+    return fetch(url, opts).then(function(r) { return r.json(); });
+  }
+  fetchJson("/api/widgets", { method: "GET", headers: { "Accept": "application/json" } });
+`, function(sites) {
+  // The .then chain after fetch shouldn't break URL+method extraction.
+  if (sites.length < 1) return false;
+  var found = sites.find(function(s) { return s.url === "/api/widgets" && s.method === "GET"; });
+  if (!found) return false;
+  return found.headers && found.headers["Accept"] === "application/json";
+});
+
+api("library wrapper with switch-discriminated method", `
+  function send(opts) {
+    var m = opts.method;
+    var xhr = new XMLHttpRequest();
+    switch (m) {
+      case "GET": xhr.open("GET", opts.url); break;
+      case "POST": xhr.open("POST", opts.url); break;
+      case "PUT": xhr.open("PUT", opts.url); break;
+      default: xhr.open("GET", opts.url);
+    }
+    xhr.send(opts.body ? JSON.stringify(opts.body) : null);
+  }
+  send({ url: "/api/sw1", method: "PUT", body: { val: 42 } });
+`, function(sites) {
+  // The switch-based dispatch in the wrapper should still resolve
+  // both URL and method through caller-arg substitution.
+  if (sites.length < 1) return false;
+  var found = sites.find(function(s) { return s.url === "/api/sw1" && s.method === "PUT"; });
+  if (!found) return false;
+  var byName = {};
+  (found.params || []).forEach(function(p) { byName[p.name] = p; });
+  return !!byName.val && byName.val.defaultValue === 42;
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// REAL jQuery — verify the analyzer traces through actual jquery-3.7.1
+// internals into the native XHR.send. Synthetic shape-mimics are not a
+// substitute: jQuery's $.ajax is a multi-hundred-line state machine
+// (ajaxSettings → prefilters → transports → jqXHR), and the analyzer
+// has to follow the spec-eval lattice into all of it. This test fixes
+// regressions where convergence/binop+/read-edge optimizations would
+// stop seeing the user's actual fetch URL through the real wrapper.
+// ═════════════════════════════════════════════════════════════════════
+console.log("\n=== REAL jQuery library tracing ===\n");
+
+var jqueryMin = fs.readFileSync(path.join(rootDir, "testing/harness-dumps/jquery-3.7.1.min.js"), "utf8");
+
+api("real jQuery — $.ajax({url,method,data}) reaches XHR via library state machine", jqueryMin + `
+  // User code calls real jQuery $.ajax. Analyzer must trace the full
+  // jQuery internal state machine (ajaxSettings → prefilters →
+  // transports → jqXHR → param() body serialiser → native xhr.open /
+  // xhr.send) to surface the user's url + method + body fields. ECMA
+  // spec-eval has to follow these inter-procedural hops via _specInst-
+  // antiateAv + caller-arg substitution; if any hop bottoms out at top,
+  // a learned-method gap shows. Test asserts the full outcome (no
+  // "bonus" gap accommodations).
+  jQuery.ajax({
+    url: "/api/widgets",
+    method: "POST",
+    data: { name: "alpha", count: 3 }
+  });
+`, function(sites) {
+  var match = sites.find(function(s) { return s.url === "/api/widgets" && s.method === "POST"; });
+  if (!match) return false;
+  var byName = {};
+  (match.params || []).forEach(function(p) { byName[p.name] = p; });
+  return !!byName.name && byName.name.defaultValue === "alpha" &&
+         !!byName.count && byName.count.defaultValue === 3;
+});
+
+api("real jQuery — $.get(url) reaches XHR GET via library state machine", jqueryMin + `
+  jQuery.get("/api/profile");
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/profile" && s.method === "GET"; });
+});
+
 console.log("\n=== Summary ===");
 console.log("Total: " + total + ", Passed: " + passed + ", Failed: " + failed);
 process.exit(failed > 0 ? 1 : 0);
