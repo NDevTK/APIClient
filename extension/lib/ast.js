@@ -14784,6 +14784,31 @@ function _extractFetchCall(path, result, type) {
     }
   }
 
+  // ── URL syntactic validity gate per RFC 3986 § 2.2 ─────────────────
+  // Raw space (U+0020) is not in the URL character set — it must be
+  // percent-encoded. A resolved URL value containing a literal space is
+  // syntactically invalid at the WHATWG URL parser boundary AND, in
+  // practice, is the smoking-gun signature of a JS ToString accident:
+  // Object.prototype.toString → "[object Class]" (ECMA § 20.1.3.6),
+  // Function.prototype.toString → "function f() { … }" (ECMA § 20.2.3.5).
+  // The analyzer reaches Object.prototype.toString via the builtin-method
+  // dispatch in _specApplyBuiltinMethod (ECMA-correct for `obj.toString()`
+  // calls in user code), but the resulting string isn't a URL any author
+  // would emit deliberately. Filtering at the system boundary stops the
+  // schema from ingesting garbage methods while leaving spec-eval's
+  // upstream evaluation faithful. Logs a resolver-gap so the reviewer
+  // sees the unresolved-as-URL site.
+  var validUrls = [];
+  for (var ui = 0; ui < urls.length; ui++) {
+    if (typeof urls[ui] !== "string") continue;
+    if (urls[ui].indexOf(" ") >= 0) continue;
+    validUrls.push(urls[ui]);
+  }
+  if (validUrls.length === 0) {
+    _recordUrlResolveGap(urlArgPath);
+    return;
+  }
+  urls = validUrls;
   // ── Create call sites (with per-caller method pairing) ──
   for (var u = 0; u < urls.length; u++) {
     var siteMethod = httpMethods && u < httpMethods.length ? httpMethods[u] : (httpMethod || "GET");
@@ -15985,10 +16010,18 @@ function _avFlattenAnyConstLeaves(rootAv) {
 // § 13.6–13.13. Returns AbstractValue or null on type-disqualification.
 function _evalBinaryConstConst(lv, rv, op) {
   if (op === "+") {
-    if (typeof lv === "string" || typeof rv === "string") {
+    // ECMA § 7.1.1 ToPrimitive: object/function operands need a hint-aware
+    // valueOf/toString. Without a statically-known method, the result is
+    // opaque — return null so callers fall through to top instead of
+    // emitting Object.prototype.toString's "[object Object]" garbage.
+    var lvT = typeof lv, rvT = typeof rv;
+    var lvOk = lvT === "string" || lvT === "number" || lvT === "boolean" || lv === null || lv === undefined;
+    var rvOk = rvT === "string" || rvT === "number" || rvT === "boolean" || rv === null || rv === undefined;
+    if (!lvOk || !rvOk) return null;
+    if (lvT === "string" || rvT === "string") {
       return _hcConst(String(lv) + String(rv));
     }
-    if (typeof lv === "number" && typeof rv === "number") {
+    if (lvT === "number" && rvT === "number") {
       return _hcConst(lv + rv);
     }
     return null;
