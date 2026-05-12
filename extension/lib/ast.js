@@ -677,6 +677,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcRestArgsByFn = new WeakMap();
   _hcOrByPair = new WeakMap();
   _hcMemberByPair = new WeakMap();
+  _hcBinopByOp = Object.create(null);
   _hcConstString = new Map();
   _hcConstNumber = new Map();
   _specEqualAvCache = new WeakMap();
@@ -7527,6 +7528,27 @@ function _hcMember(objAv, keyAv) {
   return av;
 }
 
+// Hash-cons binop AV by (op, left, right). op is a short string; inner
+// Map keyed by op-string returns an outer Map<left, Map<right, av>>.
+// Same identity-preservation rationale as _hcOr / _hcMember.
+var _hcBinopByOp = Object.create(null);
+function _hcBinop(op, leftAv, rightAv) {
+  if (!leftAv || !rightAv) return { kind: "binop", op: op, left: leftAv, right: rightAv };
+  var lMap = _hcBinopByOp[op];
+  if (!lMap) { lMap = new WeakMap(); _hcBinopByOp[op] = lMap; }
+  var rMap = lMap.get(leftAv);
+  if (rMap) {
+    var hit = rMap.get(rightAv);
+    if (hit) return hit;
+  } else {
+    rMap = new WeakMap();
+    lMap.set(leftAv, rMap);
+  }
+  var av = { kind: "binop", op: op, left: leftAv, right: rightAv };
+  rMap.set(rightAv, av);
+  return av;
+}
+
 function _specLogicalOrAv(leftAv, rightAv) {
   // Idempotent join per ECMA lattice semantics: a ⊔ a = a. Without
   // deduplication, recursive function fixpoint diverges (each iteration
@@ -12704,13 +12726,13 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
             }
             subs.set(node, bopOr);
           } else {
-            subs.set(node, { kind: "binop", op: node.op, left: bopL, right: bopR });
+            subs.set(node, _hcBinop(node.op, bopL, bopR));
           }
         } else {
-          subs.set(node, { kind: "binop", op: node.op, left: bopL, right: bopR });
+          subs.set(node, _hcBinop(node.op, bopL, bopR));
         }
       } else {
-        subs.set(node, { kind: "binop", op: node.op, left: bopL, right: bopR });
+        subs.set(node, _hcBinop(node.op, bopL, bopR));
       }
       continue;
     }
