@@ -14715,12 +14715,18 @@ function _resolveAllValues(initialPath, initialDepth) {
   // source of truth; this function projects its string leaves.
   var encFn = initialPath.getFunctionParent && initialPath.getFunctionParent();
   if (encFn && _t.isFunction(encFn.node)) {
-    // Partial analysis per ECMA § 14.2: only stmts before initialPath
-    // influence its AV. After fixpoint memoizes encFn, this is O(1)
-    // via the !force memo short-circuit. For non-memoized encFns
-    // (encountered demand-driven), this saves the bulk of body work.
-    var ravTopIdx = _specFindEnclosingTopStmtIdx(encFn, initialPath);
-    _specAnalyzePropertyFlow(encFn, false, ravTopIdx);
+    // Slice gate: only analyse encFn if in slice. Non-slice encFns
+    // don't transitively reach a sink, so their AV resolution can't
+    // contribute to fetch-URL extraction. Memoized slice fns hit the
+    // !force short-circuit anyway; this skip avoids analysing non-
+    // slice fns demand-driven from main-pass paths.
+    if (!_specCallGraphCallersOf || _specSliceFns.has(encFn.node)) {
+      // Partial analysis per ECMA § 14.2: only stmts before initialPath
+      // influence its AV. After fixpoint memoizes encFn, this is O(1)
+      // via the !force memo short-circuit.
+      var ravTopIdx = _specFindEnclosingTopStmtIdx(encFn, initialPath);
+      _specAnalyzePropertyFlow(encFn, false, ravTopIdx);
+    }
     var memoAv = _specPathValMemo.get(initialPath.node);
     if (memoAv) {
       // Page-origin substitution per WHATWG URL § 4.4: location.{origin,
@@ -18237,7 +18243,11 @@ function _traceValueSource(path, _unused) {
   _specEnsureProgramGlobalsPrepass(path);
   if (path.getFunctionParent) {
     var encFn = path.getFunctionParent();
-    if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node)) {
+    // Slice gate: only analyse encFn if in slice. Non-slice encFns
+    // don't transitively reach a sink; their analysis here would
+    // cascade work without contributing to actionable taint flow.
+    if (encFn && encFn.node && _t.isFunction(encFn.node) && !_specEffectsMemo.has(encFn.node) &&
+        (!_specCallGraphCallersOf || _specSliceFns.has(encFn.node))) {
       // Detect HOF callback per ECMA § 23.1.3: encFn is the first
       // argument to a CallExpression whose callee is `arr.method`
       // where method is in the spec's Array.prototype HOF list AND
