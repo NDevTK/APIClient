@@ -677,6 +677,10 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcRestArgsByFn = new WeakMap();
   _hcOrByPair = new WeakMap();
   _hcMemberByPair = new WeakMap();
+  _avLeafSetCache = new WeakMap();
+  _hcOrByLeafSig = new Map();
+  _avLeafIdMap = new WeakMap();
+  _avLeafNextId = 1;
   _hcBinopByOp = Object.create(null);
   _hcConstString = new Map();
   _hcConstNumber = new Map();
@@ -7494,17 +7498,97 @@ function _specJoinAllAv(leaves) {
 // extra pass when content stabilises (vs O(iterations) full structural
 // walks of huge or-trees).
 var _hcOrByPair = new WeakMap();
+// Canonical leaf set per or-AV. Lazily computed and cached. The set
+// is order-independent and captures the flat set of non-or descendants
+// — two structurally-equal or-trees built from different orderings
+// share the same canonical leaf set. Hash-cons of or-AVs by canonical
+// leaf-id signature lets _hcOr produce identical results for
+// `or(a, or(b, c))` and `or(or(a, b), c)`. The IDs are assigned lazily
+// per AV via _avNextId / _avIdMap.
+var _avLeafSetCache = new WeakMap();
+var _hcOrByLeafSig = new Map();
+var _avLeafIdMap = new WeakMap();
+var _avLeafNextId = 1;
+function _avLeafId(av) {
+  if (!av || typeof av !== "object") return 0;
+  var id = _avLeafIdMap.get(av);
+  if (!id) { id = _avLeafNextId++; _avLeafIdMap.set(av, id); }
+  return id;
+}
+function _avLeafSet(av) {
+  if (!av) return null;
+  if (av.kind !== "or") return null;
+  var cached = _avLeafSetCache.get(av);
+  if (cached) return cached;
+  var s = new Set();
+  var stack = [av];
+  var seen = new Set();
+  while (stack.length > 0) {
+    var n = stack.pop();
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    if (n.kind === "or") {
+      // Reuse cached leaf set when present — child or-AVs flatten in O(1).
+      var childCached = _avLeafSetCache.get(n);
+      if (childCached && n !== av) {
+        childCached.forEach(function (leaf) { s.add(leaf); });
+        continue;
+      }
+      if (n.left) stack.push(n.left);
+      if (n.right) stack.push(n.right);
+      if (n.alternatives) for (var oi = 0; oi < n.alternatives.length; oi++) stack.push(n.alternatives[oi]);
+    } else {
+      s.add(n);
+    }
+  }
+  _avLeafSetCache.set(av, s);
+  return s;
+}
+// Canonical signature for hash-cons by leaf set: sorted leaf IDs joined.
+// Two or-AVs with the same leaves yield the same signature regardless
+// of internal tree shape / ordering.
+function _avLeafSig(leftAv, rightAv) {
+  var ids = [];
+  function collect(av) {
+    if (!av) return;
+    if (av.kind === "or") {
+      var lset = _avLeafSet(av);
+      if (lset) lset.forEach(function (l) { ids.push(_avLeafId(l)); });
+    } else {
+      ids.push(_avLeafId(av));
+    }
+  }
+  collect(leftAv);
+  collect(rightAv);
+  // Dedup + sort for canonical signature.
+  var u = new Set(ids);
+  ids = [];
+  u.forEach(function (id) { ids.push(id); });
+  ids.sort(function (a, b) { return a - b; });
+  return ids.join(",");
+}
 function _hcOr(leftAv, rightAv) {
+  // Canonical hash-cons by combined leaf-set signature: order-independent
+  // and merge-shape-independent. `or(a, or(b, c))` and `or(or(a, b), c)`
+  // and `or(b, or(a, c))` all share identity. Crucial for fixpoint
+  // convergence (worklist's _ssChanged hits `===` short-circuit when
+  // joins stabilize regardless of accumulation order).
+  var sig = _avLeafSig(leftAv, rightAv);
+  var bySig = _hcOrByLeafSig.get(sig);
+  if (bySig) return bySig;
+  // Also keep the (left, right) pair cache for fast repeat with same
+  // structural pair — short-circuits before computing the signature.
   var rMap = _hcOrByPair.get(leftAv);
   if (rMap) {
     var cached = rMap.get(rightAv);
-    if (cached) return cached;
+    if (cached) { _hcOrByLeafSig.set(sig, cached); return cached; }
   } else {
     rMap = new WeakMap();
     _hcOrByPair.set(leftAv, rMap);
   }
   var newOr = { kind: "or", left: leftAv, right: rightAv };
   rMap.set(rightAv, newOr);
+  _hcOrByLeafSig.set(sig, newOr);
   return newOr;
 }
 
