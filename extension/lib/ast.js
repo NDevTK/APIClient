@@ -12762,13 +12762,34 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       continue;
     }
     if (node.kind === "or") {
-      var orSubL = subs.get(node.left) || node.left;
-      var orSubR = subs.get(node.right) || node.right;
-      // Hash-cons: identical (left, right) pair produces same AV across
-      // calls. Identity preservation lets downstream identity-based dedup
-      // (_specEqualAv x===y short-circuit, _avTaintTransMemo, etc.) hit
-      // on repeated substitutions of the same structural shape.
-      subs.set(node, _hcOr(orSubL, orSubR));
+      // Substitute over canonical flat leaf set. Skips intermediate
+      // or-tree internal nodes — they don't need their own substituted
+      // entry; the result is rebuilt from substituted leaves directly.
+      // The enum pass (above) ensures every leaf is in `subs`. For deep
+      // or-trees on Stripe-scale, this saves O(or-internal-nodes) work
+      // per _specInstantiateAv call.
+      var orLeafSet = _avLeafSet(node);
+      if (orLeafSet) {
+        var newLeaves = [];
+        orLeafSet.forEach(function (leaf) {
+          newLeaves.push(subs.get(leaf) || leaf);
+        });
+        if (newLeaves.length === 0) subs.set(node, _AV_TOP);
+        else if (newLeaves.length === 1) subs.set(node, newLeaves[0]);
+        else {
+          // Build canonical or-AV from substituted leaves via _hcOr.
+          // The canonical leaf-sig hash-cons ensures the result has
+          // the same identity as any other path that produces the
+          // same final leaf set.
+          var orRes = newLeaves[0];
+          for (var nli = 1; nli < newLeaves.length; nli++) orRes = _hcOr(orRes, newLeaves[nli]);
+          subs.set(node, orRes);
+        }
+      } else {
+        var orSubL = subs.get(node.left) || node.left;
+        var orSubR = subs.get(node.right) || node.right;
+        subs.set(node, _hcOr(orSubL, orSubR));
+      }
       continue;
     }
     if (node.kind === "binop") {
