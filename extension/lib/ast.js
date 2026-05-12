@@ -12634,7 +12634,13 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       continue;
     }
     if (node.kind === "or") {
-      subs.set(node, { kind: "or", left: subs.get(node.left) || node.left, right: subs.get(node.right) || node.right });
+      var orSubL = subs.get(node.left) || node.left;
+      var orSubR = subs.get(node.right) || node.right;
+      // Hash-cons: identical (left, right) pair produces same AV across
+      // calls. Identity preservation lets downstream identity-based dedup
+      // (_specEqualAv x===y short-circuit, _avTaintTransMemo, etc.) hit
+      // on repeated substitutions of the same structural shape.
+      subs.set(node, _hcOr(orSubL, orSubR));
       continue;
     }
     if (node.kind === "binop") {
@@ -16202,7 +16208,9 @@ function _specSubstituteParam(rootAv, paramIdx, paramFn, replacementAv) {
       continue;
     }
     if (node.kind === "or") {
-      subs.set(node, { kind: "or", left: subs.get(node.left) || node.left, right: subs.get(node.right) || node.right });
+      var orSL = subs.get(node.left) || node.left;
+      var orSR = subs.get(node.right) || node.right;
+      subs.set(node, _hcOr(orSL, orSR));
       continue;
     }
     if (node.kind === "template" && node.exprs) {
