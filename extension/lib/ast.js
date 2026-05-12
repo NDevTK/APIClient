@@ -17756,6 +17756,34 @@ function _extractBodyParams(rootNode, rootScope) {
         }
       }
     }
+    // § 13.14 ConditionalExpression `cond ? consequent : alternate` — both
+    // branches can deliver the body at runtime depending on cond's
+    // ToBoolean. Push both so the worklist collects body fields from
+    // each. Typical wrapper pattern: `xhr.send(opts.body ?
+    // JSON.stringify(opts.body) : null)`. The body shape is in the
+    // consequent (or alternate); pushing both is sound widening — the
+    // accumulator dedupes by name across branches.
+    if (_t.isConditionalExpression(node)) {
+      if (node.consequent) stack.push({ node: node.consequent, scope: scope });
+      if (node.alternate) stack.push({ node: node.alternate, scope: scope });
+      continue;
+    }
+    // § 13.13.2 LogicalOR `a || b`: when `a` is truthy at runtime it
+    // delivers the body; otherwise `b` does. § 13.14 NullishCoalescing
+    // `a ?? b`: similar but only null/undefined falls through. Both:
+    // push both operands. `a && b` is the other LogicalAnd; the runtime
+    // value is `b` when `a` is truthy — push `b` (the right operand)
+    // plus optionally `a` for completeness.
+    if (_t.isLogicalExpression(node)) {
+      if (node.operator === "||" || node.operator === "??") {
+        if (node.left) stack.push({ node: node.left, scope: scope });
+        if (node.right) stack.push({ node: node.right, scope: scope });
+      } else if (node.operator === "&&") {
+        // `a && b` evaluates to b when truthy; b is the body shape.
+        if (node.right) stack.push({ node: node.right, scope: scope });
+      }
+      continue;
+    }
     // JSON.stringify(arg) — recurse into arg.
     if (_isJsonStringify(node, scope)) {
       if (node.arguments[0]) stack.push({ node: node.arguments[0], scope: scope });
