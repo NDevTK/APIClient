@@ -12448,9 +12448,19 @@ function _avHasSubstitutableCheck(rootAv) {
     stack.push(n);
     if (n.kind === "member") { if (n.obj) stack.push(n.obj); if (n.key) stack.push(n.key); }
     else if (n.kind === "or") {
-      if (n.left) stack.push(n.left);
-      if (n.right) stack.push(n.right);
-      if (n.alternatives) for (var oi = 0; oi < n.alternatives.length; oi++) stack.push(n.alternatives[oi]);
+      // Push flat leaves instead of left/right tree-recursion. Same
+      // correctness — every reachable non-or descendant is visited once
+      // — but skips intermediate or-tree internal nodes entirely. On
+      // deep or-trees (Stripe-scale), this halves visited node count
+      // (skip every or-internal node).
+      var hsLset = _avLeafSet(n);
+      if (hsLset) {
+        hsLset.forEach(function (leaf) { stack.push(leaf); });
+      } else {
+        if (n.left) stack.push(n.left);
+        if (n.right) stack.push(n.right);
+        if (n.alternatives) for (var oi = 0; oi < n.alternatives.length; oi++) stack.push(n.alternatives[oi]);
+      }
     }
     else if (n.kind === "binop") { if (n.left) stack.push(n.left); if (n.right) stack.push(n.right); }
     else if (n.kind === "template" && n.exprs) {
@@ -12493,10 +12503,21 @@ function _avHasSubstitutableCheck(rootAv) {
     } else if (av.kind === "member") {
       f = (av.obj && _avHasSubstitutable.get(av.obj)) || (av.key && _avHasSubstitutable.get(av.key)) || false;
     } else if (av.kind === "or") {
-      f = (av.left && _avHasSubstitutable.get(av.left)) || (av.right && _avHasSubstitutable.get(av.right)) || false;
-      if (!f && av.alternatives) {
-        for (var aoi = 0; aoi < av.alternatives.length; aoi++) {
-          if (_avHasSubstitutable.get(av.alternatives[aoi])) { f = true; break; }
+      // OR over flat leaves (canonical leaf set). Skips intermediate
+      // or-tree internal nodes — they don't add anything substantively;
+      // a leaf's substitutability is what matters.
+      var orLset = _avLeafSet(av);
+      if (orLset) {
+        var orIt = orLset.values();
+        for (var orNxt = orIt.next(); !orNxt.done; orNxt = orIt.next()) {
+          if (_avHasSubstitutable.get(orNxt.value)) { f = true; break; }
+        }
+      } else {
+        f = (av.left && _avHasSubstitutable.get(av.left)) || (av.right && _avHasSubstitutable.get(av.right)) || false;
+        if (!f && av.alternatives) {
+          for (var aoi = 0; aoi < av.alternatives.length; aoi++) {
+            if (_avHasSubstitutable.get(av.alternatives[aoi])) { f = true; break; }
+          }
         }
       }
     } else if (av.kind === "binop") {
