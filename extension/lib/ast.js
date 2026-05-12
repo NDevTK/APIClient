@@ -15673,10 +15673,16 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
           var nfnIter = nextFnNodes.values();
           for (var nfnStep = nfnIter.next(); !nfnStep.done; nfnStep = nfnIter.next()) {
             var nextFnNode = nfnStep.value;
+            // Slice gate: skip param-fns not in slice. Their callers'
+            // arg AVs can't transitively reach a sink, so substituting
+            // through them produces leaves that wouldn't contribute to
+            // any actionable URL/taint result.
+            if (_specCallGraphCallersOf && !_specSliceFns.has(nextFnNode)) continue;
             var nextFnPath = _specPathOfFunc(nextFnNode, ref);
             if (nextFnPath) worklist.push({ funcPath: nextFnPath, av: substituted });
           }
-        } else if (callerEncFn && _t.isFunction(callerEncFn.node)) {
+        } else if (callerEncFn && _t.isFunction(callerEncFn.node) &&
+                   (!_specCallGraphCallersOf || _specSliceFns.has(callerEncFn.node))) {
           worklist.push({ funcPath: callerEncFn, av: substituted });
         }
       }
