@@ -5638,6 +5638,15 @@ var _specPendingAnalysesSeen = new WeakSet();
 var _specFixpointConverged = false;
 function _specEnqueueAnalysis(fnNode, fnPath) {
   if (!fnNode || !fnPath) return;
+  // Caller-callee dependency edge: the currently-analyzing function is
+  // about to consume this callee's memo (either immediately if already
+  // populated, or after the callee is analyzed). Record the edge so the
+  // worklist can re-enqueue this caller precisely on callee sig changes
+  // rather than re-running ALL static callers (~7K wasted re-runs of `e`
+  // on github-combined.js, where `e`'s output is invariant under most
+  // callees' sig changes — its static call graph is much wider than its
+  // actual data-dependency set).
+  _specRecordCalleeRead(fnNode);
   if (_specPendingAnalysesSeen.has(fnNode)) return;
   if (_specEffectsMemo.has(fnNode)) return;
   if (_specAnalyzeInProgress.has(fnNode)) return;
@@ -5645,6 +5654,46 @@ function _specEnqueueAnalysis(fnNode, fnPath) {
       !_specSliceFns.has(fnNode)) return;
   _specPendingAnalysesSeen.add(fnNode);
   _specPendingAnalyses.push(fnPath);
+}
+// Precise inter-procedural dependency edges populated during analysis.
+// `callerFnNode → Set<calleeFnNode>`: each entry records that the
+// caller's body consumed the callee's return-value, side-effects, or
+// effects memo (read) OR enqueued the callee for analysis (anticipated
+// read). Worklist re-enqueue (see _specAnalyzeProgramWithFixpoint)
+// filters static callers by this set so callees whose sig change cannot
+// affect a given caller don't trigger that caller's re-analysis.
+// Re-built per analysis: the set is cleared at the start of each
+// `_specAnalyzePropertyFlow` call so stale edges from prior worklist
+// iterations don't accumulate (which would degrade to the previous
+// over-enqueueing behaviour).
+var _specReadEdges = new WeakMap();
+var _specCurrentAnalysisStack = [];
+function _specRecordCalleeRead(calleeNode) {
+  if (!calleeNode) return;
+  if (_specCurrentAnalysisStack.length === 0) return;
+  var caller = _specCurrentAnalysisStack[_specCurrentAnalysisStack.length - 1];
+  if (caller === calleeNode) return;
+  var set = _specReadEdges.get(caller);
+  if (!set) { set = new Set(); _specReadEdges.set(caller, set); }
+  set.add(calleeNode);
+}
+// Worklist re-enqueue helper: when calleeNode's signature changes, only
+// re-enqueue static callers whose analysis actually read calleeNode's
+// memo. Callers without a recorded read-edge can't see calleeNode's sig
+// change (their result is invariant under it) — re-analysing them is
+// wasted work. Falls back to enqueue when read-edge is unknown (e.g.
+// caller analyzed but read-set wasn't populated by any of the wrapped
+// memo accesses), preserving previous over-enqueue soundness.
+function _enqueueDependentCallers(calleeNode, callersOf, sigByFn, pendingNodes) {
+  if (!callersOf.has(calleeNode)) return;
+  callersOf.get(calleeNode).forEach(function(c) {
+    if (!_specSliceFns.has(c) || !sigByFn.has(c)) return;
+    var reads = _specReadEdges.get(c);
+    // No read-set populated: conservative — enqueue (matches old behaviour).
+    // Read-set populated AND includes calleeNode: c read calleeNode's memo
+    // during its last analysis, so calleeNode's sig change can flow into c.
+    if (!reads || reads.has(calleeNode)) pendingNodes.add(c);
+  });
 }
 // Reverse + forward call graphs built during slice computation.
 // Persisted so _specAnalyzeProgramWithFixpoint's pass-2/worklist can
@@ -10254,12 +10303,9 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
     // Any caller of this fn that's already analysed needs re-checking —
     // its body's call-site processing produced a side-effect summary
     // based on this fn's PREVIOUS (empty) memo. Now that the memo is
-    // populated, re-analyse the caller.
-    if (callersOf.has(fp.node)) {
-      callersOf.get(fp.node).forEach(function(c) {
-        if (_specSliceFns.has(c) && sigByFn.has(c)) pendingNodes.add(c);
-      });
-    }
+    // populated, re-analyse the caller. Read-edges filter to callers
+    // that actually consumed this fn's memo (see _specReadEdges).
+    _enqueueDependentCallers(fp.node, callersOf, sigByFn, pendingNodes);
   }
   var _t_worklist_start = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
   // Worklist convergence: re-analyse callers whose callee signature
@@ -10281,20 +10327,12 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
         _specAnalyzePropertyFlow(ppfp, true);
         _worklistAnalyses++;
         sigByFn.set(ppfp.node, _ssSnapshot(ppfp.node));
-        if (callersOf.has(ppfp.node)) {
-          callersOf.get(ppfp.node).forEach(function(c) {
-            if (_specSliceFns.has(c) && sigByFn.has(c)) pendingNodes.add(c);
-          });
-        }
+        _enqueueDependentCallers(ppfp.node, callersOf, sigByFn, pendingNodes);
       }
       var newSnap = _ssSnapshot(node);
       if (_ssChanged(sigByFn.get(node), newSnap)) {
         sigByFn.set(node, newSnap);
-        if (callersOf.has(node)) {
-          callersOf.get(node).forEach(function(c) {
-            if (_specSliceFns.has(c) && sigByFn.has(c)) pendingNodes.add(c);
-          });
-        }
+        _enqueueDependentCallers(node, callersOf, sigByFn, pendingNodes);
       }
     }
   }
@@ -10436,6 +10474,14 @@ function _specAnalyzePropertyFlow(funcPath, force, stopAfterStmtIdx) {
     return _specEffectsMemo.get(fnNode) || [];
   }
   _specAnalyzeInProgress.add(fnNode);
+  // Read-edge tracking: push this fn as the current analysis context so
+  // callee-memo reads during the body's spec eval record dependency edges
+  // back to this fn. The set is freshly allocated per analysis so worklist
+  // re-runs don't accumulate stale edges from prior iterations (e.g. a
+  // callee that fn used to read but no longer does after a refined
+  // analysis path).
+  _specCurrentAnalysisStack.push(fnNode);
+  _specReadEdges.set(fnNode, new Set());
 
   // For Program, the "body" is the Program itself's body array.
   // For Function, the body is the function body block.
@@ -10443,6 +10489,10 @@ function _specAnalyzePropertyFlow(funcPath, force, stopAfterStmtIdx) {
   if (!bodyPath || !bodyPath.node) {
     _specEffectsMemo.set(fnNode, []);
     _specAnalyzeInProgress.delete(fnNode);
+    if (_specCurrentAnalysisStack.length > 0 &&
+        _specCurrentAnalysisStack[_specCurrentAnalysisStack.length - 1] === fnNode) {
+      _specCurrentAnalysisStack.pop();
+    }
     return [];
   }
 
@@ -10482,6 +10532,10 @@ function _specAnalyzePropertyFlow(funcPath, force, stopAfterStmtIdx) {
     _drainHofQueueIntoStack(stack || [], hofQueueBaseLen, effects);
     _specEffectsMemo.set(fnNode, effects);
     _specAnalyzeInProgress.delete(fnNode);
+    if (_specCurrentAnalysisStack.length > 0 &&
+        _specCurrentAnalysisStack[_specCurrentAnalysisStack.length - 1] === fnNode) {
+      _specCurrentAnalysisStack.pop();
+    }
     return effects;
   }
 
@@ -10516,6 +10570,10 @@ function _specAnalyzePropertyFlow(funcPath, force, stopAfterStmtIdx) {
         yieldAvs: yieldSlice
       });
       _specAnalyzeInProgress.delete(fnNode);
+      if (_specCurrentAnalysisStack.length > 0 &&
+          _specCurrentAnalysisStack[_specCurrentAnalysisStack.length - 1] === fnNode) {
+        _specCurrentAnalysisStack.pop();
+      }
       // Don't set _specEffectsMemo / _specReturnValueMemo /
       // _specSideEffectMemo — partial analyses don't have full summary.
       return effects;
@@ -10657,6 +10715,12 @@ function _specAnalyzePropertyFlow(funcPath, force, stopAfterStmtIdx) {
   // skip the cursor path entirely.
   _specStmtCursor.delete(fnNode);
   _specAnalyzeInProgress.delete(fnNode);
+  // Pop the analysis context — callee reads outside this fn record back
+  // to whichever fn was active before we pushed (or no-op when stack empty).
+  if (_specCurrentAnalysisStack.length > 0 &&
+      _specCurrentAnalysisStack[_specCurrentAnalysisStack.length - 1] === fnNode) {
+    _specCurrentAnalysisStack.pop();
+  }
   return effects;
 }
 
@@ -12338,6 +12402,7 @@ function _specEvalLeaf(path, state, vals, effects) {
       if (!_specSideEffectMemo.has(calleeFnPath.node)) {
         _specEnqueueAnalysis(calleeFnPath.node, calleeFnPath);
       } else {
+        _specRecordCalleeRead(calleeFnPath.node);
         var ssApply = _specSideEffectMemo.get(calleeFnPath.node);
         var ssCallerArgs = [];
         for (var ssai = 0; ssai < n.arguments.length; ssai++) {
@@ -12382,6 +12447,7 @@ function _specEvalLeaf(path, state, vals, effects) {
     // _specReturnValueMemo (populated by a prior _specAnalyzePropertyFlow
     // walk on the callee). Substitute caller-arg AVs per § 10.2.10.
     if (calleeFnPath && calleeFnPath.node && _specReturnValueMemo.has(calleeFnPath.node)) {
+      _specRecordCalleeRead(calleeFnPath.node);
       var memoRet = _specReturnValueMemo.get(calleeFnPath.node);
       if (memoRet) {
         var callArgAvs = [];
