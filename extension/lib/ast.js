@@ -679,6 +679,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcConstString = new Map();
   _hcConstNumber = new Map();
   _specEqualAvCache = new WeakMap();
+  _specFixpointConverged = false;
   _specEnclosingFnsCache = new WeakMap();
   _specEnclFnByNode = new WeakMap();
   _specProgramGlobalsPrepassDoneGlobal = null;
@@ -5612,11 +5613,21 @@ var _specAnalyzeInProgress = new WeakSet();
 // caller's analysis get analysed.
 var _specPendingAnalyses = [];
 var _specPendingAnalysesSeen = new WeakSet();
+// Set to true once _specAnalyzeProgramWithFixpoint's worklist converges.
+// Post-fixpoint, _specEnqueueAnalysis gates new enqueues on slice
+// membership: non-slice fns aren't transitive callers of any sink (per
+// the slice definition: entries ∪ transitive callers ∪ transitive
+// callees), so analysing them during main-pass cascades produces AVs
+// that can't contribute to actionable taint flow. During fixpoint
+// itself the gate is OFF so callee-discovery proceeds normally.
+var _specFixpointConverged = false;
 function _specEnqueueAnalysis(fnNode, fnPath) {
   if (!fnNode || !fnPath) return;
   if (_specPendingAnalysesSeen.has(fnNode)) return;
   if (_specEffectsMemo.has(fnNode)) return;
   if (_specAnalyzeInProgress.has(fnNode)) return;
+  if (_specFixpointConverged && _specCallGraphCallersOf &&
+      !_specSliceFns.has(fnNode)) return;
   _specPendingAnalysesSeen.add(fnNode);
   _specPendingAnalyses.push(fnPath);
 }
@@ -10148,6 +10159,10 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
     }
   }
   var _t_worklist_end = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  // Fixpoint converged: subsequent _specEnqueueAnalysis calls in
+  // main-pass demand paths are gated on slice membership (non-slice
+  // fns can't transitively reach a sink).
+  _specFixpointConverged = true;
   if (typeof globalThis !== "undefined") {
     globalThis._lastFixpointTimings = {
       fnCount: fnPaths.length,
@@ -18446,6 +18461,14 @@ function _avTaintTransitionsCompute(av, ctxPath) {
     var fnPath = _specPathOfFunc(av.fn, ctxPath);
     if (fnPath) {
       var callSites = _specFindCallSites(fnPath);
+      // Dedup arg AVs across call sites: each unique caller arg AV
+      // contributes one transition to the taint BFS. Hash-cons makes
+      // structurally-equal AVs share identity, so a Set-by-reference
+      // dedups correctly. Without this, popular fns with many call
+      // sites passing the same arg (e.g. shared _AV_TOP or hash-cons'd
+      // const) iterate all sites doing parent-path walks (~3ms each)
+      // even when the contribution is structurally a single edge.
+      var seenCallerArgs = new Set();
       for (var ci = 0; ci < callSites.length; ci++) {
         var callRef = callSites[ci];
         // Class constructors are invoked via NewExpression per ECMA § 13.3.5;
@@ -18454,6 +18477,7 @@ function _avTaintTransitionsCompute(av, ctxPath) {
         if (av.idx >= callRef.node.arguments.length) continue;
         var argNode = callRef.node.arguments[av.idx];
         var argAv = _specPathValMemo.get(argNode);
+        if (argAv && seenCallerArgs.has(argAv)) continue;
         if (!argAv) {
           // The caller's enclosing scope hasn't been analysed by spec
           // eval — analyse it on-demand so the arg's AV populates.
@@ -18462,11 +18486,18 @@ function _avTaintTransitionsCompute(av, ctxPath) {
           // by evaluating the caller's enclosing function body.
           var callerEnc = callRef.getFunctionParent && callRef.getFunctionParent();
           if (callerEnc && _t.isFunction(callerEnc.node) && !_specEffectsMemo.has(callerEnc.node)) {
+            // Slice gate: only analyse callers that are in the slice
+            // (entries ∪ transitive callers ∪ transitive callees).
+            // Non-slice callers don't transitively reach a sink per
+            // slice semantics, so their arg AVs can't contribute to
+            // actionable taint flow. Skipping avoids per-call-site
+            // analyses that compound to O(callers × body) work during
+            // _avTaintTransitions's param-AV walk on popular helpers.
+            if (_specCallGraphCallersOf && !_specSliceFns.has(callerEnc.node)) continue;
             // Partial analysis per ECMA § 14.2: only stmts before the
             // call site influence the arg's AV. Saves cost on large
-            // non-slice callers — common in webpack/library bundles
-            // where popular slice helpers are dispatched from many
-            // unrelated callers via array indexing.
+            // callers — common in webpack/library bundles where popular
+            // slice helpers are dispatched from many call sites.
             var caTopIdx = _specFindEnclosingTopStmtIdx(callerEnc, callRef);
             try { _specAnalyzePropertyFlow(callerEnc, false, caTopIdx); } catch (_) {}
             argAv = _specPathValMemo.get(argNode);
@@ -18481,6 +18512,8 @@ function _avTaintTransitionsCompute(av, ctxPath) {
           }
         }
         if (!argAv) continue;
+        if (seenCallerArgs.has(argAv)) continue;
+        seenCallerArgs.add(argAv);
         out.push({ to: argAv, kind: "param-caller", desc: "param @ arg " + av.idx, atNode: argNode });
       }
     }
