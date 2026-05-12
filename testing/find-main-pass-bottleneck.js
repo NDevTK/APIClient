@@ -31,6 +31,9 @@ var instrumentation = `
   }
   _specAnalyzePropertyFlow = _instrumented("_specAnalyzePropertyFlow", _specAnalyzePropertyFlow);
   _resolveAllValues = _instrumented("_resolveAllValues", _resolveAllValues);
+  _resolveByContextSensitiveReanalysis = _instrumented("_resolveByContextSensitiveReanalysis", _resolveByContextSensitiveReanalysis);
+  _resolveAvBySubstitutingCallerArgs = _instrumented("_resolveAvBySubstitutingCallerArgs", _resolveAvBySubstitutingCallerArgs);
+  _specInstantiateAv = _instrumented("_specInstantiateAv", _specInstantiateAv);
   _avAtPath = _instrumented("_avAtPath", _avAtPath);
   _processNetworkSink = _instrumented("_processNetworkSink", _processNetworkSink);
   _processExportMethodCall = _instrumented("_processExportMethodCall", _processExportMethodCall);

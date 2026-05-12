@@ -15367,6 +15367,11 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
       var refParent = ref.node;
       if (!refParent || !_t.isCallExpression(refParent)) continue;
       var callerEncFn = ref.getFunctionParent && ref.getFunctionParent();
+      // Slice gate: non-slice callers don't transitively reach a sink,
+      // so substituting their arg AVs can't contribute to actionable
+      // URL/taint resolution. Skip the per-caller analysis cascade.
+      if (callerEncFn && _t.isFunction(callerEncFn.node) &&
+          _specCallGraphCallersOf && !_specSliceFns.has(callerEncFn.node)) continue;
       var callerState = (callerEncFn && _t.isFunction(callerEncFn.node))
         ? _specInitialFunctionBodyState(callerEncFn.node, callerEncFn)
         : _specStateCreate({});
@@ -15452,6 +15457,37 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
           callerArgAvs.push(argAv || _AV_TOP);
         }
       }
+      // Dedup substitutions where callerArgAvs match an earlier call
+      // site's by identity (hash-cons preserves identity for equal
+      // content). For popular helpers with many call sites passing
+      // structurally-identical args, this collapses O(call-sites)
+      // instantiations to O(distinct-arg-tuples). Per-fn seen Set
+      // initialized via the fnVisited Map's WeakSet (reused).
+      var argsKey = callerArgAvs.length === 0 ? "_" : null;
+      if (argsKey === null) {
+        var sks = [];
+        var anySubKeyed = true;
+        for (var aki = 0; aki < callerArgAvs.length; aki++) {
+          if (callerArgAvs[aki] === null || callerArgAvs[aki] === undefined) { anySubKeyed = false; break; }
+          sks.push(callerArgAvs[aki]);
+        }
+        if (anySubKeyed) argsKey = sks;
+      }
+      var seenArgsForItem = item._seenArgs || (item._seenArgs = []);
+      var alreadySub = false;
+      if (Array.isArray(argsKey)) {
+        for (var sai = 0; sai < seenArgsForItem.length; sai++) {
+          var prev = seenArgsForItem[sai];
+          if (prev.length !== argsKey.length) continue;
+          var matchSub = true;
+          for (var smj = 0; smj < prev.length; smj++) {
+            if (prev[smj] !== argsKey[smj]) { matchSub = false; break; }
+          }
+          if (matchSub) { alreadySub = true; break; }
+        }
+      }
+      if (alreadySub) continue;
+      if (Array.isArray(argsKey)) seenArgsForItem.push(argsKey);
       // Pass the function being substituted as fnContext so only
       // params tagged with this funcNode get replaced. Constructor-
       // params (tagged via _specBuildThisInstanceAv) won't be touched.
