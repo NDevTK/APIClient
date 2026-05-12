@@ -676,6 +676,7 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
   _hcArgsLenByFn = new WeakMap();
   _hcRestArgsByFn = new WeakMap();
   _hcOrByPair = new WeakMap();
+  _hcMemberByPair = new WeakMap();
   _hcConstString = new Map();
   _hcConstNumber = new Map();
   _specEqualAvCache = new WeakMap();
@@ -7506,6 +7507,26 @@ function _hcOr(leftAv, rightAv) {
   return newOr;
 }
 
+// Hash-cons member AV by (obj, key) AV identity pair. Same shape as
+// _hcOr. Substitute pass and member-projection sites repeatedly build
+// member AVs with structurally-identical (obj, key) — without hash-
+// cons each is a distinct identity, defeating downstream dedup.
+var _hcMemberByPair = new WeakMap();
+function _hcMember(objAv, keyAv) {
+  if (!objAv || !keyAv) return { kind: "member", obj: objAv, key: keyAv };
+  var inner = _hcMemberByPair.get(objAv);
+  if (inner) {
+    var hit = inner.get(keyAv);
+    if (hit) return hit;
+  } else {
+    inner = new WeakMap();
+    _hcMemberByPair.set(objAv, inner);
+  }
+  var av = { kind: "member", obj: objAv, key: keyAv };
+  inner.set(keyAv, av);
+  return av;
+}
+
 function _specLogicalOrAv(leftAv, rightAv) {
   // Idempotent join per ECMA lattice semantics: a ⊔ a = a. Without
   // deduplication, recursive function fixpoint diverges (each iteration
@@ -12593,10 +12614,10 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
             Object.prototype.hasOwnProperty.call(protoSub.props, subKey.value)) {
           subs.set(node, protoSub.props[subKey.value]);
         } else {
-          subs.set(node, { kind: "member", obj: subObj, key: subKey });
+          subs.set(node, _hcMember(subObj, subKey));
         }
       } else {
-        subs.set(node, { kind: "member", obj: subObj, key: subKey });
+        subs.set(node, _hcMember(subObj, subKey));
       }
       continue;
     }
