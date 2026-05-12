@@ -1287,6 +1287,83 @@ function _processNetworkSink(path, result) {
     var _xhrCalleeAv = _avAtPath(path.get("callee"));
     var isXhr = _xhrCalleeAv && _xhrCalleeAv.kind === "builtin-method" &&
                 _xhrCalleeAv.id === "XMLHttpRequest.prototype.open";
+    // § 13.3.6 + § 10.2.10 post-substitution check: when the wrapper's
+    // static AV for `r.open` doesn't resolve (e.g. `r = opts.xhr()` —
+    // `opts` is an abstract param at wrapper analysis time so r's type
+    // bottoms out), walk the wrapper's call sites and substitute caller
+    // arg AVs. After substitution, opts.xhr resolves to the caller's
+    // factory function-ref; _specInstantiateAv's call-reduction folds
+    // `call(function-ref(makeXhr))` to makeXhr's return-memo (XHR
+    // instance), then member-access on the XHR instance dispatches via
+    // prototype chain to XMLHttpRequest.prototype.open. The check holds
+    // for any caller whose args produce that resolution.
+    if (!isXhr && _xhrCalleeAv && _xhrCalleeAv.kind === "member") {
+      var pncEncFn = path.getFunctionParent && path.getFunctionParent();
+      if (pncEncFn && _t.isFunction(pncEncFn.node) &&
+          _avHasSubstitutableCheck(_xhrCalleeAv)) {
+        var pncCallSites = _specFindCallSites(pncEncFn);
+        for (var pnci = 0; pnci < pncCallSites.length && !isXhr; pnci++) {
+          var pncSite = pncCallSites[pnci];
+          if (!pncSite || !pncSite.node || !pncSite.node.arguments) continue;
+          var pncArgs = [];
+          for (var pnai = 0; pnai < pncSite.node.arguments.length; pnai++) {
+            var pncArgAv = _specPathValMemo.get(pncSite.node.arguments[pnai]) || _AV_TOP;
+            pncArgs.push(pncArgAv);
+          }
+          // Iterative call-reduction loop: substitute caller args, then
+          // while the result is `member(call(function-ref(F), args), key)`
+          // (the wrapper's `r = factoryCall(); r.open(...)` shape), unfold
+          // F's return memo with the call's args per § 13.3.6. Iterates on
+          // each unfolded level; bounded by a per-fn visited-Set per ECMA
+          // § 13.3.6 runtime recursion semantics (recursive functions
+          // bottom out at the call-form on re-entry, same as our abstract
+          // analog). No depth cap — the visited-set guarantees termination.
+          var pncSubbed = _specInstantiateAv(_xhrCalleeAv, pncArgs, undefined, pncEncFn.node);
+          var pncSeenFns = new Set();
+          while (pncSubbed && pncSubbed.kind === "member" && pncSubbed.obj &&
+                 pncSubbed.obj.kind === "call" && pncSubbed.obj.callee &&
+                 pncSubbed.obj.callee.kind === "function-ref" &&
+                 pncSubbed.obj.callee.funcNode &&
+                 !pncSeenFns.has(pncSubbed.obj.callee.funcNode)) {
+            var pncFn = pncSubbed.obj.callee.funcNode;
+            pncSeenFns.add(pncFn);
+            var pncRetMemo = _specReturnValueMemo.get(pncFn);
+            if (!pncRetMemo) break;
+            var pncRecv = _specInstantiateAv(pncRetMemo, pncSubbed.obj.args || [], undefined, pncFn);
+            if (!pncRecv) break;
+            // § 13.10 PropertyAccess: resolve `recv.key` against the
+            // substituted receiver. Per the AV taxonomy, WHATWG-spec
+            // builtin instances (XMLHttpRequest, FormData, …) store
+            // their prototype methods as own props directly on the
+            // obj-lit AV (see _specApplyBuiltinCtor); look up own props
+            // first, then fall through to [[Prototype]] chain.
+            var pncKeyV = pncSubbed.key && pncSubbed.key.kind === "const" ? pncSubbed.key.value : null;
+            var pncResolved = null;
+            if (pncKeyV != null && pncRecv.kind === "obj-lit" && pncRecv.props &&
+                Object.prototype.hasOwnProperty.call(pncRecv.props, pncKeyV)) {
+              pncResolved = pncRecv.props[pncKeyV];
+            }
+            if (!pncResolved && pncKeyV != null && typeof pncKeyV === "string") {
+              var pncProto = _specGetPrototypeOfAv(pncRecv);
+              if (pncProto && pncProto.kind === "obj-lit" && pncProto.props &&
+                  Object.prototype.hasOwnProperty.call(pncProto.props, pncKeyV)) {
+                pncResolved = pncProto.props[pncKeyV];
+              }
+            }
+            if (pncResolved) {
+              pncSubbed = pncResolved;
+            } else {
+              pncSubbed = _hcMember(pncRecv, pncSubbed.key);
+            }
+          }
+          if (pncSubbed && pncSubbed.kind === "builtin-method" &&
+              pncSubbed.id === "XMLHttpRequest.prototype.open") {
+            isXhr = true;
+            _xhrCalleeAv = pncSubbed;
+          }
+        }
+      }
+    }
     var methodArg = node.arguments[0];
     var _xhrArg1 = node.arguments[1];
     if (isXhr) {
@@ -5645,6 +5722,14 @@ var _specSliceComputedDone = new WeakSet();
 // Explicit cycle guard for demand-driven mutual recursion — see the
 // guard at the top of _specAnalyzePropertyFlow for the rationale.
 var _specAnalyzeInProgress = new WeakSet();
+// Cycle guard for _specInstantiateAv's call(function-ref) reduction.
+// When F's return-memo is being instantiated for a call to F, mark F
+// in-progress; nested call(function-ref(F)) inside the memo short-
+// circuits to keep the call form, preserving termination for recursive
+// fns. § 13.3.6 OrdinaryCall: recursive calls terminate via runtime
+// recursion semantics; our abstract analog is a fixed-point bottoming
+// out at the call structure.
+var _specInstantiateInProgress = new WeakSet();
 // Trampoline state: callee functions discovered during a property-flow
 // analysis whose memos weren't yet populated. Instead of recursing into
 // _specAnalyzePropertyFlow from within _specApplyStatement (which would
@@ -12908,19 +12993,24 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       continue;
     }
     if (node.kind === "call") {
-      // Lazy-call deferral per § 13.3.6: substitute callee + args. After
-      // substitution, dispatch:
-      //   – call(function-ref) → still deferred to _avFlattenStringLeaves
-      //     (which reads the callee's return memo + substitutes args).
-      //   – call(builtin-method) with a substituted receiver from the
-      //     original member access → fold via the pure helper bank
+      // § 13.3.6 OrdinaryCallEvaluation: substitute callee + args, then
+      // dispatch by the substituted callee's resolved kind:
+      //   – builtin-method → fold via the pure helper bank
       //     (_applyStringMethodToConst / _applyNumberMethodToConst) when
-      //     the receiver folds to a const value of the right type. When
-      //     the receiver is opaque-but-typed (param / member / binop /
-      //     template / coerce(string)), emit a coerce AV so the schema
-      //     records the method's return type per ECMA-262. We don't call
-      //     _specApplyBuiltinMethod from here — that would form an
-      //     indirect recursion cycle through the .call/.apply paths.
+      //     the receiver is a const of the right type. Opaque-typed
+      //     receivers (param / member / binop / template / coerce) get
+      //     a coerce AV so the schema records the method's return type.
+      //   – function-ref → per § 13.3.6, the call evaluates to F's
+      //     return value with args substituted into F's params (§ 10.2.10
+      //     FunctionDeclarationInstantiation). Reading F's return memo +
+      //     instantiating with subCallArgs reduces the call to the
+      //     resolved return value. This lets chains like
+      //     `var r = opts.xhr(); r.open(...)` resolve r to F's return —
+      //     e.g. `function makeXhr(){return new XMLHttpRequest();}` →
+      //     XHR-instance AV, which dispatches .open to
+      //     XMLHttpRequest.prototype.open via prototype-chain lookup.
+      //     Cycle-safe via _specInstantiateInProgress (recursive calls
+      //     short-circuit to undefined sub, leaving the call form).
       var subCallee = subs.get(node.callee) || node.callee;
       var subCallArgs = [];
       for (var sci = 0; sci < node.args.length; sci++) {
