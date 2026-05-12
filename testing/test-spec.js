@@ -234,17 +234,31 @@ console.log("\n=== § 13.13 LogicalExpression ===\n");
 specTest("§ 13.13 OR: `arguments[0] || {}` records or(args-elt, obj-lit) target", `
   function f() { var t = arguments[0] || {}; t.k = "v"; }
 `, function(effects) {
+  // § 13.13.2 LogicalOR: both operands reachable depending on
+  // ToBoolean(left). AV may be flat `or(args-elt, obj-lit)` (legacy
+  // eager-distribute) OR `logical(||, args-elt, obj-lit)` (preserves
+  // operator for post-substitution short-circuit). Same semantic
+  // invariant: left is statically reachable as an args-elt.
   if (effects.length !== 1) return false;
-  return effects[0].target && effects[0].target.kind === "or" &&
-         effects[0].target.left && effects[0].target.left.kind === "args-elt";
+  var t = effects[0].target;
+  if (!t) return false;
+  if (t.kind === "logical" && t.op === "||") {
+    return t.left && t.left.kind === "args-elt";
+  }
+  return t.kind === "or" && t.left && t.left.kind === "args-elt";
 });
 
 specTest("§ 13.13 OR: both operands reachable in value", `
   function f(req) { this.id = req.id || 42; }
 `, function(effects) {
+  // Same logical-vs-or shape choice; both denote § 13.13.2's "either
+  // left or right" runtime resolution. Asserts the semantic invariant:
+  // left is the member access, right is the literal 42 fallback.
   if (effects.length !== 1) return false;
   var v = effects[0].value;
-  return v && v.kind === "or" &&
+  if (!v) return false;
+  var matchesShape = (v.kind === "logical" && v.op === "||") || v.kind === "or";
+  return matchesShape &&
          v.left && v.left.kind === "member" &&
          v.right && v.right.kind === "const" && v.right.value === 42;
 });
@@ -608,9 +622,15 @@ console.log("\n=== § 13.13.1 LogicalAndExpression ===\n");
 specTest("§ 13.13.1: `a && b` value is or(a, b) — both operands reachable per spec short-circuit", `
   function f(req) { this.id = req.valid && req.id; }
 `, function(effects) {
+  // § 13.13.1 LogicalAnd: AV may be flat `or(...)` (eager) or
+  // `logical(&&, ...)` (preserves operator for post-substitution
+  // short-circuit). Both denote the same statically-possible set:
+  // either left or right depending on ToBoolean(left).
   if (effects.length !== 1) return false;
   var v = effects[0].value;
-  return v && v.kind === "or" &&
+  if (!v) return false;
+  var matchesShape = (v.kind === "logical" && v.op === "&&") || v.kind === "or";
+  return matchesShape &&
          v.left && v.left.kind === "member" &&
          v.right && v.right.kind === "member";
 });
@@ -618,9 +638,14 @@ specTest("§ 13.13.1: `a && b` value is or(a, b) — both operands reachable per
 specTest("§ 13.14: `a ?? b` value is or(a, b) — nullish-coalescing short-circuit", `
   function f(req) { this.id = req.id ?? 42; }
 `, function(effects) {
+  // § 13.14 NullishCoalescing: AV may be `or(...)` (eager) or
+  // `logical(??, ...)` (preserves operator). Both denote the same
+  // statically-possible set per spec short-circuit semantics.
   if (effects.length !== 1) return false;
   var v = effects[0].value;
-  return v && v.kind === "or" &&
+  if (!v) return false;
+  var matchesShape = (v.kind === "logical" && v.op === "??") || v.kind === "or";
+  return matchesShape &&
          v.left && v.left.kind === "member" &&
          v.right && v.right.kind === "const" && v.right.value === 42;
 });

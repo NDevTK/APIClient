@@ -7142,6 +7142,15 @@ function _specEqualAvCompute(a, b) {
         pairs.push([x.right, y.right]);
         break;
       }
+      // § 13.13 LogicalExpression preserves operator metadata for
+      // post-substitution short-circuit. Structural equality: same op
+      // and structurally-equal operands.
+      case "logical": {
+        if (x.op !== y.op) return false;
+        pairs.push([x.left, y.left]);
+        pairs.push([x.right, y.right]);
+        break;
+      }
       case "template": {
         if (!x.quasis || !y.quasis || x.quasis.length !== y.quasis.length) return false;
         for (var tqei = 0; tqei < x.quasis.length; tqei++) {
@@ -11182,8 +11191,7 @@ function _specEvalLeaf(path, state, vals, effects) {
   if (_t.isLogicalExpression(n)) {
     // § 13.13.1 (&&), § 13.13.2 (||), § 13.14 (??): each operator
     // short-circuits per ToBoolean / nullish testing. When `left` is a
-    // Const we can pick statically per spec; otherwise both arms are
-    // possible and we model as or(left, right).
+    // Const we can pick statically per spec.
     var lLeft = vals.get(n.left) || _AV_TOP;
     var lRight = vals.get(n.right) || _AV_TOP;
     if (lLeft.kind === "const") {
@@ -11200,8 +11208,17 @@ function _specEvalLeaf(path, state, vals, effects) {
         return (lLeft.value === null || lLeft.value === undefined) ? lRight : lLeft;
       }
     }
+    // Non-const left: preserve LogicalExpression structure as a `logical`
+    // AV so post-substitution evaluation (_specInstantiateAv) can re-
+    // apply § 13.13 short-circuit once caller args resolve left to a
+    // const. Common pattern: `opts.method || "GET"` in a wrapper — left
+    // is `member(param-opts, "method")` here, but at the call site
+    // `wrapper({method: "POST"})` the substituted left becomes
+    // const "POST" (truthy) and the OR folds to just "POST". Flatten
+    // logic in `_avFlattenStringLeaves` also distinguishes
+    // statically-truthy left from indeterminate left.
     if (n.operator === "||" || n.operator === "&&" || n.operator === "??") {
-      return _specLogicalOrAv(lLeft, lRight);
+      return { kind: "logical", op: n.operator, left: lLeft, right: lRight };
     }
   }
   if (_t.isAssignmentExpression(n)) {
@@ -12566,6 +12583,9 @@ function _avHasSubstitutableCheck(rootAv) {
       if (n.alternatives) for (var oi = 0; oi < n.alternatives.length; oi++) stack.push(n.alternatives[oi]);
     }
     else if (n.kind === "binop") { if (n.left) stack.push(n.left); if (n.right) stack.push(n.right); }
+    // § 13.13 logical: its operands may contain substitutable param refs;
+    // post-substitution short-circuit can collapse the AV to a const.
+    else if (n.kind === "logical") { if (n.left) stack.push(n.left); if (n.right) stack.push(n.right); }
     else if (n.kind === "template" && n.exprs) {
       for (var ti = 0; ti < n.exprs.length; ti++) stack.push(n.exprs[ti]);
     }
@@ -12741,6 +12761,9 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
       }
     }
     else if (av.kind === "binop") { _pushIfSub(av.left); _pushIfSub(av.right); }
+    // § 13.13 logical: enumerate operands so substitution + short-circuit
+    // can apply post-substitution.
+    else if (av.kind === "logical") { _pushIfSub(av.left); _pushIfSub(av.right); }
     else if (av.kind === "template" && av.exprs) {
       for (var tii = 0; tii < av.exprs.length; tii++) _pushIfSub(av.exprs[tii]);
     }
@@ -12975,6 +12998,29 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
         }
       } else {
         subs.set(node, _hcBinop(node.op, bopL, bopR));
+      }
+      continue;
+    }
+    // § 13.13 LogicalExpression post-substitution short-circuit. After
+    // substituting the operands with caller-arg AVs, if the LEFT operand
+    // becomes a const, apply ToBoolean / nullish per the operator and
+    // pick the appropriate branch. Otherwise preserve the logical AV
+    // for further upstream substitution.
+    if (node.kind === "logical") {
+      var logL = subs.get(node.left) || node.left;
+      var logR = subs.get(node.right) || node.right;
+      if (logL && logL.kind === "const") {
+        if (node.op === "||") {
+          subs.set(node, logL.value ? logL : logR);
+        } else if (node.op === "&&") {
+          subs.set(node, logL.value ? logR : logL);
+        } else if (node.op === "??") {
+          subs.set(node, (logL.value === null || logL.value === undefined) ? logR : logL);
+        } else {
+          subs.set(node, { kind: "logical", op: node.op, left: logL, right: logR });
+        }
+      } else {
+        subs.set(node, { kind: "logical", op: node.op, left: logL, right: logR });
       }
       continue;
     }
@@ -16083,7 +16129,7 @@ function _avFlattenStringLeavesImpl(rootAv) {
   // have no statically-known string leaf — return empty without allocation.
   if (rootAv.kind !== "or" && rootAv.kind !== "binop" &&
       rootAv.kind !== "template" && rootAv.kind !== "call" &&
-      rootAv.kind !== "deferred-ctor") {
+      rootAv.kind !== "deferred-ctor" && rootAv.kind !== "logical") {
     return [];
   }
   // Composite AV — fall through to full two-pass tree walk.
@@ -16106,6 +16152,14 @@ function _avFlattenStringLeavesImpl(rootAv) {
       if (n.left) enumStack.push(n.left);
       if (n.right) enumStack.push(n.right);
     } else if (n.kind === "binop" && n.op === "+") {
+      if (n.left) enumStack.push(n.left);
+      if (n.right) enumStack.push(n.right);
+    } else if (n.kind === "logical") {
+      // § 13.13 LogicalExpression: both operand sub-trees can produce
+      // runtime values depending on left's ToBoolean / nullish state.
+      // Walk both for leaf enumeration; the pass-2 reducer unions them
+      // (a surviving `logical` AV here means neither operand collapsed
+      // post-substitution, so both branches are statically realizable).
       if (n.left) enumStack.push(n.left);
       if (n.right) enumStack.push(n.right);
     } else if (n.kind === "template" && n.exprs) {
@@ -16186,6 +16240,17 @@ function _avFlattenStringLeavesImpl(rootAv) {
           leaves.push(bopL[bli] + bopR[bri]);
         }
       }
+    } else if (av.kind === "logical") {
+      // § 13.13: surviving `logical` AV means neither operand was a
+      // const post-substitution (else _specInstantiateAv would have
+      // short-circuited). Both branches are runtime-possible. Union
+      // the operand leaf-sets. For `||` / `&&` / `??` the union is
+      // sound — the realized branch is whichever ToBoolean / nullish
+      // test the runtime takes; the static set covers both.
+      var logLLeaves = av.left ? (leavesOf.get(av.left) || []) : [];
+      var logRLeaves = av.right ? (leavesOf.get(av.right) || []) : [];
+      for (var loi = 0; loi < logLLeaves.length; loi++) leaves.push(logLLeaves[loi]);
+      for (var lori = 0; lori < logRLeaves.length; lori++) leaves.push(logRLeaves[lori]);
     } else if (av.kind === "template" && av.quasis && av.exprs) {
       // ECMA § 13.2.8.6: every interpolation must have leaves; compose.
       var tplExprLeaves = [];
