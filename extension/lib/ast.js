@@ -932,13 +932,18 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
       }
     },
     // ── Value constraint collection ──
+    // Constraints feed sink dispatch (slice-gated); non-slice fns'
+    // constraints are unused — skip collection in them.
     SwitchStatement: function(path) {
+      if (!_isPathInSlice(path)) return;
       _collectSwitchConstraints(path);
     },
     LogicalExpression: function(path) {
+      if (!_isPathInSlice(path)) return;
       _collectEqualityConstraints(path);
     },
     BinaryExpression: function(path) {
+      if (!_isPathInSlice(path)) return;
       if (path.node.operator === "in" &&
           _t.isIdentifier(path.node.left) && _t.isIdentifier(path.node.right)) {
         var binding = path.scope.getBinding(path.node.right.name);
@@ -964,7 +969,11 @@ function analyzeJSBundle(code, sourceUrl, forceScript, opts) {
       }
     },
     MemberExpression: function(path) {
-      // Computed member access: obj[key] → key constrained to obj's property names
+      // Computed member access: obj[key] → key constrained to obj's property names.
+      // Slice gate: constraints feed sink dispatch which only fires for slice fns
+      // (per _processSecurity*'s _isPathInSlice gate). Collecting constraints in
+      // non-slice fn bodies is dead weight.
+      if (!_isPathInSlice(path)) return;
       if (path.node.computed && _t.isIdentifier(path.node.property)) {
         var cmObj = _resolveToObject(path.get("object"), 0);
         if (cmObj) {
