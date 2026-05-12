@@ -1336,15 +1336,43 @@ function _processNetworkSink(path, result) {
       var urls = _resolveAllValues(path.get("arguments.1"), 0);
       console.debug("[AST:trace]   url resolve → [%s] (%d values)", urls.join(", "), urls.length);
 
-      for (var i = 0; i < urls.length; i++) {
-        var pairedMethod = xhrMethod;
-        if (xhrMethodVals && xhrMethodVals.length === urls.length) {
-          var pm = xhrMethodVals[i];
-          if (typeof pm === "string" && _HTTP_METHODS_LC[pm.toLowerCase()]) pairedMethod = pm.toUpperCase();
+      // (url, method) pairing: when lengths match, treat as aligned
+      // per-branch pairs; otherwise cartesian product. The unequal case
+      // arises when caller-arg substitution adds methods (e.g. `opts.method
+      // || "GET"` resolves to "GET" statically AND to "POST" after
+      // substituting caller `{method: "POST"}` — methodVals=["GET","POST"],
+      // urls=[single literal]). Each distinct (url, method) tuple is a
+      // statically-possible runtime call.
+      var validMethodList = [];
+      if (xhrMethodVals && xhrMethodVals.length > 0) {
+        for (var xvi = 0; xvi < xhrMethodVals.length; xvi++) {
+          var xv = xhrMethodVals[xvi];
+          if (typeof xv === "string" && _HTTP_METHODS_LC[xv.toLowerCase()]) {
+            validMethodList.push(xv.toUpperCase());
+          }
         }
-        var xhrMethodDisplay = pairedMethod === "(dynamic)" ? "?" : pairedMethod;
-        _pushFetchSite(result, _buildFetchSite(urls[i], xhrMethodDisplay, xhrHeaders, "xhr", xhrBodyParams));
-        console.debug("[AST:fetch] xhr %s %s", xhrMethodDisplay, urls[i]);
+      }
+      if (validMethodList.length > 0 && validMethodList.length !== urls.length) {
+        for (var i2 = 0; i2 < urls.length; i2++) {
+          for (var mj = 0; mj < validMethodList.length; mj++) {
+            var xhrDisplay = validMethodList[mj] === "(dynamic)" ? "?" : validMethodList[mj];
+            _pushFetchSite(result, _buildFetchSite(urls[i2], xhrDisplay, xhrHeaders, "xhr", xhrBodyParams));
+            console.debug("[AST:fetch] xhr %s %s", xhrDisplay, urls[i2]);
+          }
+        }
+      } else {
+        for (var i = 0; i < urls.length; i++) {
+          var pairedMethod = xhrMethod;
+          if (validMethodList.length === urls.length) {
+            pairedMethod = validMethodList[i];
+          } else if (xhrMethodVals && xhrMethodVals.length === urls.length) {
+            var pm = xhrMethodVals[i];
+            if (typeof pm === "string" && _HTTP_METHODS_LC[pm.toLowerCase()]) pairedMethod = pm.toUpperCase();
+          }
+          var xhrMethodDisplay = pairedMethod === "(dynamic)" ? "?" : pairedMethod;
+          _pushFetchSite(result, _buildFetchSite(urls[i], xhrMethodDisplay, xhrHeaders, "xhr", xhrBodyParams));
+          console.debug("[AST:fetch] xhr %s %s", xhrMethodDisplay, urls[i]);
+        }
       }
     }
     return;
@@ -12634,6 +12662,8 @@ function _avHasSubstitutableCheck(rootAv) {
       }
     } else if (av.kind === "binop") {
       f = (av.left && _avHasSubstitutable.get(av.left)) || (av.right && _avHasSubstitutable.get(av.right)) || false;
+    } else if (av.kind === "logical") {
+      f = (av.left && _avHasSubstitutable.get(av.left)) || (av.right && _avHasSubstitutable.get(av.right)) || false;
     } else if (av.kind === "template" && av.exprs) {
       for (var pti = 0; pti < av.exprs.length; pti++) {
         if (_avHasSubstitutable.get(av.exprs[pti])) { f = true; break; }
@@ -14830,10 +14860,27 @@ function _extractFetchCall(path, result, type) {
     }
   }
 
-  // ── Create call sites (with per-caller method pairing) ──
-  for (var u = 0; u < urls.length; u++) {
-    var siteMethod = httpMethods && u < httpMethods.length ? httpMethods[u] : (httpMethod || "GET");
-    _pushFetchSite(result, _buildFetchSite(urls[u], siteMethod, headers, type, params, { enclosingFunction: funcInfo ? funcInfo.name : undefined, responseType: responseType, urlIsLiteral: urlFromLiteral }));
+  // ── Create call sites ──────────────────────────────────────────────
+  // (url, method) pairing logic:
+  //   When urls.length === httpMethods.length, treat them as per-caller
+  //   pairs (e.g. a ternary `cond ? {url:"/a", method:"GET"} : {url:"/b",
+  //   method:"POST"}` produces aligned arrays at the same caller branch).
+  //   Otherwise — methods may have been augmented by caller-arg
+  //   substitution of `opts.method || "GET"` while urls came from a
+  //   stable literal — neither set should be truncated. Emit the
+  //   cartesian product: each distinct (url, method) tuple is a real
+  //   statically-possible runtime call.
+  if (httpMethods && urls.length !== httpMethods.length) {
+    for (var u = 0; u < urls.length; u++) {
+      for (var hm = 0; hm < httpMethods.length; hm++) {
+        _pushFetchSite(result, _buildFetchSite(urls[u], httpMethods[hm], headers, type, params, { enclosingFunction: funcInfo ? funcInfo.name : undefined, responseType: responseType, urlIsLiteral: urlFromLiteral }));
+      }
+    }
+  } else {
+    for (var u2 = 0; u2 < urls.length; u2++) {
+      var siteMethod = httpMethods && u2 < httpMethods.length ? httpMethods[u2] : (httpMethod || "GET");
+      _pushFetchSite(result, _buildFetchSite(urls[u2], siteMethod, headers, type, params, { enclosingFunction: funcInfo ? funcInfo.name : undefined, responseType: responseType, urlIsLiteral: urlFromLiteral }));
+    }
   }
 
   if (urls.length > 0) {
@@ -15101,13 +15148,32 @@ function _resolveAllValues(initialPath, initialDepth) {
           }
         }
       }
+      // § 10.2.10 FunctionDeclarationInstantiation post-substitution path.
+      // When memoAv contains substitutable param refs (i.e. its leaves can
+      // change post-caller-arg-substitution), the resolver must also
+      // surface caller-derived leaves alongside the static-leaf set:
+      //
+      //   xhr.open(opts.method || "GET", opts.url)
+      //
+      // produces `logical(||, member(param-opts,"method"), "GET")`. Static
+      // flatten yields ["GET"] (the const right branch); the "POST" leaf
+      // only exists after substituting opts={method:"POST"} from caller.
+      // With the `logical` AV preserving operator semantics,
+      // _specInstantiateAv applies § 13.13.2 short-circuit and collapses
+      // to const "POST" — which then becomes a leaf via the substitution
+      // path. Both branches are runtime-realisable; the union is sound.
+      //
+      // Gated on _avHasSubstitutableCheck so non-substitutable AVs skip
+      // the call-site walk entirely.
+      if (_avHasSubstitutableCheck(memoAv)) {
+        var subLeaves = _resolveAvBySubstitutingCallerArgs(encFn, memoAv);
+        if (subLeaves && subLeaves.length > 0) {
+          for (var sli = 0; sli < subLeaves.length; sli++) {
+            if (combinedLeaves.indexOf(subLeaves[sli]) < 0) combinedLeaves.push(subLeaves[sli]);
+          }
+        }
+      }
       if (combinedLeaves.length > 0) return combinedLeaves;
-      // Param-substitution path per § 10.2.10 FunctionDeclarationInstantiation:
-      // when memoAv references encFn's params, walk encFn's call sites and
-      // substitute each caller's arg AVs. Returns the union of string leaves
-      // across all caller substitutions.
-      var subLeaves = _resolveAvBySubstitutingCallerArgs(encFn, memoAv);
-      if (subLeaves && subLeaves.length > 0) return subLeaves;
     }
   } else {
     // Module-level (no enclosing function) per ECMA § 16.1 Scripts:
