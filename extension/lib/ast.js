@@ -11467,11 +11467,22 @@ function _specEvalLeaf(path, state, vals, effects) {
     var lv = leftAv.value, rv = rightAv.value;
     var op = n.operator;
     // § 13.8.1 AdditiveExpression `+` — string concat or Number::add.
+    // Per § 7.1.1 ToPrimitive, object/function operands need a hint-aware
+    // valueOf/toString call. Without a statically-known method, the
+    // result is opaque — abstracting to top is the sound widening. Using
+    // JS's blunt `String(obj)` would emit "[object Object]" per
+    // Object.prototype.toString (§ 20.1.3.6), which propagates downstream
+    // as garbage URLs at fetch sinks (`fetch GET [object Object]`) —
+    // useless for API learning even though spec-correct for the coercion.
     if (op === "+") {
-      if (typeof lv === "string" || typeof rv === "string") {
+      var lvT = typeof lv, rvT = typeof rv;
+      var lvOk = lvT === "string" || lvT === "number" || lvT === "boolean" || lv === null || lv === undefined;
+      var rvOk = rvT === "string" || rvT === "number" || rvT === "boolean" || rv === null || rv === undefined;
+      if (!lvOk || !rvOk) return _AV_TOP;
+      if (lvT === "string" || rvT === "string") {
         return { kind: "const", value: String(lv) + String(rv) };
       }
-      if (typeof lv === "number" && typeof rv === "number") {
+      if (lvT === "number" && rvT === "number") {
         return { kind: "const", value: lv + rv };
       }
       return _AV_TOP;
