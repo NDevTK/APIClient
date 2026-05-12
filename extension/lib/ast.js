@@ -7217,9 +7217,10 @@ function _specEqualAvCompute(a, b) {
 function _specJoinAv(a, b) {
   if (!a) return b;
   if (!b) return a;
+  if (a === b) return a;
   if (_specEqualAv(a, b)) return a;
   if (a.kind === "top" || b.kind === "top") return _AV_TOP;
-  return { kind: "or", left: a, right: b };
+  return _hcOr(a, b);
 }
 
 // State LUB — pointwise on each binding name; missing bindings remain
@@ -7480,7 +7481,7 @@ function _specJoinAllAv(leaves) {
     var nextLevel = [];
     for (var li = 0; li < level.length; li += 2) {
       if (li + 1 < level.length) {
-        nextLevel.push({ kind: "or", left: level[li], right: level[li + 1] });
+        nextLevel.push(_hcOr(level[li], level[li + 1]));
       } else {
         nextLevel.push(level[li]);
       }
@@ -8957,7 +8958,7 @@ function _specOrFromAlternatives(alts) {
   if (alts.length === 1) return alts[0];
   var av = alts[0];
   for (var i = 1; i < alts.length; i++) {
-    av = { kind: "or", left: av, right: alts[i] };
+    av = _hcOr(av, alts[i]);
   }
   return av;
 }
@@ -14984,12 +14985,12 @@ function _resolvePageOriginAv(av) {
     var a = nodes[ri];
     if (rebuilt.has(a)) continue;
     if (a.kind === "taint-source" && Object.prototype.hasOwnProperty.call(subs, a.id)) {
-      rebuilt.set(a, { kind: "const", value: subs[a.id] });
+      rebuilt.set(a, _hcConst(subs[a.id]));
       didSub = true;
     } else if (a.kind === "or") {
-      rebuilt.set(a, { kind: "or",
-        left: a.left ? (rebuilt.get(a.left) || a.left) : a.left,
-        right: a.right ? (rebuilt.get(a.right) || a.right) : a.right });
+      var rL = a.left ? (rebuilt.get(a.left) || a.left) : a.left;
+      var rR = a.right ? (rebuilt.get(a.right) || a.right) : a.right;
+      rebuilt.set(a, _hcOr(rL, rR));
     } else if (a.kind === "binop" && a.op === "+") {
       var bopL = a.left ? (rebuilt.get(a.left) || a.left) : a.left;
       var bopR = a.right ? (rebuilt.get(a.right) || a.right) : a.right;
