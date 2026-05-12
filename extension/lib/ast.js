@@ -12424,6 +12424,21 @@ var _avHasSubstitutable = new WeakMap();
 // shared substitutable-bearing subtrees on every new root.
 function _avHasSubstitutableCheck(rootAv) {
   if (!rootAv || typeof rootAv !== "object") return false;
+  // Fast-path: inherent leaves can't contain substitutables. Skip the
+  // WeakMap.has lookup entirely for kinds known never to be / contain
+  // substitutable nodes. These are by far the most common AV kinds on
+  // typical bundles (const-string concat results, builtin method/ctor
+  // dispatches, taint-source markers, function-ref leaves) — saving
+  // the WeakMap touch per call shifts measurable load off
+  // WeakMapLookupHashIndex in the V8 profile.
+  var rk = rootAv.kind;
+  if (rk === "const" || rk === "top" || rk === "taint-source" ||
+      rk === "builtin-method" || rk === "builtin-ctor" ||
+      rk === "callable-namespace" || rk === "function-ref" ||
+      rk === "regex-instance" || rk === "formdata-instance" ||
+      rk === "range-instance" || rk === "dom-element") {
+    return false;
+  }
   if (_avHasSubstitutable.has(rootAv)) return _avHasSubstitutable.get(rootAv);
   // Two-Set scheme: enumSeen prevents re-push of shared subtrees;
   // inProgress marks "visited but children not yet finalised", so the
