@@ -12727,11 +12727,11 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext) {
         if (tplAlts.length === 0) {
           subs.set(node, _AV_TOP);
         } else if (tplAlts.length === 1) {
-          subs.set(node, { kind: "const", value: tplAlts[0] });
+          subs.set(node, _hcConst(tplAlts[0]));
         } else {
-          var tplOrFolded = { kind: "const", value: tplAlts[0] };
+          var tplOrFolded = _hcConst(tplAlts[0]);
           for (var tak = 1; tak < tplAlts.length; tak++) {
-            tplOrFolded = _specSetUnionAv(tplOrFolded, { kind: "const", value: tplAlts[tak] });
+            tplOrFolded = _specSetUnionAv(tplOrFolded, _hcConst(tplAlts[tak]));
           }
           subs.set(node, tplOrFolded);
         }
