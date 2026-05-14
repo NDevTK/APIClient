@@ -1,6 +1,5 @@
 # API Security Researcher — Development Guide
-
-Work autonomously and continuously across all ideas. No mocking, no placeholders, no heuristics, no summaries, no workarounds. Context length is not a stop signal — keep iterating.
+Work autonomously and continuously across all ideas. No mocking, no placeholders, no heuristics, no summaries, no workarounds. Context length is not a stop signal — keep iterating. Tests must cover whats not fixed and they should fail and must be fixed without avoidance. Track ECMA work in extension\lib\ECMA_COVERAGE.md
 
 ## Project Overview
 
