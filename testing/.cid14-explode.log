@@ -1,4 +1,3 @@
-refines=200 commits=143 rss=247MB
-refines=400 commits=294 rss=350MB
-refines=600 commits=475 rss=449MB
-refines=800 commits=626 rss=457MB
+CONE-START rss=238MB
+CONE-DONE cw=0 coneFns=6 rss=236MB
+DONE 4335ms refines=undefined commits=458 sites=0
