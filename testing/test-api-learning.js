@@ -812,6 +812,99 @@ api("SD-10 reproducer: extend(s, opts) with param src — multi-level ctx-refine
 });
 
 // Direct opts: lib3.ajax({url}) reaches xhr.open via direct opts access.
+// SD-25: Array.prototype.forEach builtin-iter dispatching cb that writes
+// to outer obj-lit. The cb's prop-write should propagate to outer state.
+// (Distinguishes user-defined `each` from builtin `forEach`.)
+api("SD-25: Array.prototype.forEach cb propagates outer obj prop writes", `
+  var registry = {};
+  ["aaa", "bbb"].forEach(function(method) {
+    registry[method] = function(url) { fetch("/api/sd25/" + method + "?u=" + url); };
+  });
+  registry.aaa("x");
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url && s.url.indexOf("/api/sd25/") === 0; });
+});
+
+// JQ-6: jQuery's Ut/Vt curry — register factory via curried helper, then
+// transport-select + invoke + .send() chain. Mimics ce.ajaxTransport's
+// actual shape: Ut(_t) returns closure that registers into _t; Vt picks
+// transports from _t["*"] and invokes each until one returns truthy.
+api("JQ-6: Ut(_t)-style curried registry + Vt-style transport dispatch", `
+  function Ut(o) {
+    return function(e, t) {
+      if (typeof e !== "string") { t = e; e = "*"; }
+      (o[e] = o[e] || []).push(t);
+    };
+  }
+  function Vt(t, opts) {
+    var arr = t["*"] || [];
+    for (var i = 0; i < arr.length; i++) {
+      var r = arr[i](opts);
+      if (r && r.send) { r.send(); return; }
+    }
+  }
+  var _t = {};
+  var ajaxTransport = Ut(_t);
+  ajaxTransport(function(opts) {
+    return {
+      send: function() {
+        var x = new XMLHttpRequest();
+        x.open(opts.method, opts.url);
+      }
+    };
+  });
+  Vt(_t, {url: "/api/jq6", method: "POST"});
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/jq6" && s.method === "POST"; });
+});
+
+// JQ-2: extend(target, source) deep-merge of nested fn-refs.
+api("JQ-2: extend(s, {xhr: fn}); s.xhr() returns from the merged-in factory", `
+  function extend(t, src) { for (var k in src) t[k] = src[k]; return t; }
+  function go() {
+    var s = {};
+    extend(s, { xhr: function() { return new XMLHttpRequest(); } });
+    var r = s.xhr();
+    r.open("GET", "/api/jq2");
+    r.send();
+  }
+  go();
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/jq2"; });
+});
+
+// JQ-4: i.xhr() factory dispatch — XHR instance returned, .open detected.
+api("JQ-4: opts.xhr() returning new XHR — r.open detected as sink with opts.url", `
+  function go(opts) {
+    var r = opts.xhr();
+    r.open(opts.method, opts.url);
+    r.send();
+  }
+  go({
+    xhr: function() { return new XMLHttpRequest(); },
+    method: "POST",
+    url: "/api/jq4"
+  });
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/jq4" && s.method === "POST"; });
+});
+
+// JQ-5: Inline transport factory returning {send: fn}; send invoked.
+api("JQ-5: transport(opts).send() — send body analyzed with concrete opts", `
+  function transport(opts) {
+    return {
+      send: function() {
+        var r = new XMLHttpRequest();
+        r.open("GET", opts.url);
+        r.send();
+      }
+    };
+  }
+  transport({url: "/api/jq5"}).send();
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/jq5"; });
+});
+
 api("Direct opts ajax: lib3.ajax({url}) reads opts.url directly into xhr.open", `
   (function() {
     function ajax(opts) {
@@ -824,6 +917,174 @@ api("Direct opts ajax: lib3.ajax({url}) reads opts.url directly into xhr.open", 
   lib3.ajax({url: "/api/direct"});
 `, function(sites) {
   return !!sites.find(function(s) { return s.url === "/api/direct"; });
+});
+
+// Simpler: const String.match without || fallback.
+api("Simpler: const.toLowerCase().match() returns array literal", `
+  var x = "*".toLowerCase().match(/[a-z*]/g);
+  fetch("/api/match/" + x[0]);
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/match/*"; });
+});
+
+// Match + || fallback alone:
+api("Match + || fallback: ('*').match(re) || [''] should be the match", `
+  var x = "*".match(/[a-z*]/g) || [""];
+  fetch("/api/m2/" + x[0]);
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/m2/*"; });
+});
+
+// undefined || "*" (prop fallback):
+api("Prop || const fallback: (opts.x || '*') resolves to '*' when prop absent", `
+  function ajax(opts) {
+    var t = opts.dataType || "*";
+    fetch("/api/p2/" + t);
+  }
+  ajax({});
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/p2/*"; });
+});
+
+// Inner prop ||: opts.x || "*" in fn body should fold to "*" via param-
+// refinement of opts to {}. Works as the URL component.
+api("Inner prop ||: opts.x || '*' in fn body", `
+  function ajax(opts) {
+    var d = opts.x || "*";
+    fetch("/api/inner-prop-or/" + d);
+  }
+  ajax({});
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/inner-prop-or/*"; });
+});
+
+// SD-11 (next-session gap): refinement-time logical-receiver chain dispatch.
+// At standalone, `opts.x || "*"` is logical{left:member(param,"x"), right:const}.
+// At param-refinement with opts={}, left should become undefined (since {}
+// has no x), shrinking logical to just const "*". But the chain `.toLowerCase()`
+// on the receiver depends on RefinementContext propagating into method-call
+// receiver AVs — currently the post-refinement effects don't carry the
+// resolved receiver string to the URL resolver. Single-shot test guards the
+// gap until refinement-context-aware receiver propagation is added.
+api("SD-11: inner chain (opts.x||'*').toLowerCase() in fn body fold via refinement", `
+  function ajax(opts) {
+    var d = (opts.x || "*").toLowerCase();
+    fetch("/api/lc/" + d);
+  }
+  ajax({});
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/lc/*"; });
+});
+
+// SD-8: String.match composed with logical-or-fallback. Models jQuery's
+// `i.dataTypes = (i.dataType || "*").toLowerCase().match(D) || [""]`.
+api("SD-8 String.match + || fallback: dynamic-type-list from string default", `
+  function ajax(opts) {
+    var i = opts;
+    i.dataTypes = (i.dataType || "*").toLowerCase().match(/[a-z*]+/g) || [""];
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/api/dt/" + i.dataTypes[0]);
+  }
+  ajax({});
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url && s.url.indexOf("/api/dt/") === 0; });
+});
+
+// jQuery's inspect-first-non-undefined-return pattern: each iter + cb writes
+// closure var + cb returns false to break. After each, captured var returned.
+api("inspect first-non-undefined: each(arr, cb) writes outer var; return captured", `
+  function each(arr, cb) {
+    for (var i = 0; i < arr.length; i++) {
+      if (cb.call(arr[i], i, arr[i]) === false) break;
+    }
+  }
+  function inspect(arr, opts) {
+    var selected;
+    each(arr, function(_, factory) {
+      selected = factory(opts);
+      if (selected) return false;
+    });
+    return selected;
+  }
+  var transports = [
+    function(opts) {
+      return {
+        send: function() {
+          var x = new XMLHttpRequest();
+          x.open("GET", opts.url);
+        }
+      };
+    }
+  ];
+  function ajax(opts) {
+    var t = inspect(transports, opts);
+    t.send();
+  }
+  ajax({url: "/api/inspect-pattern"});
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/inspect-pattern"; });
+});
+
+// Full jQuery-like shape: IIFE + ce + extend(ce, {ajax}) + transports +
+// user-code via window alias. Replicates real jQuery's actual layered shape
+// to verify the SD-10 + B2 chain handles complete factory-dispatch flow.
+api("Full jQuery shape: IIFE + extend(ce, {ajax: ...}) + transport dispatch + window alias", `
+  (function(window) {
+    function extend(target, src) {
+      for (var k in src) target[k] = src[k];
+      return target;
+    }
+    var ce = function(e, t) { return new ce.fn.init(e, t); };
+    ce.fn = { init: function() {} };
+    var transports = {};
+    extend(ce, {
+      ajaxTransport: function(name, fn) { transports[name] = fn; },
+      ajax: function(opts) {
+        var i = opts;
+        var transport = transports["*"](i);
+        transport.send({}, function() {});
+      }
+    });
+    ce.ajaxTransport("*", function(opts) {
+      return {
+        send: function(headers, complete) {
+          var xhr = new XMLHttpRequest();
+          xhr.open(opts.type, opts.url);
+          xhr.send();
+        }
+      };
+    });
+    window.fullJq = ce;
+  })(window);
+  fullJq.ajax({url: "/api/full-shape", type: "GET"});
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/full-shape"; });
+});
+
+// jQuery ajax→transport.send pattern: transport factory returns {send},
+// ajax dispatches to transport.send which does xhr.open.
+api("jQuery ajax→transport.send: ajax dispatches via transport factory's send method", `
+  (function() {
+    var transports = {};
+    function ajaxTransport(name, fn) { transports[name] = fn; }
+    ajaxTransport("*", function(opts) {
+      return {
+        send: function(headers, complete) {
+          var xhr = new XMLHttpRequest();
+          xhr.open(opts.type, opts.url);
+          xhr.send();
+        }
+      };
+    });
+    function ajax(opts) {
+      var transport = transports["*"](opts);
+      transport.send({}, function() {});
+    }
+    window.lib5 = { ajax: ajax };
+  })();
+  lib5.ajax({url: "/api/transport", type: "GET"});
+`, function(sites) {
+  return !!sites.find(function(s) { return s.url === "/api/transport"; });
 });
 
 // Layered jQuery shape: ajax method via extend + get/post via each iteration.
