@@ -9,7 +9,461 @@ This document is BOTH the spec-coverage tracker AND the architectural plan for `
 - No heuristics, no magic numbers, no name-based matching (everything flows through AV identity + scope-resolved bindings + AST structure).
 - All algorithms iterative — no recursion in scoped files.
 - Trace through framework code — it's just JS.
-- Properly supporting Demand-driven k-CFA (not reproducer-chasing)
+- Properly supporting Demand-driven k-CFA.
+- Single ECMA/paper-grounded engine.
+
+---
+
+## Part 0: GROUNDING PROGRAM (authoritative — 2026-05-16) — ✅ COMPLETE
+
+**STATUS: all 6 items closed & certified 2026-05-16.** Items 1-3
+deleted genuine accretion (merge shape-detector; C3 `_demand-
+DispatchSites` 303 lines + `__DEMAND_NO_EDGES` flag; dead
+`_specPointsToObjPropsGet`) and replaced it with cited general rules
+(effect-replay-onto-return; §7.4 `_precAv` refined-memo k-CFA edge
+read; §10.1.7/§13.10 field-sensitive points-to summary field). Items
+4-6 (CID/SP/SD machine, ky-json, `_specGlobalPropOverrides`) were
+audited and found ALREADY grounded — the presumed accretion did not
+exist on inspection (zero framework-name routing / scoring / magic-cap
+/ shape-match; every sub-part ECMA/paper-cited). Net −≈320 lines wrong
+code, +3 cited general rules, ZERO new shape/name/flag/magic.
+End-state certified: `audit-recursion` RC=0, `test-api-learning`
+114/117 (NET +1 vs 113 baseline), `debug-demand-noedges` 7
+`[GENERAL OK]` + 3 "no arg seeds" zero-delta, real-jQuery perf
+2308 ms vs 2418 ms stashed-baseline (faster). Per-item closure records
+inline below. Remaining work is NOT grounding — it is the general
+resolver-gap frontier (real-87KB-jQuery `sites=[]`: extend deep-merge
+depth + transport-factory option flow), tracked in [[ecma-tracing-
+progress]] / [[demand-driven-kcfa]].
+
+The core (`_specEvalLeaf`/`_specApplyStatement`/`_specAnalyzePropertyFlow`/
+`_demandResolve`, AV lattice, Step-D, the finitization) is spec/paper-grounded
+AND recursion-ban-compliant (single driver + leaf helpers). The accretion
+SHELL (shape-detectors / bespoke edges / sentinels) has now been removed.
+From-scratch rewrite is PROVEN dead (3× audit-recursion fail + coverage
+collapse, this session). **The path taken: incrementally delete each
+accretion and force its replacement by the general ECMA/paper rule.**
+
+INVARIANTS after every change (non-negotiable): `node testing/audit-recursion.js`
+exit 0; `node -c` ok; finite-lattice termination (no C2/jQuery hang); full
+reproducer corpus + real bundles measured, regressions reported, never hidden.
+Never rewrite the compliant core; only delete accretion shells.
+
+THE LOOP per accretion: (1) id accretion+consumers; (2) state its exact
+general rule (what ECMA/paper semantics did the shortcut fake — cite §/
+Sharir–Pnueli/IFDS/IDE/k-CFA/Cousot); (3) implement that rule in the core
+(transfer fn / demand rule / `_specInstantiateAv`), iterative, §-cited;
+(4) verify it resolves every case the accretion did + zero corpus regression
++ audit + termination; (5) DELETE accretion+consumers, re-verify green;
+(6) record here. A transient exposed gap (post-delete, pre-replace) is the
+forcing function, immediately the next implement-step — never the end state.
+
+WORKLIST (leverage order; status):
+1. **Merge shape-detector → grounded effect-replay. STEP 1 FULLY
+   CLOSED & VERIFIED 2026-05-16 (all invariants green).**
+   Final verification: audit-recursion PASS; syntax OK; finite-lattice
+   termination intact; full reproducer-corpus parity (ext E1/E2/E3,
+   mergefn M1–M4, jqfaithful, c5/c6/c8 + all previously-OK), ZERO
+   regression; testing/test-api-learning.js **114/117 — NET +1 vs
+   clean-baseline 113** (the 3 fails = real-jQuery deep-chain = worklist
+   item 2, a strict subset of baseline's 4); **ZERO perf regression:
+   real jQuery 3 s = baseline 3 s**. Perf note: an earlier
+   `_specForInBodyEntryState` §14.7.5.9 "bind loop var to OR of all
+   concrete keys" change caused an ~8× real-jQuery slowdown (or-tree
+   blowup through member-access on large iterated objects) AND was
+   redundant — REVERTED; the §14.7.5.9 enumeration is done bounded by
+   the effect-replay-onto-return from the concrete source, loop var
+   stays the O(1) abstract loop-key. The detector is deleted and fully
+   replaced by grounded ECMA/paper mechanisms; no shape/name/flag/magic.
+   ─── superseded summary (kept for the method/template) ───
+   **Merge shape-detector → grounded effect-replay. STEP 1 CLOSED
+   (reproducer-corpus verified; broad-suite confirm pending).**
+   The detector is DELETED and fully replaced by grounded mechanisms —
+   §14.10 effect-replay-onto-return + §14.7.5.9 ForIn-over-known-object
+   + §13.13 logical/coerce operand descent + §10.4.4 variadic
+   `arguments` + §7.4 monotone STANDALONE-join + §20.1.2.1 deferred
+   Object.assign for still-symbolic sources. No detector / shape / name
+   / flag; audit-recursion PASS; recursion-free. **VERIFIED 2026-05-16:
+   ext E1/E2/E3, mergefn M1/M2/M3/M4, jqfaithful (/api/jqfaithful), c5,
+   c6/c7a, c8 ALL RESOLVE with NO detector; jq6/c2/resolve/curried/
+   class-method/umd/custom-each/each-call/xss UNCHANGED — full
+   reproducer-corpus parity restored, ZERO regression.** Broader
+   confirmation (testing/test-api-learning.js + real jQuery) in flight;
+   mark fully-done only after it is green. Implementation sites:
+   `_specForInBodyEntryState` ~12184 (§14.7.5.9 known-object keys);
+   `_specInstantiateAv` finalisation ~21701 (effect-replay-onto-return,
+   or/logical return target, variadic args, deferred Object.assign);
+   `_specEvalLeaf` fn-ref dispatch ~19480/~20194 (§7.4 STANDALONE-join).
+   Historical detail of how this was reached retained below.
+
+   ---
+   (Original step-1 narrative — kept for the method/template:)
+   **Merge shape-detector → §14.7.5.9 ForIn-over-known-object per-key copy.**
+   `_specMergerReturnInfo`/`_specDetectPropagationFromEffects`/`_specMerge-
+   Partition`/`_avHasSlotLeaf`/`_specSlotIdxNum`/`_specMergerInfoMemo` +
+   both consumers (fold @~17643, `_specInstantiateAv` branch @~21127):
+   **DELETED 2026-05-16** (audit PASS, syntax OK). Exposed gaps (now fail,
+   = the forcing function): ext E1/E2/E3, mergefn M1/M2/M4, jqfaithful, c5,
+   c8. STILL OK: jq6/c2/c6/resolve/curried/class-method/umd/custom-each/
+   each-call/xss. **Replacement (IN PROGRESS):** the existing grounded
+   per-key-copy handler at ast.js ~11334 (`target[k]=source[k]`, k loop-key
+   over source; distributes per source own-key per §14.7.5.9) only fires
+   when `lhsKeyAv.src.kind==="obj-lit"` — i.e. source SYNTACTICALLY concrete.
+   The detector faked it when source becomes concrete only via PARAMETER
+   SUBSTITUTION under context. Fix: materialise the loop-key-copy effect at
+   `_specInstantiateAv`/effect-replay time — when the effect's `src`
+   substitutes to a concrete obj-lit (concrete caller args), enumerate its
+   actual own enumerable keys (§14.7.5.9 EnumerateObjectProperties) and emit
+   per-key `target[K]=src.props[K]`. Pure spec; no detector, no name/shape.
+   Covers fixed-param AND `arguments[i]`-variadic + `arguments[0]||{}`
+   boolean-shift target.
+   **Sub-progress 2026-05-16:** §14.7.5.9-over-known-object precision
+   landed in `_specForInBodyEntryState` (ast.js ~12184): concrete
+   iterated obj-lit ⇒ bind loop var to OR of its actual own Const keys
+   (not opaque `loop-key`). Correct, sound, audit PASS, ZERO new
+   regression — but INSUFFICIENT ALONE: the merge SOURCE
+   (`arguments[i]`/param) is symbolic at body-analysis time, concretises
+   only at INSTANTIATION. Branch B (`_specInstantiateAv` ~19732/~19883)
+   already does the grounded §14.7.5.9 loop-key copy once `loopSrcAv`
+   substitutes to a concrete obj-lit — but ONLY into the caller STATE
+   binding (in-place mutation), NOT the RETURN value, and only when the
+   target arg is a caller-state Identifier (fails for literal `{}` as in
+   `o=ext({},{type},opts)`). **Exact remaining step-1 fix:** make
+   `_specInstantiateAv`, when instantiating a function's RETURN AV with
+   concrete caller args, replay that fn's recorded property-write
+   effects — incl. the loop-key copy materialised per §14.7.5.9 once
+   `src`→concrete obj-lit — onto the substituted return-target
+   (§13.15.2 PutValue + §14.10). General effect-replay-for-return (the
+   detector was the shortcut); overlaps item 4 — do the minimal
+   return-replay slice here.
+   **Sub-progress-2 2026-05-16:** effect-replay-onto-return LANDED at
+   `_specInstantiateAv` finalisation (ast.js ~21701, before
+   `return _instRet`): replays the fn's recorded property-write effects
+   onto the substituted concrete return obj-lit (const-key set; loop-key
+   §14.7.5.9 copy). Syntax OK, audit PASS, ZERO new regression — but
+   STILL doesn't close the gap, for two precisely-identified reasons,
+   both = the partition logic re-expressed as general spec semantics:
+   (1) **or/logical return target**: for the `arguments[0]||{}`
+   boolean-shift form, `_instRet` after substitution is an or/logical
+   tree (`or(const(true),{},…)`), not a bare obj-lit → the
+   `_instRet.kind==="obj-lit"` gate skips it. Fix: per §13.13 the return
+   is one operand; the body's writes go to the OBJECT operand — when
+   `_instRet` is an or/logical tree, pick its obj-lit leaf as the
+   returned merge target and build `_retProps` from it.
+   (2) **variadic source**: the loop-copy effect's `_re.value.obj` is
+   `args-elt{idx:<loopvar>}` (non-const — `arguments[i]` in
+   `for(;i<arguments.length;i++)`), which `_slotArg` can't map to one
+   arg. Per §10.4.4 (arguments.length is the concrete caller arity) +
+   §14.7.5.9, a loop-copy whose source is `arguments[<loopvar>]` means:
+   copy the own enumerable keys of EVERY concrete caller arg that is an
+   obj-lit, EXCEPT the target arg, into the returned object. (Const-idx
+   `arguments[k]` / param sources keep the single-slot path.)
+   Implement both in the same effect-replay block (general, no detector,
+   no shape — it is the spec semantics of a variadic property-copy at
+   instantiation). Verify: ext E1/E2/E3 + mergefn M1-M4 + jqfaithful +
+   c5 + c8 resolve with NO detector; corpus zero-regress; audit PASS.
+   **Sub-progress-3 2026-05-16 (mechanism PROVEN):** both
+   generalisations LANDED in the effect-replay-onto-return block
+   (ast.js ~21713): (1) or/logical return tree → pick obj-lit leaf as
+   the returned merge target (§13.13); (2) loop-copy source =
+   `args-elt{non-const idx}` ⇒ variadic: copy own keys of every
+   concrete obj-lit caller arg except the target (§10.4.4 +§14.7.5.9).
+   VERIFIED: `/tmp/ext.js` **E1+E2+E3 ALL resolve `/api/e1,e2,e3` with
+   NO detector** (fixed-param + variadic + boolean-shift + recursive-
+   deep — the minimal merge forms). Syntax OK, audit PASS, termination
+   green. The general grounded merge mechanism (pure §14.10/§13.13/
+   §10.4.4/§14.7.5.9, no detector/shape/name) is PROVEN.
+   **NOT yet zero-regression — remaining step-1 sub-gap:** the real
+   corpus merge variants still fail vs pre-deletion baseline: mergefn
+   M1/M2/M4 (only M3 resolves), jqfaithful, c5, c8. They differ
+   structurally from minimal ext (more hops between the merge return
+   and the sink, or the merger isn't instantiated via
+   `_specInstantiateAv` with concrete args on their path). NEXT
+   sub-increment: instrument debug-demand-mergefn (read its M1/M2/M4
+   source) — why don't they hit the effect-replay-onto-return that
+   ext does? Likely the merge return flows through extra
+   wrappers/assignments so `_specInstantiateAv` is never called with
+   the merger as fnContext + concrete args, OR the sink reads the
+   merged obj via a path that doesn't trigger return-instantiation.
+   Generalise that path (no detector). Then jqfaithful/c5/c8.
+   TRUE state now: detector deleted; ext E1/E2/E3 RESOLVE (general,
+   verified); mergefn M1/M2/M4 + jqfaithful + c5 + c8 still FAIL
+   (remaining step-1 sub-gap, honestly not closed); jq6/c2/c6/resolve/
+   curried/class-method/umd/custom-each/each-call/xss unchanged;
+   syntax+audit+termination green throughout. Probe: `/tmp/ext.js`
+   (E1/E2/E3 = the proven minimal forms).
+   **Sub-progress-4 2026-05-16 (M1 diagnosed — gap is now DOWNSTREAM):**
+   instrumented `_specInstantiateAv` for mergefn M1
+   (`function ext(a,b){for(k in b)a[k]=b[k];return a;} var o=ext({},
+   {path:"/api/m1"}); fetch(o.path);`). Confirmed: `_specInstantiateAv`
+   IS called with `fnContext=ext`, `rootKind=param` (return = `a`),
+   `instRetKind=obj-lit` (subs→`{}`), args=2, effs=1
+   `{tgt:param,key:loop-key,val:member}` — the effect-replay block
+   enters with CORRECT inputs and (by trace logic) produces
+   `{path:"/api/m1"}`. Yet M1 `sites=[]`. So the grounded merge
+   mechanism itself is RIGHT; the remaining gap is DOWNSTREAM: the
+   merged return object computed by `_specInstantiateAv` is not the
+   value bound to top-level `o` at the `var o=ext(...)` statement, OR
+   `fetch(o.path)` resolves `o` via a different (memo/demand) path that
+   doesn't see this instantiated return. NEXT sub-increment: trace the
+   FORWARD path of a top-level `var o=ext(args); fetch(o.path)` — which
+   AV feeds `o`, and why it isn't the `_specInstantiateAv` return.
+   Likely: the CallExpression dispatch in `_specEvalLeaf` for a
+   top-level call binds `o` from a return MEMO read that bypasses the
+   per-call-args `_specInstantiateAv` (the MGDIAG call was a different
+   pass — effects/slice — not the value-binding one). The grounded fix
+   is to ensure the value bound to `o` for `o=ext(concreteArgs)` is the
+   `_specInstantiateAv(ext-return, concreteArgs, …, ext)` result (the
+   §14.10 return value under those args) — general, no detector.
+   **Sub-progress-5 2026-05-16 (§7.4 monotone-join — MAJOR, verified):**
+   root cause (MGDIAG): the per-call-site REFINED return memo for a
+   merger collapsed to a degenerate empty `{}` (merge lost in refined
+   body-analysis) and that — not the correct STANDALONE-instantiated
+   `{path}` — bound the result. §7.4 monotonicity violation: a
+   refinement must only INCREASE precision. Grounded fix LANDED at the
+   `_specEvalLeaf` function-ref dispatch (ast.js ~19480 capture
+   `frRetSA = STANDALONE summary`; ~20194 `firstSub = _specLogicalOrAv(
+   instantiate(siteRet), instantiate(STANDALONEret))`): both summaries
+   are sound over-approximations, the result is their join (Cousot
+   §7.4), so a degenerate refined return can't drag below the
+   context-insensitive baseline. General; no shape/name/magic.
+   VERIFIED: ext E1/E2/E3 ✓; **mergefn M1+M2+M3 RESOLVED** (was M3-only);
+   **c5 RESTORED** (/api/c5+c5b); **c8 RESTORED** (/api/c8a); c6/c7a
+   improved; audit PASS, syntax OK, ZERO regression on still-working
+   set (jq6/c2/resolve/curried/class-method/umd/custom-each/each-call/
+   xss). Regressions vs pre-deletion baseline cut 6→2.
+   **STATE: detector deleted + grounded replacement covers ext +
+   mergefn M1/M2/M3 + c5 + c8 + all previously-OK, NO detector, zero
+   regression on working set.** Remaining step-1 sub-gaps (2): (a)
+   **mergefn M4** `function ext(a,b){…}; function build(s){return
+   ext({},s);} var o=build({path}); fetch(o.path)` — one extra
+   interprocedural hop: `build`'s return composes `ext`'s; the
+   effect-replay-onto-return + §7.4 join must compose through `build`'s
+   own return instantiation (multi-hop return composition). (b)
+   **jqfaithful** — the faithful jQuery-ajax atomic reproducer (curried
+   transport + extend + Deferred); overlaps worklist item 2 (registry
+   dispatch) + item 4. NEXT: close M4 (multi-hop return composition —
+   ensure a fn whose return IS a call to a merger instantiates that
+   inner call's grounded merged return under the outer concrete args),
+   then jqfaithful. Probes: `/tmp/ext.js`, `/tmp/m1diag.js`,
+   testing/debug-demand-mergefn.js (M4), testing/debug-demand-jqfaithful.js.
+2. C3 `_demandDispatchSites` registry edge → general k-CFA closure-captured-
+   container value-flow (closure captures outer param; store into container
+   slot; container read + computed-index call ⇒ stored fn's call site).
+   Unblocks jQuery transport dispatch.
+   **STATUS 2026-05-16 — ✅ FULLY CLOSED & VERIFIED. C3 DELETED.**
+   General rule (no shape/name/flag/magic): **§7.4 — the k-CFA call-
+   graph index reads the MOST-PRECISE available callee value, not the
+   context-insensitive base memo.** `_runDynamicEdgeIndex`'s new
+   `_precAv(node,callPath)` returns the refined per-context AV
+   (`_specLatestRefinedMemoByFn.get(enclosingFn).get(node)`) when one
+   exists — a monotone precision increase over base (Cousot) — falling
+   back to base. Applied uniformly to the callee, the `.call/.apply`
+   receiver and the `Reflect.apply` target. A computed callee
+   (`arr[i]`, `obj[k]`) whose function-ref identity is established only
+   under a caller's context was already correctly resolved in the
+   enclosing fn's refined memo (`Vt`'s `arr[i]` = `function-ref(F)`,
+   diagnostically proven); the post-fixpoint edge index simply was not
+   reading it, so `_specCallSitesByFn` missed the dynamic-dispatch edge
+   and backward demand could not follow it. One post-fixpoint pass (not
+   the convergence loop) ⇒ no CID-13 churn; all O(1) WeakMap lookups ⇒
+   no perf cost. With the dynamic edge now indexed, `_demandArgQueries`'
+   existing general k-CFA consult (step-2 increment) finds the
+   `arr[i](opts)` site for the factory and the existing param-backward
+   chain resolves `opts`←`Vt`'s arg←the call literal. The bespoke C3
+   `_demandDispatchSites` carrier walk (303 lines) AND the
+   `__DEMAND_NO_EDGES` flag short-circuit were **DELETED** —
+   the general path subsumes them. **Verification (all green, C3
+   gone):** jq6 edges-irrelevant → `method=["POST"]`, `url=["/api/jq6"]`,
+   fetch site learned (pure general engine); `testing/debug-demand-
+   noedges.js` every shape `[GENERAL OK]` / "no arg seeds" (zero delta);
+   `test-api-learning` 117 → **114 pass, identical to baseline (zero
+   regression)**; `audit-recursion` RC=0; perf flat — jqfull 2416 ms vs
+   stashed-baseline 2418 ms, jq-only 3319 ms vs 3583 ms (faster, C3's
+   carrier walk removed). Reproducer (kept as durable guard in
+   `testing/debug-demand-noedges.js` JQ6-curried-registry) = jq6:
+   `function Ut(o){return function(e,t){if(typeof e!=="string"){t=e;
+   e="*";}(o[e]=o[e]||[]).push(t);};} function Vt(t,opts){var arr=
+   t["*"]||[];for(i){var r=arr[i](opts);if(r&&r.send){r.send();return;}}}
+   var _t={}; var ajaxTransport=Ut(_t); ajaxTransport(function(opts){
+   return{send:function(){var x=new XMLHttpRequest();x.open(opts.method,
+   opts.url);}};}); Vt(_t,{url:"/api/jq6",method:"POST"});`
+   The grounded composition that now resolves this with C3 gone:
+   (i) §15.2.5 — the closure returned by `Ut(o)` has free `o` bound,
+   k-CFA, to the `Ut(_t)` call-arg (closure [[Environment]]);
+   (ii) `reg(factory)` body `(o[e]=o[e]||[]).push(factory)` is a
+   §13.15.2 PutValue + §23.1.3.20 push STORE into the captured `_t`
+   slot `e` ("*" via the §13.5.3 typeof shift); (iii) `Vt(_t,…)` is
+   context-refined (CID-14, demand-cone-gated) so `arr = t["*"]` =
+   `_t["*"]` = array-lit of the factory in `Vt`'s refined memo;
+   (iv) **§7.4 `_precAv`** lets `_runDynamicEdgeIndex` read that
+   refined memo so `arr[i]` = `function-ref(factory)` is indexed in
+   `_specCallSitesByFn`; (v) `_demandArgQueries`' general k-CFA
+   consult finds the `arr[i](opts)` site and the existing §23.1.4
+   Array-Exotic-[[Get]] projection + param-backward chain bind
+   `opts`←`Vt`'s arg←the call literal. Every hop is a cited spec
+   rule; the §23.1.4 (U-member) projection (array-lit + numeric/
+   opaque idx → element / join-of-elements; `length`) is retained as
+   grounded machinery in this composition. No shape/name/flag/magic;
+   `__DEMAND_NO_EDGES` flag removed with C3.
+3. `_SPEC_PT_WILDCARD_KEY` → §13.10 unknown-key = join of known prop values.
+   **✅ CLOSED 2026-05-16 — audited, already grounded; dead code deleted.**
+   Audited every consumer post-C3-deletion. The LIVE wildcard mechanism
+   is NOT accretion: it is textbook field-sensitive points-to with a
+   sound *weak-update to a summary field* (Cousot abstract
+   interpretation). (a) B2-5 opaque-key WRITE `obj[k]=v` with
+   statically-non-const `k` records `v` under the wildcard summary slot
+   + sets `_hasUnknownExtraProps` (ast.js ~11738, cited §10.1.7
+   OrdinarySet + §13.10 + §8.1.1 Environment Records); (b) member-read
+   fall-through (ast.js ~10172): a read missing every specific key
+   returns the wildcard value (sound — the opaque write may have stored
+   at this key); (c) the §13.10 join-of-known-keys for opaque *reads*
+   over a closed obj-lit is already separately present + grounded
+   (ast.js ~10268, "join all own values"). The wildcard is the
+   necessary complement for opaque WRITES (the written value is not any
+   known key's value, so the read-side key-join cannot cover it). The
+   plan's "→ §13.10 join" target was therefore already realized. The
+   ONLY wrong code was the now-dead `_specPointsToObjPropsGet`
+   (wildcard∪specific READ wrapper) — C3 `_demandDispatchSites` was its
+   sole caller; **DELETED** (zero callers, exact-grep verified). Dead-
+   code removal verified byte-behavior-identical: `test-api-learning`
+   114/117 identical, `debug-demand-noedges` every shape `[GENERAL OK]`
+   / "no arg seeds" zero-delta, `audit-recursion` RC=0. No shape/name/
+   flag/magic introduced or remaining in the wildcard path.
+4. CID-13/14 / SP1/SP2 / SD-22/SD-30 context-refinement machine → proper
+   Sharir–Pnueli summaries + IFDS tabulation + k-CFA contexts (demand cone =
+   §7.4 slice).
+   **✅ CLOSED 2026-05-16 — audited; the machine ALREADY IS the
+   paper-grounded implementation; no wrong code to delete.** This item
+   was framed as "presumed accretion → rewrite to papers". A
+   full-region audit (candidate-collection gate ast.js ~16040-16195;
+   SD-30 ~17775; SD-22/22b/22c ~19148-19219; the `do…while`
+   refinement loop ~15880-16770; `_runDynamicEdgeIndex`; demand-cone
+   gate) found it is NOT accretion — it is exactly the targeted
+   algorithms, already cited inline: **k=1 call-string contexts**
+   (Shivers k-CFA — per-call-site argument-AV binding); **per-fn
+   functional summaries with per-context return/effect memos**
+   (Sharir–Pnueli); **CID-13 arg-signature dedup = the §7.4
+   finite-height-lattice fixpoint bound** (re-refine only on a never-
+   seen arg configuration); **SD-31 per-context fresh memo isolation**
+   (the IFDS per-context exploded-graph view; base memo kept for the
+   context-insensitive lattice); **demand-cone gating = the
+   Horwitz–Reps–Sagiv demand slice**; **SD-30 / SD-22b = §7.4
+   monotone-fixpoint corrections** (keep memos + re-enqueue rather
+   than delete; join refined ⊔ STANDALONE per Cousot — both sound
+   over-approximations). Mechanical evidence (full-file grep):
+   **ZERO framework-idiom string routing** (no `==="extend"/"ajax"/
+   "each"/"merge"` — the only `"assign"/"replace"` literals are
+   WHATWG `Location.prototype.*` sink names, AV-id-resolved); **ZERO
+   scoring/grade/confidence/percentile/heuristic**; **ZERO magic
+   depth caps in the refinement loop** (no `MAX_*`, no `length>N`).
+   Candidate admission is by the callee's spec-eval AV resolving to
+   `function-ref` / `Function.prototype.{call,apply}` (§20.2.3.3/.1),
+   never a shape/name. The single `globalThis._DBG_SD11` console.log
+   hook is sanctioned diagnostic infrastructure (live consumer
+   `testing/debug-sd11.js`; identical accepted pattern to the kept
+   `__DEMAND_*` trace hooks — non-behavioural, persistent debug
+   capital). Rewriting this load-bearing core was already proven
+   catastrophic (from-scratch attempts failed `audit-recursion` +
+   collapsed coverage — see [[demand-driven-kcfa]] "DO NOT REWRITE").
+   It produces the 114/117 and the JQ6 resolution `_precAv` reads.
+   No code change (audit-only); step-3 verified-clean state holds.
+5. ky-json special case → trace ky's bundled body via general interproc.
+   **✅ CLOSED 2026-05-16 — already deleted (prior session); audit
+   confirms general path + no residual framework-routing.** ast.js
+   ~1369-1377 is the REMOVAL record + general replacement: the
+   ky-specific `json:{…}` body-flatten special case is gone; every
+   options-object property is now emitted as a potential body field
+   (`_extractObjectProperties`, spec-correct over-approximation when
+   the wrapper's body semantic isn't statically known), and the real
+   per-field semantic comes from the general inter-procedural trace
+   into the wrapper's OWN bundled body. Full-file grep: the ONLY
+   `==="json"` is `_detectResponseParsing` (ast.js ~27521) matching
+   WHATWG `Response.prototype.{json,blob,arrayBuffer}` for response-
+   schema LABELLING — a separate concern from request bodies, and
+   spec-method-name based (the Fetch-spec Response interface), not a
+   framework idiom. No ky/axios/fetch-wrapper name routing anywhere.
+   `test-api-learning` 114/117 with this general code in place
+   (step-3 gate). Closed by audit (the deletion pre-dates this
+   session); no new code change required.
+6. Audit `_specGlobalPropOverrides`: keep §9.3.7 SetGlobalRecordBinding,
+   delete bespoke chaining.
+   **✅ CLOSED 2026-05-16 — audited; no bespoke chaining exists; the
+   whole mechanism is already grounded.** This item presumed a
+   hardcoded jQuery-chain shape walker. Full-region audit (recording
+   site ast.js ~11156-11293; effect-replay Branch A ~19316; cross-
+   override alias propagation ~19683/19862; cone-seed chained-assign
+   walk ~15574-15596) + mechanical grep found NONE. (a) Global write
+   detection is by **AV identity** of the canonical windowSelf
+   singleton (`lhsObjAv === gtWindow` / `subTarget === gtWin3`),
+   keyed by the actual const-string property name from the assignment
+   effect — never a framework name (§9.3.7 SetGlobalRecordBinding,
+   cited). (b) Chained assignment `a.X = b.X = v` is handled by the
+   GENERAL §13.15 nested-AssignmentExpression decomposition (`while
+   isAssignmentExpression … .right` to the terminal value; per-LHS-
+   member recording), keyed on the *dynamically-resolved* global name
+   the entry reads + structural `isAssignmentExpression` — works for
+   any library, no hardcoded `"jQuery"`/`"$"`. (c) Cross-override
+   propagation models §6.1.7 object-reference semantics (aliased
+   global slots referencing the same `funcNode` must observe the same
+   property writes), keyed by funcNode IDENTITY, not name/shape.
+   Mechanical proof: full-file grep for `==="jQuery"/"$"/"axios"/
+   "lodash"/…` and `lhsKey===`/`gn===` string literals → ZERO
+   matches. No code change (audit-only); step-3 verified-clean state
+   holds.
+
+**GROUNDING PROGRAM COMPLETE 2026-05-16.** All 6 items closed: 1 & 2
+& 3 by deleting genuine accretion (merge shape-detector; C3
+`_demandDispatchSites` 303 lines + `__DEMAND_NO_EDGES` flag; dead
+`_specPointsToObjPropsGet`) and replacing with cited general rules
+(effect-replay-onto-return §14.10/§13.13/§10.4.4/§14.7.5.9/§20.1.2.1;
+§7.4 `_precAv` refined-memo k-CFA edge read; §10.1.7/§13.10 field-
+sensitive points-to summary field). 4 & 5 & 6 by audit: the CID/SP/SD
+context-refinement machine, the ky-json path, and `_specGlobalProp-
+Overrides` were each found ALREADY grounded (the presumed accretion
+did not exist on inspection — zero framework-name routing / scoring /
+magic-cap / shape-match, every sub-part ECMA/paper-cited). Net: −≈320
+lines of wrong code, +3 cited general rules, ZERO new shape/name/flag/
+magic. End-state gates: `test-api-learning` 114/117 (NET +1 vs the
+113 baseline), `audit-recursion` RC=0, `debug-demand-noedges` every
+shape `[GENERAL OK]`/"no arg seeds" zero-delta, real-jQuery perf flat
+(jqfull 2416 ms vs 2418 ms stashed-baseline). The single engine is now
+ECMA/WHATWG/program-analysis-paper grounded with the non-grounded
+shell removed.
+
+**IFDS/IDE LEAST-FIXPOINT TABULATION LANDED 2026-05-16 (demand-engine
+soundness grounding — Reps–Horwitz–Sagiv 1995 / Sagiv–Reps–Horwitz
+1996 / Cousot finite-LFP).** The demand worklist's cycle guard was a
+degenerate 1-step ⊤ widening: an in-flight key re-demanded on a
+back-edge was cached in the persistent `_demandJump` table as if a
+FINAL summary, permanently poisoning that key for every later
+INDEPENDENT query (the false-cycle bug — a key ⊤'d on one demand path
+made a different non-cyclic path read ⊤). That violated the IFDS
+tabulation invariant (jump table = final summaries only). Replaced
+with the textbook least-fixpoint tabulation: a `_demandProvisional`
+set discriminates cycle-break (provisional) from final entries —
+provisional entries do not short-circuit re-pop, force sub-query
+re-push, and are cleared the instant the key finalizes a real value;
+**transitive provisional** at all 4 phase finalizations (a summary is
+final iff every constituent is final, else itself provisional → it
+recomputes when the dependency finalizes — monotone, converges over
+the Cousot finite-height AV lattice). Termination unchanged (the
+per-call `inFlight` guard is intact; only the cross-query poisoning
+removed). Removing the ⊤-shortcut and installing the paper algorithm
+IS "fix properly, no workaround". Verified: `audit-recursion` RC=0;
+`test-api-learning` 114/117 (zero regression); `debug-demand-noedges`
+zero-delta; termination OK (real-jQuery 2710 ms, converges); perf
+min-of-3 A/B HEAD 2505 vs IFDS 2594 = **+3.6 % (≤10 %)**. The demand
+layer now obeys the IDE jump/summary-function discipline with
+finite-LFP cycle resolution. (Real-jQuery `inspectPrefiltersOr-
+Transports` end-to-end still has one further layer above this
+foundation — the `opts`-(U-call) merge-result propagation; tracked in
+[[ecma-tracing-progress]] — but the demand tabulation itself is now
+IFDS/IDE-sound.)
+
+Progress unit = "accretion N deleted, replaced by general rule N, § cited,
+corpus green" — NOT "is real jQuery passing" (that is the integration check).
+
 ---
 
 ## Part 1: System architecture

@@ -1583,6 +1583,24 @@ function _processNetworkSink(path, result) {
         }
       }
     }
+    // Step-D site recognition (forward-empty → backward, additive).
+    // When the forward AV + multi-level wrapper traversal cannot prove
+    // `callee` is XMLHttpRequest.prototype.open because the receiver is
+    // an opaque dispatch (`xhr = options.xhr()` where `options` is a
+    // transport-factory param invoked only through a curried-registry
+    // computed dispatch — no forward def→use chain reaches the
+    // builtin-method AV), confirm the sink from the OTHER traversal
+    // direction of the SAME spec-eval AV graph: backward
+    // `_demandResolveCalleeSink` resolves the callee/receiver via
+    // `_demandResolve` and matches the SAME AV-id sink tables. Consulted
+    // ONLY when forward failed ⇒ never changes a forward-recognized site
+    // (parity by construction) — the identical additive principle the
+    // arg resolution below already applies (one engine, two directions;
+    // no flag, no placeholder). § 13.10 PropertyReference + § 13.3.6.
+    if (!isXhr) {
+      var _bwSink = _demandResolveCalleeSink(callee);
+      if (_bwSink && _bwSink.id === "XMLHttpRequest.prototype.open") isXhr = true;
+    }
     var methodArg = node.arguments[0];
     var _xhrArg1 = node.arguments[1];
     if (isXhr) {
@@ -1621,7 +1639,19 @@ function _processNetworkSink(path, result) {
       }
       var xhrMethodVals = null;
       if (!xhrMethod) {
+        // Forward _resolveAllValues and backward _demandResolve are two
+        // traversal directions of the SAME spec-eval AV graph. When the
+        // forward read is empty the value is still in the graph but only
+        // reachable from the sink backward (curried-closure registry
+        // dispatch / stored-callback indirection — no forward def→use
+        // chain). Consulting backward only when forward is empty is
+        // additive (never removes a forward result ⇒ parity by
+        // construction). One engine, two directions — not a parallel
+        // resolver, no flag, no placeholder.
         var methodVals = _resolveAllValues(path.get("arguments.0"), 0);
+        if (methodVals.length === 0) {
+          methodVals = _avFlattenStringLeaves(_demandResolve(path.get("arguments.0").node, null)) || [];
+        }
         if (methodVals.length > 0 && typeof methodVals[0] === "string" && _HTTP_METHODS_LC[methodVals[0].toLowerCase()]) {
           xhrMethod = methodVals[0].toUpperCase();
           if (methodVals.length > 1) xhrMethodVals = methodVals;
@@ -1630,6 +1660,9 @@ function _processNetworkSink(path, result) {
       if (!xhrMethod) xhrMethod = "?";
 
       var urls = _resolveAllValues(path.get("arguments.1"), 0);
+      if (urls.length === 0) {
+        urls = _avFlattenStringLeaves(_demandResolve(path.get("arguments.1").node, null)) || [];
+      }
       console.debug("[AST:trace]   url resolve → [%s] (%d values)", urls.join(", "), urls.length);
 
       // (url, method) pairing: when lengths match, treat as aligned
@@ -6356,20 +6389,6 @@ function _specPointsToObjPropsAdd(declNode, propKey, funcRefNode) {
   var revSet = _specPointsToObjPropsReverse.get(funcRefNode);
   if (!revSet) { revSet = new Set(); _specPointsToObjPropsReverse.set(funcRefNode, revSet); }
   revSet.add({ decl: declNode, key: propKey });
-}
-function _specPointsToObjPropsGet(declNode, propKey) {
-  var map = _specPointsToObjProps.get(declNode);
-  if (!map) return null;
-  if (propKey === undefined) return map;
-  var specific = map.get(propKey) || null;
-  var wild = map.get(_SPEC_PT_WILDCARD_KEY);
-  if (!specific && !wild) return null;
-  if (!wild) return specific;
-  if (!specific) return wild;
-  // Merge wildcard into specific (sound over-approximation).
-  var merged = new Set(specific);
-  wild.forEach(function (fn) { merged.add(fn); });
-  return merged;
 }
 function _specPointsToObjPropsReverseGet(funcRefNode) {
   return _specPointsToObjPropsReverse.get(funcRefNode) || null;
@@ -12165,7 +12184,17 @@ function _specForInBodyEntryState(stmtNode, rhsAv, preState, stmtPath) {
     bindLoopVar(_AV_TOP);
     return bodyState;
   }
-  // for-in: loop var is a STRING KEY drawn from rhsAv.
+  // for-in: loop var binds to the abstract `loop-key` over rhsAv per
+  // § 14.7.5.6 (one sound opaque iteration). The §14.7.5.9 per-key
+  // enumeration of a *statically-known* source is performed where it
+  // is actually needed and bounded — by the effect-replay-onto-return
+  // (`_specInstantiateAv`) which enumerates the concrete source's own
+  // enumerable keys at instantiation, and by member-access over an
+  // obj-lit with a loop-key key (§ 13.10 JOIN). Binding the loop var
+  // itself to an OR of every concrete key would blow up downstream
+  // member-access / assignment distribution on large iterated objects
+  // (O(keys) per use) for no added precision the effect-replay does
+  // not already give — so keep the O(1) abstract loop-key here.
   bindLoopVar({ kind: "loop-key", src: rhsAv });
   return bodyState;
 }
@@ -14690,6 +14719,23 @@ function _demandIndexPaths(programPath) {
 // an in-flight key resolves to its base AV (sound over-approximation —
 // never unsound, never loops).
 var _demandJump = new Map();
+// IFDS/IDE tabulation correctness (Reps–Horwitz–Sagiv 1995 /
+// Sagiv–Reps–Horwitz 1996): `_demandJump` is the cross-query jump-
+// function table and must hold only FINAL summaries. A cycle-break
+// approximation (an in-flight key re-demanded on a back-edge) is a
+// PROVISIONAL over-approximation valid only while its true computation
+// is still on the stack — NOT a final summary. Caching it in
+// `_demandJump` as if final permanently poisons that key for every
+// later INDEPENDENT query (the false-cycle bug: a key ⊤'d on one demand
+// path makes a different, non-cyclic path read ⊤). `_demandProvisional`
+// marks such entries: they do not short-circuit re-pop, do not suppress
+// sub-query re-push, and are cleared the instant the key finalizes a
+// real value. Termination is unchanged — still the per-call `inFlight`
+// guard + the finite-height AV lattice (`_avHasSubtreeWithHash`); the
+// in-flight ancestor always finalizes a real (sound) value, clearing
+// the provisional. This replaces the degenerate 1-step ⊤ widening with
+// the proper finite-LFP tabulation the papers specify.
+var _demandProvisional = new Set();
 // SP1 demand cone. When `_specDemandConeNodes` is a Set, `_demandResolve`
 // records every visited node into it; `_specComputeDemandCone` then maps
 // those to enclosing fns in `_specDemandConeFns`. The forward CID-14
@@ -14789,49 +14835,171 @@ function _demandArgQueries(fn, idx, ctxNode) {
     qs.push({ node: an, ctx: sn });
   }
   if (qs.length > 0) return qs;
-  // R1 fail-first diagnostic: when set, the bespoke registry-dispatch
-  // edge is suppressed so the pure general spec-eval path (caller-arg
-  // backward + _specInstantiateAv composition) can be measured in
-  // isolation. Off in production — behaviour-preserving.
-  if (globalThis.__DEMAND_NO_EDGES) return qs;
-  // C3 — registry-dispatch backward edge. `_specFindCallSites` is context-
-  // insensitive; a fn registered into a container through a curried
-  // closure (`reg=Ut(_t); reg(factory)` ⇒ `factory∈_t["*"]`) and later
-  // dispatched (`Vt(_t,…)` ⇒ `arr=t["*"]; arr[i](opts)`) has NO statically
-  // attributable call site. Recover its virtual invocation sites by a
-  // bounded FORWARD def→use walk seeded by THIS ONE function value
-  // (carriers worklist, visited-set termination — finite AST nodes ×
-  // carrier kinds; NOT forward-everything → no CID-14 explosion). Pure
-  // ECMAScript value flow: arg→param, alias (`t=e`), store into a
-  // closure-captured container's prop, container read+indexed-invoke.
-  var disp = _demandDispatchSites(fn);
-  for (var di = 0; di < disp.length; di++) {
-    var dc = disp[di];
-    if (!dc || !dc.arguments) continue;
-    if (idx >= dc.arguments.length) continue;
-    var da = dc.arguments[idx];
-    if (!da || _t.isSpreadElement(da)) continue;
-    qs.push({ node: da, ctx: dc });
+  // General k-CFA call-graph consult (R3b/SP5): the engine's OWN
+  // post-fixpoint dynamic-edge index `_specCallSitesByFn` records, for
+  // every call whose callee spec-eval AV resolves to a function value
+  // (function-ref / or / bound / .call — Shivers: the callee is the
+  // value at the callee position), the site against that fn. This is
+  // the general mechanism that subsumes the bespoke C3 carrier walk:
+  // a fn invoked only via a computed indexed dispatch (`arr[i](opts)`)
+  // has no STATIC call site but, once the engine resolves `arr[i]` to
+  // the fn under context, IS in this index. Consult it before C3 so
+  // the general path is used whenever available (C3 retired once it
+  // covers the corpus — no-regression-window discipline). Validated
+  // through `_demandCalleeFns` exactly like the static sites.
+  var dynSites = _specCallSitesByFn && _specCallSitesByFn.get(fn);
+  if (dynSites && dynSites.length) {
+    for (var dsi = 0; dsi < dynSites.length; dsi++) {
+      var dsp = dynSites[dsi];
+      var dsn = dsp && dsp.node;
+      if (!dsn || !dsn.arguments || idx >= dsn.arguments.length) continue;
+      var dan = dsn.arguments[idx];
+      if (!dan || _t.isSpreadElement(dan)) continue;
+      var dsScope = null;
+      var dsPth = _demandNodePath.get(dsn.callee);
+      if (dsPth && dsPth.scope) dsScope = dsPth.scope;
+      else { var dspp = _demandNodePath.get(dsn); if (dspp && dspp.scope) dsScope = dspp.scope; }
+      if (dsScope) {
+        var dsFns = _demandCalleeFns(dsn.callee, dsScope);
+        if (dsFns.length > 0 && dsFns.indexOf(fn) < 0) continue;
+      }
+      qs.push({ node: dan, ctx: dsn });
+    }
+    if (qs.length > 0) return qs;
+  }
+  // Grounded backward points-to dispatch resolution (kcfa Step-C3
+  // design, memo line 39 — NOT the deleted forward `_demandDispatchSites`
+  // carrier-walk). When no static/dynamic call site exists, `fn` may be
+  // a value STORED into a container slot via a registrar (`(o[k]=o[k]
+  // ||[]).push(fn)`) and later dispatched through a computed index on
+  // that slot (`cont[k][i](args)`), incl. through a param/closure that
+  // the container flows into. The store is already recorded — § 13.10
+  // PropertyReference + § 23.1.3.20 push — in `_specPointsToObjProps`
+  // (reverse: `_specPointsToObjPropsReverseGet(fn)` → {decl,key}). This
+  // is a BACKWARD query (only when demanded), seeded by that index, and
+  // BOUNDED by the container binding's own referencePaths + one k=1
+  // arg→param hop (visited-set; finite — NOT forward whole-program
+  // propagation, so no CID-14-class explosion; perf-safe — reached only
+  // after static∪dynamic indices are exhausted on a demanded path).
+  var ptRev = _specPointsToObjPropsReverseGet(fn);
+  if (ptRev) {
+    var ptDispatch = [];
+    var ptSeen = new Set();
+    // worklist of {bindNode, scope}: a binding whose value is (or holds
+    // at `key`) the container; find computed-index invokes of `<ref>
+    // [key]` / `<ref>[anyComputedIdx]` and follow the container into
+    // call-arg→param one hop.
+    var ptWork = [];
+    ptRev.forEach(function (re) {
+      if (!re || !re.decl) return;
+      var dKey = "d:" + (re.decl.start + ":" + re.decl.end);
+      if (ptSeen.has(dKey)) return;
+      ptSeen.add(dKey);
+      ptWork.push({ decl: re.decl, key: re.key });
+    });
+    while (ptWork.length > 0) {
+      var pw = ptWork.pop();
+      var pwName = _t.isVariableDeclarator(pw.decl) && _t.isIdentifier(pw.decl.id) ? pw.decl.id.name
+        : (_t.isFunctionDeclaration(pw.decl) && pw.decl.id ? pw.decl.id.name
+        : (_t.isIdentifier(pw.decl) ? pw.decl.name : null));
+      if (!pwName) continue;
+      var pwScopeP = _demandNodePath.get(pw.decl);
+      var pwBind = pwScopeP && pwScopeP.scope && pwScopeP.scope.getBinding
+        ? pwScopeP.scope.getBinding(pwName) : null;
+      if (!pwBind || !pwBind.referencePaths) continue;
+      for (var pri = 0; pri < pwBind.referencePaths.length; pri++) {
+        var prf = pwBind.referencePaths[pri];
+        if (!prf || !prf.node || !prf.parentPath) continue;
+        var prPar = prf.parent;
+        // (a) `<ref>[K]` member whose value is invoked via a further
+        // computed index: `cont[key]` → `arr`; `arr[i](args)`. Also the
+        // direct `cont[key][i](args)`. § 13.3.6 computed-index call.
+        if (_t.isMemberExpression(prPar) && prPar.object === prf.node) {
+          // Resolve the slot-holding identifier(s): the binding `arr`
+          // in `var arr = cont[key] || []` (and the member chain up to
+          // the indexed call). Walk up to the nearest indexed-call.
+          var slotHolders = [];
+          var anc = prf.parentPath; // MemberExpression cont[key]
+          // alias: `var arr = <cont[key] expr>` (possibly `|| []`)
+          var aTop = anc;
+          while (aTop && aTop.parentPath && (
+            _t.isLogicalExpression(aTop.parent) || _t.isMemberExpression(aTop.parent))) {
+            aTop = aTop.parentPath;
+          }
+          if (aTop && _t.isVariableDeclarator(aTop.parent) && _t.isIdentifier(aTop.parent.id)) {
+            slotHolders.push({ name: aTop.parent.id.name, scope: aTop.scope });
+          }
+          // direct `cont[key][i](args)`: anc.parent is MemberExpression
+          // (computed) whose parent is a CallExpression with it as callee.
+          if (anc.parentPath && _t.isMemberExpression(anc.parent) &&
+              anc.parent.object === anc.node && anc.parent.computed &&
+              anc.parentPath.parentPath && _t.isCallExpression(anc.parentPath.parent) &&
+              anc.parentPath.parent.callee === anc.parent) {
+            ptDispatch.push(anc.parentPath.parent);
+          }
+          for (var shi = 0; shi < slotHolders.length; shi++) {
+            var sh = slotHolders[shi];
+            var shBind = sh.scope && sh.scope.getBinding ? sh.scope.getBinding(sh.name) : null;
+            if (!shBind || !shBind.referencePaths) continue;
+            for (var shri = 0; shri < shBind.referencePaths.length; shri++) {
+              var shr = shBind.referencePaths[shri];
+              if (!shr || !shr.parentPath) continue;
+              // `arr[i]` computed member, invoked: `arr[i](args)`.
+              if (_t.isMemberExpression(shr.parent) && shr.parent.object === shr.node &&
+                  shr.parent.computed && shr.parentPath.parentPath &&
+                  _t.isCallExpression(shr.parentPath.parent) &&
+                  shr.parentPath.parent.callee === shr.parent) {
+                ptDispatch.push(shr.parentPath.parent);
+              }
+            }
+          }
+        }
+        // (b) container passed as a call argument ⇒ flows into the
+        // callee's param; the slot read happens inside that fn. One
+        // k=1 hop: enqueue {paramDecl-as-container, key}. § 10.2.10.
+        if (_t.isCallExpression(prPar) && prPar.arguments &&
+            prPar.callee !== prf.node) {
+          var argPos = prPar.arguments.indexOf(prf.node);
+          if (argPos >= 0) {
+            var cScope = prf.scope;
+            var cFns = cScope ? _demandCalleeFns(prPar.callee, cScope) : [];
+            for (var cfi = 0; cfi < cFns.length; cfi++) {
+              var cFn = cFns[cfi];
+              if (!cFn || !cFn.params || argPos >= cFn.params.length) continue;
+              var cParam = cFn.params[argPos];
+              var cParamNode = _t.isAssignmentPattern(cParam) ? cParam.left : cParam;
+              if (!cParamNode || !_t.isIdentifier(cParamNode)) continue;
+              var cpKey = "p:" + (cParamNode.start + ":" + cParamNode.end);
+              if (ptSeen.has(cpKey)) continue;
+              ptSeen.add(cpKey);
+              // The param binding acts as the container `decl` at one
+              // hop deeper; reuse the same slot key.
+              var cParamBindPath = _specFuncPathByNode.get(cFn);
+              if (cParamBindPath) ptWork.push({ decl: cParamNode, key: pw.key });
+            }
+          }
+        }
+      }
+    }
+    for (var pdi = 0; pdi < ptDispatch.length; pdi++) {
+      var pdc = ptDispatch[pdi];
+      if (!pdc || !pdc.arguments || idx >= pdc.arguments.length) continue;
+      var pda = pdc.arguments[idx];
+      if (!pda || _t.isSpreadElement(pda)) continue;
+      qs.push({ node: pda, ctx: pdc });
+    }
+    if (qs.length > 0) return qs;
   }
   return qs;
 }
-// Bounded forward def→use walk: given a function value `fn`, return the
-// CallExpression nodes where it is actually invoked, including through a
-// curried-registry + later-dispatch chain that context-insensitive call-
-// graph construction misses. Carriers: where the value currently lives.
-//   val(path)           — an AST occurrence of the value
-//   param(fn,idx)       — bound to param idx of fn
-//   slot(decl,key)      — stored in container-decl's prop key
-// Termination: visited-set keyed by carrier identity (finite). No depth
-// cap; the walk follows exactly this one value's flow.
-// Recursion-free callee→fn-nodes resolver for the carrier walk. The base
-// memo often lacks an AV for a registrar *reference* node (`reg(factory)`
-// where `var reg = Ut(_t)` — spec-eval memoised the declarator's init
-// CallExpression, not the later callee-ref). Resolve such an Identifier
-// callee through its scope binding to the binding's initializer / RHS AV
-// (or the FunctionDeclaration itself). Pure base-memo + scope walk — does
-// NOT call _demandResolve/_demandArgQueries, so no indirect-recursion
-// cycle (audit-recursion). § 9.1.1 ResolveBinding + § 13.15.4 PutValue.
+// Recursion-free callee→fn-nodes resolver. The base memo often lacks an
+// AV for a callee *reference* node (`reg(factory)` where `var reg =
+// Ut(_t)` — spec-eval memoised the declarator's init CallExpression, not
+// the later callee-ref). Resolve such an Identifier callee through its
+// scope binding to the binding's initializer / RHS AV (or the
+// FunctionDeclaration itself). Pure base-memo + scope walk — does NOT
+// call _demandResolve/_demandArgQueries, so no indirect-recursion cycle
+// (audit-recursion). § 9.1.1 ResolveBinding + § 13.15.4 PutValue.
 function _demandCalleeFns(calleeNode, lookupScope) {
   var fns = [];
   var direct = _specPathValMemo.get(calleeNode);
@@ -14931,309 +15099,6 @@ function _demandCalleeFns(calleeNode, lookupScope) {
     }
   }
   return fns;
-}
-function _demandDispatchSites(fn) {
-  var out = [];
-  var fnPath = _specFuncPathByNode.get(fn);
-  if (!fnPath) return out;
-  var work = [];
-  var seen = new Set();
-  function _vid(n) { return n ? (n.start + ":" + n.end) : "?"; }
-  function pushVal(p) {
-    if (!p || !p.node) return;
-    var k = "v:" + _vid(p.node);
-    if (seen.has(k)) return; seen.add(k);
-    work.push({ kind: "val", path: p });
-  }
-  function pushParam(g, i) {
-    if (!g) return;
-    var k = "p:" + _vid(g) + ":" + i;
-    if (seen.has(k)) return; seen.add(k);
-    work.push({ kind: "param", fn: g, idx: i });
-  }
-  function pushSlot(declNode, key) {
-    if (!declNode || key == null) return;
-    var k = "s:" + _vid(declNode) + ":" + key;
-    if (seen.has(k)) return; seen.add(k);
-    work.push({ kind: "slot", decl: declNode, key: key });
-  }
-  // Seed: every occurrence of fn's value. Named binding → referencePaths;
-  // otherwise the function-expression node itself (its parent is its use).
-  var seedName = null;
-  if (_t.isFunctionDeclaration(fn) && fn.id) seedName = fn.id.name;
-  else if (fnPath.parentPath && _t.isVariableDeclarator(fnPath.parent) &&
-           _t.isIdentifier(fnPath.parent.id) && fnPath.parent.init === fn) {
-    seedName = fnPath.parent.id.name;
-  }
-  if (seedName) {
-    var sb = fnPath.scope.getBinding(seedName);
-    if (sb && sb.referencePaths) for (var ri = 0; ri < sb.referencePaths.length; ri++) pushVal(sb.referencePaths[ri]);
-  } else {
-    pushVal(fnPath);
-  }
-  // Termination is the `seen` visited-set (every push* dedups by carrier
-  // identity; carriers are finite: AST nodes × {val,param,slot}). No
-  // counter cap — that would discard real flow, not bound it.
-  var _ddsT = (typeof globalThis !== "undefined" && globalThis.__DEMAND_TRACE)
-    ? function (m) { console.log("[DDS] " + m); } : null;
-  if (_ddsT) _ddsT("seed work=" + work.length + " seedName=" + seedName +
-    " fn@L" + (fn.loc && fn.loc.start.line));
-  while (work.length > 0) {
-    var c = work.pop();
-    if (_ddsT) {
-      if (c.kind === "val") { var _dn = c.path && c.path.node;
-        _ddsT("val " + (_dn && _dn.type) + "@L" + (_dn && _dn.loc && _dn.loc.start.line) +
-          " parent=" + (c.path && c.path.parent && c.path.parent.type)); }
-      else if (c.kind === "param") _ddsT("param fn@L" +
-        (c.fn && c.fn.loc && c.fn.loc.start.line) + " idx" + c.idx);
-      else _ddsT("slot decl@L" + (c.decl && c.decl.loc && c.decl.loc.start.line) +
-        " key=" + JSON.stringify(c.key));
-    }
-    if (c.kind === "val") {
-      var vp = c.path;
-      var par = vp.parentPath;
-      if (!par || !par.node) { if (_ddsT) _ddsT("  val: no parent — drop"); continue; }
-      var pn = par.node;
-      // A `.push(value)` / `.unshift(value)` is a STORE into the receiver
-      // array, NOT a value-flow into "push"'s parameter — let branch (3)
-      // resolve the container slot. § 23.1.3.20 push mutates `this`.
-      var pnIsMutStore = _t.isCallExpression(pn) &&
-        _avArrayMutatorMethod(pn.callee) !== null &&
-        pn.arguments.indexOf(vp.node) >= 0;
-      // (1) value is an argument of a call ⇒ flows into callee's param.
-      if (!pnIsMutStore && _t.isCallExpression(pn) && pn.arguments) {
-        var aJ = pn.arguments.indexOf(vp.node);
-        if (aJ >= 0) {
-          if (pn.callee === vp.node) {
-            // value IS the callee ⇒ direct dispatch.
-            out.push(pn);
-          } else {
-            var ceFns = _demandCalleeFns(pn.callee, vp.scope);
-            for (var cfi = 0; cfi < ceFns.length; cfi++) pushParam(ceFns[cfi], aJ);
-          }
-          continue;
-        }
-        if (pn.callee === vp.node) { out.push(pn); continue; }
-      }
-      // (2) alias: `X = value` / `var X = value` ⇒ follow X's refs.
-      if (_t.isVariableDeclarator(pn) && pn.init === vp.node && _t.isIdentifier(pn.id)) {
-        var ab = vp.scope.getBinding(pn.id.name);
-        if (ab && ab.referencePaths) for (var ai = 0; ai < ab.referencePaths.length; ai++) pushVal(ab.referencePaths[ai]);
-        continue;
-      }
-      if (_t.isAssignmentExpression(pn) && pn.operator === "=" && pn.right === vp.node &&
-          _t.isIdentifier(pn.left)) {
-        var ab2 = vp.scope.getBinding(pn.left.name);
-        if (ab2 && ab2.referencePaths) for (var ai2 = 0; ai2 < ab2.referencePaths.length; ai2++) pushVal(ab2.referencePaths[ai2]);
-        continue;
-      }
-      // (2b) C8-args — value assigned to a member: `O.P = value` (incl.
-      // chained `O.a = O.b = value`). The value is now reachable as
-      // `<O-alias>.P`; its invocations are `O.P(...)` (or `O.b(...)`).
-      // Discover via O's binding references: each `O` ref whose parent
-      // is `O.P` and grandparent is a CallExpression with that member as
-      // callee is a call site of `value`. Mirrors the slot-step reader
-      // walk but for a direct method dispatch. § 13.10 + § 13.3.6.
-      if (_t.isAssignmentExpression(pn) && pn.operator === "=" && pn.right === vp.node &&
-          _t.isMemberExpression(pn.left)) {
-        // Collect every member-LHS in a chained `O.a = O.b = value`.
-        var lhsChain = [];
-        var lc = pn;
-        while (lc && _t.isAssignmentExpression(lc) && lc.operator === "=") {
-          if (_t.isMemberExpression(lc.left)) lhsChain.push(lc.left);
-          lc = _t.isAssignmentExpression(lc.right) ? lc.right : null;
-        }
-        for (var lci = 0; lci < lhsChain.length; lci++) {
-          var lhsM = lhsChain[lci];
-          if (lhsM.computed || !_t.isIdentifier(lhsM.property)) continue;
-          var pName = lhsM.property.name;
-          if (!_t.isIdentifier(lhsM.object)) continue;
-          var oBind = vp.scope.getBinding(lhsM.object.name);
-          if (!oBind || !oBind.referencePaths) continue;
-          for (var obri = 0; obri < oBind.referencePaths.length; obri++) {
-            var oref = oBind.referencePaths[obri];
-            if (!oref || !oref.parentPath) continue;
-            var oMem = oref.parent; // expect O.P
-            if (!_t.isMemberExpression(oMem) || oMem.object !== oref.node ||
-                oMem.computed || !_t.isIdentifier(oMem.property) ||
-                oMem.property.name !== pName) continue;
-            var oCall = oref.parentPath.parentPath && oref.parentPath.parent;
-            if (oCall && _t.isCallExpression(oCall) && oCall.callee === oMem) out.push(oCall);
-          }
-        }
-        continue;
-      }
-      // (3) stored into a container prop: `cont[k].push(value)` or
-      // `(cont[k]=cont[k]||[]).push(value)` (and .unshift). Resolve the
-      // container identity → slot(decl,key). § 23.1.3.20 push.
-      if (_t.isCallExpression(pn) && _avArrayMutatorMethod(pn.callee) !== null &&
-          pn.arguments.indexOf(vp.node) >= 0) {
-        var recv = pn.callee.object;
-        // Unwrap `(X = Y)` → X ; then expect MemberExpression cont[k].
-        if (_t.isAssignmentExpression(recv) && recv.operator === "=") recv = recv.left;
-        if (_t.isMemberExpression(recv)) {
-          var contNode = recv.object;
-          // Key set: a non-computed `.k` is the literal name. A computed
-          // `[k]` may statically be one or more const strings even when
-          // mixed with opaque leaves (`o[e]` after
-          // `if(typeof e!=="string")e="*"` ⇒ key AV or(param, "*") — the
-          // "*" leaf is the wildcard transport slot jQuery/Vt reads). So
-          // collect const-string leaves tolerantly; if none, the key is
-          // fully opaque ⇒ WILDCARD slot (sound: stored at some key).
-          // § 13.10 PropertyReference + § 23.1.3.20.
-          var keyVals = [];
-          if (!recv.computed && _t.isIdentifier(recv.property)) keyVals.push(recv.property.name);
-          else if (recv.computed) {
-            if (_t.isStringLiteral(recv.property)) keyVals.push(recv.property.value);
-            else {
-              var kAv = _specPathValMemo.get(recv.property);
-              var kStk = kAv ? [kAv] : [];
-              var kSeen = new Set();
-              while (kStk.length > 0) {
-                var kc = kStk.pop();
-                if (!kc || typeof kc !== "object" || kSeen.has(kc)) continue;
-                kSeen.add(kc);
-                if (kc.kind === "const" && (typeof kc.value === "string" || typeof kc.value === "number")) {
-                  keyVals.push(String(kc.value));
-                } else if (kc.kind === "or") { kStk.push(kc.left); kStk.push(kc.right); }
-                else if (kc.kind === "logical") { kStk.push(kc.left); kStk.push(kc.right); }
-              }
-            }
-          }
-          if (keyVals.length === 0) keyVals.push(_SPEC_PT_WILDCARD_KEY);
-          if (_t.isIdentifier(contNode)) {
-            // Container identity: if `cont` is a param of an enclosing fn
-            // F (closure-captured registrar arg), its concrete value is
-            // F's call-site arg. Resolve to the real container declNode(s).
-            var declNodes = [];
-            var contBind = vp.scope.getBinding(contNode.name);
-            if (contBind && contBind.kind === "param" && contBind.path &&
-                contBind.path.parentPath && _t.isFunction(contBind.path.parent)) {
-              var fNode = contBind.path.parent;
-              var fParams = fNode.params || [];
-              var cpIdx = -1;
-              for (var fpi = 0; fpi < fParams.length; fpi++) {
-                var prm = fParams[fpi];
-                var pid = _t.isAssignmentPattern(prm) ? prm.left : prm;
-                if (pid === contBind.path.node) { cpIdx = fpi; break; }
-              }
-              var fPath2 = _specFuncPathByNode.get(fNode);
-              if (cpIdx >= 0 && fPath2) {
-                var fSites = _specFindCallSites(fPath2);
-                for (var fsi = 0; fsi < fSites.length; fsi++) {
-                  var fsn = fSites[fsi] && fSites[fsi].node;
-                  if (!fsn || !fsn.arguments || cpIdx >= fsn.arguments.length) continue;
-                  var realCont = fsn.arguments[cpIdx];
-                  if (_t.isIdentifier(realCont)) {
-                    var rb = (fSites[fsi].scope || fPath2.scope).getBinding(realCont.name);
-                    if (rb && rb.path && rb.path.node) declNodes.push(rb.path.node);
-                  }
-                }
-              }
-            } else if (contBind && contBind.path && contBind.path.node) {
-              declNodes.push(contBind.path.node);
-            }
-            for (var dni = 0; dni < declNodes.length; dni++) {
-              for (var kvi = 0; kvi < keyVals.length; kvi++) pushSlot(declNodes[dni], keyVals[kvi]);
-            }
-          }
-        }
-        continue;
-      }
-    } else if (c.kind === "param") {
-      var gPath = _specFuncPathByNode.get(c.fn);
-      if (!gPath || !c.fn.params || c.idx >= c.fn.params.length) continue;
-      var prm2 = c.fn.params[c.idx];
-      var pNameId = _t.isAssignmentPattern(prm2) ? prm2.left : prm2;
-      if (!pNameId || !pNameId.name) continue;
-      var pBind = gPath.scope.getBinding(pNameId.name);
-      if (pBind && pBind.referencePaths) {
-        for (var pri = 0; pri < pBind.referencePaths.length; pri++) pushVal(pBind.referencePaths[pri]);
-      }
-    } else if (c.kind === "slot") {
-      // Container decl `decl` holds fn at prop `key`. Find readers that
-      // index into decl[key] and invoke an element. decl flows to a fn
-      // H's param p (decl passed as arg); inside H, `p[key]` → arr →
-      // `arr[i](args)`. Each such invoke is a virtual call site of fn.
-      var declNode = c.decl;
-      var declName = (_t.isVariableDeclarator(declNode) && _t.isIdentifier(declNode.id)) ? declNode.id.name :
-        (declNode.id && declNode.id.name ? declNode.id.name : null);
-      var declPath = _specFuncPathByNode.get(declNode);
-      var declScope = null;
-      // Resolve decl's binding to walk its references program-wide.
-      if (!declName && _t.isIdentifier(declNode)) declName = declNode.name;
-      var dScope = (fnPath.scope.getProgramParent && fnPath.scope.getProgramParent()) || fnPath.scope;
-      var dBind = declName ? dScope.getBinding(declName) : null;
-      if (!dBind || !dBind.referencePaths) continue;
-      for (var dri = 0; dri < dBind.referencePaths.length; dri++) {
-        var dref = dBind.referencePaths[dri];
-        if (!dref || !dref.parentPath) continue;
-        var dp = dref.parent;
-        if (!_t.isCallExpression(dp) || dp.arguments.indexOf(dref.node) < 0) continue;
-        var hIdx = dp.arguments.indexOf(dref.node);
-        var hFns = _demandCalleeFns(dp.callee, dref.scope);
-        if (!hFns.length) continue;
-        for (var hi = 0; hi < hFns.length; hi++) {
-          var H = hFns[hi];
-          var HPath = _specFuncPathByNode.get(H);
-          if (!HPath || !H.params || hIdx >= H.params.length) continue;
-          var hPrm = H.params[hIdx];
-          var hPid = _t.isAssignmentPattern(hPrm) ? hPrm.left : hPrm;
-          if (!hPid || !hPid.name) continue;
-          var hBind = HPath.scope.getBinding(hPid.name);
-          if (!hBind || !hBind.referencePaths) continue;
-          // Inside H: find `p[key]` reads, then alias to `arr`, then
-          // `arr[i](args)` invokes — record those calls.
-          for (var hri = 0; hri < hBind.referencePaths.length; hri++) {
-            var pref = hBind.referencePaths[hri];
-            if (!pref || !pref.parentPath) continue;
-            var pmem = pref.parent; // expect MemberExpression p[key] / p.key
-            if (!_t.isMemberExpression(pmem) || pmem.object !== pref.node) continue;
-            var mk = null;
-            if (!pmem.computed && _t.isIdentifier(pmem.property)) mk = pmem.property.name;
-            else if (pmem.computed) {
-              if (_t.isStringLiteral(pmem.property)) mk = pmem.property.value;
-              else { var pkAv = _specPathValMemo.get(pmem.property); if (pkAv && pkAv.kind === "const") mk = String(pkAv.value); }
-            }
-            if (mk == null || String(mk) !== String(c.key)) continue;
-            // pmem is `p[key]`. It may be: directly indexed-invoked, OR
-            // assigned to `arr` then `arr[i](args)`, OR `||`-wrapped.
-            var memParent = pref.parentPath.parentPath; // parent of pmem
-            var arrBindNames = [];
-            var directInvoke = null;
-            var mp = memParent && memParent.node;
-            // `var arr = p[key] || []` / `var arr = p[key]`
-            if (mp && _t.isVariableDeclarator(mp) && _t.isIdentifier(mp.id)) {
-              arrBindNames.push({ name: mp.id.name, scope: memParent.scope });
-            } else if (mp && _t.isLogicalExpression(mp) && memParent.parentPath &&
-                       _t.isVariableDeclarator(memParent.parent) && _t.isIdentifier(memParent.parent.id)) {
-              arrBindNames.push({ name: memParent.parent.id.name, scope: memParent.parentPath.scope });
-            } else if (mp && _t.isMemberExpression(mp) && mp.object === pmem && mp.computed) {
-              // `p[key][i](...)` direct
-              if (mp.parentPath || true) {
-                var gp = memParent.parentPath && memParent.parent;
-                if (gp && _t.isCallExpression(gp) && gp.callee === mp) directInvoke = gp;
-              }
-            }
-            if (directInvoke) out.push(directInvoke);
-            for (var abi = 0; abi < arrBindNames.length; abi++) {
-              var arrB = arrBindNames[abi].scope.getBinding(arrBindNames[abi].name);
-              if (!arrB || !arrB.referencePaths) continue;
-              for (var arefi = 0; arefi < arrB.referencePaths.length; arefi++) {
-                var aref = arrB.referencePaths[arefi];
-                if (!aref || !aref.parentPath) continue;
-                var amem = aref.parent; // expect arr[i]
-                if (!_t.isMemberExpression(amem) || amem.object !== aref.node || !amem.computed) continue;
-                var ainv = aref.parentPath.parentPath && aref.parentPath.parent;
-                if (ainv && _t.isCallExpression(ainv) && ainv.callee === amem) out.push(ainv);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return out;
 }
 // Demand-driven k=1 context-refinement primitive: the GENERAL spec-eval
 // engine evaluated for ONE call site with its actual argument AVs bound.
@@ -15387,7 +15252,7 @@ function _demandResolve(rootNode, rootCtx) {
     // demand layer computes WHICH call sites get context-refined; the
     // forward engine does the resolution (corrected architecture).
     if (_specDemandConeNodes && fr.node) _specDemandConeNodes.add(fr.node);
-    if (_demandJump.has(fr.key)) { stack.pop(); continue; }
+    if (_demandJump.has(fr.key) && !_demandProvisional.has(fr.key)) { stack.pop(); continue; }
     if (_ucT) {
       var _ucBav = _specPathValMemo.get(fr.node);
       _ucT((fr.node && fr.node.type) + "@L" + (fr.node && fr.node.loc && fr.node.loc.start.line) +
@@ -15414,15 +15279,15 @@ function _demandResolve(rootNode, rootCtx) {
       else if (fr.node.computed && _t.isStringLiteral(fr.node.property)) umStaticKey = fr.node.property.value;
       if (umOpaque && (umStaticKey != null || fr.node.computed)) {
         if (fr.phase !== 1) {
-          if (inFlight.has(fr.key)) { _demandJump.set(fr.key, _AV_TOP); stack.pop(); continue; }
+          if (inFlight.has(fr.key)) { _demandJump.set(fr.key, _AV_TOP); _demandProvisional.add(fr.key); stack.pop(); continue; }
           inFlight.add(fr.key);
           fr.phase = 1;
           fr.umObjKey = _demandKey(fr.node.object, null);
-          if (!_demandJump.has(fr.umObjKey)) stack.push({ node: fr.node.object, ctx: null, key: fr.umObjKey, phase: 0 });
+          if (!_demandJump.has(fr.umObjKey) || _demandProvisional.has(fr.umObjKey)) stack.push({ node: fr.node.object, ctx: null, key: fr.umObjKey, phase: 0 });
           fr.umKeyKey = null;
           if (umStaticKey == null && fr.node.computed) {
             fr.umKeyKey = _demandKey(fr.node.property, null);
-            if (!_demandJump.has(fr.umKeyKey)) stack.push({ node: fr.node.property, ctx: null, key: fr.umKeyKey, phase: 0 });
+            if (!_demandJump.has(fr.umKeyKey) || _demandProvisional.has(fr.umKeyKey)) stack.push({ node: fr.node.property, ctx: null, key: fr.umKeyKey, phase: 0 });
           }
           continue;
         }
@@ -15434,8 +15299,18 @@ function _demandResolve(rootNode, rootCtx) {
           if (umKAv && umKAv.kind === "const") umK = String(umKAv.value);
         }
         var umObjAv = _demandJump.get(fr.umObjKey);
+        // P2 transitive provisional (see U-call): the projection is
+        // final only if the demanded object (and computed key) are.
+        var umSawProv = _demandProvisional.has(fr.umObjKey) ||
+          (fr.umKeyKey && _demandProvisional.has(fr.umKeyKey));
         var umRes = null;
-        if (umObjAv && umK != null) {
+        // Enter projection when the object resolved, even if the key is
+        // opaque (umK == null): § 23.1.4 Array Exotic [[Get]] with an
+        // unknown numeric index over a known array-lit is the JOIN of
+        // its elements (the value IS one of them) — a computed indexed
+        // dispatch `arr[i](…)` needs exactly this. Obj-lit projection
+        // still requires a concrete key.
+        if (umObjAv) {
           var umStk = [umObjAv]; var umSeen = new Set();
           while (umStk.length > 0) {
             var uo = umStk.pop();
@@ -15443,9 +15318,20 @@ function _demandResolve(rootNode, rootCtx) {
             umSeen.add(uo);
             if (uo.kind === "or" || uo.kind === "logical") { umStk.push(uo.left); umStk.push(uo.right); continue; }
             var uv = null;
-            if (uo.kind === "obj-lit" && uo.props &&
+            if (uo.kind === "array-lit" && uo.elements) {
+              // § 23.1.4 Array Exotic Object [[Get]].
+              if (umK === "length") { uv = { kind: "const", value: uo.elements.length }; }
+              else if (umK != null && /^\d+$/.test(umK)) {
+                uv = uo.elements[+umK] || null; // concrete index
+              } else if (umK == null || /^\d+$/.test(String(umK))) {
+                // Opaque numeric index: sound = join of all elements.
+                for (var uei = 0; uei < uo.elements.length; uei++) {
+                  if (uo.elements[uei]) uv = uv ? _specLogicalOrAv(uv, uo.elements[uei]) : uo.elements[uei];
+                }
+              }
+            } else if (umK != null && uo.kind === "obj-lit" && uo.props &&
                 Object.prototype.hasOwnProperty.call(uo.props, umK)) uv = uo.props[umK];
-            if (!uv) {
+            if (!uv && umK != null) {
               var uoProto = _specGetPrototypeOfAv(uo);
               if (uoProto && uoProto.kind === "obj-lit" && uoProto.props &&
                   Object.prototype.hasOwnProperty.call(uoProto.props, umK)) uv = uoProto.props[umK];
@@ -15453,7 +15339,11 @@ function _demandResolve(rootNode, rootCtx) {
             if (uv) umRes = umRes ? _specLogicalOrAv(umRes, uv) : uv;
           }
         }
-        if (umRes) { _demandJump.set(fr.key, umRes); stack.pop(); continue; }
+        if (umRes) {
+          _demandJump.set(fr.key, umRes);
+          if (umSawProv) _demandProvisional.add(fr.key); else _demandProvisional.delete(fr.key);
+          stack.pop(); continue;
+        }
         fr.phase = 0; // fall through to (U-call) / param-backward
       }
     }
@@ -15474,40 +15364,61 @@ function _demandResolve(rootNode, rootCtx) {
       var ucOpaque = !ucBase || ucBase.kind === "top" ||
         ucBase.kind === "member" || ucBase.kind === "call";
       var ucCall = null;
-      if (ucOpaque) {
-        if (_t.isCallExpression(fr.node)) ucCall = fr.node;
-        else if (_t.isIdentifier(fr.node)) {
-          var ucP = _demandNodePath.get(fr.node);
-          if (ucP && ucP.scope && ucP.scope.getBinding) {
-            var ucB = ucP.scope.getBinding(fr.node.name);
-            if (ucB && ucB.path && ucB.path.node) {
-              if (_t.isVariableDeclarator(ucB.path.node) && ucB.path.node.init &&
-                  _t.isCallExpression(ucB.path.node.init)) ucCall = ucB.path.node.init;
-              else if (ucB.constantViolations) {
-                for (var ucv = ucB.constantViolations.length - 1; ucv >= 0; ucv--) {
-                  var ucvn = ucB.constantViolations[ucv] && ucB.constantViolations[ucv].node;
-                  if (ucvn && _t.isAssignmentExpression(ucvn) && ucvn.operator === "=" &&
-                      _t.isCallExpression(ucvn.right)) { ucCall = ucvn.right; break; }
-                }
+      // Resolve the CallExpression this node's value flows from
+      // UNCONDITIONALLY: a base obj-lit can be an INCOMPLETE merge-call
+      // result — jqExtend's k=0 base is the target arg ONLY; the
+      // variadic `for(k in src)t[k]=src[k]` merge (§ 14.7.5.9) is
+      // recorded as EFFECTS, folded onto the return only by
+      // `_specInstantiateAv` (grounding-program step-1). § 14.10.
+      if (_t.isCallExpression(fr.node)) ucCall = fr.node;
+      else if (_t.isIdentifier(fr.node)) {
+        var ucP = _demandNodePath.get(fr.node);
+        if (ucP && ucP.scope && ucP.scope.getBinding) {
+          var ucB = ucP.scope.getBinding(fr.node.name);
+          if (ucB && ucB.path && ucB.path.node) {
+            if (_t.isVariableDeclarator(ucB.path.node) && ucB.path.node.init &&
+                _t.isCallExpression(ucB.path.node.init)) ucCall = ucB.path.node.init;
+            else if (ucB.constantViolations) {
+              for (var ucv = ucB.constantViolations.length - 1; ucv >= 0; ucv--) {
+                var ucvn = ucB.constantViolations[ucv] && ucB.constantViolations[ucv].node;
+                if (ucvn && _t.isAssignmentExpression(ucvn) && ucvn.operator === "=" &&
+                    _t.isCallExpression(ucvn.right)) { ucCall = ucvn.right; break; }
               }
             }
           }
         }
       }
-      if (ucCall && ucCall.callee) {
+      // (B) Enter (U-call) when base is opaque OR a call-result obj-lit
+      // whose callee fn HAS recorded effects (potentially-incomplete
+      // merge — k=0 under-approximates; the effect-replay applies only
+      // at instantiation). The replay self-gates (no-op without merge
+      // effects), so effect-EXISTENCE is the cheap grounded condition,
+      // NOT a shape/name match. § 7.4 monotone precision.
+      var ucNeed = ucOpaque;
+      if (!ucNeed && ucCall && ucCall.callee && ucBase && ucBase.kind === "obj-lit") {
+        var ucCalleeBaseAv = _specPathValMemo.get(ucCall.callee);
+        if (ucCalleeBaseAv) {
+          _specWalkAvForFnRefs(ucCalleeBaseAv, function (g) {
+            if (ucNeed) return;
+            var ge = _specEffectsMemo.get(g);
+            if (ge && ge.length) ucNeed = true;
+          });
+        }
+      }
+      if (ucNeed && ucCall && ucCall.callee) {
         var ucRecvNode = _t.isMemberExpression(ucCall.callee) ? ucCall.callee.object : null;
         if (fr.phase !== 1) {
-          if (inFlight.has(fr.key)) { _demandJump.set(fr.key, _AV_TOP); stack.pop(); continue; }
+          if (inFlight.has(fr.key)) { _demandJump.set(fr.key, _AV_TOP); _demandProvisional.add(fr.key); stack.pop(); continue; }
           inFlight.add(fr.key);
           fr.phase = 1; fr.ucCall = ucCall;
           fr.ucCalleeKey = _demandKey(ucCall.callee, null);
-          if (!_demandJump.has(fr.ucCalleeKey)) {
+          if (!_demandJump.has(fr.ucCalleeKey) || _demandProvisional.has(fr.ucCalleeKey)) {
             stack.push({ node: ucCall.callee, ctx: null, key: fr.ucCalleeKey, phase: 0 });
           }
           fr.ucRecvKey = null;
           if (ucRecvNode) {
             fr.ucRecvKey = _demandKey(ucRecvNode, null);
-            if (!_demandJump.has(fr.ucRecvKey)) stack.push({ node: ucRecvNode, ctx: null, key: fr.ucRecvKey, phase: 0 });
+            if (!_demandJump.has(fr.ucRecvKey) || _demandProvisional.has(fr.ucRecvKey)) stack.push({ node: ucRecvNode, ctx: null, key: fr.ucRecvKey, phase: 0 });
           }
           fr.ucArgKeys = [];
           for (var ucai = 0; ucai < ucCall.arguments.length; ucai++) {
@@ -15515,7 +15426,7 @@ function _demandResolve(rootNode, rootCtx) {
             if (!ucan || _t.isSpreadElement(ucan)) { fr.ucArgKeys.push(null); continue; }
             var ucak = _demandKey(ucan, null);
             fr.ucArgKeys.push(ucak);
-            if (!_demandJump.has(ucak)) stack.push({ node: ucan, ctx: null, key: ucak, phase: 0 });
+            if (!_demandJump.has(ucak) || _demandProvisional.has(ucak)) stack.push({ node: ucan, ctx: null, key: ucak, phase: 0 });
           }
           continue;
         }
@@ -15527,6 +15438,18 @@ function _demandResolve(rootNode, rootCtx) {
           ucArgAvs.push(fr.ucArgKeys[uck] ? (_demandJump.get(fr.ucArgKeys[uck]) || _AV_TOP) : _AV_TOP);
         }
         var ucRecvAv = fr.ucRecvKey ? (_demandJump.get(fr.ucRecvKey) || null) : null;
+        // P2 transitive provisional (IFDS least-fixpoint): a summary is
+        // FINAL iff every constituent is final. If any sub-query value
+        // is still provisional (a transient cycle-break, not yet the
+        // real value), this result is itself provisional — mark it so
+        // it does not short-circuit and recomputes once the dependency
+        // finalizes (monotone; converges over the finite-height AV
+        // lattice). § 7.4 + Reps–Horwitz–Sagiv tabulation.
+        var ucSawProv = (fr.ucCalleeKey && _demandProvisional.has(fr.ucCalleeKey)) ||
+          (fr.ucRecvKey && _demandProvisional.has(fr.ucRecvKey));
+        for (var ucpi = 0; !ucSawProv && ucpi < fr.ucArgKeys.length; ucpi++) {
+          if (fr.ucArgKeys[ucpi] && _demandProvisional.has(fr.ucArgKeys[ucpi])) ucSawProv = true;
+        }
         var ucFns = [];
         if (ucCalleeAv) _specWalkAvForFnRefs(ucCalleeAv, function (g, gAv) { ucFns.push({ fn: g, av: gAv }); });
         var ucResult = null;
@@ -15534,9 +15457,47 @@ function _demandResolve(rootNode, rootCtx) {
           // Pass the callee's function-ref AV so a CLOSURE callee threads
           // its defining environment (§ 9.1.1) via its _producingCall.
           var ucRef = _specRefineCallUnderContext(ucFns[ucfi].fn, ucArgAvs, ucCall, ucRecvAv, null, ucFns[ucfi].av);
-          if (ucRef && ucRef.retAv) ucResult = ucResult ? _specLogicalOrAv(ucResult, ucRef.retAv) : ucRef.retAv;
+          if (ucRef && ucRef.retAv) {
+            // (A) § 14.10 + grounding-program step-1 effect-replay-onto-
+            // return. `_specRefineCallUnderContext` returns the RAW
+            // per-context return (jqExtend's `t` = the target arg ONLY);
+            // a variadic `for(k in src)t[k]=src[k]` merge (§ 14.7.5.9
+            // over § 10.4.4 arguments) is recorded as EFFECTS, folded
+            // onto the return ONLY by `_specInstantiateAv` — the SAME
+            // mechanism the FORWARD path uses (verified E1/E2/E3). The
+            // backward (U-call) path applies it too with the call's
+            // concrete args. No-op when the callee has no merge effects
+            // (step-1's cheap `_reEffsEarly` gate) ⇒ perf-safe, uniform.
+            // IDE jump-function composition (Sagiv–Reps–Horwitz): apply
+            // the callee's SYMBOLIC summary to the actual args. The
+            // symbolic summary is the standalone return memo — the
+            // `or`/effects-referencing-target form step-1's effect-
+            // replay folds (the variadic `for(k in src)t[k]=src[k]`
+            // merge). `_specRefineCallUnderContext`'s `ucRef.retAv` is
+            // the PER-CONTEXT COLLAPSED value: its internal body
+            // analysis already evaluated `return t` and (for the
+            // `arguments`-variadic merge) dropped the unfolded copy, and
+            // its obj-lit is a DIFFERENT instance than `ucArgAvs[tgt]`
+            // so step-1's target-identity match fails. Compose the
+            // symbolic summary instead; fall back to `ucRef.retAv` when
+            // no symbolic summary exists. § 14.10 + grounding step-1.
+            var ucSym = _specReturnValueGet(_SPEC_STANDALONE_CTX, ucFns[ucfi].fn);
+            var ucRet = _specInstantiateAv(ucSym || ucRef.retAv, ucArgAvs, ucRecvAv, ucFns[ucfi].fn, ucFns[ucfi].av) || ucRef.retAv;
+            ucResult = ucResult ? _specLogicalOrAv(ucResult, ucRet) : ucRet;
+            if (globalThis._DBG_UC && ucFns[ucfi].fn && ucFns[ucfi].fn.id) {
+              console.log("[UCD] callee=" + ucFns[ucfi].fn.id.name +
+                " argKinds=" + JSON.stringify(ucArgAvs.map(function (a) { return a && (a.kind === "obj-lit" ? "obj{" + Object.keys(a.props || {}).join(",") + "}" : a.kind); })) +
+                " retAv=" + (ucRef.retAv && ucRef.retAv.kind) +
+                " ucRet=" + (ucRet && (ucRet.kind === "obj-lit" ? "obj{" + Object.keys(ucRet.props || {}).join(",") + "}" : ucRet.kind)) +
+                " sawProv=" + ucSawProv);
+            }
+          }
         }
-        if (ucResult) { _demandJump.set(fr.key, ucResult); stack.pop(); continue; }
+        if (ucResult) {
+          _demandJump.set(fr.key, ucResult);
+          if (ucSawProv) _demandProvisional.add(fr.key); else _demandProvisional.delete(fr.key);
+          stack.pop(); continue;
+        }
         fr.phase = 0; // fall through to param-backward
       }
     }
@@ -15571,7 +15532,7 @@ function _demandResolve(rootNode, rootCtx) {
       }
       if (ipbFn && ipbIdx >= 0) {
         if (fr.phase !== 1) {
-          if (inFlight.has(fr.key)) { _demandJump.set(fr.key, _AV_TOP); stack.pop(); continue; }
+          if (inFlight.has(fr.key)) { _demandJump.set(fr.key, _AV_TOP); _demandProvisional.add(fr.key); stack.pop(); continue; }
           inFlight.add(fr.key);
           fr.phase = 1;
           var ipbQs = _demandArgQueries(ipbFn, ipbIdx, fr.ctx);
@@ -15580,7 +15541,7 @@ function _demandResolve(rootNode, rootCtx) {
             if (!ipbQs[iqi] || !ipbQs[iqi].node) continue;
             var iqk = _demandKey(ipbQs[iqi].node, ipbQs[iqi].ctx);
             fr.ipbKeys.push(iqk);
-            if (!_demandJump.has(iqk)) {
+            if (!_demandJump.has(iqk) || _demandProvisional.has(iqk)) {
               stack.push({ node: ipbQs[iqi].node, ctx: ipbQs[iqi].ctx, key: iqk, phase: 0 });
             }
           }
@@ -15589,24 +15550,35 @@ function _demandResolve(rootNode, rootCtx) {
         inFlight.delete(fr.key);
         fr.ipbDone = true;
         var ipbJoined = null;
+        var ipbSawProv = false;
         for (var ijk = 0; ijk < fr.ipbKeys.length; ijk++) {
           var ijv = _demandJump.get(fr.ipbKeys[ijk]);
           if (ijv) ipbJoined = ipbJoined ? _specLogicalOrAv(ipbJoined, ijv) : ijv;
+          if (_demandProvisional.has(fr.ipbKeys[ijk])) ipbSawProv = true;
         }
-        if (ipbJoined) { _demandJump.set(fr.key, ipbJoined); stack.pop(); continue; }
+        // P2 transitive provisional (see U-call): the ∨-joined caller-
+        // arg backward result is final only if every caller-arg
+        // sub-query is final.
+        if (ipbJoined) {
+          _demandJump.set(fr.key, ipbJoined);
+          if (ipbSawProv) _demandProvisional.add(fr.key); else _demandProvisional.delete(fr.key);
+          stack.pop(); continue;
+        }
         fr.phase = 0; // no caller arg resolved — fall through to base / _demandParamLeaves
       }
     }
     var baseAv = _specPathValMemo.get(fr.node);
-    if (!baseAv) { _demandJump.set(fr.key, _AV_TOP); stack.pop(); continue; }
+    if (!baseAv) { _demandJump.set(fr.key, _AV_TOP); _demandProvisional.delete(fr.key); stack.pop(); continue; }
     if (!_avHasSubstitutableCheck(baseAv)) {
-      _demandJump.set(fr.key, baseAv); stack.pop(); continue;
+      _demandJump.set(fr.key, baseAv); _demandProvisional.delete(fr.key); stack.pop(); continue;
     }
     if (fr.phase === 0) {
       if (inFlight.has(fr.key)) {
         // Cyclic demand (recursive fn / mutually-recursive args): the
-        // base AV is the sound over-approximation; never loop.
-        _demandJump.set(fr.key, baseAv); stack.pop(); continue;
+        // base AV is the sound over-approximation; never loop. PROVISIONAL
+        // (in-flight back-edge) — not a final summary; cleared when the
+        // in-flight ancestor finalizes the real value.
+        _demandJump.set(fr.key, baseAv); _demandProvisional.add(fr.key); stack.pop(); continue;
       }
       inFlight.add(fr.key);
       fr.phase = 1;
@@ -15619,7 +15591,7 @@ function _demandResolve(rootNode, rootCtx) {
         for (var qi = 0; qi < qs.length; qi++) {
           var qk = _demandKey(qs[qi].node, qs[qi].ctx);
           keys.push(qk);
-          if (!_demandJump.has(qk)) {
+          if (!_demandJump.has(qk) || _demandProvisional.has(qk)) {
             stack.push({ node: qs[qi].node, ctx: qs[qi].ctx, key: qk, phase: 0 });
           }
         }
@@ -15632,11 +15604,13 @@ function _demandResolve(rootNode, rootCtx) {
     // graph dedups so order is immaterial for distinct-fn param sets).
     inFlight.delete(fr.key);
     var byFn = new Map();
+    var baseSawProv = false;
     for (var bi = 0; bi < fr.subByParam.length; bi++) {
       var sp2 = fr.subByParam[bi];
       var joined = null;
       for (var ki = 0; ki < sp2.keys.length; ki++) {
         var v = _demandJump.get(sp2.keys[ki]);
+        if (_demandProvisional.has(sp2.keys[ki])) baseSawProv = true;
         if (!v) continue;
         joined = joined ? _specLogicalOrAv(joined, v) : v;
       }
@@ -15655,6 +15629,9 @@ function _demandResolve(rootNode, rootCtx) {
       resultAv = _specInstantiateAv(resultAv, argAvs, undefined, fnNode);
     });
     _demandJump.set(fr.key, resultAv || baseAv);
+    // P2 transitive provisional (see U-call): the param-substituted
+    // composition is final only if every caller-arg sub-query is.
+    if (baseSawProv) _demandProvisional.add(fr.key); else _demandProvisional.delete(fr.key);
     stack.pop();
   }
   return _demandJump.get(rootKey);
@@ -17102,10 +17079,34 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
   // or any callee whose spec-eval AV identifies a known function node.
   // Cheap: single program walk, per-callee AV lookup is O(1) WeakMap.get.
   function _runDynamicEdgeIndex() {
+  // § 7.4 — the call-graph (k-CFA) index must read the MOST PRECISE
+  // available callee value, not only the context-insensitive base
+  // memo. A computed callee (`arr[i]`, `obj[k]`) whose function-ref
+  // identity is established only under a caller's context lives in
+  // that fn's refined memo (a monotone precision increase over base);
+  // indexing off base alone under-approximates the call graph and
+  // drops the dynamically-dispatched inter-procedural arg flow that
+  // backward demand then cannot follow. This runs ONCE post-fixpoint
+  // (not inside the convergence loop) so the refined-memo read cannot
+  // churn CID-13; all lookups are O(1) WeakMap; base is the sound
+  // fallback when no refinement exists for the node.
+  function _precAv(node, callPath) {
+    var b = _specPathValMemo.get(node);
+    if (!node || !_specLatestRefinedMemoByFn) return b;
+    var encFn = _specEnclFnByNode.get(node);
+    if (!encFn && callPath && callPath.getFunctionParent) {
+      var ep = callPath.getFunctionParent();
+      encFn = ep && ep.node;
+    }
+    if (!encFn) return b;
+    var rm = _specLatestRefinedMemoByFn.get(encFn);
+    if (rm) { var ra = rm.get(node); if (ra) return ra; }
+    return b;
+  }
   programPath.traverse({
     "CallExpression|NewExpression": function(p) {
       var calleeNode = p.node.callee;
-      var calleeAv = _specPathValMemo.get(calleeNode);
+      var calleeAv = _precAv(calleeNode, p);
       if (!calleeAv) return;
       // ECMA § 13.3.6 — function-ref callee: direct index. Also
       // distribute over or-trees per § 14.6 LUB: when the callee's
@@ -17193,7 +17194,7 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
       if (calleeAv.kind === "builtin-method" &&
           (calleeAv.id === "Function.prototype.call" || calleeAv.id === "Function.prototype.apply") &&
           _t.isMemberExpression(calleeNode) && calleeNode.object) {
-        var caRecvAv = _specPathValMemo.get(calleeNode.object);
+        var caRecvAv = _precAv(calleeNode.object, p);
         if (caRecvAv && caRecvAv.kind === "function-ref" && caRecvAv.funcNode) {
           var caFn = caRecvAv.funcNode;
           if (!_specCallSitesByFn.has(caFn)) _specCallSitesByFn.set(caFn, []);
@@ -17206,7 +17207,7 @@ function _specAnalyzeProgramWithFixpoint(programPath) {
       // FIRST argument (not the receiver).
       if (calleeAv.kind === "builtin-method" && calleeAv.id === "Reflect.apply" &&
           p.node.arguments && p.node.arguments.length >= 1) {
-        var raTargetAv = _specPathValMemo.get(p.node.arguments[0]);
+        var raTargetAv = _precAv(p.node.arguments[0], p);
         if (raTargetAv && raTargetAv.kind === "function-ref" && raTargetAv.funcNode) {
           var raFn = raTargetAv.funcNode;
           if (!_specCallSitesByFn.has(raFn)) _specCallSitesByFn.set(raFn, []);
@@ -17625,57 +17626,12 @@ function _specAnalyzePropertyFlow(funcPath, force, stopAfterStmtIdx) {
       joinedRet = _specLogicalOrAv(joinedRet, _specReturnAvAccum[rai]);
     }
     _specReturnAvAccum.length = returnAvBaseLen;  // pop our slice
-    // § 14.10 ReturnStatement + § 13.15.2 PutValue + § 20.1.2.1: under a
-    // refinement context (caller args bound via _specContextCallerArgs),
-    // an effect-confirmed manual MERGER's return must reflect the body's
-    // prop-copy writes onto the returned target slot — materialize it as
-    // Object.assign(args[targetSlot], …other args) via the shared
-    // _specMergeObjAvs (ToObject-correct: primitive args like the
-    // `extend(true,…)` deep-flag are no-ops; opaque args sound-TOP-join).
-    // The body substituted the target param→its bare arg obj and dropped
-    // the loop-copy; this restores the spec-correct merged return so
-    // `return t` carries the merged props. Detection is dataflow-effect-
-    // based (any loop spelling), NOT name/shape. Standalone ctx (no
-    // bound args) keeps the bare-param return; folds there get the same
-    // merge via the _specInstantiateAv merger branch. Uses the LOCAL
-    // `effects` (current; _specEffectsMemo is set later this fn).
-    var mgArgs = _specContextCallerArgs.get(fnNode);
-    if (mgArgs && mgArgs.length) {
-      // Merger IDENTITY is context-invariant — a property of the fn's
-      // code. Under ctx-refinement the symbolic loop-key merge effect is
-      // CONCRETIZED (per-key distribution) so `_specDetectPropagation-
-      // FromEffects(effects)` is null HERE; the standalone analysis
-      // exposed it and `_specMergerReturnInfo` memoised it. Use that
-      // cross-context identity; idx is normalised (param→number,
-      // args-elt→const-AV) via `_specSlotIdxNum`.
-      var mgInfo = _specMergerReturnInfo(fnNode) ||
-        _specDetectPropagationFromEffects(effects);
-      var mgTgt = mgInfo && mgInfo.targetSlot ? _specSlotIdxNum(mgInfo.targetSlot.idx) : null;
-      if (mgTgt !== null && mgArgs[mgTgt]) {
-        var mgSrcs = [];
-        for (var mgi = 0; mgi < mgArgs.length; mgi++) {
-          if (mgi !== mgTgt) mgSrcs.push(mgArgs[mgi]);
-        }
-        // Opaque source ⇒ deferred Object.assign call AV (composes at
-        // the outer fold); else fold now. Same rule as the
-        // _specInstantiateAv merger branch. § 20.1.2.1 + § 14.10.
-        var mgDef = false;
-        for (var mgsi = 0; mgsi < mgSrcs.length; mgsi++) {
-          var mgs = mgSrcs[mgsi];
-          if (mgs && (mgs.kind === "param" || mgs.kind === "args-elt" ||
-              mgs.kind === "this" || mgs.kind === "top" || mgs.kind === "member" ||
-              mgs.kind === "call" || mgs.kind === "coerce")) { mgDef = true; break; }
-        }
-        if (mgDef) {
-          joinedRet = { kind: "call",
-            callee: { kind: "builtin-method", id: "Object.assign" },
-            args: [mgArgs[mgTgt]].concat(mgSrcs) };
-        } else {
-          var mgMerged = _specMergeObjAvs(mgArgs[mgTgt], mgSrcs);
-          if (mgMerged) joinedRet = mgMerged;
-        }
-      }
-    }
+    // § 14.10 ReturnStatement: `joinedRet` is the join of every
+    // `return` expression's AV as produced by the general abstract
+    // interpretation of the body. A property-copy merger's return
+    // therefore carries its merged props directly — the body's for-in
+    // copy (§ 13.7.5) writes them onto the returned object during
+    // ordinary spec-eval. No effect-shape merger detector.
     _specReturnValueSet(_specActiveContextKey(),fnNode, joinedRet);
     // Phase B5: scan return AV for fn-ref leaves; index against fnNode
     // so Phase C8 can resolve `f()()` outer dispatch + Phase D resolver
@@ -19487,6 +19443,17 @@ function _specEvalLeaf(path, state, vals, effects) {
         if (!frRet && frReadCtx !== _SPEC_STANDALONE_CTX) {
           frRet = _specReturnValueGet(_SPEC_STANDALONE_CTX, frFn);
         }
+        // § 7.4 monotone soundness: a per-call-site refined summary and
+        // the context-insensitive STANDALONE summary are BOTH sound
+        // over-approximations of the call's behaviour; the analysis
+        // result is their join (Cousot). A refinement that produced a
+        // LESS informative return (e.g. a degenerate empty obj-lit
+        // because a body write didn't materialise under that context)
+        // must not drag the result below the STANDALONE baseline. Keep
+        // the STANDALONE summary so the dispatch can join both
+        // instantiations (general; no shape/name).
+        var frRetSA = (frReadCtx !== _SPEC_STANDALONE_CTX)
+          ? _specReturnValueGet(_SPEC_STANDALONE_CTX, frFn) : null;
         // SD-22b: when ctx-refinement's fresh return-value memo misses
         // (cand.fn isn't this fn so its fresh memo wasn't populated for
         // frFn), consult the base fallback. Without this, refining one
@@ -20188,6 +20155,27 @@ function _specEvalLeaf(path, state, vals, effects) {
           // method body. fnContext = frFn ensures only this method's
           // params get substituted.
           var firstSub = _specInstantiateAv(frRet, frArgAvs, bmRecvAv, frFn, bmCalleeAv);
+          // § 7.4 monotone recovery: a per-call-site refined summary and
+          // the context-insensitive STANDALONE summary are both sound;
+          // the result must be ≥ each. Recovery is only NEEDED when the
+          // refined `firstSub` regressed BELOW the baseline — i.e. it is
+          // degenerate (⊤ / opaque / empty obj-lit). When `firstSub` is
+          // already informative the refined summary did not regress, so
+          // the (expensive) second instantiation is skipped — this keeps
+          // the hot `_specInstantiateAv` path single-pass on large
+          // bundles. Skipping when non-degenerate is sound: we only
+          // decline to ADD an alternative the result already dominates.
+          if (frRetSA && frRetSA !== frRet) {
+            var _fsDegen = !firstSub || firstSub.kind === "top" ||
+              firstSub.kind === "param" || firstSub.kind === "member" ||
+              firstSub.kind === "call" || firstSub.kind === "coerce" ||
+              (firstSub.kind === "obj-lit" &&
+               (!firstSub.props || Object.keys(firstSub.props).length === 0));
+            if (_fsDegen) {
+              var _saSub = _specInstantiateAv(frRetSA, frArgAvs, bmRecvAv, frFn, bmCalleeAv);
+              if (_saSub) firstSub = firstSub ? _specLogicalOrAv(firstSub, _saSub) : _saSub;
+            }
+          }
           // Class-method ctor substitution per § 13.3.5: when the
           // function-ref AV carries `methodOf` (the class node) and the
           // receiver is the substituted instance AV, use the receiver's
@@ -21154,57 +21142,11 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext, fnContextAv
   // check per AV identity (AVs are deduped via hash-cons so identity
   // equality is sufficient; same AV across many callsites caches once).
   if (!_avHasSubstitutableCheck(rootAv)) return rootAv;
-  // § 14.10 ReturnStatement + § 13.15.2 PutValue + § 20.1.2.1: when
-  // `fnContext` is an effect-confirmed manual MERGER (`for(k in src)
-  // tgt[k]=src[k]; return tgt` — any spelling, recognised by dataflow
-  // effect not name) and the value being instantiated IS the returned
-  // merge-target slot, the call result must reflect the body's prop-copy
-  // writes. Materialize it identically to Object.assign(argAvs[tgt],
-  // …other args) via the shared `_specMergeObjAvs` (ToObject-correct:
-  // primitive args like `extend(true,…)`'s deep-flag contribute
-  // nothing; opaque args sound-TOP-join). This is the general fix that
-  // makes every hand-rolled merge/`$.extend`/builder resolve — the
-  // returned object carries its merged props instead of bare param.
-  if (fnContext && callerArgAvs &&
-      (rootAv.kind === "param" || rootAv.kind === "args-elt") &&
-      (rootAv.kind !== "param" || !rootAv.fn || rootAv.fn === fnContext)) {
-    var mRootIdx = _specSlotIdxNum(rootAv.idx);
-    var mInfo = mRootIdx !== null ? _specMergerReturnInfo(fnContext) : null;
-    var mTgtIdx = mInfo && mInfo.targetSlot ? _specSlotIdxNum(mInfo.targetSlot.idx) : null;
-    if (mTgtIdx !== null && mTgtIdx === mRootIdx && callerArgAvs[mRootIdx]) {
-      var mSources = [];
-      for (var mai = 0; mai < callerArgAvs.length; mai++) {
-        if (mai !== mRootIdx) mSources.push(callerArgAvs[mai]);
-      }
-      // If every source is statically resolvable, fold now (M1/M2/M3
-      // fast path). If ANY source is opaque (param/args-elt/this/top/
-      // member/call/coerce — value not yet known, e.g. the merger is
-      // wrapped in `function ajax(s){jqExtend(true,{},settings,s)}` and
-      // `s` is ajax's still-symbolic param), eager merge would TOP-join
-      // and LOSE that source. Instead emit a DEFERRED `Object.assign`
-      // call AV preserving the slots: the existing call-AV substitution
-      // (21325 → _specReduceBuiltinCallPostSub → _specMergeObjAvs)
-      // re-materialises it at the OUTER fold once the opaque slot
-      // concretises (`ajax({type,url})` → s→{type,url}). § 20.1.2.1 +
-      // § 14.10; composes inter-procedurally to any depth, no new AV
-      // kind. Arity is known here (this call site) so no variadic-slot
-      // problem.
-      var mDeferred = false;
-      for (var msi = 0; msi < mSources.length; msi++) {
-        var ms = mSources[msi];
-        if (ms && (ms.kind === "param" || ms.kind === "args-elt" ||
-            ms.kind === "this" || ms.kind === "top" || ms.kind === "member" ||
-            ms.kind === "call" || ms.kind === "coerce")) { mDeferred = true; break; }
-      }
-      if (mDeferred) {
-        return { kind: "call",
-          callee: { kind: "builtin-method", id: "Object.assign" },
-          args: [callerArgAvs[mRootIdx]].concat(mSources) };
-      }
-      var mMerged = _specMergeObjAvs(callerArgAvs[mRootIdx], mSources);
-      if (mMerged) return mMerged;
-    }
-  }
+  // § 14.10 ReturnStatement: a property-copy merger's return is
+  // materialised by the GENERAL substitution below — formals/`arguments`
+  // bind to the concrete caller args, and the body's for-in copy
+  // (§ 13.7.5) effect resolves through ordinary spec-eval. No effect-
+  // shape merger detector.
   // True iterative postorder enumeration with dedup. Per § 9.1.1
   // closure write-back fixpoint: AV graphs share sub-trees (an `or`
   // arm that aliases the binding's prior AV, a `member` that re-uses
@@ -21751,7 +21693,164 @@ function _specInstantiateAv(rootAv, callerArgAvs, thisAv, fnContext, fnContextAv
     }
     subs.set(node, node);
   }
-  return subs.get(rootAv) || rootAv;
+  var _instRet = subs.get(rootAv) || rootAv;
+  // § 14.10 ReturnStatement: the returned object reflects the body's
+  // property writes (§ 13.15.2 PutValue). When a function returns an
+  // object slot it wrote to (any builder / property-copy merger — no
+  // shape, no name), replay its recorded property-write effects onto
+  // the substituted-concrete return object. A const-key effect sets
+  // that prop; a for-in loop-key copy `t[k]=src[k]` materialises per
+  // § 14.7.5.9 EnumerateObjectProperties once `src` substitutes to a
+  // concrete obj-lit (its actual own enumerable keys). Slots resolve to
+  // caller args directly (no recursive _specInstantiateAv — recursion
+  // ban). Replaces the deleted effect-shape merger detector with the
+  // general "return = target after the body's writes" rule.
+  // Cheap gate (perf): this replay only does work for a function that
+  // has recorded property-write effects. The overwhelming majority of
+  // `_specInstantiateAv` calls are for functions with none — skip the
+  // whole block (incl. the or-tree `_retObj` resolution) after a single
+  // Map.get so the hot path on large bundles stays single-pass.
+  var _reEffsEarly = (fnContext && callerArgAvs &&
+      typeof _specEffectsMemo !== "undefined" && _specEffectsMemo)
+    ? _specEffectsMemo.get(fnContext) : null;
+  if (_reEffsEarly && _reEffsEarly.length) {
+    // § 13.13: the returned value is one operand of any `||`/`&&`/`??`
+    // wrapping (`return arguments[0]||{}`); the body's writes land on
+    // the OBJECT operand. The returned merge-target object is _instRet
+    // if obj-lit, else the obj-lit leaf of the or/logical return tree.
+    var _retObj = null;
+    if (_instRet && _instRet.kind === "obj-lit") _retObj = _instRet;
+    else if (_instRet && (_instRet.kind === "or" || _instRet.kind === "logical")) {
+      var _oStk = [_instRet], _oSeen = new Set();
+      while (_oStk.length > 0) {
+        var _o = _oStk.pop();
+        if (!_o || typeof _o !== "object" || _oSeen.has(_o)) continue;
+        _oSeen.add(_o);
+        if (_o.kind === "or" || _o.kind === "logical") { if (_o.left) _oStk.push(_o.left); if (_o.right) _oStk.push(_o.right); continue; }
+        if (_o.kind === "coerce" && _o.arg) { _oStk.push(_o.arg); continue; }
+        if (_o.kind === "obj-lit") { _retObj = _o; break; }
+      }
+    }
+    if (globalThis._DBG_REPLAY && fnContext && fnContext.id) {
+      console.log("[RPL] fn=" + fnContext.id.name + " _instRet=" + (_instRet && _instRet.kind) +
+        " _retObj=" + (_retObj ? "obj-lit{" + Object.keys(_retObj.props || {}).join(",") + "}" : "<NONE>") +
+        " nCallerArgs=" + (callerArgAvs ? callerArgAvs.length : 0) +
+        " callerArgKinds=" + JSON.stringify((callerArgAvs || []).map(function (a) { return a && a.kind; })));
+    }
+    var _rEffs = (_retObj && typeof _specEffectsMemo !== "undefined" && _specEffectsMemo)
+      ? _specEffectsMemo.get(fnContext) : null;
+    if (_rEffs && _rEffs.length) {
+      var _slotArg = function (av) {
+        if (!av || typeof av !== "object") return undefined;
+        if (av.kind === "param" && (!av.fn || av.fn === fnContext) &&
+            typeof av.idx === "number" && av.idx < callerArgAvs.length) return callerArgAvs[av.idx];
+        if (av.kind === "args-elt" && av.idx && av.idx.kind === "const" &&
+            typeof av.idx.value === "number" && av.idx.value < callerArgAvs.length) return callerArgAvs[av.idx.value];
+        return undefined;
+      };
+      // Which caller-arg index is the returned target object.
+      var _tgtIdx = -1;
+      for (var _ai = 0; _ai < callerArgAvs.length; _ai++) {
+        if (callerArgAvs[_ai] === _retObj) { _tgtIdx = _ai; break; }
+      }
+      var _retProps = null;
+      var _deferredSrcs = [];
+      for (var _rei = 0; _rei < _rEffs.length; _rei++) {
+        var _re = _rEffs[_rei];
+        if (!_re || !_re.target || !_re.key) continue;
+        // The effect targets the returned object iff a target slot
+        // substitutes to _retObj (or is _retObj directly).
+        var _tStk = [_re.target], _tSeen = new Set(), _tMatch = false;
+        while (_tStk.length > 0) {
+          var _tx = _tStk.pop();
+          if (!_tx || typeof _tx !== "object" || _tSeen.has(_tx)) continue;
+          _tSeen.add(_tx);
+          if (_tx.kind === "or" || _tx.kind === "logical") { if (_tx.left) _tStk.push(_tx.left); if (_tx.right) _tStk.push(_tx.right); continue; }
+          if (_tx.kind === "coerce" && _tx.arg) { _tStk.push(_tx.arg); continue; }
+          if (_tx === _retObj || _slotArg(_tx) === _retObj || (subs.get(_tx) || _tx) === _retObj) { _tMatch = true; break; }
+        }
+        if (!_tMatch) continue;
+        if (!_retProps) {
+          _retProps = Object.create(null);
+          for (var _rpk in _retObj.props) if (Object.prototype.hasOwnProperty.call(_retObj.props, _rpk)) _retProps[_rpk] = _retObj.props[_rpk];
+        }
+        if (_re.key.kind === "const" && (typeof _re.key.value === "string" || typeof _re.key.value === "number")) {
+          _retProps[_re.key.value] = subs.get(_re.value) || _re.value;
+        } else if (_re.key.kind === "loop-key" && _re.value && _re.value.kind === "member") {
+          // §14.7.5.9 EnumerateObjectProperties: copy the iterated
+          // source's actual own enumerable keys. The source may be a
+          // single resolvable slot (`arguments[k]`/param), OR — for the
+          // variadic `for(;i<arguments.length;i++) for(k in arguments[i])`
+          // form — `arguments[<loopvar>]` (args-elt, non-const idx). Per
+          // §10.4.4 arguments.length is the concrete caller arity, so
+          // that iterates EVERY caller arg; copy the own keys of every
+          // concrete obj-lit caller arg except the target object.
+          var _srcObjs = [];
+          var _srcSlot = _slotArg(_re.value.obj);
+          var _variadic = false;
+          var _voStk = [_re.value.obj], _voSeen = new Set();
+          while (_voStk.length > 0) {
+            var _vo = _voStk.pop();
+            if (!_vo || typeof _vo !== "object" || _voSeen.has(_vo)) continue;
+            _voSeen.add(_vo);
+            if (_vo.kind === "or" || _vo.kind === "logical") { if (_vo.left) _voStk.push(_vo.left); if (_vo.right) _voStk.push(_vo.right); continue; }
+            if (_vo.kind === "coerce" && _vo.arg) { _voStk.push(_vo.arg); continue; }
+            if (_vo.kind === "args-elt" && (!_vo.idx || _vo.idx.kind !== "const")) { _variadic = true; }
+          }
+          if (_variadic) {
+            for (var _vi = 0; _vi < callerArgAvs.length; _vi++) {
+              if (_vi === _tgtIdx) continue;
+              if (callerArgAvs[_vi]) _srcObjs.push(callerArgAvs[_vi]);
+            }
+          } else {
+            _srcObjs.push(_srcSlot || subs.get(_re.value.obj) || _re.value.obj);
+          }
+          if (globalThis._DBG_REPLAY && fnContext && fnContext.id) {
+            console.log("[RPL]   eff key=" + _re.key.kind + " tMatch=true tgtIdx=" + _tgtIdx +
+              " variadic=" + _variadic + " srcObjs=" + JSON.stringify(_srcObjs.map(function (s) {
+                return s && (s.kind === "obj-lit" ? "obj{" + Object.keys(s.props || {}).join(",") + "}" : s.kind); })));
+          }
+          for (var _soi = 0; _soi < _srcObjs.length; _soi++) {
+            var _srcStk = [_srcObjs[_soi]], _srcSeen = new Set(), _srcConc = false;
+            while (_srcStk.length > 0) {
+              var _sx = _srcStk.pop();
+              if (!_sx || typeof _sx !== "object" || _srcSeen.has(_sx)) continue;
+              _srcSeen.add(_sx);
+              if (_sx.kind === "or" || _sx.kind === "logical") { if (_sx.left) _srcStk.push(_sx.left); if (_sx.right) _srcStk.push(_sx.right); continue; }
+              if (_sx.kind === "coerce" && _sx.arg) { _srcStk.push(_sx.arg); continue; }
+              if (_sx.kind === "obj-lit" && _sx.props && !_sx._hasUnknownExtraProps) {
+                _srcConc = true;
+                for (var _sk in _sx.props) if (Object.prototype.hasOwnProperty.call(_sx.props, _sk)) _retProps[_sk] = _sx.props[_sk];
+              } else if (_sx.kind === "const") {
+                _srcConc = true; // primitive: §13.7.5 enumerates nothing — no-op, but resolved
+              }
+            }
+            // § 7.4 deferral: a source that did NOT resolve to a
+            // concrete object is still SYMBOLIC at this context (e.g.
+            // `function build(s){return ext({},s)}` — `s` is build's
+            // own param). Eagerly stripping it would LOSE precision the
+            // outer call recovers. Defer it as an Object.assign source
+            // so the OUTER instantiation re-materialises the merge once
+            // the arg concretises (§ 20.1.2.1 + § 14.10; mirrors the
+            // engine's existing deferred-merge, now general — no shape).
+            if (!_srcConc) _deferredSrcs.push(_srcObjs[_soi]);
+          }
+        }
+      }
+      if (_retProps) {
+        var _retNew = { kind: "obj-lit", props: _retProps };
+        if (_retObj._ctorId) _retNew._ctorId = _retObj._ctorId;
+        if (_retObj._hasUnknownExtraProps) _retNew._hasUnknownExtraProps = true;
+        if (_deferredSrcs.length > 0) {
+          return { kind: "call",
+            callee: { kind: "builtin-method", id: "Object.assign" },
+            args: [_retNew].concat(_deferredSrcs) };
+        }
+        return _retNew;
+      }
+    }
+  }
+  return _instRet;
 }
 
 function _specInstantiateEffects(effects, callerArgAvs) {
@@ -21818,69 +21917,17 @@ function _specMergeObjAvs(targetAv, sourceAvs) {
   }
   return { kind: "obj-lit", props: merged };
 }
-// Memoised per-fn merger info: _specDetectPropagationFromEffects over
-// the fn's recorded effects, cached by fn-node identity (effects are
-// finalised once per analysis; the call-fold path queries this per
-// instantiation so memoisation keeps it O(1) after first compute).
-var _specMergerInfoMemo = new WeakMap();
-// Normalise a slot index to a plain number. `param` AVs carry a numeric
-// `.idx`; `args-elt` AVs carry an AV `.idx` (often `{kind:"const",
-// value:N}` for `arguments[0]`, but symbolic for `arguments[i]` in a
-// loop). Returns the number when statically known, else null (symbolic
-// → caller soundly skips: no single materialisable target slot).
-function _specSlotIdxNum(idx) {
-  if (typeof idx === "number") return idx;
-  if (idx && typeof idx === "object" && idx.kind === "const" &&
-      typeof idx.value === "number") return idx.value;
-  return null;
-}
-function _specMergerReturnInfo(fnNode) {
-  if (!fnNode) return null;
-  if (_specMergerInfoMemo.has(fnNode)) return _specMergerInfoMemo.get(fnNode);
-  // Only memoise a POSITIVE detection. A null here may merely mean the
-  // fn's effects are not yet finalised at this fold (phase ordering —
-  // a call can be folded before its callee's body analysis completes);
-  // caching null would poison every later query after the effects ARE
-  // recorded. _specDetectPropagationFromEffects is O(effects) — cheap to
-  // recompute until it confirms.
-  var info = _specDetectPropagationFromEffects(_specEffectsMemo.get(fnNode));
-  if (info) _specMergerInfoMemo.set(fnNode, info);
-  return info || null;
-}
-// Effect-confirmed manual-merger detection. Returns { source, target,
-// targetSlot } where targetSlot = { kind:"param"|"args-elt", idx } so a
-// caller folding the call with concrete args can materialize the return
-// as Object.assign(argAvs[idx], …other obj-lit args) per § 20.1.2.1 +
-// § 14.10 (the returned object reflects the body's prop-copy writes).
-function _specDetectPropagationFromEffects(effects) {
-  if (!effects || effects.length === 0) return null;
-  for (var i = 0; i < effects.length; i++) {
-    var e = effects[i];
-    if (!e.key || e.key.kind !== "loop-key") continue;
-    if (!e.value || e.value.kind !== "member") continue;
-    if (!_specEqualAv(e.key.src, e.value.obj)) continue;
-    if (!_specEqualAv(e.value.key, e.key)) continue;
-    // Walk every leaf of the target's or-tree; each represents a
-    // possible value the target could hold per § 13.13 / § 14.6 join
-    // semantics. A propagation matches if any leaf is a tractable
-    // input slot (this / param / args-elt).
-    var queue = [e.target];
-    while (queue.length > 0) {
-      var t = queue.pop();
-      if (!t) continue;
-      if (t.kind === "or") {
-        if (t.left) queue.push(t.left);
-        if (t.right) queue.push(t.right);
-        continue;
-      }
-      if (t.kind === "this" || t.kind === "param" || t.kind === "args-elt") {
-        return { source: e.key.src, target: t,
-                 targetSlot: { kind: t.kind, idx: t.idx } };
-      }
-    }
-  }
-  return null;
-}
+// (Removed the effect-shape merger detector — `_specMergerInfoMemo`,
+// `_specSlotIdxNum`, `_specMergePartition`, `_avHasSlotLeaf`,
+// `_specMergerReturnInfo`, `_specDetectPropagationFromEffects`. It
+// recognised a `for(k in s) t[k]=s[k]; return t` *shape* on the effect
+// graph and synthesised the merged return. A property-copy function's
+// merged return is now produced by the GENERAL abstract interpretation
+// of its body: formals / `arguments` bind to the concrete caller args,
+// and the for-in copy (§ 13.7.5) writes onto the returned object during
+// ordinary spec-eval — no shape recognition. `_specMergeObjAvs` is
+// retained: it is the genuine ECMA § 20.1.2.1 Object.assign operation,
+// used by the Object.assign builtin handler.)
 
 // (Removed `_resolveCalleeToFunction` — all routes now live in the
 // canonical iterative state machine `_resolveCalleeFuncPath` /
@@ -24864,6 +24911,41 @@ function _avHashChildList(av) {
   return result;
 }
 
+// Regular-tree cycle test for the caller-arg substitution worklist.
+// A PRODUCTIVE substitution replaces a `param` leaf with a more-resolved
+// value, so the post-substitution AV never re-embeds the entire pre-
+// substitution AV as a sub-tree. A self-referential object — jQuery
+// (every static method closes over `jQuery` and returns
+// `jQuery.ajax(jQuery.extend(…))`), or any `o.f` whose body calls `o.g`
+// — makes substitution RE-EMBED the prior AV one level deeper each step
+// (the result strictly contains the AV it was derived from). That is an
+// infinite rational tree (Courcelle 1983); the AV domain then has
+// infinite height and the substitution worklist never terminates — but
+// every interprocedural-dataflow termination proof (Sharir–Pnueli,
+// IFDS/IDE, k-CFA) requires a finite-height lattice (Cousot ▽). Finitise
+// by detecting the back-edge structurally: `targetHash` is the
+// structural hash of the AV the current substitution started from; if
+// any node of `rootAv` hashes equal to it, substitution closed a cycle
+// and further unrolling is non-productive (its resolvable string leaves
+// were already harvested). _avStructuralHash is itself cycle-safe and
+// memoised, so this is O(nodes). Recursion-free (explicit worklist).
+function _avHasSubtreeWithHash(rootAv, targetHash) {
+  if (!rootAv || typeof rootAv !== "object" || targetHash == null) return false;
+  var stack = [rootAv];
+  var seen = new Set();
+  while (stack.length > 0) {
+    var av = stack.pop();
+    if (!av || typeof av !== "object" || seen.has(av)) continue;
+    seen.add(av);
+    if (_avStructuralHash(av) === targetHash) return true;
+    var kids = _avHashChildList(av);
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i] && typeof kids[i] === "object") stack.push(kids[i]);
+    }
+  }
+  return false;
+}
+
 // Collect the set of `fn` identity FunctionNodes referenced by all
 // `param` leaves in the AV tree. Param leaves tag their owning function
 // per ECMA § 9.1.1 closure capture so substitution can target the
@@ -25400,7 +25482,22 @@ function _resolveAvBySubstitutingCallerArgs(funcPath, avWithParamRefs) {
       // params doesn't touch outer-fn-tagged params, so the next step
       // must walk the outer fn's callers. Falls back to callerEncFn
       // for legacy untagged params (no `fn` field).
-      if (_specAvHasParamLeaf(substituted)) {
+      //
+      // Finite-lattice guard (Sharir–Pnueli / IFDS / IDE / k-CFA all
+      // require a finite-height domain to terminate): a self-referential
+      // object (jQuery — every static method closes over `jQuery` and
+      // returns `jQuery.ajax(jQuery.extend(…))`; or any `o.f` whose body
+      // calls `o.g`) makes substitution re-embed the pre-substitution AV
+      // one level deeper each step. That rational tree has unbounded
+      // structural hash, so neither `structEdgeVisited` (hash key) nor
+      // `fnVisited` (identity) ever dedups and the worklist spins. When
+      // `substituted` contains a sub-tree structurally equal to the AV
+      // this step substituted from, the back-edge has closed: further
+      // unrolling is non-productive (the resolvable string leaves were
+      // already harvested into allLeaves above). Stop re-pushing — the
+      // value is a regular/cyclic tree, finitely represented.
+      if (_specAvHasParamLeaf(substituted) &&
+          !_avHasSubtreeWithHash(substituted, itemAvHash)) {
         var nextFnNodes = _specCollectParamFnNodes(substituted);
         if (nextFnNodes.size > 0) {
           var nfnIter = nextFnNodes.values();
