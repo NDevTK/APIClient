@@ -10,7 +10,7 @@ Browse any website. The extension works in the background:
 2. **Captures** cross-frame postMessage and MessageChannel messages via isolated-world listeners.
 3. **Decodes** traffic through a protocol chain: async chunked, batchexecute, gRPC-Web, SSE, NDJSON, multipart, GraphQL, JSON, and Protobuf.
 4. **Learns** API structure (VDD — Value-Driven Discovery) by merging schemas from every observed request and response into a unified service map.
-5. **Analyzes** JavaScript bundles with a scope-aware AST engine that extracts API call sites, value constraints, proto field maps, and security vulnerabilities — before any network call is made.
+5. **Analyzes** JavaScript bundles by *executing them for real* under forced multi-path exploration on a forked QuickJS-ng engine (WebAssembly) with a Lexbor spec DOM — extracting API call sites, computed URL/header/body values, and security taint, before any network call is made.
 6. **Probes** for official documentation (OpenAPI, Google Discovery) at well-known paths and merges it with learned data.
 
 Open the popup to inspect, test, and export everything it found.
@@ -20,8 +20,8 @@ Open the popup to inspect, test, and export everything it found.
 ### API Discovery & Schema Learning
 
 - **Passive Learning**: Every request and response teaches the extension about URL patterns, query parameters, body fields, field types, content types, and authentication.
-- **AST Static Analysis**: Babel parser + traverse with inter-procedural tracing extracts fetch/XHR call sites from JavaScript bundles — discovers APIs that haven't been called yet, including URLs, methods, headers, body structure, and query params.
-- **Value Constraint Extraction**: Detects valid parameter values from `switch`/`case`, `.includes()`, and equality chains in source code. These appear as dropdowns in the Send panel for both URL params and request body fields.
+- **Forced-Execution Analysis**: The unmodified bundle is *run* on a forked QuickJS-ng (compiled to WebAssembly) inside an offscreen Web Worker. Only the host boundary is modelled — a real Lexbor spec DOM/CSS/`URL`, and record-only fetch/XHR/`location`/storage stubs. Closures, prototypes, `Function.prototype.call/apply/bind`, async, framework state machines (jQuery `$.ajax`, axios, react-query) all evaluate with exact ECMA semantics because it is a real engine, not a re-implementation. Discovers APIs that haven't been called yet, with fully-computed URLs/methods/headers/body fields.
+- **Value Constraint Extraction**: Valid parameter values come from whatever the executed code computes (`switch`/`case`, `.includes()`, equality chains evaluate naturally). These appear as dropdowns in the Send panel for both URL params and request body fields.
 - **Autonomous Documentation Discovery**: Probes well-known paths (`/.well-known/openapi.json`, `/swagger.json`, `/$discovery/rest`, etc.) with version, visibility, and auth variants.
 - **Proto Field Maps & Enums**: Detects protobuf field number-to-name mappings and enum definitions from JavaScript bundles.
 - **Source Map Recovery**: Fetches source maps and extracts TypeScript interfaces, enums, and type aliases. Enriches VDD parameters with original type names. Runs security analysis on unminified original sources.
@@ -49,14 +49,12 @@ Format badges (PROTO, JSPB, BATCH, gRPC-WEB, SSE, NDJSON, GRAPHQL, MULTIPART, AS
 
 ### JavaScript Security Code Review
 
-AST-based analysis using Babel's scope system — no regex, no string matching, works on minified code.
+Taint is observed during the *same real execution* used for API learning — no separate traversal, no regex, no name matching. Works on minified code because names are irrelevant: a sink is what an executed call reaches at the host edge.
 
-- **DOM XSS Sinks**: `innerHTML`, `outerHTML`, `document.write`, `eval`, `new Function`, `insertAdjacentHTML`, `setTimeout`/`setInterval` with string arg, `setAttribute("on*")`.
-- **Open Redirects**: `location.href`, `location.assign`, `location.replace` with user-controlled values.
-- **Dangerous Patterns**: `postMessage` without `event.origin` checks, prototype pollution (`obj[userKey] = value`), dynamic `RegExp` with user-controlled patterns.
-- **Taint Source Tracking**: Traces data flow through scope bindings, function parameters, destructuring, string concatenation, method calls, array iteration callbacks (`.forEach`, `.map`, `.filter`, `.find`, `.reduce`), and `.then()`/`.catch()` chains. User-controlled sources: `location.*`, `document.referrer`, `document.cookie`, `window.name`, `event.data`.
-- **Severity Classification**: HIGH (user-controlled source reaches sink), MEDIUM (dynamic/unresolvable), LOW (literal value).
-- **No false positives from minification**: All detection is scope-aware — dynamic keys from iterators, object merges, and polyfills are not flagged.
+- **Attacker-taint sources** are the host-edge data made *opaque* (infectious through member-get / call / `JSON.parse` / iteration): `location.hash/search`, `document.cookie`, `*Storage.getItem`, `window.name`, `XHR.responseText/response`, `fetch` `Response` bodies, `postMessage` `data`/`origin`. DOM *structure* stays concrete so frameworks boot.
+- **Sinks** are recorded only when the value reaching them is tainted: code-exec (`eval`/`Function`/string `setTimeout`/`setInterval`), open-redirect (`location.href`/`assign`/`replace`), DOM-HTML (`innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`), script-bearing `setAttribute`. A concrete write (e.g. jQuery feature-detection `innerHTML`) is not a finding and costs nothing.
+- **Severity** is category-fixed: `code-exec` → critical, else high (sanitizer-path downgrade is honest future work, not claimed).
+- **Source positions**: every finding carries the bundle call chain from the engine's real `Error().stack`, mapped to combined-bundle line space for click-through to the original JS.
 
 ### Replay & Export
 
@@ -94,9 +92,11 @@ AST-based analysis using Babel's scope system — no regex, no string matching, 
 3. Enable **Developer mode**.
 4. Click **Load unpacked** and select the extension folder.
 
-The Babel runtime must be built first if `lib/babel-bundle.js` is not present:
+The analysis engine ships pre-built in `extension/lib/qjs/`. To rebuild it from the forked QuickJS-ng + Lexbor source (requires gcc for the native iterate binary and the bundled emsdk for the wasm targets):
 ```
-npm install && node build.js
+node engine/build.mjs            # native qjs.exe + cli/mod/worker wasm + stage
+node engine/build.mjs worker     # just the extension's wasm worker
+node engine/build.mjs stage      # copy qjs_worker.js + hostedge.gen.js into extension/lib/qjs/
 ```
 
 ## Architecture
@@ -104,17 +104,27 @@ npm install && node build.js
 ```
 intercept.js       Main-world fetch/XHR/WebSocket/EventSource wrapper (request + response capture)
 content.js         Isolated-world content script (DOM scanning, PAGE_FETCH relay, intercept relay, postMessage/MessageChannel listener)
-background.js      Service worker (request interception, VDD learning, AST orchestration, export)
+background.js      Service worker (request interception, VDD learning, analysis orchestration, protocol classification, export)
 popup.js           Popup controller (rendering, replay, form builder, security panel)
 popup.html/css     Popup markup and styles
+ast-worker.html    Offscreen document — thin relay to the analysis Web Worker
+ast-thread.js      Web Worker — schedule enumeration, one fresh wasm instance per schedule
+
+engine/qjs/        Forked QuickJS-ng + vendored Lexbor (Apache-2.0); ONE patched source → all targets:
+  quickjs.c          Patched interpreter — opaque sentinel, selective branch forcing, infectious-opaque
+  quickjs-forced.h   Forced-execution controller (schedule in, B/F trace out)
+  qjsmain.c          Host main — installs the DOM binding, evals scripts, surfaces @E gaps
+  qjs_dom.c          QuickJS↔Lexbor binding — spec DOM/CSS/customElements/WHATWG URL
+  hostedge.js        Record-only Web-boundary shim (fetch/XHR/location/storage/MessageChannel)
+  driver.js          Event-loop epilogue (pumps load/ready/message + XHR completion)
+engine/build.mjs     Builds native qjs.exe + 3 wasm targets from one source; `stage`s the worker
+extension/lib/qjs/   Pre-built qjs_worker.js + generated hostedge.gen.js (shipped)
 
 lib/
-  ast.js           AST engine — API call site extraction, proto detection, security code review
   sourcemap.js     Source map recovery — TypeScript interfaces, enums, type aliases
   discovery.js     Protocol parsers, schema resolution, bidirectional OpenAPI conversion
   protobuf.js      Wire-format codec, JSPB decoder, recursive base64 scanning
   req2proto.js     Error-based schema probing (Google-specific + generic)
-  babel-bundle.js  Bundled Babel runtime (parser, traverse, types) — built by build.js
 ```
 
 ### Data Flow
@@ -128,8 +138,8 @@ Cross-frame postMessage / MessageChannel ──→ content.js (message listener)
                                                                               │
                                               ┌───────────────────────────────┤
                                               ▼                               ▼
-                                     VDD Schema Learning              AST Bundle Analysis
-                                     (learnFromRequest/Response)      (analyzeJSBundle)
+                                     VDD Schema Learning              Forced-Execution Analysis
+                                     (learnFromRequest/Response)      (offscreen wasm worker)
                                               │                               │
                                               ▼                               ▼
                                      Discovery Docs (IndexedDB)      Security Findings
@@ -168,7 +178,16 @@ GlobalStore uses IndexedDB (inaccessible to content scripts) instead of `chrome.
 
 ## Testing
 
+Analysis correctness is proven by *running real code*, not unit assertions:
+
 ```
-node test-ast.js    # 560 tests — AST engine
-node test-lib.js    # 180 tests — protobuf, discovery, stats, chains
+cd engine/qjs
+node drive.mjs hostedge.js _gate.js driver.js     # endpoint/value polarity (server gate)
+node drive.mjs hostedge.js _xss.js  driver.js     # XSS sink polarity (positive + negative)
+node drive.mjs hostedge.js _url.js  driver.js     # WHATWG URL (Lexbor) polarity
+QJS_BIN=qjs_wasm.js node drive.mjs ...            # same, on wasm — native ≡ wasm before any claim
+node ../../testing/harness.js goto https://…      # live Chrome (CDP) — the only real-site ground truth
+node ../../test-lib.js                            # protobuf / discovery / OpenAPI conversion
 ```
+
+Real minified jQuery 3.7.1 is the standing regression gate (boots with zero spurious forks). Polarity fixtures never substitute for verifying a change against a real site through the harness.

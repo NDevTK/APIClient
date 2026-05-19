@@ -3860,7 +3860,7 @@ async function handleResponseBody(tabId, msg, frameId) {
 
 // ─── Cross-Script AST Buffering ──────────────────────────────────────────────
 
-function _bufferScript(tabId, scriptUrl, code, pageUrl) {
+function _bufferScript(tabId, scriptUrl, code, pageUrl, order, island) {
   var buf = _scriptBuffers.get(tabId);
   if (!buf) {
     buf = { scripts: [], timer: null, pageUrl: pageUrl, pending: 0, loadFired: false };
@@ -3884,7 +3884,7 @@ function _bufferScript(tabId, scriptUrl, code, pageUrl) {
     if (buf.scripts[i].key === key) { _scriptBufferDecrementPending(tabId, buf); return; }
   }
 
-  buf.scripts.push({ url: scriptUrl, code: code, key: key });
+  buf.scripts.push({ url: scriptUrl, code: code, key: key, order: (order == null ? 1e9 : order), island: island || null });
   console.debug("[AST:buffer] Buffered script %s (%d chars) tab=%d — %d scripts pending",
     scriptUrl || "(inline)", code.length, tabId, buf.scripts.length);
   _scriptBufferDecrementPending(tabId, buf);
@@ -3908,7 +3908,76 @@ function _scriptBufferDecrementPending(tabId, buf) {
   }
 }
 
-function _fetchAndBufferScript(tabId, scriptUrl, pageUrl) {
+// SSRF guard for the cookieless background script-fetch. host_perms
+// <all_urls> + no-CORS read means a hostile <script src> could point
+// at loopback / link-local / RFC1918 / cloud-metadata; real CDN-hosted
+// JS is always public http(s), so this costs nothing in usage while
+// removing a confused-deputy capability analysis never needs. NOT a
+// same-origin or content-type restriction (both wrong here).
+function _isPublicScriptUrl(u) {
+  var p;
+  try { p = new URL(u); } catch (e) { return false; }
+  if (p.protocol !== "http:" && p.protocol !== "https:") return false;
+  var h = p.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "0.0.0.0" || h === "::1" || h.endsWith(".local") || h.endsWith(".localhost")) return false;
+  if (/^127\./.test(h) || /^169\.254\./.test(h) || /^10\./.test(h) ||
+      /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
+  if (/^(::1|fe80:|fc[0-9a-f][0-9a-f]:|fd[0-9a-f][0-9a-f]:|::ffff:(127|10|192\.168|169\.254))/i.test(h)) return false;
+  return true;
+}
+
+// CORB/ORB enforcement for the CORS-bypassing extension fetch. A
+// hostile page can point <script src> at a cross-origin victim
+// endpoint (account.json, an HTML page); the browser's CORB would stop
+// a no-cors reader, but our host-permission fetch bypasses CORS, so we
+// must replicate CORB ourselves or become a cross-site read primitive.
+// Same-origin-to-page resources need no protection (the page can read
+// them itself). Cross-origin: block CORB-protected MIME types, honor
+// nosniff, and confirm by sniffing the body (catches mislabeled
+// JSON/HTML served as text/plain or octet-stream).
+function _jsMime(m) {
+  return m === "text/javascript" || m === "application/javascript" ||
+    m === "application/ecmascript" || m === "text/ecmascript" ||
+    m === "application/x-javascript" || m === "text/x-javascript" ||
+    m === "application/x-ecmascript" || m === "text/jscript" ||
+    m === "application/node" || /^text\/javascript1\.[0-5]$/.test(m);
+}
+function _corbProtectedMime(m) {
+  return m === "text/html" || m === "text/xml" || m === "application/xml" ||
+    /\+xml$/.test(m) || m === "application/json" || /\+json$/.test(m) ||
+    /^multipart\//.test(m);
+}
+function _sniffsProtected(s) {
+  var h = String(s == null ? "" : s).slice(0, 4096).replace(/^﻿/, "");
+  h = h.replace(/^\s+/, "");
+  if (h.charAt(0) === "<") return true; // HTML/XML/SVG/markup
+  if (h.charAt(0) === "{" || h.charAt(0) === "[") {
+    try { JSON.parse(s); return true; } catch (e) {
+      try { JSON.parse(h); return true; } catch (_) {}
+    }
+  }
+  return false;
+}
+function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageUrl) {
+  mime = String(mime || "").split(";")[0].trim().toLowerCase();
+  var cross = true;
+  try { cross = new URL(scriptUrl).origin !== new URL(pageUrl).origin; } catch (e) { cross = true; }
+  if (!cross) {
+    // Same-origin to the page — no confused-deputy; only skip the
+    // page's own non-JS data for usability, not as a boundary.
+    return !(_corbProtectedMime(mime) && !_jsMime(mime));
+  }
+  if (_corbProtectedMime(mime)) return false;          // CORB-protected type
+  if (nosniff && !_jsMime(mime)) return false;          // browser blocks too
+  if (_sniffsProtected(body)) return false;             // mislabeled data
+  return true;
+}
+
+function _fetchAndBufferScript(tabId, scriptUrl, pageUrl, order) {
+  if (!_isPublicScriptUrl(scriptUrl)) {
+    console.debug("[AST:buffer] Skipping non-public script URL (SSRF guard): %s", scriptUrl);
+    return;
+  }
   // Check if already buffered
   var buf = _scriptBuffers.get(tabId);
   if (buf) {
@@ -3927,19 +3996,23 @@ function _fetchAndBufferScript(tabId, scriptUrl, pageUrl) {
     if (!resp.ok) {
       console.debug("[AST:buffer] Fetch failed for %s: %d %s", scriptUrl, resp.status, resp.statusText);
       _scriptBufferDecrementPending(tabId, buf);
-      return;
+      return null;
     }
-    var ct = resp.headers.get("content-type") || "";
-    // Skip non-JS responses (images, CSS, etc. that might share .open() URLs)
-    if (ct && !ct.includes("javascript") && !ct.includes("ecmascript") && !ct.includes("text/plain") && !ct.includes("application/x-javascript")) {
-      console.debug("[AST:buffer] Skipping non-JS content-type for %s: %s", scriptUrl, ct);
+    var mime = resp.headers.get("content-type") || "";
+    var nosniff = (resp.headers.get("x-content-type-options") || "").toLowerCase().indexOf("nosniff") >= 0;
+    return resp.text().then(function(t) { return { mime: mime, nosniff: nosniff, text: t }; });
+  }).then(function(r) {
+    if (!r) return;
+    // CORB/ORB: never ingest a cross-origin response the browser would
+    // protect — replicates the protection our host-permission fetch bypasses.
+    if (!_corbAllowsScript(r.mime, r.nosniff, r.text, scriptUrl, pageUrl)) {
+      console.debug("[AST:buffer] CORB-blocked %s (mime=%s)", scriptUrl, String(r.mime).split(";")[0]);
       _scriptBufferDecrementPending(tabId, buf);
       return;
     }
-    return resp.text();
-  }).then(function(code) {
+    var code = r.text;
     if (code && code.length >= 50) {
-      _bufferScript(tabId, scriptUrl, code, pageUrl);
+      _bufferScript(tabId, scriptUrl, code, pageUrl, order);
     } else if (code != null) {
       // Tiny script — buffer skips it; balance the pending counter.
       _scriptBufferDecrementPending(tabId, buf);
@@ -4147,7 +4220,32 @@ async function _analyzeCombinedScripts(tabId) {
   if (!buf || buf.scripts.length === 0) return;
 
   var tab = getTab(tabId);
-  var scripts = buf.scripts;
+  // Concatenate in DOM/execution order, not fetch-arrival order — a
+  // later chunk that reads state an earlier chunk set up (GitHub's app
+  // chunk reading client-env loaded by environment-*.js) throws
+  // "requested before it was loaded" if combined out of order. Stable
+  // in-place sort so every downstream reader (scriptOffsets, the
+  // fallback combine paths, _findScriptForLine) sees the same order.
+  buf.scripts.sort(function (a, b) { return (a.order == null ? 1e9 : a.order) - (b.order == null ? 1e9 : b.order); });
+  // Split executable scripts from server-rendered data islands. Islands
+  // are NOT concatenated into the executable bundle (they're JSON, not
+  // code) — they're rebuilt into the worker's virtual DOM so the bundle
+  // bootstraps from them (GitHub #client-env) and runs correctly.
+  var _allBuf = buf.scripts;
+  var scripts = [];
+  var domIslands = [];
+  for (var _abi = 0; _abi < _allBuf.length; _abi++) {
+    var _be = _allBuf[_abi];
+    if (_be.island) domIslands.push({ id: _be.island.id, type: _be.island.scriptType, dataTarget: _be.island.dataTarget, text: _be.code });
+    else scripts.push(_be);
+  }
+  // Real <script src> URLs (in execution order) — built into the
+  // virtual DOM so webpack's auto-publicPath (document.currentScript
+  // .src / getElementsByTagName("script")) finds a real script URL
+  // instead of throwing "Automatic publicPath is not supported". Just
+  // URLs (tiny); bodies are already in the combined code.
+  var scriptUrls = [];
+  for (var _sui = 0; _sui < scripts.length; _sui++) if (scripts[_sui].url) scriptUrls.push(scripts[_sui].url);
   var totalChars = 0;
   for (var i = 0; i < scripts.length; i++) totalChars += scripts[i].code.length;
 
@@ -4169,18 +4267,29 @@ async function _analyzeCombinedScripts(tabId) {
   // AST_ANALYSIS_VERSION, replay the cached result without touching the
   // offscreen worker.
   var scriptHashes = [];
+  var islandHashes = [];
   try {
     for (var hi = 0; hi < scripts.length; hi++) {
       scriptHashes.push(await _hashScriptSHA256(scripts[hi].code));
     }
+    // Island content is part of the analysis input (env drives which
+    // endpoints/values resolve) — folded into the cache identity (so a
+    // changed data island re-analyzes) but kept in a SEPARATE array:
+    // scriptHashes.length must stay === scripts.length, since that
+    // equality is what gates cacheKey creation. (Mixing islands in
+    // broke the gate → cacheKey=null → results never cached.)
+    for (var hj = 0; hj < domIslands.length; hj++) {
+      islandHashes.push((domIslands[hj].id || hj) + ":" + await _hashScriptSHA256(domIslands[hj].text));
+    }
   } catch (_) {
     // SubtleCrypto unavailable — proceed without cache
     scriptHashes = [];
+    islandHashes = [];
   }
 
   var cacheKey = null;
   if (scriptHashes.length === scripts.length) {
-    cacheKey = scriptHashes.join("+");
+    cacheKey = scriptHashes.join("+") + (islandHashes.length ? "|isl:" + islandHashes.join(",") : "");
     var cached = globalStore.scriptCache.get(cacheKey);
     if (cached && cached.version === AST_ANALYSIS_VERSION) {
       console.debug("[AST:cache] Cache HIT for tab=%d (%d scripts, key=%s…)",
@@ -4242,6 +4351,8 @@ async function _analyzeCombinedScripts(tabId) {
     response = await sendToOffscreen({
       type: "AST_ANALYZE", code: combined, sourceUrl: tabUrl, forceScript: true,
       domContext: getTab(tabId).domContext || null,
+      domIslands: domIslands,
+      scriptUrls: scriptUrls,
     });
   } catch (e) {
     console.debug("[AST:combined] sendToOffscreen failed for tab=%d: %s", tabId, e.message || e);
@@ -5068,12 +5179,14 @@ function handleContentMessage(msg, sender) {
   if (msg.type === "SCRIPT_SOURCE") {
     var pageUrl = (sender.tab && sender.tab.url) || "";
     if (msg.code && typeof msg.code === "string") {
-      // Inline script — code sent directly
-      _bufferScript(tabId, msg.url || "", msg.code, pageUrl);
+      // Inline script (or a server-rendered data island when
+      // msg.island is set — buffered the same way, but kept out of the
+      // executable concat and built into the virtual DOM instead).
+      _bufferScript(tabId, msg.url || "", msg.code, pageUrl, msg.order, msg.island || null);
     } else if (msg.url && !msg.code) {
       // External script — content script sent URL only (avoids CORS issues)
       // Background has host_permissions: <all_urls>, so fetch is unrestricted
-      _fetchAndBufferScript(tabId, msg.url, pageUrl);
+      _fetchAndBufferScript(tabId, msg.url, pageUrl, msg.order);
     }
     return;
   }
@@ -5405,7 +5518,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         }
       }
 
-      // Re-fetch the script (extension has <all_urls>)
+      // Re-fetch the script (extension has <all_urls>) — same SSRF
+      // guard as the buffering path: public http(s) only.
+      if (!_isPublicScriptUrl(scriptUrl)) { sendResponse({ error: "blocked: non-public script URL" }); return; }
       fetch(scriptUrl).then(function(r) {
         if (!r.ok) throw new Error(r.status + " " + r.statusText);
         return r.text();

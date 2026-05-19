@@ -469,7 +469,7 @@
 
   var _lastScanHash = null;
   var _lastFormScanHash = null;
-  var _lastDomScanHash = null;
+  var _lastDomScanHash = null;
 
   function _simpleHash(str) {
     var h = 0;
@@ -589,6 +589,10 @@
           };
         }
       }
+      // (Server-rendered data islands are NOT collected here — slurping
+      // GitHub's multi-MB react embeddedData into one CONTENT_DOM
+      // message exceeds the structured-clone send. They flow through
+      // the per-item script pipeline instead; see extractScriptSource.)
       // Forms — same metadata scanForms() previously collected, now part
       // of the unified DOM context. The user noted: "This DOM work
       // likely replaces the HTML form extraction".
@@ -612,11 +616,21 @@
     });
   }
 
+  /* page-HTML seed removed: snapshotting SSR HTML into generic
+     non-functional JNode stubs is not a spec DOM. */
+
   // ─── Script Source Extraction (for AST analysis) ────────────────────────────
 
   const _sentScripts = new Set(); // track URLs/hashes already sent
+  // Monotonic DOM-execution order. querySelectorAll("script") yields
+  // document order; mutation-added scripts get later indices. Combined
+  // analysis MUST concatenate in this order or a bundle whose later
+  // chunk reads state a former chunk set up (e.g. GitHub's app chunk
+  // reading client-env loaded by environment-*.js) throws
+  // "requested before it was loaded" when the order is fetch-arrival.
+  var _scriptOrder = 0;
 
-  function sendScriptSource(url, code) {
+  function sendScriptSource(url, code, order) {
     if (!code || code.length < 50) return; // skip trivial scripts
     var key = url || hashCode(code);
     if (_sentScripts.has(key)) return;
@@ -625,6 +639,7 @@
       type: "SCRIPT_SOURCE",
       url: url || null,
       code: code,
+      order: order == null ? _scriptOrder++ : order,
     });
   }
 
@@ -637,8 +652,26 @@
   }
 
   function extractScriptSource(scriptEl) {
-    // Skip non-JavaScript script types (JSON config, importmaps, templates, etc.)
     var sType = scriptEl.type;
+    var order = _scriptOrder++;
+    // Server-rendered data island (GitHub's <script type="application/
+    // json" id="client-env">, ld+json, framework embeddedData). NOT
+    // executable — the bundle reads it via getElementById(id)
+    // .textContent → JSON.parse. Sent per-item (small message each,
+    // unlike one giant CONTENT_DOM) and order-tagged so it's built
+    // into the virtual DOM before the chunk that reads it.
+    if (sType && /^(application\/(ld\+)?json|text\/(template|html))$/i.test(sType) && !scriptEl.src) {
+      var dtext = scriptEl.textContent;
+      if (dtext) {
+        chrome.runtime.sendMessage({
+          type: "SCRIPT_SOURCE", url: null, code: dtext, order: order,
+          island: { id: scriptEl.id || null, scriptType: sType,
+            dataTarget: scriptEl.getAttribute("data-target") || null },
+        });
+      }
+      return;
+    }
+    // Skip other non-JavaScript script types (importmaps, speculationrules…)
     if (sType && sType !== "text/javascript" && sType !== "module" &&
         !/^(application\/javascript|text\/ecmascript)$/i.test(sType)) {
       return;
@@ -652,11 +685,12 @@
         type: "SCRIPT_SOURCE",
         url: src,
         code: null,  // background will fetch the source
+        order: order,
       });
     } else {
       // Inline script
       var code = scriptEl.textContent;
-      if (code) sendScriptSource(null, code);
+      if (code) sendScriptSource(null, code, order);
     }
   }
 
