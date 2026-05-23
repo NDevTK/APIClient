@@ -2706,6 +2706,26 @@ function buildFormFields(schema, initialData = null) {
     container.appendChild(info);
   }
 
+  // Learned required headers — the header SET the bundle actually attached at
+  // the host edge (fetch init.headers / XHR setRequestHeader), per-header
+  // literal value vs opaque ("dynamic", set by the app at runtime). Transport
+  // metadata, shown read-only so a reviewer knows what the endpoint needs
+  // (e.g. github preheat: Accept: application/json + X-GITHUB-PREHEAT dynamic).
+  const _rh = (schema.method && schema.method.requiredHeaders)
+    || (schema.endpoint && schema.endpoint.requiredHeaders);
+  if (_rh && Object.keys(_rh).length > 0) {
+    const hsec = el("div", "form-section");
+    let hh = '<div class="form-section-label">Required Headers <span class="card-meta">(learned)</span></div>';
+    for (const [hn, hv] of Object.entries(_rh)) {
+      const hval = (hv && hv.kind === "literal")
+        ? `<code>${esc(String(hv.value))}</code>`
+        : '<em class="card-meta">dynamic (set by app)</em>';
+      hh += `<div class="card-meta" style="display:flex;gap:8px;align-items:center;"><code>${esc(hn)}</code>: ${hval}</div>`;
+    }
+    hsec.innerHTML = hh;
+    container.appendChild(hsec);
+  }
+
   if (schema.parameters && Object.keys(schema.parameters).length > 0) {
     const section = el("div", "form-section");
     section.innerHTML = '<div class="form-section-label">URL Parameters</div>';

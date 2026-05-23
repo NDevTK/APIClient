@@ -338,7 +338,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     return { loc: { line: pick.line, column: pick.col }, chain: chain };
   }
 
-  function ep(method, rawUrl, body, kind, at, shape) {
+  function ep(method, rawUrl, body, kind, at, shape, hdrs) {
     if (isUnresolved(rawUrl) || isUnresolved(method)) {
       var rk = (method || "?") + " " + (rawUrl || "");
       if (!reSeen.has(rk)) {
@@ -355,8 +355,21 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     if (q >= 0) { path = rawUrl.slice(0, q); qs = rawUrl.slice(q + 1); }
     var key = method + " " + path;
     var m = methods.get(key);
-    if (!m) { m = { method: method, path: path, kind: kind, params: new Map(), loc: null, chain: [] }; methods.set(key, m); }
+    if (!m) { m = { method: method, path: path, kind: kind, params: new Map(), loc: null, chain: [], headers: {} }; methods.set(key, m); }
     if (!m.loc && at) { var s = pickSite(at); m.loc = s.loc; m.chain = s.chain; }
+    // requiredHeaders: the SET the bundle actually attached at the host edge
+    // (fetch init.headers / XHR setRequestHeader), per-header literal-vs-opaque
+    // provenance preserved ({name:{kind:"literal",value}|{kind:"opaque"}}).
+    // Merge across forced runs; a literal supersedes an earlier opaque for the
+    // same header (a concrete value is the better example).
+    if (hdrs && typeof hdrs === "object") {
+      for (var hk in hdrs) {
+        var hv = hdrs[hk];
+        if (!hv) continue;
+        var prev = m.headers[hk];
+        if (!prev || (prev.kind === "opaque" && hv.kind === "literal")) m.headers[hk] = hv;
+      }
+    }
     var add = function (n, loc, val) {
       var p = m.params.get(n);
       if (!p) { p = { name: n, location: loc, examples: new Set() }; m.params.set(n, p); }
@@ -561,8 +574,8 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     for (var ri = 0; ri < rh.length; ri++) {
       var r = rh[ri];
       if (r.api === "XMLHttpRequest.open") { if (pend) ep(pend.m, pend.u, null, "xhr", pend.at); pend = { m: r.args[0], u: r.args[1], at: r.at }; }
-      else if (r.api === "XMLHttpRequest.send") { if (pend) { ep(pend.m, pend.u, r.args[0], "xhr", pend.at, r.args[1]); pend = null; } }
-      else if (r.api === "fetch") ep(r.args[1] || "GET", r.args[0], r.args[2], "fetch", r.at, r.args[3]);
+      else if (r.api === "XMLHttpRequest.send") { if (pend) { ep(pend.m, pend.u, r.args[0], "xhr", pend.at, r.args[1], r.args[2]); pend = null; } }
+      else if (r.api === "fetch") ep(r.args[1] || "GET", r.args[0], r.args[2], "fetch", r.at, r.args[3], r.args[4]);
       else if (r.api === "script" && r.args && r.args[0] && !isUnresolved(r.args[0])) chunkUrls.add(String(r.args[0]));
     }
     if (pend) ep(pend.m, pend.u, null, "xhr", pend.at);
@@ -722,7 +735,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     });
     fetchCallSites.push({
       method: mm.method, url: mm.path, params: params,
-      headers: {}, loc: mm.loc, callChain: mm.chain,
+      headers: mm.headers || {}, loc: mm.loc, callChain: mm.chain,
       enclosingFunction: null, kind: mm.kind,
     });
     focusedView.push({

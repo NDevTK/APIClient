@@ -1421,10 +1421,25 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
 
   // Record content-type when AST captured it and the method hasn't seen
   // a real request-time content type yet. Real traffic overrides.
-  if (callSite.headers) {
-    const ct = callSite.headers["content-type"] || callSite.headers["Content-Type"];
+  if (callSite.headers && typeof callSite.headers === "object") {
+    // AST-captured required headers: the SET the bundle actually attached at
+    // the host edge (fetch init.headers / XHR setRequestHeader), each entry
+    // {kind:"literal",value}|{kind:"opaque"} (older format: bare string).
+    const ctEntry = callSite.headers["content-type"] || callSite.headers["Content-Type"];
+    const ct = ctEntry && (typeof ctEntry === "string" ? ctEntry : ctEntry.value);
     if (ct && (!m.contentTypes || m.contentTypes.length === 0)) {
       m.contentTypes = [ct];
+    }
+    // Store the full set per-endpoint as transport metadata (NOT body params),
+    // so the Send panel can show "this endpoint needs header X". A literal
+    // supersedes an earlier opaque for the same header; real traffic refines.
+    if (!m.requiredHeaders) m.requiredHeaders = {};
+    for (const hk in callSite.headers) {
+      const hv = callSite.headers[hk];
+      const norm = (typeof hv === "string") ? { kind: "literal", value: hv } : hv;
+      if (!norm || !norm.kind) continue;
+      const prev = m.requiredHeaders[hk];
+      if (!prev || (prev.kind === "opaque" && norm.kind === "literal")) m.requiredHeaders[hk] = norm;
     }
   }
 
@@ -5105,6 +5120,10 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
             service: interfaceName,
             source: isDynamic ? "ast_dynamic" : "ast_analysis",
             pageUrl: _epMeta ? _epMeta.url : null,
+            // AST-captured required headers (the SET the bundle attached at the
+            // host edge, per-header literal/opaque) — transport metadata shown
+            // in the Send panel so the endpoint is actually usable.
+            requiredHeaders: (callSite.headers && Object.keys(callSite.headers).length) ? callSite.headers : null,
             firstSeen: Date.now(),
           });
           newEndpoints++;
@@ -7164,6 +7183,11 @@ function resolveEndpointSchema(tabId, endpointKey, service, methodId) {
         scopes: match.method.scopes || [],
         resourceName: match.resourceName,
         contentTypes: match.method.contentTypes || [],
+        // AST-learned required headers (the header SET the bundle attached at
+        // the host edge, per-header literal/opaque) — transport metadata the
+        // Send panel surfaces. Whitelisted out before, so the popup never saw
+        // it for AST endpoints (which load via service+methodId, ep=null).
+        requiredHeaders: match.method.requiredHeaders || null,
       };
 
       // Resolve parameters
@@ -7306,6 +7330,7 @@ function resolveEndpointSchema(tabId, endpointKey, service, methodId) {
           origin: ep.origin,
           referer: ep.referer,
           contentType: ep.contentType,
+          requiredHeaders: ep.requiredHeaders || null,
         }
       : null,
   };
