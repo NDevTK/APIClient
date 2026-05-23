@@ -56,19 +56,35 @@ function lexborSrcs() {
 // Single source list — every target compiles the SAME patched TU set
 // plus the qjs<->Lexbor binding and Lexbor itself.
 const SRC = ["qjsmain.c", "quickjs.c", "libregexp.c", "libunicode.c",
-             "dtoa.c", "quickjs-libc.c", "qjs_dom.c", ...lexborSrcs()];
+             "dtoa.c", "quickjs-libc.c", "qjs_dom.c",
+             // C++ trampoline for Z3 — converts a Z3 throw into a
+             // Z3_ERROR verdict + @E diagnostic instead of crashing
+             // the runtime. Both gcc and emcc auto-detect .cpp.
+             "qjs_z3_shim.cpp",
+             ...lexborSrcs()];
+// Z3 SMT solver, linked statically. Used ONLY for security:
+// @S tainted-sink path-satisfiability solve (REAL EXPLOIT vs
+// INFEASIBLE forced path vs TAINT REACH ONLY). NEVER for API value
+// resolution — API values stay assumed/forked/structural per CLAUDE.md
+// (we want hidden/unreachable endpoints too). z3.h is C-ABI; the
+// solver code lives inside quickjs.c, no JS bridge.
+const Z3 = resolve(ENGINE, ".work", "z3");
+const Z3_INC = `-I${relative(QJS, join(Z3, "src", "api")).split(/[\\/]/).join("/")}`;
+const Z3_LIB_N = relative(QJS, join(Z3, "bn", "libz3.a")).split(/[\\/]/).join("/");
+const Z3_LIB_W = relative(QJS, join(Z3, "bw", "libz3.a")).split(/[\\/]/).join("/");
 const CFLAGS = ["-O1", "-w", "-D_GNU_SOURCE", "-DLEXBOR_STATIC",
+                "-DQJS_HAVE_Z3=1", Z3_INC,
                 "-I.", "-I../lexbor/source"];
 // QuickJS's own recursion (parser/GC) overflows emscripten's 64KB
-// default stack on real minified bundles; grow it + the heap. The
-// heap grows on demand from 64MB; MAXIMUM_MEMORY is the wasm32
-// ceiling (2^32 = 4 GiB = 65536 64KiB pages — the most a wasm32
-// linear memory can address, and the most Chrome will grant). Without
-// this, emscripten's ALLOW_MEMORY_GROWTH default caps at 2GB, so a
-// large real-site bundle re-executed across forced schedules could
-// OOM while half the addressable space sat unused.
-const WMEM = ["-sSTACK_SIZE=8388608", "-sINITIAL_MEMORY=67108864",
-              "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=4294967296"];
+// default stack on real minified bundles; grow it. Memory64 lifts
+// the wasm32 4 GiB cap to the wasm64 spec ceiling (2^64 bytes); the
+// platform/host enforces the real bound, not an arbitrary build-
+// time number. Memory64 ships in Chrome ≥ 133, Firefox ≥ 134, Node
+// ≥ 24. All linked libraries must also be -sMEMORY64=1.
+const WMEM = ["-sMEMORY64=1",
+              "-sSTACK_SIZE=8388608",
+              "-sALLOW_MEMORY_GROWTH=1",
+              "-sDISABLE_EXCEPTION_CATCHING=0", "-fexceptions"];
 
 function run(cmd, args, extraEnv) {
   console.log(`\n[build] ${cmd} ${args.join(" ")}`);
@@ -80,7 +96,10 @@ function run(cmd, args, extraEnv) {
   if (r.status !== 0) { console.error(`[build] FAILED rc=${r.status}`); process.exit(r.status || 1); }
 }
 function emcc(extra, out) {
-  run(EM_PY, [EMCC, ...CFLAGS, ...SRC, ...WMEM, ...extra, "-o", out],
+  // libz3.a (wasm) appended to the link line — emcc auto-links the
+  // C++ runtime so no extra -lstdc++ needed; Z3 is single-threaded so
+  // no -pthread either.
+  run(EM_PY, [EMCC, ...CFLAGS, ...SRC, Z3_LIB_W, ...WMEM, ...extra, "-o", out],
       { EM_CONFIG, EMSDK });
 }
 function size(f) {
@@ -93,26 +112,38 @@ function native() {
   // gcc is spawned through a shell. A GCC @response-file is the
   // canonical fix for a long link line (whitespace-separated tokens;
   // every path here is space-free, forward-slash, relative to QJS).
+  //
+  // libz3.a is C++ (libstdc++ + libgcc statically baked so the exe is
+  // portable across mingw-runtime versions). -lpthread is required by
+  // Z3's mutex init even with -DZ3_SINGLE_THREADED=ON on mingw.
   const rsp = "native.rsp";
   writeFileSync(join(QJS, rsp),
-    [...CFLAGS, "-o", "qjs.exe", ...SRC, "-lm"].join("\n"));
+    [...CFLAGS, "-o", "qjs.exe", ...SRC, Z3_LIB_N,
+     "-static-libstdc++", "-static-libgcc", "-lstdc++", "-lpthread", "-lm"].join("\n"));
   run("gcc", ["@" + rsp]);
   console.log("[build] " + size("qjs.exe"));
 }
 function cli() {
   // NODERAWFS: the wasm CLI reads script files + writes the trace on
   // the real FS, exactly like native — drive.mjs treats them the same.
-  emcc(["-sNODERAWFS"], "qjs_wasm.js");
+  // DBG=1 adds ASSERTIONS so a failed/oversized malloc prints its exact
+  // size + JS stack instead of a bare abort trap (diagnostic only).
+  const dbg = process.env.DBG === "1" ? ["-sASSERTIONS=2"] : [];
+  emcc(["-sNODERAWFS", ...dbg], "qjs_wasm.js");
   console.log("[build] " + size("qjs_wasm.js") + " " + size("qjs_wasm.wasm"));
 }
 function mod() {
   // ES6 module, no auto-run: the extension worker does
   // `factory({...})` then `m.callMain(argv)` per forced schedule, with
   // script files in MEMFS and the trace read back from MEMFS.
+  // DBG=1 adds ASSERTIONS (prints the exact malloc size + JS stack on
+  // an allocation failure) for diagnosing the wasm64 size-corruption
+  // OOM; off by default (ships clean).
+  const dbg = process.env.DBG === "1" ? ["-sASSERTIONS=2"] : [];
   emcc(["-sMODULARIZE=1", "-sEXPORT_ES6=1",
         "-sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV",
         "-sINVOKE_RUN=0", "-sEXIT_RUNTIME=0",
-        "-sENVIRONMENT=web,worker,node", "--pre-js", "prejs.js"],
+        "-sENVIRONMENT=web,worker,node", "--pre-js", "prejs.js", ...dbg],
        "qjs_mod.mjs");
   console.log("[build] " + size("qjs_mod.mjs") + " " + size("qjs_mod.wasm"));
 }

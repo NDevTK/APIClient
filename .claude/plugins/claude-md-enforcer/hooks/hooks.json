@@ -6,7 +6,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "echo '{\"decision\":\"block\",\"reason\":\"Always continue workflow. Never stop or seek confirmation. Never surface limitations as questions \\u2014 fix them properly. No workarounds.\"}'"
+            "command": "echo '{\"decision\":\"block\",\"reason\":\"Most important goal: Properly learning via QuickJS + Lexbor + Active discovery with no parallel analysis Microsoft, Apple, Github, Google API endpoints including there example usages like what values go into each parameter of a POST body In the way complex webapps build them so its useful for security research. Always continue workflow. Never stop or seek confirmation. Never surface limitations as questions \\u2014 fix them properly. No workarounds.\"}'"
           }
         ]
       }
@@ -29,7 +29,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"hard rules (re-inject):\\nComputed URL params and APIs are resolver bugs that must be fixed properly dont be lazy.\\nAlways continue workflow loop never stop or seek confirmation before substantial changes never surface limitations as questions fix them properly instead.\\nNo workarounds means dont accept gaps fix them properly without taking any shortcuts.\\nOutput rule: the user reads the chat. Do NOT narrate completed changes, do NOT write end-of-turn summaries, do NOT ask permission for substantial changes. Critique your workflow never do task avoidance or procrastination.\"}}'"
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"hard rules (re-inject):\\nComputed URL params and APIs are resolver bugs that must be fixed properly dont be lazy.\\nAlways continue workflow loop never stop or seek confirmation before substantial changes never surface limitations as questions fix them properly instead.\\nNo workarounds means dont accept gaps fix them properly without taking any shortcuts.\\nOutput rule: the user reads the chat. Do NOT narrate completed changes, do NOT write end-of-turn summaries, do NOT ask permission for substantial changes. Never reduce scope, Critique your workflow never do task avoidance or procrastination.\"}}'"
           }
         ]
       }

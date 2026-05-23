@@ -1310,9 +1310,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!isExtensionPage) return;
 
     if (msg.type === "STATE_UPDATED") {
-      if (msg.tabId === currentTabId || logFilter !== "active") {
-        throttledLoadState();
-      }
+      // Endpoints, security findings and keys are GLOBAL (cross-tab
+      // globalStore), so re-render on ANY tab's update — not just the active
+      // tab's. The background deep unused-feature grind and cross-session
+      // resumes learn endpoints (e.g. github's login-gated `preheat`) MINUTES
+      // after the page loaded and may carry a different tabId than the open
+      // popup's active tab; gating on `msg.tabId === currentTabId` hid those,
+      // so they only showed on reopen. loadState re-fetches the global store
+      // plus the active tab's per-tab request log, so a blanket refresh is
+      // correct (and throttled).
+      throttledLoadState();
       if (currentBodyMode === "msgconsole" && currentChannelId) {
         refreshMsgConsole();
       }
@@ -1638,12 +1645,83 @@ function _renderSanitizerDetails(item) {
     + '<ul class="taint-hops">' + rows + '</ul></details>';
 }
 
+// Render a Z3-produced multi-source PoC: shows the ordered attacker
+// steps (URL setup, postMessage payloads, storage/cookie injections)
+// and a "Run multi-step PoC" button that orchestrates the attack
+// against the target tab via background._runStructuredPlan. The
+// rendered steps are exactly what the orchestrator dispatches —
+// reviewer sees the recipe before executing.
+function _renderPocRow(entry, i, poc) {
+  const key = _findingKey(entry);
+  const stepBlocks = [];
+  // URL setup row (hash/search/pathname) — applied at chrome.tabs.create
+  if (poc.url && (poc.url.hash || poc.url.search || poc.url.pathname)) {
+    const parts = [];
+    if (poc.url.hash) parts.push('hash=' + esc(poc.url.hash));
+    if (poc.url.search) parts.push('search=' + esc(poc.url.search));
+    if (poc.url.pathname) parts.push('path=' + esc(poc.url.pathname));
+    stepBlocks.push('<div class="poc-step poc-url">URL: ' + parts.join(' &nbsp; ') + '</div>');
+  }
+  // Pre-injection state (storage, cookies)
+  if (Array.isArray(poc.storage) && poc.storage.length) {
+    for (const it of poc.storage)
+      stepBlocks.push('<div class="poc-step poc-pre">localStorage.setItem(<b>' + esc(it.key || '') + '</b>, ' + esc(JSON.stringify(it.value || '')) + ')</div>');
+  }
+  if (Array.isArray(poc.cookies) && poc.cookies.length) {
+    for (const it of poc.cookies)
+      stepBlocks.push('<div class="poc-step poc-pre">document.cookie = ' + esc(JSON.stringify(it.value || '')) + '</div>');
+  }
+  // Ordered events (postMessage sequence)
+  for (let ei = 0; ei < poc.events.length; ei++) {
+    const ev = poc.events[ei];
+    const carried = ev.carriesPayload ? ' <span class="poc-marker-tag" title="this event carries the marker that intercept.js detects at the sink">[sink-bearing]</span>' : '';
+    stepBlocks.push('<div class="poc-step poc-event">'
+      + 'Step ' + (ei + 1) + ' &middot; <code>window.postMessage(</code>'
+      + '<pre class="poc-payload">' + esc(JSON.stringify(ev.payload, null, 2)) + '</pre>'
+      + '<code>, "*")</code>' + carried + '</div>');
+  }
+  const stepHtml = stepBlocks.length
+    ? '<details class="poc-steps"><summary>PoC plan (' + stepBlocks.length + ' step' + (stepBlocks.length === 1 ? '' : 's') + ')</summary>' + stepBlocks.join('') + '</details>'
+    : '<div class="poc-na">PoC has no actionable steps</div>';
+
+  const resultHtml = '<div class="probe-result" data-finding-key="' + esc(key) + '"></div>';
+  const probeData = {
+    pocPlan: poc,
+    sourceUrl: entry.sourceUrl || null,
+    pageUrl: entry.pageUrl || null,
+    sinkType: entry.item.type || null,
+    sinkName: entry.item.sink || null,
+  };
+  const btnAttrs =
+    ' data-finding-key="' + esc(key) + '"'
+    + ' data-probe=\'' + esc(JSON.stringify(probeData)) + '\''
+    + ' data-finding-idx="' + i + '"';
+  const verdictTag = entry.item.verdict
+    ? '<span class="poc-verdict poc-' + esc(entry.item.verdict.toLowerCase()) + '">Z3: ' + esc(entry.item.verdict) + '</span>'
+    : '';
+  return '<div class="probe-row poc-row">'
+    + verdictTag
+    + stepHtml
+    + '<button class="probe-btn poc-run-btn"' + btnAttrs + '>Run multi-step PoC</button>'
+    + '<span class="probe-hint">orchestrates the sequence on the target via chrome.scripting. Payload calls a dedicated <code>apiclientsink(origin)</code> global installed by intercept.js — REAL EXPLOIT requires the browser to actually run that function through the named pipeline (svg onload, img onerror, eval, javascript: navigation). CSP that blocks inline scripts prevents the call → NOT REPRODUCED. No prototype hooks, no substring matching: the only signal is "did the function land".</span>'
+    + resultHtml + '</div>';
+}
+
 function _renderVerifyRow(entry, i) {
   // Only sinks carry a taint source the probe can exercise. Dangerous
   // patterns (prototype pollution, regex ReDoS, etc.) aren't probed by
   // URL/postMessage strategies — show a subdued row explaining why.
   if (entry.kind !== "sink") {
     return '<div class="probe-row"><span class="probe-na">pattern finding — not probeable via URL/postMessage</span></div>';
+  }
+  // Z3-produced structured PoC (multi-source, ordered events, nested
+  // object payloads): preferred over legacy single-strategy probe when
+  // present. Sends EXPLOIT_PROBE_START with pocPlan → background.js
+  // routes to _runStructuredPlan → composes target URL + dispatches
+  // event sequence + reads intercept.js marker-flag.
+  const poc = entry.item.poc;
+  if (poc && Array.isArray(poc.events) && (poc.events.length || (poc.url && (poc.url.hash || poc.url.search || poc.url.pathname)) || (poc.storage && poc.storage.length) || (poc.cookies && poc.cookies.length))) {
+    return _renderPocRow(entry, i, poc);
   }
   const strategy = _probeStrategyFor(entry.item);
   const key = _findingKey(entry);
@@ -1744,9 +1822,14 @@ async function _handleVerifyClick(btn) {
 
   try {
     const start = await new Promise((resolve) => {
+      // pocPlan present → background.js routes to _runStructuredPlan
+      // (multi-source orchestrator); else legacy single-strategy
+      // probe path. Both share the same EXPLOIT_PROBE_START envelope
+      // so the popup needs no separate command type.
       chrome.runtime.sendMessage({
         type: "EXPLOIT_PROBE_START",
-        strategy: probeData.strategy,
+        strategy: probeData.strategy || null,
+        pocPlan: probeData.pocPlan || null,
         paramName: probeData.paramName || null,
         fieldPath: probeData.fieldPath || [],
         sinkType: probeData.sinkType || null,
@@ -1820,47 +1903,38 @@ function _renderProbeResult(resultEl, snapshot) {
   const hits = snapshot.hits || [];
   const executed = snapshot.executed || null;
 
-  // Tri-state verdict matches the harness + memory rule:
-  //   1. NOT REPRODUCED — no sink touched the marker and no payload vector fired
-  //   2. TAINT REACH ONLY — sink received the marker but didn't parse/exec it
-  //   3. REAL EXPLOIT — an active payload executed (img/svg onerror fired,
-  //      eval/Function consumed the js statement, javascript: href ran)
-  //      OR HTML parsing was confirmed via the DOM-presence div (CSP-tolerant)
-  if (!hits.length && !executed) {
+  // Binary verdict matching the new probe model: intercept.js installs
+  // a dedicated `apiclientsink(origin)` global. The orchestrator's
+  // payload is constructed to call it from inside whatever exec
+  // pipeline applies (svg onload / img onerror / eval / javascript:
+  // navigation). A call ⇒ REAL EXPLOIT (browser actually executed
+  // through the named pipeline). No call ⇒ NOT REPRODUCED. There is
+  // no "TAINT REACH ONLY" intermediate — that lived on the old
+  // prototype-hook substring-match channel which we removed.
+  if (!executed) {
     resultEl.className = "probe-result probe-miss";
-    resultEl.textContent = "NOT REPRODUCED — no sink reached and no payload executed. Finding may require user interaction, a specific DOM state, or a different source.";
+    let html = '<div class="probe-miss-head">NOT REPRODUCED — apiclientsink was never called. The payload may have been blocked by CSP, the gate values may not match the plan, or the target may not have parsed/executed the payload.</div>';
+    const recipe = snapshot.recipe;
+    if (recipe) {
+      html += '<details class="probe-recipe"><summary>What the SW actually sent</summary><pre>' + esc(JSON.stringify(recipe, null, 2)) + '</pre></details>';
+    }
+    resultEl.innerHTML = html;
     return;
   }
 
-  const vectorDesc = {
-    html: "inline handler fired (img onerror)",
-    svg: "inline handler fired (svg onload)",
-    js: "eval/Function ran the JS payload",
-    href: "javascript: URL navigation ran the payload",
-    dom: "HTML parsing confirmed (div landed in DOM — CSP-tolerant)",
-  };
-  const firedKeys = executed ? Object.keys(executed).filter(k => executed[k]) : [];
-  const activeExec = firedKeys.some(k => k !== "dom");
-
-  resultEl.className = "probe-result " + (firedKeys.length ? "probe-hit" : "probe-miss");
-  let html = "";
-  if (firedKeys.length) {
-    html += '<div class="probe-hit-head">' +
-      (activeExec ? "REAL EXPLOIT — payload executed at runtime" : "HTML PARSING CONFIRMED — payload was parsed as HTML") +
-      '</div><ul class="probe-hits">';
-    for (const v of firedKeys) {
-      html += '<li><code>' + esc(v) + '</code> — ' + esc(vectorDesc[v] || "unknown vector") + '</li>';
-    }
-    html += '</ul>';
-  } else if (hits.length) {
-    html += '<div class="probe-hit-head">TAINT REACH ONLY — marker reached a sink but was not parsed/executed</div>';
-    html += '<div class="probe-hint-detail">Handler may have treated the value as plain text (textContent, encoded), or a sanitizer stripped active content before innerHTML.</div>';
+  const firedOrigins = Object.keys(executed).filter(k => executed[k]);
+  resultEl.className = "probe-result probe-hit";
+  let html = '<div class="probe-hit-head">REAL EXPLOIT — apiclientsink fired ' +
+    firedOrigins.length + ' time(s)</div><ul class="probe-hits">';
+  for (const origin of firedOrigins) {
+    html += '<li><code>' + esc(origin) + '</code></li>';
   }
+  html += '</ul>';
   if (hits.length) {
-    html += '<div class="probe-hit-subhead">intercept.js recorded ' + hits.length + ' sink call(s) with the marker:</div><ul class="probe-hits probe-hits-dim">';
+    html += '<div class="probe-hit-subhead">apiclientsink invocations (' + hits.length + '):</div><ul class="probe-hits probe-hits-dim">';
     for (const h of hits.slice(0, 6)) {
       const url = h.url ? ' <span class="probe-hit-url">' + esc(String(h.url).slice(0, 80)) + '</span>' : '';
-      html += '<li><code>' + esc(h.sink) + '</code>' + url + '<br><span class="probe-hit-val">' + esc(String(h.value || "").slice(0, 200)) + '</span></li>';
+      html += '<li><code>' + esc(h.sink) + '</code>' + url + '</li>';
     }
     if (hits.length > 6) html += '<li>… +' + (hits.length - 6) + ' more</li>';
     html += '</ul>';
@@ -2968,7 +3042,7 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
     if (initialValue && typeof initialValue === "object" && !Array.isArray(initialValue)) {
       queue.push({ kind: "MESSAGE_GROUP", parent: wrapper, fieldDef, category, depth, initialValue, hasSchema: false });
     } else {
-      wrapper.appendChild(createSingleInput({ type: "string" }, ""));
+      wrapper.appendChild(createSingleInput({ type: "string" }, "", category));
     }
   } else if (fieldDef.label === "repeated" && fieldDef.type !== "message") {
     const listContainer = el("div", "form-repeated-list");
@@ -2976,10 +3050,10 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
 
     if (Array.isArray(initialValue) && initialValue.length > 0) {
       for (const val of initialValue) {
-        listContainer.appendChild(createSingleInput(fieldDef, val));
+        listContainer.appendChild(createSingleInput(fieldDef, val, category));
       }
     } else {
-      listContainer.appendChild(createSingleInput(fieldDef, initialValue));
+      listContainer.appendChild(createSingleInput(fieldDef, initialValue, category));
     }
     wrapper.appendChild(listContainer);
 
@@ -2987,10 +3061,10 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
     addBtn.textContent = "+ Add";
     addBtn.type = "button";
     addBtn.dataset.formAddRepeated = "1";
-    _addItemTargets.set(addBtn, { kind: "repeatedScalar", listContainer, fieldDef });
+    _addItemTargets.set(addBtn, { kind: "repeatedScalar", listContainer, fieldDef, category });
     wrapper.appendChild(addBtn);
   } else if (fieldDef.type !== "message") {
-    wrapper.appendChild(createSingleInput(fieldDef, initialValue));
+    wrapper.appendChild(createSingleInput(fieldDef, initialValue, category));
   }
 
   return wrapper;
@@ -3120,11 +3194,11 @@ document.addEventListener("click", (e) => {
   if (ctx.kind === "repeatedMessage") {
     ctx.listContainer.appendChild(_buildRepeatedMessageItem(ctx.fieldDef, ctx.category, ctx.depth, null));
   } else if (ctx.kind === "repeatedScalar") {
-    ctx.listContainer.appendChild(createSingleInput(ctx.fieldDef));
+    ctx.listContainer.appendChild(createSingleInput(ctx.fieldDef, null, ctx.category));
   }
 });
 
-function createSingleInput(fieldDef, initialValue = null) {
+function createSingleInput(fieldDef, initialValue = null, category = null) {
   const type = fieldDef.type || "string";
 
   if ((type === "enum" || fieldDef.enum) && fieldDef.enum?.length) {

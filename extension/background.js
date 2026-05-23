@@ -4,12 +4,42 @@
 
 importScripts("lib/protobuf.js", "lib/discovery.js", "lib/req2proto.js", "lib/stats.js", "lib/chains.js");
 
-// ─── AST Cache Version ──────────────────────────────────────────────────────
-// Bump this when the AST analysis output shape changes or a resolver
-// path is added — cached results from an older version replay via
-// _replayCachedAST which skips the analyzer, so finding-shape changes
-// must invalidate the cache to take effect.
-const AST_ANALYSIS_VERSION = 2;
+// ─── AST Cache Fingerprint ──────────────────────────────────────────────────
+// The fingerprint hashes the analyzer worker files at first use — any
+// change to ast-thread.js, hostedge.gen.js, or qjs_worker.js auto-
+// invalidates cached results because the cache key shifts. Replaces
+// the prior manual AST_ANALYSIS_VERSION constant that had to be bumped
+// by hand whenever the analyzer output shape changed (smell:
+// non-additive shape changes leaked across versions; never bumping
+// meant stale cached results deserialized into new consumer code wrong).
+var _analyzerFingerprint = null;
+var _analyzerFingerprintP = null;
+async function getAnalyzerFingerprint() {
+  if (_analyzerFingerprint) return _analyzerFingerprint;
+  if (_analyzerFingerprintP) return _analyzerFingerprintP;
+  _analyzerFingerprintP = (async () => {
+    var files = ["ast-thread.js", "lib/qjs/qjs_worker.js", "lib/qjs/hostedge.gen.js"];
+    var hashes = [];
+    for (var i = 0; i < files.length; i++) {
+      try {
+        var resp = await fetch(chrome.runtime.getURL(files[i]));
+        var txt = await resp.text();
+        hashes.push(await _hashScriptSHA256(txt));
+      } catch (e) {
+        // A file missing during a partial build/stage cycle would
+        // produce a wrong fingerprint; treat as not-yet-cacheable.
+        hashes.push(null);
+      }
+    }
+    if (hashes.indexOf(null) >= 0) {
+      _analyzerFingerprintP = null;       // retry on next call
+      return null;
+    }
+    _analyzerFingerprint = hashes.join(".").slice(0, 32);
+    return _analyzerFingerprint;
+  })();
+  return _analyzerFingerprintP;
+}
 
 // ─── Offscreen AST Worker ────────────────────────────────────────────────────
 // Heavy libs (babel-bundle.js, ast.js, sourcemap.js) run in an offscreen
@@ -49,6 +79,21 @@ async function sendToOffscreen(msg) {
   await ensureOffscreen();
   return chrome.runtime.sendMessage(msg);
 }
+
+// Cross-session eventual consistency: on browser start AND extension
+// reload/update, proactively create the offscreen document so its worker —
+// which runs _resumeIncompleteDeep on load — picks up any deep grind left
+// incomplete in IndexedDB (the persisted combined bundle + cursor) and
+// continues from where it stopped, WITHOUT waiting for the user to visit a
+// new page. The persisted JS is never lost (IndexedDB survives restart); this
+// just kicks the resume immediately instead of on the next navigation. The
+// worker no-ops when IndexedDB has nothing pending, so the cost is one idle
+// offscreen doc that Chrome reclaims when truly idle.
+function _kickDeepResume() { try { ensureOffscreen().catch(function () {}); } catch (e) {} }
+try {
+  chrome.runtime.onStartup.addListener(_kickDeepResume);
+  chrome.runtime.onInstalled.addListener(_kickDeepResume);
+} catch (e) {}
 
 // Inlined from ast.js — extracts sourceMappingURL from the last 500 chars.
 // Runs synchronously in the service worker (no Babel needed).
@@ -610,6 +655,12 @@ async function clearGlobalStore() {
   globalStore.probeResults.clear();
   globalStore.scopes.clear();
   globalStore.securityFindings.clear();
+  // The AST replay cache is keyed by analyzer-fingerprint + script hashes,
+  // so it normally self-invalidates across builds — but an explicit Clear
+  // is the tester's "re-analyze from scratch" action, and leaving the cache
+  // means the next navigation replays a stale derived result instead of
+  // re-running the worker. Clearing it here makes Clear actually clear.
+  globalStore.scriptCache.clear();
   try {
     await _idbClear();
   } catch (_) {
@@ -1055,7 +1106,12 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
     };
   }
 
-  const segments = urlObj.pathname.split("/").filter(Boolean);
+  // __feUrlShape path-template params ({id}) survive new URL() as
+  // %7B..%7D (the WHATWG path percent-encode set includes {}); decode so
+  // a templated method reads `{id}`, not `%7Bid%7D`. Harmless for normal
+  // paths — they never contain %7B.
+  const _decTpl = (s) => s.replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}");
+  const segments = urlObj.pathname.split("/").filter(Boolean).map(_decTpl);
   const interfaceParts = interfaceName.split("/");
 
   // Method segments are everything after the interface prefix
@@ -1110,6 +1166,13 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
 // Stats observation counters are never bumped.
 function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
   const tab = getTab(tabId);
+
+  // Structural @T candidates carry url:null (a host-edge site in
+  // unreached code whose value never resolved). They are surfaced as
+  // structural candidates / focusedView review items, never as a
+  // learnable endpoint — resolving null through new URL() fabricates a
+  // bogus "/null" path (origin + String(null)). Skip cleanly.
+  if (callSite.url == null || callSite.url === "") return null;
 
   // Resolve URL. Dynamic / unresolvable → register service-level only,
   // no synthetic method entry (would confuse the reviewer with made-up
@@ -1212,7 +1275,7 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
   if (!doc.resources.learned.methods[methodName] && !probedMethod) {
     doc.resources.learned.methods[methodName] = {
       id: methodId,
-      path: csUrl.pathname.substring(1),
+      path: csUrl.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
       httpMethod: callSite.method,
       parameters: {},
       request: null,
@@ -1306,6 +1369,28 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
           type: _inferType(p.validValues, p.defaultValue),
           location: "query",
           description: "Learned from AST fetch call site",
+          _astInferred: true,
+        };
+      }
+      _mergeAstValues(m.parameters[p.name], p.validValues, p.defaultValue);
+    }
+  }
+
+  // Path params — the {name} segments __feUrlShape recovered from an
+  // opaque path interpolation (e.g. /settings/avatars/{id}, where id is
+  // real attacker/server input the bundle interpolated). Registered as
+  // location:"path" (required — it IS the path) so the reviewer sees the
+  // templated segment as a real parameter; value stays opaque (no
+  // example) until real traffic or replay fills it.
+  if (callSite.params) {
+    for (const p of callSite.params) {
+      if ((p.location || "query") !== "path") continue;
+      if (!m.parameters[p.name]) {
+        m.parameters[p.name] = {
+          type: _inferType(p.validValues, p.defaultValue),
+          location: "path",
+          required: true,
+          description: "Learned from AST fetch call site (path template)",
           _astInferred: true,
         };
       }
@@ -3860,7 +3945,7 @@ async function handleResponseBody(tabId, msg, frameId) {
 
 // ─── Cross-Script AST Buffering ──────────────────────────────────────────────
 
-function _bufferScript(tabId, scriptUrl, code, pageUrl, order, island) {
+function _bufferScript(tabId, scriptUrl, code, pageUrl, order) {
   var buf = _scriptBuffers.get(tabId);
   if (!buf) {
     buf = { scripts: [], timer: null, pageUrl: pageUrl, pending: 0, loadFired: false };
@@ -3884,7 +3969,7 @@ function _bufferScript(tabId, scriptUrl, code, pageUrl, order, island) {
     if (buf.scripts[i].key === key) { _scriptBufferDecrementPending(tabId, buf); return; }
   }
 
-  buf.scripts.push({ url: scriptUrl, code: code, key: key, order: (order == null ? 1e9 : order), island: island || null });
+  buf.scripts.push({ url: scriptUrl, code: code, key: key, order: (order == null ? 1e9 : order) });
   console.debug("[AST:buffer] Buffered script %s (%d chars) tab=%d — %d scripts pending",
     scriptUrl || "(inline)", code.length, tabId, buf.scripts.length);
   _scriptBufferDecrementPending(tabId, buf);
@@ -4213,12 +4298,104 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
   for (var smi = 0; smi < sourceMapScripts.length; smi++) {
     _fetchSourceMapForScript(tabId, tab, analysis, sourceMapScripts[smi].scriptUrl, sourceMapScripts[smi].smUrl);
   }
+
+  // Even on a cached eager-bundle hit, fold in the lazy chunks (the chunk
+  // re-analyses are cache hits too). Fire-and-forget: replay path is sync.
+  _maybeDownloadChunks(tabId, buf, analysis.chunkUrls)
+    .catch(function (e) { console.debug("[AST:chunks] tab=%d replay error: %s", tabId, e && e.message); });
 }
 
-async function _analyzeCombinedScripts(tabId) {
+// Deterministic in-flight signal for the diagnostic / e2e harness:
+// _analyzeCombinedScripts sets this for the tab on entry, clears on
+// exit (success OR error). Lets a test poll "wait until !running"
+// instead of guessing a wall-clock budget — the wait scales with
+// real worker execution.
+const _analysisInflight = new Set();
+// Lazy-chunk download (ONE round — the eager-loader manifest, which already
+// includes the login-gated partials' chunks like 30129 / issues/preheat).
+// Folds the discovered chunks into the combined set and re-analyses so their
+// endpoints are learned. Bounded: a transitive fixpoint chases the whole
+// ~700-chunk graph; one round is the directly-lazy surface.
+async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
+  if (!buf || !Array.isArray(chunkUrls) || chunkUrls.length === 0) return;
+  if (buf._chunkRoundDone) return;
+  buf._chunkRoundDone = true;
+  if (!buf._chunkSeen) buf._chunkSeen = new Set();
+  var known = new Set();
+  var maxOrder = 0;
+  for (var i = 0; i < buf.scripts.length; i++) {
+    if (buf.scripts[i].url) known.add(buf.scripts[i].url);
+    if (typeof buf.scripts[i].order === "number" && buf.scripts[i].order > maxOrder) maxOrder = buf.scripts[i].order;
+  }
+  var fresh = [];
+  for (var j = 0; j < chunkUrls.length; j++) {
+    var u = chunkUrls[j];
+    if (!u || known.has(u) || buf._chunkSeen.has(u) || !/^https?:\/\//i.test(u)) continue;
+    buf._chunkSeen.add(u);
+    fresh.push(u);
+  }
+  if (fresh.length === 0) return;
+  console.debug("[AST:chunks] tab=%d: %d new lazy chunk(s) to download", tabId, fresh.length);
+  var added = 0;
+  var CONC = 8;
+  for (var s = 0; s < fresh.length; s += CONC) {
+    var batch = fresh.slice(s, s + CONC);
+    // Direct SW fetch (host_permissions: <all_urls>) — NOT pageContextFetch.
+    // Chunk assets are public (github.githubassets.com); the page-context relay
+    // was flaky (a navigating/closing tab dropped fetches mid-flight, so the
+    // combined sometimes folded in only SOME chunks — the residue-variance bug
+    // that lost preheat). The SW fetch is independent of the tab's lifecycle.
+    var results = await Promise.all(batch.map(function (cu) {
+      return fetch(cu, { method: "GET", credentials: "omit" })
+        .then(function (resp) { return resp.ok ? resp.text() : null; })
+        .then(function (body) { return { u: cu, body: body }; })
+        .catch(function (e) { return { u: cu, body: null, err: String(e && e.message || e) }; });
+    }));
+    for (var ri = 0; ri < results.length; ri++) {
+      var rr = results[ri];
+      if (rr.body) {
+        buf.scripts.push({ url: rr.u, code: rr.body, order: ++maxOrder });
+        added++;
+      } else {
+        console.debug("[AST:chunks] fetch failed %s: %s", rr.u, rr.err || "not-ok/empty");
+      }
+    }
+  }
+  if (added === 0) return;
+  console.debug("[AST:chunks] tab=%d: folded in %d chunk(s), re-analysing (%d scripts total)",
+    tabId, added, buf.scripts.length);
+  await _analyzeCombinedScriptsInner(tabId, buf);
+}
+
+// Review queue. New pages (and their JS) are QUEUED, then a single drainer
+// reviews ONE page at a time. Combined with the worker throttling itself
+// (it yields the core between every schedule/deep batch), this means many
+// open tabs never stack analyses onto the CPU — the reviewer runs cool in
+// the background and never pins a core. Time is free; a maxed core is not.
+var _reviewQueue = [];
+var _reviewDraining = false;
+function _analyzeCombinedScripts(tabId) {
   var buf = _scriptBuffers.get(tabId);
   if (!buf || buf.scripts.length === 0) return;
-
+  if (_reviewQueue.indexOf(tabId) < 0) _reviewQueue.push(tabId);   // dedupe within queue; a re-queue after run re-reviews late scripts (combined-cache makes an unchanged set a fast hit)
+  _drainReviewQueue();
+}
+async function _drainReviewQueue() {
+  if (_reviewDraining) return;
+  _reviewDraining = true;
+  try {
+    while (_reviewQueue.length) {
+      var tabId = _reviewQueue.shift();
+      var buf = _scriptBuffers.get(tabId);
+      if (!buf || buf.scripts.length === 0) continue;
+      _analysisInflight.add(tabId);
+      try { await _analyzeCombinedScriptsInner(tabId, buf); }
+      catch (e) { console.debug("[AST:queue] tab=%d review error: %s", tabId, e && e.message); }
+      finally { _analysisInflight.delete(tabId); }
+    }
+  } finally { _reviewDraining = false; }
+}
+async function _analyzeCombinedScriptsInner(tabId, buf) {
   var tab = getTab(tabId);
   // Concatenate in DOM/execution order, not fetch-arrival order — a
   // later chunk that reads state an earlier chunk set up (GitHub's app
@@ -4231,14 +4408,11 @@ async function _analyzeCombinedScripts(tabId) {
   // are NOT concatenated into the executable bundle (they're JSON, not
   // code) — they're rebuilt into the worker's virtual DOM so the bundle
   // bootstraps from them (GitHub #client-env) and runs correctly.
-  var _allBuf = buf.scripts;
-  var scripts = [];
-  var domIslands = [];
-  for (var _abi = 0; _abi < _allBuf.length; _abi++) {
-    var _be = _allBuf[_abi];
-    if (_be.island) domIslands.push({ id: _be.island.id, type: _be.island.scriptType, dataTarget: _be.island.dataTarget, text: _be.code });
-    else scripts.push(_be);
-  }
+  // Lexbor inside the engine worker parses CONTENT_HTML and produces
+  // the real spec DOM the bundle reads — including the page's data
+  // islands (inline <script type="application/json">). No need to
+  // ship them as a separate domIslands array.
+  var scripts = buf.scripts;
   // Real <script src> URLs (in execution order) — built into the
   // virtual DOM so webpack's auto-publicPath (document.currentScript
   // .src / getElementsByTagName("script")) finds a real script URL
@@ -4263,40 +4437,33 @@ async function _analyzeCombinedScripts(tabId) {
 
   // ─── AST Cache Check ───────────────────────────────────────────────
   // Hash each script individually, then combine hashes into a cache key.
-  // If the exact same set of scripts was analyzed before with the same
-  // AST_ANALYSIS_VERSION, replay the cached result without touching the
-  // offscreen worker.
+  // If the exact same set of scripts was analyzed before AND the
+  // analyzer fingerprint (the SHA of the analyzer worker source) is
+  // unchanged, replay the cached result without touching the offscreen
+  // worker. Analyzer fingerprint is baked into cacheKey, so a stale
+  // entry simply does not match — no manual version bumps needed.
   var scriptHashes = [];
-  var islandHashes = [];
   try {
     for (var hi = 0; hi < scripts.length; hi++) {
       scriptHashes.push(await _hashScriptSHA256(scripts[hi].code));
     }
-    // Island content is part of the analysis input (env drives which
-    // endpoints/values resolve) — folded into the cache identity (so a
-    // changed data island re-analyzes) but kept in a SEPARATE array:
-    // scriptHashes.length must stay === scripts.length, since that
-    // equality is what gates cacheKey creation. (Mixing islands in
-    // broke the gate → cacheKey=null → results never cached.)
-    for (var hj = 0; hj < domIslands.length; hj++) {
-      islandHashes.push((domIslands[hj].id || hj) + ":" + await _hashScriptSHA256(domIslands[hj].text));
-    }
   } catch (_) {
     // SubtleCrypto unavailable — proceed without cache
     scriptHashes = [];
-    islandHashes = [];
   }
 
   var cacheKey = null;
-  if (scriptHashes.length === scripts.length) {
-    cacheKey = scriptHashes.join("+") + (islandHashes.length ? "|isl:" + islandHashes.join(",") : "");
+  var analyzerFp = await getAnalyzerFingerprint();
+  if (analyzerFp && scriptHashes.length === scripts.length) {
+    // Cache key = (analyzer fingerprint) + (script content hashes).
+    // Any change to the analyzer worker files OR the analyzed scripts
+    // flips the key, so stale entries simply don't match.
+    cacheKey = analyzerFp + "|" + scriptHashes.join("+");
     var cached = globalStore.scriptCache.get(cacheKey);
-    if (cached && cached.version === AST_ANALYSIS_VERSION) {
+    if (cached) {
       console.debug("[AST:cache] Cache HIT for tab=%d (%d scripts, key=%s…)",
         tabId, scripts.length, cacheKey.slice(0, 16));
-      // Update timestamp for LRU eviction
-      cached.timestamp = Date.now();
-      // Replay cached results
+      cached.timestamp = Date.now();      // LRU touch
       _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf);
       return;
     }
@@ -4350,25 +4517,52 @@ async function _analyzeCombinedScripts(tabId) {
   try {
     response = await sendToOffscreen({
       type: "AST_ANALYZE", code: combined, sourceUrl: tabUrl, forceScript: true,
-      domContext: getTab(tabId).domContext || null,
-      domIslands: domIslands,
       scriptUrls: scriptUrls,
+      pageHtml: getTab(tabId)._pageHtml || null,
+      // The chunk re-analysis pass (round 2, after _maybeDownloadChunks set
+      // _chunkRoundDone) runs SEED-ONLY: it folds in ~346 lazy chunks (~18 MB
+      // combined), where the full value-spread BFS would be a minutes-long
+      // cliff. The seed's loader/static drive recovers the chunk endpoints;
+      // round 1's full BFS already gave the eager endpoints their spread.
+      seedOnly: !!buf._chunkRoundDone,
+      // Deep orphan @T drive (render-gated chunk endpoints like preheat) on
+      // the chunk-fold round. It's THROTTLED+resumable now: the worker steps
+      // it in small batches with CPU yields between (qjsmain persistent
+      // runtime), so it learns the unused/login-gated surface at a low duty
+      // cycle in the background instead of pegging a core.
+      deep: !!buf._chunkRoundDone,
     });
   } catch (e) {
     console.debug("[AST:combined] sendToOffscreen failed for tab=%d: %s", tabId, e.message || e);
+    getTab(tabId)._astError = "sendToOffscreen threw: " + (e.message || String(e));
     return;
   }
   if (!response || !response.success) {
     console.debug("[AST:combined] analyzeJSBundle failed for tab=%d: %s", tabId,
       response ? response.error : "no response");
     if (response && response.stack) console.debug(response.stack);
+    getTab(tabId)._astError = "offscreen unsuccessful: " + (response ? (response.error + " | " + (response.stack || "")) : "no response");
     // Fallback: analyze scripts individually
     for (var fi = 0; fi < scripts.length; fi++) {
       analyzeScript(tabId, scripts[fi].url, scripts[fi].code);
     }
     return;
   }
+  getTab(tabId)._astError = null;
   analysis = response.result;
+
+  // NOTE: lazy-chunk consumption (download the chunk URLs the forced run
+  // recorded — analysis.chunkUrls — and re-review the combined whole) is
+  // intentionally NOT run inline here: it must not BLOCK the initial
+  // endpoint population, and re-analyzing the 8 MB+ combined set is only
+  // affordable once the worker reuses its instance across schedules. Today
+  // each github schedule aborts at JS_FreeRuntime (the teardown GC leak) so
+  // ast-thread recycles (re-instantiates the 36 MB instance) every
+  // schedule, which makes even one combined re-analysis prohibitively slow
+  // live. The discovery half stands (hostedge records chunk URLs →
+  // analysis.chunkUrls); wiring the download+combined-review back in is
+  // gated on the persistent-runtime / fresh-context-per-schedule fix that
+  // removes the per-schedule re-instantiation.
 
   if (analysis._timings) {
     // Surface per-script AST latency on the analysis result so the
@@ -4382,9 +4576,10 @@ async function _analyzeCombinedScripts(tabId) {
   }
 
   // ─── Cache the analysis result ──────────────────────────────────────
+  // Cache key already encodes the analyzer fingerprint + script hashes;
+  // no separate version field — a stale fingerprint just won't match.
   if (cacheKey) {
     globalStore.scriptCache.set(cacheKey, {
-      version: AST_ANALYSIS_VERSION,
       result: JSON.parse(JSON.stringify(analysis)), // deep copy to avoid aliasing
       scriptOffsets: scriptOffsets,
       tabUrl: tabUrl,
@@ -4516,6 +4711,12 @@ async function _analyzeCombinedScripts(tabId) {
   for (var smi = 0; smi < sourceMapScripts.length; smi++) {
     _fetchSourceMapForScript(tabId, tab, analysis, sourceMapScripts[smi].scriptUrl, sourceMapScripts[smi].smUrl);
   }
+
+  // Download the lazy chunks this run discovered and re-analyse the union —
+  // learns the login-gated endpoints (issues/preheat/index, …). Awaited so
+  // the in-flight signal covers it.
+  try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls); }
+  catch (e) { console.debug("[AST:chunks] tab=%d error: %s", tabId, e && e.message); }
 }
 
 function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
@@ -4599,7 +4800,6 @@ async function analyzeScript(tabId, scriptUrl, code) {
   try {
     response = await sendToOffscreen({
       type: "AST_ANALYZE", code: code, sourceUrl: scriptUrl,
-      domContext: getTab(tabId).domContext || null,
     });
   } catch (e) {
     console.debug("[AST] sendToOffscreen failed for %s: %s", scriptUrl, e.message || e);
@@ -4847,6 +5047,11 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
     for (var fc = 0; fc < analysis.fetchCallSites.length; fc++) {
       var callSite = analysis.fetchCallSites[fc];
       try {
+        // Structural @T candidate (url:null — unreached site, value
+        // unresolved): surfaced via focusedView/structuralCandidates, not
+        // a learnable endpoint. Skip before new URL(null) fabricates a
+        // "/null" path.
+        if (callSite.url == null || callSite.url === "") continue;
         // Skip data:/blob:/about: URLs — those are inline content, not
         // API endpoints. Registering them as services produces empty-
         // host records with garbled paths (the URL parser reads the
@@ -4973,123 +5178,14 @@ function _formFieldToParamType(field) {
   }
 }
 
-function _handleFormMetadata(tabId, forms, sender) {
-  const tab = getTab(tabId);
-  const pageUrl = sender.tab ? sender.tab.url : null;
-
-  for (var fi = 0; fi < forms.length; fi++) {
-    var form = forms[fi];
-    if (!form.action || !form.fields || !form.fields.length) continue;
-
-    var url;
-    try { url = new URL(form.action); } catch (_) { continue; }
-
-    var service = extractInterfaceName(url);
-    var { methodName: baseMethodName } = calculateMethodMetadata(url, service);
-    var qualifiedName = form.method.toLowerCase() + "_" + baseMethodName;
-    // Create or get VDD entry
-    var docEntry = tab.discoveryDocs.get(service);
-    if (!docEntry || !docEntry.doc) {
-      docEntry = {
-        status: "found",
-        isVirtual: true,
-        doc: {
-          kind: "discovery#restDescription",
-          name: service,
-          title: `${service} (Learned)`,
-          rootUrl: url.origin + "/",
-          baseUrl: url.origin + "/",
-          resources: { learned: { methods: {} } },
-          schemas: {},
-        },
-      };
-      tab.discoveryDocs.set(service, docEntry);
-    }
-
-    var doc = docEntry.doc;
-    if (!doc.resources.learned) doc.resources.learned = { methods: {} };
-
-    var methodId = `${service.replace(/\//g, ".")}.${qualifiedName}`;
-
-    if (!doc.resources.learned.methods[qualifiedName]) {
-      doc.resources.learned.methods[qualifiedName] = {
-        id: methodId,
-        path: url.pathname.substring(1),
-        httpMethod: form.method,
-        parameters: {},
-        request: null,
-        origin: url.origin,
-        _source: "form_scan",
-      };
-    }
-
-    var m = doc.resources.learned.methods[qualifiedName];
-
-    // Convert form fields to parameters
-    for (var fj = 0; fj < form.fields.length; fj++) {
-      var field = form.fields[fj];
-      if (!field.name || typeof field.name !== "string") continue;
-
-      var location = form.method === "GET" ? "query" : "body";
-      var paramType = _formFieldToParamType(field);
-
-      if (!m.parameters[field.name]) {
-        m.parameters[field.name] = {
-          type: paramType,
-          location: location,
-          description: "Learned from form" + (field.placeholder ? ` (${field.placeholder})` : ""),
-        };
-      }
-
-      var param = m.parameters[field.name];
-
-      // HTML validation constraints
-      if (field.required) param.required = true;
-      if (field.pattern) param.pattern = field.pattern;
-      if (field.minLength) param.minLength = field.minLength;
-      if (field.maxLength) param.maxLength = field.maxLength;
-      if (field.min != null) param.minimum = field.min;
-      if (field.max != null) param.maximum = field.max;
-
-      // Select/radio options → enum
-      if (field.options && field.options.length > 0) {
-        param.enum = field.options.map(function (o) { return o.value; });
-      }
-
-      if (field.defaultValue != null) param.default = field.defaultValue;
-      if (field.autocomplete) param._autocomplete = field.autocomplete;
-    }
-
-    // Record content type
-    if (!m.contentTypes) m.contentTypes = [];
-    if (!m.contentTypes.includes(form.enctype)) m.contentTypes.push(form.enctype);
-
-    // Apply example-value picker so form-scan-derived methods show
-    // prefill values via pickExampleValue (enum/format/default tiers).
-    // Without this, the Send form would render empty inputs on AST-
-    // or form-only methods.
-    applyStatsToMethod(m, doc);
-
-    // Register as endpoint
-    var epKey = "FORM " + form.method + " " + url.hostname + url.pathname;
-    if (!tab.endpoints.has(epKey)) {
-      tab.endpoints.set(epKey, {
-        url: form.action,
-        method: form.method,
-        host: url.hostname,
-        path: url.pathname,
-        service: service,
-        origin: url.origin,
-        source: "form_scan",
-        pageUrl: pageUrl,
-        firstSeen: Date.now(),
-      });
-    }
-  }
-
-  mergeToGlobal(tab);
-  notifyPopup(tabId);
-}
+/* _handleFormMetadata removed: forms are now learned through the
+   engine path. The Lexbor-parsed document inside the QuickJS worker
+   exposes every form; __hostDrive walks them and calls form.submit(),
+   which routes through the same G.fetch hook the bundle's own JS
+   reaches. The resulting @H records flow through learnFromAstCallSite
+   (engine output) and learnFromRequest (live traffic) into the same
+   discoveryDoc, with per-field literal/opaque provenance preserved.
+   No separate content-script DOM walk. */
 
 function _handleFormSubmit(tabId, msg) {
   if (!msg.url || !msg.fields) return;
@@ -5137,7 +5233,15 @@ function _handleFormSubmit(tabId, msg) {
   notifyPopup(tabId);
 }
 
-// Content scripts handle CONTENT_KEYS, CONTENT_ENDPOINTS, CONTENT_FORMS, CONTENT_FORM_SUBMIT, RESPONSE_BODY, and SCRIPT_SOURCE.
+// Content scripts handle CONTENT_HTML, CONTENT_DOM, CONTENT_FORMS,
+// CONTENT_FORM_SUBMIT, RESPONSE_BODY, and SCRIPT_SOURCE. CONTENT_KEYS
+// / CONTENT_ENDPOINTS were removed — those were heuristic regex
+// scans over HTML text, which is Lexbor's parsing job, and the
+// endpoint heuristic ("url contains /api/" etc.) produced source:
+// page_source entries with no method, no params, no taint info.
+// Now: raw HTML lands in CONTENT_HTML, gets parsed by Lexbor in the
+// worker; real endpoints come from forced execution observing actual
+// fetch/XHR at the host edge.
 // Manifest "matches" already restricts which pages they run on.
 function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
@@ -5161,6 +5265,27 @@ function handleContentMessage(msg, sender) {
     return;
   }
 
+  // AST_RESUMED: the offscreen worker finished a deep grind it picked up from
+  // IndexedDB after an MV3 eviction. Merge the recovered unused-feature
+  // endpoints into the matching tab + globalStore so the resume isn't wasted.
+  if (msg.type === "AST_RESUMED") {
+    try {
+      var _rurl = (msg.sourceUrl || "").split("?")[0];
+      var _rtid = null;
+      _tabMeta.forEach(function (mm, tid) { if (_rtid == null && mm && mm.url && _rurl && mm.url.indexOf(_rurl) === 0) _rtid = tid; });
+      if (_rtid != null && msg.result) {
+        var _rtab = getTab(_rtid);
+        mergeASTResultsIntoVDD(_rtab, [msg.result], _rtid);
+        mergeToGlobal(_rtab);
+        notifyPopup(_rtid);
+        console.debug("[AST:resumed] merged deep-resume for %s into tab=%d", _rurl, _rtid);
+      } else {
+        console.debug("[AST:resumed] no open tab for %s — resume endpoints not merged", _rurl);
+      }
+    } catch (e) { console.debug("[AST:resumed] error: %s", e && e.message); }
+    return;
+  }
+
   // PROBE_HIT: intercept.js recorded a sink that saw the active
   // probe marker. Correlate to an open exploit-probe session via the
   // hit's own marker (carried in the URL at probe time) and append.
@@ -5179,10 +5304,9 @@ function handleContentMessage(msg, sender) {
   if (msg.type === "SCRIPT_SOURCE") {
     var pageUrl = (sender.tab && sender.tab.url) || "";
     if (msg.code && typeof msg.code === "string") {
-      // Inline script (or a server-rendered data island when
-      // msg.island is set — buffered the same way, but kept out of the
-      // executable concat and built into the virtual DOM instead).
-      _bufferScript(tabId, msg.url || "", msg.code, pageUrl, msg.order, msg.island || null);
+      // Inline JS only — data islands are handled by Lexbor parsing
+      // CONTENT_HTML, not shipped as separate SCRIPT_SOURCE messages.
+      _bufferScript(tabId, msg.url || "", msg.code, pageUrl, msg.order);
     } else if (msg.url && !msg.code) {
       // External script — content script sent URL only (avoids CORS issues)
       // Background has host_permissions: <all_urls>, so fetch is unrestricted
@@ -5221,93 +5345,34 @@ function handleContentMessage(msg, sender) {
     return;
   }
 
-  if (msg.type === "CONTENT_FORMS") {
-    if (Array.isArray(msg.forms)) {
-      _handleFormMetadata(tabId, msg.forms, sender);
-    }
-    return;
-  }
-
   if (msg.type === "CONTENT_FORM_SUBMIT") {
     _handleFormSubmit(tabId, msg);
     return;
   }
 
-  if (!Array.isArray(msg.keys || msg.endpoints)) return;
   const tab = getTab(tabId);
 
-  if (msg.type === "CONTENT_KEYS") {
-    for (const key of msg.keys) {
-      API_KEY_RE.lastIndex = 0;
-      if (!API_KEY_RE.test(key)) continue;
-      if (!tab.apiKeys.has(key)) {
-        var _ckPageUrl = sender.tab ? sender.tab.url : null;
-        tab.apiKeys.set(key, {
-          origin: sender.origin,
-          referer: sender.origin,
-          source: "page_source",
-          firstSeen: Date.now(),
-          lastSeen: Date.now(),
-          services: new Set(),
-          hosts: new Set(),
-          endpoints: new Set(),
-          pageUrls: new Set(_ckPageUrl ? [_ckPageUrl] : []),
-          requestCount: 0,
-        });
-      } else if (sender.tab && sender.tab.url) {
-        var _ckExisting = tab.apiKeys.get(key);
-        if (!_ckExisting.pageUrls) _ckExisting.pageUrls = new Set();
-        _ckExisting.pageUrls.add(sender.tab.url);
-      }
-    }
-    mergeToGlobal(tab);
+  if (msg.type === "CONTENT_PING") {
+    var arr = _contentPings.get(tabId);
+    if (!arr) { arr = []; _contentPings.set(tabId, arr); }
+    arr.push({ at: msg.at || Date.now(), pageUrl: msg.pageUrl || null });
+    return;
+  }
+
+  if (msg.type === "CONTENT_HTML") {
+    // Raw server-rendered HTML — stash per-tab so AST_ANALYZE feeds it
+    // into the worker, where Lexbor parses it spec-correctly into the
+    // analyser's document. The bundle's connectedCallback / React
+    // effects then have a real DOM to attach to; @H records come
+    // through observed fetch/XHR, not from regex-scanning the text.
+    tab._pageHtml = String(msg.html || "");
     notifyPopup(tabId);
   }
 
-  if (msg.type === "CONTENT_ENDPOINTS") {
-    for (const ep of msg.endpoints) {
-      const key = `SOURCE ${ep}`;
-      if (!tab.endpoints.has(key)) {
-        try {
-          const url = new URL(ep);
-          const rpcInfo = parseRpcPath(url.pathname);
-          tab.endpoints.set(key, {
-            url: ep,
-            method: "?",
-            host: url.hostname,
-            path: url.pathname,
-            service: extractInterfaceName(url),
-            origin: sender.origin,
-            rpc: rpcInfo,
-            source: "page_source",
-            pageUrl: sender.tab ? sender.tab.url : null,
-            firstSeen: Date.now(),
-          });
-        } catch (_) {}
-      }
-    }
-    mergeToGlobal(tab);
-    notifyPopup(tabId);
-  }
-
-  // CONTENT_DOM: snapshot of static page DOM context (meta tags, data-*
-  // attrs, hrefs/srcs/actions/forms extracted from the rendered HTML).
-  // Cached per-tab; passed into AST_ANALYZE so virtual-DOM resolution
-  // can close gaps where JS reads markup-set values (e.g.
-  // document.querySelector("meta[name=X]").content). Per user directive:
-  // "HTML is also in-scope... pages should be reviewed with all the
-  // javascript files plus DOM" + "DOM work likely replaces the HTML form
-  // extraction" — so forms inside the DOM context are routed to the
-  // existing form handler instead of going through a separate
-  // CONTENT_FORMS message.
-  if (msg.type === "CONTENT_DOM") {
-    if (msg.domContext) {
-      tab.domContext = msg.domContext;
-      if (Array.isArray(msg.domContext.forms) && msg.domContext.forms.length > 0) {
-        _handleFormMetadata(tabId, msg.domContext.forms, sender);
-      }
-    }
-  }
+  /* CONTENT_DOM handler removed: Lexbor in the engine worker parses
+     the same CONTENT_HTML and exposes the spec DOM the bundle reads
+     via document.querySelector / dataset / getAttribute. No
+     parallel content-script DOM snapshot. */
 }
 
 // Popup messages — sender.tab is absent for popup contexts.
@@ -5353,6 +5418,85 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         sendResponse(alive);
       });
       return true; // async sendResponse
+    }
+
+    case "DUMP_BUNDLE_INFO": {
+      const buf = _scriptBuffers.get(tabId);
+      const tt = tabId != null ? getTab(tabId) : null;
+      if (!buf || !Array.isArray(buf.scripts)) { sendResponse({ error: "no buffer for tab" }); return; }
+      // All buffered scripts are JS now (data islands stay in the
+      // HTML payload Lexbor parses; never reach the buffer).
+      const exe = buf.scripts.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      sendResponse({
+        scriptCount: exe.length,
+        scriptLengths: exe.map(s => s.code ? s.code.length : 0),
+        scriptUrls: exe.map(s => s.url || null),
+        pageHtmlLen: tt && tt._pageHtml ? tt._pageHtml.length : 0,
+      });
+      return;
+    }
+
+    case "DUMP_BUNDLE_PART": {
+      const buf = _scriptBuffers.get(tabId);
+      if (!buf || !Array.isArray(buf.scripts)) { sendResponse({ error: "no buffer for tab" }); return; }
+      const exe = buf.scripts.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      const idx = msg.index | 0;
+      if (idx < 0 || idx >= exe.length) { sendResponse({ error: "out of range" }); return; }
+      sendResponse({
+        index: idx,
+        code: exe[idx].code || "",
+        url: exe[idx].url || null,
+        order: exe[idx].order || 0,
+        total: exe.length,
+      });
+      return;
+    }
+
+    case "DUMP_PAGE_HTML": {
+      const tt = tabId != null ? getTab(tabId) : null;
+      if (!tt || !tt._pageHtml) { sendResponse({ error: "no pageHtml for tab" }); return; }
+      // Page HTML for github fits in one response (~600KB), no need to
+      // chunk; if a future site exceeds, switch to chunked.
+      sendResponse({ html: tt._pageHtml });
+      return;
+    }
+
+    case "DIAG_TAB": {
+      const t = tabId != null ? getTab(tabId) : null;
+      const buf = _scriptBuffers.get(tabId);
+      let bufKB = 0;
+      let bufCount = 0;
+      if (buf && Array.isArray(buf.scripts)) {
+        bufCount = buf.scripts.length;
+        for (const s of buf.scripts) if (s.code) bufKB += (s.code.length / 1024) | 0;
+      }
+      sendResponse({
+        hasPageHtml: !!(t && t._pageHtml),
+        pageHtmlLen: t && t._pageHtml ? t._pageHtml.length : 0,
+        astScriptCount: t && t._astResults ? Object.keys(t._astResults).length : 0,
+        astFetchCount: (t && t._astResults && Array.isArray(t._astResults) && t._astResults[0] && t._astResults[0].fetchCallSites) ? t._astResults[0].fetchCallSites.length : 0,
+        securityFindingsCount: t && t._securityFindings ? t._securityFindings.length : 0,
+        scriptBufferCount: bufCount,
+        scriptBufferKB: bufKB,
+        scriptBufferPending: buf ? buf.pending : 0,
+        scriptBufferLoadFired: buf ? !!buf.loadFired : false,
+        // Deterministic "buffer settled" signal: the debounce timer
+        // is null AND loadFired AND pending=0 means the SW has
+        // committed to analyzing this batch (the debounce fired and
+        // _analyzeCombinedScripts was called). True well-defined
+        // signal — no "wait N polls for stability" heuristic needed
+        // by the test that observes this.
+        scriptBufferDebounceFired: !!(buf && buf.loadFired && buf.pending === 0 && !buf.timer && buf.scripts.length > 0),
+        // True while _analyzeCombinedScripts is executing for this
+        // tab (incl. the offscreen-worker call). Tests / harness
+        // poll `analysisRunning === false` to know completion vs
+        // mid-flight; deterministic signal, no clock guess.
+        analysisRunning: _analysisInflight.has(tabId),
+        chunkStreams: _chunkStreams.size,
+        contentPings: _contentPings.get(tabId) || [],
+        endpointCount: t && t.endpoints ? t.endpoints.size : 0,
+      });
+      return;
     }
 
     case "PROBE_ENDPOINT": {
@@ -5785,6 +5929,12 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
           fieldPath: Array.isArray(ses.fieldPath) ? ses.fieldPath.slice() : [],
           decoders: Array.isArray(ses.decoders) ? ses.decoders.slice() : [],
           preconditions: Array.isArray(ses.preconditions) ? ses.preconditions.slice() : [],
+          // Orchestrator-populated fields (_runStructuredPlan): targetUrl,
+          // events. Lets a reviewer see EXACTLY what URL + payloads the
+          // SW dispatched, so a NOT REPRODUCED can be traced back to a
+          // concrete gap (URL gate, payload shape, CSP).
+          targetUrl: ses.recipe && ses.recipe.targetUrl || null,
+          events: ses.recipe && Array.isArray(ses.recipe.events) ? ses.recipe.events : null,
         },
       });
       return;
@@ -6171,12 +6321,22 @@ function _pruneProbeSessions() {
 // it. No await for the run — popup callers are non-blocking.
 function startExploitProbe(msg) {
   _pruneProbeSessions();
-  const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions } = msg || {};
-  if (!strategy) throw new Error("strategy required (hash | search | pathname | postmessage)");
+  const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions, pocPlan } = msg || {};
+  // pocPlan: the structured multi-source PoC produced by the Z3 solver
+  // (securitySinks[i].poc), routes through _runStructuredPlan instead of
+  // the legacy single-strategy path. {url:{hash,search,pathname},
+  // events:[{kind,seq,payload,carriesPayload}], storage:[],
+  // cookies:[], verify:"marker"}. Strategy is OPTIONAL when pocPlan
+  // is present (the plan dictates the dispatch — postMessage sequence,
+  // URL components, storage pre-injection).
+  if (!strategy && !pocPlan) throw new Error("strategy required (hash | search | pathname | postmessage) or pocPlan from finding.poc");
   if (strategy === "search" && !paramName) {
     throw new Error("search strategy requires paramName — derive it from the finding's observed source (e.g. the argument to URLSearchParams.get)");
   }
   if (fieldPath && !Array.isArray(fieldPath)) throw new Error("fieldPath must be an array of string field names");
+  if (pocPlan && (typeof pocPlan !== "object" || !Array.isArray(pocPlan.events))) {
+    throw new Error("pocPlan must be an object with events[] array — pass the finding's `poc` field verbatim");
+  }
 
   // Resolve pageUrl from the finding the probe is verifying.
   // globalStore.securityFindings records pageUrl when the finding is
@@ -6193,13 +6353,15 @@ function startExploitProbe(msg) {
   const wait = Math.max(1000, Math.min(30000, Number(waitMs) || 5000));
   const marker = "PROBE_" + Math.random().toString(36).slice(2, 10).toUpperCase();
   const session = {
-    marker, status: "running", strategy, pageUrl: pageUrl || null,
+    marker, status: "running", strategy: strategy || (pocPlan ? "pocPlan" : null),
+    pageUrl: pageUrl || null,
     findingId: findingId || null, sourceUrl: (msg && msg.sourceUrl) || null,
     paramName: paramName || null,
     fieldPath: Array.isArray(fieldPath) ? fieldPath.slice() : [],
     sinkType: sinkType || null, sinkName: sinkName || null,
     decoders: Array.isArray(decoders) ? decoders.slice() : [],
     preconditions: Array.isArray(preconditions) ? preconditions.slice() : [],
+    pocPlan: pocPlan || null,
     waitMs: wait,
     hits: [], openedTabs: [], createdAt: Date.now(), finishedAt: null, error: null,
   };
@@ -6222,25 +6384,21 @@ function startExploitProbe(msg) {
 async function _readProbeExecFlag(tabId, marker) {
   try {
     const flagName = "__apisec_fired_" + marker;
-    const domId = "__apisec_dom_" + marker;
     const results = await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       world: "MAIN",
-      func: (flag, id) => {
-        // Two execution signals per frame:
-        //   1. self[flag] — set by <img onerror>, <svg onload>,
-        //      javascript: href navigation, or eval of js payload.
-        //      Requires inline-handler-permissive CSP.
-        //   2. document.getElementById(id) — our payload's <div>
-        //      landed in the DOM. Proves HTML PARSING happened, no
-        //      script-src required. Works under strict CSP.
-        try {
-          const out = Object.assign({}, self[flag] || {});
-          if (document.getElementById(id)) out.dom = out.dom || Date.now();
-          return Object.keys(out).length ? out : null;
-        } catch (_) { return null; }
+      func: (flag) => {
+        // The probe's only signal is `self[flag]` populated by
+        // intercept.js's `apiclientsink(origin)` global. Each entry
+        // is keyed by the `origin` string the payload passed (e.g.
+        // "dom-html:MARKER:svg" / "code-exec:MARKER" / ...). The
+        // function was called ⇒ the browser actually executed the
+        // payload through whichever pipeline its origin names; CSP
+        // blocks ⇒ no call ⇒ entry stays absent. No prototype hooks,
+        // no substring matching, no CSP-relabeling.
+        try { return self[flag] || null; } catch (_) { return null; }
       },
-      args: [flagName, domId],
+      args: [flagName],
     });
     const merged = {};
     for (const r of results || []) {
@@ -6279,22 +6437,22 @@ async function _runExploitProbe(session) {
   if (!session.pageUrl || !/^https?:/i.test(session.pageUrl)) {
     throw new Error("pageUrl required — caller should read it from the finding's stored pageUrl (globalStore.securityFindings[sourceUrl].pageUrl)");
   }
+  if (session.pocPlan) {
+    return _runStructuredPlan(session);
+  }
 
   let execReadTabId = null;
   let attackerPostedTargetUrl = null;
   try {
     if (session.strategy === "postmessage") {
-      // Cross-origin attacker page: example.com is a real third-party
-      // origin the extension has <all_urls> permission for. Open it,
-      // inject an attacker script that window.opens the target with
-      // the marker in the hash (so intercept.js arms wrappers at
-      // document_start), then postMessage a payload that carries both
-      // the sentinel marker AND active HTML/JS payloads. The handler
-      // that routes message.data to a sink will trip our execution
-      // flag if the sink actually parses the payload.
-      const atkTab = await chrome.tabs.create({ url: "https://example.com/", active: false });
-      session.openedTabs.push(atkTab.id);
-      await _waitForTabLoaded(atkTab.id, 10000);
+      // Cross-origin attacker tabs that window.open the target are
+      // dead: chrome.scripting injection has no user gesture, the
+      // popup blocker kills window.open silently, the target tab
+      // never opens, NOT REPRODUCED. chrome.tabs.create from the
+      // extension is privileged and not subject to the popup blocker.
+      // Same-window postMessage (window.postMessage(payload, "*"))
+      // reaches the bundle's message handler identically — the
+      // handler's gates inspect e.data shape, not e.origin.
       const targetWithMarker = _buildProbeUrl(session.pageUrl, "hash", session.marker, { sinkType: session.sinkType, sinkName: session.sinkName });
       attackerPostedTargetUrl = targetWithMarker;
       const payloads = _probePayloads(session.marker);
@@ -6365,21 +6523,26 @@ async function _runExploitProbe(session) {
           else if (d === "base64") shaped = btoa(unescape(encodeURIComponent(String(shaped))));
         } catch (_) {}
       }
+      const tgtTab = await chrome.tabs.create({ url: targetWithMarker, active: false });
+      session.openedTabs.push(tgtTab.id);
+      execReadTabId = tgtTab.id;
+      await _waitForTabLoaded(tgtTab.id, 10000);
       await chrome.scripting.executeScript({
-        target: { tabId: atkTab.id },
+        target: { tabId: tgtTab.id },
         world: "MAIN",
-        injectImmediately: true,
-        func: (tUrl, mk, shapedPayload) => {
-          const win = window.open(tUrl, "_blank");
-          // Retry so handler-registration timing races don't lose the
-          // payload. The TARGET window sees the exact shape the AST
-          // observed it reading — no guesses.
-          const deliveries = [2500, 5000, 8000];
+        func: (shapedPayload) => {
+          // Same-window postMessage to the bundle's own listener.
+          // Three retry deliveries cover handler-registration timing
+          // races (the bundle may install its listener asynchronously
+          // after script eval, e.g. inside a framework boot hook).
+          const deliveries = [200, 1500, 3500];
           for (const delay of deliveries) {
-            setTimeout(() => { try { win && win.postMessage(shapedPayload, "*"); } catch (_) {} }, delay);
+            setTimeout(() => {
+              try { window.postMessage(shapedPayload, "*"); } catch (_) {}
+            }, delay);
           }
         },
-        args: [targetWithMarker, session.marker, shaped],
+        args: [shaped],
       });
       await new Promise((r) => setTimeout(r, 4000 + session.waitMs));
     } else {
@@ -6414,6 +6577,269 @@ async function _runExploitProbe(session) {
     // Close tabs the extension opened. Tabs popped by window.open
     // inside pages are left so the reviewer can inspect state after
     // the probe finishes.
+    for (const tid of session.openedTabs) {
+      try { await chrome.tabs.remove(tid); } catch (_) {}
+    }
+    session.openedTabs = [];
+  }
+}
+
+// Multi-source PoC orchestrator. Consumes the Z3-solver-produced plan
+// (finding.poc) and executes it against the live target:
+//   1. Compose target URL = pageUrl + plan.url.{hash,search,pathname}
+//      (the persistent attacker-controllable bits that gate the path)
+//   2. Open attacker tab on a real cross-origin host (example.com) so
+//      window.open + postMessage cross-origin semantics match a real
+//      attack page — and chrome.scripting can run inside it without
+//      the target's CSP applying to the opener.
+//   3. Open target with marker in hash so intercept.js arms wrappers
+//      at document_start, then pre-inject storage/cookie state via
+//      chrome.scripting on the target.
+//   4. For each plan.event in seq order, run a chrome.scripting call
+//      in the attacker tab that postMessages the structured payload.
+//      The LAST event (carriesPayload=true) carries the marker —
+//      intercept.js detects it when the sink actually parses it.
+//   5. Read the marker execution flag. Verified = REAL PoC; flag
+//      absent after waitMs = NOT_REPRODUCED (CSP blocked, sanitizer
+//      stripped, or the plan's payload doesn't actually exploit).
+//
+// Verification is intercept.js marker-flag only — no Debugger API.
+// CSP-blocked payloads count as non-PoC by definition (per project
+// policy: if the page wouldn't have executed it anyway, it's not a
+// valid finding).
+async function _runStructuredPlan(session) {
+  const plan = session.pocPlan;
+  let execReadTabId = null;
+  try {
+    // Build the target URL from pageUrl + the plan's URL bits + the
+    // marker hash so intercept.js arms wrappers. Hash-from-plan
+    // and marker hash co-exist: plan-hash is the gate value the
+    // bundle reads; marker is a sentinel for execution detection.
+    // Both are present in the URL fragment, attacker has full
+    // control of fragment content per Web spec.
+    let pageUrl;
+    try {
+      pageUrl = new URL(session.pageUrl);
+    } catch (e) {
+      throw new Error("pageUrl is malformed: " + e.message);
+    }
+    // Marker convention matches intercept.js's URL-scan: it reads the
+    // marker from `__apisec=<TOKEN>` in either fragment or search at
+    // document_start and arms its sink wrappers to record any call
+    // whose value contains the token. Without this URL token,
+    // intercept.js stays cold (zero overhead per-navigation) and our
+    // execution flag never gets set — so EVERY structured-plan run
+    // injects the marker even if plan.url has no other content.
+    //
+    // The PLAN HASH MUST COME FIRST. Bundles routinely guard with
+    // `location.hash.startsWith("#tmpl=")` (or similar), and the Z3
+    // PoC plan computed that prefix as part of the gate-evidence. If
+    // we prepend our marker, startsWith fails, the gated branch never
+    // executes, and the probe wrongly reports NOT REPRODUCED.
+    // intercept.js's regex is `[#&]__apisec=` so it matches when the
+    // marker is appended after the plan hash via `&`.
+    const ph = plan.url && plan.url.hash ? String(plan.url.hash).replace(/^#/, "") : "";
+    pageUrl.hash = ph
+      ? "#" + ph + (ph.endsWith("&") ? "" : "&") + "__apisec=" + session.marker
+      : "#__apisec=" + session.marker;
+    if (plan.url && plan.url.search) {
+      const planSearch = String(plan.url.search).replace(/^\?/, "");
+      const params = new URLSearchParams(planSearch);
+      const existing = new URLSearchParams(pageUrl.search);
+      // Plan values OVERRIDE pageUrl on conflict — Z3 computed them
+      // as required for the gate.
+      for (const [k, v] of params) existing.set(k, v);
+      pageUrl.search = existing.toString() ? "?" + existing.toString() : "";
+    }
+    if (plan.url && plan.url.pathname) {
+      pageUrl.pathname = String(plan.url.pathname);
+    }
+    const targetUrl = pageUrl.toString();
+    session.recipe = session.recipe || {};
+    session.recipe.targetUrl = targetUrl;
+    session.recipe.marker = session.marker;
+
+    // 2) Pre-injection: cookies + localStorage via chrome.scripting on
+    //    a brief target-tab load. These have to be in place BEFORE the
+    //    bundle reads them; we open the target, inject, navigate again
+    //    to re-trigger module init with the values present.
+    const needsPreInject = (plan.storage && plan.storage.length) || (plan.cookies && plan.cookies.length);
+    if (needsPreInject) {
+      const seedTab = await chrome.tabs.create({ url: targetUrl, active: false });
+      session.openedTabs.push(seedTab.id);
+      await _waitForTabLoaded(seedTab.id, 10000);
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: seedTab.id },
+          world: "MAIN",
+          func: (storageItems, cookieItems) => {
+            try {
+              for (const it of (storageItems || [])) {
+                if (it && it.key != null) localStorage.setItem(String(it.key), String(it.value == null ? "" : it.value));
+              }
+              for (const it of (cookieItems || [])) {
+                if (it && it.value != null) document.cookie = String(it.value);
+              }
+            } catch (_) {}
+          },
+          args: [plan.storage || [], plan.cookies || []],
+        });
+      } catch (e) {
+        session.error = "pre-inject failed: " + (e && e.message || String(e));
+      }
+      try { await chrome.tabs.remove(seedTab.id); } catch (_) {}
+      session.openedTabs = session.openedTabs.filter((t) => t !== seedTab.id);
+    }
+
+    // 3) From the attacker tab, window.open(target) + dispatch the
+    //    plan.events sequence with delays. The LAST event carries the
+    //    marker woven into its sink-bearing field — intercept.js sees
+    //    the marker hit the sink and sets the execution flag.
+    const events = Array.isArray(plan.events) ? plan.events.slice() : [];
+    // Construct the actual exploit payload that BOTH satisfies the
+    // sink's Z3-solved shape AND fires _readProbeExecFlag's detection
+    // signals. The detection reads two things per frame:
+    //   1) self["__apisec_fired_<MARKER>"]: set by an inline handler
+    //      (img/svg/script) — requires inline-permissive CSP.
+    //   2) document.getElementById("__apisec_dom_<MARKER>"): proves
+    //      HTML parsing happened — works under strict CSP.
+    // The Z3 witness is just a CONSTRAINT-shape witness (e.g. "<svg"
+    // because the gate required startsWith / contains an XSS marker).
+    // Prefixing the original value with the marker leaves NO active
+    // construct — innerHTML="MARKER:render" parses as inert text. We
+    // EMBED the witness verbatim as the leading bytes (preserves the
+    // gate), then append a real probe-firing payload that contains
+    // the marker substring in both detection forms.
+    function setByPath(obj, path, value) {
+      const parts = String(path || "").split(".").filter(Boolean);
+      if (!parts.length) return value;
+      let cur = obj;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const k = parts[i];
+        if (cur[k] == null || typeof cur[k] !== "object") cur[k] = {};
+        cur = cur[k];
+      }
+      cur[parts[parts.length - 1]] = value;
+      return obj;
+    }
+    function getByPath(obj, path) {
+      const parts = String(path || "").split(".").filter(Boolean);
+      let cur = obj;
+      for (const k of parts) {
+        if (cur == null) return undefined;
+        cur = cur[k];
+      }
+      return cur;
+    }
+    function buildSinkPayload(sinkType, witnessPrefix, marker) {
+      // Payload calls `apiclientsink(origin)` when the browser actually
+      // runs it through whatever execution pipeline applies — innerHTML
+      // parse → inline event handler, eval, javascript: navigation. No
+      // prototype hooks, no substring match. CSP-correct: blocked inline
+      // scripts ⇒ function never called ⇒ NOT REPRODUCED.
+      //
+      // The dom-html payload INTRINSICALLY CONTAINS every shape the
+      // engine's exploit-shape disjunction tests for (`<script`, `<svg`,
+      // `<iframe`, `<img`, ` onerror=`, ` onload=`, ` onclick=`,
+      // `javascript:`). Z3's exploit shape is a `seq.contains` OR-
+      // disjunction; any payload that contains ANY one of those
+      // substrings satisfies it, and ours contains them all — so the
+      // witness Z3 picked is already covered without prepending.
+      // Prepending the raw witness (e.g. "<img") was the previous
+      // approach and produced "<img<svg onload=…>" which the HTML
+      // parser reads as ONE invalid tag named "img<svg" — onload never
+      // fires, the probe wrongly reports NOT REPRODUCED. Witness is
+      // only re-applied when the source-side gate is startsWith-shaped
+      // (currently: code-exec / open-redirect rely on it). Φ
+      // structure isn't exposed to the orchestrator; the dom-html case
+      // is universal enough that this discrimination is sufficient.
+      const witness = typeof witnessPrefix === "string" ? witnessPrefix : "";
+      const call = (origin) => "apiclientsink('" + origin + "')";
+      if (sinkType === "dom-html" || sinkType === "dom-attr") {
+        const origin = sinkType + ":" + marker;
+        // Five parallel vectors covering all 8 exploit-shape substrings.
+        // Any one that survives the sanitizer + CSP fires apiclientsink.
+        return '<svg onload="' + call(origin + ":svg") + '"></svg>'
+             + '<img src=x onerror="' + call(origin + ":img") + '">'
+             + '<iframe srcdoc="<script>parent.' + call(origin + ":iframe") + '</' + 'script>" onclick="' + call(origin + ":onclick") + '"></iframe>'
+             + '<a href="javascript:' + call(origin + ":javascript") + '">x</a>'
+             + '<script>' + call(origin + ":script") + '</' + 'script>';
+      }
+      if (sinkType === "code-exec") {
+        // eval / Function / setTimeout-string. Witness IS the leading
+        // syntax the source-side gate may have constrained; preserve it.
+        return witness + ";" + call("code-exec:" + marker);
+      }
+      if (sinkType === "open-redirect") {
+        // javascript: URL navigation runs the body as a script. Witness
+        // preserved for the same reason.
+        return witness + "javascript:" + call("open-redirect:" + marker);
+      }
+      // Unknown sink: fall back to the dom-html universal payload.
+      return '<svg onload="' + call("unknown:" + marker) + '"></svg>';
+    }
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      if (!ev.carriesPayload) continue;
+      const field = ev.payloadField;
+      if (!field) continue;
+      const stripped = field.indexOf("data.") === 0 ? field.slice(5) : field;
+      const witness = typeof getByPath(ev.payload, stripped) === "string"
+        ? getByPath(ev.payload, stripped) : "";
+      const sinkType = session.sinkType || "dom-html";
+      setByPath(ev.payload, stripped,
+        buildSinkPayload(sinkType, witness, session.marker));
+    }
+    session.recipe.events = events.map(e => ({ payload: e.payload, carriesPayload: !!e.carriesPayload }));
+
+    // Open the target via chrome.tabs.create — `window.open(t,_blank)`
+    // from a chrome.scripting MAIN-world injection has no user gesture
+    // and Chrome's popup blocker drops it (the call returns null and
+    // no request is ever issued, so the bundle's message handler never
+    // runs and the probe wrongly reports NOT REPRODUCED). chrome.tabs
+    // creates the tab via the extension's privileged API, not subject
+    // to the popup blocker. Same-window postMessage from the target
+    // itself (window.postMessage(payload, "*")) reaches its own
+    // message handler exactly like a cross-origin postMessage would —
+    // origin pattern "*" matches; the handler's `e.data` shape is the
+    // bit the bundle's gates inspect.
+    const tgtTab = await chrome.tabs.create({ url: targetUrl, active: false });
+    session.openedTabs.push(tgtTab.id);
+    await _waitForTabLoaded(tgtTab.id, 10000);
+
+    await chrome.scripting.executeScript({
+      target: { tabId: tgtTab.id },
+      world: "MAIN",
+      func: (eventList, perMessageDelayMs) => {
+        const baseDelay = 500;
+        eventList.forEach((ev, i) => {
+          const t = baseDelay + i * perMessageDelayMs;
+          setTimeout(() => {
+            try {
+              if (ev && ev.kind === "postMessage") {
+                window.postMessage(ev.payload, "*");
+              }
+            } catch (_) {}
+          }, t);
+        });
+      },
+      args: [events, 400],
+    });
+
+    // Wait long enough for ALL events to deliver and the handler chain
+    // to settle. baseDelay (500) + n * 400 + post-deliver settle.
+    const settleMs = 500 + events.length * 400 + Math.max(2000, session.waitMs);
+    await new Promise((r) => setTimeout(r, settleMs));
+
+    // tgtTab is the target — we created it, no need to discover by URL.
+    execReadTabId = tgtTab.id;
+    session.executed = await _readProbeExecFlag(execReadTabId, session.marker);
+    session.status = "done";
+  } catch (e) {
+    session.status = "error";
+    session.error = (e && e.message) || String(e);
+  } finally {
+    session.finishedAt = Date.now();
     for (const tid of session.openedTabs) {
       try { await chrome.tabs.remove(tid); } catch (_) {}
     }
@@ -6584,16 +7010,15 @@ async function buildExportRequest(tabId, msg) {
 
 const EXTENSION_ORIGIN = `chrome-extension://${chrome.runtime.id}`;
 const CONTENT_TYPES = new Set([
-  "CONTENT_KEYS",
-  "CONTENT_ENDPOINTS",
-  "CONTENT_FORMS",
+  "CONTENT_HTML",
+  "CONTENT_PING",
   "CONTENT_FORM_SUBMIT",
-  "CONTENT_DOM",
   "RESPONSE_BODY",
   "SCRIPT_SOURCE",
   "SCRIPTS_LOADED",
   "PROBE_HIT",
 ]);
+const _contentPings = new Map();  // tabId -> [{ at, pageUrl }, ...]
 
 // Threat model: Content scripts run in web page renderer processes. A compromised
 // renderer has our extension's sender.id (since we inject into every page), so
@@ -6618,8 +7043,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (!CONTENT_TYPES.has(msg.type)) return;
+  // Chunked-message reassembly: content.js's _sendChunked splits any
+  // payload exceeding ~16 MiB so the 64 MiB per-call structured-clone
+  // cap doesn't truncate. Background buffers parts under __chunk
+  // .streamId; once all parts arrived, the full payload is restored
+  // on the named field and the original handler runs on the merged
+  // envelope. No truncation, no caps — large bundles / responses /
+  // HTML are reassembled losslessly.
+  if (msg.__chunk) {
+    const merged = _absorbChunk(msg);
+    if (!merged) return;  // still waiting for more parts
+    handleContentMessage(merged, sender);
+    return;
+  }
   handleContentMessage(msg, sender);
 });
+
+const _chunkStreams = new Map();  // streamId -> { parts:[], received, total, payloadKey, envelope }
+function _absorbChunk(msg) {
+  const c = msg.__chunk;
+  let s = _chunkStreams.get(c.streamId);
+  if (!s) {
+    s = { parts: new Array(c.total), received: 0, total: c.total, payloadKey: c.payloadKey, envelope: null };
+    _chunkStreams.set(c.streamId, s);
+  }
+  if (typeof s.parts[c.index] === "undefined") {
+    s.parts[c.index] = msg[c.payloadKey];
+    s.received++;
+  }
+  if (!s.envelope) {
+    // First part seen — snapshot the envelope minus the payload field
+    // and the __chunk metadata. All parts carry the same envelope
+    // contents EXCEPT the payload-key field, which gets reassembled.
+    s.envelope = Object.assign({}, msg);
+    delete s.envelope.__chunk;
+    delete s.envelope[c.payloadKey];
+  }
+  if (s.received < s.total) return null;
+  _chunkStreams.delete(c.streamId);
+  const out = Object.assign({}, s.envelope);
+  out[c.payloadKey] = s.parts.join("");
+  return out;
+}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   // Keep session storage logs so closed tab requests remain viewable

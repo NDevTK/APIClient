@@ -108,7 +108,7 @@ background.js      Service worker (request interception, VDD learning, analysis 
 popup.js           Popup controller (rendering, replay, form builder, security panel)
 popup.html/css     Popup markup and styles
 ast-worker.html    Offscreen document — thin relay to the analysis Web Worker
-ast-thread.js      Web Worker — schedule enumeration, one fresh wasm instance per schedule
+ast-thread.js      Web Worker — schedule enumeration (one fresh wasm instance per schedule) + throttled, preemptible, cross-session-resumable deep unused-feature grind
 
 engine/qjs/        Forked QuickJS-ng + vendored Lexbor (Apache-2.0); ONE patched source → all targets:
   quickjs.c          Patched interpreter — opaque sentinel, selective branch forcing, infectious-opaque
@@ -157,6 +157,16 @@ Cross-frame postMessage / MessageChannel ──→ content.js (message listener)
 | **GlobalStore** | IndexedDB (service worker origin) | Cross-tab | Persistent |
 | **Request Logs** | `chrome.storage.session` | Per-tab | Browser session |
 | **Field Renames** | IndexedDB (via GlobalStore) | Cross-tab | Persistent |
+| **Deep-grind progress** | IndexedDB (offscreen worker origin) | Per-bundle | Until complete |
+
+### Background Analysis & Scheduling
+
+The deep analysis learns the *complete* API surface — including features that haven't run yet and login-gated code in lazily-loaded chunks — by force-driving the bundle's unreached functions. That is a lot of work on a large site, so it is designed to be **thorough but gentle on the device**:
+
+- **Low CPU, never pins a core.** Work runs in short bursts (one execution schedule, or a small batch of unreached functions) with a sleep of about the same length after each (~50% duty cycle). Analysis is serial and throttled, not parallel — parallelism would only add heat. Time is treated as free because it runs in the background; your machine stays cool and responsive.
+- **The page you're on comes first.** A freshly visited page's quick review is high priority and **preempts** any in-progress deep dive of a previously visited site. The deep dive pauses at a safe checkpoint, the new page's findings appear right away, then the deep dive resumes — only ever one analysis running at a time.
+- **Resumable across sessions.** Long deep dives checkpoint their progress (and the captured JavaScript) to IndexedDB. If the MV3 service worker is evicted, or you close and reopen the browser, the analysis **resumes from where it left off** with no re-fetching and no lost work — and it resumes automatically on browser start, without needing to revisit the page. The most recently relevant site is resumed first.
+- **Eventual consistency, no quality loss.** Every site's deep dive eventually completes; none is dropped to save time, and no endpoint or example value is sacrificed for speed. Depth and example quality are never traded away — the cost is spread over time instead.
 
 ### Security Model
 

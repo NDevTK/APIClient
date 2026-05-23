@@ -32,6 +32,6 @@
   },
   "devDependencies": {
     "esbuild": "^0.27.3",
-    "puppeteer": "^23.0.0"
+    "puppeteer": "^25.0.4"
   }
 }

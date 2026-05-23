@@ -7,6 +7,18 @@ var _pending = new Map();
 var _nextId = 0;
 
 _worker.onmessage = function(e) {
+  // Unsolicited durable-deep RESUME result (no pending _id): the worker
+  // picked up an incomplete deep grind from IndexedDB after an eviction and
+  // finished it. Forward to the service worker so the recovered endpoints
+  // land in globalStore. The offscreen doc has chrome.runtime; the worker
+  // doesn't, which is why it routes through here.
+  if (e.data && e.data._resumed) {
+    try {
+      chrome.runtime.sendMessage({ type: "AST_RESUMED", sourceUrl: e.data.sourceUrl || "",
+        result: e.data.response && e.data.response.result });
+    } catch (_) {}
+    return;
+  }
   var cb = _pending.get(e.data._id);
   if (cb) {
     _pending.delete(e.data._id);

@@ -1,0 +1,13 @@
+step 1: 1794ms rem=1105 preheat=false rss=673MB
+step 2: 0ms rem=1102 preheat=false rss=673MB
+step 3: 1ms rem=1099 preheat=false rss=673MB
+step 50: 112ms rem=957 preheat=false rss=674MB
+step 100: 137ms rem=807 preheat=true rss=676MB
+step 150: 120ms rem=657 preheat=true rss=677MB
+step 200: 120ms rem=507 preheat=true rss=678MB
+step 250: 120ms rem=357 preheat=true rss=679MB
+step 300: 115ms rem=205 preheat=true rss=679MB
+step 350: 119ms rem=55 preheat=true rss=679MB
+--- done: 368 steps, 46.2s, firstStep=1794ms laterMax=977ms, totalFetch=214, preheat=true, aborted=false, peakRss=679MB ---
+persistent-rt OK if laterMax << firstStep (no re-boot): firstStep=1794ms laterMax=977ms
+EXIT=1

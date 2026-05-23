@@ -230,6 +230,50 @@ nav {
   font-size: 10px;
   color: #484f58;
 }
+/* Structured (Z3-produced multi-source) PoC styles — when finding.poc
+   is present the row renders a verdict tag + a collapsible plan
+   summary above the Run button. */
+.poc-row { flex-direction: column; align-items: stretch; }
+.poc-verdict {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.poc-real_exploit { background: #491718; color: #ff8181; }
+.poc-taint_reach  { background: #3b2e08; color: #ffdb6b; }
+.poc-infeasible   { background: #1c2128; color: #6e7681; }
+.poc-z3_error     { background: #1c2128; color: #d29922; }
+.poc-steps { margin: 4px 0; font-size: 11px; }
+.poc-steps summary { cursor: pointer; color: #8b949e; }
+.poc-step {
+  margin: 4px 0;
+  padding: 4px 6px;
+  border-left: 2px solid #30363d;
+  background: #0d1117;
+  color: #c9d1d9;
+}
+.poc-url  { border-left-color: #58a6ff; }
+.poc-pre  { border-left-color: #a371f7; }
+.poc-event { border-left-color: #f78166; }
+.poc-payload {
+  margin: 4px 0;
+  padding: 4px 6px;
+  font-size: 10px;
+  color: #79c0ff;
+  background: #161b22;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.poc-marker-tag {
+  font-size: 9px;
+  color: #ff7b72;
+  margin-left: 6px;
+}
+.poc-run-btn { align-self: flex-start; }
+.poc-na { font-size: 10px; color: #6e7681; }
 .probe-na {
   font-size: 10px;
   color: #6e7681;

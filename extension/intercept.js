@@ -449,90 +449,36 @@
 
   function installProbe(MARKER) {
     if (window.__apisec_probe && window.__apisec_probe.marker === MARKER) return;
+    // The PoC payload is constructed by the orchestrator to call
+    // `apiclientsink(origin)` when the browser actually executes /
+    // parses / dispatches the payload — NOT by hooking sink
+    // prototypes. Three reasons this is the right design:
+    //   1. Honesty: a call to apiclientsink means the browser ACTUALLY
+    //      ran the payload through whatever pipeline (HTML parser →
+    //      event handler, eval, javascript: navigation). Prototype
+    //      hooks fire on sink ENTRY — they can't tell whether CSP
+    //      blocked the downstream execution.
+    //   2. CSP-correct: if CSP forbids inline event handlers,
+    //      apiclientsink isn't called → correctly NOT REPRODUCED.
+    //   3. No fragility: no monkey-patching `Element.prototype`,
+    //      `Document.prototype.write`, etc. Site code that walks
+    //      property descriptors won't see foreign descriptors.
+    // `origin` identifies WHICH sink/vector fired; visible in console
+    // and recorded by leaf-id for the orchestrator's verdict.
     const hits = [];
     window.__apisec_probe = { marker: MARKER, hits };
-
-    function record(sink, value) {
+    const flagKey = "__apisec_fired_" + MARKER;
+    window.apiclientsink = function (origin) {
+      const o = String(origin == null ? "(unknown)" : origin);
+      try { console.log("[apiclientsink] " + MARKER + " fired: " + o); } catch (_) {}
       try {
-        const hit = { sink, value: String(value).slice(0, 600), marker: MARKER, at: Date.now(), url: location.href };
+        const bucket = self[flagKey] || (self[flagKey] = {});
+        bucket[o] = Date.now();
+        const hit = { sink: o, value: o, marker: MARKER, at: Date.now(), url: location.href };
         hits.push(hit);
         document.dispatchEvent(new CustomEvent("__uasr_probe_hit", { detail: hit }));
       } catch (_) {}
-    }
-    function containsMarker(v) { try { return String(v).indexOf(MARKER) !== -1; } catch (_) { return false; } }
-
-    // DOM sink wrappers
-    try {
-      const eDesc = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
-      if (eDesc && eDesc.set) {
-        Object.defineProperty(Element.prototype, "innerHTML", {
-          configurable: true, enumerable: eDesc.enumerable, get: eDesc.get,
-          set(v) { if (containsMarker(v)) record("innerHTML", v); return eDesc.set.call(this, v); },
-        });
-      }
-      const oDesc = Object.getOwnPropertyDescriptor(Element.prototype, "outerHTML");
-      if (oDesc && oDesc.set) {
-        Object.defineProperty(Element.prototype, "outerHTML", {
-          configurable: true, enumerable: oDesc.enumerable, get: oDesc.get,
-          set(v) { if (containsMarker(v)) record("outerHTML", v); return oDesc.set.call(this, v); },
-        });
-      }
-      if (Element.prototype.insertAdjacentHTML) {
-        const orig = Element.prototype.insertAdjacentHTML;
-        Element.prototype.insertAdjacentHTML = function (pos, html) {
-          if (containsMarker(html)) record("insertAdjacentHTML", html);
-          return orig.call(this, pos, html);
-        };
-      }
-    } catch (_) {}
-
-    try {
-      const wrote = Document.prototype.write;
-      Document.prototype.write = function (v) {
-        if (containsMarker(v)) record("document.write", v);
-        return wrote.apply(this, arguments);
-      };
-    } catch (_) {}
-
-    // Network sinks
-    try {
-      const origFetch = window.fetch;
-      window.fetch = function (u2) {
-        if (containsMarker(u2)) record("fetch", u2);
-        return origFetch.apply(this, arguments);
-      };
-    } catch (_) {}
-    try {
-      const origOpen = XMLHttpRequest.prototype.open;
-      XMLHttpRequest.prototype.open = function (mth, u2) {
-        if (containsMarker(u2)) record("xhr.open", u2);
-        return origOpen.apply(this, arguments);
-      };
-    } catch (_) {}
-
-    // Code-exec sinks
-    try {
-      const origEval = window.eval;
-      window.eval = function (s) { if (containsMarker(s)) record("eval", s); return origEval.call(this, s); };
-      const origFn = window.Function;
-      window.Function = function () {
-        for (let i = 0; i < arguments.length; i++) if (containsMarker(arguments[i])) record("new Function", arguments[i]);
-        return origFn.apply(this, arguments);
-      };
-    } catch (_) {}
-
-    // Location-change sinks
-    try {
-      const origAssign = Location.prototype.assign;
-      Location.prototype.assign = function (v) { if (containsMarker(v)) record("location.assign", v); return origAssign.apply(this, arguments); };
-      const origReplace = Location.prototype.replace;
-      Location.prototype.replace = function (v) { if (containsMarker(v)) record("location.replace", v); return origReplace.apply(this, arguments); };
-    } catch (_) {}
-    try {
-      window.addEventListener("hashchange", function () {
-        if (containsMarker(location.hash)) record("hashchange", location.hash);
-      });
-    } catch (_) {}
+    };
   }
 
 })();

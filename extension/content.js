@@ -1,6 +1,12 @@
-// Content script: scans the page DOM for API keys and endpoint URLs,
-// acts as a fetch relay for the background service worker, and relays
-// intercepted response bodies from the main-world intercept script.
+// Content script: ships RAW materials to the analyser — raw
+// server-rendered HTML (CONTENT_HTML), raw script source per
+// <script> (SCRIPT_SOURCE), raw network response bodies relayed from
+// intercept.js (RESPONSE_BODY). Does NOT do any regex / heuristic
+// pre-scan: HTML parsing is Lexbor's job in the worker; endpoint and
+// API-key discovery is the forced-execution pipeline's job (real
+// fetch/XHR observed at the host edge, with method/args/call site).
+// Also acts as a fetch relay for the SW and a form-metadata
+// collector for the form-submission pipeline.
 
 (function () {
   // ─── Response Body Relay (must be first — drains intercept.js buffer) ────
@@ -11,7 +17,7 @@
   document.addEventListener("__uasr_resp", (e) => {
     if (!e.detail) return;
     const d = e.detail;
-    chrome.runtime.sendMessage({
+    _sendChunked({
       type: "RESPONSE_BODY",
       url: d.url,
       method: d.method,
@@ -27,7 +33,7 @@
       requestHeaders: d.requestHeaders || null,
       requestBody: d.requestBody || null,
       requestBodyBase64: d.requestBodyBase64 || false,
-    });
+    }, "body");
   });
   // Signal intercept.js that the relay is listening — replays buffered events
   document.dispatchEvent(new CustomEvent("__uasr_ready"));
@@ -130,179 +136,58 @@
     } catch (_) {}
   }, true);
 
-  // ─── Key & Endpoint Patterns ────────────────────────────────────────────
-
-  const API_KEY_PATTERNS = [
-    { name: "Google API Key", re: /AIzaSy[\w-]{33}/g },
-    { name: "Bearer Token", re: /bearer\s+[a-zA-Z0-9-._~+/]+=*/gi },
-    {
-      name: "Generic API Key",
-      re: /(?:api[-_]?key|access[-_]?token|auth[-_]?token)['"]?\s*[:=]\s*['"]?([a-zA-Z0-9\-_]{16,})['"]?/gi,
-    },
-    { name: "Firebase Key", re: /AIza[0-9A-Za-z-_]{35}/g },
-    { name: "Mapbox Token", re: /pk\.[a-zA-Z0-9.]+/g },
-    { name: "GitHub Token", re: /ghp_[a-zA-Z0-9]{36}/g },
-    { name: "Stripe Key", re: /[sk|pk]_(?:test|live)_[0-9a-zA-Z]{24}/g },
-  ];
-
-  const ENDPOINT_RE = /https?:\/\/[\w.-]+\.[a-z]{2,}(?::\d+)?\/[^\s"'<>)}\]]+/g;
-
-  function isGoogleApisUrl(urlString) {
-    if (typeof urlString !== "string") return false;
-    try {
-      // Try absolute URL first
-      let parsed;
-      try {
-        parsed = new URL(urlString);
-      } catch (e) {
-        // Fallback: treat as relative to the current page
-        parsed = new URL(urlString, window.location.origin);
-      }
-      const host = parsed.hostname.toLowerCase();
-      return host === "googleapis.com" || host.endsWith(".googleapis.com");
-    } catch (e) {
-      return false;
+  // ─── Chunked-message transport ─────────────────────────────────────────
+  // chrome.runtime.sendMessage's structured-clone limit is 64 MiB per
+  // call. Large raw materials (full server-rendered HTML on a heavy
+  // SPA, multi-MB script bodies, large response bodies) need split-
+  // and-reassemble — callers still hand the WHOLE payload as one
+  // logical unit; this transport slices it into ≤16 MiB chunks under
+  // a stream id, background.js's chunk-reassembly layer merges them
+  // back before dispatching to the type-specific handler. No truncation,
+  // no caps, no heuristics.
+  var _streamSeq = 0;
+  function _sendChunked(msg, payloadKey) {
+    var payload = msg[payloadKey];
+    if (typeof payload !== "string") { chrome.runtime.sendMessage(msg); return; }
+    // 16 MiB per chunk leaves head-room for envelope fields + UTF-16
+    // string-length-vs-byte-size overhead (the 64 MiB cap is bytes
+    // post-clone, JS strings are length-counted in code units).
+    var CHUNK = 16 * 1024 * 1024;
+    if (payload.length <= CHUNK) { chrome.runtime.sendMessage(msg); return; }
+    var streamId = "s_" + (++_streamSeq) + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    var total = Math.ceil(payload.length / CHUNK);
+    for (var i = 0; i < total; i++) {
+      var part = Object.assign({}, msg);
+      part[payloadKey] = payload.slice(i * CHUNK, (i + 1) * CHUNK);
+      part.__chunk = { streamId: streamId, index: i, total: total, payloadKey: payloadKey };
+      chrome.runtime.sendMessage(part);
     }
   }
 
-  function scanText(text) {
-    const keys = new Set();
-    const endpoints = new Set();
-
-    for (const pattern of API_KEY_PATTERNS) {
-      pattern.re.lastIndex = 0;
-      let m;
-      while ((m = pattern.re.exec(text)) !== null) {
-        // Use the captured group if available, otherwise the whole match
-        keys.add(m[1] || m[0]);
-      }
-    }
-
-    ENDPOINT_RE.lastIndex = 0;
-    let m;
-    while ((m = ENDPOINT_RE.exec(text)) !== null) {
-      // Heuristic: must look like an API endpoint
-      const url = m[0];
-      if (
-        url.includes("api") ||
-        /\bv\d+\b/.test(url) ||
-        url.endsWith(".json") ||
-        url.includes("/$rpc/") ||
-        url.includes("graphql") ||
-        url.includes("/rpc/") ||
-        url.includes("/rest/") ||
-        url.includes("/data/") ||
-        url.includes("/service") ||
-        url.includes("/query") ||
-        url.includes("/mutation") ||
-        url.includes("/batch") ||
-        url.includes("/webhook") ||
-        isGoogleApisUrl(url) ||
-        /\.(svc|asmx|ashx|axd)([?/]|$)/.test(url)
-      ) {
-        endpoints.add(url);
-      }
-    }
-
-    return { keys: [...keys], endpoints: [...endpoints] };
-  }
-
-  function scanPage() {
-    const html = document.documentElement.outerHTML;
-    const { keys, endpoints } = scanText(html);
-
-    for (const script of document.querySelectorAll("script:not([src])")) {
-      const result = scanText(script.textContent);
-      for (const k of result.keys) if (!keys.includes(k)) keys.push(k);
-      for (const e of result.endpoints)
-        if (!endpoints.includes(e)) endpoints.push(e);
-    }
-
-    return { keys: [...new Set(keys)], endpoints: [...new Set(endpoints)] };
-  }
-
-  // ─── Form Element Scanning ────────────────────────────────────────────────
-
-  function scanForms() {
-    var forms = document.querySelectorAll("form");
-    if (!forms.length) return [];
-    var results = [];
-    for (var i = 0; i < forms.length; i++) {
-      var meta = _extractFormMetadata(forms[i]);
-      if (meta) results.push(meta);
-    }
-    return results;
-  }
-
-  function _extractFormMetadata(form) {
-    var action;
-    try {
-      action = new URL(form.action || location.href, location.href).href;
-    } catch (_) {
-      action = location.href;
-    }
-
-    var method = (form.method || "GET").toUpperCase();
-    var enctype = form.enctype || "application/x-www-form-urlencoded";
-
-    var fields = [];
-    var elements = form.elements;
-    var seenNames = {};
-
-    for (var i = 0; i < elements.length; i++) {
-      var el = elements[i];
-      var name = el.name;
-      if (!name) continue;
-      if (seenNames[name] && el.type === "radio") continue;
-      seenNames[name] = true;
-
-      var field = { name: name, tagName: el.tagName.toLowerCase(), type: el.type || null };
-
-      if (el.placeholder) field.placeholder = el.placeholder;
-      if (el.required) field.required = true;
-      if (el.pattern) field.pattern = el.pattern;
-      if (el.minLength > 0) field.minLength = el.minLength;
-      if (el.maxLength > 0 && el.maxLength < 524288) field.maxLength = el.maxLength;
-      if (el.min) field.min = el.min;
-      if (el.max) field.max = el.max;
-      if (el.step && el.step !== "any") field.step = el.step;
-      if (el.autocomplete && el.autocomplete !== "on" && el.autocomplete !== "off") {
-        field.autocomplete = el.autocomplete;
-      }
-      if (el.value && el.type !== "password") {
-        field.defaultValue = el.value;
-      }
-
-      // Select options
-      if (el.tagName === "SELECT") {
-        var options = [];
-        for (var j = 0; j < el.options.length && j < 50; j++) {
-          options.push({ value: el.options[j].value, label: el.options[j].text || el.options[j].value });
-        }
-        field.options = options;
-      }
-
-      // Radio button group values
-      if (el.type === "radio") {
-        var radios = form.querySelectorAll("input[type=\"radio\"][name=\"" + CSS.escape(name) + "\"]");
-        var radioValues = [];
-        for (var r = 0; r < radios.length; r++) radioValues.push(radios[r].value);
-        field.options = radioValues.map(function (v) { return { value: v, label: v }; });
-      }
-
-      fields.push(field);
-    }
-
-    if (fields.length === 0) return null;
-
-    return {
-      action: action,
-      method: method,
-      enctype: enctype,
-      id: form.id || null,
-      name: form.name || null,
-      fields: fields,
-    };
+  // Raw-HTML relay (replaces the heuristic key/endpoint regex scan
+  // that used to live here): content.js ships the raw server-rendered
+  // HTML to the analyser; Lexbor parses it spec-correctly in the
+  // worker. Regex string-matching for "/api/" / "/rpc/" / "graphql"
+  // / API-key shapes against HTML text was a heuristic shortcut that
+  // bypassed the forced-execution pipeline — it produced
+  // `source: page_source` endpoints with no method, no params, no
+  // real taint info, AND missed every key/endpoint that wasn't a
+  // literal in the HTML (anything constructed in JS, ie the entire
+  // API surface of a real SPA). Removing it forces the answer to
+  // come through the proper path: Lexbor parses the HTML → bundle
+  // executes under forced exec → @H records observe real fetch/XHR
+  // with method, args, call site.
+  function _sendPageHtml(why) {
+    var html;
+    try { html = document.documentElement.outerHTML; } catch (_) { return; }
+    if (!html) return;
+    _sendChunked({
+      type: "CONTENT_HTML",
+      html: html,
+      origin: location.origin,
+      pageUrl: location.href,
+      reason: why,
+    }, "html");
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -468,8 +353,6 @@
   // on SPA re-renders or MutationObserver re-triggers without actual DOM changes.
 
   var _lastScanHash = null;
-  var _lastFormScanHash = null;
-  var _lastDomScanHash = null;
 
   function _simpleHash(str) {
     var h = 0;
@@ -481,143 +364,24 @@
 
   // ─── Init ──────────────────────────────────────────────────────────────────
 
-  const { keys, endpoints } = scanPage();
+  // Initial raw-HTML ship — Lexbor in the worker parses this as the
+  // analysed document, so subsequent forced execution sees a real
+  // server-rendered DOM (custom elements with their attributes, data
+  // islands, the structure the bundle's connectedCallback / React
+  // effects depend on).
+  var _lastHtmlHash = null;
+  _sendPageHtml("init");
 
-  var scanHash = _simpleHash(JSON.stringify({ keys: keys, endpoints: endpoints }));
-  if (scanHash !== _lastScanHash) {
-    _lastScanHash = scanHash;
-    if (keys.length > 0) {
-      chrome.runtime.sendMessage({
-        type: "CONTENT_KEYS",
-        keys,
-        origin: location.origin,
-      });
-    }
-    if (endpoints.length > 0) {
-      chrome.runtime.sendMessage({
-        type: "CONTENT_ENDPOINTS",
-        endpoints,
-        origin: location.origin,
-      });
-    }
-  }
+  // Forms are NOT scanned here — Lexbor in the engine worker parses
+  // the same HTML and __hostDrive calls form.submit() on each form,
+  // routing through the same fetch hook the bundle's own JS reaches.
+  // One execution flow.
 
-  // Forms are now collected as part of the unified DOM scan (CONTENT_DOM
-  // below). Background routes msg.domContext.forms into the same form
-  // handler that previously consumed CONTENT_FORMS — one DOM walk
-  // instead of two. Per user directive: "DOM work likely replaces the
-  // HTML form extraction".
-
-  // Page DOM context — meta tags, data-* attrs, hrefs/srcs/actions, and
-  // forms — for the AST analyser's virtual DOM resolution. Per user
-  // directive: "what DOM gets sent in the first place [is] useful for
-  // learning". Walks the live DOM (more reliable than re-parsing
-  // outerHTML), but shape matches extractDomContextFromHtml's output
-  // (plus richer form metadata) so the analyser and consumers see both.
-  function _scanDomContext() {
-    var ctx = { metaTags: {}, dataAttrs: {}, hrefs: {}, srcs: {}, actions: {}, byId: {}, inlineHandlers: {}, forms: [] };
-    try {
-      // <meta name=X content=Y>
-      var metas = document.querySelectorAll("meta[name][content]");
-      for (var mi = 0; mi < metas.length; mi++) {
-        var nm = metas[mi].getAttribute("name");
-        var ct = metas[mi].getAttribute("content");
-        if (nm && ct != null) ctx.metaTags[nm] = ct;
-      }
-      // Per-element scan: every element. Most don't have any of these
-      // attributes; the loop bails early on each. Walking `*` keeps the
-      // extraction framework-agnostic — no specific data-* convention
-      // (Stimulus, Vue, etc.) is privileged.
-      var els = document.querySelectorAll("*");
-      for (var ei = 0; ei < els.length; ei++) {
-        var el = els[ei];
-        var dataMap = null;
-        var ds = el.dataset;
-        if (ds) {
-          for (var dk in ds) {
-            if (Object.prototype.hasOwnProperty.call(ds, dk)) {
-              if (!dataMap) dataMap = {};
-              // Convert camelCase back to kebab to match HTML extractor's shape.
-              var kebab = dk.replace(/[A-Z]/g, function(c) { return "-" + c.toLowerCase(); });
-              dataMap[kebab] = ds[dk];
-            }
-          }
-        }
-        if (dataMap) ctx.dataAttrs[ei] = dataMap;
-        var hv = el.getAttribute("href");
-        if (hv) ctx.hrefs[ei] = hv;
-        var sv = el.getAttribute("src");
-        if (sv) ctx.srcs[ei] = sv;
-        var av = el.getAttribute("action");
-        if (av) ctx.actions[ei] = av;
-        // id-keyed lookup for `document.getElementById("X").<prop>`
-        // resolution in the analyser. WHATWG DOM standard pattern.
-        var idAttr = el.getAttribute("id");
-        if (idAttr) {
-          ctx.byId[idAttr] = {
-            href: hv || null,
-            src: sv || null,
-            action: av || null,
-            dataAttrs: dataMap || null,
-          };
-        }
-        // Inline event handlers (<... onclick="fn(this)" ...>). HTML5
-        // § 8.2.3 event handler attributes — handler runs with `this`
-        // bound to the element. The analyser uses these as synthetic
-        // call sites so `this` resolves to element attributes.
-        var inlineHandlers = null;
-        for (var ai = 0; ai < el.attributes.length; ai++) {
-          var attr = el.attributes[ai];
-          if (attr.name && attr.name.toLowerCase().indexOf("on") === 0 && attr.name.length > 2 && attr.value) {
-            if (!inlineHandlers) inlineHandlers = [];
-            inlineHandlers.push({
-              event: attr.name.slice(2).toLowerCase(),
-              body: attr.value,
-            });
-          }
-        }
-        if (inlineHandlers) {
-          var ihKey = idAttr || ("el" + ei);
-          ctx.inlineHandlers[ihKey] = {
-            handlers: inlineHandlers,
-            elementAttrs: {
-              href: hv || null,
-              src: sv || null,
-              action: av || null,
-              dataAttrs: dataMap || null,
-            },
-          };
-        }
-      }
-      // (Server-rendered data islands are NOT collected here — slurping
-      // GitHub's multi-MB react embeddedData into one CONTENT_DOM
-      // message exceeds the structured-clone send. They flow through
-      // the per-item script pipeline instead; see extractScriptSource.)
-      // Forms — same metadata scanForms() previously collected, now part
-      // of the unified DOM context. The user noted: "This DOM work
-      // likely replaces the HTML form extraction".
-      var forms = document.querySelectorAll("form");
-      for (var fi = 0; fi < forms.length; fi++) {
-        var fmeta = _extractFormMetadata(forms[fi]);
-        if (fmeta) ctx.forms.push(fmeta);
-      }
-    } catch (e) { /* DOM access failures are silent */ }
-    return ctx;
-  }
-  var domCtx = _scanDomContext();
-  var domHash = _simpleHash(JSON.stringify(domCtx));
-  if (domHash !== _lastDomScanHash) {
-    _lastDomScanHash = domHash;
-    chrome.runtime.sendMessage({
-      type: "CONTENT_DOM",
-      domContext: domCtx,
-      origin: location.origin,
-      pageUrl: location.href,
-    });
-  }
-
-  /* page-HTML seed removed: snapshotting SSR HTML into generic
-     non-functional JNode stubs is not a spec DOM. */
+  /* No content-side DOM walker. Lexbor inside the QuickJS worker
+     re-parses the CONTENT_HTML message into the same spec DOM the
+     bundle reads via document.querySelector / dataset / etc. Any
+     "DOM context" the analyser needs is read FROM the engine,
+     never shipped as a separate snapshot from the page context. */
 
   // ─── Script Source Extraction (for AST analysis) ────────────────────────────
 
@@ -631,16 +395,21 @@
   var _scriptOrder = 0;
 
   function sendScriptSource(url, code, order) {
-    if (!code || code.length < 50) return; // skip trivial scripts
+    if (!code) return;
+    // No size threshold — CLAUDE.md "no magic numbers, no depth/size
+    // caps". A 30-char `document.body.innerHTML=location.hash` is a
+    // real reflective XSS and must reach the analyzer like any other.
+    // Large bundle scripts (multi-MB) route through _sendChunked so
+    // the 64 MiB per-message structured-clone cap doesn't truncate.
     var key = url || hashCode(code);
     if (_sentScripts.has(key)) return;
     _sentScripts.add(key);
-    chrome.runtime.sendMessage({
+    _sendChunked({
       type: "SCRIPT_SOURCE",
       url: url || null,
       code: code,
       order: order == null ? _scriptOrder++ : order,
-    });
+    }, "code");
   }
 
   function hashCode(str) {
@@ -654,24 +423,13 @@
   function extractScriptSource(scriptEl) {
     var sType = scriptEl.type;
     var order = _scriptOrder++;
-    // Server-rendered data island (GitHub's <script type="application/
-    // json" id="client-env">, ld+json, framework embeddedData). NOT
-    // executable — the bundle reads it via getElementById(id)
-    // .textContent → JSON.parse. Sent per-item (small message each,
-    // unlike one giant CONTENT_DOM) and order-tagged so it's built
-    // into the virtual DOM before the chunk that reads it.
-    if (sType && /^(application\/(ld\+)?json|text\/(template|html))$/i.test(sType) && !scriptEl.src) {
-      var dtext = scriptEl.textContent;
-      if (dtext) {
-        chrome.runtime.sendMessage({
-          type: "SCRIPT_SOURCE", url: null, code: dtext, order: order,
-          island: { id: scriptEl.id || null, scriptType: sType,
-            dataTarget: scriptEl.getAttribute("data-target") || null },
-        });
-      }
-      return;
-    }
-    // Skip other non-JavaScript script types (importmaps, speculationrules…)
+    // Skip non-JavaScript script types entirely. Data islands
+    // (<script type="application/json">, ld+json, importmaps,
+    // speculationrules, text/template, text/html) are part of the
+    // CONTENT_HTML payload — Lexbor parses them into the spec DOM,
+    // and the bundle reads them via getElementById(id).textContent
+    // → JSON.parse through the engine's normal DOM hooks. No
+    // parallel SCRIPT_SOURCE shipping of island bodies.
     if (sType && sType !== "text/javascript" && sType !== "module" &&
         !/^(application\/javascript|text\/ecmascript)$/i.test(sType)) {
       return;
@@ -711,43 +469,35 @@
   // ─── Mutation Observer (Dynamic Loading) ───────────────────────────────────
 
   let debounceTimer = null;
-  const pendingKeys = new Set();
-  const pendingEndpoints = new Set();
-  const pendingForms = [];
+  let _pendingHtmlResend = false;
 
   const observer = new MutationObserver((mutations) => {
     let changed = false;
+    let domGrew = false;
 
     for (const mutation of mutations) {
       for (const node of mutation.addedNodes) {
         if (node.nodeType === Node.ELEMENT_NODE) {
-          // Check script tags
           if (node.tagName === "SCRIPT") {
-            const res = scanText(node.textContent);
-            if (res.keys.length || res.endpoints.length) {
-              res.keys.forEach((k) => pendingKeys.add(k));
-              res.endpoints.forEach((e) => pendingEndpoints.add(e));
-              changed = true;
-            }
-            // Extract source for AST analysis
+            // Raw script source — ships through SCRIPT_SOURCE; no
+            // regex pre-scan of textContent.
             extractScriptSource(node);
           }
-          // Check form elements
-          if (node.tagName === "FORM") {
-            var formMeta = _extractFormMetadata(node);
-            if (formMeta) { pendingForms.push(formMeta); changed = true; }
-          } else if (node.querySelectorAll) {
-            var nestedForms = node.querySelectorAll("form");
-            for (var fi = 0; fi < nestedForms.length; fi++) {
-              var nfMeta = _extractFormMetadata(nestedForms[fi]);
-              if (nfMeta) { pendingForms.push(nfMeta); changed = true; }
-            }
-          }
+          // No content-side form metadata extraction — Lexbor in the
+          // engine worker re-parses CONTENT_HTML and __hostDrive drives
+          // form.submit() through the same fetch hook the bundle reaches.
+          domGrew = true;
         }
       }
     }
 
-    if (changed) {
+    // Any DOM growth (SPA route, lazy-loaded fragment, framework
+    // re-render) re-ships the raw HTML so the worker's Lexbor document
+    // tracks the live page. Debounced so a mutation storm collapses to
+    // one CONTENT_HTML message.
+    if (domGrew) _pendingHtmlResend = true;
+
+    if (changed || domGrew) {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(flushPending, 1000);
     }
@@ -760,34 +510,24 @@
 
   function flushPending() {
     debounceTimer = null;
-    if (pendingKeys.size > 0) {
-      chrome.runtime.sendMessage({
-        type: "CONTENT_KEYS",
-        keys: [...pendingKeys],
-        origin: location.origin,
-      });
-      pendingKeys.clear();
-    }
-    if (pendingEndpoints.size > 0) {
-      chrome.runtime.sendMessage({
-        type: "CONTENT_ENDPOINTS",
-        endpoints: [...pendingEndpoints],
-        origin: location.origin,
-      });
-      pendingEndpoints.clear();
-    }
-    if (pendingForms.length > 0) {
-      var pf = pendingForms.slice();
-      pendingForms.length = 0;
-      var pfHash = _simpleHash(JSON.stringify(pf));
-      if (pfHash !== _lastFormScanHash) {
-        _lastFormScanHash = pfHash;
-        chrome.runtime.sendMessage({
-          type: "CONTENT_FORMS",
-          forms: pf,
-          origin: location.origin,
-          pageUrl: location.href,
-        });
+    if (_pendingHtmlResend) {
+      _pendingHtmlResend = false;
+      // De-dup against the prior HTML so identical re-renders don't
+      // churn the worker.
+      var html;
+      try { html = document.documentElement.outerHTML; } catch (_) { return; }
+      if (html) {
+        var hh = _simpleHash(html);
+        if (hh !== _lastHtmlHash) {
+          _lastHtmlHash = hh;
+          chrome.runtime.sendMessage({
+            type: "CONTENT_HTML",
+            html: html,
+            origin: location.origin,
+            pageUrl: location.href,
+            reason: "mutation",
+          });
+        }
       }
     }
   }
