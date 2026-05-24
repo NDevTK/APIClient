@@ -21,7 +21,8 @@ const PJS = fs.readFileSync(Q + '/_curp.js', 'utf8');
   let rem = 1, step = 0, preheat = false, totalFetch = 0, aborted = false, peakRss = 0;
   const t0 = Date.now();
   let firstMs = 0, laterMax = 0;
-  while (rem > 0 && step < 12) {   // fast persistence/no-crash check; set high to run to completion (wasm preheat-via-deep verified to rem=0, peakRss~679MB)
+  var phUrl = "";
+  while (rem > 0 && step < 12) {   // fast persistence/no-crash check; set `rem > 0` (no step cap) to run to completion (preheat-via-deep + named holes + ~679MB verified)
     out.length = 0; err.length = 0;
     const st = Date.now();
     try { m.callMain(['--fe-deep-step=' + BATCH].concat(fileArgs)); } catch (e) { err.push('step ' + e); break; }
@@ -30,7 +31,7 @@ const PJS = fs.readFileSync(Q + '/_curp.js', 'utf8');
     rem = -1;
     for (const l of out) {
       if (l.slice(0, 4) === '@DS ') { try { rem = JSON.parse(l.slice(4)).rem; } catch (e) { rem = 0; } }
-      if (l.indexOf('preheat/index') >= 0) preheat = true;
+      if (l.indexOf('preheat/index') >= 0) { preheat = true; var _m = l.match(/"args":\["([^"]*)"/); if (_m) phUrl = _m[1]; }
       if (l.slice(0, 3) === '@H ' && l.indexOf('"fetch"') >= 0) totalFetch++;
     }
     const rss = process.memoryUsage().rss; if (rss > peakRss) peakRss = rss;
@@ -41,5 +42,6 @@ const PJS = fs.readFileSync(Q + '/_curp.js', 'utf8');
   }
   try { m.callMain(['--fe-deep-end']); } catch (e) {}
   console.log(`--- done: ${step} steps, ${((Date.now() - t0) / 1000).toFixed(1)}s, firstStep=${firstMs}ms laterMax=${laterMax}ms, totalFetch=${totalFetch}, preheat=${preheat}, aborted=${aborted}, peakRss=${(peakRss/1048576|0)}MB ---`);
+  console.log(`preheat URL (named holes?): ${phUrl}`);
   console.log(`persistent-rt OK if laterMax << firstStep (no re-boot): firstStep=${firstMs}ms laterMax=${laterMax}ms`);
 })();

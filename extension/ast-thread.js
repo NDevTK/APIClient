@@ -109,13 +109,21 @@ function parsePairs(s) {
 function sourceMapUrlOf(code) {
   var tail = code.length > 500 ? code.slice(-500) : code;
   var marker = "sourceMappingURL=";
-  var idx = tail.indexOf(marker);
+  // LAST occurrence — the real trailing annotation, not a "sourceMappingURL="
+  // that appears earlier inside a string literal.
+  var idx = tail.lastIndexOf(marker);
   if (idx === -1) return null;
   var start = idx + marker.length;
   while (start < tail.length && (tail.charCodeAt(start) === 32 || tail.charCodeAt(start) === 9)) start++;
   var end = start;
   while (end < tail.length && tail.charCodeAt(end) > 32) end++;
-  return end > start ? tail.substring(start, end) : null;
+  var url = tail.substring(start, end);
+  // Block-comment form `/*# sourceMappingURL=foo.js.map*/` (github ships both
+  // `//#` line and `/*# … */` block styles) — strip the trailing `*/` the
+  // line form lacks, else the fetch URL ends in `*/` and 404s.
+  var star = url.indexOf("*/");
+  if (star >= 0) url = url.slice(0, star);
+  return url.length ? url : null;
 }
 
 // An opaque value that flowed into a URL/method stringifies to
@@ -159,9 +167,21 @@ function buildPageDomSrc(scriptUrls) {
     "}catch(e){}})();";
 }
 
-async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor) {
+async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds) {
   var t0 = Date.now();
   var _resume = (typeof resumeCursor === "number" && resumeCursor >= 0);
+  // Cross-session resume is by a per-function-ID DRIVEN SET (file:line:col hash
+  // the engine emits as `@DD`), not a cursor index — so the engine's usefulness
+  // sort can reorder freely without skipping. `_driven` accumulates this run's
+  // @DD ids on top of the persisted set; it's written to the engine's `/driven`
+  // before the first deep-step so already-driven functions are skipped.
+  var _driven = new Set(Array.isArray(drivenIds) ? drivenIds : []);
+  // Relevance = when the PAGE was last visited (user's definition). Set once on
+  // the initial grind (a real page visit ≈ now); PRESERVED across resume batches
+  // so it stays the visit time, NOT bumped to "now" each batch — otherwise a
+  // long-running grind for an old page would masquerade as recently-visited and
+  // starve a page the user actually opened more recently.
+  var _vts = (typeof visitTs === "number" && visitTs > 0) ? visitTs : Date.now();
   // Throttle: cap any single yield (ms) — the work-burst granularity is one
   // schedule/deep-batch run, so rest ≈ work gives ~50% duty, capped here so a
   // slow run doesn't stall the queue too long. DEEP_BATCH = orphans per deep
@@ -681,28 +701,40 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     hasPreheatSrc: !!(code && code.indexOf("issues/preheat/index") >= 0) };
   if (deep && m) {
     var _dkey = _deepKey(code);
-    var _drem = 1, _dguard = 0, _dcur = _resume ? resumeCursor : 0, _dfirst = true;
+    var _drem = 1, _dguard = 0, _dcur = _resume ? resumeCursor : 0, _lastPartialN = methods.size;
     _deepStats.stop = "done";
     // Persist the combined bundle ONCE (heavy, ~18 MB) so a fresh worker can
     // resume; the cursor is a tiny per-batch write below.
     try { await _idbPut("code", { key: _dkey, code: code, scriptUrls: scriptUrls || null, pageHtml: pageHtml || null, sourceUrl: sourceUrl || "" }); } catch (e) {}
-    try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now() }); } catch (e) {}
+    try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now(), vts: _vts, driven: Array.from(_driven) }); } catch (e) {}
+    // Hand the engine the already-driven ids (from a prior session/batch) so its
+    // first deep-step skips them — cross-session resume by driven-SET, not cursor.
+    if (_driven.size) { try { m.FS.writeFile("/driven", Array.from(_driven).join("\n")); } catch (e) {} }
     while (_drem > 0 && _dguard++ < 200000) {
       stdout.length = 0; stderr.length = 0;
       var _dT0 = Date.now();
-      var _args = ["--fe-deep-step=" + DEEP_BATCH];
-      if (_dfirst && _dcur > 0) _args.push("--fe-deep-from=" + _dcur);   // seek on resume's first step
-      _dfirst = false;
+      var _args = ["--fe-deep-step=" + DEEP_BATCH];   // resume is via /driven (written above), not a cursor seek
       try { m.callMain(_args.concat(fileArgs)); }
       catch (e) { _deepStats.stop = "throw:" + ((e && e.message) || e); break; }
       _drem = -1;
       for (var _di = 0; _di < stdout.length; _di++) {
-        if (stdout[_di].slice(0, 4) === "@DS ") { try { var _ds = JSON.parse(stdout[_di].slice(4)); _drem = _ds.rem; if (typeof _ds.cur === "number") _dcur = _ds.cur; } catch (e) { _drem = 0; } }
+        var _ln = stdout[_di];
+        if (_ln.slice(0, 4) === "@DS ") { try { var _ds = JSON.parse(_ln.slice(4)); _drem = _ds.rem; if (typeof _ds.cur === "number") _dcur = _ds.cur; } catch (e) { _drem = 0; } }
+        else if (_ln.slice(0, 4) === "@DD ") { var _did = _ln.slice(4).trim(); if (_did) _driven.add(_did); }   // function driven → driven-set (persisted for resume)
       }
       processStdout();                       // aggregate this batch's @H/@S/@T
       _deepStats.steps++; _deepStats.rem = _drem;
       if (_deepStats.total < 0 && _drem >= 0) _deepStats.total = _drem + DEEP_BATCH;   // ≈ residue size
-      try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now() }); } catch (e) {}   // durable cursor
+      try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now(), vts: _vts, driven: Array.from(_driven) }); } catch (e) {}   // durable cursor
+      // Stream what this batch learned to the UI instead of waiting for the
+      // whole (minutes-long) grind: when new endpoints appeared, post a partial
+      // result. background.js merges it exactly like the final/resume result, so
+      // the popup grows live. Posted only on growth, so a barren stretch of
+      // orphans costs no traffic.
+      if (methods.size > _lastPartialN) {
+        _lastPartialN = methods.size;
+        try { postMessage({ _partial: true, sourceUrl: sourceUrl || "", response: { success: true, result: _buildResult() } }); } catch (e) {}
+      }
       if (_yieldDeep) { _deepStats.stop = "yielded@step" + _deepStats.steps; break; }   // a live review preempts — cursor saved, resume after
       if (instAborted) { _deepStats.stop = "abort@step" + _deepStats.steps; break; }
       if (_drem < 0) { _deepStats.stop = "no-@DS@step" + _deepStats.steps; _drem = 0; }
@@ -723,6 +755,11 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // each at its real bundle source position. This replaces the dropped
   // Babel viewer index: the engine knows what's interesting because it
   // executed it, not because it indexed identifiers.
+  // Hoisted so the deep loop can build a PARTIAL result from the
+  // accumulated state (methods/sinks/structural) after each batch and stream
+  // it to the UI — the deep grind runs for minutes, so without this the
+  // unused-feature endpoints would only appear once the whole run finished.
+  function _buildResult() {
   var fetchCallSites = [];
   var focusedView = [];
   methods.forEach(function (mm) {
@@ -800,6 +837,8 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     _timings: { ms: Date.now() - t0, runs: runs },
     _deepStats: _deepStats,
   };
+  }
+  return _buildResult();
 }
 
 onmessage = function (e) {
@@ -882,22 +921,26 @@ async function _resumeIncompleteDeep() {
   var keys;
   try { keys = await _idbAllKeys("prog"); } catch (e) { return; }
   if (!keys || !keys.length) return;
-  // Prioritize the MOST RECENTLY active grind (the user's latest interest) so
-  // the most relevant unused-feature surface is learned first; older grinds
-  // follow on subsequent passes. Eventual consistency: each grind's bundle +
-  // cursor stay in IndexedDB until its rem hits 0, so none is ever dropped —
-  // they all complete eventually, just newest-first.
+  // Prioritize the grind for the MOST RECENTLY VISITED page (the user's
+  // definition of relevance) so its unused-feature surface is learned first;
+  // pages visited longer ago follow on subsequent passes. Use the visit
+  // timestamp `vts` (set on the page visit, preserved across batches), NOT the
+  // per-batch `ts` (which would rank a still-grinding old page over a freshly
+  // opened one). Eventual consistency: each grind's bundle + cursor stay in
+  // IndexedDB until its rem hits 0, so none is ever dropped — all complete,
+  // just most-recently-visited first.
   var key = keys[0], bestTs = -1;
   for (var ki = 0; ki < keys.length; ki++) {
     try { var pr = await _idbGet("prog", keys[ki]); } catch (e) { continue; }
-    if (pr && (pr.ts || 0) > bestTs) { bestTs = pr.ts || 0; key = keys[ki]; }
+    var prTs = pr ? (pr.vts || pr.ts || 0) : 0;   // visit-recency, fall back to batch ts for pre-vts records
+    if (pr && prTs > bestTs) { bestTs = prTs; key = keys[ki]; }
   }
   var prog = null, codeRec = null;
   try { prog = await _idbGet("prog", key); codeRec = await _idbGet("code", key); } catch (e) { return; }
   if (!prog || !codeRec || !codeRec.code) { try { await _idbDel("prog", key); await _idbDel("code", key); } catch (e) {} _pump(); return; }
   _deepRunning = true; _yieldDeep = false;
   try {
-    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0);
+    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || []);
     postMessage({ _resumed: true, sourceUrl: codeRec.sourceUrl || "", response: { success: true, result: result } });
   } catch (e) { /* leave the record for a later retry */ }
   finally { _deepRunning = false; }

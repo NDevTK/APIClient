@@ -2735,6 +2735,10 @@ function buildFormFields(schema, initialData = null) {
           name,
           {
             name: param.name, // Pass the name (which might be an alias)
+            // Show the source-map-resolved real name (e.g. `e`→`owner`) as the
+            // label; the field key (first arg) stays the minified name so URL
+            // path substitution still matches the `{e}` hole.
+            displayName: param._sourceMapName || undefined,
             type:
               param.type === "integer"
                 ? "int32"
@@ -3371,6 +3375,7 @@ function formValuesToInitialData(formValues) {
 
 function collectFormValues() {
   const params = {};
+  const pathParams = {};
   const fields = [];
   const topFields = document.querySelectorAll(
     "#send-form-fields > .form-section > .form-field",
@@ -3380,14 +3385,33 @@ function collectFormValues() {
     const result = collectSingleField(wrapper);
     if (!result) continue;
     if (wrapper.dataset.category === "param") {
-      if (result.value !== "" && result.value != null)
-        params[result.name] = result.value;
+      if (result.value !== "" && result.value != null) {
+        // Path-template params (e.g. /{owner}/{repo}/…) substitute INTO the
+        // URL path; everything else is a query param. Separating them is what
+        // makes the learned template's editable owner/repo actually target the
+        // right resource instead of being appended as ?owner=…&repo=….
+        if (wrapper.dataset.location === "path") pathParams[result.name] = result.value;
+        else params[result.name] = result.value;
+      }
     } else {
       fields.push(result);
     }
   }
 
-  return { params, fields };
+  return { params, pathParams, fields };
+}
+
+// Substitute editable path-template holes — /{owner}/{repo}/… — with the
+// values the researcher typed. Unfilled holes are left as-is so an invalid
+// URL surfaces (the user must supply required path params), never silently
+// sent with a literal "{owner}".
+function applyPathParams(url, pathParams) {
+  if (!pathParams || !url) return url;
+  return url.replace(/\{([^}\/]+)\}/g, (m, name) =>
+    Object.prototype.hasOwnProperty.call(pathParams, name)
+      ? encodeURIComponent(String(pathParams[name]))
+      : m,
+  );
 }
 
 function collectSingleField(rootWrapper) {
@@ -3525,6 +3549,7 @@ async function sendRequest() {
     // Collect URL params from form fields even for GET/DELETE
     if (bodyMode === "form") {
       const formValues = collectFormValues();
+      url = applyPathParams(url, formValues.pathParams);
       if (Object.keys(formValues.params).length > 0) {
         try {
           const urlObj = new URL(url);
@@ -3532,15 +3557,16 @@ async function sendRequest() {
             urlObj.searchParams.set(k, String(v));
           }
           url = urlObj.toString();
-          currentRequestUrl = url;
         } catch (_) {
           console.warn("[Send] URL construction failed:", _);
         }
       }
+      currentRequestUrl = url;
     }
     body = { mode: "raw", formData: null, rawBody: null, frameId: currentReplayRequest?.frameId };
   } else if (bodyMode === "form") {
     const formValues = collectFormValues();
+    url = applyPathParams(url, formValues.pathParams);
     if (Object.keys(formValues.params).length > 0) {
       try {
         const urlObj = new URL(url);
@@ -3548,11 +3574,11 @@ async function sendRequest() {
           urlObj.searchParams.set(k, String(v));
         }
         url = urlObj.toString();
-        currentRequestUrl = url;
       } catch (_) {
         console.warn("[Send] URL construction failed:", _);
       }
     }
+    currentRequestUrl = url;
     if (formValues.fields.length === 0) {
       // No body fields in schema — fall back to raw body (e.g. replayed form-urlencoded body)
       const rawFallback = document.getElementById("send-raw-body").value;

@@ -100,13 +100,19 @@ try {
 function extractSourceMapUrl(code) {
   var tail = code.length > 500 ? code.slice(-500) : code;
   var marker = "sourceMappingURL=";
-  var idx = tail.indexOf(marker);
+  var idx = tail.lastIndexOf(marker);   // last occurrence = the real trailing annotation
   if (idx === -1) return null;
   var start = idx + marker.length;
   while (start < tail.length && (tail.charCodeAt(start) === 32 || tail.charCodeAt(start) === 9)) start++;
   var end = start;
   while (end < tail.length && tail.charCodeAt(end) > 32) end++;
-  return end > start ? tail.substring(start, end) : null;
+  var url = tail.substring(start, end);
+  // Strip the trailing `*/` from the block-comment form `/*# … */` (github
+  // ships both `//#` line and `/*# … */` block styles) so the fetch URL
+  // doesn't end in `*/` and 404.
+  var star = url.indexOf("*/");
+  if (star >= 0) url = url.slice(0, star);
+  return url.length ? url : null;
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -173,6 +179,13 @@ const globalStore = {
   securityFindings: new Map(), // sourceUrl → { sourceUrl, securitySinks[], dangerousPatterns[] }
   scriptCache: new Map(), // SHA-256 hash → { version, result, timestamp }
   discoveryChanges: new Map(), // service → [{ timestamp, fetchUrl, changes }]
+  // pageUrl(no query) → { scriptOffsets, sourceMapScripts, savedAt }. The deep
+  // (chunk-fold) round spawns a resumable grind that can outlive an SW
+  // eviction; when it finishes via AST_RESUMED the SW has lost the per-script
+  // line map + the chunk source-map URL list, so path-param names (owner/repo)
+  // can't be resolved. Persisting just those two small artefacts lets the
+  // resume merge re-run the eager path's source-map name resolution.
+  deepResumeMeta: new Map(),
 };
 
 // In-flight exploit-probe sessions, keyed by marker. The EXPLOIT_PROBE
@@ -442,6 +455,7 @@ function _serializeGlobalStore() {
     securityFindings: Object.fromEntries(globalStore.securityFindings),
     scriptCache: Object.fromEntries(globalStore.scriptCache),
     discoveryChanges: Object.fromEntries(globalStore.discoveryChanges),
+    deepResumeMeta: Object.fromEntries(globalStore.deepResumeMeta),
     savedAt: Date.now(),
   };
 }
@@ -500,6 +514,15 @@ function _deserializeIntoGlobalStore(s) {
   if (s.discoveryChanges) {
     for (const [k, v] of Object.entries(s.discoveryChanges))
       globalStore.discoveryChanges.set(k, v);
+  }
+  if (s.deepResumeMeta) {
+    // Resume metadata for a page not revisited within a week is stale — its
+    // chunk hashes/source maps may have rotated, so drop it on restore.
+    var _drmTTL = 7 * 24 * 60 * 60 * 1000;
+    var _drmNow = Date.now();
+    for (const [k, v] of Object.entries(s.deepResumeMeta)) {
+      if (v && (_drmNow - (v.savedAt || 0)) < _drmTTL) globalStore.deepResumeMeta.set(k, v);
+    }
   }
 }
 
@@ -648,13 +671,27 @@ function mergeToGlobal(tab) {
   scheduleSave();
 }
 
+// Incremented every time the store is wiped (the bin/Clear reset). An analysis
+// or its async continuation (the worker round-trip, a source-map re-merge, a
+// resume merge) captures the epoch when it starts and bails before writing to
+// the store if the epoch has moved — so work already in flight when Clear ran
+// can't repopulate the just-wiped store. Eviction-agnostic (unlike a buffer
+// check), so it never suppresses a legitimate post-eviction resume merge.
+var _dataEpoch = 0;
+
 async function clearGlobalStore() {
+  _dataEpoch++;
   globalStore.apiKeys.clear();
   globalStore.endpoints.clear();
   globalStore.discoveryDocs.clear();
   globalStore.probeResults.clear();
   globalStore.scopes.clear();
   globalStore.securityFindings.clear();
+  globalStore.deepResumeMeta.clear();
+  // Drop any SW-side analyses still queued so a pending review can't repopulate
+  // the store right after we wipe it (the offscreen worker's running/queued
+  // grind is stopped separately via AST_CLEAR before this runs).
+  _reviewQueue.length = 0;
   // The AST replay cache is keyed by analyzer-fingerprint + script hashes,
   // so it normally self-invalidates across builds — but an explicit Clear
   // is the tester's "re-analyze from scratch" action, and leaving the cache
@@ -1393,6 +1430,12 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
           description: "Learned from AST fetch call site (path template)",
           _astInferred: true,
         };
+      }
+      // Real declared name from the page's source map (e.g. minified `e` →
+      // `owner`), for display; the param key stays the minified name so URL
+      // substitution still matches the `{e}` hole.
+      if (p._sourceMapName && !m.parameters[p.name]._sourceMapName) {
+        m.parameters[p.name]._sourceMapName = p._sourceMapName;
       }
       _mergeAstValues(m.parameters[p.name], p.validValues, p.defaultValue);
     }
@@ -4150,6 +4193,51 @@ function _findScriptForLine(line, scriptOffsets) {
   return scriptOffsets[0];
 }
 
+// Resolve an AST endpoint's path-param names (minified, in URL order) to the
+// page's REAL declared names via its chunk's source map. No minified pattern-
+// matching and no value guessing: it maps the fetch call-site position through
+// the map to the original position, reads that line from the map's own
+// `sourcesContent`, and takes the URL template's path interpolation identifiers
+// in order — e.g. `await fetch(\`/${owner}/${repo}/…?source=${source}\`)` →
+// ["owner","repo"]. Returns the names array, or null if anything's missing.
+function _resolveAstPathParamNames(callSite, scriptOffsets, sourceMapsByUrl) {
+  try {
+    if (!callSite || !callSite.loc || !scriptOffsets || !scriptOffsets.length || !sourceMapsByUrl) return null;
+    var sc = _findScriptForLine(callSite.loc.line, scriptOffsets);
+    if (!sc || !sc.url) return null;
+    var sm = sourceMapsByUrl[sc.url];
+    if (!sm || !sm.mappings || !sm.sourcesContent) return null;
+    var genLine = callSite.loc.line - sc.lineStart + 1;          // 1-based line within the chunk
+    var col = (callSite.loc.column != null ? callSite.loc.column : (callSite.loc.col || 0));
+    var li = genLine - 1;
+    if (li < 0 || li >= sm.mappings.length) return null;
+    var segs = sm.mappings[li];
+    if (!segs || !segs.length) return null;
+    // Largest genCol <= col covers this position (Source Map spec § 4.4).
+    var lo = 0, hi = segs.length - 1, best = -1;
+    while (lo <= hi) { var mid = (lo + hi) >>> 1; if (segs[mid].genCol <= col) { best = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (best < 0) return null;
+    var seg = segs[best];
+    if (typeof seg.srcIdx !== "number" || typeof seg.srcLine !== "number") return null;
+    var content = sm.sourcesContent[seg.srcIdx];
+    if (!content) return null;
+    var lines = content.split("\n");
+    // The fetch URL template sits on/near the mapped line (beautified source
+    // can wrap the call across 1-2 lines) — join a small window, then take the
+    // FIRST backtick template literal (the fetch URL).
+    var win = (lines[seg.srcLine] || "") + " " + (lines[seg.srcLine + 1] || "") + " " + (lines[seg.srcLine - 1] || "");
+    var bt = win.indexOf("`");
+    if (bt < 0) return null;
+    var bt2 = win.indexOf("`", bt + 1);
+    var tmpl = bt2 > bt ? win.slice(bt + 1, bt2) : win.slice(bt + 1);
+    var qm = tmpl.indexOf("?");
+    var pathPart = qm >= 0 ? tmpl.slice(0, qm) : tmpl;   // path interpolations only (owner/repo, not query)
+    var names = [], re = /\$\{\s*([A-Za-z_$][\w$]*)\s*\}/g, mm;
+    while ((mm = re.exec(pathPart))) names.push(mm[1]);
+    return names.length ? names : null;
+  } catch (e) { return null; }
+}
+
 // Build cross-file definition index from combined AST propDefs+defMap.
 // Maps property/function names to {sourceUrl, line} using scriptOffsets
 // to convert combined-code lines back to per-script lines.
@@ -4412,6 +4500,7 @@ async function _drainReviewQueue() {
 }
 async function _analyzeCombinedScriptsInner(tabId, buf) {
   var tab = getTab(tabId);
+  var _ep = _dataEpoch;   // a Clear during the worker round-trip invalidates this run
   // Concatenate in DOM/execution order, not fetch-arrival order — a
   // later chunk that reads state an earlier chunk set up (GitHub's app
   // chunk reading client-env loaded by environment-*.js) throws
@@ -4526,6 +4615,23 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   else if (buf.pageUrl) tabUrl = buf.pageUrl;
   else if (scripts[0].url) tabUrl = scripts[0].url;
 
+  // Persist the resume metadata (combined→chunk line map + chunk source-map
+  // URLs) BEFORE the long deep grind, not after. The resume path is exactly the
+  // case where the SW evicts mid-grind, so the worker never returns and an
+  // after-the-fact save would never run; saving it up front lets the eventual
+  // AST_RESUMED merge re-resolve path-param names (owner/repo) the way the eager
+  // merge does. Keyed by page URL (sans query) to match the resume lookup.
+  if (buf._chunkRoundDone) {
+    try {
+      globalStore.deepResumeMeta.set(tabUrl.split("?")[0], {
+        scriptOffsets: scriptOffsets,
+        sourceMapScripts: sourceMapScripts,
+        savedAt: Date.now(),
+      });
+      scheduleSave();
+    } catch (_) {}
+  }
+
   // Analyze combined in offscreen document (non-blocking)
   var analysis;
   var response;
@@ -4553,6 +4659,13 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     return;
   }
   if (!response || !response.success) {
+    // The Clear button terminated the worker mid-analysis. Abort cleanly — do
+    // NOT fall back to per-script re-analysis, which would re-flood the freshly
+    // respawned worker right after a Clear and repopulate the just-wiped store.
+    if (response && response.error === "cleared") {
+      console.debug("[AST:combined] tab=%d aborted — worker cleared", tabId);
+      return;
+    }
     console.debug("[AST:combined] analyzeJSBundle failed for tab=%d: %s", tabId,
       response ? response.error : "no response");
     if (response && response.stack) console.debug(response.stack);
@@ -4564,7 +4677,17 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     return;
   }
   getTab(tabId)._astError = null;
+  // The bin/Clear reset fired while this analysis was in the worker. Its result
+  // predates the wipe, so merging it (or downloading its chunks / spawning the
+  // deep round) would repopulate the just-cleared store. Abandon the whole tail.
+  if (_ep !== _dataEpoch) {
+    console.debug("[AST:combined] tab=%d result discarded — store reset mid-analysis", tabId);
+    return;
+  }
   analysis = response.result;
+  // Carry the combined→per-script line map onto the analysis so the VDD merge
+  // can resolve a path param's minified name to its real source-map name.
+  analysis.scriptOffsets = scriptOffsets;
 
   // NOTE: lazy-chunk consumption (download the chunk URLs the forced run
   // recorded — analysis.chunkUrls — and re-review the combined whole) is
@@ -4735,6 +4858,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
 }
 
 function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
+  var _ep = _dataEpoch;   // a Clear during the (async) source-map fetch invalidates this re-merge
   try {
     if (!/^https?:\/\//i.test(smUrl)) {
       smUrl = new URL(smUrl, new URL(scriptUrl)).href;
@@ -4759,6 +4883,12 @@ function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
         }
         var smData = smResp2.result;
         analysis.sourceMap = smData;
+        // Per-script map store: a page loads many chunks, each with its OWN
+        // map; `analysis.sourceMap` keeps only the last fetched, so param-name
+        // resolution must look up the map for the SPECIFIC chunk an endpoint's
+        // call site lives in (via scriptOffsets), not the last one.
+        analysis.sourceMapsByUrl = analysis.sourceMapsByUrl || {};
+        analysis.sourceMapsByUrl[scriptUrl] = smData;
         console.debug("[AST:sourcemap] Parsed: %d sources, %d names, %d proto files, %d API client files",
           smData.sources.length, smData.names.length, smData.protoFileNames.length, smData.apiClientFiles.length);
         if (smData.sourcesContent && smData.sourcesContent.length) {
@@ -4787,6 +4917,7 @@ function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
           // cross-coord dedup (reverse-map the source-mapped location
           // through smData back to bundled coords, compare those).
         }
+        if (_ep !== _dataEpoch) return;   // store was reset while this map was fetching — don't repopulate
         mergeASTResultsIntoVDD(tab, [analysis], tabId);
         mergeToGlobal(tab);
         notifyPopup(tabId);
@@ -4827,6 +4958,7 @@ async function analyzeScript(tabId, scriptUrl, code) {
     return;
   }
   analysis = response.result;
+  analysis.scriptOffsets = [{ url: scriptUrl, lineStart: 1 }];   // single-script: trivial offset map
 
   if (analysis.resolverErrors && analysis.resolverErrors.length > 0) {
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
@@ -5067,6 +5199,19 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
         // a learnable endpoint. Skip before new URL(null) fabricates a
         // "/null" path.
         if (callSite.url == null || callSite.url === "") continue;
+        // Source-map: resolve minified path-param names (e/a) → the page's
+        // real declared names (owner/repo) from the chunk's source map, and
+        // tag each path param by URL order so the learner/UI can label them.
+        var _smPathNames = _resolveAstPathParamNames(callSite, analysis.scriptOffsets, analysis.sourceMapsByUrl);
+        if (_smPathNames && callSite.params) {
+          var _spi = 0;
+          for (var _sp = 0; _sp < callSite.params.length; _sp++) {
+            if ((callSite.params[_sp].location || "query") === "path") {
+              if (_spi < _smPathNames.length) callSite.params[_sp]._sourceMapName = _smPathNames[_spi];
+              _spi++;
+            }
+          }
+        }
         // Skip data:/blob:/about: URLs — those are inline content, not
         // API endpoints. Registering them as services produces empty-
         // host records with garbled paths (the URL parser reads the
@@ -5261,6 +5406,52 @@ function _handleFormSubmit(tabId, msg) {
 // Now: raw HTML lands in CONTENT_HTML, gets parsed by Lexbor in the
 // worker; real endpoints come from forced execution observing actual
 // fetch/XHR at the host edge.
+// Merge a deep-grind deliverable (a mid-grind partial OR the final/resume
+// result) into the matching tab + globalStore. Shared by AST_PARTIAL (live
+// streaming during the grind) and AST_RESUMED (final after eviction). The
+// deepResumeMeta (persisted before the grind, survives eviction) carries the
+// line map + chunk source-map list; its absence means the bin/Clear reset
+// wiped it mid-grind, so the deliverable is dropped (no repopulating a reset
+// store). doNames re-fetches chunk source maps to relabel path params
+// (owner/repo) — done once on the final result, skipped on every partial so
+// the stream stays cheap.
+function _mergeDeepResult(sourceUrl, result, doNames) {
+  try {
+    if (!result) return;
+    var _rurl = (sourceUrl || "").split("?")[0];
+    var _rtid = null;
+    _tabMeta.forEach(function (mm, tid) { if (_rtid == null && mm && mm.url && _rurl && mm.url.indexOf(_rurl) === 0) _rtid = tid; });
+    if (_rtid == null) { console.debug("[AST:deep] no open tab for %s — not merged", _rurl); return; }
+    var _drm = globalStore.deepResumeMeta.get(_rurl);
+    if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", _rurl); return; }
+    var _rtab = getTab(_rtid);
+    if (_drm.scriptOffsets) result.scriptOffsets = _drm.scriptOffsets;
+    mergeASTResultsIntoVDD(_rtab, [result], _rtid);
+    mergeToGlobal(_rtab);
+    notifyPopup(_rtid);
+    if (!doNames) return;
+    // Fetch source maps + re-merge to relabel minified path params (e/a) to
+    // their declared names (owner/repo), scoped to chunks that hold a learned
+    // call site (a github resume costs a handful of map fetches, not 600+).
+    if (_drm.sourceMapScripts && _drm.sourceMapScripts.length && _drm.scriptOffsets) {
+      var _needScript = new Set();
+      var _rfc = (result.fetchCallSites || []);
+      for (var _rfi = 0; _rfi < _rfc.length; _rfi++) {
+        var _rcl = _rfc[_rfi];
+        if (_rcl && _rcl.loc && typeof _rcl.loc.line === "number") {
+          var _rsc = _findScriptForLine(_rcl.loc.line, _drm.scriptOffsets);
+          if (_rsc && _rsc.url) _needScript.add(_rsc.url);
+        }
+      }
+      for (var _rsmi = 0; _rsmi < _drm.sourceMapScripts.length; _rsmi++) {
+        if (!_needScript.has(_drm.sourceMapScripts[_rsmi].scriptUrl)) continue;
+        _fetchSourceMapForScript(_rtid, _rtab, result, _drm.sourceMapScripts[_rsmi].scriptUrl, _drm.sourceMapScripts[_rsmi].smUrl);
+      }
+    }
+    console.debug("[AST:deep] merged for %s into tab=%d (names=%s)", _rurl, _rtid, !!doNames);
+  } catch (e) { console.debug("[AST:deep] merge error: %s", e && e.message); }
+}
+
 // Manifest "matches" already restricts which pages they run on.
 function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
@@ -5286,24 +5477,13 @@ function handleContentMessage(msg, sender) {
 
   // AST_RESUMED: the offscreen worker finished a deep grind it picked up from
   // IndexedDB after an MV3 eviction. Merge the recovered unused-feature
-  // endpoints into the matching tab + globalStore so the resume isn't wasted.
-  if (msg.type === "AST_RESUMED") {
-    try {
-      var _rurl = (msg.sourceUrl || "").split("?")[0];
-      var _rtid = null;
-      _tabMeta.forEach(function (mm, tid) { if (_rtid == null && mm && mm.url && _rurl && mm.url.indexOf(_rurl) === 0) _rtid = tid; });
-      if (_rtid != null && msg.result) {
-        var _rtab = getTab(_rtid);
-        mergeASTResultsIntoVDD(_rtab, [msg.result], _rtid);
-        mergeToGlobal(_rtab);
-        notifyPopup(_rtid);
-        console.debug("[AST:resumed] merged deep-resume for %s into tab=%d", _rurl, _rtid);
-      } else {
-        console.debug("[AST:resumed] no open tab for %s — resume endpoints not merged", _rurl);
-      }
-    } catch (e) { console.debug("[AST:resumed] error: %s", e && e.message); }
-    return;
-  }
+  // endpoints + resolve source-map names (this is the final result).
+  if (msg.type === "AST_RESUMED") { _mergeDeepResult(msg.sourceUrl, msg.result, true); return; }
+  // AST_PARTIAL: a mid-grind batch streamed what it has learned so far so the
+  // UI grows live instead of waiting for the whole run. Merge endpoints fast;
+  // skip per-map name resolution (the final result does that once) so the
+  // stream stays cheap.
+  if (msg.type === "AST_PARTIAL") { _mergeDeepResult(msg.sourceUrl, msg.result, false); return; }
 
   // PROBE_HIT: intercept.js recorded a sink that saw the active
   // probe marker. Correlate to an open exploit-probe session via the
@@ -5579,10 +5759,27 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "CLEAR_TAB": {
-      if (tabId != null) state.tabs.delete(tabId);
-      clearGlobalStore();
-      sendResponse({ ok: true });
-      return;
+      // The main Clear button: delete ALL extension data and stop ALL work.
+      (async function () {
+        // 1. Stop the offscreen worker FIRST — terminate it (kills the running
+        //    wasm grind outright) and delete its resumable-grind DB — so no
+        //    in-flight analysis or resume can repopulate what we wipe next.
+        try { await sendToOffscreen({ type: "AST_CLEAR" }); } catch (e) {}
+        // 2. Global findings + the persisted gapiStore (and the SW-side review
+        //    queue / deepResumeMeta, cleared inside clearGlobalStore).
+        await clearGlobalStore();
+        // 3. All request logs — in-memory and the persisted session copy —
+        //    plus the per-tab working state that feeds re-analysis, so the next
+        //    navigation starts from a genuinely empty slate.
+        for (const tid of _sessionSaveTimers.values()) clearTimeout(tid);
+        _sessionSaveTimers.clear();
+        state.tabs.clear();
+        _scriptBuffers.clear();
+        _wsConnState.clear();
+        try { await chrome.storage.session.clear(); } catch (e) {}
+        sendResponse({ ok: true });
+      })();
+      return true;   // async sendResponse
     }
 
     case "CLEAR_LOG": {
@@ -7219,6 +7416,9 @@ function resolveEndpointSchema(tabId, endpointKey, service, methodId) {
             // AST-discovered valid values
             _astValidValues: pDef._astValidValues || null,
             _astValueSource: pDef._astValueSource || null,
+            // Real declared name from the page's source map (e.g. `e`→`owner`)
+            // for display; `name` stays the minified key for URL substitution.
+            _sourceMapName: pDef._sourceMapName || null,
           };
         }
       }
