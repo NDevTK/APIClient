@@ -715,10 +715,26 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         if (pendingPoC && Array.isArray(pendingPoC.steps) && pendingPoC.steps.length) {
           poc = adaptPoc(pendingPoC, pendingSec.type, zr.psi);
         }
+        // Recover the attacker source from Ψ. LEAF terms serialize as
+        // `$<id>:<label>` where <label> is the taint-source name the engine
+        // assigned at OPQ() (location.hash, postMessage.data, document.cookie,
+        // …) — the engine already emits it in psi, so surface it instead of a
+        // generic host-unknown fallback. The popup maps it to a probe strategy.
+        var srcLabel = null;
+        if (zr.psi && typeof zr.psi === "string") {
+          var _labels = [], _re = /\$\d+:([A-Za-z][\w.]*)/g, _m;
+          while ((_m = _re.exec(zr.psi))) _labels.push(_m[1]);
+          for (var _li = 0; _li < _labels.length; _li++) {
+            if (/^location\.(hash|search|pathname|href)$/.test(_labels[_li]) ||
+                /postMessage|event\.data/i.test(_labels[_li])) { srcLabel = _labels[_li]; break; }
+          }
+          if (!srcLabel && _labels.length) srcLabel = _labels[0];
+        }
         securitySinks.push({
           type: pendingSec.type,
           sink: pendingSec.sink,
-          source: "host-unknown attacker input reached the sink (forced multi-path execution)",
+          source: srcLabel || "host-unknown attacker input reached the sink (forced multi-path execution)",
+          sourceType: srcLabel ? "user-controlled" : undefined,
           severity: sev,
           location: ss.loc || { line: 0, column: 0 },
           taintPath: ss.chain.map(function (c) { return { at: c }; }),

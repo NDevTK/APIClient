@@ -103,11 +103,13 @@ node engine/build.mjs stage      # copy qjs_worker.js + hostedge.gen.js into ext
 
 ```
 intercept.js       Main-world fetch/XHR/WebSocket/EventSource wrapper (request + response capture)
-content.js         Isolated-world content script (DOM scanning, PAGE_FETCH relay, intercept relay, postMessage/MessageChannel listener)
-background.js      Service worker (request interception, VDD learning, analysis orchestration, protocol classification, export)
-popup.js           Popup controller (rendering, replay, form builder, security panel)
+content.js         Isolated-world content script (ships raw HTML/scripts/responses, PAGE_FETCH relay, postMessage/MessageChannel listener) — messages the offscreen brain DIRECTLY
+background.js      Thin, STATELESS service worker — extension-page-only. Owns the offscreen lifecycle, forwards browser events the offscreen can't observe (webNavigation/tabs as __evt), and performs privileged chrome.* on the brain's behalf (__rpc: tabs.*, scripting.exec, storage.session.*, cross-origin fetch). Holds NO state.
+offscreen-brain.js The LEARNING BRAIN (runs in the offscreen document — stable lifetime + IndexedDB). All state + logic: globalStore, VDD schema learning, discovery, AST merge, request log, protocol classification, popup handlers, export, persistence. Privileged chrome.* APIs it lacks go through the SW via swRpc.
+popup.js           Popup controller (rendering, replay, form builder, security panel) — messages the offscreen brain directly
 popup.html/css     Popup markup and styles
-ast-worker.html    Offscreen document — thin relay to the analysis Web Worker
+ast-worker.html    Offscreen document — loads the brain (offscreen-brain.js) + the analysis Web Worker
+ast-worker.js      In-document bridge: exposes self.astDispatch (the brain calls it directly) and merges streamed deep-grind results
 ast-thread.js      Web Worker — schedule enumeration (one fresh wasm instance per schedule) + throttled, preemptible, cross-session-resumable deep unused-feature grind
 
 engine/qjs/        Forked QuickJS-ng + vendored Lexbor (Apache-2.0); ONE patched source → all targets:
@@ -130,12 +132,14 @@ lib/
 ### Data Flow
 
 ```
-Page JS ──→ intercept.js (main world) ──→ CustomEvent ──→ content.js ──→ background.js
-             (request headers/body +                                          │
-              response headers/body)                                          │
+Page JS ──→ intercept.js (main world) ──→ CustomEvent ──→ content.js ──→ offscreen-brain.js
+             (request headers/body +                      (broadcast reaches     │   (the brain;
+              response headers/body)                       the offscreen doc      │    real sender —
+                                                           directly)              │    tab/frame/url)
+Cross-frame postMessage / MessageChannel ──→ content.js (message listener) ──────→│
                                                                               │
-Cross-frame postMessage / MessageChannel ──→ content.js (message listener) ──→│
-                                                                              │
+  background.js (SW): offscreen lifecycle + __evt (webNavigation/tabs) +      │
+                      __rpc (tabs/scripting/storage.session/fetch) ───────────┤
                                               ┌───────────────────────────────┤
                                               ▼                               ▼
                                      VDD Schema Learning              Forced-Execution Analysis
@@ -152,12 +156,14 @@ Cross-frame postMessage / MessageChannel ──→ content.js (message listener)
 
 ### Storage
 
+All learned state lives in **IndexedDB in the offscreen document** (the brain's stable home). `chrome.storage.local` is **banned** (a compromised renderer could read cross-site structural metadata); `chrome.storage.session` is the single exception, used only for the request log and reached by the brain through the SW (`chrome.storage` isn't exposed to the offscreen).
+
 | Store | Backend | Scope | Lifetime |
 |-------|---------|-------|----------|
-| **GlobalStore** | IndexedDB (service worker origin) | Cross-tab | Persistent |
-| **Request Logs** | `chrome.storage.session` | Per-tab | Browser session |
+| **GlobalStore** | IndexedDB `uasr_store` / `gapiStore` (offscreen document) | Cross-tab | Persistent (debounced save; restored on offscreen recreate) |
+| **Request Logs** | `chrome.storage.session` (via SW RPC) | Per-tab | Browser session |
 | **Field Renames** | IndexedDB (via GlobalStore) | Cross-tab | Persistent |
-| **Deep-grind progress** | IndexedDB (offscreen worker origin) | Per-bundle | Until complete |
+| **Deep-grind progress** | IndexedDB `feDeepDB` (offscreen document) | Per-bundle | Until complete |
 
 ### Background Analysis & Scheduling
 
@@ -175,11 +181,12 @@ The deep analysis learns the *complete* API surface — including features that 
 | Context | Process | Trust Level |
 |---------|---------|-------------|
 | `intercept.js` (main world) | Renderer | Untrusted — same origin as page, no extension APIs |
-| `content.js` (isolated world) | Renderer | Low trust — message whitelist: `CONTENT_KEYS`, `CONTENT_ENDPOINTS`, `RESPONSE_BODY` |
-| `background.js` (service worker) | Extension | Trusted — full extension APIs, IndexedDB |
+| `content.js` (isolated world) | Renderer | Low trust — ships raw page material under a fixed message type set; treated as untrusted page data |
+| `background.js` (service worker) | Extension | Trusted — full extension APIs; thin, holds no learned data |
+| `offscreen-brain.js` (offscreen document) | Extension | Trusted — owns IndexedDB + all learned state |
 | `popup.js` (extension page) | Extension | Trusted |
 
-GlobalStore uses IndexedDB (inaccessible to content scripts) instead of `chrome.storage.local` to prevent compromised renderers from reading cross-site structural metadata. Message routing validates `sender.url` origin (unforgeable by the browser process).
+The brain uses IndexedDB (inaccessible to content scripts) instead of `chrome.storage.local` to keep a compromised renderer from reading cross-site structural metadata. **Trust is decided by `sender.url`, never `sender.id`** — every `onMessage` sender carries the extension id (external senders go to `onMessageExternal`), so the id is not a discriminator; an extension-origin URL is a trusted context (popup/offscreen), a web URL is a content script (untrusted). The SW honors privileged `__rpc` **only** from the offscreen URL and browser-event `__evt` only from an extension origin; it never relays content-script payloads (content scripts reach the brain directly with the browser-verified `sender`, so page data is never laundered into a trusted origin). SW fetches on the brain's behalf always omit cookies.
 
 ## Security & Privacy
 

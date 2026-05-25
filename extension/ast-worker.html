@@ -1,3 +1,15 @@
 <!DOCTYPE html>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' http: https: data:">
+<!-- The offscreen document hosts the API-learning BRAIN (offscreen-brain.js, the
+     former service worker) where it has a stable lifetime + IndexedDB. Its lib/*
+     dependencies load first (same set the SW used to importScripts), then the
+     brain, then ast-worker.js which owns the analysis Web Worker and exposes
+     self.astDispatch for the brain to call directly. -->
+<script src="lib/protobuf.js"></script>
+<script src="lib/discovery.js"></script>
+<script src="lib/req2proto.js"></script>
+<script src="lib/stats.js"></script>
+<script src="lib/chains.js"></script>
+<script src="lib/trace-mapping.bundle.js"></script>
+<script src="offscreen-brain.js"></script>
 <script src="ast-worker.js"></script>

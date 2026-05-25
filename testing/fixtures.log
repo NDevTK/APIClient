@@ -1,9 +1,9 @@
 fixtures server listening on http://127.0.0.1:8765/
   GET / -> /poc_multi.html
   lock: D:\APIClient\testing\fixtures.lock
-[2026-05-20T23:17:51.025Z] GET /poc_multi.html  referer=-
-[2026-05-20T23:19:09.503Z] GET /poc_multi.html  referer=-
-[2026-05-20T23:19:13.043Z] GET /poc_multi.html  referer=-
-[2026-05-20T23:19:14.607Z] GET /x  referer=http://127.0.0.1:8765/poc_multi.html
-[2026-05-20T23:34:04.490Z] GET /poc_multi.html  referer=-
-[2026-05-20T23:34:05.603Z] GET /x  referer=http://127.0.0.1:8765/poc_multi.html
+[2026-05-25T07:44:16.590Z] GET /poc_multi.html  referer=-
+[2026-05-25T07:44:26.904Z] GET /poc_multi.html  referer=-
+[2026-05-25T07:44:26.993Z] GET /favicon.ico  referer=http://127.0.0.1:8765/poc_multi.html
+[2026-05-25T07:45:50.265Z] GET /poc_multi.html  referer=-
+[2026-05-25T07:50:46.472Z] GET /poc_hash.html  referer=-
+[2026-05-25T07:50:46.485Z] GET /x  referer=http://127.0.0.1:8765/poc_hash.html

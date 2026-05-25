@@ -1,8 +1,15 @@
-// Service worker: intercepts network requests, extracts API keys,
-// endpoints, auth headers, coordinates discovery document fetching,
-// req2proto fallback probing, and stores AST security findings.
-
-importScripts("lib/protobuf.js", "lib/discovery.js", "lib/req2proto.js", "lib/stats.js", "lib/chains.js", "lib/trace-mapping.bundle.js");
+// offscreen-brain.js — the API-learning brain. Runs in the OFFSCREEN document
+// (loaded by ast-worker.html, which provides the lib/* globals via <script> tags
+// and the analysis Web Worker via ast-worker.js). It owns globalStore + discovery
+// + AST merge + the request log + ALL the popup message handlers, and persists to
+// IndexedDB — a stable home, unlike the evicted service worker. The thin service
+// worker (background.js) forwards browser events here and performs privileged
+// chrome.tabs.* calls on this brain's behalf (see _swRpc / __rpc).
+//
+// Was background.js (the service worker) until the brain moved to the offscreen.
+// Differences from a SW: no importScripts (libs are <script>s in ast-worker.html);
+// no chrome.tabs/scripting/webNavigation (those are RPC'd to the SW or arrive as
+// forwarded __evt messages); the analysis worker is reached via self.astDispatch.
 
 // ─── AST Cache Fingerprint ──────────────────────────────────────────────────
 // The fingerprint hashes the analyzer worker files at first use — any
@@ -41,59 +48,43 @@ async function getAnalyzerFingerprint() {
   return _analyzerFingerprintP;
 }
 
-// ─── Offscreen AST Worker ────────────────────────────────────────────────────
-// Heavy libs (babel-bundle.js, ast.js, sourcemap.js) run in an offscreen
-// document so the service worker stays responsive during analysis.
+// ─── Analysis Web Worker dispatch ─────────────────────────────────────────────
+// The brain runs IN the offscreen document; the analysis Web Worker (ast-thread.js)
+// is owned by ast-worker.js (loaded in the SAME document), which exposes
+// self.astDispatch(msg) → Promise<response>. AST_* messages go straight to it —
+// chrome.runtime.sendMessage would NOT reach a same-document listener (the
+// sender's own context is excluded from the broadcast).
+function sendToOffscreen(msg) {
+  if (typeof self.astDispatch === "function") return self.astDispatch(msg);
+  return Promise.resolve({ success: false, error: "analysis worker dispatch unavailable" });
+}
+// The offscreen document's lifecycle + the cross-session resume kick are owned by
+// the thin service worker (background.js). Nothing to create from inside it.
+function ensureOffscreen() { return Promise.resolve(); }
 
-var _offscreenReady = null;
-
-async function ensureOffscreen() {
-  // Always check contexts — caching the promise breaks when the
-  // document gets closed (chrome.offscreen.closeDocument or SW
-  // hibernation can reset the offscreen). A stale resolved promise
-  // would skip re-creation and `chrome.runtime.sendMessage` would
-  // then hang waiting for a recipient that no longer exists.
-  var contexts = await chrome.runtime.getContexts({
-    contextTypes: ["OFFSCREEN_DOCUMENT"]
+// Privileged chrome.tabs.* / webNavigation.* calls the offscreen can't make — the
+// thin service worker performs them and returns the result. Resolves to the
+// result, rejects on error. (chrome.scripting.executeScript injects a function
+// that can't be serialized across this boundary; the exploit-probe that needs it
+// runs in the SW, not here.)
+function swRpc(api) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return chrome.runtime.sendMessage({ __rpc: true, api: api, args: args }).then(function (r) {
+    if (!r || !r.ok) throw new Error((r && r.error) || ("swRpc failed: " + api));
+    return r.result;
   });
-  if (contexts.length > 0) return;
-  // Serialize concurrent ensureOffscreen calls so chrome.offscreen
-  // .createDocument doesn't reject with "Only a single offscreen
-  // document may be created at a time."
-  if (_offscreenReady) return _offscreenReady;
-  _offscreenReady = (async () => {
-    try {
-      await chrome.offscreen.createDocument({
-        url: "ast-worker.html",
-        reasons: ["WORKERS"],
-        justification: "AST analysis of JavaScript bundles"
-      });
-    } finally {
-      _offscreenReady = null;
-    }
-  })();
-  return _offscreenReady;
 }
 
-async function sendToOffscreen(msg) {
-  await ensureOffscreen();
-  return chrome.runtime.sendMessage(msg);
+// Cross-origin fetch via the SW. The offscreen document is under COEP
+// require-corp so a direct cross-origin fetch here fails for any host that
+// doesn't send CORP; the SW (host_permissions: <all_urls>) fetches with cookies
+// always omitted. Resolves to { ok, status, statusText, headers (lowercased
+// object), body (text) } — NOT a Response object. Used only for uncredentialed
+// public resources (scripts / lazy chunks / spec docs); credentialed same-origin
+// requests go through pageContextFetch (the page renderer) instead.
+function swFetch(url, opts) {
+  return swRpc("fetch", Object.assign({ url: url }, opts || {}));
 }
-
-// Cross-session eventual consistency: on browser start AND extension
-// reload/update, proactively create the offscreen document so its worker —
-// which runs _resumeIncompleteDeep on load — picks up any deep grind left
-// incomplete in IndexedDB (the persisted combined bundle + cursor) and
-// continues from where it stopped, WITHOUT waiting for the user to visit a
-// new page. The persisted JS is never lost (IndexedDB survives restart); this
-// just kicks the resume immediately instead of on the next navigation. The
-// worker no-ops when IndexedDB has nothing pending, so the cost is one idle
-// offscreen doc that Chrome reclaims when truly idle.
-function _kickDeepResume() { try { ensureOffscreen().catch(function () {}); } catch (e) {} }
-try {
-  chrome.runtime.onStartup.addListener(_kickDeepResume);
-  chrome.runtime.onInstalled.addListener(_kickDeepResume);
-} catch (e) {}
 
 // Inlined from ast.js — extracts sourceMappingURL from the last 500 chars.
 // Runs synchronously in the service worker (no Babel needed).
@@ -142,10 +133,10 @@ const _deepStatsByTab = new Map(); // tabId → { rem, total, steps, stop, ts } 
 const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, isTop, lastSeen }>
 const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
 
-// ─── Frame tracking via webNavigation ────────────────────────────────────────
-// Replaces content-script FRAME_REGISTER — authoritative frame data from the
-// browser process, not from potentially cross-origin iframe JS contexts.
-chrome.webNavigation.onCommitted.addListener(function(details) {
+// ─── Frame tracking via webNavigation (forwarded as __evt NAV by the SW) ──────
+// The offscreen can't observe chrome.webNavigation; the thin SW forwards each
+// onCommitted as an __evt NAV message, dispatched here by the brain's onMessage.
+function _onNav(details) {
   var tabId = details.tabId;
   var frameId = details.frameId;
   if (!_tabFrames.has(tabId)) _tabFrames.set(tabId, new Map());
@@ -165,7 +156,7 @@ chrome.webNavigation.onCommitted.addListener(function(details) {
     }
   }
   notifyPopup(tabId);
-});
+}
 
 // Cross-script AST analysis: buffer scripts per tab, debounce, concatenate + analyze
 const _scriptBuffers = new Map(); // tabId → { scripts: [{url, code}], timer: null }
@@ -320,7 +311,7 @@ function getTab(tabId) {
 async function captureTabMeta(tabId) {
   if (_tabMeta.has(tabId)) return;
   try {
-    const tab = await chrome.tabs.get(tabId);
+    const tab = await swRpc("tabs.get", tabId);
     if (tab) {
       _tabMeta.set(tabId, { title: tab.title || `Tab ${tabId}`, url: tab.url || "" });
     }
@@ -537,16 +528,12 @@ async function saveGlobalStore() {
 }
 
 async function loadGlobalStore() {
+  // Learned data persists in IndexedDB (the offscreen has it + a stable
+  // lifetime). chrome.storage is NOT used: chrome.storage.local is banned, and
+  // chrome.storage is not even exposed to the offscreen document — a previous
+  // chrome.storage.local read here THREW before the IndexedDB restore ran, so a
+  // recreated offscreen came up with an empty store and the popup saw nothing.
   try {
-    // Migrate from chrome.storage.local if data exists there (one-time)
-    const legacy = await chrome.storage.local.get("gapiStore");
-    if (legacy.gapiStore) {
-      _deserializeIntoGlobalStore(legacy.gapiStore);
-      await _idbSet("gapiStore", _serializeGlobalStore());
-      await chrome.storage.local.remove("gapiStore");
-      return;
-    }
-    // Normal load from IndexedDB
     const s = await _idbGet("gapiStore");
     if (s) _deserializeIntoGlobalStore(s);
   } catch (_) {
@@ -734,7 +721,7 @@ async function saveTabSessionLog(tabId) {
   if (!tab) return;
   try {
     const serialized = tab.requestLog.map(serializeLogEntry);
-    await chrome.storage.session.set({ [`reqLog_${tabId}`]: serialized });
+    await swRpc("storage.session.set", { [`reqLog_${tabId}`]: serialized });
     await saveSessionIndex();
   } catch (e) {
     console.error("[Session] Save failed for tab", tabId, e);
@@ -751,7 +738,7 @@ async function saveSessionIndex() {
     }
   }
   try {
-    await chrome.storage.session.set({ reqLog_index: index });
+    await swRpc("storage.session.set", { reqLog_index: index });
   } catch (e) {
     console.error("[Session] Index save failed:", e);
   }
@@ -759,7 +746,7 @@ async function saveSessionIndex() {
 
 async function loadSessionLogs() {
   try {
-    const data = await chrome.storage.session.get(null);
+    const data = await swRpc("storage.session.get", null);
     for (const [key, value] of Object.entries(data)) {
       if (key === "reqLog_index") {
         for (const [tidStr, meta] of Object.entries(value)) {
@@ -2879,7 +2866,8 @@ function mergeSchemaInto(doc, rootSchemaName, rootNewSchema) {
  * Send a PAGE_FETCH message to a tab's content script.
  */
 async function sendPageFetch(tabId, url, opts, frameId = 0) {
-  return chrome.tabs.sendMessage(
+  return swRpc(
+    "tabs.sendMessage",
     tabId,
     {
       type: "PAGE_FETCH",
@@ -4170,15 +4158,15 @@ function _fetchAndBufferScript(tabId, scriptUrl, pageUrl, order) {
   // this fetch to complete (or fail) before firing analysis.
   buf.pending++;
 
-  fetch(scriptUrl).then(function(resp) {
+  swFetch(scriptUrl).then(function(resp) {
     if (!resp.ok) {
       console.debug("[AST:buffer] Fetch failed for %s: %d %s", scriptUrl, resp.status, resp.statusText);
       _scriptBufferDecrementPending(tabId, buf);
       return null;
     }
-    var mime = resp.headers.get("content-type") || "";
-    var nosniff = (resp.headers.get("x-content-type-options") || "").toLowerCase().indexOf("nosniff") >= 0;
-    return resp.text().then(function(t) { return { mime: mime, nosniff: nosniff, text: t }; });
+    var mime = resp.headers["content-type"] || "";
+    var nosniff = (resp.headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0;
+    return { mime: mime, nosniff: nosniff, text: resp.body };
   }).then(function(r) {
     if (!r) return;
     // CORB/ORB: never ingest a cross-origin response the browser would
@@ -4478,14 +4466,15 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
   var CONC = 8;
   for (var s = 0; s < fresh.length; s += CONC) {
     var batch = fresh.slice(s, s + CONC);
-    // Direct SW fetch (host_permissions: <all_urls>) — NOT pageContextFetch.
-    // Chunk assets are public (github.githubassets.com); the page-context relay
-    // was flaky (a navigating/closing tab dropped fetches mid-flight, so the
-    // combined sometimes folded in only SOME chunks — the residue-variance bug
-    // that lost preheat). The SW fetch is independent of the tab's lifecycle.
+    // SW fetch (host_permissions: <all_urls>, cookies omitted) — NOT
+    // pageContextFetch. Chunk assets are public (github.githubassets.com); the
+    // page-context relay was flaky (a navigating/closing tab dropped fetches
+    // mid-flight, so the combined sometimes folded in only SOME chunks — the
+    // residue-variance bug that lost preheat). The SW fetch is independent of the
+    // tab's lifecycle and not subject to the offscreen's COEP.
     var results = await Promise.all(batch.map(function (cu) {
-      return fetch(cu, { method: "GET", credentials: "omit" })
-        .then(function (resp) { return resp.ok ? resp.text() : null; })
+      return swFetch(cu, { method: "GET" })
+        .then(function (resp) { return resp.ok ? resp.body : null; })
         .then(function (body) { return { u: cu, body: body }; })
         .catch(function (e) { return { u: cu, body: null, err: String(e && e.message || e) }; });
     }));
@@ -5664,7 +5653,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       const checks = [];
       for (const [fid, info] of frames) {
         checks.push(
-          chrome.tabs.sendMessage(tabId, { type: "PING" }, { frameId: fid })
+          swRpc("tabs.sendMessage", tabId, { type: "PING" }, { frameId: fid })
             .then(() => ({ frameId: fid, url: info.url, origin: info.origin, isTop: info.isTop, alive: true }))
             .catch(() => ({ frameId: fid, alive: false }))
         );
@@ -5844,7 +5833,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         state.tabs.clear();
         _scriptBuffers.clear();
         _wsConnState.clear();
-        try { await chrome.storage.session.clear(); } catch (e) {}
+        try { await swRpc("storage.session.clear"); } catch (e) {}
         sendResponse({ ok: true });
       })();
       return true;   // async sendResponse
@@ -5854,14 +5843,14 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       if (msg.clearAll) {
         for (const [tid, t] of state.tabs) {
           t.requestLog = [];
-          chrome.storage.session.remove(`reqLog_${tid}`).catch(() => {});
+          swRpc("storage.session.remove", `reqLog_${tid}`).catch(() => {});
         }
         saveSessionIndex();
       } else {
         if (tabId == null) return;
         const tab = getTab(tabId);
         tab.requestLog = [];
-        chrome.storage.session.remove(`reqLog_${tabId}`).catch(() => {});
+        swRpc("storage.session.remove", `reqLog_${tabId}`).catch(() => {});
         saveSessionIndex();
       }
       sendResponse({ ok: true });
@@ -5949,9 +5938,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // Re-fetch the script (extension has <all_urls>) — same SSRF
       // guard as the buffering path: public http(s) only.
       if (!_isPublicScriptUrl(scriptUrl)) { sendResponse({ error: "blocked: non-public script URL" }); return; }
-      fetch(scriptUrl).then(function(r) {
+      swFetch(scriptUrl).then(function(r) {
         if (!r.ok) throw new Error(r.status + " " + r.statusText);
-        return r.text();
+        return r.body;
       }).then(function(code) {
         sendResponse({ code: code, findings: _slFindings, pageUrl: _slPageUrl });
       }).catch(function(e) {
@@ -6068,7 +6057,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "WS_SEND_MSG": {
       if (tabId == null) return;
       var _wsOpts = msg.frameId != null ? { frameId: msg.frameId } : undefined;
-      chrome.tabs.sendMessage(tabId, {
+      swRpc("tabs.sendMessage", tabId, {
         type: "WS_SEND_MSG",
         wsId: msg.channelId,
         data: msg.data,
@@ -6100,7 +6089,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "PM_SEND_MSG": {
       if (tabId == null) return;
       var _pmOpts = msg.frameId != null ? { frameId: msg.frameId } : undefined;
-      chrome.tabs.sendMessage(tabId, {
+      swRpc("tabs.sendMessage", tabId, {
         type: "PM_SEND_MSG",
         data: msg.data,
         targetOrigin: msg.targetOrigin,
@@ -6133,7 +6122,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "MC_SEND_MSG": {
       if (tabId == null) return;
       var _mcOpts = msg.frameId != null ? { frameId: msg.frameId } : undefined;
-      chrome.tabs.sendMessage(tabId, {
+      swRpc("tabs.sendMessage", tabId, {
         type: "MC_SEND_MSG",
         channelId: msg.channelId,
         data: msg.data,
@@ -6558,22 +6547,14 @@ function _buildProbeUrl(pageUrl, strategy, marker, opts) {
 }
 
 function _waitForTabLoaded(tabId, timeoutMs) {
+  // The offscreen can't observe chrome.tabs.onUpdated; the SW forwards each
+  // update as __evt TAB_UPDATED, which _onTabUpdated fans out to these listeners.
   return new Promise((resolve) => {
     let done = false;
-    const to = setTimeout(() => {
-      if (done) return; done = true;
-      chrome.tabs.onUpdated.removeListener(listener);
-      resolve();
-    }, timeoutMs || 15000);
-    const listener = (id, info) => {
-      if (id === tabId && info.status === "complete") {
-        if (done) return; done = true;
-        clearTimeout(to);
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    };
-    chrome.tabs.onUpdated.addListener(listener);
+    const finish = () => { if (done) return; done = true; clearTimeout(to); _tabUpdatedListeners.delete(listener); resolve(); };
+    const to = setTimeout(finish, timeoutMs || 15000);
+    const listener = (id, info) => { if (id === tabId && info.status === "complete") finish(); };
+    _tabUpdatedListeners.add(listener);
   });
 }
 
@@ -6668,22 +6649,10 @@ function startExploitProbe(msg) {
 async function _readProbeExecFlag(tabId, marker) {
   try {
     const flagName = "__apisec_fired_" + marker;
-    const results = await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      world: "MAIN",
-      func: (flag) => {
-        // The probe's only signal is `self[flag]` populated by
-        // intercept.js's `apiclientsink(origin)` global. Each entry
-        // is keyed by the `origin` string the payload passed (e.g.
-        // "dom-html:MARKER:svg" / "code-exec:MARKER" / ...). The
-        // function was called ⇒ the browser actually executed the
-        // payload through whichever pipeline its origin names; CSP
-        // blocks ⇒ no call ⇒ entry stays absent. No prototype hooks,
-        // no substring matching, no CSP-relabeling.
-        try { return self[flag] || null; } catch (_) { return null; }
-      },
-      args: [flagName],
-    });
+    // chrome.scripting lives in the SW; it runs the predefined `readExecFlag`
+    // injector (reads `self[flag]` set by intercept.js's apiclientsink) in every
+    // frame and returns the per-frame results for us to merge.
+    const results = await swRpc("scripting.exec", { op: "readExecFlag", tabId, allFrames: true, args: [flagName] });
     const merged = {};
     for (const r of results || []) {
       if (!r || !r.result) continue;
@@ -6703,7 +6672,7 @@ async function _readProbeExecFlag(tabId, marker) {
 // we match on that canonical form.
 async function _findProbeTargetTab(pageUrl, marker) {
   try {
-    const tabs = await chrome.tabs.query({});
+    const tabs = await swRpc("tabs.query", {});
     const needleMarker = "__apisec=" + marker;
     for (const t of tabs) {
       if (t.url && t.url.indexOf(needleMarker) !== -1) return t.id;
@@ -6807,27 +6776,14 @@ async function _runExploitProbe(session) {
           else if (d === "base64") shaped = btoa(unescape(encodeURIComponent(String(shaped))));
         } catch (_) {}
       }
-      const tgtTab = await chrome.tabs.create({ url: targetWithMarker, active: false });
+      const tgtTab = await swRpc("tabs.create", { url: targetWithMarker, active: false });
       session.openedTabs.push(tgtTab.id);
       execReadTabId = tgtTab.id;
       await _waitForTabLoaded(tgtTab.id, 10000);
-      await chrome.scripting.executeScript({
-        target: { tabId: tgtTab.id },
-        world: "MAIN",
-        func: (shapedPayload) => {
-          // Same-window postMessage to the bundle's own listener.
-          // Three retry deliveries cover handler-registration timing
-          // races (the bundle may install its listener asynchronously
-          // after script eval, e.g. inside a framework boot hook).
-          const deliveries = [200, 1500, 3500];
-          for (const delay of deliveries) {
-            setTimeout(() => {
-              try { window.postMessage(shapedPayload, "*"); } catch (_) {}
-            }, delay);
-          }
-        },
-        args: [shaped],
-      });
+      // Same-window postMessage to the bundle's own listener (the predefined
+      // `postMessage` injector, retried to cover async handler-registration races)
+      // — run by the SW since chrome.scripting isn't available in the offscreen.
+      await swRpc("scripting.exec", { op: "postMessage", tabId: tgtTab.id, args: [shaped] });
       await new Promise((r) => setTimeout(r, 4000 + session.waitMs));
     } else {
       // URL-reachable strategies: new tab navigated to targetUrl with
@@ -6835,7 +6791,7 @@ async function _runExploitProbe(session) {
       // at document_start; if the page consumes location.hash|search|
       // pathname and routes it to a sink, the active payload fires.
       const probeUrl = _buildProbeUrl(session.pageUrl, session.strategy, session.marker, { paramName: session.paramName, sinkType: session.sinkType, sinkName: session.sinkName });
-      const tab = await chrome.tabs.create({ url: probeUrl, active: false });
+      const tab = await swRpc("tabs.create", { url: probeUrl, active: false });
       session.openedTabs.push(tab.id);
       execReadTabId = tab.id;
       await _waitForTabLoaded(tab.id, 10000);
@@ -6862,7 +6818,7 @@ async function _runExploitProbe(session) {
     // inside pages are left so the reviewer can inspect state after
     // the probe finishes.
     for (const tid of session.openedTabs) {
-      try { await chrome.tabs.remove(tid); } catch (_) {}
+      try { await swRpc("tabs.remove", tid); } catch (_) {}
     }
     session.openedTabs = [];
   }
@@ -6949,29 +6905,16 @@ async function _runStructuredPlan(session) {
     //    to re-trigger module init with the values present.
     const needsPreInject = (plan.storage && plan.storage.length) || (plan.cookies && plan.cookies.length);
     if (needsPreInject) {
-      const seedTab = await chrome.tabs.create({ url: targetUrl, active: false });
+      const seedTab = await swRpc("tabs.create", { url: targetUrl, active: false });
       session.openedTabs.push(seedTab.id);
       await _waitForTabLoaded(seedTab.id, 10000);
       try {
-        await chrome.scripting.executeScript({
-          target: { tabId: seedTab.id },
-          world: "MAIN",
-          func: (storageItems, cookieItems) => {
-            try {
-              for (const it of (storageItems || [])) {
-                if (it && it.key != null) localStorage.setItem(String(it.key), String(it.value == null ? "" : it.value));
-              }
-              for (const it of (cookieItems || [])) {
-                if (it && it.value != null) document.cookie = String(it.value);
-              }
-            } catch (_) {}
-          },
-          args: [plan.storage || [], plan.cookies || []],
-        });
+        // Predefined `seedStorage` injector (localStorage + cookies), run by the SW.
+        await swRpc("scripting.exec", { op: "seedStorage", tabId: seedTab.id, args: [plan.storage || [], plan.cookies || []] });
       } catch (e) {
         session.error = "pre-inject failed: " + (e && e.message || String(e));
       }
-      try { await chrome.tabs.remove(seedTab.id); } catch (_) {}
+      try { await swRpc("tabs.remove", seedTab.id); } catch (_) {}
       session.openedTabs = session.openedTabs.filter((t) => t !== seedTab.id);
     }
 
@@ -7087,28 +7030,13 @@ async function _runStructuredPlan(session) {
     // message handler exactly like a cross-origin postMessage would —
     // origin pattern "*" matches; the handler's `e.data` shape is the
     // bit the bundle's gates inspect.
-    const tgtTab = await chrome.tabs.create({ url: targetUrl, active: false });
+    const tgtTab = await swRpc("tabs.create", { url: targetUrl, active: false });
     session.openedTabs.push(tgtTab.id);
     await _waitForTabLoaded(tgtTab.id, 10000);
 
-    await chrome.scripting.executeScript({
-      target: { tabId: tgtTab.id },
-      world: "MAIN",
-      func: (eventList, perMessageDelayMs) => {
-        const baseDelay = 500;
-        eventList.forEach((ev, i) => {
-          const t = baseDelay + i * perMessageDelayMs;
-          setTimeout(() => {
-            try {
-              if (ev && ev.kind === "postMessage") {
-                window.postMessage(ev.payload, "*");
-              }
-            } catch (_) {}
-          }, t);
-        });
-      },
-      args: [events, 400],
-    });
+    // Predefined `dispatchEvents` injector (the postMessage sequence with
+    // per-message delay), run by the SW since chrome.scripting isn't in the offscreen.
+    await swRpc("scripting.exec", { op: "dispatchEvents", tabId: tgtTab.id, args: [events, 400] });
 
     // Wait long enough for ALL events to deliver and the handler chain
     // to settle. baseDelay (500) + n * 400 + post-deliver settle.
@@ -7125,7 +7053,7 @@ async function _runStructuredPlan(session) {
   } finally {
     session.finishedAt = Date.now();
     for (const tid of session.openedTabs) {
-      try { await chrome.tabs.remove(tid); } catch (_) {}
+      try { await swRpc("tabs.remove", tid); } catch (_) {}
     }
     session.openedTabs = [];
   }
@@ -7304,50 +7232,66 @@ const CONTENT_TYPES = new Set([
 ]);
 const _contentPings = new Map();  // tabId -> [{ at, pageUrl }, ...]
 
-// Threat model: Content scripts run in web page renderer processes. A compromised
-// renderer has our extension's sender.id (since we inject into every page), so
-// sender.id only rejects other extensions. The real security gate is sender.url —
-// set by the browser process, unforgeable by the renderer. This router enforces:
-//   1. sender.id must match our extension (rejects other extensions)
-//   2. sender.url origin check (extension page vs content script — unforgeable)
-//   3. Extension pages → handlePopupMessage (rejects CONTENT_TYPES)
-//   4. Content scripts → handleContentMessage (rejects everything except CONTENT_TYPES)
-// Data-returning types (GET_STATE, GET_ALL_LOGS, GET_TAB_LIST) are only reachable
-// from extension pages, never from content scripts. See SECURITY.md.
+// Tab-update listeners (used by the exploit-probe's tab-load wait). The offscreen
+// can't observe chrome.tabs.onUpdated; the SW forwards it as __evt TAB_UPDATED.
+const _tabUpdatedListeners = new Set();
+function _onTabUpdated(m) {
+  for (const fn of _tabUpdatedListeners) { try { fn(m.tabId, m.changeInfo || {}, m.tab || {}); } catch (_) {} }
+}
+
+// The brain runs in the OFFSCREEN document and receives messages DIRECTLY:
+// chrome.runtime.sendMessage broadcasts to every extension context, so both our
+// content scripts (in web renderers) and the popup reach this document without
+// the SW relaying anything. The thin SW only forwards the browser events the
+// offscreen can't observe itself (__evt: NAV/TAB_REMOVED/TAB_UPDATED).
+//   • __evt (from the SW, extension origin) → frame/tab event handlers
+//   • CONTENT_TYPES from a web-page origin   → handleContentMessage (UNTRUSTED;
+//                    real browser-verified sender = tab/frame/url)
+//   • extension-page origin (popup)          → handlePopupMessage
+// sender.id is NOT a trust signal (every onMessage sender carries our id). The
+// boundary is sender.url: extension-origin = trusted (popup/SW); a web URL = an
+// untrusted content script. __evt is honored ONLY from the extension origin, so a
+// compromised renderer can't forge a browser event (e.g. TAB_REMOVED for a
+// victim tab) by broadcasting one straight to this document.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
+  if (!msg) return;
+  const fromExtOrigin = !!(sender.url && sender.url.startsWith(EXTENSION_ORIGIN + "/"));
 
-  const isExtensionPage =
-    sender.url && sender.url.startsWith(EXTENSION_ORIGIN + "/");
-
-  if (isExtensionPage) {
-    // Deep-grind results come from the OFFSCREEN doc (ast-worker.html) — an
-    // extension page, so they land here, NOT in handleContentMessage (which
-    // also drops on !sender.tab). Route them to the merge before the popup
-    // dispatch. Missing this silently dropped every AST_PARTIAL (live streaming
-    // + deep-status) and every AST_RESUMED (post-eviction grind merge).
-    if (msg.type === "AST_RESUMED") { _mergeDeepResult(msg.sourceUrl, msg.result, true); return; }
-    if (msg.type === "AST_PARTIAL") { _mergeDeepResult(msg.sourceUrl, msg.result, false); return; }
-    if (CONTENT_TYPES.has(msg.type)) return;
-    handlePopupMessage(msg, sender, sendResponse);
-    return true; // keep sendResponse alive for async handlePopupMessage
-  }
-
-  if (!CONTENT_TYPES.has(msg.type)) return;
-  // Chunked-message reassembly: content.js's _sendChunked splits any
-  // payload exceeding ~16 MiB so the 64 MiB per-call structured-clone
-  // cap doesn't truncate. Background buffers parts under __chunk
-  // .streamId; once all parts arrived, the full payload is restored
-  // on the named field and the original handler runs on the merged
-  // envelope. No truncation, no caps — large bundles / responses /
-  // HTML are reassembled losslessly.
-  if (msg.__chunk) {
-    const merged = _absorbChunk(msg);
-    if (!merged) return;  // still waiting for more parts
-    handleContentMessage(merged, sender);
+  if (msg.__evt) {
+    if (!fromExtOrigin) return;
+    if (msg.__evt === "NAV") _onNav(msg);
+    else if (msg.__evt === "TAB_REMOVED") _onTabRemoved(msg.tabId);
+    else if (msg.__evt === "TAB_UPDATED") _onTabUpdated(msg);
     return;
   }
-  handleContentMessage(msg, sender);
+
+  if (typeof msg.type !== "string") return;
+
+  // Content-script message — arrives straight from the page renderer. sender is
+  // the browser-verified content-script sender (sender.tab / sender.frameId /
+  // sender.url = the frame), so no synthetic tab context and no spoof surface. A
+  // trusted extension page never sends a CONTENT_TYPE, so an extension-origin one
+  // is dropped (defense in depth).
+  if (CONTENT_TYPES.has(msg.type)) {
+    if (fromExtOrigin) return;
+    // Chunked-message reassembly: content.js's _sendChunked splits payloads over
+    // ~16 MiB; rebuild before dispatch (no truncation, no caps).
+    if (msg.__chunk) {
+      const merged = _absorbChunk(msg);
+      if (merged) handleContentMessage(merged, sender);
+      return;
+    }
+    handleContentMessage(msg, sender);
+    return;
+  }
+
+  // Discriminate by sender.url, NOT sender.tab: an action popup's sender.tab is
+  // the ACTIVE tab (defined!), so a sender.tab check would wrongly drop popup
+  // messages. Extension-page origin (popup) → handlePopupMessage.
+  if (!fromExtOrigin) return;
+  handlePopupMessage(msg, sender, sendResponse);
+  return true; // keep sendResponse alive for async handlePopupMessage
 });
 
 const _chunkStreams = new Map();  // streamId -> { parts:[], received, total, payloadKey, envelope }
@@ -7377,7 +7321,8 @@ function _absorbChunk(msg) {
   return out;
 }
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+// Forwarded by the SW as __evt TAB_REMOVED (the offscreen can't observe tabs).
+function _onTabRemoved(tabId) {
   // Keep session storage logs so closed tab requests remain viewable
   const meta = _tabMeta.get(tabId);
   if (meta) {
@@ -7394,7 +7339,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (buf && buf.timer) clearTimeout(buf.timer);
   _scriptBuffers.delete(tabId);
   saveSessionIndex();
-});
+}
 
 // ─── Send Request: Schema Resolution ─────────────────────────────────────────
 
