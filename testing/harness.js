@@ -361,7 +361,31 @@ async function cmdDumpBundle(args) {
   });
 }
 
-const CMDS = { start: cmdStart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, capture: cmdCapture, dumpbundle: cmdDumpBundle };
+// Evaluate an expression in the OFFSCREEN document (the learning brain lives
+// there now, not the SW) — for DIAGNOSING a stalled learning pipeline (script
+// buffers, swFetch results, analysis/resolver errors). Same role cmdSweval had
+// for the old SW brain; results verification still goes through the popup UI.
+async function cmdOffscreen(args) {
+  const expr = args.join(" ");
+  if (!expr) throw new Error("usage: offscreen <js-expression>");
+  const body = /(^|\s)return\s|;|\{/.test(expr) ? expr : "return (" + expr + ");";
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const extId = lock?.extId;
+    const url = `chrome-extension://${extId}/ast-worker.html`;
+    let pg = null;
+    for (let i = 0; i < 40 && !pg; i++) {
+      const t = browser.targets().find((t) => t.url().startsWith(url));
+      if (t) pg = await t.page().catch(() => null);
+      if (!pg) await sleep(150);
+    }
+    if (!pg) { log("(no offscreen target — extension running?)"); return; }
+    const out = await pg.evaluate(new Function("return (async () => { " + body + " })()"));
+    log(JSON.stringify(out, null, 2));
+  });
+}
+
+const CMDS = { start: cmdStart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, capture: cmdCapture, dumpbundle: cmdDumpBundle };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
