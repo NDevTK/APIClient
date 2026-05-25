@@ -7,8 +7,8 @@ const createQJS = require('./qjs_worker.js');
 const Q = path.resolve(__dirname, '../../../engine/qjs');
 const HOST = fs.readFileSync(Q + '/hostedge.js', 'utf8');
 const DRV = fs.readFileSync(Q + '/driver.js', 'utf8');
-const BUN = fs.readFileSync(Q + '/_curbundle_all.js', 'utf8');   // eager + 346 chunks
-const PRE = fs.readFileSync(Q + '/_realph.js', 'utf8');
+const BUN = fs.readFileSync(Q + '/_livebundle.js', 'utf8');   // live crashing bundle dumped from Chrome feDeepDB
+const PRE = fs.readFileSync(Q + '/_livebundle.pre.js', 'utf8');
 const PJS = fs.readFileSync(Q + '/_curp.js', 'utf8');
 (async () => {
   let out = [], err = [];
@@ -18,11 +18,11 @@ const PJS = fs.readFileSync(Q + '/_curp.js', 'utf8');
   try { m.callMain(['--fe-emit-bc', '/b.js', '/b.bc']); } catch (e) { err.push('emitbc ' + e); }
   const fileArgs = ['/pre.js', '/h.js', '/p.js', '/b.bc', '/d.js'];
   const BATCH = 3;
-  let rem = 1, step = 0, preheat = false, totalFetch = 0, aborted = false, peakRss = 0;
+  let rem = 1, step = 0, preheat = false, totalFetch = 0, aborted = false, peakRss = 0, totalS = 0, totalZ = 0;
   const t0 = Date.now();
-  let firstMs = 0, laterMax = 0;
+  let firstMs = 0, laterMax = 0, phStep = -1, drivenTotal = 0, phDriven = -1;
   var phUrl = "";
-  while (rem > 0 && step < 12) {   // fast persistence/no-crash check; set `rem > 0` (no step cap) to run to completion (preheat-via-deep + named holes + ~679MB verified)
+  while (rem > 0 && step < 100000) {   // run to completion: measure preheat's driven-position depth
     out.length = 0; err.length = 0;
     const st = Date.now();
     try { m.callMain(['--fe-deep-step=' + BATCH].concat(fileArgs)); } catch (e) { err.push('step ' + e); break; }
@@ -31,8 +31,11 @@ const PJS = fs.readFileSync(Q + '/_curp.js', 'utf8');
     rem = -1;
     for (const l of out) {
       if (l.slice(0, 4) === '@DS ') { try { rem = JSON.parse(l.slice(4)).rem; } catch (e) { rem = 0; } }
-      if (l.indexOf('preheat/index') >= 0) { preheat = true; var _m = l.match(/"args":\["([^"]*)"/); if (_m) phUrl = _m[1]; }
+      if (l.slice(0, 4) === '@DD ') drivenTotal++;
+      if (l.indexOf('preheat/index') >= 0) { if (!preheat) { phStep = step; phDriven = drivenTotal; } preheat = true; var _m = l.match(/"args":\["([^"]*)"/); if (_m) phUrl = _m[1]; }
       if (l.slice(0, 3) === '@H ' && l.indexOf('"fetch"') >= 0) totalFetch++;
+      if (l.slice(0, 3) === '@S ') totalS++;
+      if (l.slice(0, 3) === '@Z ') totalZ++;
     }
     const rss = process.memoryUsage().rss; if (rss > peakRss) peakRss = rss;
     if (err.some(e => /ABORT/.test(e))) { aborted = true; break; }
@@ -41,7 +44,8 @@ const PJS = fs.readFileSync(Q + '/_curp.js', 'utf8');
     if (step <= 3 || step % 50 === 0) console.log(`step ${step}: ${dt}ms rem=${rem} preheat=${preheat} rss=${(rss/1048576|0)}MB`);
   }
   try { m.callMain(['--fe-deep-end']); } catch (e) {}
-  console.log(`--- done: ${step} steps, ${((Date.now() - t0) / 1000).toFixed(1)}s, firstStep=${firstMs}ms laterMax=${laterMax}ms, totalFetch=${totalFetch}, preheat=${preheat}, aborted=${aborted}, peakRss=${(peakRss/1048576|0)}MB ---`);
+  console.log(`--- done: ${step} steps, ${((Date.now() - t0) / 1000).toFixed(1)}s, firstStep=${firstMs}ms laterMax=${laterMax}ms, totalFetch=${totalFetch}, @S=${totalS}, @Z=${totalZ}, preheat=${preheat}, aborted=${aborted}, peakRss=${(peakRss/1048576|0)}MB ---`);
   console.log(`preheat URL (named holes?): ${phUrl}`);
+  console.log(`PREHEAT DEPTH: found at step=${phStep} after ${phDriven} orphans driven (of ${drivenTotal} total). At DEEP_ROUND=20 batches*3=60/cycle => ~${phDriven > 0 ? Math.ceil(phDriven / 60) : "?"} rotation cycles needed.`);
   console.log(`persistent-rt OK if laterMax << firstStep (no re-boot): firstStep=${firstMs}ms laterMax=${laterMax}ms`);
 })();

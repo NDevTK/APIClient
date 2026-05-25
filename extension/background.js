@@ -2,7 +2,7 @@
 // endpoints, auth headers, coordinates discovery document fetching,
 // req2proto fallback probing, and stores AST security findings.
 
-importScripts("lib/protobuf.js", "lib/discovery.js", "lib/req2proto.js", "lib/stats.js", "lib/chains.js");
+importScripts("lib/protobuf.js", "lib/discovery.js", "lib/req2proto.js", "lib/stats.js", "lib/chains.js", "lib/trace-mapping.bundle.js");
 
 // ─── AST Cache Fingerprint ──────────────────────────────────────────────────
 // The fingerprint hashes the analyzer worker files at first use — any
@@ -138,6 +138,7 @@ function _trimRequestLog(tab) {
 // Session storage for request logs — survives SW restarts, clears on browser close
 const _sessionSaveTimers = new Map(); // tabId → timeoutId
 const _tabMeta = new Map(); // tabId → { title, url, closed? }
+const _deepStatsByTab = new Map(); // tabId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
 const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, isTop, lastSeen }>
 const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
 
@@ -688,6 +689,7 @@ async function clearGlobalStore() {
   globalStore.scopes.clear();
   globalStore.securityFindings.clear();
   globalStore.deepResumeMeta.clear();
+  _deepStatsByTab.clear();
   // Drop any SW-side analyses still queued so a pending review can't repopulate
   // the store right after we wipe it (the offscreen worker's running/queued
   // grind is stopped separately via AST_CLEAR before this runs).
@@ -1495,6 +1497,33 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
   return docEntry;
 }
 
+// Find an existing method whose TEMPLATED path matches this concrete request
+// path, so network traffic merges into the QuickJS-learned (or earlier
+// network-templated) endpoint instead of forking a new per-value method. This
+// is what lets QuickJS supply the editable URL structure (/{e}/{a}/…) while the
+// network supplies the real example values for those path params: a match routes
+// the request to that method, and the path-param value capture below records the
+// concrete segment (NDevTK, APIClient) into its stats. Match = same verb, same
+// segment count, every non-{…} segment equal, at least one {…} segment. No
+// scoring — a literal segment-by-segment structural match.
+function _matchTemplatedMethod(learnedMethods, httpMethod, pathname) {
+  const segs = pathname.split("/").filter(Boolean);
+  if (!segs.length) return null;
+  for (const key in learnedMethods) {
+    const mm = learnedMethods[key];
+    if (!mm || mm.httpMethod !== httpMethod || !mm.path) continue;
+    const tps = mm.path.split("/").filter(Boolean);
+    if (tps.length !== segs.length) continue;
+    let hasTemplate = false, ok = true;
+    for (let i = 0; i < tps.length; i++) {
+      if (tps[i].startsWith("{") && tps[i].endsWith("}")) { hasTemplate = true; continue; }
+      if (tps[i] !== segs[i]) { ok = false; break; }
+    }
+    if (ok && hasTemplate) return key;
+  }
+  return null;
+}
+
 function learnFromRequest(tabId, interfaceName, entry, headers) {
   const tab = getTab(tabId);
   const url = new URL(entry.url);
@@ -1573,10 +1602,16 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
 
   // Resolve method name — disambiguate when different HTTP methods hit the same path
   let methodName;
+  // A concrete request that matches an existing TEMPLATED method (QuickJS gave
+  // /{e}/{a}/… or earlier traffic templatized it) merges into that method, so
+  // its real path-segment values become examples for the editable params.
+  const _tplMatch = _matchTemplatedMethod(doc.resources.learned.methods, method, url.pathname);
   const existingBase = doc.resources.learned.methods[baseMethodName];
   const existingQualified = doc.resources.learned.methods[qualifiedName];
 
-  if (existingQualified) {
+  if (_tplMatch) {
+    methodName = _tplMatch;
+  } else if (existingQualified) {
     // Already disambiguated from a prior collision — use qualified name
     methodName = qualifiedName;
   } else if (existingBase && existingBase.httpMethod !== method) {
@@ -4200,39 +4235,39 @@ function _findScriptForLine(line, scriptOffsets) {
 // `sourcesContent`, and takes the URL template's path interpolation identifiers
 // in order — e.g. `await fetch(\`/${owner}/${repo}/…?source=${source}\`)` →
 // ["owner","repo"]. Returns the names array, or null if anything's missing.
-function _resolveAstPathParamNames(callSite, scriptOffsets, sourceMapsByUrl) {
+function _resolvePathParamNames(callSite, scriptOffsets, traceMapsByUrl) {
+  // Resolve a SHOWN finding's minified path params (e/a) to their declared names
+  // (owner/repo) by running the source-map LIBRARY (@jridgewell/trace-mapping)
+  // on the finding's own call-site location — the position the engine already
+  // emits via its normal stack trace (NO engine instrumentation, NO bundle
+  // transform). originalPositionFor() + sourceContentFor() hand back the
+  // ORIGINAL fetch line; we read its template literal's path interpolations.
   try {
-    if (!callSite || !callSite.loc || !scriptOffsets || !scriptOffsets.length || !sourceMapsByUrl) return null;
+    if (!callSite || !callSite.loc || !scriptOffsets || !scriptOffsets.length || !traceMapsByUrl) return null;
     var sc = _findScriptForLine(callSite.loc.line, scriptOffsets);
     if (!sc || !sc.url) return null;
-    var sm = sourceMapsByUrl[sc.url];
-    if (!sm || !sm.mappings || !sm.sourcesContent) return null;
-    var genLine = callSite.loc.line - sc.lineStart + 1;          // 1-based line within the chunk
-    var col = (callSite.loc.column != null ? callSite.loc.column : (callSite.loc.col || 0));
-    var li = genLine - 1;
-    if (li < 0 || li >= sm.mappings.length) return null;
-    var segs = sm.mappings[li];
-    if (!segs || !segs.length) return null;
-    // Largest genCol <= col covers this position (Source Map spec § 4.4).
-    var lo = 0, hi = segs.length - 1, best = -1;
-    while (lo <= hi) { var mid = (lo + hi) >>> 1; if (segs[mid].genCol <= col) { best = mid; lo = mid + 1; } else hi = mid - 1; }
-    if (best < 0) return null;
-    var seg = segs[best];
-    if (typeof seg.srcIdx !== "number" || typeof seg.srcLine !== "number") return null;
-    var content = sm.sourcesContent[seg.srcIdx];
+    var tm = traceMapsByUrl[sc.url];
+    if (!tm) return null;
+    var genLine = callSite.loc.line - sc.lineStart + 1;            // 1-based line within the chunk
+    var col0 = (callSite.loc.column != null ? callSite.loc.column : (callSite.loc.col || 1)) - 1;
+    if (col0 < 0) col0 = 0;
+    var op = traceMapping.originalPositionFor(tm, { line: genLine, column: col0 });
+    if (!op || op.source == null || op.line == null) return null;
+    var content = traceMapping.sourceContentFor(tm, op.source);
     if (!content) return null;
     var lines = content.split("\n");
-    // The fetch URL template sits on/near the mapped line (beautified source
-    // can wrap the call across 1-2 lines) — join a small window, then take the
-    // FIRST backtick template literal (the fetch URL).
-    var win = (lines[seg.srcLine] || "") + " " + (lines[seg.srcLine + 1] || "") + " " + (lines[seg.srcLine - 1] || "");
-    var bt = win.indexOf("`");
+    var BT = String.fromCharCode(96);   // backtick
+    // The fetch's original line(s) hold the URL template literal; scan a small
+    // window (beautified calls can wrap) for the first backtick template, then
+    // read its PATH interpolations (before '?'), last identifier of each ${...}.
+    var win = (lines[op.line - 1] || "") + " " + (lines[op.line] || "") + " " + (lines[op.line - 2] || "");
+    var bt = win.indexOf(BT);
     if (bt < 0) return null;
-    var bt2 = win.indexOf("`", bt + 1);
+    var bt2 = win.indexOf(BT, bt + 1);
     var tmpl = bt2 > bt ? win.slice(bt + 1, bt2) : win.slice(bt + 1);
     var qm = tmpl.indexOf("?");
-    var pathPart = qm >= 0 ? tmpl.slice(0, qm) : tmpl;   // path interpolations only (owner/repo, not query)
-    var names = [], re = /\$\{\s*([A-Za-z_$][\w$]*)\s*\}/g, mm;
+    var pathPart = qm >= 0 ? tmpl.slice(0, qm) : tmpl;
+    var names = [], re = /\$\{\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*([A-Za-z_$][\w$]*)\s*\}/g, mm;
     while ((mm = re.exec(pathPart))) names.push(mm[1]);
     return names.length ? names : null;
   } catch (e) { return null; }
@@ -4639,6 +4674,13 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     response = await sendToOffscreen({
       type: "AST_ANALYZE", code: combined, sourceUrl: tabUrl, forceScript: true,
       scriptUrls: scriptUrls,
+      // Per-chunk line offsets + each chunk's sourceMappingURL so the OFFSCREEN
+      // worker (long-lived, owns IndexedDB) can fetch maps and resolve minified
+      // path-param names (e→owner) itself — the SW is evicted mid-grind and must
+      // not fetch maps. sourceMapScripts = [{scriptUrl, smUrl}] (smUrl is the
+      // bundle's real pragma: relative filename OR full address).
+      scriptOffsets: scriptOffsets,
+      sourceMapScripts: sourceMapScripts,
       pageHtml: getTab(tabId)._pageHtml || null,
       // The chunk re-analysis pass (round 2, after _maybeDownloadChunks set
       // _chunkRoundDone) runs SEED-ONLY: it folds in ~346 lazy chunks (~18 MB
@@ -4845,8 +4887,21 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     notifyPopup(tabId);
   }
 
-  // Fetch source maps for individual scripts (each has its own source map)
+  // Fetch source maps — SCOPED to the chunks that actually hold a learned
+  // fetch call site (so path-param names like e/a → owner/repo resolve),
+  // not all ~661 shipped maps. The deep grind's endpoints (e.g. preheat) live
+  // in lazy chunks, so this must consider the combined-bundle loc of every
+  // fetchCallSite, mapped back to its chunk via scriptOffsets.
+  var _needSM = new Set();
+  for (var _fi = 0; _fi < analysis.fetchCallSites.length; _fi++) {
+    var _fcl = analysis.fetchCallSites[_fi];
+    if (_fcl && _fcl.loc && typeof _fcl.loc.line === "number") {
+      var _fsc = _findScriptForLine(_fcl.loc.line, scriptOffsets);
+      if (_fsc && _fsc.url) _needSM.add(_fsc.url);
+    }
+  }
   for (var smi = 0; smi < sourceMapScripts.length; smi++) {
+    if (_needSM.size && !_needSM.has(sourceMapScripts[smi].scriptUrl)) continue;
     _fetchSourceMapForScript(tabId, tab, analysis, sourceMapScripts[smi].scriptUrl, sourceMapScripts[smi].smUrl);
   }
 
@@ -4876,6 +4931,12 @@ function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
       }
       try {
         var smJson = JSON.parse(smResp.body);
+        // Name resolution (e→owner) uses the standard library on the
+        // engine-stamped hole position; stored per chunk URL (each lazy chunk
+        // has its own map). The AST_PARSE_SOURCEMAP call below stays only for
+        // proto-file/type extraction from the map's sources/sourcesContent.
+        try { analysis.traceMapsByUrl = analysis.traceMapsByUrl || {}; analysis.traceMapsByUrl[scriptUrl] = new traceMapping.TraceMap(smJson); }
+        catch (e) { console.debug("[AST:sourcemap] TraceMap failed for %s: %s", scriptUrl, e && e.message); }
         var smResp2 = await sendToOffscreen({ type: "AST_PARSE_SOURCEMAP", sourceMapJson: smJson });
         if (!smResp2 || !smResp2.success) {
           console.debug("[AST:sourcemap] parseSourceMap failed for %s: %s", smUrl, smResp2 ? smResp2.error : "no response");
@@ -5010,6 +5071,8 @@ async function analyzeScript(tabId, scriptUrl, code) {
         }
         try {
           var smJson = JSON.parse(smResp.body);
+          try { analysis.traceMapsByUrl = analysis.traceMapsByUrl || {}; analysis.traceMapsByUrl[scriptUrl] = new traceMapping.TraceMap(smJson); }
+          catch (e) { console.debug("[AST:sourcemap] TraceMap failed for %s: %s", scriptUrl, e && e.message); }
           var smResp2 = await sendToOffscreen({ type: "AST_PARSE_SOURCEMAP", sourceMapJson: smJson });
           if (!smResp2 || !smResp2.success) {
             console.debug("[AST:sourcemap] parseSourceMap failed for %s: %s", smUrl, smResp2 ? smResp2.error : "no response");
@@ -5199,15 +5262,17 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
         // a learnable endpoint. Skip before new URL(null) fabricates a
         // "/null" path.
         if (callSite.url == null || callSite.url === "") continue;
-        // Source-map: resolve minified path-param names (e/a) → the page's
-        // real declared names (owner/repo) from the chunk's source map, and
-        // tag each path param by URL order so the learner/UI can label them.
-        var _smPathNames = _resolveAstPathParamNames(callSite, analysis.scriptOffsets, analysis.sourceMapsByUrl);
-        if (_smPathNames && callSite.params) {
+        // Source-map: resolve this finding's minified path params (e/a) → the
+        // page's declared names (owner/repo) by running the library on the
+        // finding's own call-site location (originalPositionFor → original fetch
+        // line). Tag each PATH param in URL order. Library-only, on shown
+        // findings, no engine instrumentation, no bundle transform.
+        var _smNames = _resolvePathParamNames(callSite, analysis.scriptOffsets, analysis.traceMapsByUrl);
+        if (_smNames && callSite.params) {
           var _spi = 0;
           for (var _sp = 0; _sp < callSite.params.length; _sp++) {
             if ((callSite.params[_sp].location || "query") === "path") {
-              if (_spi < _smPathNames.length) callSite.params[_sp]._sourceMapName = _smPathNames[_spi];
+              if (_spi < _smNames.length) callSite.params[_sp]._sourceMapName = _smNames[_spi];
               _spi++;
             }
           }
@@ -5317,6 +5382,13 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
       analysis._securityMerged = true;
       if (!tab._securityFindings) tab._securityFindings = [];
       var _mfMeta = tabId != null ? _tabMeta.get(tabId) : null;
+      // REPLACE any prior entry for this source, don't append — the deep grind
+      // streams partials each carrying the GROWING accumulated securitySinks for
+      // the same sourceUrl, so appending would pile up snapshots (mergeToGlobal
+      // set()s by sourceUrl so globalStore stays correct, but the tab array would
+      // leak). Keep the latest (most complete) per source.
+      for (var _sfx = tab._securityFindings.length - 1; _sfx >= 0; _sfx--)
+        if (tab._securityFindings[_sfx].sourceUrl === analysis.sourceUrl) tab._securityFindings.splice(_sfx, 1);
       tab._securityFindings.push({
         sourceUrl: analysis.sourceUrl,
         pageUrl: _mfMeta ? _mfMeta.url : null,
@@ -5425,30 +5497,18 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
     var _drm = globalStore.deepResumeMeta.get(_rurl);
     if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", _rurl); return; }
     var _rtab = getTab(_rtid);
+    if (result._deepStats) _deepStatsByTab.set(_rtid, Object.assign({}, result._deepStats, { ts: Date.now() }));
     if (_drm.scriptOffsets) result.scriptOffsets = _drm.scriptOffsets;
+    // Path-param name resolution (e→owner) for the deep grind is done in the
+    // OFFSCREEN worker (it owns the chunk JS + has IndexedDB + outlives the SW),
+    // which fetches each chunk's map by its real sourceMappingURL and attaches
+    // `_sourceMapName` to the call-site params BEFORE sending this result. The SW
+    // must NOT fetch maps here — it is evicted mid-grind, so any SW-side map fetch
+    // / cache is unreliable. The SW only merges what the worker resolved.
     mergeASTResultsIntoVDD(_rtab, [result], _rtid);
     mergeToGlobal(_rtab);
     notifyPopup(_rtid);
-    if (!doNames) return;
-    // Fetch source maps + re-merge to relabel minified path params (e/a) to
-    // their declared names (owner/repo), scoped to chunks that hold a learned
-    // call site (a github resume costs a handful of map fetches, not 600+).
-    if (_drm.sourceMapScripts && _drm.sourceMapScripts.length && _drm.scriptOffsets) {
-      var _needScript = new Set();
-      var _rfc = (result.fetchCallSites || []);
-      for (var _rfi = 0; _rfi < _rfc.length; _rfi++) {
-        var _rcl = _rfc[_rfi];
-        if (_rcl && _rcl.loc && typeof _rcl.loc.line === "number") {
-          var _rsc = _findScriptForLine(_rcl.loc.line, _drm.scriptOffsets);
-          if (_rsc && _rsc.url) _needScript.add(_rsc.url);
-        }
-      }
-      for (var _rsmi = 0; _rsmi < _drm.sourceMapScripts.length; _rsmi++) {
-        if (!_needScript.has(_drm.sourceMapScripts[_rsmi].scriptUrl)) continue;
-        _fetchSourceMapForScript(_rtid, _rtab, result, _drm.sourceMapScripts[_rsmi].scriptUrl, _drm.sourceMapScripts[_rsmi].smUrl);
-      }
-    }
-    console.debug("[AST:deep] merged for %s into tab=%d (names=%s)", _rurl, _rtid, !!doNames);
+    console.debug("[AST:deep] merged for %s into tab=%d", _rurl, _rtid);
   } catch (e) { console.debug("[AST:deep] merge error: %s", e && e.message); }
 }
 
@@ -5475,15 +5535,9 @@ function handleContentMessage(msg, sender) {
     return;
   }
 
-  // AST_RESUMED: the offscreen worker finished a deep grind it picked up from
-  // IndexedDB after an MV3 eviction. Merge the recovered unused-feature
-  // endpoints + resolve source-map names (this is the final result).
-  if (msg.type === "AST_RESUMED") { _mergeDeepResult(msg.sourceUrl, msg.result, true); return; }
-  // AST_PARTIAL: a mid-grind batch streamed what it has learned so far so the
-  // UI grows live instead of waiting for the whole run. Merge endpoints fast;
-  // skip per-map name resolution (the final result does that once) so the
-  // stream stays cheap.
-  if (msg.type === "AST_PARTIAL") { _mergeDeepResult(msg.sourceUrl, msg.result, false); return; }
+  // (AST_RESUMED / AST_PARTIAL are handled in the onMessage router's
+  // isExtensionPage branch — they originate from the offscreen doc, which has
+  // no sender.tab, so handleContentMessage would have dropped them at the top.)
 
   // PROBE_HIT: intercept.js recorded a sink that saw the active
   // probe marker. Correlate to an open exploit-probe session via the
@@ -5582,7 +5636,21 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
   switch (msg.type) {
     case "GET_STATE": {
       const tab = tabId != null ? getTab(tabId) : null;
-      sendResponse(tab ? serializeTabData(tab) : null);
+      const data = tab ? serializeTabData(tab) : null;
+      if (data) {
+        let _ds = _deepStatsByTab.get(tabId);
+        if (!_ds) {
+          // The popup may be showing a different active tab than the one being
+          // ground (it opens against whatever tab is active — often not the
+          // analyzed page). Endpoints/findings are global, so surface the
+          // most-recently-updated grind's progress regardless of tab.
+          let _best = null;
+          _deepStatsByTab.forEach((v) => { if (!_best || (v.ts || 0) > (_best.ts || 0)) _best = v; });
+          _ds = _best;
+        }
+        if (_ds) data.deepStats = _ds;
+      }
+      sendResponse(data);
       return;
     }
 
@@ -7253,6 +7321,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sender.url && sender.url.startsWith(EXTENSION_ORIGIN + "/");
 
   if (isExtensionPage) {
+    // Deep-grind results come from the OFFSCREEN doc (ast-worker.html) — an
+    // extension page, so they land here, NOT in handleContentMessage (which
+    // also drops on !sender.tab). Route them to the merge before the popup
+    // dispatch. Missing this silently dropped every AST_PARTIAL (live streaming
+    // + deep-status) and every AST_RESUMED (post-eviction grind merge).
+    if (msg.type === "AST_RESUMED") { _mergeDeepResult(msg.sourceUrl, msg.result, true); return; }
+    if (msg.type === "AST_PARTIAL") { _mergeDeepResult(msg.sourceUrl, msg.result, false); return; }
     if (CONTENT_TYPES.has(msg.type)) return;
     handlePopupMessage(msg, sender, sendResponse);
     return true; // keep sendResponse alive for async handlePopupMessage

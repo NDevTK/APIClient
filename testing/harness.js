@@ -295,7 +295,73 @@ async function cmdSweval(args) {
   });
 }
 
-const CMDS = { start: cmdStart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval };
+// Capture the active page's RAW server-rendered HTML (a fresh same-origin
+// fetch, so react-partial elements + their embedded <script type=json> data
+// islands are present — post-JS the DOM has them replaced by rendered React)
+// and write it as an engine test fixture (`globalThis.__pageUrl=…;
+// globalThis.__pageHtml=…;`). Used to refresh _realph.js with a COMPLETE page
+// (the old fixture was a partial capture missing the global-nav-bar partial +
+// breadcrumb crumbs the render-gated learning needs).
+async function cmdCapture(args) {
+  const out = args.join(" ").trim();
+  if (!out) throw new Error("usage: capture <output-file.js>");
+  await withBrowser(async (browser) => {
+    const page = await getActivePage(browser);
+    const cap = await page.evaluate(async () => {
+      const r = await fetch(location.href, { credentials: "include", redirect: "follow" });
+      return { url: location.href.split("#")[0], status: r.status, html: await r.text() };
+    });
+    const js = "globalThis.__pageUrl=" + JSON.stringify(cap.url) + ";globalThis.__pageHtml=" + JSON.stringify(cap.html) + ";\n";
+    const abs = path.isAbsolute(out) ? out : path.join(ROOT, out);
+    fs.writeFileSync(abs, js, "utf8");
+    log(`captured ${cap.html.length} chars (HTTP ${cap.status}) from ${cap.url} -> ${abs}`);
+  });
+}
+
+// Dump the exact combined bundle the deep grind booted (and crashed on) from
+// the offscreen doc's feDeepDB, so the wasm OOB can be reproduced natively in
+// _wdeep.cjs with a real stack instead of guessed-at. Writes <out> (the code)
+// and <out>.pre.js (the page HTML) — drop-in replacements for _curbundle_all.js
+// / _realph.js so the live, crashing chunk set is what runs natively.
+async function cmdDumpBundle(args) {
+  const out = (args.join(" ").trim()) || "engine/qjs/_livebundle.js";
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const extId = lock?.extId;
+    const url = `chrome-extension://${extId}/ast-worker.html`;
+    let pg = null;
+    for (let i = 0; i < 40 && !pg; i++) {
+      const t = browser.targets().find(t => t.url().startsWith(url));
+      if (t) pg = await t.page().catch(() => null);
+      if (!pg) await sleep(150);
+    }
+    if (!pg) { log("(no offscreen target — extension running?)"); return; }
+    const rec = await pg.evaluate(() => new Promise((res) => {
+      let r;
+      try { r = indexedDB.open("feDeepDB"); } catch (e) { return res({ err: "open throw " + e.message }); }
+      r.onerror = () => res({ err: "open error" });
+      r.onsuccess = () => {
+        const db = r.result;
+        if (!db.objectStoreNames.contains("code")) return res({ err: "no code store; have=" + [...db.objectStoreNames].join(",") });
+        const g = db.transaction("code", "readonly").objectStore("code").getAll();
+        g.onerror = () => res({ err: "getAll error" });
+        g.onsuccess = () => {
+          const recs = g.result || [];
+          if (!recs.length) return res({ err: "no code records (grind didn't persist / cleared)" });
+          const c = recs[recs.length - 1];
+          res({ key: c.key, sourceUrl: c.sourceUrl || "", len: (c.code || "").length, code: c.code || "", pageHtml: c.pageHtml || "", scriptUrls: c.scriptUrls || null });
+        };
+      };
+    }));
+    if (rec.err) { log("feDeepDB: " + rec.err); return; }
+    const abs = path.isAbsolute(out) ? out : path.join(ROOT, out);
+    fs.writeFileSync(abs, rec.code, "utf8");
+    if (rec.pageHtml) fs.writeFileSync(abs.replace(/\.js$/, ".pre.js"), "globalThis.__pageUrl=" + JSON.stringify(rec.sourceUrl.split("#")[0]) + ";globalThis.__pageHtml=" + JSON.stringify(rec.pageHtml) + ";\n", "utf8");
+    log(`dumped ${rec.len} bytes (sourceUrl=${rec.sourceUrl}) -> ${abs}` + (rec.pageHtml ? " + .pre.js" : ""));
+  });
+}
+
+const CMDS = { start: cmdStart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, capture: cmdCapture, dumpbundle: cmdDumpBundle };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);

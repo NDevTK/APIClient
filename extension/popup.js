@@ -1410,12 +1410,35 @@ async function populateTabFilter() {
 // ─── Render ──────────────────────────────────────────────────────────────────
 
 function render() {
+  renderDeepStatus();
   renderDataPanel();
   renderSecurityPanel();
   renderSendPanel();
   renderFrameSelector();
   renderResponsePanel();
   populateTabFilter();
+}
+
+// Background deep unused-feature grind progress. The grind drives lazy-chunk
+// orphan functions (e.g. github's login-gated `preheat`) over MINUTES at a low
+// CPU duty cycle; without this line the user can't tell whether it's running,
+// done, or stuck — and can't tell a not-yet-reached endpoint from a missing one.
+function renderDeepStatus() {
+  const el = document.getElementById("deep-status");
+  if (!el) return;
+  const ds = tabData && tabData.deepStats;
+  if (!ds || typeof ds.total !== "number" || ds.total < 0) { el.style.display = "none"; return; }
+  const total = ds.total, rem = Math.max(0, ds.rem | 0);
+  const done = total - rem;
+  if (rem === 0) {
+    el.textContent = `Deep scan complete — ${total} unused functions explored`;
+    el.className = "deep-status done";
+  } else {
+    const pct = total > 0 ? Math.floor((done / total) * 100) : 0;
+    el.textContent = `Deep scan: ${done}/${total} unused functions (${pct}%) — learning hidden endpoints…`;
+    el.className = "deep-status active";
+  }
+  el.style.display = "block";
 }
 
 // ─── Data Panel ──────────────────────────────────────────────────────────────

@@ -34,11 +34,16 @@ var HOSTDRIVER = self.__HOSTDRIVER_SRC;
 var _DDB = "feDeepDB";
 function _idb() {
   return new Promise(function (res, rej) {
-    var r = indexedDB.open(_DDB, 1);
+    var r = indexedDB.open(_DDB, 2);
     r.onupgradeneeded = function () {
       var db = r.result;
       if (!db.objectStoreNames.contains("code")) db.createObjectStore("code", { keyPath: "key" });
       if (!db.objectStoreNames.contains("prog")) db.createObjectStore("prog", { keyPath: "key" });
+      // Source maps for path-param name resolution (e→owner), keyed by chunk
+      // URL. The offscreen worker owns this (long-lived + has IndexedDB, unlike
+      // the ~30s-evicted SW): map + the chunk's original JS (sourcesContent)
+      // kept until the page's grind finishes (dropped) or the bin wipes the DB.
+      if (!db.objectStoreNames.contains("smaps")) db.createObjectStore("smaps", { keyPath: "key" });
     };
     r.onsuccess = function () { res(r.result); };
     r.onerror = function () { rej(r.error); };
@@ -75,6 +80,122 @@ function _idbAllKeys(store) {
       rq.onsuccess = function () { res(rq.result || []); }; rq.onerror = function () { res([]); };
     });
   });
+}
+
+// ── Source-map path-param name resolution (offscreen-owned) ──────────────────
+// The worker (long-lived, has IndexedDB — unlike the ~30 s-evicted SW) fetches a
+// chunk's map by the REAL sourceMappingURL the bundle ships (relative filename OR
+// full address), parses it, and resolves a minified path read (e) → its declared
+// name (owner): originalPositionFor(call-site) → original line → that template's
+// path ${…} identifiers. Map JSON (its sourcesContent IS the chunk's original JS)
+// is kept in feDeepDB "smaps" until the grind finishes or the bin wipes the DB; a
+// worker-local parsed cache avoids re-parsing. Every step is failure-tolerant —
+// a missing/404 map just leaves the param minified, never fabricated.
+var _smParsed = {};   // chunkUrl → parsedMap | null (null = tried, none)
+var _smChunksTouched = new Set();   // chunk URLs this grind fetched a map for (drop on done)
+var _SMBT = String.fromCharCode(96);
+function _smChunkForLine(line, scriptOffsets) {
+  for (var i = scriptOffsets.length - 1; i >= 0; i--)
+    if (line >= scriptOffsets[i].lineStart) return scriptOffsets[i];
+  return scriptOffsets[0];
+}
+function _smOrigPos(parsed, genLine1, genCol0) {
+  if (!parsed || !parsed.mappings) return null;
+  var li = genLine1 - 1;
+  if (li < 0 || li >= parsed.mappings.length) return null;
+  var segs = parsed.mappings[li];
+  if (!segs || !segs.length) return null;
+  var lo = 0, hi = segs.length - 1, best = -1;
+  while (lo <= hi) { var mid = (lo + hi) >>> 1; if (segs[mid].genCol <= genCol0) { best = mid; lo = mid + 1; } else hi = mid - 1; }
+  if (best < 0) best = 0;
+  var s = segs[best];
+  if (typeof s.srcIdx !== "number" || typeof s.srcLine !== "number") return null;
+  return { srcIdx: s.srcIdx, srcLine0: s.srcLine };
+}
+function _smNamesFromContent(content, srcLine0) {
+  if (!content) return null;
+  var lines = content.split("\n");
+  var win = (lines[srcLine0] || "") + " " + (lines[srcLine0 + 1] || "") + " " + (lines[srcLine0 - 1] || "");
+  var bt = win.indexOf(_SMBT); if (bt < 0) return null;
+  var bt2 = win.indexOf(_SMBT, bt + 1);
+  var tmpl = bt2 > bt ? win.slice(bt + 1, bt2) : win.slice(bt + 1);
+  var qm = tmpl.indexOf("?"); var pathPart = qm >= 0 ? tmpl.slice(0, qm) : tmpl;
+  var names = [], re = /\$\{\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*([A-Za-z_$][\w$]*)\s*\}/g, mm;
+  while ((mm = re.exec(pathPart))) names.push(mm[1]);
+  return names.length ? names : null;
+}
+function _smMapUrl(chunkUrl, sourceMapScripts) {
+  var smu = null;
+  if (Array.isArray(sourceMapScripts)) for (var i = 0; i < sourceMapScripts.length; i++)
+    if (sourceMapScripts[i].scriptUrl === chunkUrl) { smu = sourceMapScripts[i].smUrl; break; }
+  if (!smu) smu = chunkUrl + ".map";   // fallback ONLY when the chunk shipped no pragma
+  try { return /^https?:\/\//i.test(smu) ? smu : new URL(smu, chunkUrl).href; } catch (e) { return null; }
+}
+async function _smGetParsed(chunkUrl, sourceMapScripts) {
+  if (Object.prototype.hasOwnProperty.call(_smParsed, chunkUrl)) return _smParsed[chunkUrl];
+  var parsed = null;
+  try { var rec = await _idbGet("smaps", chunkUrl); if (rec && rec.json) parsed = parseSourceMap(rec.json); } catch (e) {}
+  if (!parsed) {
+    var url = _smMapUrl(chunkUrl, sourceMapScripts);
+    if (url) {
+      try {
+        // Time-box so a slow/hanging map server can't stall the grind's post loop.
+        var _ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
+        var _to = _ac ? setTimeout(function () { try { _ac.abort(); } catch (e) {} }, 8000) : 0;
+        var resp = await fetch(url, _ac ? { method: "GET", credentials: "omit", signal: _ac.signal } : { method: "GET", credentials: "omit" });
+        if (_to) clearTimeout(_to);
+        if (resp && resp.ok) {
+          var json = await resp.json();
+          parsed = parseSourceMap(json);
+          _smChunksTouched.add(chunkUrl);
+          try { await _idbPut("smaps", { key: chunkUrl, json: json }); } catch (e) {}
+        }
+      } catch (e) {}
+    }
+  }
+  _smParsed[chunkUrl] = parsed || null;
+  return _smParsed[chunkUrl];
+}
+// One bundle frame (combined-line position) → its original template's path
+// ${…} names, via the chunk's source map. Returns null if this frame's source
+// has no path template (e.g. a shared fetch wrapper).
+async function _smNamesForFrame(frame, scriptOffsets, sourceMapScripts) {
+  if (!frame || typeof frame.line !== "number") return null;
+  var chunk = _smChunkForLine(frame.line, scriptOffsets);
+  if (!chunk || !chunk.url) return null;
+  var parsed = await _smGetParsed(chunk.url, sourceMapScripts);
+  if (!parsed) return null;
+  var genLine = frame.line - chunk.lineStart + 1;
+  var col0 = (frame.column != null ? frame.column : (frame.col || 1)) - 1; if (col0 < 0) col0 = 0;
+  var op = _smOrigPos(parsed, genLine, col0);
+  if (!op) return null;
+  return _smNamesFromContent(parsed.sourcesContent && parsed.sourcesContent[op.srcIdx], op.srcLine0);
+}
+async function _resolveSmNames(fcs, scriptOffsets, sourceMapScripts) {
+  if (!Array.isArray(fcs) || !Array.isArray(scriptOffsets) || !scriptOffsets.length) return;
+  for (var i = 0; i < fcs.length; i++) {
+    var cs = fcs[i];
+    if (!cs || !Array.isArray(cs.params)) continue;
+    var pathN = 0;
+    for (var p = 0; p < cs.params.length; p++) if ((cs.params[p].location || "query") === "path") { if (!cs.params[p]._sourceMapName) pathN++; }
+    if (pathN === 0) continue;
+    // Walk the bundle call frames innermost→outermost: the host edge / a shared
+    // fetch wrapper has no URL template, the caller that wrote `/${owner}/${repo}`
+    // does. Use the first frame whose path-name count matches this site's path
+    // params (exact structural match), else the first non-empty result.
+    var frames = (Array.isArray(cs.bframes) && cs.bframes.length) ? cs.bframes : (cs.loc ? [cs.loc] : []);
+    var names = null;
+    for (var f = 0; f < frames.length; f++) {
+      var fn = await _smNamesForFrame(frames[f], scriptOffsets, sourceMapScripts);
+      if (!fn) continue;
+      if (fn.length === pathN) { names = fn; break; }
+      if (!names) names = fn;   // remember first non-empty as fallback
+    }
+    if (!names) continue;
+    var spi = 0;
+    for (var q = 0; q < cs.params.length; q++)
+      if ((cs.params[q].location || "query") === "path") { if (spi < names.length) cs.params[q]._sourceMapName = names[spi]; spi++; }
+  }
 }
 // Stable key for a combined bundle (content-sensitive: chunk set changes ⇒
 // new key ⇒ no stale resume). djb2 over a stride sample + length — fast on
@@ -167,8 +288,13 @@ function buildPageDomSrc(scriptUrls) {
     "}catch(e){}})();";
 }
 
-async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds) {
+async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, maxBatches, scriptOffsets, sourceMapScripts) {
   var t0 = Date.now();
+  // Rotation bound: the deep grind advances at most this many batches per
+  // invocation, then RETURNS (leaving its driven-set persisted) so the scheduler
+  // can rotate to another page. Without it one page would grind to completion
+  // while others wait ("getting stuck"). 0/undefined → effectively unbounded.
+  var _maxDeep = (typeof maxBatches === "number" && maxBatches > 0) ? maxBatches : 200000;
   var _resume = (typeof resumeCursor === "number" && resumeCursor >= 0);
   // Cross-session resume is by a per-function-ID DRIVEN SET (file:line:col hash
   // the engine emits as `@DD`), not a cursor index — so the engine's usefulness
@@ -350,15 +476,23 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // the line is in the combined-bundle space background.js maps via
   // scriptOffsets; fall back to the innermost frame.
   function pickSite(at) {
-    if (!at || !at.length) return { loc: null, chain: [] };
+    if (!at || !at.length) return { loc: null, chain: [], bframes: [] };
     var pick = at[0];
     for (var i = 0; i < at.length; i++) { if (String(at[i].file).indexOf("/b.js") >= 0) { pick = at[i]; break; } }
     var chain = [];
-    for (var j = 0; j < at.length; j++) chain.push({ line: at[j].line, column: at[j].col });
-    return { loc: { line: pick.line, column: pick.col }, chain: chain };
+    // bframes = every analyzed-bundle (/b.js) frame, innermost→outermost. The
+    // innermost is often a shared wrapper (e.g. the patched global fetch in
+    // fetch-patch.ts) whose source has NO URL template; the real ${owner}/${repo}
+    // template is in a CALLER frame. Source-map name resolution walks these.
+    var bframes = [];
+    for (var j = 0; j < at.length; j++) {
+      chain.push({ line: at[j].line, column: at[j].col });
+      if (String(at[j].file).indexOf("/b.js") >= 0) bframes.push({ line: at[j].line, column: at[j].col });
+    }
+    return { loc: { line: pick.line, column: pick.col }, chain: chain, bframes: bframes };
   }
 
-  function ep(method, rawUrl, body, kind, at, shape, hdrs) {
+  function ep(method, rawUrl, body, kind, at, shape, hdrs, holes) {
     if (isUnresolved(rawUrl) || isUnresolved(method)) {
       var rk = (method || "?") + " " + (rawUrl || "");
       if (!reSeen.has(rk)) {
@@ -375,8 +509,8 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     if (q >= 0) { path = rawUrl.slice(0, q); qs = rawUrl.slice(q + 1); }
     var key = method + " " + path;
     var m = methods.get(key);
-    if (!m) { m = { method: method, path: path, kind: kind, params: new Map(), loc: null, chain: [], headers: {} }; methods.set(key, m); }
-    if (!m.loc && at) { var s = pickSite(at); m.loc = s.loc; m.chain = s.chain; }
+    if (!m) { m = { method: method, path: path, kind: kind, params: new Map(), loc: null, chain: [], bframes: [], headers: {} }; methods.set(key, m); }
+    if (!m.loc && at) { var s = pickSite(at); m.loc = s.loc; m.chain = s.chain; m.bframes = s.bframes; }
     // requiredHeaders: the SET the bundle actually attached at the host edge
     // (fetch init.headers / XHR setRequestHeader), per-header literal-vs-opaque
     // provenance preserved ({name:{kind:"literal",value}|{kind:"opaque"}}).
@@ -390,13 +524,22 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         if (!prev || (prev.kind === "opaque" && hv.kind === "literal")) m.headers[hk] = hv;
       }
     }
-    var add = function (n, loc, val) {
+    var add = function (n, loc, val, holeLoc) {
       var p = m.params.get(n);
       if (!p) { p = { name: n, location: loc, examples: new Set() }; m.params.set(n, p); }
+      // Generated bundle read site of this hole (from __feUrlHoles) so the SW
+      // can resolve the declared name via a source-map library. First wins.
+      if (holeLoc && !p.holeLoc) p.holeLoc = holeLoc;
       // A "{name}" value is a __feUrlShape opaque marker (e.g. ?q={hash}
       // when the query value was attacker/server input), NOT a real
       // example — record the param, omit the synthetic value.
       if (val !== undefined && val !== "" && !isUnresolved(val) && !/^\{[^}]*\}$/.test(String(val))) p.examples.add(val);
+    };
+    // Pair a path/query hole name with its generated position from __feUrlHoles.
+    var holeLocOf = function (nm) {
+      if (!holes || !holes.length) return null;
+      for (var i = 0; i < holes.length; i++) if (holes[i] && holes[i].name === nm && holes[i].line) return { line: holes[i].line, column: holes[i].col };
+      return null;
     };
     // Path-template params: __feUrlShape renders an opaque path segment as
     // {name} (e.g. /settings/avatars/{id} — id is real attacker/server
@@ -404,9 +547,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // example) so the structure is learned; the path keeps the {name}
     // template (OpenAPI style), never a fabricated value.
     var ppRe = /\{([^}\/]+)\}/g, ppm;
-    while ((ppm = ppRe.exec(path))) add(ppm[1], "path", undefined);
+    while ((ppm = ppRe.exec(path))) add(ppm[1], "path", undefined, holeLocOf(ppm[1]));
     var qp = parsePairs(qs);
-    for (var k in qp) for (var vi = 0; vi < qp[k].length; vi++) add(k, "query", qp[k][vi]);
+    for (var k in qp) for (var vi = 0; vi < qp[k].length; vi++) add(k, "query", qp[k][vi], holeLocOf(k));
     // Prefer hostedge's structured `shape` over JSON.parse(body) — the
     // shape carries per-field provenance (literal value vs opaque
     // attacker-tainted), so `{action:"favorite", target_id:<opaque>}`
@@ -593,12 +736,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var pend = null;
     for (var ri = 0; ri < rh.length; ri++) {
       var r = rh[ri];
-      if (r.api === "XMLHttpRequest.open") { if (pend) ep(pend.m, pend.u, null, "xhr", pend.at); pend = { m: r.args[0], u: r.args[1], at: r.at }; }
-      else if (r.api === "XMLHttpRequest.send") { if (pend) { ep(pend.m, pend.u, r.args[0], "xhr", pend.at, r.args[1], r.args[2]); pend = null; } }
-      else if (r.api === "fetch") ep(r.args[1] || "GET", r.args[0], r.args[2], "fetch", r.at, r.args[3], r.args[4]);
+      if (r.api === "XMLHttpRequest.open") { if (pend) ep(pend.m, pend.u, null, "xhr", pend.at, undefined, undefined, pend.holes); pend = { m: r.args[0], u: r.args[1], at: r.at, holes: r.args[2] }; }
+      else if (r.api === "XMLHttpRequest.send") { if (pend) { ep(pend.m, pend.u, r.args[0], "xhr", pend.at, r.args[1], r.args[2], pend.holes); pend = null; } }
+      else if (r.api === "fetch") ep(r.args[1] || "GET", r.args[0], r.args[2], "fetch", r.at, r.args[3], r.args[4], r.args[5]);
       else if (r.api === "script" && r.args && r.args[0] && !isUnresolved(r.args[0])) chunkUrls.add(String(r.args[0]));
     }
-    if (pend) ep(pend.m, pend.u, null, "xhr", pend.at);
+    if (pend) ep(pend.m, pend.u, null, "xhr", pend.at, undefined, undefined, pend.holes);
   }
   while (work.length) {
     var job = work.shift();
@@ -701,16 +844,16 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     hasPreheatSrc: !!(code && code.indexOf("issues/preheat/index") >= 0) };
   if (deep && m) {
     var _dkey = _deepKey(code);
-    var _drem = 1, _dguard = 0, _dcur = _resume ? resumeCursor : 0, _lastPartialN = methods.size;
+    var _drem = 1, _dguard = 0, _dcur = _resume ? resumeCursor : 0, _lastPartialN = methods.size, _lastPartialSinks = securitySinks.length;
     _deepStats.stop = "done";
     // Persist the combined bundle ONCE (heavy, ~18 MB) so a fresh worker can
     // resume; the cursor is a tiny per-batch write below.
-    try { await _idbPut("code", { key: _dkey, code: code, scriptUrls: scriptUrls || null, pageHtml: pageHtml || null, sourceUrl: sourceUrl || "" }); } catch (e) {}
+    try { await _idbPut("code", { key: _dkey, code: code, scriptUrls: scriptUrls || null, pageHtml: pageHtml || null, sourceUrl: sourceUrl || "", scriptOffsets: scriptOffsets || null, sourceMapScripts: sourceMapScripts || null }); } catch (e) {}
     try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now(), vts: _vts, driven: Array.from(_driven) }); } catch (e) {}
     // Hand the engine the already-driven ids (from a prior session/batch) so its
     // first deep-step skips them — cross-session resume by driven-SET, not cursor.
     if (_driven.size) { try { m.FS.writeFile("/driven", Array.from(_driven).join("\n")); } catch (e) {} }
-    while (_drem > 0 && _dguard++ < 200000) {
+    while (_drem > 0 && _dguard++ < _maxDeep) {
       stdout.length = 0; stderr.length = 0;
       var _dT0 = Date.now();
       var _args = ["--fe-deep-step=" + DEEP_BATCH];   // resume is via /driven (written above), not a cursor seek
@@ -727,13 +870,18 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       if (_deepStats.total < 0 && _drem >= 0) _deepStats.total = _drem + DEEP_BATCH;   // ≈ residue size
       try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now(), vts: _vts, driven: Array.from(_driven) }); } catch (e) {}   // durable cursor
       // Stream what this batch learned to the UI instead of waiting for the
-      // whole (minutes-long) grind: when new endpoints appeared, post a partial
-      // result. background.js merges it exactly like the final/resume result, so
-      // the popup grows live. Posted only on growth, so a barren stretch of
-      // orphans costs no traffic.
-      if (methods.size > _lastPartialN) {
+      // whole (minutes-long) grind. Fire on: (a) new endpoints OR new SECURITY
+      // SINKS (the highest-value growth — sink-reaching fns can fire @S without
+      // an endpoint, so an endpoint-only trigger would miss them); OR (b) a step
+      // interval / completion, so the deep-status PROGRESS bar keeps advancing
+      // even through long runs of orphans that add nothing learnable (otherwise
+      // the bar freezes at the last new-endpoint step and looks stalled). The
+      // merge is cheap for partials (doNames=false → no source-map fetch).
+      var _progressTick = (_deepStats.steps % 8 === 0) || _drem === 0;
+      if (methods.size > _lastPartialN || securitySinks.length > _lastPartialSinks || _progressTick) {
         _lastPartialN = methods.size;
-        try { postMessage({ _partial: true, sourceUrl: sourceUrl || "", response: { success: true, result: _buildResult() } }); } catch (e) {}
+        _lastPartialSinks = securitySinks.length;
+        try { var _pres = _buildResult(); await _resolveSmNames(_pres.fetchCallSites, scriptOffsets, sourceMapScripts); postMessage({ _partial: true, sourceUrl: sourceUrl || "", response: { success: true, result: _pres } }); } catch (e) {}
       }
       if (_yieldDeep) { _deepStats.stop = "yielded@step" + _deepStats.steps; break; }   // a live review preempts — cursor saved, resume after
       if (instAborted) { _deepStats.stop = "abort@step" + _deepStats.steps; break; }
@@ -741,7 +889,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       if (_drem > 0) await new Promise(function (r) { setTimeout(r, Math.min(THROTTLE_CAP_MS, Date.now() - _dT0)); });
     }
     try { m.callMain(["--fe-deep-end"]); } catch (e) {}
-    if (_drem === 0) { try { await _idbDel("prog", _dkey); await _idbDel("code", _dkey); } catch (e) {} }   // done → drop resume state
+    if (_drem === 0) { try { await _idbDel("prog", _dkey); await _idbDel("code", _dkey); } catch (e) {}   // done → drop resume state
+      try { var _tc = Array.from(_smChunksTouched); for (var _tci = 0; _tci < _tc.length; _tci++) await _idbDel("smaps", _tc[_tci]); } catch (e) {}   // grind finished all stages → drop this page's source maps + their JS (kept only during learning)
+    }
   }
 
   // Release the wasm module + its captured arrays after BFS exits.
@@ -767,13 +917,13 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var gated = [];
     mm.params.forEach(function (p) {
       var vv = Array.from(p.examples);
-      params.push({ name: p.name, location: p.location, validValues: vv });
+      params.push({ name: p.name, location: p.location, validValues: vv, holeLoc: p.holeLoc || null });
       if (vv.length > 1) gated.push(p.name + "∈{" + vv.join(",") + "}");
     });
     fetchCallSites.push({
       method: mm.method, url: mm.path, params: params,
       headers: mm.headers || {}, loc: mm.loc, callChain: mm.chain,
-      enclosingFunction: null, kind: mm.kind,
+      bframes: mm.bframes || [], enclosingFunction: null, kind: mm.kind,
     });
     focusedView.push({
       kind: "endpoint", title: mm.method + " " + mm.path,
@@ -838,7 +988,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     _deepStats: _deepStats,
   };
   }
-  return _buildResult();
+  var _fr = _buildResult();
+  try { await _resolveSmNames(_fr.fetchCallSites, scriptOffsets, sourceMapScripts); } catch (e) {}
+  return _fr;
 }
 
 onmessage = function (e) {
@@ -855,7 +1007,13 @@ onmessage = function (e) {
     // concurrently — so the device never carries two wasm instances / two
     // drives at once (the overheating failure mode).
     _reviewQ.push({ id: id, msg: msg });
-    if (_deepRunning) _yieldDeep = true;
+    // Preempt ANY in-progress deep grind — the background resume rotation
+    // (`_deepRunning`) AND a live review now running to completion (`_busy`).
+    // The deep loop checks `_yieldDeep` each batch and breaks (cursor/driven-set
+    // already persisted), so the newer page's review starts within one batch
+    // instead of waiting out the prior page's full ~100 s grind.
+    if (_deepRunning || _busy) _yieldDeep = true;
+    _deepRound.length = 0;   // a new page visit changes recency → rebuild the rotation round so it leads next
     _pump();
     return;
   }
@@ -900,6 +1058,8 @@ var _busy = false;          // a live review is running
 var _deepRunning = false;   // the background deep grind is running
 var _yieldDeep = false;     // preempt signal: deep grind stops at next batch
 var _reviewQ = [];          // pending high-priority reviews
+var DEEP_ROUND = 20;        // batches a grind advances per rotation cycle before yielding to the next page
+var _deepRound = [];        // keys remaining in the current recency-ordered rotation round (cross-page fairness)
 
 function _pump() {
   if (_busy || _deepRunning) return;       // a task owns the worker; it re-pumps when it finishes
@@ -909,41 +1069,61 @@ function _pump() {
 
 function _runReview(id, msg) {
   _busy = true;
+  _yieldDeep = false;   // fresh review owns the worker; any preempt flag set AFTER this point (by a newer visit) is honored, so a stale yield can't kill this grind on its first batch
   function fin(resp) { _busy = false; postMessage({ _id: id, response: resp }); _pump(); }
+  // The active page IS the most-relevant work, so its deep grind runs to
+  // COMPLETION in this one booted instance (maxBatches=0 → unbounded) rather
+  // than a DEEP_ROUND slice. Capping the live review at one rotation cycle meant
+  // every later cycle RE-BOOTED the ~18 MB bundle (~3 s each) before driving its
+  // next 20 batches — so an endpoint deep in the residue (github's `preheat` sits
+  // at orphan ~1008/1108) needed ~17 re-boots and was never reached before the
+  // user gave up, even though native drives all 1108 in ONE boot (~65 s). It
+  // stays preemptible: `_yieldDeep` breaks the batch loop the instant a newer
+  // page's review arrives (cursor/driven-set persisted), and OTHER pages still
+  // make progress via the DEEP_ROUND-bounded `_resumeIncompleteDeep` rotation.
   forcedAnalyze(String(msg.code || ""), msg.sourceUrl || "", msg.scriptUrls || null,
-    typeof msg.pageHtml === "string" ? msg.pageHtml : null, !!msg.seedOnly, !!msg.deep)
+    typeof msg.pageHtml === "string" ? msg.pageHtml : null, !!msg.seedOnly, !!msg.deep,
+    undefined, undefined, undefined, 0, msg.scriptOffsets || null, msg.sourceMapScripts || null)
     .then(function (result) { fin({ success: true, result: result }); })
     .catch(function (err) { fin({ success: false, error: (err && err.message) || String(err), stack: err && err.stack }); });
 }
 
 async function _resumeIncompleteDeep() {
   if (_busy || _deepRunning || _reviewQ.length) return;   // reviews take priority; never overlap
-  var keys;
-  try { keys = await _idbAllKeys("prog"); } catch (e) { return; }
-  if (!keys || !keys.length) return;
-  // Prioritize the grind for the MOST RECENTLY VISITED page (the user's
-  // definition of relevance) so its unused-feature surface is learned first;
-  // pages visited longer ago follow on subsequent passes. Use the visit
-  // timestamp `vts` (set on the page visit, preserved across batches), NOT the
-  // per-batch `ts` (which would rank a still-grinding old page over a freshly
-  // opened one). Eventual consistency: each grind's bundle + cursor stay in
-  // IndexedDB until its rem hits 0, so none is ever dropped — all complete,
-  // just most-recently-visited first.
-  var key = keys[0], bestTs = -1;
-  for (var ki = 0; ki < keys.length; ki++) {
-    try { var pr = await _idbGet("prog", keys[ki]); } catch (e) { continue; }
-    var prTs = pr ? (pr.vts || pr.ts || 0) : 0;   // visit-recency, fall back to batch ts for pre-vts records
-    if (pr && prTs > bestTs) { bestTs = prTs; key = keys[ki]; }
+  // ROTATION across pages so no single page gets stuck running to completion
+  // while others wait. A "round" is every incomplete grind, ordered by visit
+  // recency (`vts`, set on the page visit, preserved across batches — NOT the
+  // per-batch `ts`). Each call advances ONE grind by a BOUNDED batch (DEEP_ROUND)
+  // then returns; the next call takes the next page in the round; when the round
+  // empties it's rebuilt from whatever's still incomplete (re-ordered by recency,
+  // picking up newly-visited pages). So most-recent goes first each round, every
+  // page makes progress every round, and each completes eventually (its record
+  // drops at rem=0). Most-useful-first WITHIN a page is the engine's usefulness
+  // sort; this is the cross-page half.
+  if (!_deepRound.length) {
+    var keys;
+    try { keys = await _idbAllKeys("prog"); } catch (e) { return; }
+    if (!keys || !keys.length) return;
+    var withTs = [];
+    for (var ki = 0; ki < keys.length; ki++) {
+      try { var pr = await _idbGet("prog", keys[ki]); } catch (e) { continue; }
+      if (pr) withTs.push({ k: keys[ki], vts: pr.vts || pr.ts || 0 });
+    }
+    if (!withTs.length) return;
+    withTs.sort(function (a, b) { return b.vts - a.vts; });   // most-recently-visited first
+    _deepRound = withTs.map(function (x) { return x.k; });
   }
+  var key = _deepRound.shift();
   var prog = null, codeRec = null;
-  try { prog = await _idbGet("prog", key); codeRec = await _idbGet("code", key); } catch (e) { return; }
+  try { prog = await _idbGet("prog", key); codeRec = await _idbGet("code", key); } catch (e) { _pump(); return; }
   if (!prog || !codeRec || !codeRec.code) { try { await _idbDel("prog", key); await _idbDel("code", key); } catch (e) {} _pump(); return; }
   _deepRunning = true; _yieldDeep = false;
   try {
-    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || []);
+    // Bounded to DEEP_ROUND batches: advance this page, then yield to the next.
+    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || [], DEEP_ROUND, codeRec.scriptOffsets || null, codeRec.sourceMapScripts || null);
     postMessage({ _resumed: true, sourceUrl: codeRec.sourceUrl || "", response: { success: true, result: result } });
   } catch (e) { /* leave the record for a later retry */ }
   finally { _deepRunning = false; }
-  _pump();   // yielded → run the queued review(s); else (more remains / next grind) re-resume
+  _pump();   // → next page in the round (rotation), or a queued review, or refill the round
 }
 setTimeout(_resumeIncompleteDeep, 8000);

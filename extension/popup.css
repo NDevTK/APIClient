@@ -47,6 +47,22 @@ header h1 {
   border-color: #58a6ff;
 }
 
+/* Background deep-grind progress */
+.deep-status {
+  font-size: 11px;
+  padding: 4px 14px;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+.deep-status.active {
+  color: #d29922;
+  background: #1c1810;
+}
+.deep-status.done {
+  color: #3fb950;
+  background: #11261a;
+}
+
 /* Tabs */
 nav {
   display: flex;
