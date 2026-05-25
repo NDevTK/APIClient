@@ -6878,7 +6878,17 @@ async function _runStructuredPlan(session) {
     // executes, and the probe wrongly reports NOT REPRODUCED.
     // intercept.js's regex is `[#&]__apisec=` so it matches when the
     // marker is appended after the plan hash via `&`.
-    const ph = plan.url && plan.url.hash ? String(plan.url.hash).replace(/^#/, "") : "";
+    // When NO postMessage event carries the payload, the attacker source is a
+    // URL component (location.hash/search/pathname). The plan only put the Z3
+    // *witness* there (e.g. "<svg onload=alert()>"), which neither calls
+    // apiclientsink nor — for <svg onload> via innerHTML — even fires. Weave the
+    // active multi-vector apiclientsink payload into that component instead. The
+    // postMessage-gated case (hash is a gate, payload rides an event) keeps the
+    // witness untouched because _hasPayloadEvent is true.
+    const _hasPayloadEvent = Array.isArray(plan.events) && plan.events.some(function (e) { return e && e.carriesPayload && e.payloadField; });
+    const _planSinkType = session.sinkType || "dom-html";
+    let ph = plan.url && plan.url.hash ? String(plan.url.hash).replace(/^#/, "") : "";
+    if (!_hasPayloadEvent && ph) ph = buildSinkPayload(_planSinkType, ph, session.marker);
     pageUrl.hash = ph
       ? "#" + ph + (ph.endsWith("&") ? "" : "&") + "__apisec=" + session.marker
       : "#__apisec=" + session.marker;
@@ -6886,9 +6896,13 @@ async function _runStructuredPlan(session) {
       const planSearch = String(plan.url.search).replace(/^\?/, "");
       const params = new URLSearchParams(planSearch);
       const existing = new URLSearchParams(pageUrl.search);
+      // Single-param search with no payload event ⇒ that param IS the source;
+      // weave the active payload in. Multi-param plans mix gate values we must
+      // preserve literally, so leave those as the Z3 witness.
+      const _searchIsSource = !_hasPayloadEvent && !ph && [...params.keys()].length === 1;
       // Plan values OVERRIDE pageUrl on conflict — Z3 computed them
       // as required for the gate.
-      for (const [k, v] of params) existing.set(k, v);
+      for (const [k, v] of params) existing.set(k, _searchIsSource ? buildSinkPayload(_planSinkType, v, session.marker) : v);
       pageUrl.search = existing.toString() ? "?" + existing.toString() : "";
     }
     if (plan.url && plan.url.pathname) {
