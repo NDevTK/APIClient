@@ -927,7 +927,12 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
                 method = method || detail.metadata.method;
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          // Protobuf error-details decode failed — corrupt or non-standard
+          // error envelope. service/method extraction falls through to the
+          // next strategy (JSON / JSPB body).
+          if (typeof console !== "undefined") console.debug("[req2proto] protobuf error-details decode failed:", e && e.message || e);
+        }
       }
 
       // ── JSON response (gapi-service parse.go lines 47-57) ──
@@ -945,7 +950,12 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
                 method = method || detail.metadata.method;
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          // JSON error-details parse failed — body isn't valid JSON despite
+          // the application/json content-type (servers misreport). Fall
+          // through to JSPB strategy.
+          if (typeof console !== "undefined") console.debug("[req2proto] JSON error-details parse failed:", e && e.message || e);
+        }
       }
 
       // ── JSPB / protojson response (parse.go lines 41-45) ──

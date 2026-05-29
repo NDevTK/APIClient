@@ -52,11 +52,19 @@
   let _relayReady = false;
   const _buffer = [];
 
+  /* CustomEvent dispatch sends instrumented data to the isolated-world
+     content script. A throw means the document is detached (page
+     navigated away mid-event) or the event ctor failed — both are
+     real but page-noise-prone conditions. Log at DEBUG so a developer
+     debugging the relay can see them in the page console without
+     spamming a working page. */
   function emit(data) {
     if (_relayReady) {
       try {
         document.dispatchEvent(new CustomEvent(EVENT_NAME, { detail: data }));
-      } catch (_) {}
+      } catch (e) {
+        console.debug("[apiclient:emit]", e && e.message || e);
+      }
     } else {
       _buffer.push(data);
     }
@@ -67,7 +75,9 @@
     for (const data of _buffer) {
       try {
         document.dispatchEvent(new CustomEvent(EVENT_NAME, { detail: data }));
-      } catch (_) {}
+      } catch (e) {
+        console.debug("[apiclient:emit_buffered]", e && e.message || e);
+      }
     }
     _buffer.length = 0;
   });
@@ -91,7 +101,12 @@
       } else {
         ws.send(data);
       }
-    } catch (_) {}
+    } catch (e) {
+      // ws.send throws when the socket is CLOSED/CLOSING — expected when the
+      // page navigated away or the server hung up. Debug-log so a "popup Send
+      // didn't reach the server" diagnosis can confirm a closed-socket cause.
+      console.debug("[apiclient:ws_send]", e && e.message || e);
+    }
   });
 
 
@@ -145,9 +160,31 @@
 
   // ─── fetch() wrapper ───────────────────────────────────────────────────────
 
+  // Capture the bundle's call-site stack at network-API entry, stripping the
+  // intercept.js wrapper frames so the consumer gets the bundle's frames
+  // first. Used for per-[live]-endpoint provenance (the network-vs-AST diff: a
+  // [live]-only endpoint pinpoints the exact bundle function the forced-exec
+  // engine didn't reach). Cheap: `new Error().stack` is just a stack walk.
+  function _captureCallStack() {
+    try {
+      var s = (new Error()).stack || "";
+      if (!s) return "";
+      var lines = s.split("\n");
+      var out = [];
+      for (var i = 0; i < lines.length; i++) {
+        var ln = lines[i];
+        if (i === 0 && /^Error/.test(ln)) continue;       // V8 leading "Error" line
+        if (/intercept\.js[:?]/.test(ln)) continue;         // strip our wrapper frames
+        out.push(ln);
+      }
+      return out.join("\n");
+    } catch (_) { return ""; }
+  }
+
   const _fetch = window.fetch;
 
   window.fetch = async function (input, init) {
+    var callStack = _captureCallStack();
     // Snapshot request data before calling fetch (body may be consumed)
     var reqHeaders = _captureHeaders(input, init);
     var bodySource = (init && init.body !== undefined) ? init.body : null;
@@ -224,6 +261,7 @@
             requestHeaders: reqHeaders,
             requestBody: reqBody,
             requestBodyBase64: reqBase64,
+            callStack: callStack,
           });
         } catch (_) {}
       })();
@@ -255,6 +293,7 @@
     if (this.__uasr_hooked) return _xhrSend.apply(this, arguments);
     this.__uasr_hooked = true;
 
+    var callStack = _captureCallStack();
     // Capture request body before sending
     var captured = _captureBody(sendBody);
     var _reqHeaders = this.__uasr_reqHeaders || {};
@@ -311,6 +350,7 @@
           requestHeaders: _reqHeaders,
           requestBody: _reqBody,
           requestBodyBase64: _reqBase64,
+          callStack: callStack,
         });
       } catch (_) {}
     });

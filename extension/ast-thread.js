@@ -17,7 +17,7 @@
 // .js sets self.__HOSTEDGE_SRC (generated from engine/qjs/hostedge.js,
 // the single source of truth drive.mjs also tests); sourcemap.js keeps
 // the genuinely-static sourcemap/TS helpers.
-importScripts("lib/qjs/qjs_worker.js", "lib/qjs/hostedge.gen.js", "lib/sourcemap.js");
+importScripts("lib/qjs/qjs_worker.js", "lib/qjs/hostedge.gen.js", "lib/sourcemap.js", "lib/priority.js");
 
 var HOSTEDGE = self.__HOSTEDGE_SRC;
 var HOSTDRIVER = self.__HOSTDRIVER_SRC;
@@ -129,12 +129,17 @@ function _smMapUrl(chunkUrl, sourceMapScripts) {
   if (Array.isArray(sourceMapScripts)) for (var i = 0; i < sourceMapScripts.length; i++)
     if (sourceMapScripts[i].scriptUrl === chunkUrl) { smu = sourceMapScripts[i].smUrl; break; }
   if (!smu) smu = chunkUrl + ".map";   // fallback ONLY when the chunk shipped no pragma
-  try { return /^https?:\/\//i.test(smu) ? smu : new URL(smu, chunkUrl).href; } catch (e) { return null; }
+  if (/^https?:\/\//i.test(smu)) return smu;
+  return URL.canParse(smu, chunkUrl) ? new URL(smu, chunkUrl).href : null;
 }
 async function _smGetParsed(chunkUrl, sourceMapScripts) {
   if (Object.prototype.hasOwnProperty.call(_smParsed, chunkUrl)) return _smParsed[chunkUrl];
   var parsed = null;
-  try { var rec = await _idbGet("smaps", chunkUrl); if (rec && rec.json) parsed = parseSourceMap(rec.json); } catch (e) {}
+  try { var rec = await _idbGet("smaps", chunkUrl); if (rec && rec.json) parsed = parseSourceMap(rec.json); }
+  catch (e) {
+    if (!self._whyRecords) self._whyRecords = [];
+    self._whyRecords.push({ phase: "smap_idb_get_throw", chunkUrl: chunkUrl, err: String(e && e.message || e) });
+  }
   if (!parsed) {
     var url = _smMapUrl(chunkUrl, sourceMapScripts);
     if (url) {
@@ -148,9 +153,16 @@ async function _smGetParsed(chunkUrl, sourceMapScripts) {
           var json = await resp.json();
           parsed = parseSourceMap(json);
           _smChunksTouched.add(chunkUrl);
-          try { await _idbPut("smaps", { key: chunkUrl, json: json }); } catch (e) {}
+          try { await _idbPut("smaps", { key: chunkUrl, json: json }); }
+          catch (e) {
+            if (!self._whyRecords) self._whyRecords = [];
+            self._whyRecords.push({ phase: "smap_idb_put_throw", chunkUrl: chunkUrl, err: String(e && e.message || e) });
+          }
         }
-      } catch (e) {}
+      } catch (e) {
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "smap_fetch_throw", chunkUrl: chunkUrl, url: url, err: String(e && e.message || e) });
+      }
     }
   }
   _smParsed[chunkUrl] = parsed || null;
@@ -259,7 +271,33 @@ function sourceMapUrlOf(code) {
 function isUnresolved(s) {
   if (!s) return true;
   var t = String(s).trim();
-  return !t || t.indexOf("[object Object]") >= 0 || t.indexOf("[object%20Object]") >= 0;
+  // "[object Object]" is the stringified opaque marker reaching a URL slot. It
+  // arrives raw, or percent-encoded by WHATWG `new URL()` to varying degrees:
+  // the space as %20 ("[object%20Object]") and/or the brackets as %5B/%5D
+  // ("%5Bobject%20Object%5D"). Match the "%5Bobject" prefix too so the fully
+  // encoded form is recognized as opaque, not emitted as a garbage endpoint.
+  return !t || t.indexOf("[object Object]") >= 0 || t.indexOf("[object%20Object]") >= 0 ||
+    t.indexOf("%5Bobject") >= 0;
+}
+
+// A URL whose addressable BASE is itself an opaque __feUrlShape hole has no
+// concrete origin to issue against — it is a FULLY-opaque URL, which per the
+// structural-learning rule is a resolverError, never a fabricated {name}
+// endpoint. Two shapes: (1) the whole URL is a hole at position 0
+// ({refEndpoint}, {currentTarget}/title — relative with an opaque base), or
+// (2) the host/authority inside scheme://… or protocol-relative //… is a hole
+// (https://{host}/api). An opaque SEGMENT under a concrete base is NOT this —
+// "/repos/{id}" and "/{t}/refs" are root-relative (page origin is the concrete
+// base), so the leading "/" anchors them and they remain real path templates.
+function isOpaqueBaseUrl(s) {
+  if (!s) return false;
+  var t = String(s).trim();
+  if (t.charAt(0) === "{") return true;
+  var m = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^\/?#]*)/.exec(t);
+  if (m && m[1].indexOf("{") >= 0) return true;
+  var m2 = /^\/\/([^\/?#]*)/.exec(t);
+  if (m2 && m2[1].indexOf("{") >= 0) return true;
+  return false;
 }
 
 // One coherent forced execution per schedule; enumerate schedules from
@@ -279,22 +317,36 @@ function buildPageDomSrc(scriptUrls) {
   if (!srcs.length) return null;
   return "(function(){try{\n" +
     "var SR=" + JSON.stringify(srcs) + ";\n" +
-    // Real <script src> tags + document.currentScript: the page's
-    // actual script elements, so a bundle that derives its base URL
-    // from currentScript.src / getElementsByTagName("script") runs its
-    // own real code correctly — not a model, the real DOM it expects.
-    "var LS=null;for(var s=0;s<SR.length;s++){var sc=document.createElement('script');sc.src=SR[s];sc.setAttribute('src',SR[s]);(document.head||document.documentElement||document.body).appendChild(sc);LS=sc;}\n" +
-    "if(LS){try{Object.defineProperty(document,'currentScript',{get:function(){return LS;},configurable:true});}catch(e){}}\n" +
+    // Real <script src> tags + per-script document.currentScript: bundles
+    // (MDN airgap.js / Catalyst loaders / webpack publicPath probes)
+    // dereference `document.currentScript.src` to learn their own URL.
+    // Build a basename→element map; document.currentScript is a live
+    // getter that consults globalThis.__feCurFile (set per-script by
+    // qjs_eval_script in qjsmain.c) so EACH script sees ITSELF as
+    // currentScript during its own eval — matching browser semantics.
+    "var SR_EL={};var LS=null;for(var s=0;s<SR.length;s++){\n" +
+    "  var sc=document.createElement('script');sc.src=SR[s];sc.setAttribute('src',SR[s]);\n" +
+    "  (document.head||document.documentElement||document.body).appendChild(sc);LS=sc;\n" +
+    "  try{var bn=String(SR[s]).split('?')[0].split('/').pop();SR_EL['/'+bn]=sc;}catch(e){}\n" +
+    "}\n" +
+    "globalThis.__feScriptElMap=SR_EL;globalThis.__feLastScript=LS;\n" +
     "}catch(e){}})();";
 }
 
-async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, maxBatches, scriptOffsets, sourceMapScripts) {
+async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, scriptOffsets, sourceMapScripts) {
   var t0 = Date.now();
-  // Rotation bound: the deep grind advances at most this many batches per
-  // invocation, then RETURNS (leaving its driven-set persisted) so the scheduler
-  // can rotate to another page. Without it one page would grind to completion
-  // while others wait ("getting stuck"). 0/undefined → effectively unbounded.
-  var _maxDeep = (typeof maxBatches === "number" && maxBatches > 0) ? maxBatches : 200000;
+  // Phase-timing instrumentation — to MEASURE (not assert) where real-bundle
+  // time goes: boot (the one snapshot boot), memcpy (cumulative restore cost,
+  // scales with image size), the BFS phase, and the deep grind. Surfaced via
+  // _deepStats so the popup can read the breakdown on a real page.
+  var _tBootMs = 0, _tMemcpyMs = 0, _tBcMs = 0;
+  // No JS-side rotation bound: the deep grind runs ONE callMain that drives
+  // every remaining orphan, JSPI-yielding per orphan via qjs_host_yield, so
+  // the host scheduler can rotate to a higher-priority fiber (live review,
+  // another page's grind) at every orphan boundary via priority.js's
+  // flowCmp. A page no longer "completes in this booted instance" exclusive
+  // of other pages; instead, the suspended-fiber queue interleaves them by
+  // priority at orphan granularity.
   var _resume = (typeof resumeCursor === "number" && resumeCursor >= 0);
   // Cross-session resume is by a per-function-ID DRIVEN SET (file:line:col hash
   // the engine emits as `@DD`), not a cursor index — so the engine's usefulness
@@ -308,12 +360,20 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // long-running grind for an old page would masquerade as recently-visited and
   // starve a page the user actually opened more recently.
   var _vts = (typeof visitTs === "number" && visitTs > 0) ? visitTs : Date.now();
-  // Throttle: cap any single yield (ms) — the work-burst granularity is one
-  // schedule/deep-batch run, so rest ≈ work gives ~50% duty, capped here so a
-  // slow run doesn't stall the queue too long. DEEP_BATCH = orphans per deep
-  // step (small → short bursts → the device stays cool).
-  var THROTTLE_CAP_MS = 4000;
-  var DEEP_BATCH = 3;
+  // Throttle: schedule-loop yields rest ≈ work (~50% duty) capped here so a
+  // slow run doesn't stall the queue too long. The deep grind has no JS-side
+  // batch loop — its cool-CPU duty lives in the JSPI scheduler's macrotask
+  // sleep (priority.js pickFromFiberQueue + _yieldMC), invoked by the
+  // engine's per-orphan qjs_host_yield (compiled in for the JSPI worker
+  // build). Drain + persist cadence is the per-orphan JSPI yield itself —
+  // every yield runs _drainDeepStdout below before the suspending Promise
+  // resolves, so there is NO interval-based heartbeat (which would be a
+  // magic time-cap masquerading as observability).
+  // Schedule-loop throttle cap (ms). The popup's "Yield throttle" slider
+  // writes self._throttleCapMs via SET_ANALYSIS_OPTS — 0 means no sleep
+  // (max throughput, hottest CPU), higher means longer rest = cooler.
+  // The default (when the user hasn't moved the slider yet) lives here.
+  var THROTTLE_CAP_MS = (typeof self._throttleCapMs === "number" && self._throttleCapMs >= 0) ? self._throttleCapMs : 4000;
   // /h.js host-edge model, /p.js the page's server-rendered DOM data
   // islands (so the bundle bootstraps correctly), /b.js the analyzed
   // bundle, /d.js the epilogue that pumps load/ready/message + XHR
@@ -327,8 +387,87 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // bundles that wait on customElements (Catalyst/Turbo) or
   // querySelector results from the server-rendered HTML never reach
   // their fetch sites.
-  var inMem = [["/h.js", HOSTEDGE], ["/b.js", code], ["/d.js", HOSTDRIVER]];
-  var fileArgs = ["/h.js", "/b.js", "/d.js"];
+  // Split the analyzed bundle along the per-page-script boundaries the
+  // brain captured (`scriptOffsets[i].lineStart`, 1-based). Each script
+  // is its own MEMFS file (/b/0.js, /b/1.js, …) so qjsmain.c can run
+  // JS_DetectModule on the per-script slice and eval each with the
+  // right mode (GLOBAL for classic, MODULE for ESM). A real page mixes
+  // both kinds: classic inline scripts that use sloppy-mode features
+  // alongside an rspack/webpack ESM bundle with top-level `export`;
+  // their concatenation parses as neither and the old single-/b.js
+  // path threw "unsupported keyword: export" the moment the ESM chunk
+  // landed, learning ZERO endpoints on MDN/GitHub. JS_Eval2 carries
+  // `line_num = scriptOffsets[i].lineStart` so stack frames inside a
+  // slice still report combined-bundle line numbers (downstream source
+  // map resolution by `_findScriptForLine` keeps working unchanged).
+  // /b.0.js etc. all keep the `/b.` prefix so the stack-frame filter
+  // below still picks them out from /h.js / /d.js frames.
+  // Name each MEMFS slice by its real script-URL basename (no /b. prefix)
+  // so the libc ESM module loader resolves `import "runtime.X.js"` —
+  // rspack/webpack runtime-chunk static imports — to THIS slice's file
+  // (`/runtime.X.js`), making them the SAME module record the
+  // per-file argv eval handles. Without this, each cross-chunk import
+  // creates a NEW module record, the webpack runtime initializes
+  // twice, and __webpack_require__ identity diverges so the runtime's
+  // chunk-load wiring breaks. Browser semantics: one <script> = one
+  // module record. Slices with no basename (inline) keep the numbered
+  // form. Our infrastructure files /h.js, /d.js, /pre.js, /p.js are
+  // the only non-bundle MEMFS paths; the stack-frame filter excludes
+  // those explicitly.
+  var bundleFiles = [];
+  var INFRA_PATHS = { "/h.js": 1, "/d.js": 1, "/pre.js": 1, "/p.js": 1 };
+  if (scriptOffsets && scriptOffsets.length) {
+    var lines = String(code).split("\n");
+    var pathSeen = Object.create(null);
+    for (var si = 0; si < scriptOffsets.length; si++) {
+      var startLn = (scriptOffsets[si].lineStart | 0);
+      var endLn = (si + 1 < scriptOffsets.length)
+        ? (scriptOffsets[si + 1].lineStart | 0) - 1
+        : lines.length;
+      var sliceLines = lines.slice(startLn - 1, endLn);
+      var scriptUrl = scriptOffsets[si].url || "";
+      var basename = scriptUrl ? scriptUrl.split("?")[0].split("/").pop() : "";
+      var path;
+      if (basename && basename.endsWith(".js") && !pathSeen["/" + basename] && !INFRA_PATHS["/" + basename]) {
+        path = "/" + basename;
+      } else {
+        path = "/b." + si + ".js";
+      }
+      pathSeen[path] = 1;
+      bundleFiles.push({ path: path, src: sliceLines.join("\n"), startLine: startLn });
+    }
+  } else {
+    bundleFiles.push({ path: "/b.0.js", src: String(code), startLine: 1 });
+  }
+  var inMem = [["/h.js", HOSTEDGE]];
+  var fileArgs = ["/h.js"];
+  for (var bfi = 0; bfi < bundleFiles.length; bfi++) {
+    inMem.push([bundleFiles[bfi].path, bundleFiles[bfi].src]);
+    fileArgs.push(bundleFiles[bfi].path);
+  }
+  inMem.push(["/d.js", HOSTDRIVER]);
+  fileArgs.push("/d.js");
+  /* @WHY observability: every forcedAnalyze invocation logs the bundleFiles/
+     fileArgs counts so a downstream "main eval processed only 10 of N args"
+     symptom is distinguishable from "the worker was only given 10 to start
+     with". Surfaces via GET_LAST_STDERR alongside the C-side per-eval @WHY. */
+  if (!self._whyRecords) self._whyRecords = [];
+  self._whyRecords.push({
+    phase: "forced_analyze_entry",
+    seedOnly: !!seedOnly, deep: !!deep,
+    sourceUrl: sourceUrl || "",
+    scriptOffsets: scriptOffsets ? scriptOffsets.length : 0,
+    bundleFiles: bundleFiles.length,
+    fileArgs: fileArgs.length,
+    codeKB: Math.round((code ? code.length : 0) / 1024),
+  });
+  // Pass start-line offsets to qjsmain so JS_Eval2 reports stack-frame
+  // line numbers in combined-bundle space (matches scriptOffsets[].lineStart
+  // exactly, so the brain's _findScriptForLine still resolves correctly).
+  // Per-path (`/b.N.js=line` or `/b.basename.js=line`) because the slice
+  // naming switches between numbered and basename to satisfy ESM imports.
+  var startLineArg = "--fe-script-start-lines=" + bundleFiles.map(function (b) { return b.path + "=" + b.startLine; }).join(",");
+  fileArgs.unshift(startLineArg);
   // globalThis (not self) — QuickJS embedded in the wasm here is running
   // script bytecode, not a Web Worker; `self` isn't defined until
   // hostedge.js's prelude maps it. Hostedge.js reads __pageHtml /
@@ -352,7 +491,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // On a durable RESUME (fresh worker after eviction) skip the BFS entirely —
   // the reached endpoints were already learned + persisted in the original
   // run; this run only continues the deep orphan grind from the saved cursor.
-  var work = _resume ? [] : [""], seen = new Set([""]);
+  // Work items: {sched, key?, deep?, frontierSig?, productivity?, ts?}. seen
+  // dedups by the decision string (sched).
+  var work = _resume ? [] : [{ sched: "" }], seen = new Set([""]);
   // X-Force Algorithm 1 §3.2 fitness hybrid (mirrors drive.mjs header
   // comment). Linear (edge prune) by default for fast saturation; on
   // a NEW @S sink, switch to Quadratic boost (all eligible frontiers
@@ -475,31 +616,98 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // literal host-API call). Prefer a /b.js (analyzed-bundle) frame so
   // the line is in the combined-bundle space background.js maps via
   // scriptOffsets; fall back to the innermost frame.
+  // A frame is a "bundle frame" when its file matches a path the worker
+  // wrote into MEMFS for one of the page's scripts — anything else is
+  // infra (/h.js host-edge, /d.js driver, /pre.js page-globals, /p.js
+  // page-DOM seed) or native. The slice paths are basenames (`/foo.js`)
+  // for scripts that carry one (so ESM imports resolve), or
+  // /b.N.js fallbacks for inline scripts.
+  var bundleFileSet = Object.create(null);
+  for (var bfsi = 0; bfsi < bundleFiles.length; bfsi++) bundleFileSet[bundleFiles[bfsi].path] = 1;
+  function isBundleFrame(fname) { return !!bundleFileSet[String(fname)]; }
   function pickSite(at) {
     if (!at || !at.length) return { loc: null, chain: [], bframes: [] };
     var pick = at[0];
-    for (var i = 0; i < at.length; i++) { if (String(at[i].file).indexOf("/b.js") >= 0) { pick = at[i]; break; } }
+    for (var i = 0; i < at.length; i++) { if (isBundleFrame(at[i].file)) { pick = at[i]; break; } }
     var chain = [];
-    // bframes = every analyzed-bundle (/b.js) frame, innermost→outermost. The
-    // innermost is often a shared wrapper (e.g. the patched global fetch in
-    // fetch-patch.ts) whose source has NO URL template; the real ${owner}/${repo}
-    // template is in a CALLER frame. Source-map name resolution walks these.
     var bframes = [];
     for (var j = 0; j < at.length; j++) {
       chain.push({ line: at[j].line, column: at[j].col });
-      if (String(at[j].file).indexOf("/b.js") >= 0) bframes.push({ line: at[j].line, column: at[j].col });
+      if (isBundleFrame(at[j].file)) bframes.push({ line: at[j].line, column: at[j].col });
     }
     return { loc: { line: pick.line, column: pick.col }, chain: chain, bframes: bframes };
   }
 
+  /* Magic-byte protocol sniffer (never URL-suffix). hex is the body's
+     full byte sequence as ASCII hex (from hostedge bodyShape). Returns
+     a string tag — the caller stores it on the endpoint so the popup
+     and the brain's decoders know which wire format to apply.
+     Recognised signatures (every byte from the spec/wire format, not
+     a name guess):
+       - gRPC-Web:  first byte is 0x00 (uncompressed) or 0x01
+         (compressed) and the NEXT 4 bytes are a big-endian length that
+         exactly matches the remaining bytes. Spec: gRPC over HTTP §6.
+       - Protobuf:  first varint byte's low 3 bits are a valid wire
+         type (0 varint / 1 i64 / 2 LEN / 5 i32). Wire types 3, 4 are
+         reserved → reject. High bit can be 0 or 1 (continuation).
+       - gzip:      magic 1f 8b.
+       - zlib:      78 da | 78 9c | 78 01.
+       - JSON:      starts with whitespace or { / [ / " / digit / t / f / n.
+     Multiple candidates can match (Protobuf bytes might also be JSON
+     when starting with 0x7b/0x5b); precedence: gRPC-Web > gzip/zlib >
+     JSON > Protobuf > bytes. */
+  function _classifyBinary(hex) {
+    if (typeof hex !== "string" || hex.length < 2) return "bytes";
+    var b0 = parseInt(hex.slice(0, 2), 16);
+    var byteLen = hex.length >> 1;
+    // gRPC-Web frame: 5-byte header (1 flag + 4 BE length)
+    if (byteLen >= 5 && (b0 === 0x00 || b0 === 0x01)) {
+      var declared = parseInt(hex.slice(2, 10), 16);
+      if (declared === byteLen - 5) return "grpc-web";
+    }
+    // gzip magic
+    if (b0 === 0x1f && byteLen >= 2 && parseInt(hex.slice(2, 4), 16) === 0x8b) return "gzip";
+    // zlib magic
+    if (b0 === 0x78 && byteLen >= 2) {
+      var b1 = parseInt(hex.slice(2, 4), 16);
+      if (b1 === 0xda || b1 === 0x9c || b1 === 0x01) return "zlib";
+    }
+    // JSON / NDJSON — leading byte is '{', '[', '"', digit, t/f/n, or whitespace
+    if (b0 === 0x7b || b0 === 0x5b || b0 === 0x22 ||
+        (b0 >= 0x30 && b0 <= 0x39) || b0 === 0x74 || b0 === 0x66 || b0 === 0x6e ||
+        b0 === 0x20 || b0 === 0x09 || b0 === 0x0a || b0 === 0x0d) return "json";
+    // Protobuf — varint tag, low 3 bits ∈ {0,1,2,5}
+    var wireType = b0 & 0x07;
+    if (wireType === 0 || wireType === 1 || wireType === 2 || wireType === 5) {
+      var fieldNum = (b0 & 0x78) >> 3;   // single-byte tag; multi-byte varints have high bit set
+      if (fieldNum > 0) return "protobuf";
+    }
+    return "bytes";
+  }
+
   function ep(method, rawUrl, body, kind, at, shape, hdrs, holes) {
-    if (isUnresolved(rawUrl) || isUnresolved(method)) {
+    // __feUrlShape renders an opaque URL segment as the template marker
+    // {name}. When the bundle builds the URL through WHATWG `new URL()`
+    // (Lexbor), the spec percent-encodes the braces ({->%7B, }->%7D) before
+    // urlOf records the resolved .href — so /{t}/refs arrives here as
+    // /%7Bt%7D/refs and the {name} path-param regex below misses it, leaving
+    // the segment unlearned and the path mangled. Un-mangle our OWN marker's
+    // encoded form so the segment is learned as an opaque path param and the
+    // stored path keeps the clean OpenAPI template. A real API path never
+    // carries a literal percent-encoded brace pair, so this only ever touches
+    // the synthetic hole marker, never a concrete URL component.
+    if (typeof rawUrl === "string" && rawUrl.indexOf("%7") >= 0)
+      rawUrl = rawUrl.replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}");
+    var opaqueBase = isOpaqueBaseUrl(rawUrl);
+    if (isUnresolved(rawUrl) || isUnresolved(method) || opaqueBase) {
       var rk = (method || "?") + " " + (rawUrl || "");
       if (!reSeen.has(rk)) {
         reSeen.add(rk);
         resolverErrors.push({
           context: kind + " call site (" + (sourceUrl || "bundle") + ")",
-          message: "request target did not resolve to a concrete string at the converged fixpoint (opaque component reached the " + kind + " URL/method): " + JSON.stringify({ method: method, url: rawUrl }),
+          message: opaqueBase
+            ? "request target has an opaque base/origin (the addressable anchor is an attacker/server-input hole, not a concrete host or root-relative path) — fully-opaque URL, recorded as a driver gap not a fabricated endpoint: " + JSON.stringify({ method: method, url: rawUrl })
+            : "request target did not resolve to a concrete string at the converged fixpoint (opaque component reached the " + kind + " URL/method): " + JSON.stringify({ method: method, url: rawUrl }),
         });
       }
       return;
@@ -565,10 +773,20 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           if (!fv || !fv.kind) continue;
           if (fv.kind === "literal") add(pn, "body", fv.value);
           else if (fv.kind === "opaque") add(pn, "body", undefined);   // record param name; example omitted
+          else if (fv.kind === "binary" && typeof fv.hex === "string") {
+            /* Binary value INSIDE an object field (e.g. {file: <Uint8Array>}).
+               The bytes are the example value — record as a 0x-prefixed hex
+               literal so the popup can render and the user can edit it.
+               Wire protocol of this sub-field would also be classifyable,
+               but we keep this concise — full classification is for
+               top-level binary bodies (handled above). */
+            add(pn, "body", "0x" + fv.hex);
+          }
           else if (fv.kind === "array") {
             for (var ii = 0; ii < fv.items.length; ii++) {
               var it = fv.items[ii];
               if (it && it.kind === "literal") add(pn, "body", it.value);
+              else if (it && it.kind === "binary" && typeof it.hex === "string") add(pn, "body", "0x" + it.hex);
               else if (it && (it.kind === "object" || it.kind === "formdata" || it.kind === "params") && it.fields) _walk(it.fields, pn);
             }
           }
@@ -581,6 +799,17 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       // someOpaqueValue})) — there are no field names to learn. Do NOT
       // fall through to string-parsing String(opaque)="[object Object]",
       // which would invent a body param literally named "[object Object]".
+    } else if (shape && shape.kind === "binary" && typeof shape.hex === "string") {
+      /* Binary body (Protobuf/gRPC-Web/file upload/etc.) — hostedge
+         captured every byte as hex. Classify the wire format from the
+         leading bytes so the popup + protocol decoder know what to do
+         with it. Per CLAUDE.md #7 ("magic-byte sniffing + content-type,
+         never URL-suffix heuristics"): identifier is the bytes, never
+         the URL. Field decoding (Protobuf tag/wire-type walk) happens
+         in the brain via lib/protobuf.js, which already has the decoder
+         — we just need to surface the bytes + the protocol guess so
+         downstream can pick the decoder. */
+      m.bodyBinary = { byteLength: shape.byteLength | 0, hex: shape.hex, protocol: _classifyBinary(shape.hex) };
     } else if (body != null && body !== "" && !isUnresolved(body)) {
       var bj = null;
       try { bj = JSON.parse(body); } catch (e) {}
@@ -613,17 +842,109 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // loop just recycles to a fresh instance and keeps going; no coverage is
   // lost. Same disposable-instance principle as the memory watchdog below.
   var instAborted = false;
+  /* huntContext = {pageKey, type, vts} captured by this instance's qjs_host_yield
+     closure. The yield Promise stores this context in self._fiberQ so the
+     scheduler can pick the highest-priority entry across ALL suspended fibers
+     of ALL pages — not in arrival order. */
+  var huntContext = {
+    pageKey: (sourceUrl || "").split("#")[0] || "default",
+    type: deep ? "deep" : "review",      // live review preempts deep grind by default
+    vts: (typeof visitTs === "number" && visitTs > 0) ? visitTs : Date.now(),
+    lastReaches: 1,                       // engine sets via @Y reaches=<bit> before each yield; 1 = conservative default
+    /* Per-goal emission counters (per CLAUDE.md goal priority: endpoints
+       are #1, security is #10). flowCmp uses `recentEndpoints` as the
+       load-bearing productivity tier so a fiber that just emitted real
+       network endpoints (@H) outranks one emitting structural candidates
+       (@T) or security sinks (@S) of equal count. recentSecondary is
+       the tiebreaker so a fiber emitting @S still beats one emitting
+       nothing. */
+    totalEndpoints: 0,                    // @H only — fetch / XHR.open / WebSocket / etc.
+    totalSecondary: 0,                    // @T (structural candidates) + @S (security sinks)
+    endpointsAtLastYield: 0,
+    secondaryAtLastYield: 0,
+    /* Legacy aggregate kept so existing read sites (BFS fruitfulness
+       check at _lastEmittedHS) keep working. = endpoints + secondary,
+       same as the previous "all emissions" counter. */
+    totalEmissions: 0,
+    emissionsAtLastYield: 0,
+    lastResumed: Date.now(),
+  };
   async function freshInstance() {
     instAborted = false;
     var inst = await self.createQJS({
       noInitialRun: true,
-      print: function (s) { stdout.push(s); },
-      // Surface engine/bundle errors — never swallow. A bundle that
-      // throws is a signal the host model is incomplete; the detail
-      // (qjsmain emits "@E <file> :: <msg>" + stack here) becomes a
-      // visible resolverError so the gap gets fixed, not hidden.
-      printErr: function (s) { stderr.push(s); },
-      onAbort: function () { instAborted = true; },
+      print: function (s) {
+        /* Per-line tap: the engine emits structured @Y / @H / @T / @S
+           records on stdout. Update huntContext live so the priority
+           comparator sees the latest reachability + emission counts.
+           Then push to stdout for the BFS / drive logic below. */
+        if (s.length > 3) {
+          var p3 = s.charCodeAt(0) === 64 /* @ */ ? s.substr(0, 3) : "";
+          if (p3 === "@Y ") {
+            var m = /reaches=([01])/.exec(s);
+            if (m) huntContext.lastReaches = +m[1];
+          } else if (p3 === "@H ") {
+            huntContext.totalEndpoints++;
+            huntContext.totalEmissions++;
+          } else if (p3 === "@T " || p3 === "@S ") {
+            huntContext.totalSecondary++;
+            huntContext.totalEmissions++;
+          }
+        }
+        stdout.push(s);
+      },
+      printErr: function (s) { stderr.push(s); if (!self._lastStderr) self._lastStderr = []; self._lastStderr.push(s); if (self._lastStderr.length > 500) self._lastStderr.shift(); },
+      onAbort: function (msg) {
+        instAborted = true;
+        /* Capture the emscripten abort reason — without this it lands on the
+           default emscripten printErr which our worker shim wires up, but on
+           wasm-builtin aborts (RuntimeError, integer overflow, OOM) the message
+           may bypass printErr and arrive only here. Record it on @WHY so a
+           silent abort no longer looks like a clean return. */
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "wasm_abort", reason: String(msg || "(no reason)") });
+      },
+      /* JSPI cooperative-yield import: each yield is enqueued in
+         self._fiberQ with this instance's huntContext (pageKey/type/vts).
+         self._yieldDrain (the global scheduler) picks which entry to
+         resume next BY PRIORITY across all pages — not by arrival. The
+         wasm stack is preserved by JSPI's real stack switching while
+         this Promise is pending. */
+      qjs_host_yield: function () {
+        /* Per-orphan drain (deep grind) — invoke this instance's drain
+           hook synchronously BEFORE the suspending Promise resolves, so
+           @DD/@H/@T/@S printed since the last yield are aggregated and
+           persisted while this fiber is paused. Hook is set by the deep
+           grind on huntContext.onYieldDrain; absent for review fibers
+           (their print loop is post-callMain). The hook itself is an
+           async function but returning a Promise from a Promise body is
+           ignored — we fire-and-forget; the IDB put it awaits resolves
+           on its own microtask. Reentrancy is gated inside the drain. */
+        if (huntContext.onYieldDrain) {
+          try { huntContext.onYieldDrain(); }
+          catch (e) {
+            /* A drain throw is an observability failure for THIS yield
+               (@DD/@H/etc. since last yield not aggregated). Surface so
+               a hook bug doesn't silently lose endpoints. The wasm
+               resume below still runs so the grind continues. */
+            if (!self._whyRecords) self._whyRecords = [];
+            self._whyRecords.push({ phase: "yield_drain_throw", err: String(e && e.message || e) });
+          }
+        }
+        return new Promise(function (resolve) {
+          if (!self._fiberQ) self._fiberQ = [];
+          var entry = { resolve: resolve, ts: Date.now(), ctx: huntContext };
+          self._fiberQ.push(entry);
+          if (typeof self._yieldDrain === "function") {
+            self._yieldDrain(entry);
+          } else {
+            queueMicrotask(function () {
+              var i = self._fiberQ.indexOf(entry);
+              if (i >= 0) { self._fiberQ.splice(i, 1); resolve(); }
+            });
+          }
+        });
+      },
     });
     for (var i = 0; i < inMem.length; i++) inst.FS.writeFile(inMem[i][0], inMem[i][1]);
     return inst;
@@ -639,38 +960,144 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // (measured ~1.6× faster/run, identical @H). Same wasm INSTANCE keeps
   // its MEMFS across callMain, so /b.bc persists; on recycle, freshInstance
   // re-writes it from inMem. If compile fails, fall back to the source.
-  try {
-    m.callMain(["--fe-emit-bc", "/b.js", "/b.bc"]);
-    var _bc = m.FS.readFile("/b.bc");
-    if (_bc && _bc.length > 0) {
-      var _bi = fileArgs.indexOf("/b.js");
-      if (_bi >= 0) fileArgs[_bi] = "/b.bc";
-      inMem = inMem.filter(function (e) { return e[0] !== "/b.js"; });
-      inMem.push(["/b.bc", _bc]);
-      try { m.FS.unlink("/b.js"); } catch (e) {}   // drop the 7 MB source from this instance
+  // Compile each per-script bundle file to bytecode so re-parsing the
+  // multi-MB sources on every schedule (~850 ms each on github) collapses
+  // to a fast JS_ReadObject. qjs_eval_bc dispatches MODULE vs GLOBAL on
+  // the value tag, so ESM vs classic stays correct after the compile.
+  // start-lines are passed in so JS_Eval2's line_num bakes combined-bundle
+  // line numbers into the .bc's debug info.
+  //
+  // DEFER source unlinking until every BC is compiled: a later script's
+  // BC compile may issue `import "<earlier>.js"` which the libc loader
+  // reads from MEMFS. Unlinking the source after each compile would
+  // make the import fail for cross-chunk references (rspack/webpack
+  // runtime chunks). Sources stay in MEMFS for the entire compile loop;
+  // also stay in inMem so freshInstance re-creates them on schedule
+  // recycle.
+  var _bcOk = 0, _bcEmpty = 0, _bcThrew = 0, _bcAborted = 0;
+  var _bcBaselineBytes = 0;   // first chunk's footprint; recycle ratio is relative
+  var _bc0 = Date.now();
+  for (var bce = 0; bce < bundleFiles.length; bce++) {
+    var _src = bundleFiles[bce].path;
+    var _dst = _src.replace(/\.js$/, ".bc");
+    var _bcCallThrew = false;
+    try {
+      await m.callMain([startLineArg, "--fe-emit-bc", _src, _dst]);
+      var _bc = null;
+      try { _bc = m.FS.readFile(_dst); } catch (e) { _bc = null; }
+      if (_bc && _bc.length > 0) {
+        var _bi = fileArgs.indexOf(_src);
+        if (_bi >= 0) fileArgs[_bi] = _dst;
+        inMem.push([_dst, _bc]);
+        _bcOk++;
+      } else {
+        /* @WHY observability: the bytecode file is missing or empty even though
+           callMain returned without throwing — qjsmain's --fe-emit-bc printed @E
+           or wrote zero bytes. Recording the source keeps a per-script trail so
+           a host-model gap (e.g. an unmodelled JS feature breaking the parse
+           ONLY for this slice) is visible. NOT a silent skip. */
+        _bcEmpty++;
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "bc_compile_empty", file: _src, len: bundleFiles[bce].src.length });
+      }
+    } catch (e) {
+      _bcCallThrew = true;
+      _bcThrew++;
+      if (instAborted) _bcAborted++;
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "bc_compile_throw", file: _src, err: String(e && e.message || e), aborted: !!instAborted });
     }
-  } catch (e) { /* keep /b.js source path on any compile failure */ }
-  // Aggregate ONE run's stdout (@E/@T/@H/@S/@P/@Z) into the shared learning
-  // state. Reads the closure `stdout` (each run clears + fills it first).
-  // Shared by the BFS schedule runs AND the throttled deep-step batches, so
-  // the deep pass's @H/@S/@T are learned identically to the reached ones.
-  function processStdout() {
+    /* Memory watchdog over the bc-compile loop. Each --fe-emit-bc invocation
+       creates+frees a JSRuntime; wasm `memory.grow` is monotonic so the freed
+       memory is never returned to the OS — over 646 github chunks the
+       instance climbs past Chrome's per-instance wasm cap and the next
+       emit-bc throws a wasm trap ("memory access out of bounds"). Note the
+       trap does NOT set instAborted (onAbort fires for emscripten abort()
+       calls only, not for wasm RuntimeErrors); we must recycle on ANY throw,
+       not just abort. The recycle reuses the SAME instance-disposable
+       principle as the BFS schedule loop's ratio-based watchdog at the
+       bottom of this function; reusing it here is structural, not a
+       workaround. inMem already carries every .bc produced so far + every
+       still-uncompiled source, so freshInstance reconstitutes MEMFS
+       verbatim. */
+    if (instAborted || _bcCallThrew) {
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "bc_recycle", reason: instAborted ? "abort" : "wasm_trap", after_bce: bce });
+      m = null;
+      await new Promise(function (r) { setTimeout(r, 0); });
+      m = await freshInstance();
+      _bcBaselineBytes = 0;
+    } else {
+      var _bcMemNow = wasmBytes(m);
+      if (_bcBaselineBytes === 0) _bcBaselineBytes = _bcMemNow;
+      else if (_bcMemNow > _bcBaselineBytes * 2) {
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "bc_recycle", reason: "mem_growth", after_bce: bce, baseline: _bcBaselineBytes, now: _bcMemNow });
+        m = null;
+        await new Promise(function (r) { setTimeout(r, 0); });
+        m = await freshInstance();
+        _bcBaselineBytes = 0;
+      }
+    }
+  }
+  if (!self._whyRecords) self._whyRecords = [];
+  _tBcMs = Date.now() - _bc0;
+  self._whyRecords.push({ phase: "bc_compile_done", total: bundleFiles.length, ok: _bcOk, empty: _bcEmpty, threw: _bcThrew, aborted: _bcAborted });
+  // Aggregate stdout (@E/@T/@H/@S/@P/@Z) into the shared learning state.
+  // BFS schedule runs pass startIdx=0 (each run resets stdout first); the
+  // deep grind's drain passes a per-yield startIdx so each @H/@T/@S line
+  // is aggregated exactly once across the long single-callMain. __pendingSec
+  // / __pendingPoC are CLOSURE-LEVEL so an @S whose paired @Z arrived in a
+  // later yield is not orphaned by the drain boundary.
+  var __pendingSec = null;       // @S waiting for paired @Z verdict (spans yields)
+  var __pendingPoC = null;       // @P arriving between @S and @Z (spans yields)
+  function processStdout(startIdx) {
     var rh = [];
-    var pendingSec = null;                        // @S waiting for paired @Z verdict
-    var pendingPoC = null;                        // @P arriving between @S and @Z
-    for (var li = 0; li < stdout.length; li++) {
+    var li0 = (typeof startIdx === "number" && startIdx > 0) ? startIdx : 0;
+    // startIdx==0 means a fresh stdout buffer (BFS schedule OR first deep-
+    // drain on a recycled instance), so any dangling __pendingSec from a
+    // PRIOR buffer must not pair into the new run.
+    if (li0 === 0) { __pendingSec = null; __pendingPoC = null; }
+    for (var li = li0; li < stdout.length; li++) {
       var line = stdout[li];
+      if (line.slice(0, 5) === "@WHY ") {
+        /* Diagnostic record from a phase that finished without producing
+           its expected output. Surface on self so the brain can expose
+           it to the popup's diagnostic view. */
+        try {
+          var why = JSON.parse(line.slice(5));
+          if (!self._whyRecords) self._whyRecords = [];
+          self._whyRecords.push(why);
+        } catch (e) {
+          /* A malformed @WHY emission is itself an observability gap — the
+             whole point of @WHY is to surface failures, and dropping the
+             malformed one means a downstream phase that emitted bad JSON is
+             ALSO invisible. Record the raw line and the parse error so the
+             engine-side serialization bug is self-diagnosing. */
+          if (!self._whyRecords) self._whyRecords = [];
+          self._whyRecords.push({ phase: "why_parse_throw", raw: line.slice(0, 300), err: String(e && e.message || e) });
+        }
+        continue;
+      }
       if (line.slice(0, 3) === "@E ") {
         var ej; try { ej = JSON.parse(line.slice(3)); } catch (e) { ej = { message: line.slice(3) }; }
         var emsg = String(ej.message || "(throw)");
         var ekey = "E:" + emsg.slice(0, 120);
         if (!reSeen.has(ekey)) {
           reSeen.add(ekey);
-          var firstFrame = String(ej.stack || "").split("\n").filter(function (s) { return s.indexOf("/b.js") >= 0; })[0] || "";
+          var bundleFileNames = bundleFiles.map(function (b) { return b.path; });
+          var firstFrame = String(ej.stack || "").split("\n").filter(function (s) {
+            for (var bfn = 0; bfn < bundleFileNames.length; bfn++) if (s.indexOf(bundleFileNames[bfn] + ":") >= 0) return true;
+            return false;
+          })[0] || "";
           var snippet = null;
-          var fm = /\/b\.js:(\d+):(\d+)/.exec(firstFrame);
-          if (fm) {
-            var ln = +fm[1], cl = +fm[2];
+          var fmre = null;
+          for (var bfn2 = 0; bfn2 < bundleFileNames.length && !fmre; bfn2++) {
+            var name = bundleFileNames[bfn2].replace(/[.+*?^${}()|[\]\\]/g, "\\$&");
+            fmre = new RegExp(name + ":(\\d+):(\\d+)").exec(firstFrame);
+          }
+          if (fmre) {
+            var ln = +fmre[1], cl = +fmre[2];
             var srcLine = String(code).split("\n")[ln - 1];
             if (srcLine != null) {
               var a = Math.max(0, cl - 240);
@@ -691,29 +1118,64 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           var tr = JSON.parse(line.slice(3));
           structural.set(tr.api + "@" + tr.file + ":" + tr.line + ":" + tr.col,
             { api: tr.api, file: tr.file, line: tr.line, col: tr.col, args: tr.args || [] });
-        } catch (e) {}
+        } catch (e) {
+          /* Malformed @T from the engine — without surfacing, a corrupt
+             structural-candidate emission silently halves the JAW set the
+             reviewer sees. Engine-side serialization bug if observed. */
+          if (!self._whyRecords) self._whyRecords = [];
+          self._whyRecords.push({ phase: "at_parse_throw", line: line.slice(0, 200), err: String(e && e.message || e) });
+        }
         continue;
       }
       if (line.slice(0, 3) === "@H ") {
-        try { rh.push(JSON.parse(line.slice(3))); } catch (e) {}
+        try { rh.push(JSON.parse(line.slice(3))); }
+        catch (e) {
+          /* Malformed @H (host-edge call site) — silently dropping it means
+             a real fetch the bundle reached is lost from the learned set. */
+          if (!self._whyRecords) self._whyRecords = [];
+          self._whyRecords.push({ phase: "ah_parse_throw", line: line.slice(0, 200), err: String(e && e.message || e) });
+        }
       } else if (line.slice(0, 3) === "@S ") {
-        try { pendingSec = JSON.parse(line.slice(3)); pendingPoC = null; } catch (e) { pendingSec = null; pendingPoC = null; }
+        try { _pendingSec = JSON.parse(line.slice(3)); _pendingPoC = null; }
+        catch (e) {
+          /* @S (security sink) parse failure — without surfacing, a real
+             tainted-sink finding is silently lost AND the verdict pairing
+             (next @Z) attaches to a stale or null _pendingSec. */
+          _pendingSec = null; _pendingPoC = null;
+          if (!self._whyRecords) self._whyRecords = [];
+          self._whyRecords.push({ phase: "as_parse_throw", line: line.slice(0, 200), err: String(e && e.message || e) });
+        }
       } else if (line.slice(0, 3) === "@P ") {
-        try { pendingPoC = JSON.parse(line.slice(3)); } catch (e) { pendingPoC = null; }
+        try { _pendingPoC = JSON.parse(line.slice(3)); }
+        catch (e) {
+          _pendingPoC = null;
+          if (!self._whyRecords) self._whyRecords = [];
+          self._whyRecords.push({ phase: "ap_parse_throw", line: line.slice(0, 200), err: String(e && e.message || e) });
+        }
       } else if (line.slice(0, 3) === "@Z ") {
-        var zr; try { zr = JSON.parse(line.slice(3)); } catch (e) { pendingSec = null; pendingPoC = null; continue; }
-        if (!pendingSec) continue;
-        if (zr.verdict === "INFEASIBLE") { pendingSec = null; pendingPoC = null; continue; }
-        var ss = pickSite(pendingSec.at);
-        var sk = pendingSec.type + "|" + pendingSec.sink + "|" + (ss.loc ? ss.loc.line + ":" + ss.loc.column : "?");
-        if (secSeen.has(sk)) { pendingSec = null; pendingPoC = null; continue; }
+        var zr;
+        try { zr = JSON.parse(line.slice(3)); }
+        catch (e) {
+          /* @Z (Z3 verdict) parse failure — the security verdict is lost,
+             and the paired _pendingSec must drop too (no verdict means we
+             can't classify the @S). */
+          _pendingSec = null; _pendingPoC = null;
+          if (!self._whyRecords) self._whyRecords = [];
+          self._whyRecords.push({ phase: "az_parse_throw", line: line.slice(0, 200), err: String(e && e.message || e) });
+          continue;
+        }
+        if (!_pendingSec) continue;
+        if (zr.verdict === "INFEASIBLE") { _pendingSec = null; _pendingPoC = null; continue; }
+        var ss = pickSite(_pendingSec.at);
+        var sk = _pendingSec.type + "|" + _pendingSec.sink + "|" + (ss.loc ? ss.loc.line + ":" + ss.loc.column : "?");
+        if (secSeen.has(sk)) { _pendingSec = null; _pendingPoC = null; continue; }
         secSeen.add(sk);
         sinkSeen.add(sk);
-        var sev = pendingSec.type === "code-exec" ? "critical" : "high";
+        var sev = _pendingSec.type === "code-exec" ? "critical" : "high";
         if (zr.verdict === "TAINT_REACH") sev = "medium";
         var poc = null;
-        if (pendingPoC && Array.isArray(pendingPoC.steps) && pendingPoC.steps.length) {
-          poc = adaptPoc(pendingPoC, pendingSec.type, zr.psi);
+        if (_pendingPoC && Array.isArray(_pendingPoC.steps) && _pendingPoC.steps.length) {
+          poc = adaptPoc(_pendingPoC, _pendingSec.type, zr.psi);
         }
         // Recover the attacker source from Ψ. LEAF terms serialize as
         // `$<id>:<label>` where <label> is the taint-source name the engine
@@ -731,22 +1193,22 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           if (!srcLabel && _labels.length) srcLabel = _labels[0];
         }
         securitySinks.push({
-          type: pendingSec.type,
-          sink: pendingSec.sink,
+          type: _pendingSec.type,
+          sink: _pendingSec.sink,
           source: srcLabel || "host-unknown attacker input reached the sink (forced multi-path execution)",
           sourceType: srcLabel ? "user-controlled" : undefined,
           severity: sev,
           location: ss.loc || { line: 0, column: 0 },
           taintPath: ss.chain.map(function (c) { return { at: c }; }),
-          value: pendingSec.value != null ? String(pendingSec.value) : null,
+          value: _pendingSec.value != null ? String(_pendingSec.value) : null,
           verdict: zr.verdict,
           witness: zr.witness || null,
           psi: zr.psi || null,
           phi: zr.phi || null,
           poc: poc,
         });
-        pendingSec = null;
-        pendingPoC = null;
+        _pendingSec = null;
+        _pendingPoC = null;
       }
     }
     var pend = null;
@@ -755,13 +1217,112 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       if (r.api === "XMLHttpRequest.open") { if (pend) ep(pend.m, pend.u, null, "xhr", pend.at, undefined, undefined, pend.holes); pend = { m: r.args[0], u: r.args[1], at: r.at, holes: r.args[2] }; }
       else if (r.api === "XMLHttpRequest.send") { if (pend) { ep(pend.m, pend.u, r.args[0], "xhr", pend.at, r.args[1], r.args[2], pend.holes); pend = null; } }
       else if (r.api === "fetch") ep(r.args[1] || "GET", r.args[0], r.args[2], "fetch", r.at, r.args[3], r.args[4], r.args[5]);
-      else if (r.api === "script" && r.args && r.args[0] && !isUnresolved(r.args[0])) chunkUrls.add(String(r.args[0]));
+      /* html-attr: declared endpoint extracted from the Lexbor document
+         ([action] / [formaction] / [data-*-url|-href|-src]). No body, no
+         headers — the URL itself IS the captured fact. Args layout
+         matches the fetch shape so ep() reads url/method from args[0]/
+         args[1]; the shape carries kind:"declared" so the brain sees
+         it's from HTML, not from a forced fetch call. */
+      else if (r.api === "html-attr") ep(r.args[1] || "GET", r.args[0], null, "html-attr", r.at, null, null, null);
+      /* WebSocket / EventSource / sendBeacon: the bundle CONSTRUCTED a
+         real connection / event-source URL during forced execution. The
+         structural-residue path above already handles UNREACHED instances
+         (url:null), but a REACHED ws:// or wss:// URL was being dropped
+         because the dispatch had no case — the @H record was emitted by
+         hostedge but nothing folded it into the endpoint set. The "method"
+         field is the protocol verb (WEBSOCKET/EVENTSOURCE/SENDBEACON) to
+         match the structural variant's labeling. */
+      else if (r.api === "WebSocket") ep("WEBSOCKET", r.args[0], null, "websocket", r.at, null, null, null);
+      else if (r.api === "EventSource") ep("EVENTSOURCE", r.args[0], null, "eventsource", r.at, null, null, null);
+      else if (r.api === "sendBeacon") ep("SENDBEACON", r.args[0], r.args[1], "sendbeacon", r.at, r.args[2], null, null);
+      /* script/Worker/SharedWorker URLs are ALL additional JS bundle
+         locations: the brain downloads them and re-analyses to recover
+         lazy-loaded endpoints. Without including Worker/SharedWorker in
+         chunkUrls, bundles that move their fetch surface into a Web
+         Worker (Google Drive, Apple Maps, Office 365) lose every fetch
+         the Worker makes — those scripts were never analysed. */
+      else if ((r.api === "script" || r.api === "Worker" || r.api === "SharedWorker") &&
+               r.args && r.args[0] && !isUnresolved(r.args[0])) chunkUrls.add(String(r.args[0]));
     }
     if (pend) ep(pend.m, pend.u, null, "xhr", pend.at, undefined, undefined, pend.holes);
   }
+  /* Within-page priority: BFS pops schedules by priority, not FIFO. Each
+     pending job has a `key` (its uncovered-edge identity) and a `deep` flag
+     (Quadratic-boost bypass — fruitful run's frontier). Priority order
+     lexicographic, no magic weights:
+       1. `deep` bypass jobs first (they came from a fruitful run that
+          just emitted a NEW @H/@S — its frontiers are likely productive).
+       2. shorter prefix first (shallower depth → may unlock more frontiers
+          via the existing X-Force expansion).
+       3. enqueue order (anti-starvation, oldest waiting beats newest tied).
+     Each pop is O(n) over `work`; n is bounded by the distinct uncovered
+     branch-edge set per CLAUDE.md's "Linear edge prune" → polynomial. */
+  var _lastEmittedHS = huntContext.totalEmissions | 0;   // post-run delta marks fruitfulness
+  /* Comparator delegated to lib/priority.js so the heuristic lives in the
+     dedicated file (ORDER only, never COVERAGE). The schedCmp returns the
+     <,=,> ordering for two work entries on (deep, prefix-length); the
+     enqueue-order tiebreaker is handled here via the array index since the
+     comparator is pure and doesn't see positions. */
+  function _pickJob() {
+    var bestI = 0, best = work[0];
+    for (var k = 1; k < work.length; k++) {
+      if (self._priorityCmp.schedCmp(work[k], best) < 0) { best = work[k]; bestI = k; }
+      // schedCmp returns 0 on equal-priority — the earlier array index already
+      // held by bestI is the anti-starvation tiebreaker (oldest enqueued wins).
+    }
+    work.splice(bestI, 1);
+    return best;
+  }
+  // === Snapshot-restore schedule execution (Wizer-style linear-memory imaging,
+  // validated in mdrive.mjs SNAP=1: identical results, ~7-8× lower per-schedule
+  // cost). REPLACES re-boot-per-schedule: boot the bundle ONCE into the
+  // persistent g_boot_ctx, image HEAPU8, then restore the image + drive per
+  // schedule (no per-schedule re-eval). The driver epilogue (/d.js, last
+  // fileArg) is the per-schedule DRIVE; everything before it (page DOM, /h.js,
+  // bundle .bc) is the one-time BOOT. The restore resets the bundle's mutated
+  // JS state AND footprint to post-boot every drive, so the memory accumulation
+  // the old per-schedule watchdog guarded against cannot happen — the watchdog
+  // is gone, replaced by abort-recovery (a wasm abort poisons the instance; the
+  // JS-side ABORT flag survives a memcpy, so re-boot a fresh instance). */
+  var driveArg = fileArgs[fileArgs.length - 1];   // /d.js
+  var bootArgs = fileArgs.slice(0, -1);           // /pre.js, --fe-script-start-lines, /h.js, /p.js, bundle .bc
+  // Boot the bundle ONCE, image HEAPU8, then restore + drive per schedule (no
+  // per-schedule re-eval). The restore resets the bundle's state + footprint to
+  // post-boot every drive, so the cross-schedule memory climb the old watchdog
+  // guarded against can't happen (watchdog deleted). A schedule's decision
+  // string drives the FUNCTIONS the driver invokes; opaque branches at module
+  // top-level run during boot (before the image) and are SURFACED, not explored
+  // (bootSnapshot) — this model does NOT re-boot for them.
+  var _snap = null;   // post-boot linear-memory image (Uint8Array)
+  async function bootSnapshot() {
+    stdout.length = 0; stderr.length = 0;
+    try { m.FS.writeFile("/boot.tr", new Uint8Array(0)); } catch (e) {}
+    var _bt0 = Date.now();
+    try { await m.callMain(["--fe-boot", "--fe-trace=/boot.tr"].concat(bootArgs)); }
+    catch (e) {
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "boot_callmain_throw", err: String(e && e.message || e), instAborted: !!instAborted });
+    }
+    _tBootMs += Date.now() - _bt0;
+    processStdout();   // module-init @H/@S/@Z, aggregated once
+    var _img = (m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null;
+    var _bt = ""; try { _bt = m.FS.readFile("/boot.tr", { encoding: "utf8" }); } catch (e) {}
+    var _bd = [], _bfr = [], _btl = _bt.split("\n");
+    for (var _bi = 0; _bi < _btl.length; _bi++) {
+      var _bb = _btl[_bi].match(/^B (\d+) (\d)/); if (_bb) _bd[+_bb[1]] = _bb[2];
+      var _bff = _btl[_bi].match(/^F (\d+)/); if (_bff) _bfr.push(+_bff[1]);
+    }
+    if (_bfr.length) { if (!self._whyRecords) self._whyRecords = []; self._whyRecords.push({ phase: "boot_frontiers_unexplored", count: _bfr.length }); }
+    // Module-init opaque branches run during the boot eval, before the image, so
+    // the snapshot can't explore their flip without re-evaluating module-init.
+    // This model does NOT re-boot for them (that re-boot was a fallback dressed
+    // up as "hybrid"); the count above SURFACES them as a known limitation.
+    return _img;
+  }
+  if (work.length) _snap = await bootSnapshot();
   while (work.length) {
-    var job = work.shift();
-    var sched = typeof job === "string" ? job : job.sched;
+    var job = _pickJob();
+    var sched = job.sched;
     // Pop-time gate (mirrors drive.mjs). During bootstrap (no sink
     // fired anywhere) every queued job runs — pruning here would
     // defeat the bootstrap search. After bootstrap, Linear's edge
@@ -775,38 +1336,73 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var _runT0 = Date.now();
     stdout.length = 0;
     stderr.length = 0;
+    var _mc0 = Date.now();
+    if (_snap) m.HEAPU8.set(_snap);                       // restore the post-boot image (resets bundle state + footprint)
+    _tMemcpyMs += Date.now() - _mc0;
+    try { m.FS.writeFile("/t.tr", new Uint8Array(0)); } catch (e) {}   // fresh trace per drive
     try {
-      m.callMain(["--fe-exec", "--fe-sched=" + sched, "--fe-trace=/t.tr"].concat(fileArgs));
-    } catch (e) { /* engine may longjmp on exit; trace + stdout still valid */ }
+      await m.callMain(["--fe-drive=" + sched, "--fe-trace=/t.tr", driveArg]);
+    } catch (e) {
+      /* The engine may longjmp on exit; trace + stdout still valid. But a
+         RuntimeError from a wasm trap (stack overflow, unreachable, OOM) needs
+         to be surfaced — without this it's swallowed and the symptom looks like
+         a clean completion that just learned nothing. */
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({
+        phase: "schedule_callmain_throw",
+        sched: sched,
+        runs: runs,
+        err: String(e && e.message || e),
+        instAborted: !!instAborted,
+      });
+    }
     var trace = "";
-    try { trace = m.FS.readFile("/t.tr", { encoding: "utf8" }); } catch (e) {}
-    // Memory watchdog: capture the first run's footprint as the
-    // baseline; once the (monotonic) wasm memory has grown past 2×
-    // that baseline, the instance is accumulating across schedules —
-    // recycle. The 2× ratio means "one extra run's worth beyond the
-    // first has stuck"; it is relative to the measured per-bundle
-    // footprint (tiny for jQuery, ~920 MB for github), not an absolute
-    // constant. Yield first so V8 GC reclaims the dropped instance's
-    // linear memory before the fresh one allocates.
-    var memNow = wasmBytes(m);
+    try { trace = m.FS.readFile("/t.tr", { encoding: "utf8" }); }
+    catch (e) {
+      /* The forced-exec trace file is the BFS's frontier signal — without it,
+         no `F <i> <key>` lines are decoded, no new schedules enqueue, and the
+         BFS exits after this run as if the bundle had no branches. A trace
+         read failure is a host-FS gap (e.g. the wasm aborted before
+         flushing) and must be visible: the symptom otherwise looks like
+         "the engine just stops finding endpoints after schedule N". */
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "trace_read_throw", sched: sched, err: String(e && e.message || e) });
+    }
+    // Abort recovery: a wasm abort (e.g. an emscripten teardown assert) POISONS
+    // the instance — every later callMain throws, and HEAPU8.set can't clear
+    // the JS-side ABORT flag — so spin up a fresh instance and re-boot + re-
+    // image. NO memory watchdog: the per-drive restore resets the bundle's
+    // footprint to post-boot every schedule, so the cross-schedule accumulation
+    // the old 2×-baseline watchdog guarded against cannot happen (the restore
+    // IS the reclamation; the climb to ~920 MB on github was caused by the
+    // re-boot-per-schedule model this replaces). Output for THIS run was
+    // already captured in stdout/trace above.
     if (instAborted) {
-      // The engine aborted this run at teardown — the instance is poisoned,
-      // recycle before the next schedule (output for THIS run was already
-      // captured in stdout/trace above).
       m = null;
       await new Promise(function (r) { setTimeout(r, 0); });
       m = await freshInstance();
-      baselineBytes = 0;
-    } else if (baselineBytes === 0) {
-      baselineBytes = memNow;
-    } else if (memNow > baselineBytes * 2) {
-      m = null;
-      await new Promise(function (r) { setTimeout(r, 0); });
-      m = await freshInstance();
-      baselineBytes = 0;
+      _snap = await bootSnapshot();        // re-image on the fresh instance
     }
 
     processStdout();
+
+    /* OBSERVABILITY: if driver.js never reached its @WHY driver_entry
+       breadcrumb, the bundle aborted mid per-script-eval (wasm
+       Aborted, typically from list_empty(&rt->gc_obj_list) assertion
+       triggered by ESM cross-chunk module-record cycles the GC can't
+       collect). Without surfacing this, the brain sees "0 endpoints + 0
+       errors" — indistinguishable from "didn't run". */
+    var sawDriverEntry = false;
+    for (var _wi = 0; _wi < stdout.length; _wi++) {
+      if (stdout[_wi].indexOf("\"phase\":\"driver_entry\"") >= 0) { sawDriverEntry = true; break; }
+    }
+    if (!sawDriverEntry && !reSeen.has("driver_never_entered")) {
+      reSeen.add("driver_never_entered");
+      resolverErrors.push({
+        context: "engine teardown (" + (sourceUrl || "bundle") + ")",
+        message: "wasm aborted during per-script eval BEFORE driver.js ran (no driver_entry @WHY record). Most likely: a module-record cycle GC couldn't collect, triggering list_empty(&rt->gc_obj_list) assertion at JS_FreeRuntime. Look at self._lastStderr for the 'Aborted(' line.",
+      });
+    }
 
     // X-Force §3.2 hybrid: Linear edge prune by default; Quadratic
     // boost when this run was fruitful; bootstrap-Exponential while
@@ -817,9 +1413,23 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     for (var ti = 0; ti < tl.length; ti++) {
       var b = tl[ti].match(/^B (\d+) (\d) (\d+)/);
       if (b) { decisions[+b[1]] = b[2]; coveredEdges.add(b[3] + ":" + b[2]); continue; }
-      var f = tl[ti].match(/^F (\d+) (\d+)/);
-      if (f) frontiers.push({ i: +f[1], key: f[2] });
+      var f = tl[ti].match(/^F (\d+) (\d+)(?: (\d+))?/);
+      // 3rd field = reach-signature of the arm this frontier's flip explores
+      // (2 = reaches a network edge, 1 = host-but-not-net, 0/absent = unknown
+      // from a legacy/non-per-arm branch). schedCmp runs net-reaching
+      // frontiers first so the most-likely-endpoint internal path is explored
+      // ahead of the rest — intra-function priority, not FIFO over branches.
+      if (f) frontiers.push({ i: +f[1], key: f[2], sig: f[3] ? +f[3] : 0 });
     }
+    /* Per-schedule branch-density observation: how many opaque branches did
+       this schedule traverse (B-records) and how many frontiers remain
+       (F-records, post-SMT-prune). The brain uses this to estimate per-page
+       continuation density — pages with many opaque branches deep in the
+       reach graph have more potential continuations to schedule against
+       priority signals (active-tab affinity, click affinity, etc.). Pure
+       observability; doesn't change BFS scheduling. */
+    if (!self._whyRecords) self._whyRecords = [];
+    self._whyRecords.push({ phase: "schedule_branch_density", sched: sched.slice(0, 24), branches: decisions.length, frontiers: frontiers.length, uncoveredFrontiers: frontiers.filter(function (f) { return !coveredEdges.has(f.key + ":1"); }).length });
     // Pure Linear edge-coverage: enqueue a frontier ONLY if its flipped
     // edge (key,1) is uncovered, so N is bounded by the distinct host-
     // relevant branch-edge set (polynomial) — the BFS terminates and can't
@@ -838,75 +1448,323 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // + cascade (their args are opaque anyway — no per-value spread to chase),
     // so the seed run alone suffices; skip frontier enqueue. The reached
     // EAGER endpoints already got their value spread from round 1's full BFS.
+    /* Productivity tag — frontiers from a run that JUST emitted new @H/@S/@T
+       records are MORE LIKELY to lead to further discoveries when their
+       flipped arm runs, so they pop ahead of frontiers from unproductive
+       runs (the _pickJob comparator's existing `deep` dimension). Without
+       this, every frontier is FIFO-flat by the prior structural sort —
+       fruitful arms wait behind boring ones, and on a large bundle the
+       reviewer sees endpoints trickle in slowly even though the analyzer
+       just discovered a productive seam. _lastEmittedHS captures the per-
+       schedule emission count we tracked above; the comparison against
+       the per-instance huntContext.totalEmissions reflects @H/@S only,
+       which is the productivity signal we care about for endpoint
+       learning (a schedule that found new sinks/endpoints is the seam). */
+    var _emissionsDelta = (huntContext.totalEmissions | 0) - _lastEmittedHS;
+    var _runFruitful = _emissionsDelta > 0;
+    _lastEmittedHS = huntContext.totalEmissions | 0;
+    var _enqTs = Date.now();
     if (!seedOnly) for (var ki = 0; ki < frontiers.length; ki++) {
       var fr = frontiers[ki];
       if (coveredEdges.has(fr.key + ":1")) continue;
       var ns = decisions.slice(0, fr.i).map(function (d) { return d || "0"; }).join("") + "1";
-      if (!seen.has(ns)) { seen.add(ns); work.push({ sched: ns, key: fr.key }); }
+      if (!seen.has(ns)) {
+        seen.add(ns);
+        /* Carry the PARENT-run productivity onto every frontier this run
+           emits — schedCmp uses `productivity` as tier 2 (replacing the
+           old shorter-prefix depth heuristic) so frontiers from a run
+           that just emitted N new @H/@S/@T pop before frontiers from a
+           run that emitted fewer. ts is anti-starvation across equal-
+           productivity frontiers (oldest enqueued wins). */
+        work.push({ sched: ns, key: fr.key, deep: _runFruitful, frontierSig: fr.sig | 0, productivity: _emissionsDelta, ts: _enqTs });
+      }
+    }
+    // Per-schedule wall-clock samples for surfacing in the offscreen brain via
+    // a JS-readable list (`_schedTimings`). Lets us see per-schedule cost from
+    // outside the worker without needing a console capture that puppeteer
+    // doesn't reliably forward. Bounded to last 50 to cap memory.
+    try {
+      if (!self._schedTimings) self._schedTimings = [];
+      self._schedTimings.push({ sched: sched.slice(0, 16), runs: runs, ms: Date.now() - _runT0 });
+      if (self._schedTimings.length > 50) self._schedTimings.shift();
+    } catch (e) {
+      /* Per-schedule timing-record append failure — pure observability path,
+         the analysis result is unaffected, but a failure here means the
+         GET_SCHED_TIMINGS RPC will under-report. Surface so a corrupt timing
+         buffer or out-of-memory on self._schedTimings is visible. */
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "sched_timing_push_throw", err: String(e && e.message || e) });
     }
     // THROTTLE: yield the core ~as long as this schedule ran (≈50% duty), so
     // the analysis never PINS a core — it runs cool in the background. Time is
     // free (this is a queued background reviewer); a maxed core is not.
     if (work.length) await new Promise(function (r) { setTimeout(r, Math.min(THROTTLE_CAP_MS, Date.now() - _runT0)); });
   }
+  // Schedule BFS done. If the deep grind follows, RECYCLE to a fresh instance
+  // for it rather than an explicit --fe-boot-end free of g_boot_ctx: tearing
+  // down MS's async-heavy g_boot_ctx can trip the gc-leak assert and POISON the
+  // instance, so the deep grind's first callMain throws and the page learns
+  // ZERO @T→@H (observed: astLearned=0 on learn.microsoft.com). Dropping the
+  // old instance lets V8 reclaim its whole linear memory (the g_boot_ctx image
+  // included), and the deep grind boots its own g_deep_ctx on a CLEAN instance
+  // — exactly the pre-snapshot model (which left no persistent runtime before
+  // the deep grind). Review-only runs need no free: `m` is dropped on return.
+  _snap = null;
+  if (deep && m) {
+    m = null;
+    await new Promise(function (r) { setTimeout(r, 0); });
+    m = await freshInstance();
+  }
 
-  // DEEP pass (throttled, resumable): learn the unused/render-gated chunk
-  // endpoints (login-gated preheat) without pinning the core. The bundle
-  // boots ONCE into qjsmain's persistent runtime; each --fe-deep-step drives
-  // a small batch of orphan @T functions and reports how many remain, and we
-  // sleep between batches. One instance (bounded memory), low CPU duty.
-  var _deepStats = { steps: 0, rem: -1, stop: "n/a", total: -1,
+  // DEEP pass: learn the unused/render-gated chunk endpoints (login-gated
+  // preheat). ONE callMain drives the entire residue; the engine yields per
+  // orphan via JSPI (qjs_host_yield), so the host scheduler can rotate to a
+  // higher-priority fiber (live review, another page's grind) at every
+  // orphan boundary. Drain + persist run DURING each JSPI yield via
+  // _drainDeepStdout below — no JS-side outer batch loop, no DEEP_BATCH
+  // size knob, no DEEP_ROUND batch-count cap, no _maxDeep guard. A wasm
+  // trap mid-callMain throws → recycle to a fresh instance from the
+  // persisted driven-set and retry (the residue is whatever's not in
+  // /driven, so the recycle resumes the right tail).
+  // Phase breakdown captured at the BFS→deep boundary: bfsMs = whole schedule
+  // phase (boot + memcpy + drives), of which bootMs is the one snapshot boot,
+  // memcpyMs the cumulative restore cost, bcMs the one-time bytecode-compile.
+  // deepMs is filled in after the deep grind. Lets the popup show where real-
+  // bundle time actually goes (is the BFS or the deep grind dominant?).
+  var _bfsMs = Date.now() - t0;
+  var _deepStats = { steps: 0, rem: -1, stop: "n/a", total: -1, dnfThrew: 0, dnfRet: 0,
+    bfsMs: _bfsMs, bootMs: _tBootMs, memcpyMs: _tMemcpyMs, bcMs: _tBcMs, deepMs: 0, runs: runs,
     combinedKB: Math.round((code ? code.length : 0) / 1024),
     hasPreheatSrc: !!(code && code.indexOf("issues/preheat/index") >= 0) };
   if (deep && m) {
     var _dkey = _deepKey(code);
-    var _drem = 1, _dguard = 0, _dcur = _resume ? resumeCursor : 0, _lastPartialN = methods.size, _lastPartialSinks = securitySinks.length;
+    var _dcur = _resume ? resumeCursor : 0;
+    var _lastPartialN = methods.size, _lastPartialSinks = securitySinks.length;
+    var _lastProgTs = 0;              // last time the live deep-grind progress was streamed (UI cadence, not a learning bound)
+    var _stdoutCursor = 0;            // index into stdout: lines before this are already processed
+    var _lastPersistDrivenN = -1;     // driven set size at last successful prog-put
+    var _drainBusy = false;           // reentrancy guard (drain awaits IDB; another yield may fire)
+    var _drem = -1;                   // last @DS rem we saw
     _deepStats.stop = "done";
     // Persist the combined bundle ONCE (heavy, ~18 MB) so a fresh worker can
-    // resume; the cursor is a tiny per-batch write below.
-    try { await _idbPut("code", { key: _dkey, code: code, scriptUrls: scriptUrls || null, pageHtml: pageHtml || null, sourceUrl: sourceUrl || "", scriptOffsets: scriptOffsets || null, sourceMapScripts: sourceMapScripts || null }); } catch (e) {}
-    try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now(), vts: _vts, driven: Array.from(_driven) }); } catch (e) {}
+    // resume. IDB failures must be visible — a silent QuotaExceededError on
+    // the 18 MB code-put leaves the resume state unwriteable and breaks
+    // cross-session continuity, but looks identical to "the grind finished"
+    // on the next session. Same for the prog-put: without it, the
+    // driven-set doesn't survive a worker eviction.
+    try { await _idbPut("code", { key: _dkey, code: code, scriptUrls: scriptUrls || null, pageHtml: pageHtml || null, sourceUrl: sourceUrl || "", scriptOffsets: scriptOffsets || null, sourceMapScripts: sourceMapScripts || null }); }
+    catch (e) {
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "idb_put_code_throw", key: _dkey, codeKB: Math.round((code ? code.length : 0) / 1024), err: String(e && e.message || e) });
+    }
+    try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now(), vts: _vts, driven: Array.from(_driven) }); _lastPersistDrivenN = _driven.size; }
+    catch (e) {
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "idb_put_prog_throw", key: _dkey, driven: _driven.size, err: String(e && e.message || e) });
+    }
     // Hand the engine the already-driven ids (from a prior session/batch) so its
     // first deep-step skips them — cross-session resume by driven-SET, not cursor.
-    if (_driven.size) { try { m.FS.writeFile("/driven", Array.from(_driven).join("\n")); } catch (e) {} }
-    while (_drem > 0 && _dguard++ < _maxDeep) {
-      stdout.length = 0; stderr.length = 0;
-      var _dT0 = Date.now();
-      var _args = ["--fe-deep-step=" + DEEP_BATCH];   // resume is via /driven (written above), not a cursor seek
-      try { m.callMain(_args.concat(fileArgs)); }
-      catch (e) { _deepStats.stop = "throw:" + ((e && e.message) || e); break; }
-      _drem = -1;
-      for (var _di = 0; _di < stdout.length; _di++) {
-        var _ln = stdout[_di];
-        if (_ln.slice(0, 4) === "@DS ") { try { var _ds = JSON.parse(_ln.slice(4)); _drem = _ds.rem; if (typeof _ds.cur === "number") _dcur = _ds.cur; } catch (e) { _drem = 0; } }
-        else if (_ln.slice(0, 4) === "@DD ") { var _did = _ln.slice(4).trim(); if (_did) _driven.add(_did); }   // function driven → driven-set (persisted for resume)
+    if (_driven.size) {
+      try { m.FS.writeFile("/driven", Array.from(_driven).join("\n")); }
+      catch (e) {
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "driven_file_write_throw", n: _driven.size, err: String(e && e.message || e) });
       }
-      processStdout();                       // aggregate this batch's @H/@S/@T
-      _deepStats.steps++; _deepStats.rem = _drem;
-      if (_deepStats.total < 0 && _drem >= 0) _deepStats.total = _drem + DEEP_BATCH;   // ≈ residue size
-      try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now(), vts: _vts, driven: Array.from(_driven) }); } catch (e) {}   // durable cursor
-      // Stream what this batch learned to the UI instead of waiting for the
-      // whole (minutes-long) grind. Fire on: (a) new endpoints OR new SECURITY
-      // SINKS (the highest-value growth — sink-reaching fns can fire @S without
-      // an endpoint, so an endpoint-only trigger would miss them); OR (b) a step
-      // interval / completion, so the deep-status PROGRESS bar keeps advancing
-      // even through long runs of orphans that add nothing learnable (otherwise
-      // the bar freezes at the last new-endpoint step and looks stalled). The
-      // merge is cheap for partials (doNames=false → no source-map fetch).
-      var _progressTick = (_deepStats.steps % 8 === 0) || _drem === 0;
-      if (methods.size > _lastPartialN || securitySinks.length > _lastPartialSinks || _progressTick) {
-        _lastPartialN = methods.size;
-        _lastPartialSinks = securitySinks.length;
-        try { var _pres = _buildResult(); await _resolveSmNames(_pres.fetchCallSites, scriptOffsets, sourceMapScripts); postMessage({ _partial: true, sourceUrl: sourceUrl || "", response: { success: true, result: _pres } }); } catch (e) {}
-      }
-      if (_yieldDeep) { _deepStats.stop = "yielded@step" + _deepStats.steps; break; }   // a live review preempts — cursor saved, resume after
-      if (instAborted) { _deepStats.stop = "abort@step" + _deepStats.steps; break; }
-      if (_drem < 0) { _deepStats.stop = "no-@DS@step" + _deepStats.steps; _drem = 0; }
-      if (_drem > 0) await new Promise(function (r) { setTimeout(r, Math.min(THROTTLE_CAP_MS, Date.now() - _dT0)); });
     }
-    try { m.callMain(["--fe-deep-end"]); } catch (e) {}
-    if (_drem === 0) { try { await _idbDel("prog", _dkey); await _idbDel("code", _dkey); } catch (e) {}   // done → drop resume state
-      try { var _tc = Array.from(_smChunksTouched); for (var _tci = 0; _tci < _tc.length; _tci++) await _idbDel("smaps", _tc[_tci]); } catch (e) {}   // grind finished all stages → drop this page's source maps + their JS (kept only during learning)
+    /* Drain stdout incrementally from _stdoutCursor onward: aggregate new
+       @DD into _driven, parse the latest @DS for `rem`, run processStdout
+       on the new tail to capture @H/@T/@S/@WHY/@E/@P/@Z, and persist the
+       prog record + partial result when the driven set advanced. Bound
+       to this forcedAnalyze's closure so per-instance state (stdout,
+       methods, _driven, _dkey, …) is the right one. The qjs_host_yield
+       Promise body invokes this synchronously on every per-orphan yield,
+       and the post-callMain final-drain call below catches the tail. */
+    async function _drainDeepStdout() {
+      if (_drainBusy) return;   // reentrancy: an awaited IDB put yields → another fiber's yield may invoke us before we finish
+      _drainBusy = true;
+      try {
+        for (var _di = _stdoutCursor; _di < stdout.length; _di++) {
+          var _ln = stdout[_di];
+          if (_ln.slice(0, 4) === "@DS ") {
+            try { var _ds = JSON.parse(_ln.slice(4)); _drem = _ds.rem; if (typeof _ds.cur === "number") _dcur = _ds.cur;
+              // Driving-completeness frontier counts: host-bearing @T functions
+              // directed-driven that fired no host call (threw before fetch, or
+              // returned without one). Per-grind cumulative — surfaced in
+              // deep-status so the non-firing residue is visible, not silent.
+              if (typeof _ds.dnfThrew === "number") _deepStats.dnfThrew = _ds.dnfThrew;
+              if (typeof _ds.dnfRet === "number") _deepStats.dnfRet = _ds.dnfRet; }
+            catch (e) {
+              /* @DS JSON parse failure — leave _drem at its last value rather
+                 than falling back to 0 (which would falsely look like a
+                 completed grind to the cleanup branch). Surface so engine-
+                 side serialization bugs are diagnosable. */
+              if (!self._whyRecords) self._whyRecords = [];
+              self._whyRecords.push({ phase: "ds_parse_throw", line: _ln.slice(0, 200), err: String(e && e.message || e) });
+            }
+          } else if (_ln.slice(0, 4) === "@DD ") {
+            var _did = _ln.slice(4).trim();
+            if (_did) _driven.add(_did);
+          } else if (_ln.slice(0, 8) === "@DTOTAL ") {
+            // Residue size emitted at grind start → live `total` so the popup
+            // shows done/total/% DURING the grind, not just the vague cross-tab
+            // line until @DS at the end.
+            var _tt = parseInt(_ln.slice(8), 10);
+            if (_tt >= 0) _deepStats.total = _tt;
+          }
+        }
+        // Aggregate this drain's @H/@T/@S/@WHY/@E/@P/@Z into the shared
+        // learning state. processStdout reads from _stdoutCursor through
+        // stdout.length, then advances the cursor — so each line is
+        // processed exactly once across the grind.
+        processStdout(_stdoutCursor);
+        _stdoutCursor = stdout.length;
+        if (_driven.size !== _lastPersistDrivenN) {
+          _deepStats.steps++;
+          // LIVE progress: with @DTOTAL (residue size) known from grind start,
+          // rem = total - driven count, recomputed each drain so the popup
+          // shows done/total/% DURING the grind. Fall back to the end-of-grind
+          // @DS rem (and derive total from it) when no @DTOTAL was seen
+          // (older engine / step mode).
+          if (_deepStats.total >= 0) _deepStats.rem = Math.max(0, _deepStats.total - _driven.size);
+          else { _deepStats.rem = _drem; if (_drem >= 0) _deepStats.total = _drem + _driven.size; }
+          try { await _idbPut("prog", { key: _dkey, cur: _dcur, ts: Date.now(), vts: _vts, driven: Array.from(_driven) }); _lastPersistDrivenN = _driven.size; }
+          catch (e) {
+            /* Durable-cursor write — silently failing here means resume
+               across MV3 eviction restarts the grind from an EARLIER
+               driven-set, redriving fns that already fired @H. The grind
+               eventually converges via dedup, but the engine wastes
+               callMains. Surface so quota/IDB-locked is diagnosable. */
+            if (!self._whyRecords) self._whyRecords = [];
+            self._whyRecords.push({ phase: "idb_put_prog_step_throw", step: _deepStats.steps, driven: _driven.size, err: String(e && e.message || e) });
+          }
+          // Stream what this drain learned to the UI. Fire when new endpoints
+          // or sinks appeared (the highest-value growth) — the live-pick
+          // order means useful network-reaching orphans come early, so the
+          // UI fills in fast even through long-running grinds. The merge is
+          // cheap for partials (doNames=false → no source-map fetch).
+          // Stream on endpoint/sink growth (the high-value signal) OR on a
+          // ~2s cadence once the grind is active (total>=0) so the live
+          // progress %/driven count keeps refreshing through the long
+          // unproductive-orphan tail — otherwise the popup % freezes between
+          // endpoint-growths and the grind looks stuck. The 2s is a UI refresh
+          // cadence, NOT a learning bound: every orphan still drives; this only
+          // paces how often progress is posted.
+          var _nowMs = Date.now();
+          if (methods.size > _lastPartialN || securitySinks.length > _lastPartialSinks ||
+              (_deepStats.total >= 0 && _nowMs - _lastProgTs >= 2000)) {
+            _lastPartialN = methods.size;
+            _lastPartialSinks = securitySinks.length;
+            _lastProgTs = _nowMs;
+            try { var _pres = _buildResult(); await _resolveSmNames(_pres.fetchCallSites, scriptOffsets, sourceMapScripts); postMessage({ _partial: true, sourceUrl: sourceUrl || "", response: { success: true, result: _pres } }); }
+            catch (e) {
+              /* Partial-result emission failed — surface so a serialization
+                 gap (e.g. an opaque marker reaching JSON.stringify, or a
+                 name-resolver throwing on a malformed sourcemap) is
+                 visible. The grind continues. */
+              if (!self._whyRecords) self._whyRecords = [];
+              self._whyRecords.push({ phase: "partial_emit_throw", step: _deepStats.steps, err: String(e && e.message || e) });
+            }
+          }
+        }
+      } finally {
+        _drainBusy = false;
+      }
+    }
+    /* Register the drain on this instance's huntContext so qjs_host_yield
+       can call it BEFORE pushing the suspending Promise resolve into
+       _fiberQ. The yield body in freshInstance reads ctx.onYieldDrain;
+       a null/missing hook (review fibers) makes it a no-op. */
+    huntContext.onYieldDrain = _drainDeepStdout;
+    /* Outer loop iterates only on recycle (wasm trap / abort / cumulative
+       memory growth past 2× baseline) — the engine's own loop drives every
+       remaining orphan in one callMain, JSPI-yielding per orphan. Without
+       a recycle path, an OOM mid-grind would lose the rest of the
+       residue. The /driven file is rewritten into the fresh instance, so
+       the retry skips already-driven fns. */
+    var _dpBaselineBytes = 0;
+    var _grindDone = false;
+    while (!_grindDone) {
+      stdout.length = 0; stderr.length = 0;
+      _stdoutCursor = 0;
+      var _dpCallThrew = false;
+      try { await m.callMain(["--fe-deep-grind"].concat(fileArgs)); }
+      catch (e) {
+        /* Wasm trap (e.g. monotonic memory.grow saturating Chrome's per-
+           instance cap, abort from JS_FreeRuntime's debug assert on heavy
+           teardown). The residue is whatever's not in /driven; recycle the
+           instance and retry. */
+        _dpCallThrew = true;
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size });
+      }
+      // Final drain for any lines after the last JSPI yield (e.g. the
+      // closing @DS the engine emits before returning from main).
+      await _drainDeepStdout();
+      var _dpRecycleReason = null;
+      if (instAborted) _dpRecycleReason = "abort";
+      else if (_dpCallThrew) _dpRecycleReason = "wasm_trap";
+      else if (_drem > 0) {
+        /* callMain returned cleanly but residue still has uncovered fns —
+           memory recycle proactively if we crossed the 2× baseline threshold
+           (same monotonic-memory ratchet as the BFS schedule loop). */
+        var _dpMemNow = wasmBytes(m);
+        if (_dpBaselineBytes === 0) _dpBaselineBytes = _dpMemNow;
+        else if (_dpMemNow > _dpBaselineBytes * 2) _dpRecycleReason = "mem_growth";
+        else _dpRecycleReason = "callmain_returned_with_residue";   // shouldn't happen on the grind path
+      }
+      if (_drem === 0) { _grindDone = true; break; }
+      if (_dpRecycleReason) {
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "deep_recycle", reason: _dpRecycleReason, step: _deepStats.steps, rem: _drem });
+        m = null;
+        await new Promise(function (r) { setTimeout(r, 0); });
+        m = await freshInstance();
+        huntContext.onYieldDrain = _drainDeepStdout;
+        if (_driven.size) {
+          try { m.FS.writeFile("/driven", Array.from(_driven).join("\n")); }
+          catch (e) {
+            if (!self._whyRecords) self._whyRecords = [];
+            self._whyRecords.push({ phase: "driven_file_recycle_throw", n: _driven.size, step: _deepStats.steps, err: String(e && e.message || e) });
+          }
+        }
+        _dpBaselineBytes = 0;
+        instAborted = false;
+      } else {
+        /* No recycle reason and residue not zero — engine returned without
+           making progress. Surface so a stuck callMain (e.g. host stub
+           hanging the grind) is visible, then exit so we don't spin. */
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "deep_callmain_no_progress", drem: _drem, drivenN: _driven.size });
+        _deepStats.stop = "no-progress";
+        break;
+      }
+    }
+    huntContext.onYieldDrain = null;
+    try { await m.callMain(["--fe-deep-end"]); }
+    catch (e) {
+      /* Final --fe-deep-end on a recycled/aborted instance — the engine
+         call to release the deep-cache (qjs_deep_free) can throw if the
+         wasm was poisoned. wasm GC reclaims everything on instance
+         disposal, so functionally fine, but a throw on a HEALTHY instance
+         is a host-model gap worth seeing. */
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "deep_end_throw", err: String(e && e.message || e), instAborted: !!instAborted });
+    }
+    if (_grindDone) {
+      try { await _idbDel("prog", _dkey); await _idbDel("code", _dkey); }
+      catch (e) {
+        /* Cleanup-on-completion IDB delete failed — the resume state stays
+           in IDB, so on next session the worker will REPLAY a completed
+           grind (re-driving every function). Functionally idle — the
+           driven-SET prevents re-work — but wastes a wasm boot. */
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "idb_del_done_throw", key: _dkey, err: String(e && e.message || e) });
+      }
+      try { var _tc = Array.from(_smChunksTouched); for (var _tci = 0; _tci < _tc.length; _tci++) await _idbDel("smaps", _tc[_tci]); }
+      catch (e) {
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "idb_del_smaps_throw", n: _smChunksTouched.size, err: String(e && e.message || e) });
+      }
     }
   }
 
@@ -940,6 +1798,11 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       method: mm.method, url: mm.path, params: params,
       headers: mm.headers || {}, loc: mm.loc, callChain: mm.chain,
       bframes: mm.bframes || [], enclosingFunction: null, kind: mm.kind,
+      // Binary body bytes + magic-byte-sniffed protocol guess. Present
+      // only when the bundle sent an ArrayBuffer/TypedArray body. The
+      // brain runs the protocol-specific decoder (lib/protobuf.js for
+      // protobuf/grpc-web) to extract per-field values from the bytes.
+      bodyBinary: mm.bodyBinary || null,
     });
     focusedView.push({
       kind: "endpoint", title: mm.method + " " + mm.path,
@@ -984,6 +1847,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     }
   });
 
+  _deepStats.deepMs = (Date.now() - t0) - _bfsMs;   // deep-grind phase (total minus the BFS phase)
   return {
     fetchCallSites: fetchCallSites,
     securitySinks: securitySinks,
@@ -1005,7 +1869,16 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   };
   }
   var _fr = _buildResult();
-  try { await _resolveSmNames(_fr.fetchCallSites, scriptOffsets, sourceMapScripts); } catch (e) {}
+  try { await _resolveSmNames(_fr.fetchCallSites, scriptOffsets, sourceMapScripts); }
+  catch (e) {
+    /* Final source-map name resolution failed — surface the diagnostic so a
+       parse error (malformed map JSON, missing sourcesContent, traceMapping
+       version skew) is visible. Without this the popup shows minified path
+       params (e/a) and the reviewer can't tell whether they're genuinely
+       unresolvable (no map shipped) or a fixable resolver gap. */
+    if (!self._whyRecords) self._whyRecords = [];
+    self._whyRecords.push({ phase: "resolve_sm_names_throw", err: String(e && e.message || e), nFcs: (_fr.fetchCallSites || []).length });
+  }
   return _fr;
 }
 
@@ -1015,22 +1888,103 @@ onmessage = function (e) {
 
   function done(response) { postMessage({ _id: id, response: response }); }
 
+  if (msg.type === "SET_ANALYSIS_OPTS") {
+    /* Cooling + pool-size knobs from the popup. yieldThrottleMs caps the
+       schedule-loop's per-run sleep (the existing self._throttleCapMs;
+       0 = no throttle = max throughput). maxWorkers is a pool-shape
+       knob owned by ast-worker.js (the dispatcher) — workers don't know
+       their own pool size, so we just record it on self for telemetry. */
+    var opts = msg.opts || {};
+    if (typeof opts.yieldThrottleMs === "number" && opts.yieldThrottleMs >= 0) {
+      self._throttleCapMs = opts.yieldThrottleMs | 0;
+    }
+    if (typeof opts.maxWorkers === "number") {
+      self._poolMaxWorkers = opts.maxWorkers | 0;
+    }
+    return;   // no _id reply expected (broadcast from dispatcher)
+  }
+
   if (msg.type === "AST_ANALYZE") {
-    // High-priority live page review. Queue it and, if the background deep
-    // grind is running, signal it to YIELD at the next batch boundary (its
-    // cursor is already persisted to IndexedDB, so it resumes afterward). The
-    // review never waits for the deep dive to finish, and the two never run
-    // concurrently — so the device never carries two wasm instances / two
-    // drives at once (the overheating failure mode).
+    // A live review IS a focus signal — the brain dispatches this on
+    // page-loaded for the active tab, so the page becoming reviewable
+    // IS the page the user is now on. Update _activePageKey so the
+    // cross-page priority scheduler's first lexicographic dimension
+    // resumes this page's fibers preferentially over background deep
+    // grinds for older pages. The URL identity is browser-verified
+    // (the brain's NAV handler set it from chrome.webNavigation).
+    if (msg.sourceUrl) self._activePageKey = String(msg.sourceUrl).split("#")[0];
     _reviewQ.push({ id: id, msg: msg });
-    // Preempt ANY in-progress deep grind — the background resume rotation
-    // (`_deepRunning`) AND a live review now running to completion (`_busy`).
-    // The deep loop checks `_yieldDeep` each batch and breaks (cursor/driven-set
-    // already persisted), so the newer page's review starts within one batch
-    // instead of waiting out the prior page's full ~100 s grind.
-    if (_deepRunning || _busy) _yieldDeep = true;
-    _deepRound.length = 0;   // a new page visit changes recency → rebuild the rotation round so it leads next
+    // No need for a JS-side preempt flag: a new review's fiber competes in
+    // the suspended-fiber queue, and flowCmp's active-page-focus dimension
+    // wins over background-page grinds at the next per-orphan JSPI yield.
+    // The IDB-resume launcher (_resumeIncompleteDeep) already skips keys
+    // whose grind fiber is in flight (_deepGrindRunning), so a new review
+    // here doesn't re-kick its own grind on top of the running one.
     _pump();
+    return;
+  }
+
+  if (msg.type === "GET_SCHED_TIMINGS") {
+    done({ success: true, result: self._schedTimings || [] });
+    return;
+  }
+
+  if (msg.type === "GET_FIBER_STATE") {
+    /* Read-only snapshot of the scheduler state so the harness can verify
+       that paused fibers are actually being picked by priority, not
+       resumed FIFO. The fiber-queue is the cross-page priority queue. */
+    var fq = (self._fiberQ || []).map(function (e) {
+      return {
+        pageKey: e.ctx && e.ctx.pageKey,
+        type: e.ctx && e.ctx.type,
+        vts: e.ctx && e.ctx.vts,
+        reaches: e.reaches,
+        recentEmissions: e.recentEmissions,
+        ts: e.ts,
+      };
+    });
+    done({ success: true, result: {
+      activePageKey: self._activePageKey || null,
+      fiberQ: fq,
+      totalSuspended: fq.length,
+    } });
+    return;
+  }
+
+  if (msg.type === "DEEP_FOCUS") {
+    // Tab switched to an already-loaded page: bump that page's visit recency
+    // (vts) so _resumeIncompleteDeep's recency-ordered round puts its incomplete
+    // grind FIRST next round — relevance follows the tab you're actually viewing,
+    // not only the last one navigated. Resume is by driven-SET (ids), so the
+    // reorder never re-drives or skips. Match on the code record's sourceUrl.
+    // Also set _activePageKey so the cross-page priority scheduler's FIRST
+    // lexicographic dimension (active-page-focus) preempts all other flows
+    // for the currently-viewed page — JSPI yields between the focused page's
+    // wasm and any others give the focused page every resume until it yields.
+    self._activePageKey = msg.pageUrl ? String(msg.pageUrl).split("#")[0] : null;
+    done({ success: true });
+    (async function () {
+      try {
+        var keys = await _idbAllKeys("code");
+        for (var i = 0; i < keys.length; i++) {
+          var cr = await _idbGet("code", keys[i]);
+          if (cr && cr.sourceUrl && String(cr.sourceUrl).split("#")[0] === msg.pageUrl) {
+            var pr = await _idbGet("prog", keys[i]);
+            if (pr) { pr.vts = Date.now(); await _idbPut("prog", pr); }
+            break;
+          }
+        }
+      } catch (e) {
+        /* DEEP_FOCUS handler — bumping `vts` for the focused page's resumable
+           grind so the cross-page rotation picks it next. An IDB failure here
+           means the focused page DOESN'T jump the rotation queue, so the
+           reviewer sees the WRONG page being ground when they tab-switch.
+           Diagnose so a quota / lock condition is visible. */
+        if (!self._whyRecords) self._whyRecords = [];
+        self._whyRecords.push({ phase: "deep_focus_vts_throw", pageUrl: msg.pageUrl, err: String(e && e.message || e) });
+      }
+      _pump();   // idle → pick up the now-leading focused grind
+    })();
     return;
   }
 
@@ -1054,92 +2008,211 @@ onmessage = function (e) {
   } else if (msg.type === "AST_EXTRACT_TYPES") {
     try { response = { success: true, result: extractTypesFromSources(msg.sourcesContent, msg.sources) }; }
     catch (err) { response = { success: false, error: err.message, stack: err.stack }; }
+  } else if (msg.type === "GET_LAST_STDERR") {
+    response = { success: true, result: { lines: (self._lastStderr || []).slice(-200), why: self._whyRecords || [] } };
   } else {
     response = { success: false, error: "Unknown message type: " + msg.type };
   }
   done(response);
 };
 
-// ── Two-tier preemptible scheduler ───────────────────────────────────────
-// The worker is single-threaded, so exactly one task runs at a time. Live
-// page reviews (_reviewQ) are HIGH priority; the background deep grind (learn
-// the unused/login-gated chunk surface across MV3 worker lifetimes, resumed
-// from the IndexedDB cursor) is LOW priority and PREEMPTIBLE. A review
-// arriving mid-grind sets _yieldDeep → the grind stops at the next batch
-// boundary (cursor saved) → the review runs → the grind resumes from its
-// saved cursor. Nothing overlaps, so the device never runs two wasm instances
-// / two drives at once. This is the "low-effort findings on a new visit show
-// even while a past site's deep dive is in flight, then it resumes" tier.
-var _busy = false;          // a live review is running
-var _deepRunning = false;   // the background deep grind is running
-var _yieldDeep = false;     // preempt signal: deep grind stops at next batch
+// ── Preemptible JSPI-fiber scheduler ─────────────────────────────────────
+// One worker thread runs wasm at a time, but MULTIPLE wasm fibers can be
+// suspended concurrently — each forcedAnalyze's qjs_host_yield enqueues an
+// entry in self._fiberQ. priority.js's flowCmp picks the next paused fiber
+// to resume on each macrotask turn: active-page-focus > reaches host edge >
+// recent emissions > visit recency > anti-starvation ts. A new live review
+// arrives → _reviewQ.push + _pump kicks the review's forcedAnalyze; its
+// fiber competes in _fiberQ with whatever deep grinds are already paused
+// there, and flowCmp's active-page focus dimension picks the review next
+// at every JSPI yield of the running fiber. No JS-side preempt flag, no
+// batch loop — preemption is the comparator's job.
 var _reviewQ = [];          // pending high-priority reviews
-var DEEP_ROUND = 20;        // batches a grind advances per rotation cycle before yielding to the next page
-var _deepRound = [];        // keys remaining in the current recency-ordered rotation round (cross-page fairness)
 
+/* Fiber yield drain. The wasm's JSPI suspension creates a Promise per
+   yield; this hook resolves it after the worker's MACROTASK queue gets
+   a turn — i.e., after pending message events (new AST_ANALYZE, brain
+   RPC replies) dispatch. queueMicrotask was wrong
+   (the wasm's resume queues another microtask immediately, the worker's
+   message queue never dispatches); setTimeout(0) was wrong (clamps to
+   1-4ms per yield → 100%+ overhead at 1000 yields/sec). MessageChannel
+   posts a real macrotask without the timeout clamp, ~10us each — the
+   worker's message queue gets a turn between every wasm yield and
+   resume, while overhead stays acceptable. The orchestrator layer can
+   replace this with a priority-aware version that DELAYS resume for
+   lower-priority fibers. */
+/* Cross-page paused-fiber comparator lives in lib/priority.js — see that file
+   for the lexicographic dimensions. This module-level binding stays so call
+   sites here read `_flowCmp(a, b)` unchanged; the activePageKey closure is
+   provided once per call. */
+self._activePageKey = null;   // updated by DEEP_FOCUS / NAV: the user's current page wins all ties
+function _flowCmp(a, b) { return self._priorityCmp.flowCmp(a, b, self._activePageKey); }
+var _yieldMC = new MessageChannel();
+_yieldMC.port1.onmessage = function () {
+  /* Resolve the SINGLE highest-priority paused fiber per macrotask turn.
+     Others stay suspended (their wasm stacks preserved by JSPI). When
+     the resumed fiber yields next, we run the comparator again — at
+     that point the resumed fiber's recentEmissions / reaches values
+     have shifted, possibly changing the winner. */
+  /* Delegate pick to priority.js — same comparator as inline before, but
+     now the ORDER decision lives in the dedicated picker file. The fiber's
+     `wake` is whatever resume mechanism the entry was created with (Promise
+     resolve here; would be a postMessage in a multi-worker setup). */
+  var best = self._priorityCmp.pickFromFiberQueue(self._fiberQ, self._activePageKey);
+  if (!best) return;
+  if (best.ctx) best.ctx.lastResumed = Date.now();
+  best.resolve();
+  /* If MORE fibers are still queued, schedule another drain — the
+     just-resumed one will run until ITS next yield (op-poll heartbeat or
+     per-orphan), which gives the comparator new state. */
+  if (self._fiberQ.length > 0) _yieldMC.port2.postMessage(null);
+};
+self._yieldDrain = function (entry) {
+  /* Attach the most recent engine signals to this entry. The engine
+     emits @Y reaches=<bit> JUST BEFORE the JS-side yield call — the
+     per-instance stdout collector parses that line and stashes the
+     reachability bit on the instance's last-yield context, which we
+     read here. recentEndpoints / recentSecondary are computed by
+     comparing the instance's per-class emission counts to the values
+     at last yield, so flowCmp can prioritize endpoint-producing
+     fibers (goal #1) ahead of sink-producing ones (goal #10) while
+     keeping recentEmissions for any legacy consumer. */
+  if (entry.ctx) {
+    entry.reaches = entry.ctx.lastReaches ? 1 : 0;
+    var nowEp = (entry.ctx.totalEndpoints | 0);
+    var nowSec = (entry.ctx.totalSecondary | 0);
+    var nowE = (entry.ctx.totalEmissions | 0);
+    entry.recentEndpoints = nowEp - (entry.ctx.endpointsAtLastYield | 0);
+    entry.recentSecondary = nowSec - (entry.ctx.secondaryAtLastYield | 0);
+    entry.recentEmissions = nowE - (entry.ctx.emissionsAtLastYield | 0);
+    entry.ctx.endpointsAtLastYield = nowEp;
+    entry.ctx.secondaryAtLastYield = nowSec;
+    entry.ctx.emissionsAtLastYield = nowE;
+  } else {
+    entry.reaches = 1;   // unknown context → assume reachable so it gets a fair turn
+    entry.recentEndpoints = 0;
+    entry.recentSecondary = 0;
+    entry.recentEmissions = 0;
+  }
+  if (self._fiberQ.length === 1) _yieldMC.port2.postMessage(null);
+};
+
+/* PER-PAGE WASM, prioritized-hunting scheduler. Each page gets its own
+   wasm instance (forcedAnalyze's freshInstance) with isolated memory +
+   JSRuntime — pages NEVER share state. Each instance's callMain is a
+   JSPI fiber; when it calls qjs_host_yield the wasm stack is preserved
+   intact. The scheduler maintains a queue of suspended fibers across
+   ALL pages and resolves the HIGHEST-PRIORITY one's yield Promise next
+   — not the most-recent yield, not in arrival order. Concurrent flows
+   on the same wasm thread interleave at JSPI yield boundaries, not at
+   callMain boundaries.
+
+   Removed: _busy gate. Multiple forcedAnalyze can be in flight, one per
+   page; each has its own instance + own callMain Promise. The yield
+   queue (self._fiberQ) is GLOBAL — shared across pages. The drain hook
+   picks across all pages by priority. */
 function _pump() {
-  if (_busy || _deepRunning) return;       // a task owns the worker; it re-pumps when it finishes
-  if (_reviewQ.length) { var t = _reviewQ.shift(); _runReview(t.id, t.msg); return; }
-  setTimeout(_resumeIncompleteDeep, 300);  // idle → pick up any incomplete deep grind
+  // Live reviews start AS SOON AS they arrive — no gate.
+  while (_reviewQ.length) {
+    var t = _reviewQ.shift();
+    _runReview(t.id, t.msg);
+  }
+  // Kick the IDB-resume scan on the next macrotask. _resumeIncompleteDeep
+  // is re-entrant via the _deepGrindRunning set: keys whose fiber is
+  // already in flight are skipped, so launching from every _pump tick
+  // never double-spawns.
+  setTimeout(_resumeIncompleteDeep, 0);
 }
 
 function _runReview(id, msg) {
-  _busy = true;
-  _yieldDeep = false;   // fresh review owns the worker; any preempt flag set AFTER this point (by a newer visit) is honored, so a stale yield can't kill this grind on its first batch
-  function fin(resp) { _busy = false; postMessage({ _id: id, response: resp }); _pump(); }
-  // The active page IS the most-relevant work, so its deep grind runs to
-  // COMPLETION in this one booted instance (maxBatches=0 → unbounded) rather
-  // than a DEEP_ROUND slice. Capping the live review at one rotation cycle meant
-  // every later cycle RE-BOOTED the ~18 MB bundle (~3 s each) before driving its
-  // next 20 batches — so an endpoint deep in the residue (github's `preheat` sits
-  // at orphan ~1008/1108) needed ~17 re-boots and was never reached before the
-  // user gave up, even though native drives all 1108 in ONE boot (~65 s). It
-  // stays preemptible: `_yieldDeep` breaks the batch loop the instant a newer
-  // page's review arrives (cursor/driven-set persisted), and OTHER pages still
-  // make progress via the DEEP_ROUND-bounded `_resumeIncompleteDeep` rotation.
+  function fin(resp) { postMessage({ _id: id, response: resp }); _pump(); }
+  // The review's deep grind runs ONE callMain that drives every remaining
+  // orphan; the engine JSPI-yields per orphan so the host scheduler can
+  // rotate to another page's grind via priority.js's flowCmp at every
+  // orphan boundary. No `maxBatches` slice, no JS-side batch loop — the
+  // active-page focus tier in flowCmp keeps this review's fiber winning
+  // ties until it pauses on its own JSPI yield, then another page's
+  // grind can advance one orphan before the active-page fiber gets the
+  // next pick.
   forcedAnalyze(String(msg.code || ""), msg.sourceUrl || "", msg.scriptUrls || null,
     typeof msg.pageHtml === "string" ? msg.pageHtml : null, !!msg.seedOnly, !!msg.deep,
-    undefined, undefined, undefined, 0, msg.scriptOffsets || null, msg.sourceMapScripts || null)
+    undefined, undefined, undefined, msg.scriptOffsets || null, msg.sourceMapScripts || null)
     .then(function (result) { fin({ success: true, result: result }); })
     .catch(function (err) { fin({ success: false, error: (err && err.message) || String(err), stack: err && err.stack }); });
 }
 
 async function _resumeIncompleteDeep() {
-  if (_busy || _deepRunning || _reviewQ.length) return;   // reviews take priority; never overlap
-  // ROTATION across pages so no single page gets stuck running to completion
-  // while others wait. A "round" is every incomplete grind, ordered by visit
-  // recency (`vts`, set on the page visit, preserved across batches — NOT the
-  // per-batch `ts`). Each call advances ONE grind by a BOUNDED batch (DEEP_ROUND)
-  // then returns; the next call takes the next page in the round; when the round
-  // empties it's rebuilt from whatever's still incomplete (re-ordered by recency,
-  // picking up newly-visited pages). So most-recent goes first each round, every
-  // page makes progress every round, and each completes eventually (its record
-  // drops at rem=0). Most-useful-first WITHIN a page is the engine's usefulness
-  // sort; this is the cross-page half.
-  if (!_deepRound.length) {
-    var keys;
-    try { keys = await _idbAllKeys("prog"); } catch (e) { return; }
-    if (!keys || !keys.length) return;
-    var withTs = [];
-    for (var ki = 0; ki < keys.length; ki++) {
-      try { var pr = await _idbGet("prog", keys[ki]); } catch (e) { continue; }
-      if (pr) withTs.push({ k: keys[ki], vts: pr.vts || pr.ts || 0 });
-    }
-    if (!withTs.length) return;
-    withTs.sort(function (a, b) { return b.vts - a.vts; });   // most-recently-visited first
-    _deepRound = withTs.map(function (x) { return x.k; });
+  /* Default: ONE deep grind running at a time. Multiple concurrent grinds
+     would mean N concurrent wasm instances (each holds its bundle's
+     ~hundreds-of-MB linear memory + Z3 + Lexbor + JSRuntime), which on a
+     multi-page session blows the MV3 worker's memory ceiling. The cross-
+     page priority signal still works: switching tabs bumps that page's
+     vts via DEEP_FOCUS → the NEXT grind launch (after the current one
+     exits) picks the most-recent-vts incomplete grind. A live REVIEW for
+     a newly-visited page spawns its own short-lived wasm instance and
+     runs CONCURRENTLY with whatever grind is in flight (2 instances at
+     most: 1 review + 1 grind), and the JSPI fiber-queue interleaves them
+     per orphan via flowCmp's active-page focus tier. Parallel grinds
+     across pages are the UI option (cooling vs. throughput) — not the
+     default. */
+  if (!self._deepGrindRunning) self._deepGrindRunning = new Set();
+  if (self._deepGrindRunning.size > 0) return;
+  var keys;
+  try { keys = await _idbAllKeys("prog"); }
+  catch (e) {
+    if (!self._whyRecords) self._whyRecords = [];
+    self._whyRecords.push({ phase: "deep_resume_idb_keys_throw", err: String(e && e.message || e) });
+    return;
   }
-  var key = _deepRound.shift();
+  if (!keys || !keys.length) return;
+  var withTs = [];
+  for (var ki = 0; ki < keys.length; ki++) {
+    var pr = null;
+    try { pr = await _idbGet("prog", keys[ki]); }
+    catch (e) {
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "deep_resume_idb_read_throw", key: keys[ki], err: String(e && e.message || e) });
+      continue;
+    }
+    if (pr) withTs.push({ k: keys[ki], vts: pr.vts || pr.ts || 0 });
+  }
+  if (!withTs.length) return;
+  withTs.sort(self._priorityCmp.deepRoundCmp);   // most-recently-visited first
+  var key = withTs[0].k;
+  if (self._deepGrindRunning.has(key)) return;   // race-safety; size check above usually covers it
   var prog = null, codeRec = null;
-  try { prog = await _idbGet("prog", key); codeRec = await _idbGet("code", key); } catch (e) { _pump(); return; }
-  if (!prog || !codeRec || !codeRec.code) { try { await _idbDel("prog", key); await _idbDel("code", key); } catch (e) {} _pump(); return; }
-  _deepRunning = true; _yieldDeep = false;
+  try { prog = await _idbGet("prog", key); codeRec = await _idbGet("code", key); }
+  catch (e) {
+    if (!self._whyRecords) self._whyRecords = [];
+    self._whyRecords.push({ phase: "deep_resume_idb_read_throw", key: key, err: String(e && e.message || e) });
+    return;
+  }
+  if (!prog || !codeRec || !codeRec.code) {
+    try { await _idbDel("prog", key); await _idbDel("code", key); }
+    catch (e) {
+      if (!self._whyRecords) self._whyRecords = [];
+      self._whyRecords.push({ phase: "deep_resume_idb_cleanup_throw", key: key, err: String(e && e.message || e) });
+    }
+    setTimeout(_resumeIncompleteDeep, 0);   // try the next-most-recent key
+    return;
+  }
+  self._deepGrindRunning.add(key);
   try {
-    // Bounded to DEEP_ROUND batches: advance this page, then yield to the next.
-    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || [], DEEP_ROUND, codeRec.scriptOffsets || null, codeRec.sourceMapScripts || null);
+    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || [], codeRec.scriptOffsets || null, codeRec.sourceMapScripts || null);
     postMessage({ _resumed: true, sourceUrl: codeRec.sourceUrl || "", response: { success: true, result: result } });
-  } catch (e) { /* leave the record for a later retry */ }
-  finally { _deepRunning = false; }
-  _pump();   // → next page in the round (rotation), or a queued review, or refill the round
+  } catch (e) {
+    /* The grind fiber threw — prog/code IDB records remain so the next
+       _resumeIncompleteDeep tick retries. Surface so a stuck fiber is
+       visible instead of being silently re-queued. */
+    if (!self._whyRecords) self._whyRecords = [];
+    self._whyRecords.push({ phase: "deep_resume_grind_throw", key: key, err: String(e && e.message || e) });
+  } finally {
+    self._deepGrindRunning.delete(key);
+  }
+  setTimeout(_resumeIncompleteDeep, 0);   // chain to the next-most-recent incomplete grind
 }
-setTimeout(_resumeIncompleteDeep, 8000);
+// Initial IDB-resume kick on worker start: if a prior session left
+// incomplete grinds, launch them immediately. Re-entrancy is guarded by
+// _deepGrindRunning, so a NAV-triggered review that arrives concurrently
+// just adds its own fiber to the queue rather than double-launching.
+setTimeout(_resumeIncompleteDeep, 0);

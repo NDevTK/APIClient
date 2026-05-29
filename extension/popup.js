@@ -352,7 +352,13 @@ function gqlSyncVariablesFromTree(panelDiv) {
     if (r) fields.push(r);
   }
   const obj = gqlFieldTreeToJson(fields);
-  try { textarea.value = JSON.stringify(obj, null, 2); } catch (_) {}
+  try { textarea.value = JSON.stringify(obj, null, 2); }
+  catch (e) {
+    // gqlFieldTreeToJson should produce JSON-safe output, but a cycle or
+    // BigInt would throw. Surface so a malformed form tree is visible
+    // rather than the textarea silently staying stale.
+    console.warn("[popup:gql] JSON.stringify failed for form tree:", e && e.message || e);
+  }
 }
 
 function gqlRenderTabs() {
@@ -670,7 +676,16 @@ function mpGraphqlEditor(part) {
   const wrap = document.createElement("div");
   // Parse current value as GraphQL envelope to split query/variables/operationName.
   let parsed = null;
-  try { parsed = parseGraphQLRequest(part.editor.value || "{}"); } catch (_) {}
+  try { parsed = parseGraphQLRequest(part.editor.value || "{}"); }
+  catch (e) {
+    // The body might not be a GraphQL request at all (user typing free-form
+    // before structured editing kicks in) — that's expected and routes through
+    // the `op` fallback below using the raw editor value. But a real parse
+    // throw (vs returning null) means something unexpected; surface at debug
+    // so a malformed-envelope diagnosis is possible without spamming the
+    // common "free-form input" case (parseGraphQLRequest returns null there).
+    console.debug("[popup:gql_editor] parseGraphQLRequest threw:", e && e.message || e);
+  }
   const op = parsed?.operations?.[0] || { query: part.editor.value || "", variables: null, operationName: null };
 
   function field(label, value, rows) {
@@ -837,6 +852,59 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   document.getElementById("btn-clear").addEventListener("click", clearState);
+
+  // ⚙ Settings panel — toggles visibility; values flow to the offscreen brain
+  // (IDB-persisted) and propagate to the worker via SET_ANALYSIS_OPTS.
+  const settingsPanel = document.getElementById("panel-settings");
+  document.getElementById("btn-settings").addEventListener("click", () => {
+    const showing = settingsPanel.style.display !== "none";
+    settingsPanel.style.display = showing ? "none" : "block";
+  });
+  const yieldInput = document.getElementById("opt-yield-throttle-ms");
+  const yieldOut = document.getElementById("opt-yield-throttle-ms-val");
+  const workersInput = document.getElementById("opt-max-workers");
+  // Load current values from the brain (IDB-backed).
+  try {
+    const opts = await chrome.runtime.sendMessage({ type: "GET_ANALYSIS_OPTS" });
+    if (opts && typeof opts === "object") {
+      if (typeof opts.yieldThrottleMs === "number") {
+        yieldInput.value = String(opts.yieldThrottleMs);
+        yieldOut.value = String(opts.yieldThrottleMs);
+      }
+      if (typeof opts.maxWorkers === "number") {
+        workersInput.value = String(opts.maxWorkers);
+      }
+    }
+  } catch (e) {
+    /* GET_ANALYSIS_OPTS failed — surface so a brain handler gap isn't hidden.
+       The inputs stay at their HTML defaults so the panel is still usable. */
+    console.warn("[popup] GET_ANALYSIS_OPTS failed:", e && e.message || e);
+  }
+  yieldInput.addEventListener("input", () => {
+    yieldOut.value = yieldInput.value;
+  });
+  yieldInput.addEventListener("change", async () => {
+    try {
+      await chrome.runtime.sendMessage({
+        type: "SET_ANALYSIS_OPTS",
+        opts: { yieldThrottleMs: parseInt(yieldInput.value, 10) },
+      });
+    } catch (e) {
+      console.warn("[popup] SET_ANALYSIS_OPTS yieldThrottleMs failed:", e && e.message || e);
+    }
+  });
+  workersInput.addEventListener("change", async () => {
+    const v = parseInt(workersInput.value, 10);
+    if (!(v > 0)) return;
+    try {
+      await chrome.runtime.sendMessage({
+        type: "SET_ANALYSIS_OPTS",
+        opts: { maxWorkers: v },
+      });
+    } catch (e) {
+      console.warn("[popup] SET_ANALYSIS_OPTS maxWorkers failed:", e && e.message || e);
+    }
+  });
 
   // Data panel
   document
@@ -1034,32 +1102,33 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (key) headers[key] = val;
     }
 
+    // Local helper: apply form-field params to the URL's query string. canParse
+    // guard so an unparseable Send-tab URL stays as-is rather than catching a
+    // throw — the URL field's validity is checked upstream when the user types,
+    // so reaching here unparseable means a real bug we want surfaced.
+    function _applyFormParamsToUrl(rawUrl, params) {
+      if (!URL.canParse(rawUrl)) {
+        console.warn("[popup:send] URL.canParse(%s) failed — form params not applied", rawUrl);
+        return rawUrl;
+      }
+      const urlObj = new URL(rawUrl);
+      for (const [k, v] of Object.entries(params)) urlObj.searchParams.set(k, String(v));
+      return urlObj.toString();
+    }
     let body;
     if (httpMethod === "GET" || httpMethod === "DELETE") {
       // Collect URL params from form fields even for GET/DELETE
       if (bodyMode === "form") {
         const formValues = collectFormValues();
         if (Object.keys(formValues.params).length > 0) {
-          try {
-            const urlObj = new URL(url);
-            for (const [k, v] of Object.entries(formValues.params)) {
-              urlObj.searchParams.set(k, String(v));
-            }
-            url = urlObj.toString();
-          } catch (_) {}
+          url = _applyFormParamsToUrl(url, formValues.params);
         }
       }
       body = null;
     } else if (bodyMode === "form") {
       const formValues = collectFormValues();
       if (Object.keys(formValues.params).length > 0) {
-        try {
-          const urlObj = new URL(url);
-          for (const [k, v] of Object.entries(formValues.params)) {
-            urlObj.searchParams.set(k, String(v));
-          }
-          url = urlObj.toString();
-        } catch (_) {}
+        url = _applyFormParamsToUrl(url, formValues.params);
       }
       body = {
         mode: "form",
@@ -1227,13 +1296,18 @@ document.addEventListener("DOMContentLoaded", async () => {
         bodySize: r.rawBodyB64 ? Math.ceil((r.rawBodyB64.length * 3) / 4) : 0,
       };
 
-      // Parse query string from URL
-      try {
+      // Parse query string from URL — canParse guard so HAR export doesn't
+      // catch parse-validity throws. A malformed request.url means the request
+      // log captured something unparseable; preserve the entry but skip the
+      // queryString breakdown (HAR spec allows empty queryString array).
+      if (URL.canParse(r.url)) {
         const u = new URL(r.url);
         u.searchParams.forEach((v, k) => {
           request.queryString.push({ name: k, value: v });
         });
-      } catch (_) {}
+      } else {
+        console.debug("[popup:HAR] skipping queryString for unparseable url:", r.url);
+      }
 
       // Request body
       if (r.rawBodyB64) {
@@ -1404,7 +1478,12 @@ async function populateTabFilter() {
     if (logFilter !== "active" && logFilter !== "all") {
       select.value = String(logFilter);
     }
-  } catch (_) {}
+  } catch (e) {
+    // GET_TAB_LIST RPC failure or DOM manipulation throw — the popup's tab
+    // filter dropdown will be stale. Surface so the user-visible gap (only
+    // "Active Tab" / "All Tabs" available, no per-tab choices) is diagnosable.
+    console.warn("[popup:populateTabFilter] failed:", e && e.message || e);
+  }
 }
 
 // ─── Render ──────────────────────────────────────────────────────────────────
@@ -1427,17 +1506,70 @@ function renderDeepStatus() {
   const el = document.getElementById("deep-status");
   if (!el) return;
   const ds = tabData && tabData.deepStats;
-  if (!ds || typeof ds.total !== "number" || ds.total < 0) { el.style.display = "none"; return; }
-  const total = ds.total, rem = Math.max(0, ds.rem | 0);
-  const done = total - rem;
-  if (rem === 0) {
-    el.textContent = `Deep scan complete — ${total} unused functions explored`;
-    el.className = "deep-status done";
-  } else {
-    const pct = total > 0 ? Math.floor((done / total) * 100) : 0;
-    el.textContent = `Deep scan: ${done}/${total} unused functions (${pct}%) — learning hidden endpoints…`;
-    el.className = "deep-status active";
+  const all = (tabData && Array.isArray(tabData.allDeepStats)) ? tabData.allDeepStats : [];
+  // Per-tab summary line (the original signal — unchanged).
+  let head = "";
+  if (ds && typeof ds.total === "number" && ds.total >= 0) {
+    const total = ds.total, rem = Math.max(0, ds.rem | 0), done = total - rem;
+    if (rem === 0) {
+      head = `Deep scan complete — ${total} unused functions explored`;
+      el.className = "deep-status done";
+    } else {
+      const pct = total > 0 ? Math.floor((done / total) * 100) : 0;
+      head = `Deep scan: ${done}/${total} unused functions (${pct}%) — learning hidden endpoints…`;
+      el.className = "deep-status active";
+    }
   }
+  // Cross-tab background work — honest visibility into the rotation (which
+  // OTHER tabs have incomplete grinds, whether any paused for a higher-priority
+  // review). Display-only; the scheduler isn't user-controllable by design.
+  let crossHtml = "";
+  if (all.length > 1 || (all.length === 1 && (!ds || all[0].tabId !== ds.tabId))) {
+    const rows = all.map((s) => {
+      const total = s.total || 0;
+      const rem = Math.max(0, s.rem | 0);
+      const done = Math.max(0, total - rem);
+      const pct = total > 0 ? Math.floor((done / total) * 100) : 0;
+      let label;
+      if (total === 0) label = "queued";
+      else if (rem === 0) label = "complete";
+      else if (s.stop && s.stop.indexOf("yielded") === 0) label = "paused (preempted by a live review)";
+      else label = `${pct}% (${done}/${total})`;
+      const page = s.pageUrl ? new URL(s.pageUrl).hostname + new URL(s.pageUrl).pathname.replace(/\/$/, "") : ("tab " + s.tabId);
+      return `<div class="deep-row" title="${esc(s.pageUrl || "")}"><span class="deep-page">${esc(page.slice(0, 60))}</span> — <span class="deep-label">${esc(label)}</span></div>`;
+    }).join("");
+    crossHtml = `<details class="deep-cross-tab"><summary>Background work across tabs (${all.length})</summary>${rows}</details>`;
+  }
+  // Analyzer gaps (resolverErrors): host calls the forced-exec REACHED but
+  // couldn't resolve (fully-opaque URL/method), or host-model gaps (a bundle
+  // throw under the host model — a Web API not modelled correctly). Per
+  // CLAUDE.md these are P1 to close and MUST be visible, not console-only:
+  // they tell the reviewer "there's a fetch here the engine saw but couldn't
+  // pin down" — distinguishing a reached-but-unresolved endpoint from one the
+  // engine never reached at all.
+  let resolverHtml = "";
+  const rerrs = (tabData && Array.isArray(tabData.resolverErrors)) ? tabData.resolverErrors : [];
+  if (rerrs.length) {
+    const rows = rerrs.map((r) =>
+      `<div class="deep-row" title="${esc(r.message || "")}"><span class="deep-label">${esc((r.context || "gap") + ": " + (r.message || "").slice(0, 140))}</span></div>`
+    ).join("");
+    resolverHtml = `<details class="deep-cross-tab"><summary>Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})</summary>${rows}</details>`;
+  }
+  // Driving-completeness frontier: of the @T functions the deep grind
+  // directed-drove, how many fired NO host call — split threw (an opaque op
+  // raised before the fetch) vs returned (the host call's branch arm wasn't
+  // forced, or it's an event-gated handler registered-not-dispatched, or the
+  // opaque broke a deep call chain to a nested fetch). This is the precise
+  // residue the unused-feature surface is still hiding behind; surfacing the
+  // shape per CLAUDE.md's no-silent-zero rule turns "explored N functions" into
+  // "explored N, M of them reached no endpoint — and here's why".
+  let dnfHtml = "";
+  if (ds && ((ds.dnfThrew | 0) + (ds.dnfRet | 0)) > 0) {
+    const threw = ds.dnfThrew | 0, ret = ds.dnfRet | 0;
+    dnfHtml = `<div class="deep-row deep-dnf" title="Driven unused functions that fired no fetch/XHR/WebSocket. threw: an opaque op raised before the host call. returned: the host-call branch wasn't forced, or the handler is event-gated / behind a deep opaque-broken call chain.">${threw + ret} driven functions reached no endpoint (${threw} threw, ${ret} returned) — driving-completeness frontier</div>`;
+  }
+  if (!head && !crossHtml && !resolverHtml && !dnfHtml) { el.style.display = "none"; return; }
+  el.innerHTML = (head ? `<div class="deep-head">${esc(head)}</div>` : "") + dnfHtml + crossHtml + resolverHtml;
   el.style.display = "block";
 }
 
@@ -1832,7 +1964,15 @@ function _resumeInflightProbes(container) {
 async function _handleVerifyClick(btn) {
   const key = btn.dataset.findingKey;
   let probeData = {};
-  try { probeData = JSON.parse(btn.dataset.probe || "{}"); } catch (_) {}
+  try { probeData = JSON.parse(btn.dataset.probe || "{}"); }
+  catch (e) {
+    // The probe payload was set by renderSecurityPanel; a JSON.parse throw
+    // means an earlier serializer wrote malformed data into the data-attribute.
+    // Surface so the broken probe definition is visible (probeData stays {}
+    // and the exploit-verify dispatches with empty payload, which will fail
+    // probe-side — having the parse diagnostic narrows where to look).
+    console.warn("[popup:_handleVerifyClick] data-probe parse failed key=%s: %s", key, e && e.message || e);
+  }
   const card = btn.closest(".card");
   const resultEl = card ? card.querySelector('.probe-result') : null;
   if (!resultEl) return;
@@ -2133,9 +2273,22 @@ function renderSecurityPanel() {
 // ─── Send Panel ──────────────────────────────────────────────────────────────
 
 function renderSendPanel() {
-  // Fingerprint: skip rebuild if discovery docs haven't changed
+  // Fingerprint: skip rebuild if discovery docs haven't changed. Must include
+  // PER-DOC method count — when the AST analysis learns new methods on an
+  // existing service (e.g. github bundle drops more @H records on the same
+  // `github.com` service), docKeys.length stays the same but the dropdown
+  // is stale. Without the method-count sum, `renderMethodDropdown()` only
+  // fires on a new SERVICE, not new METHODS, so users see "-- select method --"
+  // after a fresh nav until manually re-rendering.
   const docKeys = tabData?.discoveryDocs ? Object.keys(tabData.discoveryDocs) : [];
-  const sendFp = docKeys.length + ":" + (tabData?.requestLog?.length || 0);
+  let methodSum = 0;
+  if (tabData?.discoveryDocs) {
+    for (const k of docKeys) {
+      const svc = tabData.discoveryDocs[k];
+      if (svc && svc.doc) methodSum += getDocMethods(svc.doc).length;
+    }
+  }
+  const sendFp = docKeys.length + "/" + methodSum + ":" + (tabData?.requestLog?.length || 0);
   if (sendFp === _lastSendFp) return;
   _lastSendFp = sendFp;
 
@@ -2257,7 +2410,33 @@ function renderMethodDropdown() {
               else if (hasAst) tag = " [ast]";
               else if (hasLive) tag = " [live]";
             }
-            opt.textContent = `[${m.httpMethod}] ${m.id}${tag}`;
+            // Substitute source-map-resolved param names into the displayed id
+            // (e.g. `github.com.{e}_{a}_issues_preheat_index` →
+            // `github.com.{owner}_{repo}_issues_preheat_index`) so the reviewer
+            // can read the endpoint without having to open the param panel to
+            // decode minified single-letter holes. The underlying option value
+            // and URL-substitution key stay minified to match the engine's
+            // `${e}` hole — only the human-visible textContent is rewritten.
+            //
+            // Parse the id with a regex-by-hole-name so we only rewrite at
+            // declared hole positions, not arbitrary `{e}` substrings — a
+            // string-level replace would also rewrite if a longer path
+            // template happened to contain `{e}` in another context. The path
+            // param is matched as a whole bracketed token bound by either
+            // start/end of string or the `.` / `_` separators that the method
+            // id uses for `/` (so `{eee}` doesn't get its inner `{e}` touched).
+            let displayId = m.id;
+            if (m.parameters) {
+              for (const pName in m.parameters) {
+                const p = m.parameters[pName];
+                if (p && p._sourceMapName && p.location === "path" && pName !== p._sourceMapName) {
+                  const esc = pName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                  const re = new RegExp("(^|[._/])\\{" + esc + "\\}(?=$|[._/])", "g");
+                  displayId = displayId.replace(re, "$1{" + p._sourceMapName + "}");
+                }
+              }
+            }
+            opt.textContent = `[${m.httpMethod}] ${displayId}${tag}`;
             opt.dataset.method = m.httpMethod;
             opt.dataset.isVirtual = "true";
             opt.dataset.svc = svcName;
@@ -2326,27 +2505,40 @@ function renderServiceOriginHint() {
   var pageUrls = svcData.pageUrls || [];
   if (pageUrls.length === 0) return;
 
-  // Check if any known page URL matches the current tab
+  // Check if any known page URL matches the current tab. URL parse failures
+  // here are EXPECTED — `tabUrl` may be a chrome:// page or empty, and stored
+  // `pageUrls` from older brain versions can be malformed; the fallback is to
+  // treat them as non-matching, which is the correct hint behavior. The catches
+  // stay bare here precisely because surfacing them would spam on every popup
+  // open. The OUTER availableFrames read is the only path where a throw means
+  // a real popup state bug (availableFrames should always be an array).
   var tabUrl = "";
   try {
     var tabs = availableFrames;
     if (tabs.length > 0) tabUrl = tabs[0].url;
-  } catch (_) {}
-  var tabOrigin = "";
-  try { tabOrigin = new URL(tabUrl).origin; } catch (_) {}
+  } catch (e) {
+    console.warn("[popup:renderServiceOriginHint] availableFrames read threw:", e && e.message || e);
+  }
+  // Use URL.canParse (WHATWG, standard since Chrome 120) so we don't catch
+  // throws as a parse-validity test — empty/chrome:// inputs short-circuit
+  // explicitly instead of going through exception flow. Root-cause fix for
+  // what would otherwise be two silent catches: an unparseable input is
+  // KNOWN AT THE GUARD, not discovered via throw.
+  var tabOrigin = (tabUrl && URL.canParse(tabUrl)) ? new URL(tabUrl).origin : "";
   var matchesCurrentTab = false;
   for (var i = 0; i < pageUrls.length; i++) {
-    try {
-      if (new URL(pageUrls[i]).origin === tabOrigin) { matchesCurrentTab = true; break; }
-    } catch (_) {}
+    if (pageUrls[i] && URL.canParse(pageUrls[i]) && new URL(pageUrls[i]).origin === tabOrigin) {
+      matchesCurrentTab = true; break;
+    }
   }
 
   if (matchesCurrentTab) return;
 
-  // Show hint with the most recent page URL
+  // Show hint with the most recent page URL — same canParse root-cause fix.
+  // Fallback to the raw lastUrl when it isn't a parseable URL (legacy stored
+  // entries can be just a hostname) is the correct display semantic.
   var lastUrl = pageUrls[pageUrls.length - 1];
-  var lastHostname = "";
-  try { lastHostname = new URL(lastUrl).hostname; } catch (_) { lastHostname = lastUrl; }
+  var lastHostname = (lastUrl && URL.canParse(lastUrl)) ? new URL(lastUrl).hostname : (lastUrl || "");
 
   var frameNote = "";
   var frameOrigins = svcData.frameOrigins || [];
@@ -2372,8 +2564,8 @@ function renderKeySelector() {
   var epSelect = document.getElementById("send-ep-select");
   var selectedOpt = epSelect?.options?.[epSelect.selectedIndex];
   var svc = selectedOpt?.dataset?.svc || "";
-  var hostname = "";
-  try { hostname = new URL(currentRequestUrl).hostname; } catch (_) {}
+  // Explicit canParse guard — same root-cause fix as renderServiceOriginHint.
+  var hostname = (currentRequestUrl && URL.canParse(currentRequestUrl)) ? new URL(currentRequestUrl).hostname : "";
 
   // Collect matching keys (same logic as collectKeysForService in background)
   var matchingKeys = [];
@@ -2740,10 +2932,19 @@ function buildFormFields(schema, initialData = null) {
     const hsec = el("div", "form-section");
     let hh = '<div class="form-section-label">Required Headers <span class="card-meta">(learned)</span></div>';
     for (const [hn, hv] of Object.entries(_rh)) {
-      const hval = (hv && hv.kind === "literal")
-        ? `<code>${esc(String(hv.value))}</code>`
-        : '<em class="card-meta">dynamic (set by app)</em>';
-      hh += `<div class="card-meta" style="display:flex;gap:8px;align-items:center;"><code>${esc(hn)}</code>: ${hval}</div>`;
+      if (hv && hv.kind === "literal") {
+        /* Literal: read-only display. sendRequest auto-attaches the
+           value from currentSchema.method.requiredHeaders so the user
+           doesn't need to retype it. */
+        hh += `<div class="card-meta" style="display:flex;gap:8px;align-items:center;"><code>${esc(hn)}</code>: <code>${esc(String(hv.value))}</code></div>`;
+      } else {
+        /* Opaque: editable input so the reviewer can paste in the
+           runtime value (CSRF token, signature, bearer) the analyzer
+           couldn't compute. The input carries data-required-header so
+           sendRequest's auto-attach loop reads it as a learned header
+           override; user-typed form headers still win above. */
+        hh += `<div class="card-meta" style="display:flex;gap:8px;align-items:center;"><code>${esc(hn)}</code>: <input type="text" class="opaque-header-input" data-required-header="${esc(hn)}" placeholder="dynamic — paste runtime value" style="flex:1;min-width:0"></div>`;
+      }
     }
     hsec.innerHTML = hh;
     container.appendChild(hsec);
@@ -3289,7 +3490,18 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
     // datalist (no orphaned <datalist> nodes accumulating in the DOM).
     const dlId = "astvals-" + (fieldDef.name || "field").replace(/[^A-Za-z0-9]/g, "_") + "-" + (category || "");
     inp.setAttribute("list", dlId);
-    if (initialValue !== null && initialValue !== undefined) inp.value = String(initialValue);
+    if (initialValue !== null && initialValue !== undefined) {
+      inp.value = String(initialValue);
+    } else if (fieldDef._astValidValues.length === 1) {
+      /* Single observed AST value AND no initialValue → prefill it.
+         The bundle only set this param one way during forced execution,
+         so the analyzer's confidence on this single value is highest.
+         For multi-valued params (>=2 distinct observed values) the
+         input stays empty so the user picks from the datalist; per
+         CLAUDE.md never auto-pick one of multiple observations as if
+         it were "the" value. */
+      inp.value = String(fieldDef._astValidValues[0]);
+    }
     const dl = document.createElement("datalist");
     dl.id = dlId;
     for (let i = 0; i < fieldDef._astValidValues.length; i++) {
@@ -3565,6 +3777,44 @@ async function sendRequest() {
     const key = row.querySelector(".header-key").value.trim();
     const val = row.querySelector(".header-val").value.trim();
     if (key) headers[key] = val;
+  }
+  /* Auto-attach learned required headers — the engine captured these
+     from the bundle's own fetch init.headers / XHR setRequestHeader
+     (per-header literal/opaque provenance). Without this, the popup
+     SHOWED the required headers in the form section but DIDN'T send
+     them, so replays of (for example) github preheat went out without
+     `Accept: application/json` and the server returned HTML instead of
+     JSON — the reviewer thought the endpoint was broken when actually
+     the replay was missing a header the analyzer had already learned.
+     Precedence (last-write-wins after this point): form-row headers >
+     opaque-input runtime values > learned literals. */
+  const _learnedRH = (currentSchema && currentSchema.method && currentSchema.method.requiredHeaders)
+                  || (currentSchema && currentSchema.endpoint && currentSchema.endpoint.requiredHeaders);
+  if (_learnedRH && typeof _learnedRH === "object") {
+    const _userKeysLc = new Set(Object.keys(headers).map(k => k.toLowerCase()));
+    for (const [hn, hv] of Object.entries(_learnedRH)) {
+      if (!hv || hv.kind !== "literal" || typeof hv.value !== "string") continue;
+      if (_userKeysLc.has(hn.toLowerCase())) continue;   // user form-row override wins
+      headers[hn] = hv.value;
+    }
+  }
+  /* Opaque-required-header inputs: the reviewer pastes runtime values
+     (CSRF token, bearer, signature) directly into the Required Headers
+     section. Each input carries data-required-header with the canonical
+     name. Empty values are skipped — the analyzer can't compute these,
+     and sending an empty header is worse than omitting it. User-typed
+     form-row headers still win (case-insensitive). */
+  for (const inp of document.querySelectorAll(".opaque-header-input")) {
+    const name = inp.dataset.requiredHeader;
+    const val = inp.value;
+    if (!name || !val) continue;
+    const lc = name.toLowerCase();
+    let overridden = false;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === lc) { overridden = true; break; }
+    }
+    if (overridden) continue;
+    headers[name] = val;
   }
 
   let body;
@@ -5196,7 +5446,12 @@ async function replayRequest(reqId, sourceTabId) {
               initialData = pbTreeToMap(jspbToTree(parsed));
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          // f.req JSPB extraction failed — expected for non-Google bodies.
+          // Falls through to plain-JSON attempt below; debug-log so a real
+          // serialization-shape bug is visible without spamming.
+          console.debug("[popup:send_load] f.req JSPB parse failed:", e && e.message || e);
+        }
         // Also try plain JSON body
         if (!initialData) {
           try {
@@ -5206,7 +5461,12 @@ async function replayRequest(reqId, sourceTabId) {
             if (json && typeof json === "object" && !Array.isArray(json)) {
               initialData = json;
             }
-          } catch (_) {}
+          } catch (e) {
+            // Plain JSON parse failed — body might be form-encoded or binary.
+            // The fallthrough `initialData = {}` below is the correct empty
+            // form state for "couldn't parse anything meaningful."
+            console.debug("[popup:send_load] plain JSON parse failed:", e && e.message || e);
+          }
         }
         if (!initialData) initialData = {};
       } else {
@@ -5271,7 +5531,13 @@ async function replayRequest(reqId, sourceTabId) {
         setBodyMode("graphql");
         gqlLoadOperations(gqlReq.operations, gqlReq.batched);
       }
-    } catch (_) {}
+    } catch (e) {
+      // isGraphQLUrl heuristically matched (often false-positive for
+      // /graphql-shaped URLs that aren't real GraphQL), so the body might
+      // not be a GraphQL envelope. parseGraphQLRequest returning null is the
+      // normal "not GraphQL" signal; a THROW here means something unexpected.
+      console.debug("[popup:send_load] GraphQL body load threw:", e && e.message || e);
+    }
   }
   if (!gqlDetected && !mpDetected) {
     // Form mode if schema was loaded, otherwise raw
@@ -5295,7 +5561,12 @@ async function replayRequest(reqId, sourceTabId) {
     try {
       const bytes = base64ToUint8(req.rawBodyB64);
       document.getElementById("send-raw-body").value = new TextDecoder().decode(bytes);
-    } catch (_) {}
+    } catch (e) {
+      // base64 decode or UTF-8 decode failed — the rawBodyB64 is malformed.
+      // The textarea stays empty (correct fallback for "can't display") but
+      // surface so a binary/corrupt body capture is diagnosable.
+      console.warn("[popup:send] raw body decode failed:", e && e.message || e);
+    }
   }
   // Populate historical response if available
   if (req.responseBody || req.status) {
@@ -5328,7 +5599,12 @@ async function replayRequest(reqId, sourceTabId) {
         try {
           const bytes = base64ToUint8(req.responseBody);
           bodyText = new TextDecoder().decode(bytes);
-        } catch (e) {}
+        } catch (e) {
+          // base64 / UTF-8 decode of historical body failed — bodyText stays
+          // as the raw base64 string. Downstream format parsing will likely
+          // also fail (and log), but surface here for traceability.
+          console.warn("[popup:historical] base64 decode failed for %s body: %s", mimeType, e && e.message || e);
+        }
       }
 
       if (isGrpcWeb(mimeType)) {
@@ -5350,7 +5626,11 @@ async function replayRequest(reqId, sourceTabId) {
             raw: bodyText,
             size: bytes.length,
           };
-        } catch (e) {}
+        } catch (e) {
+          // gRPC-Web frame extraction threw — surface so a corrupt captured
+          // body that the MIME type promised but couldn't deliver is visible.
+          console.debug("[popup:historical] gRPC-Web parse failed:", e && e.message || e);
+        }
       } else if (isJspb) {
         // JSPB (JSON+Protobuf): parse as JSON, convert to protobuf tree
         try {
@@ -5364,7 +5644,9 @@ async function replayRequest(reqId, sourceTabId) {
               isJspb: true,
             };
           }
-        } catch (e) {}
+        } catch (e) {
+          console.debug("[popup:historical] JSPB parse failed:", e && e.message || e);
+        }
       } else if (isBinaryProtobuf) {
         try {
           const bytes = req.responseBase64
@@ -5376,7 +5658,9 @@ async function replayRequest(reqId, sourceTabId) {
             raw: req.responseBody,
             size: bytes.length,
           };
-        } catch (e) {}
+        } catch (e) {
+          console.debug("[popup:historical] binary protobuf parse failed:", e && e.message || e);
+        }
       } else if (mimeType.includes("json") || mimeType.includes("text/plain") || mimeType.includes("javascript")) {
         try {
           // Strip Google XSSI prefix before parsing
@@ -5412,7 +5696,12 @@ async function replayRequest(reqId, sourceTabId) {
               size: bodyText.length,
             };
           }
-        } catch (e) {}
+        } catch (e) {
+          // JSON parse failure on a body the MIME type tagged as JSON/text/JS
+          // — common (servers misreport content-type), surface at debug so it's
+          // diagnosable without spamming on every misreported body.
+          console.debug("[popup:historical] JSON parse failed for %s body: %s", mimeType, e && e.message || e);
+        }
       }
 
       // SSE, NDJSON, multipart, and async chunked are detected by renderResultBody()

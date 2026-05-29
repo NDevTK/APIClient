@@ -218,6 +218,10 @@ function extractTypesFromFile(code, source) {
   }
 
   var t = BabelBundle.t;
+  // BabelBundle.traverse can throw on malformed AST (corrupt sourcemap-
+  // shipped sourcesContent). Surface the diagnostic so a type-extraction
+  // gap on a specific file is visible — without it, the user sees minified
+  // names with no clue why source-map enrichment didn't fire.
   try {
     BabelBundle.traverse(ast, {
       // Enum-like const objects: const MyEnum = { A: 0, B: 1 }
@@ -342,7 +346,9 @@ function extractTypesFromFile(code, source) {
         }
       },
     });
-  } catch (_) {}
+  } catch (e) {
+    if (typeof console !== "undefined") console.debug("[sourcemap:extractTypes] traverse failed for %s: %s", source, e && e.message || e);
+  }
 
   return types;
 }

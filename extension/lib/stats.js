@@ -42,24 +42,23 @@ function updateParamStats(stats, value) {
 }
 
 function detectFormat(stats, value) {
-  // date-time: parseable date with structural indicators
+  // date-time: parseable date with structural indicators. new Date(invalid)
+  // returns Invalid Date (NaN getTime) instead of throwing, so the try/catch
+  // is just defensive against unexpected platform behavior — the isNaN check
+  // is the real validity test. No try needed.
   if (value.length >= 8 && (value.includes("-") || value.includes("T"))) {
-    try {
-      const d = new Date(value);
-      if (!isNaN(d.getTime()) && d.getFullYear() > 1900 && d.getFullYear() < 2200) {
-        stats.formatHints["date-time"]++;
-      }
-    } catch (_) {}
+    const d = new Date(value);
+    if (!isNaN(d.getTime()) && d.getFullYear() > 1900 && d.getFullYear() < 2200) {
+      stats.formatHints["date-time"]++;
+    }
   }
 
-  // uri: valid URL with http(s) protocol
-  if (value.length >= 8 && (value.startsWith("http://") || value.startsWith("https://"))) {
-    try {
-      const u = new URL(value);
-      if (u.protocol === "http:" || u.protocol === "https:") {
-        stats.formatHints.uri++;
-      }
-    } catch (_) {}
+  // uri: canParse guard — root-cause fix for the URL-parse-as-validity test.
+  if (value.length >= 8 && (value.startsWith("http://") || value.startsWith("https://")) && URL.canParse(value)) {
+    const u = new URL(value);
+    if (u.protocol === "http:" || u.protocol === "https:") {
+      stats.formatHints.uri++;
+    }
   }
 
   // email: exactly one @ with text on both sides and a dot after @

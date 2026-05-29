@@ -33,6 +33,7 @@
       requestHeaders: d.requestHeaders || null,
       requestBody: d.requestBody || null,
       requestBodyBase64: d.requestBodyBase64 || false,
+      callStack: d.callStack || null,
     }, "body");
   });
   // Signal intercept.js that the relay is listening — replays buffered events
@@ -48,7 +49,13 @@
     if (!e.detail) return;
     try {
       chrome.runtime.sendMessage({ type: "PROBE_HIT", hit: e.detail });
-    } catch (_) {}
+    } catch (err) {
+      // Extension context invalidated (extension was reloaded after content.js
+      // injected) is the common cause — chrome.runtime is gone. Surface so a
+      // missing PROBE_HIT after a sink fires is diagnosable rather than looking
+      // like the probe failed to detect the exploit.
+      console.warn("[content:probe_hit] sendMessage failed:", err && err.message || err);
+    }
   });
 
   // ─── postMessage Listener ─────────────────────────────────────────────────
@@ -71,7 +78,15 @@
     port.addEventListener("message", (e) => {
       try {
         let body;
-        try { body = JSON.stringify(e.data); } catch (_) { body = String(e.data); }
+        try { body = JSON.stringify(e.data); }
+        catch (jsonErr) {
+          // structured-cloneable data may not round-trip JSON (BigInt, cycles,
+          // typed-array refs). Fall back to String() — still a learning signal
+          // about the message shape — but log the JSON failure so the request
+          // log can be checked for malformed bodies.
+          console.debug("[content:mc] JSON.stringify failed for mcId=%s: %s", mcId, jsonErr && jsonErr.message || jsonErr);
+          body = String(e.data);
+        }
         chrome.runtime.sendMessage({
           type: "RESPONSE_BODY",
           url: location.href,
@@ -83,7 +98,12 @@
           body: body,
           base64Encoded: false,
         });
-      } catch (_) {}
+      } catch (err) {
+        // Extension context invalidated or sendMessage failure — a MessageChannel
+        // RESPONSE_BODY is lost. Surface so missing channel traffic in the request
+        // log is diagnosable.
+        console.warn("[content:mc] sendMessage failed for mcId=%s: %s", mcId, err && err.message || err);
+      }
     });
     port.start();
   }
@@ -119,7 +139,13 @@
       const pmId = _pmChannels.get(from);
       if (event.source) _pmSources.set(from, event.source);
       let body;
-      try { body = JSON.stringify(event.data); } catch (_) { body = String(event.data); }
+      try { body = JSON.stringify(event.data); }
+      catch (jsonErr) {
+        // Same diagnostic as _instrumentPort above — non-JSON-cloneable
+        // data falls back to String() but the JSON failure is logged.
+        console.debug("[content:pm] JSON.stringify failed for pmId=%s: %s", pmId, jsonErr && jsonErr.message || jsonErr);
+        body = String(event.data);
+      }
       chrome.runtime.sendMessage({
         type: "RESPONSE_BODY",
         url: location.href,
@@ -133,7 +159,13 @@
         sourceOrigin: from,
         targetOrigin: location.origin,
       });
-    } catch (_) {}
+    } catch (err) {
+      // postMessage listener catch — covers extension-context-invalidated
+      // sendMessage failures + any throw in the brain RPC. A lost PM_RECV
+      // means the brain's request log misses cross-origin postMessage
+      // traffic, which can hide an exploit's data channel.
+      console.warn("[content:pm] PM_RECV dispatch failed:", err && err.message || err);
+    }
   }, true);
 
   // ─── Chunked-message transport ─────────────────────────────────────────
@@ -289,6 +321,20 @@
   // or handles data-returning message types. See SECURITY.md.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "PING") {
+      sendResponse({ ok: true });
+      return;
+    }
+    if (msg.type === "RESHIP") {
+      // The offscreen brain came up AFTER our initial ship and broadcasts RESHIP
+      // so we re-send everything (the cold-start delivery race — the offscreen
+      // wasn't alive when content.js shipped at document_idle, so the brain
+      // missed our scripts/HTML). _bufferScript/_buffer dedup by url/hash, so
+      // re-ship is idempotent. Clear our local sent-set so we walk fresh.
+      _sentScripts.clear();
+      _scriptOrder = 0;
+      _sendPageHtml("reship");
+      try { document.querySelectorAll("script").forEach(extractScriptSource); } catch (_) {}
+      if (document.readyState === "complete") _signalScriptsLoaded();
       sendResponse({ ok: true });
       return;
     }
@@ -538,9 +584,13 @@
     if (!e.target || e.target.tagName !== "FORM") return;
     try {
       var form = e.target;
-      var action;
-      try { action = new URL(form.action || location.href, location.href).href; }
-      catch (_) { action = location.href; }
+      // canParse guard so we don't use throw as a parse-validity test. Action
+      // resolution defaults to location.href when the form's action attribute
+      // is malformed — same as the previous catch fallback, surfaced explicitly.
+      var rawAction = form.action || location.href;
+      var action = URL.canParse(rawAction, location.href)
+        ? new URL(rawAction, location.href).href
+        : location.href;
 
       var method = (form.method || "GET").toUpperCase();
       var enctype = form.enctype || "application/x-www-form-urlencoded";

@@ -37,12 +37,26 @@ async function ensureOffscreen() {
 // Wake the brain on browser start / extension update so it resumes any incomplete
 // deep grind from IndexedDB without waiting for a navigation.
 try {
-  chrome.runtime.onStartup.addListener(() => ensureOffscreen().catch(() => {}));
-  chrome.runtime.onInstalled.addListener(() => ensureOffscreen().catch(() => {}));
-} catch (e) {}
+  chrome.runtime.onStartup.addListener(() => ensureOffscreen().catch((e) => console.warn("[bg:onStartup] ensureOffscreen failed:", e && e.message || e)));
+  chrome.runtime.onInstalled.addListener(() => ensureOffscreen().catch((e) => console.warn("[bg:onInstalled] ensureOffscreen failed:", e && e.message || e)));
+} catch (e) {
+  // chrome.runtime.onStartup / onInstalled missing — the only way this catch fires
+  // is if the MV3 API surface changed. Surface so the boot-time hook gap is visible.
+  console.warn("[bg] failed to register onStartup/onInstalled listeners:", e && e.message || e);
+}
 
 // Forward a message to the offscreen brain, ensuring it exists first.
-function toBrain(m) { ensureOffscreen().then(() => chrome.runtime.sendMessage(m).catch(() => {})).catch(() => {}); }
+function toBrain(m) {
+  ensureOffscreen()
+    .then(() => chrome.runtime.sendMessage(m).catch((e) => {
+      // The brain isn't listening (race during offscreen-document boot, or it
+      // crashed). The dispatch silently failing leaves the SW thinking the
+      // message was delivered. Surface the message type + error so a lost
+      // event (NAV, TAB_REMOVED, content-shipped script) is diagnosable.
+      console.debug("[bg:toBrain] sendMessage failed type=%s: %s", m && m.type, e && e.message || e);
+    }))
+    .catch((e) => console.warn("[bg:toBrain] ensureOffscreen failed type=%s: %s", m && m.type, e && e.message || e));
+}
 
 // ─── Browser events the offscreen can't observe → forward to the brain ────────
 chrome.webNavigation.onCommitted.addListener((d) => {
@@ -52,6 +66,10 @@ chrome.tabs.onRemoved.addListener((tabId) => { toBrain({ __evt: "TAB_REMOVED", t
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   toBrain({ __evt: "TAB_UPDATED", tabId: tabId, changeInfo: changeInfo, tab: { id: tab.id, url: tab.url || "", status: tab.status || "" } });
 });
+// Switching to an already-loaded tab (no navigation) is the real "which page is
+// relevant now" signal during normal browsing — forward it so the brain can
+// make that page's background deep grind lead the next rotation round.
+chrome.tabs.onActivated.addListener((info) => { toBrain({ __evt: "TAB_ACTIVATED", tabId: info.tabId }); });
 
 // ─── Privileged chrome.* RPC for the offscreen brain ──────────────────────────
 // The brain runs in a document and can't call chrome.tabs.*; it sends a {__rpc}
@@ -67,13 +85,25 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 const _PROBE_INJECTORS = {
   // Read the per-marker execution flag intercept.js's apiclientsink() populated —
   // proof the browser actually ran the payload (vs. taint merely reaching a sink).
-  readExecFlag: (flag) => { try { return self[flag] || null; } catch (_) { return null; } },
+  // A throw here means the page tampered with `self` (frozen, proxied, etc.) so
+  // the probe result is genuinely unknown; surface so a bundle that defeats the
+  // flag read is visible rather than silently flipping to "not reproduced".
+  readExecFlag: (flag) => { try { return self[flag] || null; } catch (e) { console.warn("[probe:readExecFlag] flag=%s threw: %s", flag, e && e.message || e); return null; } },
   // Same-window postMessage to the bundle's own listener, retried to cover async
   // handler-registration races.
   postMessage: (shapedPayload) => {
     const deliveries = [200, 1500, 3500];
     for (const delay of deliveries) {
-      setTimeout(() => { try { window.postMessage(shapedPayload, "*"); } catch (_) {} }, delay);
+      setTimeout(() => {
+        try { window.postMessage(shapedPayload, "*"); }
+        catch (e) {
+          // postMessage of structured-cloneable data should never throw under
+          // a normal page; a throw means the payload couldn't be cloned (e.g.
+          // contains a function / DOM node) or the window is detached. Both
+          // are real failures the probe needs to know about.
+          console.warn("[probe:postMessage] threw at delay=%dms: %s", delay, e && e.message || e);
+        }
+      }, delay);
     }
   },
   // Pre-seed localStorage + cookies before the bundle reads them at module init.
@@ -85,7 +115,13 @@ const _PROBE_INJECTORS = {
       for (const it of (cookieItems || [])) {
         if (it && it.value != null) document.cookie = String(it.value);
       }
-    } catch (_) {}
+    } catch (e) {
+      // localStorage / document.cookie can throw (quota, third-party cookie
+      // policy, sandboxed iframe). Surface so the probe knows the seed didn't
+      // land — otherwise the exploit reproducibility looks like a code-path
+      // bug when it's actually a storage-policy block.
+      console.warn("[probe:seedStorage] threw: %s", e && e.message || e);
+    }
   },
   // Dispatch a sequence of postMessage events with per-message delay (structured plan).
   dispatchEvents: (eventList, perMessageDelayMs) => {
@@ -93,7 +129,14 @@ const _PROBE_INJECTORS = {
     eventList.forEach((ev, i) => {
       const t = baseDelay + i * perMessageDelayMs;
       setTimeout(() => {
-        try { if (ev && ev.kind === "postMessage") window.postMessage(ev.payload, "*"); } catch (_) {}
+        try { if (ev && ev.kind === "postMessage") window.postMessage(ev.payload, "*"); }
+        catch (e) {
+          // Same diagnostic rationale as the single-postMessage injector above —
+          // a structured-clone failure or detached window must be visible so
+          // the structured-plan probe doesn't report NOT_REPRODUCED for a
+          // delivery failure rather than a real bundle behavior.
+          console.warn("[probe:dispatchEvents] postMessage threw at i=%d t=%dms: %s", i, t, e && e.message || e);
+        }
       }, t);
     });
   },
@@ -108,13 +151,12 @@ async function _swRpc(msg) {
     case "tabs.query": return chrome.tabs.query(...args);
     case "tabs.get": return chrome.tabs.get(...args);
     case "webNavigation.getAllFrames": return chrome.webNavigation.getAllFrames(...args);
-    // The request log is the "network traffic" exception that lives in
-    // chrome.storage.session — but chrome.storage isn't exposed to the offscreen
-    // document, so the brain reads/writes it through the SW.
-    case "storage.session.set": return chrome.storage.session.set(...args);
-    case "storage.session.get": return chrome.storage.session.get(...args);
-    case "storage.session.remove": return chrome.storage.session.remove(...args);
-    case "storage.session.clear": return chrome.storage.session.clear(...args);
+    // chrome.storage.session.* RPC handlers removed — the brain no longer
+    // mirrors request logs to session storage (the offscreen document's
+    // stable lifetime makes the in-memory log authoritative). If a caller
+    // accidentally still issues a storage.session.* RPC the unknown-api
+    // throw below will surface it as a diagnostic — better than silently
+    // doing nothing.
     // Cross-origin fetch on the brain's behalf. The offscreen document is under
     // COEP require-corp, so a cross-origin fetch there fails unless the host
     // happens to send CORP — the SW (host_permissions: <all_urls>) is not, so its
@@ -125,8 +167,11 @@ async function _swRpc(msg) {
     // response (status + headers object + text body).
     case "fetch": {
       const o = args[0] || {};
-      let u;
-      try { u = new URL(o.url); } catch (e) { throw new Error("bad fetch url"); }
+      // canParse guard then explicit throw — same diagnostic shape ("bad fetch
+      // url") but no longer using the catch as a parse-validity test. The
+      // throw is the SAME error the offscreen brain's swFetch caller expects.
+      if (!URL.canParse(o.url)) throw new Error("bad fetch url");
+      const u = new URL(o.url);
       if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("blocked: non-http(s) fetch url");
       const init = {
         method: o.method || "GET",
@@ -174,7 +219,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Privileged chrome.* RPC — accepted ONLY from the offscreen brain. (The popup
   // is also extension-origin but never uses __rpc; pinning it to the offscreen
   // URL means even a popup-context compromise can't reach chrome.tabs.* /
-  // storage.session.* through this relay.)
+  // chrome.scripting.exec / chrome.* fetch through this relay.)
   if (msg.__rpc) {
     if (sender.url.startsWith(EXT_ORIGIN + "/" + OFFSCREEN_URL)) {
       _swRpc(msg).then((r) => sendResponse({ ok: true, result: r }))
@@ -187,5 +232,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Any other extension-page message (the popup's GET_STATE etc.) is handled by
   // the brain, which receives the same broadcast directly. The SW's only job is
   // to make sure the brain is alive to receive it (and to resume any grind).
-  ensureOffscreen().catch(() => {});
+  ensureOffscreen().catch((e) => {
+    // The popup just asked the brain for state and we couldn't even WAKE the
+    // offscreen document — the popup will time out waiting for the broadcast
+    // reply. Surface so the boot gap is diagnosable; the popup user otherwise
+    // sees "loading…" forever with no console signal.
+    console.warn("[bg:onMessage] ensureOffscreen failed for popup request:", e && e.message || e);
+  });
 });

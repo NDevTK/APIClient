@@ -684,11 +684,13 @@ function extractMethodsFromDiscovery(doc) {
 function findDiscoveryMethod(doc, endpointPath, httpMethod) {
   if (!doc || !doc.resources) return null;
 
+  // canParse guard so the basePath extraction doesn't use throw as a
+  // parse-validity test. An empty / malformed baseUrl yields empty basePath,
+  // which means no prefix stripping below — correct semantic.
   const baseUrl = doc.baseUrl || doc.rootUrl || "";
-  let basePath = "";
-  try {
-    basePath = new URL(baseUrl).pathname.replace(/\/$/, "");
-  } catch (_) {}
+  const basePath = (baseUrl && URL.canParse(baseUrl))
+    ? new URL(baseUrl).pathname.replace(/\/$/, "")
+    : "";
 
   // Strip basePath prefix from endpointPath for comparison
   let normPath = endpointPath;
@@ -1079,12 +1081,22 @@ function parseBatchExecuteResponse(bodyText) {
             const chunk = JSON.parse(lines[i + 1]);
             chunks.push(chunk);
             i++;
-          } catch (e) {}
+          } catch (e) {
+            // Length-prefix-shaped line followed by non-JSON — malformed
+            // BatchExecute envelope. Continue scanning; log so a chunk-format
+            // mismatch is diagnosable.
+            if (typeof console !== "undefined") console.debug("[discovery:BatchExecute] length-prefix chunk JSON parse failed:", e && e.message || e);
+          }
         }
       } else if (line.startsWith("[")) {
         try {
           chunks.push(JSON.parse(line));
-        } catch (e) {}
+        } catch (e) {
+          // Bracket-shaped line that isn't JSON — log and skip; the
+          // BatchExecute format permits non-chunk noise interleaved with
+          // chunks (XSSI prefix etc., already stripped above).
+          if (typeof console !== "undefined") console.debug("[discovery:BatchExecute] bracket line JSON parse failed:", e && e.message || e);
+        }
       }
     }
 
@@ -1172,7 +1184,12 @@ function parseAsyncChunkedResponse(bodyText) {
           const parsed = JSON.parse(trimmed);
           chunks.push({ type: "jspb", data: parsed, raw: payload });
           continue;
-        } catch (_) {}
+        } catch (e) {
+          // Starts with `[` but isn't valid JSON — fall through to text
+          // classification. Debug-log so a malformed [-bracketed payload that
+          // pretends to be JSPB is diagnosable.
+          if (typeof console !== "undefined") console.debug("[discovery:chunked] JSON.parse(JSPB-shaped) failed:", e && e.message || e);
+        }
       }
       if (trimmed.startsWith("<")) {
         chunks.push({ type: "html", data: null, raw: payload });
@@ -1354,10 +1371,14 @@ function parseSSE(bodyText) {
       if (dataLines.length === 0) continue;
 
       const rawData = dataLines.join("\n");
+      // Try JSON; fall through to raw string when SSE `data:` isn't JSON.
+      // SSE data is OFTEN plain text (status updates, comments), so debug-
+      // log the parse failure rather than warn — it's expected for text events.
       let parsed = rawData;
-      try {
-        parsed = JSON.parse(rawData);
-      } catch (_) {}
+      try { parsed = JSON.parse(rawData); }
+      catch (e) {
+        if (typeof console !== "undefined") console.debug("[discovery:SSE] data JSON parse failed (treating as text):", e && e.message || e);
+      }
 
       events.push({ event: eventType, data: parsed, id, raw: rawData });
     }
@@ -1596,13 +1617,14 @@ function isGraphQLUrl(url) {
   //   gql-fed.reddit.com (hostname uses `gql-` prefix with no "graphql")
   //   shopify, github etc. tend to use /graphql explicitly.
   if (/graphql/i.test(url)) return true;
-  try {
+  // canParse guard — non-URL inputs simply aren't GraphQL by these tests.
+  if (URL.canParse(url)) {
     var u = new URL(url);
     // Hostname-level indicators.
     if (/\bgql(-|\.|$)/i.test(u.hostname)) return true;
     // Path-level indicators beyond plain "graphql".
     if (/\/gql(\/|\?|$)/i.test(u.pathname)) return true;
-  } catch (_) {}
+  }
   return false;
 }
 
@@ -2219,7 +2241,12 @@ function classifyResponseAsset(responseBody, responseBase64, opts) {
           return { kind: "asset", label: textMagic + note2 };
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      // TextDecoder with fatal:false shouldn't throw on arbitrary bytes —
+      // a throw here means the bytes input wasn't a valid Uint8Array shape.
+      // Falls through to "binary-structured" classification.
+      if (typeof console !== "undefined") console.debug("[discovery:classify] TextDecoder threw on binary bytes:", e && e.message || e);
+    }
     // Base64 bytes with no magic match: could be protobuf, gRPC-Web, or any
     // structured binary format. These have schemas; don't skip learning.
     return { kind: "api", label: "binary-structured" };

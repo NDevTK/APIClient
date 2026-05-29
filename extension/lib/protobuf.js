@@ -534,7 +534,13 @@ function pbTreeNode(rootF, valueCallback) {
               parsedAsMessage = true;
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          // Length-delimited field didn't decode as a nested message — that's
+          // the normal signal that it's a string/bytes leaf or packed array.
+          // Debug-log so a real recursion-depth or buffer-bounds bug is
+          // diagnosable; falls through to packed-repeated and bytes attempts.
+          if (typeof console !== "undefined") console.debug("[pb:decode] nested message decode failed:", e && e.message || e);
+        }
       }
       if (parsedAsMessage) continue;
 
@@ -564,11 +570,15 @@ function pbTreeNode(rootF, valueCallback) {
 }
 
 function tryUtf8(bytes) {
+  // TextDecoder with fatal:true uses the throw AS the validity signal \u2014 there
+  // is no non-throwing equivalent in the platform API. The catch returns null
+  // to express "not valid UTF-8"; the throw itself is not a bug but the
+  // outcome we're testing for, so no diagnostic surface is appropriate here.
   try {
     var str = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     // Accept printable ASCII + common unicode
     if (/^[\x20-\x7E\t\n\r\u00A0-\uFFFF]+$/.test(str)) return str;
-  } catch (_) {}
+  } catch (_) { /* invalid UTF-8 \u2014 the function's defined "no" answer */ }
   return null;
 }
 
@@ -590,6 +600,10 @@ function bytesToHex(bytes) {
  */
 function pbTryDecodePacked(data) {
   if (data.length === 0) return [];
+  // Same TextDecoder-style pattern: pbReadVarint throws on truncated/over-long
+  // varints, and that throw IS the function's defined "not a packed-repeated
+  // field" outcome (next caller tries the bytes/UTF-8 path). The catch is
+  // the parse-validity signal, not error suppression.
   try {
     var values = [];
     var pos = 0;
@@ -600,7 +614,7 @@ function pbTryDecodePacked(data) {
     }
     // Must consume all bytes exactly — partial consumption means it's not packed
     if (pos === data.length && values.length > 1) return values;
-  } catch (_) {}
+  } catch (_) { /* not a packed-repeated field — defined "no" answer */ }
   return null;
 }
 

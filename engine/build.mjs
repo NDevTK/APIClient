@@ -84,7 +84,19 @@ const CFLAGS = ["-O1", "-w", "-D_GNU_SOURCE", "-DLEXBOR_STATIC",
 const WMEM = ["-sMEMORY64=1",
               "-sSTACK_SIZE=8388608",
               "-sALLOW_MEMORY_GROWTH=1",
-              "-sDISABLE_EXCEPTION_CATCHING=0", "-fexceptions"];
+              // -fwasm-exceptions = native WebAssembly exception handling
+              // proposal (vs legacy -fexceptions which inserts JS invoke_*
+              // shims around indirect calls). Z3's C++ throws still work,
+              // but the indirect-call dispatch is now pure wasm — no JS
+              // frame is left on the call stack between wasm functions,
+              // which JSPI requires for WebAssembly.Suspending to unwind
+              // the stack on a yield. Under -fexceptions the github 4.4MB
+              // bundle aborted at ~7 .bc with "trying to suspend JS
+              // frames" because the bytecode interpreter dispatches CFunc
+              // calls through invoke_* (JS) on the EH-enabled build.
+              // DISABLE_EXCEPTION_CATCHING isn't compatible with the new
+              // EH model — it was the legacy mode's switch.
+              "-fwasm-exceptions"];
 
 function run(cmd, args, extraEnv) {
   console.log(`\n[build] ${cmd} ${args.join(" ")}`);
@@ -141,7 +153,10 @@ function mod() {
   // OOM; off by default (ships clean).
   const dbg = process.env.DBG === "1" ? ["-sASSERTIONS=2"] : [];
   emcc(["-sMODULARIZE=1", "-sEXPORT_ES6=1",
-        "-sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV",
+        // HEAPU8: mdrive.mjs's snapshot-schedule path images linear memory
+        // (boot once, restore per drive) — the Node-side proof of the model
+        // ast-thread.js will use (the worker build already exports HEAPU8).
+        "-sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV,HEAPU8",
         "-sINVOKE_RUN=0", "-sEXIT_RUNTIME=0",
         "-sENVIRONMENT=web,worker,node", "--pre-js", "prejs.js", ...dbg],
        "qjs_mod.mjs");
@@ -159,9 +174,32 @@ function worker() {
   // .wasm fetch, so the extension's MV3 CSP (default-src 'none', no
   // connect-src 'self') can't block it; importScripts + the
   // 'wasm-unsafe-eval' source is all that's needed.
+  //
+  // JSPI (JavaScript Promise Integration) instruments wasm IMPORTS so
+  // the engine can yield from arbitrary bytecode positions back to the
+  // host and be RESUMED later from where it paused — enabling the
+  // prioritisation system to interleave unbounded code paths (a JS path
+  // that does not naturally terminate still yields control periodically
+  // and can emit @H records when resumed). Unlike ASYNCIFY, JSPI uses
+  // REAL wasm stack switching (no fixed save buffer → no depth cap on
+  // the paused call stack), so there is no analysis bound on how deep a
+  // JS callchain can be at the yield point. Browser support: Chrome 137+
+  // shipping, Firefox/Safari in progress. JSPI_EXPORTS lists the wasm
+  // exports that may suspend; qjs_host_yield is the C function that
+  // returns a Promise the engine awaits.
   emcc(["-sMODULARIZE=1", "-sEXPORT_NAME=createQJS", "-sSINGLE_FILE=1",
-        "-sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV",
+        // HEAPU8 is needed at runtime so ast-thread.js's wasmBytes() can
+        // read the linear-memory size for the memory-watchdog recycle in
+        // the bc-compile loop and the BFS schedule loop. Without it, the
+        // watchdog's `m.HEAPU8.buffer.byteLength` reads as 0 every
+        // iteration, baselineBytes stays 0, the `memNow > baseline * 2`
+        // check never fires, and the wasm grows unbounded until V8 traps
+        // "memory access out of bounds" on the 346th github chunk.
+        "-sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV,HEAPU8",
         "-sINVOKE_RUN=0", "-sEXIT_RUNTIME=0",
+        "-sJSPI=1",
+        "-sJSPI_EXPORTS=callMain",
+        "-DQJS_HAS_JSPI=1",
         "-sENVIRONMENT=worker,node"],
        "qjs_worker.js");
   console.log("[build] " + size("qjs_worker.js"));

@@ -10,9 +10,28 @@
     <header>
       <h1>API Security Researcher</h1>
       <div class="toolbar">
+        <button id="btn-settings" title="Analysis settings">⚙</button>
         <button id="btn-clear" title="Clear All Data">🗑️</button>
       </div>
     </header>
+
+    <!-- Settings panel — cooling/concurrency knobs. Hidden by default; the
+         ⚙ toolbar button toggles it. Values persist in the offscreen
+         brain's IDB store and propagate to the worker on change. -->
+    <section id="panel-settings" class="panel" style="display:none">
+      <h2>Analysis settings</h2>
+      <label>
+        Yield throttle (ms)
+        <input type="range" id="opt-yield-throttle-ms" min="0" max="10000" step="100" value="4000" />
+        <output id="opt-yield-throttle-ms-val">4000</output>
+        <p class="hint">Cooling: max sleep after each schedule run. Higher = cooler CPU, slower analysis. 0 = no throttle.</p>
+      </label>
+      <label>
+        Analyzer workers
+        <input type="number" id="opt-max-workers" min="1" value="1" />
+        <p class="hint">Number of Web Workers running the QuickJS analyzer. 1 = serial (cool); higher = real parallelism on multi-core (faster, more memory + heat).</p>
+      </label>
+    </section>
 
     <div id="deep-status" class="deep-status" style="display:none"></div>
 

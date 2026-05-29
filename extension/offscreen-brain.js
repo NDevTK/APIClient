@@ -126,8 +126,6 @@ function _trimRequestLog(tab) {
   while (tab.requestLog.length > MAX_REQUEST_LOG_ENTRIES) tab.requestLog.pop();
 }
 
-// Session storage for request logs — survives SW restarts, clears on browser close
-const _sessionSaveTimers = new Map(); // tabId → timeoutId
 const _tabMeta = new Map(); // tabId → { title, url, closed? }
 const _deepStatsByTab = new Map(); // tabId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
 const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, isTop, lastSeen }>
@@ -142,18 +140,26 @@ function _onNav(details) {
   if (!_tabFrames.has(tabId)) _tabFrames.set(tabId, new Map());
   var frMap = _tabFrames.get(tabId);
   var url = details.url || "";
-  var origin = "";
-  try { origin = new URL(url).origin; } catch (_) {}
+  // Explicit URL.canParse guard so origin extraction isn't a throw-and-recover
+  // pattern — chrome:// / about: / unparseable inputs yield empty origin
+  // directly, which downstream treats as "unknown origin" correctly.
+  var origin = (url && URL.canParse(url)) ? new URL(url).origin : "";
   var isTop = details.parentFrameId === -1;
   frMap.set(frameId, { url: url, origin: origin, isTop: isTop, lastSeen: Date.now() });
-  // Update _tabMeta for top frames
+  // Update _tabMeta for top frames + bump lastActivatedTs so the review-queue
+  // picker (priority.js pickFromReviewQueue) treats a NEWLY-navigated tab as
+  // "user attention" — without this, only tab-clicks (TAB_ACTIVATED) bumped
+  // recency, so a fresh-navigation tab's analysis sat behind older queued
+  // tabs even though the navigation IS the user's current focus action.
   if (isTop && url) {
     var tm = _tabMeta.get(tabId);
     if (!tm) {
-      _tabMeta.set(tabId, { title: "Tab " + tabId, url: url });
+      tm = { title: "Tab " + tabId, url: url };
+      _tabMeta.set(tabId, tm);
     } else {
       tm.url = url;
     }
+    tm.lastActivatedTs = Date.now();
   }
   notifyPopup(tabId);
 }
@@ -697,91 +703,56 @@ async function clearGlobalStore() {
 // Load persisted data on startup — handlers must await this before reading globalStore
 const _globalStoreReady = loadGlobalStore();
 
-// ─── Session Storage (Request Logs) ─────────────────────────────────────────
-
-function serializeLogEntry(entry) {
-  return { ...entry };
-}
-
-function scheduleSessionSave(tabId) {
-  if (_sessionSaveTimers.has(tabId)) {
-    clearTimeout(_sessionSaveTimers.get(tabId));
-  }
-  _sessionSaveTimers.set(
-    tabId,
-    setTimeout(() => {
-      _sessionSaveTimers.delete(tabId);
-      saveTabSessionLog(tabId);
-    }, 1000),
-  );
-}
-
-async function saveTabSessionLog(tabId) {
-  const tab = state.tabs.get(tabId);
-  if (!tab) return;
+// Cold-start delivery race: if the offscreen brain wasn't alive when content.js
+// shipped its initial HTML/SCRIPT_SOURCE at document_idle (Chrome restart, the
+// first nav landing inside the ~ensureOffscreen createDocument window), those
+// broadcasts went nowhere. Once we're up, ask each live content script in an
+// http(s) tab to re-ship — buffer dedup makes it idempotent. tabs.sendMessage
+// to a tab without an active content script (e.g. invalidated post extension
+// reload) just errors; the catch makes it a no-op. We don't re-broadcast on
+// later inits beyond the brain's birth because there's no state for it to
+// catch up to past this moment.
+// Apply persisted analysis opts (cooling + worker pool size) on brain boot
+// so the pool spawns at the user's chosen size BEFORE the first analysis
+// arrives. Missing record (first run) is fine — astDispatch keeps its
+// default pool of 1.
+_globalStoreReady.then(async function () {
   try {
-    const serialized = tab.requestLog.map(serializeLogEntry);
-    await swRpc("storage.session.set", { [`reqLog_${tabId}`]: serialized });
-    await saveSessionIndex();
-  } catch (e) {
-    console.error("[Session] Save failed for tab", tabId, e);
-  }
-}
-
-async function saveSessionIndex() {
-  const index = {};
-  for (const [tabId, meta] of _tabMeta) {
-    const tab = state.tabs.get(tabId);
-    const count = tab ? tab.requestLog.length : 0;
-    if (count > 0 || meta.closed) {
-      index[tabId] = { ...meta, count };
-    }
-  }
-  try {
-    await swRpc("storage.session.set", { reqLog_index: index });
-  } catch (e) {
-    console.error("[Session] Index save failed:", e);
-  }
-}
-
-async function loadSessionLogs() {
-  try {
-    const data = await swRpc("storage.session.get", null);
-    for (const [key, value] of Object.entries(data)) {
-      if (key === "reqLog_index") {
-        for (const [tidStr, meta] of Object.entries(value)) {
-          const tid = parseInt(tidStr, 10);
-          if (!isNaN(tid)) _tabMeta.set(tid, meta);
-        }
-        continue;
-      }
-      if (key.startsWith("reqLog_")) {
-        const tabId = parseInt(key.slice(7), 10);
-        if (isNaN(tabId) || !Array.isArray(value)) continue;
-        const tab = getTab(tabId);
-        if (tab.requestLog.length === 0) {
-          tab.requestLog = value;
-          // Restore _wsConnState from persisted WEBSOCKET entries
-          for (const entry of value) {
-            if (entry.method === "WEBSOCKET" && entry.channelId) {
-              if (!_wsConnState.has(tabId)) _wsConnState.set(tabId, new Map());
-              // After SW restart, mark all as closed — intercept.js will re-emit WS_OPEN for live ones
-              _wsConnState.get(tabId).set(entry.channelId, {
-                url: entry.url,
-                readyState: entry.wsOpen ? 1 : 3,
-                entryId: entry.id,
-              });
-            }
-          }
-        }
-      }
+    const opts = await _idbGet("analysisOpts");
+    if (opts && typeof opts === "object" && typeof self.astDispatch === "function") {
+      self.astDispatch({ type: "SET_ANALYSIS_OPTS", opts: opts });
     }
   } catch (e) {
-    console.error("[Session] Load failed:", e);
+    console.warn("[brain] applying persisted analysisOpts at boot failed:", e && e.message || e);
   }
-}
+});
 
-loadSessionLogs();
+_globalStoreReady.then(async function () {
+  try {
+    const tabs = await swRpc("tabs.query", { url: ["http://*/*", "https://*/*"] });
+    if (!Array.isArray(tabs)) return;
+    for (const t of tabs) {
+      if (!t || t.id == null) continue;
+      swRpc("tabs.sendMessage", t.id, { type: "RESHIP" }).catch(function (e) {
+        // Per-tab reship failures are normal (tab without active content script
+        // after extension reload). Don't surface — that's expected; surface
+        // ONLY the outer tabs.query failure, since that means we couldn't even
+        // enumerate the tabs to reship to and the brain starts up partially blind.
+        console.debug("[brain:reship] tab=%d sendMessage failed: %s", t.id, e && e.message || e);
+      });
+    }
+  } catch (e) {
+    console.warn("[brain:reship] tabs.query failed at startup — content scripts won't reship buffered scripts: %s", e && e.message || e);
+  }
+});
+
+/* Session-storage persistence layer removed. Previously the brain mirrored
+   request logs to chrome.storage.session so they survived MV3 SW eviction
+   (when the brain lived in the SW). The brain now runs in the offscreen
+   document — stable lifetime, no eviction — so `state.tabs[tabId].requestLog`
+   is the single authoritative store. scheduleSessionSave /
+   saveTabSessionLog / saveSessionIndex / loadSessionLogs / serializeLogEntry
+   and all call sites have been deleted. */
 
 // ─── Patterns ────────────────────────────────────────────────────────────────
 
@@ -959,8 +930,10 @@ function refineByObservedPrefix(tab, urlObj, initialName) {
     for (const bucket of Object.values(docEntry.doc.resources || {})) {
       for (const m of Object.values(bucket.methods || {})) {
         if (!m || typeof m.path !== "string" || !m.origin) continue;
-        let origHost = null;
-        try { origHost = new URL(m.origin).hostname; } catch (_) {}
+        // canParse guard — same root-cause fix as the webnav origin handler.
+        // A malformed stored m.origin yields null hostname which can't equal
+        // hostname; the `continue` below is the correct semantic.
+        const origHost = URL.canParse(m.origin) ? new URL(m.origin).hostname : null;
         if (origHost !== hostname) continue;
         siblingPaths.push(m.path);
       }
@@ -1190,6 +1163,19 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
 // reports it under `ast-constraint` provenance — never as "observed-top"
 // (which implies the SERVER received this value; the server never did).
 // Stats observation counters are never bumped.
+/* Hex string → Uint8Array. Pair-by-pair scan; odd-length input is treated
+   as ending one nibble early (a malformed body emission). No allocation
+   bloat — single typed-array allocated at exact size. */
+function _hexToBytes(hex) {
+  if (typeof hex !== "string") return new Uint8Array(0);
+  const n = hex.length >> 1;
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    out[i] = parseInt(hex.substr(i * 2, 2), 16) | 0;
+  }
+  return out;
+}
+
 function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
   const tab = getTab(tabId);
 
@@ -1430,6 +1416,59 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
     }
   }
 
+  // Reverse cross-doc reconcile: if THIS method is templated ({hole} path
+  // segments), fold any existing CONCRETE same-host live records that match
+  // the template into it, then drop the duplicate. Closes the dominant
+  // first-load split where live requests (en-us/...) created concrete records
+  // BEFORE the deep grind learned the template ({userLocale}/...) — the
+  // forward `_matchTemplatedMethodAcrossHost` only catches the other order.
+  // Each concrete segment aligned with a {hole} becomes that path-param's
+  // example value (goal #2); the concrete method's query params / response /
+  // request / stats fold in where the template lacks them. Precise match:
+  // same segment count, literal segments equal, same HTTP method, matched
+  // method's origin host == this host, and the dup must be concrete at >=1
+  // hole (else it IS this template, not a distinct concrete record) — so
+  // distinct endpoints are never merged.
+  if (m && typeof m.path === "string" && m.path.indexOf("{") >= 0) {
+    const _tSegs = m.path.split("/").filter(Boolean);
+    const _hostname = csUrl.hostname;
+    for (const [, _de] of tab.discoveryDocs) {
+      if (!_de || !_de.doc || !_de.doc.resources) continue;
+      for (const _bucket of Object.values(_de.doc.resources)) {
+        if (!_bucket || !_bucket.methods) continue;
+        for (const _key of Object.keys(_bucket.methods)) {
+          const _cm = _bucket.methods[_key];
+          if (!_cm || _cm === m || _cm.httpMethod !== m.httpMethod || typeof _cm.path !== "string") continue;
+          const _cSegs = _cm.path.split("/").filter(Boolean);
+          if (_cSegs.length !== _tSegs.length) continue;
+          const _oh = (_cm.origin && URL.canParse(_cm.origin)) ? new URL(_cm.origin).hostname : null;
+          if (_oh !== _hostname) continue;
+          let _ok = true, _concreteAtHole = false;
+          for (let _i = 0; _i < _tSegs.length; _i++) {
+            const _isHole = _tSegs[_i].charAt(0) === "{" && _tSegs[_i].slice(-1) === "}";
+            const _cHole = _cSegs[_i].charAt(0) === "{" && _cSegs[_i].slice(-1) === "}";
+            if (_isHole) { if (!_cHole) _concreteAtHole = true; continue; }
+            if (_tSegs[_i] !== _cSegs[_i]) { _ok = false; break; }
+          }
+          if (!_ok || !_concreteAtHole) continue;
+          for (let _i = 0; _i < _tSegs.length; _i++) {
+            if (!(_tSegs[_i].charAt(0) === "{" && _tSegs[_i].slice(-1) === "}")) continue;
+            const _val = _cSegs[_i];
+            if (_val.charAt(0) === "{") continue;
+            const _hole = _tSegs[_i].slice(1, -1);
+            if (!m.parameters[_hole]) m.parameters[_hole] = { type: "string", location: "path", required: true, description: "Learned (concrete value from live traffic)" };
+            _mergeAstValues(m.parameters[_hole], [_val], _val);
+          }
+          if (_cm.parameters) for (const _pn in _cm.parameters) { if (!m.parameters[_pn]) m.parameters[_pn] = _cm.parameters[_pn]; }
+          if (_cm.response && !m.response) m.response = _cm.response;
+          if (_cm.request && !m.request) m.request = _cm.request;
+          if (_cm._stats && !m._stats) m._stats = _cm._stats;
+          delete _bucket.methods[_key];
+        }
+      }
+    }
+  }
+
   // Body params — build a direct AST schema (no synthetic JSON round-trip).
   const bodyParams = (callSite.params || []).filter(p => (p.location || "query") === "body");
   if (bodyParams.length) {
@@ -1475,6 +1514,71 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
     }
   }
 
+  // Binary body: hostedge.bodyShape captured the full byte sequence + the
+  // worker's magic-byte sniffer classified the wire format (protobuf,
+  // grpc-web, gzip, zlib, json, bytes). For protobuf/grpc-web, decode via
+  // lib/protobuf.js (pbDecodeRaw) so each field becomes a body param named
+  // f<num>:<wire> with its concrete value as the example. Real wire-format
+  // bytes, real values — not a name guess. (#7 protocol classification)
+  if (callSite.bodyBinary && typeof callSite.bodyBinary.hex === "string" && typeof self.pbDecodeRaw === "function") {
+    const bb = callSite.bodyBinary;
+    m.bodyBinary = { byteLength: bb.byteLength | 0, protocol: bb.protocol || "bytes" };
+    let pbBytes = null;
+    if (bb.protocol === "protobuf") {
+      pbBytes = _hexToBytes(bb.hex);
+    } else if (bb.protocol === "grpc-web" && bb.hex.length >= 10) {
+      // gRPC-Web frame = 1-byte flag + 4-byte BE length + payload. The
+      // payload is the protobuf message; strip the 5-byte header.
+      pbBytes = _hexToBytes(bb.hex.slice(10));
+    }
+    if (pbBytes && pbBytes.length > 0) {
+      try {
+        const fields = self.pbDecodeRaw(pbBytes);
+        for (const f of fields) {
+          // Field name as `f<num>` (wire format has no names; the .proto
+          // descriptor would map it but we don't have one at AST time).
+          // Wire-type tag suffixes the param name so the reviewer sees
+          // what kind of value lives there (`varint` vs `len` vs `i32`).
+          const wireTag = f.wire === 0 ? "varint" :
+                          f.wire === 1 ? "i64" :
+                          f.wire === 2 ? "len" :
+                          f.wire === 5 ? "i32" : ("w" + f.wire);
+          const pname = "f" + f.field + ":" + wireTag;
+          let example;
+          if (f.wire === 0) {
+            example = String(f.data);
+          } else if (f.wire === 2 && f.data instanceof Uint8Array) {
+            // LEN: could be a string or a nested message. Try UTF-8 decode;
+            // if the bytes look like a printable string, that's the value.
+            // Otherwise emit hex so the bytes are still visible.
+            let asString = "";
+            try { asString = new TextDecoder("utf-8", { fatal: true }).decode(f.data); }
+            catch (_) { asString = ""; }
+            example = asString || ("0x" + Array.from(f.data).map(b => (b < 16 ? "0" : "") + b.toString(16)).join(""));
+          } else if (f.data instanceof Uint8Array) {
+            example = "0x" + Array.from(f.data).map(b => (b < 16 ? "0" : "") + b.toString(16)).join("");
+          } else {
+            example = String(f.data);
+          }
+          // Reuse the same param map the JSON body path uses so the popup
+          // renders binary fields alongside textual ones uniformly.
+          const existing = m.parameters && m.parameters[pname];
+          if (!m.parameters) m.parameters = {};
+          if (!existing) {
+            m.parameters[pname] = { location: "body", _astValidValues: new Set([example]), _astInferred: true };
+          } else if (existing._astValidValues) {
+            existing._astValidValues.add(example);
+          }
+        }
+      } catch (e) {
+        /* pbDecodeRaw rejected — surface so a malformed protobuf body is
+           visible (not silently dropped). The bytes stay on m.bodyBinary
+           for the popup to inspect raw. */
+        console.warn("[brain] protobuf decode failed:", e && e.message || e, "url=" + callSite.url);
+      }
+    }
+  }
+
   // Apply example-value picker so the Send form has prefills even
   // before any real traffic hits — pickExampleValue's `ast-constraint`
   // tier uses the _astValidValues we just attached. applyStatsToMethod
@@ -1511,6 +1615,37 @@ function _matchTemplatedMethod(learnedMethods, httpMethod, pathname) {
   return null;
 }
 
+// Cross-doc template reconcile. Forced-exec may learn an endpoint as a
+// TEMPLATED method (e.g. {userLocale}/content-nav/site-header.json) under
+// one service grouping, while a concrete live request (en-us/content-nav/
+// site-header.json) refines (refineByObservedPrefix) to a DIFFERENT
+// same-host service — leaving the same logical endpoint split into a
+// templated [ast] record and a concrete [live] one (observed live on
+// learn.microsoft.com: /{userLocale}/content-nav vs /en-us/content-nav).
+// `_matchTemplatedMethod` only searches one doc, so it can't bridge the
+// split. This searches EVERY same-host doc and returns the doc name whose
+// templated method matches this concrete path+method, so learnFromRequest
+// can redirect the request into that doc — the concrete segment then lands
+// as the param's example value (goal #2) instead of duplicating the
+// endpoint. Safe: precise segment match (same count; each segment equal or
+// a {hole}), same HTTP method only, and the matched method's origin host
+// must equal this host — so distinct services aren't mis-merged.
+function _matchTemplatedMethodAcrossHost(tab, hostname, httpMethod, pathname) {
+  if (!tab || !tab.discoveryDocs) return null;
+  for (const [docName, docEntry] of tab.discoveryDocs) {
+    if (!docEntry || !docEntry.doc || !docEntry.doc.resources) continue;
+    for (const bucket of Object.values(docEntry.doc.resources)) {
+      if (!bucket || !bucket.methods) continue;
+      const mk = _matchTemplatedMethod(bucket.methods, httpMethod, pathname);
+      if (!mk) continue;
+      const mm = bucket.methods[mk];
+      const oh = (mm && mm.origin && URL.canParse(mm.origin)) ? new URL(mm.origin).hostname : null;
+      if (oh === hostname) return docName;
+    }
+  }
+  return null;
+}
+
 function learnFromRequest(tabId, interfaceName, entry, headers) {
   const tab = getTab(tabId);
   const url = new URL(entry.url);
@@ -1530,6 +1665,17 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
       grouping = refined;
       interfaceName = refined.name;
     }
+  }
+  // Cross-doc template reconcile: if forced-exec already learned this endpoint
+  // as a templated method under a DIFFERENT same-host service grouping, route
+  // this concrete request into THAT doc so the same logical endpoint isn't
+  // split into a templated [ast] record + a concrete [live] one. The
+  // subsequent _matchTemplatedMethod (below) then finds the template within
+  // the redirected doc and merges, recording the concrete segment as the
+  // param example. Only redirects on a precise same-host templated match.
+  const _crossHostDoc = _matchTemplatedMethodAcrossHost(tab, url.hostname, method, url.pathname);
+  if (_crossHostDoc && _crossHostDoc !== interfaceName) {
+    interfaceName = _crossHostDoc;
   }
   // Stamp the resolved name onto the entry so callers (handleResponseBody)
   // can use it for downstream lookups instead of their pre-migration
@@ -1573,7 +1719,15 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
         // need splitting at the call site — left as one method for now.
         _nameHint = deriveGraphQLMethodName(_gql.operations[0]);
       }
-    } catch (_) {}
+    } catch (e) {
+      /* GraphQL operation-name detection failed (body wasn't base64 /
+         wasn't text / wasn't valid GraphQL syntax). The endpoint still
+         registers under its fallback methodName; only the named
+         disambiguation between `gql_GetUser` and `gql_GetRepo` on the
+         same /graphql URL is missed. Surface so a GraphQL parser
+         regression on a real bundle is visible. */
+      console.debug("[brain] GraphQL name-hint derive failed:", e && e.message || e, "url=" + entry.url);
+    }
   }
 
   const { methodName: baseMethodName } = calculateMethodMetadata(url, interfaceName, _nameHint);
@@ -1621,7 +1775,7 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
   if (!doc.resources.learned.methods[methodName] && !probedMethod) {
     doc.resources.learned.methods[methodName] = {
       id: methodId,
-      path: url.pathname.substring(1),
+      path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
       httpMethod: method,
       parameters: {},
       request: null,
@@ -1709,7 +1863,7 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
           if (!doc.resources.learned.methods[call.rpcId]) {
             doc.resources.learned.methods[call.rpcId] = {
               id: callMethodId,
-              path: url.pathname.substring(1),
+              path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
               httpMethod: "POST",
               parameters: {},
               request: null,
@@ -1757,7 +1911,12 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
               partM.request = { $ref: schemaName };
               const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas);
               mergeSchemaInto(doc, schemaName, newSchema);
-            } catch (_) {}
+            } catch (e) {
+              /* Multipart-batch sub-request JSON parse failed for one
+                 part — other parts still process. Surface so a malformed
+                 sub-request body on an otherwise-valid batch is visible. */
+              console.debug("[brain] multipart-batch request-part JSON parse failed:", e && e.message || e, "part=" + partMethodName, "url=" + entry.url);
+            }
           }
         }
       }
@@ -1780,7 +1939,9 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
             }
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        console.debug("[brain] grpc-web request-body decode failed:", e && e.message || e, "url=" + entry.url);
+      }
     } else if (headers["content-type"]?.includes("json+protobuf")) {
       // JSPB body — positional array encoding
       try {
@@ -1791,7 +1952,9 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
           const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas, true);
           mergeSchemaInto(doc, schemaName, newSchema);
         }
-      } catch (e) {}
+      } catch (e) {
+        console.debug("[brain] JSPB request-body parse failed:", e && e.message || e, "url=" + entry.url);
+      }
     } else if (
       headers["content-type"]?.includes("x-protobuf") ||
       headers["content-type"]?.includes("application/protobuf")
@@ -1805,7 +1968,9 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
           const newSchema = generateSchemaFromPbTree(tree, schemaName, doc.schemas);
           mergeSchemaInto(doc, schemaName, newSchema);
         }
-      } catch (e) {}
+      } catch (e) {
+        console.debug("[brain] x-protobuf request-body decode failed:", e && e.message || e, "url=" + entry.url);
+      }
     } else if (headers["content-type"]?.includes("json")) {
       try {
         const json = JSON.parse(text);
@@ -1813,7 +1978,9 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
         m.request = { $ref: schemaName };
         const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas);
         mergeSchemaInto(doc, schemaName, newSchema);
-      } catch (e) {}
+      } catch (e) {
+        console.debug("[brain] JSON request-body parse failed:", e && e.message || e, "url=" + entry.url);
+      }
     } else if (headers["content-type"]?.includes("x-www-form-urlencoded")) {
       // Form-urlencoded with f.req JSPB (non-batchexecute, e.g. browserinfo)
       try {
@@ -1828,7 +1995,9 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
             mergeSchemaInto(doc, schemaName, newSchema);
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        console.debug("[brain] form-urlencoded f.req parse failed:", e && e.message || e, "url=" + entry.url);
+      }
     } else if (text && /^[\s﻿\x00-\x1f]*[{\[]/.test(text)) {
       // Structural JSON detection for request bodies whose content-type
       // is text/plain, missing, or anything other than the explicit
@@ -1848,7 +2017,14 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
           const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas);
           mergeSchemaInto(doc, schemaName, newSchema);
         }
-      } catch (e) {}
+      } catch (e) {
+        /* Structural JSON sniff parse failure — text LOOKED like JSON
+           (starts with `{`/`[` after whitespace) but JSON.parse rejected
+           it. Most often: a partial body / malformed JSON / a JSON
+           prefix followed by binary. Surface so the schema-not-learned
+           symptom is traceable to the parse failure. */
+        console.debug("[brain] structural-JSON request-body parse failed:", e && e.message || e, "url=" + entry.url);
+      }
     }
   }
 
@@ -1918,7 +2094,15 @@ function learnFromRequest(tabId, interfaceName, entry, headers) {
       try {
         const _cbText = new TextDecoder().decode(base64ToUint8(entry.rawBodyB64));
         chainBody = JSON.parse(_cbText);
-      } catch (_) {}
+      } catch (e) {
+        /* Chain-tracking body parse failed — request body isn't JSON
+           (binary protobuf / form-encoded / etc.). chainBody stays
+           empty so this request doesn't contribute body-value chain
+           links; URL params still flow through findChainLinks above.
+           Surface so a chain-detection gap on binary-body endpoints
+           is visible. */
+        console.debug("[brain] chain-body parse failed:", e && e.message || e, "url=" + entry.url);
+      }
     }
     const bodyValues = flattenObjectValues(chainBody);
     const links = findChainLinks(tab._valueIndex, requestParams, bodyValues, methodId);
@@ -2208,7 +2392,58 @@ function learnFromResponse(tabId, interfaceName, entry) {
   }
   if (!textBody) return;
 
-  const mimeType = entry.mimeType || "";
+  /* Magic-byte mimeType fallback. Servers commonly omit/genericize the
+     Content-Type on binary responses (application/octet-stream, or no
+     header at all); the existing isGrpcWeb/isSSE/isNDJSON dispatch
+     below is string-on-mimeType, so an unmarked gRPC-Web frame or
+     protobuf body falls through to the generic JSON path and the
+     schema/example-value extraction never runs. Per CLAUDE.md #7
+     (magic-byte sniff + content-type, never URL-suffix), peek at the
+     leading bytes and synthesize a mimeType when the server didn't
+     supply one. Real wire-format signatures (gRPC frame, protobuf
+     varint tag, gzip/zlib magic) come straight from the spec.  */
+  let mimeType = entry.mimeType || "";
+  if (!mimeType || /^application\/octet-stream(?:$|;)/i.test(mimeType)) {
+    let _sniffBytes = null;
+    if (entry.responseBase64) {
+      try { _sniffBytes = base64ToUint8(entry.responseBody); }
+      catch (e) { console.warn("[brain] mime-sniff base64 decode failed:", e && e.message || e, entry.url); }
+    } else if (typeof entry.responseBody === "string") {
+      try { _sniffBytes = new TextEncoder().encode(entry.responseBody); }
+      catch (e) { console.warn("[brain] mime-sniff encode failed:", e && e.message || e, entry.url); }
+    }
+    if (_sniffBytes && _sniffBytes.length >= 1) {
+      const b0 = _sniffBytes[0];
+      const n = _sniffBytes.length;
+      // gRPC-Web frame: flag byte (0x00 uncompressed / 0x01 compressed)
+      // + 4-byte BE payload length matching the remaining bytes
+      if (n >= 5 && (b0 === 0x00 || b0 === 0x01)) {
+        const declared = (_sniffBytes[1] << 24) | (_sniffBytes[2] << 16) | (_sniffBytes[3] << 8) | _sniffBytes[4];
+        if (declared === n - 5) mimeType = "application/grpc-web+proto";
+      }
+      // gzip magic 1f 8b — the brain doesn't decompress here, but tagging
+      // the mimeType means downstream sees a real content-encoding rather
+      // than treating gzip bytes as text and corrupting the schema.
+      if (!mimeType && n >= 2 && b0 === 0x1f && _sniffBytes[1] === 0x8b) mimeType = "application/gzip";
+      // zlib magic 78 da | 78 9c | 78 01
+      if (!mimeType && n >= 2 && b0 === 0x78 && (_sniffBytes[1] === 0xda || _sniffBytes[1] === 0x9c || _sniffBytes[1] === 0x01)) mimeType = "application/zlib";
+      // Protobuf varint tag — first byte's low 3 bits ∈ {0,1,2,5}
+      // (valid wire types) and field number > 0. Apply only when the
+      // body decidedly isn't JSON (first byte not whitespace / { / [ /
+      // " / digit / true|false|null start), since JSON is the
+      // overwhelming default.
+      if (!mimeType && (b0 !== 0x7b && b0 !== 0x5b && b0 !== 0x22 &&
+                        !(b0 >= 0x30 && b0 <= 0x39) &&
+                        b0 !== 0x74 && b0 !== 0x66 && b0 !== 0x6e &&
+                        b0 !== 0x20 && b0 !== 0x09 && b0 !== 0x0a && b0 !== 0x0d)) {
+        const wireType = b0 & 0x07;
+        const fieldNum = (b0 & 0x78) >> 3;
+        if ((wireType === 0 || wireType === 1 || wireType === 2 || wireType === 5) && fieldNum > 0) {
+          mimeType = "application/x-protobuf";
+        }
+      }
+    }
+  }
   if (isAsyncChunkedResponse(textBody)) {
     const chunks = parseAsyncChunkedResponse(textBody);
     if (chunks) {
@@ -2226,7 +2461,7 @@ function learnFromResponse(tabId, interfaceName, entry) {
         if (!callM) {
           doc.resources.learned.methods[chunkKey] = {
             id: `${interfaceName.replace(/\//g, ".")}.${chunkKey}`,
-            path: url.pathname.substring(1),
+            path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
             httpMethod: entry.method || "GET",
             parameters: {},
             request: null,
@@ -2258,7 +2493,7 @@ function learnFromResponse(tabId, interfaceName, entry) {
         if (!callM) {
           doc.resources.learned.methods[res.rpcId] = {
             id: `${interfaceName.replace(/\//g, ".")}.${res.rpcId}`,
-            path: url.pathname.substring(1),
+            path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
             httpMethod: "POST",
             parameters: {},
             request: null,
@@ -2311,7 +2546,15 @@ function learnFromResponse(tabId, interfaceName, entry) {
           mergeSchemaInto(doc, schemaName, newSchema);
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      /* gRPC-Web frame decode failed — the schema for this endpoint
+         won't be learned from THIS response, the next captured response
+         from the same URL may decode correctly. Surface so a real
+         malformed-frame symptom (server-side bug or wrong protocol
+         classification) is visible instead of disappearing into an
+         empty schema. */
+      console.debug("[brain] grpc-web frame decode failed:", e && e.message || e, "url=" + entry.url);
+    }
   } else if (isSSE(mimeType)) {
     // Server-Sent Events: learn schema from JSON data payloads
     try {
@@ -2331,7 +2574,12 @@ function learnFromResponse(tabId, interfaceName, entry) {
           }
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      /* SSE parse failed — malformed event stream (server sent
+         data without `data: ` prefix, missing terminator, etc.).
+         Surface so the schema-learning skip is observable. */
+      console.debug("[brain] SSE parse failed:", e && e.message || e, "url=" + entry.url);
+    }
   } else if (isNDJSON(mimeType)) {
     // NDJSON: learn schema from first object
     try {
@@ -2346,7 +2594,9 @@ function learnFromResponse(tabId, interfaceName, entry) {
         );
         mergeSchemaInto(doc, schemaName, newSchema);
       }
-    } catch (e) {}
+    } catch (e) {
+      console.debug("[brain] NDJSON parse failed:", e && e.message || e, "url=" + entry.url);
+    }
   } else if (isMultipartBatch(mimeType)) {
     // Multipart batch: learn schema from each part's body
     try {
@@ -2363,7 +2613,7 @@ function learnFromResponse(tabId, interfaceName, entry) {
             if (!partM) {
               doc.resources.learned.methods[partKey] = {
                 id: `${interfaceName.replace(/\//g, ".")}.${partKey}`,
-                path: url.pathname.substring(1),
+                path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
                 httpMethod: entry.method || "POST",
                 parameters: {},
                 request: null,
@@ -2379,10 +2629,17 @@ function learnFromResponse(tabId, interfaceName, entry) {
               doc.schemas,
             );
             mergeSchemaInto(doc, schemaName, newSchema);
-          } catch (_) {}
+          } catch (e) {
+            /* One part's JSON parse failed — rest of the batch still
+               processes. Surface so a malformed part on an otherwise-
+               valid batch response is visible. */
+            console.debug("[brain] multipart part JSON parse failed:", e && e.message || e, "partIdx=" + i, "url=" + entry.url);
+          }
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.debug("[brain] multipart batch parse failed:", e && e.message || e, "url=" + entry.url);
+    }
   } else if (isRSC(mimeType) || (mimeType === "" && looksLikeRSC(textBody))) {
     // React Server Components stream: line-framed `<id>:<payload>`. Each
     // json-typed row carries structured data; module-typed rows catalog
@@ -2427,9 +2684,20 @@ function learnFromResponse(tabId, interfaceName, entry) {
               }
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          /* RSC module-chunk registration failed — likely a malformed
+             rsc.modules entry. The response schema still got learned
+             above. Surface so a chunk-discovery gap on RSC bundles
+             (Next.js app router, etc.) is visible. */
+          console.debug("[brain] RSC module-chunk registration failed:", e && e.message || e, "url=" + entry.url);
+        }
       }
-    } catch (_) {}
+    } catch (e) {
+      /* RSC parse failed — malformed stream or non-RSC content that
+         looksLikeRSC false-positived. Surface so the schema-learning
+         skip is observable. */
+      console.debug("[brain] RSC parse failed:", e && e.message || e, "url=" + entry.url);
+    }
   } else if (isGraphQLUrl(url.href) && mimeType.includes("json")) {
     // GraphQL response: extract data/errors structure
     try {
@@ -2448,7 +2716,9 @@ function learnFromResponse(tabId, interfaceName, entry) {
           }
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.debug("[brain] GraphQL response parse failed:", e && e.message || e, "url=" + entry.url);
+    }
   } else if (mimeType.includes("json") || mimeType.includes("javascript") ||
              /^[\s﻿\x00-\x1f]*[{\[]/.test(textBody)) {
     // JSON or JSONP (callback-wrapped JSON returned as text/javascript) OR
@@ -2478,7 +2748,14 @@ function learnFromResponse(tabId, interfaceName, entry) {
       targetM.response = { $ref: schemaName };
       const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas);
       mergeSchemaInto(doc, schemaName, newSchema);
-    } catch (e) {}
+    } catch (e) {
+      /* JSON/JSONP response parse failed — common when the body is
+         truncated, has a JSONP callback we couldn't strip, isn't valid
+         JSON, or is just `ok`/`true`/etc. (the explicit throw above).
+         Surface so a schema-not-learned symptom traces to the parse
+         step rather than disappearing. */
+      console.debug("[brain] JSON/JSONP response parse failed:", e && e.message || e, "url=" + entry.url);
+    }
   } else if (
     mimeType.includes("protobuf") ||
     entry.contentType?.includes("protobuf") ||
@@ -2499,7 +2776,14 @@ function learnFromResponse(tabId, interfaceName, entry) {
       targetM.response = { $ref: schemaName };
       const newSchema = generateSchemaFromPbTree(tree, schemaName, doc.schemas);
       mergeSchemaInto(doc, schemaName, newSchema);
-    } catch (e) {}
+    } catch (e) {
+      /* Protobuf response decode failed — body bytes didn't decode as
+         valid wire format (might be a mis-classified text body, a
+         compressed payload the brain didn't decompress, or a truncated
+         response). Surface so the schema-not-learned symptom is
+         traceable. */
+      console.debug("[brain] protobuf response decode failed:", e && e.message || e, "url=" + entry.url);
+    }
   }
 
   // ─── Chain value indexing ─────────────────────────────────────────────────
@@ -2897,14 +3181,21 @@ async function pageContextFetch(tabId, url, opts, frameId) {
   }
 
   // Try the original tab's target frame
+  let _pageFetchErr = null;
   if (tabId != null) {
     try {
       return await sendPageFetch(tabId, url, opts, frameId ?? 0);
-    } catch (_) {}
+    } catch (e) {
+      /* Page-context fetch failed (tab closed, content script not injected,
+         frame removed, etc.). Capture the underlying reason so the caller
+         sees more than "content script unreachable". */
+      _pageFetchErr = e && e.message || String(e);
+      console.debug("[brain] pageContextFetch sendPageFetch failed:", _pageFetchErr, "tabId=" + tabId + " url=" + url);
+    }
   }
 
   return {
-    error: "relay_failed: content script unreachable on tab " + tabId,
+    error: "relay_failed: content script unreachable on tab " + tabId + (_pageFetchErr ? " (" + _pageFetchErr + ")" : ""),
   };
 }
 
@@ -3506,7 +3797,6 @@ async function handleResponseBody(tabId, msg, frameId) {
       tab.requestLog.unshift(entry);
       _trimRequestLog(tab);
       conns.set(channelId, { url: msg.url, readyState: 1, entryId: entry.id });
-      scheduleSessionSave(tabId);
       notifyPopup(tabId);
       return;
     }
@@ -3528,7 +3818,6 @@ async function handleResponseBody(tabId, msg, frameId) {
         // Cap messages to prevent storage bloat
         if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
       }
-      scheduleSessionSave(tabId);
       notifyPopup(tabId);
       return;
     }
@@ -3568,12 +3857,19 @@ async function handleResponseBody(tabId, msg, frameId) {
       let textBody = msg.body;
       if (msg.base64Encoded) {
         try { textBody = new TextDecoder().decode(base64ToUint8(msg.body)); }
-        catch (_) { textBody = null; }
+        catch (e) {
+          /* Base64-decode or UTF-8 decode of a captured WS message failed
+             — likely a binary frame (Protobuf/MessagePack/Flatbuffers)
+             rather than text. Surface so key-extraction skip is observable
+             and a future diff can route binary WS frames through the same
+             protocol classifier the brain runs on HTTP response bodies. */
+          console.debug("[brain] WS body decode failed:", e && e.message || e, "url=" + msg.url);
+          textBody = null;
+        }
       }
       if (textBody) extractKeysFromText(tabId, textBody, msg.url, "response_body");
     }
 
-    scheduleSessionSave(tabId);
     notifyPopup(tabId);
     return;
   }
@@ -3614,7 +3910,6 @@ async function handleResponseBody(tabId, msg, frameId) {
       extractKeysFromText(tabId, msg.body, msg.url, "response_body");
     }
 
-    scheduleSessionSave(tabId);
     notifyPopup(tabId);
     return;
   }
@@ -3639,7 +3934,6 @@ async function handleResponseBody(tabId, msg, frameId) {
       tab.requestLog.unshift(entry);
       _trimRequestLog(tab);
     }
-    scheduleSessionSave(tabId);
     notifyPopup(tabId);
     return;
   }
@@ -3677,7 +3971,6 @@ async function handleResponseBody(tabId, msg, frameId) {
       extractKeysFromText(tabId, msg.body, msg.url, "response_body");
     }
 
-    scheduleSessionSave(tabId);
     notifyPopup(tabId);
     return;
   }
@@ -3704,7 +3997,6 @@ async function handleResponseBody(tabId, msg, frameId) {
       extractKeysFromText(tabId, msg.body, msg.url, "response_body");
     }
     learnFromResponse(tabId, entry.service, entry);
-    scheduleSessionSave(tabId);
     notifyPopup(tabId);
     return;
   }
@@ -3789,6 +4081,12 @@ async function handleResponseBody(tabId, msg, frameId) {
     mimeType: msg.contentType || "",
     responseHeaders: msg.responseHeaders || {},
     frameId: frameId ?? 0,
+    // Bundle call-site stack captured at the network-API hook in intercept.js
+    // (`new Error().stack`, wrapper frames stripped). For a [live]-only
+    // endpoint (one the forced-execution engine didn't reach), this names the
+    // exact bundle function that fired the request — diagnostic provenance
+    // for the network-vs-AST diff.
+    callStack: msg.callStack || null,
   };
 
   // Update lastSeen on matching endpoint
@@ -3809,7 +4107,16 @@ async function handleResponseBody(tabId, msg, frameId) {
     let textBody = msg.body;
     if (msg.base64Encoded) {
       try { textBody = new TextDecoder().decode(base64ToUint8(msg.body)); }
-      catch (_) { textBody = null; }
+      catch (e) {
+        /* Base64 / UTF-8 decode failure on a captured response body — most
+           often a binary frame (Protobuf / gRPC-Web / image / gzipped) that
+           the text-decoder rejects. Surface so the skipped key-extraction
+           is observable instead of silent (was `catch (_) { textBody = null }`,
+           which dropped the diagnostic). The classifier below still runs on
+           the raw bytes via magic-byte sniff. */
+        console.debug("[brain] response body text-decode failed:", e && e.message || e, "url=" + msg.url);
+        textBody = null;
+      }
     }
     if (textBody) extractKeysFromText(tabId, textBody, msg.url, "response_body");
   }
@@ -3871,7 +4178,9 @@ async function handleResponseBody(tabId, msg, frameId) {
                 entry.isJspb = true;
               }
             }
-          } catch (_) {}
+          } catch (e) {
+            console.debug("[brain] JSPB-in-text body parse failed:", e && e.message || e, "url=" + msg.url);
+          }
         } else {
           entry.decodedBody = pbDecodeTree(bytes, 8, (val) => {
             if (typeof val === "string") {
@@ -3891,16 +4200,19 @@ async function handleResponseBody(tabId, msg, frameId) {
               entry.isJspb = true;
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          console.debug("[brain] form-urlencoded f.req decode failed:", e && e.message || e, "url=" + msg.url);
+        }
       } else {
         // Try JSON parsing for any non-protobuf, non-form-encoded body.
         // Many analytics SDKs (reddit's /svc/shreddit/events, GA, sentry,
         // segment, ...) send JSON bodies with `Content-Type: text/plain`
         // to bypass CORS preflight. Gating on the content-type alone
         // misses every one. Body STRUCTURE is authoritative: if it parses
-        // as a JSON object/array, treat as JSON. Failed parses fall
-        // through silently — text/binary bodies that aren't JSON simply
-        // don't get field extraction (the existing behaviour for them).
+        // as a JSON object/array, treat as JSON. A failed parse is the
+        // expected outcome for text/binary bodies that aren't JSON; we
+        // surface the diagnostic so a NEW class of mis-detected body is
+        // visible rather than silently absent from field-extraction.
         try {
           const text = new TextDecoder().decode(bytes);
           const trimmed = text.trimStart();
@@ -3911,9 +4223,13 @@ async function handleResponseBody(tabId, msg, frameId) {
               entry.isJson = true;
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          console.debug("[brain] structural-JSON request-body parse failed:", e && e.message || e, "url=" + msg.url);
+        }
       }
-    } catch (_) {}
+    } catch (e) {
+      console.debug("[brain] request-body decode outer failed:", e && e.message || e, "url=" + msg.url);
+    }
   }
 
   // Learn from request — skipped only for "boring" fetches. Image APIs
@@ -4020,7 +4336,6 @@ async function handleResponseBody(tabId, msg, frameId) {
   }
 
   mergeToGlobal(tab);
-  scheduleSessionSave(tabId);
   notifyPopup(tabId);
 }
 
@@ -4445,7 +4760,6 @@ const _analysisInflight = new Set();
 async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
   if (!buf || !Array.isArray(chunkUrls) || chunkUrls.length === 0) return;
   if (buf._chunkRoundDone) return;
-  buf._chunkRoundDone = true;
   if (!buf._chunkSeen) buf._chunkSeen = new Set();
   var known = new Set();
   var maxOrder = 0;
@@ -4453,14 +4767,61 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
     if (buf.scripts[i].url) known.add(buf.scripts[i].url);
     if (typeof buf.scripts[i].order === "number" && buf.scripts[i].order > maxOrder) maxOrder = buf.scripts[i].order;
   }
+  /* Resolve chunk URLs (script/Worker/SharedWorker constructors) against
+     the page base BEFORE filtering. Worker/SharedWorker callers usually
+     pass a relative path (`new Worker("/static/worker.js")`); the
+     previous `^https?:\/\/` filter dropped them outright, so every fetch
+     surface inside Worker bundles was invisible. Use the tab's page URL
+     as base; fall back to the buffer's first script URL if no tab meta. */
+  var _baseUrl = null;
+  try {
+    var _meta = _tabMeta.get(tabId);
+    if (_meta && _meta.url) _baseUrl = _meta.url;
+    else if (buf.scripts.length && buf.scripts[0].url) _baseUrl = buf.scripts[0].url;
+  } catch (e) {
+    console.warn("[chunkUrls] base url lookup failed:", e && e.message || e);
+  }
   var fresh = [];
   for (var j = 0; j < chunkUrls.length; j++) {
     var u = chunkUrls[j];
-    if (!u || known.has(u) || buf._chunkSeen.has(u) || !/^https?:\/\//i.test(u)) continue;
-    buf._chunkSeen.add(u);
-    fresh.push(u);
+    if (!u) continue;
+    var absU = null;
+    if (/^https?:\/\//i.test(u)) absU = u;
+    else if (_baseUrl) {
+      try { absU = new URL(u, _baseUrl).href; }
+      catch (e) {
+        console.warn("[chunkUrls] resolve failed for", u, "vs", _baseUrl, ":", e && e.message || e);
+        continue;
+      }
+    } else {
+      /* No base URL available — can't resolve a relative chunk path. The
+         emission is preserved on chunkUrls for diagnostic visibility but
+         not downloaded. Surface so the gap is visible. */
+      console.debug("[chunkUrls] dropped relative URL (no base):", u);
+      continue;
+    }
+    if (known.has(absU) || buf._chunkSeen.has(absU)) continue;
+    buf._chunkSeen.add(absU);
+    fresh.push(absU);
   }
-  if (fresh.length === 0) return;
+  if (fresh.length === 0) {
+    // No new lazy chunks to fetch — but the deep grind (orphan residue
+    // drive) is valuable for EVERY page, not just chunk-heavy ones. It's
+    // what drives wrapper-callers like `mxe(){return M("/site-header.json")}`
+    // to resolve the concrete URL. Gating it behind a successful chunk
+    // download meant a no-lazy-chunk site (learn.microsoft.com) NEVER ran
+    // the deep grind, so its load-time wrapper fetches (site-header.json,
+    // toc.json, taxonomies, …) stayed unlearned — confirmed live: 5 ast
+    // endpoints, empty deep-status, 7 real fetch() calls missed. Run the
+    // deep pass once: _chunkRoundDone=true makes the inner call dispatch
+    // deep=true, and the top-of-function `if (buf._chunkRoundDone) return`
+    // guard prevents re-entry/recursion. Reset on throw so a wasm trap
+    // doesn't permanently lock out a later retry (mirrors the download path).
+    buf._chunkRoundDone = true;
+    try { await _analyzeCombinedScriptsInner(tabId, buf); }
+    catch (e) { buf._chunkRoundDone = false; throw e; }
+    return;
+  }
   console.debug("[AST:chunks] tab=%d: %d new lazy chunk(s) to download", tabId, fresh.length);
   var added = 0;
   var CONC = 8;
@@ -4488,10 +4849,31 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
       }
     }
   }
-  if (added === 0) return;
+  if (added === 0) {
+    // Every candidate chunk failed to download, but the deep grind must
+    // still run on the scripts we DO have (same rationale as the no-fresh-
+    // chunks path above — the orphan residue drive isn't chunk-dependent).
+    buf._chunkRoundDone = true;
+    try { await _analyzeCombinedScriptsInner(tabId, buf); }
+    catch (e) { buf._chunkRoundDone = false; throw e; }
+    return;
+  }
   console.debug("[AST:chunks] tab=%d: folded in %d chunk(s), re-analysing (%d scripts total)",
     tabId, added, buf.scripts.length);
-  await _analyzeCombinedScriptsInner(tabId, buf);
+  /* Set _chunkRoundDone BEFORE the inner call so _analyzeCombinedScriptsInner
+     reads it as TRUE and passes seedOnly+deep=true to the worker (chunk-
+     fold round runs the SEED + deep-grind, NOT another full value-spread
+     BFS over the now-647-script bundle). The earlier "set after success
+     only" version turned round-2 into a full-BFS run that ate ~95s × 429
+     schedules and skipped the deep grind entirely — observed live as
+     deepStats.steps=0 on round-2. The flag is reset to FALSE inside the
+     catch so a thrown inner call (wasm memory trap on a pathological
+     chunk, etc.) doesn't permanently lock out retry — late script
+     arrivals can trigger _maybeDownloadChunks again, which will see
+     _chunkRoundDone=false and proceed. */
+  buf._chunkRoundDone = true;
+  try { await _analyzeCombinedScriptsInner(tabId, buf); }
+  catch (e) { buf._chunkRoundDone = false; throw e; }
 }
 
 // Review queue. New pages (and their JS) are QUEUED, then a single drainer
@@ -4512,13 +4894,49 @@ async function _drainReviewQueue() {
   _reviewDraining = true;
   try {
     while (_reviewQueue.length) {
-      var tabId = _reviewQueue.shift();
+      /* Recency-priority pick instead of FIFO shift — when the user tabs to
+         a different page while an older queued tab is still waiting, the
+         tab they're LOOKING AT gets analyzed next. The comparator lives in
+         lib/priority.js (ORDER only, never COVERAGE — every queued tab still
+         gets analyzed eventually). _tabMeta.lastActivatedTs is bumped on
+         TAB_ACTIVATED; tabs without a recorded activation timestamp default
+         to 0 and trail the recently-activated cohort. */
+      var tabId = self._priorityCmp.pickFromReviewQueue(_reviewQueue, function (t) {
+        var meta = _tabMeta.get(t);
+        return (meta && meta.lastActivatedTs) || 0;
+      });
+      if (tabId == null) break;
       var buf = _scriptBuffers.get(tabId);
       if (!buf || buf.scripts.length === 0) continue;
+      /* Same-tab guard: a re-queue from a late-arriving script for a tab
+         whose analysis is STILL IN FLIGHT (round-1 BFS or chunk-merged
+         round-2 still grinding) must not spawn a CONCURRENT second call —
+         two wasm instances on the same 4.4MB+ bundle would compete for
+         memory (wasm `memory.grow` is monotonic per-instance) and one
+         would trap "memory access out of bounds" mid-eval. The previous
+         absence of this guard produced 7 concurrent round-2 retries on
+         github, each duplicating the 17MB compiled-bytecode footprint.
+         Different tabId CAN still run concurrently — JSPI scheduler
+         interleaves them at yield points. The re-queue isn't dropped;
+         the late scripts are folded into the current buf and the next
+         drain iteration after the in-flight one finishes will pick them
+         up via the cache-miss path. */
+      if (_analysisInflight.has(tabId)) continue;
       _analysisInflight.add(tabId);
-      try { await _analyzeCombinedScriptsInner(tabId, buf); }
-      catch (e) { console.debug("[AST:queue] tab=%d review error: %s", tabId, e && e.message); }
-      finally { _analysisInflight.delete(tabId); }
+      /* Fire-and-forget — do NOT await. With the worker's JSPI scheduler
+         (ast-thread.js _yieldDrain + _flowCmp), each page's analysis runs
+         in its own wasm instance and interleaves with others at JSPI yield
+         points by lexicographic priority (active-page focus, reaches-host-
+         edge, recent emissions, visit recency, anti-starvation). Awaiting
+         here would serialize and reduce the scheduler to a trivial pick-
+         the-only-fiber loop — the same behavior we'd get without JSPI.
+         The brain's per-tab cache + _dataEpoch guard already keep results
+         attribution-correct under concurrency; errors surface via
+         analysis.resolverErrors (worker-side) or _astError (this side),
+         not lost via a bare catch. */
+      _analyzeCombinedScriptsInner(tabId, buf)
+        .catch(function (e) { console.debug("[AST:queue] tab=%d review error: %s", tabId, e && e.message); })
+        .finally(function () { _analysisInflight.delete(tabId); });
     }
   } finally { _reviewDraining = false; }
 }
@@ -4653,7 +5071,15 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
         savedAt: Date.now(),
       });
       scheduleSave();
-    } catch (_) {}
+    } catch (e) {
+      /* Persisting the deep-resume metadata (combined→chunk line map +
+         per-chunk source-map URLs) failed. Without these, an SW-eviction
+         resume of the deep grind reads back the chunks but can't resolve
+         source-map names (e/a → owner/repo) on its merged @H records —
+         labels stay minified. Surface so a quota / IDB-lock condition
+         is diagnosable; the deep grind itself still runs. */
+      console.warn("[brain] deepResumeMeta persist failed:", e && e.message || e, "tabUrl=" + tabUrl);
+    }
   }
 
   // Analyze combined in offscreen document (non-blocking)
@@ -4747,7 +5173,28 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // ─── Cache the analysis result ──────────────────────────────────────
   // Cache key already encodes the analyzer fingerprint + script hashes;
   // no separate version field — a stale fingerprint just won't match.
-  if (cacheKey) {
+  //
+  // BUT: don't cache a DEGENERATE result — a run that produced zero learned
+  // facts AND surfaced a resolverError is a host-model gap (e.g. the wasm
+  // aborted mid-bundle, JSPI suspend failed, GC residue assert tripped).
+  // Caching it under the script-hash key would block re-analysis even after
+  // the engine bug is fixed: the next navigation hashes the same scripts,
+  // hits the cache, replays the empty result. The analyzer-fingerprint
+  // covers the JS worker source but NOT the embedded wasm — a wasm rebuild
+  // does not bump it, so the cache stays wedged until the user explicitly
+  // hits the bin/Clear button. Skipping the cache write on a degenerate
+  // result means a fresh navigation actually re-runs against the fixed
+  // engine. A run with at least one fact or no resolverError is preserved
+  // (the structural-learning rule — a real "no endpoints on this page" is
+  // legitimate; a resolverError-bearing zero is not).
+  var _hasFacts = ((analysis.fetchCallSites && analysis.fetchCallSites.length) ||
+                   (analysis.securitySinks && analysis.securitySinks.length) ||
+                   (analysis.protoEnums && analysis.protoEnums.length) ||
+                   (analysis.protoFieldMaps && analysis.protoFieldMaps.length) ||
+                   (analysis.domEndpoints && analysis.domEndpoints.length) ||
+                   (analysis.chunkUrls && analysis.chunkUrls.length));
+  var _hasResolverErr = analysis.resolverErrors && analysis.resolverErrors.length > 0;
+  if (cacheKey && !(_hasResolverErr && !_hasFacts)) {
     globalStore.scriptCache.set(cacheKey, {
       result: JSON.parse(JSON.stringify(analysis)), // deep copy to avoid aliasing
       scriptOffsets: scriptOffsets,
@@ -4755,6 +5202,8 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
       timestamp: Date.now(),
     });
     scheduleSave();
+  } else if (cacheKey) {
+    console.debug("[AST:cache] SKIPPING write for tab=%d (degenerate result: %d resolverErrors, no learned facts) — next navigation will retry", tabId, analysis.resolverErrors.length);
   }
 
   // Cross-file definition index is populated by analyzeJSBundle's pre-pass
@@ -4762,10 +5211,22 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // combined-bundle lines back into per-script coords on first request.
 
   if (analysis.resolverErrors && analysis.resolverErrors.length > 0) {
+    // Surface to the popup diagnostic view, not console-only. A reached-but-
+    // opaque host call (fully-opaque URL/method) or a host-model gap (@E
+    // bundle throw) is a P1 the reviewer must SEE and act on — per CLAUDE.md
+    // "@WHY/diagnostics SHOULD be exposed in the popup's diagnostic view".
+    // Deduped by message (the distinct-message set is the natural bound — no
+    // cap); diagnostic buffer, not analysis state, so it drops nothing learned.
+    if (!Array.isArray(tab._resolverErrors)) tab._resolverErrors = [];
+    var _seenRe = new Set(tab._resolverErrors.map(function (r) { return r.message; }));
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
       var _re = analysis.resolverErrors[_rei];
       console.debug("[AST:resolver] %s: %s", _re.context, _re.message);
       if (_re.stack) console.debug(_re.stack);
+      if (!_seenRe.has(_re.message)) {
+        _seenRe.add(_re.message);
+        tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null });
+      }
     }
   }
 
@@ -5011,10 +5472,22 @@ async function analyzeScript(tabId, scriptUrl, code) {
   analysis.scriptOffsets = [{ url: scriptUrl, lineStart: 1 }];   // single-script: trivial offset map
 
   if (analysis.resolverErrors && analysis.resolverErrors.length > 0) {
+    // Surface to the popup diagnostic view, not console-only. A reached-but-
+    // opaque host call (fully-opaque URL/method) or a host-model gap (@E
+    // bundle throw) is a P1 the reviewer must SEE and act on — per CLAUDE.md
+    // "@WHY/diagnostics SHOULD be exposed in the popup's diagnostic view".
+    // Deduped by message (the distinct-message set is the natural bound — no
+    // cap); diagnostic buffer, not analysis state, so it drops nothing learned.
+    if (!Array.isArray(tab._resolverErrors)) tab._resolverErrors = [];
+    var _seenRe = new Set(tab._resolverErrors.map(function (r) { return r.message; }));
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
       var _re = analysis.resolverErrors[_rei];
       console.debug("[AST:resolver] %s: %s", _re.context, _re.message);
       if (_re.stack) console.debug(_re.stack);
+      if (!_seenRe.has(_re.message)) {
+        _seenRe.add(_re.message);
+        tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null });
+      }
     }
   }
 
@@ -5306,16 +5779,22 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
         // method registration (endpoint list shows "what fetches exist
         // on this page," method list shows "what API endpoints we know").
         var bundleId = analysis.sourceUrl ? analysis.sourceUrl.replace(/^https?:\/\//, "").slice(-60) : "";
+        // __feUrlShape renders an opaque path segment as {id}; the worker's
+        // ep() emits that, but new URL() (csUrl) re-encodes the braces to
+        // %7B/%7D. Decode so the learned endpoint path keeps the OpenAPI
+        // template ({id}) instead of %7Bid%7D — used for BOTH the dedup key
+        // and the stored path so they stay consistent.
+        var _csPath = csUrl.pathname.replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}");
         var epKey = isDynamic
           ? "AST DYN " + bundleId + " " + (callSite.enclosingFunction || "anon") + " " + callSite.method + " " + fc
-          : "AST " + callSite.method + " " + csUrl.pathname;
+          : "AST " + callSite.method + " " + _csPath;
         if (!tab.endpoints.has(epKey)) {
           var _epMeta = _tabMeta.get(tabId);
           tab.endpoints.set(epKey, {
             url: isDynamic ? callSite.url : csUrl.href,
             method: callSite.method,
             host: isDynamic ? sourceHost : csUrl.hostname,
-            path: isDynamic ? callSite.url : csUrl.pathname,
+            path: isDynamic ? callSite.url : _csPath,
             service: interfaceName,
             source: isDynamic ? "ast_dynamic" : "ast_analysis",
             pageUrl: _epMeta ? _epMeta.url : null,
@@ -5361,7 +5840,15 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
           pageUrl: deBase,
           firstSeen: Date.now(),
         });
-      } catch (_) {}
+      } catch (e) {
+        /* DOM-endpoint registration failed for one entry — almost always
+           a malformed `url` attribute (relative path the bundle didn't
+           normalize, javascript: handler we didn't filter early enough,
+           etc.). Other entries in the batch still register. Surface
+           so a real DOM-extraction regression on a vendor page is
+           visible instead of disappearing into an empty endpoint list. */
+        console.debug("[brain] DOM endpoint registration failed:", e && e.message || e, "url=" + (domEp && domEp.url), "src=" + (domEp && domEp.source));
+      }
     }
 
     // Store security findings on tab state (only once per analysis — skip if already merged)
@@ -5450,7 +5937,6 @@ function _handleFormSubmit(tabId, msg) {
   };
 
   tab.requestLog.push(entry);
-  scheduleSessionSave(tabId);
 
   // Learn from the form submission
   learnFromRequest(tabId, service, entry, entry.requestHeaders);
@@ -5495,6 +5981,22 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
     // must NOT fetch maps here — it is evicted mid-grind, so any SW-side map fetch
     // / cache is unreliable. The SW only merges what the worker resolved.
     mergeASTResultsIntoVDD(_rtab, [result], _rtid);
+    // Surface the deep grind's resolverErrors too — the orphan drive is where
+    // most reached-but-opaque host calls (fully-opaque URLs from cold-orphan
+    // wrappers) come from, and they arrive on the partial/resumed result here,
+    // NOT the initial combined analysis. Without this the popup diagnostic
+    // would only ever show the seed pass's gaps. Deduped by message.
+    if (result.resolverErrors && result.resolverErrors.length) {
+      if (!Array.isArray(_rtab._resolverErrors)) _rtab._resolverErrors = [];
+      var _seenDre = new Set(_rtab._resolverErrors.map(function (r) { return r.message; }));
+      for (var _dri = 0; _dri < result.resolverErrors.length; _dri++) {
+        var _dre = result.resolverErrors[_dri];
+        if (_dre && !_seenDre.has(_dre.message)) {
+          _seenDre.add(_dre.message);
+          _rtab._resolverErrors.push({ context: _dre.context, message: _dre.message, snippet: _dre.snippet || null });
+        }
+      }
+    }
     mergeToGlobal(_rtab);
     notifyPopup(_rtid);
     console.debug("[AST:deep] merged for %s into tab=%d", _rurl, _rtid);
@@ -5627,17 +6129,50 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       const tab = tabId != null ? getTab(tabId) : null;
       const data = tab ? serializeTabData(tab) : null;
       if (data) {
-        let _ds = _deepStatsByTab.get(tabId);
-        if (!_ds) {
-          // The popup may be showing a different active tab than the one being
-          // ground (it opens against whatever tab is active — often not the
-          // analyzed page). Endpoints/findings are global, so surface the
-          // most-recently-updated grind's progress regardless of tab.
-          let _best = null;
-          _deepStatsByTab.forEach((v) => { if (!_best || (v.ts || 0) > (_best.ts || 0)) _best = v; });
-          _ds = _best;
-        }
+        // Per-tab head = THIS tab's grind ONLY. The previous cross-tab
+        // "most-recently-updated grind regardless of tab" fallback
+        // MISATTRIBUTED another page's progress to the active tab — e.g.
+        // after navigating a tab from github to learn.microsoft.com, the
+        // MS tab's deep-status read github's "complete", making it
+        // impossible to tell whether MS's own grind had run. Cross-tab
+        // visibility is the `_all` list below; the head must be accurate
+        // to the tab the popup is showing or it lies about which page has
+        // background work.
+        const _ds = _deepStatsByTab.get(tabId);
         if (_ds) data.deepStats = _ds;
+        // Cross-tab task-status surface: every page with a tracked grind, its
+        // progress, and whether it's currently paused for a higher-priority
+        // live review. Honest visibility into the background scheduling that
+        // would otherwise be invisible to the user. Display-only (no controls).
+        const _all = [];
+        _deepStatsByTab.forEach((v, k) => {
+          const meta = _tabMeta.get(k);
+          _all.push({
+            tabId: k,
+            pageUrl: meta && meta.url ? meta.url : "",
+            title: meta && meta.title ? meta.title : "",
+            total: v.total || 0,
+            rem: typeof v.rem === "number" ? v.rem : (v.total || 0),
+            done: Math.max(0, (v.total || 0) - (typeof v.rem === "number" ? v.rem : 0)),
+            // stop="yielded@step…" → the grind paused mid-batch for a fresh
+            // page review (preemption). stop="complete" / null → finished or
+            // running normally. Surface verbatim so the UI can label it.
+            stop: v.stop || null,
+            steps: v.steps || 0,
+            ts: v.ts || 0,
+            // Phase-timing decomposition (ms) for measuring where real-bundle
+            // time goes — BFS phase vs deep grind, and the snapshot's own
+            // boot/memcpy cost (memcpy scales with image size; the unvalidated bit).
+            bfsMs: v.bfsMs || 0, bootMs: v.bootMs || 0, memcpyMs: v.memcpyMs || 0, bcMs: v.bcMs || 0, deepMs: v.deepMs || 0,
+            // Driving-completeness frontier: of the driven orphan @T functions,
+            // how many fired NO host call (threw before the fetch / returned
+            // without one). High dnf ⇒ the gaps are driven-but-not-firing
+            // (event-gated / deep opaque chain); low dnf ⇒ gaps are not-in-residue.
+            dnfThrew: v.dnfThrew || 0, dnfRet: v.dnfRet || 0,
+          });
+        });
+        _all.sort((a, b) => b.ts - a.ts);   // most-recent grind first (mirrors the scheduler's recency-ordered rotation)
+        data.allDeepStats = _all;
       }
       sendResponse(data);
       return;
@@ -5825,50 +6360,80 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         // 2. Global findings + the persisted gapiStore (and the SW-side review
         //    queue / deepResumeMeta, cleared inside clearGlobalStore).
         await clearGlobalStore();
-        // 3. All request logs — in-memory and the persisted session copy —
-        //    plus the per-tab working state that feeds re-analysis, so the next
+        // 3. All in-memory request logs + per-tab working state, so the next
         //    navigation starts from a genuinely empty slate.
-        for (const tid of _sessionSaveTimers.values()) clearTimeout(tid);
-        _sessionSaveTimers.clear();
         state.tabs.clear();
         _scriptBuffers.clear();
         _wsConnState.clear();
-        try { await swRpc("storage.session.clear"); } catch (e) {}
         sendResponse({ ok: true });
       })();
       return true;   // async sendResponse
     }
 
+    case "GET_ANALYSIS_OPTS": {
+      // IDB-backed analysis options (cooling + workers UI knobs). On first
+      // read, the record may not exist yet — return an empty object so
+      // the popup falls back to its HTML defaults. The brain's single
+      // "global" object store uses key "analysisOpts" for this record.
+      let opts = null;
+      try { opts = await _idbGet("analysisOpts"); }
+      catch (e) {
+        /* Reading the IDB opts record failed — surface so a corrupt/locked
+           IDB is diagnosable. Return an empty object so the popup still
+           renders with HTML defaults. */
+        console.warn("[brain] GET_ANALYSIS_OPTS idb read failed:", e && e.message || e);
+      }
+      sendResponse(opts || {});
+      return;
+    }
+
+    case "SET_ANALYSIS_OPTS": {
+      // Merge the incoming partial opts into the persisted record, then
+      // broadcast via astDispatch so the worker pool (dispatcher) updates
+      // its size + forwards yieldThrottleMs to each pool worker.
+      let cur = null;
+      try { cur = await _idbGet("analysisOpts"); } catch (e) {
+        console.warn("[brain] SET_ANALYSIS_OPTS idb read failed:", e && e.message || e);
+      }
+      const next = Object.assign({}, cur || {}, msg.opts || {});
+      try { await _idbSet("analysisOpts", next); }
+      catch (e) {
+        /* Persist failed — the in-memory propagation below still happens
+           so the user's setting takes effect this session, but it won't
+           survive a restart. Surface so quota/lock is visible. */
+        console.warn("[brain] SET_ANALYSIS_OPTS idb put failed:", e && e.message || e);
+      }
+      try { self.astDispatch({ type: "SET_ANALYSIS_OPTS", opts: next }); }
+      catch (e) {
+        console.warn("[brain] SET_ANALYSIS_OPTS dispatch failed:", e && e.message || e);
+      }
+      sendResponse({ ok: true });
+      return;
+    }
+
     case "CLEAR_LOG": {
+      // Request logs live in-memory only now (session storage layer removed
+      // — the offscreen document's stable lifetime makes the mirror moot).
+      // Clearing the in-memory array IS the operation.
       if (msg.clearAll) {
-        for (const [tid, t] of state.tabs) {
-          t.requestLog = [];
-          swRpc("storage.session.remove", `reqLog_${tid}`).catch(() => {});
-        }
-        saveSessionIndex();
+        for (const [, t] of state.tabs) t.requestLog = [];
       } else {
         if (tabId == null) return;
-        const tab = getTab(tabId);
-        tab.requestLog = [];
-        swRpc("storage.session.remove", `reqLog_${tabId}`).catch(() => {});
-        saveSessionIndex();
+        getTab(tabId).requestLog = [];
       }
       sendResponse({ ok: true });
       return;
     }
 
     case "GET_TAB_LIST": {
+      // Single pass over state.tabs — closed tabs stay in state.tabs (with
+      // meta.closed=true) instead of being moved to a session-storage mirror,
+      // so one iteration covers live AND closed entries.
       const tabs = [];
       for (const [tid, t] of state.tabs) {
         if (t.requestLog.length === 0) continue;
         const meta = _tabMeta.get(tid) || { title: `Tab ${tid}`, url: "" };
         tabs.push({ tabId: tid, title: meta.title, url: meta.url, count: t.requestLog.length, closed: !!meta.closed });
-      }
-      // Also include closed tabs from metadata that still have session storage
-      for (const [tid, meta] of _tabMeta) {
-        if (meta.closed && !state.tabs.has(tid)) {
-          tabs.push({ tabId: tid, title: meta.title, url: meta.url, count: meta.count || 0, closed: true });
-        }
       }
       sendResponse(tabs);
       return;
@@ -6100,8 +6665,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         if (entry) {
           entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data || "", base64: false });
           if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
-          scheduleSessionSave(tabId);
-          notifyPopup(tabId);
+              notifyPopup(tabId);
         }
         sendResponse({ ok: true });
       }).catch((err) => sendResponse({ error: err.message }));
@@ -6132,8 +6696,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         if (entry) {
           entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data || "", base64: false });
           if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
-          scheduleSessionSave(tabId);
-          notifyPopup(tabId);
+              notifyPopup(tabId);
         }
         sendResponse({ ok: true });
       }).catch((err) => sendResponse({ error: err.message }));
@@ -6353,7 +6916,14 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         if (!svcName && spec.servers?.[0]?.url) {
           try {
             svcName = new URL(spec.servers[0].url).hostname;
-          } catch (_) {}
+          } catch (e) {
+            /* OpenAPI spec's `servers[0].url` isn't a valid absolute URL
+               (relative or templated like `{protocol}://api/v1`). Fall
+               back to spec.info.title below. Surface so a malformed
+               spec doesn't silently lose its hostname-based service
+               key. */
+            console.debug("[brain] OpenAPI servers[0].url parse failed:", e && e.message || e, "url=" + spec.servers[0].url);
+          }
         }
         if (!svcName) {
           svcName = (spec.info?.title || "imported")
@@ -6677,7 +7247,14 @@ async function _findProbeTargetTab(pageUrl, marker) {
     for (const t of tabs) {
       if (t.url && t.url.indexOf(needleMarker) !== -1) return t.id;
     }
-  } catch (_) {}
+  } catch (e) {
+    /* tabs.query failed (SW RPC error, restricted permission, etc.)
+       — the postMessage probe can't find its target tab so the
+       finding reports NOT REPRODUCED. Surface so a real RPC outage
+       is diagnosable instead of looking like "the exploit just
+       didn't fire". */
+    console.warn("[brain] _findProbeTargetTab tabs.query failed:", e && e.message || e, "pageUrl=" + pageUrl);
+  }
   return null;
 }
 
@@ -6774,7 +7351,15 @@ async function _runExploitProbe(session) {
           else if (d === "uri-component") shaped = encodeURIComponent(String(shaped));
           else if (d === "uri") shaped = encodeURI(String(shaped));
           else if (d === "base64") shaped = btoa(unescape(encodeURIComponent(String(shaped))));
-        } catch (_) {}
+        } catch (e) {
+          /* Pre-encoding step failed — common when `shaped` contains
+             characters outside the encoder's domain (e.g. raw bytes
+             through btoa, lone surrogates through encodeURI). The probe
+             would deliver a partially-encoded payload that the bundle's
+             decoder chain can't unpack, so the exploit looks NOT
+             REPRODUCED when actually the payload never assembled. */
+          console.warn("[brain] probe pre-encode failed:", e && e.message || e, "decoder=" + d);
+        }
       }
       const tgtTab = await swRpc("tabs.create", { url: targetWithMarker, active: false });
       session.openedTabs.push(tgtTab.id);
@@ -7253,6 +7838,31 @@ function _onTabUpdated(m) {
   for (const fn of _tabUpdatedListeners) { try { fn(m.tabId, m.changeInfo || {}, m.tab || {}); } catch (_) {} }
 }
 
+// Tab focus (switching to an already-loaded tab) is the live "which page is
+// relevant now" signal — make that page's incomplete background deep grind lead
+// the next rotation round. The worker owns feDeepDB (where per-page visit
+// recency `vts` lives), so it does the bump; we just hand it the focused URL.
+async function _onTabActivated(tabId) {
+  /* Bump _tabMeta.lastActivatedTs so the review-queue picker
+     (priority.js pickFromReviewQueue) orders by user attention — the tab
+     just brought to the foreground jumps ahead of older queued tabs. */
+  let meta = _tabMeta.get(tabId);
+  if (!meta) { meta = { title: "Tab " + tabId, url: "" }; _tabMeta.set(tabId, meta); }
+  meta.lastActivatedTs = Date.now();
+  let url = meta.url;
+  if (!url) {
+    try {
+      const t = await swRpc("tabs.get", tabId);
+      if (t && t.url) { url = t.url; meta.url = url; meta.title = t.title || meta.title; }
+    } catch (e) {
+      console.debug("[brain:_onTabActivated] tabs.get failed for tabId=%d: %s", tabId, e && e.message || e);
+    }
+  }
+  if (!url || !/^https?:/i.test(url)) return;
+  try { sendToOffscreen({ type: "DEEP_FOCUS", pageUrl: String(url).split("#")[0] }); }
+  catch (e) { console.debug("[brain:_onTabActivated] DEEP_FOCUS dispatch failed: %s", e && e.message || e); }
+}
+
 // The brain runs in the OFFSCREEN document and receives messages DIRECTLY:
 // chrome.runtime.sendMessage broadcasts to every extension context, so both our
 // content scripts (in web renderers) and the popup reach this document without
@@ -7277,6 +7887,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.__evt === "NAV") _onNav(msg);
     else if (msg.__evt === "TAB_REMOVED") _onTabRemoved(msg.tabId);
     else if (msg.__evt === "TAB_UPDATED") _onTabUpdated(msg);
+    else if (msg.__evt === "TAB_ACTIVATED") _onTabActivated(msg.tabId);
     return;
   }
 
@@ -7337,22 +7948,27 @@ function _absorbChunk(msg) {
 
 // Forwarded by the SW as __evt TAB_REMOVED (the offscreen can't observe tabs).
 function _onTabRemoved(tabId) {
-  // Keep session storage logs so closed tab requests remain viewable
+  // Closed-tab request logs remain VIEWABLE for the offscreen-document's
+  // lifetime. The old session-storage mirror existed because the brain used
+  // to live in the SW (evicted) — the offscreen brain doesn't need that
+  // mirror, but we still preserve the in-memory state.tabs entry so the
+  // popup's "All Tabs" / per-tab-history filter can show closed-tab logs
+  // until the user clicks the bin button. Mark meta.closed/closedAt so the
+  // tab list distinguishes live vs closed entries.
   const meta = _tabMeta.get(tabId);
   if (meta) {
-    const tab = state.tabs.get(tabId);
     meta.closed = true;
     meta.closedAt = Date.now();
-    meta.count = tab ? tab.requestLog.length : meta.count || 0;
   }
-  state.tabs.delete(tabId);
+  // Only the transient working state is freed — the live frame index, the
+  // WebSocket connection map, the script-fetch buffer. These don't survive
+  // tab close because the page is gone; the request log is HISTORY and
+  // stays.
   _wsConnState.delete(tabId);
   _tabFrames.delete(tabId);
-  // Clean up script buffer and cancel pending analysis
   var buf = _scriptBuffers.get(tabId);
   if (buf && buf.timer) clearTimeout(buf.timer);
   _scriptBuffers.delete(tabId);
-  saveSessionIndex();
 }
 
 // ─── Send Request: Schema Resolution ─────────────────────────────────────────
@@ -8222,7 +8838,12 @@ async function executeSendRequest(tabId, msg) {
                 extractKeysFromText(tabId, val, url, "send_response_grpc");
               }
             });
-          } catch (_) {}
+          } catch (e) {
+            /* One frame's protobuf decode failed — other frames in the
+               same response still process. Surface so a malformed frame
+               on an otherwise-valid response is visible. */
+            console.debug("[brain] send-response grpc-web frame decode failed:", e && e.message || e, "url=" + url);
+          }
         }
       }
       // Serialize bytes as base64 array for message passing
@@ -8232,7 +8853,13 @@ async function executeSendRequest(tabId, msg) {
         raw: resp.body,
         size: bytes.length,
       };
-    } catch (_) {
+    } catch (e) {
+      /* Outer gRPC-Web frame parse failed — bytes weren't valid frame
+         format. Fall back to binary blob so the reviewer still sees
+         the raw response, but surface the parse failure so the format
+         mismatch (likely a server bug or wrong content-type) is
+         diagnosable. */
+      console.warn("[brain] send-response grpc-web parse failed:", e && e.message || e, "url=" + url);
       bodyResult = {
         format: "binary",
         parsed: null,
@@ -8539,6 +9166,7 @@ function serializeTabData(tab) {
     probeResults: mergedProbe,
     requestLog: tab.requestLog || [],
     securityFindings: mergedSecurityFindings(tab),
+    resolverErrors: tab._resolverErrors || [],
   };
 }
 

@@ -156,12 +156,12 @@ Cross-frame postMessage / MessageChannel ──→ content.js (message listener)
 
 ### Storage
 
-All learned state lives in **IndexedDB in the offscreen document** (the brain's stable home). `chrome.storage.local` is **banned** (a compromised renderer could read cross-site structural metadata); `chrome.storage.session` is the single exception, used only for the request log and reached by the brain through the SW (`chrome.storage` isn't exposed to the offscreen).
+All learned state lives in **IndexedDB in the offscreen document** (the brain's stable home). `chrome.storage.local` is **banned** (a compromised renderer could read cross-site structural metadata);
 
 | Store | Backend | Scope | Lifetime |
 |-------|---------|-------|----------|
 | **GlobalStore** | IndexedDB `uasr_store` / `gapiStore` (offscreen document) | Cross-tab | Persistent (debounced save; restored on offscreen recreate) |
-| **Request Logs** | `chrome.storage.session` (via SW RPC) | Per-tab | Browser session |
+| **Request Logs** | offscreen document | Per-tab | Browser session |
 | **Field Renames** | IndexedDB (via GlobalStore) | Cross-tab | Persistent |
 | **Deep-grind progress** | IndexedDB `feDeepDB` (offscreen document) | Per-bundle | Until complete |
 

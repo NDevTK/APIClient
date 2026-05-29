@@ -11,5 +11,9 @@
 <script src="lib/stats.js"></script>
 <script src="lib/chains.js"></script>
 <script src="lib/trace-mapping.bundle.js"></script>
+<!-- Picker heuristics (ORDER only, never COVERAGE) — loaded before the brain
+     so its review-queue drain can use them. Same file the analysis Worker
+     loads via importScripts; both contexts share self._priorityCmp. -->
+<script src="lib/priority.js"></script>
 <script src="offscreen-brain.js"></script>
 <script src="ast-worker.js"></script>
