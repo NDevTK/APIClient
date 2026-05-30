@@ -863,6 +863,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   const yieldInput = document.getElementById("opt-yield-throttle-ms");
   const yieldOut = document.getElementById("opt-yield-throttle-ms-val");
   const workersInput = document.getElementById("opt-max-workers");
+  // Bound the worker count by this machine's logical cores — more workers than
+  // cores adds only memory, not parallelism — and surface the count so the
+  // control is informative, not a blind number box.
+  const _cores = (navigator.hardwareConcurrency | 0) || 4;
+  workersInput.max = String(_cores);
+  const _whint = document.getElementById("opt-max-workers-hint");
+  if (_whint) _whint.textContent += " This machine has " + _cores + " logical cores.";
   // Load current values from the brain (IDB-backed).
   try {
     const opts = await chrome.runtime.sendMessage({ type: "GET_ANALYSIS_OPTS" });
@@ -894,8 +901,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
   workersInput.addEventListener("change", async () => {
-    const v = parseInt(workersInput.value, 10);
+    let v = parseInt(workersInput.value, 10);
     if (!(v > 0)) return;
+    // Clamp to [1, cores] — a typed value can exceed the input's max, and more
+    // workers than cores only burns memory. Reflect the clamp back to the UI.
+    v = Math.min(v, _cores);
+    if (String(v) !== workersInput.value) workersInput.value = String(v);
     try {
       await chrome.runtime.sendMessage({
         type: "SET_ANALYSIS_OPTS",
@@ -1750,7 +1761,10 @@ function _renderTaintPathDetails(item) {
     var snippetHtml = h.code
       ? '<div class="hop-snippet"><code>' + esc(String(h.code).slice(0, 200)) + '</code></div>'
       : '';
-    rows += '<li><code>[' + esc(h.kind || "?") + ']</code> '
+    // Only show a [kind] tag when the hop HAS one — the code snippet below
+    // carries the meaning, so a bare "[?]" placeholder is just noise.
+    var kindHtml = h.kind ? '<code>[' + esc(h.kind) + ']</code> ' : '';
+    rows += '<li>' + kindHtml
       + esc(h.desc || "") + ' <span class="hop-at">' + esc(at) + '</span>' + dimAnn
       + snippetHtml + '</li>';
   }
@@ -2183,12 +2197,6 @@ function renderSecurityPanel() {
     var sevBadge = '<span class="badge badge-' + esc(sev) + '">' + esc(sev.toUpperCase()) + '</span>';
     var loc = item.location ? "L" + item.location.line + ":" + item.location.column : "";
 
-    var codeHtml = item.codeContext
-      ? '<pre class="code-context clickable-code" data-source-url="' + esc(entry.sourceUrl || '') +
-        '" data-line="' + (item.location ? item.location.line : 0) +
-        '" data-col="' + (item.location ? item.location.column : 0) +
-        '"><code class="language-javascript">' + esc(item.codeContext) + '</code></pre>'
-      : '';
 
     var srcLink = entry.sourceUrl && /^https?:\/\//i.test(entry.sourceUrl)
       ? '<a href="' + esc(entry.sourceUrl) + '" target="_blank" title="' + esc(entry.sourceUrl) + '">' + esc(entry.srcLabel) + '</a>'
@@ -2217,7 +2225,6 @@ function renderSecurityPanel() {
         + '<div class="card-label">' + typeBadge + ' ' + sevBadge + ' ' + esc(item.sink) + '</div>'
         + '<div class="card-value">' + esc(sourceDesc) + '</div>'
         + sinkDimsHtml
-        + codeHtml
         + _renderTaintPathDetails(item)
         + _renderPreconditionsDetails(item)
         + _renderSanitizerDetails(item)
@@ -2234,7 +2241,6 @@ function renderSecurityPanel() {
         + '<div class="card-label">' + patBadge + ' ' + sevBadge + '</div>'
         + '<div class="card-value">' + esc(item.description || item.type) + '</div>'
         + patSinkDimsHtml
-        + codeHtml
         + _renderTaintPathDetails(item)
         + '<div class="card-meta">' + srcLink + (loc ? " " + esc(loc) : "") + '</div>'
         + verifyHtmlPat
@@ -2245,29 +2251,11 @@ function renderSecurityPanel() {
   container.innerHTML = html;
   _wireVerifyButtons(container);
   _resumeInflightProbes(container);
-
-  // Syntax-highlight code snippets
-  container.querySelectorAll(".code-context code.language-javascript").forEach(function(el) {
-    Prism.highlightElement(el);
-  });
-
-  // Click handler: open source viewer for code context snippets. The
-  // column is essential for the viewer's per-finding tree-shake on
-  // minified bundles (every sink on react-core sits on L6 — line alone
-  // can't disambiguate which finding the reviewer clicked).
-  container.querySelectorAll(".clickable-code").forEach(function(el) {
-    el.addEventListener("click", function() {
-      var url = el.dataset.sourceUrl;
-      var line = el.dataset.line;
-      var col = el.dataset.col;
-      if (url) {
-        var viewerUrl = "viewer.html?sourceUrl=" + encodeURIComponent(url) +
-             "&line=" + (line || 0) + "&tabId=" + (currentTabId || 0);
-        if (col != null && col !== "") viewerUrl += "&col=" + col;
-        chrome.tabs.create({ url: viewerUrl });
-      }
-    });
-  });
+  // The source viewer (+ Prism + Babel) was removed: the taint path now shows
+  // the per-hop code inline (each hop's source line, sliced at analysis time),
+  // and `harness finding <id>` gives full context — so the standalone viewer's
+  // syntax-highlighted source browse is no longer needed. Code snippets render
+  // as plain <code>; no Prism.highlightElement, no viewer.html tab.
 }
 
 // ─── Send Panel ──────────────────────────────────────────────────────────────

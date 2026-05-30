@@ -3,7 +3,6 @@
   <head>
     <meta charset="utf-8" />
     <title>API Security Researcher</title>
-    <link rel="stylesheet" href="lib/prism-theme.css" />
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
@@ -22,14 +21,14 @@
       <h2>Analysis settings</h2>
       <label>
         Yield throttle (ms)
-        <input type="range" id="opt-yield-throttle-ms" min="0" max="10000" step="100" value="4000" />
-        <output id="opt-yield-throttle-ms-val">4000</output>
-        <p class="hint">Cooling: max sleep after each schedule run. Higher = cooler CPU, slower analysis. 0 = no throttle.</p>
+        <input type="range" id="opt-yield-throttle-ms" min="0" max="10000" step="100" value="0" />
+        <output id="opt-yield-throttle-ms-val">0</output>
+        <p class="hint">Default 0 = fast (use the core fully — this is a research tool, you're waiting on results). Raise it only to cool the CPU for background tabs; the page you're viewing stays fast regardless.</p>
       </label>
       <label>
         Analyzer workers
         <input type="number" id="opt-max-workers" min="1" value="1" />
-        <p class="hint">Number of Web Workers running the QuickJS analyzer. 1 = serial (cool); higher = real parallelism on multi-core (faster, more memory + heat).</p>
+        <p class="hint" id="opt-max-workers-hint">Web Workers running the QuickJS analyzer. Each page's analysis is pinned to ONE worker (one core), so raise this to analyze MULTIPLE tabs in parallel. Each worker holds its own wasm memory (~hundreds of MB).</p>
       </label>
     </section>
 
@@ -188,7 +187,6 @@
 
     <script src="lib/protobuf.js"></script>
     <script src="lib/discovery.js"></script>
-    <script src="lib/prism.js" data-manual></script>
     <script src="popup.js"></script>
   </body>
 </html>

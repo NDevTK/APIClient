@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Canonical forked-QuickJS build. Three artifacts from ONE patched
-// source tree (engine/qjs) — no test-vs-ship divergence:
+// Canonical forked-QuickJS build. All artifacts are WASM, from ONE
+// patched source tree (engine/qjs) — no test-vs-ship divergence:
 //
-//   qjs.exe       native gcc       — fast Node-side X-Force iteration
-//   qjs_wasm.js   emcc NODERAWFS   — wasm CLI, byte-identical to native
+//   qjs_wasm.js   emcc NODERAWFS   — wasm CLI (node), for fast engine-
+//                                    level gate/X-Force iteration
 //   qjs_mod.mjs   emcc MODULARIZE  — ES6 module, Node-side model proof
 //                 EXPORT_ES6         (mdrive.mjs)
 //   qjs_worker.js emcc MODULARIZE  — classic-worker factory (no ES6,
@@ -12,13 +12,21 @@
 //                                    Web Worker runs, a fresh instance
 //                                    per forced schedule
 //
+// NATIVE (gcc qjs.exe) IS BANNED. It was a fake-browser test bed: no
+// JSPI scheduler, no host fetch (so the live grind's safeFetch-loaded
+// lazy chunks are never driven), no real Chrome DOM/crypto — so it
+// produced FALSE confidence (e.g. a real bundle "converged" native
+// while the live wasm froze on a fetched-chunk orphan native never
+// loaded). Verify on the real target ONLY: wasm CLI (node qjs_wasm.js)
+// for engine-level gates, the live Chrome harness for integration.
+//
 // The forced-execution controller (quickjs-forced.h, patched into
 // quickjs.c) takes its config from qjsmain's --fe-* argv so it behaves
-// identically across native, wasm-CLI and modular-wasm (emscripten
-// getenv / post-init ENV are unreliable in the MODULARIZE build).
+// identically across wasm-CLI and modular-wasm (emscripten getenv /
+// post-init ENV are unreliable in the MODULARIZE build).
 //
-//   node engine/build.mjs            # all three
-//   node engine/build.mjs native|cli|mod
+//   node engine/build.mjs            # all wasm artifacts
+//   node engine/build.mjs cli|mod|worker|stage
 import { spawnSync } from "node:child_process";
 import { existsSync, statSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve, dirname, relative } from "node:path";
@@ -70,12 +78,11 @@ const SRC = ["qjsmain.c", "quickjs.c", "libregexp.c", "libunicode.c",
 // solver code lives inside quickjs.c, no JS bridge.
 const Z3 = resolve(ENGINE, ".work", "z3");
 const Z3_INC = `-I${relative(QJS, join(Z3, "src", "api")).split(/[\\/]/).join("/")}`;
-const Z3_LIB_N = relative(QJS, join(Z3, "bn", "libz3.a")).split(/[\\/]/).join("/");
 const Z3_LIB_W = relative(QJS, join(Z3, "bw", "libz3.a")).split(/[\\/]/).join("/");
 const CFLAGS = ["-O1", "-w", "-D_GNU_SOURCE", "-DLEXBOR_STATIC",
                 "-DQJS_HAVE_Z3=1", Z3_INC,
                 "-I.", "-I../lexbor/source",
-                // Opt-in extra -D defines (e.g. native diagnostic probes) via
+                // Opt-in extra -D defines (e.g. diagnostic probes) via
                 // QJS_EXTRA_DEFINES="-DQJS_SPIN_PROBE"; never set in ship builds.
                 ...(process.env.QJS_EXTRA_DEFINES ? process.env.QJS_EXTRA_DEFINES.split(/\s+/).filter(Boolean) : [])];
 // QuickJS's own recursion (parser/GC) overflows emscripten's 64KB
@@ -122,22 +129,6 @@ function size(f) {
   return existsSync(p) ? `${f} ${(statSync(p).size / 1024 | 0)}KB` : `${f} MISSING`;
 }
 
-function native() {
-  // ~150 Lexbor TUs blow past Windows' 8191-char cmd.exe limit when
-  // gcc is spawned through a shell. A GCC @response-file is the
-  // canonical fix for a long link line (whitespace-separated tokens;
-  // every path here is space-free, forward-slash, relative to QJS).
-  //
-  // libz3.a is C++ (libstdc++ + libgcc statically baked so the exe is
-  // portable across mingw-runtime versions). -lpthread is required by
-  // Z3's mutex init even with -DZ3_SINGLE_THREADED=ON on mingw.
-  const rsp = "native.rsp";
-  writeFileSync(join(QJS, rsp),
-    [...CFLAGS, "-o", "qjs.exe", ...SRC, Z3_LIB_N,
-     "-static-libstdc++", "-static-libgcc", "-lstdc++", "-lpthread", "-lm"].join("\n"));
-  run("gcc", ["@" + rsp]);
-  console.log("[build] " + size("qjs.exe"));
-}
 function cli() {
   // NODERAWFS: the wasm CLI reads script files + writes the trace on
   // the real FS, exactly like native — drive.mjs treats them the same.
@@ -229,8 +220,11 @@ function stage() {
 }
 
 const step = process.argv[2];
+if (step === "native") {
+  console.error("[build] native (qjs.exe) is BANNED — it is a fake-browser test bed (no JSPI/fetch/Chrome DOM) that gives false confidence. Use `cli` (node qjs_wasm.js) for engine gates or the live Chrome harness for integration.");
+  process.exit(2);
+}
 const all = !step;
-if (all || step === "native") native();
 if (all || step === "cli") cli();
 if (all || step === "mod") mod();
 if (all || step === "worker") worker();

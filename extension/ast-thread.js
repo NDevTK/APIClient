@@ -351,6 +351,25 @@ function buildPageDomSrc(scriptUrls) {
 
 async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, scriptOffsets, sourceMapScripts) {
   var t0 = Date.now();
+  // Per-hop taint-path SNIPPET: a taint-path hop carries only a bundle position
+  // ({line,column} from the @S stack chain). Slice the actual source line from
+  // the analyzed bundle (`code`, in closure scope) so the reviewer reads the
+  // CODE at each transformation source→…→sink — the per-hop context the popup
+  // promises and the retired Babel viewer used to show, instead of bare
+  // numbers. Lines split lazily ONCE (the bundle can be MBs). Positions are
+  // bundle (eval) coordinates — the same space the @S chain reports — so no
+  // source-map needed; the line windows around the column for minified bundles.
+  var _taintSrcLines = null;
+  function _hopCode(c) {
+    if (!c || !(c.line > 0)) return "";
+    if (!_taintSrcLines) _taintSrcLines = String(code || "").split("\n");
+    if (c.line > _taintSrcLines.length) return "";
+    var ln = _taintSrcLines[c.line - 1] || "";
+    var col = (c.column | 0);
+    if (ln.length <= 140) return ln.trim();
+    var start = Math.max(0, col - 60), end = Math.min(ln.length, col + 80);
+    return (start > 0 ? "…" : "") + ln.slice(start, end).trim() + (end < ln.length ? "…" : "");
+  }
   // Phase-timing instrumentation — to MEASURE (not assert) where real-bundle
   // time goes: boot (the one snapshot boot), memcpy (cumulative restore cost,
   // scales with image size), the BFS phase, and the deep grind. Surfaced via
@@ -1223,7 +1242,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           sourceType: srcLabel ? "user-controlled" : undefined,
           severity: sev,
           location: ss.loc || { line: 0, column: 0 },
-          taintPath: ss.chain.map(function (c) { return { at: c }; }),
+          taintPath: ss.chain.map(function (c) { return { at: c, code: _hopCode(c) }; }),
           value: _pendingSec.value != null ? String(_pendingSec.value) : null,
           verdict: zr.verdict,
           witness: zr.witness || null,

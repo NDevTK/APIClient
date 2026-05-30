@@ -24,12 +24,7 @@
   },
   "homepage": "https://github.com/NDevTK/APIClient#readme",
   "dependencies": {
-    "@babel/generator": "^8.0.0-rc.3",
-    "@babel/parser": "^8.0.0-rc.3",
-    "@babel/traverse": "^8.0.0-rc.3",
-    "@babel/types": "^8.0.0-rc.3",
-    "@jridgewell/trace-mapping": "^0.3.31",
-    "prismjs": "^1.30.0"
+    "@jridgewell/trace-mapping": "^0.3.31"
   },
   "devDependencies": {
     "esbuild": "^0.27.3",
