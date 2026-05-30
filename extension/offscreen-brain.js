@@ -75,16 +75,10 @@ function swRpc(api) {
   });
 }
 
-// Cross-origin fetch via the SW. The offscreen document is under COEP
-// require-corp so a direct cross-origin fetch here fails for any host that
-// doesn't send CORP; the SW (host_permissions: <all_urls>) fetches with cookies
-// always omitted. Resolves to { ok, status, statusText, headers (lowercased
-// object), body (text) } — NOT a Response object. Used only for uncredentialed
-// public resources (scripts / lazy chunks / spec docs); credentialed same-origin
-// requests go through pageContextFetch (the page renderer) instead.
-function swFetch(url, opts) {
-  return swRpc("fetch", Object.assign({ url: url }, opts || {}));
-}
+// External fetches go through the single safeFetch (lib/safe-fetch.js, loaded
+// before this file): direct, GET only, cookies omitted, http(s) only. There is no
+// swFetch / SW relay any more — the offscreen document fetches cross-origin itself.
+// Credentialed same-origin requests (schema.verify) still use pageContextFetch.
 
 // Inlined from ast.js — extracts sourceMappingURL from the last 500 chars.
 // Runs synchronously in the service worker (no Babel needed).
@@ -4473,7 +4467,7 @@ function _fetchAndBufferScript(tabId, scriptUrl, pageUrl, order) {
   // this fetch to complete (or fail) before firing analysis.
   buf.pending++;
 
-  swFetch(scriptUrl).then(function(resp) {
+  safeFetch(scriptUrl).then(function(resp) {
     if (!resp.ok) {
       console.debug("[AST:buffer] Fetch failed for %s: %d %s", scriptUrl, resp.status, resp.statusText);
       _scriptBufferDecrementPending(tabId, buf);
@@ -4834,7 +4828,7 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
     // residue-variance bug that lost preheat). The SW fetch is independent of the
     // tab's lifecycle and not subject to the offscreen's COEP.
     var results = await Promise.all(batch.map(function (cu) {
-      return swFetch(cu, { method: "GET" })
+      return safeFetch(cu, { method: "GET" })
         .then(function (resp) { return resp.ok ? resp.body : null; })
         .then(function (body) { return { u: cu, body: body }; })
         .catch(function (e) { return { u: cu, body: null, err: String(e && e.message || e) }; });
@@ -6503,7 +6497,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // Re-fetch the script (extension has <all_urls>) — same SSRF
       // guard as the buffering path: public http(s) only.
       if (!_isPublicScriptUrl(scriptUrl)) { sendResponse({ error: "blocked: non-public script URL" }); return; }
-      swFetch(scriptUrl).then(function(r) {
+      safeFetch(scriptUrl).then(function(r) {
         if (!r.ok) throw new Error(r.status + " " + r.statusText);
         return r.body;
       }).then(function(code) {

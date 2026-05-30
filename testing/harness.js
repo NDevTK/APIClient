@@ -249,6 +249,13 @@ async function cmdDiag(args) {
     const attachTarget = async (t) => {
       try {
         if (t.type() === "service_worker") { const w = await t.worker(); if (w) attach("SW", w); }
+        else if (t.type() === "other" && t.url().startsWith("chrome-extension://") && t.url().endsWith(".js")) {
+          // The analysis Web Worker (ast-thread.js) is a dedicated-worker target —
+          // reach its console via t.worker(), NOT t.page(). importScripts/analysis
+          // errors surface HERE, which t.page() silently missed before.
+          const w = await t.worker().catch(() => null);
+          if (w) attach("worker:" + t.url().split("/").pop(), w);
+        }
         else if ((t.type() === "page" || t.type() === "background_page" || t.type() === "other")
                  && t.url().startsWith("chrome-extension://")) {   // extension context only — skip analyzed page noise
           const pg = await t.page().catch(() => null);
@@ -374,10 +381,16 @@ async function cmdDumpBundle(args) {
 // feDeepDB (which is only populated by the cross-session deep grind, not
 // the shallow review where the wall-time regression manifests).
 async function cmdDumpScripts(args) {
-  const out = (args.join(" ").trim()) || "engine/qjs/_curbundle.js";
+  // Optional `find:<substr>` selects the buffer whose COMBINED code contains
+  // <substr> (e.g. find:index-docs), regardless of which tab is active — the
+  // freezing chunk is often in a background tab's buffer, not the foreground
+  // page, so active-page matching grabs the wrong one.
+  let find = null;
+  const rest = args.filter((a) => { const m = /^find:(.*)$/.exec(a); if (m) { find = m[1]; return false; } return true; });
+  const out = (rest.join(" ").trim()) || "engine/qjs/_curbundle.js";
   await withBrowser(async (browser) => {
-    const page = await getActivePage(browser);
-    const pageUrl = await page.evaluate(() => location.href).catch(() => "");
+    const page = await getActivePage(browser).catch(() => null);
+    const pageUrl = page ? await page.evaluate(() => location.href).catch(() => "") : "";
     const lock = await readLock();
     const extId = lock?.extId;
     const ourl = `chrome-extension://${extId}/ast-worker.html`;
@@ -388,15 +401,23 @@ async function cmdDumpScripts(args) {
       if (!pg) await sleep(150);
     }
     if (!pg) { log("(no offscreen target — extension running?)"); return; }
-    const rec = await pg.evaluate((wantUrl) => {
+    const rec = await pg.evaluate((wantUrl, find) => {
       if (typeof _scriptBuffers === "undefined") return { err: "_scriptBuffers not visible from offscreen scope" };
       let best = null;
+      const haveTabs = [];
       for (const [tid, b] of _scriptBuffers.entries()) {
         if (!b || !b.scripts || b.scripts.length === 0) continue;
+        haveTabs.push((b.pageUrl || "") + "(" + b.scripts.length + " scripts)");
+        if (find) {
+          // Select the buffer that actually CONTAINS the wanted code (by url or
+          // source text) — the freezing chunk's tab, not the active one.
+          if (b.scripts.some((s) => (s.url && s.url.indexOf(find) >= 0) || (s.code && s.code.indexOf(find) >= 0))) { best = { tid, b }; break; }
+          continue;
+        }
         if (wantUrl && b.pageUrl && b.pageUrl.split("#")[0] === wantUrl.split("#")[0]) { best = { tid, b }; break; }
         if (!best) best = { tid, b };
       }
-      if (!best) return { err: "no live buffer (any tab); pageUrl=" + wantUrl };
+      if (!best) return { err: "no live buffer" + (find ? " containing '" + find + "'" : " (any tab); pageUrl=" + wantUrl) + "; buffers=[" + haveTabs.join(" | ") + "]" };
       const scripts = best.b.scripts.slice().sort((a, b) => (a.order == null ? 1e9 : a.order) - (b.order == null ? 1e9 : b.order));
       let combined = "";
       const map = [];
@@ -410,7 +431,7 @@ async function cmdDumpScripts(args) {
       let html = null;
       try { html = (typeof getTab === "function") ? (getTab(best.tid)._pageHtml || null) : null; } catch (_) {}
       return { tid: best.tid, pageUrl: best.b.pageUrl || wantUrl || "", combined, map, html };
-    }, pageUrl);
+    }, pageUrl, find);
     if (rec.err) { log("dumpscripts: " + rec.err); return; }
     const abs = path.isAbsolute(out) ? out : path.join(ROOT, out);
     fs.writeFileSync(abs, rec.combined, "utf8");
@@ -444,7 +465,42 @@ async function cmdOffscreen(args) {
   });
 }
 
-const CMDS = { start: cmdStart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts };
+// Eval inside the analysis Web Worker (ast-thread.js) — a dedicated-worker CDP
+// target reached via t.worker(), NOT t.page(). The place to inspect a stuck grind
+// (self._poolLiveness is in the offscreen; the worker holds the live combined
+// source + driven set + the engine instance). If the worker is blocked in a sync
+// C call with no JSPI yield, this eval will time out — itself a useful signal
+// (sync-block vs resumed-but-non-terminating).
+async function cmdWorker(args) {
+  const expr = args.join(" ");
+  if (!expr) throw new Error("usage: worker <js-expression>");
+  const body = /(^|\s)return\s|;|\{/.test(expr) ? expr : "return (" + expr + ");";
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const extId = lock?.extId;
+    const ourl = `chrome-extension://${extId}/ast-worker.html`;
+    // The analysis worker is a DEDICATED worker of the offscreen PAGE, so it is
+    // reached via offscreenPage.workers(), not browser.targets() (a dedicated
+    // worker isn't a top-level target). There may be several (the pool) — pick
+    // one running ast-thread.js.
+    let w = null, diag = "";
+    for (let i = 0; i < 40 && !w; i++) {
+      const t = browser.targets().find((t) => t.url().startsWith(ourl));
+      const pg = t ? await t.page().catch(() => null) : null;
+      if (pg) {
+        const workers = pg.workers();
+        diag = "offscreen workers=[" + workers.map((x) => x.url().split("/").pop()).join(",") + "]";
+        w = workers.find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
+      }
+      if (!w) await sleep(150);
+    }
+    if (!w) { log("(no analysis worker; " + (diag || "no offscreen page") + ")"); return; }
+    const out = await w.evaluate(new Function("return (async () => { " + body + " })()"));
+    log(JSON.stringify(out, null, 2));
+  });
+}
+
+const CMDS = { start: cmdStart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);

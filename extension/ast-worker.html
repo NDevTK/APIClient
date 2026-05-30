@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' http: https: data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' https: http: data:">
 <!-- The offscreen document hosts the API-learning BRAIN (offscreen-brain.js, the
      former service worker) where it has a stable lifetime + IndexedDB. Its lib/*
      dependencies load first (same set the SW used to importScripts), then the
@@ -15,5 +15,8 @@
      so its review-queue drain can use them. Same file the analysis Worker
      loads via importScripts; both contexts share self._priorityCmp. -->
 <script src="lib/priority.js"></script>
+<!-- THE single external-fetch function (GET only, no cookies, http(s) only).
+     Shared with the analysis Worker (ast-thread.js importScripts). -->
+<script src="lib/safe-fetch.js"></script>
 <script src="offscreen-brain.js"></script>
 <script src="ast-worker.js"></script>

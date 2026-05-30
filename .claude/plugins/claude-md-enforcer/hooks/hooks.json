@@ -6,19 +6,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "echo '{\"decision\":\"block\",\"reason\":\"Continue its your responsibility to keep improving the extension and how it works since theres a lots of websites that exist and the design is never perfect a stopping point is never wanted.\"}'"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "shell": "bash",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Workaround check (only if your edit ADDED any of these): magic numbers (depth caps, time caps, step caps), name-based identifier matching without scope check, placeholder/synthesized values masquerading as real, accepting a gap as \\\"unresolvable\\\", bundler-specific recognition, tests codifying a gap, silent error swallowing (catch+ignore, fallback to default that hides the failure). If any present, fix properly regardless of effort.\"}}'"
+            "command": "echo '{\"decision\":\"block\",\"reason\":\"Continue its your responsibility to keep improving the extension and how it works without delay theres a lots of websites that exist and the design is never perfect a stopping point is never wanted.\"}'"
           }
         ]
       }

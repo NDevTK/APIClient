@@ -157,35 +157,10 @@ async function _swRpc(msg) {
     // accidentally still issues a storage.session.* RPC the unknown-api
     // throw below will surface it as a diagnostic — better than silently
     // doing nothing.
-    // Cross-origin fetch on the brain's behalf. The offscreen document is under
-    // COEP require-corp, so a cross-origin fetch there fails unless the host
-    // happens to send CORP — the SW (host_permissions: <all_urls>) is not, so its
-    // fetch works for ANY host. Security: cookies are ALWAYS omitted (these are
-    // uncredentialed public-resource fetches — scripts/chunks/specs — never the
-    // user's authenticated session; credentialed replay goes through the page
-    // renderer instead) and only http(s) is allowed. Returns a serializable
-    // response (status + headers object + text body).
-    case "fetch": {
-      const o = args[0] || {};
-      // canParse guard then explicit throw — same diagnostic shape ("bad fetch
-      // url") but no longer using the catch as a parse-validity test. The
-      // throw is the SAME error the offscreen brain's swFetch caller expects.
-      if (!URL.canParse(o.url)) throw new Error("bad fetch url");
-      const u = new URL(o.url);
-      if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("blocked: non-http(s) fetch url");
-      const init = {
-        method: o.method || "GET",
-        credentials: "omit",
-        redirect: o.redirect || "follow",
-        cache: o.cache || "default",
-      };
-      if (o.headers) init.headers = o.headers;
-      if (o.body != null) init.body = o.body;
-      const resp = await fetch(u.href, init);
-      const headers = {};
-      resp.headers.forEach((v, k) => { headers[k] = v; });
-      return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers, body: await resp.text() };
-    }
+    // NOTE: cross-origin fetch is NOT a SW RPC. External fetches go DIRECTLY from
+    // the offscreen document / its Worker through lib/safe-fetch.js (GET only,
+    // cookies omitted, http(s) only) — COEP does not block fetch, so the SW relay
+    // was pointless indirection and is gone.
     // Exploit-probe injection: run a named, predefined injector (above) in the
     // target tab's MAIN world. Returns the per-frame InjectionResult array (its
     // `.result` values are serializable) so the brain can merge them.

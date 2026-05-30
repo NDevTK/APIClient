@@ -17,7 +17,7 @@
 // .js sets self.__HOSTEDGE_SRC (generated from engine/qjs/hostedge.js,
 // the single source of truth drive.mjs also tests); sourcemap.js keeps
 // the genuinely-static sourcemap/TS helpers.
-importScripts("lib/qjs/qjs_worker.js", "lib/qjs/hostedge.gen.js", "lib/sourcemap.js", "lib/priority.js");
+importScripts("lib/qjs/qjs_worker.js", "lib/qjs/hostedge.gen.js", "lib/sourcemap.js", "lib/priority.js", "lib/safe-fetch.js");
 
 var HOSTEDGE = self.__HOSTEDGE_SRC;
 var HOSTDRIVER = self.__HOSTDRIVER_SRC;
@@ -144,13 +144,14 @@ async function _smGetParsed(chunkUrl, sourceMapScripts) {
     var url = _smMapUrl(chunkUrl, sourceMapScripts);
     if (url) {
       try {
+        // safeFetch = the single external-fetch fn (GET, no cookies, http(s) only).
         // Time-box so a slow/hanging map server can't stall the grind's post loop.
         var _ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
         var _to = _ac ? setTimeout(function () { try { _ac.abort(); } catch (e) {} }, 8000) : 0;
-        var resp = await fetch(url, _ac ? { method: "GET", credentials: "omit", signal: _ac.signal } : { method: "GET", credentials: "omit" });
+        var resp = await safeFetch(url, _ac ? { signal: _ac.signal } : null);
         if (_to) clearTimeout(_to);
-        if (resp && resp.ok) {
-          var json = await resp.json();
+        if (resp && resp.ok && resp.body != null) {
+          var json = JSON.parse(resp.body);
           parsed = parseSourceMap(json);
           _smChunksTouched.add(chunkUrl);
           try { await _idbPut("smaps", { key: chunkUrl, json: json }); }
@@ -293,10 +294,25 @@ function isOpaqueBaseUrl(s) {
   if (!s) return false;
   var t = String(s).trim();
   if (t.charAt(0) === "{") return true;
+  // A URL-template's host expressions that evaluated to JS undefined/null
+  // coerce the AUTHORITY to the literal string "undefined"/"null" (or a
+  // concatenation, e.g. `https://${h}${p}/` with h,p undefined →
+  // "https://undefinedundefined/"). That authority can never address a real
+  // host — the host-building values weren't computed — so it is an UNRESOLVED
+  // base (a resolverError, never the fabricated "POST /" endpoint it would
+  // otherwise display as). Same class of JS-coercion artifact as the
+  // "[object Object]" opaque marker. Tight, not fuzzy: a real authority always
+  // has a label separator (a dot, or is a known host); an authority made up
+  // ONLY of "undefined"/"null" never does. Whole-URL "undefined"/"null" (a
+  // bare `fetch(undefinedVar)`) is the same artifact. Observed live on
+  // apple.com (POST / + SENDBEACON / were both https://undefinedundefined/).
+  if (t === "undefined" || t === "null") return true;
   var m = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^\/?#]*)/.exec(t);
   if (m && m[1].indexOf("{") >= 0) return true;
+  if (m && /^(undefined|null)+$/.test(m[1])) return true;
   var m2 = /^\/\/([^\/?#]*)/.exec(t);
   if (m2 && m2[1].indexOf("{") >= 0) return true;
+  if (m2 && /^(undefined|null)+$/.test(m2[1])) return true;
   return false;
 }
 
@@ -1536,6 +1552,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     bfsMs: _bfsMs, bootMs: _tBootMs, memcpyMs: _tMemcpyMs, bcMs: _tBcMs, deepMs: 0, runs: runs,
     combinedKB: Math.round((code ? code.length : 0) / 1024),
     hasPreheatSrc: !!(code && code.indexOf("issues/preheat/index") >= 0) };
+  self._lastDeepStats = _deepStats;   // liveness: expose the in-flight grind's steps/total/rem to the heartbeat
   if (deep && m) {
     var _dkey = _deepKey(code);
     var _dcur = _resume ? resumeCursor : 0;
@@ -1604,6 +1621,17 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           } else if (_ln.slice(0, 4) === "@DD ") {
             var _did = _ln.slice(4).trim();
             if (_did) _driven.add(_did);
+            // Orphan completed → clear the "currently driving" marker. If this
+            // marker is STILL set (same id) on later heartbeats, that orphan's
+            // drive never returned = the non-terminating-orphan freeze, now
+            // named with its source loc (per the OBSERVABILITY policy).
+            if (_did && self._currentOrphan && self._currentOrphan.id === _did) self._currentOrphan = null;
+          } else if (_ln.slice(0, 8) === "@DSTART ") {
+            try { self._currentOrphan = JSON.parse(_ln.slice(8)); self._currentOrphan.ts = Date.now(); }
+            catch (e) {
+              if (!self._whyRecords) self._whyRecords = [];
+              self._whyRecords.push({ phase: "dstart_parse_throw", line: _ln.slice(0, 200), err: String(e && e.message || e) });
+            }
           } else if (_ln.slice(0, 8) === "@DTOTAL ") {
             // Residue size emitted at grind start → live `total` so the popup
             // shows done/total/% DURING the grind, not just the vague cross-tab
@@ -1620,6 +1648,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         _stdoutCursor = stdout.length;
         if (_driven.size !== _lastPersistDrivenN) {
           _deepStats.steps++;
+          // Stamp wall-clock of the LAST real grind progress so the liveness
+          // heartbeat (a separate timer) can report how long the grind has
+          // been stuck even while the event loop is otherwise alive — the
+          // signal that distinguishes a fiber-scheduling stall from a
+          // blocked-event-loop freeze.
+          self._lastGrindProgressTs = Date.now();
           // LIVE progress: with @DTOTAL (residue size) known from grind start,
           // rem = total - driven count, recomputed each drain so the popup
           // shows done/total/% DURING the grind. Fall back to the end-of-grind
@@ -2060,6 +2094,7 @@ _yieldMC.port1.onmessage = function () {
      resolve here; would be a postMessage in a multi-worker setup). */
   var best = self._priorityCmp.pickFromFiberQueue(self._fiberQ, self._activePageKey);
   if (!best) return;
+  self._resumeCount = (self._resumeCount || 0) + 1;   // liveness: # of fiber resumes (forks "not resumed" vs "resumed-but-not-driving")
   if (best.ctx) best.ctx.lastResumed = Date.now();
   best.resolve();
   /* If MORE fibers are still queued, schedule another drain — the
@@ -2216,3 +2251,37 @@ async function _resumeIncompleteDeep() {
 // _deepGrindRunning, so a NAV-triggered review that arrives concurrently
 // just adds its own fiber to the queue rather than double-launching.
 setTimeout(_resumeIncompleteDeep, 0);
+
+// Liveness heartbeat (OBSERVABILITY — bounds/terminates nothing, not a
+// watchdog). A timer-driven post, independent of the grind's per-yield
+// drain, so the offscreen (ast-worker.js records it per slot, exposed via
+// _poolLiveness for the harness `offscreen` command) can tell apart the two
+// freeze classes that look identical from outside:
+//   • heartbeat STOPS advancing (its ts goes stale) ⇒ the wasm thread is
+//     parked inside ONE long synchronous C call (regex backtrack, Lexbor
+//     parse, a huge --fe-emit-bc) — no qjs_host_yield can fire there, so the
+//     whole event loop is blocked. THIS is the live freeze.
+//   • heartbeat KEEPS advancing but lastGrindProgressTs is stale ⇒ event loop
+//     alive, but the grind fiber isn't being resumed — a scheduling stall.
+// Before this, the two were indistinguishable and a freeze could only be
+// guessed at (three wrong guesses this session). The grind's own per-yield
+// drain only emits while it's RUNNING, so it cannot report its own freeze;
+// a separate timer can.
+setInterval(function () {
+  try {
+    postMessage({ _heartbeat: true, ts: Date.now(),
+      fiberQ: (self._fiberQ || []).length,
+      grindRunning: (self._deepGrindRunning ? self._deepGrindRunning.size : 0),
+      lastGrindProgressTs: self._lastGrindProgressTs || 0,
+      resumeCount: self._resumeCount || 0,
+      deepSteps: self._lastDeepStats ? self._lastDeepStats.steps : -1,
+      deepRem: self._lastDeepStats ? self._lastDeepStats.rem : -1,
+      deepTotal: self._lastDeepStats ? self._lastDeepStats.total : -1,
+      currentOrphan: self._currentOrphan || null,   // the orphan being driven; if unchanged while steps stalls = the non-terminating culprit
+      activePageKey: self._activePageKey || null });
+  } catch (e) {
+    /* postMessage only throws while the worker is being torn down (the port
+       is closing) — there is no live offscreen to surface a diagnostic to,
+       and _whyRecords dies with the worker. Nothing to report. */
+  }
+}, 2000);

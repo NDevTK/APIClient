@@ -74,7 +74,10 @@ const Z3_LIB_N = relative(QJS, join(Z3, "bn", "libz3.a")).split(/[\\/]/).join("/
 const Z3_LIB_W = relative(QJS, join(Z3, "bw", "libz3.a")).split(/[\\/]/).join("/");
 const CFLAGS = ["-O1", "-w", "-D_GNU_SOURCE", "-DLEXBOR_STATIC",
                 "-DQJS_HAVE_Z3=1", Z3_INC,
-                "-I.", "-I../lexbor/source"];
+                "-I.", "-I../lexbor/source",
+                // Opt-in extra -D defines (e.g. native diagnostic probes) via
+                // QJS_EXTRA_DEFINES="-DQJS_SPIN_PROBE"; never set in ship builds.
+                ...(process.env.QJS_EXTRA_DEFINES ? process.env.QJS_EXTRA_DEFINES.split(/\s+/).filter(Boolean) : [])];
 // QuickJS's own recursion (parser/GC) overflows emscripten's 64KB
 // default stack on real minified bundles; grow it. Memory64 lifts
 // the wasm32 4 GiB cap to the wasm64 spec ceiling (2^64 bytes); the

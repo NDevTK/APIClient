@@ -20,8 +20,19 @@ var _pageToWorker = new Map();  // pageKey → poolIndex (sticky routing)
 
 function _makeWorker() {
   var w = new Worker("ast-thread.js");
-  var slot = { worker: w, pending: new Map(), assignedPages: new Set(), busy: 0 };
+  var slot = { worker: w, pending: new Map(), assignedPages: new Set(), busy: 0, liveness: null, livenessRecvTs: 0 };
   w.onmessage = function (e) {
+    if (e.data && e.data._heartbeat) {
+      // Liveness observability: record this slot's last heartbeat + when WE
+      // received it. A growing receive-age (vs the worker's own ts) means the
+      // worker's event loop is blocked in a sync C call (no macrotask can run
+      // there); a fresh heartbeat with a stale lastGrindProgressTs means the
+      // loop is alive but the grind fiber isn't being resumed. Read via
+      // self._poolLiveness() from the offscreen harness command.
+      slot.liveness = e.data;
+      slot.livenessRecvTs = Date.now();
+      return;
+    }
     if (e.data && e.data._resumed) {
       try { if (typeof self._mergeDeepResult === "function") self._mergeDeepResult(e.data.sourceUrl || "", e.data.response && e.data.response.result, true); }
       catch (err) { console.warn("[ast-worker] _mergeDeepResult (resumed) failed:", err && err.message || err); }
@@ -177,5 +188,32 @@ self.astDispatch = function (msg) {
       slot.busy--;
       resolve({ success: false, error: "postMessage failed: " + (err && err.message) });
     }
+  });
+};
+
+// Liveness snapshot for the harness `offscreen` command — distinguishes a
+// BLOCKED worker event loop (livenessAgeMs grows without bound: the wasm
+// thread is parked in one long sync C call) from a LIVE loop with a stalled
+// grind (livenessAgeMs stays small but grindStuckMs grows). Pure read-only
+// observability; never mutates pool state.
+self._poolLiveness = function () {
+  var now = Date.now();
+  return _pool.map(function (s, i) {
+    var lv = s.liveness || null;
+    return {
+      slot: i,
+      busy: s.busy,
+      pending: s.pending.size,
+      livenessAgeMs: s.livenessRecvTs ? (now - s.livenessRecvTs) : -1,
+      fiberQ: lv ? lv.fiberQ : -1,
+      grindRunning: lv ? lv.grindRunning : -1,
+      grindStuckMs: (lv && lv.lastGrindProgressTs) ? (lv.ts - lv.lastGrindProgressTs) : -1,
+      resumeCount: lv ? lv.resumeCount : -1,
+      deepSteps: lv ? lv.deepSteps : -1,
+      deepRem: lv ? lv.deepRem : -1,
+      deepTotal: lv ? lv.deepTotal : -1,
+      stuckOrphan: (lv && lv.currentOrphan) ? lv.currentOrphan : null,
+      activePageKey: lv ? lv.activePageKey : null,
+    };
   });
 };
