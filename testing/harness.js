@@ -34,7 +34,7 @@ const fs = require("fs");
 const fsp = fs.promises;
 const http = require("http");
 const crypto = require("crypto");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const puppeteer = require("puppeteer");
 
 // Deterministic Chrome extension ID for an unpacked extension at the
@@ -137,6 +137,37 @@ async function getPopupPage(browser) {
 }
 
 // ─── commands ──────────────────────────────────────────────────────────────
+
+// restart [port] — kill the harness Chrome and relaunch CLEAN. A running
+// analysis worker re-imports `lib/qjs/qjs_worker.js` (the SINGLE_FILE wasm) and
+// Chrome caches it in worker memory; chrome.runtime.reload() + bin/Clear (worker
+// respawn) do NOT bust that in-memory cache, so a freshly-BUILT engine isn't
+// picked up live (verified: the grind stuck at the SAME emission count pre/post
+// reload = stale wasm). A new Chrome PROCESS has no in-memory cache and re-reads
+// the rebuilt qjs_worker.js from disk (V8's on-disk code cache keys on file
+// content, so a rebuilt file invalidates automatically — no need to wipe it).
+// Also clears IndexedDB (learned-state reset). PRESERVES cookies / Login Data /
+// the rest of the profile so authenticated sites stay logged in. DO NOT wipe the
+// "Service Worker" or "Code Cache" dirs — deleting the SW dir breaks the
+// extension's background SW startup (it then never creates the offscreen doc, so
+// analysis never runs). Use after `node engine/build.mjs stage`.
+async function cmdRestart(args) {
+  const lock = await readLock();
+  if (lock && lock.pid) {
+    try {
+      if (process.platform === "win32") execSync(`taskkill /F /T /PID ${lock.pid}`, { stdio: "ignore" });
+      else { try { process.kill(-lock.pid, "SIGKILL"); } catch { process.kill(lock.pid, "SIGKILL"); } }
+      log(`killed Chrome pid ${lock.pid}`);
+    } catch (e) { log(`kill pid ${lock.pid}: ${e.message || e} (may already be gone)`); }
+  }
+  await clearLock();
+  await sleep(1800);   // let the process group exit + release the profile's file locks
+  // IndexedDB ONLY — the learned-state reset the user asked for. The new process
+  // handles the engine cache; cookies/login live in other dirs and survive.
+  try { await fsp.rm(path.join(PROFILE_DIR, "Default/IndexedDB"), { recursive: true, force: true }); log("cleared Default/IndexedDB"); }
+  catch (e) { /* absent dir is fine */ }
+  await cmdStart(args);
+}
 
 async function cmdStart(args) {
   const existing = await readLock();
@@ -500,7 +531,7 @@ async function cmdWorker(args) {
   });
 }
 
-const CMDS = { start: cmdStart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts };
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);

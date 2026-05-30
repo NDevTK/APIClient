@@ -387,9 +387,17 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // magic time-cap masquerading as observability).
   // Schedule-loop throttle cap (ms). The popup's "Yield throttle" slider
   // writes self._throttleCapMs via SET_ANALYSIS_OPTS — 0 means no sleep
-  // (max throughput, hottest CPU), higher means longer rest = cooler.
-  // The default (when the user hasn't moved the slider yet) lives here.
-  var THROTTLE_CAP_MS = (typeof self._throttleCapMs === "number" && self._throttleCapMs >= 0) ? self._throttleCapMs : 4000;
+  // (max throughput), higher means longer rest = cooler.
+  // DEFAULT = 0 (no throttle). This is a security-RESEARCH tool: the user
+  // actively opened it and is WAITING on the API surface — leaving the
+  // analysis core idle at 50% duty to be "polite" optimised for the wrong
+  // thing. A single page's grind is pinned to ONE worker (sticky routing) =
+  // one core, so full-tilt uses that one core and leaves the rest for the
+  // system. Cooling is now an OPT-IN (raise the slider), not a forced
+  // default; even then the active page stays hot via the _isActive exemption
+  // below. (Was 4000 = ~50% duty — made every page, incl. the one on screen,
+  // crawl.)
+  var THROTTLE_CAP_MS = (typeof self._throttleCapMs === "number" && self._throttleCapMs >= 0) ? self._throttleCapMs : 0;
   // /h.js host-edge model, /p.js the page's server-rendered DOM data
   // islands (so the bundle bootstraps correctly), /b.js the analyzed
   // bundle, /d.js the epilogue that pumps load/ready/message + XHR
@@ -1511,10 +1519,17 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       if (!self._whyRecords) self._whyRecords = [];
       self._whyRecords.push({ phase: "sched_timing_push_throw", err: String(e && e.message || e) });
     }
-    // THROTTLE: yield the core ~as long as this schedule ran (≈50% duty), so
-    // the analysis never PINS a core — it runs cool in the background. Time is
-    // free (this is a queued background reviewer); a maxed core is not.
-    if (work.length) await new Promise(function (r) { setTimeout(r, Math.min(THROTTLE_CAP_MS, Date.now() - _runT0)); });
+    // THROTTLE: yield the core ~as long as this schedule ran (≈50% duty) so a
+    // BACKGROUND analysis never PINS a core. EXCEPT the page the user is actively
+    // viewing (self._activePageKey): the researcher is WAITING on its results, so
+    // it runs hot (no per-run sleep) — making the focused page fast was the point
+    // of the question, and a flat throttle made every page (incl. the one on
+    // screen) crawl at half speed. Relevance-aware, mirroring flowCmp's active-
+    // page-focus tier: background stays cool, the focused page is responsive.
+    // Time is free for background work; the focused page's latency is what the
+    // user feels. THROTTLE_CAP_MS=0 (popup slider) still forces hot everywhere.
+    var _isActive = self._activePageKey && String(sourceUrl || "").split("#")[0] === self._activePageKey;
+    if (work.length && !_isActive) await new Promise(function (r) { setTimeout(r, Math.min(THROTTLE_CAP_MS, Date.now() - _runT0)); });
   }
   // Schedule BFS done. If the deep grind follows, RECYCLE to a fresh instance
   // for it rather than an explicit --fe-boot-end free of g_boot_ctx: tearing
