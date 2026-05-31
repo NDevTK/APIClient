@@ -843,11 +843,31 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       var rk = (method || "?") + " " + (rawUrl || "");
       if (!reSeen.has(rk)) {
         reSeen.add(rk);
+        // Attach the call-site location + chain (from the @H record's
+        // Error().stack) so a reached-but-opaque endpoint is SELF-DIAGNOSING —
+        // CLAUDE.md makes this a P1 the reviewer must SEE and act on, but the
+        // record carried only a generic page-URL context, leaving the reviewer
+        // unable to find WHICH of a 2.3 MB bundle's fetch sites went opaque
+        // (9 such on learn.microsoft.com, all locationless). `loc` is in
+        // combined-bundle space (background.js maps it to file:line:col via
+        // scriptOffsets); `chain` is the full call stack to the host edge.
+        var _reSite = pickSite(at);
+        var _reLoc = _reSite.loc;
+        // Cold-orphan drives invoke the function synthetically (no real caller
+        // chain), so pickSite finds no bundle frame → null loc. Fall back to the
+        // orphan's OWN bytecode position — self._currentOrphan, set from the
+        // @DSTART the deep grind flushes before each drive — so even a cold-driven
+        // opaque URL names its source function. Only set during the deep grind
+        // (BFS emits no @DSTART, so _currentOrphan is null there → no wrong loc).
+        if (!_reLoc && self._currentOrphan && typeof self._currentOrphan.line === "number")
+          _reLoc = { line: self._currentOrphan.line, column: self._currentOrphan.col, file: self._currentOrphan.file };
         resolverErrors.push({
           context: kind + " call site (" + (sourceUrl || "bundle") + ")",
           message: opaqueBase
             ? "request target has an opaque base/origin (the addressable anchor is an attacker/server-input hole, not a concrete host or root-relative path) — fully-opaque URL, recorded as a driver gap not a fabricated endpoint: " + JSON.stringify({ method: method, url: rawUrl })
             : "request target did not resolve to a concrete string at the converged fixpoint (opaque component reached the " + kind + " URL/method): " + JSON.stringify({ method: method, url: rawUrl }),
+          loc: _reLoc,
+          chain: _reSite.chain,
         });
       }
       return;

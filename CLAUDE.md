@@ -1,4 +1,4 @@
-Most important goal: Properly learning via QuickJS + Lexbor + Active discovery (NO parallel analysis) the Microsoft, Apple, Github, Google API endpoints + their per-parameter example values — the way complex webapps actually build them — so the output is useful for security research. All below policy may be overridden to comply with this.
+Most important goal: Properly learning via QuickJS + Lexbor + Active discovery (NO parallel analysis) the Microsoft, Apple, Github, Google etc API endpoints + their per-parameter example values — the way complex webapps actually build them — so the output is useful for security research. All below policy may be overridden to comply with this.
 
 EXPECTATION: if an API exists in the page's JavaScript bundle, the engine learns it — even when that path is normally gated behind a user action (login, click, navigation, async event). Forced execution drives the gated paths under opaque args; nothing in the bundle is "out of scope" because the user didn't interact with it.
 
@@ -178,6 +178,13 @@ The *only* things that are correctly ours: the analyzer-boundary fakes (record-o
 
 **Keep the vendored bases in sync with upstream (not a question — DO it).** A QuickJS-ng / Lexbor version bump is maintenance to perform, not to defer: upstream ships real value we want (e.g. 0.15.0 = native `btoa`/`atob` + Uint8Array base64/hex builtins, the `JS_NewSymbol(NULL)` segfault fix, atom-leak fix). The fork is heavily woven through `quickjs.c`, so a bump is a 3-way merge (`git merge-file` against the old + new upstream bases), NOT a blind overwrite — re-apply every fork patch, rebuild all targets, and re-run the FULL polarity gate set + a real-bundle deep-grind (`_idxdocs`) before claiming it landed. A bump that builds and passes the small gates but freezes/crashes a real bundle is NOT done — the regression is the bug, fix it (fixpoint, never a cap). Record the landed version in [[reference_quickjs_version]].
 
+**Fork version-control system — the engine source IS core project code, keep it tracked (authoritative).** The forced-execution engine is as load-bearing as the extension; its source must never sit untracked (an untracked engine = no corruption undo, the failure that let a scripted line-number edit silently clobber `hostedge.js`'s Blob constructor). The model:
+- **Where it lives / what's tracked.** `build.mjs` compiles IN-PLACE from `engine/qjs/` (a clone of upstream quickjs-ng; `origin` = quickjs-ng). Our work lives on the **`apiclient-fork` branch** of that repo, branched off the pinned upstream SHA so **`master` stays pristine for clean `git fetch && merge`**. Tracked (the vendor commit on `apiclient-fork`) = the 9 authored files (`hostedge.js`, `driver.js`, `qjsmain.c`, `qjs_dom.c`, `qjs_z3_shim.cpp`, `quickjs-forced.h`, `priority.h`, `drive.mjs`, `mdrive.mjs`) + the in-place upstream edits (`quickjs.c`, `quickjs.h`) = 11 files. NOT yet tracked (follow-up): the real green-gate fixtures. NOT tracked ever: scratch fixtures (`_*.js` that aren't named gates, `*.tmp/.out/.err`), multi-MB real-site captures (`_idxdocs.js`, `_yt.js`, `_ghbundle.js`, …; regenerable via `dumpscripts`), and regenerable wasm artifacts (`qjs_*.wasm`/`.js`, ~28 MB). (`priority.c` and `priority.js` do NOT exist — only `priority.h`, `#include`d by `quickjs.c`; CLAUDE.md's earlier `priority.c` citation was stale.)
+- **Corruption discipline (why this exists).** BEFORE any multi-file or scripted edit to engine source, COMMIT the current green state to `apiclient-fork` so a bad edit has an undo. A linter may reformat JS BETWEEN tool calls, so **never edit engine source by line-number scripts — match exact text (Edit/Write), and read `git diff` before staging.** The Read tool does not hallucinate; a "the file changed under me" surprise means a real reformat — re-read, don't confabulate a tool bug.
+- **Upstream sync.** `git -C engine/qjs fetch origin && … merge origin/master` on `master`, then merge `master` into `apiclient-fork` (the 3-way merge re-applies the `quickjs.c`/`.h` patch set per the paragraph above); rebuild all targets; run the FULL gate set + `_idxdocs` before claiming it landed.
+- **Landing a fork change (post-push model).** `apiclient-fork` is now PUSHED to the fork remote and PINNED by APIClient's gitlink, so the tip SHA is load-bearing — **never amend or force-push a pushed `apiclient-fork` commit** (it would orphan the gitlink). Instead: make a NEW commit on `apiclient-fork`, push it (`git -C engine/qjs push fork apiclient-fork`), then in APIClient `git add engine/qjs` to bump the gitlink + commit. The local-only safety-net commit (pre-push) was the exception that could be amended; once pushed, append.
+- **Standing permission.** You MAY, without asking: commit fork changes to `apiclient-fork` and push them to the `fork` remote (the fork repo is dedicated to this project — pushing green checkpoints to it IS the corruption safeguard), and create/modify test fixtures and the gate harness. You MUST still confirm before: pushing **APIClient itself** to its origin (`github.com/NDevTK/APIClient`), and any destructive `git reset --hard`/force-push (a publish to the main project repo is the user's call; a force-push rewrites shared history).
+
 ### Extension process split — where state lives (authoritative)
 
 The MV3 service worker is evicted on idle, so it CANNOT hold learned state. The split:
@@ -316,10 +323,12 @@ The invariant a future change must preserve: **high quality/depth AND low CPU/me
 - **Page-origin attribution**: unchanged — the brain (`offscreen-brain.js`) resolves a relative recorded URL against the PAGE origin, not the script host.
 - **Learning pipeline / protocol**: unchanged — `ast-thread.js` emits `fetchCallSites`; the brain (`offscreen-brain.js`) feeds them through the same learning path as real traffic and does protocol classification. The engine does not classify protocols.
 
+Never blame external sources.
 All fixes must reproduce under a clean deterministic test.
 Never rush fixes with workarounds or heuristics.
 Never create a general/shape heuristic fix.
 Effort and fatigue is anthropomorphizing a problem you don't have.
-Fixes should be pasue and resume prioritisation avoid bounds.
-Prefer viewing the extension UI over querying the offscreen directly.
+Fixes must be pasue and resume prioritisation never bounds/limits.
+Prefer viewing/dogfood the extension UI over querying the offscreen directly.
+When systems are not advanced enough design it properly first before continuing to solve your issue.
 PoC must be built from Z3's solve over the real traced flow — not hardcoded payload templates. (Taint flow UI uses this same data)
