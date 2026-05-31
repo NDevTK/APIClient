@@ -1959,82 +1959,35 @@ function _renderPocRow(entry, i, poc) {
   // (with type + severity). This row holds only the dynamic Run/probe result.
   return '<div class="probe-row poc-row">'
     + stepHtml
-    + '<button class="probe-btn poc-run-btn"' + btnAttrs + '>Run multi-step PoC</button>'
-    + '<span class="probe-hint">orchestrates the sequence on the target via chrome.scripting. Payload calls a dedicated <code>apiclientsink(origin)</code> global installed by intercept.js — REAL EXPLOIT requires the browser to actually run that function through the named pipeline (svg onload, img onerror, eval, javascript: navigation). CSP that blocks inline scripts prevents the call → NOT REPRODUCED. No prototype hooks, no substring matching: the only signal is "did the function land".</span>'
+    + '<button class="probe-btn poc-run-btn"' + btnAttrs + '>Load PoC</button>'
+    + '<span class="probe-hint">compiles the EXACT PoC JavaScript from the Z3 solve (no template) and embeds a cross-origin attacker sandbox — click <b>Run PoC</b> inside it (your click is the user gesture). The payload calls <code>apiclientsink(&lt;finding-id&gt;)</code>, which intercept.js relays only when the browser ACTUALLY executes it → REAL EXPLOIT. CSP blocking the handler → no call → NOT REPRODUCED.</span>'
     + resultHtml + '</div>';
 }
 
 function _renderVerifyRow(entry, i) {
+  // Offer a PoC ONLY for a proven, solvable exploit. REAL_EXPLOIT means Z3
+  // SOUNDLY solved a source-connected exploit; for anything else
+  // (EXPLOIT_UNPROVEN / TAINT_REACH / INFEASIBLE / Z3_ERROR) we do NOT offer to
+  // build a PoC — there is no soundly-solved exploit to run, so a "Load PoC"
+  // button would be a lie. The verdict-reason banner explains the situation.
+  if (entry.item && entry.item.verdict && entry.item.verdict !== "REAL_EXPLOIT") {
+    return "";
+  }
   // Only sinks carry a taint source the probe can exercise. Dangerous
   // patterns (prototype pollution, regex ReDoS, etc.) aren't probed by
   // URL/postMessage strategies — show a subdued row explaining why.
   if (entry.kind !== "sink") {
     return '<div class="probe-row"><span class="probe-na">pattern finding — not probeable via URL/postMessage</span></div>';
   }
-  // Z3-produced structured PoC (multi-source, ordered events, nested
-  // object payloads): preferred over legacy single-strategy probe when
-  // present. Sends EXPLOIT_PROBE_START with pocPlan → background.js
-  // routes to _runStructuredPlan → composes target URL + dispatches
-  // event sequence + reads intercept.js marker-flag.
+  // The PoC is compiled ONLY from the Z3 solve (the @P plan: solved values +
+  // channels + order). If a REAL_EXPLOIT carries that plan, offer it; otherwise
+  // we offer NOTHING — there is no legacy/template strategy probe. (A sound
+  // REAL_EXPLOIT always carries a @P plan, so this is the live path.)
   const poc = entry.item.poc;
   if (poc && Array.isArray(poc.events) && (poc.events.length || (poc.url && (poc.url.hash || poc.url.search || poc.url.pathname)) || (poc.storage && poc.storage.length) || (poc.cookies && poc.cookies.length))) {
     return _renderPocRow(entry, i, poc);
   }
-  const strategy = _probeStrategyFor(entry.item);
-  const key = _findingKey(entry);
-  if (!strategy) {
-    return '<div class="probe-row"><span class="probe-na">no probe strategy for source <code>' + esc(entry.item.source || "?") + '</code> — verify from the taint trace</span></div>';
-  }
-
-  // AST-derived probe parameters — if the source needs more than just
-  // "a URL with a marker" (search param name, postMessage field path),
-  // pull the specifics from the finding's taint path. When the AST
-  // didn't observe the necessary data, disable Verify and say why —
-  // we never guess a param name or field shape.
-  let paramName = null;
-  let fieldPath = [];
-  let disabledReason = null;
-  if (strategy === "search") {
-    paramName = _extractParamNameFromTaintPath(entry.item.taintPath);
-    if (!paramName) disabledReason = "AST didn't record which ?key= the sink reads (need a `.get(\"…\")` hop in the taint path)";
-  } else if (strategy === "postmessage") {
-    fieldPath = _extractFieldPathFromTaintPath(entry.item.taintPath, entry.item.source);
-    // An empty fieldPath is fine — it means the handler treats event.data as a string.
-  }
-
-  const label = 'Load PoC (' + strategy + ')';
-  const resultHtml = '<div class="probe-result" data-finding-key="' + esc(key) + '"></div>';
-  // sourceUrl is the script URL the finding's pageUrl is keyed to in
-  // globalStore.securityFindings — the SW uses it to look up which
-  // page the finding was observed on.
-  // Include sinkType, decoders, and preconditions so the SW can build
-  // the matching payload shape. sinkType picks js/html/href vectors;
-  // decoders are applied in reverse to pre-encode; preconditions pin
-  // gate fields (action === "exec"-style) into the shaped payload.
-  const decoders = _extractDecodersFromTaintPath(entry.item.taintPath);
-  const preconditions = Array.isArray(entry.item.preconditions) ? entry.item.preconditions : [];
-  const probeData = {
-    strategy, paramName, fieldPath,
-    sourceUrl: entry.sourceUrl || null, pageUrl: entry.pageUrl || null,
-    sinkType: entry.item.type || null, sinkName: entry.item.sink || null,
-    decoders, preconditions,
-  };
-  const btnAttrs =
-    ' data-finding-key="' + esc(key) + '"'
-    + ' data-probe=\'' + esc(JSON.stringify(probeData)) + '\''
-    + ' data-finding-idx="' + i + '"';
-  if (disabledReason) {
-    return '<div class="probe-row">'
-      + '<button class="probe-btn" disabled' + btnAttrs + '>' + esc(label) + '</button>'
-      + '<span class="probe-na">' + esc(disabledReason) + '</span>'
-      + resultHtml + '</div>';
-  }
-  const hint = 'shows the exact PoC JS and an embedded cross-origin attacker sandbox — click Run inside it to fire the '
-    + esc(strategy) + ' PoC against the target';
-  return '<div class="probe-row">'
-    + '<button class="probe-btn"' + btnAttrs + '>' + esc(label) + '</button>'
-    + '<span class="probe-hint">' + hint + '</span>'
-    + resultHtml + '</div>';
+  return "";
 }
 
 function _wireVerifyButtons(container) {
@@ -2324,16 +2277,14 @@ function renderSecurityPanel() {
         ? '<div class="card-dims" title="attacker-controlled dims surviving to the sink">sinkDims: {' + esc(item.sinkDims.join(",") || "none") + '}</div>'
         : "";
 
-      // Z3 STATIC verdict badge — grouped with the other badges at the top of
-      // the box. The verdict is UNTESTED: Z3 REAL_EXPLOIT means Z3 GENERATED a
-      // candidate exploit witness (a PoC), NOT that the exploit is confirmed —
-      // so the badge says "PoC", never "REAL EXPLOIT". Only the DYNAMIC probe
-      // result (apiclientsink fired, in the verify row) earns "REAL EXPLOIT".
-      // TAINT_REACH = taint reached but Z3 generated no PoC. Reuses .poc-* colors.
-      var _vLabel = ({ REAL_EXPLOIT: "PoC", TAINT_REACH: "taint", INFEASIBLE: "infeasible", Z3_ERROR: "Z3 error" })[item.verdict]
-        || String(item.verdict || "").replace(/_/g, " ");
-      var vBadge = item.verdict
-        ? '<span class="badge poc-' + esc(String(item.verdict).toLowerCase()) + '" title="Z3 STATIC verdict (UNTESTED): PoC = Z3 generated a candidate exploit witness; taint = taint reached, no PoC. Run Verify for the dynamic confirmation.">' + esc(_vLabel) + '</span> '
+      // The ONLY verdict badge is "PoC" — and ONLY for REAL_EXPLOIT, where Z3
+      // SOUNDLY solved a source-connected exploit (a candidate PoC, untested
+      // until Verify fires it). Every other verdict — EXPLOIT_UNPROVEN (SAT only
+      // under an unsound over-approx), TAINT_REACH, INFEASIBLE, Z3_ERROR — gets
+      // NO badge: the verdict-reason banner explains it in words and no PoC is
+      // offered. A badge for those would over-claim solvability.
+      var vBadge = item.verdict === "REAL_EXPLOIT"
+        ? '<span class="badge poc-real_exploit" title="Z3 soundly solved a source-connected exploit (candidate PoC) — UNTESTED until Verify fires it.">PoC</span> '
         : '';
       var verifyHtmlSink = _renderVerifyRow(entry, i);
       html += '<div class="card" data-finding-key="' + esc(_findingKey(entry)) + '">'

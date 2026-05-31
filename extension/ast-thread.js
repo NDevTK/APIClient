@@ -451,6 +451,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var nc = conditions ? conditions.length : 0;
     if (verdict === "REAL_EXPLOIT") return { reason: "poc", text: witness ? "Z3 generated an exploit witness (PoC) under " + nc + " path condition" + (nc === 1 ? "" : "s") + " — UNTESTED until Verify fires it" : "Z3: exploit shape satisfiable, no concrete witness captured" };
     if (verdict === "Z3_ERROR") return { reason: "gen-failed", text: "PoC generation FAILED — Z3 solver error; exploitability UNKNOWN (not a clean verdict)" };
+    if (verdict === "EXPLOIT_UNPROVEN") return { reason: "unproven", text: "Taint reaches an exploit-shaped sink, but the exploit is satisfiable only under an UNSOUND over-approximation (an unmodeled transform or a replace() that could sanitize) — NOT a proven PoC, so no PoC is offered. Review the trace manually." };
     if (verdict === "TAINT_REACH") {
       if (nc) return { reason: "pinned", text: "Taint reaches the sink but " + nc + " path condition" + (nc === 1 ? "" : "s") + " pin the value — no exploit shape satisfies them (candidate FALSE POSITIVE / sanitized)" };
       return { reason: "no-shape", text: "Taint reaches the sink but no exploit shape is defined for this sink family — PoC generation not attempted (exploitability UNKNOWN)" };
@@ -1302,6 +1303,16 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           continue;
         }
         if (!_pendingSec) continue;
+        // DIAG: capture whether a Z3 @P plan is paired at each REAL_EXPLOIT @Z,
+        // to pin why the live PoC falls back to a template (plan dropped before
+        // finding.poc). Read via the worker harness cmd's self._whyRecords.
+        if (zr.verdict === "REAL_EXPLOIT") {
+          if (!self._whyRecords) self._whyRecords = [];
+          self._whyRecords.push({ phase: "poc_pair_diag", sink: _pendingSec.sink,
+            hasPendingPoC: !!_pendingPoC,
+            pocSteps: (_pendingPoC && _pendingPoC.steps && _pendingPoC.steps.length) || 0,
+            pocSample: _pendingPoC ? JSON.stringify(_pendingPoC).slice(0, 200) : null });
+        }
         if (zr.verdict === "INFEASIBLE") { _pendingSec = null; _pendingPoC = null; continue; }
         var ss = pickSite(_pendingSec.at);
         var sk = _pendingSec.type + "|" + _pendingSec.sink + "|" + (ss.loc ? ss.loc.line + ":" + ss.loc.column : "?");
@@ -1332,11 +1343,13 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
               existing._pathKeys[pkey] = 1;
               existing.paths.push(pathRec);
               // Promote the finding to the strongest verdict any path proves.
-              var rank = { REAL_EXPLOIT: 3, Z3_ERROR: 2, TAINT_REACH: 1 };
+              // Only REAL_EXPLOIT is a proven PoC; EXPLOIT_UNPROVEN ranks above
+              // bare TAINT_REACH but is NOT a PoC (no badge / no PoC offer).
+              var rank = { REAL_EXPLOIT: 3, EXPLOIT_UNPROVEN: 2, Z3_ERROR: 2, TAINT_REACH: 1 };
               if ((rank[zr.verdict] || 0) > (rank[existing.verdict] || 0)) {
                 existing.verdict = zr.verdict;
                 existing.verdictReason = verdictReason;
-                existing.severity = _pendingSec.type === "code-exec" ? "critical" : (zr.verdict === "TAINT_REACH" ? "medium" : "high");
+                existing.severity = _pendingSec.type === "code-exec" ? "critical" : ((zr.verdict === "TAINT_REACH" || zr.verdict === "EXPLOIT_UNPROVEN") ? "medium" : "high");
                 existing.taintPath = dataFlow.length ? dataFlow : ss.chain.map(function (c) { return { at: c }; });
                 existing.conditions = conditions;
                 existing.callChain = ss.chain;
@@ -1352,7 +1365,10 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         secSeen.add(sk);
         sinkSeen.add(sk);
         var sev = _pendingSec.type === "code-exec" ? "critical" : "high";
-        if (zr.verdict === "TAINT_REACH") sev = "medium";
+        // TAINT_REACH (exploit shape UNSAT) and EXPLOIT_UNPROVEN (exploit SAT but
+        // only under an unsound over-approximation — NOT a proven PoC) are both
+        // medium: real taint reach, but no confidently-solvable exploit.
+        if (zr.verdict === "TAINT_REACH" || zr.verdict === "EXPLOIT_UNPROVEN") sev = "medium";
         var poc = null;
         if (_pendingPoC && Array.isArray(_pendingPoC.steps) && _pendingPoC.steps.length) {
           poc = adaptPoc(_pendingPoC, _pendingSec.type, zr.psi);
