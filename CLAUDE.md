@@ -322,3 +322,4 @@ Never create a general/shape heuristic fix.
 Effort and fatigue is anthropomorphizing a problem you don't have.
 Fixes should be pasue and resume prioritisation avoid bounds.
 Prefer viewing the extension UI over querying the offscreen directly.
+PoC must be built from Z3's solve over the real traced flow — not hardcoded payload templates. (Taint flow UI uses this same data)

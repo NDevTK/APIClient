@@ -248,6 +248,45 @@ async function cmdPopup(args) {
   });
 }
 
+// Fire the embedded PoC sandbox the way a USER does: a real (trusted) click on
+// the "Run PoC" button INSIDE poc-sandbox.html. A trusted click is the user
+// activation window.open needs — a JS dispatchEvent would be untrusted and the
+// PoC's window.open would be popup-blocked, so this can't be done via `popup`.
+// After the click, polls the finding card's verdict (REAL EXPLOIT / NOT REPRO).
+async function cmdPocRun(args) {
+  const waitMs = parseInt(args[0] || "12000", 10);
+  await withBrowser(async (browser) => {
+    const popup = await getPopupPage(browser);
+    let frame = null;
+    for (let i = 0; i < 40 && !frame; i++) {
+      frame = popup.frames().find((f) => f.url().indexOf("poc-sandbox.html") >= 0) || null;
+      if (!frame) await sleep(150);
+    }
+    if (!frame) { log("no poc-sandbox frame — click 'Load PoC' in the popup first"); return; }
+    await frame.waitForFunction(() => { const b = document.getElementById("run"); return b && !b.disabled; }, { timeout: 8000 }).catch(() => {});
+    const pocLen = await popup.evaluate(() => { const c = document.querySelector("pre.poc-js code"); return c ? c.textContent.length : 0; });
+    await frame.click("#run");   // TRUSTED gesture → window.open allowed
+    log("clicked Run PoC (trusted gesture); PoC length=" + pocLen);
+    // Poll the popup card's verdict for up to waitMs.
+    const deadline = Date.now() + waitMs;
+    let verdict = "(no verdict yet)";
+    while (Date.now() < deadline) {
+      verdict = await popup.evaluate(() => {
+        const c = document.querySelector("#security-findings .card");
+        if (!c) return "(no card)";
+        const hit = c.querySelector(".probe-hit-head");
+        if (hit) return hit.innerText;
+        const miss = c.querySelector(".probe-miss-head");
+        if (miss) return miss.innerText;
+        return (c.querySelector(".poc-status") || {}).innerText || "(staged)";
+      });
+      if (/REAL EXPLOIT|NOT REPRODUCED/.test(verdict)) break;
+      await sleep(500);
+    }
+    log("verdict: " + verdict);
+  });
+}
+
 // Navigate a real tab to a URL so the extension analyzes a live page
 // end-to-end (content.js captures scripts+HTML → background → worker).
 // Reuses the active non-extension tab, else opens one.
@@ -531,7 +570,7 @@ async function cmdWorker(args) {
   });
 }
 
-const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts };
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);

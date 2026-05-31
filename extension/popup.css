@@ -406,6 +406,86 @@ nav {
 .san-match { color: #3fb950; }
 .san-branch { color: #d29922; }
 .san-reject { color: #f85149; }
+/* Structured taint-trace verdict classifier — distinguishes the four cases the
+   bare verdict conflates (PoC / pinned candidate-FP / gen-failure / no-shape). */
+.verdict-reason {
+  font-size: 10px;
+  line-height: 1.4;
+  margin: 4px 0;
+  padding: 5px 8px;
+  border-radius: 4px;
+  border-left: 3px solid #30363d;
+  background: #161b22;
+  color: #c9d1d9;
+}
+.verdict-reason.vr-poc { border-left-color: #f85149; background: #2d1416; color: #ffb1b1; }
+.verdict-reason.vr-pinned { border-left-color: #d29922; background: #2a2208; color: #ffe09a; }
+.verdict-reason.vr-gen-failed { border-left-color: #a371f7; background: #1d1830; color: #d2c0ff; }
+.verdict-reason.vr-no-shape { border-left-color: #8b949e; background: #161b22; color: #b9c2cc; }
+.taint-section-h {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #6e7681;
+  margin: 6px 0 2px 0;
+}
+.taint-source code { color: #ff9d6b; font-size: 10px; }
+.taint-conds, .taint-callchain {
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  font-size: 10px;
+  color: #c9d1d9;
+  margin: 2px 0 2px 16px;
+  padding-left: 16px;
+}
+.taint-conds li, .taint-callchain li { margin: 2px 0; line-height: 1.5; }
+.taint-conds code { color: #79c0ff; background: none; padding: 0; }
+.taint-conds-empty { font-size: 10px; color: #6e7681; font-style: italic; margin: 2px 0 2px 4px; }
+.cond-branch {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-right: 4px;
+  text-transform: uppercase;
+}
+.cond-true { background: #14301c; color: #6fd98a; }
+.cond-false { background: #2d1416; color: #ff8181; }
+.taint-callchain code { color: #d2a8ff; background: none; padding: 0; }
+.alt-paths { margin-top: 4px; }
+.alt-path-list { list-style: none; margin: 4px 0 0 0; padding: 0; }
+.alt-path {
+  border-top: 1px solid #21262d;
+  padding: 4px 0;
+  font-size: 10px;
+  color: #8b949e;
+}
+/* Unified PoC: the exact JS + the embedded sandboxed attacker page. */
+.poc-sandbox-host { margin: 6px 0; }
+.poc-js-head, .poc-sandbox-head {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .4px;
+  color: #6e7681; margin: 6px 0 2px 0;
+}
+.poc-sandbox-head b { color: #6fd98a; }
+pre.poc-js {
+  background: #161b22; border: 1px solid #21262d; border-radius: 4px;
+  padding: 6px 8px; margin: 0; max-height: 160px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+}
+pre.poc-js code {
+  font-family: "Cascadia Code", "Fira Code", monospace; font-size: 10px;
+  color: #79c0ff; background: none; padding: 0;
+}
+.poc-copy-btn {
+  margin: 4px 0; background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+  border-radius: 4px; padding: 3px 10px; font-size: 11px; cursor: pointer;
+}
+.poc-copy-btn:hover { background: #30363d; }
+.poc-sandbox-frame {
+  width: 100%; height: 150px; border: 1px solid #30363d; border-radius: 4px;
+  background: #0d1117;
+}
+.poc-status { font-size: 11px; color: #8b949e; }
 .san-reason {
   color: #8b949e;
   font-style: italic;

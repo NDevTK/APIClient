@@ -9,14 +9,12 @@
 // collector for the form-submission pipeline.
 
 (function () {
-  // The exploit-probe opens its OWN tab with a `__apisec=MARKER` token in the
-  // URL (hash or query) so intercept.js installs apiclientsink there. That tab
-  // is a synthetic exploit-test target, NOT a research page — shipping its
-  // scripts/HTML for analysis re-analyzes the same code and adds a DUPLICATE
-  // finding (the "Verify makes it go 1→2 findings" bug). So we SKIP the analysis
-  // shipping (scripts, HTML, SCRIPTS_LOADED) for a probe tab, while keeping the
-  // probe relays below (the whole point of the tab) intact.
-  var _PROBE_TAB = /[#?&]__apisec=/.test(location.href);
+  // No URL-token probe mode: correlation rides in the PoC payload (the finding's
+  // crypto.randomUUID passed to apiclientsink), never in the URL. A PoC target is
+  // just the page with an attacker payload in the hash; the hash is not a value
+  // sent to the server, so it must not change the analysis decision. Re-analysis
+  // is deduped by the brain's code fingerprint (identical scripts ⇒ cache hit ⇒
+  // no rescan, no duplicate finding), so there is nothing to skip here.
 
   // ─── Response Body Relay (must be first — drains intercept.js buffer) ────
   // Threat model: intercept.js (main world) is untrusted — same origin as the page.
@@ -48,24 +46,37 @@
   // Signal intercept.js that the relay is listening — replays buffered events
   document.dispatchEvent(new CustomEvent("__uasr_ready"));
 
-  // Exploit-probe hit relay: when the page's intercept.js detects a
-  // URL-bound probe marker and wraps a sink, each hit fires as a
-  // CustomEvent. Forward to background so the active probe session can
-  // correlate. Background gates on the allow-list, so spoofed events
-  // from the page can at worst submit noise to that session's hits —
-  // they cannot read other tabs' data.
-  document.addEventListener("__uasr_probe_hit", (e) => {
-    if (!e.detail) return;
+  // Exploit-probe hit relay: when a PoC payload executes, intercept.js's
+  // apiclientsink(id) fires with the finding's crypto.randomUUID (carried INSIDE
+  // the payload, never in the URL). Forward to the offscreen brain, which
+  // correlates the hit to the finding/probe session by that id. Two channels,
+  // because the CustomEvent races content.js's document_idle injection:
+  //   (1) live CustomEvent for hits fired after we're listening, and
+  //   (2) a drain of the durable `data-uasr-hits` documentElement attribute for
+  //       hits intercept.js mirrored there BEFORE content.js loaded.
+  var _uasrSeenHits = new Set();
+  function _forwardProbeHit(hit) {
+    if (!hit) return;
+    var k = (hit.id || "") + "|" + (hit.at || "");
+    if (_uasrSeenHits.has(k)) return;
+    _uasrSeenHits.add(k);
+    try { chrome.runtime.sendMessage({ type: "PROBE_HIT", hit: hit }); }
+    catch (err) { console.warn("[content:probe_hit] sendMessage failed:", err && err.message || err); }
+  }
+  document.addEventListener("__uasr_probe_hit", (e) => { if (e.detail) _forwardProbeHit(e.detail); });
+  function _drainHitMirror() {
     try {
-      chrome.runtime.sendMessage({ type: "PROBE_HIT", hit: e.detail });
-    } catch (err) {
-      // Extension context invalidated (extension was reloaded after content.js
-      // injected) is the common cause — chrome.runtime is gone. Surface so a
-      // missing PROBE_HIT after a sink fires is diagnosable rather than looking
-      // like the probe failed to detect the exploit.
-      console.warn("[content:probe_hit] sendMessage failed:", err && err.message || err);
-    }
-  });
+      var raw = document.documentElement.getAttribute("data-uasr-hits");
+      if (!raw) return;
+      JSON.parse(raw).forEach(_forwardProbeHit);
+    } catch (_) {}
+  }
+  _drainHitMirror();
+  try {
+    new MutationObserver(_drainHitMirror).observe(document.documentElement, {
+      attributes: true, attributeFilter: ["data-uasr-hits"],
+    });
+  } catch (_) {}
 
   // ─── postMessage Listener ─────────────────────────────────────────────────
   // Runs in isolated world — no main-world wrapper needed. message events are
@@ -219,7 +230,6 @@
   // executes under forced exec → @H records observe real fetch/XHR
   // with method, args, call site.
   function _sendPageHtml(why) {
-    if (_PROBE_TAB) return;  // probe tab: not an analysis target
     var html;
     try { html = document.documentElement.outerHTML; } catch (_) { return; }
     if (!html) return;
@@ -451,7 +461,6 @@
   var _scriptOrder = 0;
 
   function sendScriptSource(url, code, order) {
-    if (_PROBE_TAB) return;  // probe tab: don't ship scripts for analysis (would dup the finding)
     if (!code) return;
     // No size threshold — CLAUDE.md "no magic numbers, no depth/size
     // caps". A 30-char `document.body.innerHTML=location.hash` is a
@@ -518,7 +527,6 @@
   // timer hasn't expired (continuous script-load streams reset the timer
   // forever on busy pages, so it never fires on its own).
   function _signalScriptsLoaded() {
-    if (_PROBE_TAB) return;  // probe tab: not an analysis target
     chrome.runtime.sendMessage({ type: "SCRIPTS_LOADED" });
   }
   if (document.readyState === "complete") _signalScriptsLoaded();
@@ -576,7 +584,7 @@
       try { html = document.documentElement.outerHTML; } catch (_) { return; }
       if (html) {
         var hh = _simpleHash(html);
-        if (hh !== _lastHtmlHash && !_PROBE_TAB) {  // probe tab: not an analysis target
+        if (hh !== _lastHtmlHash) {
           _lastHtmlHash = hh;
           chrome.runtime.sendMessage({
             type: "CONTENT_HTML",

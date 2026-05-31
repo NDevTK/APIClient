@@ -389,6 +389,74 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     }
     try { return parse(); } catch (e) { return []; }
   }
+  // Pretty-print one Lisp-y term (psi/phi sub-term; serializer qjs_sb_term0 in
+  // quickjs.c) into a readable JS-ish expression — source-grounded, no guessing:
+  // `$id:label`→label, `(. b "n")`→b.n, `(fn b a)`→fn(b, a), `(op a b)`→a OP b
+  // (op chars exactly qjs_cmp_opchar's set), `(! b)`→!b.
+  function _termToStr(s, st) {
+    function ws() { while (st.i < s.length && s[st.i] === " ") st.i++; }
+    function rdStr() { st.i++; var o = ""; while (st.i < s.length && s[st.i] !== '"') { if (s[st.i] === "\\") st.i++; o += s[st.i++]; } if (s[st.i] === '"') st.i++; return o; }
+    function opStr(c) { return ({ "=": "===", "!": "!==", "<": "<", "l": "<=", ">": ">", "g": ">=" })[c] || c; }
+    ws();
+    if (st.i >= s.length) return "?";
+    var c = s[st.i];
+    if (c === "(") {
+      st.i++; ws();
+      var head = ""; while (st.i < s.length && s[st.i] !== " " && s[st.i] !== ")") head += s[st.i++];
+      if (head === ".") { var base = _termToStr(s, st); ws(); var name = s[st.i] === '"' ? rdStr() : ""; ws(); if (s[st.i] === ")") st.i++; return base + "." + name; }
+      var a = _termToStr(s, st); ws();
+      var b = null;
+      if (s[st.i] !== ")") b = _termToStr(s, st);
+      ws(); if (s[st.i] === ")") st.i++;
+      if (/^[A-Za-z_$]/.test(head)) return head + "(" + a + (b != null && b !== "?" ? ", " + b : "") + ")";
+      if (b == null) return (head === "!" ? "!" : head) + a;  // unary logical NOT (op 'U')
+      return a + " " + opStr(head) + " " + b;            // infix binary
+    }
+    if (c === '"') { var k = rdStr(); return JSON.stringify(k); }
+    if (c === "$") { st.i++; while (st.i < s.length && s[st.i] !== ":") st.i++; if (s[st.i] === ":") st.i++; var lab = ""; while (st.i < s.length && /[\w.$]/.test(s[st.i])) lab += s[st.i++]; return lab; }
+    var tok = ""; while (st.i < s.length && s[st.i] !== " " && s[st.i] !== ")") tok += s[st.i++];
+    return tok;
+  }
+  function _termPretty(s) { if (typeof s !== "string" || !s) return ""; try { return _termToStr(s, { i: 0 }); } catch (e) { return ""; } }
+  // Φ (path constraints) → the CONDITIONALS on the source→sink path. The engine
+  // serializes Φ as `[d:term,d:term,...]` (qjs_sb_pc) where d∈{0,1} is the
+  // branch the forced run took. Each is a condition a reviewer reads to judge
+  // whether a gate PINS the value (likely-safe / FP) vs leaves it free. The
+  // term may reference the tainted source (taintRel) or be source-independent
+  // (an unrelated control-flow gate); both are surfaced. Robust to junk → [].
+  function _phiToConditions(phi) {
+    if (typeof phi !== "string") return [];
+    var s = phi.trim();
+    if (s[0] !== "[") return [];
+    var out = [], i = 1, n = s.length;
+    while (i < n && s[i] !== "]") {
+      while (i < n && (s[i] === " " || s[i] === ",")) i++;
+      if (i >= n || s[i] === "]") break;
+      var dec = ""; while (i < n && s[i] !== ":" && s[i] !== "]" && s[i] !== ",") dec += s[i++];
+      if (s[i] !== ":") { continue; }
+      i++;
+      var st = { i: i }, expr = "";
+      try { expr = _termToStr(s, st); } catch (e) { expr = ""; }
+      i = st.i;
+      if (expr) out.push({ decision: (dec.trim() === "1") ? 1 : 0, expr: expr });
+    }
+    return out;
+  }
+  // Classify the Z3 verdict so a reviewer can DISTINGUISH the cases the bare
+  // verdict conflates: a candidate FALSE-POSITIVE (gates pin the value → not
+  // exploitable) from a PoC-GENERATION FAILURE (Z3 errored, or no exploit shape
+  // for the sink family → exploitability UNKNOWN). REAL_EXPLOIT+witness = a
+  // generated PoC, untested until the dynamic probe fires it.
+  function _classifyVerdict(verdict, conditions, witness) {
+    var nc = conditions ? conditions.length : 0;
+    if (verdict === "REAL_EXPLOIT") return { reason: "poc", text: witness ? "Z3 generated an exploit witness (PoC) under " + nc + " path condition" + (nc === 1 ? "" : "s") + " — UNTESTED until Verify fires it" : "Z3: exploit shape satisfiable, no concrete witness captured" };
+    if (verdict === "Z3_ERROR") return { reason: "gen-failed", text: "PoC generation FAILED — Z3 solver error; exploitability UNKNOWN (not a clean verdict)" };
+    if (verdict === "TAINT_REACH") {
+      if (nc) return { reason: "pinned", text: "Taint reaches the sink but " + nc + " path condition" + (nc === 1 ? "" : "s") + " pin the value — no exploit shape satisfies them (candidate FALSE POSITIVE / sanitized)" };
+      return { reason: "no-shape", text: "Taint reaches the sink but no exploit shape is defined for this sink family — PoC generation not attempted (exploitability UNKNOWN)" };
+    }
+    return { reason: "unknown", text: String(verdict || "") };
+  }
   // Phase-timing instrumentation — to MEASURE (not assert) where real-bundle
   // time goes: boot (the one snapshot boot), memcpy (cumulative restore cost,
   // scales with image size), the BFS phase, and the deep grind. Surfaced via
@@ -571,6 +639,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   var reSeen = new Set();
   var securitySinks = [];
   var secSeen = new Set();
+  var secByKey = new Map();         // sk → finding, so distinct forced paths to
+                                    // the SAME sink aggregate as multiple
+                                    // interprocedural paths (not first-wins drop)
   var chunkUrls = new Set();         // lazy-chunk URLs the bundle's loader requested (script.src=)
 
   // Normalise the engine's @P (per-leaf step records) into the shape
@@ -694,8 +765,8 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var chain = [];
     var bframes = [];
     for (var j = 0; j < at.length; j++) {
-      chain.push({ line: at[j].line, column: at[j].col });
-      if (isBundleFrame(at[j].file)) bframes.push({ line: at[j].line, column: at[j].col });
+      chain.push({ line: at[j].line, column: at[j].col, name: at[j].name, file: at[j].file });
+      if (isBundleFrame(at[j].file)) bframes.push({ line: at[j].line, column: at[j].col, name: at[j].name });
     }
     return { loc: { line: pick.line, column: pick.col }, chain: chain, bframes: bframes };
   }
@@ -1108,18 +1179,22 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // Aggregate stdout (@E/@T/@H/@S/@P/@Z) into the shared learning state.
   // BFS schedule runs pass startIdx=0 (each run resets stdout first); the
   // deep grind's drain passes a per-yield startIdx so each @H/@T/@S line
-  // is aggregated exactly once across the long single-callMain. __pendingSec
-  // / __pendingPoC are CLOSURE-LEVEL so an @S whose paired @Z arrived in a
-  // later yield is not orphaned by the drain boundary.
-  var __pendingSec = null;       // @S waiting for paired @Z verdict (spans yields)
-  var __pendingPoC = null;       // @P arriving between @S and @Z (spans yields)
+  // is aggregated exactly once across the long single-callMain. _pendingSec
+  // / _pendingPoC are CLOSURE-LEVEL (declared here, used by the loop below) so
+  // an @S/@P whose paired @Z arrived in a LATER yield/drain batch is not
+  // orphaned by the drain boundary. (These were previously undeclared implicit
+  // globals while a dead `__`-prefixed pair was reset here — so cross-batch
+  // pairing silently dropped the Z3 @P plan; declaring the names the loop
+  // actually uses fixes it.)
+  var _pendingSec = null;       // @S waiting for paired @Z verdict (spans yields)
+  var _pendingPoC = null;       // @P arriving between @S and @Z (spans yields)
   function processStdout(startIdx) {
     var rh = [];
     var li0 = (typeof startIdx === "number" && startIdx > 0) ? startIdx : 0;
     // startIdx==0 means a fresh stdout buffer (BFS schedule OR first deep-
-    // drain on a recycled instance), so any dangling __pendingSec from a
+    // drain on a recycled instance), so any dangling _pendingSec from a
     // PRIOR buffer must not pair into the new run.
-    if (li0 === 0) { __pendingSec = null; __pendingPoC = null; }
+    if (li0 === 0) { _pendingSec = null; _pendingPoC = null; }
     for (var li = li0; li < stdout.length; li++) {
       var line = stdout[li];
       if (line.slice(0, 5) === "@WHY ") {
@@ -1230,7 +1305,50 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         if (zr.verdict === "INFEASIBLE") { _pendingSec = null; _pendingPoC = null; continue; }
         var ss = pickSite(_pendingSec.at);
         var sk = _pendingSec.type + "|" + _pendingSec.sink + "|" + (ss.loc ? ss.loc.line + ":" + ss.loc.column : "?");
-        if (secSeen.has(sk)) { _pendingSec = null; _pendingPoC = null; continue; }
+        // The conditionals (Φ) the forced run took to reach this sink, and the
+        // interprocedural call chain (which functions the taint passed through).
+        var conditions = _phiToConditions(zr.phi);
+        var dataFlow = _psiToHops(zr.psi);
+        var verdictReason = _classifyVerdict(zr.verdict, conditions, zr.witness);
+        // Each forced run reaching the SAME sink is a DISTINCT interprocedural
+        // path (different Φ / call chain). Keyed by the Φ string so genuinely
+        // identical paths dedup but alternate gating-paths accumulate.
+        var pathRec = {
+          verdict: zr.verdict,
+          verdictReason: verdictReason,
+          conditions: conditions,
+          dataFlow: dataFlow,
+          callChain: ss.chain,
+          witness: zr.witness || null,
+          psi: zr.psi || null,
+          phi: zr.phi || null,
+        };
+        if (secSeen.has(sk)) {
+          var existing = secByKey.get(sk);
+          if (existing) {
+            var pkey = String(zr.phi || "") + "||" + String(zr.psi || "");
+            if (!existing._pathKeys) existing._pathKeys = {};
+            if (!existing._pathKeys[pkey]) {
+              existing._pathKeys[pkey] = 1;
+              existing.paths.push(pathRec);
+              // Promote the finding to the strongest verdict any path proves.
+              var rank = { REAL_EXPLOIT: 3, Z3_ERROR: 2, TAINT_REACH: 1 };
+              if ((rank[zr.verdict] || 0) > (rank[existing.verdict] || 0)) {
+                existing.verdict = zr.verdict;
+                existing.verdictReason = verdictReason;
+                existing.severity = _pendingSec.type === "code-exec" ? "critical" : (zr.verdict === "TAINT_REACH" ? "medium" : "high");
+                existing.taintPath = dataFlow.length ? dataFlow : ss.chain.map(function (c) { return { at: c }; });
+                existing.conditions = conditions;
+                existing.callChain = ss.chain;
+                existing.witness = zr.witness || existing.witness;
+                existing.psi = zr.psi || existing.psi;
+                existing.phi = zr.phi || existing.phi;
+              }
+            }
+          }
+          _pendingSec = null; _pendingPoC = null;
+          continue;
+        }
         secSeen.add(sk);
         sinkSeen.add(sk);
         var sev = _pendingSec.type === "code-exec" ? "critical" : "high";
@@ -1254,7 +1372,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           }
           if (!srcLabel && _labels.length) srcLabel = _labels[0];
         }
-        securitySinks.push({
+        var finding = {
           type: _pendingSec.type,
           sink: _pendingSec.sink,
           source: srcLabel || "host-unknown attacker input reached the sink (forced multi-path execution)",
@@ -1264,14 +1382,25 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           // Prefer the engine's psi data-flow (source→ops→sink, verifiable +
           // feeds the probe's field-path/decoder extractors); fall back to the
           // @S call-stack positions only when there's no psi term.
-          taintPath: (function () { var ph = _psiToHops(zr.psi); return ph.length ? ph : ss.chain.map(function (c) { return { at: c }; }); })(),
+          taintPath: dataFlow.length ? dataFlow : ss.chain.map(function (c) { return { at: c }; }),
+          // The interprocedural call chain + the conditionals (Φ) + the
+          // verdict classification — so the trace shows WHICH functions, WHICH
+          // gates, and WHY it's a PoC vs pinned-FP vs gen-failure. `paths` holds
+          // every distinct forced path reaching this sink (multi-path view).
+          callChain: ss.chain,
+          conditions: conditions,
+          verdictReason: verdictReason,
+          paths: [pathRec],
+          _pathKeys: (function () { var o = {}; o[String(zr.phi || "") + "||" + String(zr.psi || "")] = 1; return o; })(),
           value: _pendingSec.value != null ? String(_pendingSec.value) : null,
           verdict: zr.verdict,
           witness: zr.witness || null,
           psi: zr.psi || null,
           phi: zr.phi || null,
           poc: poc,
-        });
+        };
+        securitySinks.push(finding);
+        secByKey.set(sk, finding);
         _pendingSec = null;
         _pendingPoC = null;
       }
