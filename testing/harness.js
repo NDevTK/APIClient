@@ -531,66 +531,7 @@ async function cmdWorker(args) {
   });
 }
 
-// gate <fixture.js> [--deep] — run a self-contained gate fixture through the
-// REAL Chrome analysis worker (qjs_worker.js + JSPI), where crypto.subtle and
-// safeFetch are LIVE. This is the ONLY valid test of the LEARNING SYSTEM: native
-// is banned, and the node wasm-CLI both lack host crypto + safeFetch, so neither
-// can exercise lazy-chunk fetching or crypto-dependent values — they test a
-// crippled subset of the engine, not the learning system. Drives forcedAnalyze
-// (the worker's own analysis entry) on the fixture and prints the learned
-// endpoints (@H), security sinks (@S/@Z), resolverErrors, and structural (@T)
-// count. Run on a CLEAN worker (`node testing/harness.js restart`) so a stuck
-// background grind doesn't starve the gate's fiber. Rebuild+stage+restart to
-// pick up an engine change before gating.
-async function cmdGate(args) {
-  const file = args.find((a) => !a.startsWith("--"));
-  if (!file) throw new Error("usage: gate <fixture.js|.html> [--deep]");
-  const deep = args.includes("--deep");
-  const raw = fs.readFileSync(path.isAbsolute(file) ? file : path.join(ROOT, file), "utf8");
-  const name = path.basename(file);
-  // .html fixture: extract INLINE <script> bodies as the code and pass the full
-  // HTML as pageHtml, so a DOM-dependent inline-script vuln (location.hash →
-  // getElementById(x).innerHTML) is analyzed with the real Lexbor DOM — without
-  // the DOM, getElementById returns null, the script throws before the sink, and
-  // the finding is missed.
-  let code = raw, pageHtml = null;
-  if (/\.html?$/i.test(file)) {
-    pageHtml = raw;
-    const inline = [];
-    raw.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (m, attrs, body) => {
-      if (!/\bsrc\s*=/i.test(attrs)) inline.push(body);
-      return m;
-    });
-    code = inline.join("\n;\n");
-  }
-  await withBrowser(async (browser) => {
-    const lock = await readLock();
-    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
-    let w = null, diag = "";
-    for (let i = 0; i < 80 && !w; i++) {
-      const t = browser.targets().find((t) => t.url().startsWith(ourl));
-      const pg = t ? await t.page().catch(() => null) : null;
-      if (pg) { const ws = pg.workers(); diag = ws.map((x) => x.url().split("/").pop()).join(","); w = ws.find((x) => x.url().indexOf("ast-thread.js") >= 0) || null; }
-      if (!w) await sleep(150);
-    }
-    if (!w) { log("(no analysis worker — open the popup once or `goto` a page so the offscreen spins up; saw [" + diag + "])"); return; }
-    const out = await w.evaluate(async (code, name, deep, pageHtml) => {
-      if (typeof forcedAnalyze !== "function") return { err: "forcedAnalyze not in worker scope" };
-      try {
-        const r = await forcedAnalyze(code, "gate://" + name, null, pageHtml, false, deep);
-        return {
-          endpoints: [...new Set((r.fetchCallSites || []).map((f) => ((f.method || "") + " " + (f.url || f.path || "")).trim()))],
-          sinks: [...new Set((r.securitySinks || []).map((s) => (s.kind || s.sink || s.type || "?") + (s.verdict ? ":" + s.verdict : "")))],
-          resolverErrors: (r.resolverErrors || []).length,
-          structural: (r.structuralCandidates || []).length,
-        };
-      } catch (e) { return { err: String((e && e.message) || e), stack: e && e.stack }; }
-    }, code, name, deep, pageHtml);
-    log(JSON.stringify(out, null, 2));
-  });
-}
-
-const CMDS = { start: cmdStart, restart: cmdRestart, gate: cmdGate, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts };
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);

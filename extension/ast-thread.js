@@ -351,24 +351,43 @@ function buildPageDomSrc(scriptUrls) {
 
 async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, scriptOffsets, sourceMapScripts) {
   var t0 = Date.now();
-  // Per-hop taint-path SNIPPET: a taint-path hop carries only a bundle position
-  // ({line,column} from the @S stack chain). Slice the actual source line from
-  // the analyzed bundle (`code`, in closure scope) so the reviewer reads the
-  // CODE at each transformation source→…→sink — the per-hop context the popup
-  // promises and the retired Babel viewer used to show, instead of bare
-  // numbers. Lines split lazily ONCE (the bundle can be MBs). Positions are
-  // bundle (eval) coordinates — the same space the @S chain reports — so no
-  // source-map needed; the line windows around the column for minified bundles.
-  var _taintSrcLines = null;
-  function _hopCode(c) {
-    if (!c || !(c.line > 0)) return "";
-    if (!_taintSrcLines) _taintSrcLines = String(code || "").split("\n");
-    if (c.line > _taintSrcLines.length) return "";
-    var ln = _taintSrcLines[c.line - 1] || "";
-    var col = (c.column | 0);
-    if (ln.length <= 140) return ln.trim();
-    var start = Math.max(0, col - 60), end = Math.min(ln.length, col + 80);
-    return (start > 0 ? "…" : "") + ln.slice(start, end).trim() + (end < ln.length ? "…" : "");
+  // PROPER taint TRACE from the engine's psi term (the data-flow QuickJS
+  // computed), NOT the @S call-STACK. The popup's _extract*FromTaintPath helpers
+  // expect data-flow hops {kind:"source"|"member"|"call-arg", desc} — that IS
+  // the psi term: `$id:label` (source leaf), `(. base "name")` (member),
+  // `(fn base arg)` (call). _psiToHops parses the Lisp-y psi (serializer in
+  // quickjs.c qjs_sb_term0) and emits hops SOURCE-FIRST along the tainted spine,
+  // so the popup shows `responseText → JSON.parse → .webRes → sink` — verifiable
+  // from the trace alone (essential for sources like XHR responseText that have
+  // no automated probe strategy). Robust to junk: any parse failure → [].
+  function _psiToHops(psi) {
+    if (typeof psi !== "string" || !psi) return [];
+    var i = 0, n = psi.length;
+    function ws() { while (i < n && psi[i] === " ") i++; }
+    function str() { ws(); if (psi[i] !== '"') return ""; i++; var s = ""; while (i < n && psi[i] !== '"') { if (psi[i] === "\\") i++; s += psi[i++]; } if (psi[i] === '"') i++; return s; }
+    function skip() { // skip one balanced term without recording (for non-spine args)
+      ws(); if (i >= n) return;
+      if (psi[i] === "(") { var d = 0; do { if (psi[i] === "(") d++; else if (psi[i] === ")") d--; i++; } while (i < n && d > 0); }
+      else if (psi[i] === '"') { str(); }
+      else { while (i < n && psi[i] !== " " && psi[i] !== ")") i++; }
+    }
+    function parse() { // returns source-first hops for the term at i
+      ws(); if (i >= n) return [];
+      var c = psi[i];
+      if (c === "(") {
+        i++; ws(); var head = ""; while (i < n && psi[i] !== " " && psi[i] !== ")") head += psi[i++];
+        if (head === ".") { var bh = parse(); var name = str(); ws(); if (psi[i] === ")") i++; bh.push({ kind: "member", desc: "." + name }); return bh; }
+        // (fn base arg): follow whichever child carries the source leaf
+        var save = i; var bh2 = parse(); ws();
+        var argStart = i; var ah = parse(); ws(); if (psi[i] === ")") i++;
+        var spine = bh2.length ? bh2 : ah;
+        spine.push({ kind: "call-arg", desc: head + "()" });
+        return spine;
+      }
+      if (c === "$") { i++; var id = ""; while (i < n && psi[i] !== ":") id += psi[i++]; if (psi[i] === ":") i++; var lab = ""; while (i < n && /[\w.$]/.test(psi[i])) lab += psi[i++]; return [{ kind: "source", desc: lab }]; }
+      skip(); return []; // "lit" / num / ? → no source hop
+    }
+    try { return parse(); } catch (e) { return []; }
   }
   // Phase-timing instrumentation — to MEASURE (not assert) where real-bundle
   // time goes: boot (the one snapshot boot), memcpy (cumulative restore cost,
@@ -1242,7 +1261,10 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           sourceType: srcLabel ? "user-controlled" : undefined,
           severity: sev,
           location: ss.loc || { line: 0, column: 0 },
-          taintPath: ss.chain.map(function (c) { return { at: c, code: _hopCode(c) }; }),
+          // Prefer the engine's psi data-flow (source→ops→sink, verifiable +
+          // feeds the probe's field-path/decoder extractors); fall back to the
+          // @S call-stack positions only when there's no psi term.
+          taintPath: (function () { var ph = _psiToHops(zr.psi); return ph.length ? ph : ss.chain.map(function (c) { return { at: c }; }); })(),
           value: _pendingSec.value != null ? String(_pendingSec.value) : null,
           verdict: zr.verdict,
           witness: zr.witness || null,

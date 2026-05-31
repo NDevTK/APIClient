@@ -1739,7 +1739,9 @@ function _renderTaintPathDetails(item) {
   let rows = "";
   for (let i = 0; i < item.taintPath.length; i++) {
     const h = item.taintPath[i];
-    const at = h.at ? ("L" + h.at.line + ":C" + h.at.column) : "?";
+    // psi data-flow hops carry no per-op position (the sink's L:C is in the
+    // card meta); only show a position when the hop actually has one.
+    const at = h.at ? ("L" + h.at.line + ":C" + h.at.column) : "";
     // Dim transition annotation — where in the chain did origin (or
     // another dimension) flip? Shows before→after only when the hop
     // changed dims; otherwise shows the current mask.
@@ -1865,11 +1867,9 @@ function _renderPocRow(entry, i, poc) {
     ' data-finding-key="' + esc(key) + '"'
     + ' data-probe=\'' + esc(JSON.stringify(probeData)) + '\''
     + ' data-finding-idx="' + i + '"';
-  const verdictTag = entry.item.verdict
-    ? '<span class="poc-verdict poc-' + esc(entry.item.verdict.toLowerCase()) + '">Z3: ' + esc(entry.item.verdict) + '</span>'
-    : '';
+  // No verdict tag here — the Z3 verdict is a badge at the top of the box
+  // (with type + severity). This row holds only the dynamic Run/probe result.
   return '<div class="probe-row poc-row">'
-    + verdictTag
     + stepHtml
     + '<button class="probe-btn poc-run-btn"' + btnAttrs + '>Run multi-step PoC</button>'
     + '<span class="probe-hint">orchestrates the sequence on the target via chrome.scripting. Payload calls a dedicated <code>apiclientsink(origin)</code> global installed by intercept.js — REAL EXPLOIT requires the browser to actually run that function through the named pipeline (svg onload, img onerror, eval, javascript: navigation). CSP that blocks inline scripts prevents the call → NOT REPRODUCED. No prototype hooks, no substring matching: the only signal is "did the function land".</span>'
@@ -1895,7 +1895,7 @@ function _renderVerifyRow(entry, i) {
   const strategy = _probeStrategyFor(entry.item);
   const key = _findingKey(entry);
   if (!strategy) {
-    return '<div class="probe-row"><span class="probe-na">no probe strategy for source <code>' + esc(entry.item.source || "?") + '</code></span></div>';
+    return '<div class="probe-row"><span class="probe-na">no probe strategy for source <code>' + esc(entry.item.source || "?") + '</code> — verify from the taint trace</span></div>';
   }
 
   // AST-derived probe parameters — if the source needs more than just
@@ -2220,9 +2220,20 @@ function renderSecurityPanel() {
         ? '<div class="card-dims" title="attacker-controlled dims surviving to the sink">sinkDims: {' + esc(item.sinkDims.join(",") || "none") + '}</div>'
         : "";
 
+      // Z3 STATIC verdict badge — grouped with the other badges at the top of
+      // the box. The verdict is UNTESTED: Z3 REAL_EXPLOIT means Z3 GENERATED a
+      // candidate exploit witness (a PoC), NOT that the exploit is confirmed —
+      // so the badge says "PoC", never "REAL EXPLOIT". Only the DYNAMIC probe
+      // result (apiclientsink fired, in the verify row) earns "REAL EXPLOIT".
+      // TAINT_REACH = taint reached but Z3 generated no PoC. Reuses .poc-* colors.
+      var _vLabel = ({ REAL_EXPLOIT: "PoC", TAINT_REACH: "taint", INFEASIBLE: "infeasible", Z3_ERROR: "Z3 error" })[item.verdict]
+        || String(item.verdict || "").replace(/_/g, " ");
+      var vBadge = item.verdict
+        ? '<span class="badge poc-' + esc(String(item.verdict).toLowerCase()) + '" title="Z3 STATIC verdict (UNTESTED): PoC = Z3 generated a candidate exploit witness; taint = taint reached, no PoC. Run Verify for the dynamic confirmation.">' + esc(_vLabel) + '</span> '
+        : '';
       var verifyHtmlSink = _renderVerifyRow(entry, i);
       html += '<div class="card" data-finding-key="' + esc(_findingKey(entry)) + '">'
-        + '<div class="card-label">' + typeBadge + ' ' + sevBadge + ' ' + esc(item.sink) + '</div>'
+        + '<div class="card-label">' + typeBadge + ' ' + sevBadge + ' ' + vBadge + esc(item.sink) + '</div>'
         + '<div class="card-value">' + esc(sourceDesc) + '</div>'
         + sinkDimsHtml
         + _renderTaintPathDetails(item)

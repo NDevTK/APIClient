@@ -9,6 +9,15 @@
 // collector for the form-submission pipeline.
 
 (function () {
+  // The exploit-probe opens its OWN tab with a `__apisec=MARKER` token in the
+  // URL (hash or query) so intercept.js installs apiclientsink there. That tab
+  // is a synthetic exploit-test target, NOT a research page — shipping its
+  // scripts/HTML for analysis re-analyzes the same code and adds a DUPLICATE
+  // finding (the "Verify makes it go 1→2 findings" bug). So we SKIP the analysis
+  // shipping (scripts, HTML, SCRIPTS_LOADED) for a probe tab, while keeping the
+  // probe relays below (the whole point of the tab) intact.
+  var _PROBE_TAB = /[#?&]__apisec=/.test(location.href);
+
   // ─── Response Body Relay (must be first — drains intercept.js buffer) ────
   // Threat model: intercept.js (main world) is untrusted — same origin as the page.
   // This relay only forwards to background.js via sendMessage; background validates
@@ -210,6 +219,7 @@
   // executes under forced exec → @H records observe real fetch/XHR
   // with method, args, call site.
   function _sendPageHtml(why) {
+    if (_PROBE_TAB) return;  // probe tab: not an analysis target
     var html;
     try { html = document.documentElement.outerHTML; } catch (_) { return; }
     if (!html) return;
@@ -441,6 +451,7 @@
   var _scriptOrder = 0;
 
   function sendScriptSource(url, code, order) {
+    if (_PROBE_TAB) return;  // probe tab: don't ship scripts for analysis (would dup the finding)
     if (!code) return;
     // No size threshold — CLAUDE.md "no magic numbers, no depth/size
     // caps". A 30-char `document.body.innerHTML=location.hash` is a
@@ -507,6 +518,7 @@
   // timer hasn't expired (continuous script-load streams reset the timer
   // forever on busy pages, so it never fires on its own).
   function _signalScriptsLoaded() {
+    if (_PROBE_TAB) return;  // probe tab: not an analysis target
     chrome.runtime.sendMessage({ type: "SCRIPTS_LOADED" });
   }
   if (document.readyState === "complete") _signalScriptsLoaded();
@@ -564,7 +576,7 @@
       try { html = document.documentElement.outerHTML; } catch (_) { return; }
       if (html) {
         var hh = _simpleHash(html);
-        if (hh !== _lastHtmlHash) {
+        if (hh !== _lastHtmlHash && !_PROBE_TAB) {  // probe tab: not an analysis target
           _lastHtmlHash = hh;
           chrome.runtime.sendMessage({
             type: "CONTENT_HTML",
