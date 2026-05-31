@@ -265,7 +265,14 @@ async function cmdPocRun(args) {
     if (!frame) { log("no poc-sandbox frame — click 'Load PoC' in the popup first"); return; }
     await frame.waitForFunction(() => { const b = document.getElementById("run"); return b && !b.disabled; }, { timeout: 8000 }).catch(() => {});
     const pocLen = await popup.evaluate(() => { const c = document.querySelector("pre.poc-js code"); return c ? c.textContent.length : 0; });
-    await frame.click("#run");   // TRUSTED gesture → window.open allowed
+    // The popup tab must be FOREGROUND for window.open to count as an active-tab
+    // user gesture — a real toolbar popup always is; a puppeteer-opened popup tab
+    // sits in the background, so window.open would be popup-blocked (returns null,
+    // the PoC's own alert fires and a modal wedges the renderer). bringToFront
+    // mirrors the real interaction; it is NOT a dialog workaround.
+    await popup.bringToFront();
+    await sleep(500);   // let the foreground/activation state settle so the click counts as an active-tab gesture (else window.open is popup-blocked on a fresh restart)
+    await frame.click("#run");   // TRUSTED, FOREGROUND gesture → window.open allowed
     log("clicked Run PoC (trusted gesture); PoC length=" + pocLen);
     // Poll the popup card's verdict for up to waitMs.
     const deadline = Date.now() + waitMs;

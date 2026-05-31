@@ -4752,8 +4752,20 @@ const _analysisInflight = new Set();
 // endpoints are learned. Bounded: a transitive fixpoint chases the whole
 // ~700-chunk graph; one round is the directly-lazy surface.
 async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
-  if (!buf || !Array.isArray(chunkUrls) || chunkUrls.length === 0) return;
+  if (!buf) return;
   if (buf._chunkRoundDone) return;
+  // A page with NO discovered lazy chunks (a simple page, an inline-only
+  // message handler, learn.microsoft.com's no-split bundle) STILL needs the
+  // deep orphan-residue grind — it's what drives the gated/unreached
+  // functions (the multi-message handler that only reaches innerHTML after
+  // state-priming; wrapper-callers like mxe(){return M("/site-header.json")}).
+  // The old `chunkUrls.length === 0` early-return bypassed the
+  // `fresh.length === 0` deep-trigger below, so a zero-chunk page never ran
+  // the deep pass — confirmed live: poc_multi produced 0 security findings
+  // because its handler orphan was never driven. Normalise a missing/empty
+  // list to [] and fall through; the fresh-empty branch sets _chunkRoundDone
+  // and dispatches the deep pass exactly as the no-fresh-chunks case does.
+  if (!Array.isArray(chunkUrls)) chunkUrls = [];
   if (!buf._chunkSeen) buf._chunkSeen = new Set();
   var known = new Set();
   var maxOrder = 0;
@@ -4995,10 +5007,18 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   var cacheKey = null;
   var analyzerFp = await getAnalyzerFingerprint();
   if (analyzerFp && scriptHashes.length === scripts.length) {
-    // Cache key = (analyzer fingerprint) + (script content hashes).
-    // Any change to the analyzer worker files OR the analyzed scripts
-    // flips the key, so stale entries simply don't match.
-    cacheKey = analyzerFp + "|" + scriptHashes.join("+");
+    // Cache key = (analyzer fingerprint) + (script content hashes) + (round
+    // mode). Any change to the analyzer worker files OR the analyzed scripts
+    // flips the key, so stale entries simply don't match. The round-mode
+    // suffix is load-bearing: round 1 (BFS, deep=false) and round 2 (deep
+    // orphan-residue grind, _chunkRoundDone=true) run the SAME script set but
+    // produce DIFFERENT results — round 2 adds the gated/unreached findings
+    // (the state-primed multi-message handler, wrapper-caller URLs). Without
+    // the suffix, round 2's identical key HIT round 1's cached BFS result and
+    // returned before dispatching the worker, so the deep grind NEVER ran on a
+    // zero-new-chunk page — confirmed live: poc_multi's multi-message XSS was
+    // never found because round 2 short-circuited on the round-1 cache entry.
+    cacheKey = analyzerFp + "|" + scriptHashes.join("+") + (buf._chunkRoundDone ? "|deep" : "");
     var cached = globalStore.scriptCache.get(cacheKey);
     if (cached) {
       console.debug("[AST:cache] Cache HIT for tab=%d (%d scripts, key=%s…)",
@@ -5230,6 +5250,17 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     (analysis.dangerousPatterns && analysis.dangerousPatterns.length);
   if (!hasFindings && sourceMapScripts.length === 0) {
     console.debug("[AST:combined] No findings for tab=%d", tabId);
+    // The deep orphan-residue grind is exactly what surfaces the findings
+    // round 1's BFS couldn't reach — the state-primed multi-message handler,
+    // gated/login-only chunk endpoints, wrapper-caller URLs. So it MUST run
+    // even when round 1 found NOTHING. Returning here without triggering it
+    // was circular: a page whose ONLY finding needs the deep grind (poc_multi's
+    // multi-message XSS) found nothing in round 1 → returned → the deep grind
+    // never dispatched → the finding was never found. The other early returns
+    // above (sendToOffscreen throw, worker cleared, epoch reset) are genuine
+    // abort paths where skipping is correct; this "no findings yet" one is not.
+    try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls); }
+    catch (e) { console.debug("[AST:chunks] tab=%d error: %s", tabId, e && e.message); }
     return;
   }
 

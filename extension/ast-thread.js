@@ -671,12 +671,18 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // event only; every other field keeps its Z3-solved gate value.
     var sinkLeafId = -1;
     var sinkField = null;
-    if (typeof psi === "string") {
+    // PREFER the engine-emitted (sinkLeaf, sinkField): the engine identified the
+    // sink-bearing field from Ψ's spine exactly. Scraping quoted segments from
+    // the psi STRING breaks for a concat Ψ ("<div class='" + e.data.cls + "'>…")
+    // — the literal wrapper segments get mixed into the field path, so the proof
+    // hook is woven into a nonexistent field and the payload keeps alert(...).
+    if (rawPoc && typeof rawPoc.sinkLeaf === "number" && rawPoc.sinkLeaf >= 0) {
+      sinkLeafId = rawPoc.sinkLeaf;
+      sinkField = (typeof rawPoc.sinkField === "string" && rawPoc.sinkField) ? rawPoc.sinkField : null;
+    } else if (typeof psi === "string") {
+      // Fallback (older engine / no spine): single-leaf reflections only.
       var leafMatch = psi.match(/\$(\d+):/);
       if (leafMatch) sinkLeafId = +leafMatch[1];
-      // Member accesses appear as (. <root> "key") nested innermost-first
-      // (`(. (. $3 "data") "html")`). Pull the quoted segments in
-      // outer-to-inner order = the OP order = the property chain.
       var keys = [];
       var re = /"([^"\\]*(?:\\.[^"\\]*)*)"/g, m;
       while ((m = re.exec(psi))) keys.push(m[1]);

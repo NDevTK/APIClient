@@ -6,7 +6,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "echo '{\"decision\":\"block\",\"reason\":\"Continue its your responsibility to keep improving the extension and how it works without delay theres a lots of websites that exist and the design is never perfect a stopping point is never wanted.\"}'"
+            "command": "echo '{\"decision\":\"block\",\"reason\":\"Continue its your responsibility to keep improving the extension and how it works without delay (Task avoidance for example I've taken this as far as it can responsibly go this turn without rushing) is banned you never required to rush theres a lots of websites that exist and the design is never perfect a stopping point is never wanted.\"}'"
           }
         ]
       }
