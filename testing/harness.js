@@ -577,7 +577,85 @@ async function cmdWorker(args) {
   });
 }
 
-const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts };
+// Resolve an engine-reported combined-bundle location (file:line[:col]) back to
+// a readable source snippet. The forced-exec engine line-numbers stack frames
+// (@DSTART, @WHY spin loopFile/loopLine) against the COMBINED bundle (slices
+// joined with per-slice start-line offsets), but scriptCache holds each chunk as
+// one minified line and combined line numbers shift between dumps — so a raw
+// `devsite...:4944:158` is otherwise unreadable. This reads the SAME
+// feDeepDB.code store the grind booted from and prints the line (windowed around
+// the column) so a fixpoint/keying bug can be read in the real source. The
+// missing piece that made the Google spin fix blind.
+async function cmdSrcLoc(args) {
+  const spec = (args[0] || "").trim();          // file:line[:col]
+  const ctxCols = parseInt(args[1] || "200", 10); // chars of context each side of col
+  // Non-greedy filename: a greedy `.*` ate the line number (file:4944:158 →
+  // line=158), so anchor the trailing :line[:col] and take the SHORTEST file.
+  const m = spec.match(/^(.*?):(\d+)(?::(\d+))?$/);
+  if (!m) throw new Error("usage: srcloc <file:line[:col]> [ctxCols]");
+  const wantFile = m[1], wantLine = parseInt(m[2], 10), wantCol = m[3] ? parseInt(m[3], 10) : 0;
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
+    let pg = null;
+    for (let i = 0; i < 40 && !pg; i++) {
+      const t = browser.targets().find((t) => t.url().startsWith(ourl));
+      if (t) pg = await t.page().catch(() => null);
+      if (!pg) await sleep(150);
+    }
+    if (!pg) { log("(no offscreen)"); return; }
+    const rec = await pg.evaluate(async (wantFileArg) => {
+      let r; try { r = indexedDB.open("feDeepDB"); } catch (e) { return { err: "open throw " + e.message }; }
+      const db = await new Promise((ok) => { r.onsuccess = () => ok(r.result); r.onerror = () => ok(null); });
+      if (!db) return { err: "no feDeepDB" };
+      if (!db.objectStoreNames.contains("code")) return { err: "no code store" };
+      const g = db.transaction("code", "readonly").objectStore("code").getAll();
+      const recs = await new Promise((ok) => { g.onsuccess = () => ok(g.result || []); g.onerror = () => ok([]); });
+      if (!recs.length) return { err: "code store empty" };
+      // Prefer the record whose scriptOffsets reference the wanted chunk; else largest.
+      let best = null;
+      for (const rc of recs) {
+        const offs = rc.scriptOffsets || [];
+        const hasChunk = offs.some((o) => (o.url || "").indexOf(wantFileArg) >= 0);
+        const sz = (rc.code || "").length;
+        const score = (hasChunk ? 1e12 : 0) + sz;
+        if (!best || score > best.score) best = { score, rc };
+      }
+      const rc = best.rc;
+      return { key: rc.key || "", code: rc.code || "", scriptOffsets: rc.scriptOffsets || null };
+    }, wantFile);
+    if (rec.err) { log("srcloc: " + rec.err); return; }
+    const lines = rec.code.split("\n");
+    if (wantLine < 1 || wantLine > lines.length) {
+      log(`srcloc: line ${wantLine} out of range (combined has ${lines.length} lines)`);
+      return;
+    }
+    const line = lines[wantLine - 1];
+    // Which chunk owns this combined line (scriptOffsets[].lineStart is 1-based
+    // combined space). Pick the chunk with the GREATEST lineStart <= wantLine —
+    // NOT array order (scriptOffsets isn't guaranteed sorted; a from-end break
+    // mis-attributed devsite@3247 as a googleapis chunk@84).
+    let owner = null;
+    const offs = rec.scriptOffsets || [];
+    for (let i = 0; i < offs.length; i++) {
+      const ls = offs[i].lineStart | 0;
+      if (ls <= wantLine && (!owner || ls > (owner.lineStart | 0))) owner = offs[i];
+    }
+    log(`srcloc ${spec}  (combined ${lines.length} lines, key=${rec.key})`);
+    log(`chunk: ${owner ? (owner.url || "?") + " @lineStart " + owner.lineStart : "(no scriptOffsets)"}`);
+    log(`lineLen=${line.length} col=${wantCol}`);
+    if (wantCol > 0 && line.length > ctxCols * 2) {
+      const a = Math.max(0, wantCol - ctxCols), b = Math.min(line.length, wantCol + ctxCols);
+      log(`…[${a}..${b}]…`);
+      log(line.slice(a, b));
+      log(" ".repeat(Math.min(ctxCols, wantCol - a)) + "^ col " + wantCol);
+    } else {
+      log(line.slice(0, Math.min(line.length, ctxCols * 4)));
+    }
+  });
+}
+
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
