@@ -1789,7 +1789,6 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var _lastPersistDrivenN = -1;     // driven set size at last successful prog-put
     var _drainBusy = false;           // reentrancy guard (drain awaits IDB; another yield may fire)
     var _drem = -1;                   // last @DS rem we saw
-    var _inFlightOrphan = null;       // id of an orphan whose @DSTART fired but @DD hasn't — the culprit if callMain traps
     _deepStats.stop = "done";
     // Persist the combined bundle ONCE (heavy, ~18 MB) so a fresh worker can
     // resume. IDB failures must be visible — a silent QuotaExceededError on
@@ -1956,17 +1955,8 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            teardown). The residue is whatever's not in /driven; recycle the
            instance and retry. */
         _dpCallThrew = true;
-        /* The drive that trapped is the in-flight orphan (its @DSTART fired,
-           its @DD never did). Mark it driven so the recycle's /driven rewrite
-           skips it — otherwise the fresh instance re-picks the same culprit
-           (same LIVE priority) and traps identically, and the grind never
-           advances past it (the rem:-1 starvation). Skipping ONE proven-
-           non-terminating orphan via the driven-set fixpoint is not a cap;
-           every other orphan in the residue still runs. */
-        var _culprit = _inFlightOrphan;
-        if (_culprit) { _driven.add(_culprit); _inFlightOrphan = null; }
         if (!self._whyRecords) self._whyRecords = [];
-        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size, culprit: _culprit || "(unknown)" });
+        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size });
       }
       // Final drain for any lines after the last JSPI yield (e.g. the
       // closing @DS the engine emits before returning from main).
