@@ -851,6 +851,7 @@ async function cmdMultiTab(args) {
 async function cmdNetDiff(args) {
   const all = args.includes("--all");
   const showAssets = args.includes("--assets");   // include static-asset GETs in the gap list (default: filter them)
+  const unused = args.includes("--unused");        // LEARNED-NOT-LIVE: the unused API surface forced exec found (the VALUE), not gaps
   await withBrowser(async (browser) => {
     const lock = await readLock();
     const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
@@ -861,7 +862,7 @@ async function cmdNetDiff(args) {
       if (!pg) await sleep(150);
     }
     if (!pg) { log("(no offscreen target — run `harness restart` first)"); return; }
-    const out = await pg.evaluate(({ all, showAssets }) => {
+    const out = await pg.evaluate(({ all, showAssets, unused }) => {
       // Normalize a URL to host+path with volatile id/number segments collapsed,
       // so /repo/pull/123 and /repo/pull/456 are one endpoint shape.
       const norm = (u, base) => {
@@ -887,10 +888,12 @@ async function cmdNetDiff(args) {
           || ct === "application/wasm"
           || /^application\/(x-font|font-|vnd\.ms-fontobject)/.test(ct);
       };
-      const learned = new Set();
+      const learned = new Set(), learnedMap = new Map();
       if (typeof globalStore !== "undefined") {
-        for (const e of globalStore.endpoints.values())
-          learned.add((e.method || "GET") + " " + norm((e.host ? "https://" + e.host : "") + (e.path || e.url || "")));
+        for (const e of globalStore.endpoints.values()) {
+          const k = (e.method || "GET") + " " + norm((e.host ? "https://" + e.host : "") + (e.path || e.url || ""));
+          learned.add(k); if (!learnedMap.has(k)) learnedMap.set(k, e);
+        }
       }
       const seen = new Set(), gaps = [], byTab = []; let assetFiltered = 0;
       if (typeof state !== "undefined") {
@@ -910,10 +913,33 @@ async function cmdNetDiff(args) {
           byTab.push({ tab: pageUrl.slice(0, 50), gaps: tabGaps });
         }
       }
+      if (unused) {
+        // LEARNED-NOT-LIVE = the unused API surface forced exec found (THE VALUE,
+        // the inverse of gaps): AST-learned endpoints the page never fired, with
+        // their example values. source !== ast_analysis means it was learned FROM
+        // live traffic (so it DID fire) — exclude those.
+        const unusedList = [];
+        for (const [k, e] of learnedMap) {
+          if (seen.has(k)) continue;
+          if (e.source && e.source !== "ast_analysis") continue;
+          let ex = "";
+          try {
+            const ps = (e.params && e.params.length ? e.params
+                      : (e.methods && Object.values(e.methods)[0] && Object.values(e.methods)[0].params) || []);
+            ex = ps.slice(0, 5).map((p) => p.name + (p.example != null && p.example !== ""
+                   ? "=" + String(p.example).slice(0, 24)
+                   : (p.valueSource === "opaque" || p.in === "opaque" ? "={opaque}" : ""))).join(", ");
+          } catch (_) {}
+          unusedList.push(k + (ex ? "  [" + ex + "]" : ""));
+        }
+        return { mode: "unused = learned-but-not-live (the unused API surface forced exec found — THE VALUE)",
+                 learnedCount: learnedMap.size, liveDistinct: seen.size, unusedCount: unusedList.length,
+                 unused: unusedList.slice(0, 100) };
+      }
       return { learnedCount: learned.size, liveDistinct: seen.size, gapCount: gaps.length,
                assetFiltered: assetFiltered + (showAssets ? " (shown; --assets)" : " (static-asset GETs excluded; --assets to show)"),
                gaps: gaps.slice(0, 60).map((g) => g.k + (g.status ? " [" + g.status + "]" : "")) };
-    }, { all, showAssets }).catch((e) => ({ error: String(e && e.message || e) }));
+    }, { all, showAssets, unused }).catch((e) => ({ error: String(e && e.message || e) }));
     log(JSON.stringify(out, null, 2));
     log("NOTE: a gap is definitive only when learnstate is `complete` (rem==0); mid-analysis, re-check after.");
   });
