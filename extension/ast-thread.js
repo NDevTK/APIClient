@@ -17,7 +17,7 @@
 // .js sets self.__HOSTEDGE_SRC (generated from engine/qjs/hostedge.js,
 // the single source of truth drive.mjs also tests); sourcemap.js keeps
 // the genuinely-static sourcemap/TS helpers.
-importScripts("lib/qjs/qjs_worker.js", "lib/qjs/hostedge.gen.js", "lib/sourcemap.js", "lib/priority.js", "lib/safe-fetch.js");
+importScripts("lib/qjs/qjs_worker.js", "lib/qjs/hostedge.gen.js", "lib/sourcemap.js", "lib/priority.js", "lib/safe-fetch.js", "lib/learnstate.js");
 
 var HOSTEDGE = self.__HOSTEDGE_SRC;
 var HOSTDRIVER = self.__HOSTDRIVER_SRC;
@@ -2565,8 +2565,47 @@ setTimeout(_resumeIncompleteDeep, 0);
 // guessed at (three wrong guesses this session). The grind's own per-yield
 // drain only emits while it's RUNNING, so it cannot report its own freeze;
 // a separate timer can.
+/* Honest learning-state verdict — the SINGLE signal the harness needs to tell
+   "a finding is genuinely MISSING (driven to completion, never found)" from
+   "still being LOOKED FOR (orphans remain / a fiber is mid-flight)". Without
+   this, a network-vs-AST diff is unfalsifiable: a missing endpoint could be a
+   real forced-exec gap OR just not-yet-reached, and the two are
+   indistinguishable from rem/stop alone (rem>0 with stop="done" looked
+   finished while 61k orphans were undriven). Classifies into:
+     • "complete"  — rem===0: every orphan driven; a finding absent NOW is a
+                      genuine gap (or correctly-not-an-endpoint, e.g. a
+                      <include-fragment src> whose connectedCallback never
+                      fetched — NOT an endpoint, by design).
+     • "analyzing" — rem>0 AND (a grind is running OR a fiber is queued OR the
+                      grind made progress within the staleness window): still
+                      looking; absence is NOT yet a gap.
+     • "stalled"   — rem>0 but nothing running/queued AND no progress for the
+                      staleness window: the priority frontier failed to advance
+                      (the prioritization bug class) — absence here is a
+                      SCHEDULING failure to surface, distinct from a real gap.
+   The distinction is the whole point: "missing" is only truthful at
+   "complete"; at "analyzing" the harness must say "still looking", and
+   "stalled" flags a prioritization defect, not a coverage gap. */
+function _learningState() {
+  // Delegate to the shared lib/learnstate.js classifier (DRY — the popup UI
+  // uses the same one) so the harness verdict and the user-facing status never
+  // drift on what "complete"/"analyzing"/"stalled" mean. This just gathers the
+  // worker-local counters and hands them off.
+  var d = self._lastDeepStats || {};
+  var progressTs = self._lastGrindProgressTs || 0;
+  return self.LearnState.learningStateOf({
+    rem: (typeof d.rem === "number") ? d.rem : -1,
+    total: (typeof d.total === "number") ? d.total : -1,
+    running: self._deepGrindRunning ? self._deepGrindRunning.size : 0,
+    queued: (self._fiberQ || []).length,
+    msSinceProgress: progressTs ? (Date.now() - progressTs) : -1
+  });
+}
+self._learningState = _learningState;
+
 setInterval(function () {
   try {
+    var ls = _learningState();
     postMessage({ _heartbeat: true, ts: Date.now(),
       fiberQ: (self._fiberQ || []).length,
       grindRunning: (self._deepGrindRunning ? self._deepGrindRunning.size : 0),
@@ -2575,6 +2614,7 @@ setInterval(function () {
       deepSteps: self._lastDeepStats ? self._lastDeepStats.steps : -1,
       deepRem: self._lastDeepStats ? self._lastDeepStats.rem : -1,
       deepTotal: self._lastDeepStats ? self._lastDeepStats.total : -1,
+      learningState: ls.state, learningDriven: ls.driven, learningRem: ls.rem,   // honest "missing vs still-looking" verdict
       currentOrphan: self._currentOrphan || null,   // the orphan being driven; if unchanged while steps stalls = the non-terminating culprit
       activePageKey: self._activePageKey || null });
   } catch (e) {

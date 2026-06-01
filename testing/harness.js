@@ -723,7 +723,43 @@ async function cmdGate(args) {
   });
 }
 
-const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, gate: cmdGate };
+// The honest "is a finding MISSING or still being LOOKED FOR" verdict — the
+// signal a network-vs-AST diff MUST gate on. Polls the worker's _learningState
+// until it reaches "complete" (every orphan driven → absence is a real gap) or
+// "stalled" (priority frontier failed to advance → a SCHEDULING defect, not a
+// coverage gap), or times out still "analyzing" (slow, not done — absence is
+// NOT a gap yet). Without this, calling something a gap mid-analysis is
+// unfalsifiable. `--wait` polls up to --timeout for a terminal verdict.
+async function cmdLearnState(args) {
+  const flags = args.filter((a) => a.startsWith("--"));
+  const wait = flags.includes("--wait");
+  const tmf = flags.find((f) => f.startsWith("--timeout="));
+  const timeoutMs = tmf ? parseInt(tmf.slice(10), 10) : 120000;
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
+    let w = null;
+    for (let i = 0; i < 60 && !w; i++) {
+      const t = browser.targets().find((t) => t.url().startsWith(ourl));
+      const pg = t ? await t.page().catch(() => null) : null;
+      if (pg) w = pg.workers().find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
+      if (!w) await sleep(150);
+    }
+    if (!w) { log("(no analysis worker — run `harness restart` first)"); return; }
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    do {
+      last = await w.evaluate(() => (typeof self._learningState === "function" ? self._learningState() : { state: "no-verdict-fn" }))
+        .catch((e) => ({ state: "eval-error", error: String(e && e.message || e) }));
+      if (!wait || last.state === "complete" || last.state === "stalled" || last.state === "no-verdict-fn") break;
+      await sleep(2000);
+    } while (Date.now() < deadline);
+    // Reaching the deadline while still "analyzing" is itself the answer: not done.
+    log(JSON.stringify(last, null, 2));
+  });
+}
+
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, gate: cmdGate, learnstate: cmdLearnState };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
