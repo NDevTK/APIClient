@@ -31,15 +31,22 @@
     var running = c.running | 0;
     var queued = c.queued | 0;
     var sinceProgress = (typeof c.msSinceProgress === "number" && c.msSinceProgress >= 0) ? c.msSinceProgress : Infinity;
+    // "analyzing" requires ACTUAL forward motion, not just a fiber sitting in
+    // the queue: a queued-but-not-resumed fiber with stale progress IS the
+    // stall (observed: rem 1713, queued 1, running 0, msSinceProgress 85s — a
+    // fiber parked, never resumed, no @DD advancing). So progress recency
+    // (running OR recent progress) is the liveness signal; a stale queue alone
+    // is NOT liveness. running>0 means a grind callMain is mid-flight (always
+    // live); recent progress means @DD advanced within STALE_MS.
+    var live = (running > 0) || (sinceProgress < STALE_MS);
     var state;
     if (rem === 0) state = "complete";
-    else if (rem < 0) state = (running > 0 || queued > 0 || sinceProgress < STALE_MS) ? "analyzing" : "unknown";
+    else if (rem < 0) state = live ? "analyzing" : "unknown";
     // rem<0 = the grind hasn't reported a remaining count yet (total may be
-    // known from @DTOTAL before the first @DS). That is NOT "stalled" (we have
-    // no rem to say work-is-left-and-idle) — it's "analyzing" if anything is
-    // live, else "unknown". Only a CONCRETE rem>0 with nothing live = stalled.
-    else if (running > 0 || queued > 0 || sinceProgress < STALE_MS) state = "analyzing";
-    else state = "stalled";
+    // known from @DTOTAL before the first @DS). NOT "stalled" (no rem to say
+    // work-is-left-and-idle) — "analyzing" if live, else "unknown".
+    else if (live) state = "analyzing";
+    else state = "stalled";   // concrete rem>0, no forward motion (queued-but-parked counts here)
     return {
       state: state, rem: rem, total: total,
       driven: (total >= 0 && rem >= 0) ? (total - rem) : -1,
