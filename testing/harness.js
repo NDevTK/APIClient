@@ -719,6 +719,13 @@ async function cmdGate(args) {
         else { resolve({ success: false, error: "__gateRun not exposed in worker" }); }
       });
     }, code, name, deep, timeoutMs, pageHtml).catch((e) => ({ success: false, error: String(e && e.message || e) }));
+    // Surface a contaminated result loudly: a prior overflowing/non-terminating
+    // fixture poisons the worker's deep-grind state, so this result can't be
+    // trusted until the worker is fresh. (The methodology error that wasted a
+    // turn — believing a contaminated "_opqrec overflows".)
+    if (res && res.result && res.result.dirtyWorker) {
+      err("⚠ dirtyWorker:true — a PRIOR fixture left the worker contaminated; this result is UNTRUSTWORTHY. Run `node testing/harness.js restart` then re-gate.");
+    }
     log(JSON.stringify(res, null, 2));
   });
 }
