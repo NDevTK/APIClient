@@ -125,7 +125,52 @@ function size(f) {
   return existsSync(p) ? `${f} ${(statSync(p).size / 1024 | 0)}KB` : `${f} MISSING`;
 }
 
+// Keeping the vendored quickjs-ng base current is MANDATORY (CLAUDE.md), so a
+// fork that is BEHIND upstream is a BUILD ERROR — not a notification a human is
+// left to act on. Fetches upstream (cached to once/hour so rapid rebuilds stay
+// fast), then refuses to build when apiclient-fork is missing upstream commits.
+// Offline (fetch fails) → warn + proceed (never block a build for lack of
+// network). SKIP_UPSTREAM_CHECK=1 bypasses for offline iteration ONLY — a stale
+// engine must never be LANDED. The remediation is `node engine/sync.mjs apply`.
+function gitQ(args) {
+  return spawnSync("git", args, { cwd: QJS, encoding: "utf8",
+    shell: process.platform === "win32" });
+}
+function upstreamSyncCheck() {
+  if (process.env.SKIP_UPSTREAM_CHECK === "1") {
+    console.warn("[build] upstream sync check SKIPPED (SKIP_UPSTREAM_CHECK=1) — offline iteration only; do NOT land a stale engine");
+    return;
+  }
+  try {
+    const stamp = join(ENGINE, ".work", ".upstream-fetch-stamp");
+    const fresh = existsSync(stamp) && (Date.now() - statSync(stamp).mtimeMs) < 3600_000;
+    if (!fresh) {
+      const f = gitQ(["fetch", "origin", "--quiet", "--tags"]);
+      if (f.status !== 0) {
+        console.warn(`[build] upstream sync check: git fetch failed (offline?) — proceeding without it\n        ${String(f.stderr || "").trim().split("\n")[0]}`);
+        return;
+      }
+      try { mkdirSync(dirname(stamp), { recursive: true }); writeFileSync(stamp, ""); } catch {}
+    }
+    const base = gitQ(["merge-base", "HEAD", "origin/master"]).stdout.trim();
+    if (!base) { console.warn("[build] upstream sync check: no merge-base with origin/master — proceeding"); return; }
+    const behind = parseInt(gitQ(["rev-list", "--count", `${base}..origin/master`]).stdout.trim() || "0", 10);
+    if (behind > 0) {
+      const up = gitQ(["describe", "--tags", "origin/master"]).stdout.trim() || "?";
+      console.error(`\n[build] REFUSING TO BUILD: engine is ${behind} commit(s) behind quickjs-ng upstream (${up}).`);
+      console.error(`[build]   Keeping the fork current is mandatory. Sync first:`);
+      console.error(`[build]     node engine/sync.mjs apply      # FF master + 3-way merge into apiclient-fork`);
+      console.error(`[build]   then re-run the build, verify the FULL gate set + _idxdocs, and land.`);
+      console.error(`[build]   (offline-iteration-only override, NEVER to land: SKIP_UPSTREAM_CHECK=1)\n`);
+      process.exit(3);
+    }
+  } catch (e) {
+    console.warn(`[build] upstream sync check skipped (${String((e && e.message) || e).split("\n")[0]})`);
+  }
+}
+
 function worker() {
+  upstreamSyncCheck();
   // Classic-worker factory: -sEXPORT_NAME makes importScripts() set
   // self.createQJS (no ES6 import — the extension worker is classic so
   // it can also importScripts sourcemap.js). MEMFS only: a browser
