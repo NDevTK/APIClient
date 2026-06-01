@@ -1,32 +1,28 @@
 #!/usr/bin/env node
-// Canonical forked-QuickJS build. All artifacts are WASM, from ONE
-// patched source tree (engine/qjs) — no test-vs-ship divergence:
+// Canonical forked-QuickJS build. ONE artifact, from ONE patched source
+// tree (engine/qjs):
 //
-//   qjs_wasm.js   emcc NODERAWFS   — wasm CLI (node), for fast engine-
-//                                    level gate/X-Force iteration
-//   qjs_mod.mjs   emcc MODULARIZE  — ES6 module, Node-side model proof
-//                 EXPORT_ES6         (mdrive.mjs)
 //   qjs_worker.js emcc MODULARIZE  — classic-worker factory (no ES6,
-//                 EXPORT_NAME        importScripts-able), MEMFS — this
-//                                    is what the extension's offscreen
+//                 EXPORT_NAME        importScripts-able), MEMFS, JSPI —
+//                                    this is what the extension's offscreen
 //                                    Web Worker runs, a fresh instance
-//                                    per forced schedule
+//                                    per forced schedule. The ONLY target.
 //
-// NATIVE (gcc qjs.exe) IS BANNED. It was a fake-browser test bed: no
-// JSPI scheduler, no host fetch (so the live grind's safeFetch-loaded
-// lazy chunks are never driven), no real Chrome DOM/crypto — so it
-// produced FALSE confidence (e.g. a real bundle "converged" native
-// while the live wasm froze on a fetched-chunk orphan native never
-// loaded). Verify on the real target ONLY: wasm CLI (node qjs_wasm.js)
-// for engine-level gates, the live Chrome harness for integration.
+// NATIVE (gcc qjs.exe) AND THE NODE WASM-CLI (qjs_wasm.js) + MODULAR
+// NODE BUILD (qjs_mod.mjs) ARE BANNED. They are fake-browser test beds:
+// no JSPI scheduler, no host fetch (so the live grind's safeFetch-loaded
+// lazy chunks are never driven), no real Chrome DOM/crypto — so they
+// produce FALSE confidence (a real bundle "converged" on the CLI while
+// the live wasm spun on a fetched-chunk orphan the CLI never loaded;
+// proven repeatedly — the CLI cannot reproduce a live spin). ALL testing
+// is through the live Chrome harness (testing/harness.js). The node
+// drivers (drive.mjs / mdrive.mjs) are deleted with the CLI targets.
 //
 // The forced-execution controller (quickjs-forced.h, patched into
-// quickjs.c) takes its config from qjsmain's --fe-* argv so it behaves
-// identically across wasm-CLI and modular-wasm (emscripten getenv /
-// post-init ENV are unreliable in the MODULARIZE build).
+// quickjs.c) takes its config from qjsmain's --fe-* argv.
 //
-//   node engine/build.mjs            # all wasm artifacts
-//   node engine/build.mjs cli|mod|worker|stage
+//   node engine/build.mjs            # builds + stages the worker
+//   node engine/build.mjs worker|stage
 import { spawnSync } from "node:child_process";
 import { existsSync, statSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve, dirname, relative } from "node:path";
@@ -129,34 +125,6 @@ function size(f) {
   return existsSync(p) ? `${f} ${(statSync(p).size / 1024 | 0)}KB` : `${f} MISSING`;
 }
 
-function cli() {
-  // NODERAWFS: the wasm CLI reads script files + writes the trace on
-  // the real FS, exactly like native — drive.mjs treats them the same.
-  // DBG=1 adds ASSERTIONS so a failed/oversized malloc prints its exact
-  // size + JS stack instead of a bare abort trap (diagnostic only).
-  const dbg = process.env.DBG === "1" ? ["-sASSERTIONS=2"] : [];
-  emcc(["-sNODERAWFS", ...dbg], "qjs_wasm.js");
-  console.log("[build] " + size("qjs_wasm.js") + " " + size("qjs_wasm.wasm"));
-}
-function mod() {
-  // ES6 module, no auto-run: the extension worker does
-  // `factory({...})` then `m.callMain(argv)` per forced schedule, with
-  // script files in MEMFS and the trace read back from MEMFS.
-  // DBG=1 adds ASSERTIONS (prints the exact malloc size + JS stack on
-  // an allocation failure) for diagnosing the wasm64 size-corruption
-  // OOM; off by default (ships clean).
-  const dbg = process.env.DBG === "1" ? ["-sASSERTIONS=2"] : [];
-  emcc(["-sMODULARIZE=1", "-sEXPORT_ES6=1",
-        // HEAPU8: mdrive.mjs's snapshot-schedule path images linear memory
-        // (boot once, restore per drive) — the Node-side proof of the model
-        // ast-thread.js will use (the worker build already exports HEAPU8).
-        "-sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV,HEAPU8",
-        "-sINVOKE_RUN=0", "-sEXIT_RUNTIME=0",
-        "-sENVIRONMENT=web,worker,node", "--pre-js", "prejs.js", ...dbg],
-       "qjs_mod.mjs");
-  console.log("[build] " + size("qjs_mod.mjs") + " " + size("qjs_mod.wasm"));
-}
-
 function worker() {
   // Classic-worker factory: -sEXPORT_NAME makes importScripts() set
   // self.createQJS (no ES6 import — the extension worker is classic so
@@ -220,13 +188,11 @@ function stage() {
 }
 
 const step = process.argv[2];
-if (step === "native") {
-  console.error("[build] native (qjs.exe) is BANNED — it is a fake-browser test bed (no JSPI/fetch/Chrome DOM) that gives false confidence. Use `cli` (node qjs_wasm.js) for engine gates or the live Chrome harness for integration.");
+if (step === "native" || step === "cli" || step === "mod") {
+  console.error("[build] `" + step + "` is BANNED — native (qjs.exe), the node wasm-CLI (qjs_wasm.js), and the modular node build (qjs_mod.mjs) are all fake-browser test beds (no JSPI scheduler / no host fetch / no real Chrome DOM+crypto) that give FALSE confidence. The CLI cannot reproduce a live spin. Build only the worker; test ONLY through the live Chrome harness (testing/harness.js).");
   process.exit(2);
 }
 const all = !step;
-if (all || step === "cli") cli();
-if (all || step === "mod") mod();
 if (all || step === "worker") worker();
 if (all || step === "stage") stage();
 console.log(`[build] done: ${step || "all"}`);
