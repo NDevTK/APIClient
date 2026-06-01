@@ -1,0 +1,5 @@
+# Git hooks and shell scripts must keep LF endings — a CRLF shebang
+# (`#!/bin/sh\r`) makes the interpreter lookup fail on checkout (Windows
+# autocrlf would otherwise convert them and silently break the hook).
+hooks/* text eol=lf
+*.sh text eol=lf
