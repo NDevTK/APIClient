@@ -268,14 +268,18 @@ In priority order for the goal:
 19. **Facts not guesses** — every value the analyzer emits is traced structurally or grounded in one of the eight learning sources. No hardcoded strings, no depth caps, no magic numbers that paper over resolver gaps.
 20. **Tooling context improvement** — when a review needed a manual step, the harness learns that step (hop snippets, receiverType, endpoint.view, etc.).
 
-## Per-vendor characteristics the analyzer must be aware of
+## API tech & conventions the analyzer handles (vendor-AGNOSTIC — NOT a company list)
 
-- **Github**: GraphQL `_graphql` POST + REST `/api/v3/...`. Catalyst custom-elements (`[data-controller]`, `connectedCallback`) declare action handlers. Turbo Streams use `data-turbo-*` for partial updates. Required header `X-Requested-With: XMLHttpRequest` on AJAX. OpenAPI source: `github/rest-api-description`.
-- **Microsoft**: MS Graph (`graph.microsoft.com`) is OData — `$select`, `$expand`, `$filter`, `$batch`. Office.js apps. Auth via `Authorization: Bearer <MSAL token>`. Schema source: `$metadata` endpoint.
-- **Apple**: iCloud uses plist for some payloads (legacy) and JSON for newer. Login flows use `X-Apple-Sa-Cookie`, `X-Apple-Widget-Key`, hashed challenge. Music/Maps APIs use bearer JWT.
-- **Google**: REST (`*.googleapis.com`) + gRPC-Web (`*.gstatic.com/*`, `application/grpc-web+proto`). Discovery documents at `*.googleapis.com/$discovery/rest`. Auth via OAuth 2 bearer or signed cookies for first-party.
+These are conventions and wire-formats that recur across MANY apps; the analyzer handles each by the CONVENTION / WIRE-FORMAT / discovery-probe, NEVER by detecting a company. The vendor names are only where each is commonly SEEN — not a scope or requirement (per SCOPE/TARGET: any complex webapp qualifies, FANG or not; a small SaaS using GraphQL or OData is identical to a big one).
 
-These aren't rules to hard-code into the analyzer — they're things the analyzer's *output* should reflect when it lands on those pages.
+- **Discovery / schema documents** — Google-style Discovery (`/$discovery/rest`), OpenAPI/Swagger (`/openapi.json`, `/swagger.json`, version + visibility variants), OData `$metadata`. `discovery.js` probes these CONVENTION paths on ANY host and converts to a common schema.
+- **GraphQL** — `POST {query, variables, operationName}` (seen as github's `/_graphql`, but any host); parsed by BODY SHAPE.
+- **OData** — `$select`/`$expand`/`$filter`/`$batch` query + `$metadata` schema (seen on MS Graph); recognized by the QUERY convention, not the host.
+- **gRPC-Web / protobuf / JSPB / batchexecute** — `application/grpc-web+proto`, protobuf wire-format, the batchexecute double-JSON envelope (seen on `*.googleapis.com`/`*.gstatic.com`); classified by MAGIC-BYTE + content-type, never URL/host suffix.
+- **Required-header conventions** — AJAX markers (`X-Requested-With`), bearer/MSAL/OAuth tokens, widget/challenge headers (seen as github `X-Requested-With`, Apple `X-Apple-Widget-Key`), legacy plist vs JSON bodies. Captured PER ENDPOINT as transport metadata from what the bundle ACTUALLY attached (per-header literal/opaque) — never a hardcoded "vendor X needs Y" table.
+- **Component frameworks that defer loads** — Catalyst custom-elements / `connectedCallback`, Turbo Streams `data-turbo-*`, React effects, `<include-fragment>` — learned by EXECUTION (driving the lifecycle), never by framework-name recognition.
+
+None of this is keyed on a company — it's the convention/wire-format the analyzer's output reflects on ANY app that uses it.
 
 ## Never Do
 
