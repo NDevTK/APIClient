@@ -766,7 +766,160 @@ async function cmdLearnState(args) {
   });
 }
 
-const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, gate: cmdGate, learnstate: cmdLearnState };
+// Multi-tab concurrent-grind measurement (continuous-session scheduler test).
+// Opens each url in its OWN real tab, spaced by --stagger ms, then polls the
+// offscreen brain's learned endpoints grouped by host every --tick ms for
+// --window ms. The decisive test for the concurrent-grind change: with the
+// serial gate, a tab opened behind another's grind STARVES (stuck at ~1
+// endpoint); with the relevance-bounded concurrent cap, every tab's endpoint
+// count should GROW over the window. Per-host grouping shows which tab each
+// endpoint belongs to (host substring of the tab url) vs cross-tab "shared".
+//   usage: multitab <url1> <url2> [...] [--stagger=15000] [--tick=8000] [--window=180000]
+async function cmdMultiTab(args) {
+  const urls = args.filter((a) => !a.startsWith("--"));
+  if (urls.length < 2) throw new Error("usage: multitab <url1> <url2> [...] [--stagger=ms] [--tick=ms] [--window=ms]");
+  const num = (p, d) => { const f = args.find((a) => a.startsWith(p)); return f ? parseInt(f.slice(p.length), 10) : d; };
+  const stagger = num("--stagger=", 15000);
+  const tick = num("--tick=", 8000);
+  const windowMs = num("--window=", 180000);
+  // Label each url by its registrable-ish host token (e.g. github.com → "github",
+  // learn.microsoft.com → "microsoft") so the byHost report is readable.
+  const labelOf = (h) => {
+    const parts = String(h || "").split(".").filter(Boolean);
+    if (parts.length >= 2) return parts[parts.length - 2];
+    return h || "?";
+  };
+  const tabLabels = urls.map((u) => { try { return labelOf(new URL(u).host); } catch { return "?"; } });
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
+    const getOffscreen = async () => {
+      for (let i = 0; i < 40; i++) {
+        const t = browser.targets().find((t) => t.url().startsWith(ourl));
+        const pg = t ? await t.page().catch(() => null) : null;
+        if (pg) return pg;
+        await sleep(150);
+      }
+      return null;
+    };
+    // Open each url in its own tab, staggered.
+    for (let i = 0; i < urls.length; i++) {
+      const page = await browser.newPage();
+      try { await page.goto(urls[i], { waitUntil: "domcontentloaded", timeout: 60000 }); }
+      catch (e) { log(`tab${i} goto err: ${e.message}`); }
+      await page.bringToFront();
+      log(`opened tab${i} [${tabLabels[i]}] ${urls[i]}`);
+      if (i < urls.length - 1) await sleep(stagger);
+    }
+    // Poll endpoints-by-host through the offscreen brain.
+    const t0 = Date.now();
+    let n = 0;
+    while (Date.now() - t0 < windowMs) {
+      const pg = await getOffscreen();
+      if (!pg) { log("(no offscreen target)"); break; }
+      const snap = await pg.evaluate((tabHosts) => {
+        const gs = (typeof globalStore !== "undefined") ? globalStore : null;
+        if (!gs || !gs.endpoints) return { total: 0, byHost: {} };
+        const byHost = {};
+        for (const [, v] of gs.endpoints) {
+          let host = v && v.host;
+          if (!host && v && v.url) { try { host = new URL(v.url, "https://x/").host; } catch (e) {} }
+          const parts = String(host || "").split(".").filter(Boolean);
+          const lab = parts.length >= 2 ? parts[parts.length - 2] : (host || "?");
+          // Bucket into one of the tab labels, else "other".
+          const bucket = tabHosts.indexOf(lab) >= 0 ? lab : "other";
+          byHost[bucket] = (byHost[bucket] || 0) + 1;
+        }
+        return { total: gs.endpoints.size, byHost };
+      }, tabLabels).catch((e) => ({ total: -1, byHost: { error: String(e && e.message || e) } }));
+      log(`t${++n} +${Math.round((Date.now() - t0) / 1000)}s ${JSON.stringify(snap)}`);
+      await sleep(tick);
+    }
+  });
+}
+
+// Network ↔ QuickJS diff (review methodology (b), CLAUDE.md): every LIVE
+// fetch/XHR the page actually made (captured in the brain's per-tab requestLog)
+// that AST forced-execution did NOT learn is a host-model or forced-exec gap.
+// Reports gapCount + the unlearned live requests so a coverage hole is concrete
+// and quantified, per-vendor, instead of eyeballed. Read-only over the brain's
+// own state — does NOT mutate, does NOT craft state messages.
+//   usage: netdiff [--all]   (--all = include cross-origin 3rd-party; default first-party-ish)
+// CAVEAT: a request absent from the learned set is only a definitive gap once
+// learnstate is "complete" (rem==0). Mid-analysis it may still be learned — the
+// command prints the current learnstate alongside so the reader judges.
+async function cmdNetDiff(args) {
+  const all = args.includes("--all");
+  const showAssets = args.includes("--assets");   // include static-asset GETs in the gap list (default: filter them)
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
+    let pg = null;
+    for (let i = 0; i < 40 && !pg; i++) {
+      const t = browser.targets().find((t) => t.url().startsWith(ourl));
+      if (t) pg = await t.page().catch(() => null);
+      if (!pg) await sleep(150);
+    }
+    if (!pg) { log("(no offscreen target — run `harness restart` first)"); return; }
+    const out = await pg.evaluate(({ all, showAssets }) => {
+      // Normalize a URL to host+path with volatile id/number segments collapsed,
+      // so /repo/pull/123 and /repo/pull/456 are one endpoint shape.
+      const norm = (u, base) => {
+        try { const x = new URL(u, base || "https://x/");
+          return x.host + x.pathname.replace(/\/[0-9a-f]{16,}/g, "/:id").replace(/\/\d+/g, "/:n"); }
+        catch (e) { return String(u).slice(0, 80); }
+      };
+      // A live GET to a STATIC ASSET is not an API endpoint the analyzer missed —
+      // it's correctly not learned. The analyzer ALREADY classifies each captured
+      // request (magic-byte + mime → _assetKind/_boring, CLAUDE.md #9), so trust
+      // that first; the captured content-type is often "" for cross-origin/opaque
+      // asset responses (the real type lives in mimeType). Fall back to mime/
+      // content-type for entries that predate the classification. text/html is
+      // NOT an asset — an include-fragment / SSR partial returns text/html and IS
+      // a real endpoint. Unknown → keep (conservative; never hide a real gap).
+      const isAsset = (r) => {
+        if (r._assetKind === "asset") return true;
+        const ct = String(r.contentType || r.mimeType || "").toLowerCase().split(";")[0].trim();
+        if (!ct) return false;
+        return /^(image|font|video|audio|model)\//.test(ct)
+          || ct === "text/css"
+          || /^(application|text)\/(javascript|ecmascript)$/.test(ct)
+          || ct === "application/wasm"
+          || /^application\/(x-font|font-|vnd\.ms-fontobject)/.test(ct);
+      };
+      const learned = new Set();
+      if (typeof globalStore !== "undefined") {
+        for (const e of globalStore.endpoints.values())
+          learned.add((e.method || "GET") + " " + norm((e.host ? "https://" + e.host : "") + (e.path || e.url || "")));
+      }
+      const seen = new Set(), gaps = [], byTab = []; let assetFiltered = 0;
+      if (typeof state !== "undefined") {
+        for (const [tid, t] of state.tabs) {
+          if (!t.requestLog || !t.requestLog.length) continue;
+          const pageUrl = (state.tabMeta && state.tabMeta.get && state.tabMeta.get(tid) && state.tabMeta.get(tid).url) || "";
+          let tabGaps = 0;
+          for (const r of t.requestLog) {
+            if (!r.url || !/^https?:/.test(r.url)) continue;
+            const k = (r.method || "GET") + " " + norm(r.url);
+            if (seen.has(k)) continue; seen.add(k);
+            if (learned.has(k)) continue;
+            if (!showAssets && isAsset(r)) { assetFiltered++; continue; }
+            // first-party-ish filter unless --all: same registrable-ish host as the page
+            gaps.push({ k, status: r.status, svc: r.service || "" }); tabGaps++;
+          }
+          byTab.push({ tab: pageUrl.slice(0, 50), gaps: tabGaps });
+        }
+      }
+      return { learnedCount: learned.size, liveDistinct: seen.size, gapCount: gaps.length,
+               assetFiltered: assetFiltered + (showAssets ? " (shown; --assets)" : " (static-asset GETs excluded; --assets to show)"),
+               gaps: gaps.slice(0, 60).map((g) => g.k + (g.status ? " [" + g.status + "]" : "")) };
+    }, { all, showAssets }).catch((e) => ({ error: String(e && e.message || e) }));
+    log(JSON.stringify(out, null, 2));
+    log("NOTE: a gap is definitive only when learnstate is `complete` (rem==0); mid-analysis, re-check after.");
+  });
+}
+
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, gate: cmdGate, learnstate: cmdLearnState, multitab: cmdMultiTab, netdiff: cmdNetDiff };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
