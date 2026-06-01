@@ -2170,6 +2170,17 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
    (a test-harness deadline, not an analysis cap). */
 self.__gateRun = function (msg, done) {
   var _gWhy0 = (self._whyRecords || []).length;
+  /* Dirty-worker guard: a PRIOR gate fixture that overflowed/didn't terminate
+     leaves the worker mid-recycle (a running grind, or accumulated
+     deep_callmain_throw), which CONTAMINATES this run — a later fixture
+     falsely shows converged:false/throws. Capture the pre-run state so the
+     result is FLAGGED untrustworthy rather than silently believed (the
+     methodology error that wasted a turn: concluding "_opqrec overflows" from
+     a contaminated run). The harness `gate` command should `restart` when
+     dirtyWorker is set. */
+  var _gPriorThrows = (self._whyRecords || []).filter(function (w) { return w.phase === "deep_callmain_throw"; }).length;
+  var _gPriorRunning = self._deepGrindRunning ? self._deepGrindRunning.size : 0;
+  var _gDirty = (_gPriorThrows > 0) || (_gPriorRunning > 0);
   var _gDeadline = (typeof msg.timeoutMs === "number" ? msg.timeoutMs : 30000);
   var _gStart = Date.now();
   var _gTimer = null, _gDone = false;
@@ -2183,6 +2194,7 @@ self.__gateRun = function (msg, done) {
     var spins = why.filter(function (w) { return w.phase === "spin_nonterminating"; });
     _finishGate({ success: true, result: {
       gate: msg.name || "(fixture)", converged: false, ms: Date.now() - _gStart,
+      dirtyWorker: _gDirty,   // prior overflow/running grind contaminated this run — restart + re-gate
       spinCount: spins.length,
       spinLoops: spins.slice(-5).map(function (w) { return (w.loopFile || w.file || "?") + ":" + (w.loopLine || w.line || 0); }),
       why: why.slice(-12)
@@ -2197,6 +2209,7 @@ self.__gateRun = function (msg, done) {
       var sinks = (r && r.securitySinks) || [];
       _finishGate({ success: true, result: {
         gate: msg.name || "(fixture)", converged: true, ms: Date.now() - _gStart,
+        dirtyWorker: _gDirty,   // if true, a prior fixture contaminated this — re-run after `harness restart` to trust it
         endpoints: eps.map(function (e) { return (e.method || "?") + " " + (e.url || e.path || "?"); }),
         endpointCount: eps.length,
         sinkCount: sinks.length,
