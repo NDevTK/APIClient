@@ -47,10 +47,18 @@
     // work-is-left-and-idle) — "analyzing" if live, else "unknown".
     else if (live) state = "analyzing";
     else state = "stalled";   // concrete rem>0, no forward motion (queued-but-parked counts here)
+    var driven = (total >= 0 && rem >= 0) ? (total - rem) : -1;
+    var head = (typeof c.head === "number") ? c.head : -1;
+    /* headDone = the page's HIGH-VALUE head (net-reaching/endpoint orphans,
+       sorted first) is fully driven → the continuous-session scheduler can
+       rotate to another page's head before grinding this page's completeness
+       tail. true once driven >= head (head known), or at complete. */
+    var headDone = (state === "complete") || (head >= 0 && driven >= 0 && driven >= head);
     return {
-      state: state, rem: rem, total: total,
-      driven: (total >= 0 && rem >= 0) ? (total - rem) : -1,
+      state: state, rem: rem, total: total, head: head,
+      driven: driven,
       pct: (total > 0 && rem >= 0) ? Math.floor(((total - rem) / total) * 100) : -1,
+      headDone: headDone,
       running: running, queued: queued
     };
   }

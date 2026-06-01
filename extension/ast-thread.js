@@ -1878,6 +1878,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             // line until @DS at the end.
             var _tt = parseInt(_ln.slice(8), 10);
             if (_tt >= 0) _deepStats.total = _tt;
+          } else if (_ln.slice(0, 7) === "@DHEAD ") {
+            // Head size = net-reaching (endpoint) orphan count, sorted first.
+            // The continuous-session scheduler drives every page's HEAD before
+            // any page's completeness TAIL; this is the head/tail boundary.
+            var _hh = parseInt(_ln.slice(7), 10);
+            if (_hh >= 0) _deepStats.head = _hh;
           }
         }
         // Aggregate this drain's @H/@T/@S/@WHY/@E/@P/@Z into the shared
@@ -2609,6 +2615,7 @@ function _learningState() {
   return self.LearnState.learningStateOf({
     rem: (typeof d.rem === "number") ? d.rem : -1,
     total: (typeof d.total === "number") ? d.total : -1,
+    head: (typeof d.head === "number") ? d.head : -1,
     running: self._deepGrindRunning ? self._deepGrindRunning.size : 0,
     queued: (self._fiberQ || []).length,
     msSinceProgress: progressTs ? (Date.now() - progressTs) : -1
