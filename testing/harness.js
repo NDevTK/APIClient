@@ -655,7 +655,62 @@ async function cmdSrcLoc(args) {
   });
 }
 
-const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc };
+// Run a gate FIXTURE through the REAL Chrome worker (live JSPI + safeFetch +
+// Chrome crypto — the actual learning system), the Chrome-only replacement for
+// the banned `node qjs_wasm.js <fixture>` flow. A fixture is a synthetic INPUT
+// to the real target, not an unrelated target: same wasm, same host, just a
+// fixed code string instead of a live page's scripts. Fast (seconds), real
+// host, no false confidence. `--deep` exercises the deep-grind orphan drive
+// (where opaque loops spin); a non-converging fixture returns the spin
+// telemetry (loopFile:line) instead of hanging the harness.
+//   gate engine/qjs/_xss.js [--deep] [--timeout=30000]
+async function cmdGate(args) {
+  const flags = args.filter((a) => a.startsWith("--"));
+  const files = args.filter((a) => !a.startsWith("--"));
+  if (!files.length) throw new Error("usage: gate <fixture.js> [--deep] [--timeout=ms]");
+  const deep = flags.includes("--deep");
+  const tmf = flags.find((f) => f.startsWith("--timeout="));
+  const timeoutMs = tmf ? parseInt(tmf.slice(10), 10) : 30000;
+  const abs = path.isAbsolute(files[0]) ? files[0] : path.join(ROOT, files[0]);
+  if (!fs.existsSync(abs)) throw new Error("no such fixture: " + abs);
+  const code = fs.readFileSync(abs, "utf8");
+  const name = path.basename(abs);
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
+    let w = null, diag = "";
+    for (let i = 0; i < 60 && !w; i++) {
+      const t = browser.targets().find((t) => t.url().startsWith(ourl));
+      const pg = t ? await t.page().catch(() => null) : null;
+      if (pg) {
+        const workers = pg.workers();
+        diag = "workers=[" + workers.map((x) => x.url().split("/").pop()).join(",") + "]";
+        w = workers.find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
+      }
+      if (!w) await sleep(150);
+    }
+    if (!w) { log("(no analysis worker; " + (diag || "no offscreen") + ") — run `harness restart` first"); return; }
+    // The worker's astDispatch resolves AST_GATE with the compact summary.
+    const res = await w.evaluate(async (code, name, deep, timeoutMs) => {
+      return await new Promise((resolve) => {
+        // astDispatch is the in-worker entry; AST_GATE runs forcedAnalyze and
+        // resolves via the message `done` callback shape the dispatcher uses.
+        const msg = { type: "AST_GATE", code, name, deep, timeoutMs, id: "gate-" + name };
+        // self.astDispatch posts back through the same channel; but inside the
+        // worker we call the handler directly and await its done().
+        let settled = false;
+        const done = (payload) => { if (!settled) { settled = true; resolve(payload); } };
+        // The dispatcher reads `done` from the message-port; emulate by calling
+        // the global handler with an injected done.
+        if (typeof self.__gateRun === "function") { self.__gateRun(msg, done); }
+        else { resolve({ success: false, error: "__gateRun not exposed in worker" }); }
+      });
+    }, code, name, deep, timeoutMs).catch((e) => ({ success: false, error: String(e && e.message || e) }));
+    log(JSON.stringify(res, null, 2));
+  });
+}
+
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, gate: cmdGate };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);

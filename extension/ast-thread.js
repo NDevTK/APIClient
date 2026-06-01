@@ -2143,6 +2143,62 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   return _fr;
 }
 
+/* Chrome-only gate runner (the Chrome replacement for the banned
+   `node qjs_wasm.js <fixture>`): run ONE fixture's code through the REAL
+   worker's forcedAnalyze (live JSPI scheduler + safeFetch + Chrome crypto —
+   the actual learning system, not the node CLI's crippled host) and resolve
+   a COMPACT request/response summary via `done`. Exposed on self so the
+   harness `gate` command can call it directly (w.evaluate) with a local
+   done. A fixture is a synthetic INPUT to the real target, not an unrelated
+   target. `deep:true` exercises the deep-grind orphan drive (where opaque
+   loops spin live). A wall-clock guard surfaces a hang WITH the spin
+   telemetry (loopFile:line) instead of blocking the harness — the gate
+   FIXTURE asserts termination; the engine itself is never time-bounded
+   (a test-harness deadline, not an analysis cap). */
+self.__gateRun = function (msg, done) {
+  var _gWhy0 = (self._whyRecords || []).length;
+  var _gDeadline = (typeof msg.timeoutMs === "number" ? msg.timeoutMs : 30000);
+  var _gStart = Date.now();
+  var _gTimer = null, _gDone = false;
+  var _finishGate = function (payload) {
+    if (_gDone) return; _gDone = true;
+    if (_gTimer) { clearTimeout(_gTimer); _gTimer = null; }
+    done(payload);
+  };
+  _gTimer = setTimeout(function () {
+    var why = (self._whyRecords || []).slice(_gWhy0);
+    var spins = why.filter(function (w) { return w.phase === "spin_nonterminating"; });
+    _finishGate({ success: true, result: {
+      gate: msg.name || "(fixture)", converged: false, ms: Date.now() - _gStart,
+      spinCount: spins.length,
+      spinLoops: spins.slice(-5).map(function (w) { return (w.loopFile || w.file || "?") + ":" + (w.loopLine || w.line || 0); }),
+      why: why.slice(-12)
+    } });
+  }, _gDeadline);
+  forcedAnalyze(String(msg.code || ""), msg.sourceUrl || ("fixture://" + (msg.name || "gate")),
+                null, null, false, !!msg.deep, 0, 0, null, null, null)
+    .then(function (r) {
+      var why = (self._whyRecords || []).slice(_gWhy0);
+      var spins = why.filter(function (w) { return w.phase === "spin_nonterminating"; });
+      var eps = (r && r.fetchCallSites) || [];
+      var sinks = (r && r.securitySinks) || [];
+      _finishGate({ success: true, result: {
+        gate: msg.name || "(fixture)", converged: true, ms: Date.now() - _gStart,
+        endpoints: eps.map(function (e) { return (e.method || "?") + " " + (e.url || e.path || "?"); }),
+        endpointCount: eps.length,
+        sinkCount: sinks.length,
+        sinks: sinks.map(function (s) { return (s.sink || "?") + (s.verdict ? "=" + s.verdict : ""); }),
+        resolverErrors: (r && r.resolverErrors) ? r.resolverErrors.length : 0,
+        structuralCandidates: (r && r.structuralCandidates) ? r.structuralCandidates.length : 0,
+        spinCount: spins.length,
+        spinLoops: spins.slice(-5).map(function (w) { return (w.loopFile || w.file || "?") + ":" + (w.loopLine || w.line || 0); })
+      } });
+    })
+    .catch(function (err) {
+      _finishGate({ success: false, error: (err && err.message) || String(err), gate: msg.name || "(fixture)" });
+    });
+};
+
 onmessage = function (e) {
   var id = e.data._id;
   var msg = e.data.msg;
@@ -2259,6 +2315,8 @@ onmessage = function (e) {
     })).then(function (results) { done({ success: true, result: results }); });
     return;
   }
+
+  if (msg.type === "AST_GATE") { self.__gateRun(msg, done); return; }
 
   var response;
   if (msg.type === "AST_BUILD_DEFINITION_MAP") {
