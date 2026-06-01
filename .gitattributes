@@ -3,3 +3,6 @@
 # autocrlf would otherwise convert them and silently break the hook).
 hooks/* text eol=lf
 *.sh text eol=lf
+# GitHub Actions run: blocks are fed to bash on the Linux runner — a CRLF here
+# appends \r to every script line and breaks it. Keep workflow YAML LF.
+.github/workflows/*.yml text eol=lf
