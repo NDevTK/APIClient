@@ -53,8 +53,9 @@ Taint is observed during the *same real execution* used for API learning — no 
 
 - **Attacker-taint sources** are the host-edge data made *opaque* (infectious through member-get / call / `JSON.parse` / iteration): `location.hash/search`, `document.cookie`, `*Storage.getItem`, `window.name`, `XHR.responseText/response`, `fetch` `Response` bodies, `postMessage` `data`/`origin`. DOM *structure* stays concrete so frameworks boot.
 - **Sinks** are recorded only when the value reaching them is tainted: code-exec (`eval`/`Function`/string `setTimeout`/`setInterval`), open-redirect (`location.href`/`assign`/`replace`), DOM-HTML (`innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`), script-bearing `setAttribute`. A concrete write (e.g. jQuery feature-detection `innerHTML`) is not a finding and costs nothing.
-- **Severity** is category-fixed: `code-exec` → critical, else high (sanitizer-path downgrade is honest future work, not claimed).
-- **Source positions**: every finding carries the bundle call chain from the engine's real `Error().stack`, mapped to combined-bundle line space for click-through to the original JS.
+- **Z3 path-satisfiability filter.** A tainted sink by itself is only *reach*. Z3 is linked into the engine (C, no JS bridge); the source→sink path constraints (Φ) accumulated over the attacker-tainted value are asserted with an exploit-shaped query: **SAT ⇒ REAL_EXPLOIT** (the model is a concrete attacker witness), **SAT(Φ) ∧ UNSAT(exploit) ⇒ TAINT_REACH** (feasible but Φ pins a non-exploitable value), **UNSAT(Φ) ⇒ INFEASIBLE** (X-Force forced incompatible gates — suppressed, never shown). The same solver also prunes infeasible flipped schedules during exploration. Z3 errors surface as a distinct `Z3_ERROR` + `@E`, never silently collapsed.
+- **Unified, Z3-built PoC probe.** The exact JavaScript shown in the UI is *built from Z3's solve over the real trace* (each attacker leaf → channel/order/fieldPath/solved-value/decoders), not a hardcoded template. It runs verbatim in a manifest **sandbox page** (opaque origin = real cross-origin attacker) on your click, correlating back via the finding's `crypto.randomUUID` inside the payload (never data in the URL): **NOT REPRODUCED** or **REAL EXPLOIT**. The static badge is "PoC" (untested) until the probe confirms it.
+- **Source positions**: every finding carries the bundle call chain from the engine's real `Error().stack`, mapped to combined-bundle line space for click-through to the original JS, plus a structured taint trace (data flow, conditionals Φ, interprocedural call chain, Z3's leaves/witness).
 
 ### Replay & Export
 
@@ -71,7 +72,7 @@ Taint is observed during the *same real execution* used for API learning — no 
 ### Cross-Tab Request Log
 
 - **Multi-Tab Filtering**: View requests from the active tab, all tabs, or a specific closed tab.
-- **Session Persistence**: Logs stored in `chrome.storage.session` — survive MV3 service worker restarts, auto-clear on browser close.
+- **Session Persistence**: Logs live **in memory in the offscreen document** (its lifetime is stable, so they survive MV3 service-worker eviction); they are cleared on browser close or the 🗑️ bin button. (The former `chrome.storage.session` layer was removed once the offscreen document's lifetime became stable.)
 - **Closed Tab Retention**: Logs from closed tabs remain accessible.
 - **Search & Filter**: Text filter across URL, method, service, content type, and tab title.
 - **Virtual Scroll**: Handles large request logs without DOM bloat.
@@ -92,11 +93,16 @@ Taint is observed during the *same real execution* used for API learning — no 
 3. Enable **Developer mode**.
 4. Click **Load unpacked** and select the extension folder.
 
-The analysis engine ships pre-built in `extension/lib/qjs/`. To rebuild it from the forked QuickJS-ng + Lexbor source (requires gcc for the native iterate binary and the bundled emsdk for the wasm targets):
+The analysis engine ships pre-built in `extension/lib/qjs/`. To rebuild it from the forked QuickJS-ng + Lexbor source (uses the bundled emsdk for the wasm target):
 ```
-node engine/build.mjs            # native qjs.exe + cli/mod/worker wasm + stage
-node engine/build.mjs worker     # just the extension's wasm worker
+node engine/build.mjs worker     # build the extension's wasm worker (the ONE target)
 node engine/build.mjs stage      # copy qjs_worker.js + hostedge.gen.js into extension/lib/qjs/
+```
+There is exactly **one** build target — the Chrome wasm worker (`SINGLE_FILE`, JSPI). The former native (`qjs.exe`), node wasm-CLI (`qjs_wasm.js`), and modular node (`qjs_mod.mjs`) targets are **banned and error out**: none has JSPI, host `fetch`/`safeFetch`, or real Chrome crypto/DOM, so they give false confidence (a bundle "converged" on the CLI while the live wasm spun on a fetched-chunk orphan the CLI never loaded). All verification is through the live Chrome harness — never node.
+
+The engine source is pinned by the `engine/qjs` gitlink (a commit into the `apiclient-fork` branch of the [quickjs-ng fork](https://github.com/NDevTK/APIClient-quickjs)); the runtime artifact `extension/lib/qjs/qjs_worker.js` is built from it and committed alongside. Enable the repo hooks once so a gitlink bump can't be committed without re-staging the rebuilt worker (and vice-versa they stay consistent):
+```
+git config core.hooksPath hooks
 ```
 
 ## Architecture
@@ -104,13 +110,13 @@ node engine/build.mjs stage      # copy qjs_worker.js + hostedge.gen.js into ext
 ```
 intercept.js       Main-world fetch/XHR/WebSocket/EventSource wrapper (request + response capture)
 content.js         Isolated-world content script (ships raw HTML/scripts/responses, PAGE_FETCH relay, postMessage/MessageChannel listener) — messages the offscreen brain DIRECTLY
-background.js      Thin, STATELESS service worker — extension-page-only. Owns the offscreen lifecycle, forwards browser events the offscreen can't observe (webNavigation/tabs as __evt), and performs privileged chrome.* on the brain's behalf (__rpc: tabs.*, scripting.exec, storage.session.*, cross-origin fetch). Holds NO state.
+background.js      Thin, STATELESS service worker — extension-page-only. Owns the offscreen lifecycle, forwards browser events the offscreen can't observe (webNavigation/tabs as __evt), and performs the privileged chrome.* the offscreen lacks on the brain's behalf (__rpc: tabs.*, scripting.exec). Holds NO state. Cross-origin fetch is NOT an SW job — COEP doesn't block fetch, so the offscreen + worker fetch directly via one safeFetch (GET, no cookies, http(s) only).
 offscreen-brain.js The LEARNING BRAIN (runs in the offscreen document — stable lifetime + IndexedDB). All state + logic: globalStore, VDD schema learning, discovery, AST merge, request log, protocol classification, popup handlers, export, persistence. Privileged chrome.* APIs it lacks go through the SW via swRpc.
 popup.js           Popup controller (rendering, replay, form builder, security panel) — messages the offscreen brain directly
 popup.html/css     Popup markup and styles
 ast-worker.html    Offscreen document — loads the brain (offscreen-brain.js) + the analysis Web Worker
 ast-worker.js      In-document bridge: exposes self.astDispatch (the brain calls it directly) and merges streamed deep-grind results
-ast-thread.js      Web Worker — schedule enumeration (one fresh wasm instance per schedule) + throttled, preemptible, cross-session-resumable deep unused-feature grind
+ast-thread.js      Web Worker — schedule enumeration (Wizer-style snapshot/restore: boot the bundle ONCE, image linear memory, restore per schedule — no re-boot) + fast-by-default, WFQ-scheduled, preemptible, cross-session-resumable deep unused-feature grind
 
 engine/qjs/        Forked QuickJS-ng + vendored Lexbor (Apache-2.0); ONE patched source → all targets:
   quickjs.c          Patched interpreter — opaque sentinel, selective branch forcing, infectious-opaque
@@ -119,7 +125,7 @@ engine/qjs/        Forked QuickJS-ng + vendored Lexbor (Apache-2.0); ONE patched
   qjs_dom.c          QuickJS↔Lexbor binding — spec DOM/CSS/customElements/WHATWG URL
   hostedge.js        Record-only Web-boundary shim (fetch/XHR/location/storage/MessageChannel)
   driver.js          Event-loop epilogue (pumps load/ready/message + XHR completion)
-engine/build.mjs     Builds native qjs.exe + 3 wasm targets from one source; `stage`s the worker
+engine/build.mjs     Builds the ONE Chrome wasm worker target from the patched source; `stage`s it (native/cli/mod targets are banned and error out)
 extension/lib/qjs/   Pre-built qjs_worker.js + generated hostedge.gen.js (shipped)
 
 lib/
@@ -127,6 +133,9 @@ lib/
   discovery.js     Protocol parsers, schema resolution, bidirectional OpenAPI conversion
   protobuf.js      Wire-format codec, JSPB decoder, recursive base64 scanning
   req2proto.js     Error-based schema probing (Google-specific + generic)
+  safe-fetch.js    The ONE external-fetch path (GET, cookies omitted, http(s) only) — shared by the brain + worker
+  learnstate.js    DRY analysis-state classifier (complete / analyzing / stalled) — worker heartbeat, harness, popup
+  priority.js      WFQ fiber comparator + weights (cross-page CPU fair-share; active-page focus tier)
 ```
 
 ### Data Flow
@@ -139,7 +148,7 @@ Page JS ──→ intercept.js (main world) ──→ CustomEvent ──→ cont
 Cross-frame postMessage / MessageChannel ──→ content.js (message listener) ──────→│
                                                                               │
   background.js (SW): offscreen lifecycle + __evt (webNavigation/tabs) +      │
-                      __rpc (tabs/scripting/storage.session/fetch) ───────────┤
+                      __rpc (tabs/scripting only; NO fetch — safeFetch direct)┤
                                               ┌───────────────────────────────┤
                                               ▼                               ▼
                                      VDD Schema Learning              Forced-Execution Analysis
@@ -161,19 +170,20 @@ All learned state lives in **IndexedDB in the offscreen document** (the brain's 
 | Store | Backend | Scope | Lifetime |
 |-------|---------|-------|----------|
 | **GlobalStore** | IndexedDB `uasr_store` / `gapiStore` (offscreen document) | Cross-tab | Persistent (debounced save; restored on offscreen recreate) |
-| **Request Logs** | offscreen document | Per-tab | Browser session |
+| **Request Logs** | In-memory (offscreen document) | Per-tab | Offscreen lifetime (survives SW eviction; cleared on browser close / bin) |
 | **Field Renames** | IndexedDB (via GlobalStore) | Cross-tab | Persistent |
 | **Deep-grind progress** | IndexedDB `feDeepDB` (offscreen document) | Per-bundle | Until complete |
 
 ### Background Analysis & Scheduling
 
-The deep analysis learns the *complete* API surface — including features that haven't run yet and login-gated code in lazily-loaded chunks — by force-driving the bundle's unreached functions. That is a lot of work on a large site, so it is designed to be **thorough but gentle on the device**:
+The deep analysis learns the *complete* API surface — including features that haven't run yet and login-gated code in lazily-loaded chunks — by force-driving the bundle's unreached functions. This is a security-research tool you actively opened and are waiting on, so it is **fast by default**, and CPU/parallelism are **your choice** (popup ⚙):
 
-- **Low CPU, never pins a core.** Work runs in short bursts (one execution schedule, or a small batch of unreached functions) with a sleep of about the same length after each (~50% duty cycle). Analysis is serial and throttled, not parallel — parallelism would only add heat. Time is treated as free because it runs in the background; your machine stays cool and responsive.
-- **The page you're on comes first.** A freshly visited page's quick review is high priority and **preempts** any in-progress deep dive of a previously visited site. The deep dive pauses at a safe checkpoint, the new page's findings appear right away, then the deep dive resumes — only ever one analysis running at a time.
-- **Most-relevant functions first, across browsing sessions.** Relevance is **which page you visited most recently** — the background learner resumes that page's dive first (the page you're actively on always preempts). Within a dive, functions the page's own flow reached (so they resolve to concrete values) are driven before cold ones, cheapest first. Progress is tracked by **which functions are done** (a stable per-function id), not a position counter — so the priority order can change freely between sessions without ever re-doing or skipping a function. Ordering only changes *when* each function is driven, never *what* is learned, and every function is still driven (no cap on depth). Each page is analyzed in isolation (only its own JavaScript), so this prioritization never mixes one site's code into another's.
-- **Resumable across sessions.** Long deep dives checkpoint their progress (and the captured JavaScript) to IndexedDB. If the MV3 service worker is evicted, or you close and reopen the browser, the analysis **resumes from where it left off** with no re-fetching and no lost work — and it resumes automatically on browser start, without needing to revisit the page. The most recently relevant site is resumed first.
-- **Eventual consistency, no quality loss.** Every site's deep dive eventually completes; none is dropped to save time, and no endpoint or example value is sacrificed for speed. Depth and example quality are never traded away — the cost is spread over time instead.
+- **Fast by default — a free core isn't left idle.** The default throttle is 0 (no per-schedule sleep): the learner uses the core to surface the API surface sooner. Relevance ordering + active-page focus already decide *what* runs first, so full speed just means *more learned sooner*. If you want a cooler background, the ⚙ **Yield throttle** slider raises the CPU-duty cap (the focused page stays hot regardless), and **Analyzer workers** grows the worker pool.
+- **Priority frontier, not a FIFO — pause and resume, never cap.** A code path is only terminated when continuing would be pointless (a fixpoint-detected non-terminating loop); otherwise it pauses and resumes later. The schedule + deep-grind run as a **resumable priority frontier**: the most-useful work runs now, yields at per-orphan / per-branch boundaries, and resumes the rest later — no depth/step/time cap.
+- **Weighted-fair across concurrent pages; the page you're on preempts.** Multiple open tabs' analyses are suspended JSPI fibers scheduled by **weighted fair queueing** (weight = reaches-host-edge + marginal endpoint yield), so CPU is shared fairly; the page you're actively viewing wins a strict focus tier above WFQ and resumes ahead of background grinds at the next yield. Parallelism is *across pages* (a worker pool) — a single page's grind uses one core; extra workers only parallelise concurrent tabs.
+- **Most-relevant first, by view recency.** The most-recently-viewed page leads; within a grind, functions that reach a network edge (and ones whose body already ran in real context, so they resolve to concrete values) are driven before cold/sink-only ones, cheapest first. Progress is tracked by **which functions are done** (a stable per-function id), not a position counter — so the order can change freely between runs without ever re-doing or skipping a function. Each page is analyzed in isolation (only its own JavaScript).
+- **Resumable across sessions.** Long grinds checkpoint their progress (and the captured JavaScript) to IndexedDB. If the MV3 service worker is evicted, or you close and reopen the browser, the analysis **resumes from where it left off** with no re-fetching and no lost work — automatically on browser start, without revisiting the page.
+- **Eventual consistency, no quality loss.** Every site's grind eventually completes; none is dropped, and no endpoint or example value is sacrificed for speed.
 - **The 🗑️ bin button is a hard stop + full reset.** It deletes *all* learned data and stops *all* work outright: the background worker is terminated (killing any running analysis immediately, not just asked to stop), its resumable checkpoint is deleted, and the global store + request logs are wiped. Work that was already in flight can't sneak results back in afterward. This is separate from the automatic re-scan that happens when the analyzer's own code changes — that re-scan *keeps* past findings (they accumulate); only the bin button clears them.
 
 ### Security Model
@@ -186,7 +196,7 @@ The deep analysis learns the *complete* API surface — including features that 
 | `offscreen-brain.js` (offscreen document) | Extension | Trusted — owns IndexedDB + all learned state |
 | `popup.js` (extension page) | Extension | Trusted |
 
-The brain uses IndexedDB (inaccessible to content scripts) instead of `chrome.storage.local` to keep a compromised renderer from reading cross-site structural metadata. **Trust is decided by `sender.url`, never `sender.id`** — every `onMessage` sender carries the extension id (external senders go to `onMessageExternal`), so the id is not a discriminator; an extension-origin URL is a trusted context (popup/offscreen), a web URL is a content script (untrusted). The SW honors privileged `__rpc` **only** from the offscreen URL and browser-event `__evt` only from an extension origin; it never relays content-script payloads (content scripts reach the brain directly with the browser-verified `sender`, so page data is never laundered into a trusted origin). SW fetches on the brain's behalf always omit cookies.
+The brain uses IndexedDB (inaccessible to content scripts) instead of `chrome.storage.local` to keep a compromised renderer from reading cross-site structural metadata. **Trust is decided by `sender.url`, never `sender.id`** — every `onMessage` sender carries the extension id (external senders go to `onMessageExternal`), so the id is not a discriminator; an extension-origin URL is a trusted context (popup/offscreen), a web URL is a content script (untrusted). The SW honors privileged `__rpc` **only** from the offscreen URL and browser-event `__evt` only from an extension origin; it never relays content-script payloads (content scripts reach the brain directly with the browser-verified `sender`, so page data is never laundered into a trusted origin). External fetches (lazy chunks, source maps, discovery probes) go **directly** from the offscreen document and its worker through one auditable `safeFetch` (GET only, cookies omitted, http(s) only) — not via the SW; COEP `require-corp` does not block `fetch`.
 
 ## Security & Privacy
 
@@ -197,16 +207,16 @@ The brain uses IndexedDB (inaccessible to content scripts) instead of `chrome.st
 
 ## Testing
 
-Analysis correctness is proven by *running real code*, not unit assertions:
+Analysis correctness is proven by *running real code* in the **live Chrome harness** (the only valid host — it has JSPI, `safeFetch`, and real Chrome crypto/DOM), never node:
 
 ```
-cd engine/qjs
-node drive.mjs hostedge.js _gate.js driver.js     # endpoint/value polarity (server gate)
-node drive.mjs hostedge.js _xss.js  driver.js     # XSS sink polarity (positive + negative)
-node drive.mjs hostedge.js _url.js  driver.js     # WHATWG URL (Lexbor) polarity
-QJS_BIN=qjs_wasm.js node drive.mjs ...            # same, on wasm — native ≡ wasm before any claim
-node ../../testing/harness.js goto https://…      # live Chrome (CDP) — the only real-site ground truth
-node ../../test-lib.js                            # protobuf / discovery / OpenAPI conversion
+node testing/harness.js restart                      # kill+clear-IDB, pick up a rebuilt qjs_worker.js
+node testing/harness.js gate engine/qjs/_gate.js --deep    # endpoint/value polarity (server gate)
+node testing/harness.js gate engine/qjs/_xss.js  --deep    # XSS sink polarity (4× REAL_EXPLOIT, Z3 witnesses)
+node testing/harness.js gate engine/qjs/_url.js  --deep    # WHATWG URL (Lexbor) polarity
+node testing/harness.js goto https://…               # live real-site analysis (the ground truth)
+node testing/harness.js netdiff                      # live requests vs AST-learned (coverage diff)
+node test-lib.js                                     # protobuf / discovery / OpenAPI conversion
 ```
 
-Real minified jQuery 3.7.1 is the standing regression gate (boots with zero spurious forks). Polarity fixtures never substitute for verifying a change against a real site through the harness.
+Each gate reports `converged`, `endpointCount`/`sinkCount`, and `spinCount` (0 = no non-terminating loop). Real minified jQuery 3.7.1 is the standing regression gate (boots with zero spurious forks). Polarity fixtures never substitute for verifying a change against a real site through the harness. (The former `drive.mjs`/`mdrive.mjs` node drivers were deleted with the banned node targets.)

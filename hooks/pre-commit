@@ -1,0 +1,26 @@
+#!/bin/sh
+# APIClient pre-commit guard — keep the engine SOURCE pointer and its shipped
+# RUNTIME ARTIFACT consistent.
+#
+# The forced-execution engine lives in the engine/qjs gitlink (a submodule-style
+# commit pointer into the apiclient-fork branch of our quickjs-ng fork). The
+# extension actually loads the PRE-BUILT wasm at extension/lib/qjs/qjs_worker.js,
+# which is staged from that source by `node engine/build.mjs worker && stage`.
+# Bumping the gitlink WITHOUT re-staging qjs_worker.js ships a stale worker
+# against new source (main's runtime != main's source). This guard makes that
+# inconsistency un-committable. Override intentional source-only bumps with
+# `git commit --no-verify`.
+
+gitlink_staged=$(git diff --cached --name-only -- engine/qjs)
+worker_staged=$(git diff --cached --name-only -- extension/lib/qjs/qjs_worker.js)
+
+if [ -n "$gitlink_staged" ] && [ -z "$worker_staged" ]; then
+  echo "pre-commit BLOCKED: engine/qjs gitlink is staged but extension/lib/qjs/qjs_worker.js is NOT."
+  echo "  A new engine source pointer must ship the worker built from it, or main runs a stale artifact."
+  echo "  Fix: node engine/build.mjs worker && node engine/build.mjs stage"
+  echo "       git add extension/lib/qjs/qjs_worker.js   (and extension/lib/qjs/hostedge.gen.js if hostedge.js changed)"
+  echo "  Intentional source-only bump: git commit --no-verify"
+  exit 1
+fi
+
+exit 0
