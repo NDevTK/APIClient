@@ -1969,7 +1969,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            instance and retry. */
         _dpCallThrew = true;
         if (!self._whyRecords) self._whyRecords = [];
-        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size });
+        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size, culprit: (self._currentOrphan && self._currentOrphan.id) || "(unknown)" });
       }
       // Final drain for any lines after the last JSPI yield (e.g. the
       // closing @DS the engine emits before returning from main).
