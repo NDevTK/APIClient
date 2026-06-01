@@ -1963,11 +1963,23 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
        the retry skips already-driven fns. */
     var _dpBaselineBytes = 0;
     var _grindDone = false;
+    /* HEAD-FIRST (continuous-session scheduler, increment 2): the FIRST grind
+       callMain drives ONLY the net-reaching HEAD (--fe-deep-grind-head) — on
+       github that's ~405 of 98,445 orphans (0.4%), ~4s, surfacing essentially
+       all endpoints — then RETURNS so the page is immediately useful and the
+       scheduler can rotate to another open page's head before this page's
+       ~6-min completeness tail. Subsequent iterations drive the full residue
+       (the tail) with --fe-deep-grind. The driven-set carries the head's
+       progress into the tail run (per-fn-id, no re-drive). NOT a cap: the tail
+       still runs to rem=0; head-first only reorders WHICH runs first so
+       endpoints stream early. */
+    var _headPhase = true;
     while (!_grindDone) {
       stdout.length = 0; stderr.length = 0;
       _stdoutCursor = 0;
       var _dpCallThrew = false;
-      try { await m.callMain(["--fe-deep-grind"].concat(fileArgs)); }
+      var _grindArg = _headPhase ? "--fe-deep-grind-head" : "--fe-deep-grind";
+      try { await m.callMain([_grindArg].concat(fileArgs)); }
       catch (e) {
         /* Wasm trap (e.g. monotonic memory.grow saturating Chrome's per-
            instance cap, abort from JS_FreeRuntime's debug assert on heavy
@@ -1980,9 +1992,21 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       // Final drain for any lines after the last JSPI yield (e.g. the
       // closing @DS the engine emits before returning from main).
       await _drainDeepStdout();
+      /* Head phase returned cleanly (not a throw/abort): the net-reaching HEAD
+         is driven (endpoints surfaced). Transition to the TAIL — continue the
+         SAME instance with --fe-deep-grind (full residue; driven-set skips the
+         head). This is NOT a recycle and NOT done: rem>0 is EXPECTED here (the
+         tail remains), so bypass the no-progress/recycle logic below. The
+         scheduler (increment 3) will later interleave OTHER pages' heads here
+         before this tail; for now the same page proceeds head→tail. */
+      if (_headPhase && !_dpCallThrew && !instAborted) {
+        _headPhase = false;
+        if (_drem === 0) { _grindDone = true; break; }   // head WAS the whole residue (small page)
+        continue;   // run the tail on the same instance
+      }
       var _dpRecycleReason = null;
       if (instAborted) _dpRecycleReason = "abort";
-      else if (_dpCallThrew) _dpRecycleReason = "wasm_trap";
+      else if (_dpCallThrew) { _dpRecycleReason = "wasm_trap"; _headPhase = false; }
       else if (_drem > 0) {
         /* callMain returned cleanly but residue still has uncovered fns —
            memory recycle proactively if we crossed the 2× baseline threshold
