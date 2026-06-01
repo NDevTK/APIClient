@@ -136,27 +136,43 @@ function gitQ(args) {
   return spawnSync("git", args, { cwd: QJS, encoding: "utf8",
     shell: process.platform === "win32" });
 }
+// True upstream is quickjs-ng/quickjs — resolve it by URL, NOT by the remote
+// NAME. A clean clone's submodule `origin` is the FORK (per .gitmodules:
+// url=APIClient-quickjs), so comparing against `origin/master` would diff the
+// fork's (possibly stale) mirror, not real upstream — the bug that made this
+// check pass only on a machine where `origin` happened to be quickjs-ng. Adds an
+// `upstream` remote if no existing remote points at quickjs-ng.
+function qjsngRemote() {
+  const rv = gitQ(["remote", "-v"]).stdout || "";
+  for (const line of rv.split("\n")) {
+    const m = line.match(/^(\S+)\s+\S*quickjs-ng\/quickjs(?:\.git)?\s+\(fetch\)/);
+    if (m) return m[1];
+  }
+  gitQ(["remote", "add", "upstream", "https://github.com/quickjs-ng/quickjs.git"]);
+  return "upstream";
+}
 function upstreamSyncCheck() {
   if (process.env.SKIP_UPSTREAM_CHECK === "1") {
     console.warn("[build] upstream sync check SKIPPED (SKIP_UPSTREAM_CHECK=1) — offline iteration only; do NOT land a stale engine");
     return;
   }
   try {
+    const REM = qjsngRemote();
     const stamp = join(ENGINE, ".work", ".upstream-fetch-stamp");
     const fresh = existsSync(stamp) && (Date.now() - statSync(stamp).mtimeMs) < 3600_000;
     if (!fresh) {
-      const f = gitQ(["fetch", "origin", "--quiet", "--tags"]);
+      const f = gitQ(["fetch", REM, "--quiet", "--tags"]);
       if (f.status !== 0) {
         console.warn(`[build] upstream sync check: git fetch failed (offline?) — proceeding without it\n        ${String(f.stderr || "").trim().split("\n")[0]}`);
         return;
       }
       try { mkdirSync(dirname(stamp), { recursive: true }); writeFileSync(stamp, ""); } catch {}
     }
-    const base = gitQ(["merge-base", "HEAD", "origin/master"]).stdout.trim();
-    if (!base) { console.warn("[build] upstream sync check: no merge-base with origin/master — proceeding"); return; }
-    const behind = parseInt(gitQ(["rev-list", "--count", `${base}..origin/master`]).stdout.trim() || "0", 10);
+    const base = gitQ(["merge-base", "HEAD", `${REM}/master`]).stdout.trim();
+    if (!base) { console.warn(`[build] upstream sync check: no merge-base with ${REM}/master — proceeding`); return; }
+    const behind = parseInt(gitQ(["rev-list", "--count", `${base}..${REM}/master`]).stdout.trim() || "0", 10);
     if (behind > 0) {
-      const up = gitQ(["describe", "--tags", "origin/master"]).stdout.trim() || "?";
+      const up = gitQ(["describe", "--tags", `${REM}/master`]).stdout.trim() || "?";
       console.error(`\n[build] REFUSING TO BUILD: engine is ${behind} commit(s) behind quickjs-ng upstream (${up}).`);
       console.error(`[build]   Keeping the fork current is mandatory. Sync first:`);
       console.error(`[build]     node engine/sync.mjs apply      # FF master + 3-way merge into apiclient-fork`);
