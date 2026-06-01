@@ -2189,7 +2189,7 @@ self.__gateRun = function (msg, done) {
     } });
   }, _gDeadline);
   forcedAnalyze(String(msg.code || ""), msg.sourceUrl || ("fixture://" + (msg.name || "gate")),
-                null, null, false, !!msg.deep, 0, 0, null, null, null)
+                null, (typeof msg.pageHtml === "string" && msg.pageHtml) ? msg.pageHtml : null, false, !!msg.deep, 0, 0, null, null, null)
     .then(function (r) {
       var why = (self._whyRecords || []).slice(_gWhy0);
       var spins = why.filter(function (w) { return w.phase === "spin_nonterminating"; });

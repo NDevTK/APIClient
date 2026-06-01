@@ -675,6 +675,19 @@ async function cmdGate(args) {
   if (!fs.existsSync(abs)) throw new Error("no such fixture: " + abs);
   const code = fs.readFileSync(abs, "utf8");
   const name = path.basename(abs);
+  // --html=<file>: pass pre-existing SSR HTML so the engine parses it into the
+  // Lexbor DOM FIRST (then runs the fixture code). Models the real-site case
+  // where a custom element (<include-fragment src>) is already in the SSR HTML
+  // and customElements.define() upgrades the EXISTING element — distinct from
+  // a JS-createElement'd one.
+  const hf = flags.find((f) => f.startsWith("--html="));
+  let pageHtml = null;
+  if (hf) {
+    const hp = hf.slice(7);
+    const habs = path.isAbsolute(hp) ? hp : path.join(ROOT, hp);
+    if (!fs.existsSync(habs)) throw new Error("no such html file: " + habs);
+    pageHtml = fs.readFileSync(habs, "utf8");
+  }
   await withBrowser(async (browser) => {
     const lock = await readLock();
     const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
@@ -691,11 +704,11 @@ async function cmdGate(args) {
     }
     if (!w) { log("(no analysis worker; " + (diag || "no offscreen") + ") — run `harness restart` first"); return; }
     // The worker's astDispatch resolves AST_GATE with the compact summary.
-    const res = await w.evaluate(async (code, name, deep, timeoutMs) => {
+    const res = await w.evaluate(async (code, name, deep, timeoutMs, pageHtml) => {
       return await new Promise((resolve) => {
         // astDispatch is the in-worker entry; AST_GATE runs forcedAnalyze and
         // resolves via the message `done` callback shape the dispatcher uses.
-        const msg = { type: "AST_GATE", code, name, deep, timeoutMs, id: "gate-" + name };
+        const msg = { type: "AST_GATE", code, name, deep, timeoutMs, pageHtml, id: "gate-" + name };
         // self.astDispatch posts back through the same channel; but inside the
         // worker we call the handler directly and await its done().
         let settled = false;
@@ -705,7 +718,7 @@ async function cmdGate(args) {
         if (typeof self.__gateRun === "function") { self.__gateRun(msg, done); }
         else { resolve({ success: false, error: "__gateRun not exposed in worker" }); }
       });
-    }, code, name, deep, timeoutMs).catch((e) => ({ success: false, error: String(e && e.message || e) }));
+    }, code, name, deep, timeoutMs, pageHtml).catch((e) => ({ success: false, error: String(e && e.message || e) }));
     log(JSON.stringify(res, null, 2));
   });
 }
