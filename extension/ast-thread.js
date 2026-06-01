@@ -1053,7 +1053,20 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         }
         stdout.push(s);
       },
-      printErr: function (s) { stderr.push(s); if (!self._lastStderr) self._lastStderr = []; self._lastStderr.push(s); if (self._lastStderr.length > 500) self._lastStderr.shift(); },
+      printErr: function (s) {
+        stderr.push(s); if (!self._lastStderr) self._lastStderr = []; self._lastStderr.push(s); if (self._lastStderr.length > 500) self._lastStderr.shift();
+        /* Promote the engine's leak diagnostic to the non-rotating @WHY log:
+           the FreeRuntime_residue line (printed by JS_FreeRuntime right before
+           the gc_obj_list assert, naming the leaked object TYPE) scrolls off the
+           500-line stderr buffer before it can be read, so the abort looked
+           unattributed. Keep it durable so the specific leaked type (obj /
+           bytecode / varref / async / context) is always recoverable. */
+        if (s.indexOf("FreeRuntime_residue") >= 0) {
+          if (!self._whyRecords) self._whyRecords = [];
+          try { self._whyRecords.push(Object.assign({ phase: "freeruntime_residue_raw" }, JSON.parse(s.slice(s.indexOf("{"))))); }
+          catch (e) { self._whyRecords.push({ phase: "freeruntime_residue_raw", line: s.slice(0, 200) }); }
+        }
+      },
       onAbort: function (msg) {
         instAborted = true;
         /* Capture the emscripten abort reason — without this it lands on the
