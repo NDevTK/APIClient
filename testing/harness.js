@@ -1002,6 +1002,12 @@ const GATE_MANIFEST = {
   // instance, learn the concrete endpoint. Asserted like any other gate — RED until
   // the engine is fixed; the manifest is never relaxed to make a broken gate pass.
   "engine/qjs/_opqctor.js":           { endpointCount: 1, deep: true },
+  // Boot-constructed config-bearing client (telemetry/analytics/API-SDK/auth):
+  // `new Client({endpoint:"…"})` at module top-level whose send() reads
+  // this.cfg. The boot drive must run the method with its REAL receiver so the
+  // concrete collector URL is learned (not the opaque-this @H that gets it
+  // excluded from the deep residue). Asserted; RED until the engine is fixed.
+  "engine/qjs/_bootsender.js":        { endpointCount: 1, deep: true },
 };
 
 function _gateAllRunOnce(w, code, name, deep, timeoutMs) {
