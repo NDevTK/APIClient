@@ -4810,6 +4810,21 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
     buf._chunkSeen.add(absU);
     fresh.push(absU);
   }
+  /* Chunk-pipeline observability (layers 1-2 of the include-fragment chain:
+     discover → fetch). Records per round what was received, deduped vs already-
+     shipped, and (updated in the fetch loop below) fetched OK / failed, plus
+     whether any custom-element-defining script (github-elements / element-
+     registry / behaviors) is present — so a missing endpoint's defining script
+     is TRACED through the pipeline, not guessed. Read via `harness offscreen
+     "return self._chunkDiag"`. */
+  if (!self._chunkDiag) self._chunkDiag = [];
+  var _ceRe = /github-elements|element-registry|behaviors|catalyst/i;
+  var _cdiag = { tab: tabId, received: chunkUrls.length, fresh: fresh.length,
+    dedupedAlreadyShipped: chunkUrls.length - fresh.length,
+    ceScriptsFresh: fresh.filter(function (u) { return _ceRe.test(u); }).map(function (u) { return u.split("/").pop().slice(0, 40); }),
+    fetchedOk: 0, fetchFailed: 0 };
+  self._chunkDiag.push(_cdiag);
+  if (self._chunkDiag.length > 20) self._chunkDiag.shift();
   if (fresh.length === 0) {
     // No new lazy chunks to fetch — but the deep grind (orphan residue
     // drive) is valuable for EVERY page, not just chunk-heavy ones. It's
@@ -4850,7 +4865,9 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
       if (rr.body) {
         buf.scripts.push({ url: rr.u, code: rr.body, order: ++maxOrder });
         added++;
+        _cdiag.fetchedOk++;
       } else {
+        _cdiag.fetchFailed++;
         console.debug("[AST:chunks] fetch failed %s: %s", rr.u, rr.err || "not-ok/empty");
       }
     }

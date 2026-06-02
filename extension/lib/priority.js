@@ -8,13 +8,21 @@
  * a different comparator changes WHEN something is learned, not WHETHER.
  *
  * The functions are pure: they take observed signals (productivity delta,
- * reaches-host-edge bit, vts, recency, etc.) and return ordering. They do
- * not mutate, do not close over scheduler state, do not have side effects.
+ * reaches-host-edge bit, virtual time, recency, etc.) and return ordering.
+ * They do not mutate, do not close over scheduler state, do not have side
+ * effects. flowCmp/flowWeight DO use weighted virtual time (WEIGHTED FAIR
+ * QUEUEING) rather than strict lexicographic tiers — weights here allocate
+ * CPU PROPORTIONALLY among runnable fibers, which is still ORDER ONLY (they
+ * change WHEN a flow runs, never WHETHER any work item is covered). schedCmp
+ * stays lexicographic (no weighted sums) because it orders a discrete
+ * frontier set, not a continuous CPU share.
  *
  * Three comparators live here:
- *   flowCmp(a, b, activePageKey)
- *     — paused-JSPI-fiber ordering. Used by ast-thread.js _yieldDrain to
- *       pick the next fiber to resume across all suspended page analyses.
+ *   flowCmp(a, b, activePageKey)  [+ flowWeight(entry)]
+ *     — paused-JSPI-fiber ordering by WEIGHTED FAIR QUEUEING. Used by
+ *       ast-thread.js to pick the next fiber to resume across all suspended
+ *       page analyses; the scheduler advances each flow's virtual time by
+ *       sliceCost / flowWeight after each resume.
  *   schedCmp(a, b)
  *     — BFS schedule ordering. Used by ast-thread.js _pickJob to pick the
  *       next decision-string schedule to run from the work queue.
@@ -30,39 +38,83 @@
  */
 
 self._priorityCmp = {
-  /* Paused JSPI fiber comparator. Negative result = a wins (run first).
-     Lexicographic, no weighted sums. Both @H (endpoints) and @S (sinks)
-     come from the SAME forced execution — one engine, two views per
-     CLAUDE.md "The engine is one execution, two views" — but the
-     ordering reflects CLAUDE.md's goal-priority list (endpoint
-     completeness is goal #1, security finding detection is goal #10),
-     so when two fibers each emitted records this cycle the endpoint
-     emitter resumes first:
-       1. Active-page focus (the user's current page wins all ties)
-       2. Reaches host edge from current pc (engine-emitted reaches bit)
-       3. Recent ENDPOINT emissions (@H — fetch / XHR / WebSocket /
-          sendBeacon). Outranks one emitting structural candidates (@T)
-          or security sinks (@S) of equal count — same execution still
-          captures both, just resumes the endpoint-producing fiber's
-          continuation first.
-       4. Recent SECONDARY emissions (@T + @S). Beats a fiber emitting
-          nothing — keeps sink-discovery moving when no endpoints are
-          coming out — but loses to ANY endpoint emitter.
-       5. Page visit recency (most-recently-viewed wins)
-       6. Anti-starvation (oldest-waiting breaks ties so nothing starves) */
+  /* Paused JSPI fiber comparator — WEIGHTED FAIR QUEUEING. Negative result =
+     a wins (run first). This is NOT strict lexicographic priority: the old
+     design made `recentEndpoints` a STRICT tier, so a background page emitting
+     1 more endpoint per cycle than another could monopolize the CPU and leave
+     the other only anti-starvation crumbs. WFQ instead gives every runnable
+     flow a CPU share PROPORTIONAL to its weight (= marginal value), so a
+     flatter page still makes proportional progress while a productive page
+     gets correspondingly more. Tiers:
+       1. Active-page focus, STRICT but ONLY DURING HIGH-VALUE WORK — the page
+          the user is ON wins every comparison WHILE it is still surfacing
+          endpoints (a live review, or a deep grind whose net-reaching HEAD is
+          not yet done: `ctx.headDone !== true`). This keeps the current page
+          INSTANT for what matters (its endpoints) without letting its LOW-value
+          completeness TAIL freeze the rest of the session: once the foreground
+          page's head is done, its tail drops to plain WFQ and competes on value
+          like any background, so a freshly-opened background tab's HIGH-VOI head
+          (big UCB explore bonus) can preempt the foreground's near-zero-value
+          tail. The head/tail boundary is the engine's existing net-reaching
+          prefix (headDone) — no magic threshold. (Among equal-focus fibers and
+          all background fibers, WFQ decides.)
+       2. Virtual time `ctx.flowVt` ASCENDING — the WFQ core. The flow that has
+          received the least service RELATIVE TO ITS WEIGHT (smallest virtual
+          time) runs next. The scheduler (ast-thread.js) advances a flow's
+          flowVt by sliceCost / weight after each resume, where weight =
+          flowWeight() below. Endpoint production (goal #1) and host-edge reach
+          raise the weight, so a productive flow's virtual time grows slower ⇒
+          it is picked more often ⇒ more CPU — proportionally, not absolutely.
+       3. Anti-starvation (oldest-waiting `ts`) — tiebreak when two flows have
+          equal virtual time (e.g. two freshly-created flows both at the
+          system virtual time). */
   flowCmp: function (a, b, activePageKey) {
-    var aFoc = (activePageKey && a.ctx && a.ctx.pageKey === activePageKey) ? 1 : 0;
-    var bFoc = (activePageKey && b.ctx && b.ctx.pageKey === activePageKey) ? 1 : 0;
+    // Focus is strict only while the active page is still doing HIGH-value work
+    // (headDone !== true). Its low-value completeness tail competes by WFQ so a
+    // background's high-VOI head can preempt it.
+    var aFoc = (activePageKey && a.ctx && a.ctx.pageKey === activePageKey && a.ctx.headDone !== true) ? 1 : 0;
+    var bFoc = (activePageKey && b.ctx && b.ctx.pageKey === activePageKey && b.ctx.headDone !== true) ? 1 : 0;
     if (aFoc !== bFoc) return bFoc - aFoc;
-    var aR = a.reaches ? 1 : 0, bR = b.reaches ? 1 : 0;
-    if (aR !== bR) return bR - aR;
-    var aEp = a.recentEndpoints | 0, bEp = b.recentEndpoints | 0;
-    if (aEp !== bEp) return bEp - aEp;
-    var aSec = a.recentSecondary | 0, bSec = b.recentSecondary | 0;
-    if (aSec !== bSec) return bSec - aSec;
-    var aV = (a.ctx && a.ctx.vts) || 0, bV = (b.ctx && b.ctx.vts) || 0;
-    if (aV !== bV) return bV - aV;
+    var aVt = (a.ctx && typeof a.ctx.flowVt === "number") ? a.ctx.flowVt : 0;
+    var bVt = (b.ctx && typeof b.ctx.flowVt === "number") ? b.ctx.flowVt : 0;
+    if (aVt !== bVt) return aVt - bVt;   // smaller virtual time served first
     return a.ts - b.ts;
+  },
+
+  /* WFQ weight for a fiber = its EXPECTED MARGINAL VALUE toward the goals
+     (value of information), estimated OPTIMISTICALLY under uncertainty so
+     under-sampled work is explored, not starved. Higher weight ⇒
+     proportionally more CPU. Composed of:
+       - a FAIRNESS FLOOR of 1: every flow, even one currently producing
+         nothing, has weight ≥ 1 so its virtual time still advances at a
+         bounded rate and it is never permanently starved (the WFQ analogue of
+         the old anti-starvation tier, but giving a real proportional share
+         rather than only tiebreak crumbs).
+       - a +1 HOST-EDGE-REACH bonus when the fiber's current pc can reach a
+         host edge (engine `@Y reaches` bit): such a fiber is positioned to
+         emit an endpoint/sink imminently, so it earns more CPU NOW.
+       - the observed ENDPOINT RATE (`ctx.epRate`, an EWMA of @H emissions per
+         resume maintained by the scheduler): the load-bearing EXPLOIT signal —
+         a flow actively surfacing endpoints (goal #1) gets CPU in proportion
+         to how fast it is surfacing them, and decays back toward the floor as
+         it goes flat (so a page that has surfaced its surface yields CPU to a
+         fresher one).
+       - the UCB1 EXPLORE bonus (`ctx.exploreBonus` = √(2·ln N / nᵢ), N = total
+         resumes, nᵢ = this flow's resumes; computed by the scheduler): the
+         optimism-under-uncertainty term that makes a NEWLY-OPENED or rarely-
+         run page the HIGHEST-value thing to sample (its productivity is
+         unknown — exactly what we should explore), then SHRINKS as the page is
+         sampled so weight converges to its true observed rate. This is what
+         turns WFQ from greedy-exploit into productive continuous-session
+         learning: a fresh tab gets a burst to discover its surface instead of
+         languishing at the floor until it happens to emit. The √ and ln are
+         the canonical UCB1 confidence radius, not tunable coverage magic —
+         order only, never coverage. */
+  flowWeight: function (entry) {
+    var reaches = (entry && (entry.reaches || (entry.ctx && entry.ctx.lastReaches))) ? 1 : 0;
+    var epRate = (entry && entry.ctx && typeof entry.ctx.epRate === "number" && entry.ctx.epRate > 0) ? entry.ctx.epRate : 0;
+    var explore = (entry && entry.ctx && typeof entry.ctx.exploreBonus === "number" && entry.ctx.exploreBonus > 0) ? entry.ctx.exploreBonus : 0;
+    return 1 + reaches + epRate + explore;
   },
 
   /* BFS schedule comparator. Negative result = a wins. Input shape:

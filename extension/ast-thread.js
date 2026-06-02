@@ -1028,6 +1028,19 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     totalEmissions: 0,
     emissionsAtLastYield: 0,
     lastResumed: Date.now(),
+    /* WEIGHTED FAIR QUEUEING (CPU allocation across concurrent page fibers).
+       flowVt = this flow's accumulated VIRTUAL TIME; the scheduler picks the
+       runnable fiber with the SMALLEST flowVt, and after a fiber runs a slice
+       of wall-time `c` advances its flowVt by c / weight. Higher weight ⇒
+       slower virtual-time growth ⇒ MORE real CPU — so CPU share is
+       proportional to weight (= marginal value). A fresh flow starts at the
+       current system virtual time (self._sysVt), NOT 0, so a newly-opened tab
+       can't hoard CPU "catching up" from virtual time it was never present
+       for (Start-time Fair Queueing's max-with-system-V rule). epRate = an
+       EWMA of endpoints produced per resume slice = the observed marginal
+       value that feeds the weight. */
+    flowVt: (typeof self._sysVt === "number" ? self._sysVt : 0),
+    epRate: 0,
   };
   async function freshInstance() {
     instAborted = false;
@@ -1582,6 +1595,13 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // queued schedule: the X-Force path explosion that OOM-crashed github.
     if (job && job.key && coveredEdges.has(job.key + ":1")) continue;
     runs++;
+    /* BFS throughput telemetry (observability): runs done, schedules still
+       queued, endpoints found so far. The deep grind (where most unused-API
+       endpoints come from) only starts AFTER this loop drains, so on a massive
+       bundle a queue that GROWS while endpoints stay flat = X-Force path
+       explosion starving the deep grind — the signal that tells "converging
+       slowly" from "exploding". Order-only diagnostic. */
+    self._bfsState = { runs: runs, workLen: work.length, eps: methods.size, sinks: securitySinks.length };
     var _runT0 = Date.now();
     stdout.length = 0;
     stderr.length = 0;
@@ -1795,6 +1815,18 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   self._lastDeepStats = _deepStats;   // liveness: expose the in-flight grind's steps/total/rem to the heartbeat
   if (deep && m) {
     var _dkey = _deepKey(code);
+    /* Register this LIVE grind in the SAME in-flight set the resume launcher
+       (_resumeIncompleteDeep) uses, keyed by the same _deepKey(code). Without
+       this, a live grind (which persists its prog record with rem>0 below) is
+       INVISIBLE to _resumeIncompleteDeep, so the resume launcher could pick the
+       very key being live-ground and spawn a DUPLICATE grind in a second wasm
+       instance — double-driving the same orphans + breaking the concurrency
+       cap (which must bound TOTAL live instances = reviews + resumes). The
+       finally guarantees removal on every exit (normal, break, or an uncaught
+       throw from freshInstance). */
+    if (!self._deepGrindRunning) self._deepGrindRunning = new Set();
+    self._deepGrindRunning.add(_dkey);
+    try {
     var _dcur = _resume ? resumeCursor : 0;
     var _lastPartialN = methods.size, _lastPartialSinks = securitySinks.length;
     var _lastProgTs = 0;              // last time the live deep-grind progress was streamed (UI cadence, not a learning bound)
@@ -1871,6 +1903,17 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             catch (e) {
               if (!self._whyRecords) self._whyRecords = [];
               self._whyRecords.push({ phase: "dstart_parse_throw", line: _ln.slice(0, 200), err: String(e && e.message || e) });
+            }
+          } else if (_ln.slice(0, 5) === "@WHY ") {
+            // Deep-grind @WHY (spin_nonterminating, etc.) on STDOUT — capture into
+            // _whyRecords so the engine's grind-phase diagnostics are observable
+            // from the harness (were DROPPED: only @H/@DD/@DS were extracted, so a
+            // stdout @WHY never surfaced — the gap that blocked diagnosing the
+            // multi-orphan net:0 residual). Capped to avoid a re-arming-probe flood.
+            if (!self._whyRecords) self._whyRecords = [];
+            if (self._whyRecords.length < 300) {
+              try { self._whyRecords.push(JSON.parse(_ln.slice(5))); }
+              catch (e) { self._whyRecords.push({ phase: "why_raw", line: _ln.slice(0, 200) }); }
             }
           } else if (_ln.slice(0, 8) === "@DTOTAL ") {
             // Residue size emitted at grind start → live `total` so the popup
@@ -2001,6 +2044,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
          before this tail; for now the same page proceeds head→tail. */
       if (_headPhase && !_dpCallThrew && !instAborted) {
         _headPhase = false;
+        /* HEAD done = the page's endpoint-surfacing work is finished; only the
+           low-value completeness tail remains. Drop this flow's strict
+           active-focus override (flowCmp reads ctx.headDone) so its tail
+           competes by plain WFQ — a freshly-opened background tab's high-VOI
+           head can now preempt this tail instead of waiting for it. */
+        huntContext.headDone = true;
         if (_drem === 0) { _grindDone = true; break; }   // head WAS the whole residue (small page)
         continue;   // run the tail on the same instance
       }
@@ -2069,6 +2118,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         if (!self._whyRecords) self._whyRecords = [];
         self._whyRecords.push({ phase: "idb_del_smaps_throw", n: _smChunksTouched.size, err: String(e && e.message || e) });
       }
+    }
+    } finally {
+      self._deepGrindRunning.delete(_dkey);
     }
   }
 
@@ -2152,6 +2204,11 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   });
 
   _deepStats.deepMs = (Date.now() - t0) - _bfsMs;   // deep-grind phase (total minus the BFS phase)
+  /* Observability: expose the discovered chunk/script URLs (incl. the SSR
+     <script src> now emitted by hostedge.js) so the harness can see whether
+     a missing endpoint's defining script was DISCOVERED — the first layer of
+     the chunk pipeline (discover → safeFetch → re-run → define → upgrade). */
+  self._lastChunkUrls = chunkUrls ? Array.from(chunkUrls) : [];
   return {
     fetchCallSites: fetchCallSites,
     securitySinks: securitySinks,
@@ -2230,8 +2287,13 @@ self.__gateRun = function (msg, done) {
       why: why.slice(-12)
     } });
   }, _gDeadline);
+  // resumeCursor MUST be undefined (NOT 0): _resume = (resumeCursor >= 0), so a
+  // literal 0 makes _resume=true ⇒ `work=[]` ⇒ the boot+BFS schedule loop is
+  // skipped entirely, and a non-deep fixture then runs NOTHING and reports 0
+  // endpoints/sinks (the silent gate-wide false-0). A fresh gate is not a
+  // resume — mirror the live analysis call, which passes undefined.
   forcedAnalyze(String(msg.code || ""), msg.sourceUrl || ("fixture://" + (msg.name || "gate")),
-                null, (typeof msg.pageHtml === "string" && msg.pageHtml) ? msg.pageHtml : null, false, !!msg.deep, 0, 0, null, null, null)
+                null, (typeof msg.pageHtml === "string" && msg.pageHtml) ? msg.pageHtml : null, false, !!msg.deep, undefined, undefined, null, null, null)
     .then(function (r) {
       var why = (self._whyRecords || []).slice(_gWhy0);
       var spins = why.filter(function (w) { return w.phase === "spin_nonterminating"; });
@@ -2241,10 +2303,27 @@ self.__gateRun = function (msg, done) {
         gate: msg.name || "(fixture)", converged: true, ms: Date.now() - _gStart,
         dirtyWorker: _gDirty,   // if true, a prior fixture contaminated this — re-run after `harness restart` to trust it
         endpoints: eps.map(function (e) { return (e.method || "?") + " " + (e.url || e.path || "?"); }),
+        // Per-endpoint param/body detail — so a gate can assert example-value DEPTH
+        // (the value: param KEYS + values), not just that the URL was found. Each
+        // param shows name@location and =value (or (opq) for an opaque/keyless one).
+        endpointsDetail: eps.slice(0, 8).map(function (e) {
+          var ps = (e.params || []).map(function (p) {
+            var vv = p.validValues || (p.examples && typeof p.examples.forEach === "function" ? Array.from(p.examples) : (p.examples || []));
+            return p.name + (vv && vv.length ? "=" + vv.slice(0, 4).map(String).join("|").slice(0, 30) : "(opaque)");
+          });
+          return (e.method || "?") + " " + (e.url || e.path || "?") + (ps.length ? "  {" + ps.join(", ") + "}" : "  {no-params}");
+        }),
         endpointCount: eps.length,
         sinkCount: sinks.length,
         sinks: sinks.map(function (s) { return (s.sink || "?") + (s.verdict ? "=" + s.verdict : ""); }),
         resolverErrors: (r && r.resolverErrors) ? r.resolverErrors.length : 0,
+        // WHICH targets went opaque + WHERE (the call-site loc) — actionable like
+        // the netdiff stack-oracle: a reached-but-opaque endpoint names the fn to
+        // drive through its real instance (vs a not-reached one absent here).
+        resolverErrorsList: (r && r.resolverErrors ? r.resolverErrors : []).slice(0, 12).map(function (re) {
+          var u = ""; try { var m = (re.message || "").match(/\{.*\}$/); if (m) { var o = JSON.parse(m[0]); u = (o.method || "?") + " " + (o.url || "?"); } } catch (e) {}
+          return (u || (re.message || "").slice(0, 60)) + (re.loc ? "  @" + String(re.loc.file || "?").split("/").pop() + ":" + re.loc.line : "");
+        }),
         structuralCandidates: (r && r.structuralCandidates) ? r.structuralCandidates.length : 0,
         spinCount: spins.length,
         spinLoops: spins.slice(-5).map(function (w) { return (w.loopFile || w.file || "?") + ":" + (w.loopLine || w.line || 0); })
@@ -2273,6 +2352,12 @@ onmessage = function (e) {
     }
     if (typeof opts.maxWorkers === "number") {
       self._poolMaxWorkers = opts.maxWorkers | 0;
+    }
+    if (typeof opts.grindCap === "number" && opts.grindCap > 0) {
+      // WFQ admission cap: max concurrent grind wasm instances (memory vs
+      // multi-tab breadth). CPU among them is fair-shared by flowCmp's
+      // virtual-time tier regardless of this value.
+      self._grindCap = opts.grindCap | 0;
     }
     return;   // no _id reply expected (broadcast from dispatcher)
   }
@@ -2314,12 +2399,22 @@ onmessage = function (e) {
         reaches: e.reaches,
         recentEmissions: e.recentEmissions,
         ts: e.ts,
+        // WFQ observability: the virtual time + weight inputs the fair-share
+        // pick is based on, so the harness can confirm CPU is split by weight.
+        flowVt: e.ctx && e.ctx.flowVt,
+        epRate: e.ctx && e.ctx.epRate,
+        weight: self._priorityCmp.flowWeight(e),
       };
     });
+    // Per-flow cumulative resume tally (CPU actually granted) so fairness is
+    // verifiable as resumes-proportional-to-weight, not just queue state.
     done({ success: true, result: {
       activePageKey: self._activePageKey || null,
       fiberQ: fq,
       totalSuspended: fq.length,
+      sysVt: self._sysVt || 0,
+      resumeCount: self._resumeCount || 0,
+      resumesByFlow: self._resumesByFlow || {},
     } });
     return;
   }
@@ -2436,7 +2531,18 @@ _yieldMC.port1.onmessage = function () {
   var best = self._priorityCmp.pickFromFiberQueue(self._fiberQ, self._activePageKey);
   if (!best) return;
   self._resumeCount = (self._resumeCount || 0) + 1;   // liveness: # of fiber resumes (forks "not resumed" vs "resumed-but-not-driving")
-  if (best.ctx) best.ctx.lastResumed = Date.now();
+  if (best.ctx) {
+    best.ctx.lastResumed = Date.now();
+    // WFQ system virtual time = the virtual time of the flow now being served.
+    // A flow created LATER inits its flowVt to this (huntContext), so a newly-
+    // opened tab joins at "now" in virtual time and can't hoard CPU catching
+    // up from virtual time it was never present for (SFQ's max-with-V rule).
+    if (typeof best.ctx.flowVt === "number") self._sysVt = best.ctx.flowVt;
+    // Per-flow CPU-grant tally (observability: verify resumes ∝ weight).
+    if (!self._resumesByFlow) self._resumesByFlow = {};
+    var _pk = best.ctx.pageKey || "default";
+    self._resumesByFlow[_pk] = (self._resumesByFlow[_pk] || 0) + 1;
+  }
   best.resolve();
   /* If MORE fibers are still queued, schedule another drain — the
      just-resumed one will run until ITS next yield (op-poll heartbeat or
@@ -2464,6 +2570,48 @@ self._yieldDrain = function (entry) {
     entry.ctx.endpointsAtLastYield = nowEp;
     entry.ctx.secondaryAtLastYield = nowSec;
     entry.ctx.emissionsAtLastYield = nowE;
+    /* WFQ accounting for the slice that just ran (resume → this yield).
+       epRate = EWMA of @H endpoints produced per resume slice — the
+       marginal-value signal that feeds flowWeight. Decay 0.75 keeps ~4
+       slices of memory so a page that just went flat decays toward the floor
+       within a few yields (CPU then flows to a fresher page), while a steadily
+       productive page holds a high rate. Then advance the flow's virtual time
+       by sliceCost / weight: a higher-weight (more productive / host-edge-
+       reaching) flow advances SLOWER ⇒ is picked more ⇒ gets proportionally
+       more CPU. sliceCost is wall-time so the share is CPU-time-proportional,
+       not merely resume-count-proportional. */
+    entry.ctx.epRate = entry.ctx.epRate * 0.75 + entry.recentEndpoints * 0.25;
+    /* UCB1 explore bonus = √(2·ln N / nᵢ): N = total resumes across all flows,
+       nᵢ = this flow's resumes. Large when this flow is under-sampled (a fresh
+       tab nᵢ≈0 ⇒ bonus ≈ √(2 ln N), the highest-VOI thing to run), shrinks as
+       it is sampled ⇒ weight converges to the observed epRate. Recomputed each
+       yield so a never-yet-picked new flow (nᵢ=0) gets the burst on its FIRST
+       yield and isn't starved waiting to be picked. ln is floored at 1 (N<e)
+       so the bonus is finite and positive from the first resume. */
+    var _ni = (self._resumesByFlow && self._resumesByFlow[entry.ctx.pageKey]) || 0;
+    var _ntot = self._resumeCount || 1;
+    entry.ctx.exploreBonus = Math.sqrt(2 * Math.max(1, Math.log(_ntot)) / Math.max(1, _ni));
+    /* Per-flow scheduler telemetry (observability): record each flow's explore
+       bonus at its FIRST yield (smallest nᵢ ⇒ the burst) and the peak, so the
+       UCB explore burst for a fresh background tab is verifiable after the fact
+       (the fiber spends most of its life RUNNING, rarely caught in _fiberQ at a
+       probe instant). Order-only data, never affects coverage. */
+    if (!self._flowSeen) self._flowSeen = {};
+    var _fk = entry.ctx.pageKey || "default";
+    if (!self._flowSeen[_fk]) self._flowSeen[_fk] = { firstExplore: Math.round(entry.ctx.exploreBonus * 100) / 100, firstNtot: _ntot, maxExplore: entry.ctx.exploreBonus };
+    var _fs = self._flowSeen[_fk];
+    if (entry.ctx.exploreBonus > _fs.maxExplore) _fs.maxExplore = entry.ctx.exploreBonus;
+    var _sliceCost = Date.now() - (entry.ctx.lastResumed || Date.now());
+    if (_sliceCost < 0) _sliceCost = 0;
+    var _w = self._priorityCmp.flowWeight(entry);
+    entry.ctx.flowVt = (typeof entry.ctx.flowVt === "number" ? entry.ctx.flowVt : (self._sysVt || 0)) + _sliceCost / _w;
+    /* Cumulative REAL CPU time (ms) granted to each flow — the true fairness
+       metric (resume COUNT misleads: a small bundle does many cheap yields, a
+       big one fewer heavy slices). With WFQ, two flows backlogged at once
+       should accrue cpuMs in proportion to their weights. */
+    if (!self._cpuMsByFlow) self._cpuMsByFlow = {};
+    var _fpk = entry.ctx.pageKey || "default";
+    self._cpuMsByFlow[_fpk] = (self._cpuMsByFlow[_fpk] || 0) + _sliceCost;
   } else {
     entry.reaches = 1;   // unknown context → assume reachable so it gets a fair turn
     entry.recentEndpoints = 0;
@@ -2532,7 +2680,19 @@ async function _resumeIncompleteDeep() {
      across pages are the UI option (cooling vs. throughput) — not the
      default. */
   if (!self._deepGrindRunning) self._deepGrindRunning = new Set();
-  if (self._deepGrindRunning.size > 0) return;
+  /* ADMISSION (WFQ part 1 — memory bound): up to _grindCap concurrent grind
+     instances may be live at once (each wasm instance holds its bundle's
+     ~hundreds-of-MB linear memory + Z3 + Lexbor + JSRuntime, so this caps
+     peak memory). The set contains BOTH live-review grinds (registered in
+     forcedAnalyze's deep block) and resume grinds, so the cap bounds the
+     TOTAL — and a resume never duplicates a key already being live-ground.
+     CPU among the admitted instances is then allocated by WEIGHTED FAIR
+     QUEUEING at the JSPI yield boundary (flowCmp's virtual-time tier), so a
+     flat page still gets a proportional slice instead of only anti-starvation
+     crumbs. Default 2 (active + 1 background); user-growable via
+     SET_ANALYSIS_OPTS.grindCap for more multi-tab breadth (more memory). */
+  var _grindCap = (typeof self._grindCap === "number" && self._grindCap > 0) ? self._grindCap : 2;
+  if (self._deepGrindRunning.size >= _grindCap) return;
   var keys;
   try { keys = await _idbAllKeys("prog"); }
   catch (e) {
@@ -2554,8 +2714,14 @@ async function _resumeIncompleteDeep() {
   }
   if (!withTs.length) return;
   withTs.sort(self._priorityCmp.deepRoundCmp);   // most-recently-visited first
-  var key = withTs[0].k;
-  if (self._deepGrindRunning.has(key)) return;   // race-safety; size check above usually covers it
+  // Pick the highest-priority key NOT already running (concurrent admission:
+  // the top key may already be in flight — live or resume — so scan for the
+  // best not-yet-running one to fill the next cap slot).
+  var key = null;
+  for (var _wi = 0; _wi < withTs.length; _wi++) {
+    if (!self._deepGrindRunning.has(withTs[_wi].k)) { key = withTs[_wi].k; break; }
+  }
+  if (key === null) return;   // every incomplete grind is already running
   var prog = null, codeRec = null;
   try { prog = await _idbGet("prog", key); codeRec = await _idbGet("code", key); }
   catch (e) {
@@ -2573,6 +2739,12 @@ async function _resumeIncompleteDeep() {
     return;
   }
   self._deepGrindRunning.add(key);
+  /* Concurrent fill: this grind suspends at its first JSPI yield, so kick
+     another launch NOW to admit the next page's grind up to _grindCap — they
+     then run as concurrent fibers fair-shared by flowCmp's WFQ virtual-time
+     tier, instead of this one having to finish first. The cap check + not-
+     running scan make the kick idempotent (no-ops when the cap is full). */
+  setTimeout(_resumeIncompleteDeep, 0);
   try {
     var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || [], codeRec.scriptOffsets || null, codeRec.sourceMapScripts || null);
     postMessage({ _resumed: true, sourceUrl: codeRec.sourceUrl || "", response: { success: true, result: result } });
