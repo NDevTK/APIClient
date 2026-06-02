@@ -1595,10 +1595,39 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       var _bff = _btl[_bi].match(/^F (\d+)/); if (_bff) _bfr.push(+_bff[1]);
     }
     if (_bfr.length) { if (!self._whyRecords) self._whyRecords = []; self._whyRecords.push({ phase: "boot_frontiers_unexplored", count: _bfr.length }); }
-    // Module-init opaque branches run during the boot eval, before the image, so
-    // the snapshot can't explore their flip without re-evaluating module-init.
-    // This model does NOT re-boot for them (that re-boot was a fallback dressed
-    // up as "hybrid"); the count above SURFACES them as a known limitation.
+    // Boot-frontier coverage. A top-level `if(opaque){sink/fetch}` runs during the
+    // seed boot eval — BEFORE the snapshot image — so the pure-snapshot BFS can't
+    // flip it (the snapshot images post-boot). Re-boot once per frontier with that
+    // decision flipped (--fe-boot --fe-sched), driving the sink/fetch-bearing arm.
+    // The boot-forced decision PUSHES its predicate into Φ, so the security verdict
+    // is correct (TAINT_REACH for a value-pinning gate `===`, REAL_EXPLOIT for a
+    // bypass) — this only became safe to re-enable once the gated-sink Z3 false-
+    // positive was fixed (fresh exploit solver + UNDEF-gated breakout, quickjs.c).
+    // SINGLE-LEVEL: a frontier revealed only AFTER flipping another (a NESTED boot
+    // gate) is not yet re-explored; the complete form is a boot-frontier BFS that
+    // enqueues each re-boot trace's new frontiers to fixpoint. The boot_frontiers
+    // count above surfaces the residual so the gap is visible, never silent. Boot
+    // frontiers are ~0 on real bundles (host-edge taint is read INSIDE functions,
+    // not at module top level — _idxdocs: 0), so this is inert there.
+    var _rebooted = 0;
+    for (var _fi = 0; _fi < _bfr.length && !instAborted; _fi++) {
+      var _p = _bfr[_fi];
+      var _bs = "";
+      for (var _j = 0; _j < _p; _j++) _bs += (_bd[_j] != null ? _bd[_j] : "0");
+      _bs += (_bd[_p] === "1" ? "0" : "1");
+      stdout.length = 0; stderr.length = 0;
+      try { m.FS.writeFile("/boot.tr", new Uint8Array(0)); } catch (e) {}
+      try { await m.callMain(["--fe-boot", "--fe-sched=" + _bs, "--fe-trace=/boot.tr"].concat(bootArgs)); }
+      catch (e) { if (!self._whyRecords) self._whyRecords = []; self._whyRecords.push({ phase: "reboot_frontier_throw", pos: _p, err: String(e && e.message || e) }); }
+      processStdout();
+      _rebooted++;
+    }
+    if (_rebooted && !instAborted) {
+      stdout.length = 0; stderr.length = 0;
+      try { await m.callMain(["--fe-boot"].concat(bootArgs)); } catch (e) {}
+      var _img2 = (m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null;
+      if (_img2) _img = _img2;
+    }
     return _img;
   }
   if (work.length) _snap = await bootSnapshot();
