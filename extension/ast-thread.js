@@ -2311,7 +2311,8 @@ self.__gateRun = function (msg, done) {
             var vv = p.validValues || (p.examples && typeof p.examples.forEach === "function" ? Array.from(p.examples) : (p.examples || []));
             return p.name + (vv && vv.length ? "=" + vv.slice(0, 4).map(String).join("|").slice(0, 30) : "(opaque)");
           });
-          return (e.method || "?") + " " + (e.url || e.path || "?") + (ps.length ? "  {" + ps.join(", ") + "}" : "  {no-params}");
+          var _loc = e.loc ? ("  @" + String(e.loc.file || "?").split("/").pop() + ":" + e.loc.line + ":" + (e.loc.col || 0)) : "";
+          return (e.method || "?") + " " + (e.url || e.path || "?") + (ps.length ? "  {" + ps.join(", ") + "}" : "  {no-params}") + _loc;
         }),
         endpointCount: eps.length,
         sinkCount: sinks.length,
