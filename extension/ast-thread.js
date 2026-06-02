@@ -1241,6 +1241,8 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // actually uses fixes it.)
   var _pendingSec = null;       // @S waiting for paired @Z verdict (spans yields)
   var _pendingPoC = null;       // @P arriving between @S and @Z (spans yields)
+  var _codeLines = null;        // lazy split of the combined bundle for caught_throw snippet enrichment
+  var _caughtSites = new Set(); // dedup: enrich the snippet once per throw site (a hot site re-emits per drive)
   function processStdout(startIdx) {
     var rh = [];
     var li0 = (typeof startIdx === "number" && startIdx > 0) ? startIdx : 0;
@@ -1256,6 +1258,24 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            it to the popup's diagnostic view. */
         try {
           var why = JSON.parse(line.slice(5));
+          // Enrich a caught_throw (a swallowed exception in a host-edge-reaching
+          // fn — typically a MISSING host/DOM stub the path called as a
+          // function) with the SOURCE at the throw, so the missing capability
+          // is self-identifying without dumpscripts/worker line-mapping
+          // archaeology (the combined `code` lines match the engine's reported
+          // combined line/col). Deduped per site — a hot site re-emits per drive.
+          if (why && why.phase === "caught_throw" && (why.line | 0) > 0 && !why.snippet) {
+            var _cs = (why.file || "") + ":" + why.line + ":" + (why.col || 0);
+            if (!_caughtSites.has(_cs)) {
+              _caughtSites.add(_cs);
+              try {
+                if (!_codeLines) _codeLines = String(code || "").split("\n");
+                var _cl = _codeLines[(why.line | 0) - 1] || "";
+                var _cc = (why.col | 0);
+                why.snippet = _cl.slice(Math.max(0, _cc - 70), _cc + 90);
+              } catch (e2) {}
+            }
+          }
           if (!self._whyRecords) self._whyRecords = [];
           self._whyRecords.push(why);
         } catch (e) {
