@@ -908,7 +908,13 @@ async function cmdNetDiff(args) {
             if (learned.has(k)) continue;
             if (!showAssets && isAsset(r)) { assetFiltered++; continue; }
             // first-party-ish filter unless --all: same registrable-ish host as the page
-            gaps.push({ k, status: r.status, svc: r.service || "" }); tabGaps++;
+            // The bundle call-site that fired this live request (intercept.js
+            // captured new Error().stack, wrapper frames stripped). A gap's
+            // FIRST frame IS the function forced exec failed to drive — turns
+            // "missed URL X" into "missed the path at <fn> that fires X", the
+            // actionable signal for closing the coverage gap (the oracle role).
+            const site = (r.callStack || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
+            gaps.push({ k, status: r.status, svc: r.service || "", site }); tabGaps++;
           }
           byTab.push({ tab: pageUrl.slice(0, 50), gaps: tabGaps });
         }
@@ -938,7 +944,7 @@ async function cmdNetDiff(args) {
       }
       return { learnedCount: learned.size, liveDistinct: seen.size, gapCount: gaps.length,
                assetFiltered: assetFiltered + (showAssets ? " (shown; --assets)" : " (static-asset GETs excluded; --assets to show)"),
-               gaps: gaps.slice(0, 60).map((g) => g.k + (g.status ? " [" + g.status + "]" : "")) };
+               gaps: gaps.slice(0, 60).map((g) => g.k + (g.status ? " [" + g.status + "]" : "") + (g.site ? "  ← " + g.site : "  ← (no stack)")) };
     }, { all, showAssets, unused }).catch((e) => ({ error: String(e && e.message || e) }));
     log(JSON.stringify(out, null, 2));
     log("NOTE: a gap is definitive only when learnstate is `complete` (rem==0); mid-analysis, re-check after.");
