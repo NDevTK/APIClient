@@ -2141,6 +2141,19 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         break;
       }
     }
+    // FINAL drain after the grind loop. The reentrancy guard runs one async
+    // drain at a time and DROPS a request that arrives while a prior drain is
+    // mid-IDB-await. Mid-grind a later yield re-drains the dropped lines, but
+    // the FINAL drain — a SHORT grind converging while a drain is still awaiting
+    // IDB — has no later yield, so it is dropped and the tail's @H is lost (the
+    // cold-ctor arrow re-drive's concrete endpoint vanished this way). An async
+    // drain runs its for-loop + processStdout SYNCHRONOUSLY at invocation and
+    // only awaits AFTER (the IDB put), so an in-flight drain has already
+    // advanced _stdoutCursor past its own lines — a direct synchronous pass
+    // over the unread tail here cannot race the cursor and guarantees the last
+    // @H is learned before the result is built.
+    if (_stdoutCursor < stdout.length) { processStdout(_stdoutCursor); _stdoutCursor = stdout.length; }
+    await _drainDeepStdout();
     huntContext.onYieldDrain = null;
     try { await m.callMain(["--fe-deep-end"]); }
     catch (e) {
