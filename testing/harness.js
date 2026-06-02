@@ -998,15 +998,10 @@ const GATE_MANIFEST = {
   "engine/qjs/_vspread.js":           { endpointCount: 1 },
   "engine/qjs/_orphan_closure.js":    { endpointCount: 2 },
   "engine/qjs/_gql_spread_orphan.js": { endpointCount: 1 },
-  // KNOWN-BROKEN, deliberately NOT asserted here (surfaced, not hidden — this is a
-  // comment, NOT a "knownGap"/allowed-to-fail bypass): _opqctor.js should learn
-  // `GET /api/box-search` via the deep-grind cold-class-ctor construct → arrow
-  // re-drive, but gives 0 through the live harness (it was qjs.exe-only verified).
-  // Narrowed precisely: the arrow IS captured + re-driven with a real instance,
-  // lookup() IS entered with a real `this`, but `return fetch(this.url)` never
-  // reaches the shim's G.fetch. P1 to fix, then add `{ endpoints/path assertions }`.
-  // (project_opqctor_cold_ctor_arrow_redrive.) Adding it here while broken would
-  // turn gate-all red — fix the engine, don't relax the manifest.
+  // Cold class ctor (deep): construct it, re-drive the captured arrow with the real
+  // instance, learn the concrete endpoint. Asserted like any other gate — RED until
+  // the engine is fixed; the manifest is never relaxed to make a broken gate pass.
+  "engine/qjs/_opqctor.js":           { endpointCount: 1, deep: true },
 };
 
 function _gateAllRunOnce(w, code, name, deep, timeoutMs) {
