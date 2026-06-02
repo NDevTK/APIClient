@@ -895,6 +895,26 @@ async function cmdNetDiff(args) {
           learned.add(k); if (!learnedMap.has(k)) learnedMap.set(k, e);
         }
       }
+      // An endpoint with opaque path params is learned as a TEMPLATE
+      // (`/{userLocale}/content-nav/X.json`) — the hole is a structural opaque
+      // param (CLAUDE.md structural learning) and the endpoint IS learned. The
+      // live request carries the concrete segment (`/en-us/...`), so exact-key
+      // membership misses it and the oracle would FALSELY flag a learned
+      // endpoint as a coverage gap (or as unused when it did fire). Match
+      // concrete live URLs against learned templates: each {hole} (literal, or
+      // %7B..%7D after norm()'s URL re-encode) is one path-segment wildcard.
+      const tmplRe = (k) => {
+        if (k.indexOf("{") < 0 && k.indexOf("%7B") < 0 && k.indexOf("%7b") < 0) return null;
+        const src = "^" + k
+          .replace(/%7B[^%/]*%7D/gi, "\x00")
+          .replace(/\{[^}/]*\}/g, "\x00")
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          .replace(/\x00/g, "[^/]+") + "$";
+        try { return new RegExp(src); } catch (e) { return null; }
+      };
+      const learnedTemplates = [];
+      for (const k of learned) { const re = tmplRe(k); if (re) learnedTemplates.push(re); }
+      const matchedByTemplate = (liveKey) => learnedTemplates.some((re) => re.test(liveKey));
       const seen = new Set(), gaps = [], byTab = []; let assetFiltered = 0;
       if (typeof state !== "undefined") {
         for (const [tid, t] of state.tabs) {
@@ -905,7 +925,7 @@ async function cmdNetDiff(args) {
             if (!r.url || !/^https?:/.test(r.url)) continue;
             const k = (r.method || "GET") + " " + norm(r.url);
             if (seen.has(k)) continue; seen.add(k);
-            if (learned.has(k)) continue;
+            if (learned.has(k) || matchedByTemplate(k)) continue;
             if (!showAssets && isAsset(r)) { assetFiltered++; continue; }
             // first-party-ish filter unless --all: same registrable-ish host as the page
             // The bundle call-site that fired this live request (intercept.js
@@ -924,9 +944,12 @@ async function cmdNetDiff(args) {
         // the inverse of gaps): AST-learned endpoints the page never fired, with
         // their example values. source !== ast_analysis means it was learned FROM
         // live traffic (so it DID fire) — exclude those.
+        // A learned TEMPLATE whose hole matched a concrete live URL DID fire —
+        // exclude it from "unused" too (same template-match as the gap side).
+        const liveMatchesTemplate = (k) => { const re = tmplRe(k); if (!re) return false; for (const lk of seen) if (re.test(lk)) return true; return false; };
         const unusedList = [];
         for (const [k, e] of learnedMap) {
-          if (seen.has(k)) continue;
+          if (seen.has(k) || liveMatchesTemplate(k)) continue;
           if (e.source && e.source !== "ast_analysis") continue;
           let ex = "";
           try {
