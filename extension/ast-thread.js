@@ -2347,7 +2347,29 @@ self.__gateRun = function (msg, done) {
         }),
         structuralCandidates: (r && r.structuralCandidates) ? r.structuralCandidates.length : 0,
         spinCount: spins.length,
-        spinLoops: spins.slice(-5).map(function (w) { return (w.loopFile || w.file || "?") + ":" + (w.loopLine || w.line || 0); })
+        spinLoops: spins.slice(-5).map(function (w) { return (w.loopFile || w.file || "?") + ":" + (w.loopLine || w.line || 0); }),
+        // Drive-internals diagnostics from THIS run's @WHY (same worker — no
+        // pool-routing confound that the `worker` command suffers). Surfaces the
+        // frontier/driven signals needed to tell "branch arm not explored" apart
+        // from "branch never emitted a frontier": bootFrontiersUnexplored>0 means
+        // a boot-phase (top-level / __feDriveStatic / __hostDrive-epilogue) opaque
+        // branch the pure-snapshot BFS can't flip; scheduleUncovered>0 means a
+        // drive-phase frontier the BFS hasn't flipped YET; drivenNoFire counts
+        // host-bearing fns directed-driven whose host edge never fired.
+        driveDiag: (function () {
+          var bf = why.filter(function (w) { return w.phase === "boot_frontiers_unexplored"; });
+          var sbd = why.filter(function (w) { return w.phase === "schedule_branch_density"; });
+          var dnf = why.filter(function (w) { return w.phase === "driven_no_fire"; });
+          var sum = function (arr, k) { return arr.reduce(function (a, w) { return a + (w[k] || 0); }, 0); };
+          return {
+            bootFrontiersUnexplored: sum(bf, "count"),
+            scheduleRuns: sbd.length,
+            scheduleFrontiers: sum(sbd, "frontiers"),
+            scheduleUncovered: sum(sbd, "uncoveredFrontiers"),
+            drivenNoFire: dnf.length,
+            why: why.filter(function (w) { return /frontier|driven|density|residue|deep|static/i.test(w.phase || ""); }).slice(-10)
+          };
+        })()
       } });
     })
     .catch(function (err) {
