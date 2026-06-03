@@ -2186,6 +2186,17 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       if (!self._whyRecords) self._whyRecords = [];
       self._whyRecords.push({ phase: "deep_end_throw", err: String(e && e.message || e), instAborted: !!instAborted });
     }
+    // Finalize the remaining count at grind exit (the final drain above fully
+    // populated _driven). Without this, a grind that RAN but never hit the
+    // `@DS rem===0` break — e.g. a page whose whole residue was driven via the
+    // head/value-spread, or whose @DTOTAL was known but the closing @DS lost —
+    // leaves _deepStats.rem at the -1 init, so the heartbeat reports learnstate
+    // "unknown" (the PRE-grind sentinel) forever instead of the honest
+    // "complete"/"stalled". rem is now total−driven (or 0 with total=driven when
+    // the grind completed with no @DTOTAL), so "missing vs still-looking" stays
+    // truthful. Mirrors the live update at the per-drain rem computation.
+    if (_deepStats.total >= 0) _deepStats.rem = Math.max(0, _deepStats.total - _driven.size);
+    else if (_grindDone) { _deepStats.rem = 0; _deepStats.total = _driven.size; }
     if (_grindDone) {
       try { await _idbDel("prog", _dkey); await _idbDel("code", _dkey); }
       catch (e) {
