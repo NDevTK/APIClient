@@ -1013,6 +1013,16 @@ const GATE_MANIFEST = {
   // controls" is a real sink), never silently dropped. H() concretizes the
   // went-opaque record so the call site is visible. Asserts it does not vanish.
   "engine/qjs/_opqurl.js":            { endpointCount: 0, resolverErrorCount: 1 },
+  // Render-cycle: forced exec drives a custom element's connectedCallback fetch
+  // across the four real shapes — eager construction, async (await-gated)
+  // loader, lazy (IntersectionObserver-gated), and JS-injected-by-render-fn.
+  // These were UNASSERTED; locking them in shows the render cycle is NOT the
+  // open frontier the docs imply (the common CE paths all drive) — the residual
+  // github/MS-Learn CE-fetch gaps are narrower edge cases, not "render cycle".
+  "engine/qjs/_ce_construct.js":      { endpointCount: 1, deep: true },
+  "engine/qjs/_ce_async.js":          { endpointCount: 1, deep: true },
+  "engine/qjs/_ce_lazy.js":           { endpointCount: 1, deep: true },
+  "engine/qjs/_ce_inject.js":         { endpointCount: 1, deep: true },
 };
 
 function _gateAllRunOnce(w, code, name, deep, timeoutMs) {
