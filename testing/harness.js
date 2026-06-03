@@ -1023,6 +1023,12 @@ const GATE_MANIFEST = {
   "engine/qjs/_ce_async.js":          { endpointCount: 1, deep: true },
   "engine/qjs/_ce_lazy.js":           { endpointCount: 1, deep: true },
   "engine/qjs/_ce_inject.js":         { endpointCount: 1, deep: true },
+  // Config client constructed DURING the grind (jsll/telemetry & sign-in shape):
+  // a residue init does `new Channel(CONFIG)`, and sendPOST resolves the concrete
+  // collector URL from the real receiver. Asserts the grind-constructed pattern
+  // works AND that the redundant opaque cold-drive @H at the same call site is
+  // deduped away (resolverErrorCount 0, not the noise the H() surface adds).
+  "engine/qjs/_gridrecv.js":          { endpointCount: 1, resolverErrorCount: 0, deep: true },
 };
 
 function _gateAllRunOnce(w, code, name, deep, timeoutMs) {

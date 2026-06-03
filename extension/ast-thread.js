@@ -861,6 +861,18 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         // (BFS emits no @DSTART, so _currentOrphan is null there → no wrong loc).
         if (!_reLoc && self._currentOrphan && typeof self._currentOrphan.line === "number")
           _reLoc = { line: self._currentOrphan.line, column: self._currentOrphan.col, file: self._currentOrphan.file };
+        // Suppress a REDUNDANT opaque resolverError when the SAME call site was
+        // ALSO learned CONCRETELY — a config client driven both cold (opaque
+        // this → opaque URL) and with its real receiver (concrete URL). The
+        // concrete record wins; the opaque is cold-drive residue, not a gap.
+        // Genuine opaque-only sinks (no concrete sibling at this loc) still
+        // surface. (Handles concrete-first; the concrete branch handles the
+        // opaque-first order by retiring the resolverError when it learns one.)
+        if (_reLoc) {
+          var _dupConcrete = false;
+          methods.forEach(function (m) { if (m.loc && m.loc.line === _reLoc.line && m.loc.column === _reLoc.column) _dupConcrete = true; });
+          if (_dupConcrete) return;
+        }
         resolverErrors.push({
           context: kind + " call site (" + (sourceUrl || "bundle") + ")",
           message: opaqueBase
@@ -878,7 +890,16 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var key = method + " " + path;
     var m = methods.get(key);
     if (!m) { m = { method: method, path: path, kind: kind, params: new Map(), loc: null, chain: [], bframes: [], headers: {} }; methods.set(key, m); }
-    if (!m.loc && at) { var s = pickSite(at); m.loc = s.loc; m.chain = s.chain; m.bframes = s.bframes; }
+    if (!m.loc && at) {
+      var s = pickSite(at); m.loc = s.loc; m.chain = s.chain; m.bframes = s.bframes;
+      // A concrete endpoint at this loc RETIRES any earlier opaque resolverError
+      // for the same call site (the cold-drive sibling) — keep the signal, drop
+      // the redundant noise. Genuine opaque-only sinks have no concrete loc here.
+      if (m.loc) for (var _ri = resolverErrors.length - 1; _ri >= 0; _ri--) {
+        var _rl = resolverErrors[_ri].loc;
+        if (_rl && _rl.line === m.loc.line && _rl.column === m.loc.column) resolverErrors.splice(_ri, 1);
+      }
+    }
     // requiredHeaders: the SET the bundle actually attached at the host edge
     // (fetch init.headers / XHR setRequestHeader), per-header literal-vs-opaque
     // provenance preserved ({name:{kind:"literal",value}|{kind:"opaque"}}).
