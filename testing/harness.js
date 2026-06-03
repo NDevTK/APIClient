@@ -1008,6 +1008,11 @@ const GATE_MANIFEST = {
   // concrete collector URL is learned (not the opaque-this @H that gets it
   // excluded from the deep residue). Asserted; RED until the engine is fixed.
   "engine/qjs/_bootsender.js":        { endpointCount: 1, deep: true },
+  // GENUINE attacker-opaque URL (fetch(location.hash)) — no literal exists to
+  // recover, so it must SURFACE as a resolverError ("fetch a URL the attacker
+  // controls" is a real sink), never silently dropped. H() concretizes the
+  // went-opaque record so the call site is visible. Asserts it does not vanish.
+  "engine/qjs/_opqurl.js":            { endpointCount: 0, resolverErrorCount: 1 },
 };
 
 function _gateAllRunOnce(w, code, name, deep, timeoutMs) {
@@ -1029,6 +1034,10 @@ function _gateAllAssert(name, exp, res) {
   const problems = [];
   if (typeof exp.endpointCount === "number" && r.endpointCount !== exp.endpointCount)
     problems.push("endpoints " + r.endpointCount + "≠" + exp.endpointCount);
+  if (typeof exp.resolverErrorCount === "number") {
+    const rerr = (r.resolverErrorsList || []).length;
+    if (rerr !== exp.resolverErrorCount) problems.push("resolverErrors " + rerr + "≠" + exp.resolverErrorCount);
+  }
   if (Array.isArray(exp.sinks)) {
     const a = (r.sinks || []).slice().sort().join(", ");
     const e = exp.sinks.slice().sort().join(", ");
@@ -1064,8 +1073,8 @@ async function cmdGateAll(args) {
       const exp = GATE_MANIFEST[name];
       let res = await _gateAllRunOnce(w, code, path.basename(abs), !!exp.deep, timeoutMs);
       const r = res && res.result;
-      const empty = r && r.endpointCount === 0 && (!r.sinks || r.sinks.length === 0);
-      const wantNonEmpty = (exp.endpointCount > 0) || (Array.isArray(exp.sinks) && exp.sinks.length > 0);
+      const empty = r && r.endpointCount === 0 && (!r.sinks || r.sinks.length === 0) && !((r.resolverErrorsList || []).length);
+      const wantNonEmpty = (exp.endpointCount > 0) || (Array.isArray(exp.sinks) && exp.sinks.length > 0) || (exp.resolverErrorCount > 0);
       if (empty && wantNonEmpty) res = await _gateAllRunOnce(w, code, path.basename(abs), !!exp.deep, timeoutMs);  // post-restart race retry
       results.push(_gateAllAssert(name, exp, res));
     }
