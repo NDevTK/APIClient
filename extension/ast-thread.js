@@ -1883,6 +1883,13 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     combinedKB: Math.round((code ? code.length : 0) / 1024),
     hasPreheatSrc: !!(code && code.indexOf("issues/preheat/index") >= 0) };
   self._lastDeepStats = _deepStats;   // liveness: expose the in-flight grind's steps/total/rem to the heartbeat
+  // Per-page liveness: with _grindCap=2 two grinds share _lastDeepStats (last to
+  // update wins), so a learnstate read for the ACTIVE page can show the OTHER
+  // page's counters (e.g. github read returning MS Learn's total:14411 while both
+  // grind concurrently). Index by pageKey so _learningState reports the active
+  // page's own grind, not whichever updated _lastDeepStats last.
+  if (!self._deepStatsByPage) self._deepStatsByPage = {};
+  self._deepStatsByPage[String(sourceUrl || "").split("#")[0]] = _deepStats;
   if (deep && m) {
     var _dkey = _deepKey(code);
     /* Register this LIVE grind in the SAME in-flight set the resume launcher
@@ -2808,7 +2815,10 @@ function _learningState() {
   // uses the same one) so the harness verdict and the user-facing status never
   // drift on what "complete"/"analyzing"/"stalled" mean. This just gathers the
   // worker-local counters and hands them off.
-  var d = self._lastDeepStats || {};
+  // Prefer the ACTIVE page's own grind counters over the global last-updated
+  // ones (two grinds run concurrently at _grindCap=2), so the "missing vs
+  // still-looking" verdict reflects the page the harness/popup is asking about.
+  var d = (self._activePageKey && self._deepStatsByPage && self._deepStatsByPage[self._activePageKey]) || self._lastDeepStats || {};
   var progressTs = self._lastGrindProgressTs || 0;
   return self.LearnState.learningStateOf({
     rem: (typeof d.rem === "number") ? d.rem : -1,
