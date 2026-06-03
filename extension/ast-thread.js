@@ -2326,119 +2326,6 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   return _fr;
 }
 
-/* Chrome-only gate runner (the Chrome replacement for the banned
-   `node qjs_wasm.js <fixture>`): run ONE fixture's code through the REAL
-   worker's forcedAnalyze (live JSPI scheduler + safeFetch + Chrome crypto —
-   the actual learning system, not the node CLI's crippled host) and resolve
-   a COMPACT request/response summary via `done`. Exposed on self so the
-   harness `gate` command can call it directly (w.evaluate) with a local
-   done. A fixture is a synthetic INPUT to the real target, not an unrelated
-   target. `deep:true` exercises the deep-grind orphan drive (where opaque
-   loops spin live). A wall-clock guard surfaces a hang WITH the spin
-   telemetry (loopFile:line) instead of blocking the harness — the gate
-   FIXTURE asserts termination; the engine itself is never time-bounded
-   (a test-harness deadline, not an analysis cap). */
-self.__gateRun = function (msg, done) {
-  var _gWhy0 = (self._whyRecords || []).length;
-  /* Dirty-worker guard: a PRIOR gate fixture that overflowed/didn't terminate
-     leaves the worker mid-recycle (a running grind, or accumulated
-     deep_callmain_throw), which CONTAMINATES this run — a later fixture
-     falsely shows converged:false/throws. Capture the pre-run state so the
-     result is FLAGGED untrustworthy rather than silently believed (the
-     methodology error that wasted a turn: concluding "_opqrec overflows" from
-     a contaminated run). The harness `gate` command should `restart` when
-     dirtyWorker is set. */
-  var _gPriorThrows = (self._whyRecords || []).filter(function (w) { return w.phase === "deep_callmain_throw"; }).length;
-  var _gPriorRunning = self._deepGrindRunning ? self._deepGrindRunning.size : 0;
-  var _gDirty = (_gPriorThrows > 0) || (_gPriorRunning > 0);
-  var _gDeadline = (typeof msg.timeoutMs === "number" ? msg.timeoutMs : 30000);
-  var _gStart = Date.now();
-  var _gTimer = null, _gDone = false;
-  var _finishGate = function (payload) {
-    if (_gDone) return; _gDone = true;
-    if (_gTimer) { clearTimeout(_gTimer); _gTimer = null; }
-    done(payload);
-  };
-  _gTimer = setTimeout(function () {
-    var why = (self._whyRecords || []).slice(_gWhy0);
-    var spins = why.filter(function (w) { return w.phase === "spin_nonterminating"; });
-    _finishGate({ success: true, result: {
-      gate: msg.name || "(fixture)", converged: false, ms: Date.now() - _gStart,
-      dirtyWorker: _gDirty,   // prior overflow/running grind contaminated this run — restart + re-gate
-      spinCount: spins.length,
-      spinLoops: spins.slice(-5).map(function (w) { return (w.loopFile || w.file || "?") + ":" + (w.loopLine || w.line || 0); }),
-      why: why.slice(-12)
-    } });
-  }, _gDeadline);
-  // resumeCursor MUST be undefined (NOT 0): _resume = (resumeCursor >= 0), so a
-  // literal 0 makes _resume=true ⇒ `work=[]` ⇒ the boot+BFS schedule loop is
-  // skipped entirely, and a non-deep fixture then runs NOTHING and reports 0
-  // endpoints/sinks (the silent gate-wide false-0). A fresh gate is not a
-  // resume — mirror the live analysis call, which passes undefined.
-  forcedAnalyze(String(msg.code || ""), msg.sourceUrl || ("fixture://" + (msg.name || "gate")),
-                null, (typeof msg.pageHtml === "string" && msg.pageHtml) ? msg.pageHtml : null, false, !!msg.deep, undefined, undefined, null, null, null)
-    .then(function (r) {
-      var why = (self._whyRecords || []).slice(_gWhy0);
-      var spins = why.filter(function (w) { return w.phase === "spin_nonterminating"; });
-      var eps = (r && r.fetchCallSites) || [];
-      var sinks = (r && r.securitySinks) || [];
-      _finishGate({ success: true, result: {
-        gate: msg.name || "(fixture)", converged: true, ms: Date.now() - _gStart,
-        dirtyWorker: _gDirty,   // if true, a prior fixture contaminated this — re-run after `harness restart` to trust it
-        endpoints: eps.map(function (e) { return (e.method || "?") + " " + (e.url || e.path || "?"); }),
-        // Per-endpoint param/body detail — so a gate can assert example-value DEPTH
-        // (the value: param KEYS + values), not just that the URL was found. Each
-        // param shows name@location and =value (or (opq) for an opaque/keyless one).
-        endpointsDetail: eps.slice(0, 8).map(function (e) {
-          var ps = (e.params || []).map(function (p) {
-            var vv = p.validValues || (p.examples && typeof p.examples.forEach === "function" ? Array.from(p.examples) : (p.examples || []));
-            return p.name + (vv && vv.length ? "=" + vv.slice(0, 4).map(String).join("|").slice(0, 30) : "(opaque)");
-          });
-          var _loc = e.loc ? ("  @" + String(e.loc.file || "?").split("/").pop() + ":" + e.loc.line + ":" + (e.loc.col || 0)) : "";
-          return (e.method || "?") + " " + (e.url || e.path || "?") + (ps.length ? "  {" + ps.join(", ") + "}" : "  {no-params}") + _loc;
-        }),
-        endpointCount: eps.length,
-        sinkCount: sinks.length,
-        sinks: sinks.map(function (s) { return (s.sink || "?") + (s.verdict ? "=" + s.verdict : ""); }),
-        resolverErrors: (r && r.resolverErrors) ? r.resolverErrors.length : 0,
-        // WHICH targets went opaque + WHERE (the call-site loc) — actionable like
-        // the netdiff stack-oracle: a reached-but-opaque endpoint names the fn to
-        // drive through its real instance (vs a not-reached one absent here).
-        resolverErrorsList: (r && r.resolverErrors ? r.resolverErrors : []).slice(0, 12).map(function (re) {
-          var u = ""; try { var m = (re.message || "").match(/\{.*\}$/); if (m) { var o = JSON.parse(m[0]); u = (o.method || "?") + " " + (o.url || "?"); } } catch (e) {}
-          return (u || (re.message || "").slice(0, 60)) + (re.loc ? "  @" + String(re.loc.file || "?").split("/").pop() + ":" + re.loc.line : "");
-        }),
-        structuralCandidates: (r && r.structuralCandidates) ? r.structuralCandidates.length : 0,
-        spinCount: spins.length,
-        spinLoops: spins.slice(-5).map(function (w) { return (w.loopFile || w.file || "?") + ":" + (w.loopLine || w.line || 0); }),
-        // Drive-internals diagnostics from THIS run's @WHY (same worker — no
-        // pool-routing confound that the `worker` command suffers). Surfaces the
-        // frontier/driven signals needed to tell "branch arm not explored" apart
-        // from "branch never emitted a frontier": bootFrontiersUnexplored>0 means
-        // a boot-phase (top-level / __feDriveStatic / __hostDrive-epilogue) opaque
-        // branch the pure-snapshot BFS can't flip; scheduleUncovered>0 means a
-        // drive-phase frontier the BFS hasn't flipped YET; drivenNoFire counts
-        // host-bearing fns directed-driven whose host edge never fired.
-        driveDiag: (function () {
-          var bf = why.filter(function (w) { return w.phase === "boot_frontiers_unexplored"; });
-          var sbd = why.filter(function (w) { return w.phase === "schedule_branch_density"; });
-          var dnf = why.filter(function (w) { return w.phase === "driven_no_fire"; });
-          var sum = function (arr, k) { return arr.reduce(function (a, w) { return a + (w[k] || 0); }, 0); };
-          return {
-            bootFrontiersUnexplored: sum(bf, "count"),
-            scheduleRuns: sbd.length,
-            scheduleFrontiers: sum(sbd, "frontiers"),
-            scheduleUncovered: sum(sbd, "uncoveredFrontiers"),
-            drivenNoFire: dnf.length,
-            why: why.filter(function (w) { return /frontier|driven|density|residue|deep|static/i.test(w.phase || ""); }).slice(-10)
-          };
-        })()
-      } });
-    })
-    .catch(function (err) {
-      _finishGate({ success: false, error: (err && err.message) || String(err), gate: msg.name || "(fixture)" });
-    });
-};
 
 onmessage = function (e) {
   var id = e.data._id;
@@ -2572,8 +2459,6 @@ onmessage = function (e) {
     })).then(function (results) { done({ success: true, result: results }); });
     return;
   }
-
-  if (msg.type === "AST_GATE") { self.__gateRun(msg, done); return; }
 
   var response;
   if (msg.type === "AST_BUILD_DEFINITION_MAP") {
