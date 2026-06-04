@@ -351,6 +351,12 @@ function buildPageDomSrc(scriptUrls) {
 
 async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, scriptOffsets, sourceMapScripts) {
   var t0 = Date.now();
+  // Assign the QuickJS-WASM analysis its PAGE ORIGIN so safeFetch (host-edge
+  // fetches the bundle drives) applies normal origin-relative web rules: a
+  // localhost page may reach localhost, a public page may not reach the user's
+  // private network. One page per worker instance, so this self-global is the
+  // analysis's principal for the whole grind.
+  if (typeof self !== "undefined") self.__sfPageOrigin = sourceUrl || "";
   // PROPER taint TRACE from the engine's psi term (the data-flow QuickJS
   // computed), NOT the @S call-STACK. The popup's _extract*FromTaintPath helpers
   // expect data-flow hops {kind:"source"|"member"|"call-arg", desc} — that IS

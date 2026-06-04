@@ -4383,23 +4383,6 @@ function _scriptBufferDecrementPending(tabId, buf) {
   }
 }
 
-// SSRF guard for the cookieless background script-fetch. host_perms
-// <all_urls> + no-CORS read means a hostile <script src> could point
-// at loopback / link-local / RFC1918 / cloud-metadata; real CDN-hosted
-// JS is always public http(s), so this costs nothing in usage while
-// removing a confused-deputy capability analysis never needs. NOT a
-// same-origin or content-type restriction (both wrong here).
-function _isPublicScriptUrl(u) {
-  var p;
-  try { p = new URL(u); } catch (e) { return false; }
-  if (p.protocol !== "http:" && p.protocol !== "https:") return false;
-  var h = p.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h === "0.0.0.0" || h === "::1" || h.endsWith(".local") || h.endsWith(".localhost")) return false;
-  if (/^127\./.test(h) || /^169\.254\./.test(h) || /^10\./.test(h) ||
-      /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
-  if (/^(::1|fe80:|fc[0-9a-f][0-9a-f]:|fd[0-9a-f][0-9a-f]:|::ffff:(127|10|192\.168|169\.254))/i.test(h)) return false;
-  return true;
-}
 
 // CORB/ORB enforcement for the CORS-bypassing extension fetch. A
 // hostile page can point <script src> at a cross-origin victim
@@ -4449,10 +4432,8 @@ function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageUrl) {
 }
 
 function _fetchAndBufferScript(tabId, scriptUrl, pageUrl, order) {
-  if (!_isPublicScriptUrl(scriptUrl)) {
-    console.debug("[AST:buffer] Skipping non-public script URL (SSRF guard): %s", scriptUrl);
-    return;
-  }
+  // safeFetch is the single chokepoint: it rejects non-public/private hosts
+  // (SSRF) and non-http(s) schemes, so a blocked URL returns {ok:false} below.
   // Check if already buffered
   var buf = _scriptBuffers.get(tabId);
   if (buf) {
@@ -4467,7 +4448,7 @@ function _fetchAndBufferScript(tabId, scriptUrl, pageUrl, order) {
   // this fetch to complete (or fail) before firing analysis.
   buf.pending++;
 
-  safeFetch(scriptUrl).then(function(resp) {
+  safeFetch(scriptUrl, { pageUrl: pageUrl }).then(function(resp) {
     if (!resp.ok) {
       console.debug("[AST:buffer] Fetch failed for %s: %d %s", scriptUrl, resp.status, resp.statusText);
       _scriptBufferDecrementPending(tabId, buf);
@@ -5081,12 +5062,18 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     combined += code;
   }
 
-  // Determine source URL for the combined analysis (use tab URL or first script URL)
+  // Source URL for the combined analysis. SECURITY: this becomes the analysis
+  // PRINCIPAL — safeFetch's origin-relative SSRF origin (self.__sfPageOrigin in
+  // the worker) AND window.location. It MUST derive only from the browser-
+  // provided sender.tab.url (captured into _tabMeta.url / buf.pageUrl in
+  // handleContentMessage), NEVER a content-script-supplied value (msg.url ->
+  // scripts[0].url) — else a hostile page could claim a localhost origin to
+  // defeat the SSRF guard. No untrusted fallback: unknown origin leaves tabUrl ""
+  // -> safeFetch's safe default (block private) + a placeholder window.location.
   var tabUrl = "";
   var meta = _tabMeta.get(tabId);
   if (meta && meta.url) tabUrl = meta.url;
   else if (buf.pageUrl) tabUrl = buf.pageUrl;
-  else if (scripts[0].url) tabUrl = scripts[0].url;
 
   // Persist the resume metadata (combined→chunk line map + chunk source-map
   // URLs) BEFORE the long deep grind, not after. The resume path is exactly the
@@ -6545,10 +6532,10 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         }
       }
 
-      // Re-fetch the script (extension has <all_urls>) — same SSRF
-      // guard as the buffering path: public http(s) only.
-      if (!_isPublicScriptUrl(scriptUrl)) { sendResponse({ error: "blocked: non-public script URL" }); return; }
-      safeFetch(scriptUrl).then(function(r) {
+      // Re-fetch the script (extension has <all_urls>). safeFetch is the single
+      // chokepoint — it rejects private/non-public hosts (SSRF) and bad schemes,
+      // surfacing as !r.ok below; no separate guard here.
+      safeFetch(scriptUrl, { pageUrl: _slPageUrl }).then(function(r) {
         if (!r.ok) throw new Error(r.status + " " + r.statusText);
         return r.body;
       }).then(function(code) {

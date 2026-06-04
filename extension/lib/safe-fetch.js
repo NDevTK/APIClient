@@ -12,6 +12,16 @@
 //   • HTTP(S) only     — scheme must be http:/https:; file:/data:/blob:/chrome-
 //                        extension:/etc. are rejected so a crafted URL can't read
 //                        local/extension resources.
+//   • origin-relative  — the analyzer acts with the analyzed PAGE's origin
+//     SSRF guard         (opts.pageUrl, else the context's self.__sfPageOrigin —
+//                        the QuickJS-WASM-assigned page origin). NORMAL web rules:
+//                        a page may load cross-origin PUBLIC JS (CDN/imports) AND
+//                        a localhost/intranet page may fetch its OWN private
+//                        network (localhost->localhost). The ONLY thing blocked is
+//                        a PUBLIC page reaching the user's PRIVATE network via the
+//                        extension's host perms (confused-deputy). Replaces a
+//                        duplicated _isPublicScriptUrl that also left source-map/
+//                        discovery fetches unprotected.
 //
 // This is a DIRECT fetch from the offscreen document or its Web Worker — there is
 // NO service-worker relay. crossOriginIsolated / COEP `require-corp` does NOT block
@@ -24,6 +34,20 @@
 // (text) } — NOT a Response — so it is identical in the offscreen document and the
 // Worker. Loaded in both: offscreen-brain.js via <script> (ast-worker.html) and
 // ast-thread.js via importScripts.
+// Private/loopback/link-local classification (RFC1918 + loopback + IPv6 ULA/LL)
+// for the origin-relative SSRF rule: a request is blocked ONLY when the TARGET is
+// private but the PAGE origin is not — a public page reaching the intranet.
+// localhost->localhost and any->public are allowed (normal web rules).
+function _isPrivateHost(host) {
+  if (!host) return false;
+  host = String(host).toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "0.0.0.0" || host === "::1" ||
+    host.endsWith(".local") || host.endsWith(".localhost") ||
+    /^127\./.test(host) || /^169\.254\./.test(host) || /^10\./.test(host) ||
+    /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^(::1|fe80:|fc[0-9a-f][0-9a-f]:|fd[0-9a-f][0-9a-f]:|::ffff:(127|10|192\.168|169\.254))/i.test(host);
+}
+
 async function safeFetch(url, opts) {
   opts = opts || {};
   var parsed;
@@ -31,6 +55,18 @@ async function safeFetch(url, opts) {
   catch (e) { return { ok: false, status: 0, statusText: "bad-url", headers: {}, body: "" }; }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
     return { ok: false, status: 0, statusText: "blocked-scheme:" + parsed.protocol, headers: {}, body: "" };
+  // Origin-relative SSRF (see header). Block a PRIVATE target ONLY when the
+  // analyzed page's origin is not itself private — a public page must not use the
+  // extension's host perms to reach the user's localhost/intranet. Page origin =
+  // opts.pageUrl, else the context's self.__sfPageOrigin (set per page by the
+  // worker/offscreen). Unknown page origin -> treated as public -> blocked (safe
+  // default). localhost->localhost and any->public pass.
+  if (_isPrivateHost(parsed.hostname)) {
+    var _po = opts.pageUrl || (typeof self !== "undefined" && self.__sfPageOrigin) || "";
+    var _ph = ""; try { if (_po) _ph = new URL(_po).hostname; } catch (e) {}
+    if (!_isPrivateHost(_ph))
+      return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {}, body: "" };
+  }
   var init = { method: "GET", credentials: "omit", redirect: "follow" };
   // Analyzer probe headers only (e.g. discovery's X-Goog-Api-Key / X-Http-Method-
   // Override). Never auth/cookies — credentials are omitted above regardless.
