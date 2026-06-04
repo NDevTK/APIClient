@@ -4863,6 +4863,12 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
         buf.scripts.push({ url: rr.u, code: rr.body, order: ++maxOrder });
         added++;
         _cdiag.fetchedOk++;
+      } else if (rr.corb) {
+        // A discovered import dropped because the cross-origin response wasn't
+        // JS-typed — surface it distinctly (not lumped into fetch failures) so a
+        // CORB-dropped chunk is observable, never a silent coverage loss.
+        _cdiag.corbBlocked = (_cdiag.corbBlocked || 0) + 1;
+        console.debug("[AST:chunks] CORB-blocked non-JS import %s", rr.u);
       } else {
         _cdiag.fetchFailed++;
         console.debug("[AST:chunks] fetch failed %s: %s", rr.u, rr.err || "not-ok/empty");
