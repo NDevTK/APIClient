@@ -4394,6 +4394,10 @@ function _scriptBufferDecrementPending(tabId, buf) {
 // the single chokepoint, so every code-loader gets it and a new one can't forget
 // it (the chunk path previously had none). See lib/safe-fetch.js _corbAllowsScript.
 
+// @security-contract  LOADER: external <script src>
+//   loads:    JAVASCRIPT (executed as code)          quickjs-control: YES
+//   enforced: safeFetch(as:"script") -> CORB (cross-origin must be JS-typed) +
+//             origin-relative SSRF; principal = the page's sender.tab.url (pageUrl).
 function _fetchAndBufferScript(tabId, scriptUrl, pageUrl, order) {
   // safeFetch is the single chokepoint: it rejects non-public/private hosts
   // (SSRF) and non-http(s) schemes, so a blocked URL returns {ok:false} below.
@@ -4692,6 +4696,11 @@ const _analysisInflight = new Set();
 // Folds the discovered chunks into the combined set and re-analyses so their
 // endpoints are learned. Bounded: a transitive fixpoint chases the whole
 // ~700-chunk graph; one round is the directly-lazy surface.
+// @security-contract  LOADER: lazy import()/chunk (chunkUrls are bundle-DISCOVERED = untrusted)
+//   loads:    JAVASCRIPT (executed as code)          quickjs-control: YES
+//   enforced: safeFetch(as:"script") -> CORB + SSRF; principal = the tab's
+//             trusted sender.tab.url (_chunkPageOrigin via _tabMeta); CORB-drops
+//             surface in _chunkDiag.corbBlocked.
 async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
   if (!buf) return;
   if (buf._chunkRoundDone) return;
@@ -6016,6 +6025,14 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
 }
 
 // Manifest "matches" already restricts which pages they run on.
+// @security-contract  TRUST BOUNDARY: web content -> offscreen (trusted)
+//   sender:    UNTRUSTED content script (web origin); msg.* is attacker-shaped.
+//   principal: sender.tab.url (browser-provided) — NEVER msg.* — is the only
+//              value used as the SSRF origin + window.location. Enforced below:
+//              requires sender.tab (drop otherwise); pageUrl = sender.tab.url
+//              (no msg.url fallback — see _analyzeCombinedScriptsInner tabUrl).
+//   msg.code/url: analysis INPUT only (runs in the QuickJS sandbox, or is a
+//              safeFetch TARGET), never a trusted decision.
 function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
   const tabId = sender.tab.id;

@@ -132,6 +132,15 @@ function _smMapUrl(chunkUrl, sourceMapScripts) {
   if (/^https?:\/\//i.test(smu)) return smu;
   return URL.canParse(smu, chunkUrl) ? new URL(smu, chunkUrl).href : null;
 }
+// @security-contract  LOADER: source map (chunkUrl's sourceMappingURL)
+//   loads:    DATA (parsed for names only)           quickjs-control: NO
+//   enforced: safeFetch(as:"sourcemap") -> SSRF (no CORB; not executed code);
+//             principal = the grind's sourceUrl (pageOrigin, per-call). Resolved
+//             names go ONLY to the findings shown in the UI, never into the engine.
+//   RESIDUAL: this fetch runs in the WORKER that hosts QuickJS (outside the WASM,
+//             but not the trusted offscreen). Defense-in-depth: move to the
+//             offscreen (needs offscreen chunk-map pre-fetch). Primary map fetch
+//             already IS in the offscreen (_fetchSourceMapForScript).
 async function _smGetParsed(chunkUrl, sourceMapScripts, pageOrigin) {
   if (Object.prototype.hasOwnProperty.call(_smParsed, chunkUrl)) return _smParsed[chunkUrl];
   var parsed = null;
