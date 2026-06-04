@@ -691,6 +691,81 @@ async function cmdLearnState(args) {
   });
 }
 
+// TRIAGE — distinguishes the failure modes `learnstate` CANNOT: a non-terminating
+// HANG vs a RECYCLE (uncatchable stack-overflow re-spawn) vs a SPIN (sync loop) vs
+// a LARGE TASK (progressing, fix = prioritisation not a cap) vs DONE. learnstate
+// shows only {state,driven} and HIDES that e.g. 100+ catchable stack overflows
+// fired-and-recovered (measured on sentry_inline: complete/1302 yet stack_overflow
+// _recursion×N). This samples _learningState()+_whyRecords TWICE (--gap ms apart)
+// so the driven/overflow DELTA classifies the mode; a worker eval that TIMES OUT is
+// itself the HANG signal (worker sync-blocked in a C call, no JSPI yield).
+//   usage: triage [--gap=4000]
+async function cmdTriage(args) {
+  const gapf = args.find((a) => a.startsWith("--gap="));
+  const gapMs = gapf ? parseInt(gapf.slice(6), 10) : 4000;
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
+    let w = null;
+    for (let i = 0; i < 60 && !w; i++) {
+      const t = browser.targets().find((t) => t.url().startsWith(ourl));
+      const pg = t ? await t.page().catch(() => null) : null;
+      if (pg) w = pg.workers().find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
+      if (!w) await sleep(150);
+    }
+    if (!w) { log("(no analysis worker — run `harness restart` first)"); return; }
+    const probe = async () => {
+      const t0 = Date.now();
+      try {
+        const r = await w.evaluate(() => {
+          const st = (typeof self._learningState === "function") ? self._learningState() : { state: "no-fn" };
+          const recs = self._whyRecords || [];
+          const by = {}; for (const x of recs) { const p = (x && x.phase) || "?"; by[p] = (by[p] || 0) + 1; }
+          return { st, by, nWhy: recs.length };
+        });
+        return { ms: Date.now() - t0, ...r };
+      } catch (e) {
+        // A hung worker (sync-blocked in a C recursion/loop with no JSPI yield)
+        // cannot service the eval — the timeout IS the hang signal.
+        return { ms: Date.now() - t0, evalError: String(e && e.message || e) };
+      }
+    };
+    const sig = (by) => ({
+      overflow: ((by || {}).stack_overflow_recursion || 0) + ((by || {}).stack_overflow_nonrecursive || 0),
+      spin: (by || {}).spin_nonterminating || 0,
+      caught: (by || {}).caught_throw || 0,
+    });
+    const a = await probe();
+    if (a.evalError) { log(JSON.stringify({ verdict: "HANG — worker sync-blocked (eval timed out: " + a.evalError + ")", note: "a C-level recursion/loop with no JSPI yield; srcloc the last @DSTART / @WHY spin" }, null, 2)); return; }
+    await sleep(gapMs);
+    const b = await probe();
+    if (b.evalError) { log(JSON.stringify({ verdict: "HANG — worker became sync-blocked between samples", firstSample: a.st }, null, 2)); return; }
+    const dn = (x) => (x && typeof x.st.driven === "number") ? x.st.driven : null;
+    const dDriven = (dn(a) !== null && dn(b) !== null) ? dn(b) - dn(a) : null;
+    const sa = sig(a.by), sb = sig(b.by);
+    const dOverflow = sb.overflow - sa.overflow, dWhy = b.nWhy - a.nWhy;
+    let verdict;
+    if (b.st.state === "complete" || b.st.state === "stalled") {
+      verdict = (b.st.state === "complete" ? "DONE (terminated)" : "STALLED (worker self-reported stalled)") +
+        (sb.overflow ? ` — RECOVERED from ${sb.overflow} catchable stack-overflow(s); the gitlab pathology is the UNCATCHABLE variant of these` : "");
+    } else if (dDriven !== null && dDriven > 0) {
+      verdict = `LARGE TASK — driven +${dDriven} in ${gapMs}ms (progressing). Fix is PRIORITISATION (run productive paths first), NEVER a cap.`;
+    } else if (dOverflow > 0) {
+      verdict = `RECYCLE — driven flat (+${dDriven}) while stack-overflows climb (+${dOverflow}). The uncatchable-overflow re-spawn; root-cause the trap (reserve throw headroom).`;
+    } else if (sb.spin > 0 && dDriven !== null && dDriven <= 0) {
+      verdict = `SPIN — driven flat, ${sb.spin} spin_nonterminating @WHY. A non-terminating sync loop the fixpoint missed; srcloc the loop.`;
+    } else if (dWhy > 0 && (dDriven === null || dDriven <= 0)) {
+      verdict = `BUSY-NO-DRIVE — emitting @WHY (+${dWhy}) but driven flat; inspect whyByPhase for the active phase.`;
+    } else {
+      verdict = `IDLE/STUCK — driven flat (+${dDriven}), no overflow/spin/emit delta. Either finished-but-not-flagged or a silent stall.`;
+    }
+    log(JSON.stringify({
+      verdict, state: b.st.state, driven: dn(b), dDriven, rem: b.st.rem, total: b.st.total,
+      gapMs, signals: sb, deltas: { dOverflow, dWhy }, whyByPhase: b.by,
+    }, null, 2));
+  });
+}
+
 // Multi-tab concurrent-grind measurement (continuous-session scheduler test).
 // Opens each url in its OWN real tab, spaced by --stagger ms, then polls the
 // offscreen brain's learned endpoints grouped by host every --tick ms for
@@ -900,7 +975,7 @@ async function cmdNetDiff(args) {
 }
 
 
-const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, learnstate: cmdLearnState, multitab: cmdMultiTab, netdiff: cmdNetDiff };
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, learnstate: cmdLearnState, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
