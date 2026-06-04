@@ -4938,6 +4938,14 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // islands (inline <script type="application/json">). No need to
   // ship them as a separate domIslands array.
   var scripts = buf.scripts;
+  // DIAGNOSTIC: record each analysis round's script set so a dropped external
+  // script (the cross-origin CDN case) is visible — which round ran, how many
+  // scripts, and whether the CDN bundle was present.
+  if (!self._analyzeDiag) self._analyzeDiag = [];
+  self._analyzeDiag.push({ n: scripts.length, pending: buf.pending, loadFired: !!buf.loadFired,
+    hasCDN: scripts.some(function (s) { return /sentry-cdn|browser\.sentry/.test(s.url || ""); }),
+    urls: scripts.map(function (s) { return (s.url || "inline").split("/").pop().slice(0, 24); }).slice(0, 8) });
+  if (self._analyzeDiag.length > 12) self._analyzeDiag.shift();
   // Real <script src> URLs (in execution order) — built into the
   // virtual DOM so webpack's auto-publicPath (document.currentScript
   // .src / getElementsByTagName("script")) finds a real script URL
