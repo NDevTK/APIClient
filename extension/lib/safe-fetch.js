@@ -55,24 +55,33 @@ async function safeFetch(url, opts) {
   catch (e) { return { ok: false, status: 0, statusText: "bad-url", headers: {}, body: "" }; }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
     return { ok: false, status: 0, statusText: "blocked-scheme:" + parsed.protocol, headers: {}, body: "" };
-  // Origin-relative SSRF (see header). Block a PRIVATE target ONLY when the
-  // analyzed page's origin is not itself private — a public page must not use the
-  // extension's host perms to reach the user's localhost/intranet. Page origin =
-  // opts.pageUrl, else the context's self.__sfPageOrigin (set per page by the
-  // worker/offscreen). Unknown page origin -> treated as public -> blocked (safe
-  // default). localhost->localhost and any->public pass.
-  if (_isPrivateHost(parsed.hostname)) {
-    var _po = opts.pageUrl || (typeof self !== "undefined" && self.__sfPageOrigin) || "";
-    var _ph = ""; try { if (_po) _ph = new URL(_po).hostname; } catch (e) {}
-    if (!_isPrivateHost(_ph))
-      return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {}, body: "" };
-  }
+  // Origin-relative SSRF (see header). The PRINCIPAL is the analyzed PAGE's origin
+  // — opts.pageUrl, else self.__sfPageOrigin. A cross-origin script/source-map
+  // uses the origin of the PAGE it is loaded into (gstatic.com JS in google.com
+  // acts as google.com), so the principal is always the page, never the asset's
+  // own host. Block a PRIVATE target only when the page origin is NOT itself
+  // private — a public page must not use the extension's host perms to reach the
+  // user's intranet. Unknown page origin -> treated as public -> blocked.
+  var _po = opts.pageUrl || (typeof self !== "undefined" && self.__sfPageOrigin) || "";
+  var _pageHost = ""; try { if (_po) _pageHost = new URL(_po).hostname; } catch (e) {}
+  var _pagePrivate = _isPrivateHost(_pageHost);
+  if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
+    return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {}, body: "" };
   var init = { method: "GET", credentials: "omit", redirect: "follow" };
   // Analyzer probe headers only (e.g. discovery's X-Goog-Api-Key / X-Http-Method-
   // Override). Never auth/cookies — credentials are omitted above regardless.
   if (opts.headers) init.headers = opts.headers;
   if (opts.signal) init.signal = opts.signal;
   var resp = await fetch(parsed.href, init);
+  // SSRF-via-redirect: the initial-URL check can't see a 30x to the intranet.
+  // Re-validate the FINAL url (redirects were followed) BEFORE reading the body,
+  // so a public page's request that landed on a private host never feeds internal
+  // data into the analysis. (Modern Chrome's Private Network Access also gates the
+  // request itself for extension fetches; this stops the data from being ingested.)
+  try {
+    if (resp.url && _isPrivateHost(new URL(resp.url).hostname) && !_pagePrivate)
+      return { ok: false, status: 0, statusText: "blocked-private-redirect", headers: {}, body: "" };
+  } catch (e) {}
   var headers = {};
   try { resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; }); } catch (e) {}
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: await resp.text() };
