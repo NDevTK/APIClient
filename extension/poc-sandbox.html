@@ -43,6 +43,8 @@
   // The PoC JavaScript is displayed by the popup (once) — this embed only RUNS
   // it. We receive the exact code via POC_SETUP and eval it on the user's click.
   window.addEventListener("message", function (e) {
+    if (window.origin !== 'null') return console.error('Not sandboxed');
+    if (!e.origin.startsWith('chrome-extension:') || e.source !== window.top) return console.error('Untrusted sender');
     var d = e.data;
     if (!d || d.type !== "POC_SETUP") return;
     pocJs = String(d.pocJs || "");
