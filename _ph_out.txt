@@ -1,1 +1,0 @@
-/usr/bin/bash: line 1: ./qjs.exe: No such file or directory

@@ -1113,6 +1113,20 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           try { self._whyRecords.push(Object.assign({ phase: "freeruntime_residue_raw" }, JSON.parse(s.slice(s.indexOf("{"))))); }
           catch (e) { self._whyRecords.push({ phase: "freeruntime_residue_raw", line: s.slice(0, 200) }); }
         }
+        /* Promote each bundle-slice's module-vs-classic dispatch to the durable
+           @WHY log: the breadcrumb scrolls off the 500-line stderr buffer
+           (deep-grind re-boots flood it), but its isModule bit IS the
+           cross-slice-global signal — a CDN <script src> defining `var Sentry`
+           runs in isolated MODULE scope iff JS_DetectModule flags the slice,
+           hiding that global from a later inline slice. bc_emit = the bytecode
+           compile decision (the bundle's real path); eval_script = the non-bc
+           path, infra files (/h,/p,/d,/pre) excluded as noise. */
+        if (s.indexOf("bc_emit") >= 0 ||
+            (s.indexOf("eval_script") >= 0 && s.indexOf("/h.js") < 0 && s.indexOf("/p.js") < 0 && s.indexOf("/d.js") < 0 && s.indexOf("/pre.js") < 0)) {
+          if (!self._whyRecords) self._whyRecords = [];
+          try { self._whyRecords.push(JSON.parse(s.slice(s.indexOf("{")))); }
+          catch (e) { self._whyRecords.push({ phase: "bc_emit", line: s.slice(0, 200) }); }
+        }
       },
       onAbort: function (msg) {
         instAborted = true;
