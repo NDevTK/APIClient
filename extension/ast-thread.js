@@ -132,7 +132,7 @@ function _smMapUrl(chunkUrl, sourceMapScripts) {
   if (/^https?:\/\//i.test(smu)) return smu;
   return URL.canParse(smu, chunkUrl) ? new URL(smu, chunkUrl).href : null;
 }
-async function _smGetParsed(chunkUrl, sourceMapScripts) {
+async function _smGetParsed(chunkUrl, sourceMapScripts, pageOrigin) {
   if (Object.prototype.hasOwnProperty.call(_smParsed, chunkUrl)) return _smParsed[chunkUrl];
   var parsed = null;
   try { var rec = await _idbGet("smaps", chunkUrl); if (rec && rec.json) parsed = parseSourceMap(rec.json); }
@@ -148,7 +148,9 @@ async function _smGetParsed(chunkUrl, sourceMapScripts) {
         // Time-box so a slow/hanging map server can't stall the grind's post loop.
         var _ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
         var _to = _ac ? setTimeout(function () { try { _ac.abort(); } catch (e) {} }, 8000) : 0;
-        var resp = await safeFetch(url, _ac ? { signal: _ac.signal } : null);
+        // Per-call page origin (the grind's sourceUrl) — NOT a worker global, so a
+        // concurrent grind for another page can't lend this fetch its origin.
+        var resp = await safeFetch(url, { pageUrl: pageOrigin || "", signal: _ac ? _ac.signal : undefined });
         if (_to) clearTimeout(_to);
         if (resp && resp.ok && resp.body != null) {
           var json = JSON.parse(resp.body);
@@ -172,11 +174,11 @@ async function _smGetParsed(chunkUrl, sourceMapScripts) {
 // One bundle frame (combined-line position) → its original template's path
 // ${…} names, via the chunk's source map. Returns null if this frame's source
 // has no path template (e.g. a shared fetch wrapper).
-async function _smNamesForFrame(frame, scriptOffsets, sourceMapScripts) {
+async function _smNamesForFrame(frame, scriptOffsets, sourceMapScripts, pageOrigin) {
   if (!frame || typeof frame.line !== "number") return null;
   var chunk = _smChunkForLine(frame.line, scriptOffsets);
   if (!chunk || !chunk.url) return null;
-  var parsed = await _smGetParsed(chunk.url, sourceMapScripts);
+  var parsed = await _smGetParsed(chunk.url, sourceMapScripts, pageOrigin);
   if (!parsed) return null;
   var genLine = frame.line - chunk.lineStart + 1;
   var col0 = (frame.column != null ? frame.column : (frame.col || 1)) - 1; if (col0 < 0) col0 = 0;
@@ -184,7 +186,7 @@ async function _smNamesForFrame(frame, scriptOffsets, sourceMapScripts) {
   if (!op) return null;
   return _smNamesFromContent(parsed.sourcesContent && parsed.sourcesContent[op.srcIdx], op.srcLine0);
 }
-async function _resolveSmNames(fcs, scriptOffsets, sourceMapScripts) {
+async function _resolveSmNames(fcs, scriptOffsets, sourceMapScripts, pageOrigin) {
   if (!Array.isArray(fcs) || !Array.isArray(scriptOffsets) || !scriptOffsets.length) return;
   for (var i = 0; i < fcs.length; i++) {
     var cs = fcs[i];
@@ -199,7 +201,7 @@ async function _resolveSmNames(fcs, scriptOffsets, sourceMapScripts) {
     var frames = (Array.isArray(cs.bframes) && cs.bframes.length) ? cs.bframes : (cs.loc ? [cs.loc] : []);
     var names = null;
     for (var f = 0; f < frames.length; f++) {
-      var fn = await _smNamesForFrame(frames[f], scriptOffsets, sourceMapScripts);
+      var fn = await _smNamesForFrame(frames[f], scriptOffsets, sourceMapScripts, pageOrigin);
       if (!fn) continue;
       if (fn.length === pathN) { names = fn; break; }
       if (!names) names = fn;   // remember first non-empty as fallback
@@ -351,12 +353,6 @@ function buildPageDomSrc(scriptUrls) {
 
 async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, scriptOffsets, sourceMapScripts) {
   var t0 = Date.now();
-  // Assign the QuickJS-WASM analysis its PAGE ORIGIN so safeFetch (host-edge
-  // fetches the bundle drives) applies normal origin-relative web rules: a
-  // localhost page may reach localhost, a public page may not reach the user's
-  // private network. One page per worker instance, so this self-global is the
-  // analysis's principal for the whole grind.
-  if (typeof self !== "undefined") self.__sfPageOrigin = sourceUrl || "";
   // PROPER taint TRACE from the engine's psi term (the data-flow QuickJS
   // computed), NOT the @S call-STACK. The popup's _extract*FromTaintPath helpers
   // expect data-flow hops {kind:"source"|"member"|"call-arg", desc} — that IS
@@ -2061,7 +2057,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             _lastPartialN = methods.size;
             _lastPartialSinks = securitySinks.length;
             _lastProgTs = _nowMs;
-            try { var _pres = _buildResult(); await _resolveSmNames(_pres.fetchCallSites, scriptOffsets, sourceMapScripts); postMessage({ _partial: true, sourceUrl: sourceUrl || "", response: { success: true, result: _pres } }); }
+            try { var _pres = _buildResult(); await _resolveSmNames(_pres.fetchCallSites, scriptOffsets, sourceMapScripts, sourceUrl); postMessage({ _partial: true, sourceUrl: sourceUrl || "", response: { success: true, result: _pres } }); }
             catch (e) {
               /* Partial-result emission failed — surface so a serialization
                  gap (e.g. an opaque marker reaching JSON.stringify, or a
@@ -2337,7 +2333,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   };
   }
   var _fr = _buildResult();
-  try { await _resolveSmNames(_fr.fetchCallSites, scriptOffsets, sourceMapScripts); }
+  try { await _resolveSmNames(_fr.fetchCallSites, scriptOffsets, sourceMapScripts, sourceUrl); }
   catch (e) {
     /* Final source-map name resolution failed — surface the diagnostic so a
        parse error (malformed map JSON, missing sourcesContent, traceMapping

@@ -12,9 +12,9 @@
 //   • HTTP(S) only     — scheme must be http:/https:; file:/data:/blob:/chrome-
 //                        extension:/etc. are rejected so a crafted URL can't read
 //                        local/extension resources.
-//   • origin-relative  — the analyzer acts with the analyzed PAGE's origin
-//     SSRF guard         (opts.pageUrl, else the context's self.__sfPageOrigin —
-//                        the QuickJS-WASM-assigned page origin). NORMAL web rules:
+//   • origin-relative  — the analyzer acts with the analyzed PAGE's origin, passed
+//     SSRF guard         PER CALL as opts.pageUrl (the trusted sender.tab.url) —
+//                        never a shared global (concurrent grinds). NORMAL web rules:
 //                        a page may load cross-origin PUBLIC JS (CDN/imports) AND
 //                        a localhost/intranet page may fetch its OWN private
 //                        network (localhost->localhost). The ONLY thing blocked is
@@ -55,14 +55,15 @@ async function safeFetch(url, opts) {
   catch (e) { return { ok: false, status: 0, statusText: "bad-url", headers: {}, body: "" }; }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
     return { ok: false, status: 0, statusText: "blocked-scheme:" + parsed.protocol, headers: {}, body: "" };
-  // Origin-relative SSRF (see header). The PRINCIPAL is the analyzed PAGE's origin
-  // — opts.pageUrl, else self.__sfPageOrigin. A cross-origin script/source-map
-  // uses the origin of the PAGE it is loaded into (gstatic.com JS in google.com
-  // acts as google.com), so the principal is always the page, never the asset's
-  // own host. Block a PRIVATE target only when the page origin is NOT itself
-  // private — a public page must not use the extension's host perms to reach the
-  // user's intranet. Unknown page origin -> treated as public -> blocked.
-  var _po = opts.pageUrl || (typeof self !== "undefined" && self.__sfPageOrigin) || "";
+  // Origin-relative SSRF (see header). The PRINCIPAL is the analyzed PAGE's origin,
+  // passed PER CALL as opts.pageUrl — NOT a shared global: two grinds run
+  // concurrently in one worker, so a worker-global principal would let one page's
+  // origin contaminate another's fetch. Every caller passes the trusted
+  // sender.tab.url. A cross-origin script/source-map uses the origin of the PAGE
+  // it is loaded into (gstatic.com JS in google.com acts as google.com), never the
+  // asset's own host. Block a PRIVATE target only when the page origin is NOT
+  // itself private. Unknown page origin -> treated as public -> blocked.
+  var _po = opts.pageUrl || "";
   var _pageHost = ""; try { if (_po) _pageHost = new URL(_po).hostname; } catch (e) {}
   var _pagePrivate = _isPrivateHost(_pageHost);
   if (_isPrivateHost(parsed.hostname) && !_pagePrivate)

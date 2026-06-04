@@ -4842,8 +4842,19 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
     // tab's lifecycle and not subject to the offscreen's COEP.
     var results = await Promise.all(batch.map(function (cu) {
       return safeFetch(cu, { pageUrl: _chunkPageOrigin, method: "GET" })
-        .then(function (resp) { return resp.ok ? resp.body : null; })
-        .then(function (body) { return { u: cu, body: body }; })
+        .then(function (resp) {
+          if (!resp.ok) return { u: cu, body: null };
+          // CORB on imports: a chunk is loaded AS JAVASCRIPT, so only ingest a
+          // JS-typed (or same-origin) response — never read a cross-origin
+          // HTML/JSON/etc. body as a "chunk". The script-buffer path enforces the
+          // same via _corbAllowsScript; without it here the analyzer could be
+          // steered into reading cross-origin DATA (cookieless, but still).
+          var mime = resp.headers["content-type"] || "";
+          var nosniff = (resp.headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0;
+          if (!_corbAllowsScript(mime, nosniff, resp.body, cu, _chunkPageOrigin))
+            return { u: cu, body: null, corb: true };
+          return { u: cu, body: resp.body };
+        })
         .catch(function (e) { return { u: cu, body: null, err: String(e && e.message || e) }; });
     }));
     for (var ri = 0; ri < results.length; ri++) {
