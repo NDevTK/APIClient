@@ -4827,6 +4827,11 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
   console.debug("[AST:chunks] tab=%d: %d new lazy chunk(s) to download", tabId, fresh.length);
   var added = 0;
   var CONC = 8;
+  // Trusted page origin (sender.tab.url via _tabMeta) for safeFetch's origin-
+  // relative rule. Chunk URLs (cu) are bundle-DISCOVERED = attacker-controlled;
+  // the principal must be the page's OWN trusted origin so a localhost page loads
+  // its localhost chunks while a public page still cannot reach a private chunk.
+  var _chunkPageOrigin = (_tabMeta.get(tabId) || {}).url || "";
   for (var s = 0; s < fresh.length; s += CONC) {
     var batch = fresh.slice(s, s + CONC);
     // SW fetch (host_permissions: <all_urls>, cookies omitted) — NOT
@@ -4836,7 +4841,7 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
     // residue-variance bug that lost preheat). The SW fetch is independent of the
     // tab's lifecycle and not subject to the offscreen's COEP.
     var results = await Promise.all(batch.map(function (cu) {
-      return safeFetch(cu, { method: "GET" })
+      return safeFetch(cu, { pageUrl: _chunkPageOrigin, method: "GET" })
         .then(function (resp) { return resp.ok ? resp.body : null; })
         .then(function (body) { return { u: cu, body: body }; })
         .catch(function (e) { return { u: cu, body: null, err: String(e && e.message || e) }; });
