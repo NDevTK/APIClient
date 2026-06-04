@@ -34,6 +34,45 @@
 // (text) } — NOT a Response — so it is identical in the offscreen document and the
 // Worker. Loaded in both: offscreen-brain.js via <script> (ast-worker.html) and
 // ast-thread.js via importScripts.
+// CORB/ORB for a SCRIPT load (opts.as==="script"): a chunk/import becomes
+// executable code under QuickJS control, so the response must be JS-typed (or
+// same-origin) — never a cross-origin HTML/JSON/etc. DATA body read as code.
+// Lives here (the chokepoint) so every code-loader gets it and a new one can't
+// forget it (the chunk path previously had none).
+function _jsMime(m) {
+  return m === "text/javascript" || m === "application/javascript" ||
+    m === "application/ecmascript" || m === "text/ecmascript" ||
+    m === "application/x-javascript" || m === "text/x-javascript" ||
+    m === "application/x-ecmascript" || m === "text/jscript" ||
+    m === "application/node" || /^text\/javascript1\.[0-5]$/.test(m);
+}
+function _corbProtectedMime(m) {
+  return m === "text/html" || m === "text/xml" || m === "application/xml" ||
+    /\+xml$/.test(m) || m === "application/json" || /\+json$/.test(m) ||
+    /^multipart\//.test(m);
+}
+function _sniffsProtected(s) {
+  var h = String(s == null ? "" : s).slice(0, 4096).replace(/^﻿/, "");
+  h = h.replace(/^\s+/, "");
+  if (h.charAt(0) === "<") return true; // HTML/XML/SVG/markup
+  if (h.charAt(0) === "{" || h.charAt(0) === "[") {
+    try { JSON.parse(s); return true; } catch (e) {
+      try { JSON.parse(h); return true; } catch (_) {}
+    }
+  }
+  return false;
+}
+function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageUrl) {
+  mime = String(mime || "").split(";")[0].trim().toLowerCase();
+  var cross = true;
+  try { cross = new URL(scriptUrl).origin !== new URL(pageUrl).origin; } catch (e) { cross = true; }
+  if (!cross) return !(_corbProtectedMime(mime) && !_jsMime(mime)); // same-origin: only skip the page's own non-JS data
+  if (_corbProtectedMime(mime)) return false;          // CORB-protected type
+  if (nosniff && !_jsMime(mime)) return false;          // browser blocks too
+  if (_sniffsProtected(body)) return false;             // mislabeled data
+  return true;
+}
+
 // Private/loopback/link-local classification (RFC1918 + loopback + IPv6 ULA/LL)
 // for the origin-relative SSRF rule: a request is blocked ONLY when the TARGET is
 // private but the PAGE origin is not — a public page reaching the intranet.
@@ -85,6 +124,17 @@ async function safeFetch(url, opts) {
   } catch (e) {}
   var headers = {};
   try { resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; }); } catch (e) {}
-  return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: await resp.text() };
+  var body = await resp.text();
+  // CORB policy by LOAD TYPE (opts.as). "script" = bytes that will RUN as code
+  // (chunk/import, under QuickJS control) -> must be JS-typed/same-origin. Other
+  // loads ("sourcemap"/"config"/data — not executed) are exempt. Whether the
+  // result later REACHES QuickJS is the caller's documented contract, not
+  // enforced here (safeFetch returns bytes; the engine boundary is downstream).
+  if (opts.as === "script" && resp.ok &&
+      !_corbAllowsScript(headers["content-type"] || "",
+        (headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0,
+        body, parsed.href, _po))
+    return { ok: false, status: 0, statusText: "blocked-corb", headers: headers, body: "" };
+  return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body };
 }
 if (typeof self !== "undefined") self.safeFetch = safeFetch;

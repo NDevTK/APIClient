@@ -150,7 +150,9 @@ async function _smGetParsed(chunkUrl, sourceMapScripts, pageOrigin) {
         var _to = _ac ? setTimeout(function () { try { _ac.abort(); } catch (e) {} }, 8000) : 0;
         // Per-call page origin (the grind's sourceUrl) — NOT a worker global, so a
         // concurrent grind for another page can't lend this fetch its origin.
-        var resp = await safeFetch(url, { pageUrl: pageOrigin || "", signal: _ac ? _ac.signal : undefined });
+        // as:"sourcemap" — DATA, not executed code (parsed for names only, outside
+        // QuickJS, UI-only), so no CORB; still SSRF-gated by the page principal.
+        var resp = await safeFetch(url, { pageUrl: pageOrigin || "", as: "sourcemap", signal: _ac ? _ac.signal : undefined });
         if (_to) clearTimeout(_to);
         if (resp && resp.ok && resp.body != null) {
           var json = JSON.parse(resp.body);

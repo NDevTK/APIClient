@@ -4335,7 +4335,13 @@ async function handleResponseBody(tabId, msg, frameId) {
 
 // ─── Cross-Script AST Buffering ──────────────────────────────────────────────
 
-function _bufferScript(tabId, scriptUrl, code, pageUrl, order) {
+// fromFetch=true ONLY when this call balances a _fetchAndBufferScript pending++
+// (an external <script src>). Inline scripts arrive here directly and never
+// incremented pending, so they must NOT decrement it — otherwise an inline
+// <script> buffered while an external fetch is in flight steals that fetch's
+// pending slot, firing analysis prematurely and dropping the external script
+// (observed: a cross-origin CDN bundle lost while the page's inline script ran).
+function _bufferScript(tabId, scriptUrl, code, pageUrl, order, fromFetch) {
   var buf = _scriptBuffers.get(tabId);
   if (!buf) {
     buf = { scripts: [], timer: null, pageUrl: pageUrl, pending: 0, loadFired: false };
@@ -4356,13 +4362,13 @@ function _bufferScript(tabId, scriptUrl, code, pageUrl, order) {
   // Deduplicate by URL or content hash
   var key = scriptUrl || _hashScriptCode(code);
   for (var i = 0; i < buf.scripts.length; i++) {
-    if (buf.scripts[i].key === key) { _scriptBufferDecrementPending(tabId, buf); return; }
+    if (buf.scripts[i].key === key) { if (fromFetch) _scriptBufferDecrementPending(tabId, buf); return; }
   }
 
   buf.scripts.push({ url: scriptUrl, code: code, key: key, order: (order == null ? 1e9 : order) });
   console.debug("[AST:buffer] Buffered script %s (%d chars) tab=%d — %d scripts pending",
     scriptUrl || "(inline)", code.length, tabId, buf.scripts.length);
-  _scriptBufferDecrementPending(tabId, buf);
+  if (fromFetch) _scriptBufferDecrementPending(tabId, buf);
 
   // Reset debounce timer — wait for more scripts before combined analysis
   if (buf.timer) clearTimeout(buf.timer);
@@ -4384,52 +4390,9 @@ function _scriptBufferDecrementPending(tabId, buf) {
 }
 
 
-// CORB/ORB enforcement for the CORS-bypassing extension fetch. A
-// hostile page can point <script src> at a cross-origin victim
-// endpoint (account.json, an HTML page); the browser's CORB would stop
-// a no-cors reader, but our host-permission fetch bypasses CORS, so we
-// must replicate CORB ourselves or become a cross-site read primitive.
-// Same-origin-to-page resources need no protection (the page can read
-// them itself). Cross-origin: block CORB-protected MIME types, honor
-// nosniff, and confirm by sniffing the body (catches mislabeled
-// JSON/HTML served as text/plain or octet-stream).
-function _jsMime(m) {
-  return m === "text/javascript" || m === "application/javascript" ||
-    m === "application/ecmascript" || m === "text/ecmascript" ||
-    m === "application/x-javascript" || m === "text/x-javascript" ||
-    m === "application/x-ecmascript" || m === "text/jscript" ||
-    m === "application/node" || /^text\/javascript1\.[0-5]$/.test(m);
-}
-function _corbProtectedMime(m) {
-  return m === "text/html" || m === "text/xml" || m === "application/xml" ||
-    /\+xml$/.test(m) || m === "application/json" || /\+json$/.test(m) ||
-    /^multipart\//.test(m);
-}
-function _sniffsProtected(s) {
-  var h = String(s == null ? "" : s).slice(0, 4096).replace(/^﻿/, "");
-  h = h.replace(/^\s+/, "");
-  if (h.charAt(0) === "<") return true; // HTML/XML/SVG/markup
-  if (h.charAt(0) === "{" || h.charAt(0) === "[") {
-    try { JSON.parse(s); return true; } catch (e) {
-      try { JSON.parse(h); return true; } catch (_) {}
-    }
-  }
-  return false;
-}
-function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageUrl) {
-  mime = String(mime || "").split(";")[0].trim().toLowerCase();
-  var cross = true;
-  try { cross = new URL(scriptUrl).origin !== new URL(pageUrl).origin; } catch (e) { cross = true; }
-  if (!cross) {
-    // Same-origin to the page — no confused-deputy; only skip the
-    // page's own non-JS data for usability, not as a boundary.
-    return !(_corbProtectedMime(mime) && !_jsMime(mime));
-  }
-  if (_corbProtectedMime(mime)) return false;          // CORB-protected type
-  if (nosniff && !_jsMime(mime)) return false;          // browser blocks too
-  if (_sniffsProtected(body)) return false;             // mislabeled data
-  return true;
-}
+// CORB/ORB enforcement moved INTO safeFetch as the opts.as==="script" policy:
+// the single chokepoint, so every code-loader gets it and a new one can't forget
+// it (the chunk path previously had none). See lib/safe-fetch.js _corbAllowsScript.
 
 function _fetchAndBufferScript(tabId, scriptUrl, pageUrl, order) {
   // safeFetch is the single chokepoint: it rejects non-public/private hosts
@@ -4447,36 +4410,33 @@ function _fetchAndBufferScript(tabId, scriptUrl, pageUrl, order) {
   // Increment pending so the load-fired-and-no-pending check waits for
   // this fetch to complete (or fail) before firing analysis.
   buf.pending++;
+  // Standing observability for the INITIAL external-<script src> fetch path (the
+  // chunk path has _chunkDiag; this is its analog) so a dropped initial script —
+  // e.g. a cross-origin CDN bundle — is visible, not silent. Read via
+  // `harness offscreen "return self._fbsDiag"`.
+  if (!self._fbsDiag) self._fbsDiag = {};
+  self._fbsDiag[scriptUrl] = "fetching";
 
-  safeFetch(scriptUrl, { pageUrl: pageUrl }).then(function(resp) {
+  // as:"script" — safeFetch enforces CORB (cross-origin must be JS-typed), SSRF,
+  // and scheme; a blocked load comes back !ok (statusText "blocked-corb" etc.).
+  safeFetch(scriptUrl, { pageUrl: pageUrl, as: "script" }).then(function(resp) {
     if (!resp.ok) {
-      console.debug("[AST:buffer] Fetch failed for %s: %d %s", scriptUrl, resp.status, resp.statusText);
-      _scriptBufferDecrementPending(tabId, buf);
-      return null;
-    }
-    var mime = resp.headers["content-type"] || "";
-    var nosniff = (resp.headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0;
-    return { mime: mime, nosniff: nosniff, text: resp.body };
-  }).then(function(r) {
-    if (!r) return;
-    // CORB/ORB: never ingest a cross-origin response the browser would
-    // protect — replicates the protection our host-permission fetch bypasses.
-    if (!_corbAllowsScript(r.mime, r.nosniff, r.text, scriptUrl, pageUrl)) {
-      console.debug("[AST:buffer] CORB-blocked %s (mime=%s)", scriptUrl, String(r.mime).split(";")[0]);
+      self._fbsDiag[scriptUrl] = (resp.statusText === "blocked-corb") ? "corb-blocked" : ("notok:" + resp.status + " " + resp.statusText);
+      console.debug("[AST:buffer] %s for %s (%d)", resp.statusText, scriptUrl, resp.status);
       _scriptBufferDecrementPending(tabId, buf);
       return;
     }
-    var code = r.text;
+    var code = resp.body;
     if (code && code.length >= 50) {
-      _bufferScript(tabId, scriptUrl, code, pageUrl, order);
+      self._fbsDiag[scriptUrl] = "buffered:" + code.length;
+      _bufferScript(tabId, scriptUrl, code, pageUrl, order, true);
     } else if (code != null) {
+      self._fbsDiag[scriptUrl] = "tiny:" + code.length;
       // Tiny script — buffer skips it; balance the pending counter.
       _scriptBufferDecrementPending(tabId, buf);
     }
-    // If `code` is undefined here, the previous .then returned undefined
-    // because of the content-type / status checks above — pending was
-    // already decremented there.
   }).catch(function(err) {
+    self._fbsDiag[scriptUrl] = "error:" + (err && err.message || err);
     console.debug("[AST:buffer] Fetch error for %s: %s", scriptUrl, err.message || err);
     _scriptBufferDecrementPending(tabId, buf);
   });
@@ -4841,18 +4801,11 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
     // residue-variance bug that lost preheat). The SW fetch is independent of the
     // tab's lifecycle and not subject to the offscreen's COEP.
     var results = await Promise.all(batch.map(function (cu) {
-      return safeFetch(cu, { pageUrl: _chunkPageOrigin, method: "GET" })
+      // as:"script" — a chunk is loaded AS code, so safeFetch enforces CORB
+      // (cross-origin must be JS-typed) + SSRF with the page principal.
+      return safeFetch(cu, { pageUrl: _chunkPageOrigin, method: "GET", as: "script" })
         .then(function (resp) {
-          if (!resp.ok) return { u: cu, body: null };
-          // CORB on imports: a chunk is loaded AS JAVASCRIPT, so only ingest a
-          // JS-typed (or same-origin) response — never read a cross-origin
-          // HTML/JSON/etc. body as a "chunk". The script-buffer path enforces the
-          // same via _corbAllowsScript; without it here the analyzer could be
-          // steered into reading cross-origin DATA (cookieless, but still).
-          var mime = resp.headers["content-type"] || "";
-          var nosniff = (resp.headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0;
-          if (!_corbAllowsScript(mime, nosniff, resp.body, cu, _chunkPageOrigin))
-            return { u: cu, body: null, corb: true };
+          if (!resp.ok) return { u: cu, body: null, corb: resp.statusText === "blocked-corb" };
           return { u: cu, body: resp.body };
         })
         .catch(function (e) { return { u: cu, body: null, err: String(e && e.message || e) }; });
