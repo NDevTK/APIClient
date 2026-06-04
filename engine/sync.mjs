@@ -88,10 +88,11 @@ function apply() {
   console.log(`[sync] FF master to ${up}/master + mirror to ${fork}…`);
   gSafe("git checkout master");
   gSafe(`git merge --ff-only ${up}/master`);
-  // Keep the FORK's master a CURRENT mirror of upstream — the step that was
-  // missing (only apiclient-fork was pushed), so the fork's master went stale.
-  const pm = gSafe(`git push ${fork} master`);
-  console.log(`[sync]   master mirror → ${fork}: ${(pm.split("\n").pop() || "ok").trim()}`);
+  // Do NOT push the master mirror HERE. Pushing it before apiclient-fork leaves
+  // the fork remote with master AHEAD of apiclient-fork until the agent's post-
+  // verify push — which reads as a broken fork (the bug just reported). Both
+  // pushes happen at LAND time, apiclient-fork FIRST then master, so master is
+  // never ahead. The local FF above is all the 3-way merge below needs.
   console.log("[sync] 3-way merge master into apiclient-fork…");
   gSafe("git checkout apiclient-fork");
   gSafe("git merge --no-edit master");
@@ -105,11 +106,14 @@ function apply() {
   console.log(`[sync] clean merge → ${gSafe("git describe --tags apiclient-fork")}`);
   console.log("[sync] rebuilding worker…");
   execSync("node engine/build.mjs worker && node engine/build.mjs stage", { cwd: ROOT, stdio: "inherit" });
-  console.log("\n[sync] MERGED + BUILT (master mirror pushed). apiclient-fork NOT yet pushed (a clean merge can still break a real bundle). Next — the AGENT does these, not the user:");
+  console.log("\n[sync] MERGED + BUILT locally — NOTHING pushed yet (a clean merge can still break a real bundle). Next — the AGENT does these, not the user:");
   console.log("  1. node testing/harness.js restart");
   console.log("  2. FULL polarity gate set + _idxdocs --deep (spin 0, converged, _xss 4x REAL_EXPLOIT)");
   console.log("  3. a real vendor bundle (Apple/MS) — no freeze, grind completes");
-  console.log(`  4. ONLY if all green:  git -C engine/qjs push ${fork} apiclient-fork`);
+  console.log("  4. ONLY if all green, push apiclient-fork FIRST, then the master mirror");
+  console.log("     (this order keeps master from ever being ahead of the fork on the remote):");
+  console.log(`        git -C engine/qjs push ${fork} apiclient-fork`);
+  console.log(`        git -C engine/qjs push ${fork} master`);
   console.log("     APIClient: git add engine/qjs extension/lib/qjs/qjs_worker.js extension/lib/qjs/hostedge.gen.js && git commit  (hook checks the worker is staged)");
   console.log("     then: git push origin main   (pushing verified changes to main is YOUR responsibility — don't leave it)");
 }
