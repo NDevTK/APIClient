@@ -87,6 +87,15 @@ function _isPrivateHost(host) {
     /^(::1|fe80:|fc[0-9a-f][0-9a-f]:|fd[0-9a-f][0-9a-f]:|::ffff:(127|10|192\.168|169\.254))/i.test(host);
 }
 
+// @security-contract  ENFORCEMENT POINT (the single network chokepoint)
+//   guarantees: cookies omitted; method GET; http(s) only; origin-relative SSRF
+//               (a PRIVATE target is blocked unless the page principal is itself
+//               private) on BOTH the initial URL and the post-redirect final URL.
+//   opts.as:    "script"          -> + CORB (cross-origin must be JS-typed)
+//               "sourcemap"/other -> data, no CORB (not executed as code)
+//   principal:  opts.pageUrl PER CALL (the page's trusted sender.tab.url) — no
+//               shared global (concurrent grinds would contaminate it); unknown
+//               principal -> treated as public -> private targets blocked.
 async function safeFetch(url, opts) {
   opts = opts || {};
   var parsed;
