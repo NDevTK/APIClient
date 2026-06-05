@@ -4836,6 +4836,13 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls, esmImportUrls) {
       var rr = results[ri];
       if (rr.body) {
         buf.scripts.push({ url: rr.u, code: rr.body, order: ++maxOrder });
+        // Diagnostic: capture each fetched chunk body's first chars (read via
+        // `harness offscreen "return self._fetchedHeads"`). Localises an ESM
+        // content-mangle to the FETCH vs the downstream combine/slice — proved the
+        // esm.sh ''@1:1 SyntaxError is clean-at-fetch (c0:47) so combine-side.
+        try { if (!self._fetchedHeads) self._fetchedHeads = []; var _fb = String(rr.body || "");
+          self._fetchedHeads.push({ u: rr.u, len: _fb.length, c0: _fb.charCodeAt(0), head: _fb.slice(0, 30) });
+          if (self._fetchedHeads.length > 40) self._fetchedHeads.shift(); } catch (e) {}
         added++;
         _cdiag.fetchedOk++;
       } else if (rr.corb) {

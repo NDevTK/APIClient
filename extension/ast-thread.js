@@ -1237,6 +1237,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   for (var bce = 0; bce < bundleFiles.length; bce++) {
     var _src = bundleFiles[bce].path;
     var _dst = _src.replace(/\.js$/, ".bc");
+    // .mjs / no-extension module ids (esm.sh: "/x/<host>/auth-js.mjs", ".../supabase-js@2")
+    // don't match /\.js$/, so _dst would EQUAL _src and the emitted bytecode would OVERWRITE
+    // the source in MEMFS + inMem. The import-triggered module loader then reads that BC
+    // (version byte 0x1A) AS SOURCE → "SyntaxError: unexpected token ''" at 1:1, the esm.sh
+    // 0-endpoints blocker. Keep _dst distinct so the source survives for the loader.
+    if (_dst === _src) _dst = _src + ".bc";
     var _bcCallThrew = false;
     try {
       await m.callMain([startLineArg, "--fe-emit-bc", _src, _dst]);
