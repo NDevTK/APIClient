@@ -2184,6 +2184,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
        still runs to rem=0; head-first only reorders WHICH runs first so
        endpoints stream early. */
     var _headPhase = true;
+    var _noProgRecycles = 0, _lastRecycleDriven = -1;   // a recycle loop with driven flat across many recycles is a provable no-progress spin
     while (!_grindDone) {
       stdout.length = 0; stderr.length = 0;
       _stdoutCursor = 0;
@@ -2252,6 +2253,19 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       if (_dpRecycleReason) {
         if (!self._whyRecords) self._whyRecords = [];
         self._whyRecords.push({ phase: "deep_recycle", reason: _dpRecycleReason, step: _deepStats.steps, rem: _drem });
+        /* No-progress recycle break — MADE to terminate (CLAUDE.md), not spun. A
+           recycle loop where driven hasn't advanced across many recycles is a
+           provably-pointless spin: a SYSTEMIC trap (e.g. an async-frame corruption
+           hitting a VARYING orphan each re-drive) the per-culprit abandon below
+           can't catch. Stop the grind so the head's endpoints persist instead of
+           looping forever; the underlying trap stays surfaced in _whyRecords. */
+        if (_driven.size === _lastRecycleDriven) _noProgRecycles++;
+        else { _noProgRecycles = 0; _lastRecycleDriven = _driven.size; }
+        if (_noProgRecycles >= 12) {
+          self._whyRecords.push({ phase: "deep_recycle_noprogress_stop", recycles: _noProgRecycles, driven: _driven.size, rem: _drem, step: _deepStats.steps });
+          _deepStats.stop = "recycle-noprogress";
+          break;
+        }
         m = null;
         await new Promise(function (r) { setTimeout(r, 0); });
         m = await freshInstance();
