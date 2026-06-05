@@ -956,7 +956,20 @@ async function cmdNetDiff(args) {
       const _reachedSet = new Set();
       const _moduleLinkSet = new Set();   // ESM "could not load module '/x'" — a DISCOVERY/LINK gap, not endpoint opacity
       if (typeof globalStore !== "undefined" && globalStore.scriptCache) {
+        // Use only the LATEST scriptCache entry per page. The analysis re-runs as
+        // ESM modules arrive across rounds (each round is a new bundle-hash entry);
+        // an early round's resolverErrors are STALE — they name modules not yet
+        // fetched THEN. Reporting the union shows phantom link-failures the final
+        // round already resolved (esm.sh: 7 "could not load module" surfaced while
+        // its converged 18-script round had 0). Group by tabUrl, keep max-timestamp.
+        const _latestPerTab = new Map();
         for (const sc of globalStore.scriptCache.values()) {
+          const _tab = (sc && sc.tabUrl) || "";
+          const _ts = (sc && sc.timestamp) || 0;
+          const _prev = _latestPerTab.get(_tab);
+          if (!_prev || _ts >= (_prev.timestamp || 0)) _latestPerTab.set(_tab, sc);
+        }
+        for (const sc of _latestPerTab.values()) {
           const re = sc && sc.result && sc.result.resolverErrors;
           if (Array.isArray(re)) for (const r of re) {
             const msg = String((r && r.message) || JSON.stringify(r));
