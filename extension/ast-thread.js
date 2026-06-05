@@ -1300,6 +1300,17 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     if (li0 === 0) { _pendingSec = null; _pendingPoC = null; }
     for (var li = li0; li < stdout.length; li++) {
       var line = stdout[li];
+      if (line.slice(0, 8) === "@MODURL ") {
+        /* A CDN-URL ESM import (`import x from "https://cdn/auth.js"`) the module
+           loader couldn't resolve from MEMFS — feed it into chunkUrls so the same
+           discover→fetch→re-run loop that handles webpack lazy chunks pulls the
+           imported module in. Without this, modular ESM apps (Vite/Rollup, modular
+           firebase) analyze to total:0 — their dep modules are fetched by the live
+           page's module loader, never shipped by content.js. */
+        var _mu = line.slice(8).trim();
+        if (_mu && !isUnresolved(_mu)) chunkUrls.add(_mu);
+        continue;
+      }
       if (line.slice(0, 5) === "@WHY ") {
         /* Diagnostic record from a phase that finished without producing
            its expected output. Surface on self so the brain can expose
