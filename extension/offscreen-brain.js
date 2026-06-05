@@ -5290,7 +5290,30 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
                 var _fld = _re.opaqueFields[_fi];
                 if (typeof _json[_fld] === "string") _ex[_fld] = _json[_fld];
               }
-              if (Object.keys(_ex).length) _re.replyExample = { source: _srcEp, fields: _ex };
+              if (Object.keys(_ex).length) {
+                _re.replyExample = { source: _srcEp, fields: _ex };
+                // Surface the chained endpoint in the moat: a FULLY-opaque URL
+                // that IS a reply field resolves to the field's real value (a
+                // server-provided URL — marked reply-example, never computed).
+                // forced exec already learned the chained fetch fired; the GET
+                // only supplies its URL. (Templated chains stay {hole} endpoints,
+                // not resolverErrors, so this only fires for whole-URL chains.)
+                var _cm = /"method":"(\w+)"/.exec(_re.message || "");
+                var _chainMethod = _cm ? _cm[1] : "GET";
+                for (var _ek in _ex) {
+                  var _eu = null; try { _eu = new URL(_ex[_ek], _rcPrincipal); } catch (e) {}
+                  if (!_eu || (_eu.protocol !== "http:" && _eu.protocol !== "https:")) continue;
+                  var _epk = "replyex " + _chainMethod + " " + _eu.host + _eu.pathname;
+                  if (!tab.endpoints.has(_epk)) {
+                    tab.endpoints.set(_epk, {
+                      url: _eu.href, method: _chainMethod, host: _eu.host, path: _eu.pathname,
+                      service: extractInterfaceName(_eu), source: "reply_example",
+                      valueSource: "reply-example", replyFrom: { endpoint: _srcEp, field: _ek },
+                      pageUrl: _rcPrincipal, firstSeen: Date.now(),
+                    });
+                  }
+                }
+              }
             }
           }
         }
@@ -5605,7 +5628,30 @@ async function analyzeScript(tabId, scriptUrl, code) {
                 var _fld = _re.opaqueFields[_fi];
                 if (typeof _json[_fld] === "string") _ex[_fld] = _json[_fld];
               }
-              if (Object.keys(_ex).length) _re.replyExample = { source: _srcEp, fields: _ex };
+              if (Object.keys(_ex).length) {
+                _re.replyExample = { source: _srcEp, fields: _ex };
+                // Surface the chained endpoint in the moat: a FULLY-opaque URL
+                // that IS a reply field resolves to the field's real value (a
+                // server-provided URL — marked reply-example, never computed).
+                // forced exec already learned the chained fetch fired; the GET
+                // only supplies its URL. (Templated chains stay {hole} endpoints,
+                // not resolverErrors, so this only fires for whole-URL chains.)
+                var _cm = /"method":"(\w+)"/.exec(_re.message || "");
+                var _chainMethod = _cm ? _cm[1] : "GET";
+                for (var _ek in _ex) {
+                  var _eu = null; try { _eu = new URL(_ex[_ek], _rcPrincipal); } catch (e) {}
+                  if (!_eu || (_eu.protocol !== "http:" && _eu.protocol !== "https:")) continue;
+                  var _epk = "replyex " + _chainMethod + " " + _eu.host + _eu.pathname;
+                  if (!tab.endpoints.has(_epk)) {
+                    tab.endpoints.set(_epk, {
+                      url: _eu.href, method: _chainMethod, host: _eu.host, path: _eu.pathname,
+                      service: extractInterfaceName(_eu), source: "reply_example",
+                      valueSource: "reply-example", replyFrom: { endpoint: _srcEp, field: _ek },
+                      pageUrl: _rcPrincipal, firstSeen: Date.now(),
+                    });
+                  }
+                }
+              }
             }
           }
         }
