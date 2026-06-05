@@ -5306,15 +5306,28 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
                 // not resolverErrors, so this only fires for whole-URL chains.)
                 var _cm = /"method":"(\w+)"/.exec(_re.message || "");
                 var _chainMethod = _cm ? _cm[1] : "GET";
-                for (var _ek in _ex) {
-                  var _eu = null; try { _eu = new URL(_ex[_ek], _rcPrincipal); } catch (e) {}
+                // Reconstruct the chained URL: substitute the recovered field
+                // values INTO the URL template (rawUrl, e.g. "{apiHost}/api/widgets")
+                // so the literal PATH survives the opaque host; a fully-opaque URL
+                // (the whole URL IS one field) uses each field value directly.
+                var _tmpl = (typeof _re.rawUrl === "string" && _re.rawUrl.indexOf("{") >= 0) ? _re.rawUrl : null;
+                var _chainUrls = [];
+                if (_tmpl) {
+                  var _su = _tmpl;
+                  for (var _f in _ex) _su = _su.split("{" + _f + "}").join(_ex[_f]);
+                  if (_su.indexOf("{") < 0) _chainUrls.push(_su);
+                } else {
+                  for (var _f2 in _ex) _chainUrls.push(_ex[_f2]);
+                }
+                for (var _ci = 0; _ci < _chainUrls.length; _ci++) {
+                  var _eu = null; try { _eu = new URL(_chainUrls[_ci], _rcPrincipal); } catch (e) {}
                   if (!_eu || (_eu.protocol !== "http:" && _eu.protocol !== "https:")) continue;
                   var _epk = "replyex " + _chainMethod + " " + _eu.host + _eu.pathname;
                   if (!tab.endpoints.has(_epk)) {
                     tab.endpoints.set(_epk, {
                       url: _eu.href, method: _chainMethod, host: _eu.host, path: _eu.pathname,
                       service: extractInterfaceName(_eu), source: "reply_example",
-                      valueSource: "reply-example", replyFrom: { endpoint: _srcEp, field: _ek },
+                      valueSource: "reply-example", replyFrom: { endpoint: _srcEp, field: Object.keys(_ex).join(",") },
                       pageUrl: _rcPrincipal, firstSeen: Date.now(),
                     });
                   }
@@ -5650,15 +5663,28 @@ async function analyzeScript(tabId, scriptUrl, code) {
                 // not resolverErrors, so this only fires for whole-URL chains.)
                 var _cm = /"method":"(\w+)"/.exec(_re.message || "");
                 var _chainMethod = _cm ? _cm[1] : "GET";
-                for (var _ek in _ex) {
-                  var _eu = null; try { _eu = new URL(_ex[_ek], _rcPrincipal); } catch (e) {}
+                // Reconstruct the chained URL: substitute the recovered field
+                // values INTO the URL template (rawUrl, e.g. "{apiHost}/api/widgets")
+                // so the literal PATH survives the opaque host; a fully-opaque URL
+                // (the whole URL IS one field) uses each field value directly.
+                var _tmpl = (typeof _re.rawUrl === "string" && _re.rawUrl.indexOf("{") >= 0) ? _re.rawUrl : null;
+                var _chainUrls = [];
+                if (_tmpl) {
+                  var _su = _tmpl;
+                  for (var _f in _ex) _su = _su.split("{" + _f + "}").join(_ex[_f]);
+                  if (_su.indexOf("{") < 0) _chainUrls.push(_su);
+                } else {
+                  for (var _f2 in _ex) _chainUrls.push(_ex[_f2]);
+                }
+                for (var _ci = 0; _ci < _chainUrls.length; _ci++) {
+                  var _eu = null; try { _eu = new URL(_chainUrls[_ci], _rcPrincipal); } catch (e) {}
                   if (!_eu || (_eu.protocol !== "http:" && _eu.protocol !== "https:")) continue;
                   var _epk = "replyex " + _chainMethod + " " + _eu.host + _eu.pathname;
                   if (!tab.endpoints.has(_epk)) {
                     tab.endpoints.set(_epk, {
                       url: _eu.href, method: _chainMethod, host: _eu.host, path: _eu.pathname,
                       service: extractInterfaceName(_eu), source: "reply_example",
-                      valueSource: "reply-example", replyFrom: { endpoint: _srcEp, field: _ek },
+                      valueSource: "reply-example", replyFrom: { endpoint: _srcEp, field: Object.keys(_ex).join(",") },
                       pageUrl: _rcPrincipal, firstSeen: Date.now(),
                     });
                   }

@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><title>chain_order</title></head>
+<body><div id="root">chain_order</div>
+<!-- Loaded as ...chain_order.html?x=1. Tests concat ORDER: literal+opaque
+     (works: /api/pre{search}) vs opaque+literal (suspected: collapses fully
+     opaque, dropping the literal). location.search is the opaque. -->
+<script>
+window.__a = function () { fetch("/api/pre/" + location.search); };   // literal + opaque
+window.__b = function () { fetch(location.search + "/api/post"); };   // opaque + literal
+</script>
+</body></html>

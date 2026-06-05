@@ -919,6 +919,11 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             : "request target did not resolve to a concrete string at the converged fixpoint (opaque component reached the " + kind + " URL/method): " + JSON.stringify({ method: method, url: rawUrl }),
           loc: _reLoc,
           chain: _reSite.chain,
+          // The URL TEMPLATE (e.g. "{apiHost}/api/widgets") when partially
+          // concrete — opaque-base flagged it, but the literal path is here, so
+          // the reply-example seed can substitute the field value and keep the
+          // path instead of dropping it.
+          rawUrl: typeof rawUrl === "string" ? rawUrl : undefined,
           // The opaque URL's symbolic fields + their SOURCE-LEAF provenance
           // (from __feUrlHoles). A reply->request chain (oidc
           // metadata.token_endpoint) shows src "fetch.body.json" — the
