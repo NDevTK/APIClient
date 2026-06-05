@@ -223,7 +223,12 @@ function worker() {
         "-sJSPI=1",
         "-sJSPI_EXPORTS=callMain",
         "-DQJS_HAS_JSPI=1",
-        "-sENVIRONMENT=worker,node"],
+        "-sENVIRONMENT=worker,node",
+        // Function names in the wasm name section make a deep-grind overflow stack
+        // name the recursing C fn (e.g. qjs_t_free) instead of wasm-function[N] —
+        // the right context to fix it. Off by default (+~3.5MB to the per-page
+        // worker); `WASM_NAMES=1 node engine/build.mjs worker` turns it on.
+        ...(process.env.WASM_NAMES ? ["--profiling-funcs"] : [])],
        "qjs_worker.js");
   console.log("[build] " + size("qjs_worker.js"));
 }

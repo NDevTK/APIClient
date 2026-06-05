@@ -2204,7 +2204,10 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         // needs to bound the shape it is currently missing (a stack overflow that
         // gets abandoned today instead of being made to terminate).
         var _culpritLoc = _co ? ((_co.file || "?") + ":" + _co.line + ":" + _co.col) : null;
-        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size, culprit: _culpritId || "(unknown)", culpritLoc: _culpritLoc });
+        // Capture the overflow stack TOP (the deepest, repeating frames name the
+        // recursion cycle) — distinguishes a worker-JS re-drive recursion (HOSTDRIVER
+        // frames) from a wasm/QuickJS one, deciding WHERE the fix goes.
+        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size, culprit: _culpritId || "(unknown)", culpritLoc: _culpritLoc, stack: String((e && e.stack) || "").slice(0, 1100) });
         // A culprit that throws the SAME way on every re-drive is provably
         // unhelpable (forced exec is deterministic) — count repeats so the recycle
         // below can abandon it (mark driven) rather than re-drive it forever.
