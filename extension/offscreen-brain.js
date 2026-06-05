@@ -5248,13 +5248,56 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     // cap); diagnostic buffer, not analysis state, so it drops nothing learned.
     if (!Array.isArray(tab._resolverErrors)) tab._resolverErrors = [];
     var _seenRe = new Set(tab._resolverErrors.map(function (r) { return r.message; }));
+    // Reply-example seed (CLAUDE.md opaque-with-example policy): a fromReply
+    // chain — fetch(reply.field) — names its SOURCE endpoint + field. Fire ONE
+    // bounded safe GET per source (cached → no spam + deterministic; GET-only →
+    // no account change; origin-scoped under safeFetch's OWN SOP/CORS with the
+    // page principal) and extract the field — the real value the bundle CANNOT
+    // compute (server input). The endpoint + field stay forced-exec-learned;
+    // this only fills the EXAMPLE, a marked sample, never a branch decider.
+    var _rcPrincipal = (_tabMeta.get(tabId) || {}).url || "";
+    if (!tab._replyCache) tab._replyCache = {};
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
       var _re = analysis.resolverErrors[_rei];
       console.debug("[AST:resolver] %s: %s", _re.context, _re.message);
       if (_re.stack) console.debug(_re.stack);
+      if (_rcPrincipal && _re.fromReply && _re.opaqueSources && _re.opaqueFields && _re.opaqueFields.length) {
+        var _src = null;
+        for (var _si = 0; _si < _re.opaqueSources.length; _si++) {
+          var _os = _re.opaqueSources[_si];
+          if (typeof _os === "string" && _os.indexOf("fetch.") === 0 && _os.indexOf(" ") > 0) { _src = _os; break; }
+        }
+        var _srcEp = _src ? _src.slice(_src.indexOf(" ") + 1) : null;
+        var _absSrc = null;
+        // Resolve against the page principal — safeFetch wants an absolute URL +
+        // checks its origin vs the principal (origin-relative SSRF: same-origin
+        // ok, public->private blocked). A bundle's source URL is relative.
+        if (_srcEp && _srcEp.indexOf("{") < 0) { try { _absSrc = new URL(_srcEp, _rcPrincipal).href; } catch (e) {} }
+        if (_absSrc) {
+          var _reply = tab._replyCache[_absSrc];
+          if (_reply === undefined) {
+            try {
+              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, method: "GET", credentialed: true });
+              _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
+            } catch (e) { _reply = null; }
+            tab._replyCache[_absSrc] = _reply;
+          }
+          if (_reply) {
+            var _json = null; try { _json = JSON.parse(_reply); } catch (e) {}
+            if (_json && typeof _json === "object") {
+              var _ex = {};
+              for (var _fi = 0; _fi < _re.opaqueFields.length; _fi++) {
+                var _fld = _re.opaqueFields[_fi];
+                if (typeof _json[_fld] === "string") _ex[_fld] = _json[_fld];
+              }
+              if (Object.keys(_ex).length) _re.replyExample = { source: _srcEp, fields: _ex };
+            }
+          }
+        }
+      }
       if (!_seenRe.has(_re.message)) {
         _seenRe.add(_re.message);
-        tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null });
+        tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null, replyExample: _re.replyExample || null });
       }
     }
   }
@@ -5520,13 +5563,56 @@ async function analyzeScript(tabId, scriptUrl, code) {
     // cap); diagnostic buffer, not analysis state, so it drops nothing learned.
     if (!Array.isArray(tab._resolverErrors)) tab._resolverErrors = [];
     var _seenRe = new Set(tab._resolverErrors.map(function (r) { return r.message; }));
+    // Reply-example seed (CLAUDE.md opaque-with-example policy): a fromReply
+    // chain — fetch(reply.field) — names its SOURCE endpoint + field. Fire ONE
+    // bounded safe GET per source (cached → no spam + deterministic; GET-only →
+    // no account change; origin-scoped under safeFetch's OWN SOP/CORS with the
+    // page principal) and extract the field — the real value the bundle CANNOT
+    // compute (server input). The endpoint + field stay forced-exec-learned;
+    // this only fills the EXAMPLE, a marked sample, never a branch decider.
+    var _rcPrincipal = (_tabMeta.get(tabId) || {}).url || "";
+    if (!tab._replyCache) tab._replyCache = {};
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
       var _re = analysis.resolverErrors[_rei];
       console.debug("[AST:resolver] %s: %s", _re.context, _re.message);
       if (_re.stack) console.debug(_re.stack);
+      if (_rcPrincipal && _re.fromReply && _re.opaqueSources && _re.opaqueFields && _re.opaqueFields.length) {
+        var _src = null;
+        for (var _si = 0; _si < _re.opaqueSources.length; _si++) {
+          var _os = _re.opaqueSources[_si];
+          if (typeof _os === "string" && _os.indexOf("fetch.") === 0 && _os.indexOf(" ") > 0) { _src = _os; break; }
+        }
+        var _srcEp = _src ? _src.slice(_src.indexOf(" ") + 1) : null;
+        var _absSrc = null;
+        // Resolve against the page principal — safeFetch wants an absolute URL +
+        // checks its origin vs the principal (origin-relative SSRF: same-origin
+        // ok, public->private blocked). A bundle's source URL is relative.
+        if (_srcEp && _srcEp.indexOf("{") < 0) { try { _absSrc = new URL(_srcEp, _rcPrincipal).href; } catch (e) {} }
+        if (_absSrc) {
+          var _reply = tab._replyCache[_absSrc];
+          if (_reply === undefined) {
+            try {
+              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, method: "GET", credentialed: true });
+              _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
+            } catch (e) { _reply = null; }
+            tab._replyCache[_absSrc] = _reply;
+          }
+          if (_reply) {
+            var _json = null; try { _json = JSON.parse(_reply); } catch (e) {}
+            if (_json && typeof _json === "object") {
+              var _ex = {};
+              for (var _fi = 0; _fi < _re.opaqueFields.length; _fi++) {
+                var _fld = _re.opaqueFields[_fi];
+                if (typeof _json[_fld] === "string") _ex[_fld] = _json[_fld];
+              }
+              if (Object.keys(_ex).length) _re.replyExample = { source: _srcEp, fields: _ex };
+            }
+          }
+        }
+      }
       if (!_seenRe.has(_re.message)) {
         _seenRe.add(_re.message);
-        tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null });
+        tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null, replyExample: _re.replyExample || null });
       }
     }
   }
