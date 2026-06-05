@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>chain_async</title></head>
+<body><div id="root">chain_async</div>
+<!-- DIAGNOSTIC repro of oidc's STRUCTURE (not a usefulness claim): the reply
+     chain split across async functions with a cached metadata helper — exactly
+     the shape (getMetadata await + cache → consumer uses metadata.field → fetch)
+     where chain_min's simple .then connected but oidc did not. Isolates whether
+     the async-multi-function indirection is what breaks the connection. -->
+<script>
+var _meta = null;
+async function getMetadata() {                    // oidc MetadataService.getMetadata
+  if (_meta) return _meta;
+  var r = await fetch("/chain_config.json");
+  _meta = await r.json();
+  return _meta;
+}
+async function exchange() {                        // oidc token client
+  var m = await getMetadata();
+  return fetch(m.dataUrl);                         // chained: URL from the reply
+}
+globalThis.__flow = function () { return exchange(); };
+</script>
+</body></html>
