@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8"><title>chain_nested</title></head>
+<body><div id="root">chain_nested</div>
+<!-- DIAGNOSTIC: the NESTED this-member shape (oidc: tokenClient._metadataService
+     .getMetadata()). exchange() is a this-method whose metadata source is a
+     this-MEMBER instance, not a module function — the difference vs chain_async
+     (which connected). If this stays cold, the nested this-member receiver is the
+     confirmed real-library reply-chain gap. -->
+<script>
+class MetaService {
+  async getMetadata() {
+    if (this._m) return this._m;
+    var r = await fetch("/chain_config.json");
+    this._m = await r.json();
+    return this._m;
+  }
+}
+class TokenClient {
+  constructor() { this._meta = new MetaService(); }
+  async exchange() {
+    var m = await this._meta.getMetadata();   // nested this-member
+    return fetch(m.dataUrl);
+  }
+}
+var client = new TokenClient();
+globalThis.__flow = function () { return client.exchange(); };
+</script>
+</body></html>
