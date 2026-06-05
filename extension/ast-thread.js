@@ -919,6 +919,15 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             : "request target did not resolve to a concrete string at the converged fixpoint (opaque component reached the " + kind + " URL/method): " + JSON.stringify({ method: method, url: rawUrl }),
           loc: _reLoc,
           chain: _reSite.chain,
+          // The opaque URL's symbolic fields + their SOURCE-LEAF provenance
+          // (from __feUrlHoles). A reply->request chain (oidc
+          // metadata.token_endpoint) shows src "fetch.body.json" — the
+          // server-response the URL came from; `fromReply` is the honest signal
+          // that a fetch flows into THIS fetch (what a bounded reply-GET would
+          // seed). location.search/cookie/etc. show their own src. Empty = bare.
+          opaqueFields: (holes && holes.length) ? holes.map(function (h) { return h && h.name; }).filter(Boolean) : undefined,
+          opaqueSources: (holes && holes.length) ? holes.map(function (h) { return h && h.src; }).filter(Boolean) : undefined,
+          fromReply: (holes && holes.some(function (h) { return h && h.src && (h.src.indexOf("fetch.") === 0 || h.src.indexOf("XHR.") === 0); })) || undefined,
         });
       }
       return;
