@@ -721,7 +721,15 @@ async function cmdTriage(args) {
           const st = (typeof self._learningState === "function") ? self._learningState() : { state: "no-fn" };
           const recs = self._whyRecords || [];
           const by = {}; for (const x of recs) { const p = (x && x.phase) || "?"; by[p] = (by[p] || 0) + 1; }
-          return { st, by, nWhy: recs.length };
+          // Surface the THROW err strings + recycle reasons — the distinguishing
+          // root signal for a wasm_trap recycle loop that the bare phase COUNT
+          // hides: "Cannot enlarge memory"/"Out of memory"=scale (boot bundle too
+          // big), "out of bounds"/"unreachable"=a specific orphan bug, "Aborted()"
+          // =an assert. Without this a large-site wedge shows 59× deep_callmain_throw
+          // with no CAUSE, so it can't be root-caused (CLAUDE.md: READ throw.err).
+          const throws = recs.filter((x) => x && x.phase === "deep_callmain_throw").slice(-6).map((x) => ({ err: x.err, step: x.step, culprit: x.culprit }));
+          const recycles = {}; for (const x of recs) { if (x && x.phase === "deep_recycle") { const rr = x.reason || "?"; recycles[rr] = (recycles[rr] || 0) + 1; } }
+          return { st, by, nWhy: recs.length, throws, recycles };
         });
         return { ms: Date.now() - t0, ...r };
       } catch (e) {
@@ -762,6 +770,7 @@ async function cmdTriage(args) {
     log(JSON.stringify({
       verdict, state: b.st.state, driven: dn(b), dDriven, rem: b.st.rem, total: b.st.total,
       gapMs, signals: sb, deltas: { dOverflow, dWhy }, whyByPhase: b.by,
+      recycles: b.recycles, throws: b.throws,
     }, null, 2));
   });
 }

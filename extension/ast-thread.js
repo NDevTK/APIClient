@@ -2186,7 +2186,14 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            instance and retry. */
         _dpCallThrew = true;
         if (!self._whyRecords) self._whyRecords = [];
-        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size, culprit: (self._currentOrphan && self._currentOrphan.id) || "(unknown)" });
+        var _culpritId = (self._currentOrphan && self._currentOrphan.id) || null;
+        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size, culprit: _culpritId || "(unknown)" });
+        // A culprit that throws the SAME way on every re-drive is provably
+        // unhelpable (forced exec is deterministic) — count repeats so the recycle
+        // below can abandon it (mark driven) rather than re-drive it forever.
+        // Terminate-on-provable-pointlessness, NOT a cap: a one-off trap (count 1)
+        // still recycles and retries; only a deterministic RE-throw is abandoned.
+        if (_culpritId) { if (!self._deepThrowCounts) self._deepThrowCounts = {}; self._deepThrowCounts[_culpritId] = (self._deepThrowCounts[_culpritId] || 0) + 1; }
       }
       // Final drain for any lines after the last JSPI yield (e.g. the
       // closing @DS the engine emits before returning from main).
@@ -2229,6 +2236,19 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         await new Promise(function (r) { setTimeout(r, 0); });
         m = await freshInstance();
         huntContext.onYieldDrain = _drainDeepStdout;
+        /* Abandon a culprit that has thrown identically ≥2× — re-driving it only
+           re-throws (forced exec is deterministic), which is what wedges the grind
+           in a recycle loop (esm.sh: one orphan overflowed 1231×, driven flat).
+           Mark it driven so the fresh instance advances to the remaining residue;
+           its OWN endpoints stay forfeit until the recursion-collapse fixpoint
+           bounds the overflow (the deeper root). Recorded, never silent. */
+        if (_dpCallThrew && self._currentOrphan && self._currentOrphan.id &&
+            self._deepThrowCounts && self._deepThrowCounts[self._currentOrphan.id] >= 2 &&
+            !_driven.has(self._currentOrphan.id)) {
+          var _ab = self._currentOrphan.id;
+          _driven.add(_ab);
+          self._whyRecords.push({ phase: "deep_orphan_abandoned", culprit: _ab, throws: self._deepThrowCounts[_ab], step: _deepStats.steps });
+        }
         if (_driven.size) {
           try { m.FS.writeFile("/driven", Array.from(_driven).join("\n")); }
           catch (e) {
