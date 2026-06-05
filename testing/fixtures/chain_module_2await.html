@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>chain_module_2await</title></head>
+<body><div id="root">chain_module_2await</div>
+<!-- 2x2 isolation cell: MODULE fn + DOUBLE await (vs chain_async = module +
+     single await, which CONNECTS; vs chain_nested2 = method + double await,
+     COLD). If this is COLD the gap is the DOUBLE-AWAIT (`var j = await
+     r.json(); return j`) treated as a return, NOT method-ness. -->
+<script>
+async function getConfig() { var r = await fetch("/chain_config.json"); var j = await r.json(); return j; }
+async function load() { var c = await getConfig(); return fetch(c.dataUrl); }
+globalThis.__load = function () { return load(); };
+</script>
+</body></html>

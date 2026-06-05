@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>chain_evt_async</title></head>
+<body><div id="root">chain_evt_async</div>
+<button id="go">Go</button>
+<!-- The FH-drain analogue of chain_async: a grind-driven FACTORY (__setup, never
+     called on load) registers an ASYNC click handler whose await-gated fetch
+     chains off a config reply. The grind drives __setup -> addEventListener queues
+     the real handler closure into FH -> the post-batch FH drain fires it. WITHOUT
+     the FH-drain pump fix the async handler's await-gated fetch(c.dataUrl) sits in
+     a .then chain that qjs_drop_pending_jobs DROPS -> cold; WITH the fix it is
+     PUMPED -> the chained endpoint (/api/data/from-reply-example) is learned.
+     Inert on load (the handler only runs on a click the grind forces). -->
+<script>
+async function getConfig() { var r = await fetch("/chain_config.json"); return r.json(); }
+window.__setup = function () {
+  var b = document.getElementById("go");
+  b.addEventListener("click", async function () {
+    var c = await getConfig();
+    return fetch(c.dataUrl);   // await-gated; DROPPED without the FH pump fix
+  });
+};
+</script>
+</body></html>

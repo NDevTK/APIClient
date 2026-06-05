@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><title>chain_method_2await</title></head>
+<body><div id="root">chain_method_2await</div>
+<!-- Missing 2x2 cell: METHOD + DOUBLE await, NO direct fetch before the await
+     (chain_nested2 runReply = this + a direct fetch(this.cfg.url) and is COLD).
+     If this CONNECTS the culprit is the DIRECT fetch before the await (firing
+     a host edge before the reply chain), isolating chain_nested2's failure to
+     the pre-await host fire. If COLD it's method+double itself. -->
+<script>
+class Helper {
+  async getConfig() { var r = await fetch("/chain_config.json"); var j = await r.json(); return j; }
+}
+class Client {
+  constructor() { this._h = new Helper(); }
+  async run() { var c = await this._h.getConfig(); return fetch(c.dataUrl); }
+}
+var c = new Client();
+globalThis.__run = function () { return c.run(); };
+</script>
+</body></html>

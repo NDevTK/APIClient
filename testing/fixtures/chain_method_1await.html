@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><title>chain_method_1await</title></head>
+<body><div id="root">chain_method_1await</div>
+<!-- 2x2 isolation cell: METHOD + SINGLE await (returns r.json() unawaited, like
+     chain_async's getMetadata but as a class method). If this CONNECTS the gap
+     is NOT method-ness; combined with chain_module_2await it pins the cause to
+     the double-await. -->
+<script>
+class Helper {
+  async getConfig() { var r = await fetch("/chain_config.json"); return r.json(); }
+}
+class Client {
+  constructor() { this._h = new Helper(); }
+  async run() { var c = await this._h.getConfig(); return fetch(c.dataUrl); }
+}
+var c = new Client();
+globalThis.__run = function () { return c.run(); };
+</script>
+</body></html>
