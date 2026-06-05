@@ -949,8 +949,8 @@ async function cmdNetDiff(args) {
         for (const sc of globalStore.scriptCache.values()) {
           const re = sc && sc.result && sc.result.resolverErrors;
           if (Array.isArray(re)) for (const r of re) _reachedSet.add(
-            (r && r.loc ? "@" + r.loc.line + ":" + r.loc.column + " " : "") +
-            String((r && r.message) || JSON.stringify(r)).slice(0, 220));
+            (r && r.loc ? "@" + (r.loc.file ? r.loc.file + ":" : "") + r.loc.line + ":" + r.loc.column + " " : "") +
+            String((r && r.message) || JSON.stringify(r)).slice(0, 200));
         }
       }
       const _reached = Array.from(_reachedSet);
