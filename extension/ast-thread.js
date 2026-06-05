@@ -559,6 +559,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // the only non-bundle MEMFS paths; the stack-frame filter excludes
   // those explicitly.
   var bundleFiles = [];
+  var _slicePathToUrl = {};   // slice MEMFS path → its real script URL, for per-importer ESM relative-import resolution
   var INFRA_PATHS = { "/h.js": 1, "/d.js": 1, "/pre.js": 1, "/p.js": 1 };
   if (scriptOffsets && scriptOffsets.length) {
     var lines = String(code).split("\n");
@@ -579,6 +580,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       }
       pathSeen[path] = 1;
       bundleFiles.push({ path: path, src: sliceLines.join("\n"), startLine: startLn });
+      if (scriptUrl) _slicePathToUrl[path] = scriptUrl;
     }
   } else {
     bundleFiles.push({ path: "/b.0.js", src: String(code), startLine: 1 });
@@ -1310,8 +1312,20 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            imported module in. Without this, modular ESM apps (Vite/Rollup, modular
            firebase) analyze to total:0 — their dep modules are fetched by the live
            page's module loader, never shipped by content.js. */
-        var _mu = line.slice(8).trim();
-        if (_mu && !isUnresolved(_mu)) esmImportUrls.add(_mu);
+        var _mu = line.slice(8);
+        var _tab = _mu.indexOf("\t");
+        if (_tab >= 0) {
+          // <importer-module-name>\t<relative-specifier> — a fetched CDN module's
+          // relative/absolute-path import. WHATWG-resolve the specifier against the
+          // importer's REAL URL (not the page base) so esm.sh-style transitive
+          // imports like `/@supabase/auth-js.mjs` reach the right origin.
+          var _imp = _mu.slice(0, _tab).trim(), _spec = _mu.slice(_tab + 1).trim();
+          var _impUrl = _slicePathToUrl[_imp];
+          if (_impUrl && _spec) { try { esmImportUrls.add(new URL(_spec, _impUrl).href); } catch (e) {} }
+        } else {
+          _mu = _mu.trim();
+          if (_mu && !isUnresolved(_mu)) esmImportUrls.add(_mu);
+        }
         continue;
       }
       if (line.slice(0, 5) === "@WHY ") {
