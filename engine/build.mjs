@@ -117,7 +117,16 @@ function emcc(extra, out) {
   // libz3.a (wasm) appended to the link line — emcc auto-links the
   // C++ runtime so no extra -lstdc++ needed; Z3 is single-threaded so
   // no -pthread either.
-  run(EM_PY, [EMCC, ...CFLAGS, ...SRC, Z3_LIB_W, ...WMEM, ...extra, "-o", out],
+  // ASAN=1 → a wasm32 (NOT MEMORY64 — emscripten ASan is incompatible with it)
+  // diagnostic build WITHOUT z3 (its prebuilt .a is MEMORY64-only, and z3 is not
+  // on the async-resume path being debugged): catches a stray/aliased heap write
+  // AT RUNTIME in the live Chrome harness. Diagnostic only; never shipped.
+  const asan = !!process.env.ASAN;
+  const cflags = asan ? CFLAGS.map((f) => (f === "-DQJS_HAVE_Z3=1" ? "-DQJS_HAVE_Z3=0" : f)) : CFLAGS;
+  const src = asan ? SRC.filter((f) => !/z3_shim/i.test(f)) : SRC;
+  const z3 = asan ? [] : [Z3_LIB_W];
+  const wmem = asan ? WMEM.filter((f) => f !== "-sMEMORY64=1") : WMEM;
+  run(EM_PY, [EMCC, ...cflags, ...src, ...z3, ...wmem, ...extra, "-o", out],
       { EM_CONFIG, EMSDK });
 }
 function size(f) {
@@ -228,7 +237,13 @@ function worker() {
         // name the recursing C fn (e.g. qjs_t_free) instead of wasm-function[N] —
         // the right context to fix it. Off by default (+~3.5MB to the per-page
         // worker); `WASM_NAMES=1 node engine/build.mjs worker` turns it on.
-        ...(process.env.WASM_NAMES ? ["--profiling-funcs"] : [])],
+        ...(process.env.WASM_NAMES ? ["--profiling-funcs"] : []),
+        // ASAN=1 builds the wasm worker with AddressSanitizer to catch a stray
+        // write / use-after-free AT RUNTIME in the live Chrome harness (the real
+        // target — NOT a native test bed, so the JSPI/safeFetch/crypto path is
+        // exercised). Names so the violation stack is readable. Heavy (shadow
+        // memory) + slow; diagnostic only. `ASAN=1 node engine/build.mjs worker`.
+        ...(process.env.ASAN ? ["-fsanitize=address", "--profiling-funcs", "-sERROR_ON_UNDEFINED_SYMBOLS=0"] : [])],
        "qjs_worker.js");
   console.log("[build] " + size("qjs_worker.js"));
 }
