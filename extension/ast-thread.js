@@ -969,15 +969,31 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       for (var i = 0; i < holes.length; i++) if (holes[i] && holes[i].name === nm && holes[i].line) return { line: holes[i].line, column: holes[i].col };
       return null;
     };
+    // The concrete example the engine recovered for this hole (a real
+    // location.search / URLSearchParams.get value that rode a concat into the
+    // URL) — surfaces /api/user/{userId} WITH example 42, not a bare template.
+    var holeExampleOf = function (nm) {
+      if (!holes || !holes.length) return undefined;
+      for (var i = 0; i < holes.length; i++) if (holes[i] && holes[i].name === nm && holes[i].example !== undefined) return holes[i].example;
+      return undefined;
+    };
     // Path-template params: __feUrlShape renders an opaque path segment as
-    // {name} (e.g. /settings/avatars/{id} — id is real attacker/server
-    // input with no static value). Record each as a path param (opaque, no
-    // example) so the structure is learned; the path keeps the {name}
-    // template (OpenAPI style), never a fabricated value.
+    // {name} (e.g. /settings/avatars/{id} — id is real attacker/server input).
+    // Record each as a path param so the structure is learned; the path keeps
+    // the {name} template (OpenAPI style). A concrete example is attached only
+    // when the engine recovered one (a real location.search / query value that
+    // rode a concat) — never a fabricated value.
     var ppRe = /\{([^}\/]+)\}/g, ppm;
-    while ((ppm = ppRe.exec(path))) add(ppm[1], "path", undefined, holeLocOf(ppm[1]));
+    while ((ppm = ppRe.exec(path))) add(ppm[1], "path", holeExampleOf(ppm[1]), holeLocOf(ppm[1]));
     var qp = parsePairs(qs);
-    for (var k in qp) for (var vi = 0; vi < qp[k].length; vi++) add(k, "query", qp[k][vi], holeLocOf(k));
+    for (var k in qp) for (var vi = 0; vi < qp[k].length; vi++) {
+      // A "{tab}" query value is a __feUrlShape hole marker — resolve it to the
+      // engine's recovered example for that hole (fetch("?section="+location
+      // .search value)) so the query param carries the concrete example, not
+      // the synthetic marker; holeLoc follows the hole name too.
+      var qv = qp[k][vi], qm = /^\{([^}]+)\}$/.exec(qv);
+      add(k, "query", qm ? holeExampleOf(qm[1]) : qv, holeLocOf(qm ? qm[1] : k));
+    }
     // Prefer hostedge's structured `shape` over JSON.parse(body) — the
     // shape carries per-field provenance (literal value vs opaque
     // attacker-tainted), so `{action:"favorite", target_id:<opaque>}`
