@@ -4681,7 +4681,7 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
 
   // Even on a cached eager-bundle hit, fold in the lazy chunks (the chunk
   // re-analyses are cache hits too). Fire-and-forget: replay path is sync.
-  _maybeDownloadChunks(tabId, buf, analysis.chunkUrls)
+  _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, analysis.esmImportUrls)
     .catch(function (e) { console.debug("[AST:chunks] tab=%d replay error: %s", tabId, e && e.message); });
 }
 
@@ -4701,9 +4701,12 @@ const _analysisInflight = new Set();
 //   enforced: safeFetch(as:"script") -> CORB + SSRF; principal = the tab's
 //             trusted sender.tab.url (_chunkPageOrigin via _tabMeta); CORB-drops
 //             surface in _chunkDiag.corbBlocked.
-async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
+async function _maybeDownloadChunks(tabId, buf, chunkUrls, esmImportUrls) {
   if (!buf) return;
-  if (buf._chunkRoundDone) return;
+  // Terminal guard: once the final (no-fresh) round ran the grind, stop. Webpack
+  // script.src chunks follow ONE round; ESM import URLs (a bounded dependency tree)
+  // follow MULTI-round to fixpoint — see the candidate split below.
+  if (buf._chunkGrindDone) return;
   // A page with NO discovered lazy chunks (a simple page, an inline-only
   // message handler, learn.microsoft.com's no-split bundle) STILL needs the
   // deep orphan-residue grind — it's what drives the gated/unreached
@@ -4716,6 +4719,15 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
   // list to [] and fall through; the fresh-empty branch sets _chunkRoundDone
   // and dispatches the deep pass exactly as the no-fresh-chunks case does.
   if (!Array.isArray(chunkUrls)) chunkUrls = [];
+  if (!Array.isArray(esmImportUrls)) esmImportUrls = [];
+  // Round 1 considers BOTH webpack chunks + ESM imports; later rounds consider ONLY
+  // newly-surfaced ESM imports (transitive deps of fetched modules). This keeps a
+  // webpack app's huge script.src graph one-round (no transitive fetch storm) while
+  // following ESM `import` trees to fixpoint. _chunkSeen dedups → `fresh` shrinks →
+  // terminates. Only the final (fresh-empty) round runs the deep grind (_chunkGrindDone).
+  var _firstRound = !buf._chunkFetchStarted;
+  buf._chunkFetchStarted = true;
+  chunkUrls = _firstRound ? chunkUrls.concat(esmImportUrls) : esmImportUrls;
   if (!buf._chunkSeen) buf._chunkSeen = new Set();
   var known = new Set();
   var maxOrder = 0;
@@ -4784,13 +4796,14 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
     // the deep grind, so its load-time wrapper fetches (site-header.json,
     // toc.json, taxonomies, …) stayed unlearned — confirmed live: 5 ast
     // endpoints, empty deep-status, 7 real fetch() calls missed. Run the
-    // deep pass once: _chunkRoundDone=true makes the inner call dispatch
-    // deep=true, and the top-of-function `if (buf._chunkRoundDone) return`
-    // guard prevents re-entry/recursion. Reset on throw so a wasm trap
+    // deep pass once: _chunkRoundDone=true makes the inner call dispatch deep=true;
+    // _chunkGrindDone marks the grind ran so the grind pass's own trailing
+    // _maybeDownloadChunks returns (no re-loop). Reset both on throw so a wasm trap
     // doesn't permanently lock out a later retry (mirrors the download path).
+    buf._chunkGrindDone = true;
     buf._chunkRoundDone = true;
     try { await _analyzeCombinedScriptsInner(tabId, buf); }
-    catch (e) { buf._chunkRoundDone = false; throw e; }
+    catch (e) { buf._chunkGrindDone = false; buf._chunkRoundDone = false; throw e; }
     return;
   }
   console.debug("[AST:chunks] tab=%d: %d new lazy chunk(s) to download", tabId, fresh.length);
@@ -4838,12 +4851,12 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
     }
   }
   if (added === 0) {
-    // Every candidate chunk failed to download, but the deep grind must
-    // still run on the scripts we DO have (same rationale as the no-fresh-
-    // chunks path above — the orphan residue drive isn't chunk-dependent).
+    // Every candidate chunk failed to download — terminal (they won't change on
+    // retry; _chunkSeen dedups them). Run the deep grind on what we have.
+    buf._chunkGrindDone = true;
     buf._chunkRoundDone = true;
     try { await _analyzeCombinedScriptsInner(tabId, buf); }
-    catch (e) { buf._chunkRoundDone = false; throw e; }
+    catch (e) { buf._chunkGrindDone = false; buf._chunkRoundDone = false; throw e; }
     return;
   }
   console.debug("[AST:chunks] tab=%d: folded in %d chunk(s), re-analysing (%d scripts total)",
@@ -4854,11 +4867,10 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls) {
      BFS over the now-647-script bundle). The earlier "set after success
      only" version turned round-2 into a full-BFS run that ate ~95s × 429
      schedules and skipped the deep grind entirely — observed live as
-     deepStats.steps=0 on round-2. The flag is reset to FALSE inside the
-     catch so a thrown inner call (wasm memory trap on a pathological
-     chunk, etc.) doesn't permanently lock out retry — late script
-     arrivals can trigger _maybeDownloadChunks again, which will see
-     _chunkRoundDone=false and proceed. */
+     deepStats.steps=0 on round-2. This is a FETCH round, NOT terminal: its trailing
+     _maybeDownloadChunks runs again and — _chunkGrindDone not yet set — follows THIS
+     round's newly-surfaced ESM transitive imports (the fixpoint loop; webpack chunks
+     are not re-considered after round 1). _chunkRoundDone reset on throw allows retry. */
   buf._chunkRoundDone = true;
   try { await _analyzeCombinedScriptsInner(tabId, buf); }
   catch (e) { buf._chunkRoundDone = false; throw e; }
@@ -5255,7 +5267,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     // never dispatched → the finding was never found. The other early returns
     // above (sendToOffscreen throw, worker cleared, epoch reset) are genuine
     // abort paths where skipping is correct; this "no findings yet" one is not.
-    try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls); }
+    try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, analysis.esmImportUrls); }
     catch (e) { console.debug("[AST:chunks] tab=%d error: %s", tabId, e && e.message); }
     return;
   }
@@ -5379,7 +5391,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // Download the lazy chunks this run discovered and re-analyse the union —
   // learns the login-gated endpoints (issues/preheat/index, …). Awaited so
   // the in-flight signal covers it.
-  try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls); }
+  try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, analysis.esmImportUrls); }
   catch (e) { console.debug("[AST:chunks] tab=%d error: %s", tabId, e && e.message); }
 }
 

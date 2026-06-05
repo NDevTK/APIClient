@@ -657,6 +657,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
                                     // the SAME sink aggregate as multiple
                                     // interprocedural paths (not first-wins drop)
   var chunkUrls = new Set();         // lazy-chunk URLs the bundle's loader requested (script.src=)
+  var esmImportUrls = new Set();     // ESM `import` URLs (@MODURL) — a BOUNDED dependency tree,
+                                     // so the offscreen follows these MULTI-ROUND (transitive) to
+                                     // fixpoint, unlike the webpack script.src graph (one-round).
 
   // Normalise the engine's @P (per-leaf step records) into the shape
   // background.js's _runExploitProbe expects:
@@ -1308,7 +1311,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            firebase) analyze to total:0 — their dep modules are fetched by the live
            page's module loader, never shipped by content.js. */
         var _mu = line.slice(8).trim();
-        if (_mu && !isUnresolved(_mu)) chunkUrls.add(_mu);
+        if (_mu && !isUnresolved(_mu)) esmImportUrls.add(_mu);
         continue;
       }
       if (line.slice(0, 5) === "@WHY ") {
@@ -2362,6 +2365,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // analyzer on the chunk — the unused-feature API surface (most of a
     // complex app's endpoints) lives there. Engine-grounded discovery.
     chunkUrls: chunkUrls ? Array.from(chunkUrls) : [],
+    esmImportUrls: esmImportUrls ? Array.from(esmImportUrls) : [],
     sourceUrl: sourceUrl || "",
     sourceMapUrl: sourceMapUrlOf(code),
     _timings: { ms: Date.now() - t0, runs: runs },
