@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><title>oidc_search_min</title></head>
+<body><div id="root">oidc_search_min</div>
+<!-- Isolates oidc-client-ts signinCallback's code-exchange gate WITHOUT the huge
+     real bundle (minimum repro): read location.search ?code, bail if absent, else
+     fetch the discovery reply's token endpoint with the code. On load there's no
+     ?code, so forced exec must drive past the location.search gate (opaque-with-
+     example, shipped this session) AND propagate the reply (free-async chain) to
+     learn POST /api/data/from-reply-example. If COLD, isolates which gate fails.
+     Inert on load. -->
+<script>
+async function discover() { var r = await fetch("/chain_config.json"); return r.json(); }
+globalThis.__callback = async function () {
+  var params = new URLSearchParams(location.search);
+  var code = params.get("code");
+  if (!code) return;                                   // the gate: bails with no ?code
+  var cfg = await discover();
+  return fetch(cfg.dataUrl, { method: "POST", body: JSON.stringify({ code: code }) });
+};
+</script>
+</body></html>
