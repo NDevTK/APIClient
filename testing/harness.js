@@ -945,15 +945,28 @@ async function cmdNetDiff(args) {
       // signal — "reached but went opaque" (a driving/resolver gap to CLOSE) vs
       // "never reached" (a coverage gap). From scriptCache[].result.resolverErrors.
       const _reachedSet = new Set();
+      const _moduleLinkSet = new Set();   // ESM "could not load module '/x'" — a DISCOVERY/LINK gap, not endpoint opacity
       if (typeof globalStore !== "undefined" && globalStore.scriptCache) {
         for (const sc of globalStore.scriptCache.values()) {
           const re = sc && sc.result && sc.result.resolverErrors;
-          if (Array.isArray(re)) for (const r of re) _reachedSet.add(
-            (r && r.loc ? "@" + (r.loc.file ? r.loc.file + ":" : "") + r.loc.line + ":" + r.loc.column + " " : "") +
-            String((r && r.message) || JSON.stringify(r)).slice(0, 200));
+          if (Array.isArray(re)) for (const r of re) {
+            const msg = String((r && r.message) || JSON.stringify(r));
+            if (msg.indexOf("could not load module") >= 0) {
+              // A failed ESM import link, NOT a host edge that went opaque. Separating
+              // it keeps reachedButOpaque a clean driving-gap signal and surfaces the
+              // distinct "module didn't link" gap (e.g. esm.sh transitive deps).
+              const mm = msg.match(/could not load module filename '([^']+)'/);
+              _moduleLinkSet.add(mm ? mm[1] : msg.slice(0, 120));
+            } else {
+              _reachedSet.add(
+                (r && r.loc ? "@" + (r.loc.file ? r.loc.file + ":" : "") + r.loc.line + ":" + r.loc.column + " " : "") +
+                msg.slice(0, 200));
+            }
+          }
         }
       }
       const _reached = Array.from(_reachedSet);
+      const _moduleLink = Array.from(_moduleLinkSet);
       if (unused) {
         // LEARNED-NOT-LIVE = the unused API surface forced exec found (THE VALUE,
         // the inverse of gaps): AST-learned endpoints the page never fired, with
@@ -1016,10 +1029,12 @@ async function cmdNetDiff(args) {
         return { mode: "unused = learned-but-not-live (the unused API surface forced exec found — THE VALUE)",
                  learnedCount: learnedMap.size, liveDistinct: seen.size, unusedCount: unusedList.length,
                  reachedButOpaque: _reached.length, reachedSamples: _reached.slice(0, 10),
+                 moduleLinkFailures: _moduleLink.length, moduleLinkSamples: _moduleLink.slice(0, 10),
                  unused: unusedList.slice(0, 100) };
       }
       return { learnedCount: learned.size, liveDistinct: seen.size, gapCount: gaps.length,
                reachedButOpaque: _reached.length, reachedSamples: _reached.slice(0, 10),
+               moduleLinkFailures: _moduleLink.length, moduleLinkSamples: _moduleLink.slice(0, 10),
                assetFiltered: assetFiltered + (showAssets ? " (shown; --assets)" : " (static-asset GETs excluded; --assets to show)"),
                gaps: gaps.slice(0, 60).map((g) => g.k + (g.status ? " [" + g.status + "]" : "") + (g.site ? "  ← " + g.site : "  ← (no stack)")) };
     }, { all, showAssets, unused }).catch((e) => ({ error: String(e && e.message || e) }));
