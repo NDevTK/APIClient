@@ -5277,7 +5277,13 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
           var _reply = tab._replyCache[_absSrc];
           if (_reply === undefined) {
             try {
-              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, method: "GET", credentialed: true });
+              // Same-origin → credentialed (the user's session = the authed API
+              // surface). Cross-origin → PUBLIC non-credentialed: a public
+              // discovery/config doc (oidc .well-known) serves ACAO:* which
+              // safeFetch's credentialed CORS would block, and creds must NEVER
+              // leak cross-origin. Per the CLAUDE.md origin-scoped policy.
+              var _sameOrig = false; try { _sameOrig = new URL(_absSrc).origin === new URL(_rcPrincipal).origin; } catch (e) {}
+              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, method: "GET", credentialed: _sameOrig });
               _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
             } catch (e) { _reply = null; }
             tab._replyCache[_absSrc] = _reply;
@@ -5615,7 +5621,13 @@ async function analyzeScript(tabId, scriptUrl, code) {
           var _reply = tab._replyCache[_absSrc];
           if (_reply === undefined) {
             try {
-              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, method: "GET", credentialed: true });
+              // Same-origin → credentialed (the user's session = the authed API
+              // surface). Cross-origin → PUBLIC non-credentialed: a public
+              // discovery/config doc (oidc .well-known) serves ACAO:* which
+              // safeFetch's credentialed CORS would block, and creds must NEVER
+              // leak cross-origin. Per the CLAUDE.md origin-scoped policy.
+              var _sameOrig = false; try { _sameOrig = new URL(_absSrc).origin === new URL(_rcPrincipal).origin; } catch (e) {}
+              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, method: "GET", credentialed: _sameOrig });
               _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
             } catch (e) { _reply = null; }
             tab._replyCache[_absSrc] = _reply;
