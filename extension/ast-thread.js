@@ -2197,8 +2197,14 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            instance and retry. */
         _dpCallThrew = true;
         if (!self._whyRecords) self._whyRecords = [];
-        var _culpritId = (self._currentOrphan && self._currentOrphan.id) || null;
-        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size, culprit: _culpritId || "(unknown)" });
+        var _co = self._currentOrphan;
+        var _culpritId = (_co && _co.id) || null;
+        // Capture the culprit's source loc (@DSTART carries file/line/col) — names
+        // WHICH function overflowed, the context the recursion-collapse fixpoint
+        // needs to bound the shape it is currently missing (a stack overflow that
+        // gets abandoned today instead of being made to terminate).
+        var _culpritLoc = _co ? ((_co.file || "?") + ":" + _co.line + ":" + _co.col) : null;
+        self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size, culprit: _culpritId || "(unknown)", culpritLoc: _culpritLoc });
         // A culprit that throws the SAME way on every re-drive is provably
         // unhelpable (forced exec is deterministic) — count repeats so the recycle
         // below can abandon it (mark driven) rather than re-drive it forever.
@@ -2257,8 +2263,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             self._deepThrowCounts && self._deepThrowCounts[self._currentOrphan.id] >= 2 &&
             !_driven.has(self._currentOrphan.id)) {
           var _ab = self._currentOrphan.id;
+          var _abLoc = (self._currentOrphan.file || "?") + ":" + self._currentOrphan.line + ":" + self._currentOrphan.col;
           _driven.add(_ab);
-          self._whyRecords.push({ phase: "deep_orphan_abandoned", culprit: _ab, throws: self._deepThrowCounts[_ab], step: _deepStats.steps });
+          self._whyRecords.push({ phase: "deep_orphan_abandoned", culprit: _ab, loc: _abLoc, throws: self._deepThrowCounts[_ab], step: _deepStats.steps });
         }
         if (_driven.size) {
           try { m.FS.writeFile("/driven", Array.from(_driven).join("\n")); }

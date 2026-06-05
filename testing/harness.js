@@ -727,7 +727,7 @@ async function cmdTriage(args) {
           // big), "out of bounds"/"unreachable"=a specific orphan bug, "Aborted()"
           // =an assert. Without this a large-site wedge shows 59× deep_callmain_throw
           // with no CAUSE, so it can't be root-caused (CLAUDE.md: READ throw.err).
-          const throws = recs.filter((x) => x && x.phase === "deep_callmain_throw").slice(-6).map((x) => ({ err: x.err, step: x.step, culprit: x.culprit }));
+          const throws = recs.filter((x) => x && x.phase === "deep_callmain_throw").slice(-6).map((x) => ({ err: x.err, step: x.step, culprit: x.culprit, loc: x.culpritLoc }));
           const recycles = {}; for (const x of recs) { if (x && x.phase === "deep_recycle") { const rr = x.reason || "?"; recycles[rr] = (recycles[rr] || 0) + 1; } }
           return { st, by, nWhy: recs.length, throws, recycles };
         });
