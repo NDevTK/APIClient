@@ -947,19 +947,56 @@ async function cmdNetDiff(args) {
         // A learned TEMPLATE whose hole matched a concrete live URL DID fire —
         // exclude it from "unused" too (same template-match as the gap side).
         const liveMatchesTemplate = (k) => { const re = tmplRe(k); if (!re) return false; for (const lk of seen) if (re.test(lk)) return true; return false; };
+        // globalStore.endpoints carries only method+host+path; the per-param
+        // KEYS+VALUES — including BODY keys (the {email,password} login shape,
+        // THE MOAT here) — live in scriptCache[].result.fetchCallSites[].params
+        // ({name, location:"path"|"query"|"body", validValues}). Without this
+        // cross-ref the unused list shows bare URLs and the diagnostic hides the
+        // very thing it measures (forced exec's recovered body shape). Build a
+        // method+pathname → merged-params map (numeric segments collapsed to
+        // match the endpoint key's norm).
+        const _paramKey = (method, url) => {
+          let path = String(url || "");
+          try { path = new URL(url, "https://x/").pathname; }
+          catch (e) { const qi = path.indexOf("?"); if (qi >= 0) path = path.slice(0, qi); }
+          path = path.replace(/\/[0-9a-f]{16,}/g, "/:id").replace(/\/\d+/g, "/:n");
+          return (method || "GET") + " " + path;
+        };
+        const _fcsParams = new Map();   // paramKey -> Map(name -> {loc, vals:Set})
+        if (typeof globalStore !== "undefined" && globalStore.scriptCache) {
+          for (const sc of globalStore.scriptCache.values()) {
+            const fcs = sc && sc.result && sc.result.fetchCallSites;
+            if (!Array.isArray(fcs)) continue;
+            for (const cs of fcs) {
+              if (!cs || !Array.isArray(cs.params) || !cs.params.length) continue;
+              const pk = _paramKey(cs.method, cs.url);
+              let pm = _fcsParams.get(pk); if (!pm) { pm = new Map(); _fcsParams.set(pk, pm); }
+              for (const p of cs.params) {
+                if (!p || !p.name) continue;
+                let pe = pm.get(p.name); if (!pe) { pe = { loc: p.location || "query", vals: new Set() }; pm.set(p.name, pe); }
+                if (Array.isArray(p.validValues)) for (const v of p.validValues) if (v != null && v !== "") pe.vals.add(v);
+              }
+            }
+          }
+        }
+        const _fmtParams = (e) => {
+          const pm = _fcsParams.get(_paramKey(e.method, e.path || e.url || ""));
+          if (!pm || !pm.size) return "";
+          // Body keys first (the moat), then path, then query.
+          const ord = { body: 0, path: 1, query: 2 };
+          const parts = Array.from(pm.entries())
+            .sort((a, b) => (ord[a[1].loc] ?? 3) - (ord[b[1].loc] ?? 3))
+            .slice(0, 8)
+            .map(([name, info]) => String(name).slice(0, 40) + "@" + info.loc + (info.vals.size
+              ? "=" + Array.from(info.vals).slice(0, 3).map((x) => String(x).slice(0, 24)).join("|")
+              : "={opaque}"));
+          return "  [" + parts.join(", ") + "]";
+        };
         const unusedList = [];
         for (const [k, e] of learnedMap) {
           if (seen.has(k) || liveMatchesTemplate(k)) continue;
           if (e.source && e.source !== "ast_analysis") continue;
-          let ex = "";
-          try {
-            const ps = (e.params && e.params.length ? e.params
-                      : (e.methods && Object.values(e.methods)[0] && Object.values(e.methods)[0].params) || []);
-            ex = ps.slice(0, 5).map((p) => p.name + (p.example != null && p.example !== ""
-                   ? "=" + String(p.example).slice(0, 24)
-                   : (p.valueSource === "opaque" || p.in === "opaque" ? "={opaque}" : ""))).join(", ");
-          } catch (_) {}
-          unusedList.push(k + (ex ? "  [" + ex + "]" : ""));
+          unusedList.push(k + _fmtParams(e));
         }
         return { mode: "unused = learned-but-not-live (the unused API surface forced exec found — THE VALUE)",
                  learnedCount: learnedMap.size, liveDistinct: seen.size, unusedCount: unusedList.length,
