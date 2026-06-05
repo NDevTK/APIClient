@@ -12,9 +12,12 @@ class Helper {
   async getConfig() { var r = await fetch("/chain_config.json"); var j = await r.json(); return j; } // awaits then returns (vs return r.json())
 }
 class Client {
-  constructor() { this._h = new Helper(); }
+  constructor() { this._h = new Helper(); this.cfg = { url: "/api/runreply-direct" }; }
   runData() { return fetch(this._h.getUrl()); }                                 // nested call -> data -> fetch
-  async runReply() { var c = await this._h.getConfig(); return fetch(c.dataUrl); } // nested call -> reply -> fetch
+  async runReply() {
+    fetch(this.cfg.url);                                                        // DIRECT this-member: does runReply get real this?
+    var c = await this._h.getConfig(); return fetch(c.dataUrl);                 // nested async this-method -> reply -> fetch
+  }
 }
 var c = new Client();
 globalThis.__data = function () { return c.runData(); };
