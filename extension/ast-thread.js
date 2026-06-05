@@ -571,12 +571,22 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         : lines.length;
       var sliceLines = lines.slice(startLn - 1, endLn);
       var scriptUrl = scriptOffsets[si].url || "";
-      var basename = scriptUrl ? scriptUrl.split("?")[0].split("/").pop() : "";
       var path;
-      if (basename && basename.endsWith(".js") && !pathSeen["/" + basename] && !INFRA_PATHS["/" + basename]) {
-        path = "/" + basename;
+      if (scriptUrl && /^https?:\/\//i.test(scriptUrl)) {
+        // Encode the URL → "/x/<host><pathname>": a collision-free module identity the
+        // engine's qjs_module_normalize matches. The old basename scheme only worked for
+        // distinct .js basenames (firebase/gstatic); esm.sh ships many .mjs/no-ext modules
+        // with colliding basenames + deep paths, so identity must be the full host+path.
+        try { var _u = new URL(scriptUrl); path = "/x/" + _u.host + _u.pathname; }
+        catch (e2) { path = "/b." + si + ".js"; }
+        if (pathSeen[path]) path = "/b." + si + ".js";
       } else {
-        path = "/b." + si + ".js";
+        var basename = scriptUrl ? scriptUrl.split("?")[0].split("/").pop() : "";
+        if (basename && basename.endsWith(".js") && !pathSeen["/" + basename] && !INFRA_PATHS["/" + basename]) {
+          path = "/" + basename;
+        } else {
+          path = "/b." + si + ".js";
+        }
       }
       pathSeen[path] = 1;
       bundleFiles.push({ path: path, src: sliceLines.join("\n"), startLine: startLn });
@@ -1185,7 +1195,15 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         });
       },
     });
-    for (var i = 0; i < inMem.length; i++) inst.FS.writeFile(inMem[i][0], inMem[i][1]);
+    for (var i = 0; i < inMem.length; i++) {
+      // Create parent dirs first — FS.writeFile won't (ENOENT on nested paths).
+      // Flat slices ("/firebase-app.js") need none; deep encoded module-identity
+      // paths ("/x/<host>/@scope/pkg.mjs") do, or the slice silently fails to write
+      // and the module can't load (wedges an ESM-app boot).
+      var _ip = inMem[i][0], _sl = _ip.lastIndexOf("/");
+      if (_sl > 0) { try { inst.FS.mkdirTree(_ip.slice(0, _sl)); } catch (e) {} }
+      inst.FS.writeFile(_ip, inMem[i][1]);
+    }
     return inst;
   }
   function wasmBytes(inst) {
