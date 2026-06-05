@@ -573,11 +573,22 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       var scriptUrl = scriptOffsets[si].url || "";
       var path;
       if (scriptUrl && /^https?:\/\//i.test(scriptUrl)) {
-        // Encode the URL → "/x/<host><pathname>": a collision-free module identity the
-        // engine's qjs_module_normalize matches. The old basename scheme only worked for
-        // distinct .js basenames (firebase/gstatic); esm.sh ships many .mjs/no-ext modules
-        // with colliding basenames + deep paths, so identity must be the full host+path.
-        try { var _u = new URL(scriptUrl); path = "/x/" + _u.host + _u.pathname; }
+        // Encode the URL → "/x/<host><path><?query>": a collision-free module identity
+        // the engine's qjs_module_normalize matches. The old basename scheme only worked
+        // for distinct .js basenames (firebase/gstatic); esm.sh ships many .mjs/no-ext
+        // modules with colliding basenames + deep paths, so identity must be host+path.
+        // The engine's abs-path branch concatenates "/x/<host>" with the RAW importer
+        // specifier — INCLUDING ?query + a literal caret (esm.sh imports redirect stubs
+        // as "/@supabase/phoenix@^0.4.2?target=es2022"). new URL() percent-encodes ^→%5E
+        // and drops the query, so the slice wrote ".../phoenix@%5E0.4.2" while the engine
+        // looked up ".../phoenix@^0.4.2?target=es2022" → the stub never linked → the whole
+        // supabase-js import chain threw → createClient never ran → 0 endpoints. Decode the
+        // pathname + keep the query so the slice identity matches the engine lookup.
+        try {
+          var _u = new URL(scriptUrl);
+          var _pn = _u.pathname; try { _pn = decodeURIComponent(_pn); } catch (e3) {}
+          path = "/x/" + _u.host + _pn + _u.search;
+        }
         catch (e2) { path = "/b." + si + ".js"; }
         if (pathSeen[path]) path = "/b." + si + ".js";
       } else {
