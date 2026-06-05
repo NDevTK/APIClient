@@ -44,8 +44,17 @@ Every analyzer-driven request goes through **`safeFetch`** (`lib/safe-fetch.js`)
 page-context requests go through **`pageContextFetch`** (as the actual page, browser-CORS/PNA-gated).
 There is no raw `fetch` on any analyzer path. `safeFetch` guarantees, in one auditable place:
 
-- **cookies omitted** (`credentials:"omit"`) — no credentialed exfiltration.
-- **GET only** — forced execution explores many paths; it never replays a state-changing method.
+- **cookies omitted by default** (`credentials:"omit"`) — no credentialed exfiltration. In
+  **credentialed mode** (`opts.credentialed` — replay a learned GET to read the real *authenticated*
+  reply, the logged-in API surface) cookies ARE attached, but the REPLY is gated by safeFetch's **own
+  SOP/CORS**: same-origin to the page principal is readable; a cross-origin credentialed read is allowed
+  only if the server granted the page's *exact* origin a credentialed read (`Access-Control-Allow-Origin`
+  == origin, never `*`, **and** `Access-Control-Allow-Credentials: true`). The browser's same-origin
+  policy does **not** apply to a host-permission fetch (it can read any origin), so safeFetch
+  re-implements the credentialed-CORS rule on the bytes before returning them.
+- **GET only** — forced execution explores many paths; it never replays a state-changing method. A
+  well-designed server does not mutate on GET, so even a credentialed GET replay is side-effect-free;
+  POST/PUT/DELETE endpoints are RECORDED by forced exec, never issued.
 - **http(s) only** — `file:`/`data:`/`blob:`/`chrome-extension:` are rejected.
 - **origin-relative SSRF (Private Network Access):** a *private* target (loopback / link-local /
   RFC1918) is blocked **unless the page principal is itself private** — a public page cannot use the

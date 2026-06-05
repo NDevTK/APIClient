@@ -3,12 +3,17 @@
 // ALL external requests (lazy chunks, source maps, discovery probes, anything the
 // analyzer pulls off the network) go through safeFetch so the security invariants
 // live in ONE auditable place:
-//   • cookies OMITTED  — credentials:"omit": never attach the user's session to an
-//                        analyzer-initiated request (no credentialed exfiltration).
+//   • cookies OMITTED by default (credentials:"omit") — no credentialed exfiltration.
+//                        In CREDENTIALED mode (opts.credentialed) the user's cookies
+//                        ARE attached to replay a learned GET and read the REAL
+//                        authenticated reply (the logged-in API surface) — but the
+//                        reply is gated by safeFetch's OWN SOP/CORS check (a host-
+//                        permission fetch bypasses the browser's; see below).
 //   • GET only         — method is forced to GET: forced execution explores many
 //                        paths; a real POST/PUT/DELETE replay would mutate server
-//                        state. Credentialed/same-origin verification (schema.verify)
-//                        uses pageContextFetch in the page renderer, not this.
+//                        state. A well-designed server never mutates on GET, so even
+//                        the credentialed replay is side-effect-free; POST/PUT/DELETE
+//                        endpoints are only RECORDED by forced exec, never issued.
 //   • HTTP(S) only     — scheme must be http:/https:; file:/data:/blob:/chrome-
 //                        extension:/etc. are rejected so a crafted URL can't read
 //                        local/extension resources.
@@ -88,9 +93,13 @@ function _isPrivateHost(host) {
 }
 
 // @security-contract  ENFORCEMENT POINT (the single network chokepoint)
-//   guarantees: cookies omitted; method GET; http(s) only; origin-relative SSRF
-//               (a PRIVATE target is blocked unless the page principal is itself
-//               private) on BOTH the initial URL and the post-redirect final URL.
+//   guarantees: cookies omitted by default — or, in opts.credentialed mode, a GET
+//               replay whose REPLY is gated by safeFetch's OWN SOP/CORS (same-origin
+//               to the principal, else exact-origin ACAO + ACAC == true), since a
+//               host-permission fetch bypasses the browser's same-origin policy;
+//               method GET; http(s) only; origin-relative SSRF (a PRIVATE target is
+//               blocked unless the page principal is itself private) on BOTH the
+//               initial URL and the post-redirect final URL.
 //   opts.as:    "script"          -> + CORB (cross-origin must be JS-typed)
 //               "sourcemap"/other -> data, no CORB (not executed as code)
 //   principal:  opts.pageUrl PER CALL (the page's trusted sender.tab.url) — no
@@ -116,9 +125,16 @@ async function safeFetch(url, opts) {
   var _pagePrivate = _isPrivateHost(_pageHost);
   if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
     return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {}, body: "" };
-  var init = { method: "GET", credentials: "omit", redirect: "follow" };
+  // opts.credentialed: replay a learned GET with the user's COOKIES to fetch the REAL
+  // authenticated reply (the logged-in API surface), instead of a useless 401. Still
+  // GET-only (method is forced below) so a well-designed server performs no account
+  // action. The reply is gated by our OWN SOP/CORS check after the fetch (see below) —
+  // the browser's does not apply to an extension fetch with host_permissions.
+  var credentialed = !!opts.credentialed;
+  var init = { method: "GET", credentials: credentialed ? "include" : "omit", redirect: "follow" };
   // Analyzer probe headers only (e.g. discovery's X-Goog-Api-Key / X-Http-Method-
-  // Override). Never auth/cookies — credentials are omitted above regardless.
+  // Override). Auth headers are never added here; cookies (credentialed mode) are the
+  // browser's, attached by credentials:"include", and gated by the SOP/CORS check below.
   if (opts.headers) init.headers = opts.headers;
   if (opts.signal) init.signal = opts.signal;
   var resp = await fetch(parsed.href, init);
@@ -144,6 +160,27 @@ async function safeFetch(url, opts) {
         (headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0,
         body, parsed.href, _po))
     return { ok: false, status: 0, statusText: "blocked-corb", headers: headers, body: "" };
+  // OWN SOP/CORS for a CREDENTIALED reply. The browser does NOT apply the same-origin
+  // policy to an extension fetch with host_permissions (it can read any origin), so
+  // when cookies are attached we MUST enforce SOP + CORS HERE on the bytes before
+  // returning them — else a malicious bundle could record a cross-origin endpoint and
+  // exfiltrate the user's authenticated data from any site they are signed into.
+  //   • SOP:  same-origin to the page principal (opts.pageUrl) is readable.
+  //   • CORS: a CROSS-origin credentialed read is allowed ONLY if the server granted
+  //           the page's EXACT origin a credentialed read — Access-Control-Allow-Origin
+  //           == that origin (never "*") AND Access-Control-Allow-Credentials == true.
+  // This is precisely the browser's credentialed-CORS rule, re-implemented because the
+  // host-permission fetch bypasses it. Blocked reads return no body (the request was a
+  // GET, so nothing was mutated; we simply refuse to hand the bundle the bytes).
+  if (credentialed) {
+    var _pageOrigin = ""; try { _pageOrigin = new URL(_po).origin; } catch (e) {}
+    if (!_pageOrigin || parsed.origin !== _pageOrigin) {
+      var _acao = headers["access-control-allow-origin"] || "";
+      var _acac = (headers["access-control-allow-credentials"] || "").toLowerCase();
+      if (!_pageOrigin || _acao !== _pageOrigin || _acac !== "true")
+        return { ok: false, status: 0, statusText: "blocked-cors-credentialed", headers: {}, body: "" };
+    }
+  }
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body };
 }
 if (typeof self !== "undefined") self.safeFetch = safeFetch;
