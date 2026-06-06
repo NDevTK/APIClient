@@ -122,7 +122,7 @@ function _trimRequestLog(tab) {
 
 const _tabMeta = new Map(); // tabId → { title, url, closed? }
 const _deepStatsByTab = new Map(); // tabId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
-const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, isTop, lastSeen }>
+const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, documentId, lastSeen }> (self-reported; NO isTop — unprovable from a frame's own message)
 const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
 
 // A document's SECURITY ORIGIN for same-origin checks — the BROWSER-provided
@@ -153,23 +153,22 @@ function _senderOrigin(sender) {
 // The offscreen can't observe chrome.webNavigation; the thin SW forwards each
 // onCommitted as an __evt NAV message, dispatched here by the brain's onMessage.
 function _onNav(details) {
+  // Frame ORIGINS are NOT tracked here anymore. A webNavigation URL parses to a
+  // tuple origin even for a sandboxed frame whose real origin is OPAQUE, and the
+  // nav event races the document's own CONTENT_HTML. Each frame now self-reports
+  // its authoritative browser origin (sender.origin via _senderOrigin) with its
+  // CONTENT_HTML message — one source, no race (see _tabFrames population there).
+  // This handler keeps only the TOP-frame tab metadata + focus-recency bump,
+  // which the navigation (the user's current action) is the right signal for.
   var tabId = details.tabId;
-  var frameId = details.frameId;
-  if (!_tabFrames.has(tabId)) _tabFrames.set(tabId, new Map());
-  var frMap = _tabFrames.get(tabId);
-  var url = details.url || "";
-  // Explicit URL.canParse guard so origin extraction isn't a throw-and-recover
-  // pattern — chrome:// / about: / unparseable inputs yield empty origin
-  // directly, which downstream treats as "unknown origin" correctly.
-  var origin = (url && URL.canParse(url)) ? new URL(url).origin : "";
   var isTop = details.parentFrameId === -1;
-  frMap.set(frameId, { url: url, origin: origin, isTop: isTop, lastSeen: Date.now() });
-  // Update _tabMeta for top frames + bump lastActivatedTs so the review-queue
-  // picker (priority.js pickFromReviewQueue) treats a NEWLY-navigated tab as
-  // "user attention" — without this, only tab-clicks (TAB_ACTIVATED) bumped
-  // recency, so a fresh-navigation tab's analysis sat behind older queued
-  // tabs even though the navigation IS the user's current focus action.
+  var url = details.url || "";
   if (isTop && url) {
+    // Bump lastActivatedTs so the review-queue picker (priority.js
+    // pickFromReviewQueue) treats a NEWLY-navigated tab as "user attention" —
+    // without this, only tab-clicks (TAB_ACTIVATED) bumped recency, so a
+    // fresh-navigation tab's analysis sat behind older queued tabs even though
+    // the navigation IS the user's current focus action.
     var tm = _tabMeta.get(tabId);
     if (!tm) {
       tm = { title: "Tab " + tabId, url: url };
@@ -178,8 +177,8 @@ function _onNav(details) {
       tm.url = url;
     }
     tm.lastActivatedTs = Date.now();
+    notifyPopup(tabId);
   }
-  notifyPopup(tabId);
 }
 
 // Cross-script AST analysis: buffer scripts per tab, debounce, concatenate + analyze
@@ -188,8 +187,9 @@ function _onNav(details) {
 // navigations), each its OWN origin; keying by tab merged them into one buffer
 // and collapsed the credentialed-read principal. Each entry: { tabId, docKey,
 // origin, url, pageHtml, scripts:[], chunk-state }. One CONTENT_HTML per document
-// creates/refreshes its entry; the engine sources the scripts (inline via the SSR
-// phase, externals via __feLoadScript).
+// creates/refreshes its entry; the engine sources the scripts itself (Lexbor
+// parses the HTML, qjs_run_doc_scripts runs each <script> in document order —
+// inline directly, external <script src> via __feLoadScript).
 const _scriptBuffers = new Map(); // documentId → per-document analysis state
 
 // The per-document credentialed-read principal for an analysis whose principal URL
@@ -4309,9 +4309,14 @@ async function handleResponseBody(tabId, msg, frameId) {
     // pageUrls always tracks the top-level page URL
     var _svcMeta = _tabMeta.get(tabId);
     if (_svcMeta?.url) _svcDocEntry.pageUrls.add(_svcMeta.url);
-    if (_svcFrameInfo && !_svcFrameInfo.isTop) {
-      // Request came from an iframe — record iframe origin separately
-      if (_svcFrameInfo.origin) {
+    // Record a frame's origin separately when it DIFFERS from the top-level page
+    // origin (a cross-origin / sandboxed / fenced iframe). We do NOT key this on a
+    // self-reported "isTop" (a fenced frame would impersonate the main frame);
+    // instead compare the frame's browser-provided origin to the top page's.
+    if (_svcFrameInfo && _svcFrameInfo.origin) {
+      var _svcTopOrigin = "";
+      if (_svcMeta?.url && URL.canParse(_svcMeta.url)) _svcTopOrigin = new URL(_svcMeta.url).origin;
+      if (_svcFrameInfo.origin !== _svcTopOrigin) {
         if (!_svcDocEntry.frameOrigins) _svcDocEntry.frameOrigins = new Set();
         _svcDocEntry.frameOrigins.add(_svcFrameInfo.origin);
       }
@@ -4455,36 +4460,6 @@ function _resolvePathParamNames(callSite, scriptOffsets, traceMapsByUrl) {
   } catch (e) { return null; }
 }
 
-// Build cross-file definition index from combined AST propDefs+defMap.
-// Maps property/function names to {sourceUrl, line} using scriptOffsets
-// to convert combined-code lines back to per-script lines.
-function _buildCrossDefs(buf, analysis, scriptOffsets) {
-  if (!buf || !scriptOffsets || !scriptOffsets.length) return;
-  var crossDefs = {}; // { name: { sourceUrl, line } }
-  // propDefs: { "defLine:objName": { propName: propDefLine } }
-  if (analysis.propDefs) {
-    for (var pk in analysis.propDefs) {
-      var props = analysis.propDefs[pk];
-      for (var pn in props) {
-        if (!crossDefs[pn]) {
-          var info = _findScriptForLine(props[pn], scriptOffsets);
-          crossDefs[pn] = { sourceUrl: info.url, line: props[pn] - info.lineStart + 1 };
-        }
-      }
-    }
-  }
-  // defMap: { name: line } — top-level function/var/class
-  if (analysis.defMap) {
-    for (var dn in analysis.defMap) {
-      if (!crossDefs[dn]) {
-        var dInfo = _findScriptForLine(analysis.defMap[dn], scriptOffsets);
-        crossDefs[dn] = { sourceUrl: dInfo.url, line: analysis.defMap[dn] - dInfo.lineStart + 1 };
-      }
-    }
-  }
-  buf.crossDefs = crossDefs;
-}
-
 // Compare new security findings against globalStore to mark as new/existing/fixed
 function _markSecurityFindingChanges(scriptUrl, findings) {
   var prev = globalStore.securityFindings.get(scriptUrl);
@@ -4542,10 +4517,6 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
   var meta = _tabMeta.get(tabId);
   if (meta && meta.url) tabUrl = meta.url;
   else if (buf && buf.pageUrl) tabUrl = buf.pageUrl;
-
-  // Cross-file definition index is populated by analyzeJSBundle's pre-pass
-  // into analysis.defMap/propDefs — GET_CROSS_DEFS projects those
-  // combined-bundle lines back into per-script coords on first request.
 
   var hasFindings = analysis.protoEnums.length || analysis.protoFieldMaps.length ||
     analysis.fetchCallSites.length || analysis.sourceMapUrl ||
@@ -5183,10 +5154,6 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   } else if (cacheKey) {
     console.debug("[AST:cache] SKIPPING write for tab=%d (degenerate result: %d resolverErrors, no learned facts) — next navigation will retry", tabId, analysis.resolverErrors.length);
   }
-
-  // Cross-file definition index is populated by analyzeJSBundle's pre-pass
-  // into analysis.defMap/propDefs — GET_CROSS_DEFS projects those
-  // combined-bundle lines back into per-script coords on first request.
 
   if (analysis.resolverErrors && analysis.resolverErrors.length > 0) {
     // Surface to the popup diagnostic view, not console-only. A reached-but-
@@ -6294,14 +6261,14 @@ function handleContentMessage(msg, sender) {
 
   if (msg.type === "CONTENT_HTML") {
     // ONE MESSAGE PER DOCUMENT. The engine (Lexbor) parses this HTML and runs EVERY
-    // script in document order in one realm — inline via the SSR phase, external
-    // <script src> via __feLoadScript (the safeFetch chokepoint). The analysis
-    // target is the realm the grind drives; content.js ships nothing but this HTML.
-    // Keyed by documentId, NOT tabId: a tab holds many documents/frames (iframes,
-    // navigations), each its OWN origin — keying by tab merges them and collapses
-    // the credentialed-read principal. The principal for this document's analysis
-    // (safeFetch SSRF origin + window.location + the credentialed reply-seed) is
-    // THIS document's own origin/url, from the browser-provided sender.
+    // script in document order in one realm — inline directly, external <script src>
+    // via __feLoadScript (the safeFetch chokepoint), all by qjs_run_doc_scripts.
+    // The analysis target is the realm the grind drives; content.js ships nothing
+    // but this HTML. Keyed by documentId, NOT tabId: a tab holds many documents/
+    // frames (iframes, navigations), each its OWN origin — keying by tab merges them
+    // and collapses the credentialed-read principal. The principal for this
+    // document's analysis (safeFetch SSRF origin + window.location + the credentialed
+    // reply-seed) is THIS document's own origin/url, from the browser-provided sender.
     tab._pageHtml = String(msg.html || "");
     var _dk = sender.documentId || (tabId + ":" + (sender.frameId || 0));
     var _buf = _scriptBuffers.get(_dk);
@@ -6311,7 +6278,23 @@ function handleContentMessage(msg, sender) {
     _buf.origin = _senderOrigin(sender);                              // credentialed-read principal (per-document)
     _buf.url = sender.url || (sender.tab && sender.tab.url) || "";    // SSRF origin + window.location
     _buf.pageHtml = tab._pageHtml;
-    _buf.scripts = [];   // engine-sourced: Lexbor parses the HTML, the SSR phase runs inline + __feLoadScript runs externals — one system
+    // Frame self-registration. Each document reports its OWN browser-provided
+    // identity (sender.documentId + sender.origin + sender.frameId) via THIS
+    // message — the single authoritative source for the frame dialog (GET_FRAMES)
+    // and per-frame request routing. No nav-event-vs-message race (one source,
+    // arriving with the document), and the AUTHORITATIVE origin: never URL-parsed
+    // (a sandboxed frame's URL parses to a real origin it does NOT have — its true
+    // origin is opaque, which _senderOrigin reflects). We do NOT record an "isTop"
+    // flag: a frame CANNOT prove it is the main frame from its own report — a
+    // fenced frame is the root of its own frame tree and would impersonate the top
+    // frame. "Is the main frame" must come from webNavigation, never this message.
+    var _frId = sender.frameId || 0;
+    if (!_tabFrames.has(tabId)) _tabFrames.set(tabId, new Map());
+    _tabFrames.get(tabId).set(_frId, {
+      url: _buf.url, origin: _buf.origin,
+      documentId: sender.documentId || null, lastSeen: Date.now(),
+    });
+    _buf.scripts = [];   // engine-sourced: Lexbor parses the HTML, qjs_run_doc_scripts runs inline + external scripts — one system
     _buf.pending = 0;
     _buf.loadFired = true;
     _buf._chunkSeen = null; _buf._chunkFetchStarted = false;
@@ -6393,11 +6376,14 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         sendResponse([{ frameId: 0, url: _tabMeta.get(tabId)?.url || "", origin: "" }]);
         return;
       }
+      // No isTop in the response: a frame can't prove it's the main frame from
+      // its own report (fenced-frame impersonation). The popup routes by frameId;
+      // "which is the main frame" would need an authoritative webNavigation lookup.
       const checks = [];
       for (const [fid, info] of frames) {
         checks.push(
           swRpc("tabs.sendMessage", tabId, { type: "PING" }, { frameId: fid })
-            .then(() => ({ frameId: fid, url: info.url, origin: info.origin, isTop: info.isTop, alive: true }))
+            .then(() => ({ frameId: fid, url: info.url, origin: info.origin, alive: true }))
             .catch(() => ({ frameId: fid, alive: false }))
         );
       }
@@ -6405,7 +6391,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         const alive = [];
         for (var i = 0; i < results.length; i++) {
           if (results[i].alive) {
-            alive.push({ frameId: results[i].frameId, url: results[i].url, origin: results[i].origin, isTop: results[i].isTop });
+            alive.push({ frameId: results[i].frameId, url: results[i].url, origin: results[i].origin });
           } else {
             frames.delete(results[i].frameId);
           }
@@ -6417,85 +6403,6 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         sendResponse(alive);
       });
       return true; // async sendResponse
-    }
-
-    case "DUMP_BUNDLE_INFO": {
-      const buf = _scriptBuffers.get(tabId);
-      const tt = tabId != null ? getTab(tabId) : null;
-      if (!buf || !Array.isArray(buf.scripts)) { sendResponse({ error: "no buffer for tab" }); return; }
-      // All buffered scripts are JS now (data islands stay in the
-      // HTML payload Lexbor parses; never reach the buffer).
-      const exe = buf.scripts.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
-      sendResponse({
-        scriptCount: exe.length,
-        scriptLengths: exe.map(s => s.code ? s.code.length : 0),
-        scriptUrls: exe.map(s => s.url || null),
-        pageHtmlLen: tt && tt._pageHtml ? tt._pageHtml.length : 0,
-      });
-      return;
-    }
-
-    case "DUMP_BUNDLE_PART": {
-      const buf = _scriptBuffers.get(tabId);
-      if (!buf || !Array.isArray(buf.scripts)) { sendResponse({ error: "no buffer for tab" }); return; }
-      const exe = buf.scripts.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
-      const idx = msg.index | 0;
-      if (idx < 0 || idx >= exe.length) { sendResponse({ error: "out of range" }); return; }
-      sendResponse({
-        index: idx,
-        code: exe[idx].code || "",
-        url: exe[idx].url || null,
-        order: exe[idx].order || 0,
-        total: exe.length,
-      });
-      return;
-    }
-
-    case "DUMP_PAGE_HTML": {
-      const tt = tabId != null ? getTab(tabId) : null;
-      if (!tt || !tt._pageHtml) { sendResponse({ error: "no pageHtml for tab" }); return; }
-      // Page HTML for github fits in one response (~600KB), no need to
-      // chunk; if a future site exceeds, switch to chunked.
-      sendResponse({ html: tt._pageHtml });
-      return;
-    }
-
-    case "DIAG_TAB": {
-      const t = tabId != null ? getTab(tabId) : null;
-      const buf = _scriptBuffers.get(tabId);
-      let bufKB = 0;
-      let bufCount = 0;
-      if (buf && Array.isArray(buf.scripts)) {
-        bufCount = buf.scripts.length;
-        for (const s of buf.scripts) if (s.code) bufKB += (s.code.length / 1024) | 0;
-      }
-      sendResponse({
-        hasPageHtml: !!(t && t._pageHtml),
-        pageHtmlLen: t && t._pageHtml ? t._pageHtml.length : 0,
-        astScriptCount: t && t._astResults ? Object.keys(t._astResults).length : 0,
-        astFetchCount: (t && t._astResults && Array.isArray(t._astResults) && t._astResults[0] && t._astResults[0].fetchCallSites) ? t._astResults[0].fetchCallSites.length : 0,
-        securityFindingsCount: t && t._securityFindings ? t._securityFindings.length : 0,
-        scriptBufferCount: bufCount,
-        scriptBufferKB: bufKB,
-        scriptBufferPending: buf ? buf.pending : 0,
-        scriptBufferLoadFired: buf ? !!buf.loadFired : false,
-        // Deterministic "buffer settled" signal: the debounce timer
-        // is null AND loadFired AND pending=0 means the SW has
-        // committed to analyzing this batch (the debounce fired and
-        // _analyzeCombinedScripts was called). True well-defined
-        // signal — no "wait N polls for stability" heuristic needed
-        // by the test that observes this.
-        scriptBufferDebounceFired: !!(buf && buf.loadFired && buf.pending === 0 && !buf.timer && buf.scripts.length > 0),
-        // True while _analyzeCombinedScripts is executing for this
-        // tab (incl. the offscreen-worker call). Tests / harness
-        // poll `analysisRunning === false` to know completion vs
-        // mid-flight; deterministic signal, no clock guess.
-        analysisRunning: _analysisInflight.has(tabId),
-        chunkStreams: _chunkStreams.size,
-        contentPings: _contentPings.get(tabId) || [],
-        endpointCount: t && t.endpoints ? t.endpoints.size : 0,
-      });
-      return;
     }
 
     case "PROBE_ENDPOINT": {
@@ -6663,147 +6570,6 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "GET_DISCOVERY_CHANGES": {
       sendResponse(Object.fromEntries(globalStore.discoveryChanges));
       return;
-    }
-
-    case "GET_SCRIPT_SOURCE": {
-      var scriptUrl = msg.scriptUrl;
-      if (!scriptUrl) { sendResponse({ error: "no URL" }); return; }
-      var tab = tabId != null ? getTab(tabId) : null;
-      var _slFindings = tab ? mergedSecurityFindings(tab).filter(function(f) { return f.sourceUrl === scriptUrl; }) : [];
-      // Determine pageUrl from buffer or findings
-      var _slBuf = _scriptBuffers.get(tabId);
-      var _slPageUrl = _slBuf ? _slBuf.pageUrl : null;
-      if (!_slPageUrl && _slFindings.length > 0) _slPageUrl = _slFindings[0].pageUrl || null;
-
-      // Try script buffers first (already fetched for AST analysis)
-      if (_slBuf) {
-        for (var _sbi = 0; _sbi < _slBuf.scripts.length; _sbi++) {
-          if (_slBuf.scripts[_sbi].url === scriptUrl && _slBuf.scripts[_sbi].code) {
-            sendResponse({ code: _slBuf.scripts[_sbi].code, findings: _slFindings, pageUrl: _slPageUrl });
-            return;
-          }
-        }
-        // If requested URL is the page URL, return the same combined source the AST analyzed
-        // (all scripts in buffer order, joined with ;\n) so finding line numbers match
-        if (_slBuf.pageUrl && scriptUrl === _slBuf.pageUrl && _slBuf.scripts.length > 0) {
-          var _combined = "";
-          for (var _cli = 0; _cli < _slBuf.scripts.length; _cli++) {
-            if (_cli > 0) _combined += ";\n";
-            _combined += _slBuf.scripts[_cli].code;
-          }
-          sendResponse({ code: _combined, findings: _slFindings, pageUrl: _slPageUrl });
-          return;
-        }
-      }
-
-      // Try request log (captured response body from fetch/XHR)
-      if (tab && tab.requestLog) {
-        for (var _sli = tab.requestLog.length - 1; _sli >= 0; _sli--) {
-          var _slEntry = tab.requestLog[_sli];
-          if (_slEntry.url === scriptUrl && _slEntry.responseBody) {
-            var _slCode = _slEntry.responseBase64 ? atob(_slEntry.responseBody) : _slEntry.responseBody;
-            sendResponse({ code: _slCode, findings: _slFindings, pageUrl: _slPageUrl });
-            return;
-          }
-        }
-      }
-
-      // Re-fetch the script (extension has <all_urls>). safeFetch is the single
-      // chokepoint — it rejects private/non-public hosts (SSRF) and bad schemes,
-      // surfacing as !r.ok below; no separate guard here.
-      safeFetch(scriptUrl, { pageUrl: _slPageUrl }).then(function(r) {
-        if (!r.ok) throw new Error(r.status + " " + r.statusText);
-        return r.body;
-      }).then(function(code) {
-        sendResponse({ code: code, findings: _slFindings, pageUrl: _slPageUrl });
-      }).catch(function(e) {
-        sendResponse({ error: e.message });
-      });
-      return true; // async sendResponse
-    }
-
-    case "GET_TAB_SCRIPTS": {
-      var scripts = new Set();
-      // From script buffers (all scripts seen on the page)
-      var _tsBuf = _scriptBuffers.get(tabId);
-      if (_tsBuf) {
-        for (var _tsi = 0; _tsi < _tsBuf.scripts.length; _tsi++) {
-          if (_tsBuf.scripts[_tsi].url) scripts.add(_tsBuf.scripts[_tsi].url);
-        }
-      }
-      // From tab security findings (survives SW restart via _securityFindings)
-      var _tsTab = tabId != null ? getTab(tabId) : null;
-      if (_tsTab) {
-        var _tsFindings = mergedSecurityFindings(_tsTab);
-        for (var _tsfi = 0; _tsfi < _tsFindings.length; _tsfi++) {
-          if (_tsFindings[_tsfi].sourceUrl) scripts.add(_tsFindings[_tsfi].sourceUrl);
-        }
-      }
-      // From globalStore.securityFindings (persisted in IndexedDB, survives SW restart)
-      for (var [_tsKey] of globalStore.securityFindings) {
-        if (_tsKey && !_tsKey.startsWith("unknown_")) scripts.add(_tsKey);
-      }
-      sendResponse([...scripts]);
-      return;
-    }
-
-    case "GET_CROSS_DEFS": {
-      // Click-to-definition data (propDefs + defMap) is now populated by
-      // analyzeJSBundle's pre-pass — the structural-def collection rides
-      // on the same traversal the security analysis already needs, so
-      // there's no separate buildDefinitionMap call to make here. Pull
-      // the cached analysis result off the tab and re-project it into
-      // per-script coords. The AST_BUILD_DEFINITION_MAP fallback only
-      // runs if the analysis is missing (shouldn't happen in practice
-      // once the capture pipeline has completed).
-      const _cdBuf = _scriptBuffers.get(tabId);
-      if (!_cdBuf || !_cdBuf.scripts || !_cdBuf.scripts.length) {
-        sendResponse(null);
-        return;
-      }
-      if (_cdBuf.crossDefs) { sendResponse(_cdBuf.crossDefs); return; }
-
-      const _cdTab = state.tabs.get(tabId);
-      const _cdAnalysis = _cdTab && _cdTab._astResults && _cdTab._astResults[0];
-      const scriptOffsets = [];
-      let nlCount = 0;
-      for (let ci = 0; ci < _cdBuf.scripts.length; ci++) {
-        if (ci > 0) { nlCount++; }
-        scriptOffsets.push({ url: _cdBuf.scripts[ci].url, lineStart: nlCount + 1 });
-        const code = _cdBuf.scripts[ci].code;
-        for (let ch = 0; ch < code.length; ch++) {
-          if (code.charCodeAt(ch) === 10) nlCount++;
-        }
-      }
-      if (_cdAnalysis && (_cdAnalysis.defMap || _cdAnalysis.propDefs)) {
-        _buildCrossDefs(_cdBuf, _cdAnalysis, scriptOffsets);
-        sendResponse(_cdBuf.crossDefs || null);
-        return;
-      }
-      // Fallback: no analysis available yet, rebuild from scratch
-      (async () => {
-        let combined = "";
-        let _fbNlCount = 0;
-        for (let ci = 0; ci < _cdBuf.scripts.length; ci++) {
-          if (ci > 0) { combined += ";\n"; _fbNlCount++; }
-          const code = _cdBuf.scripts[ci].code;
-          for (let ch = 0; ch < code.length; ch++) {
-            if (code.charCodeAt(ch) === 10) _fbNlCount++;
-          }
-          combined += code;
-        }
-        let resp;
-        try {
-          resp = await sendToOffscreen({ type: "AST_BUILD_DEFINITION_MAP", code: combined });
-        } catch (e) {
-          console.debug("[GET_CROSS_DEFS] offscreen failed:", e && e.message || e);
-          sendResponse(null); return;
-        }
-        if (!resp || !resp.success) { sendResponse(null); return; }
-        _buildCrossDefs(_cdBuf, resp.result, scriptOffsets);
-        sendResponse(_cdBuf.crossDefs || null);
-      })();
-      return true;
     }
 
     case "GET_ENDPOINT_SCHEMA": {
@@ -7746,11 +7512,15 @@ function _onTabRemoved(tabId) {
   // WebSocket connection map, the script-fetch buffer. These don't survive
   // tab close because the page is gone; the request log is HISTORY and
   // stays.
+  // WebSocket connections and the live frame index die with the page — they
+  // describe a renderer that no longer exists, so free them.
   _wsConnState.delete(tabId);
   _tabFrames.delete(tabId);
-  var buf = _scriptBuffers.get(tabId);
-  if (buf && buf.timer) clearTimeout(buf.timer);
-  _scriptBuffers.delete(tabId);
+  // The per-document script buffers are NOT freed on tab close: each document's
+  // combined source backs a resumable/background deep grind that keeps learning
+  // the closed tab's API surface (and resumes across sessions) without
+  // revisiting the page. They are reclaimed only by the 🗑️ bin hard-reset
+  // (_scriptBuffers.clear in CLEAR_TAB). Keyed by documentId, never tabId.
 }
 
 // ─── Send Request: Schema Resolution ─────────────────────────────────────────
