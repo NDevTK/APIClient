@@ -4964,11 +4964,15 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // entry simply does not match — no manual version bumps needed.
   var scriptHashes = [];
   try {
-    // The document IDENTITY (its HTML) is part of the cache key: the scripts are
-    // engine-sourced, so round 1's buf.scripts is empty — without the pageHtml hash
-    // every document would share the same (empty) key and collide. buf.url
-    // disambiguates two documents with identical HTML at different origins.
-    scriptHashes.push("doc:" + (buf.url || "") + ":" + (await _hashScriptSHA256(buf.pageHtml || "")));
+    // The combination submitted IS the cache identity: hash the pageHtml (round 1's
+    // scripts are engine-sourced, so buf.scripts is empty) + each downloaded chunk
+    // (round 2). Content/combination keying — NOT url: urls change and pages reuse
+    // scripts (jquery), so the same combination at a new url must HIT (dedup) and
+    // distinct content at the same url (about:blank) must MISS (no leak). The
+    // principal ORIGIN (buf.origin, MessageSender-derived, NEVER url) disambiguates
+    // identical content under different principals (their credentialed reads +
+    // relative resolution differ); opaque principals are unique so they never share.
+    scriptHashes.push("doc:" + (buf.origin || "") + ":" + (await _hashScriptSHA256(buf.pageHtml || "")));
     for (var hi = 0; hi < scripts.length; hi++) {
       scriptHashes.push(await _hashScriptSHA256(scripts[hi].code));
     }
@@ -4979,7 +4983,12 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
 
   var cacheKey = null;
   var analyzerFp = await getAnalyzerFingerprint();
-  if (analyzerFp && scriptHashes.length === scripts.length) {
+  // scriptHashes = [the leading "doc:" pageHtml-identity entry] + one per chunk,
+  // so a successful hash run is exactly scripts.length + 1 (SubtleCrypto failure
+  // resets it to [], which won't match — no cache, fail safe). The "+ 1" is the
+  // post-migration fix: round-1 scripts are engine-sourced (buf.scripts empty), so
+  // the document identity lives in that leading pageHtml entry, not a per-script one.
+  if (analyzerFp && scriptHashes.length === scripts.length + 1) {
     // Cache key = (analyzer fingerprint) + (script content hashes) + (round
     // mode). Any change to the analyzer worker files OR the analyzed scripts
     // flips the key, so stale entries simply don't match. The round-mode
