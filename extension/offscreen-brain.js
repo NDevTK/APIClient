@@ -122,8 +122,8 @@ function _trimRequestLog(tab) {
   while (tab.requestLog.length > MAX_REQUEST_LOG_ENTRIES) tab.requestLog.pop();
 }
 
-const _deepStatsByDoc = new Map(); // tabId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
-const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
+const _deepStatsByDoc = new Map(); // documentId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
+const _wsConnState = new Map(); // documentId → Map<wsId, { url, readyState }>
 
 // A document's SECURITY ORIGIN for same-origin checks — the BROWSER-provided
 // MessageSender.origin of the REQUESTING FRAME (authoritative), NEVER parsed from
@@ -831,7 +831,7 @@ _globalStoreReady.then(async function () {
 /* Session-storage persistence layer removed. Previously the brain mirrored
    request logs to chrome.storage.session so they survived MV3 SW eviction
    (when the brain lived in the SW). The brain now runs in the offscreen
-   document — stable lifetime, no eviction — so `state.tabs[tabId].requestLog`
+   document — stable lifetime, no eviction — so `state.docs[documentId].requestLog`
    is the single authoritative store. scheduleSessionSave /
    saveTabSessionLog / saveSessionIndex / loadSessionLogs / serializeLogEntry
    and all call sites have been deleted. */
@@ -6364,9 +6364,8 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "GET_TAB_LIST": {
-      // Single pass over state.tabs — closed tabs stay in state.tabs (with
-      // meta.closed=true) instead of being moved to a session-storage mirror,
-      // so one iteration covers live AND closed entries.
+      // Closed tabs' documents stay in state.docs (d.closed=true) so one pass
+      // covers live AND closed entries.
       // Roll up the documentId-keyed docs into one row per tab (the network tab
       // filters by tab purely in the UI). A tab is "closed" only once ALL its
       // documents are; title/url come from the main-frame document.
@@ -7205,7 +7204,7 @@ const CONTENT_TYPES = new Set([
   "RESPONSE_BODY",
   "PROBE_HIT",
 ]);
-const _contentPings = new Map();  // tabId -> [{ at, pageUrl }, ...]
+const _contentPings = new Map();  // documentId -> [{ at, pageUrl }, ...]
 
 // The brain runs in the OFFSCREEN document and receives messages DIRECTLY:
 // chrome.runtime.sendMessage broadcasts to every extension context, so both our
@@ -7300,10 +7299,9 @@ function _onTabRemoved(tabId) {
   // Closed-tab request logs remain VIEWABLE for the offscreen-document's
   // lifetime. The old session-storage mirror existed because the brain used
   // to live in the SW (evicted) — the offscreen brain doesn't need that
-  // mirror, but we still preserve the in-memory state.tabs entry so the
+  // mirror, but we still preserve the in-memory state.docs entries so the
   // popup's "All Tabs" / per-tab-history filter can show closed-tab logs
-  // until the user clicks the bin button. Mark meta.closed/closedAt so the
-  // tab list distinguishes live vs closed entries.
+  // until the user clicks the bin button.
   // Mark every document of this tab closed (its logs stay viewable). The state
   // is documentId-keyed; a tab close marks all its documents. WebSocket
   // connections die with the page — free each document's (_wsConnState is
