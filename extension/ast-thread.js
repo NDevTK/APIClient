@@ -680,6 +680,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
                                     // the SAME sink aggregate as multiple
                                     // interprocedural paths (not first-wins drop)
   var chunkUrls = new Set();         // lazy-chunk URLs the bundle's loader requested (script.src=)
+  var scriptSrcUrls = [];            // the page's OWN external <script src> URLs (@SCRIPTSRC), engine-discovered from the Lexbor DOM — [{url, module}]
   var esmImportUrls = new Set();     // ESM `import` URLs (@MODURL) — a BOUNDED dependency tree,
                                      // so the offscreen follows these MULTI-ROUND (transitive) to
                                      // fixpoint, unlike the webpack script.src graph (one-round).
@@ -1390,6 +1391,20 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         } else {
           _mu = _mu.trim();
           if (_mu && !isUnresolved(_mu)) esmImportUrls.add(_mu);
+        }
+        continue;
+      }
+      if (line.slice(0, 11) === "@SCRIPTSRC ") {
+        /* The engine discovered an external <script src> from the Lexbor DOM (the
+           one-message-per-document model — the page's OWN bundle, not a lazy chunk).
+           Format: "@SCRIPTSRC <c|m> <url>". Collect for the offscreen to safeFetch +
+           feed back to be RUN in order (classic global eval, or the module path for
+           type=module). Surfaced on self for the brain + verification. */
+        var _ss = line.slice(11);
+        var _ssp = _ss.indexOf(" ");
+        if (_ssp > 0) {
+          var _ssUrl = _ss.slice(_ssp + 1).trim();
+          if (_ssUrl && !isUnresolved(_ssUrl)) scriptSrcUrls.push({ url: _ssUrl, module: _ss.slice(0, _ssp) === "m" });
         }
         continue;
       }
@@ -2474,8 +2489,10 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
      a missing endpoint's defining script was DISCOVERED — the first layer of
      the chunk pipeline (discover → safeFetch → re-run → define → upgrade). */
   self._lastChunkUrls = chunkUrls ? Array.from(chunkUrls) : [];
+  self._lastScriptSrcs = scriptSrcUrls;
   return {
     fetchCallSites: fetchCallSites,
+    scriptSrcUrls: scriptSrcUrls,
     securitySinks: securitySinks,
     dangerousPatterns: [],
     resolverErrors: resolverErrors,
