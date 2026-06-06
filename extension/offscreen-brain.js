@@ -1258,8 +1258,11 @@ function _hexToBytes(hex) {
   return out;
 }
 
-function learnFromAstCallSite(documentId, interfaceName, callSite, scriptUrl) {
-  const tab = getDoc(documentId);
+function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
+  // Takes the DocData object directly (not documentId) so a TRANSIENT view
+  // (_emptyDocView, documentId=null) can carry a globalStore-only merge for a
+  // GONE document without getDoc(null) creating a phantom state.docs entry.
+  const tab = docData;
 
   // Structural @T candidates carry url:null (a host-edge site in
   // unreached code whose value never resolved). They are surfaced as
@@ -5737,7 +5740,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
           interfaceName = extractInterfaceName(csUrl);
         }
 
-        var _astDocEntry = learnFromAstCallSite(tab.documentId, interfaceName, callSite, analysis.sourceUrl);
+        var _astDocEntry = learnFromAstCallSite(tab, interfaceName, callSite, analysis.sourceUrl);
         // Refine interfaceName for endpoint registration if the call site
         // got promoted to a prefix bucket via observed-prefix clustering.
         if (_astDocEntry && _astDocEntry.doc && _astDocEntry.doc.name) {
@@ -5938,16 +5941,17 @@ function _mergeDeepResult(documentId, sourceUrl, result, doNames) {
     // documentId keying, NEVER url (same url != same content — about:blank frames,
     // same page in two tabs, logged-in-vs-out at one url are DIFFERENT documents).
     // The worker echoes the grind's own documentId; find the LIVE document by it.
-    // A gone document (resumed after a navigation) drops — it re-learns on the
-    // next visit — never url-matched to a same-url sibling. deepResumeMeta and
-    // _deepStatsByDoc are documentId-keyed too.
+    // documentId OR global: find the LIVE document by documentId and merge to it +
+    // globalStore; a GONE document (resumed after the doc navigated away —
+    // documentId no longer live) merges to globalStore ONLY via a transient view,
+    // NEVER url-matched to a same-url sibling. deepResumeMeta + _deepStatsByDoc are
+    // documentId-keyed.
     if (!documentId) { console.debug("[AST:deep] deep result with no documentId — dropping"); return; }
     var _rdoc = state.docs.get(documentId) || null;
-    if (_rdoc == null) { console.debug("[AST:deep] no live document for %s — not merged (re-learns on next visit)", documentId); return; }
     var _drm = globalStore.deepResumeMeta.get(documentId);
     if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", documentId); return; }
-    var _rtab = _rdoc;
-    if (result._deepStats) _deepStatsByDoc.set(documentId, Object.assign({}, result._deepStats, { ts: Date.now() }));
+    var _rtab = _rdoc || _emptyDocView();   // live → doc + global; gone → globalStore only (transient, never stored)
+    if (result._deepStats && _rdoc) _deepStatsByDoc.set(documentId, Object.assign({}, result._deepStats, { ts: Date.now() }));
     if (_drm.scriptOffsets) result.scriptOffsets = _drm.scriptOffsets;
     // Path-param name resolution (e→owner) for the deep grind is done in the
     // OFFSCREEN worker (it owns the chunk JS + has IndexedDB + outlives the SW),
@@ -5973,8 +5977,8 @@ function _mergeDeepResult(documentId, sourceUrl, result, doNames) {
       }
     }
     mergeToGlobal(_rtab);
-    notifyPopup(_rdoc.tabId);
-    console.debug("[AST:deep] merged for %s into doc=%s (tab=%s)", _rurl, _rdoc.documentId, _rdoc.tabId);
+    if (_rdoc) notifyPopup(_rdoc.tabId);
+    console.debug("[AST:deep] merged %s into doc=%s (tab=%s)", sourceUrl, documentId, _rdoc ? _rdoc.tabId : "(gone→global)");
     // A chunk/script a gated-loader orphan inserted (createElement("script").src=)
     // is discovered DURING the deep grind — it lands in result.chunkUrls HERE, not
     // the initial analysis (which already ran _maybeDownloadChunks with an EMPTY list
