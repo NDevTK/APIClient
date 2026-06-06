@@ -59,17 +59,11 @@ function toBrain(m) {
 }
 
 // ─── Browser events the offscreen can't observe → forward to the brain ────────
-chrome.webNavigation.onCommitted.addListener((d) => {
-  toBrain({ __evt: "NAV", tabId: d.tabId, frameId: d.frameId, url: d.url || "", parentFrameId: d.parentFrameId });
-});
+// Only tab-close: it frees per-tab transient state and is carried by no document
+// message. Navigation/activation/update are NOT forwarded — the brain prioritizes
+// by each document's own CONTENT_HTML arrival, not a tab-level main-frame guess.
+// (webNavigation is still used on demand — getAllFrames via __rpc for GET_FRAMES.)
 chrome.tabs.onRemoved.addListener((tabId) => { toBrain({ __evt: "TAB_REMOVED", tabId: tabId }); });
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  toBrain({ __evt: "TAB_UPDATED", tabId: tabId, changeInfo: changeInfo, tab: { id: tab.id, url: tab.url || "", status: tab.status || "" } });
-});
-// Switching to an already-loaded tab (no navigation) is the real "which page is
-// relevant now" signal during normal browsing — forward it so the brain can
-// make that page's background deep grind lead the next rotation round.
-chrome.tabs.onActivated.addListener((info) => { toBrain({ __evt: "TAB_ACTIVATED", tabId: info.tabId }); });
 
 // ─── Privileged chrome.* RPC for the offscreen brain ──────────────────────────
 // The brain runs in a document and can't call chrome.tabs.*; it sends a {__rpc}

@@ -163,36 +163,11 @@ function _originForDoc(documentId) {
   return (documentId && _docOrigins.get(documentId)) || "";
 }
 
-// ─── Frame tracking via webNavigation (forwarded as __evt NAV by the SW) ──────
-// The offscreen can't observe chrome.webNavigation; the thin SW forwards each
-// onCommitted as an __evt NAV message, dispatched here by the brain's onMessage.
-function _onNav(details) {
-  // Frames are NOT tracked here. The authoritative frame tree comes from
-  // chrome.webNavigation.getAllFrames (documentId + frameType) at GET_FRAMES time,
-  // and each frame's origin is its document buffer's _senderOrigin — no URL-parsed
-  // origin (wrong for sandboxed frames) and no nav-event-vs-CONTENT_HTML race. This
-  // handler keeps only the TOP-frame tab metadata + focus-recency bump, which the
-  // navigation (the user's current action) is the right signal for.
-  var tabId = details.tabId;
-  var isTop = details.parentFrameId === -1;
-  var url = details.url || "";
-  if (isTop && url) {
-    // Bump lastActivatedTs so the review-queue picker (priority.js
-    // pickFromReviewQueue) treats a NEWLY-navigated tab as "user attention" —
-    // without this, only tab-clicks (TAB_ACTIVATED) bumped recency, so a
-    // fresh-navigation tab's analysis sat behind older queued tabs even though
-    // the navigation IS the user's current focus action.
-    var tm = _tabMeta.get(tabId);
-    if (!tm) {
-      tm = { title: "Tab " + tabId, url: url };
-      _tabMeta.set(tabId, tm);
-    } else {
-      tm.url = url;
-    }
-    tm.lastActivatedTs = Date.now();
-    notifyPopup(tabId);
-  }
-}
+// Prioritization (recency + grind focus) is NOT driven by browser navigation or
+// tab events anymore — those operate at the TAB level and can only guess which
+// frame is the "main" document. It is driven by each document's own CONTENT_HTML
+// message (see handleContentMessage): the message arrival IS the "analyze me now"
+// signal, per document, with the document's authoritative own url/origin.
 
 // Cross-script AST analysis: buffer scripts per tab, debounce, concatenate + analyze
 // Per-DOCUMENT analysis state, keyed by documentId (sender.documentId, fallback
@@ -351,8 +326,8 @@ function getTab(tabId) {
   return state.tabs.get(tabId);
 }
 // (No tab probing: _tabMeta title/url are populated from the browser-verified
-// sender.tab on every content message in handleContentMessage, and from
-// webNavigation in _onNav — never a tabs.get round-trip.)
+// sender.tab on every content message in handleContentMessage — never a tabs.get
+// round-trip and never a webNavigation event.)
 
 // ─── Persistent Storage (IndexedDB) ─────────────────────────────────────────
 
@@ -4803,9 +4778,10 @@ async function _drainReviewQueue() {
          a different page while an older queued tab is still waiting, the
          tab they're LOOKING AT gets analyzed next. The comparator lives in
          lib/priority.js (ORDER only, never COVERAGE — every queued tab still
-         gets analyzed eventually). _tabMeta.lastActivatedTs is bumped on
-         TAB_ACTIVATED; tabs without a recorded activation timestamp default
-         to 0 and trail the recently-activated cohort. */
+         gets analyzed eventually). _tabMeta.lastActivatedTs is bumped when a
+         document delivers its CONTENT_HTML (the load IS the user-attention
+         signal); tabs without a recorded timestamp default to 0 and trail the
+         recently-loaded cohort. */
       var docKey = self._priorityCmp.pickFromReviewQueue(_reviewQueue, function (k) {
         var b = _scriptBuffers.get(k);
         var meta = (b && b.tabId != null) ? _tabMeta.get(b.tabId) : null;
@@ -6052,7 +6028,18 @@ function handleContentMessage(msg, sender) {
     _buf.loadFired = true;
     _buf._chunkSeen = null; _buf._chunkFetchStarted = false;
     _buf._chunkGrindDone = false; _buf._chunkRoundDone = false;
-    _analyzeCombinedScripts(_dk);   // through the review queue: per-document in-flight guard + recency priority (focused tab first), bounded CPU
+    // Prioritization is driven by THIS message: a document just delivered its one
+    // CONTENT_HTML, so it is the live "analyze me now" signal — no webNavigation or
+    // tab-activation guess about which frame is the main one. Bump the tab's recency
+    // (the review-queue picker orders by it) and focus the worker's resumable grind
+    // on THIS document's own url (DEEP_FOCUS bumps its vts).
+    var _ctm = _tabMeta.get(tabId);
+    if (_ctm) _ctm.lastActivatedTs = Date.now();
+    if (/^https?:/i.test(_buf.url)) {
+      try { sendToOffscreen({ type: "DEEP_FOCUS", pageUrl: String(_buf.url).split("#")[0] }); }
+      catch (e) { console.debug("[brain:CONTENT_HTML] DEEP_FOCUS dispatch failed: %s", e && e.message || e); }
+    }
+    _analyzeCombinedScripts(_dk);   // through the review queue: per-document in-flight guard + recency priority (focused doc first), bounded CPU
     notifyPopup(tabId);
     return;
   }
@@ -7112,47 +7099,14 @@ const CONTENT_TYPES = new Set([
 ]);
 const _contentPings = new Map();  // tabId -> [{ at, pageUrl }, ...]
 
-// Tab-update listeners (used by the exploit-probe's tab-load wait). The offscreen
-// can't observe chrome.tabs.onUpdated; the SW forwards it as __evt TAB_UPDATED.
-const _tabUpdatedListeners = new Set();
-function _onTabUpdated(m) {
-  for (const fn of _tabUpdatedListeners) { try { fn(m.tabId, m.changeInfo || {}, m.tab || {}); } catch (_) {} }
-}
-
-// Tab focus (switching to an already-loaded tab) is the live "which page is
-// relevant now" signal — make that page's incomplete background deep grind lead
-// the next rotation round. The worker owns feDeepDB (where per-page visit
-// recency `vts` lives), so it does the bump; we just hand it the focused URL.
-async function _onTabActivated(tabId) {
-  /* Bump _tabMeta.lastActivatedTs so the review-queue picker
-     (priority.js pickFromReviewQueue) orders by user attention — the tab
-     just brought to the foreground jumps ahead of older queued tabs. */
-  let meta = _tabMeta.get(tabId);
-  if (!meta) { meta = { title: "Tab " + tabId, url: "" }; _tabMeta.set(tabId, meta); }
-  meta.lastActivatedTs = Date.now();
-  let url = meta.url;
-  if (!url) {
-    // No tabs.get probe: ask webNavigation for the authoritative outermost-frame
-    // url of the activated tab (the page the user just focused).
-    try {
-      const fr = await swRpc("webNavigation.getAllFrames", { tabId });
-      const top = (fr || []).find((f) => f.frameType === "outermost_frame") || (fr || [])[0];
-      if (top && top.url) { url = top.url; meta.url = url; }
-    } catch (e) {
-      console.debug("[brain:_onTabActivated] getAllFrames failed for tabId=%d: %s", tabId, e && e.message || e);
-    }
-  }
-  if (!url || !/^https?:/i.test(url)) return;
-  try { sendToOffscreen({ type: "DEEP_FOCUS", pageUrl: String(url).split("#")[0] }); }
-  catch (e) { console.debug("[brain:_onTabActivated] DEEP_FOCUS dispatch failed: %s", e && e.message || e); }
-}
-
 // The brain runs in the OFFSCREEN document and receives messages DIRECTLY:
 // chrome.runtime.sendMessage broadcasts to every extension context, so both our
 // content scripts (in web renderers) and the popup reach this document without
-// the SW relaying anything. The thin SW only forwards the browser events the
-// offscreen can't observe itself (__evt: NAV/TAB_REMOVED/TAB_UPDATED).
-//   • __evt (from the SW, extension origin) → frame/tab event handlers
+// the SW relaying anything. The thin SW forwards only ONE browser event the
+// offscreen can't observe and that no document message carries: __evt TAB_REMOVED
+// (so per-tab transient state is freed when a tab closes). Navigation/activation
+// are NOT forwarded — prioritization is driven by each document's CONTENT_HTML.
+//   • __evt TAB_REMOVED (from the SW, extension origin) → _onTabRemoved
 //   • CONTENT_TYPES from a web-page origin   → handleContentMessage (UNTRUSTED;
 //                    real browser-verified sender = tab/frame/url)
 //   • extension-page origin (popup)          → handlePopupMessage
@@ -7174,10 +7128,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.__evt) {
     if (!fromExtOrigin) return;
-    if (msg.__evt === "NAV") _onNav(msg);
-    else if (msg.__evt === "TAB_REMOVED") _onTabRemoved(msg.tabId);
-    else if (msg.__evt === "TAB_UPDATED") _onTabUpdated(msg);
-    else if (msg.__evt === "TAB_ACTIVATED") _onTabActivated(msg.tabId);
+    if (msg.__evt === "TAB_REMOVED") _onTabRemoved(msg.tabId);
     return;
   }
 
