@@ -120,7 +120,6 @@ function _trimRequestLog(tab) {
   while (tab.requestLog.length > MAX_REQUEST_LOG_ENTRIES) tab.requestLog.pop();
 }
 
-const _tabMeta = new Map(); // tabId → { title, url, closed? }
 const _deepStatsByTab = new Map(); // tabId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
 const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
 
@@ -274,7 +273,7 @@ function extractKeysFromText(tabId, text, sourceUrl, sourceContext) {
           keyData.hosts.add(url.hostname);
           keyData.endpoints.add(`${url.hostname}${url.pathname}`);
         }
-        const _keyMeta = _tabMeta.get(tabId);
+        const _keyMeta = state.tabs.get(tabId);
         if (_keyMeta && _keyMeta.url) keyData.pageUrls.add(_keyMeta.url);
         if (!keyData.pageUrls) keyData.pageUrls = new Set();
       }
@@ -321,11 +320,18 @@ function getTab(tabId) {
       scopes: new Map(), // service → string[] of required scopes
       requestLog: [], // Array of { id, url, method, service, timestamp, status, headers, responseHeaders, ... }
       _valueIndex: createValueIndex(), // Chain engine: response value → source tracking
+      // Tab-level display state, folded in from the former _tabMeta side-table
+      // (the request log is inherently per-tab — the multi-tab log view). Set from
+      // the browser-verified sender.tab on content messages; NOT a security signal
+      // (the per-document credentialed-read origin lives in _docOrigins).
+      title: "Tab " + tabId, // multi-tab log label
+      url: "",               // the tab's current top-page url (display + record base)
+      closed: false,         // true once the tab closes (its logs stay visible)
     });
   }
   return state.tabs.get(tabId);
 }
-// (No tab probing: _tabMeta title/url are populated from the browser-verified
+// (No tab probing: the tab's title/url are populated from the browser-verified
 // sender.tab on every content message in handleContentMessage — never a tabs.get
 // round-trip and never a webNavigation event.)
 
@@ -1208,7 +1214,7 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
   let csUrl = null;
   if (!isDynamic) {
     try {
-      const _pageMeta = _tabMeta.get(tabId);
+      const _pageMeta = state.tabs.get(tabId);
       const _baseForRel = (_pageMeta && _pageMeta.url) ? _pageMeta.url : scriptUrl;
       csUrl = /^https?:\/\//i.test(callSite.url)
         ? new URL(callSite.url)
@@ -4273,19 +4279,16 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     // from the DURABLE _docOrigins map — never the transient script buffer (gone
     // after review) and never URL-parsed (about:blank parses to a bogus "null").
     var _svcFrameOrigin = _originForDoc(documentId);
-    // pageUrls always tracks the top-level page URL
-    var _svcMeta = _tabMeta.get(tabId);
-    if (_svcMeta?.url) _svcDocEntry.pageUrls.add(_svcMeta.url);
-    // Record a frame's origin separately when it DIFFERS from the top-level page
-    // origin (a cross-origin / sandboxed / fenced iframe) — compared on the
-    // browser-provided origin, never a self-reported isTop.
+    // pageUrls: the tab's last-seen top url (UI display of "used from"). This is a
+    // URL for the human, NOT an origin decision.
+    if (tab.url) _svcDocEntry.pageUrls.add(tab.url);
+    // frameOrigins: the SET of authoritative origins that used this service. We do
+    // NOT derive a "top page origin" from the tab url to flag iframe-ness — mapping
+    // a tab to an origin assumes the main frame and races navigation (banned). A
+    // cross-origin caller stands out in the set on its own.
     if (_svcFrameOrigin) {
-      var _svcTopOrigin = "";
-      if (_svcMeta?.url && URL.canParse(_svcMeta.url)) _svcTopOrigin = new URL(_svcMeta.url).origin;
-      if (_svcFrameOrigin !== _svcTopOrigin) {
-        if (!_svcDocEntry.frameOrigins) _svcDocEntry.frameOrigins = new Set();
-        _svcDocEntry.frameOrigins.add(_svcFrameOrigin);
-      }
+      if (!_svcDocEntry.frameOrigins) _svcDocEntry.frameOrigins = new Set();
+      _svcDocEntry.frameOrigins.add(_svcFrameOrigin);
     }
   }
 
@@ -4480,7 +4483,7 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
   var tabUrl = cached.tabUrl || "";
 
   // Override tabUrl with current tab URL if available
-  var meta = _tabMeta.get(tabId);
+  var meta = tab;   // tab-level url folded onto the per-tab state
   if (meta && meta.url) tabUrl = meta.url;
   else if (buf && buf.pageUrl) tabUrl = buf.pageUrl;
 
@@ -4575,8 +4578,8 @@ const _analysisInflight = new Set();
 // ~700-chunk graph; one round is the directly-lazy surface.
 // @security-contract  LOADER: lazy import()/chunk (chunkUrls are bundle-DISCOVERED = untrusted)
 //   loads:    JAVASCRIPT (executed as code)          quickjs-control: YES
-//   enforced: safeFetch(as:"script") -> CORB + SSRF; principal = the tab's
-//             trusted sender.tab.url (_chunkPageOrigin via _tabMeta); CORB-drops
+//   enforced: safeFetch(as:"script") -> CORB + SSRF; principal = THIS document's
+//             own trusted url (_chunkPageOrigin = buf.url); CORB-drops
 //             surface in _chunkDiag.corbBlocked.
 async function _maybeDownloadChunks(tabId, buf, chunkUrls, esmImportUrls) {
   if (!buf) return;
@@ -4778,14 +4781,13 @@ async function _drainReviewQueue() {
          a different page while an older queued tab is still waiting, the
          tab they're LOOKING AT gets analyzed next. The comparator lives in
          lib/priority.js (ORDER only, never COVERAGE — every queued tab still
-         gets analyzed eventually). _tabMeta.lastActivatedTs is bumped when a
-         document delivers its CONTENT_HTML (the load IS the user-attention
-         signal); tabs without a recorded timestamp default to 0 and trail the
+         gets analyzed eventually). buf.lastActivatedTs is stamped when a document
+         delivers its CONTENT_HTML (the load IS the user-attention signal);
+         documents without a recorded timestamp default to 0 and trail the
          recently-loaded cohort. */
       var docKey = self._priorityCmp.pickFromReviewQueue(_reviewQueue, function (k) {
         var b = _scriptBuffers.get(k);
-        var meta = (b && b.tabId != null) ? _tabMeta.get(b.tabId) : null;
-        return (meta && meta.lastActivatedTs) || 0;
+        return (b && b.lastActivatedTs) || 0;
       });
       if (docKey == null) break;
       var buf = _scriptBuffers.get(docKey);
@@ -4957,8 +4959,8 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // Source URL for the combined analysis. SECURITY: this becomes the analysis
   // PRINCIPAL — safeFetch's origin-relative SSRF origin (self.__sfPageOrigin in
   // the worker) AND window.location. It MUST derive only from the browser-
-  // provided sender.tab.url (captured into _tabMeta.url / buf.pageUrl in
-  // handleContentMessage), NEVER a content-script-supplied value (msg.url ->
+  // provided sender.url (captured into buf.url on CONTENT_HTML), NEVER a
+  // content-script-supplied value (msg.url ->
   // scripts[0].url) — else a hostile page could claim a localhost origin to
   // defeat the SSRF guard. No untrusted fallback: unknown origin leaves tabUrl ""
   // -> safeFetch's safe default (block private) + a placeholder window.location.
@@ -5638,7 +5640,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
           // `fetch('/svc/shreddit/graphql')` in a script served from
           // www.redditstatic.com actually hits www.reddit.com (the
           // page origin). Prefer the tab's page URL when available.
-          var _csMeta = _tabMeta.get(tabId);
+          var _csMeta = tab;
           var _csBaseForRel = (_csMeta && _csMeta.url) ? _csMeta.url : analysis.sourceUrl;
           csUrl = new URL(callSite.url, _csBaseForRel);
           interfaceName = extractInterfaceName(csUrl);
@@ -5665,7 +5667,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
           ? "AST DYN " + bundleId + " " + (callSite.enclosingFunction || "anon") + " " + callSite.method + " " + fc
           : "AST " + callSite.method + " " + _csPath;
         if (!tab.endpoints.has(epKey)) {
-          var _epMeta = _tabMeta.get(tabId);
+          var _epMeta = tab;
           tab.endpoints.set(epKey, {
             url: isDynamic ? callSite.url : csUrl.href,
             method: callSite.method,
@@ -5700,7 +5702,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
     for (var dei = 0; dei < domEps.length; dei++) {
       var domEp = domEps[dei];
       try {
-        var deBase = (_tabMeta.get(tabId) && _tabMeta.get(tabId).url) || analysis.sourceUrl;
+        var deBase = (tab && tab.url) || analysis.sourceUrl;
         if (!deBase) continue;
         var deResolved = new URL(domEp.url, deBase);
         if (/^(data|blob|about|javascript):/i.test(deResolved.protocol)) continue;
@@ -5733,7 +5735,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
     if ((secSinks.length || dangerousPats.length) && !analysis._securityMerged) {
       analysis._securityMerged = true;
       if (!tab._securityFindings) tab._securityFindings = [];
-      var _mfMeta = tabId != null ? _tabMeta.get(tabId) : null;
+      var _mfMeta = tab || null;
       // REPLACE any prior entry for this source, don't append — the deep grind
       // streams partials each carrying the GROWING accumulated securitySinks for
       // the same sourceUrl, so appending would pile up snapshots (mergeToGlobal
@@ -5843,7 +5845,7 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
     if (!result) return;
     var _rurl = (sourceUrl || "").split("?")[0];
     var _rtid = null;
-    _tabMeta.forEach(function (mm, tid) { if (_rtid == null && mm && mm.url && _rurl && mm.url.indexOf(_rurl) === 0) _rtid = tid; });
+    state.tabs.forEach(function (mm, tid) { if (_rtid == null && mm && mm.url && _rurl && mm.url.indexOf(_rurl) === 0) _rtid = tid; });
     if (_rtid == null) { console.debug("[AST:deep] no open tab for %s — not merged", _rurl); return; }
     var _drm = globalStore.deepResumeMeta.get(_rurl);
     if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", _rurl); return; }
@@ -5937,16 +5939,12 @@ function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
 
-  // _tabMeta title/url come from the browser-verified sender.tab on every
-  // content message (no tabs.get probe) — set/refresh it here.
+  // The tab's display title/url come from the browser-verified sender.tab on every
+  // content message (no tabs.get probe) — set/refresh on the per-tab state.
   if (sender.tab.url) {
-    var _tm = _tabMeta.get(tabId);
-    if (!_tm) {
-      _tabMeta.set(tabId, { title: sender.tab.title || ("Tab " + tabId), url: sender.tab.url });
-    } else if (!_tm.url) {
-      _tm.url = sender.tab.url;
-      if (sender.tab.title) _tm.title = sender.tab.title;
-    }
+    var _t = getTab(tabId);
+    _t.url = sender.tab.url;
+    if (sender.tab.title) _t.title = sender.tab.title;
   }
 
   // RESPONSE_BODY comes from intercept.js via content.js relay
@@ -6030,11 +6028,10 @@ function handleContentMessage(msg, sender) {
     _buf._chunkGrindDone = false; _buf._chunkRoundDone = false;
     // Prioritization is driven by THIS message: a document just delivered its one
     // CONTENT_HTML, so it is the live "analyze me now" signal — no webNavigation or
-    // tab-activation guess about which frame is the main one. Bump the tab's recency
-    // (the review-queue picker orders by it) and focus the worker's resumable grind
-    // on THIS document's own url (DEEP_FOCUS bumps its vts).
-    var _ctm = _tabMeta.get(tabId);
-    if (_ctm) _ctm.lastActivatedTs = Date.now();
+    // tab-activation guess about which frame is the main one. Stamp THIS document's
+    // load recency on its own buffer (the review-queue picker orders by it) and
+    // focus the worker's resumable grind on this document's url (DEEP_FOCUS bumps vts).
+    _buf.lastActivatedTs = Date.now();
     if (/^https?:/i.test(_buf.url)) {
       try { sendToOffscreen({ type: "DEEP_FOCUS", pageUrl: String(_buf.url).split("#")[0] }); }
       catch (e) { console.debug("[brain:CONTENT_HTML] DEEP_FOCUS dispatch failed: %s", e && e.message || e); }
@@ -6077,7 +6074,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         // would otherwise be invisible to the user. Display-only (no controls).
         const _all = [];
         _deepStatsByTab.forEach((v, k) => {
-          const meta = _tabMeta.get(k);
+          const meta = state.tabs.get(k);
           _all.push({
             tabId: k,
             pageUrl: meta && meta.url ? meta.url : "",
@@ -6273,8 +6270,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       const tabs = [];
       for (const [tid, t] of state.tabs) {
         if (t.requestLog.length === 0) continue;
-        const meta = _tabMeta.get(tid) || { title: `Tab ${tid}`, url: "" };
-        tabs.push({ tabId: tid, title: meta.title, url: meta.url, count: t.requestLog.length, closed: !!meta.closed });
+        tabs.push({ tabId: tid, title: t.title || ("Tab " + tid), url: t.url || "", count: t.requestLog.length, closed: !!t.closed });
       }
       sendResponse(tabs);
       return;
@@ -6286,7 +6282,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       for (const [tid, t] of state.tabs) {
         if (t.requestLog.length === 0) continue;
         if (filter !== "all" && filter !== tid) continue;
-        const meta = _tabMeta.get(tid) || { title: `Tab ${tid}`, url: "" };
+        const meta = { title: t.title || ("Tab " + tid), url: t.url || "", closed: !!t.closed };
         result[tid] = { meta, requestLog: t.requestLog };
       }
       sendResponse(result);
@@ -7196,7 +7192,7 @@ function _onTabRemoved(tabId) {
   // popup's "All Tabs" / per-tab-history filter can show closed-tab logs
   // until the user clicks the bin button. Mark meta.closed/closedAt so the
   // tab list distinguishes live vs closed entries.
-  const meta = _tabMeta.get(tabId);
+  const meta = state.tabs.get(tabId);
   if (meta) {
     meta.closed = true;
     meta.closedAt = Date.now();
@@ -7873,28 +7869,10 @@ async function executeSendRequest(tabId, msg) {
       }
     }
     if (svcKeys.length > 0) {
-      // Prefer key from same pageUrl origin as current tab
-      var _skTabMeta = _tabMeta.get(tabId);
-      var _skOrigin = null;
-      if (_skTabMeta && _skTabMeta.url) {
-        try { _skOrigin = new URL(_skTabMeta.url).origin; } catch (_) {}
-      }
-      if (_skOrigin && svcKeys.length > 1) {
-        var _skBest = null;
-        for (var _ski = 0; _ski < svcKeys.length; _ski++) {
-          var _skData = tab.apiKeys.get(svcKeys[_ski]) || globalStore.apiKeys.get(svcKeys[_ski]);
-          if (_skData && _skData.pageUrls) {
-            var _skPages = _skData.pageUrls instanceof Set ? _skData.pageUrls : new Set(_skData.pageUrls);
-            for (var _skPurl of _skPages) {
-              try { if (new URL(_skPurl).origin === _skOrigin) { _skBest = svcKeys[_ski]; break; } } catch (_) {}
-            }
-            if (_skBest) break;
-          }
-        }
-        apiKey = _skBest || svcKeys[0];
-      } else {
-        apiKey = svcKeys[0];
-      }
+      // Use the first matching key. We do NOT tiebreak by "same origin as the
+      // current tab": mapping a tabId to an origin assumes the main frame and races
+      // navigation (banned). The keys are already filtered to this service/host.
+      apiKey = svcKeys[0];
       // Look up the actual location (url vs specific header name) the key
       // was originally observed in — keys captured from
       // `X-Goog-Api-Key` shouldn't be re-emitted as Google-branded
