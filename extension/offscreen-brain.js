@@ -354,7 +354,10 @@ function docsForTab(tabId) {
 // when only a tabId is sent. Returns null if nothing matches (handlers fail
 // closed). Never creates an entry for a bare tabId.
 function _docFromMsg(msg) {
-  if (msg && msg.documentId) return getDoc(msg.documentId);
+  // state.docs.get (NOT getDoc) — a query must NEVER create an entry, or a popup
+  // RPC for a never-analyzed frame would pollute state.docs with a phantom doc.
+  // No match → null → the caller falls back to the global-overlay view.
+  if (msg && msg.documentId) return state.docs.get(msg.documentId) || null;
   if (msg && msg.tabId != null) {
     var docs = docsForTab(msg.tabId);
     if (docs.length) {
