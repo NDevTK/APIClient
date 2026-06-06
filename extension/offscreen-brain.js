@@ -365,6 +365,19 @@ function _docFromMsg(msg) {
   return null;
 }
 
+// A transient (unstored) empty DocData. Views that should still surface the
+// GLOBAL cumulative moat when no specific document matches — the popup opened
+// over a tab with no analyzed page — pass this to serializeTabData, which
+// overlays globalStore onto it (preserving the pre-refactor "always show the
+// cumulative learnings" behavior). NEVER stored in state.docs.
+function _emptyDocView() {
+  return {
+    documentId: null, tabId: null, frameId: 0, origin: "", url: "", title: "", closed: false,
+    apiKeys: new Map(), endpoints: new Map(), authContext: null, discoveryDocs: new Map(),
+    probeResults: new Map(), scopes: new Map(), requestLog: [], _valueIndex: createValueIndex(),
+  };
+}
+
 // Find a channel's request-log entry (WS/PM/MC) across all of a tab's documents.
 // The channel lives on whichever document opened it; the popup's message console
 // routes by tabId, so we scan the tab's docs. documentId is the storage key;
@@ -6134,8 +6147,10 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
   switch (msg.type) {
     case "GET_STATE": {
-      const tab = _docFromMsg(msg);
-      const data = tab ? serializeTabData(tab) : null;
+      // A matched document, else a transient empty view so the popup still shows
+      // the GLOBAL cumulative moat (serializeTabData overlays globalStore).
+      const tab = _docFromMsg(msg) || _emptyDocView();
+      const data = serializeTabData(tab);
       if (data) {
         // Per-tab head = THIS tab's grind ONLY. The previous cross-tab
         // "most-recently-updated grind regardless of tab" fallback

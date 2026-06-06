@@ -59,6 +59,16 @@ let lastSendResult = null; // Last rendered response for re-render after rename
 let gqlState = { ops: [], batched: false, activeIdx: 0 }; // GraphQL operation state
 let currentFrameId = 0; // Target frame for sending (0 = main frame)
 let availableFrames = []; // Cached frame list for current tab
+// documentId of the currently-selected frame — the per-document RPC target.
+// Per-document analysis storage is keyed by documentId (tabId is only the
+// network-tab UI filter). Falls back to the main frame, then any frame, then
+// null (the offscreen _docFromMsg shim resolves a bare tabId to the tab's
+// main-frame document, so single-frame pages work without a frame selection).
+function currentDocumentId() {
+  const f = availableFrames.find((x) => x.frameId === currentFrameId)
+         || availableFrames.find((x) => x.isMain) || availableFrames[0];
+  return (f && f.documentId) || null;
+}
 let currentKeyOverride = null; // null = auto, { key, source, disabled } for override
 
 // Virtual scroll state for request log
@@ -961,6 +971,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Frame selector
   document.getElementById("send-frame-select").addEventListener("change", (e) => {
     currentFrameId = parseInt(e.target.value, 10) || 0;
+    loadState();  // re-load the selected frame's per-document analysis (documentId-keyed)
   });
 
   // API key selector: delegate to radio buttons and custom input
@@ -1049,6 +1060,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         await chrome.runtime.sendMessage({
           type: "RENAME_FIELD",
           tabId: currentTabId,
+          documentId: currentDocumentId(),
           service: svc,
           methodId,
           schemaName: schema,
@@ -1061,6 +1073,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         tabData = await chrome.runtime.sendMessage({
           type: "GET_STATE",
           tabId: currentTabId,
+          documentId: currentDocumentId(),
         });
 
         if (isGqlVarsRename) {
@@ -1164,6 +1177,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       return await chrome.runtime.sendMessage({
         type: "BUILD_REQUEST",
         tabId: currentTabId,
+        documentId: currentDocumentId(),
         endpointKey: epKey,
         service: selectedOpt?.dataset?.svc,
         methodId: selectedOpt?.dataset?.discoveryId,
@@ -1415,11 +1429,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 // ─── State ───────────────────────────────────────────────────────────────────
 
 async function loadState() {
-  tabData = await chrome.runtime.sendMessage({
-    type: "GET_STATE",
-    tabId: currentTabId,
-  });
-  // Fetch available frames for the current tab
+  // Fetch available frames FIRST so currentDocumentId() can resolve the selected
+  // frame's documentId for the per-document GET_STATE below.
   try {
     availableFrames = await chrome.runtime.sendMessage({
       type: "GET_FRAMES",
@@ -1428,6 +1439,11 @@ async function loadState() {
   } catch (_) {
     availableFrames = [];
   }
+  tabData = await chrome.runtime.sendMessage({
+    type: "GET_STATE",
+    tabId: currentTabId,
+    documentId: currentDocumentId(),
+  });
   if (logFilter !== "active") {
     await loadRequestLog();
   }
@@ -2773,6 +2789,7 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
     const schema = await chrome.runtime.sendMessage({
       type: "GET_ENDPOINT_SCHEMA",
       tabId: currentTabId,
+      documentId: currentDocumentId(),
       service,
       methodId,
     });
@@ -3893,6 +3910,7 @@ async function sendRequest() {
   const msg = {
     type: "SEND_REQUEST",
     tabId: replayTabId,
+    documentId: currentReplayRequest?.documentId ?? currentDocumentId(),
     endpointKey: epKey,
     service: selectedOpt?.dataset?.svc,
     methodId: selectedOpt?.dataset?.discoveryId,
@@ -4325,6 +4343,7 @@ async function exportOpenApiSpec() {
       const result = await chrome.runtime.sendMessage({
         type: "EXPORT_OPENAPI",
         tabId: currentTabId,
+        documentId: currentDocumentId(),
         service: svc,
       });
       if (result?.error && services.length === 1) { alert(result.error); return; }
@@ -4449,6 +4468,7 @@ async function importOpenApiSpec(e) {
     const result = await chrome.runtime.sendMessage({
       type: "IMPORT_OPENAPI",
       tabId: currentTabId,
+      documentId: currentDocumentId(),
       spec,
     });
 
