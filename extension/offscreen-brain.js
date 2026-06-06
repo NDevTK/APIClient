@@ -4381,7 +4381,12 @@ function _findScriptForLine(line, scriptOffsets) {
   for (var i = scriptOffsets.length - 1; i >= 0; i--) {
     if (line >= scriptOffsets[i].lineStart) return scriptOffsets[i];
   }
-  return scriptOffsets[0];
+  // EMPTY scriptOffsets (the engine sources inline scripts now, so a page with
+  // only inline <script> has no per-script offset map) must NOT return undefined
+  // — callers do sInfo.url and would throw, taking down the WHOLE findings/endpoint
+  // result (every DOM-XSS + inline-script endpoint silently lost). A null url is
+  // the correct inline attribution: page URL, original line numbers.
+  return scriptOffsets[0] || { url: null, lineStart: 1 };
 }
 
 // Resolve an AST endpoint's path-param names (minified, in URL order) to the
