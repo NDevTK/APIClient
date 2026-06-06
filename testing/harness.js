@@ -992,6 +992,28 @@ async function cmdNetDiff(args) {
           }
         }
       }
+      // ALSO harvest the DEEP-grind resolverErrors merged onto each tab's live
+      // state (tab._resolverErrors). The residue/deep grind surfaces opacity the
+      // initial combined analysis didn't (e.g. firebase's auth-instance config goes
+      // opaque only once the init chain is force-driven) — and it lands on the
+      // per-tab state, NOT scriptCache, so reading scriptCache alone hides the very
+      // driving gaps netdiff exists to NAME (0 reachedButOpaque while the tab held 26).
+      if (typeof state !== "undefined" && state.tabs) {
+        for (const t of state.tabs.values()) {
+          const re = t && t._resolverErrors;
+          if (Array.isArray(re)) for (const r of re) {
+            const msg = String((r && r.message) || JSON.stringify(r));
+            if (msg.indexOf("could not load module") >= 0) {
+              const mm = msg.match(/could not load module filename '([^']+)'/);
+              _moduleLinkSet.add(mm ? mm[1] : msg.slice(0, 120));
+            } else {
+              _reachedSet.add(
+                (r && r.loc ? "@" + (r.loc.file ? r.loc.file + ":" : "") + r.loc.line + ":" + r.loc.column + " " : "") +
+                msg.slice(0, 200));
+            }
+          }
+        }
+      }
       const _reached = Array.from(_reachedSet);
       const _moduleLink = Array.from(_moduleLinkSet);
       if (unused) {
