@@ -1076,6 +1076,36 @@ async function cmdNetDiff(args) {
             }
           }
         }
+        // ALSO harvest per-field keys+values from the VDD (discoveryDocs). A
+        // deep-grind-driven endpoint (an un-fired SDK method) leaves scriptCache
+        // EMPTY (no eager analysis), so its learned keys+values live ONLY in the VDD
+        // (resources.learned.methods[].parameters + request $ref -> schemas) — e.g.
+        // supabase's whole logged-out admin surface. Without this, --unused shows
+        // bare URLs for exactly the moat's deep-grind wins though the values WERE
+        // computed. The _fcsParams Map dedups, so scriptCache + VDD merge cleanly.
+        const _harvestVdd = (ddMap) => {
+          if (!ddMap || typeof ddMap.values !== "function") return;
+          for (const dd of ddMap.values()) {
+            const doc = dd && dd.doc;
+            const methods = doc && doc.resources && doc.resources.learned && doc.resources.learned.methods;
+            if (!methods) continue;
+            for (const mid in methods) {
+              const m = methods[mid];
+              if (!m || !m.httpMethod) continue;
+              const pk = _paramKey(m.httpMethod, m.path || mid);
+              let pm = _fcsParams.get(pk); if (!pm) { pm = new Map(); _fcsParams.set(pk, pm); }
+              const addVals = (pe, o) => { const vv = o && (o._astValidValues || (o._exampleValue != null ? [o._exampleValue] : null)); if (Array.isArray(vv)) for (const v of vv) if (v != null && v !== "") pe.vals.add(v); };
+              const params = m.parameters || {};
+              for (const pn in params) { const p = params[pn]; let pe = pm.get(pn); if (!pe) { pe = { loc: (p && p.location) || "query", vals: new Set() }; pm.set(pn, pe); } addVals(pe, p); }
+              let bodyProps = null; const req = m.request;
+              if (req && req.$ref && doc.schemas && doc.schemas[req.$ref]) bodyProps = doc.schemas[req.$ref].properties;
+              else if (req && req.properties) bodyProps = req.properties;
+              if (bodyProps) for (const bk in bodyProps) { let pe = pm.get(bk); if (!pe) { pe = { loc: "body", vals: new Set() }; pm.set(bk, pe); } addVals(pe, bodyProps[bk]); }
+            }
+          }
+        };
+        if (typeof globalStore !== "undefined") _harvestVdd(globalStore.discoveryDocs);
+        if (typeof state !== "undefined" && state.tabs) for (const t of state.tabs.values()) if (t) _harvestVdd(t.discoveryDocs);
         const _fmtParams = (e) => {
           const pm = _fcsParams.get(_paramKey(e.method, e.path || e.url || ""));
           if (!pm || !pm.size) return "";
