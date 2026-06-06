@@ -122,7 +122,6 @@ function _trimRequestLog(tab) {
 
 const _tabMeta = new Map(); // tabId → { title, url, closed? }
 const _deepStatsByTab = new Map(); // tabId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
-const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, documentId, lastSeen }> (self-reported; NO isTop — unprovable from a frame's own message)
 const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
 
 // A document's SECURITY ORIGIN for same-origin checks — the BROWSER-provided
@@ -153,13 +152,12 @@ function _senderOrigin(sender) {
 // The offscreen can't observe chrome.webNavigation; the thin SW forwards each
 // onCommitted as an __evt NAV message, dispatched here by the brain's onMessage.
 function _onNav(details) {
-  // Frame ORIGINS are NOT tracked here anymore. A webNavigation URL parses to a
-  // tuple origin even for a sandboxed frame whose real origin is OPAQUE, and the
-  // nav event races the document's own CONTENT_HTML. Each frame now self-reports
-  // its authoritative browser origin (sender.origin via _senderOrigin) with its
-  // CONTENT_HTML message — one source, no race (see _tabFrames population there).
-  // This handler keeps only the TOP-frame tab metadata + focus-recency bump,
-  // which the navigation (the user's current action) is the right signal for.
+  // Frames are NOT tracked here. The authoritative frame tree comes from
+  // chrome.webNavigation.getAllFrames (documentId + frameType) at GET_FRAMES time,
+  // and each frame's origin is its document buffer's _senderOrigin — no URL-parsed
+  // origin (wrong for sandboxed frames) and no nav-event-vs-CONTENT_HTML race. This
+  // handler keeps only the TOP-frame tab metadata + focus-recency bump, which the
+  // navigation (the user's current action) is the right signal for.
   var tabId = details.tabId;
   var isTop = details.parentFrameId === -1;
   var url = details.url || "";
@@ -3805,7 +3803,7 @@ async function probeEndpoint(tabId, endpointKey) {
 
 // ─── Request/Response Handling (from intercept.js via content.js relay) ──────
 
-async function handleResponseBody(tabId, msg, frameId) {
+async function handleResponseBody(tabId, msg, frameId, documentId) {
   if (!msg.url) return;
   await _globalStoreReady;
 
@@ -4305,7 +4303,10 @@ async function handleResponseBody(tabId, msg, frameId) {
   var _svcDocEntry = tab.discoveryDocs.get(service);
   if (_svcDocEntry) {
     if (!_svcDocEntry.pageUrls) _svcDocEntry.pageUrls = new Set();
-    var _svcFrameInfo = frameId != null ? _tabFrames.get(tabId)?.get(frameId) : null;
+    // The requesting frame's record IS its document buffer, keyed by documentId
+    // (the response carries the capturing frame's documentId) — no separate frame
+    // table. Its origin is the AUTHORITATIVE browser origin (_senderOrigin).
+    var _svcFrameInfo = documentId ? _scriptBuffers.get(documentId) : null;
     // pageUrls always tracks the top-level page URL
     var _svcMeta = _tabMeta.get(tabId);
     if (_svcMeta?.url) _svcDocEntry.pageUrls.add(_svcMeta.url);
@@ -5076,10 +5077,12 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
       response ? response.error : "no response");
     if (response && response.stack) console.debug(response.stack);
     getTab(tabId)._astError = "offscreen unsuccessful: " + (response ? (response.error + " | " + (response.stack || "")) : "no response");
-    // Fallback: analyze scripts individually
-    for (var fi = 0; fi < scripts.length; fi++) {
-      analyzeScript(tabId, scripts[fi].url, scripts[fi].code);
-    }
+    // SURFACE the combined-analysis failure — do NOT fall back to per-script
+    // analysis. A page is reviewed as the COMBINATION of all its scripts; analysing
+    // them in isolation loses the cross-script interprocedural visibility (webpack
+    // chunk exports, shared globals) the whole design depends on, and emitting that
+    // degraded result would MASK the real failure. _astError (above) + the worker's
+    // @WHY/@E are the signal to root-cause; the resumable grind retries.
     return;
   }
   getTab(tabId)._astError = null;
@@ -5171,7 +5174,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     // page principal) and extract the field — the real value the bundle CANNOT
     // compute (server input). The endpoint + field stay forced-exec-learned;
     // this only fills the EXAMPLE, a marked sample, never a branch decider.
-    var _rcPrincipal = (_tabMeta.get(tabId) || {}).url || "";
+    var _rcPrincipal = buf.url || (_tabMeta.get(tabId) || {}).url || "";
     if (!tab._replyCache) tab._replyCache = {};
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
       var _re = analysis.resolverErrors[_rei];
@@ -5204,7 +5207,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
               // Opaque / mixed / untracked ("null:<uuid>" or "null") matches no real
               // target, so the credentialed read never fires; pageOrigin also flows to
               // safeFetch's own SOP (defense in depth).
-              var _rcOrigin = _docOriginForPrincipal(_rcPrincipal);
+              var _rcOrigin = buf.origin || _docOriginForPrincipal(_rcPrincipal);
               var _sameOrig = false; try { var _to = new URL(_absSrc).origin; _sameOrig = _rcOrigin.indexOf("://") > 0 && _to === _rcOrigin; } catch (e) {}
               var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, pageOrigin: _rcOrigin, method: "GET", credentialed: _sameOrig });
               _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
@@ -5489,233 +5492,6 @@ function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
 }
 
 // ─── AST Bundle Analysis ─────────────────────────────────────────────────────
-
-async function analyzeScript(tabId, scriptUrl, code) {
-  var tab = getTab(tabId);
-  console.debug("[AST] Received script: %s (%d chars) tab=%d", scriptUrl || "(inline)", code.length, tabId);
-  // No per-script cache here: a page is reviewed as the combination of
-  // ALL scripts it loads — cross-script inter-procedural analysis only
-  // works when the analyzer sees them together. Per-script caching
-  // would replay an isolated-script result that lacks cross-script
-  // visibility (e.g. webpack chunks where module n.d exports are
-  // installed across files). The combined-bundle cache in
-  // _analyzeCombinedScripts is the only legitimate cache layer.
-  var analysis;
-  var response;
-  try {
-    response = await sendToOffscreen({
-      type: "AST_ANALYZE", code: code, sourceUrl: scriptUrl,
-    });
-  } catch (e) {
-    console.debug("[AST] sendToOffscreen failed for %s: %s", scriptUrl, e.message || e);
-    return;
-  }
-  if (!response || !response.success) {
-    console.debug("[AST] analyzeJSBundle failed for %s: %s", scriptUrl,
-      response ? response.error : "no response");
-    if (response && response.stack) console.debug(response.stack);
-    return;
-  }
-  analysis = response.result;
-  analysis.scriptOffsets = [{ url: scriptUrl, lineStart: 1 }];   // single-script: trivial offset map
-
-  if (analysis.resolverErrors && analysis.resolverErrors.length > 0) {
-    // Surface to the popup diagnostic view, not console-only. A reached-but-
-    // opaque host call (fully-opaque URL/method) or a host-model gap (@E
-    // bundle throw) is a P1 the reviewer must SEE and act on — per CLAUDE.md
-    // "@WHY/diagnostics SHOULD be exposed in the popup's diagnostic view".
-    // Deduped by message (the distinct-message set is the natural bound — no
-    // cap); diagnostic buffer, not analysis state, so it drops nothing learned.
-    if (!Array.isArray(tab._resolverErrors)) tab._resolverErrors = [];
-    var _seenRe = new Set(tab._resolverErrors.map(function (r) { return r.message; }));
-    // Reply-example seed (CLAUDE.md opaque-with-example policy): a fromReply
-    // chain — fetch(reply.field) — names its SOURCE endpoint + field. Fire ONE
-    // bounded safe GET per source (cached → no spam + deterministic; GET-only →
-    // no account change; origin-scoped under safeFetch's OWN SOP/CORS with the
-    // page principal) and extract the field — the real value the bundle CANNOT
-    // compute (server input). The endpoint + field stay forced-exec-learned;
-    // this only fills the EXAMPLE, a marked sample, never a branch decider.
-    var _rcPrincipal = (_tabMeta.get(tabId) || {}).url || "";
-    if (!tab._replyCache) tab._replyCache = {};
-    for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
-      var _re = analysis.resolverErrors[_rei];
-      console.debug("[AST:resolver] %s: %s", _re.context, _re.message);
-      if (_re.stack) console.debug(_re.stack);
-      if (_rcPrincipal && _re.fromReply && _re.opaqueSources && _re.opaqueFields && _re.opaqueFields.length) {
-        var _src = null;
-        for (var _si = 0; _si < _re.opaqueSources.length; _si++) {
-          var _os = _re.opaqueSources[_si];
-          if (typeof _os === "string" && _os.indexOf("fetch.") === 0 && _os.indexOf(" ") > 0) { _src = _os; break; }
-        }
-        var _srcEp = _src ? _src.slice(_src.indexOf(" ") + 1) : null;
-        var _absSrc = null;
-        // Resolve against the page principal — safeFetch wants an absolute URL +
-        // checks its origin vs the principal (origin-relative SSRF: same-origin
-        // ok, public->private blocked). A bundle's source URL is relative.
-        if (_srcEp && _srcEp.indexOf("{") < 0) { try { _absSrc = new URL(_srcEp, _rcPrincipal).href; } catch (e) {} }
-        if (_absSrc) {
-          var _reply = tab._replyCache[_absSrc];
-          if (_reply === undefined) {
-            try {
-              // Same-origin → credentialed (the user's session = the authed API
-              // surface). Cross-origin → PUBLIC non-credentialed: a public
-              // discovery/config doc (oidc .well-known) serves ACAO:* which
-              // safeFetch's credentialed CORS would block, and creds must NEVER
-              // leak cross-origin. Per the CLAUDE.md origin-scoped policy.
-              // Principal ORIGIN = the requesting document's browser origin (per-frame,
-              // documentId-keyed, opaque-unique) tracked on the buffer — NOT parsed from a
-              // URL (a sandboxed frame's URL parses to a real origin it does NOT have).
-              // Opaque / mixed / untracked ("null:<uuid>" or "null") matches no real
-              // target, so the credentialed read never fires; pageOrigin also flows to
-              // safeFetch's own SOP (defense in depth).
-              var _rcOrigin = _docOriginForPrincipal(_rcPrincipal);
-              var _sameOrig = false; try { var _to = new URL(_absSrc).origin; _sameOrig = _rcOrigin.indexOf("://") > 0 && _to === _rcOrigin; } catch (e) {}
-              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, pageOrigin: _rcOrigin, method: "GET", credentialed: _sameOrig });
-              _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
-            } catch (e) { _reply = null; }
-            tab._replyCache[_absSrc] = _reply;
-          }
-          if (_reply) {
-            var _json = null; try { _json = JSON.parse(_reply); } catch (e) {}
-            if (_json && typeof _json === "object") {
-              var _ex = {};
-              for (var _fi = 0; _fi < _re.opaqueFields.length; _fi++) {
-                var _fld = _re.opaqueFields[_fi];
-                if (typeof _json[_fld] === "string") _ex[_fld] = _json[_fld];
-              }
-              if (Object.keys(_ex).length) {
-                _re.replyExample = { source: _srcEp, fields: _ex };
-                // Surface the chained endpoint in the moat: a FULLY-opaque URL
-                // that IS a reply field resolves to the field's real value (a
-                // server-provided URL — marked reply-example, never computed).
-                // forced exec already learned the chained fetch fired; the GET
-                // only supplies its URL. (Templated chains stay {hole} endpoints,
-                // not resolverErrors, so this only fires for whole-URL chains.)
-                var _cm = /"method":"(\w+)"/.exec(_re.message || "");
-                var _chainMethod = _cm ? _cm[1] : "GET";
-                // Reconstruct the chained URL: substitute the recovered field
-                // values INTO the URL template (rawUrl, e.g. "{apiHost}/api/widgets")
-                // so the literal PATH survives the opaque host; a fully-opaque URL
-                // (the whole URL IS one field) uses each field value directly.
-                var _tmpl = (typeof _re.rawUrl === "string" && _re.rawUrl.indexOf("{") >= 0) ? _re.rawUrl : null;
-                var _chainUrls = [];
-                if (_tmpl) {
-                  var _su = _tmpl;
-                  for (var _f in _ex) _su = _su.split("{" + _f + "}").join(_ex[_f]);
-                  if (_su.indexOf("{") < 0) _chainUrls.push(_su);
-                } else {
-                  for (var _f2 in _ex) _chainUrls.push(_ex[_f2]);
-                }
-                for (var _ci = 0; _ci < _chainUrls.length; _ci++) {
-                  var _eu = null; try { _eu = new URL(_chainUrls[_ci], _rcPrincipal); } catch (e) {}
-                  if (!_eu || (_eu.protocol !== "http:" && _eu.protocol !== "https:")) continue;
-                  var _epk = "replyex " + _chainMethod + " " + _eu.host + _eu.pathname;
-                  if (!tab.endpoints.has(_epk)) {
-                    tab.endpoints.set(_epk, {
-                      url: _eu.href, method: _chainMethod, host: _eu.host, path: _eu.pathname,
-                      service: extractInterfaceName(_eu), source: "reply_example",
-                      valueSource: "reply-example", replyFrom: { endpoint: _srcEp, field: Object.keys(_ex).join(",") },
-                      pageUrl: _rcPrincipal, firstSeen: Date.now(),
-                    });
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-      if (!_seenRe.has(_re.message)) {
-        _seenRe.add(_re.message);
-        tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null, replyExample: _re.replyExample || null });
-      }
-    }
-  }
-
-  var hasFindings = analysis.protoEnums.length || analysis.protoFieldMaps.length ||
-    analysis.fetchCallSites.length || analysis.sourceMapUrl ||
-    (analysis.securitySinks && analysis.securitySinks.length) ||
-    (analysis.dangerousPatterns && analysis.dangerousPatterns.length);
-  if (!hasFindings) {
-    console.debug("[AST] No findings for %s", scriptUrl || "(inline)");
-    return;
-  }
-
-  console.debug("[AST] Findings for %s: %d protoEnums, %d fieldMaps, %d fetchSites, %d secSinks, %d dangerousPatterns, sourceMap=%s",
-    scriptUrl || "(inline)", analysis.protoEnums.length, analysis.protoFieldMaps.length,
-    analysis.fetchCallSites.length,
-    (analysis.securitySinks ? analysis.securitySinks.length : 0),
-    (analysis.dangerousPatterns ? analysis.dangerousPatterns.length : 0),
-    analysis.sourceMapUrl || "none");
-
-  if (!tab._astResults) tab._astResults = [];
-  tab._astResults.push(analysis);
-  mergeASTResultsIntoVDD(tab, [analysis], tabId);
-  mergeToGlobal(tab);
-  notifyPopup(tabId);
-
-  // Source map recovery (async, fires after initial merge)
-  if (analysis.sourceMapUrl) {
-    var smUrl = analysis.sourceMapUrl;
-    try {
-      if (!/^https?:\/\//i.test(smUrl)) {
-        smUrl = new URL(smUrl, new URL(scriptUrl)).href;
-      }
-    } catch (_) {
-      console.debug("[AST:sourcemap] Failed to resolve URL: %s (base: %s)", analysis.sourceMapUrl, scriptUrl);
-      return;
-    }
-    console.debug("[AST:sourcemap] Fetching: %s", smUrl);
-    pageContextFetch(tabId, smUrl, { method: "GET" })
-      .then(async function(smResp) {
-        if (!smResp.body || smResp.error) {
-          console.debug("[AST:sourcemap] Fetch failed for %s: %s", smUrl, smResp.error || "empty body");
-          return;
-        }
-        try {
-          var smJson = JSON.parse(smResp.body);
-          try { analysis.traceMapsByUrl = analysis.traceMapsByUrl || {}; analysis.traceMapsByUrl[scriptUrl] = new traceMapping.TraceMap(smJson); }
-          catch (e) { console.debug("[AST:sourcemap] TraceMap failed for %s: %s", scriptUrl, e && e.message); }
-          var smResp2 = await sendToOffscreen({ type: "AST_PARSE_SOURCEMAP", sourceMapJson: smJson });
-          if (!smResp2 || !smResp2.success) {
-            console.debug("[AST:sourcemap] parseSourceMap failed for %s: %s", smUrl, smResp2 ? smResp2.error : "no response");
-            return;
-          }
-          var smData = smResp2.result;
-          analysis.sourceMap = smData;
-          console.debug("[AST:sourcemap] Parsed: %d sources, %d names, %d proto files, %d API client files, %d sourcesContent",
-            smData.sources.length, smData.names.length, smData.protoFileNames.length,
-            smData.apiClientFiles.length, (smData.sourcesContent || []).length);
-          if (smData.protoFileNames.length) {
-            console.debug("[AST:sourcemap] Proto files: %s", smData.protoFileNames.join(", "));
-          }
-          if (smData.apiClientFiles.length) {
-            console.debug("[AST:sourcemap] API client files: %s", smData.apiClientFiles.join(", "));
-          }
-          if (smData.sourcesContent && smData.sourcesContent.length) {
-            var typesResp = await sendToOffscreen({
-              type: "AST_EXTRACT_TYPES",
-              sourcesContent: smData.sourcesContent,
-              sources: smData.sources
-            });
-            if (typesResp && typesResp.success) {
-              analysis.sourceMapTypes = typesResp.result;
-              if (analysis.sourceMapTypes.length) {
-                console.debug("[AST:sourcemap] Extracted %d types: %s", analysis.sourceMapTypes.length,
-                  analysis.sourceMapTypes.map(function(t) { return t.kind + " " + t.name; }).slice(0, 10).join(", "));
-              }
-            }
-          }
-          mergeASTResultsIntoVDD(tab, [analysis], tabId);
-          mergeToGlobal(tab);
-          notifyPopup(tabId);
-        } catch (e) {
-          console.debug("[AST:sourcemap] Parse error for %s: %s", smUrl, e.message);
-        }
-      }).catch(function(e) {
-        console.debug("[AST:sourcemap] Network error for %s: %s", smUrl, e.message || e);
-      });
-  }
-}
 
 function mergeASTResultsIntoVDD(tab, results, tabId) {
   for (var r = 0; r < results.length; r++) {
@@ -6215,7 +5991,7 @@ function handleContentMessage(msg, sender) {
 
   // RESPONSE_BODY comes from intercept.js via content.js relay
   if (msg.type === "RESPONSE_BODY") {
-    handleResponseBody(tabId, msg, sender.frameId);
+    handleResponseBody(tabId, msg, sender.frameId, sender.documentId);
     return;
   }
 
@@ -6273,27 +6049,20 @@ function handleContentMessage(msg, sender) {
     var _dk = sender.documentId || (tabId + ":" + (sender.frameId || 0));
     var _buf = _scriptBuffers.get(_dk);
     if (!_buf) { _buf = {}; _scriptBuffers.set(_dk, _buf); }
+    // Each buffer IS this document's frame record, identified by its documentId
+    // (docKey) — never a tab-relative frameId. There is no separate frame table: a
+    // tab's frames ARE its buffers (GET_FRAMES lists them; routing + the response
+    // origin-lookup key on documentId, which Chrome's messaging accepts directly).
+    // The origin is AUTHORITATIVE (sender.origin via _senderOrigin), never URL-parsed
+    // (a sandboxed frame's URL parses to a real origin it does NOT have — its true
+    // origin is opaque, which _senderOrigin reflects), with no nav-event-vs-message
+    // race. We do NOT record "isTop": a frame can't prove it is the main frame from
+    // its own report — a fenced frame is its tree's root and would impersonate it.
     _buf.tabId = tabId;
     _buf.docKey = _dk;
     _buf.origin = _senderOrigin(sender);                              // credentialed-read principal (per-document)
     _buf.url = sender.url || (sender.tab && sender.tab.url) || "";    // SSRF origin + window.location
     _buf.pageHtml = tab._pageHtml;
-    // Frame self-registration. Each document reports its OWN browser-provided
-    // identity (sender.documentId + sender.origin + sender.frameId) via THIS
-    // message — the single authoritative source for the frame dialog (GET_FRAMES)
-    // and per-frame request routing. No nav-event-vs-message race (one source,
-    // arriving with the document), and the AUTHORITATIVE origin: never URL-parsed
-    // (a sandboxed frame's URL parses to a real origin it does NOT have — its true
-    // origin is opaque, which _senderOrigin reflects). We do NOT record an "isTop"
-    // flag: a frame CANNOT prove it is the main frame from its own report — a
-    // fenced frame is the root of its own frame tree and would impersonate the top
-    // frame. "Is the main frame" must come from webNavigation, never this message.
-    var _frId = sender.frameId || 0;
-    if (!_tabFrames.has(tabId)) _tabFrames.set(tabId, new Map());
-    _tabFrames.get(tabId).set(_frId, {
-      url: _buf.url, origin: _buf.origin,
-      documentId: sender.documentId || null, lastSeen: Date.now(),
-    });
     _buf.scripts = [];   // engine-sourced: Lexbor parses the HTML, qjs_run_doc_scripts runs inline + external scripts — one system
     _buf.pending = 0;
     _buf.loadFired = true;
@@ -6370,39 +6139,28 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "GET_FRAMES": {
-      // Verify each registered frame is still alive before returning
-      const frames = _tabFrames.get(tabId);
-      if (!frames || frames.size === 0) {
-        sendResponse([{ frameId: 0, url: _tabMeta.get(tabId)?.url || "", origin: "" }]);
-        return;
-      }
-      // No isTop in the response: a frame can't prove it's the main frame from
-      // its own report (fenced-frame impersonation). The popup routes by frameId;
-      // "which is the main frame" would need an authoritative webNavigation lookup.
-      const checks = [];
-      for (const [fid, info] of frames) {
-        checks.push(
-          swRpc("tabs.sendMessage", tabId, { type: "PING" }, { frameId: fid })
-            .then(() => ({ frameId: fid, url: info.url, origin: info.origin, alive: true }))
-            .catch(() => ({ frameId: fid, alive: false }))
-        );
-      }
-      Promise.all(checks).then((results) => {
-        const alive = [];
-        for (var i = 0; i < results.length; i++) {
-          if (results[i].alive) {
-            alive.push({ frameId: results[i].frameId, url: results[i].url, origin: results[i].origin });
-          } else {
-            frames.delete(results[i].frameId);
-          }
-        }
-        alive.sort((a, b) => a.frameId - b.frameId);
-        if (alive.length === 0) {
-          alive.push({ frameId: 0, url: _tabMeta.get(tabId)?.url || "", origin: "" });
-        }
-        sendResponse(alive);
+      // Authoritative frame tree from the BROWSER: chrome.webNavigation.getAllFrames
+      // returns each live frame's documentId + url + frameType. frameType is the
+      // only trustworthy "is this the main frame" signal — a fenced frame is reported
+      // as "fenced_frame", so it CANNOT impersonate the outermost frame (which a
+      // self-reported isTop could). The per-document buffer supplies each frame's
+      // AUTHORITATIVE origin (sender.origin via _senderOrigin); frameId is Chrome's
+      // routing id for tabs.sendMessage, not a stored identity.
+      let _wnFrames = null;
+      try { _wnFrames = await swRpc("webNavigation.getAllFrames", { tabId }); }
+      catch (e) { console.debug("[GET_FRAMES] getAllFrames failed:", e && e.message || e); }
+      const out = (_wnFrames || []).map((f) => {
+        const _fb = f.documentId ? _scriptBuffers.get(f.documentId) : null;
+        return {
+          frameId: f.frameId,
+          documentId: f.documentId || null,
+          url: f.url,
+          origin: _fb ? _fb.origin : "",
+          isMain: f.frameType === "outermost_frame",
+        };
       });
-      return true; // async sendResponse
+      sendResponse(out.length ? out : [{ frameId: 0, documentId: null, url: "", origin: "", isMain: true }]);
+      return;
     }
 
     case "PROBE_ENDPOINT": {
@@ -7508,14 +7266,10 @@ function _onTabRemoved(tabId) {
     meta.closed = true;
     meta.closedAt = Date.now();
   }
-  // Only the transient working state is freed — the live frame index, the
-  // WebSocket connection map, the script-fetch buffer. These don't survive
-  // tab close because the page is gone; the request log is HISTORY and
-  // stays.
-  // WebSocket connections and the live frame index die with the page — they
-  // describe a renderer that no longer exists, so free them.
+  // WebSocket connections die with the page — they describe a renderer that no
+  // longer exists, so free them. (There is no separate frame index to free: a
+  // tab's frames are derived live from webNavigation + the document buffers.)
   _wsConnState.delete(tabId);
-  _tabFrames.delete(tabId);
   // The per-document script buffers are NOT freed on tab close: each document's
   // combined source backs a resumable/background deep grind that keeps learning
   // the closed tab's API surface (and resumes across sessions) without

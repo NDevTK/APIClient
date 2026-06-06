@@ -2462,7 +2462,7 @@ function renderFrameSelector() {
     var f = availableFrames[i];
     var opt = document.createElement("option");
     opt.value = f.frameId;
-    var label = f.isTop ? "Top frame" : "iframe (" + f.frameId + ")";
+    var label = f.isMain ? "Top frame" : "iframe (" + f.frameId + ")";
     try {
       var u = new URL(f.url);
       label += " \u2014 " + u.hostname;
