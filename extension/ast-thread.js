@@ -362,7 +362,7 @@ function buildPageDomSrc(scriptUrls) {
     "}catch(e){}})();";
 }
 
-async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, scriptOffsets, sourceMapScripts) {
+async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, scriptOffsets, sourceMapScripts, scriptSources) {
   var t0 = Date.now();
   // PROPER taint TRACE from the engine's psi term (the data-flow QuickJS
   // computed), NOT the @S call-STACK. The popup's _extract*FromTaintPath helpers
@@ -646,6 +646,11 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     preParts.push("globalThis.__pageUrl = " + JSON.stringify(sourceUrl) + ";");
   if (typeof pageHtml === "string" && pageHtml.length > 0)
     preParts.push("globalThis.__pageHtml = " + JSON.stringify(pageHtml) + ";");
+  // url->source map of the page's OWN external <script src>, safeFetched by the
+  // offscreen and handed back so the engine RUNS them in document order (the
+  // one-message-per-document model — hostedge's SSR phase reads G.__feScriptSources).
+  if (scriptSources && typeof scriptSources === "object" && Object.keys(scriptSources).length)
+    preParts.push("globalThis.__feScriptSources = " + JSON.stringify(scriptSources) + ";");
   if (preParts.length) {
     inMem.unshift(["/pre.js", preParts.join("\n")]);
     fileArgs.unshift("/pre.js");
@@ -2851,7 +2856,7 @@ function _runReview(id, msg) {
   // next pick.
   forcedAnalyze(String(msg.code || ""), msg.sourceUrl || "", msg.scriptUrls || null,
     typeof msg.pageHtml === "string" ? msg.pageHtml : null, !!msg.seedOnly, !!msg.deep,
-    undefined, undefined, undefined, msg.scriptOffsets || null, msg.sourceMapScripts || null)
+    undefined, undefined, undefined, msg.scriptOffsets || null, msg.sourceMapScripts || null, msg.scriptSources || null)
     .then(function (result) { fin({ success: true, result: result }); })
     .catch(function (err) { fin({ success: false, error: (err && err.message) || String(err), stack: err && err.stack }); });
 }
@@ -2937,7 +2942,7 @@ async function _resumeIncompleteDeep() {
      running scan make the kick idempotent (no-ops when the cap is full). */
   setTimeout(_resumeIncompleteDeep, 0);
   try {
-    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || [], codeRec.scriptOffsets || null, codeRec.sourceMapScripts || null);
+    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || [], codeRec.scriptOffsets || null, codeRec.sourceMapScripts || null, codeRec.scriptSources || null);
     postMessage({ _resumed: true, sourceUrl: codeRec.sourceUrl || "", response: { success: true, result: result } });
   } catch (e) {
     /* The grind fiber threw — prog/code IDB records remain so the next
