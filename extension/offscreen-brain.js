@@ -6249,6 +6249,39 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
     mergeToGlobal(_rtab);
     notifyPopup(_rtid);
     console.debug("[AST:deep] merged for %s into tab=%d", _rurl, _rtid);
+    // A chunk/script a gated-loader orphan inserted (createElement("script").src=)
+    // is discovered DURING the deep grind — it lands in result.chunkUrls HERE, not
+    // the initial analysis (which already ran _maybeDownloadChunks with an EMPTY list
+    // before the grind drove the loader). Without downloading it, the inserted
+    // library's endpoints — the programmatic-insert MOAT: a logged-out admin/lazy
+    // loader's whole API surface — are never learned. Feed grind-discovered chunks
+    // through the SAME safeFetch chokepoint + re-analysis. Re-arm the terminal
+    // _chunkGrindDone guard ONLY for a genuinely-fresh ABSOLUTE url (the loader
+    // re-inserts the same url each grind → _chunkSeen dedup → next pass fresh-empty
+    // → terminates, no loop).
+    if (result.chunkUrls && result.chunkUrls.length) {
+      var _dbuf = _scriptBuffers.get(_rtid);
+      if (_dbuf) {
+        var _seen = _dbuf._chunkSeen;
+        var _hasFresh = false;
+        for (var _ci = 0; _ci < result.chunkUrls.length; _ci++) {
+          var _cu = result.chunkUrls[_ci];
+          if (_cu && /^https?:\/\//i.test(_cu) && !(_seen && _seen.has(_cu))) { _hasFresh = true; break; }
+        }
+        if (_hasFresh) {
+          _dbuf._chunkGrindDone = false;
+          // Also clear _chunkFetchStarted: _maybeDownloadChunks' line ~4755 drops
+          // webpack/script chunkUrls on non-first rounds (chunkUrls=esmImportUrls),
+          // keeping the webpack graph one-round — but a grind-discovered <script src>
+          // IS a genuinely-new script that must be fetched. Treat this as a fresh
+          // round so the script chunk is considered; _chunkSeen dedup (the _hasFresh
+          // guard above + the internal fresh filter) keeps it bounded / loop-free.
+          _dbuf._chunkFetchStarted = false;
+          _maybeDownloadChunks(_rtid, _dbuf, result.chunkUrls, result.esmImportUrls || [])
+            .catch(function (e) { console.debug("[AST:deep] grind-chunk download error: %s", e && e.message); });
+        }
+      }
+    }
   } catch (e) { console.debug("[AST:deep] merge error: %s", e && e.message); }
 }
 
