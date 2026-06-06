@@ -7603,8 +7603,6 @@ const CONTENT_TYPES = new Set([
   "CONTENT_PING",
   "CONTENT_FORM_SUBMIT",
   "RESPONSE_BODY",
-  "SCRIPT_SOURCE",
-  "SCRIPTS_LOADED",
   "PROBE_HIT",
 ]);
 const _contentPings = new Map();  // tabId -> [{ at, pageUrl }, ...]
