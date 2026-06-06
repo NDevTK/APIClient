@@ -229,7 +229,11 @@ async function cmdStart(args) {
 async function cmdPage(args) {
   const expr = args.join(" ");
   if (!expr) throw new Error("usage: page <js-expression>");
-  const body = /(^|\s)return\s|;|\{/.test(expr) ? expr : "return (" + expr + ");";
+  // Wrap in `return (...)` UNLESS the expr STARTS with a statement keyword — so
+  // expressions that merely CONTAIN `{`/`;`/`return` inside nested functions (an
+  // IIFE, `.map(fn).join()`, `JSON.stringify([...].map(...))`) still return their
+  // value. The old `contains {/;/return` test ran those with no return -> undefined.
+  const body = /^\s*(return|var|let|const|if|for|while|function|throw|do|switch)\b/.test(expr) ? expr : "return (" + expr + ");";
   await withBrowser(async (browser) => {
     const page = await getActivePage(browser);
     const out = await page.evaluate(new Function("return (async () => { " + body + " })()"));
@@ -240,7 +244,11 @@ async function cmdPage(args) {
 async function cmdPopup(args) {
   const expr = args.join(" ");
   if (!expr) throw new Error("usage: popup <js-expression>");
-  const body = /(^|\s)return\s|;|\{/.test(expr) ? expr : "return (" + expr + ");";
+  // Wrap in `return (...)` UNLESS the expr STARTS with a statement keyword — so
+  // expressions that merely CONTAIN `{`/`;`/`return` inside nested functions (an
+  // IIFE, `.map(fn).join()`, `JSON.stringify([...].map(...))`) still return their
+  // value. The old `contains {/;/return` test ran those with no return -> undefined.
+  const body = /^\s*(return|var|let|const|if|for|while|function|throw|do|switch)\b/.test(expr) ? expr : "return (" + expr + ");";
   await withBrowser(async (browser) => {
     const popup = await getPopupPage(browser);
     const out = await popup.evaluate(new Function("return (async () => { " + body + " })()"));
@@ -359,7 +367,11 @@ async function cmdDiag(args) {
 async function cmdSweval(args) {
   const expr = args.join(" ");
   if (!expr) throw new Error("usage: sweval <js-expression>");
-  const body = /(^|\s)return\s|;|\{/.test(expr) ? expr : "return (" + expr + ");";
+  // Wrap in `return (...)` UNLESS the expr STARTS with a statement keyword — so
+  // expressions that merely CONTAIN `{`/`;`/`return` inside nested functions (an
+  // IIFE, `.map(fn).join()`, `JSON.stringify([...].map(...))`) still return their
+  // value. The old `contains {/;/return` test ran those with no return -> undefined.
+  const body = /^\s*(return|var|let|const|if|for|while|function|throw|do|switch)\b/.test(expr) ? expr : "return (" + expr + ");";
   await withBrowser(async (browser) => {
     // Wake the SW: touch the popup (its render pings the SW).
     try { await getPopupPage(browser); } catch (_) {}
@@ -525,7 +537,11 @@ async function cmdDumpScripts(args) {
 async function cmdOffscreen(args) {
   const expr = args.join(" ");
   if (!expr) throw new Error("usage: offscreen <js-expression>");
-  const body = /(^|\s)return\s|;|\{/.test(expr) ? expr : "return (" + expr + ");";
+  // Wrap in `return (...)` UNLESS the expr STARTS with a statement keyword — so
+  // expressions that merely CONTAIN `{`/`;`/`return` inside nested functions (an
+  // IIFE, `.map(fn).join()`, `JSON.stringify([...].map(...))`) still return their
+  // value. The old `contains {/;/return` test ran those with no return -> undefined.
+  const body = /^\s*(return|var|let|const|if|for|while|function|throw|do|switch)\b/.test(expr) ? expr : "return (" + expr + ");";
   await withBrowser(async (browser) => {
     const lock = await readLock();
     const extId = lock?.extId;
@@ -551,7 +567,11 @@ async function cmdOffscreen(args) {
 async function cmdWorker(args) {
   const expr = args.join(" ");
   if (!expr) throw new Error("usage: worker <js-expression>");
-  const body = /(^|\s)return\s|;|\{/.test(expr) ? expr : "return (" + expr + ");";
+  // Wrap in `return (...)` UNLESS the expr STARTS with a statement keyword — so
+  // expressions that merely CONTAIN `{`/`;`/`return` inside nested functions (an
+  // IIFE, `.map(fn).join()`, `JSON.stringify([...].map(...))`) still return their
+  // value. The old `contains {/;/return` test ran those with no return -> undefined.
+  const body = /^\s*(return|var|let|const|if|for|while|function|throw|do|switch)\b/.test(expr) ? expr : "return (" + expr + ");";
   await withBrowser(async (browser) => {
     const lock = await readLock();
     const extId = lock?.extId;
