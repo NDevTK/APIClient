@@ -2500,21 +2500,23 @@ function renderServiceOriginHint() {
   // stay bare here precisely because surfacing them would spam on every popup
   // open. The OUTER availableFrames read is the only path where a throw means
   // a real popup state bug (availableFrames should always be an array).
-  var tabUrl = "";
+  // The current document's origin is the AUTHORITATIVE browser origin GET_FRAMES
+  // reports (from _docOrigins) for the MAIN frame — never derived from the tab url:
+  // a document url can't be mapped to an origin (about:blank/sandboxed give the
+  // generic "null" origin) and a tab has cross-origin documents, so url->origin
+  // would both miss real origins and fabricate ones. An opaque main frame
+  // ("null:<uuid>") yields "" here -> no match -> the cross-origin hint shows
+  // (fail-safe). The pageUrls compared below are the service's RECORDED page urls
+  // (historical "seen at"), a display heuristic — not the live principal.
+  var tabOrigin = "";
   try {
-    var tabs = availableFrames;
-    if (tabs.length > 0) tabUrl = tabs[0].url;
+    var _mainF = availableFrames.find(function (f) { return f && f.isMain; }) || availableFrames[0];
+    if (_mainF && typeof _mainF.origin === "string" && _mainF.origin.indexOf("://") > 0) tabOrigin = _mainF.origin;
   } catch (e) {
     console.warn("[popup:renderServiceOriginHint] availableFrames read threw:", e && e.message || e);
   }
-  // Use URL.canParse (WHATWG, standard since Chrome 120) so we don't catch
-  // throws as a parse-validity test — empty/chrome:// inputs short-circuit
-  // explicitly instead of going through exception flow. Root-cause fix for
-  // what would otherwise be two silent catches: an unparseable input is
-  // KNOWN AT THE GUARD, not discovered via throw.
-  var tabOrigin = (tabUrl && URL.canParse(tabUrl)) ? new URL(tabUrl).origin : "";
   var matchesCurrentTab = false;
-  for (var i = 0; i < pageUrls.length; i++) {
+  if (tabOrigin) for (var i = 0; i < pageUrls.length; i++) {
     if (pageUrls[i] && URL.canParse(pageUrls[i]) && new URL(pageUrls[i]).origin === tabOrigin) {
       matchesCurrentTab = true; break;
     }
