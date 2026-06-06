@@ -501,21 +501,14 @@
       return;
     }
     if (scriptEl.src) {
-      // External script — send URL to background (it has host_permissions, no CORS issues)
-      var src = scriptEl.src;
-      if (_sentScripts.has(src)) return;
-      _sentScripts.add(src);
-      chrome.runtime.sendMessage({
-        type: "SCRIPT_SOURCE",
-        url: src,
-        code: null,  // background will fetch the source
-        order: order,
-      });
-    } else {
-      // Inline script
-      var code = scriptEl.textContent;
-      if (code) sendScriptSource(null, code, order);
+      // External <script src> is discovered from the Lexbor DOM and loaded by the
+      // ENGINE in document order via __feLoadScript (the safeFetch chokepoint),
+      // in the same realm as the inline scripts — content.js no longer ships it.
+      return;
     }
+    // Inline script
+    var code = scriptEl.textContent;
+    if (code) sendScriptSource(null, code, order);
   }
 
   // Extract all existing scripts on page load
