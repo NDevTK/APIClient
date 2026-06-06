@@ -1402,14 +1402,27 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       if (line.slice(0, 11) === "@SCRIPTSRC ") {
         /* The engine discovered an external <script src> from the Lexbor DOM (the
            one-message-per-document model — the page's OWN bundle, not a lazy chunk).
-           Format: "@SCRIPTSRC <c|m> <url>". Collect for the offscreen to safeFetch +
+           Format: "@SCRIPTSRC <c|m> <domOrder> <url>" (domOrder = the engine's
+           querySelectorAll("script") index = document order, so the offscreen folds
+           the external into the page bundle at the right spot relative to the inline
+           scripts that read its globals). Collect for the offscreen to safeFetch +
            feed back to be RUN in order (classic global eval, or the module path for
-           type=module). Surfaced on self for the brain + verification. */
+           type=module). Backward-compatible: an order token is optional (older
+           "<c|m> <url>" → order -1). Surfaced on self for the brain + verification. */
         var _ss = line.slice(11);
         var _ssp = _ss.indexOf(" ");
         if (_ssp > 0) {
-          var _ssUrl = _ss.slice(_ssp + 1).trim();
-          if (_ssUrl && !isUnresolved(_ssUrl)) scriptSrcUrls.push({ url: _ssUrl, module: _ss.slice(0, _ssp) === "m" });
+          var _ssKind = _ss.slice(0, _ssp);
+          var _ssRest = _ss.slice(_ssp + 1);
+          var _ssp2 = _ssRest.indexOf(" ");
+          var _ssOrder = -1, _ssUrl;
+          if (_ssp2 > 0 && /^\d+$/.test(_ssRest.slice(0, _ssp2))) {
+            _ssOrder = parseInt(_ssRest.slice(0, _ssp2), 10);
+            _ssUrl = _ssRest.slice(_ssp2 + 1).trim();
+          } else {
+            _ssUrl = _ssRest.trim();
+          }
+          if (_ssUrl && !isUnresolved(_ssUrl)) scriptSrcUrls.push({ url: _ssUrl, module: _ssKind === "m", order: _ssOrder });
         }
         continue;
       }
