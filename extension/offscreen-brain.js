@@ -347,22 +347,12 @@ function getTab(tabId) {
       requestLog: [], // Array of { id, url, method, service, timestamp, status, headers, responseHeaders, ... }
       _valueIndex: createValueIndex(), // Chain engine: response value → source tracking
     });
-    captureTabMeta(tabId);
   }
   return state.tabs.get(tabId);
 }
-
-async function captureTabMeta(tabId) {
-  if (_tabMeta.has(tabId)) return;
-  try {
-    const tab = await swRpc("tabs.get", tabId);
-    if (tab) {
-      _tabMeta.set(tabId, { title: tab.title || `Tab ${tabId}`, url: tab.url || "" });
-    }
-  } catch (_) {
-    _tabMeta.set(tabId, { title: `Tab ${tabId}`, url: "" });
-  }
-}
+// (No tab probing: _tabMeta title/url are populated from the browser-verified
+// sender.tab on every content message in handleContentMessage, and from
+// webNavigation in _onNav — never a tabs.get round-trip.)
 
 // ─── Persistent Storage (IndexedDB) ─────────────────────────────────────────
 
@@ -5971,8 +5961,8 @@ function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
 
-  // Keep _tabMeta up to date — captureTabMeta only runs once and may get an
-  // empty URL if the tab hadn't committed its navigation yet.
+  // _tabMeta title/url come from the browser-verified sender.tab on every
+  // content message (no tabs.get probe) — set/refresh it here.
   if (sender.tab.url) {
     var _tm = _tabMeta.get(tabId);
     if (!_tm) {
@@ -7142,11 +7132,14 @@ async function _onTabActivated(tabId) {
   meta.lastActivatedTs = Date.now();
   let url = meta.url;
   if (!url) {
+    // No tabs.get probe: ask webNavigation for the authoritative outermost-frame
+    // url of the activated tab (the page the user just focused).
     try {
-      const t = await swRpc("tabs.get", tabId);
-      if (t && t.url) { url = t.url; meta.url = url; meta.title = t.title || meta.title; }
+      const fr = await swRpc("webNavigation.getAllFrames", { tabId });
+      const top = (fr || []).find((f) => f.frameType === "outermost_frame") || (fr || [])[0];
+      if (top && top.url) { url = top.url; meta.url = url; }
     } catch (e) {
-      console.debug("[brain:_onTabActivated] tabs.get failed for tabId=%d: %s", tabId, e && e.message || e);
+      console.debug("[brain:_onTabActivated] getAllFrames failed for tabId=%d: %s", tabId, e && e.message || e);
     }
   }
   if (!url || !/^https?:/i.test(url)) return;
