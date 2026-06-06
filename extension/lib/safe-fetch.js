@@ -74,10 +74,14 @@ function _sniffsProtected(s) {
 // anything — not even another "null". A real origin is the only form containing
 // "://"; "null" / "" / "null:<uuid>" do not, so this one test distinguishes them.
 function _isRealOrigin(o) { return typeof o === "string" && o.indexOf("://") > 0; }
-function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageUrl) {
+function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageOrigin) {
   mime = String(mime || "").split(";")[0].trim().toLowerCase();
   var cross = true;
-  try { var _so = new URL(scriptUrl).origin, _pgo = new URL(pageUrl).origin; cross = !(_isRealOrigin(_so) && _isRealOrigin(_pgo) && _so === _pgo); } catch (e) { cross = true; }
+  // scriptUrl is a network resource — its origin IS its url's origin. pageOrigin is
+  // the AUTHORITATIVE browser origin of the loading document, passed in; NEVER
+  // url-parsed (a sandboxed frame's url would fabricate a tuple origin it lacks).
+  // No real pageOrigin -> treat as cross-origin (strict CORB).
+  try { var _so = new URL(scriptUrl).origin; cross = !(_isRealOrigin(_so) && _isRealOrigin(pageOrigin) && _so === pageOrigin); } catch (e) { cross = true; }
   if (!cross) return !(_corbProtectedMime(mime) && !_jsMime(mime)); // same-origin: only skip the page's own non-JS data
   if (_corbProtectedMime(mime)) return false;          // CORB-protected type
   if (nosniff && !_jsMime(mime)) return false;          // browser blocks too
@@ -169,7 +173,7 @@ async function safeFetch(url, opts) {
   if (opts.as === "script" && resp.ok &&
       !_corbAllowsScript(headers["content-type"] || "",
         (headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0,
-        body, parsed.href, _po))
+        body, parsed.href, opts.pageOrigin || ""))
     return { ok: false, status: 0, statusText: "blocked-corb", headers: headers, body: "" };
   // OWN SOP/CORS for a CREDENTIALED reply. The browser does NOT apply the same-origin
   // policy to an extension fetch with host_permissions (it can read any origin), so
@@ -191,10 +195,10 @@ async function safeFetch(url, opts) {
     // credentialed data. An opaque origin ("null" / "null:<uuid>" / empty — incl. a
     // mixed-origin buffer's minted token) is UNIQUE per the spec → never same-origin
     // with ANYTHING → a credentialed cross-origin read that needs CORS, which an
-    // opaque origin can never be granted (ACAO can't equal it). Falls back to
-    // parsing pageUrl only when the caller passed no pageOrigin.
+    // opaque origin can never be granted (ACAO can't equal it). No pageOrigin ->
+    // "" -> fail closed: the principal is NEVER re-derived by parsing a URL (that
+    // would fabricate an origin for a sandboxed/about:blank frame).
     var _pageOrigin = opts.pageOrigin || "";
-    if (!_pageOrigin) { try { _pageOrigin = new URL(_po).origin; } catch (e) {} }
     var _sameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(parsed.origin) && parsed.origin === _pageOrigin;
     if (!_sameOrigin) {
       var _acao = headers["access-control-allow-origin"] || "";

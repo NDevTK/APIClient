@@ -4701,7 +4701,7 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls, esmImportUrls) {
     var results = await Promise.all(batch.map(function (cu) {
       // as:"script" — a chunk is loaded AS code, so safeFetch enforces CORB
       // (cross-origin must be JS-typed) + SSRF with the page principal.
-      return safeFetch(cu, { pageUrl: _chunkPageOrigin, method: "GET", as: "script" })
+      return safeFetch(cu, { pageUrl: _chunkPageOrigin, pageOrigin: buf.origin || "", method: "GET", as: "script" })
         .then(function (resp) {
           if (!resp.ok) return { u: cu, body: null, corb: resp.statusText === "blocked-corb" };
           return { u: cu, body: resp.body };
