@@ -1212,6 +1212,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         try {
           var u = String(url == null ? "" : url);
           if (!u) return null;
+          // Resolve a relative <script src> ("/app.js", "chunk.js") against the
+          // document principal — the engine passes the raw DOM attribute, and
+          // safeFetch wants an absolute URL (+ checks its origin vs the principal).
+          if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u) && sourceUrl) {
+            try { u = new URL(u, sourceUrl).href; } catch (e) {}
+          }
           if (!self._feScriptLoadCache) self._feScriptLoadCache = {};
           if (Object.prototype.hasOwnProperty.call(self._feScriptLoadCache, u)) return self._feScriptLoadCache[u];
           var resp = await safeFetch(u, { pageUrl: sourceUrl || "", as: "script" });
