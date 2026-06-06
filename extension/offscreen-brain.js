@@ -122,7 +122,7 @@ function _trimRequestLog(tab) {
   while (tab.requestLog.length > MAX_REQUEST_LOG_ENTRIES) tab.requestLog.pop();
 }
 
-const _deepStatsByTab = new Map(); // tabId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
+const _deepStatsByDoc = new Map(); // tabId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
 const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
 
 // A document's SECURITY ORIGIN for same-origin checks — the BROWSER-provided
@@ -170,9 +170,9 @@ function _originForDoc(documentId) {
 // message (see handleContentMessage): the message arrival IS the "analyze me now"
 // signal, per document, with the document's authoritative own url/origin.
 
-// Cross-script AST analysis: buffer scripts per tab, debounce, concatenate + analyze
-// Per-DOCUMENT analysis state, keyed by documentId (sender.documentId, fallback
-// tabId:frameId) — NOT tabId. A tab holds many documents/frames (iframes,
+// Cross-script AST analysis: buffer scripts per document, debounce, concatenate + analyze
+// Per-DOCUMENT analysis state, keyed by documentId (sender.documentId ONLY — no
+// tabId:frameId fallback; a doc-less content message fails closed). A tab holds many documents/frames (iframes,
 // navigations), each its OWN origin; keying by tab merged them into one buffer
 // and collapsed the credentialed-read principal. Each entry: { tabId, docKey,
 // origin, url, pageHtml, scripts:[], chunk-state }. One CONTENT_HTML per document
@@ -761,7 +761,7 @@ async function clearGlobalStore() {
   globalStore.scopes.clear();
   globalStore.securityFindings.clear();
   globalStore.deepResumeMeta.clear();
-  _deepStatsByTab.clear();
+  _deepStatsByDoc.clear();
   // Drop any SW-side analyses still queued so a pending review can't repopulate
   // the store right after we wipe it (the offscreen worker's running/queued
   // grind is stopped separately via AST_CLEAR before this runs).
@@ -5933,7 +5933,7 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
     var _drm = globalStore.deepResumeMeta.get(_rurl);
     if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", _rurl); return; }
     var _rtab = _rdoc;
-    if (result._deepStats) _deepStatsByTab.set(_rdoc.documentId, Object.assign({}, result._deepStats, { ts: Date.now() }));
+    if (result._deepStats) _deepStatsByDoc.set(_rdoc.documentId, Object.assign({}, result._deepStats, { ts: Date.now() }));
     if (_drm.scriptOffsets) result.scriptOffsets = _drm.scriptOffsets;
     // Path-param name resolution (e→owner) for the deep grind is done in the
     // OFFSCREEN worker (it owns the chunk JS + has IndexedDB + outlives the SW),
@@ -6161,14 +6161,14 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         // visibility is the `_all` list below; the head must be accurate
         // to the tab the popup is showing or it lies about which page has
         // background work.
-        const _ds = tab ? _deepStatsByTab.get(tab.documentId) : null;
+        const _ds = tab ? _deepStatsByDoc.get(tab.documentId) : null;
         if (_ds) data.deepStats = _ds;
         // Cross-tab task-status surface: every page with a tracked grind, its
         // progress, and whether it's currently paused for a higher-priority
         // live review. Honest visibility into the background scheduling that
         // would otherwise be invisible to the user. Display-only (no controls).
         const _all = [];
-        _deepStatsByTab.forEach((v, k) => {
+        _deepStatsByDoc.forEach((v, k) => {
           const meta = state.docs.get(k) || {};   // k = documentId (grind is per-document)
           _all.push({
             documentId: k,
