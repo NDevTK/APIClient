@@ -103,8 +103,10 @@ function extractSourceMapUrl(code) {
 // ─── State ───────────────────────────────────────────────────────────────────
 
 const state = {
-  // Map<tabId, TabData>
-  tabs: new Map(),
+  // Map<documentId, DocData> — per-document analysis state. tabId/frameId are
+  // FIELDS on each entry (UI filter for the network tab + Chrome routing), NEVER
+  // storage keys. The cross-site cumulative moat lives in `globalStore` (global).
+  docs: new Map(),
 };
 
 // Maximum entries retained per tab in the live request log. When exceeded,
@@ -224,9 +226,9 @@ const KEY_PATTERNS = [
 
 // ─── batchexecute Decoding ──────────────────────────────────────────────────
 
-function extractKeysFromText(tabId, text, sourceUrl, sourceContext) {
+function extractKeysFromText(documentId, text, sourceUrl, sourceContext) {
   if (!text) return;
-  const tab = getTab(tabId);
+  const tab = getDoc(documentId);
   const url = sourceUrl ? new URL(sourceUrl) : null;
   const service = url ? extractInterfaceName(url) : "unknown";
 
@@ -273,8 +275,7 @@ function extractKeysFromText(tabId, text, sourceUrl, sourceContext) {
           keyData.hosts.add(url.hostname);
           keyData.endpoints.add(`${url.hostname}${url.pathname}`);
         }
-        const _keyMeta = state.tabs.get(tabId);
-        if (_keyMeta && _keyMeta.url) keyData.pageUrls.add(_keyMeta.url);
+        if (tab && tab.url) keyData.pageUrls.add(tab.url);
         if (!keyData.pageUrls) keyData.pageUrls = new Set();
       }
     }
@@ -309,27 +310,83 @@ function extractKeysFromText(tabId, text, sourceUrl, sourceContext) {
   }
 }
 
-function getTab(tabId) {
-  if (!state.tabs.has(tabId)) {
-    state.tabs.set(tabId, {
+// Per-DOCUMENT analysis state, keyed by documentId — the stable per-document
+// identity from MessageSender. tabId/frameId are FIELDS (UI filter + Chrome
+// routing), NEVER the key. `origin` is the MessageSender principal (stamped at
+// CONTENT_HTML via _originForDoc) — NEVER derived from `url`; it stays "" (fail
+// closed) until the document reports. `url` is the document's OWN url (display +
+// relative TARGET resolution only).
+function getDoc(documentId) {
+  if (!state.docs.has(documentId)) {
+    state.docs.set(documentId, {
+      // ── identity / routing ──
+      documentId: documentId,   // storage key (also a field)
+      tabId: null,              // UI filter (network tab) + Chrome routing ONLY — never a key
+      frameId: 0,               // Chrome routing ONLY (tabs.sendMessage / pageContextFetch)
+      origin: "",               // MessageSender principal (set at CONTENT_HTML) — NEVER url-derived
+      url: "",                  // the document's OWN url (display + relative TARGET resolution)
+      title: "",                // multi-tab log label
+      closed: false,            // true once the owning tab closes (logs stay visible)
+      // ── learned facts (per-document view; the cumulative moat is globalStore) ──
       apiKeys: new Map(), // key → { origin, referer, firstSeen }
       endpoints: new Map(), // endpointKey → { method, service, key, headers, firstSeen }
       authContext: null, // { sapisid, sapisidhash, cookies }
       discoveryDocs: new Map(), // service → discovery JSON or status
       probeResults: new Map(), // endpointKey → probe result
       scopes: new Map(), // service → string[] of required scopes
-      requestLog: [], // Array of { id, url, method, service, timestamp, status, headers, responseHeaders, ... }
+      requestLog: [], // Array of { id, url, method, ..., tabId, frameId, documentId }
       _valueIndex: createValueIndex(), // Chain engine: response value → source tracking
-      // Tab-level display state, folded in from the former _tabMeta side-table
-      // (the request log is inherently per-tab — the multi-tab log view). Set from
-      // the browser-verified sender.tab on content messages; NOT a security signal
-      // (the per-document credentialed-read origin lives in _docOrigins).
-      title: "Tab " + tabId, // multi-tab log label
-      url: "",               // the tab's current top-page url (display + record base)
-      closed: false,         // true once the tab closes (its logs stay visible)
     });
   }
-  return state.tabs.get(tabId);
+  return state.docs.get(documentId);
+}
+
+// All live documents belonging to a browser tab — for AGGREGATE/UI views only
+// (the network/log tab filters by tab purely at the UI level). tabId is a field.
+function docsForTab(tabId) {
+  var out = [];
+  state.docs.forEach(function (d) { if (d.tabId === tabId) out.push(d); });
+  return out;
+}
+
+// Resolve the DocData a popup RPC targets. Per-document RPCs send documentId;
+// for robustness (and the migration window) fall back to a tab's main-frame doc
+// when only a tabId is sent. Returns null if nothing matches (handlers fail
+// closed). Never creates an entry for a bare tabId.
+function _docFromMsg(msg) {
+  if (msg && msg.documentId) return getDoc(msg.documentId);
+  if (msg && msg.tabId != null) {
+    var docs = docsForTab(msg.tabId);
+    if (docs.length) {
+      for (var i = 0; i < docs.length; i++) if (docs[i].frameId === 0) return docs[i];
+      return docs[0];
+    }
+  }
+  return null;
+}
+
+// Find a channel's request-log entry (WS/PM/MC) across all of a tab's documents.
+// The channel lives on whichever document opened it; the popup's message console
+// routes by tabId, so we scan the tab's docs. documentId is the storage key;
+// tabId is the UI/routing filter.
+function _findLogEntry(tabId, channelId, method) {
+  var docs = docsForTab(tabId);
+  for (var i = 0; i < docs.length; i++) {
+    var e = docs[i].requestLog.find(function (r) { return r.channelId === channelId && r.method === method; });
+    if (e) return e;
+  }
+  return null;
+}
+
+// The live WS connection state for a channel, across a tab's documents
+// (_wsConnState is keyed by documentId).
+function _findWsConn(tabId, channelId) {
+  var docs = docsForTab(tabId);
+  for (var i = 0; i < docs.length; i++) {
+    var c = _wsConnState.get(docs[i].documentId);
+    if (c) { var conn = c.get(channelId); if (conn) return conn; }
+  }
+  return null;
 }
 // (No tab probing: the tab's title/url are populated from the browser-verified
 // sender.tab on every content message in handleContentMessage — never a tabs.get
@@ -1185,8 +1242,8 @@ function _hexToBytes(hex) {
   return out;
 }
 
-function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
-  const tab = getTab(tabId);
+function learnFromAstCallSite(documentId, interfaceName, callSite, scriptUrl) {
+  const tab = getDoc(documentId);
 
   // Structural @T candidates carry url:null (a host-edge site in
   // unreached code whose value never resolved). They are surfaced as
@@ -1204,18 +1261,18 @@ function learnFromAstCallSite(tabId, interfaceName, callSite, scriptUrl) {
   // the service list doesn't accumulate empty-host records with
   // garbled paths.
   if (/^(data|blob|about|javascript):/i.test(callSite.url)) return null;
-  // Relative URLs resolve against the PAGE's origin at runtime, NOT the
+  // Relative URLs resolve against the DOCUMENT's own url at runtime, NOT the
   // script's host. Cross-origin-hosted scripts (e.g. Reddit serves its
   // shreddit bundle from www.redditstatic.com but it fetches against
   // www.reddit.com when the bundle executes on a reddit.com page) would
-  // otherwise be misattributed to the script's host. Fall back to
-  // scriptUrl only when the tab's page URL isn't available.
+  // otherwise be misattributed to the script's host. Using THIS document's url
+  // (not the tab's top-page url) keeps an iframe's relative fetches on its own
+  // origin. Fall back to scriptUrl only when the document url isn't available.
   const isDynamic = /^\$\{|^\(dynamic\)|^\{[a-zA-Z]/.test(callSite.url);
   let csUrl = null;
   if (!isDynamic) {
     try {
-      const _pageMeta = state.tabs.get(tabId);
-      const _baseForRel = (_pageMeta && _pageMeta.url) ? _pageMeta.url : scriptUrl;
+      const _baseForRel = (tab && tab.url) ? tab.url : scriptUrl;
       csUrl = /^https?:\/\//i.test(callSite.url)
         ? new URL(callSite.url)
         : new URL(callSite.url, _baseForRel);
@@ -1655,8 +1712,8 @@ function _matchTemplatedMethodAcrossHost(tab, hostname, httpMethod, pathname) {
   return null;
 }
 
-function learnFromRequest(tabId, interfaceName, entry, headers) {
-  const tab = getTab(tabId);
+function learnFromRequest(documentId, interfaceName, entry, headers) {
+  const tab = getDoc(documentId);
   const url = new URL(entry.url);
   const method = entry.method;
 
@@ -2358,10 +2415,10 @@ function findMethodInDoc(doc, methodId) {
   return null;
 }
 
-function learnFromResponse(tabId, interfaceName, entry) {
+function learnFromResponse(documentId, interfaceName, entry) {
   if (!entry.responseBody) return;
 
-  const tab = getTab(tabId);
+  const tab = getDoc(documentId);
   const url = new URL(entry.url);
   const { methodName } = calculateMethodMetadata(url, interfaceName);
   // Check tab-level first, then fall back to globalStore (survives SW restarts)
@@ -2542,7 +2599,7 @@ function learnFromResponse(tabId, interfaceName, entry) {
           if (frame.type !== "data") continue;
           const tree = pbDecodeTree(frame.data, 8, (val) => {
             if (typeof val === "string") {
-              extractKeysFromText(tabId, val, entry.url, "response_grpc");
+              extractKeysFromText(documentId, val, entry.url, "response_grpc");
             }
           });
           const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Response`;
@@ -2666,7 +2723,7 @@ function learnFromResponse(tabId, interfaceName, entry) {
             mergeSchemaInto(doc, schemaName, newSchema);
           }
           if (row.type === "error" && Array.isArray(row.value) && typeof row.value[1] === "string") {
-            extractKeysFromText(tabId, row.value[1], entry.url, "rsc_error");
+            extractKeysFromText(documentId, row.value[1], entry.url, "rsc_error");
           }
         }
         // Register module chunks as endpoints so the user sees the JS
@@ -2778,7 +2835,7 @@ function learnFromResponse(tabId, interfaceName, entry) {
         : new TextEncoder().encode(entry.responseBody);
       const tree = pbDecodeTree(bytes, 8, (val) => {
         if (typeof val === "string") {
-          extractKeysFromText(tabId, val, entry.url, "response_protobuf");
+          extractKeysFromText(documentId, val, entry.url, "response_protobuf");
         }
       });
       const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Response`;
@@ -3330,13 +3387,14 @@ function _diffDiscoveryDocs(oldDoc, newDoc) {
  * @param {string[]} apiKeys - All API keys to try for this service
  */
 async function fetchDiscoveryForService(
-  tabId,
+  documentId,
   service,
   hostname,
   apiKeys,
   seedUrl,
 ) {
-  const tab = getTab(tabId);
+  const tab = getDoc(documentId);
+  const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing (makePageFetchFn/notifyPopup) — derived from the doc
 
   const fetchFn = makePageFetchFn(tabId);
   const triedKeys = new Set();
@@ -3413,7 +3471,7 @@ async function fetchDiscoveryForService(
             const match = findDiscoveryMethod(doc, seedUrlObj.pathname, "POST");
             if (!match) {
               notifyPopup(tabId);
-              await performProbeAndPatch(tabId, service, seedUrl, apiKey);
+              await performProbeAndPatch(documentId, service, seedUrl, apiKey);
               return;
             }
           }
@@ -3435,7 +3493,7 @@ async function fetchDiscoveryForService(
   if (finalSeedUrl) {
     // Pick a key to try probing with (use the first available one if any)
     const probeKey = keysToTry[0] || null;
-    await performProbeAndPatch(tabId, service, finalSeedUrl, probeKey);
+    await performProbeAndPatch(documentId, service, finalSeedUrl, probeKey);
   } else {
     // If we get here, truly not found — record timestamp for cooldown
     var _prevDiscoveryNF = tab.discoveryDocs.get(service);
@@ -3457,13 +3515,14 @@ const _inflight = new Set();
 /**
  * Perform req2proto probing and patch the discovery document.
  */
-async function performProbeAndPatch(tabId, service, targetUrl, apiKey) {
+async function performProbeAndPatch(documentId, service, targetUrl, apiKey) {
   // Deduplicate: skip if already probing this service+url combo
   const probeKey = `${service}::${targetUrl}`;
   if (_inflight.has(probeKey)) return;
   _inflight.add(probeKey);
 
-  const tab = getTab(tabId);
+  const tab = getDoc(documentId);
+  const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing — derived from the doc
 
   if (typeof probeApiEndpoint === "undefined") {
     console.error("[Debug] CRITICAL: probeApiEndpoint is not defined!");
@@ -3737,8 +3796,9 @@ function convertProbeFieldsToSchema(rootFieldsObj, schemas, rootPrefix = "") {
 
 // ─── req2proto Fallback Probing ──────────────────────────────────────────────
 
-async function probeEndpoint(tabId, endpointKey) {
-  const tab = getTab(tabId);
+async function probeEndpoint(documentId, endpointKey) {
+  const tab = getDoc(documentId);
+  const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing — derived from the doc
   const ep = tab.endpoints.get(endpointKey);
   if (!ep || ep.method !== "POST") return null;
 
@@ -3786,9 +3846,9 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   const isWs = msg.method === "WS_OPEN" || msg.method === "WS_CLOSE" ||
     msg.method === "WS_SEND" || msg.method === "WS_RECV";
   if (isWs) {
-    const tab = getTab(tabId);
-    if (!_wsConnState.has(tabId)) _wsConnState.set(tabId, new Map());
-    const conns = _wsConnState.get(tabId);
+    const tab = getDoc(documentId);
+    if (!_wsConnState.has(documentId)) _wsConnState.set(documentId, new Map());
+    const conns = _wsConnState.get(documentId);
 
     if (msg.method === "WS_OPEN") {
       // Create one combined log entry for this connection
@@ -3876,7 +3936,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
           textBody = null;
         }
       }
-      if (textBody) extractKeysFromText(tabId, textBody, msg.url, "response_body");
+      if (textBody) extractKeysFromText(documentId, textBody, msg.url, "response_body");
     }
 
     notifyPopup(tabId);
@@ -3886,7 +3946,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   // postMessage: one log entry per source origin, messages[] array
   // Only PM_RECV — can't wrap window.postMessage (see intercept.js comments)
   if (msg.method === "PM_RECV") {
-    const tab = getTab(tabId);
+    const tab = getDoc(documentId);
     let entry = tab.requestLog.find((r) => r.channelId === channelId && r.method === "POSTMESSAGE");
     if (!entry) {
       entry = {
@@ -3916,7 +3976,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
 
     // Key scanning on message body
     if (msg.body) {
-      extractKeysFromText(tabId, msg.body, msg.url, "response_body");
+      extractKeysFromText(documentId, msg.body, msg.url, "response_body");
     }
 
     notifyPopup(tabId);
@@ -3925,7 +3985,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
 
   // MessageChannel: MC_OPEN creates entry, MC_RECV appends messages
   if (msg.method === "MC_OPEN") {
-    const tab = getTab(tabId);
+    const tab = getDoc(documentId);
     let entry = tab.requestLog.find((r) => r.channelId === channelId && r.method === "MSGCHANNEL");
     if (!entry) {
       entry = {
@@ -3948,7 +4008,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   }
 
   if (msg.method === "MC_RECV") {
-    const tab = getTab(tabId);
+    const tab = getDoc(documentId);
     let entry = tab.requestLog.find((r) => r.channelId === channelId && r.method === "MSGCHANNEL");
     if (!entry) {
       // Port message arrived before MC_OPEN (race) — create entry
@@ -3977,7 +4037,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
 
     if (msg.body) {
-      extractKeysFromText(tabId, msg.body, msg.url, "response_body");
+      extractKeysFromText(documentId, msg.body, msg.url, "response_body");
     }
 
     notifyPopup(tabId);
@@ -3987,7 +4047,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   // ─── SSE: streaming events, no request data ─────────────────────────────
   if (msg.method === "SSE") {
     if (!msg.body) return;
-    const tab = getTab(tabId);
+    const tab = getDoc(documentId);
     const entry = {
       id: "alt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
       url: msg.url,
@@ -4003,9 +4063,9 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     tab.requestLog.unshift(entry);
     _trimRequestLog(tab);
     if (msg.body) {
-      extractKeysFromText(tabId, msg.body, msg.url, "response_body");
+      extractKeysFromText(documentId, msg.body, msg.url, "response_body");
     }
-    learnFromResponse(tabId, entry.service, entry);
+    learnFromResponse(documentId, entry.service, entry);
     notifyPopup(tabId);
     return;
   }
@@ -4036,7 +4096,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   // Skip internal probe requests
   if (url.searchParams.has("_probe")) return;
 
-  const tab = getTab(tabId);
+  const tab = getDoc(documentId);
   let service = extractInterfaceName(url);
 
   // Build request header map from intercept.js capture
@@ -4045,9 +4105,9 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   // Key scanning: URL + request headers. Record the SPECIFIC header name
   // (lowercased) so on replay we can re-emit the key in the same location
   // instead of defaulting to X-Goog-Api-Key on every non-Google host.
-  extractKeysFromText(tabId, msg.url, msg.url, "url");
+  extractKeysFromText(documentId, msg.url, msg.url, "url");
   for (const [k, v] of Object.entries(headerMap)) {
-    extractKeysFromText(tabId, `${k}: ${v}`, msg.url, "header:" + k.toLowerCase());
+    extractKeysFromText(documentId, `${k}: ${v}`, msg.url, "header:" + k.toLowerCase());
   }
 
   // Extract key header values
@@ -4127,7 +4187,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         textBody = null;
       }
     }
-    if (textBody) extractKeysFromText(tabId, textBody, msg.url, "response_body");
+    if (textBody) extractKeysFromText(documentId, textBody, msg.url, "response_body");
   }
 
   // Classify the captured response purely by magic bytes (no URL extension,
@@ -4193,7 +4253,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         } else {
           entry.decodedBody = pbDecodeTree(bytes, 8, (val) => {
             if (typeof val === "string") {
-              extractKeysFromText(tabId, val, msg.url, "protobuf_body");
+              extractKeysFromText(documentId, val, msg.url, "protobuf_body");
             }
           });
         }
@@ -4245,7 +4305,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   // (any dynamic signal present) still learn URL + request body + auth so
   // they can be replayed and inspected.
   if (!_isBoringFetch) {
-    learnFromRequest(tabId, service, entry, headerMap);
+    learnFromRequest(documentId, service, entry, headerMap);
 
     // learnFromRequest may migrate the service (e.g. hostname-fallback →
     // path-common-prefix) when observed-prefix clustering promotes the
@@ -4302,7 +4362,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     if (!match || isLearnedOnly) {
       const keysForService = collectKeysForService(tab, service, url.hostname);
       if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
-      performProbeAndPatch(tabId, service, msg.url, apiKey || keysForService[0] || null);
+      performProbeAndPatch(documentId, service, msg.url, apiKey || keysForService[0] || null);
     }
   }
 
@@ -4319,7 +4379,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     }
     const keysForService = collectKeysForService(tab, service, url.hostname);
     if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
-    fetchDiscoveryForService(tabId, service, url.hostname, keysForService, msg.url);
+    fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url);
   }
 
   // Extract OAuth scopes from 403 www-authenticate response header
@@ -4345,7 +4405,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
 
   // Learn from response — skip for static assets.
   if (entry.responseBody && !_isAsset) {
-    learnFromResponse(tabId, service, entry);
+    learnFromResponse(documentId, service, entry);
   }
 
   mergeToGlobal(tab);
@@ -4831,7 +4891,7 @@ async function _drainReviewQueue() {
   } finally { _reviewDraining = false; }
 }
 async function _analyzeCombinedScriptsInner(tabId, buf) {
-  var tab = getTab(tabId);
+  var tab = getDoc(buf.docKey);
   var _ep = _dataEpoch;   // a Clear during the worker round-trip invalidates this run
   // Concatenate in DOM/execution order, not fetch-arrival order — a
   // later chunk that reads state an earlier chunk set up (GitHub's app
@@ -5013,7 +5073,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
       // bundle's real pragma: relative filename OR full address).
       scriptOffsets: scriptOffsets,
       sourceMapScripts: sourceMapScripts,
-      pageHtml: getTab(tabId)._pageHtml || null,
+      pageHtml: getDoc(buf.docKey)._pageHtml || null,
       // The chunk re-analysis pass (round 2, after _maybeDownloadChunks set
       // _chunkRoundDone) runs SEED-ONLY: it folds in ~346 lazy chunks (~18 MB
       // combined), where the full value-spread BFS would be a minutes-long
@@ -5029,7 +5089,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     });
   } catch (e) {
     console.debug("[AST:combined] sendToOffscreen failed for tab=%d: %s", tabId, e.message || e);
-    getTab(tabId)._astError = "sendToOffscreen threw: " + (e.message || String(e));
+    getDoc(buf.docKey)._astError = "sendToOffscreen threw: " + (e.message || String(e));
     return;
   }
   if (!response || !response.success) {
@@ -5043,7 +5103,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     console.debug("[AST:combined] analyzeJSBundle failed for tab=%d: %s", tabId,
       response ? response.error : "no response");
     if (response && response.stack) console.debug(response.stack);
-    getTab(tabId)._astError = "offscreen unsuccessful: " + (response ? (response.error + " | " + (response.stack || "")) : "no response");
+    getDoc(buf.docKey)._astError = "offscreen unsuccessful: " + (response ? (response.error + " | " + (response.stack || "")) : "no response");
     // SURFACE the combined-analysis failure — do NOT fall back to per-script
     // analysis. A page is reviewed as the COMBINATION of all its scripts; analysing
     // them in isolation loses the cross-script interprocedural visibility (webpack
@@ -5052,7 +5112,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     // @WHY/@E are the signal to root-cause; the resumable grind retries.
     return;
   }
-  getTab(tabId)._astError = null;
+  getDoc(buf.docKey)._astError = null;
   // The bin/Clear reset fired while this analysis was in the worker. Its result
   // predates the wipe, so merging it (or downloading its chunks / spawning the
   // deep round) would repopulate the just-cleared store. Abandon the whole tail.
@@ -5651,7 +5711,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
           interfaceName = extractInterfaceName(csUrl);
         }
 
-        var _astDocEntry = learnFromAstCallSite(tabId, interfaceName, callSite, analysis.sourceUrl);
+        var _astDocEntry = learnFromAstCallSite(tab.documentId, interfaceName, callSite, analysis.sourceUrl);
         // Refine interfaceName for endpoint registration if the call site
         // got promoted to a prefix bucket via observed-prefix clustering.
         if (_astDocEntry && _astDocEntry.doc && _astDocEntry.doc.name) {
@@ -5782,9 +5842,10 @@ function _formFieldToParamType(field) {
    discoveryDoc, with per-field literal/opaque provenance preserved.
    No separate content-script DOM walk. */
 
-function _handleFormSubmit(tabId, msg) {
+function _handleFormSubmit(documentId, msg) {
   if (!msg.url || !msg.fields) return;
-  var tab = getTab(tabId);
+  var tab = getDoc(documentId);
+  var tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing (notifyPopup) — derived from the doc
   var method = msg.method || "GET";
 
   var url;
@@ -5822,7 +5883,7 @@ function _handleFormSubmit(tabId, msg) {
   tab.requestLog.push(entry);
 
   // Learn from the form submission
-  learnFromRequest(tabId, service, entry, entry.requestHeaders);
+  learnFromRequest(documentId, service, entry, entry.requestHeaders);
   mergeToGlobal(tab);
   notifyPopup(tabId);
 }
@@ -5849,13 +5910,17 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
   try {
     if (!result) return;
     var _rurl = (sourceUrl || "").split("?")[0];
-    var _rtid = null;
-    state.tabs.forEach(function (mm, tid) { if (_rtid == null && mm && mm.url && _rurl && mm.url.indexOf(_rurl) === 0) _rtid = tid; });
-    if (_rtid == null) { console.debug("[AST:deep] no open tab for %s — not merged", _rurl); return; }
+    // Find the live document for this deep result by its url (= the document's
+    // own buf.url, its principal). documentId-keyed; Stage 2 will thread the
+    // documentId through the worker round-trip and drop this url-match (and merge
+    // to globalStore-only when the document is gone). For now: live doc or drop.
+    var _rdoc = null;
+    state.docs.forEach(function (d) { if (_rdoc == null && d && d.url && _rurl && d.url.indexOf(_rurl) === 0) _rdoc = d; });
+    if (_rdoc == null) { console.debug("[AST:deep] no live document for %s — not merged", _rurl); return; }
     var _drm = globalStore.deepResumeMeta.get(_rurl);
     if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", _rurl); return; }
-    var _rtab = getTab(_rtid);
-    if (result._deepStats) _deepStatsByTab.set(_rtid, Object.assign({}, result._deepStats, { ts: Date.now() }));
+    var _rtab = _rdoc;
+    if (result._deepStats) _deepStatsByTab.set(_rdoc.documentId, Object.assign({}, result._deepStats, { ts: Date.now() }));
     if (_drm.scriptOffsets) result.scriptOffsets = _drm.scriptOffsets;
     // Path-param name resolution (e→owner) for the deep grind is done in the
     // OFFSCREEN worker (it owns the chunk JS + has IndexedDB + outlives the SW),
@@ -5863,7 +5928,7 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
     // `_sourceMapName` to the call-site params BEFORE sending this result. The SW
     // must NOT fetch maps here — it is evicted mid-grind, so any SW-side map fetch
     // / cache is unreliable. The SW only merges what the worker resolved.
-    mergeASTResultsIntoVDD(_rtab, [result], _rtid);
+    mergeASTResultsIntoVDD(_rtab, [result]);
     // Surface the deep grind's resolverErrors too — the orphan drive is where
     // most reached-but-opaque host calls (fully-opaque URLs from cold-orphan
     // wrappers) come from, and they arrive on the partial/resumed result here,
@@ -5881,8 +5946,8 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
       }
     }
     mergeToGlobal(_rtab);
-    notifyPopup(_rtid);
-    console.debug("[AST:deep] merged for %s into tab=%d", _rurl, _rtid);
+    notifyPopup(_rdoc.tabId);
+    console.debug("[AST:deep] merged for %s into doc=%s (tab=%s)", _rurl, _rdoc.documentId, _rdoc.tabId);
     // A chunk/script a gated-loader orphan inserted (createElement("script").src=)
     // is discovered DURING the deep grind — it lands in result.chunkUrls HERE, not
     // the initial analysis (which already ran _maybeDownloadChunks with an EMPTY list
@@ -5943,18 +6008,29 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
 function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
-
-  // The tab's display title/url come from the browser-verified sender.tab on every
-  // content message (no tabs.get probe) — set/refresh on the per-tab state.
-  if (sender.tab.url) {
-    var _t = getTab(tabId);
-    _t.url = sender.tab.url;
-    if (sender.tab.title) _t.title = sender.tab.title;
+  // The browser-provided documentId is the ONLY stable per-document identity (a
+  // tabId:frameId pair is reused across navigations with a DIFFERENT origin). No
+  // documentId (pre-106 Chrome / opaque) → we cannot document-scope it → fail
+  // closed (no tabId:frameId fallback — that would conflate distinct origins).
+  const documentId = sender.documentId;
+  if (!documentId) {
+    console.debug("[brain:content] %s dropped — no sender.documentId (cannot document-scope; fail closed)", msg && msg.type);
+    return;
   }
+  // Stamp THIS document's identity on its DocData. `origin` is the MessageSender
+  // principal (via _senderOrigin, which also populates _docOrigins) — NEVER
+  // url-derived. `url` is the document's OWN url (display + relative TARGET base),
+  // NOT the tab's top-page url. tabId/frameId are routing/UI fields only.
+  const doc = getDoc(documentId);
+  doc.tabId = tabId;
+  doc.frameId = sender.frameId || 0;
+  if (sender.url) doc.url = sender.url;
+  doc.origin = _senderOrigin(sender);
+  if (sender.tab.title) doc.title = sender.tab.title;
 
   // RESPONSE_BODY comes from intercept.js via content.js relay
   if (msg.type === "RESPONSE_BODY") {
-    handleResponseBody(tabId, msg, sender.frameId, sender.documentId);
+    handleResponseBody(tabId, msg, sender.frameId, documentId);
     return;
   }
 
@@ -5985,15 +6061,13 @@ function handleContentMessage(msg, sender) {
   // via __feLoadScript, dynamic via the createElement host edge).
 
   if (msg.type === "CONTENT_FORM_SUBMIT") {
-    _handleFormSubmit(tabId, msg);
+    _handleFormSubmit(documentId, msg);
     return;
   }
 
-  const tab = getTab(tabId);
-
   if (msg.type === "CONTENT_PING") {
-    var arr = _contentPings.get(tabId);
-    if (!arr) { arr = []; _contentPings.set(tabId, arr); }
+    var arr = _contentPings.get(documentId);
+    if (!arr) { arr = []; _contentPings.set(documentId, arr); }
     arr.push({ at: msg.at || Date.now(), pageUrl: msg.pageUrl || null });
     return;
   }
@@ -6008,8 +6082,8 @@ function handleContentMessage(msg, sender) {
     // and collapses the credentialed-read principal. The principal for this
     // document's analysis (safeFetch SSRF origin + window.location + the credentialed
     // reply-seed) is THIS document's own origin/url, from the browser-provided sender.
-    tab._pageHtml = String(msg.html || "");
-    var _dk = sender.documentId || (tabId + ":" + (sender.frameId || 0));
+    doc._pageHtml = String(msg.html || "");
+    var _dk = documentId;
     var _buf = _scriptBuffers.get(_dk);
     if (!_buf) { _buf = {}; _scriptBuffers.set(_dk, _buf); }
     // Each buffer IS this document's frame record, identified by its documentId
@@ -6023,9 +6097,9 @@ function handleContentMessage(msg, sender) {
     // its own report — a fenced frame is its tree's root and would impersonate it.
     _buf.tabId = tabId;
     _buf.docKey = _dk;
-    _buf.origin = _senderOrigin(sender);                              // credentialed-read principal (per-document)
-    _buf.url = sender.url || (sender.tab && sender.tab.url) || "";    // SSRF origin + window.location
-    _buf.pageHtml = tab._pageHtml;
+    _buf.origin = doc.origin;                                         // credentialed-read principal (per-document; = _senderOrigin(sender))
+    _buf.url = doc.url || (sender.tab && sender.tab.url) || "";       // SSRF origin + window.location (document's own url)
+    _buf.pageHtml = doc._pageHtml;
     _buf.scripts = [];   // engine-sourced: Lexbor parses the HTML, qjs_run_doc_scripts runs inline + external scripts — one system
     _buf.pending = 0;
     _buf.loadFired = true;
@@ -6055,11 +6129,12 @@ function handleContentMessage(msg, sender) {
 // Popup messages — sender.tab is absent for popup contexts.
 async function handlePopupMessage(msg, _sender, sendResponse) {
   await _globalStoreReady;
-  const tabId = msg.tabId;
+  const tabId = msg.tabId;            // aggregate/UI filter + Chrome routing (NEVER a storage key)
+  const documentId = msg.documentId;  // per-document RPC target (resolved via _docFromMsg)
 
   switch (msg.type) {
     case "GET_STATE": {
-      const tab = tabId != null ? getTab(tabId) : null;
+      const tab = _docFromMsg(msg);
       const data = tab ? serializeTabData(tab) : null;
       if (data) {
         // Per-tab head = THIS tab's grind ONLY. The previous cross-tab
@@ -6071,7 +6146,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         // visibility is the `_all` list below; the head must be accurate
         // to the tab the popup is showing or it lies about which page has
         // background work.
-        const _ds = _deepStatsByTab.get(tabId);
+        const _ds = tab ? _deepStatsByTab.get(tab.documentId) : null;
         if (_ds) data.deepStats = _ds;
         // Cross-tab task-status surface: every page with a tracked grind, its
         // progress, and whether it's currently paused for a higher-priority
@@ -6079,9 +6154,10 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         // would otherwise be invisible to the user. Display-only (no controls).
         const _all = [];
         _deepStatsByTab.forEach((v, k) => {
-          const meta = state.tabs.get(k);
+          const meta = state.docs.get(k) || {};   // k = documentId (grind is per-document)
           _all.push({
-            tabId: k,
+            documentId: k,
+            tabId: meta.tabId != null ? meta.tabId : null,
             pageUrl: meta && meta.url ? meta.url : "",
             title: meta && meta.title ? meta.title : "",
             total: v.total || 0,
@@ -6134,16 +6210,17 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "PROBE_ENDPOINT": {
-      if (tabId == null) return;
-      probeEndpoint(tabId, msg.endpointKey).then((result) => {
+      const _pdoc = _docFromMsg(msg);
+      if (!_pdoc) { sendResponse(null); return; }
+      probeEndpoint(_pdoc.documentId, msg.endpointKey).then((result) => {
         sendResponse(result);
       });
       return true;
     }
 
     case "DISCOVER_SERVICE": {
-      if (tabId == null) return;
-      const tab = getTab(tabId);
+      const tab = _docFromMsg(msg);
+      if (!tab) { sendResponse(null); return; }
       const ep = tab.endpoints.get(msg.endpointKey);
       if (!ep) {
         sendResponse(null);
@@ -6160,7 +6237,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
           headers["X-Goog-Api-Key"] = ep.apiKey;
         }
       }
-      const fetchFn = makePageFetchFn(tabId);
+      const fetchFn = makePageFetchFn(tab.tabId);
       discoverServiceInfo(discoverUrl.toString(), headers, { fetchFn }).then(
         (result) => {
           tab.probeResults.set(`svc:${msg.endpointKey}`, result);
@@ -6169,7 +6246,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
             tab.scopes.set(svc, result.scopes);
           }
           mergeToGlobal(tab);
-          notifyPopup(tabId);
+          notifyPopup(tab.tabId);
           sendResponse(result);
         },
       );
@@ -6177,17 +6254,17 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "FETCH_DISCOVERY": {
-      if (tabId == null) return;
-      const tab = getTab(tabId);
+      const tab = _docFromMsg(msg);
+      if (!tab) { sendResponse(null); return; }
       const ep = tab.endpoints.values().next().value;
       const hostname =
         msg.hostname || (ep?.host ?? `${msg.service}.googleapis.com`);
       const apiKeys = collectKeysForService(tab, msg.service, hostname);
       if (msg.apiKey && !apiKeys.includes(msg.apiKey)) apiKeys.push(msg.apiKey);
       if (ep?.apiKey && !apiKeys.includes(ep.apiKey)) apiKeys.push(ep.apiKey);
-      fetchDiscoveryForService(tabId, msg.service, hostname, apiKeys).then(
+      fetchDiscoveryForService(tab.documentId, msg.service, hostname, apiKeys).then(
         () => {
-          sendResponse(serializeTabData(getTab(tabId)));
+          sendResponse(serializeTabData(tab));
         },
       );
       return true;
@@ -6205,7 +6282,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         await clearGlobalStore();
         // 3. All in-memory request logs + per-tab working state, so the next
         //    navigation starts from a genuinely empty slate.
-        state.tabs.clear();
+        state.docs.clear();
         _scriptBuffers.clear();
         _wsConnState.clear();
         sendResponse({ ok: true });
@@ -6259,10 +6336,10 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // — the offscreen document's stable lifetime makes the mirror moot).
       // Clearing the in-memory array IS the operation.
       if (msg.clearAll) {
-        for (const [, t] of state.tabs) t.requestLog = [];
+        for (const d of state.docs.values()) d.requestLog = [];
       } else {
         if (tabId == null) return;
-        getTab(tabId).requestLog = [];
+        for (const d of docsForTab(tabId)) d.requestLog = [];
       }
       sendResponse({ ok: true });
       return;
@@ -6272,11 +6349,20 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // Single pass over state.tabs — closed tabs stay in state.tabs (with
       // meta.closed=true) instead of being moved to a session-storage mirror,
       // so one iteration covers live AND closed entries.
-      const tabs = [];
-      for (const [tid, t] of state.tabs) {
-        if (t.requestLog.length === 0) continue;
-        tabs.push({ tabId: tid, title: t.title || ("Tab " + tid), url: t.url || "", count: t.requestLog.length, closed: !!t.closed });
+      // Roll up the documentId-keyed docs into one row per tab (the network tab
+      // filters by tab purely in the UI). A tab is "closed" only once ALL its
+      // documents are; title/url come from the main-frame document.
+      const _byTab = new Map();
+      for (const d of state.docs.values()) {
+        if (d.tabId == null || d.requestLog.length === 0) continue;
+        let row = _byTab.get(d.tabId);
+        if (!row) { row = { tabId: d.tabId, title: "", url: "", count: 0, closed: true }; _byTab.set(d.tabId, row); }
+        row.count += d.requestLog.length;
+        row.closed = row.closed && !!d.closed;
+        if (d.frameId === 0 || !row.url) { row.url = d.url || row.url; row.title = d.title || row.title; }
       }
+      const tabs = [];
+      _byTab.forEach((r) => tabs.push({ tabId: r.tabId, title: r.title || ("Tab " + r.tabId), url: r.url, count: r.count, closed: r.closed }));
       sendResponse(tabs);
       return;
     }
@@ -6284,12 +6370,18 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "GET_ALL_LOGS": {
       const result = {};
       const filter = msg.filter; // "all" | tabId (number)
-      for (const [tid, t] of state.tabs) {
-        if (t.requestLog.length === 0) continue;
-        if (filter !== "all" && filter !== tid) continue;
-        const meta = { title: t.title || ("Tab " + tid), url: t.url || "", closed: !!t.closed };
-        result[tid] = { meta, requestLog: t.requestLog };
+      // Aggregate per tab across its documents; each entry keeps its own
+      // documentId/frameId for the popup's per-frame sub-views.
+      for (const d of state.docs.values()) {
+        if (d.tabId == null || d.requestLog.length === 0) continue;
+        if (filter !== "all" && filter !== d.tabId) continue;
+        let r = result[d.tabId];
+        if (!r) { r = { meta: { title: "", url: "", closed: true }, requestLog: [] }; result[d.tabId] = r; }
+        r.requestLog = r.requestLog.concat(d.requestLog);
+        r.meta.closed = r.meta.closed && !!d.closed;
+        if (d.frameId === 0 || !r.meta.url) { r.meta.url = d.url || r.meta.url; r.meta.title = d.title || r.meta.title; }
       }
+      for (const tid in result) if (!result[tid].meta.title) result[tid].meta.title = "Tab " + tid;
       sendResponse(result);
       return;
     }
@@ -6300,10 +6392,11 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "GET_ENDPOINT_SCHEMA": {
-      if (tabId == null) return;
+      const _esdoc = _docFromMsg(msg);
+      if (!_esdoc) { sendResponse(null); return; }
       // Pass service/methodId if available (for virtual endpoints)
       const result = resolveEndpointSchema(
-        tabId,
+        _esdoc.documentId,
         msg.endpointKey,
         msg.service,
         msg.methodId,
@@ -6313,8 +6406,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "SEND_REQUEST": {
-      if (tabId == null) return;
-      executeSendRequest(tabId, msg).then((result) => {
+      const _srdoc = _docFromMsg(msg);
+      if (!_srdoc) { sendResponse({ error: "no document for request" }); return; }
+      executeSendRequest(_srdoc.documentId, msg).then((result) => {
         sendResponse(result);
       });
       return true;
@@ -6335,13 +6429,11 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "WS_GET_STATUS": {
       if (tabId == null) return;
-      const conns = _wsConnState.get(tabId);
-      const conn = conns?.get(msg.channelId);
+      const conn = _findWsConn(tabId, msg.channelId);
       // Also return the messages array for the WS console
       let messages = [];
       if (conn) {
-        const tab = getTab(tabId);
-        const entry = tab.requestLog.find((r) => r.channelId === msg.channelId && r.method === "WEBSOCKET");
+        const entry = _findLogEntry(tabId, msg.channelId, "WEBSOCKET");
         if (entry) messages = entry.messages || [];
       }
       sendResponse({
@@ -6361,8 +6453,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         targetOrigin: msg.targetOrigin,
       }, _pmOpts).then(() => {
         // Record sent message in the log entry (intercept.js can't capture outgoing postMessage)
-        const tab = getTab(tabId);
-        const entry = tab.requestLog.find((r) => r.channelId === msg.channelId && r.method === "POSTMESSAGE");
+        const entry = _findLogEntry(tabId, msg.channelId, "POSTMESSAGE");
         if (entry) {
           entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data || "", base64: false });
           if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
@@ -6375,8 +6466,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "PM_GET_STATUS": {
       if (tabId == null) return;
-      const tab = getTab(tabId);
-      const entry = tab.requestLog.find((r) => r.channelId === msg.channelId && r.method === "POSTMESSAGE");
+      const entry = _findLogEntry(tabId, msg.channelId, "POSTMESSAGE");
       sendResponse({
         readyState: 1, // postMessage is always "active"
         messages: entry ? (entry.messages || []) : [],
@@ -6392,8 +6482,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         channelId: msg.channelId,
         data: msg.data,
       }, _mcOpts).then(() => {
-        const tab = getTab(tabId);
-        const entry = tab.requestLog.find((r) => r.channelId === msg.channelId && r.method === "MSGCHANNEL");
+        const entry = _findLogEntry(tabId, msg.channelId, "MSGCHANNEL");
         if (entry) {
           entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data || "", base64: false });
           if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
@@ -6406,8 +6495,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "MC_GET_STATUS": {
       if (tabId == null) return;
-      const tab = getTab(tabId);
-      const entry = tab.requestLog.find((r) => r.channelId === msg.channelId && r.method === "MSGCHANNEL");
+      const entry = _findLogEntry(tabId, msg.channelId, "MSGCHANNEL");
       sendResponse({
         readyState: 1, // port is active once transferred
         messages: entry ? (entry.messages || []) : [],
@@ -6416,8 +6504,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "BUILD_REQUEST": {
-      if (tabId == null) return;
-      buildExportRequest(tabId, msg).then((result) => {
+      const _brdoc = _docFromMsg(msg);
+      if (!_brdoc) { sendResponse({ error: "no document" }); return; }
+      buildExportRequest(_brdoc.documentId, msg).then((result) => {
         sendResponse(result);
       });
       return true;
@@ -6511,8 +6600,8 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "RENAME_FIELD": {
-      if (tabId == null) return;
-      const tab = getTab(tabId);
+      const tab = _docFromMsg(msg);
+      if (!tab) { sendResponse(null); return; }
       const { service, schemaName, fieldKey, newName } = msg;
       const docEntry =
         tab.discoveryDocs.get(service) ||
@@ -6577,8 +6666,8 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "EXPORT_OPENAPI": {
-      if (tabId == null) return;
-      const tab = getTab(tabId);
+      const tab = _docFromMsg(msg);
+      if (!tab) { sendResponse({ error: "no document" }); return; }
       const svc = msg.service;
       const docEntry =
         tab.discoveryDocs.get(svc) || globalStore.discoveryDocs.get(svc);
@@ -6592,8 +6681,8 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "IMPORT_OPENAPI": {
-      if (tabId == null) return;
-      const tab = getTab(tabId);
+      const tab = _docFromMsg(msg);
+      if (!tab) { sendResponse({ error: "no document" }); return; }
       try {
         const spec = msg.spec;
         if (!spec || typeof spec !== "object") {
@@ -6929,7 +7018,7 @@ function startExploitProbe(msg) {
 }
 
 
-async function buildExportRequest(tabId, msg) {
+async function buildExportRequest(documentId, msg) {
   let parsedUrl;
   try {
     parsedUrl = new URL(msg.url);
@@ -6947,7 +7036,7 @@ async function buildExportRequest(tabId, msg) {
   }
 
   // API key: user override → endpoint → auto
-  const tab = getTab(tabId);
+  const tab = getDoc(documentId);
   const ep = msg.endpointKey ? tab.endpoints.get(msg.endpointKey) : null;
   if (msg.apiKeyOverride) {
     if (!msg.apiKeyOverride.disabled && msg.apiKeyOverride.key) {
@@ -7197,15 +7286,15 @@ function _onTabRemoved(tabId) {
   // popup's "All Tabs" / per-tab-history filter can show closed-tab logs
   // until the user clicks the bin button. Mark meta.closed/closedAt so the
   // tab list distinguishes live vs closed entries.
-  const meta = state.tabs.get(tabId);
-  if (meta) {
-    meta.closed = true;
-    meta.closedAt = Date.now();
+  // Mark every document of this tab closed (its logs stay viewable). The state
+  // is documentId-keyed; a tab close marks all its documents. WebSocket
+  // connections die with the page — free each document's (_wsConnState is
+  // documentId-keyed too).
+  for (const d of docsForTab(tabId)) {
+    d.closed = true;
+    d.closedAt = Date.now();
+    _wsConnState.delete(d.documentId);
   }
-  // WebSocket connections die with the page — they describe a renderer that no
-  // longer exists, so free them. (There is no separate frame index to free: a
-  // tab's frames are derived live from webNavigation + the document buffers.)
-  _wsConnState.delete(tabId);
   // The per-document script buffers are NOT freed on tab close: each document's
   // combined source backs a resumable/background deep grind that keeps learning
   // the closed tab's API surface (and resumes across sessions) without
@@ -7219,8 +7308,8 @@ function _onTabRemoved(tabId) {
  * Resolve the full schema for an endpoint by merging discovery doc + probe data.
  * Returns a unified schema the popup can use to build a form.
  */
-function resolveEndpointSchema(tabId, endpointKey, service, methodId) {
-  const tab = getTab(tabId);
+function resolveEndpointSchema(documentId, endpointKey, service, methodId) {
+  const tab = getDoc(documentId);
   const ep = endpointKey
     ? tab.endpoints.get(endpointKey) || globalStore.endpoints.get(endpointKey)
     : null;
@@ -7816,7 +7905,7 @@ function coerceValue(value, type) {
  * Execute a request from the Send panel.
  * Encodes form data, sends via pageContextFetch, decodes response.
  */
-async function executeSendRequest(tabId, msg) {
+async function executeSendRequest(documentId, msg) {
   const startTime = Date.now();
   const service = msg.service;
   const methodId = msg.methodId;
@@ -7843,7 +7932,8 @@ async function executeSendRequest(tabId, msg) {
   }
 
   // API key: user override → endpoint → service keys → discovery doc key
-  const tab = getTab(tabId);
+  const tab = getDoc(documentId);
+  const tabId = (tab && tab.tabId != null) ? tab.tabId : msg.tabId; // Chrome routing for pageContextFetch — the doc's tab; fall back to msg.tabId for cross-tab replay
   const epKey = msg.endpointKey;
   const ep = epKey ? tab.endpoints.get(epKey) : null;
   let apiKey = null;
@@ -8059,7 +8149,7 @@ async function executeSendRequest(tabId, msg) {
           try {
             pbDecodeTree(frame.data, 8, (val) => {
               if (typeof val === "string") {
-                extractKeysFromText(tabId, val, url, "send_response_grpc");
+                extractKeysFromText(documentId, val, url, "send_response_grpc");
               }
             });
           } catch (e) {
@@ -8115,7 +8205,7 @@ async function executeSendRequest(tabId, msg) {
           : new TextEncoder().encode(resp.body);
       const tree = pbDecodeTree(bytes, 8, (val) => {
         if (typeof val === "string") {
-          extractKeysFromText(tabId, val, url, "send_response_protobuf");
+          extractKeysFromText(documentId, val, url, "send_response_protobuf");
         }
       });
       bodyResult = {
