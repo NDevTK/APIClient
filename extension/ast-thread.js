@@ -141,7 +141,7 @@ function _smMapUrl(chunkUrl, sourceMapScripts) {
 //             but not the trusted offscreen). Defense-in-depth: move to the
 //             offscreen (needs offscreen chunk-map pre-fetch). Primary map fetch
 //             already IS in the offscreen (_fetchSourceMapForScript).
-async function _smGetParsed(chunkUrl, sourceMapScripts, pageOrigin) {
+async function _smGetParsed(chunkUrl, sourceMapScripts, pageOrigin, origin) {
   if (Object.prototype.hasOwnProperty.call(_smParsed, chunkUrl)) return _smParsed[chunkUrl];
   var parsed = null;
   try { var rec = await _idbGet("smaps", chunkUrl); if (rec && rec.json) parsed = parseSourceMap(rec.json); }
@@ -161,7 +161,7 @@ async function _smGetParsed(chunkUrl, sourceMapScripts, pageOrigin) {
         // concurrent grind for another page can't lend this fetch its origin.
         // as:"sourcemap" — DATA, not executed code (parsed for names only, outside
         // QuickJS, UI-only), so no CORB; still SSRF-gated by the page principal.
-        var resp = await safeFetch(url, { pageUrl: pageOrigin || "", as: "sourcemap", signal: _ac ? _ac.signal : undefined });
+        var resp = await safeFetch(url, { pageUrl: pageOrigin || "", pageOrigin: origin || "", as: "sourcemap", signal: _ac ? _ac.signal : undefined });
         if (_to) clearTimeout(_to);
         if (resp && resp.ok && resp.body != null) {
           var json = JSON.parse(resp.body);
@@ -185,11 +185,11 @@ async function _smGetParsed(chunkUrl, sourceMapScripts, pageOrigin) {
 // One bundle frame (combined-line position) → its original template's path
 // ${…} names, via the chunk's source map. Returns null if this frame's source
 // has no path template (e.g. a shared fetch wrapper).
-async function _smNamesForFrame(frame, scriptOffsets, sourceMapScripts, pageOrigin) {
+async function _smNamesForFrame(frame, scriptOffsets, sourceMapScripts, pageOrigin, origin) {
   if (!frame || typeof frame.line !== "number") return null;
   var chunk = _smChunkForLine(frame.line, scriptOffsets);
   if (!chunk || !chunk.url) return null;
-  var parsed = await _smGetParsed(chunk.url, sourceMapScripts, pageOrigin);
+  var parsed = await _smGetParsed(chunk.url, sourceMapScripts, pageOrigin, origin);
   if (!parsed) return null;
   var genLine = frame.line - chunk.lineStart + 1;
   var col0 = (frame.column != null ? frame.column : (frame.col || 1)) - 1; if (col0 < 0) col0 = 0;
@@ -197,7 +197,7 @@ async function _smNamesForFrame(frame, scriptOffsets, sourceMapScripts, pageOrig
   if (!op) return null;
   return _smNamesFromContent(parsed.sourcesContent && parsed.sourcesContent[op.srcIdx], op.srcLine0);
 }
-async function _resolveSmNames(fcs, scriptOffsets, sourceMapScripts, pageOrigin) {
+async function _resolveSmNames(fcs, scriptOffsets, sourceMapScripts, pageOrigin, origin) {
   if (!Array.isArray(fcs) || !Array.isArray(scriptOffsets) || !scriptOffsets.length) return;
   for (var i = 0; i < fcs.length; i++) {
     var cs = fcs[i];
@@ -212,7 +212,7 @@ async function _resolveSmNames(fcs, scriptOffsets, sourceMapScripts, pageOrigin)
     var frames = (Array.isArray(cs.bframes) && cs.bframes.length) ? cs.bframes : (cs.loc ? [cs.loc] : []);
     var names = null;
     for (var f = 0; f < frames.length; f++) {
-      var fn = await _smNamesForFrame(frames[f], scriptOffsets, sourceMapScripts, pageOrigin);
+      var fn = await _smNamesForFrame(frames[f], scriptOffsets, sourceMapScripts, pageOrigin, origin);
       if (!fn) continue;
       if (fn.length === pathN) { names = fn; break; }
       if (!names) names = fn;   // remember first non-empty as fallback
@@ -2253,7 +2253,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             _lastPartialN = methods.size;
             _lastPartialSinks = securitySinks.length;
             _lastProgTs = _nowMs;
-            try { var _pres = _buildResult(); await _resolveSmNames(_pres.fetchCallSites, scriptOffsets, sourceMapScripts, sourceUrl); postMessage({ _partial: true, documentId: documentId || null, sourceUrl: sourceUrl || "", response: { success: true, result: _pres } }); }
+            try { var _pres = _buildResult(); await _resolveSmNames(_pres.fetchCallSites, scriptOffsets, sourceMapScripts, sourceUrl, _principalOrigin); postMessage({ _partial: true, documentId: documentId || null, sourceUrl: sourceUrl || "", response: { success: true, result: _pres } }); }
             catch (e) {
               /* Partial-result emission failed — surface so a serialization
                  gap (e.g. an opaque marker reaching JSON.stringify, or a
@@ -2576,7 +2576,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   };
   }
   var _fr = _buildResult();
-  try { await _resolveSmNames(_fr.fetchCallSites, scriptOffsets, sourceMapScripts, sourceUrl); }
+  try { await _resolveSmNames(_fr.fetchCallSites, scriptOffsets, sourceMapScripts, sourceUrl, _principalOrigin); }
   catch (e) {
     /* Final source-map name resolution failed — surface the diagnostic so a
        parse error (malformed map JSON, missing sourcesContent, traceMapping
