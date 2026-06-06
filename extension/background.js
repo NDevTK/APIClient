@@ -185,10 +185,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // or launders page data, so it can't turn a web renderer's message into a
   // trusted extension-origin one. onMessage only ever delivers from this
   // extension's own contexts (external senders go to onMessageExternal), so
-  // sender.id is not a trust signal — sender.url is.
+  // sender.id is not a trust signal — sender.ORIGIN is (browser-set + unforgeable,
+  // and "null" for a sandboxed extension page, which must NOT be trusted as one).
+  // An exact origin match beats a URL prefix: chrome-extension://<id> is the origin,
+  // while sender.url is the document URL (kept below only to PIN the offscreen doc).
   if (sender.id !== chrome.runtime.id) return;
   if (!msg || typeof msg !== "object") return;
-  const fromExtPage = sender.url && sender.url.startsWith(EXT_ORIGIN + "/");
+  const fromExtPage = sender.origin === EXT_ORIGIN;
   if (!fromExtPage) return;   // content-script (web renderer) message: handled by the offscreen directly
 
   // Privileged chrome.* RPC — accepted ONLY from the offscreen brain. (The popup

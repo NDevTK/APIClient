@@ -67,10 +67,17 @@ function _sniffsProtected(s) {
   }
   return false;
 }
+// A REAL (tuple) origin — scheme://host[:port] — usable for same-origin and CORS.
+// An OPAQUE origin reports "null" (sandboxed iframe / data: / sandboxed doc) or
+// our minted "null:<uuid>" token (per-document, and for a mixed-origin buffer);
+// per the spec each opaque origin is UNIQUE, so it is NEVER same-origin with
+// anything — not even another "null". A real origin is the only form containing
+// "://"; "null" / "" / "null:<uuid>" do not, so this one test distinguishes them.
+function _isRealOrigin(o) { return typeof o === "string" && o.indexOf("://") > 0; }
 function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageUrl) {
   mime = String(mime || "").split(";")[0].trim().toLowerCase();
   var cross = true;
-  try { cross = new URL(scriptUrl).origin !== new URL(pageUrl).origin; } catch (e) { cross = true; }
+  try { var _so = new URL(scriptUrl).origin, _pgo = new URL(pageUrl).origin; cross = !(_isRealOrigin(_so) && _isRealOrigin(_pgo) && _so === _pgo); } catch (e) { cross = true; }
   if (!cross) return !(_corbProtectedMime(mime) && !_jsMime(mime)); // same-origin: only skip the page's own non-JS data
   if (_corbProtectedMime(mime)) return false;          // CORB-protected type
   if (nosniff && !_jsMime(mime)) return false;          // browser blocks too
@@ -102,9 +109,13 @@ function _isPrivateHost(host) {
 //               initial URL and the post-redirect final URL.
 //   opts.as:    "script"          -> + CORB (cross-origin must be JS-typed)
 //               "sourcemap"/other -> data, no CORB (not executed as code)
-//   principal:  opts.pageUrl PER CALL (the page's trusted sender.tab.url) — no
-//               shared global (concurrent grinds would contaminate it); unknown
-//               principal -> treated as public -> private targets blocked.
+//   principal:  opts.pageUrl PER CALL (the page's trusted sender.tab.url) classifies
+//               the SSRF host; opts.pageOrigin (the BROWSER-provided
+//               MessageSender.origin, opaque-unique) is the SAME-ORIGIN principal for
+//               the credentialed SOP — NOT re-parsed from a URL (a sandboxed frame
+//               has a normal URL but an opaque origin). No shared global (concurrent
+//               grinds would contaminate it); unknown principal -> public + opaque
+//               -> private targets and credentialed cross-origin reads blocked.
 async function safeFetch(url, opts) {
   opts = opts || {};
   var parsed;
@@ -173,11 +184,22 @@ async function safeFetch(url, opts) {
   // host-permission fetch bypasses it. Blocked reads return no body (the request was a
   // GET, so nothing was mutated; we simply refuse to hand the bundle the bytes).
   if (credentialed) {
-    var _pageOrigin = ""; try { _pageOrigin = new URL(_po).origin; } catch (e) {}
-    if (!_pageOrigin || parsed.origin !== _pageOrigin) {
+    // SAME-ORIGIN principal = the BROWSER-provided origin (opts.pageOrigin, from
+    // MessageSender.origin), authoritative and NEVER re-derived from a URL string:
+    // a sandboxed frame reports a normal URL but an OPAQUE "null" origin, so
+    // parsing the URL would wrongly grant it same-origin access to the embedder's
+    // credentialed data. An opaque origin ("null" / "null:<uuid>" / empty — incl. a
+    // mixed-origin buffer's minted token) is UNIQUE per the spec → never same-origin
+    // with ANYTHING → a credentialed cross-origin read that needs CORS, which an
+    // opaque origin can never be granted (ACAO can't equal it). Falls back to
+    // parsing pageUrl only when the caller passed no pageOrigin.
+    var _pageOrigin = opts.pageOrigin || "";
+    if (!_pageOrigin) { try { _pageOrigin = new URL(_po).origin; } catch (e) {} }
+    var _sameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(parsed.origin) && parsed.origin === _pageOrigin;
+    if (!_sameOrigin) {
       var _acao = headers["access-control-allow-origin"] || "";
       var _acac = (headers["access-control-allow-credentials"] || "").toLowerCase();
-      if (!_pageOrigin || _acao !== _pageOrigin || _acac !== "true")
+      if (!_isRealOrigin(_pageOrigin) || _acao !== _pageOrigin || _acac !== "true")
         return { ok: false, status: 0, statusText: "blocked-cors-credentialed", headers: {}, body: "" };
     }
   }

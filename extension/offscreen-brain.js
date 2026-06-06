@@ -125,6 +125,30 @@ const _deepStatsByTab = new Map(); // tabId → { rem, total, steps, stop, ts } 
 const _tabFrames = new Map(); // tabId → Map<frameId, { url, origin, isTop, lastSeen }>
 const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
 
+// A document's SECURITY ORIGIN for same-origin checks — the BROWSER-provided
+// MessageSender.origin of the REQUESTING FRAME (authoritative), NEVER parsed from
+// sender.url/tab.url and NEVER the top frame's: a page can sandbox its own iframes,
+// giving a sub-frame an OPAQUE origin even though its URL/embedder looks normal, so
+// parsing the URL (or using the main frame) would wrongly grant it same-origin
+// access to the embedder's credentialed data. A VALID tuple origin is used as-is
+// (the better check). An opaque origin ("null") is UNIQUE per the spec, so it gets
+// a STABLE random token (crypto.randomUUID) keyed by sender.documentId — the only
+// reliable per-document identity (a (tab,frame) id pair is reused across navigations
+// with a DIFFERENT origin, and several documents can share one origin). Two opaque
+// documents must NEVER compare same-origin. No documentId (pre-106 Chrome) -> a
+// fresh token per call -> never same-origin -> credentialed read fails closed.
+// Consumed by safeFetch's credentialed SOP as opts.pageOrigin.
+const _opaqueOriginTokens = new Map(); // documentId -> "null:<uuid>"
+function _senderOrigin(sender) {
+  var o = sender && sender.origin;
+  if (typeof o === "string" && o.indexOf("://") > 0) return o; // valid tuple origin — used as-is
+  var docId = sender && sender.documentId;
+  if (!docId) return "null:" + crypto.randomUUID();            // no stable key -> fail closed
+  var tok = _opaqueOriginTokens.get(docId);
+  if (!tok) { tok = "null:" + crypto.randomUUID(); _opaqueOriginTokens.set(docId, tok); }
+  return tok;
+}
+
 // ─── Frame tracking via webNavigation (forwarded as __evt NAV by the SW) ──────
 // The offscreen can't observe chrome.webNavigation; the thin SW forwards each
 // onCommitted as an __evt NAV message, dispatched here by the brain's onMessage.
@@ -4355,6 +4379,7 @@ function _bufferScript(tabId, scriptUrl, code, pageUrl, order, fromFetch) {
     buf.pending = 0;
     buf.loadFired = false;
     buf.pageUrl = pageUrl;
+    buf.frameOrigin = null;   // re-derive the credentialed-read principal for the new document
     console.debug("[AST:buffer] Navigation detected, cleared buffer for tab=%d", tabId);
   }
   if (pageUrl) buf.pageUrl = pageUrl;
@@ -5282,8 +5307,15 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
               // discovery/config doc (oidc .well-known) serves ACAO:* which
               // safeFetch's credentialed CORS would block, and creds must NEVER
               // leak cross-origin. Per the CLAUDE.md origin-scoped policy.
-              var _sameOrig = false; try { _sameOrig = new URL(_absSrc).origin === new URL(_rcPrincipal).origin; } catch (e) {}
-              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, method: "GET", credentialed: _sameOrig });
+              // Principal ORIGIN = the requesting document's browser origin (per-frame,
+              // documentId-keyed, opaque-unique) tracked on the buffer — NOT parsed from a
+              // URL (a sandboxed frame's URL parses to a real origin it does NOT have).
+              // Opaque / mixed / untracked ("null:<uuid>" or "null") matches no real
+              // target, so the credentialed read never fires; pageOrigin also flows to
+              // safeFetch's own SOP (defense in depth).
+              var _rcOrigin = (_scriptBuffers.get(tabId) || {}).frameOrigin || "null";
+              var _sameOrig = false; try { var _to = new URL(_absSrc).origin; _sameOrig = _rcOrigin.indexOf("://") > 0 && _to === _rcOrigin; } catch (e) {}
+              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, pageOrigin: _rcOrigin, method: "GET", credentialed: _sameOrig });
               _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
             } catch (e) { _reply = null; }
             tab._replyCache[_absSrc] = _reply;
@@ -5639,8 +5671,15 @@ async function analyzeScript(tabId, scriptUrl, code) {
               // discovery/config doc (oidc .well-known) serves ACAO:* which
               // safeFetch's credentialed CORS would block, and creds must NEVER
               // leak cross-origin. Per the CLAUDE.md origin-scoped policy.
-              var _sameOrig = false; try { _sameOrig = new URL(_absSrc).origin === new URL(_rcPrincipal).origin; } catch (e) {}
-              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, method: "GET", credentialed: _sameOrig });
+              // Principal ORIGIN = the requesting document's browser origin (per-frame,
+              // documentId-keyed, opaque-unique) tracked on the buffer — NOT parsed from a
+              // URL (a sandboxed frame's URL parses to a real origin it does NOT have).
+              // Opaque / mixed / untracked ("null:<uuid>" or "null") matches no real
+              // target, so the credentialed read never fires; pageOrigin also flows to
+              // safeFetch's own SOP (defense in depth).
+              var _rcOrigin = (_scriptBuffers.get(tabId) || {}).frameOrigin || "null";
+              var _sameOrig = false; try { var _to = new URL(_absSrc).origin; _sameOrig = _rcOrigin.indexOf("://") > 0 && _to === _rcOrigin; } catch (e) {}
+              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, pageOrigin: _rcOrigin, method: "GET", credentialed: _sameOrig });
               _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
             } catch (e) { _reply = null; }
             tab._replyCache[_absSrc] = _reply;
@@ -6216,10 +6255,16 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
 // Manifest "matches" already restricts which pages they run on.
 // @security-contract  TRUST BOUNDARY: web content -> offscreen (trusted)
 //   sender:    UNTRUSTED content script (web origin); msg.* is attacker-shaped.
-//   principal: sender.tab.url (browser-provided) — NEVER msg.* — is the only
-//              value used as the SSRF origin + window.location. Enforced below:
-//              requires sender.tab (drop otherwise); pageUrl = sender.tab.url
-//              (no msg.url fallback — see _analyzeCombinedScriptsInner tabUrl).
+//   principal: sender.tab.url (browser-provided) — NEVER msg.* — is the SSRF
+//              origin + window.location. The SAME-ORIGIN principal for a
+//              CREDENTIALED reply-seed read is the REQUESTING FRAME's browser
+//              origin (MessageSender.origin via _senderOrigin — documentId-keyed,
+//              opaque-unique) tracked per-buffer as frameOrigin: NEVER the top
+//              frame, NEVER URL-parsed (a page can sandbox its own iframe -> an
+//              opaque origin whose URL still looks normal), and a buffer that mixes
+//              two real origins collapses to a unique opaque token (fail-closed).
+//              Enforced below: requires sender.tab (drop otherwise); pageUrl =
+//              sender.tab.url (no msg.url fallback — see _analyzeCombinedScriptsInner).
 //   msg.code/url: analysis INPUT only (runs in the QuickJS sandbox, or is a
 //              safeFetch TARGET), never a trusted decision.
 function handleContentMessage(msg, sender) {
@@ -6277,6 +6322,19 @@ function handleContentMessage(msg, sender) {
       // Background has host_permissions: <all_urls>, so fetch is unrestricted
       _fetchAndBufferScript(tabId, msg.url, pageUrl, msg.order);
     }
+    // Credentialed-read principal for this tab's combined bundle = the REQUESTING
+    // document's origin (per-frame, documentId-keyed, opaque-unique via
+    // _senderOrigin). The per-tab buffer can mix frames: if every contributor shares
+    // ONE real origin that is the principal, but a SECOND distinct origin collapses
+    // it to a unique opaque token -> never same-origin -> the credentialed reply-seed
+    // fails closed, so a sandboxed/cross-origin sub-frame can't read the embedder's
+    // authenticated data through the shared analysis. Consumed at reply-seed time.
+    var _sb = _scriptBuffers.get(tabId);
+    if (_sb) {
+      var _do = _senderOrigin(sender);
+      if (_sb.frameOrigin === undefined || _sb.frameOrigin === null) _sb.frameOrigin = _do;
+      else if (_sb.frameOrigin !== _do) _sb.frameOrigin = "null:mixed-" + crypto.randomUUID();
+    }
     return;
   }
 
@@ -6300,6 +6358,7 @@ function handleContentMessage(msg, sender) {
         slBuf.pending = 0;
         slBuf.loadFired = false;
         slBuf.pageUrl = slPageUrl;
+        slBuf.frameOrigin = null;   // re-derive the credentialed-read principal for the new document
       }
       slBuf.loadFired = true;
       if (slBuf.pending === 0 && slBuf.scripts.length > 0) {
@@ -7671,6 +7730,12 @@ async function _onTabActivated(tabId) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
   if (!msg) return;
+  // Extension-origin sender = trusted (popup + SW). Authenticated by sender.URL
+  // here: the SERVICE WORKER (which forwards __evt) has no frame, so Chrome leaves
+  // its MessageSender.origin undefined (a browser quirk), and only sender.url carries
+  // the extension origin for a SW. Document->document hops use sender.ORIGIN instead
+  // (offscreen->SW in background.js, offscreen->popup in popup.js). A web content
+  // script's sender.url is a web URL -> untrusted -> handleContentMessage.
   const fromExtOrigin = !!(sender.url && sender.url.startsWith(EXTENSION_ORIGIN + "/"));
 
   if (msg.__evt) {

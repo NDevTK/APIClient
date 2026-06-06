@@ -25,10 +25,23 @@ A message's authority comes from **`sender.tab.url`** (set by the browser proces
 - A content script's `sender.url` is always the web origin (`https://…`), never `chrome-extension://`.
   The router drops a content message lacking `sender.tab`, routes web origins to the untrusted
   `handleContentMessage`, and only extension origins to trusted handlers.
-- **This `sender.tab.url` is the analysis PRINCIPAL** for every downstream security decision (the SSRF
-  origin and `window.location`). It is plumbed per page; a content-script-supplied URL (`msg.url`)
+- **This `sender.tab.url` is the analysis PRINCIPAL** for the SSRF host classification and
+  `window.location`. It is plumbed per page; a content-script-supplied URL (`msg.url`)
   is *never* used as the principal — that was an actual hole this session (a `scripts[0].url`
   fallback) and was removed.
+- **Same-origin principal for a CREDENTIALED read is a stricter value: the *requesting frame's*
+  `MessageSender.origin`** (documentId-keyed, opaque-unique via `_senderOrigin`), **never** the top
+  frame and **never** parsed from a URL. A page can sandbox its own iframe, giving it an opaque
+  (`"null"`) origin whose URL still looks normal — so URL-parsing, or using the tab/main-frame origin,
+  would let a sandboxed sub-frame read the *embedder's* authenticated bytes. An opaque origin is unique
+  per spec → never same-origin with anything (the `"null"==="null"` collision is closed). The per-tab
+  combined buffer tracks this as `frameOrigin`; two real origins in one buffer collapse to a unique
+  opaque token → the credentialed reply-seed **fails closed**.
+- **Direction matters for the extension trust boundary.** SW→offscreen (`__evt`) is authenticated by
+  `sender.url`: a service worker has no frame, so Chrome leaves its `MessageSender.origin` undefined
+  (a browser quirk) and only `sender.url` carries the extension origin. Document→document hops
+  (offscreen→SW in background.js, offscreen→popup) use `sender.origin === chrome-extension://<id>`
+  (browser-set, and `"null"` for a sandboxed extension page → rejected).
 
 ## State / storage
 
@@ -47,7 +60,9 @@ There is no raw `fetch` on any analyzer path. `safeFetch` guarantees, in one aud
 - **cookies omitted by default** (`credentials:"omit"`) — no credentialed exfiltration. In
   **credentialed mode** (`opts.credentialed` — replay a learned GET to read the real *authenticated*
   reply, the logged-in API surface) cookies ARE attached, but the REPLY is gated by safeFetch's **own
-  SOP/CORS**: same-origin to the page principal is readable; a cross-origin credentialed read is allowed
+  SOP/CORS**: same-origin to the page principal (`opts.pageOrigin` = the requesting frame's
+  `MessageSender.origin`, opaque-unique — an opaque/`"null"` principal is same-origin with *nothing*)
+  is readable; a cross-origin credentialed read is allowed
   only if the server granted the page's *exact* origin a credentialed read (`Access-Control-Allow-Origin`
   == origin, never `*`, **and** `Access-Control-Allow-Credentials: true`). The browser's same-origin
   policy does **not** apply to a host-permission fetch (it can read any origin), so safeFetch
@@ -110,4 +125,6 @@ the honesty mechanism — a label that can't cite a real check is marked as a re
 | Bundle `import()`s `http://127.0.0.1/…` or an intranet host (public page) | **Mitigated** — `safeFetch` origin-relative SSRF blocks public→private (initial + post-redirect) |
 | Bundle imports a cross-origin HTML/JSON endpoint as a "chunk" | **Mitigated** — `safeFetch as:"script"` CORB ingests JS-typed only |
 | Concurrent localhost-page grind lends its origin to a public page's fetch | **Mitigated** — principal is per-call, not a shared worker global |
+| A page sandboxes its own iframe (opaque origin) to read the embedder's credentialed API via the shared analysis | **Mitigated** — credentialed-read principal is the *requesting frame's* `MessageSender.origin` (opaque-unique, documentId-keyed), never the top frame or URL-parsed; an opaque origin is same-origin with nothing; a mixed-origin buffer fails closed |
+| Sandboxed *extension* page (origin `"null"`) impersonates a trusted extension document | **Mitigated** — document→document hops require `sender.origin === chrome-extension://<id>`; `"null"` ≠ that |
 | Bundle escapes the WASM sandbox into the worker | **Out of model** — assumes the WASM boundary holds; a true escape has raw network regardless, so the defense is the browser sandbox + CSP `connect-src` |
