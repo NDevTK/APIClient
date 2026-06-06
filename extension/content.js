@@ -1,12 +1,11 @@
-// Content script: ships RAW materials to the analyser — raw
-// server-rendered HTML (CONTENT_HTML), raw script source per
-// <script> (SCRIPT_SOURCE), raw network response bodies relayed from
-// intercept.js (RESPONSE_BODY). Does NOT do any regex / heuristic
-// pre-scan: HTML parsing is Lexbor's job in the worker; endpoint and
-// API-key discovery is the forced-execution pipeline's job (real
-// fetch/XHR observed at the host edge, with method/args/call site).
-// Also acts as a fetch relay for the SW and a form-metadata
-// collector for the form-submission pipeline.
+// Content script: ships RAW materials to the analyser — ONE CONTENT_HTML per
+// document (the page's server-rendered HTML) + raw network response bodies
+// relayed from intercept.js (RESPONSE_BODY). Does NOT ship script sources or
+// run any regex / heuristic pre-scan: HTML parsing is Lexbor's job in the
+// worker, and the document's scripts are run by QuickJS (qjs_run_doc_scripts)
+// under forced execution — endpoint/API-key discovery is real fetch/XHR
+// observed at the host edge, with method/args/call site. Also acts as a fetch
+// relay for the SW and a form-metadata collector for the form-submission pipeline.
 
 (function () {
   // No URL-token probe mode: correlation rides in the PoC payload (the finding's
@@ -346,15 +345,10 @@
     }
     if (msg.type === "RESHIP") {
       // The offscreen brain came up AFTER our initial ship and broadcasts RESHIP
-      // so we re-send everything (the cold-start delivery race — the offscreen
-      // wasn't alive when content.js shipped at document_idle, so the brain
-      // missed our scripts/HTML). _bufferScript/_buffer dedup by url/hash, so
-      // re-ship is idempotent. Clear our local sent-set so we walk fresh.
-      _sentScripts.clear();
-      _scriptOrder = 0;
+      // so we re-send the document HTML (the cold-start delivery race — the
+      // offscreen wasn't alive when content.js shipped at document_idle, so the
+      // brain missed our CONTENT_HTML). Idempotent: the brain dedups by document.
       _sendPageHtml("reship");
-      try { document.querySelectorAll("script").forEach(extractScriptSource); } catch (_) {}
-      if (document.readyState === "complete") _signalScriptsLoaded();
       sendResponse({ ok: true });
       return;
     }
@@ -418,16 +412,6 @@
   // Track hashes of last sent scan results to avoid re-sending identical data
   // on SPA re-renders or MutationObserver re-triggers without actual DOM changes.
 
-  var _lastScanHash = null;
-
-  function _simpleHash(str) {
-    var h = 0;
-    for (var i = 0; i < str.length; i++) {
-      h = ((h << 5) - h + str.charCodeAt(i)) | 0;
-    }
-    return h;
-  }
-
   // ─── Init ──────────────────────────────────────────────────────────────────
 
   // Initial raw-HTML ship — Lexbor in the worker parses this as the
@@ -435,7 +419,6 @@
   // server-rendered DOM (custom elements with their attributes, data
   // islands, the structure the bundle's connectedCallback / React
   // effects depend on).
-  var _lastHtmlHash = null;
   _sendPageHtml("init");
 
   // Forms are NOT scanned here — Lexbor in the engine worker parses
@@ -449,145 +432,13 @@
      "DOM context" the analyser needs is read FROM the engine,
      never shipped as a separate snapshot from the page context. */
 
-  // ─── Script Source Extraction (for AST analysis) ────────────────────────────
-
-  const _sentScripts = new Set(); // track URLs/hashes already sent
-  // Monotonic DOM-execution order. querySelectorAll("script") yields
-  // document order; mutation-added scripts get later indices. Combined
-  // analysis MUST concatenate in this order or a bundle whose later
-  // chunk reads state a former chunk set up (e.g. GitHub's app chunk
-  // reading client-env loaded by environment-*.js) throws
-  // "requested before it was loaded" when the order is fetch-arrival.
-  var _scriptOrder = 0;
-
-  function sendScriptSource(url, code, order) {
-    if (!code) return;
-    // No size threshold — CLAUDE.md "no magic numbers, no depth/size
-    // caps". A 30-char `document.body.innerHTML=location.hash` is a
-    // real reflective XSS and must reach the analyzer like any other.
-    // Large bundle scripts (multi-MB) route through _sendChunked so
-    // the 64 MiB per-message structured-clone cap doesn't truncate.
-    var key = url || hashCode(code);
-    if (_sentScripts.has(key)) return;
-    _sentScripts.add(key);
-    _sendChunked({
-      type: "SCRIPT_SOURCE",
-      url: url || null,
-      code: code,
-      order: order == null ? _scriptOrder++ : order,
-    }, "code");
-  }
-
-  function hashCode(str) {
-    var h = 0;
-    for (var i = 0; i < Math.min(str.length, 200); i++) {
-      h = ((h << 5) - h + str.charCodeAt(i)) | 0;
-    }
-    return "inline:" + h;
-  }
-
-  function extractScriptSource(scriptEl) {
-    var sType = scriptEl.type;
-    var order = _scriptOrder++;
-    // Skip non-JavaScript script types entirely. Data islands
-    // (<script type="application/json">, ld+json, importmaps,
-    // speculationrules, text/template, text/html) are part of the
-    // CONTENT_HTML payload — Lexbor parses them into the spec DOM,
-    // and the bundle reads them via getElementById(id).textContent
-    // → JSON.parse through the engine's normal DOM hooks. No
-    // parallel SCRIPT_SOURCE shipping of island bodies.
-    if (sType && sType !== "text/javascript" && sType !== "module" &&
-        !/^(application\/javascript|text\/ecmascript)$/i.test(sType)) {
-      return;
-    }
-    // One message per document: content.js ships ONLY CONTENT_HTML. The engine
-    // (Lexbor) parses it and runs EVERY script in document order in one realm —
-    // inline via the SSR phase, external <script src> via __feLoadScript, dynamic
-    // via the createElement host edge. No per-script SCRIPT_SOURCE shipping (it
-    // merged a tab's documents and ambiguated the per-document credentialed-read
-    // principal).
-    return;
-  }
-
-  // Extract all existing scripts on page load
-  document.querySelectorAll("script").forEach(extractScriptSource);
-
-  // Page-lifecycle signal: when the load event fires, all initial scripts
-  // (including <script defer> and <script async>) have finished loading.
-  // Tell background to fire analysis NOW even if its 1500ms idle-debounce
-  // timer hasn't expired (continuous script-load streams reset the timer
-  // forever on busy pages, so it never fires on its own).
-  function _signalScriptsLoaded() {
-    chrome.runtime.sendMessage({ type: "SCRIPTS_LOADED" });
-  }
-  if (document.readyState === "complete") _signalScriptsLoaded();
-  else window.addEventListener("load", _signalScriptsLoaded, { once: true });
-
-  // ─── Mutation Observer (Dynamic Loading) ───────────────────────────────────
-
-  let debounceTimer = null;
-  let _pendingHtmlResend = false;
-
-  const observer = new MutationObserver((mutations) => {
-    let changed = false;
-    let domGrew = false;
-
-    for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          if (node.tagName === "SCRIPT") {
-            // Raw script source — ships through SCRIPT_SOURCE; no
-            // regex pre-scan of textContent.
-            extractScriptSource(node);
-          }
-          // No content-side form metadata extraction — Lexbor in the
-          // engine worker re-parses CONTENT_HTML and __hostDrive drives
-          // form.submit() through the same fetch hook the bundle reaches.
-          domGrew = true;
-        }
-      }
-    }
-
-    // Any DOM growth (SPA route, lazy-loaded fragment, framework
-    // re-render) re-ships the raw HTML so the worker's Lexbor document
-    // tracks the live page. Debounced so a mutation storm collapses to
-    // one CONTENT_HTML message.
-    if (domGrew) _pendingHtmlResend = true;
-
-    if (changed || domGrew) {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(flushPending, 1000);
-    }
-  });
-
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-  });
-
-  function flushPending() {
-    debounceTimer = null;
-    if (_pendingHtmlResend) {
-      _pendingHtmlResend = false;
-      // De-dup against the prior HTML so identical re-renders don't
-      // churn the worker.
-      var html;
-      try { html = document.documentElement.outerHTML; } catch (_) { return; }
-      if (html) {
-        var hh = _simpleHash(html);
-        if (hh !== _lastHtmlHash) {
-          _lastHtmlHash = hh;
-          chrome.runtime.sendMessage({
-            type: "CONTENT_HTML",
-            html: html,
-            origin: location.origin,
-            pageUrl: location.href,
-            reason: "mutation",
-          });
-        }
-      }
-    }
-  }
+  // SCRIPTS_LOADED + the MutationObserver removed. One message per document: the
+  // single CONTENT_HTML (_sendPageHtml("init") above) is the whole input. The
+  // engine (Lexbor + qjs_run_doc_scripts) parses it and runs EVERY script in
+  // document order in one realm — inline + external <script src>; scripts a page
+  // inserts dynamically are discovered by forced exec's createElement host edge,
+  // not a content-side observer (which only ever saw what actually fired). No
+  // per-script SCRIPT_SOURCE shipping, no load signal, no HTML re-ship churn.
 
   // ─── Form Submission Capture ──────────────────────────────────────────────
 

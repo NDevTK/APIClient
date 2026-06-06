@@ -4380,117 +4380,11 @@ async function handleResponseBody(tabId, msg, frameId) {
 
 // ─── Cross-Script AST Buffering ──────────────────────────────────────────────
 
-// fromFetch=true ONLY when this call balances a _fetchAndBufferScript pending++
-// (an external <script src>). Inline scripts arrive here directly and never
-// incremented pending, so they must NOT decrement it — otherwise an inline
-// <script> buffered while an external fetch is in flight steals that fetch's
-// pending slot, firing analysis prematurely and dropping the external script
-// (observed: a cross-origin CDN bundle lost while the page's inline script ran).
-function _bufferScript(tabId, scriptUrl, code, pageUrl, order, fromFetch) {
-  var buf = _scriptBuffers.get(tabId);
-  if (!buf) {
-    buf = { scripts: [], timer: null, pageUrl: pageUrl, pending: 0, loadFired: false };
-    _scriptBuffers.set(tabId, buf);
-  }
-
-  // Detect navigation: if page URL changed, clear old buffer
-  if (pageUrl && buf.pageUrl && pageUrl !== buf.pageUrl) {
-    if (buf.timer) clearTimeout(buf.timer);
-    buf.scripts = [];
-    buf.pending = 0;
-    buf.loadFired = false;
-    buf.pageUrl = pageUrl;
-    buf.frameOrigin = null;   // re-derive the credentialed-read principal for the new document
-    console.debug("[AST:buffer] Navigation detected, cleared buffer for tab=%d", tabId);
-  }
-  if (pageUrl) buf.pageUrl = pageUrl;
-
-  // Deduplicate by URL or content hash
-  var key = scriptUrl || _hashScriptCode(code);
-  for (var i = 0; i < buf.scripts.length; i++) {
-    if (buf.scripts[i].key === key) { if (fromFetch) _scriptBufferDecrementPending(tabId, buf); return; }
-  }
-
-  buf.scripts.push({ url: scriptUrl, code: code, key: key, order: (order == null ? 1e9 : order) });
-  console.debug("[AST:buffer] Buffered script %s (%d chars) tab=%d — %d scripts pending",
-    scriptUrl || "(inline)", code.length, tabId, buf.scripts.length);
-  if (fromFetch) _scriptBufferDecrementPending(tabId, buf);
-
-  // Reset debounce timer — wait for more scripts before combined analysis
-  if (buf.timer) clearTimeout(buf.timer);
-  buf.timer = setTimeout(function() {
-    buf.timer = null;
-    _analyzeCombinedScripts(tabId);
-  }, 1500);
-}
-
-// Decrement pending-fetches count. When the page's load event has fired
-// AND there are no in-flight fetches AND we have buffered scripts, fire
-// analysis immediately — every initial-script subresource is captured.
-function _scriptBufferDecrementPending(tabId, buf) {
-  if (buf.pending > 0) buf.pending--;
-  if (buf.loadFired && buf.pending === 0 && buf.scripts.length > 0) {
-    if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
-    _analyzeCombinedScripts(tabId);
-  }
-}
-
-
-// CORB/ORB enforcement moved INTO safeFetch as the opts.as==="script" policy:
-// the single chokepoint, so every code-loader gets it and a new one can't forget
-// it (the chunk path previously had none). See lib/safe-fetch.js _corbAllowsScript.
-
-// @security-contract  LOADER: external <script src>
-//   loads:    JAVASCRIPT (executed as code)          quickjs-control: YES
-//   enforced: safeFetch(as:"script") -> CORB (cross-origin must be JS-typed) +
-//             origin-relative SSRF; principal = the page's sender.tab.url (pageUrl).
-function _fetchAndBufferScript(tabId, scriptUrl, pageUrl, order) {
-  // safeFetch is the single chokepoint: it rejects non-public/private hosts
-  // (SSRF) and non-http(s) schemes, so a blocked URL returns {ok:false} below.
-  // Check if already buffered
-  var buf = _scriptBuffers.get(tabId);
-  if (buf) {
-    for (var i = 0; i < buf.scripts.length; i++) {
-      if (buf.scripts[i].key === scriptUrl) return;
-    }
-  } else {
-    buf = { scripts: [], timer: null, pageUrl: pageUrl, pending: 0, loadFired: false };
-    _scriptBuffers.set(tabId, buf);
-  }
-  // Increment pending so the load-fired-and-no-pending check waits for
-  // this fetch to complete (or fail) before firing analysis.
-  buf.pending++;
-  // Standing observability for the INITIAL external-<script src> fetch path (the
-  // chunk path has _chunkDiag; this is its analog) so a dropped initial script —
-  // e.g. a cross-origin CDN bundle — is visible, not silent. Read via
-  // `harness offscreen "return self._fbsDiag"`.
-  if (!self._fbsDiag) self._fbsDiag = {};
-  self._fbsDiag[scriptUrl] = "fetching";
-
-  // as:"script" — safeFetch enforces CORB (cross-origin must be JS-typed), SSRF,
-  // and scheme; a blocked load comes back !ok (statusText "blocked-corb" etc.).
-  safeFetch(scriptUrl, { pageUrl: pageUrl, as: "script" }).then(function(resp) {
-    if (!resp.ok) {
-      self._fbsDiag[scriptUrl] = (resp.statusText === "blocked-corb") ? "corb-blocked" : ("notok:" + resp.status + " " + resp.statusText);
-      console.debug("[AST:buffer] %s for %s (%d)", resp.statusText, scriptUrl, resp.status);
-      _scriptBufferDecrementPending(tabId, buf);
-      return;
-    }
-    var code = resp.body;
-    if (code && code.length >= 50) {
-      self._fbsDiag[scriptUrl] = "buffered:" + code.length;
-      _bufferScript(tabId, scriptUrl, code, pageUrl, order, true);
-    } else if (code != null) {
-      self._fbsDiag[scriptUrl] = "tiny:" + code.length;
-      // Tiny script — buffer skips it; balance the pending counter.
-      _scriptBufferDecrementPending(tabId, buf);
-    }
-  }).catch(function(err) {
-    self._fbsDiag[scriptUrl] = "error:" + (err && err.message || err);
-    console.debug("[AST:buffer] Fetch error for %s: %s", scriptUrl, err.message || err);
-    _scriptBufferDecrementPending(tabId, buf);
-  });
-}
+// _bufferScript / _scriptBufferDecrementPending / _fetchAndBufferScript removed:
+// the per-script SCRIPT_SOURCE buffering machinery is gone. content.js ships one
+// CONTENT_HTML per document; the engine (Lexbor + qjs_run_doc_scripts) sources the
+// document's scripts. The per-document buffer now holds only {tabId, origin, url,
+// pageHtml, chunk-state}; the offscreen no longer fetches/combines scripts.
 
 function _hashScriptCode(code) {
   var h = 0;
@@ -4936,10 +4830,10 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls, esmImportUrls) {
 // the background and never pins a core. Time is free; a maxed core is not.
 var _reviewQueue = [];
 var _reviewDraining = false;
-function _analyzeCombinedScripts(tabId) {
-  var buf = _scriptBuffers.get(tabId);
-  if (!buf || buf.scripts.length === 0) return;
-  if (_reviewQueue.indexOf(tabId) < 0) _reviewQueue.push(tabId);   // dedupe within queue; a re-queue after run re-reviews late scripts (combined-cache makes an unchanged set a fast hit)
+function _analyzeCombinedScripts(docKey) {
+  var buf = _scriptBuffers.get(docKey);
+  if (!buf || !buf.pageHtml) return;                              // engine-sourced: gate on the document HTML, not pre-buffered scripts
+  if (_reviewQueue.indexOf(docKey) < 0) _reviewQueue.push(docKey);   // dedupe within queue; a re-queue after run re-reviews (combined-cache makes an unchanged doc a fast hit)
   _drainReviewQueue();
 }
 async function _drainReviewQueue() {
@@ -4954,13 +4848,15 @@ async function _drainReviewQueue() {
          gets analyzed eventually). _tabMeta.lastActivatedTs is bumped on
          TAB_ACTIVATED; tabs without a recorded activation timestamp default
          to 0 and trail the recently-activated cohort. */
-      var tabId = self._priorityCmp.pickFromReviewQueue(_reviewQueue, function (t) {
-        var meta = _tabMeta.get(t);
+      var docKey = self._priorityCmp.pickFromReviewQueue(_reviewQueue, function (k) {
+        var b = _scriptBuffers.get(k);
+        var meta = (b && b.tabId != null) ? _tabMeta.get(b.tabId) : null;
         return (meta && meta.lastActivatedTs) || 0;
       });
-      if (tabId == null) break;
-      var buf = _scriptBuffers.get(tabId);
-      if (!buf || buf.scripts.length === 0) continue;
+      if (docKey == null) break;
+      var buf = _scriptBuffers.get(docKey);
+      if (!buf || !buf.pageHtml) continue;
+      var tabId = buf.tabId;
       /* Same-tab guard: a re-queue from a late-arriving script for a tab
          whose analysis is STILL IN FLIGHT (round-1 BFS or chunk-merged
          round-2 still grinding) must not spawn a CONCURRENT second call —
@@ -4974,8 +4870,8 @@ async function _drainReviewQueue() {
          the late scripts are folded into the current buf and the next
          drain iteration after the in-flight one finishes will pick them
          up via the cache-miss path. */
-      if (_analysisInflight.has(tabId)) continue;
-      _analysisInflight.add(tabId);
+      if (_analysisInflight.has(docKey)) continue;   // per-DOCUMENT in-flight guard (distinct documents of a tab may analyse concurrently, bounded by the grind cap)
+      _analysisInflight.add(docKey);
       /* Fire-and-forget — do NOT await. With the worker's JSPI scheduler
          (ast-thread.js _yieldDrain + _flowCmp), each page's analysis runs
          in its own wasm instance and interleaves with others at JSPI yield
@@ -4988,8 +4884,8 @@ async function _drainReviewQueue() {
          analysis.resolverErrors (worker-side) or _astError (this side),
          not lost via a bare catch. */
       _analyzeCombinedScriptsInner(tabId, buf)
-        .catch(function (e) { console.debug("[AST:queue] tab=%d review error: %s", tabId, e && e.message); })
-        .finally(function () { _analysisInflight.delete(tabId); });
+        .catch(function (e) { console.debug("[AST:queue] doc review error: %s", e && e.message); })
+        .finally(function () { _analysisInflight.delete(docKey); });
     }
   } finally { _reviewDraining = false; }
 }
@@ -6420,8 +6316,7 @@ function handleContentMessage(msg, sender) {
     _buf.loadFired = true;
     _buf._chunkSeen = null; _buf._chunkFetchStarted = false;
     _buf._chunkGrindDone = false; _buf._chunkRoundDone = false;
-    if (_buf.timer) clearTimeout(_buf.timer);
-    _buf.timer = setTimeout(function () { _buf.timer = null; _analyzeCombinedScriptsInner(tabId, _buf); }, 300);
+    _analyzeCombinedScripts(_dk);   // through the review queue: per-document in-flight guard + recency priority (focused tab first), bounded CPU
     notifyPopup(tabId);
     return;
   }
