@@ -137,15 +137,30 @@ const _wsConnState = new Map(); // tabId → Map<wsId, { url, readyState }>
 // documents must NEVER compare same-origin. No documentId (pre-106 Chrome) -> a
 // fresh token per call -> never same-origin -> credentialed read fails closed.
 // Consumed by safeFetch's credentialed SOP as opts.pageOrigin.
-const _opaqueOriginTokens = new Map(); // documentId -> "null:<uuid>"
+// The single durable documentId -> origin map. The ONLY identity that survives
+// a document's analysis (the script buffer is reclaimed after review, so it can't
+// back this map) and the ONLY one that distinguishes two about:blank / sandboxed
+// frames (same url, DIFFERENT origin). A valid tuple origin is stored as-is; an
+// opaque origin gets a STABLE random token, both keyed by sender.documentId. Look
+// up later with _originForDoc(documentId) — never by tabId (assumes the main
+// frame) and never by URL-parsing (about:blank parses to a bogus "null").
+const _docOrigins = new Map(); // documentId -> origin ("https://x" | "null:<uuid>")
 function _senderOrigin(sender) {
-  var o = sender && sender.origin;
-  if (typeof o === "string" && o.indexOf("://") > 0) return o; // valid tuple origin — used as-is
   var docId = sender && sender.documentId;
-  if (!docId) return "null:" + crypto.randomUUID();            // no stable key -> fail closed
-  var tok = _opaqueOriginTokens.get(docId);
-  if (!tok) { tok = "null:" + crypto.randomUUID(); _opaqueOriginTokens.set(docId, tok); }
+  var o = sender && sender.origin;
+  if (typeof o === "string" && o.indexOf("://") > 0) {         // valid tuple origin — used as-is
+    if (docId) _docOrigins.set(docId, o);                      // remember durably for later lookups
+    return o;
+  }
+  if (!docId) return "null:" + crypto.randomUUID();            // no stable key -> fail closed, unstorable
+  var tok = _docOrigins.get(docId);
+  if (!tok) { tok = "null:" + crypto.randomUUID(); _docOrigins.set(docId, tok); }
   return tok;
+}
+// Authoritative origin for a documentId, recoverable after the buffer is gone.
+// "" if the document never reported (caller must fail closed — never assume same-origin).
+function _originForDoc(documentId) {
+  return (documentId && _docOrigins.get(documentId)) || "";
 }
 
 // ─── Frame tracking via webNavigation (forwarded as __evt NAV by the SW) ──────
@@ -189,20 +204,6 @@ function _onNav(details) {
 // parses the HTML, qjs_run_doc_scripts runs each <script> in document order —
 // inline directly, external <script src> via __feLoadScript).
 const _scriptBuffers = new Map(); // documentId → per-document analysis state
-
-// The per-document credentialed-read principal for an analysis whose principal URL
-// is `url`: the origin of the document buffer whose url matches. Used by the
-// reply-seed (which has the principal url in scope, but not always the buffer).
-// No match → "null" (fail-closed: the credentialed read never fires).
-function _docOriginForPrincipal(url) {
-  if (!url) return "null";
-  var u0 = String(url).split("?")[0];
-  var found = "null";
-  _scriptBuffers.forEach(function (b) {
-    if (b && b.url && b.origin && (b.url === url || String(b.url).split("?")[0] === u0)) found = b.origin;
-  });
-  return found;
-}
 
 // Global persistent store — survives tab closes and SW restarts
 const globalStore = {
@@ -4303,23 +4304,22 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   var _svcDocEntry = tab.discoveryDocs.get(service);
   if (_svcDocEntry) {
     if (!_svcDocEntry.pageUrls) _svcDocEntry.pageUrls = new Set();
-    // The requesting frame's record IS its document buffer, keyed by documentId
-    // (the response carries the capturing frame's documentId) — no separate frame
-    // table. Its origin is the AUTHORITATIVE browser origin (_senderOrigin).
-    var _svcFrameInfo = documentId ? _scriptBuffers.get(documentId) : null;
+    // The requesting frame's AUTHORITATIVE origin, by the response's documentId,
+    // from the DURABLE _docOrigins map — never the transient script buffer (gone
+    // after review) and never URL-parsed (about:blank parses to a bogus "null").
+    var _svcFrameOrigin = _originForDoc(documentId);
     // pageUrls always tracks the top-level page URL
     var _svcMeta = _tabMeta.get(tabId);
     if (_svcMeta?.url) _svcDocEntry.pageUrls.add(_svcMeta.url);
     // Record a frame's origin separately when it DIFFERS from the top-level page
-    // origin (a cross-origin / sandboxed / fenced iframe). We do NOT key this on a
-    // self-reported "isTop" (a fenced frame would impersonate the main frame);
-    // instead compare the frame's browser-provided origin to the top page's.
-    if (_svcFrameInfo && _svcFrameInfo.origin) {
+    // origin (a cross-origin / sandboxed / fenced iframe) — compared on the
+    // browser-provided origin, never a self-reported isTop.
+    if (_svcFrameOrigin) {
       var _svcTopOrigin = "";
       if (_svcMeta?.url && URL.canParse(_svcMeta.url)) _svcTopOrigin = new URL(_svcMeta.url).origin;
-      if (_svcFrameInfo.origin !== _svcTopOrigin) {
+      if (_svcFrameOrigin !== _svcTopOrigin) {
         if (!_svcDocEntry.frameOrigins) _svcDocEntry.frameOrigins = new Set();
-        _svcDocEntry.frameOrigins.add(_svcFrameInfo.origin);
+        _svcDocEntry.frameOrigins.add(_svcFrameOrigin);
       }
     }
   }
@@ -4651,16 +4651,11 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls, esmImportUrls) {
      the page base BEFORE filtering. Worker/SharedWorker callers usually
      pass a relative path (`new Worker("/static/worker.js")`); the
      previous `^https?:\/\/` filter dropped them outright, so every fetch
-     surface inside Worker bundles was invisible. Use the tab's page URL
-     as base; fall back to the buffer's first script URL if no tab meta. */
-  var _baseUrl = null;
-  try {
-    var _meta = _tabMeta.get(tabId);
-    if (_meta && _meta.url) _baseUrl = _meta.url;
-    else if (buf.scripts.length && buf.scripts[0].url) _baseUrl = buf.scripts[0].url;
-  } catch (e) {
-    console.warn("[chunkUrls] base url lookup failed:", e && e.message || e);
-  }
+     surface inside Worker bundles was invisible. */
+  // Base = THIS document's own browser url (buf.url); fall back to its first
+  // fetched script URL. NEVER the tab's top-frame url — a sub-frame resolves its
+  // chunks against its OWN document, not the embedder.
+  var _baseUrl = buf.url || (buf.scripts.length && buf.scripts[0].url) || null;
   var fresh = [];
   for (var j = 0; j < chunkUrls.length; j++) {
     var u = chunkUrls[j];
@@ -4721,11 +4716,12 @@ async function _maybeDownloadChunks(tabId, buf, chunkUrls, esmImportUrls) {
   console.debug("[AST:chunks] tab=%d: %d new lazy chunk(s) to download", tabId, fresh.length);
   var added = 0;
   var CONC = 8;
-  // Trusted page origin (sender.tab.url via _tabMeta) for safeFetch's origin-
-  // relative rule. Chunk URLs (cu) are bundle-DISCOVERED = attacker-controlled;
-  // the principal must be the page's OWN trusted origin so a localhost page loads
-  // its localhost chunks while a public page still cannot reach a private chunk.
-  var _chunkPageOrigin = (_tabMeta.get(tabId) || {}).url || "";
+  // Trusted page origin for safeFetch's origin-relative rule = THIS document's
+  // own browser url (buf.url), NOT the tab's top-frame url. Chunk URLs (cu) are
+  // bundle-DISCOVERED = attacker-controlled; the principal must be the document's
+  // OWN trusted origin so a localhost page loads its localhost chunks while a
+  // public page still cannot reach a private chunk.
+  var _chunkPageOrigin = buf.url || "";
   for (var s = 0; s < fresh.length; s += CONC) {
     var batch = fresh.slice(s, s + CONC);
     // SW fetch (host_permissions: <all_urls>, cookies omitted) — NOT
@@ -5003,9 +4999,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // Per-DOCUMENT principal: buf.url is THIS document's own browser-provided url
   // (set from sender on CONTENT_HTML), not the tab's — a sub-frame analyses as its
   // own origin, never the embedder's.
-  var tabUrl = "";
-  if (buf.url) tabUrl = buf.url;
-  else { var meta = _tabMeta.get(tabId); if (meta && meta.url) tabUrl = meta.url; else if (buf.pageUrl) tabUrl = buf.pageUrl; }
+  var tabUrl = buf.url || buf.pageUrl || "";
 
   // Persist the resume metadata (combined→chunk line map + chunk source-map
   // URLs) BEFORE the long deep grind, not after. The resume path is exactly the
@@ -5174,7 +5168,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     // page principal) and extract the field — the real value the bundle CANNOT
     // compute (server input). The endpoint + field stay forced-exec-learned;
     // this only fills the EXAMPLE, a marked sample, never a branch decider.
-    var _rcPrincipal = buf.url || (_tabMeta.get(tabId) || {}).url || "";
+    var _rcPrincipal = buf.url || buf.pageUrl || "";
     if (!tab._replyCache) tab._replyCache = {};
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
       var _re = analysis.resolverErrors[_rei];
@@ -5207,7 +5201,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
               // Opaque / mixed / untracked ("null:<uuid>" or "null") matches no real
               // target, so the credentialed read never fires; pageOrigin also flows to
               // safeFetch's own SOP (defense in depth).
-              var _rcOrigin = buf.origin || _docOriginForPrincipal(_rcPrincipal);
+              var _rcOrigin = buf.origin || "";   // THIS document's authoritative origin (set from sender on CONTENT_HTML); "" -> fail closed
               var _sameOrig = false; try { var _to = new URL(_absSrc).origin; _sameOrig = _rcOrigin.indexOf("://") > 0 && _to === _rcOrigin; } catch (e) {}
               var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, pageOrigin: _rcOrigin, method: "GET", credentialed: _sameOrig });
               _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
@@ -6143,22 +6137,19 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // returns each live frame's documentId + url + frameType. frameType is the
       // only trustworthy "is this the main frame" signal — a fenced frame is reported
       // as "fenced_frame", so it CANNOT impersonate the outermost frame (which a
-      // self-reported isTop could). The per-document buffer supplies each frame's
-      // AUTHORITATIVE origin (sender.origin via _senderOrigin); frameId is Chrome's
-      // routing id for tabs.sendMessage, not a stored identity.
+      // self-reported isTop could). Each frame's AUTHORITATIVE origin comes from the
+      // DURABLE _docOrigins map by documentId (survives buffer reclamation after
+      // review); frameId is Chrome's routing id for tabs.sendMessage, not an identity.
       let _wnFrames = null;
       try { _wnFrames = await swRpc("webNavigation.getAllFrames", { tabId }); }
       catch (e) { console.debug("[GET_FRAMES] getAllFrames failed:", e && e.message || e); }
-      const out = (_wnFrames || []).map((f) => {
-        const _fb = f.documentId ? _scriptBuffers.get(f.documentId) : null;
-        return {
-          frameId: f.frameId,
-          documentId: f.documentId || null,
-          url: f.url,
-          origin: _fb ? _fb.origin : "",
-          isMain: f.frameType === "outermost_frame",
-        };
-      });
+      const out = (_wnFrames || []).map((f) => ({
+        frameId: f.frameId,
+        documentId: f.documentId || null,
+        url: f.url,
+        origin: _originForDoc(f.documentId),
+        isMain: f.frameType === "outermost_frame",
+      }));
       sendResponse(out.length ? out : [{ frameId: 0, documentId: null, url: "", origin: "", isMain: true }]);
       return;
     }
