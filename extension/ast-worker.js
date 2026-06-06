@@ -34,12 +34,12 @@ function _makeWorker() {
       return;
     }
     if (e.data && e.data._resumed) {
-      try { if (typeof self._mergeDeepResult === "function") self._mergeDeepResult(e.data.sourceUrl || "", e.data.response && e.data.response.result, true); }
+      try { if (typeof self._mergeDeepResult === "function") self._mergeDeepResult(e.data.documentId || null, e.data.sourceUrl || "", e.data.response && e.data.response.result, true); }
       catch (err) { console.warn("[ast-worker] _mergeDeepResult (resumed) failed:", err && err.message || err); }
       return;
     }
     if (e.data && e.data._partial) {
-      try { if (typeof self._mergeDeepResult === "function") self._mergeDeepResult(e.data.sourceUrl || "", e.data.response && e.data.response.result, false); }
+      try { if (typeof self._mergeDeepResult === "function") self._mergeDeepResult(e.data.documentId || null, e.data.sourceUrl || "", e.data.response && e.data.response.result, false); }
       catch (err) { console.warn("[ast-worker] _mergeDeepResult (partial) failed:", err && err.message || err); }
       return;
     }
@@ -173,7 +173,7 @@ self.astDispatch = function (msg) {
   }
   return new Promise(function (resolve) {
     if (_pool.length === 0) { resolve({ success: false, error: "no workers in pool" }); return; }
-    var pageKey = msg && msg.sourceUrl ? String(msg.sourceUrl).split("#")[0] : null;
+    var pageKey = msg && msg.documentId ? msg.documentId : null;   // sticky routing by documentId, NEVER url (same url != same content)
     var slot = _pickSlot(pageKey);
     var id = _nextId++;
     /* Store {resolve, msg} so a pool-shrink can re-dispatch the SAME

@@ -5055,10 +5055,11 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // case where the SW evicts mid-grind, so the worker never returns and an
   // after-the-fact save would never run; saving it up front lets the eventual
   // AST_RESUMED merge re-resolve path-param names (owner/repo) the way the eager
-  // merge does. Keyed by page URL (sans query) to match the resume lookup.
+  // merge does. Keyed by documentId (NEVER url — same url != same content) to
+  // match the resume lookup.
   if (buf._chunkRoundDone) {
     try {
-      globalStore.deepResumeMeta.set(tabUrl.split("?")[0], {
+      globalStore.deepResumeMeta.set(buf.docKey, {
         scriptOffsets: scriptOffsets,
         sourceMapScripts: sourceMapScripts,
         savedAt: Date.now(),
@@ -5080,7 +5081,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   var response;
   try {
     response = await sendToOffscreen({
-      type: "AST_ANALYZE", code: combined, sourceUrl: tabUrl, forceScript: true,
+      type: "AST_ANALYZE", code: combined, sourceUrl: tabUrl, documentId: buf.docKey, origin: buf.origin, forceScript: true,
       scriptUrls: scriptUrls,
       // Per-chunk line offsets + each chunk's sourceMappingURL so the OFFSCREEN
       // worker (long-lived, owns IndexedDB) can fetch maps and resolve minified
@@ -5922,21 +5923,22 @@ function _handleFormSubmit(documentId, msg) {
 // store). doNames re-fetches chunk source maps to relabel path params
 // (owner/repo) — done once on the final result, skipped on every partial so
 // the stream stays cheap.
-function _mergeDeepResult(sourceUrl, result, doNames) {
+function _mergeDeepResult(documentId, sourceUrl, result, doNames) {
   try {
     if (!result) return;
-    var _rurl = (sourceUrl || "").split("?")[0];
-    // Find the live document for this deep result by its url (= the document's
-    // own buf.url, its principal). documentId-keyed; Stage 2 will thread the
-    // documentId through the worker round-trip and drop this url-match (and merge
-    // to globalStore-only when the document is gone). For now: live doc or drop.
-    var _rdoc = null;
-    state.docs.forEach(function (d) { if (_rdoc == null && d && d.url && _rurl && d.url.indexOf(_rurl) === 0) _rdoc = d; });
-    if (_rdoc == null) { console.debug("[AST:deep] no live document for %s — not merged", _rurl); return; }
-    var _drm = globalStore.deepResumeMeta.get(_rurl);
-    if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", _rurl); return; }
+    // documentId keying, NEVER url (same url != same content — about:blank frames,
+    // same page in two tabs, logged-in-vs-out at one url are DIFFERENT documents).
+    // The worker echoes the grind's own documentId; find the LIVE document by it.
+    // A gone document (resumed after a navigation) drops — it re-learns on the
+    // next visit — never url-matched to a same-url sibling. deepResumeMeta and
+    // _deepStatsByDoc are documentId-keyed too.
+    if (!documentId) { console.debug("[AST:deep] deep result with no documentId — dropping"); return; }
+    var _rdoc = state.docs.get(documentId) || null;
+    if (_rdoc == null) { console.debug("[AST:deep] no live document for %s — not merged (re-learns on next visit)", documentId); return; }
+    var _drm = globalStore.deepResumeMeta.get(documentId);
+    if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", documentId); return; }
     var _rtab = _rdoc;
-    if (result._deepStats) _deepStatsByDoc.set(_rdoc.documentId, Object.assign({}, result._deepStats, { ts: Date.now() }));
+    if (result._deepStats) _deepStatsByDoc.set(documentId, Object.assign({}, result._deepStats, { ts: Date.now() }));
     if (_drm.scriptOffsets) result.scriptOffsets = _drm.scriptOffsets;
     // Path-param name resolution (e→owner) for the deep grind is done in the
     // OFFSCREEN worker (it owns the chunk JS + has IndexedDB + outlives the SW),
@@ -5975,13 +5977,9 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
     // re-inserts the same url each grind → _chunkSeen dedup → next pass fresh-empty
     // → terminates, no loop).
     if (result.chunkUrls && result.chunkUrls.length) {
-      // Per-document buffer is keyed by documentId, not tabId — find it by the deep
-      // result's source url (= buf.url, this document's principal).
-      var _dbuf = null;
-      var _ru0 = (sourceUrl || "").split("?")[0];
-      _scriptBuffers.forEach(function (b) {
-        if (!_dbuf && b && b.url && (b.url === sourceUrl || String(b.url).split("?")[0] === _ru0)) _dbuf = b;
-      });
+      // Per-document buffer is keyed by documentId (NEVER url — same url != same
+      // content) — get it directly by the deep result's documentId.
+      var _dbuf = _scriptBuffers.get(documentId) || null;
       if (_dbuf) {
         var _seen = _dbuf._chunkSeen;
         var _hasFresh = false;
@@ -6125,10 +6123,11 @@ function handleContentMessage(msg, sender) {
     // CONTENT_HTML, so it is the live "analyze me now" signal — no webNavigation or
     // tab-activation guess about which frame is the main one. Stamp THIS document's
     // load recency on its own buffer (the review-queue picker orders by it) and
-    // focus the worker's resumable grind on this document's url (DEEP_FOCUS bumps vts).
+    // focus the worker's resumable grind on THIS document (DEEP_FOCUS bumps vts),
+    // keyed by documentId (NEVER url — same url != same content).
     _buf.lastActivatedTs = Date.now();
-    if (/^https?:/i.test(_buf.url)) {
-      try { sendToOffscreen({ type: "DEEP_FOCUS", pageUrl: String(_buf.url).split("#")[0] }); }
+    if (_buf.docKey) {
+      try { sendToOffscreen({ type: "DEEP_FOCUS", documentId: _buf.docKey }); }
       catch (e) { console.debug("[brain:CONTENT_HTML] DEEP_FOCUS dispatch failed: %s", e && e.message || e); }
     }
     _analyzeCombinedScripts(_dk);   // through the review queue: per-document in-flight guard + recency priority (focused doc first), bounded CPU

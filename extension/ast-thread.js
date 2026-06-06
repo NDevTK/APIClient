@@ -362,8 +362,19 @@ function buildPageDomSrc(scriptUrls) {
     "}catch(e){}})();";
 }
 
-async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, scriptOffsets, sourceMapScripts, scriptSources) {
+async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, deep, resumeCursor, visitTs, drivenIds, scriptOffsets, sourceMapScripts, scriptSources, documentId, origin) {
   var t0 = Date.now();
+  // Grind identity = documentId, NEVER url, NO url fallback. Same url != same
+  // content (about:blank frames, same page in two tabs, logged-in-vs-out at one
+  // url are all DIFFERENT documents); url-keying would collide their in-memory
+  // grind state + misattribute the merge. documentId is always present (the
+  // buffer's docKey; CONTENT_HTML fails closed without it).
+  var _pk = documentId;
+  // Credentialed/SSRF principal = the MessageSender ORIGIN (passed from the
+  // offscreen, where _docOrigins lives — a Web Worker can't read it), NEVER
+  // url-derived (no url fallback — "" fails closed). sourceUrl is ONLY for
+  // relative resolution + window.location, never the principal.
+  var _principalOrigin = origin || "";
   // PROPER taint TRACE from the engine's psi term (the data-flow QuickJS
   // computed), NOT the @S call-STACK. The popup's _extract*FromTaintPath helpers
   // expect data-flow hops {kind:"source"|"member"|"call-arg", desc} — that IS
@@ -1103,7 +1114,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
      scheduler can pick the highest-priority entry across ALL suspended fibers
      of ALL pages — not in arrival order. */
   var huntContext = {
-    pageKey: (sourceUrl || "").split("#")[0] || "default",
+    pageKey: _pk,
     type: deep ? "deep" : "review",      // live review preempts deep grind by default
     vts: (typeof visitTs === "number" && visitTs > 0) ? visitTs : Date.now(),
     lastReaches: 1,                       // engine sets via @Y reaches=<bit> before each yield; 1 = conservative default
@@ -1220,7 +1231,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           }
           if (!self._feScriptLoadCache) self._feScriptLoadCache = {};
           if (Object.prototype.hasOwnProperty.call(self._feScriptLoadCache, u)) return self._feScriptLoadCache[u];
-          var resp = await safeFetch(u, { pageUrl: sourceUrl || "", as: "script" });
+          var resp = await safeFetch(u, { pageUrl: sourceUrl || "", pageOrigin: _principalOrigin, as: "script" });
           var code = (resp && resp.ok && typeof resp.body === "string" && resp.body) ? resp.body : null;
           self._feScriptLoadCache[u] = code;
           if (code == null) {
@@ -2030,7 +2041,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // page-focus tier: background stays cool, the focused page is responsive.
     // Time is free for background work; the focused page's latency is what the
     // user feels. THROTTLE_CAP_MS=0 (popup slider) still forces hot everywhere.
-    var _isActive = self._activePageKey && String(sourceUrl || "").split("#")[0] === self._activePageKey;
+    var _isActive = self._activePageKey && _pk === self._activePageKey;
     if (work.length && !_isActive) await new Promise(function (r) { setTimeout(r, Math.min(THROTTLE_CAP_MS, Date.now() - _runT0)); });
   }
   // Schedule BFS done. If the deep grind follows, RECYCLE to a fresh instance
@@ -2076,7 +2087,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // grind concurrently). Index by pageKey so _learningState reports the active
   // page's own grind, not whichever updated _lastDeepStats last.
   if (!self._deepStatsByPage) self._deepStatsByPage = {};
-  self._deepStatsByPage[String(sourceUrl || "").split("#")[0]] = _deepStats;
+  self._deepStatsByPage[_pk] = _deepStats;
   if (deep && m) {
     var _dkey = _deepKey(code);
     /* Register this LIVE grind in the SAME in-flight set the resume launcher
@@ -2105,7 +2116,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // cross-session continuity, but looks identical to "the grind finished"
     // on the next session. Same for the prog-put: without it, the
     // driven-set doesn't survive a worker eviction.
-    try { await _idbPut("code", { key: _dkey, code: code, scriptUrls: scriptUrls || null, pageHtml: pageHtml || null, sourceUrl: sourceUrl || "", scriptOffsets: scriptOffsets || null, sourceMapScripts: sourceMapScripts || null }); }
+    try { await _idbPut("code", { key: _dkey, code: code, scriptUrls: scriptUrls || null, pageHtml: pageHtml || null, sourceUrl: sourceUrl || "", documentId: documentId || null, origin: origin || "", scriptOffsets: scriptOffsets || null, sourceMapScripts: sourceMapScripts || null }); }
     catch (e) {
       if (!self._whyRecords) self._whyRecords = [];
       self._whyRecords.push({ phase: "idb_put_code_throw", key: _dkey, codeKB: Math.round((code ? code.length : 0) / 1024), err: String(e && e.message || e) });
@@ -2242,7 +2253,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             _lastPartialN = methods.size;
             _lastPartialSinks = securitySinks.length;
             _lastProgTs = _nowMs;
-            try { var _pres = _buildResult(); await _resolveSmNames(_pres.fetchCallSites, scriptOffsets, sourceMapScripts, sourceUrl); postMessage({ _partial: true, sourceUrl: sourceUrl || "", response: { success: true, result: _pres } }); }
+            try { var _pres = _buildResult(); await _resolveSmNames(_pres.fetchCallSites, scriptOffsets, sourceMapScripts, sourceUrl); postMessage({ _partial: true, documentId: documentId || null, sourceUrl: sourceUrl || "", response: { success: true, result: _pres } }); }
             catch (e) {
               /* Partial-result emission failed — surface so a serialization
                  gap (e.g. an opaque marker reaching JSON.stringify, or a
@@ -2615,7 +2626,7 @@ onmessage = function (e) {
     // resumes this page's fibers preferentially over background deep
     // grinds for older pages. The URL identity is browser-verified
     // (the brain's NAV handler set it from chrome.webNavigation).
-    if (msg.sourceUrl) self._activePageKey = String(msg.sourceUrl).split("#")[0];
+    if (msg.documentId) self._activePageKey = msg.documentId;
     _reviewQ.push({ id: id, msg: msg });
     // No need for a JS-side preempt flag: a new review's fiber competes in
     // the suspended-fiber queue, and flowCmp's active-page-focus dimension
@@ -2674,14 +2685,14 @@ onmessage = function (e) {
     // lexicographic dimension (active-page-focus) preempts all other flows
     // for the currently-viewed page — JSPI yields between the focused page's
     // wasm and any others give the focused page every resume until it yields.
-    self._activePageKey = msg.pageUrl ? String(msg.pageUrl).split("#")[0] : null;
+    self._activePageKey = msg.documentId || null;   // documentId, NEVER url
     done({ success: true });
     (async function () {
       try {
         var keys = await _idbAllKeys("code");
         for (var i = 0; i < keys.length; i++) {
           var cr = await _idbGet("code", keys[i]);
-          if (cr && cr.sourceUrl && String(cr.sourceUrl).split("#")[0] === msg.pageUrl) {
+          if (cr && cr.documentId && cr.documentId === msg.documentId) {
             var pr = await _idbGet("prog", keys[i]);
             if (pr) { pr.vts = Date.now(); await _idbPut("prog", pr); }
             break;
@@ -2694,7 +2705,7 @@ onmessage = function (e) {
            reviewer sees the WRONG page being ground when they tab-switch.
            Diagnose so a quota / lock condition is visible. */
         if (!self._whyRecords) self._whyRecords = [];
-        self._whyRecords.push({ phase: "deep_focus_vts_throw", pageUrl: msg.pageUrl, err: String(e && e.message || e) });
+        self._whyRecords.push({ phase: "deep_focus_vts_throw", documentId: msg.documentId, err: String(e && e.message || e) });
       }
       _pump();   // idle → pick up the now-leading focused grind
     })();
@@ -2903,7 +2914,7 @@ function _runReview(id, msg) {
   // next pick.
   forcedAnalyze(String(msg.code || ""), msg.sourceUrl || "", msg.scriptUrls || null,
     typeof msg.pageHtml === "string" ? msg.pageHtml : null, !!msg.seedOnly, !!msg.deep,
-    undefined, undefined, undefined, msg.scriptOffsets || null, msg.sourceMapScripts || null, msg.scriptSources || null)
+    undefined, undefined, undefined, msg.scriptOffsets || null, msg.sourceMapScripts || null, msg.scriptSources || null, msg.documentId || null, msg.origin || "")
     .then(function (result) { fin({ success: true, result: result }); })
     .catch(function (err) { fin({ success: false, error: (err && err.message) || String(err), stack: err && err.stack }); });
 }
@@ -2989,8 +3000,8 @@ async function _resumeIncompleteDeep() {
      running scan make the kick idempotent (no-ops when the cap is full). */
   setTimeout(_resumeIncompleteDeep, 0);
   try {
-    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || [], codeRec.scriptOffsets || null, codeRec.sourceMapScripts || null, codeRec.scriptSources || null);
-    postMessage({ _resumed: true, sourceUrl: codeRec.sourceUrl || "", response: { success: true, result: result } });
+    var result = await forcedAnalyze(codeRec.code, codeRec.sourceUrl || "", codeRec.scriptUrls || null, codeRec.pageHtml || null, true, true, prog.cur || 0, prog.vts || prog.ts || 0, prog.driven || [], codeRec.scriptOffsets || null, codeRec.sourceMapScripts || null, codeRec.scriptSources || null, codeRec.documentId || null, codeRec.origin || "");
+    postMessage({ _resumed: true, documentId: codeRec.documentId || null, sourceUrl: codeRec.sourceUrl || "", response: { success: true, result: result } });
   } catch (e) {
     /* The grind fiber threw — prog/code IDB records remain so the next
        _resumeIncompleteDeep tick retries. Surface so a stuck fiber is
