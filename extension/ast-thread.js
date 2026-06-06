@@ -1200,6 +1200,34 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         if (!self._whyRecords) self._whyRecords = [];
         self._whyRecords.push({ phase: "wasm_abort", reason: String(msg || "(no reason)") });
       },
+      /* JSPI in-run external-script loader host half (the one-message-per-document
+         keystone): the engine's __feLoadScript binding suspends the wasm stack
+         here while THIS worker safeFetches the page's OWN subresource — the same
+         single chokepoint that loads source maps (_smGetParsed) + chunks. Principal
+         = the analysis sourceUrl. One-per-URL cached (a null is cached too, so a
+         blocked/404 subresource is not re-fetched). Returns the code string, or
+         null so the engine falls back to its @SCRIPTSRC emit. safeFetch's response
+         body holds the code (resp.body); as:"script" enforces CORB + SSRF. */
+      qjs_load_script: async function (url) {
+        try {
+          var u = String(url == null ? "" : url);
+          if (!u) return null;
+          if (!self._feScriptLoadCache) self._feScriptLoadCache = {};
+          if (Object.prototype.hasOwnProperty.call(self._feScriptLoadCache, u)) return self._feScriptLoadCache[u];
+          var resp = await safeFetch(u, { pageUrl: sourceUrl || "", as: "script" });
+          var code = (resp && resp.ok && typeof resp.body === "string" && resp.body) ? resp.body : null;
+          self._feScriptLoadCache[u] = code;
+          if (code == null) {
+            if (!self._whyRecords) self._whyRecords = [];
+            self._whyRecords.push({ phase: "qjs_load_script_blocked", url: u, status: resp ? resp.status : 0, why: resp ? resp.statusText : "no-resp" });
+          }
+          return code;
+        } catch (e) {
+          if (!self._whyRecords) self._whyRecords = [];
+          self._whyRecords.push({ phase: "qjs_load_script_throw", url: String(url), err: String(e && e.message || e) });
+          return null;
+        }
+      },
       /* JSPI cooperative-yield import: each yield is enqueued in
          self._fiberQ with this instance's huntContext (pageKey/type/vts).
          self._yieldDrain (the global scheduler) picks which entry to
