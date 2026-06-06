@@ -109,21 +109,77 @@ const state = {
   docs: new Map(),
 };
 
-// Maximum entries retained per tab in the live request log. When exceeded,
-// the oldest entries are evicted. Complex sites (LinkedIn, Booking, Figma,
-// Vercel, Discord, Spotify) saturated the previous 50-entry cap in under a
-// minute of browsing, silently dropping real traffic. 500 keeps per-tab
-// memory bounded while leaving enough headroom to capture a real session.
-// The per-service schemas still persist to globalStore independent of this
-// cap, so evicted log entries don't undo learning — only the request-log
-// replay view loses them.
-const MAX_REQUEST_LOG_ENTRIES = 500;
-function _trimRequestLog(tab) {
-  while (tab.requestLog.length > MAX_REQUEST_LOG_ENTRIES) tab.requestLog.pop();
+// GLOBAL network/PostMessage/MessageChannel traffic stream. The request log is
+// NOT per-document: a document is evicted from `state.docs` once its grind
+// completes (_maybeEvictReviewedDoc), but its captured traffic must survive that
+// eviction. So the log is ONE global array; each entry carries {tabId,
+// documentId, frameId} metadata for the popup's tab/frame filtering +
+// interaction (BUILD/SEND off a log entry). It is a session view
+// (offscreen-lifetime, NOT persisted to IDB — the per-service schemas in
+// globalStore are the durable moat). Complex sites (LinkedIn, Booking, Figma,
+// Vercel, Discord, Spotify) saturate a small cap in under a minute; 2000 keeps
+// memory bounded across ALL tabs while leaving headroom for a real multi-tab
+// session. When exceeded, the oldest entries are evicted; the per-service
+// schemas still persist to globalStore independent of this cap, so dropped log
+// entries don't undo learning — only the request-log replay view loses them.
+const MAX_REQUEST_LOG_ENTRIES = 2000;
+let globalRequestLog = [];
+// Push a captured traffic entry onto the global log, stamping the {tabId,
+// documentId, frameId} filter metadata from the SENDER (not state.docs — the
+// doc may already be evicted, and a log push must never re-create it). Newest
+// first; oldest trimmed at the cap.
+function _pushGlobalLog(entry, tabId, documentId, frameId) {
+  entry.tabId = tabId != null ? tabId : null;
+  entry.documentId = documentId || null;
+  if (entry.frameId == null) entry.frameId = frameId != null ? frameId : 0;
+  globalRequestLog.unshift(entry);
+  while (globalRequestLog.length > MAX_REQUEST_LOG_ENTRIES) globalRequestLog.pop();
 }
 
 const _deepStatsByDoc = new Map(); // documentId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
 const _wsConnState = new Map(); // documentId → Map<wsId, { url, readyState }>
+
+// -- Review-completion eviction ---------------------------------------------
+// A document whose deep grind has COMPLETED is dropped from in-memory
+// state.docs to keep memory bounded across a long many-site session. Its
+// learnings already live in globalStore (the moat) and globalRequestLog
+// (traffic), and a completed grind deletes its own feDeepDB resume record.
+// Navigate-away NEVER evicts (only grind completion does); a browser reload
+// drops state.docs but the background grind resumes from feDeepDB + globalStore
+// reloads from IDB. The sweep is debounced so it runs after a merge plus any
+// chunk re-arm has settled.
+var _evictSweepTimer = null;
+function _scheduleEvictSweep() {
+  if (_evictSweepTimer) return;
+  _evictSweepTimer = setTimeout(function () { _evictSweepTimer = null; _evictReviewedDocs(); }, 1000);
+}
+function _evictReviewedDocs() {
+  var gone = [];
+  state.docs.forEach(function (doc, documentId) {
+    var ds = _deepStatsByDoc.get(documentId);
+    // Terminal: a clean finish (stop "done" + rem 0) OR a stall (stop
+    // "no-progress"/"recycle-noprogress"; the loop EXITED, rem may be >0). A
+    // mid-grind partial carries stop "done" with rem>0; "n/a" is pre-grind.
+    var done = ds && ((ds.stop === "done" && ds.rem === 0) || ds.stop === "no-progress" || ds.stop === "recycle-noprogress");
+    if (!done) return;
+    var buf = _scriptBuffers.get(documentId);
+    if (buf && buf._chunkGrindDone === false) return;        // a chunk re-grind is pending
+    gone.push(documentId);
+  });
+  for (var i = 0; i < gone.length; i++) _evictReviewedDoc(gone[i]);
+  if (gone.length) console.debug("[evict] dropped %d reviewed document(s) from state.docs", gone.length);
+}
+function _evictReviewedDoc(documentId) {
+  // Drop the per-document analysis state + its BIG transient buffer (the combined
+  // source) + transient side-maps. NEVER touch globalRequestLog (the log is
+  // global) or _docOrigins (the credentialed-read principal stays; late same-doc
+  // traffic is routed to globalStore-only by _docForLearning, never resurrecting).
+  state.docs.delete(documentId);
+  _deepStatsByDoc.delete(documentId);
+  _scriptBuffers.delete(documentId);
+  _wsConnState.delete(documentId);
+  _contentPings.delete(documentId);
+}
 
 // A document's SECURITY ORIGIN for same-origin checks — the BROWSER-provided
 // MessageSender.origin of the REQUESTING FRAME (authoritative), NEVER parsed from
@@ -228,7 +284,7 @@ const KEY_PATTERNS = [
 
 function extractKeysFromText(documentId, text, sourceUrl, sourceContext) {
   if (!text) return;
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   const url = sourceUrl ? new URL(sourceUrl) : null;
   const service = url ? extractInterfaceName(url) : "unknown";
 
@@ -334,7 +390,6 @@ function getDoc(documentId) {
       discoveryDocs: new Map(), // service → discovery JSON or status
       probeResults: new Map(), // endpointKey → probe result
       scopes: new Map(), // service → string[] of required scopes
-      requestLog: [], // Array of { id, url, method, ..., tabId, frameId, documentId }
       _valueIndex: createValueIndex(), // Chain engine: response value → source tracking
     });
   }
@@ -377,21 +432,28 @@ function _emptyDocView() {
   return {
     documentId: null, tabId: null, frameId: 0, origin: "", url: "", title: "", closed: false,
     apiKeys: new Map(), endpoints: new Map(), authContext: null, discoveryDocs: new Map(),
-    probeResults: new Map(), scopes: new Map(), requestLog: [], _valueIndex: createValueIndex(),
+    probeResults: new Map(), scopes: new Map(), _valueIndex: createValueIndex(),
   };
 }
 
-// Find a channel's request-log entry (WS/PM/MC) across all of a tab's documents.
-// The channel lives on whichever document opened it; the popup's message console
-// routes by tabId, so we scan the tab's docs. documentId is the storage key;
-// tabId is the UI/routing filter.
+// The DocData a network-capture learner writes into. A live document -> its
+// stored DocData (per-document view + global merge). An evicted (grind-
+// complete) or not-yet-created document -> a TRANSIENT view that merges to
+// globalStore ONLY, so post-eviction traffic still enriches the cumulative moat
+// WITHOUT resurrecting a null-identity doc in state.docs (mirrors the gone-doc
+// deep merge). NEVER use getDoc on the passive-traffic path: it would re-create
+// the very doc eviction just removed.
+function _docForLearning(documentId) {
+  return (documentId && state.docs.get(documentId)) || _emptyDocView();
+}
+
+// Find a captured channel entry (WS/PM/MC) in the GLOBAL log. The popup
+// message console routes by tabId, so scope the match to that tab; channelId
+// is per-document (page-generated), hence not globally unique on its own.
 function _findLogEntry(tabId, channelId, method) {
-  var docs = docsForTab(tabId);
-  for (var i = 0; i < docs.length; i++) {
-    var e = docs[i].requestLog.find(function (r) { return r.channelId === channelId && r.method === method; });
-    if (e) return e;
-  }
-  return null;
+  return globalRequestLog.find(function (r) {
+    return r.channelId === channelId && r.method === method && r.tabId === tabId;
+  }) || null;
 }
 
 // The live WS connection state for a channel, across a tab's documents
@@ -831,7 +893,7 @@ _globalStoreReady.then(async function () {
 /* Session-storage persistence layer removed. Previously the brain mirrored
    request logs to chrome.storage.session so they survived MV3 SW eviction
    (when the brain lived in the SW). The brain now runs in the offscreen
-   document — stable lifetime, no eviction — so `state.docs[documentId].requestLog`
+   document — stable lifetime, no eviction — so the global `requestLog`
    is the single authoritative store. scheduleSessionSave /
    saveTabSessionLog / saveSessionIndex / loadSessionLogs / serializeLogEntry
    and all call sites have been deleted. */
@@ -1732,7 +1794,7 @@ function _matchTemplatedMethodAcrossHost(tab, hostname, httpMethod, pathname) {
 }
 
 function learnFromRequest(documentId, interfaceName, entry, headers) {
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   const url = new URL(entry.url);
   const method = entry.method;
 
@@ -2437,7 +2499,7 @@ function findMethodInDoc(doc, methodId) {
 function learnFromResponse(documentId, interfaceName, entry) {
   if (!entry.responseBody) return;
 
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   const url = new URL(entry.url);
   const { methodName } = calculateMethodMetadata(url, interfaceName);
   // Check tab-level first, then fall back to globalStore (survives SW restarts)
@@ -3412,7 +3474,7 @@ async function fetchDiscoveryForService(
   apiKeys,
   seedUrl,
 ) {
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing (makePageFetchFn/notifyPopup) — derived from the doc
 
   const fetchFn = makePageFetchFn(tabId);
@@ -3540,7 +3602,7 @@ async function performProbeAndPatch(documentId, service, targetUrl, apiKey) {
   if (_inflight.has(probeKey)) return;
   _inflight.add(probeKey);
 
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing — derived from the doc
 
   if (typeof probeApiEndpoint === "undefined") {
@@ -3816,7 +3878,7 @@ function convertProbeFieldsToSchema(rootFieldsObj, schemas, rootPrefix = "") {
 // ─── req2proto Fallback Probing ──────────────────────────────────────────────
 
 async function probeEndpoint(documentId, endpointKey) {
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing — derived from the doc
   const ep = tab.endpoints.get(endpointKey);
   if (!ep || ep.method !== "POST") return null;
@@ -3865,7 +3927,6 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   const isWs = msg.method === "WS_OPEN" || msg.method === "WS_CLOSE" ||
     msg.method === "WS_SEND" || msg.method === "WS_RECV";
   if (isWs) {
-    const tab = getDoc(documentId);
     if (!_wsConnState.has(documentId)) _wsConnState.set(documentId, new Map());
     const conns = _wsConnState.get(documentId);
 
@@ -3882,8 +3943,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         wsOpen: true,
         messages: [],
       };
-      tab.requestLog.unshift(entry);
-      _trimRequestLog(tab);
+      _pushGlobalLog(entry, tabId, documentId, frameId);
       conns.set(channelId, { url: msg.url, readyState: 1, entryId: entry.id });
       notifyPopup(tabId);
       return;
@@ -3893,7 +3953,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       const conn = conns.get(channelId);
       if (conn) conn.readyState = 3;
       // Mark the log entry as closed
-      const entry = tab.requestLog.find((r) => r.channelId === channelId && r.method === "WEBSOCKET");
+      const entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "WEBSOCKET" && r.documentId === documentId);
       if (entry) {
         entry.wsOpen = false;
         entry.messages.push({
@@ -3911,7 +3971,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     }
 
     // WS_SEND or WS_RECV — append message to existing connection entry
-    let entry = tab.requestLog.find((r) => r.channelId === channelId && r.method === "WEBSOCKET");
+    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "WEBSOCKET" && r.documentId === documentId);
     if (!entry) {
       // WS was opened before extension injected, or after SW restart — create entry now
       entry = {
@@ -3925,8 +3985,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         wsOpen: true,
         messages: [],
       };
-      tab.requestLog.unshift(entry);
-      _trimRequestLog(tab);
+      _pushGlobalLog(entry, tabId, documentId, frameId);
       conns.set(channelId, { url: msg.url, readyState: 1, entryId: entry.id });
     }
 
@@ -3965,8 +4024,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   // postMessage: one log entry per source origin, messages[] array
   // Only PM_RECV — can't wrap window.postMessage (see intercept.js comments)
   if (msg.method === "PM_RECV") {
-    const tab = getDoc(documentId);
-    let entry = tab.requestLog.find((r) => r.channelId === channelId && r.method === "POSTMESSAGE");
+    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "POSTMESSAGE" && r.documentId === documentId);
     if (!entry) {
       entry = {
         id: "pm_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
@@ -3980,8 +4038,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         targetOrigin: msg.targetOrigin || "",
         messages: [],
       };
-      tab.requestLog.unshift(entry);
-      _trimRequestLog(tab);
+      _pushGlobalLog(entry, tabId, documentId, frameId);
     }
 
     entry.messages.push({
@@ -4004,8 +4061,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
 
   // MessageChannel: MC_OPEN creates entry, MC_RECV appends messages
   if (msg.method === "MC_OPEN") {
-    const tab = getDoc(documentId);
-    let entry = tab.requestLog.find((r) => r.channelId === channelId && r.method === "MSGCHANNEL");
+    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "MSGCHANNEL" && r.documentId === documentId);
     if (!entry) {
       entry = {
         id: "mc_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
@@ -4019,16 +4075,14 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         targetOrigin: msg.targetOrigin || "",
         messages: [],
       };
-      tab.requestLog.unshift(entry);
-      _trimRequestLog(tab);
+      _pushGlobalLog(entry, tabId, documentId, frameId);
     }
     notifyPopup(tabId);
     return;
   }
 
   if (msg.method === "MC_RECV") {
-    const tab = getDoc(documentId);
-    let entry = tab.requestLog.find((r) => r.channelId === channelId && r.method === "MSGCHANNEL");
+    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "MSGCHANNEL" && r.documentId === documentId);
     if (!entry) {
       // Port message arrived before MC_OPEN (race) — create entry
       entry = {
@@ -4043,8 +4097,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         targetOrigin: "",
         messages: [],
       };
-      tab.requestLog.unshift(entry);
-      _trimRequestLog(tab);
+      _pushGlobalLog(entry, tabId, documentId, frameId);
     }
     entry.messages.push({
       dir: "recv",
@@ -4066,7 +4119,6 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   // ─── SSE: streaming events, no request data ─────────────────────────────
   if (msg.method === "SSE") {
     if (!msg.body) return;
-    const tab = getDoc(documentId);
     const entry = {
       id: "alt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
       url: msg.url,
@@ -4079,8 +4131,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       mimeType: msg.contentType || "",
       responseHeaders: msg.responseHeaders || {},
     };
-    tab.requestLog.unshift(entry);
-    _trimRequestLog(tab);
+    _pushGlobalLog(entry, tabId, documentId, frameId);
     if (msg.body) {
       extractKeysFromText(documentId, msg.body, msg.url, "response_body");
     }
@@ -4115,7 +4166,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   // Skip internal probe requests
   if (url.searchParams.has("_probe")) return;
 
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   let service = extractInterfaceName(url);
 
   // Build request header map from intercept.js capture
@@ -4419,8 +4470,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   }
 
   // Add to request log
-  tab.requestLog.unshift(entry);
-  _trimRequestLog(tab);
+  _pushGlobalLog(entry, tabId, documentId, frameId);
 
   // Learn from response — skip for static assets.
   if (entry.responseBody && !_isAsset) {
@@ -5549,7 +5599,7 @@ function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
 
 // ─── AST Bundle Analysis ─────────────────────────────────────────────────────
 
-function mergeASTResultsIntoVDD(tab, results, tabId) {
+function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
   for (var r = 0; r < results.length; r++) {
     var analysis = results[r];
     var sourceHost = "";
@@ -5846,7 +5896,15 @@ function mergeASTResultsIntoVDD(tab, results, tabId) {
       console.debug("[AST:merge] Security findings for %s: %d sinks, %d dangerous patterns",
         analysis.sourceUrl, secSinks.length, dangerousPats.length);
     }
+    // Record this document deep-grind stats so the eviction sweep can tell when
+    // analysis is COMPLETE (rem 0 + terminal stop). Covers main-response,
+    // _resumed, and cache-hit merges. Round-1/seed results carry rem -1 / stop
+    // "n/a" and never mark a doc reviewed.
+    if (analysis && analysis._deepStats && tab && tab.documentId) {
+      _deepStatsByDoc.set(tab.documentId, Object.assign({}, analysis._deepStats, { ts: Date.now() }));
+    }
   }
+  if (!isPartial) _scheduleEvictSweep();
 }
 
 // ─── Message Handling ────────────────────────────────────────────────────────
@@ -5871,10 +5929,9 @@ function _formFieldToParamType(field) {
    discoveryDoc, with per-field literal/opaque provenance preserved.
    No separate content-script DOM walk. */
 
-function _handleFormSubmit(documentId, msg) {
+function _handleFormSubmit(documentId, msg, tabId, frameId) {
   if (!msg.url || !msg.fields) return;
-  var tab = getDoc(documentId);
-  var tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing (notifyPopup) — derived from the doc
+  var tab = _docForLearning(documentId);
   var method = msg.method || "GET";
 
   var url;
@@ -5909,7 +5966,7 @@ function _handleFormSubmit(documentId, msg) {
     _source: "form_submit",
   };
 
-  tab.requestLog.push(entry);
+  _pushGlobalLog(entry, tabId, documentId, frameId);
 
   // Learn from the form submission
   learnFromRequest(documentId, service, entry, entry.requestHeaders);
@@ -5951,7 +6008,6 @@ function _mergeDeepResult(documentId, sourceUrl, result, doNames) {
     var _drm = globalStore.deepResumeMeta.get(documentId);
     if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", documentId); return; }
     var _rtab = _rdoc || _emptyDocView();   // live → doc + global; gone → globalStore only (transient, never stored)
-    if (result._deepStats && _rdoc) _deepStatsByDoc.set(documentId, Object.assign({}, result._deepStats, { ts: Date.now() }));
     if (_drm.scriptOffsets) result.scriptOffsets = _drm.scriptOffsets;
     // Path-param name resolution (e→owner) for the deep grind is done in the
     // OFFSCREEN worker (it owns the chunk JS + has IndexedDB + outlives the SW),
@@ -5959,7 +6015,7 @@ function _mergeDeepResult(documentId, sourceUrl, result, doNames) {
     // `_sourceMapName` to the call-site params BEFORE sending this result. The SW
     // must NOT fetch maps here — it is evicted mid-grind, so any SW-side map fetch
     // / cache is unreliable. The SW only merges what the worker resolved.
-    mergeASTResultsIntoVDD(_rtab, [result]);
+    mergeASTResultsIntoVDD(_rtab, [result], null, !doNames);
     // Surface the deep grind's resolverErrors too — the orphan drive is where
     // most reached-but-opaque host calls (fully-opaque URLs from cold-orphan
     // wrappers) come from, and they arrive on the partial/resumed result here,
@@ -6048,12 +6104,22 @@ function handleContentMessage(msg, sender) {
   // principal (via _senderOrigin, which also populates _docOrigins) — NEVER
   // url-derived. `url` is the document's OWN url (display + relative TARGET base),
   // NOT the tab's top-page url. tabId/frameId are routing/UI fields only.
-  const doc = getDoc(documentId);
-  doc.tabId = tabId;
-  doc.frameId = sender.frameId || 0;
-  if (sender.url) doc.url = sender.url;
-  doc.origin = _senderOrigin(sender);
-  if (sender.tab.title) doc.title = sender.tab.title;
+  // Always track the requesting frame security principal (populates _docOrigins
+  // via _senderOrigin; a mixed-origin buffer fails closed). CONTENT_HTML is the
+  // analysis trigger and (re)creates this document DocData; every other message
+  // is passive traffic that must NOT create or resurrect a doc -- a doc evicted
+  // on grind-completion stays evicted (its log is global + sender-tagged, and the
+  // learners route to globalStore-only via _docForLearning). getDoc (create) ONLY
+  // for CONTENT_HTML; otherwise refresh identity if the doc still lives.
+  const _origin = _senderOrigin(sender);
+  const doc = (msg.type === "CONTENT_HTML") ? getDoc(documentId) : state.docs.get(documentId);
+  if (doc) {
+    doc.tabId = tabId;
+    doc.frameId = sender.frameId || 0;
+    if (sender.url) doc.url = sender.url;
+    doc.origin = _origin;
+    if (sender.tab.title) doc.title = sender.tab.title;
+  }
 
   // RESPONSE_BODY comes from intercept.js via content.js relay
   if (msg.type === "RESPONSE_BODY") {
@@ -6088,7 +6154,7 @@ function handleContentMessage(msg, sender) {
   // via __feLoadScript, dynamic via the createElement host edge).
 
   if (msg.type === "CONTENT_FORM_SUBMIT") {
-    _handleFormSubmit(documentId, msg);
+    _handleFormSubmit(documentId, msg, tabId, sender.frameId);
     return;
   }
 
@@ -6366,10 +6432,10 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // — the offscreen document's stable lifetime makes the mirror moot).
       // Clearing the in-memory array IS the operation.
       if (msg.clearAll) {
-        for (const d of state.docs.values()) d.requestLog = [];
+        globalRequestLog = [];
       } else {
         if (tabId == null) return;
-        for (const d of docsForTab(tabId)) d.requestLog = [];
+        globalRequestLog = globalRequestLog.filter(function (r) { return r.tabId !== tabId; });
       }
       sendResponse({ ok: true });
       return;
@@ -6381,15 +6447,24 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // Roll up the documentId-keyed docs into one row per tab (the network tab
       // filters by tab purely in the UI). A tab is "closed" only once ALL its
       // documents are; title/url come from the main-frame document.
+      // Count from the GLOBAL log (grouped by tabId); enrich title/url/closed
+      // from the tab's live documents (an evicted doc leaves its log entries
+      // but no identity, so that tab degrades to "Tab N").
       const _byTab = new Map();
-      for (const d of state.docs.values()) {
-        if (d.tabId == null || d.requestLog.length === 0) continue;
-        let row = _byTab.get(d.tabId);
-        if (!row) { row = { tabId: d.tabId, title: "", url: "", count: 0, closed: true }; _byTab.set(d.tabId, row); }
-        row.count += d.requestLog.length;
-        row.closed = row.closed && !!d.closed;
-        if (d.frameId === 0 || !row.url) { row.url = d.url || row.url; row.title = d.title || row.title; }
+      for (const r of globalRequestLog) {
+        if (r.tabId == null) continue;
+        let row = _byTab.get(r.tabId);
+        if (!row) { row = { tabId: r.tabId, title: "", url: "", count: 0, closed: false }; _byTab.set(r.tabId, row); }
+        row.count++;
       }
+      _byTab.forEach((row, tid) => {
+        const docs = docsForTab(tid);
+        if (docs.length) {
+          const main = docs.find((dd) => dd.frameId === 0) || docs[0];
+          row.url = main.url || row.url; row.title = main.title || row.title;
+          row.closed = docs.every((dd) => !!dd.closed);
+        }
+      });
       const tabs = [];
       _byTab.forEach((r) => tabs.push({ tabId: r.tabId, title: r.title || ("Tab " + r.tabId), url: r.url, count: r.count, closed: r.closed }));
       sendResponse(tabs);
@@ -6401,16 +6476,23 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       const filter = msg.filter; // "all" | tabId (number)
       // Aggregate per tab across its documents; each entry keeps its own
       // documentId/frameId for the popup's per-frame sub-views.
-      for (const d of state.docs.values()) {
-        if (d.tabId == null || d.requestLog.length === 0) continue;
-        if (filter !== "all" && filter !== d.tabId) continue;
-        let r = result[d.tabId];
-        if (!r) { r = { meta: { title: "", url: "", closed: true }, requestLog: [] }; result[d.tabId] = r; }
-        r.requestLog = r.requestLog.concat(d.requestLog);
-        r.meta.closed = r.meta.closed && !!d.closed;
-        if (d.frameId === 0 || !r.meta.url) { r.meta.url = d.url || r.meta.url; r.meta.title = d.title || r.meta.title; }
+      for (const ent of globalRequestLog) {
+        if (ent.tabId == null) continue;
+        if (filter !== "all" && filter !== ent.tabId) continue;
+        let r = result[ent.tabId];
+        if (!r) { r = { meta: { title: "", url: "", closed: false }, requestLog: [] }; result[ent.tabId] = r; }
+        r.requestLog.push(ent);
       }
-      for (const tid in result) if (!result[tid].meta.title) result[tid].meta.title = "Tab " + tid;
+      for (const tid in result) {
+        const docs = docsForTab(Number(tid));
+        if (docs.length) {
+          const main = docs.find((dd) => dd.frameId === 0) || docs[0];
+          result[tid].meta.url = main.url || result[tid].meta.url;
+          result[tid].meta.title = main.title || result[tid].meta.title;
+          result[tid].meta.closed = docs.every((dd) => !!dd.closed);
+        }
+        if (!result[tid].meta.title) result[tid].meta.title = "Tab " + tid;
+      }
       sendResponse(result);
       return;
     }
@@ -7065,7 +7147,7 @@ async function buildExportRequest(documentId, msg) {
   }
 
   // API key: user override → endpoint → auto
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   const ep = msg.endpointKey ? tab.endpoints.get(msg.endpointKey) : null;
   if (msg.apiKeyOverride) {
     if (!msg.apiKeyOverride.disabled && msg.apiKeyOverride.key) {
@@ -7337,7 +7419,7 @@ function _onTabRemoved(tabId) {
  * Returns a unified schema the popup can use to build a form.
  */
 function resolveEndpointSchema(documentId, endpointKey, service, methodId) {
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   const ep = endpointKey
     ? tab.endpoints.get(endpointKey) || globalStore.endpoints.get(endpointKey)
     : null;
@@ -7960,7 +8042,7 @@ async function executeSendRequest(documentId, msg) {
   }
 
   // API key: user override → endpoint → service keys → discovery doc key
-  const tab = getDoc(documentId);
+  const tab = _docForLearning(documentId);
   const tabId = (tab && tab.tabId != null) ? tab.tabId : msg.tabId; // Chrome routing for pageContextFetch — the doc's tab; fall back to msg.tabId for cross-tab replay
   const epKey = msg.endpointKey;
   const ep = epKey ? tab.endpoints.get(epKey) : null;
@@ -8506,7 +8588,7 @@ function serializeTabData(tab) {
     scopes: mergedScopes,
     discoveryDocs: mergedDiscovery,
     probeResults: mergedProbe,
-    requestLog: tab.requestLog || [],
+    requestLog: tab.documentId ? globalRequestLog.filter(function (r) { return r.documentId === tab.documentId; }) : [],
     securityFindings: mergedSecurityFindings(tab),
     resolverErrors: tab._resolverErrors || [],
   };
