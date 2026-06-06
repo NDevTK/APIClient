@@ -326,6 +326,22 @@ function isOpaqueBaseUrl(s) {
   var m2 = /^\/\/([^\/?#]*)/.exec(t);
   if (m2 && m2[1].indexOf("{") >= 0) return true;
   if (m2 && /^(undefined|null)+$/.test(m2[1])) return true;
+  // A PATH segment coerced from JS undefined/null — `fetch("/"+id)` / `new
+  // URL(id, base)` with id === undefined yields ".../undefined" (or
+  // ".../null/..."). Like the undefined AUTHORITY above, the path-building value
+  // "wasn't computed", so the target is UNRESOLVED (a resolverError driver gap),
+  // not a real endpoint at the fabricated literal path. Same JS-coercion artifact
+  // class as the "[object Object]" opaque marker. TIGHT: only a WHOLE segment
+  // exactly "undefined"/"null" (a coercion no real value produces) — never
+  // "undefined" as a substring ("/undefined-behavior"), never in the query
+  // ("?q=undefined" is a real search term, not a target hole). Observed live:
+  // Sentry with a missing config fetched http://<page-origin>/undefined.
+  var pp = t;
+  var sm = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\/?#]*/.exec(t);
+  if (sm) pp = t.slice(sm[0].length);
+  else { var pm = /^\/\/[^\/?#]*/.exec(t); if (pm) pp = t.slice(pm[0].length); }
+  var hi = pp.search(/[?#]/); if (hi >= 0) pp = pp.slice(0, hi);
+  if (/(^|\/)(undefined|null)(\/|$)/.test(pp)) return true;
   return false;
 }
 
