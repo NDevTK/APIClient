@@ -183,7 +183,28 @@ function _onNav(details) {
 }
 
 // Cross-script AST analysis: buffer scripts per tab, debounce, concatenate + analyze
-const _scriptBuffers = new Map(); // tabId → { scripts: [{url, code}], timer: null }
+// Per-DOCUMENT analysis state, keyed by documentId (sender.documentId, fallback
+// tabId:frameId) — NOT tabId. A tab holds many documents/frames (iframes,
+// navigations), each its OWN origin; keying by tab merged them into one buffer
+// and collapsed the credentialed-read principal. Each entry: { tabId, docKey,
+// origin, url, pageHtml, scripts:[], chunk-state }. One CONTENT_HTML per document
+// creates/refreshes its entry; the engine sources the scripts (inline via the SSR
+// phase, externals via __feLoadScript).
+const _scriptBuffers = new Map(); // documentId → per-document analysis state
+
+// The per-document credentialed-read principal for an analysis whose principal URL
+// is `url`: the origin of the document buffer whose url matches. Used by the
+// reply-seed (which has the principal url in scope, but not always the buffer).
+// No match → "null" (fail-closed: the credentialed read never fires).
+function _docOriginForPrincipal(url) {
+  if (!url) return "null";
+  var u0 = String(url).split("?")[0];
+  var found = "null";
+  _scriptBuffers.forEach(function (b) {
+    if (b && b.url && b.origin && (b.url === url || String(b.url).split("?")[0] === u0)) found = b.origin;
+  });
+  return found;
+}
 
 // Global persistent store — survives tab closes and SW restarts
 const globalStore = {
@@ -5030,6 +5051,11 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // entry simply does not match — no manual version bumps needed.
   var scriptHashes = [];
   try {
+    // The document IDENTITY (its HTML) is part of the cache key: the scripts are
+    // engine-sourced, so round 1's buf.scripts is empty — without the pageHtml hash
+    // every document would share the same (empty) key and collide. buf.url
+    // disambiguates two documents with identical HTML at different origins.
+    scriptHashes.push("doc:" + (buf.url || "") + ":" + (await _hashScriptSHA256(buf.pageHtml || "")));
     for (var hi = 0; hi < scripts.length; hi++) {
       scriptHashes.push(await _hashScriptSHA256(scripts[hi].code));
     }
@@ -5106,10 +5132,12 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // scripts[0].url) — else a hostile page could claim a localhost origin to
   // defeat the SSRF guard. No untrusted fallback: unknown origin leaves tabUrl ""
   // -> safeFetch's safe default (block private) + a placeholder window.location.
+  // Per-DOCUMENT principal: buf.url is THIS document's own browser-provided url
+  // (set from sender on CONTENT_HTML), not the tab's — a sub-frame analyses as its
+  // own origin, never the embedder's.
   var tabUrl = "";
-  var meta = _tabMeta.get(tabId);
-  if (meta && meta.url) tabUrl = meta.url;
-  else if (buf.pageUrl) tabUrl = buf.pageUrl;
+  if (buf.url) tabUrl = buf.url;
+  else { var meta = _tabMeta.get(tabId); if (meta && meta.url) tabUrl = meta.url; else if (buf.pageUrl) tabUrl = buf.pageUrl; }
 
   // Persist the resume metadata (combined→chunk line map + chunk source-map
   // URLs) BEFORE the long deep grind, not after. The resume path is exactly the
@@ -5313,7 +5341,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
               // Opaque / mixed / untracked ("null:<uuid>" or "null") matches no real
               // target, so the credentialed read never fires; pageOrigin also flows to
               // safeFetch's own SOP (defense in depth).
-              var _rcOrigin = (_scriptBuffers.get(tabId) || {}).frameOrigin || "null";
+              var _rcOrigin = _docOriginForPrincipal(_rcPrincipal);
               var _sameOrig = false; try { var _to = new URL(_absSrc).origin; _sameOrig = _rcOrigin.indexOf("://") > 0 && _to === _rcOrigin; } catch (e) {}
               var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, pageOrigin: _rcOrigin, method: "GET", credentialed: _sameOrig });
               _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
@@ -5677,7 +5705,7 @@ async function analyzeScript(tabId, scriptUrl, code) {
               // Opaque / mixed / untracked ("null:<uuid>" or "null") matches no real
               // target, so the credentialed read never fires; pageOrigin also flows to
               // safeFetch's own SOP (defense in depth).
-              var _rcOrigin = (_scriptBuffers.get(tabId) || {}).frameOrigin || "null";
+              var _rcOrigin = _docOriginForPrincipal(_rcPrincipal);
               var _sameOrig = false; try { var _to = new URL(_absSrc).origin; _sameOrig = _rcOrigin.indexOf("://") > 0 && _to === _rcOrigin; } catch (e) {}
               var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, pageOrigin: _rcOrigin, method: "GET", credentialed: _sameOrig });
               _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
@@ -6260,7 +6288,13 @@ function _mergeDeepResult(sourceUrl, result, doNames) {
     // re-inserts the same url each grind → _chunkSeen dedup → next pass fresh-empty
     // → terminates, no loop).
     if (result.chunkUrls && result.chunkUrls.length) {
-      var _dbuf = _scriptBuffers.get(_rtid);
+      // Per-document buffer is keyed by documentId, not tabId — find it by the deep
+      // result's source url (= buf.url, this document's principal).
+      var _dbuf = null;
+      var _ru0 = (sourceUrl || "").split("?")[0];
+      _scriptBuffers.forEach(function (b) {
+        if (!_dbuf && b && b.url && (b.url === sourceUrl || String(b.url).split("?")[0] === _ru0)) _dbuf = b;
+      });
       if (_dbuf) {
         var _seen = _dbuf._chunkSeen;
         var _hasFresh = false;
@@ -6343,64 +6377,10 @@ function handleContentMessage(msg, sender) {
     return;
   }
 
-  // SCRIPT_SOURCE comes from content.js script extraction — buffer for cross-script analysis
-  if (msg.type === "SCRIPT_SOURCE") {
-    var pageUrl = (sender.tab && sender.tab.url) || "";
-    if (msg.code && typeof msg.code === "string") {
-      // Inline JS only — data islands are handled by Lexbor parsing
-      // CONTENT_HTML, not shipped as separate SCRIPT_SOURCE messages.
-      _bufferScript(tabId, msg.url || "", msg.code, pageUrl, msg.order);
-    } else if (msg.url && !msg.code) {
-      // External script — content script sent URL only (avoids CORS issues)
-      // Background has host_permissions: <all_urls>, so fetch is unrestricted
-      _fetchAndBufferScript(tabId, msg.url, pageUrl, msg.order);
-    }
-    // Credentialed-read principal for this tab's combined bundle = the REQUESTING
-    // document's origin (per-frame, documentId-keyed, opaque-unique via
-    // _senderOrigin). The per-tab buffer can mix frames: if every contributor shares
-    // ONE real origin that is the principal, but a SECOND distinct origin collapses
-    // it to a unique opaque token -> never same-origin -> the credentialed reply-seed
-    // fails closed, so a sandboxed/cross-origin sub-frame can't read the embedder's
-    // authenticated data through the shared analysis. Consumed at reply-seed time.
-    var _sb = _scriptBuffers.get(tabId);
-    if (_sb) {
-      var _do = _senderOrigin(sender);
-      if (_sb.frameOrigin === undefined || _sb.frameOrigin === null) _sb.frameOrigin = _do;
-      else if (_sb.frameOrigin !== _do) _sb.frameOrigin = "null:mixed-" + crypto.randomUUID();
-    }
-    return;
-  }
-
-  // SCRIPTS_LOADED fires from content.js on the page's `load` event — all
-  // initial script subresources have finished loading. Mark the buffer
-  // as ready; analysis fires when pending=0 (all background fetches have
-  // completed). Without this, the 1500ms idle-debounce never fires on
-  // busy pages where new scripts (analytics, ads, dynamic imports) keep
-  // arriving every <1500ms forever, leaving 0 of N scripts analysed.
-  if (msg.type === "SCRIPTS_LOADED") {
-    var slBuf = _scriptBuffers.get(tabId);
-    var slPageUrl = (sender.tab && sender.tab.url) || "";
-    if (slBuf) {
-      // Navigation detector: if the page URL of THIS load event differs
-      // from the buffer's recorded pageUrl, the previous page's analysis
-      // has fired (or never will) and this load is for a NEW page. Reset
-      // so the new page starts a clean batch.
-      if (slPageUrl && slBuf.pageUrl && slPageUrl !== slBuf.pageUrl) {
-        if (slBuf.timer) { clearTimeout(slBuf.timer); slBuf.timer = null; }
-        slBuf.scripts = [];
-        slBuf.pending = 0;
-        slBuf.loadFired = false;
-        slBuf.pageUrl = slPageUrl;
-        slBuf.frameOrigin = null;   // re-derive the credentialed-read principal for the new document
-      }
-      slBuf.loadFired = true;
-      if (slBuf.pending === 0 && slBuf.scripts.length > 0) {
-        if (slBuf.timer) { clearTimeout(slBuf.timer); slBuf.timer = null; }
-        _analyzeCombinedScripts(tabId);
-      }
-    }
-    return;
-  }
+  // SCRIPT_SOURCE / SCRIPTS_LOADED removed: content.js no longer ships per-script
+  // bodies or a load signal. One CONTENT_HTML per document drives the analysis; the
+  // engine sources every script from that HTML (inline via the SSR phase, external
+  // via __feLoadScript, dynamic via the createElement host edge).
 
   if (msg.type === "CONTENT_FORM_SUBMIT") {
     _handleFormSubmit(tabId, msg);
@@ -6417,13 +6397,33 @@ function handleContentMessage(msg, sender) {
   }
 
   if (msg.type === "CONTENT_HTML") {
-    // Raw server-rendered HTML — stash per-tab so AST_ANALYZE feeds it
-    // into the worker, where Lexbor parses it spec-correctly into the
-    // analyser's document. The bundle's connectedCallback / React
-    // effects then have a real DOM to attach to; @H records come
-    // through observed fetch/XHR, not from regex-scanning the text.
+    // ONE MESSAGE PER DOCUMENT. The engine (Lexbor) parses this HTML and runs EVERY
+    // script in document order in one realm — inline via the SSR phase, external
+    // <script src> via __feLoadScript (the safeFetch chokepoint). The analysis
+    // target is the realm the grind drives; content.js ships nothing but this HTML.
+    // Keyed by documentId, NOT tabId: a tab holds many documents/frames (iframes,
+    // navigations), each its OWN origin — keying by tab merges them and collapses
+    // the credentialed-read principal. The principal for this document's analysis
+    // (safeFetch SSRF origin + window.location + the credentialed reply-seed) is
+    // THIS document's own origin/url, from the browser-provided sender.
     tab._pageHtml = String(msg.html || "");
+    var _dk = sender.documentId || (tabId + ":" + (sender.frameId || 0));
+    var _buf = _scriptBuffers.get(_dk);
+    if (!_buf) { _buf = {}; _scriptBuffers.set(_dk, _buf); }
+    _buf.tabId = tabId;
+    _buf.docKey = _dk;
+    _buf.origin = _senderOrigin(sender);                              // credentialed-read principal (per-document)
+    _buf.url = sender.url || (sender.tab && sender.tab.url) || "";    // SSRF origin + window.location
+    _buf.pageHtml = tab._pageHtml;
+    _buf.scripts = [];   // engine-sourced: Lexbor parses the HTML, the SSR phase runs inline + __feLoadScript runs externals — one system
+    _buf.pending = 0;
+    _buf.loadFired = true;
+    _buf._chunkSeen = null; _buf._chunkFetchStarted = false;
+    _buf._chunkGrindDone = false; _buf._chunkRoundDone = false;
+    if (_buf.timer) clearTimeout(_buf.timer);
+    _buf.timer = setTimeout(function () { _buf.timer = null; _analyzeCombinedScriptsInner(tabId, _buf); }, 300);
     notifyPopup(tabId);
+    return;
   }
 
   /* CONTENT_DOM handler removed: Lexbor in the engine worker parses

@@ -500,15 +500,13 @@
         !/^(application\/javascript|text\/ecmascript)$/i.test(sType)) {
       return;
     }
-    if (scriptEl.src) {
-      // External <script src> is discovered from the Lexbor DOM and loaded by the
-      // ENGINE in document order via __feLoadScript (the safeFetch chokepoint),
-      // in the same realm as the inline scripts — content.js no longer ships it.
-      return;
-    }
-    // Inline script
-    var code = scriptEl.textContent;
-    if (code) sendScriptSource(null, code, order);
+    // One message per document: content.js ships ONLY CONTENT_HTML. The engine
+    // (Lexbor) parses it and runs EVERY script in document order in one realm —
+    // inline via the SSR phase, external <script src> via __feLoadScript, dynamic
+    // via the createElement host edge. No per-script SCRIPT_SOURCE shipping (it
+    // merged a tab's documents and ambiguated the per-document credentialed-read
+    // principal).
+    return;
   }
 
   // Extract all existing scripts on page load
