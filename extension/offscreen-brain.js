@@ -5904,7 +5904,14 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
       _deepStatsByDoc.set(tab.documentId, Object.assign({}, analysis._deepStats, { ts: Date.now() }));
     }
   }
-  if (!isPartial) _scheduleEvictSweep();
+  // Schedule the eviction sweep on EVERY merge, not just the final one: a TERMINAL
+  // grind stat (a no-progress/recycle stall, or a clean done) can arrive on a streaming
+  // PARTIAL, and gating on !isPartial left such a reviewed doc parked in state.docs
+  // forever (a stuck no-progress grind — neither resumed nor evicted, CPU/memory held).
+  // The sweep re-validates the terminal condition per doc (line 163), so a mid-grind
+  // partial is a cheap no-op (debounced to one pending timer); only a concluded grind
+  // actually evicts.
+  _scheduleEvictSweep();
 }
 
 // ─── Message Handling ────────────────────────────────────────────────────────
