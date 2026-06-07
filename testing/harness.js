@@ -950,28 +950,26 @@ async function cmdNetDiff(args) {
       for (const k of learned) { const re = tmplRe(k); if (re) learnedTemplates.push(re); }
       const matchedByTemplate = (liveKey) => learnedTemplates.some((re) => re.test(liveKey));
       const seen = new Set(), gaps = [], byTab = []; let assetFiltered = 0;
-      if (typeof state !== "undefined") {
-        for (const [tid, t] of state.tabs) {
-          if (!t.requestLog || !t.requestLog.length) continue;
-          const pageUrl = (state.tabMeta && state.tabMeta.get && state.tabMeta.get(tid) && state.tabMeta.get(tid).url) || "";
-          let tabGaps = 0;
-          for (const r of t.requestLog) {
-            if (!r.url || !/^https?:/.test(r.url)) continue;
-            const k = (r.method || "GET") + " " + norm(r.url);
-            if (seen.has(k)) continue; seen.add(k);
-            if (learned.has(k) || matchedByTemplate(k)) continue;
-            if (!showAssets && isAsset(r)) { assetFiltered++; continue; }
-            // first-party-ish filter unless --all: same registrable-ish host as the page
-            // The bundle call-site that fired this live request (intercept.js
-            // captured new Error().stack, wrapper frames stripped). A gap's
-            // FIRST frame IS the function forced exec failed to drive — turns
-            // "missed URL X" into "missed the path at <fn> that fires X", the
-            // actionable signal for closing the coverage gap (the oracle role).
-            const site = (r.callStack || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
-            gaps.push({ k, status: r.status, svc: r.service || "", site }); tabGaps++;
-          }
-          byTab.push({ tab: pageUrl.slice(0, 50), gaps: tabGaps });
+      // The request log is now GLOBAL (globalRequestLog), each entry tagged with
+      // {tab,doc,frame} — the documentId re-key replaced the per-tab requestLog
+      // (main 13205a4). Diff the live calls that FIRED against the learned set.
+      if (typeof globalRequestLog !== "undefined" && Array.isArray(globalRequestLog)) {
+        const _byTab = new Map();
+        for (const r of globalRequestLog) {
+          if (!r || !r.url || !/^https?:/.test(r.url)) continue;
+          const k = (r.method || "GET") + " " + norm(r.url);
+          if (seen.has(k)) continue; seen.add(k);
+          if (learned.has(k) || matchedByTemplate(k)) continue;
+          if (!showAssets && isAsset(r)) { assetFiltered++; continue; }
+          // The bundle call-site that fired this live request (intercept.js captured
+          // new Error().stack, wrapper frames stripped). A gap's FIRST frame IS the
+          // function forced exec failed to drive — the actionable oracle signal.
+          const site = (r.callStack || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
+          gaps.push({ k, status: r.status, svc: r.service || "", site });
+          const _t = String(r.tab != null ? r.tab : (r.tabId != null ? r.tabId : "?"));
+          _byTab.set(_t, (_byTab.get(_t) || 0) + 1);
         }
+        for (const [t, n] of _byTab) byTab.push({ tab: t, gaps: n });
       }
       // Reached-but-opaque host edges: a fetch/XHR forced exec DID reach but
       // whose URL/method didn't resolve to a concrete string (an opaque
@@ -1018,8 +1016,8 @@ async function cmdNetDiff(args) {
       // opaque only once the init chain is force-driven) — and it lands on the
       // per-tab state, NOT scriptCache, so reading scriptCache alone hides the very
       // driving gaps netdiff exists to NAME (0 reachedButOpaque while the tab held 26).
-      if (typeof state !== "undefined" && state.tabs) {
-        for (const t of state.tabs.values()) {
+      if (typeof state !== "undefined" && state.docs) {
+        for (const t of state.docs.values()) {
           const re = t && t._resolverErrors;
           if (Array.isArray(re)) for (const r of re) {
             const msg = String((r && r.message) || JSON.stringify(r));
@@ -1105,7 +1103,7 @@ async function cmdNetDiff(args) {
           }
         };
         if (typeof globalStore !== "undefined") _harvestVdd(globalStore.discoveryDocs);
-        if (typeof state !== "undefined" && state.tabs) for (const t of state.tabs.values()) if (t) _harvestVdd(t.discoveryDocs);
+        if (typeof state !== "undefined" && state.docs) for (const t of state.docs.values()) if (t) _harvestVdd(t.discoveryDocs);
         const _fmtParams = (e) => {
           const pm = _fcsParams.get(_paramKey(e.method, e.path || e.url || ""));
           if (!pm || !pm.size) return "";
