@@ -5809,7 +5809,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
         var _csPath = csUrl.pathname.replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}");
         var epKey = isDynamic
           ? "AST DYN " + bundleId + " " + (callSite.enclosingFunction || "anon") + " " + callSite.method + " " + fc
-          : "AST " + callSite.method + " " + _csPath;
+          : "AST " + callSite.method + " " + csUrl.hostname + _csPath;   // include HOST: an endpoint is method+host+path. Path-only collapsed same-path endpoints across DIFFERENT hosts (and across sites in the cumulative store) → lost the moat's "many sites per session" surface. Mirrors the network key (method + hostname + pathname).
         if (!tab.endpoints.has(epKey)) {
           var _epMeta = tab;
           tab.endpoints.set(epKey, {
