@@ -2144,10 +2144,18 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
        Promise body invokes this synchronously on every per-orphan yield,
        and the post-callMain final-drain call below catches the tail. */
     async function _drainDeepStdout() {
-      if (_drainBusy) return;   // reentrancy: an awaited IDB put yields → another fiber's yield may invoke us before we finish
-      _drainBusy = true;
-      try {
-        for (var _di = _stdoutCursor; _di < stdout.length; _di++) {
+      /* The SYNCHRONOUS line-scan below runs on EVERY call, NEVER gated by
+         _drainBusy. Gating the parse was the ROOT bug: when a prior fire-and-
+         forget drain was mid-IDB-await (_drainBusy=true), a reentrant call —
+         INCLUDING the post-callMain `await _drainDeepStdout()` — early-returned
+         and DROPPED the just-returned callMain's @DS/@DD. So _drem stayed at its
+         -1 init, mis-bucketed as no-progress, and the grind STOPped on the tail —
+         silently losing endpoints AND the tail-EXCLUSIVE XSS/taint sinks (a
+         sink-only orphan, net=0/sink=1, never reaches the net-only head). The
+         scan has no await, so it is atomic and advances _stdoutCursor exactly
+         once per line; ONLY the async persist/partial below needs the
+         one-write-at-a-time _drainBusy guard. */
+      for (var _di = _stdoutCursor; _di < stdout.length; _di++) {
           var _ln = stdout[_di];
           if (_ln.slice(0, 4) === "@DS ") {
             try { var _ds = JSON.parse(_ln.slice(4)); _drem = _ds.rem; if (typeof _ds.cur === "number") _dcur = _ds.cur;
@@ -2210,6 +2218,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         // processed exactly once across the grind.
         processStdout(_stdoutCursor);
         _stdoutCursor = stdout.length;
+        /* From here down is the ASYNC persist/partial — gated so only ONE IDB
+           write is in flight. A reentrant call skips ONLY this; its parse above
+           already ran (the race fix). */
+        if (_drainBusy) return;
+        _drainBusy = true;
+        try {
         if (_driven.size !== _lastPersistDrivenN) {
           _deepStats.steps++;
           // Stamp wall-clock of the LAST real grind progress so the liveness
@@ -2348,8 +2362,15 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       var _dpRecycleReason = null;
       if (instAborted) _dpRecycleReason = "abort";
       else if (_dpCallThrew) { _dpRecycleReason = "wasm_trap"; _headPhase = false; }
-      else if (_drem > 0) {
-        /* callMain returned cleanly but residue still has uncovered fns —
+      else if (_drem !== 0) {
+        /* callMain returned cleanly but residue is non-zero — OR _drem is still
+           at its -1 init (a lagging @DS parse; Fix A above makes that rare, but a
+           drain whose IDB await outlives this turn can still leave it). Either
+           way residue may remain, so CONTINUE the grind (recycle), never the
+           one-shot no-progress STOP below — termination rests solely on the 12×
+           no-progress-recycle proof (driven flat across 12 recycles). Using
+           `!== 0` not `> 0` is what keeps -1 out of the banned STOP (which also
+           silently dropped tail-exclusive XSS sink findings — the security view).
            memory recycle proactively if we crossed the 2× baseline threshold
            (same monotonic-memory ratchet as the BFS schedule loop). */
         var _dpMemNow = wasmBytes(m);
