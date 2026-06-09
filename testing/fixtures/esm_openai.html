@@ -1,0 +1,15 @@
+<!doctype html><html><head><meta charset="utf-8"><title>esm_openai</title></head>
+<body><div id="root">esm_openai</div>
+<!-- REAL OpenAI SDK from the esm.sh CDN (ESM that imports its own deps transitively by URL —
+     the same modular shape as the supabase moat). If forced exec surfaces the AI API surface
+     (/v1/chat/completions [model, messages], /v1/embeddings, /v1/models …) while LOGGED OUT —
+     the fixture fires NO real request, just registers the handlers — the ESM-from-CDN moat is
+     validated on a SECOND real library, generalising beyond supabase. -->
+<script type="module">
+import OpenAI from "https://esm.sh/openai@4";
+const client = new OpenAI({ apiKey: "sk-demo-key", dangerouslyAllowBrowser: true });
+globalThis.__chat = function (m) { return client.chat.completions.create({ model: "gpt-4o", messages: [{ role: "user", content: m }] }); };
+globalThis.__embed = function (t) { return client.embeddings.create({ model: "text-embedding-3-small", input: t }); };
+globalThis.__models = function () { return client.models.list(); };
+</script>
+</body></html>

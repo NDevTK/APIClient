@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><title>sdk_firebase_modular</title></head>
+<body><div id="root">sdk_firebase_modular</div>
+<!-- Modular firebase (firebase/auth ESM, what modern apps use) — NO compat layer,
+     so signInWithEmailAndPassword(auth, …) takes the auth instance DIRECTLY as arg0
+     with no this._delegate indirection. If sdk_firebase (compat) learns 0 endpoints
+     but THIS learns identitytoolkit accounts:signInWithPassword, the compat-layer
+     _delegate indirection is the break (the modular auth the compat wrapper delegates
+     to drives opaque). If this ALSO fails, the gap is the async auth chain itself. -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+const app = initializeApp({ apiKey: "demo-key", authDomain: "demo.firebaseapp.com", projectId: "demo-proj" });
+const auth = getAuth(app);
+globalThis.__login = function (email, pw) { return signInWithEmailAndPassword(auth, email, pw); };   // accounts:signInWithPassword
+globalThis.__signup = function (email, pw) { return createUserWithEmailAndPassword(auth, email, pw); }; // accounts:signUp
+globalThis.__reset = function (email) { return sendPasswordResetEmail(auth, email); };                 // accounts:sendOobCode
+</script>
+</body></html>
