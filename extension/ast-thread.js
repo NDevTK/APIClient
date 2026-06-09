@@ -2353,9 +2353,19 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            memory recycle proactively if we crossed the 2× baseline threshold
            (same monotonic-memory ratchet as the BFS schedule loop). */
         var _dpMemNow = wasmBytes(m);
-        if (_dpBaselineBytes === 0) _dpBaselineBytes = _dpMemNow;
+        /* rem>0 after a clean callMain means the grind has residue still to drive
+           (e.g. the head→tail handoff: the head drove the net orphans, the tail
+           must continue the rest; or a tail callMain that yielded mid-drive). It
+           must CONTINUE, not be misread as no-progress. The first tail iteration
+           has _dpBaselineBytes===0 (never seeded in the head phase); seeding it
+           here WITHOUT also setting a recycle reason left _dpRecycleReason=null,
+           so control fell through to the `else` no-progress STOP below (CLAUDE.md-
+           banned: a count/condition that stops work while rem>0). Seed the
+           baseline AND mark the recycle so rem>0 always continues the residue
+           (bounded by the 12× no-progress-recycle stop, the real proof). */
+        if (_dpBaselineBytes === 0) { _dpBaselineBytes = _dpMemNow; _dpRecycleReason = "callmain_returned_with_residue"; }
         else if (_dpMemNow > _dpBaselineBytes * 2) _dpRecycleReason = "mem_growth";
-        else _dpRecycleReason = "callmain_returned_with_residue";   // shouldn't happen on the grind path
+        else _dpRecycleReason = "callmain_returned_with_residue";
       }
       if (_drem === 0) { _grindDone = true; break; }
       if (_dpRecycleReason) {
