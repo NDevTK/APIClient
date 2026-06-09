@@ -5,3 +5,4 @@ extension.crx
 testing/harness-dumps
 testing/finding-snapshots
 testing/fixtures
+testing/*.lock
