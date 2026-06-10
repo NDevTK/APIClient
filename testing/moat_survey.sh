@@ -28,8 +28,8 @@ FIXTURES=(
   "sdk_directus|3|gap|composable; await-fix got auth, content still 0"
 )
 
-printf "%-22s %6s %6s %7s %8s %7s  %s\n" "FIXTURE" "CLEAN" "RE" "UNUSED" "RECV" "STATUS" "NOTE"
-printf '%.0s-' {1..98}; echo
+printf "%-22s %6s %6s %7s %8s %8s %7s  %s\n" "FIXTURE" "CLEAN" "RE" "UNUSED" "RECV" "VALS" "STATUS" "NOTE"
+printf '%.0s-' {1..107}; echo
 regressions=0
 for row in "${FIXTURES[@]}"; do
   IFS='|' read -r fx base kind note <<< "$row"
@@ -50,6 +50,12 @@ for row in "${FIXTURES[@]}"; do
   # opaque `this`. A low ratio = a cold/logged-in API surface stuck opaque (the moat gap).
   recv=$($H offscreen "var v=[..._lastGrindStatsByDoc.values()].sort(function(a,b){return (b.ts||0)-(a.ts||0)})[0]; return v?(v.gsRecv+'/'+v.gsDrv):'-'" 2>&1 | head -1 | tr -d '"')
   recv="${recv:--}"
+  # VALUE-DEPTH (the moat's keys+VALUES, not just URLs): of all learned request params, how
+  # many carry a CONCRETE example value (validValues) vs only a key/shape (valueSource:opaque).
+  # A learned endpoint with 0 concrete param values is a #1 miss — a URL without the example
+  # keys+values that make the moat useful. (params live in scriptCache.result.fetchCallSites.)
+  vals=$($H offscreen "var nv=0,np=0,sc=globalStore.scriptCache; if(sc&&sc.forEach)sc.forEach(function(r){var R=r&&r.result; if(R&&Array.isArray(R.fetchCallSites))R.fetchCallSites.forEach(function(cs){(cs.params||[]).forEach(function(p){np++; var vv=p.validValues||p.values; if((vv&&vv.length&&vv[0]!==undefined)||p.exampleValue!==undefined)nv++;});});}); return nv+'/'+np;" 2>&1 | head -1 | tr -d '"')
+  vals="${vals:--}"
   # status
   status="ok"
   if ! [[ "$clean" =~ ^[0-9]+$ ]]; then status="ERR"; clean="${clean:0:5}"; fi
@@ -61,8 +67,8 @@ for row in "${FIXTURES[@]}"; do
       status="REGRESS"; regressions=$((regressions+1))
     fi
   fi
-  printf "%-22s %6s %6s %7s %8s %7s  %s\n" "$fx" "$clean" "$re" "$unused" "$recv" "$status" "$note"
+  printf "%-22s %6s %6s %7s %8s %8s %7s  %s\n" "$fx" "$clean" "$re" "$unused" "$recv" "$vals" "$status" "$note"
 done
-printf '%.0s-' {1..90}; echo
+printf '%.0s-' {1..107}; echo
 if [[ "$regressions" -gt 0 ]]; then echo "RESULT: $regressions REGRESSION(s) — a direct-fetch fixture dropped below baseline"; exit 1; fi
 echo "RESULT: no regressions. GAP rows are the known real-bundle shared-helper/composable gaps (see memory)."
