@@ -1,0 +1,15 @@
+<!doctype html><html><head><meta charset="utf-8"><title>sdk_firebase</title></head>
+<body><div id="root">sdk_firebase</div>
+<!-- Third real auth SDK (firebase, UNMODIFIED from gstatic CDN) — confirm the moat
+     generalizes past supabase/appwrite. firebase.auth().signInWithEmailAndPassword
+     POSTs {email,password,returnSecureToken} to identitytoolkit; gated globals
+     drive the unused auth surface logged-out. -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script>
+firebase.initializeApp({ apiKey: "demo-key", authDomain: "demo.firebaseapp.com", projectId: "demo-proj" });
+globalThis.__login = function (email, pw) { return firebase.auth().signInWithEmailAndPassword(email, pw); };   // identitytoolkit accounts:signInWithPassword
+globalThis.__signup = function (email, pw) { return firebase.auth().createUserWithEmailAndPassword(email, pw); }; // accounts:signUp
+globalThis.__reset = function (email) { return firebase.auth().sendPasswordResetEmail(email); };                 // accounts:sendOobCode
+</script>
+</body></html>

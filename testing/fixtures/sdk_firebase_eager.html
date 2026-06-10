@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><title>sdk_firebase_eager</title></head>
+<body><div id="root">sdk_firebase_eager</div>
+<!-- Same as sdk_firebase but the auth service is instantiated EAGERLY at module
+     load (`var auth = firebase.auth()`) — a realistic init pattern (most apps do
+     `const auth = getAuth(app)` at startup). If sdk_firebase (lazy auth() inside
+     __login) learns 0 endpoints but THIS learns the identitytoolkit endpoint, the
+     gap is precisely lazy-instance timing: the boot receiver-scan runs before the
+     lazy auth instance exists, so the config-bearing request method drives with an
+     opaque receiver. Decisive cause-isolation, no engine change. -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script>
+firebase.initializeApp({ apiKey: "demo-key", authDomain: "demo.firebaseapp.com", projectId: "demo-proj" });
+var auth = firebase.auth();   // EAGER — on the heap at boot, before any forced drive
+globalThis.__login = function (email, pw) { return auth.signInWithEmailAndPassword(email, pw); };   // identitytoolkit accounts:signInWithPassword
+globalThis.__signup = function (email, pw) { return auth.createUserWithEmailAndPassword(email, pw); }; // accounts:signUp
+globalThis.__reset = function (email) { return auth.sendPasswordResetEmail(email); };                 // accounts:sendOobCode
+</script>
+</body></html>
