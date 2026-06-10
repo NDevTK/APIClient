@@ -2174,7 +2174,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
               if (typeof _ds.gsDrn === "number") _deepStats.gsDrn = _ds.gsDrn;
               if (typeof _ds.recvThr === "number") _deepStats.recvThr = _ds.recvThr;
               if (typeof _ds.recvExcK === "number") _deepStats.recvExcK = _ds.recvExcK;
-              if (typeof _ds.recvExcMsg === "string") _deepStats.recvExcMsg = _ds.recvExcMsg; }
+              if (typeof _ds.recvExcMsg === "string") _deepStats.recvExcMsg = _ds.recvExcMsg;
+              if (typeof _ds.synCol === "number") _deepStats.synCol = _ds.synCol;
+              if (typeof _ds.synAsn === "number") _deepStats.synAsn = _ds.synAsn; }
             catch (e) {
               /* @DS JSON parse failure — leave _drem at its last value rather
                  than falling back to 0 (which would falsely look like a
