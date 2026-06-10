@@ -11,10 +11,13 @@
 // STATE (after the fetch-edge !ISOPQANY method fix): cd/cm/tm learn
 // /cell/{hole}/info GREEN — the method opacity (input.method read off the
 // opaque url) was the blocker, and clearing it also unblocked the member-url
-// holes. KNOWN HOLDOUT: td (template literal + RAW direct arg `${x}`) still
-// collapses to "[object Object]" — the template ToString concretizes the bare
-// arg-opaque via Object.prototype.toString where + concat (cd) and member
-// templates (tm) keep the structured hole. Narrow (real code accesses a prop).
+// holes. The ENGINE handles ALL four shapes correctly, including template +
+// bare-opaque arg `${x}` — PROVEN by the isolated fixture tdmin.html (learns
+// GET /tdmin/{arg0}/info clean; strconcat_diag showed the arg IS opaque at
+// .concat and js_string_concat:49916 builds the concat term). In THIS 4-fetch
+// probe td can appear reached-but-opaque, but that is a multi-fetch RECORDING
+// artifact (strconcat is always opaque here too), NOT an engine gap — do not
+// treat it as a real "[object Object]" bug.
 function probe(x) {
   fetch("/cd/" + x + "/info");        // concat, direct  → known-good control
   fetch(`/td/${x}/info`);            // templ,  direct

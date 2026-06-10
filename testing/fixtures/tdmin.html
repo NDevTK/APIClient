@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><title>td min</title></head>
+<body><div id="app">x</div>
+<script>
+// Minimal isolation of the td holdout (bare opaque arg in a template literal) =
+// github's "github.com/microsoft/[object Object]" shape. One cold orphan, one
+// fetch, so the strconcat_diag @WHY is unambiguous.
+function tdmin(x) { fetch(`/tdmin/${x}/info`); }
+window.__td = { tdmin: tdmin };
+</script>
+</body></html>
