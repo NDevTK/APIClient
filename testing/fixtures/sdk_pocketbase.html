@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8"><title>pocketbase cdn</title></head>
+<body><div id="app"></div>
+<script src="https://cdn.jsdelivr.net/npm/pocketbase@0.21.5/dist/pocketbase.umd.js"></script>
+<script>
+  // Real backend SDK from CDN. The moat: learn the FULL REST surface (collection
+  // CRUD + user auth + ADMIN auth) while logged out, from the shipped client —
+  // every method builds its URL off the SAME this.baseUrl (a real multi-fetch
+  // shared-base test). All cold; forced exec should drive them.
+  var PB = (typeof PocketBase !== 'undefined') ? PocketBase : (window.PocketBase || window.pocketbase);
+  var pb = new PB('https://demo.pocketbase.io');
+  window.__pb = {
+    list:    function(){ return pb.collection('posts').getList(1, 50, { filter: 'published=true', sort: '-created' }); },
+    one:     function(id){ return pb.collection('posts').getOne(id); },
+    create:  function(d){ return pb.collection('posts').create({ title: 'x', body: 'y' }); },
+    update:  function(id){ return pb.collection('posts').update(id, { title: 'z' }); },
+    del:     function(id){ return pb.collection('posts').delete(id); },
+    authPw:  function(e,p){ return pb.collection('users').authWithPassword('a@b.co', 'pw'); },
+    adminPw: function(e,p){ return pb.admins.authWithPassword('admin@b.co', 'pw'); },
+    refresh: function(){ return pb.collection('users').authRefresh(); },
+    listAuth:function(){ return pb.collection('users').listAuthMethods(); },
+  };
+</script>
+</body></html>
