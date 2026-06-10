@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>add-then-concat</title></head>
+<body><div id="app">x</div>
+<script>
+// Bisect the multi-fetch artifact: does an OP_add on x BEFORE a template .concat
+// on the same x break the second one? (tdmin in isolation is clean.)
+function probeAT(x) {
+  fetch("/a_add/" + x + "/info");   // OP_add on x first
+  fetch(`/b_tmpl/${x}/info`);      // template .concat on SAME x second
+}
+window.__at = { probeAT: probeAT };
+</script>
+</body></html>
