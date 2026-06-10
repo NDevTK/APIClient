@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta charset="utf-8"><title>react event delegation</title></head>
+<body><div id="root"></div>
+<script>
+// Reproduces React's SYNTHETIC EVENT DELEGATION, the suspected reddit/twitch shape:
+// component onClick handlers are NOT addEventListener'd on their elements. They live
+// in a props/fiber registry keyed by element; ONE listener on the root walks to the
+// target's registered handler and calls it. The handler is a COLD closure (never
+// clicked on load) that fetches a gated endpoint. QUESTION: does forced exec drive
+// the cold delegated handler (learn /api/delegated/click) the way it drives a plain
+// cold addEventListener handler, or is the registry-stored handler invisible to the
+// orphan residue?  If the latter, reddit/twitch's 0 has a reproducible root cause.
+var _fiberProps = new Map();              // element -> { onClick }  (React fiber props)
+
+function h(tag, props, text) {            // a minimal createElement
+  var el = document.createElement(tag);
+  if (text) el.textContent = text;
+  _fiberProps.set(el, props || {});       // handler stored in fiber props, NOT on el
+  return el;
+}
+
+function rootDispatch(ev) {               // React's delegated listener
+  var node = ev.target;
+  while (node && node !== this) {          // bubble through the fiber tree
+    var p = _fiberProps.get(node);
+    if (p && p.onClick) p.onClick(ev);     // call the component handler
+    node = node.parentNode;
+  }
+}
+var root = document.getElementById('root');
+root.addEventListener('click', rootDispatch);   // the ONE real listener
+
+function App() {                          // "render": mount a click-gated button
+  var btn = h('button', {
+    onClick: function (ev) {              // COLD until a click — the moat target
+      fetch('/api/delegated/click?src=fiber');
+    }
+  }, 'Load more');
+  root.appendChild(btn);
+
+  // a second, deeper-gated handler reached only after a state flip (route-like)
+  var link = h('a', {
+    onClick: function (ev) {
+      fetch('/api/delegated/route/comments');
+    }
+  }, 'Comments');
+  root.appendChild(link);
+}
+App();
+</script>
+</body></html>
