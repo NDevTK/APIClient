@@ -2079,7 +2079,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // deepMs is filled in after the deep grind. Lets the popup show where real-
   // bundle time actually goes (is the BFS or the deep grind dominant?).
   var _bfsMs = Date.now() - t0;
-  var _deepStats = { steps: 0, rem: -1, stop: "n/a", total: -1, dnfThrew: 0, dnfRet: 0,
+  var _deepStats = { steps: 0, rem: -1, stop: "n/a", total: -1, dnfThrew: 0, dnfRet: 0, gsDrv: 0, gsRecv: 0, gsDrn: 0,
     bfsMs: _bfsMs, bootMs: _tBootMs, memcpyMs: _tMemcpyMs, bcMs: _tBcMs, deepMs: 0, runs: runs,
     combinedKB: Math.round((code ? code.length : 0) / 1024),
     hasPreheatSrc: !!(code && code.indexOf("issues/preheat/index") >= 0) };
@@ -2167,7 +2167,11 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
               // returned without one). Per-grind cumulative — surfaced in
               // deep-status so the non-firing residue is visible, not silent.
               if (typeof _ds.dnfThrew === "number") _deepStats.dnfThrew = _ds.dnfThrew;
-              if (typeof _ds.dnfRet === "number") _deepStats.dnfRet = _ds.dnfRet; }
+              if (typeof _ds.dnfRet === "number") _deepStats.dnfRet = _ds.dnfRet;
+              // __awaiter generator-resume drive-trace (see qjs_gen_susp_* in quickjs.c)
+              if (typeof _ds.gsDrv === "number") _deepStats.gsDrv = _ds.gsDrv;
+              if (typeof _ds.gsRecv === "number") _deepStats.gsRecv = _ds.gsRecv;
+              if (typeof _ds.gsDrn === "number") _deepStats.gsDrn = _ds.gsDrn; }
             catch (e) {
               /* @DS JSON parse failure — leave _drem at its last value rather
                  than falling back to 0 (which would falsely look like a

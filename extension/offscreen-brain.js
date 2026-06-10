@@ -137,6 +137,7 @@ function _pushGlobalLog(entry, tabId, documentId, frameId) {
 }
 
 const _deepStatsByDoc = new Map(); // documentId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
+const _lastGrindStatsByDoc = new Map(); // documentId → last COMPLETED grind's _deepStats — NOT evicted (mirror of the above), so the per-grind frontier shape (dnf*/gs* drive-trace) stays inspectable after analysis completes. Cleared only on CLEAR_TAB.
 const _wsConnState = new Map(); // documentId → Map<wsId, { url, readyState }>
 
 // -- Review-completion eviction ---------------------------------------------
@@ -827,6 +828,7 @@ async function clearGlobalStore() {
   globalStore.securityFindings.clear();
   globalStore.deepResumeMeta.clear();
   _deepStatsByDoc.clear();
+  _lastGrindStatsByDoc.clear();
   // Drop any SW-side analyses still queued so a pending review can't repopulate
   // the store right after we wipe it (the offscreen worker's running/queued
   // grind is stopped separately via AST_CLEAR before this runs).
@@ -5917,6 +5919,11 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
     // "n/a" and never mark a doc reviewed.
     if (analysis && analysis._deepStats && tab && tab.documentId) {
       _deepStatsByDoc.set(tab.documentId, Object.assign({}, analysis._deepStats, { ts: Date.now() }));
+      // _deepStatsByDoc is EVICTED when the doc completes (the sweep clears it to release
+      // the doc), which left the per-grind frontier counters (dnf*/gs* drive-trace)
+      // unreadable post-analysis. Mirror into a NON-evicted map so the grind's frontier
+      // shape stays inspectable (popup deep-status / harness) after completion.
+      _lastGrindStatsByDoc.set(tab.documentId, Object.assign({}, analysis._deepStats, { ts: Date.now() }));
     }
   }
   // Schedule the eviction sweep on EVERY merge, not just the final one: a TERMINAL
