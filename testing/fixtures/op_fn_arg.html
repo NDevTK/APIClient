@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><title>op-fn-as-arg</title></head>
+<body><div id="app"></div>
+<script>
+// Directus's content shape: an OPERATION fn (readItems result) is passed to
+// client.request, which EXECUTES it against the transport -> fetch. All cold.
+function readItems(collection) {
+  return function (transport) {                 // the operation fn-as-arg
+    return transport.request({ method: 'GET', path: '/items/' + collection });
+  };
+}
+function makeClient(baseUrl) {
+  var transport = { request: function (opts) { return fetch(baseUrl + opts.path, { method: opts.method }); } };
+  return { request: function (op) { return op(transport); } };   // executes the op-fn-as-arg
+}
+var client = makeClient('https://demo.ex.net');
+window.__c = {
+  read:  function () { return client.request(readItems('articles')); },  // op-fn-as-arg (content)
+  login: function () { return fetch('https://demo.ex.net/auth/login', { method: 'POST' }); } // direct control
+};
+</script>
+</body></html>
