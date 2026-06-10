@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><title>opaque member in url</title></head>
+<body><div id="app">x</div>
+<script>
+// github netdiff: 28 reached-but-opaque fetches whose URL/method is
+// "[object Object]" — the route-descriptor shape fetch(`/${route.owner}/...`).
+// One COLD probe fires all four cells with the SAME opaque arg so a single
+// forced-exec drive exercises every cell deterministically (per-function cold
+// driving was nondeterministic). The 2x2:
+//   axis 1: + concat   vs  template literal
+//   axis 2: DIRECT opaque arg  vs  MEMBER access (arg.repo)
+// STATE (after the fetch-edge !ISOPQANY method fix): cd/cm/tm learn
+// /cell/{hole}/info GREEN — the method opacity (input.method read off the
+// opaque url) was the blocker, and clearing it also unblocked the member-url
+// holes. KNOWN HOLDOUT: td (template literal + RAW direct arg `${x}`) still
+// collapses to "[object Object]" — the template ToString concretizes the bare
+// arg-opaque via Object.prototype.toString where + concat (cd) and member
+// templates (tm) keep the structured hole. Narrow (real code accesses a prop).
+function probe(x) {
+  fetch("/cd/" + x + "/info");        // concat, direct  → known-good control
+  fetch(`/td/${x}/info`);            // templ,  direct
+  fetch("/cm/" + x.repo + "/info");   // concat, member
+  fetch(`/tm/${x.repo}/info`);       // templ,  member
+}
+window.__om = { probe: probe };
+</script>
+</body></html>
