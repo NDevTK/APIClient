@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><title>directus esm cdn</title></head>
+<body><div id="app"></div>
+<script type="module">
+  import { createDirectus, rest, authentication, readItems, createItem, updateItem, deleteItem, readMe, readUsers, login, refresh } from 'https://cdn.jsdelivr.net/npm/@directus/sdk@latest/dist/index.js';
+  const client = createDirectus('https://demo.directus.io').with(rest()).with(authentication());
+  window.__d = {
+    read:   () => client.request(readItems('articles', { filter: { status: { _eq: 'published' } }, limit: 20 })),
+    one:    () => client.request(readItems('articles', { fields: ['id','title'] })),
+    create: () => client.request(createItem('articles', { title: 'x', body: 'y' })),
+    update: () => client.request(updateItem('articles', '1', { title: 'z' })),
+    del:    () => client.request(deleteItem('articles', '1')),
+    me:     () => client.request(readMe()),
+    users:  () => client.request(readUsers({ limit: 10 })),
+    login:  () => client.login('a@b.co', 'pw'),
+    refresh:() => client.refresh(),
+  };
+</script>
+</body></html>
