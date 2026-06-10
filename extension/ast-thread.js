@@ -1220,30 +1220,33 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
          null so the engine falls back to its @SCRIPTSRC emit. safeFetch's response
          body holds the code (resp.body); as:"script" enforces CORB + SSRF. */
       qjs_load_script: async function (url) {
-        try {
-          var u = String(url == null ? "" : url);
-          if (!u) return null;
-          // Resolve a relative <script src> ("/app.js", "chunk.js") against the
-          // document principal — the engine passes the raw DOM attribute, and
-          // safeFetch wants an absolute URL (+ checks its origin vs the principal).
-          if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u) && sourceUrl) {
-            try { u = new URL(u, sourceUrl).href; } catch (e) {}
-          }
-          if (!self._feScriptLoadCache) self._feScriptLoadCache = {};
+        // The engine calls this SERIALLY (one wasm-stack suspend per <script src>), so
+        // round-1 on a hundreds-of-scripts app (github ~626, 15MB) is network-latency
+        // bound on sequential fetches — the dominant round-1 cost (eval_script churns for
+        // minutes, so the deep/endpoint round never starts). PRE-WARM: kick a fetch for
+        // EVERY known scriptSrcUrl into the (now promise-valued) cache so the browser's
+        // per-origin connection pool OVERLAPS them; each serial call then awaits a warm/
+        // in-flight fetch instead of a cold round-trip. Shared via the promise cache
+        // (no double-fetch); the engine still consumes results one at a time, in order.
+        if (!self._feScriptLoadCache) self._feScriptLoadCache = {};
+        var _src = sourceUrl, _prin = _principalOrigin;
+        var _warm = function (raw) {
+          var u = String(raw == null ? "" : raw);
+          if (!u) return Promise.resolve(null);
+          // Resolve a relative <script src> against the document principal (the engine
+          // passes the raw DOM attribute; safeFetch wants an absolute, origin-checked URL).
+          if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u) && _src) { try { u = new URL(u, _src).href; } catch (e) {} }
           if (Object.prototype.hasOwnProperty.call(self._feScriptLoadCache, u)) return self._feScriptLoadCache[u];
-          var resp = await safeFetch(u, { pageUrl: sourceUrl || "", pageOrigin: _principalOrigin, as: "script" });
-          var code = (resp && resp.ok && typeof resp.body === "string" && resp.body) ? resp.body : null;
-          self._feScriptLoadCache[u] = code;
-          if (code == null) {
-            if (!self._whyRecords) self._whyRecords = [];
-            self._whyRecords.push({ phase: "qjs_load_script_blocked", url: u, status: resp ? resp.status : 0, why: resp ? resp.statusText : "no-resp" });
-          }
-          return code;
-        } catch (e) {
-          if (!self._whyRecords) self._whyRecords = [];
-          self._whyRecords.push({ phase: "qjs_load_script_throw", url: String(url), err: String(e && e.message || e) });
-          return null;
-        }
+          var p = safeFetch(u, { pageUrl: _src || "", pageOrigin: _prin, as: "script" }).then(function (resp) {
+            var code = (resp && resp.ok && typeof resp.body === "string" && resp.body) ? resp.body : null;
+            if (code == null) { try { (self._whyRecords || (self._whyRecords = [])).push({ phase: "qjs_load_script_blocked", url: u, status: resp ? resp.status : 0, why: resp ? resp.statusText : "no-resp" }); } catch (e2) {} }
+            return code;
+          }, function (e) { try { (self._whyRecords || (self._whyRecords = [])).push({ phase: "qjs_load_script_throw", url: u, err: String(e && e.message || e) }); } catch (e2) {} return null; });
+          self._feScriptLoadCache[u] = p;   // a null is cached too (blocked/404 not re-fetched)
+          return p;
+        };
+        try { for (var _i = 0; _i < scriptSrcUrls.length; _i++) _warm(scriptSrcUrls[_i] && scriptSrcUrls[_i].url); } catch (e) {}
+        return await _warm(url);
       },
       /* JSPI cooperative-yield import: each yield is enqueued in
          self._fiberQ with this instance's huntContext (pageKey/type/vts).
