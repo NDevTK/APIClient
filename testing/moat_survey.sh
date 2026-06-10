@@ -28,8 +28,8 @@ FIXTURES=(
   "sdk_directus|3|gap|composable; await-fix got auth, content still 0"
 )
 
-printf "%-22s %6s %6s %7s %7s  %s\n" "FIXTURE" "CLEAN" "RE" "UNUSED" "STATUS" "NOTE"
-printf '%.0s-' {1..90}; echo
+printf "%-22s %6s %6s %7s %8s %7s  %s\n" "FIXTURE" "CLEAN" "RE" "UNUSED" "RECV" "STATUS" "NOTE"
+printf '%.0s-' {1..98}; echo
 regressions=0
 for row in "${FIXTURES[@]}"; do
   IFS='|' read -r fx base kind note <<< "$row"
@@ -45,6 +45,11 @@ for row in "${FIXTURES[@]}"; do
   re=$($H offscreen "var c=0;for(const x of globalStore.endpoints.values())if(x.resolverError)c++;return c" 2>&1 | head -1)
   unused=$($H netdiff --unused 2>&1 | grep -oE '"unusedCount": *[0-9]+' | grep -oE '[0-9]+' | head -1)
   unused="${unused:-?}"
+  # receiver-coverage frontier (gsRecv/gsDrv off the drive-trace): of the async
+  # __awaiter/generator API methods driven, how many resolved a CONCRETE receiver vs
+  # opaque `this`. A low ratio = a cold/logged-in API surface stuck opaque (the moat gap).
+  recv=$($H offscreen "var v=[..._lastGrindStatsByDoc.values()].sort(function(a,b){return (b.ts||0)-(a.ts||0)})[0]; return v?(v.gsRecv+'/'+v.gsDrv):'-'" 2>&1 | head -1 | tr -d '"')
+  recv="${recv:--}"
   # status
   status="ok"
   if ! [[ "$clean" =~ ^[0-9]+$ ]]; then status="ERR"; clean="${clean:0:5}"; fi
@@ -56,7 +61,7 @@ for row in "${FIXTURES[@]}"; do
       status="REGRESS"; regressions=$((regressions+1))
     fi
   fi
-  printf "%-22s %6s %6s %7s %7s  %s\n" "$fx" "$clean" "$re" "$unused" "$status" "$note"
+  printf "%-22s %6s %6s %7s %8s %7s  %s\n" "$fx" "$clean" "$re" "$unused" "$recv" "$status" "$note"
 done
 printf '%.0s-' {1..90}; echo
 if [[ "$regressions" -gt 0 ]]; then echo "RESULT: $regressions REGRESSION(s) — a direct-fetch fixture dropped below baseline"; exit 1; fi
