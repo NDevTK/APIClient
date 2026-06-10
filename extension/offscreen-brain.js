@@ -5189,6 +5189,21 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     // chunk exports, shared globals) the whole design depends on, and emitting that
     // degraded result would MASK the real failure. _astError (above) + the worker's
     // @WHY/@E are the signal to root-cause; the resumable grind retries.
+    //
+    // BUT still dispatch the DEEP residue round on a RECOVERABLE failure. The big
+    // external-<script src> apps (github) abort round-1's combined BFS at the
+    // JS_FreeRuntime teardown leak (see :5212) and `return` here — which silently
+    // skips _maybeDownloadChunks below, so `_chunkRoundDone` never sets, `deep`
+    // (=!!buf._chunkRoundDone) is never true, and the ENTIRE deep residue (github's
+    // ~98k orphans — the unused/login-gated moat) is lost to one failed BFS. The
+    // deep round is independent of a clean round 1: it's seedOnly (so it enqueues NO
+    // BFS frontier — cannot path-explode) + resumable, and re-sources the page's
+    // scripts via the engine. Skip on a Clear (handled above) or an epoch reset.
+    // _maybeDownloadChunks self-guards re-fire via _chunkGrindDone (:4723).
+    if (_ep === _dataEpoch) {
+      try { await _maybeDownloadChunks(tabId, buf, [], []); }
+      catch (eDeep) { console.debug("[AST:combined] deep-on-failure dispatch threw tab=%d: %s", tabId, eDeep && (eDeep.message || eDeep)); }
+    }
     return;
   }
   getDoc(buf.docKey)._astError = null;
