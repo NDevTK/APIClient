@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>recur derived-arg</title></head>
+<body><div id="app">x</div>
+<script>
+// The recursion-collapse fixpoint keys recursive re-entry on (bytecode + args
+// SameValue-matching an ancestor). A function that recurses on a value DERIVED from
+// the opaque arg — f(x.slice(1)) — gets a NEW opaque every frame, so no ancestor
+// SameValue-matches → the fixpoint never collapses it → it recurses to a stack
+// overflow (the documented buffer.mjs shape). This fixture isolates the QUESTION:
+// does that overflow LOSE the post-recursion endpoint (a cascade), or does the
+// opaque `if` branch's BOTH-ARM drive still fire it via the base-case path? Both
+// orphans are cold (never called on load); forced exec drives them with opaque.
+function deepRec(x) {
+  if (x.length === 0) return 0;          // base-case arm (opaque length never concretely 0)
+  return 1 + deepRec(x.slice(1));        // derived-arg recursion → fixpoint miss → overflow
+}
+function consume(data) {
+  var n = deepRec(data);                 // overflows here under forced exec
+  fetch("/api/after-rec?n=" + n);        // learned (base-case path) or lost (cascade)?
+}
+window.__rec = { deepRec: deepRec, consume: consume };
+</script>
+</body></html>
