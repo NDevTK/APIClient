@@ -1176,8 +1176,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       return await chrome.runtime.sendMessage({
         type: "BUILD_REQUEST",
-        tabId: currentTabId,
-        documentId: currentDocumentId(),
         endpointKey: epKey,
         service: selectedOpt?.dataset?.svc,
         methodId: selectedOpt?.dataset?.discoveryId,
@@ -2793,8 +2791,6 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
   try {
     const schema = await chrome.runtime.sendMessage({
       type: "GET_ENDPOINT_SCHEMA",
-      tabId: currentTabId,
-      documentId: currentDocumentId(),
       service,
       methodId,
     });

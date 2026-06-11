@@ -6532,16 +6532,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "GET_ENDPOINT_SCHEMA": {
-      // No active doc (a blank tab, or a GLOBAL endpoint selected from another
-      // site) is fine: resolveEndpointSchema -> _docForLearning(null) ->
-      // _emptyDocView, then falls back to globalStore.endpoints. The Send tab is
-      // GLOBAL, so its field lookup must NOT require the active tab to hold an
-      // analyzed document (previously this returned null -> "Select a method to
-      // load field info" stuck forever for any cross-site / no-doc selection).
-      const _esdoc = _docFromMsg(msg);
-      // Pass service/methodId if available (for virtual endpoints)
+      // GLOBAL — keyed by endpointKey/service against the cumulative store,
+      // never per-tab/document (only the network-stream log is per-tab).
       const result = resolveEndpointSchema(
-        _esdoc ? _esdoc.documentId : null,
         msg.endpointKey,
         msg.service,
         msg.methodId,
@@ -6649,12 +6642,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "BUILD_REQUEST": {
-      // Build/export is a review action and the Send tab is GLOBAL, so build
-      // from globalStore when the active tab has no analyzed doc (mirrors
-      // GET_ENDPOINT_SCHEMA). buildExportRequest -> _docForLearning(null) ->
-      // _emptyDocView, with globalStore fallbacks for endpoint + discoveryDocs.
-      const _brdoc = _docFromMsg(msg);
-      buildExportRequest(_brdoc ? _brdoc.documentId : null, msg).then((result) => {
+      // GLOBAL — build/export reads the cumulative store by endpointKey/service,
+      // never per-tab/document.
+      buildExportRequest(msg).then((result) => {
         sendResponse(result);
       });
       return true;
@@ -7166,7 +7156,7 @@ function startExploitProbe(msg) {
 }
 
 
-async function buildExportRequest(documentId, msg) {
+async function buildExportRequest(msg) {
   let parsedUrl;
   try {
     parsedUrl = new URL(msg.url);
@@ -7183,11 +7173,9 @@ async function buildExportRequest(documentId, msg) {
     headers["Content-Type"] = msg.contentType;
   }
 
-  // API key: user override → endpoint → auto
-  const tab = _docForLearning(documentId);
-  const ep = msg.endpointKey
-    ? tab.endpoints.get(msg.endpointKey) || globalStore.endpoints.get(msg.endpointKey)
-    : null;
+  // API key: user override → endpoint → auto. GLOBAL — the endpoint is keyed in
+  // the cumulative store, not per-tab/document.
+  const ep = msg.endpointKey ? globalStore.endpoints.get(msg.endpointKey) : null;
   if (msg.apiKeyOverride) {
     if (!msg.apiKeyOverride.disabled && msg.apiKeyOverride.key) {
       if (msg.apiKeyOverride.source === "url") {
@@ -7211,7 +7199,7 @@ async function buildExportRequest(documentId, msg) {
     // Check for multipart batch sub-request
     const _exportBatchMethod = (() => {
       if (!msg.service || !msg.methodId) return null;
-      const docEntry = tab.discoveryDocs.get(msg.service) || globalStore.discoveryDocs.get(msg.service);
+      const docEntry = globalStore.discoveryDocs.get(msg.service);
       if (!docEntry?.doc) return null;
       const mName = msg.methodId.split(".").pop();
       return docEntry.doc.resources?.learned?.methods?.[mName];
@@ -7457,11 +7445,11 @@ function _onTabRemoved(tabId) {
  * Resolve the full schema for an endpoint by merging discovery doc + probe data.
  * Returns a unified schema the popup can use to build a form.
  */
-function resolveEndpointSchema(documentId, endpointKey, service, methodId) {
-  const tab = _docForLearning(documentId);
-  const ep = endpointKey
-    ? tab.endpoints.get(endpointKey) || globalStore.endpoints.get(endpointKey)
-    : null;
+function resolveEndpointSchema(endpointKey, service, methodId) {
+  // GLOBAL — endpoints/discovery/probes live in the cumulative store keyed by
+  // endpointKey/service. Nothing here is per-tab/document (only the network log
+  // is); the popup reviews the cumulative cross-site moat.
+  const ep = endpointKey ? globalStore.endpoints.get(endpointKey) : null;
 
   // If no endpoint but we have service+methodId (virtual), create a dummy ep object for context
   if (!ep && (!service || !methodId)) return { source: "none", endpoint: null };
@@ -7475,19 +7463,8 @@ function resolveEndpointSchema(documentId, endpointKey, service, methodId) {
   let bodySchemaName = null;
   let contentTypes = [];
 
-  // 1. Try discovery doc (tab-specific first, then global store fallback)
-  let discoveryEntry = tab.discoveryDocs.get(targetService);
-  if (discoveryEntry?.status === "found" && !discoveryEntry.doc) {
-    // Tab has a found entry but no full doc — check global store for in-memory doc
-    const globalEntry = globalStore.discoveryDocs.get(targetService);
-    if (globalEntry?.doc) discoveryEntry = globalEntry;
-  }
-  if (!discoveryEntry?.doc) {
-    // Also try global store directly if tab has no entry
-    const globalEntry = globalStore.discoveryDocs.get(targetService);
-    if (globalEntry?.status === "found" && globalEntry.doc)
-      discoveryEntry = globalEntry;
-  }
+  // 1. Discovery doc — global, per-service (the discovery store is not per-tab).
+  const discoveryEntry = globalStore.discoveryDocs.get(targetService);
   if (discoveryEntry?.status === "found" && discoveryEntry.doc) {
     const doc = discoveryEntry.doc;
     let match = null;
@@ -7563,8 +7540,7 @@ function resolveEndpointSchema(documentId, endpointKey, service, methodId) {
 
   // 2. Try probe results (only if we have a real endpoint key)
   const probeResult = endpointKey
-    ? tab.probeResults.get(endpointKey) ||
-      globalStore.probeResults.get(endpointKey)
+    ? globalStore.probeResults.get(endpointKey)
     : null;
   if (probeResult?.fields) {
     const probeFields = Object.entries(probeResult.fields).map(([name, f]) => ({
