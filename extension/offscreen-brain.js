@@ -6649,9 +6649,12 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "BUILD_REQUEST": {
+      // Build/export is a review action and the Send tab is GLOBAL, so build
+      // from globalStore when the active tab has no analyzed doc (mirrors
+      // GET_ENDPOINT_SCHEMA). buildExportRequest -> _docForLearning(null) ->
+      // _emptyDocView, with globalStore fallbacks for endpoint + discoveryDocs.
       const _brdoc = _docFromMsg(msg);
-      if (!_brdoc) { sendResponse({ error: "no document" }); return; }
-      buildExportRequest(_brdoc.documentId, msg).then((result) => {
+      buildExportRequest(_brdoc ? _brdoc.documentId : null, msg).then((result) => {
         sendResponse(result);
       });
       return true;
@@ -7182,7 +7185,9 @@ async function buildExportRequest(documentId, msg) {
 
   // API key: user override → endpoint → auto
   const tab = _docForLearning(documentId);
-  const ep = msg.endpointKey ? tab.endpoints.get(msg.endpointKey) : null;
+  const ep = msg.endpointKey
+    ? tab.endpoints.get(msg.endpointKey) || globalStore.endpoints.get(msg.endpointKey)
+    : null;
   if (msg.apiKeyOverride) {
     if (!msg.apiKeyOverride.disabled && msg.apiKeyOverride.key) {
       if (msg.apiKeyOverride.source === "url") {
