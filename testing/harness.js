@@ -675,6 +675,75 @@ async function cmdSrcLoc(args) {
   });
 }
 
+// reachgap — the moat's central diagnostic in ONE view: grind summary + learned
+// endpoints + the @WHY reach failures (host_reach_prune / spin_nonterminating /
+// recur_collapse) aggregated by source site. Answers the question that took five
+// manual indirections before: "forced-exec ran but learned few endpoints — WHERE
+// did the fetch paths die?" Usage: `goto <url>` then `reachgap`.
+async function cmdReachGap(args) {
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
+    let pg = null, w = null;
+    for (let i = 0; i < 40 && !w; i++) {
+      const t = browser.targets().find((t) => t.url().startsWith(ourl));
+      pg = t ? await t.page().catch(() => null) : null;
+      if (pg) w = pg.workers().find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
+      if (!w) await sleep(150);
+    }
+    if (!w) { log("(no analysis worker — run `harness restart` + `goto <url>` first)"); return; }
+    const wrep = await w.evaluate(() => {
+      const recs = self._whyRecords || [];
+      const byPhase = {};
+      for (const r of recs) (byPhase[r.phase] = byPhase[r.phase] || []).push(r);
+      const loc = (r) => ((r.file || "?").split("/").pop() || "?") + ":" + r.line + ":" + r.col;
+      const agg = (phase, keyFn) => {
+        const m = new Map();
+        for (const r of (byPhase[phase] || [])) {
+          const k = keyFn(r); const e = m.get(k) || { k, n: 0, s: r }; e.n++; m.set(k, e);
+        }
+        return [...m.values()].sort((a, b) => b.n - a.n);
+      };
+      return {
+        total: recs.length,
+        phases: Object.keys(byPhase).map((k) => k + "=" + byPhase[k].length),
+        prune: agg("host_reach_prune", (r) => loc(r) + "  fn=" + (r.fn || "?")).slice(0, 25).map((e) => ({ at: e.k, n: e.n })),
+        spin: agg("spin_nonterminating", (r) => loc(r) + "  backPc=" + r.ownLoopBackPc).slice(0, 25).map((e) => ({ at: e.k, n: e.n, seenN: e.s.seenN })),
+        recur: agg("recur_collapse", (r) => loc(r)).slice(0, 15).map((e) => ({ at: e.k, n: e.n })),
+        learn: (typeof self._learningState === "function") ? self._learningState() : null,
+      };
+    }).catch((e) => ({ error: String(e && e.message || e) }));
+    let eps = null;
+    if (pg) {
+      eps = await pg.evaluate(() => {
+        try {
+          return {
+            n: globalStore.endpoints.size,
+            list: [...globalStore.endpoints.values()].slice(0, 40).map((e) => (e.method || "?") + " " + (e.url || "").slice(0, 70)),
+            services: [...globalStore.discoveryDocs.keys()],
+          };
+        } catch (e) { return { error: String(e && e.message || e) }; }
+      }).catch((e) => ({ error: String(e && e.message || e) }));
+    }
+    const L = (...a) => log(a.join(""));
+    L("── REACH GAP ───────────────────────────");
+    if (wrep.error) { L("worker eval error: ", wrep.error); return; }
+    if (wrep.learn) L("grind: ", JSON.stringify(wrep.learn));
+    L("endpoints learned: ", eps ? (eps.n != null ? eps.n : JSON.stringify(eps)) : "?", eps && eps.services ? ("  services=" + JSON.stringify(eps.services)) : "");
+    if (eps && eps.list) for (const e of eps.list) L("    ", e);
+    L("@WHY phases: ", (wrep.phases || []).join("  "));
+    const sec = (title, rows, fmt) => {
+      if (!rows || !rows.length) return;
+      L("");
+      L(title, " (", rows.length, " site(s))");
+      for (const r of rows) L("    ", fmt(r));
+    };
+    sec("HOST_REACH_PRUNE — fetch paths dropped as 'won't reach host'", wrep.prune, (r) => "×" + r.n + "  " + r.at);
+    sec("SPIN_NONTERMINATING — drive stalled in a loop", wrep.spin, (r) => "×" + r.n + "  " + r.at + "  seenN=" + r.seenN);
+    sec("RECUR_COLLAPSE", wrep.recur, (r) => "×" + r.n + "  " + r.at);
+  });
+}
+
 // The honest "is a finding MISSING or still being LOOKED FOR" verdict — the
 // signal a network-vs-AST diff MUST gate on. Polls the worker's _learningState
 // until it reaches "complete" (every orphan driven → absence is a real gap) or
@@ -1141,7 +1210,7 @@ async function cmdNetDiff(args) {
 }
 
 
-const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, learnstate: cmdLearnState, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, learnstate: cmdLearnState, reachgap: cmdReachGap, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
