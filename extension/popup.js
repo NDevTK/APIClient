@@ -60,15 +60,80 @@ let lastSendResult = null; // Last rendered response for re-render after rename
 let gqlState = { ops: [], batched: false, activeIdx: 0 }; // GraphQL operation state
 let currentFrameId = 0; // Target frame for sending (0 = main frame)
 let availableFrames = []; // Cached frame list for current tab
-// documentId of the currently-selected frame — the per-document RPC target.
-// Per-document analysis storage is keyed by documentId (tabId is only the
-// network-tab UI filter). Falls back to the main frame, then any frame, then
-// null (the offscreen _docFromMsg shim resolves a bare tabId to the tab's
-// main-frame document, so single-frame pages work without a frame selection).
+// ── Send target: PINNED to a documentId (the "pin to documentid" model) ───────
+// The send target is a specific documentId, NOT the reused frameId. A navigation
+// that swaps a frame's document therefore can't silently retarget a send: the
+// pinned id stops being LIVE, readiness drops, and Send gates OFF until a new
+// document is ready — there is no arbitrary timer that re-enables it. Same-origin
+// swaps are followed automatically (identical credential principal); a confirmed
+// cross-origin swap goes _pinStale and needs an explicit re-confirm.
+let _pinnedDocId = null;   // pinned send-target documentId (null = not yet pinned)
+let _pinnedOrigin = "";    // its principal origin (the credentials origin), from the documentId→origin mapping
+let _pinStale = false;     // pinned doc swapped to a DIFFERENT, known origin — re-confirm required
+let _staleOrigin = "";     // the new origin (for the warning)
+function _origOf(f) {
+  return (f && typeof f.origin === "string" && f.origin.indexOf("://") > 0) ? f.origin : "";
+}
+// The pinned documentId while it is LIVE (ready) in the frame tree; null when the
+// document has gone/changed -> Send gates off on READINESS (not a timer).
 function currentDocumentId() {
+  if (_pinStale) return null;
+  return (_pinnedDocId && availableFrames.some((x) => x.documentId === _pinnedDocId)) ? _pinnedDocId : null;
+}
+// Principal origin shown for the live pin. From the documentId→origin mapping
+// (GET_FRAMES → _originForDoc → MessageSender.origin), NEVER url-derived; "" when
+// opaque/unknown (sandboxed/about:blank) or not yet reported, shown fail-safe.
+function currentPrincipalOrigin() {
+  if (_pinnedDocId && availableFrames.some((x) => x.documentId === _pinnedDocId)) return _pinnedOrigin;
   const f = availableFrames.find((x) => x.frameId === currentFrameId)
          || availableFrames.find((x) => x.isMain) || availableFrames[0];
-  return (f && f.documentId) || null;
+  return _origOf(f);
+}
+// Validate/advance the pin against the live frame tree (called by loadState after
+// GET_FRAMES). First load pins to the main frame. A pinned doc that NAVIGATED is:
+//   • followed if its replacement is SAME-ORIGIN (same principal) — seamless;
+//   • left NOT-READY while the replacement's origin is unknown (not yet reported)
+//     — Send stays off until it is ready, no false "changed" warning;
+//   • marked STALE only once the replacement is a KNOWN, DIFFERENT origin.
+function _resolvePin() {
+  if (availableFrames.length === 0) return;            // keep last pin; currentDocumentId() -> null (not ready)
+  if (_pinnedDocId === null) {                         // first load — default to the main frame
+    const def = availableFrames.find((f) => f.isMain) || availableFrames[0];
+    _pinnedDocId = def.documentId; _pinnedOrigin = _origOf(def); _pinStale = false;
+    currentFrameId = def.frameId || 0;
+    return;
+  }
+  if (availableFrames.some((f) => f.documentId === _pinnedDocId)) { _pinStale = false; return; }  // still live
+  const repl = availableFrames.find((f) => f.frameId === currentFrameId)
+            || availableFrames.find((f) => f.isMain) || availableFrames[0];
+  const ro = _origOf(repl);
+  if (!ro) { _pinStale = false; return; }              // replacement origin unknown -> NOT ready (not stale)
+  if (ro === _pinnedOrigin) { _pinnedDocId = repl.documentId; _pinStale = false; }  // same principal — follow
+  else { _pinStale = true; _staleOrigin = ro; }        // known different principal — fail closed + flag
+}
+function _repinTo(frameId) {                            // explicit (re)selection of a frame's CURRENT document
+  const f = availableFrames.find((x) => x.frameId === frameId);
+  currentFrameId = frameId;
+  _pinnedDocId = f ? f.documentId : null;
+  _pinnedOrigin = _origOf(f);
+  _pinStale = false;
+}
+// Single source of truth for the Send button. Enabled IFF a valid send target is
+// READY (a live pinned documentId, or a replay's captured documentId) AND we are
+// not within the brief security settle right after a documentId change AND not
+// already sending. The settle EXPIRING does not force-enable — readiness still
+// governs, so a not-ready/stale document keeps Send off with NO arbitrary timer.
+function _refreshSendEnabled() {
+  const b = document.getElementById("btn-send");
+  if (!b) return;
+  const target = (currentReplayRequest && currentReplayRequest.documentId) || currentDocumentId();
+  const settling = Date.now() < _navBlockUntil;
+  b.disabled = _sendInProgress || _pinStale || !target || settling;
+  b.title = _sendInProgress ? "Sending…"
+          : _pinStale ? "Document changed origin — re-select to send"
+          : !target ? "Waiting for the page's document to be ready…"
+          : settling ? "Document just changed — settling…"
+          : "";
 }
 let currentKeyOverride = null; // null = auto, { key, source, disabled } for override
 
@@ -846,10 +911,39 @@ let _lastKeysFp = "";
 let _lastSecFp = "";
 let _lastLogFp = "";
 let _lastSendFp = "";
+// Navigation race-guard (security delay). Sends are routed by the authoritative
+// documentId→origin pinning, so a send racing a navigation is already REFUSED at
+// the routing layer; this adds a short Send block + Request-Context refresh so the
+// user never fires at (or sees a confusing failure from) a freshly-navigated doc.
+let _navBlockUntil = 0;
+let _sendInProgress = false;
+let _navReenableTimer = null;
 
 document.addEventListener("DOMContentLoaded", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabId = tab?.id ?? null;
+
+  // Security delay: on any navigation in this tab (origin change → new
+  // documentId), block Send for a short settle window and refresh the Request
+  // Context (frame picker + per-document origins, from the documentId→origin
+  // mapping) so the displayed origin and the send target track the live document.
+  if (chrome.webNavigation) {
+    // A frame changing its document is the trigger for the security settle: gate
+    // Send off immediately, re-fetch the frame tree (→ _resolvePin re-validates the
+    // pin), then re-evaluate after a short settle. Re-eval goes through
+    // _refreshSendEnabled, so Send only returns when a documentId is actually
+    // READY — the settle expiring never force-enables a not-ready/stale document.
+    const SETTLE_MS = 1000;
+    const _markNav = (refresh) => {
+      _navBlockUntil = Date.now() + SETTLE_MS;
+      _refreshSendEnabled();
+      clearTimeout(_navReenableTimer);
+      _navReenableTimer = setTimeout(_refreshSendEnabled, SETTLE_MS + 30);
+      if (refresh) loadState();
+    };
+    chrome.webNavigation.onBeforeNavigate.addListener((d) => { if (d.tabId === currentTabId) _markNav(false); });
+    chrome.webNavigation.onCommitted.addListener((d) => { if (d.tabId === currentTabId) _markNav(true); });
+  }
 
   for (const btn of document.querySelectorAll(".tab")) {
     btn.addEventListener("click", () => {
@@ -971,8 +1065,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Frame selector
   document.getElementById("send-frame-select").addEventListener("change", (e) => {
-    currentFrameId = parseInt(e.target.value, 10) || 0;
-    loadState();  // re-load the selected frame's per-document analysis (documentId-keyed)
+    _repinTo(parseInt(e.target.value, 10) || 0);  // pin to the chosen frame's CURRENT document
+    loadState();  // re-load the selected document's per-document analysis (documentId-keyed)
   });
 
   // API key selector: delegate to radio buttons and custom input
@@ -1438,6 +1532,7 @@ async function loadState() {
   } catch (_) {
     availableFrames = [];
   }
+  _resolvePin();   // validate/advance the pinned send-target against the live frame tree
   tabData = await chrome.runtime.sendMessage({
     type: "GET_STATE",
     tabId: currentTabId,
@@ -1445,6 +1540,7 @@ async function loadState() {
   });
   await loadRequestLog();
   render();
+  _refreshSendEnabled();   // readiness may have changed (pin became live / stale / not-ready)
 }
 
 async function clearState() {
@@ -2466,35 +2562,77 @@ function renderMethodDropdown() {
 function renderFrameSelector() {
   const row = document.getElementById("send-frame-row");
   const sel = document.getElementById("send-frame-select");
+  const originEl = document.getElementById("send-principal-origin");
   if (!row || !sel) return;
 
-  if (availableFrames.length <= 1) {
+  // No frames reported yet (no content script) \u2014 hide the whole context.
+  if (availableFrames.length === 0) {
     row.classList.add("hidden");
-    currentFrameId = 0;
     renderServiceOriginHint();
+    _refreshSendEnabled();
     return;
   }
 
   row.classList.remove("hidden");
-  var prevVal = sel.value;
-  sel.innerHTML = "";
-  for (var i = 0; i < availableFrames.length; i++) {
-    var f = availableFrames[i];
-    var opt = document.createElement("option");
-    opt.value = f.frameId;
-    var label = f.isMain ? "Top frame" : "iframe (" + f.frameId + ")";
-    try {
-      var u = new URL(f.url);
-      label += " \u2014 " + u.hostname;
-    } catch (_) {
-      if (f.origin) label += " \u2014 " + f.origin;
+
+  // The picker only matters with >1 frame; single-frame pages just show the
+  // principal origin below (no dropdown).
+  if (availableFrames.length <= 1) {
+    sel.classList.add("hidden");
+  } else {
+    sel.classList.remove("hidden");
+    sel.innerHTML = "";
+    for (var i = 0; i < availableFrames.length; i++) {
+      var f = availableFrames[i];
+      var opt = document.createElement("option");
+      opt.value = f.frameId;
+      // Authoritative origin (documentId\u2192origin) is the label; the url host is
+      // only a fallback when the origin is opaque/unknown.
+      var shown = _origOf(f);
+      if (!shown) { try { shown = new URL(f.url).host; } catch (_) { shown = f.origin || "opaque"; } }
+      opt.textContent = (f.isMain ? "Top frame" : "iframe (" + f.frameId + ")") + " \u2014 " + shown;
+      sel.appendChild(opt);
     }
-    opt.textContent = label;
-    sel.appendChild(opt);
+    // Restore the selection to the PINNED document's frame (not a reused frameId);
+    // fall back to the last selected frame while a replacement is settling.
+    var pf = availableFrames.find(function (f) { return f.documentId === _pinnedDocId; });
+    sel.value = String(pf ? pf.frameId : currentFrameId);
+    currentFrameId = parseInt(sel.value, 10) || 0;
   }
-  if (prevVal) sel.value = prevVal;
-  currentFrameId = parseInt(sel.value, 10) || 0;
+
+  // Principal-origin / state line. The Send button itself is governed by
+  // _refreshSendEnabled (readiness), never here.
+  if (originEl) {
+    if (_pinStale) {
+      // Confirmed cross-origin swap \u2014 warn + offer a one-click re-target.
+      originEl.classList.add("opaque");
+      originEl.textContent = "\u26a0 Document changed \u2192 " + (_staleOrigin || "opaque origin") + " \u2014 click to re-target";
+      originEl.title = "The pinned document navigated to a different origin ("
+        + (_pinnedOrigin || "?") + " \u2192 " + (_staleOrigin || "opaque")
+        + "). Send is gated off; click to pin the new document and send to it.";
+      originEl.style.cursor = "pointer";
+      originEl.onclick = function () { _repinTo(currentFrameId); loadState(); };
+    } else if (!currentDocumentId()) {
+      // Pinned doc gone, replacement not ready yet (origin not reported).
+      originEl.classList.add("opaque");
+      originEl.textContent = "Credentials: waiting for document\u2026";
+      originEl.title = "The document changed; Send stays off until the new document reports.";
+      originEl.style.cursor = "";
+      originEl.onclick = null;
+    } else {
+      var po = currentPrincipalOrigin();
+      originEl.classList.toggle("opaque", !po);
+      originEl.textContent = po ? ("Credentials: " + po) : "Credentials: opaque / unknown origin";
+      originEl.title = po
+        ? "A page-context send uses " + po + "'s cookies (authoritative documentId\u2192origin mapping)."
+        : "No resolvable origin (sandboxed / about:blank); page-context sends fail closed.";
+      originEl.style.cursor = "";
+      originEl.onclick = null;
+    }
+  }
+
   renderServiceOriginHint();
+  _refreshSendEnabled();
 }
 
 function renderServiceOriginHint() {
@@ -3771,8 +3909,18 @@ function getInputValue(input, type) {
 
 async function sendRequest() {
   const btn = document.getElementById("btn-send");
+  // Readiness + re-entrancy backstop for the _refreshSendEnabled() gate: refuse
+  // unless a valid send target is READY (a live pinned documentId or a replay's
+  // captured one), the pin isn't a confirmed cross-origin swap, we're past the
+  // brief post-change settle, and no send is already running.
+  const _target = (currentReplayRequest && currentReplayRequest.documentId) || currentDocumentId();
+  if (_sendInProgress || _pinStale || !_target || Date.now() < _navBlockUntil) {
+    _refreshSendEnabled();
+    return;
+  }
   btn.disabled = true;
   btn.textContent = "Sending...";
+  _sendInProgress = true;
 
   const bodyMode = currentBodyMode;
   let url = currentRequestUrl;
@@ -3940,8 +4088,9 @@ async function sendRequest() {
     renderResponse({ error: err.message });
   }
 
-  btn.disabled = false;
   btn.textContent = "Send Request";
+  _sendInProgress = false;
+  _refreshSendEnabled();   // re-evaluate readiness — don't blindly re-enable
 }
 
 // ─── Message Console (WebSocket + postMessage) ─────────────────────────────
@@ -5339,7 +5488,7 @@ async function replayRequest(reqId, sourceTabId) {
   if (req.frameId != null && availableFrames.length > 1) {
     var _frameMatch = availableFrames.find(function(f) { return f.frameId === req.frameId; });
     if (_frameMatch) {
-      currentFrameId = req.frameId;
+      _repinTo(req.frameId);   // pin to the replay's frame — keeps picker + pin consistent
       var _frameSel = document.getElementById("send-frame-select");
       if (_frameSel) _frameSel.value = String(req.frameId);
     }

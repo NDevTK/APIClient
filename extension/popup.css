@@ -1074,6 +1074,16 @@ details summary:hover {
 .service-origin-open:hover {
   text-decoration: underline;
 }
+.send-ctx-origin {
+  font-size: 10px;
+  color: #8b949e;
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  word-break: break-all;
+}
+.send-ctx-origin.opaque {
+  color: #d29922;
+}
 
 /* API Key selector */
 #send-key-section {
