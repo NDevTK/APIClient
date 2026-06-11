@@ -410,18 +410,13 @@ function docsForTab(tabId) {
 // when only a tabId is sent. Returns null if nothing matches (handlers fail
 // closed). Never creates an entry for a bare tabId.
 function _docFromMsg(msg) {
-  // state.docs.get (NOT getDoc) — a query must NEVER create an entry, or a popup
-  // RPC for a never-analyzed frame would pollute state.docs with a phantom doc.
-  // No match → null → the caller falls back to the global-overlay view.
-  if (msg && msg.documentId) return state.docs.get(msg.documentId) || null;
-  if (msg && msg.tabId != null) {
-    var docs = docsForTab(msg.tabId);
-    if (docs.length) {
-      for (var i = 0; i < docs.length; i++) if (docs[i].frameId === 0) return docs[i];
-      return docs[0];
-    }
-  }
-  return null;
+  // documentId is the ONLY document key. A tabId does NOT identify a document:
+  // a tab holds many documents, "main frame" is a wrong guess, and a (tab,frame)
+  // pair is reused across navigations with a DIFFERENT origin. So a doc-less
+  // query returns null and the caller falls back to the global-overlay view;
+  // tabId stays a UI-filter / Chrome-routing FIELD, never a document resolver.
+  // state.docs.get (NOT getDoc) — a query must NEVER create a phantom entry.
+  return (msg && msg.documentId && state.docs.get(msg.documentId)) || null;
 }
 
 // A transient (unstored) empty DocData. Views that should still surface the
@@ -6554,7 +6549,10 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "WS_SEND_MSG": {
       if (tabId == null) return;
-      var _wsOpts = msg.frameId != null ? { frameId: msg.frameId } : undefined;
+      // Route to the exact DOCUMENT the socket lives on — documentId is stable,
+      // frameId is reused across navigations. frameId only as a legacy fallback.
+      var _wsOpts = msg.documentId ? { documentId: msg.documentId }
+        : (msg.frameId != null ? { frameId: msg.frameId } : undefined);
       swRpc("tabs.sendMessage", tabId, {
         type: "WS_SEND_MSG",
         wsId: msg.channelId,
@@ -6584,7 +6582,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "PM_SEND_MSG": {
       if (tabId == null) return;
-      var _pmOpts = msg.frameId != null ? { frameId: msg.frameId } : undefined;
+      // Route to the exact DOCUMENT (documentId stable; frameId reused across navs).
+      var _pmOpts = msg.documentId ? { documentId: msg.documentId }
+        : (msg.frameId != null ? { frameId: msg.frameId } : undefined);
       swRpc("tabs.sendMessage", tabId, {
         type: "PM_SEND_MSG",
         data: msg.data,
@@ -6614,7 +6614,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "MC_SEND_MSG": {
       if (tabId == null) return;
-      var _mcOpts = msg.frameId != null ? { frameId: msg.frameId } : undefined;
+      // Route to the exact DOCUMENT (documentId stable; frameId reused across navs).
+      var _mcOpts = msg.documentId ? { documentId: msg.documentId }
+        : (msg.frameId != null ? { frameId: msg.frameId } : undefined);
       swRpc("tabs.sendMessage", tabId, {
         type: "MC_SEND_MSG",
         channelId: msg.channelId,

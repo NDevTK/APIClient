@@ -51,7 +51,8 @@ let currentChannelTabId = null;
 let currentChannelId = null;
 let currentChannelType = null; // "WEBSOCKET" | "POSTMESSAGE" | "MSGCHANNEL"
 let currentTargetOrigin = null; // For postMessage send
-let currentChannelFrameId = null; // Frame where the channel lives
+let currentChannelFrameId = null; // Frame where the channel lives (legacy routing fallback)
+let currentChannelDocumentId = null; // Document the channel lives on — preferred routing target (stable across navigations)
 let logFilter = "active"; // "active" | "all" | tabId (number)
 let logSearchQuery = ""; // text filter for request log
 let allTabsData = null; // { tabId: { meta, requestLog } }
@@ -2771,6 +2772,7 @@ function onSendEndpointSelected() {
     currentChannelType = null;
     currentTargetOrigin = null;
     currentChannelFrameId = null;
+    currentChannelDocumentId = null;
     document.getElementById("send-ws-console").style.display = "none";
   }
   currentBodyMode = "form";
@@ -3950,6 +3952,7 @@ async function initMsgConsole(req) {
   // For PM reply: target is the sourceOrigin (who sent to us, we reply back to them)
   currentTargetOrigin = req.sourceOrigin || null;
   currentChannelFrameId = req.frameId ?? null;
+  currentChannelDocumentId = req.documentId ?? null;
   // Bind the channel to the tab that captured it. When logFilter=="all"
   // or we're viewing a closed-tab log, `req._tabId` is set to the origin
   // tab during log flattening. Default back to currentTabId when missing
@@ -4085,18 +4088,18 @@ async function sendConsoleMessage() {
       msgPayload = {
         type: "PM_SEND_MSG", tabId: routedTab, channelId: currentChannelId,
         data: data, targetOrigin: currentTargetOrigin || "*",
-        frameId: currentChannelFrameId,
+        documentId: currentChannelDocumentId, frameId: currentChannelFrameId,
       };
     } else if (currentChannelType === "MSGCHANNEL") {
       msgPayload = {
         type: "MC_SEND_MSG", tabId: routedTab, channelId: currentChannelId,
-        data: data, frameId: currentChannelFrameId,
+        data: data, documentId: currentChannelDocumentId, frameId: currentChannelFrameId,
       };
     } else {
       msgPayload = {
         type: "WS_SEND_MSG", tabId: routedTab,
         channelId: currentChannelId, data: data,
-        frameId: currentChannelFrameId,
+        documentId: currentChannelDocumentId, frameId: currentChannelFrameId,
       };
     }
     const result = await chrome.runtime.sendMessage(msgPayload);
