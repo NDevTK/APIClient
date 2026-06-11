@@ -3293,7 +3293,13 @@ function mergeSchemaInto(doc, rootSchemaName, rootNewSchema) {
 /**
  * Send a PAGE_FETCH message to a tab's content script.
  */
-async function sendPageFetch(tabId, url, opts, frameId = 0) {
+async function sendPageFetch(tabId, url, opts, documentId) {
+  // documentId-ONLY routing. A credentialed page-context read must hit the EXACT
+  // document (its own origin/credentials). NO frameId fallback — a frameId is
+  // reused across navigations and could resolve to a DIFFERENT origin; and with
+  // no target option tabs.sendMessage would broadcast to every frame in the tab.
+  // No documentId → refuse rather than risk a wrong-origin / broadcast read.
+  if (!documentId) return { error: "blocked: no documentId for page-context fetch" };
   return swRpc(
     "tabs.sendMessage",
     tabId,
@@ -3305,15 +3311,17 @@ async function sendPageFetch(tabId, url, opts, frameId = 0) {
       body: opts.body ?? null,
       bodyEncoding: opts.bodyEncoding || null,
     },
-    { frameId: frameId ?? 0 },
+    { documentId },
   );
 }
 
 /**
- * Fetch through a content script on the original tab.
- * @param {number} frameId — target frame (0 = main frame, >0 = iframe)
+ * Fetch through a content script in the EXACT document (credentialed,
+ * session-aware). Routed by documentId ONLY — no frameId fallback, because a
+ * frame is reused across navigations and could be a different origin.
+ * @param {string} documentId — the target document (stable across the page's life)
  */
-async function pageContextFetch(tabId, url, opts, frameId) {
+async function pageContextFetch(tabId, url, opts, documentId) {
   // Validate URL
   try {
     const parsed = new URL(url);
@@ -3328,7 +3336,7 @@ async function pageContextFetch(tabId, url, opts, frameId) {
   let _pageFetchErr = null;
   if (tabId != null) {
     try {
-      return await sendPageFetch(tabId, url, opts, frameId ?? 0);
+      return await sendPageFetch(tabId, url, opts, documentId);
     } catch (e) {
       /* Page-context fetch failed (tab closed, content script not injected,
          frame removed, etc.). Capture the underlying reason so the caller
@@ -3346,8 +3354,10 @@ async function pageContextFetch(tabId, url, opts, frameId) {
 /**
  * Create a fetchFn bound to a specific tab.
  */
-function makePageFetchFn(tabId) {
-  return (url, opts) => pageContextFetch(tabId, url, opts);
+function makePageFetchFn(tabId, documentId = null) {
+  // Bind the DOCUMENT (stable) so page-context discovery/probe reads hit the
+  // exact document's own origin/credentials. Routed by documentId only.
+  return (url, opts) => pageContextFetch(tabId, url, opts, documentId);
 }
 
 // ─── Discovery Document Fetching ─────────────────────────────────────────────
@@ -3474,7 +3484,7 @@ async function fetchDiscoveryForService(
   const tab = _docForLearning(documentId);
   const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing (makePageFetchFn/notifyPopup) — derived from the doc
 
-  const fetchFn = makePageFetchFn(tabId);
+  const fetchFn = makePageFetchFn(tabId, documentId);
   const triedKeys = new Set();
 
   // Build a deduplicated candidate list across all keys
@@ -3608,7 +3618,7 @@ async function performProbeAndPatch(documentId, service, targetUrl, apiKey) {
     return;
   }
 
-  const fetchFn = makePageFetchFn(tabId);
+  const fetchFn = makePageFetchFn(tabId, documentId);
 
   const probeHeader = apiKey ? { "x-goog-api-key": apiKey } : {};
 
@@ -3894,7 +3904,7 @@ async function probeEndpoint(documentId, endpointKey) {
     }
   }
 
-  const fetchFn = makePageFetchFn(tabId);
+  const fetchFn = makePageFetchFn(tabId, documentId);
   const result = await probeApiEndpoint(probeUrl.toString(), headers, {
     fetchFn,
   });
@@ -5542,7 +5552,7 @@ function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
     return;
   }
   console.debug("[AST:sourcemap] Fetching: %s (from %s)", smUrl, scriptUrl);
-  pageContextFetch(tabId, smUrl, { method: "GET" })
+  pageContextFetch(tabId, smUrl, { method: "GET" }, tab && tab.documentId)
     .then(async function(smResp) {
       if (!smResp.body || smResp.error) {
         console.debug("[AST:sourcemap] Fetch failed for %s: %s", smUrl, smResp.error || "empty body");
@@ -6357,7 +6367,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
           headers["X-Goog-Api-Key"] = ep.apiKey;
         }
       }
-      const fetchFn = makePageFetchFn(tab.tabId);
+      const fetchFn = makePageFetchFn(tab.tabId, tab.documentId);
       discoverServiceInfo(discoverUrl.toString(), headers, { fetchFn }).then(
         (result) => {
           tab.probeResults.set(`svc:${msg.endpointKey}`, result);
@@ -6549,10 +6559,11 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "WS_SEND_MSG": {
       if (tabId == null) return;
-      // Route to the exact DOCUMENT the socket lives on — documentId is stable,
-      // frameId is reused across navigations. frameId only as a legacy fallback.
-      var _wsOpts = msg.documentId ? { documentId: msg.documentId }
-        : (msg.frameId != null ? { frameId: msg.frameId } : undefined);
+      // documentId-ONLY routing: a frameId is reused across navigations and
+      // could resolve to a DIFFERENT origin; with no target option,
+      // tabs.sendMessage would broadcast to every frame. No documentId → refuse.
+      if (!msg.documentId) { sendResponse({ error: "blocked: no documentId" }); return true; }
+      var _wsOpts = { documentId: msg.documentId };
       swRpc("tabs.sendMessage", tabId, {
         type: "WS_SEND_MSG",
         wsId: msg.channelId,
@@ -6582,9 +6593,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "PM_SEND_MSG": {
       if (tabId == null) return;
-      // Route to the exact DOCUMENT (documentId stable; frameId reused across navs).
-      var _pmOpts = msg.documentId ? { documentId: msg.documentId }
-        : (msg.frameId != null ? { frameId: msg.frameId } : undefined);
+      // documentId-ONLY routing (no frameId fallback — reused across navs / origins).
+      if (!msg.documentId) { sendResponse({ error: "blocked: no documentId" }); return true; }
+      var _pmOpts = { documentId: msg.documentId };
       swRpc("tabs.sendMessage", tabId, {
         type: "PM_SEND_MSG",
         data: msg.data,
@@ -6614,9 +6625,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "MC_SEND_MSG": {
       if (tabId == null) return;
-      // Route to the exact DOCUMENT (documentId stable; frameId reused across navs).
-      var _mcOpts = msg.documentId ? { documentId: msg.documentId }
-        : (msg.frameId != null ? { frameId: msg.frameId } : undefined);
+      // documentId-ONLY routing (no frameId fallback — reused across navs / origins).
+      if (!msg.documentId) { sendResponse({ error: "blocked: no documentId" }); return true; }
+      var _mcOpts = { documentId: msg.documentId };
       swRpc("tabs.sendMessage", tabId, {
         type: "MC_SEND_MSG",
         channelId: msg.channelId,
@@ -8239,7 +8250,7 @@ async function executeSendRequest(documentId, msg) {
         body,
         bodyEncoding,
       },
-      msg.frameId,
+      documentId,
     );
   } catch (err) {
     return { error: `fetch_exception: ${err.message}`, timing: Date.now() - startTime };
