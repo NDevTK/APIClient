@@ -6751,14 +6751,16 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "RENAME_FIELD": {
-      const tab = _docFromMsg(msg);
-      if (!tab) { sendResponse(null); return; }
+      // GLOBAL per-service edit — never takes a documentId/tabId. The discovery
+      // store is global; a rename sets customName=true, which every merge path
+      // preserves, so editing the global doc directly persists across later page
+      // merges (no mergeToGlobal needed).
       const { service, schemaName, fieldKey, newName } = msg;
-      const docEntry =
-        tab.discoveryDocs.get(service) ||
-        globalStore.discoveryDocs.get(service);
-
-      if (!docEntry || !docEntry.doc) return;
+      const docEntry = globalStore.discoveryDocs.get(service);
+      if (!docEntry || !docEntry.doc) {
+        sendResponse({ error: "No discovery document for " + service });
+        return;
+      }
       const doc = docEntry.doc;
 
       if (schemaName === "params") {
@@ -6783,8 +6785,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         if (m && m.parameters?.[fieldKey]) {
           m.parameters[fieldKey].name = newName;
           m.parameters[fieldKey].customName = true;
-          mergeToGlobal(tab);
           sendResponse({ ok: true });
+        } else {
+          sendResponse({ error: "Parameter not found for rename" });
         }
       } else {
         // Handle schema properties or create virtual schema for raw fields
@@ -6810,7 +6813,6 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
             type: "any"
           };
         }
-        mergeToGlobal(tab);
         sendResponse({ ok: true });
       }
       return;

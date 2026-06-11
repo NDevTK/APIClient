@@ -1154,8 +1154,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         await chrome.runtime.sendMessage({
           type: "RENAME_FIELD",
-          tabId: currentTabId,
-          documentId: currentDocumentId(),
           service: svc,
           methodId,
           schemaName: schema,
