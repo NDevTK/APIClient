@@ -4616,8 +4616,6 @@ async function importOpenApiSpec(e) {
 
     const result = await chrome.runtime.sendMessage({
       type: "IMPORT_OPENAPI",
-      tabId: currentTabId,
-      documentId: currentDocumentId(),
       spec,
     });
 

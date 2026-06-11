@@ -6834,8 +6834,8 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "IMPORT_OPENAPI": {
-      const tab = _docFromMsg(msg);
-      if (!tab) { sendResponse({ error: "no document" }); return; }
+      // GLOBAL — an imported spec is a user-provided service definition, not a
+      // page fetch; it goes straight into the global discovery store (no doc).
       try {
         const spec = msg.spec;
         if (!spec || typeof spec !== "object") {
@@ -6891,8 +6891,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         const doc = convertOpenApiToDiscovery(spec, sourceUrl);
 
         // Merge with existing doc if present
-        const existing = tab.discoveryDocs.get(svcName) ||
-          globalStore.discoveryDocs.get(svcName);
+        const existing = globalStore.discoveryDocs.get(svcName);
         if (existing?.doc) {
           // Merge imported methods into existing doc
           for (const [rName, resource] of Object.entries(doc.resources)) {
@@ -6914,7 +6913,6 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
           }
         } else {
           // Store as new discovery doc
-          var _prevTabEntry = tab.discoveryDocs.get(svcName);
           var _prevGlobalEntry = globalStore.discoveryDocs.get(svcName);
           const entry = {
             status: "found",
@@ -6924,13 +6922,11 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
             fetchedAt: Date.now(),
             doc,
             isVirtual: false,
-            pageUrls: _prevTabEntry?.pageUrls || _prevGlobalEntry?.pageUrls || new Set(),
-            frameOrigins: _prevTabEntry?.frameOrigins || _prevGlobalEntry?.frameOrigins || new Set(),
+            pageUrls: _prevGlobalEntry?.pageUrls || new Set(),
+            frameOrigins: _prevGlobalEntry?.frameOrigins || new Set(),
           };
-          tab.discoveryDocs.set(svcName, entry);
           globalStore.discoveryDocs.set(svcName, entry);
         }
-        mergeToGlobal(tab);
         scheduleSave();
         sendResponse({ ok: true, service: svcName });
       } catch (err) {
