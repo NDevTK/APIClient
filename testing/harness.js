@@ -710,6 +710,14 @@ async function cmdReachGap(args) {
         prune: agg("host_reach_prune", (r) => loc(r) + "  fn=" + (r.fn || "?")).slice(0, 25).map((e) => ({ at: e.k, n: e.n })),
         spin: agg("spin_nonterminating", (r) => loc(r) + "  backPc=" + r.ownLoopBackPc).slice(0, 25).map((e) => ({ at: e.k, n: e.n, seenN: e.s.seenN })),
         recur: agg("recur_collapse", (r) => loc(r)).slice(0, 15).map((e) => ({ at: e.k, n: e.n })),
+        recvThrow: agg("recv_throw", (r) => "L" + r.line + ": " + String(r.msg || "").slice(0, 60)).slice(0, 10).map((e) => ({ at: e.k, n: e.n })),
+        orphanDrive: (function () {
+          const d = byPhase["orphan_drive"] || [];
+          let recv = 0, host = 0, asy = 0, inst = 0;
+          for (const r of d) { if (r.recv) recv++; if (r.host) host++; if (r.async) asy++; if (r.inst) inst++; }
+          return d.length ? { n: d.length, recv1: recv, recv0: d.length - recv, host: host, async: asy, inst: inst } : null;
+        })(),
+        drive: self._lastDeepStats ? (function () { const s = self._lastDeepStats; return { recvThr: s.recvThr, dnfThrew: s.dnfThrew, dnfRet: s.dnfRet, gsDrv: s.gsDrv, gsRecv: s.gsRecv, gsDrn: s.gsDrn, recvExc: String(s.recvExcMsg || "").slice(0, 70) }; })() : null,
         learn: (typeof self._learningState === "function") ? self._learningState() : null,
       };
     }).catch((e) => ({ error: String(e && e.message || e) }));
@@ -732,6 +740,8 @@ async function cmdReachGap(args) {
     L("endpoints learned: ", eps ? (eps.n != null ? eps.n : JSON.stringify(eps)) : "?", eps && eps.services ? ("  services=" + JSON.stringify(eps.services)) : "");
     if (eps && eps.list) for (const e of eps.list) L("    ", e);
     L("@WHY phases: ", (wrep.phases || []).join("  "));
+    if (wrep.drive) L("drive-stats: ", JSON.stringify(wrep.drive));
+    if (wrep.orphanDrive) L("orphan-drive (receiver coverage): ", JSON.stringify(wrep.orphanDrive));
     const sec = (title, rows, fmt) => {
       if (!rows || !rows.length) return;
       L("");
@@ -741,6 +751,7 @@ async function cmdReachGap(args) {
     sec("HOST_REACH_PRUNE — fetch paths dropped as 'won't reach host'", wrep.prune, (r) => "×" + r.n + "  " + r.at);
     sec("SPIN_NONTERMINATING — drive stalled in a loop", wrep.spin, (r) => "×" + r.n + "  " + r.at + "  seenN=" + r.seenN);
     sec("RECUR_COLLAPSE", wrep.recur, (r) => "×" + r.n + "  " + r.at);
+    sec("RECV_THROW — receiver-drive threw (orphan line : message)", wrep.recvThrow, (r) => "×" + r.n + "  " + r.at);
   });
 }
 
