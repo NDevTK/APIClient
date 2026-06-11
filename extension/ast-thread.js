@@ -1339,6 +1339,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // 0-endpoints blocker. Keep _dst distinct so the source survives for the loader.
     if (_dst === _src) _dst = _src + ".bc";
     var _bcCallThrew = false;
+    var _sderr0 = stderr.length;   // snapshot so an empty compile can attach THIS module's @E/parse stderr
     try {
       await m.callMain([startLineArg, "--fe-emit-bc", _src, _dst]);
       var _bc = null;
@@ -1356,7 +1357,17 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            ONLY for this slice) is visible. NOT a silent skip. */
         _bcEmpty++;
         if (!self._whyRecords) self._whyRecords = [];
-        self._whyRecords.push({ phase: "bc_compile_empty", file: _src, len: bundleFiles[bce].src.length });
+        /* srcHead: the first 240 source chars distinguish a legitimately-empty
+           re-export barrel (`export {x} from "./y"` only — no runtime body, so
+           empty bytecode is EXPECTED and the gap is the imports not being followed)
+           from a module with a real body (`export const f = (...) => ...`) whose
+           bytecode was wrongly dropped (a genuine ESM-emit bug). The directus
+           command modules (read/items.js etc.) compile empty and dark the whole
+           request surface — this names which case each one is. */
+        var _sh = String(bundleFiles[bce].src || "");
+        self._whyRecords.push({ phase: "bc_compile_empty", file: _src, len: bundleFiles[bce].src.length,
+          srcHead: _sh.slice(0, 240).replace(/\s+/g, " "), srcTail: _sh.slice(-160).replace(/\s+/g, " "),
+          emitErr: stderr.slice(_sderr0).join(" | ").slice(0, 400) });
       }
     } catch (e) {
       _bcCallThrew = true;
