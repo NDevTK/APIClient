@@ -6814,11 +6814,11 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "EXPORT_OPENAPI": {
-      const tab = _docFromMsg(msg);
-      if (!tab) { sendResponse({ error: "no document" }); return; }
+      // Per-SERVICE and fully GLOBAL — never takes a documentId/tabId. The
+      // discovery store is global; nothing in the popup is per-tab except the
+      // network-stream log filter (where tabId/documentId is just log metadata).
       const svc = msg.service;
-      const docEntry =
-        tab.discoveryDocs.get(svc) || globalStore.discoveryDocs.get(svc);
+      const docEntry = globalStore.discoveryDocs.get(svc);
       if (!docEntry?.doc) {
         sendResponse({ error: "No discovery document found for " + svc });
         return;

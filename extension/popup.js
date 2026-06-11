@@ -4347,8 +4347,6 @@ async function exportOpenApiSpec() {
     for (const svc of services) {
       const result = await chrome.runtime.sendMessage({
         type: "EXPORT_OPENAPI",
-        tabId: currentTabId,
-        documentId: currentDocumentId(),
         service: svc,
       });
       if (result?.error && services.length === 1) { alert(result.error); return; }
