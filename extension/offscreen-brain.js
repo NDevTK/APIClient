@@ -6532,11 +6532,16 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "GET_ENDPOINT_SCHEMA": {
+      // No active doc (a blank tab, or a GLOBAL endpoint selected from another
+      // site) is fine: resolveEndpointSchema -> _docForLearning(null) ->
+      // _emptyDocView, then falls back to globalStore.endpoints. The Send tab is
+      // GLOBAL, so its field lookup must NOT require the active tab to hold an
+      // analyzed document (previously this returned null -> "Select a method to
+      // load field info" stuck forever for any cross-site / no-doc selection).
       const _esdoc = _docFromMsg(msg);
-      if (!_esdoc) { sendResponse(null); return; }
       // Pass service/methodId if available (for virtual endpoints)
       const result = resolveEndpointSchema(
-        _esdoc.documentId,
+        _esdoc ? _esdoc.documentId : null,
         msg.endpointKey,
         msg.service,
         msg.methodId,
