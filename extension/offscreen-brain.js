@@ -2331,7 +2331,7 @@ function _aggregateStatsForSchemaPath(bodyFieldStats, schemaPath) {
   // by regex escaping; escape the rest; then swap the sentinel back to
   // the index pattern. No regex from user input — schemaPath is built
   // by the walker from controlled property names + literal `[]` markers.
-  const SENTINEL = " ARR ";
+  const SENTINEL = "\0ARR\0";
   const escaped = schemaPath
     .split("[]").join(SENTINEL)
     .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
