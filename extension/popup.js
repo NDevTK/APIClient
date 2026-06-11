@@ -1444,9 +1444,7 @@ async function loadState() {
     tabId: currentTabId,
     documentId: currentDocumentId(),
   });
-  if (logFilter !== "active") {
-    await loadRequestLog();
-  }
+  await loadRequestLog();
   render();
 }
 
@@ -1459,14 +1457,21 @@ async function clearState() {
 }
 
 async function loadRequestLog() {
-  if (logFilter === "active") {
+  // The request log is a GLOBAL array (each entry carries its own tabId) — there
+  // is NO per-document log. So every scope is served by GET_ALL_LOGS: "active" =
+  // the global log filtered to the active tab, "all" = every tab, a number = that
+  // tab. (Previously "active" nulled allTabsData and the render fell back to the
+  // per-document tabData.requestLog, which is always empty after the
+  // tabId->documentId migration — so the "Active Tab" option showed nothing.)
+  const filter = logFilter === "active" ? currentTabId : logFilter;
+  if (filter == null) {
     allTabsData = null;
     return;
   }
   try {
     allTabsData = await chrome.runtime.sendMessage({
       type: "GET_ALL_LOGS",
-      filter: logFilter,
+      filter,
     });
   } catch (_) {
     allTabsData = null;
@@ -4964,11 +4969,11 @@ function renderResponsePanel() {
   const container = document.getElementById("response-log");
   const scrollEl = document.getElementById("panel-response");
 
-  // Build entry list based on filter mode
+  // Build entry list. The request log is GLOBAL (no per-document slice), so ALL
+  // scopes render from allTabsData — loadRequestLog populated it via GET_ALL_LOGS
+  // with the right filter ("active"->active tab, "all"->every tab, number->that tab).
   let entries = [];
-  if (logFilter === "active") {
-    entries = (tabData?.requestLog || []).map((r) => ({ ...r, _tabId: currentTabId }));
-  } else if (allTabsData) {
+  if (allTabsData) {
     for (const [tidStr, data] of Object.entries(allTabsData)) {
       const tid = parseInt(tidStr, 10);
       const meta = data.meta || {};
@@ -5310,8 +5315,15 @@ async function replayRequest(reqId, sourceTabId) {
   if (sourceTabId && allTabsData && allTabsData[sourceTabId]) {
     req = allTabsData[sourceTabId].requestLog.find((r) => String(r.id) === String(reqId));
   }
-  if (!req) {
-    req = tabData?.requestLog?.find((r) => String(r.id) === String(reqId));
+  if (!req && allTabsData) {
+    // The request log is GLOBAL — search every loaded tab's slice rather than
+    // the per-document tabData.requestLog (always empty post tabId->documentId
+    // migration). With the scope-fixed loadRequestLog, allTabsData is populated
+    // for every scope including "active", so the entry is here.
+    for (const data of Object.values(allTabsData)) {
+      req = data.requestLog.find((r) => String(r.id) === String(reqId));
+      if (req) break;
+    }
   }
   if (!req) {
     console.error(`[Replay] Request ${reqId} not found in log`);
@@ -5737,24 +5749,17 @@ async function replayRequest(reqId, sourceTabId) {
 }
 
 document.getElementById("btn-clear-log").addEventListener("click", async () => {
-  if (logFilter === "active") {
-    if (tabData) tabData.requestLog = [];
-    await chrome.runtime.sendMessage({ type: "CLEAR_LOG", tabId: currentTabId });
-  } else if (logFilter === "all") {
-    allTabsData = null;
-    if (tabData) tabData.requestLog = [];
+  // The log is GLOBAL: CLEAR_LOG removes entries from the one global array
+  // (clearAll, or by tabId). Re-fetch via loadRequestLog so the render reflects
+  // the cleared state. (The old `tabData.requestLog = []` was a dead no-op on the
+  // empty per-document log, and not re-fetching left "active" showing a stale log.)
+  if (logFilter === "all") {
     await chrome.runtime.sendMessage({ type: "CLEAR_LOG", clearAll: true });
   } else {
-    // Clearing a specific tab
-    const targetTabId = logFilter;
-    if (allTabsData && allTabsData[targetTabId]) {
-      delete allTabsData[targetTabId];
-    }
-    if (targetTabId === currentTabId && tabData) {
-      tabData.requestLog = [];
-    }
+    const targetTabId = logFilter === "active" ? currentTabId : logFilter;
     await chrome.runtime.sendMessage({ type: "CLEAR_LOG", tabId: targetTabId });
   }
+  await loadRequestLog();
   renderResponsePanel();
   populateTabFilter();
 });
