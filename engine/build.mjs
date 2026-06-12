@@ -90,6 +90,11 @@ const CFLAGS = ["-O1", "-w", "-D_GNU_SOURCE", "-DLEXBOR_STATIC",
 const WMEM = ["-sMEMORY64=1",
               "-sSTACK_SIZE=8388608",
               "-sALLOW_MEMORY_GROWTH=1",
+              // Remove legacy MEMFS: its wasm-side libc fopen 404s on deep /x/<host>
+              // slice paths that the JS-side FS resolves fine under -sMEMORY64=1 — a
+              // legacy-MEMFS×Memory64 bug, not a path issue. WASMFS is the Memory64-
+              // correct filesystem backend.
+              "-sWASMFS=1",
               // -fwasm-exceptions = native WebAssembly exception handling
               // proposal (vs legacy -fexceptions which inserts JS invoke_*
               // shims around indirect calls). Z3's C++ throws still work,
@@ -227,7 +232,7 @@ function worker() {
         // iteration, baselineBytes stays 0, the `memNow > baseline * 2`
         // check never fires, and the wasm grows unbounded until V8 traps
         // "memory access out of bounds" on the 346th github chunk.
-        "-sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV,HEAPU8",
+        "-sEXPORTED_RUNTIME_METHODS=ccall,callMain,ENV,HEAPU8",
         "-sINVOKE_RUN=0", "-sEXIT_RUNTIME=0",
         "-sJSPI=1",
         "-sJSPI_EXPORTS=callMain",

@@ -32,6 +32,8 @@ var HOSTDRIVER = self.__HOSTDRIVER_SRC;
 // stores: the combined bundle ("code", written ONCE — it's ~18 MB) and the
 // per-batch cursor ("prog", a tiny write each batch).
 var _DDB = "feDeepDB";
+var _feEnc = new TextEncoder();   // string slice → Uint8Array for the in-memory engine map
+var _feDec = new TextDecoder();   // engine map bytes → text (trace/driven reads)
 function _idb() {
   return new Promise(function (res, rej) {
     var r = indexedDB.open(_DDB, 2);
@@ -1151,7 +1153,16 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   };
   async function freshInstance() {
     instAborted = false;
+    // The engine reads slices from this Map via EM_JS (Module.__feMap) and appends the
+    // execution trace to this object (Module.__feTrace[path] = [lines]). Passing BOTH
+    // INTO createQJS makes Emscripten merge them onto Module, so the EM_JS shims and the
+    // worker share one object — setting inst.__feMap AFTER creation doesn't reach the
+    // EM_JS Module reference under MODULARIZE.
+    var _feMap = new Map();
+    var _feTrace = {};
     var inst = await self.createQJS({
+      __feMap: _feMap,
+      __feTrace: _feTrace,
       noInitialRun: true,
       print: function (s) {
         /* Per-line tap: the engine emits structured @Y / @H / @T / @S
@@ -1290,14 +1301,16 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         });
       },
     });
+    // Stage every slice's bytes in the in-memory map the engine reads (no filesystem,
+    // no legacy FS API): the EM_JS shims in qjsmain.c read Module.__feMap (== _feMap)
+    // directly, so readfile / js_load_file / the .bc loader get sources straight from
+    // JS memory. Values must be Uint8Array (string sources encoded); .bc outputs land
+    // here too (engine fe_map_set), so the worker reads them back from the same map.
+    inst._feMap = _feMap;       // worker handle (the bc loop reads m._feMap)
+    inst._feTrace = _feTrace;   // worker handle (trace reads use m._feTrace[path])
     for (var i = 0; i < inMem.length; i++) {
-      // Create parent dirs first — FS.writeFile won't (ENOENT on nested paths).
-      // Flat slices ("/firebase-app.js") need none; deep encoded module-identity
-      // paths ("/x/<host>/@scope/pkg.mjs") do, or the slice silently fails to write
-      // and the module can't load (wedges an ESM-app boot).
-      var _ip = inMem[i][0], _sl = _ip.lastIndexOf("/");
-      if (_sl > 0) { try { inst.FS.mkdirTree(_ip.slice(0, _sl)); } catch (e) {} }
-      inst.FS.writeFile(_ip, inMem[i][1]);
+      var _c = inMem[i][1];
+      _feMap.set(inMem[i][0], (typeof _c === "string") ? _feEnc.encode(_c) : _c);
     }
     return inst;
   }
@@ -1342,8 +1355,8 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var _sderr0 = stderr.length;   // snapshot so an empty compile can attach THIS module's @E/parse stderr
     try {
       await m.callMain([startLineArg, "--fe-emit-bc", _src, _dst]);
-      var _bc = null;
-      try { _bc = m.FS.readFile(_dst); } catch (e) { _bc = null; }
+      // .bc landed in the in-memory map (engine fe_map_set), not a file.
+      var _bc = (m._feMap && m._feMap.has(_dst)) ? m._feMap.get(_dst) : null;
       if (_bc && _bc.length > 0) {
         var _bi = fileArgs.indexOf(_src);
         if (_bi >= 0) fileArgs[_bi] = _dst;
@@ -1811,7 +1824,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   var _snap = null;   // post-boot linear-memory image (Uint8Array)
   async function bootSnapshot() {
     stdout.length = 0; stderr.length = 0;
-    try { m.FS.writeFile("/boot.tr", new Uint8Array(0)); } catch (e) {}
+    if (m._feTrace) delete m._feTrace["/boot.tr"];   // truncate (the engine also clears on open)
     var _bt0 = Date.now();
     try { await m.callMain(["--fe-boot", "--fe-trace=/boot.tr"].concat(bootArgs)); }
     catch (e) {
@@ -1821,7 +1834,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     _tBootMs += Date.now() - _bt0;
     processStdout();   // module-init @H/@S/@Z, aggregated once
     var _img = (m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null;
-    var _bt = ""; try { _bt = m.FS.readFile("/boot.tr", { encoding: "utf8" }); } catch (e) {}
+    var _bt = (m._feTrace && m._feTrace["/boot.tr"]) ? m._feTrace["/boot.tr"].join("") : "";
     var _bd = [], _bfr = [], _btl = _bt.split("\n");
     for (var _bi = 0; _bi < _btl.length; _bi++) {
       var _bb = _btl[_bi].match(/^B (\d+) (\d)/); if (_bb) _bd[+_bb[1]] = _bb[2];
@@ -1849,7 +1862,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       for (var _j = 0; _j < _p; _j++) _bs += (_bd[_j] != null ? _bd[_j] : "0");
       _bs += (_bd[_p] === "1" ? "0" : "1");
       stdout.length = 0; stderr.length = 0;
-      try { m.FS.writeFile("/boot.tr", new Uint8Array(0)); } catch (e) {}
+      if (m._feTrace) delete m._feTrace["/boot.tr"];   // truncate before this reboot
       try { await m.callMain(["--fe-boot", "--fe-sched=" + _bs, "--fe-trace=/boot.tr"].concat(bootArgs)); }
       catch (e) { if (!self._whyRecords) self._whyRecords = []; self._whyRecords.push({ phase: "reboot_frontier_throw", pos: _p, err: String(e && e.message || e) }); }
       processStdout();
@@ -1890,7 +1903,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var _mc0 = Date.now();
     if (_snap) m.HEAPU8.set(_snap);                       // restore the post-boot image (resets bundle state + footprint)
     _tMemcpyMs += Date.now() - _mc0;
-    try { m.FS.writeFile("/t.tr", new Uint8Array(0)); } catch (e) {}   // fresh trace per drive
+    if (m._feTrace) delete m._feTrace["/t.tr"];   // fresh trace per drive (engine also clears on open)
     try {
       await m.callMain(["--fe-drive=" + sched, "--fe-trace=/t.tr", driveArg]);
     } catch (e) {
@@ -1907,18 +1920,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         instAborted: !!instAborted,
       });
     }
-    var trace = "";
-    try { trace = m.FS.readFile("/t.tr", { encoding: "utf8" }); }
-    catch (e) {
-      /* The forced-exec trace file is the BFS's frontier signal — without it,
-         no `F <i> <key>` lines are decoded, no new schedules enqueue, and the
-         BFS exits after this run as if the bundle had no branches. A trace
-         read failure is a host-FS gap (e.g. the wasm aborted before
-         flushing) and must be visible: the symptom otherwise looks like
-         "the engine just stops finding endpoints after schedule N". */
-      if (!self._whyRecords) self._whyRecords = [];
-      self._whyRecords.push({ phase: "trace_read_throw", sched: sched, err: String(e && e.message || e) });
-    }
+    /* The forced-exec trace is the BFS's frontier signal — its `F <i> <key>` lines
+       decode into new schedules. It's an in-memory append buffer now (m._feTrace[path],
+       filled by the engine's fe_trace_append), so the read can't throw; an absent
+       buffer simply means the engine emitted no B/F line this drive (a no-forced-branch
+       run), which is legitimately empty — not the old host-FS read failure. */
+    var trace = (m._feTrace && m._feTrace["/t.tr"]) ? m._feTrace["/t.tr"].join("") : "";
     // Abort recovery: a wasm abort (e.g. an emscripten teardown assert) POISONS
     // the instance — every later callMain throws, and HEAPU8.set can't clear
     // the JS-side ABORT flag — so spin up a fresh instance and re-boot + re-
@@ -2143,11 +2150,10 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // Hand the engine the already-driven ids (from a prior session/batch) so its
     // first deep-step skips them — cross-session resume by driven-SET, not cursor.
     if (_driven.size) {
-      try { m.FS.writeFile("/driven", Array.from(_driven).join("\n")); }
-      catch (e) {
-        if (!self._whyRecords) self._whyRecords = [];
-        self._whyRecords.push({ phase: "driven_file_write_throw", n: _driven.size, err: String(e && e.message || e) });
-      }
+      // /driven persists the deep-grind driven-id SET into the engine's in-memory map
+      // (no fopen): qjs_dd_load reads it back via fe_map_len/copy on the next instance.
+      if (m._feMap) m._feMap.set("/driven", _feEnc.encode(Array.from(_driven).join("\n")));
+      else { if (!self._whyRecords) self._whyRecords = []; self._whyRecords.push({ phase: "driven_file_write_throw", n: _driven.size, err: "no _feMap handle" }); }
     }
     /* Drain stdout incrementally from _stdoutCursor onward: aggregate new
        @DD into _driven, parse the latest @DS for `rem`, run processStdout
@@ -2447,11 +2453,10 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           self._whyRecords.push({ phase: "deep_orphan_abandoned", culprit: _ab, loc: _abLoc, throws: self._deepThrowCounts[_ab], step: _deepStats.steps });
         }
         if (_driven.size) {
-          try { m.FS.writeFile("/driven", Array.from(_driven).join("\n")); }
-          catch (e) {
-            if (!self._whyRecords) self._whyRecords = [];
-            self._whyRecords.push({ phase: "driven_file_recycle_throw", n: _driven.size, step: _deepStats.steps, err: String(e && e.message || e) });
-          }
+          // Rewrite /driven into the (fresh) instance's in-memory map so the recycle
+          // resumes the right tail — qjs_dd_load reads it via fe_map_len/copy, no fopen.
+          if (m._feMap) m._feMap.set("/driven", _feEnc.encode(Array.from(_driven).join("\n")));
+          else { if (!self._whyRecords) self._whyRecords = []; self._whyRecords.push({ phase: "driven_file_recycle_throw", n: _driven.size, step: _deepStats.steps, err: "no _feMap handle" }); }
         }
         _dpBaselineBytes = 0;
         instAborted = false;
