@@ -1197,6 +1197,16 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           try { self._whyRecords.push(Object.assign({ phase: "freeruntime_residue_raw" }, JSON.parse(s.slice(s.indexOf("{"))))); }
           catch (e) { self._whyRecords.push({ phase: "freeruntime_residue_raw", line: s.slice(0, 200) }); }
         }
+        /* Teardown GC leak probes (gc_scan_roots / gc_root / gc_resurrect_alloc) —
+           same durability problem as FreeRuntime_residue: they fire at teardown but
+           the deep-grind re-boots flood the 500-line stderr ring before they're read.
+           Promote to the non-rotating @WHY log so the leak's root classification
+           (external ref vs pure cycle vs finalizer alloc) is always recoverable. */
+        if (s.indexOf("gc_scan_roots") >= 0 || s.indexOf("gc_root") >= 0 || s.indexOf("gc_resurrect") >= 0) {
+          if (!self._whyRecords) self._whyRecords = [];
+          try { self._whyRecords.push(JSON.parse(s.slice(s.indexOf("{")))); }
+          catch (e) { self._whyRecords.push({ phase: "gc_probe_raw", line: s.slice(0, 200) }); }
+        }
         /* Promote each bundle-slice's module-vs-classic dispatch to the durable
            @WHY log: the breadcrumb scrolls off the 500-line stderr buffer
            (deep-grind re-boots flood it), but its isModule bit IS the
