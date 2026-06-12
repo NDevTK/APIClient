@@ -1202,6 +1202,16 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
            the deep-grind re-boots flood the 500-line stderr ring before they're read.
            Promote to the non-rotating @WHY log so the leak's root classification
            (external ref vs pure cycle vs finalizer alloc) is always recoverable. */
+        /* modload_fail — a module the loader couldn't read (not in the in-memory map):
+           the "could not load module" link failures that dark a CRUD command's
+           dependency chain (directus update/del/me/users need get-request-url.js /
+           is-system-collection.js). Durable so the failing name (incl. a corrupt one)
+           and its frequency are recoverable past the 500-line stderr ring. */
+        if (s.indexOf("modload_fail") >= 0) {
+          if (!self._whyRecords) self._whyRecords = [];
+          try { self._whyRecords.push(JSON.parse(s.slice(s.indexOf("{")))); }
+          catch (e) { self._whyRecords.push({ phase: "modload_fail", line: s.slice(0, 200) }); }
+        }
         if (s.indexOf("gc_scan_roots") >= 0 || s.indexOf("gc_root") >= 0 || s.indexOf("gc_resurrect") >= 0) {
           if (!self._whyRecords) self._whyRecords = [];
           try { self._whyRecords.push(JSON.parse(s.slice(s.indexOf("{")))); }
