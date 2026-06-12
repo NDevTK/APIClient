@@ -573,6 +573,14 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // those explicitly.
   var bundleFiles = [];
   var _slicePathToUrl = {};   // slice MEMFS path → its real script URL, for per-importer ESM relative-import resolution
+  // In-run ESM module loader state — PER-ANALYSIS, NEVER global self.* (one page's
+  // fetched modules must not leak into another principal's bundle — the WASM-per-page
+  // isolation invariant). _modCache: id->{code} (survives THIS analysis's instance
+  // recycles, re-stages into a fresh _feMap); _modInflight: id->Promise (dedups
+  // concurrent resolves); _inRunLoaded: URLs the engine pulled on demand, surfaced to
+  // the offscreen so they are folded into buf.scripts → become REAL bundle slices
+  // (bc-compiled + in the deep-grind residue), not just transiently linked.
+  var _modCache = {}, _modInflight = {}, _inRunLoaded = [];
   var INFRA_PATHS = { "/h.js": 1, "/d.js": 1, "/pre.js": 1, "/p.js": 1 };
   if (scriptOffsets && scriptOffsets.length) {
     var lines = String(code).split("\n");
@@ -1278,6 +1286,52 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         };
         try { for (var _i = 0; _i < scriptSrcUrls.length; _i++) _warm(scriptSrcUrls[_i] && scriptSrcUrls[_i].url); } catch (e) {}
         return await _warm(url);
+      },
+      /* JSPI in-run ESM MODULE loader host half. The engine's js_module_load
+         (quickjs-libc.c) suspends here when an `import` target is not yet staged
+         in _feMap — the deep modular-ESM graph (directus index→rest→commands→
+         utils→auth) the live page's own module loader would fetch but content.js
+         never shipped. Reconstruct the module's real URL from the engine's
+         canonical "/x/<host><path>" id (or a raw http(s) id), safeFetch it with
+         THIS document's principal, and stage the SOURCE in _feMap under the SAME
+         id the loader re-reads. Each fetched module's OWN imports recurse back
+         through the engine → here, so one analysis pass loads the whole graph on
+         demand. Cache persists across instance recycles (re-stages into the fresh
+         _feMap on a hit) and caches failures (null) so a 404/CORB id is not
+         re-fetched. safeFetch(as:"script") enforces CORB + SSRF — same trust model
+         as the lazy-chunk loader (bundle-DISCOVERED ids, page-principal-bounded). */
+      qjs_load_module: async function (moduleName) {
+        var nm = String(moduleName == null ? "" : moduleName);
+        if (!nm) return;
+        var _ent = _modCache[nm];
+        if (_ent !== undefined) {                           // already attempted — re-stage cached source into THIS _feMap
+          if (_ent && _ent.code != null) { try { _feMap.set(nm, _feEnc.encode(_ent.code)); } catch (e) {} }
+          return;
+        }
+        if (_modInflight[nm]) {                              // a concurrent resolve is fetching it — await, then re-stage
+          try { await _modInflight[nm]; } catch (e) {}
+          var _e2 = _modCache[nm];
+          if (_e2 && _e2.code != null) { try { _feMap.set(nm, _feEnc.encode(_e2.code)); } catch (e) {} }
+          return;
+        }
+        var _url = null;
+        if (/^https?:\/\//i.test(nm)) _url = nm;
+        else if (nm.slice(0, 3) === "/x/") _url = "https://" + nm.slice(3);   // engine's canonical CDN id → real URL
+        else { _modCache[nm] = { code: null }; return; }                      // local slice / non-fetchable id — not a network module
+        var _prin = _principalOrigin, _src = sourceUrl;
+        var _p = safeFetch(_url, { pageUrl: _src || "", pageOrigin: _prin, method: "GET", as: "script" }).then(function (resp) {
+          var code = (resp && resp.ok && typeof resp.body === "string") ? resp.body : null;
+          _modCache[nm] = { code: code };
+          if (code != null) {
+            try { _feMap.set(nm, _feEnc.encode(code)); } catch (e) {}
+            _inRunLoaded.push(_url);   // surface to the offscreen → folded into buf.scripts as a real bundle slice
+          } else { try { (self._whyRecords || (self._whyRecords = [])).push({ phase: "modfetch_blocked", id: nm.slice(-64), status: resp ? resp.status : 0 }); } catch (e2) {} }
+        }, function (e) {
+          _modCache[nm] = { code: null };
+          try { (self._whyRecords || (self._whyRecords = [])).push({ phase: "modfetch_throw", id: nm.slice(-64), err: String(e && e.message || e) }); } catch (e2) {}
+        });
+        _modInflight[nm] = _p;
+        try { await _p; } finally { delete _modInflight[nm]; }
       },
       /* JSPI cooperative-yield import: each yield is enqueued in
          self._fiberQ with this instance's huntContext (pageKey/type/vts).
@@ -2648,6 +2702,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // complex app's endpoints) lives there. Engine-grounded discovery.
     chunkUrls: chunkUrls ? Array.from(chunkUrls) : [],
     esmImportUrls: esmImportUrls ? Array.from(esmImportUrls) : [],
+    inRunModuleUrls: _inRunLoaded.slice(),   // modules the engine pulled on demand → offscreen folds into buf.scripts
     sourceUrl: sourceUrl || "",
     sourceMapUrl: sourceMapUrlOf(code),
     _timings: { ms: Date.now() - t0, runs: runs },
@@ -2913,7 +2968,7 @@ self._yieldDrain = function (entry) {
        reaching) flow advances SLOWER ⇒ is picked more ⇒ gets proportionally
        more CPU. sliceCost is wall-time so the share is CPU-time-proportional,
        not merely resume-count-proportional. */
-    entry.ctx.epRate = entry.ctx.epRate * 0.75 + entry.recentEndpoints * 0.25;
+    entry.ctx.epRate = entry.ctx.epRate * 0.75 + (entry.recentEndpoints + entry.recentSecondary) * 0.25;   // value = @H endpoints + @S XSS findings, EQUAL (view-agnostic; XSS is not second-class)
     /* UCB1 explore bonus = √(2·ln N / nᵢ): N = total resumes across all flows,
        nᵢ = this flow's resumes. Large when this flow is under-sampled (a fresh
        tab nᵢ≈0 ⇒ bonus ≈ √(2 ln N), the highest-VOI thing to run), shrinks as

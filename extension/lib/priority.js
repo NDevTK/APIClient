@@ -111,10 +111,16 @@ self._priorityCmp = {
          the canonical UCB1 confidence radius, not tunable coverage magic —
          order only, never coverage. */
   flowWeight: function (entry) {
-    var reaches = (entry && (entry.reaches || (entry.ctx && entry.ctx.lastReaches))) ? 1 : 0;
+    // Value is RUN OUTPUT, never a static reachability prediction. A flow earns
+    // weight from what executing it ACTUALLY emits — epRate, the EWMA of its @H
+    // endpoint AND @S security/XSS output. The old "+reaches" term was a static
+    // "can this reach a network edge" flag, which a static bit CANNOT answer (only
+    // running the recursion/interprocedural calls can) and which is network-blind
+    // to XSS (DOM/eval sinks aren't network edges) — a flag that can't do its job
+    // isn't kept. Weight = epRate (exploit) + UCB-explore + a fairness floor.
     var epRate = (entry && entry.ctx && typeof entry.ctx.epRate === "number" && entry.ctx.epRate > 0) ? entry.ctx.epRate : 0;
     var explore = (entry && entry.ctx && typeof entry.ctx.exploreBonus === "number" && entry.ctx.exploreBonus > 0) ? entry.ctx.exploreBonus : 0;
-    return 1 + reaches + epRate + explore;
+    return 1 + epRate + explore;
   },
 
   /* BFS schedule comparator. Negative result = a wins. Input shape:
@@ -140,11 +146,13 @@ self._priorityCmp = {
           branch's arm while productivity is about the lineage.
        4. Enqueue timestamp (oldest first — anti-starvation). */
   schedCmp: function (a, b) {
+    // No static reach-signature: "this frontier's flipped arm reaches a network/sink
+    // edge" is the same broken reachability flag (only RUNNING the arm tells, and it
+    // is network-blind to XSS) — dropped. Order by OBSERVED signal only: a `deep`
+    // frontier (its parent run emitted new @H/@S/@T) first, then the parent's
+    // measured productivity, then enqueue order (anti-starvation).
     var aDeep = a && a.deep ? 1 : 0, bDeep = b && b.deep ? 1 : 0;
     if (aDeep !== bDeep) return bDeep - aDeep;
-    var aS = (a && typeof a.frontierSig === "number") ? a.frontierSig : 0;
-    var bS = (b && typeof b.frontierSig === "number") ? b.frontierSig : 0;
-    if (aS !== bS) return bS - aS;
     var aP = (a && typeof a.productivity === "number") ? a.productivity : 0;
     var bP = (b && typeof b.productivity === "number") ? b.productivity : 0;
     if (aP !== bP) return bP - aP;

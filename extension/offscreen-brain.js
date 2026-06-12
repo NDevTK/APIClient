@@ -5458,7 +5458,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     // never dispatched → the finding was never found. The other early returns
     // above (sendToOffscreen throw, worker cleared, epoch reset) are genuine
     // abort paths where skipping is correct; this "no findings yet" one is not.
-    try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, analysis.esmImportUrls); }
+    try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, (analysis.esmImportUrls || []).concat(analysis.inRunModuleUrls || [])); }
     catch (e) { console.debug("[AST:chunks] tab=%d error: %s", tabId, e && e.message); }
     return;
   }
@@ -5582,7 +5582,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // Download the lazy chunks this run discovered and re-analyse the union —
   // learns the login-gated endpoints (issues/preheat/index, …). Awaited so
   // the in-flight signal covers it.
-  try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, analysis.esmImportUrls); }
+  try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, (analysis.esmImportUrls || []).concat(analysis.inRunModuleUrls || [])); }
   catch (e) { console.debug("[AST:chunks] tab=%d error: %s", tabId, e && e.message); }
 }
 
@@ -6144,7 +6144,7 @@ function _mergeDeepResult(documentId, sourceUrl, result, doNames) {
           // round so the script chunk is considered; _chunkSeen dedup (the _hasFresh
           // guard above + the internal fresh filter) keeps it bounded / loop-free.
           _dbuf._chunkFetchStarted = false;
-          _maybeDownloadChunks(_rtid, _dbuf, result.chunkUrls, result.esmImportUrls || [])
+          _maybeDownloadChunks(_rtid, _dbuf, result.chunkUrls, (result.esmImportUrls || []).concat(result.inRunModuleUrls || []))
             .catch(function (e) { console.debug("[AST:deep] grind-chunk download error: %s", e && e.message); });
         }
       }
