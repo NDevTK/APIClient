@@ -114,6 +114,27 @@ the honesty mechanism — a label that can't cite a real check is marked as a re
   never *ingested*), but preventing the redirected request from *reaching* a private host relies on the
   browser's Private Network Access for extension fetches.
 
+## Finding quality — gated by CONSTRAINTS + sink sensitivity, never reachability
+
+"External input reaches a sink" is NOT a finding by itself — the value is opaque for control-flow
+*because* it is attacker-influenced, so the question is what the path CONSTRAINTS allow and how
+sensitive the sink is. That constraint set is the same data Z3 already computes for path
+satisfiability: the sanitizer ops surfaced in the finding UI (`encodeURIComponent()`,
+`replace(/[<>]/g,'')`) **are** those constraints, not a separate analysis.
+
+- **Taint → `fetch`/request param:** report only when the constraints let the input change a
+  SECURITY-SENSITIVE parameter. `location.search` deciding the allow-list for a `DELETE /account`
+  call is a finding; `document.referrer` / `document.title` flowing into an analytics/logging POST is
+  **WAI**, not a finding. The discriminator is the sink + the constraints, never the data-flow edge.
+- **Open redirect is NOT a finding on its own** (Google VRP stance) unless it also leaks a
+  credential / access token — and a navigation is reachable via `w = open(); w.location = …` anyway,
+  so the redirect primitive alone is weak. Flag it only bundled with a token/secret exfil.
+- **XSS verification = build + RUN the PoC for real**, never asserted from the taint path alone. The
+  PoC is constructed from Z3's solve over the real traced flow (CLAUDE.md: BUILT from the solve, never
+  templated) and executed; the verifiable OUTCOME (sink fired with the attacker value) is the triage
+  signal — it proves exploitability even though it does not localize the bug. The UI's beautified
+  (source-mapped) taint-path + constraint view is the human-readable explanation of that same run.
+
 ## Attack scenarios
 
 | Scenario | Outcome |
