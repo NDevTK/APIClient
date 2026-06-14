@@ -21,9 +21,9 @@ H="node testing/harness.js"
 # 42; appwrite 5 -> 26; pocketbase 30 -> 33). The universal boot+ctor trampoline
 # matches this floor exactly (capability landing, metric flat vs HEAD).
 FIXTURES=(
-  "sdk_supabase|23|direct|REST backend"
+  "sdk_supabase|27|direct|REST backend (23->27 when the universal heap trampoline runs closure-using paths correctly)"
   "sdk_pocketbase|33|direct|REST backend, full admin surface logged-out"
-  "sdk_firebase|5|gap|firebase auth; 5 logged-out — prior 13 was a stale/unverified baseline; treat as a driving gap to investigate"
+  "sdk_firebase|8|gap|firebase auth; 5->8 with the universal trampoline (closure-gated paths now execute); still a driving gap to deepen"
   "sentry_cdn|4|direct|envelope POST /api/0/envelope/"
   "esm_cdn_main2|1|direct|ESM multi-import transitive (needs :8765 deps)"
   "prune_helper_gate|2|direct|value-spread cold helper-picker"
