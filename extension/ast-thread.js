@@ -1167,6 +1167,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     // worker share one object — setting inst.__feMap AFTER creation doesn't reach the
     // EM_JS Module reference under MODULARIZE.
     var _feMap = new Map();
+    _feMap.__feId = (self.__instCtr = (self.__instCtr || 0) + 1);   // DIAG: instance map identity (detect host/engine map desync)
     var _feTrace = {};
     var inst = await self.createQJS({
       __feMap: _feMap,
@@ -1303,9 +1304,13 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       qjs_load_module: async function (moduleName) {
         var nm = String(moduleName == null ? "" : moduleName);
         if (!nm) return;
+        self.__mlh = (self.__mlh || 0) + 1;
+        var _mlhN = self.__mlh;
+        if (_mlhN <= 90) { (self._whyRecords || (self._whyRecords = [])).push({ phase: "mlh_enter", n: _mlhN, nm: nm.slice(-42) }); }
         var _ent = _modCache[nm];
         if (_ent !== undefined) {                           // already attempted — re-stage cached source into THIS _feMap
-          if (_ent && _ent.code != null) { try { _feMap.set(nm, _feEnc.encode(_ent.code)); } catch (e) {} }
+          if (_ent && _ent.code != null) { try { _feMap.set(nm, _feEnc.encode(_ent.code)); if (_mlhN <= 90) self._whyRecords.push({ phase: "mlh_restage", n: _mlhN, nm: nm.slice(-42), len: _ent.code.length }); } catch (e) {} }
+          else if (_mlhN <= 90) { self._whyRecords.push({ phase: "mlh_cached_null", n: _mlhN, nm: nm.slice(-42) }); }
           return;
         }
         if (_modInflight[nm]) {                              // a concurrent resolve is fetching it — await, then re-stage
@@ -1325,6 +1330,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
           if (code != null) {
             try { _feMap.set(nm, _feEnc.encode(code)); } catch (e) {}
             _inRunLoaded.push(_url);   // surface to the offscreen → folded into buf.scripts as a real bundle slice
+            if (_mlhN <= 90) { try { (self._whyRecords || (self._whyRecords = [])).push({ phase: "mlh_fetched", n: _mlhN, nm: nm.slice(-42), len: code.length }); } catch (e3) {} }
           } else { try { (self._whyRecords || (self._whyRecords = [])).push({ phase: "modfetch_blocked", id: nm.slice(-64), status: resp ? resp.status : 0 }); } catch (e2) {} }
         }, function (e) {
           _modCache[nm] = { code: null };
@@ -1903,7 +1909,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     try { await m.callMain(["--fe-boot", "--fe-trace=/boot.tr"].concat(bootArgs)); }
     catch (e) {
       if (!self._whyRecords) self._whyRecords = [];
-      self._whyRecords.push({ phase: "boot_callmain_throw", err: String(e && e.message || e), instAborted: !!instAborted });
+      self._whyRecords.push({ phase: "boot_callmain_throw", err: String(e && e.message || e), instAborted: !!instAborted, stack: String((e && e.stack) || "").slice(0, 1200) });
     }
     _tBootMs += Date.now() - _bt0;
     processStdout();   // module-init @H/@S/@Z, aggregated once

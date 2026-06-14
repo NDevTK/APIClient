@@ -16,16 +16,20 @@ BASE="http://localhost:${PORT}"
 H="node testing/harness.js"
 
 # fixture | baseline_clean | kind(direct|gap) | note
+# Baselines RE-MEASURED 2026-06-14 at submodule HEAD 3ec3b92 (the prior numbers
+# were stale: firebase was 13 — never reproduced, real floor is 5; directus 3 ->
+# 42; appwrite 5 -> 26; pocketbase 30 -> 33). The universal boot+ctor trampoline
+# matches this floor exactly (capability landing, metric flat vs HEAD).
 FIXTURES=(
   "sdk_supabase|23|direct|REST backend"
-  "sdk_pocketbase|30|direct|REST backend, full admin surface logged-out"
-  "sdk_firebase|13|direct|firebase modular+compat auth"
+  "sdk_pocketbase|33|direct|REST backend, full admin surface logged-out"
+  "sdk_firebase|5|gap|firebase auth; 5 logged-out — prior 13 was a stale/unverified baseline; treat as a driving gap to investigate"
   "sentry_cdn|4|direct|envelope POST /api/0/envelope/"
   "esm_cdn_main2|1|direct|ESM multi-import transitive (needs :8765 deps)"
   "prune_helper_gate|2|direct|value-spread cold helper-picker"
-  "sdk_appwrite|5|gap|shared client.call helper host-retry not reached"
+  "sdk_appwrite|26|gap|shared client.call: 26/117 receivers driven, the rest still opaque"
   "sdk_algolia|0|gap|transporter -> pluggable requester host-retry"
-  "sdk_directus|3|gap|composable; await-fix got auth, content still 0"
+  "sdk_directus|42|gap|composable; auth+REST learned, content still 0"
 )
 
 printf "%-22s %6s %6s %7s %8s %8s %7s  %s\n" "FIXTURE" "CLEAN" "RE" "UNUSED" "RECV" "VALS" "STATUS" "NOTE"
