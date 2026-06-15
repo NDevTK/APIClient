@@ -1901,7 +1901,51 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // string drives the FUNCTIONS the driver invokes; opaque branches at module
   // top-level run during boot (before the image) and are SURFACED, not explored
   // (bootSnapshot) — this model does NOT re-boot for them.
-  var _snap = null;   // post-boot linear-memory image (Uint8Array)
+  var _snap = null;   // post-boot linear-memory image (Uint8Array) — "base" flow handle
+  /* Per-flow linear-memory images (objectives #5/#7/#10). REPLACES the single
+     global post-boot image: each FLOW (the base post-boot state, a paused grind
+     orphan, a forced branch-arm) owns its OWN image, never another path's heap
+     (#7/#10 context-switch). Cold flows EVICT to IndexedDB and free their RAM
+     (#5 OOM), restored on demand. The boot image is the "base" flow; per-flow
+     forks + eviction-on-pressure attach here once qjs_driving yields create
+     paused flows (#8). Reuses the same HEAPU8 slice()/set() the boot image used. */
+  var _flowImg = (function () {
+    var mem = new Map();            // id -> Uint8Array (hot, in RAM)
+    var _db = null, _dbP = null;
+    function db() {
+      if (_db) return Promise.resolve(_db);
+      if (!_dbP) _dbP = new Promise(function (res, rej) {
+        var r = indexedDB.open("qjs_flowimg", 1);
+        r.onupgradeneeded = function () { try { r.result.createObjectStore("img"); } catch (e) {} };
+        r.onsuccess = function () { _db = r.result; res(_db); };
+        r.onerror = function () { rej(r.error); };
+      });
+      return _dbP;
+    }
+    function tx(mode) { return db().then(function (d) { return d.transaction("img", mode).objectStore("img"); }); }
+    return {
+      register: function (id, u8) { mem.set(id, u8); },                 // #7/#10: this flow's own image
+      has: function (id) { return mem.has(id); },
+      drop: function (id) { mem.delete(id); },
+      evict: async function (id) {                                       // #5: image -> IDB, free RAM
+        var u8 = mem.get(id); if (!u8) return false;
+        var st = await tx("readwrite");
+        await new Promise(function (res, rej) { var rq = st.put(u8, id); rq.onsuccess = res; rq.onerror = function () { rej(rq.error); }; });
+        mem.delete(id); return true;
+      },
+      restoreSync: function (id, mod) {                                  // RAM-only SYNC restore (base flow; byte-for-byte == m.HEAPU8.set)
+        var u8 = mem.get(id);
+        if (u8 && mod.HEAPU8 && mod.HEAPU8.length >= u8.length) { mod.HEAPU8.set(u8); return true; }
+        return false;
+      },
+      restoreInto: async function (id, mod) {                            // RAM hot, else IDB (cold/evicted flows only)
+        var u8 = mem.get(id);
+        if (!u8) { var st = await tx("readonly"); u8 = await new Promise(function (res) { var rq = st.get(id); rq.onsuccess = function () { res(rq.result || null); }; rq.onerror = function () { res(null); }; }); }
+        if (u8 && mod.HEAPU8 && mod.HEAPU8.length >= u8.length) { mod.HEAPU8.set(u8); return true; }
+        return false;
+      }
+    };
+  })();
   async function bootSnapshot() {
     stdout.length = 0; stderr.length = 0;
     if (m._feTrace) delete m._feTrace["/boot.tr"];   // truncate (the engine also clears on open)
@@ -1956,7 +2000,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     }
     return _img;
   }
-  if (work.length) _snap = await bootSnapshot();
+  if (work.length) { _snap = await bootSnapshot(); if (_snap) _flowImg.register("base", _snap); }
   while (work.length) {
     var job = _pickJob();
     var sched = job.sched;
@@ -1981,7 +2025,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     stdout.length = 0;
     stderr.length = 0;
     var _mc0 = Date.now();
-    if (_snap) m.HEAPU8.set(_snap);                       // restore the post-boot image (resets bundle state + footprint)
+    if (_snap) _flowImg.restoreSync("base", m);           // #5/#7/#10: base flow = RAM, SYNC (cold flows use restoreInto/IDB)
     _tMemcpyMs += Date.now() - _mc0;
     if (m._feTrace) delete m._feTrace["/t.tr"];   // fresh trace per drive (engine also clears on open)
     try {
