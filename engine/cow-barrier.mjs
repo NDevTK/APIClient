@@ -76,9 +76,19 @@ export function instrument(wasmBytes) {
   const m = b.readBinary(wasmBytes);
   m.setFeatures(m.getFeatures() | b.Features.All); // memory64 + bulk-memory + EH for validation
 
+  // SELF-REFERENCE: never instrument the COW infrastructure functions — their own
+  // bitmap/restore stores would recurse through the barrier. Identify them by their
+  // qjs_cow_ exports' internal names (names are dropped on round-trip; exports keep them).
+  const cowFns = new Set();
+  for (let i = 0; i < m.getNumExports(); i++) {
+    const ei = b.getExportInfo(m.getExportByIndex(i));
+    if (ei.kind === b.ExternalFunction && ei.name.includes("qjs_cow_")) cowFns.add(ei.value);
+  }
   const ptrW = [], rangeW = [];
+  let skipped = 0;
   for (let i = 0; i < m.getNumFunctions(); i++) {
     const fi = b.getFunctionInfo(m.getFunctionByIndex(i));
+    if (cowFns.has(fi.name)) { skipped++; continue; } // COW infrastructure — never instrument
     if (fi.body) collectWrites(fi.body, ptrW, rangeW);
   }
   if (!ptrW.length && !rangeW.length) { m.dispose(); return { bytes: wasmBytes, stores: 0, ranges: 0 }; }
@@ -124,7 +134,7 @@ export function instrument(wasmBytes) {
   if (!m.validate()) throw new Error("cow-barrier: module failed validation after instrumentation");
   const out = m.emitBinary();
   m.dispose();
-  return { bytes: out, stores: ptrW.length, ranges: rangeW.length };
+  return { bytes: out, stores: ptrW.length, ranges: rangeW.length, skipped };
 }
 
 // file mode: `node cow-barrier.mjs in.wasm [out.wasm]` — instrument a real wasm.
@@ -135,7 +145,7 @@ if (process.argv[2] && process.argv[2].endsWith(".wasm")) {
   const r = instrument(new Uint8Array(readFileSync(inp)));
   writeFileSync(outp, r.bytes);
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  console.log(`cow-barrier: ${inp} -> ${outp}: ${r.stores} stores + ${r.ranges} ranges instrumented, validated OK (${ms.toFixed(0)}ms, ${(r.bytes.length / 1048576).toFixed(1)}MB)`);
+  console.log(`cow-barrier: ${inp} -> ${outp}: ${r.stores} stores + ${r.ranges} ranges instrumented, ${r.skipped} COW fns skipped, validated OK (${ms.toFixed(0)}ms, ${(r.bytes.length / 1048576).toFixed(1)}MB)`);
 }
 // selftest: a MEMORY64 module with a nested store + a memory.fill + a memory.copy.
 else if (process.argv[2] === "selftest") {
