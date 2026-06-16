@@ -1,22 +1,19 @@
 // COW write-barrier pass (#5/#7/#10 keystone). Instruments the engine wasm so every
-// memory WRITE marks its 64KB page dirty (qjs_cow_mark_dirty), with NO O(memory) diff
-// — the incremental dirty-tracking the per-flow COW snapshot needs (don't reuse the
-// heap of a different code path). In-place transform: each store's ptr child becomes
-//   block(result i64)[ global.set $cowg, ptr ; call $mark(global.get $cowg) ; global.get $cowg ]
-// so the address is evaluated ONCE, the page marked, then the store runs. A mutable
-// i64 scratch GLOBAL is the tee (wasm is single-threaded; nested stores are
-// sequential-safe). Verified standalone (validate + a run-test) BEFORE it touches the
-// build — a corrupt wasm-transform would break the whole extension.
+// memory WRITE marks its 64KB page(s) dirty (qjs_cow_mark_dirty / _range) — incremental
+// dirty-tracking with NO O(memory) diff, feeding the per-flow COW snapshot (don't reuse
+// another code path's heap). In-place transforms; verified standalone (validate +
+// selftest) BEFORE it touches the build — a corrupt wasm-transform breaks the extension.
 //
-// STORES-FIRST: covers i32/i64/f32/f64 store (the JS object-graph + Lexbor DOM
-// mutations). COMPLETENESS additions (next): atomic stores/RMW (ptr) + bulk-memory
-// memory.copy/fill/init (dest,size -> qjs_cow_mark_dirty_range). A miss = a leaked
-// mutation = unsound COW, so the walk THROWS on any unhandled expr id (caught + added).
+// WRITE-OP COVERAGE (provably complete via throw-on-unknown):
+//  - store (incl. atomic store: id is Store w/ isAtomic) -> mark the ptr page.
+//  - memory.fill / memory.copy / memory.init -> mark the [dest, dest+size) RANGE.
+//  - atomic RMW/cmpxchg: the wasm is single-threaded (no shared memory) -> ABSENT; the
+//    walk THROWS if any appear (then add handling), never silently skips (= a leak).
 import binaryenImport from "binaryen";
 const b = binaryenImport.default || binaryenImport;
 
-// Read-only child refs per expression id — the walk recurses these to find every write.
-// Throws on an unhandled id so coverage is provably complete for the actual wasm.
+// Read-only child refs per expression id; the walk recurses these to reach every write.
+// Atomic-RMW/cmpxchg/wait/notify are intentionally ABSENT -> throw-on-unknown if present.
 function childRefs(info) {
   switch (info.id) {
     case b.BlockId: return info.children;
@@ -39,88 +36,113 @@ function childRefs(info) {
     case b.MemoryFillId: return [info.dest, info.value, info.size];
     case b.MemoryCopyId: return [info.dest, info.source, info.size];
     case b.MemoryInitId: return [info.dest, info.offset, info.size];
-    case b.AtomicRMWId: return [info.ptr, info.value];
-    case b.AtomicCmpxchgId: return [info.ptr, info.expected, info.replacement];
-    case b.AtomicWaitId: return [info.ptr, info.expected, info.timeout];
-    case b.AtomicNotifyId: return [info.ptr, info.notifyCount];
     case b.TryId: return [info.body, ...(info.catchBodies || [])];
     case b.ThrowId: return info.operands;
-    case b.ConstId: case b.LocalGetId: case b.GlobalGetId: case b.MemorySizeId:
-    case b.NopId: case b.UnreachableId: case b.RethrowId:
-    case b.RefNullId: case b.RefFuncId: case b.PopId: return [];
-    default: throw new Error("cow-barrier: UNHANDLED expr id " + info.id + " (add to childRefs for completeness)");
+    default: throw new Error("cow-barrier: UNHANDLED expr id " + info.id + " (add to childRefs for provable completeness)");
   }
 }
 
-// Collect every store expr ref reachable from `expr`.
-// field-less leaf expr ids: no children + never a store, and binaryen.js's
-// getExpressionInfo has no schema for them (Object.keys(undefined) throws) — so
-// short-circuit on the cheap getExpressionId before the full info call.
+// field-less leaf ids: no children + never a write, and binaryen.js getExpressionInfo
+// has no schema for them (Object.keys(undefined) throws) — short-circuit on getExpressionId.
 const LEAF = new Set([b.NopId, b.UnreachableId, b.PopId, b.MemorySizeId, b.ConstId,
   b.LocalGetId, b.GlobalGetId, b.RefNullId, b.RefFuncId, b.DataDropId, b.ElemDropId]
   .filter((x) => x !== undefined));
-function collectStores(expr, out) {
+
+function collectWrites(expr, ptrW, rangeW) {
   if (!expr) return;
   const id = b.getExpressionId(expr);
   if (LEAF.has(id)) return;
-  if (id === b.StoreId) out.push(expr);
+  if (id === b.StoreId) ptrW.push(expr);
+  else if (id === b.MemoryFillId || id === b.MemoryCopyId || id === b.MemoryInitId) rangeW.push({ expr, id });
   const info = b.getExpressionInfo(expr);
-  for (const c of childRefs(info)) collectStores(c, out);
+  for (const c of childRefs(info)) collectWrites(c, ptrW, rangeW);
 }
 
-export function instrument(wasmBytes, markExportName = "qjs_cow_mark_dirty") {
-  const m = b.readBinary(wasmBytes);
-  // Preserve the module's features (memory64, bulk-memory, exceptions, ...) so
-  // validation of the 64-bit memory + the instrumented body succeeds. The real wasm
-  // declares them; ensure memory64 regardless (a binary may omit the section).
-  m.setFeatures(m.getFeatures() | b.Features.All);
-  // Resolve the mark fn by its EXPORT (function names are dropped on binary
-  // round-trip; exports keep their name -> the auto-generated internal name).
-  let markInternal = null;
+const rGetDest = (e, id) => id === b.MemoryFillId ? b._BinaryenMemoryFillGetDest(e) : id === b.MemoryCopyId ? b._BinaryenMemoryCopyGetDest(e) : b._BinaryenMemoryInitGetDest(e);
+const rSetDest = (e, id, v) => id === b.MemoryFillId ? b._BinaryenMemoryFillSetDest(e, v) : id === b.MemoryCopyId ? b._BinaryenMemoryCopySetDest(e, v) : b._BinaryenMemoryInitSetDest(e, v);
+const rGetSize = (e, id) => id === b.MemoryFillId ? b._BinaryenMemoryFillGetSize(e) : id === b.MemoryCopyId ? b._BinaryenMemoryCopyGetSize(e) : b._BinaryenMemoryInitGetSize(e);
+const rSetSize = (e, id, v) => id === b.MemoryFillId ? b._BinaryenMemoryFillSetSize(e, v) : id === b.MemoryCopyId ? b._BinaryenMemoryCopySetSize(e, v) : b._BinaryenMemoryInitSetSize(e, v);
+
+function findExport(m, name, kind) {
   for (let i = 0; i < m.getNumExports(); i++) {
     const ei = b.getExportInfo(m.getExportByIndex(i));
-    if (ei.name === markExportName && ei.kind === b.ExternalFunction) { markInternal = ei.value; break; }
+    if (ei.name === name && ei.kind === kind) return ei.value;
   }
-  if (!markInternal) throw new Error("cow-barrier: export '" + markExportName + "' not found");
-  // Collect every store, then instrument (collect-first avoids mutating mid-walk).
-  const all = [];
+  return null;
+}
+
+export function instrument(wasmBytes) {
+  const m = b.readBinary(wasmBytes);
+  m.setFeatures(m.getFeatures() | b.Features.All); // memory64 + bulk-memory + EH for validation
+
+  const ptrW = [], rangeW = [];
   for (let i = 0; i < m.getNumFunctions(); i++) {
     const fi = b.getFunctionInfo(m.getFunctionByIndex(i));
-    if (fi.body) collectStores(fi.body, all);
+    if (fi.body) collectWrites(fi.body, ptrW, rangeW);
   }
-  if (!all.length) { m.dispose(); return { bytes: wasmBytes, stores: 0 }; }
-  // The scratch global + barrier must match the memory index type (i32 / i64 under
-  // MEMORY64) — read it off a real store's ptr.
-  const ptrType = b.getExpressionType(b._BinaryenStoreGetPtr(all[0]));
-  const G = "cow_scratch_ptr";
-  m.addGlobal(G, ptrType, /*mutable*/ true, ptrType === b.i64 ? m.i64.const(0n) : m.i32.const(0));
-  for (const st of all) {
+  if (!ptrW.length && !rangeW.length) { m.dispose(); return { bytes: wasmBytes, stores: 0, ranges: 0 }; }
+
+  const mark = findExport(m, "qjs_cow_mark_dirty", b.ExternalFunction);
+  if (!mark) throw new Error("cow-barrier: export 'qjs_cow_mark_dirty' not found");
+  // ptr/size index type from a real write (i32, or i64 under MEMORY64).
+  const ptrType = ptrW.length ? b.getExpressionType(b._BinaryenStoreGetPtr(ptrW[0]))
+    : b.getExpressionType(rGetDest(rangeW[0].expr, rangeW[0].id));
+  const zero = (t) => t === b.i64 ? m.i64.const(0n) : m.i32.const(0);
+  // scratch globals: $g store-ptr/nested, $d range-dest (survives value-eval), $s range-size.
+  m.addGlobal("cow_g", ptrType, true, zero(ptrType));
+  let markRange = null, sizeType = ptrType;
+  if (rangeW.length) {
+    markRange = findExport(m, "qjs_cow_mark_dirty_range", b.ExternalFunction);
+    if (!markRange) throw new Error("cow-barrier: export 'qjs_cow_mark_dirty_range' not found");
+    sizeType = b.getExpressionType(rGetSize(rangeW[0].expr, rangeW[0].id));
+    m.addGlobal("cow_d", ptrType, true, zero(ptrType));
+    m.addGlobal("cow_s", sizeType, true, zero(sizeType));
+  }
+
+  // store ptr -> block[ set $g=ptr ; mark($g) ; get $g ]  (addr evaluated once)
+  for (const st of ptrW) {
     const ptr = b._BinaryenStoreGetPtr(st);
-    const barrier = m.block(null, [
-      m.global.set(G, ptr),
-      m.call(markInternal, [m.global.get(G, ptrType)], b.none),
-      m.global.get(G, ptrType),
-    ], ptrType);
-    b._BinaryenStoreSetPtr(st, barrier);
+    b._BinaryenStoreSetPtr(st, m.block(null, [
+      m.global.set("cow_g", ptr),
+      m.call(mark, [m.global.get("cow_g", ptrType)], b.none),
+      m.global.get("cow_g", ptrType),
+    ], ptrType));
   }
+  // range: dest -> tee into $d ; size -> tee into $s + mark_range($d,$s) (eval order
+  // dest,value/source,size means $d is set before $s, and value's nested stores use $g).
+  for (const { expr, id } of rangeW) {
+    const dest = rGetDest(expr, id), size = rGetSize(expr, id);
+    rSetDest(expr, id, m.block(null, [m.global.set("cow_d", dest), m.global.get("cow_d", ptrType)], ptrType));
+    rSetSize(expr, id, m.block(null, [
+      m.global.set("cow_s", size),
+      m.call(markRange, [m.global.get("cow_d", ptrType), m.global.get("cow_s", sizeType)], b.none),
+      m.global.get("cow_s", sizeType),
+    ], sizeType));
+  }
+
   if (!m.validate()) throw new Error("cow-barrier: module failed validation after instrumentation");
   const out = m.emitBinary();
   m.dispose();
-  return { bytes: out, stores: all.length };
+  return { bytes: out, stores: ptrW.length, ranges: rangeW.length };
 }
 
-// self-test: a module with a nested store, instrument, validate, confirm the barrier.
-if (import.meta.url === `file://${process.argv[1]?.split("\\").join("/")}` || process.argv[2] === "selftest") {
+// selftest: a MEMORY64 module with a nested store + a memory.fill + a memory.copy.
+if (process.argv[2] === "selftest") {
   const m = new b.Module();
   m.setFeatures(b.Features.All);
-  m.setMemory(1, 10, "memory", [], false, true); // MEMORY64 (memory64 = 6th arg)
+  m.setMemory(1, 10, "memory", [], false, true); // MEMORY64
   m.addFunction("qjs_cow_mark_dirty", b.createType([b.i64]), b.none, [], m.nop());
   m.addFunctionExport("qjs_cow_mark_dirty", "qjs_cow_mark_dirty");
-  // nested store: store(store(8,1)->then 16, 42)  ~ outer ptr contains inner store
-  const inner = m.i64.store(0, 0, m.i64.const(8), m.i64.const(1));
-  const body = m.block(null, [inner, m.i64.store(0, 0, m.i64.const(16), m.i64.const(42))], b.none);
+  m.addFunction("qjs_cow_mark_dirty_range", b.createType([b.i64, b.i64]), b.none, [], m.nop());
+  m.addFunctionExport("qjs_cow_mark_dirty_range", "qjs_cow_mark_dirty_range");
+  const body = m.block(null, [
+    m.i64.store(0, 0, m.i64.const(8n), m.i64.const(1n)),                 // store
+    m.i64.store(0, 0, m.i64.const(16n), m.i64.const(42n)),               // store
+    m.memory.fill(m.i64.const(64n), m.i32.const(0), m.i64.const(128n)),  // range
+    m.memory.copy(m.i64.const(256n), m.i64.const(64n), m.i64.const(32n)),// range
+  ], b.none);
   m.addFunction("f", b.none, b.none, [], body);
   const bytes = m.emitBinary(); m.dispose();
   const r = instrument(bytes);
-  console.log("selftest: instrumented stores =", r.stores, "(expect 2); validated OK");
+  console.log("selftest: stores =", r.stores, "(expect 2), ranges =", r.ranges, "(expect 2); validated OK");
 }
