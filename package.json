@@ -24,7 +24,8 @@
   },
   "homepage": "https://github.com/NDevTK/APIClient#readme",
   "dependencies": {
-    "@jridgewell/trace-mapping": "^0.3.31"
+    "@jridgewell/trace-mapping": "^0.3.31",
+    "binaryen": "^130.0.0"
   },
   "devDependencies": {
     "esbuild": "^0.27.3",
