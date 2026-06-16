@@ -18,6 +18,9 @@
 // the single source of truth drive.mjs also tests); sourcemap.js keeps
 // the genuinely-static sourcemap/TS helpers.
 importScripts("lib/qjs/qjs_worker.js", "lib/qjs/hostedge.gen.js", "lib/sourcemap.js", "lib/priority.js", "lib/safe-fetch.js", "lib/learnstate.js");
+// COW build only: the cow-barrier-instrumented wasm as a base64 blob -> self.__QJS_WASM
+// (handed to createQJS via Module.wasmBinary). Absent in the SINGLE_FILE production build.
+try { importScripts("lib/qjs/qjs_wasm.cow.gen.js"); } catch (e) { /* no COW blob -> SINGLE_FILE wasm */ }
 
 var HOSTEDGE = self.__HOSTEDGE_SRC;
 var HOSTDRIVER = self.__HOSTDRIVER_SRC;
@@ -1170,6 +1173,11 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     _feMap.__feId = (self.__instCtr = (self.__instCtr || 0) + 1);   // DIAG: instance map identity (detect host/engine map desync)
     var _feTrace = {};
     var inst = await self.createQJS({
+      // COW build (non-SINGLE_FILE): the cow-barrier-instrumented wasm is handed back
+      // via Module.wasmBinary (emscripten honors it over the embedded one) from an
+      // importScripts'd base64 blob (qjs_wasm.cow.gen.js -> self.__QJS_WASM). undefined
+      // for the normal SINGLE_FILE build -> uses the embedded wasm. CSP-clean (no fetch).
+      wasmBinary: (typeof self !== "undefined" && self.__QJS_WASM) || undefined,
       __feMap: _feMap,
       __feTrace: _feTrace,
       noInitialRun: true,
@@ -1191,6 +1199,11 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             huntContext.totalEmissions++;
           }
         }
+        // MEASUREMENT (COW verify): the engine prints @WHY to stdout, which THIS tap
+        // consumes — without re-emitting they never reach a console listener (the harness
+        // `diag` only saw the offscreen's re-logged resolverErrors). Surface COW
+        // engagement/stats + stack-overflow @WHY to the worker console so diag captures them.
+        if (self.__QJS_WASM && (s.indexOf('"phase":"cow_') >= 0 || s.indexOf('stack_overflow') >= 0)) { try { console.log(s); } catch (e) {} }
         stdout.push(s);
       },
       printErr: function (s) {

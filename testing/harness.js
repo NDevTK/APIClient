@@ -353,6 +353,7 @@ async function cmdDiag(args) {
     if (reload) { try { const pg = await getActivePage(browser); await pg.reload({ waitUntil: "domcontentloaded", timeout: 30000 }); } catch (e) { log("reload err: " + e.message); } }
     await sleep(secs * 1000);
     log("--- console (" + secs + "s, " + logs.length + " lines) ---");
+    try { fs.writeFileSync(path.join(ROOT, "engine", ".work", "diag-full.log"), logs.join("\n")); log("(full " + logs.length + " lines -> engine/.work/diag-full.log)"); } catch (e) { log("diag-full write err: " + e.message); }
     log(logs.slice(-80).join("\n") || "(no console output captured)");
   });
 }
