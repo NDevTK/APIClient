@@ -224,7 +224,12 @@ function worker() {
   // shipping, Firefox/Safari in progress. JSPI_EXPORTS lists the wasm
   // exports that may suspend; qjs_host_yield is the C function that
   // returns a Promise the engine awaits.
-  emcc(["-sMODULARIZE=1", "-sEXPORT_NAME=createQJS", "-sSINGLE_FILE=1",
+  emcc(["-sMODULARIZE=1", "-sEXPORT_NAME=createQJS",
+        // SINGLE_FILE embeds the wasm (MV3 CSP can't fetch a .wasm). COW_NO_SINGLE_FILE
+        // emits a standalone qjs_worker.wasm for the write-barrier pass to instrument;
+        // it is then supplied back via Module.wasmBinary (the loader honours it), so the
+        // CSP constraint is met by an importScripts'd base64 blob, not a fetch.
+        ...(process.env.COW_NO_SINGLE_FILE ? [] : ["-sSINGLE_FILE=1"]),
         // HEAPU8 is needed at runtime so ast-thread.js's wasmBytes() can
         // read the linear-memory size for the memory-watchdog recycle in
         // the bc-compile loop and the BFS schedule loop. Without it, the

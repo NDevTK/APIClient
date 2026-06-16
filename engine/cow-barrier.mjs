@@ -45,7 +45,8 @@ function childRefs(info) {
 // field-less leaf ids: no children + never a write, and binaryen.js getExpressionInfo
 // has no schema for them (Object.keys(undefined) throws) — short-circuit on getExpressionId.
 const LEAF = new Set([b.NopId, b.UnreachableId, b.PopId, b.MemorySizeId, b.ConstId,
-  b.LocalGetId, b.GlobalGetId, b.RefNullId, b.RefFuncId, b.DataDropId, b.ElemDropId]
+  b.LocalGetId, b.GlobalGetId, b.RefNullId, b.RefFuncId, b.DataDropId, b.ElemDropId,
+  b.RethrowId] // wasm-EH rethrow: re-throws by catch label, no expr children, no write
   .filter((x) => x !== undefined));
 
 function collectWrites(expr, ptrW, rangeW) {
@@ -126,8 +127,18 @@ export function instrument(wasmBytes) {
   return { bytes: out, stores: ptrW.length, ranges: rangeW.length };
 }
 
+// file mode: `node cow-barrier.mjs in.wasm [out.wasm]` — instrument a real wasm.
+if (process.argv[2] && process.argv[2].endsWith(".wasm")) {
+  const { readFileSync, writeFileSync } = await import("node:fs");
+  const inp = process.argv[2], outp = process.argv[3] || inp.replace(/\.wasm$/, ".cow.wasm");
+  const t0 = process.hrtime.bigint();
+  const r = instrument(new Uint8Array(readFileSync(inp)));
+  writeFileSync(outp, r.bytes);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  console.log(`cow-barrier: ${inp} -> ${outp}: ${r.stores} stores + ${r.ranges} ranges instrumented, validated OK (${ms.toFixed(0)}ms, ${(r.bytes.length / 1048576).toFixed(1)}MB)`);
+}
 // selftest: a MEMORY64 module with a nested store + a memory.fill + a memory.copy.
-if (process.argv[2] === "selftest") {
+else if (process.argv[2] === "selftest") {
   const m = new b.Module();
   m.setFeatures(b.Features.All);
   m.setMemory(1, 10, "memory", [], false, true); // MEMORY64
