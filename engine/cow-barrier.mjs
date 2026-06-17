@@ -93,52 +93,47 @@ export function instrument(wasmBytes) {
   }
   if (!ptrW.length && !rangeW.length) { m.dispose(); return { bytes: wasmBytes, stores: 0, ranges: 0 }; }
 
-  const mark = findExport(m, "qjs_cow_mark_dirty", b.ExternalFunction);
-  if (!mark) throw new Error("cow-barrier: export 'qjs_cow_mark_dirty' not found");
+  // ONE target for stores AND bulk ranges: qjs_cow_undo_log(addr, size) records the EXACT
+  // pre-flow value of every heap WORD written -> GC-consistent revert (replaces page marking,
+  // which spanned object boundaries and corrupted the object graph on revert).
+  const undoLog = findExport(m, "qjs_cow_undo_log", b.ExternalFunction);
+  if (!undoLog) throw new Error("cow-barrier: export 'qjs_cow_undo_log' not found");
   // ptr/size index type from a real write (i32, or i64 under MEMORY64).
   const ptrType = ptrW.length ? b.getExpressionType(b._BinaryenStoreGetPtr(ptrW[0]))
     : b.getExpressionType(rGetDest(rangeW[0].expr, rangeW[0].id));
   const zero = (t) => t === b.i64 ? m.i64.const(0n) : m.i32.const(0);
-  // scratch globals: $g store-ptr/nested, $d range-dest (survives value-eval), $s range-size.
+  const sizeConst = (n) => ptrType === b.i64 ? m.i64.const(BigInt(n)) : m.i32.const(n);
+  // scratch globals: $g store-ptr (eval addr once), $d/$s range dest/size (survive value-eval).
   m.addGlobal("cow_g", ptrType, true, zero(ptrType));
-  let markRange = null, sizeType = ptrType;
+  let sizeType = ptrType;
   if (rangeW.length) {
-    markRange = findExport(m, "qjs_cow_mark_dirty_range", b.ExternalFunction);
-    if (!markRange) throw new Error("cow-barrier: export 'qjs_cow_mark_dirty_range' not found");
     sizeType = b.getExpressionType(rGetSize(rangeW[0].expr, rangeW[0].id));
     m.addGlobal("cow_d", ptrType, true, zero(ptrType));
     m.addGlobal("cow_s", sizeType, true, zero(sizeType));
   }
 
-  // store (ptr, offset-imm) -> block[ set $g=ptr ; mark($g + offset) ; get $g ]
-  // CRITICAL: a wasm store writes to ptr + its OWN offset immediate, so the barrier must
-  // mark page(ptr + offset), NOT page(ptr). 72% of the engine's stores carry a non-zero
-  // offset (max ~3.2MB ≈ 49 pages); marking only the base page mis-tracks the written page
-  // whenever base+offset crosses a 64KB boundary -> that page is never saved/reverted -> a
-  // stale object survives a per-flow snapshot revert still referencing a reverted shape ->
-  // gc_decref shape-refcount UNDERFLOW. The store keeps its offset immediate and gets the
-  // ORIGINAL ptr back from the block (it re-applies the offset itself), so $g is the base
-  // (addr evaluated once) and mark() receives the true effective address.
+  // store (ptr, offset-imm, bytes) -> block[ set $g=ptr ; undo_log($g+offset, bytes) ; get $g ].
+  // The store writes ptr + its OWN offset immediate, so the barrier logs the EFFECTIVE address
+  // (the offset fix); `bytes` is the store width so undo_log covers every word the store touches.
   const addOff = (base, off) => off
     ? (ptrType === b.i64 ? m.i64.add(base, m.i64.const(BigInt(off))) : m.i32.add(base, m.i32.const(off)))
     : base;
   for (const st of ptrW) {
     const ptr = b._BinaryenStoreGetPtr(st);
-    const off = b.getExpressionInfo(st).offset;   // store's immediate offset (re-applied by the store)
+    const info = b.getExpressionInfo(st);   // .offset (re-applied by the store) + .bytes (store width)
     b._BinaryenStoreSetPtr(st, m.block(null, [
       m.global.set("cow_g", ptr),
-      m.call(mark, [addOff(m.global.get("cow_g", ptrType), off)], b.none),
+      m.call(undoLog, [addOff(m.global.get("cow_g", ptrType), info.offset), sizeConst(info.bytes)], b.none),
       m.global.get("cow_g", ptrType),
     ], ptrType));
   }
-  // range: dest -> tee into $d ; size -> tee into $s + mark_range($d,$s) (eval order
-  // dest,value/source,size means $d is set before $s, and value's nested stores use $g).
+  // bulk-memory range -> undo_log(dest, size): same target; logs every word in [dest, dest+size).
   for (const { expr, id } of rangeW) {
     const dest = rGetDest(expr, id), size = rGetSize(expr, id);
     rSetDest(expr, id, m.block(null, [m.global.set("cow_d", dest), m.global.get("cow_d", ptrType)], ptrType));
     rSetSize(expr, id, m.block(null, [
       m.global.set("cow_s", size),
-      m.call(markRange, [m.global.get("cow_d", ptrType), m.global.get("cow_s", sizeType)], b.none),
+      m.call(undoLog, [m.global.get("cow_d", ptrType), m.global.get("cow_s", sizeType)], b.none),
       m.global.get("cow_s", sizeType),
     ], sizeType));
   }
