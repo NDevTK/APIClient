@@ -143,14 +143,20 @@ async function getPopupPage(browser) {
 // Chrome caches it in worker memory; chrome.runtime.reload() + bin/Clear (worker
 // respawn) do NOT bust that in-memory cache, so a freshly-BUILT engine isn't
 // picked up live (verified: the grind stuck at the SAME emission count pre/post
-// reload = stale wasm). A new Chrome PROCESS has no in-memory cache and re-reads
-// the rebuilt qjs_worker.js from disk (V8's on-disk code cache keys on file
-// content, so a rebuilt file invalidates automatically — no need to wipe it).
-// Also clears IndexedDB (learned-state reset). PRESERVES cookies / Login Data /
-// the rest of the profile so authenticated sites stay logged in. DO NOT wipe the
-// "Service Worker" or "Code Cache" dirs — deleting the SW dir breaks the
-// extension's background SW startup (it then never creates the offscreen doc, so
-// analysis never runs). Use after `node engine/build.mjs stage`.
+// reload = stale wasm). A new Chrome PROCESS has no in-memory cache, BUT V8's
+// ON-DISK code cache (Default/Code Cache) does NOT reliably invalidate on a
+// rebuild: it caches the compiled bytecode of importScripts'd classic scripts —
+// INCLUDING qjs_wasm.cow.gen.js, whose body is one giant `atob("<base64 wasm>")`
+// string literal. A stale cache entry replays the OLD base64 → the OLD wasm runs
+// even though the on-disk blob is fresh (MEASURED: disk blob had the v2 assert
+// string `propTrk`, yet the running engine still emitted the pre-v2 `@addr`
+// message — a silently-stale measurement, the exact false-confidence CLAUDE.md
+// bans). So WIPE Default/Code Cache on every restart — it is a pure V8
+// compilation cache (Chrome regenerates it on next compile; no correctness/state
+// in it). Also clears IndexedDB (learned-state reset). PRESERVES cookies / Login
+// Data / the "Service Worker" dir (deleting the SW dir breaks the extension's
+// background SW startup → no offscreen doc → analysis never runs) and the rest of
+// the profile so authenticated sites stay logged in. Use after `node engine/build.mjs stage`.
 async function cmdRestart(args) {
   const lock = await readLock();
   if (lock && lock.pid) {
@@ -162,9 +168,12 @@ async function cmdRestart(args) {
   }
   await clearLock();
   await sleep(1800);   // let the process group exit + release the profile's file locks
-  // IndexedDB ONLY — the learned-state reset the user asked for. The new process
-  // handles the engine cache; cookies/login live in other dirs and survive.
+  // IndexedDB (learned-state reset) + V8 Code Cache (so a rebuilt wasm blob is NOT
+  // served from a stale compiled-bytecode entry — see the header comment). Both are
+  // pure caches; cookies/login live in other dirs and survive.
   try { await fsp.rm(path.join(PROFILE_DIR, "Default/IndexedDB"), { recursive: true, force: true }); log("cleared Default/IndexedDB"); }
+  catch (e) { /* absent dir is fine */ }
+  try { await fsp.rm(path.join(PROFILE_DIR, "Default/Code Cache"), { recursive: true, force: true }); log("cleared Default/Code Cache"); }
   catch (e) { /* absent dir is fine */ }
   await cmdStart(args);
 }
