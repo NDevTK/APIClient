@@ -1436,6 +1436,8 @@ var _qjs_set_driving,
   _qjs_resume_chain_call,
   _qjs_cow_boot_baseline,
   _qjs_cow_drive_restore,
+  _qjs_drive_repick,
+  _qjs_drive_run,
   _qjs_cow_stats_emit,
   _qjs_cow_pool_init,
   _qjs_cow_capture,
@@ -1462,6 +1464,8 @@ function assignWasmExports(wasmExports) {
   _qjs_resume_chain_call = Module['_qjs_resume_chain_call'] = wasmExports['qjs_resume_chain_call'];
   _qjs_cow_boot_baseline = Module['_qjs_cow_boot_baseline'] = wasmExports['qjs_cow_boot_baseline'];
   _qjs_cow_drive_restore = Module['_qjs_cow_drive_restore'] = wasmExports['qjs_cow_drive_restore'];
+  _qjs_drive_repick = Module['_qjs_drive_repick'] = wasmExports['qjs_drive_repick'];
+  _qjs_drive_run = Module['_qjs_drive_run'] = wasmExports['qjs_drive_run'];
   _qjs_cow_stats_emit = Module['_qjs_cow_stats_emit'] = wasmExports['qjs_cow_stats_emit'];
   _qjs_cow_pool_init = Module['_qjs_cow_pool_init'] = wasmExports['qjs_cow_pool_init'];
   _qjs_cow_capture = Module['_qjs_cow_capture'] = wasmExports['qjs_cow_capture'];
