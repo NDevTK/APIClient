@@ -110,12 +110,24 @@ export function instrument(wasmBytes) {
     m.addGlobal("cow_s", sizeType, true, zero(sizeType));
   }
 
-  // store ptr -> block[ set $g=ptr ; mark($g) ; get $g ]  (addr evaluated once)
+  // store (ptr, offset-imm) -> block[ set $g=ptr ; mark($g + offset) ; get $g ]
+  // CRITICAL: a wasm store writes to ptr + its OWN offset immediate, so the barrier must
+  // mark page(ptr + offset), NOT page(ptr). 72% of the engine's stores carry a non-zero
+  // offset (max ~3.2MB ≈ 49 pages); marking only the base page mis-tracks the written page
+  // whenever base+offset crosses a 64KB boundary -> that page is never saved/reverted -> a
+  // stale object survives a per-flow snapshot revert still referencing a reverted shape ->
+  // gc_decref shape-refcount UNDERFLOW. The store keeps its offset immediate and gets the
+  // ORIGINAL ptr back from the block (it re-applies the offset itself), so $g is the base
+  // (addr evaluated once) and mark() receives the true effective address.
+  const addOff = (base, off) => off
+    ? (ptrType === b.i64 ? m.i64.add(base, m.i64.const(BigInt(off))) : m.i32.add(base, m.i32.const(off)))
+    : base;
   for (const st of ptrW) {
     const ptr = b._BinaryenStoreGetPtr(st);
+    const off = b.getExpressionInfo(st).offset;   // store's immediate offset (re-applied by the store)
     b._BinaryenStoreSetPtr(st, m.block(null, [
       m.global.set("cow_g", ptr),
-      m.call(mark, [m.global.get("cow_g", ptrType)], b.none),
+      m.call(mark, [addOff(m.global.get("cow_g", ptrType), off)], b.none),
       m.global.get("cow_g", ptrType),
     ], ptrType));
   }
