@@ -1208,6 +1208,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       },
       printErr: function (s) {
         stderr.push(s); if (!self._lastStderr) self._lastStderr = []; self._lastStderr.push(s); if (self._lastStderr.length > 500) self._lastStderr.shift();
+        if (/Aborted|Assertion failed|gc_decref|gc_obj_list/i.test(s)) { try { console.error("ABORTDIAG: " + s); } catch (e) {} }   // measurement: surface the abort reason to the worker console (diag captures it; _lastStderr is lost when the offscreen closes)
         /* Promote the engine's leak diagnostic to the non-rotating @WHY log:
            the FreeRuntime_residue line (printed by JS_FreeRuntime right before
            the gc_obj_list assert, naming the leaked object TYPE) scrolls off the
@@ -1970,7 +1971,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     }
     _tBootMs += Date.now() - _bt0;
     processStdout();   // module-init @H/@S/@Z, aggregated once
-    var _img = (m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null;
+    // COW-as-snapshot build: the engine takes the COW baseline at do_boot END and reverts
+    // dirty-pages-only at do_drive START, so the host does NOT image/restore HEAPU8.
+    var _img = (self.__QJS_WASM) ? null : ((m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null);
     var _bt = (m._feTrace && m._feTrace["/boot.tr"]) ? m._feTrace["/boot.tr"].join("") : "";
     var _bd = [], _bfr = [], _btl = _bt.split("\n");
     for (var _bi = 0; _bi < _btl.length; _bi++) {
@@ -2008,7 +2011,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     if (_rebooted && !instAborted) {
       stdout.length = 0; stderr.length = 0;
       try { await m.callMain(["--fe-boot"].concat(bootArgs)); } catch (e) {}
-      var _img2 = (m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null;
+      var _img2 = (self.__QJS_WASM) ? null : ((m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null);   // COW-as-snapshot: no host image (engine baseline)
       if (_img2) _img = _img2;
     }
     return _img;
@@ -2267,6 +2270,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var _lastPersistDrivenN = -1;     // driven set size at last successful prog-put
     var _drainBusy = false;           // reentrancy guard (drain awaits IDB; another yield may fire)
     var _drem = -1;                   // last @DS rem we saw
+    var _deepPaused = false;          // engine emitted @DPAUSE: grind paused with re-drivable residue (#9, not abandoned)
     _deepStats.stop = "done";
     // Persist the combined bundle ONCE (heavy, ~18 MB) so a fresh worker can
     // resume. IDB failures must be visible — a silent QuotaExceededError on
@@ -2347,6 +2351,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
             // drive never returned = the non-terminating-orphan freeze, now
             // named with its source loc (per the OBSERVABILITY policy).
             if (_did && self._currentOrphan && self._currentOrphan.id === _did) self._currentOrphan = null;
+          } else if (_ln.slice(0, 7) === "@DPAUSE") {
+            /* #9 grind PAUSED with re-drivable residue (engine left the deferred orphans
+               UN-driven — emitted as @DG, which the @DD parser above ignores, so they stay
+               out of /driven) — exit the grind loop, never recycle/abandon. They re-drive
+               next invocation, when shared state may let them progress. */
+            _deepPaused = true;
           } else if (_ln.slice(0, 8) === "@DSTART ") {
             try { self._currentOrphan = JSON.parse(_ln.slice(8)); self._currentOrphan.ts = Date.now(); }
             catch (e) {
@@ -2476,6 +2486,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     while (!_grindDone) {
       stdout.length = 0; stderr.length = 0;
       _stdoutCursor = 0;
+      _deepPaused = false;
       var _dpCallThrew = false;
       var _grindArg = _headPhase ? "--fe-deep-grind-head" : "--fe-deep-grind";
       try { await m.callMain([_grindArg].concat(fileArgs)); }
@@ -2524,6 +2535,15 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         huntContext.headDone = true;
         if (_drem === 0) { _grindDone = true; break; }   // head WAS the whole residue (small page)
         continue;   // run the tail on the same instance
+      }
+      if (_deepPaused) {
+        /* #9 the engine PAUSED the grind: its deferred residue is re-drivable (left
+           UN-driven, not abandoned), so EXIT — never recycle/abandon. Next invocation
+           (re-visit / fresh session) re-drives the residue via the /driven skip-set;
+           the WFQ starves it by emitted output meanwhile. */
+        _deepStats.stop = "paused-redrivable";
+        _grindDone = true;
+        break;
       }
       var _dpRecycleReason = null;
       if (instAborted) _dpRecycleReason = "abort";
