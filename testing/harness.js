@@ -166,6 +166,17 @@ async function cmdRestart(args) {
       log(`killed Chrome pid ${lock.pid}`);
     } catch (e) { log(`kill pid ${lock.pid}: ${e.message || e} (may already be gone)`); }
   }
+  // Reap LEAKED harness Chromes not in the lock: a test script killed mid-restart (TaskStop)
+  // leaves its Chrome behind, and they accumulate until the grind wedges (measured: ~10
+  // instances -> sentry barely grinds). Every harness Chrome carries --remote-debugging-port;
+  // a normal browser has none, so this can't touch the user's browser. Base64 -EncodedCommand
+  // sidesteps cmd/PowerShell quoting. Best-effort.
+  if (process.platform === "win32") {
+    try {
+      const ps = "Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\" | Where-Object { $_.CommandLine -match 'remote-debugging-port' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+      execSync(`powershell -NoProfile -EncodedCommand ${Buffer.from(ps, "utf16le").toString("base64")}`, { stdio: "ignore" });
+    } catch (e) { /* best-effort reap */ }
+  }
   await clearLock();
   await sleep(1800);   // let the process group exit + release the profile's file locks
   // IndexedDB (learned-state reset) + V8 Code Cache (so a rebuilt wasm blob is NOT
