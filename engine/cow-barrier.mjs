@@ -159,10 +159,8 @@ else if (process.argv[2] === "selftest") {
   const m = new b.Module();
   m.setFeatures(b.Features.All);
   m.setMemory(1, 10, "memory", [], false, true); // MEMORY64
-  m.addFunction("qjs_cow_mark_dirty", b.createType([b.i64]), b.none, [], m.nop());
-  m.addFunctionExport("qjs_cow_mark_dirty", "qjs_cow_mark_dirty");
-  m.addFunction("qjs_cow_mark_dirty_range", b.createType([b.i64, b.i64]), b.none, [], m.nop());
-  m.addFunctionExport("qjs_cow_mark_dirty_range", "qjs_cow_mark_dirty_range");
+  m.addFunction("qjs_cow_undo_log", b.createType([b.i64, b.i64]), b.none, [], m.nop());
+  m.addFunctionExport("qjs_cow_undo_log", "qjs_cow_undo_log");
   const body = m.block(null, [
     m.i64.store(0, 0, m.i64.const(8n), m.i64.const(1n)),                 // store
     m.i64.store(0, 0, m.i64.const(16n), m.i64.const(42n)),               // store

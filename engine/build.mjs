@@ -133,7 +133,12 @@ function emcc(extra, out) {
   const src = asan ? SRC.filter((f) => !/z3_shim/i.test(f)) : SRC;
   const z3 = asan ? [] : [Z3_LIB_W];
   const wmem = asan ? WMEM.filter((f) => f !== "-sMEMORY64=1") : WMEM;
-  run(EM_PY, [EMCC, ...cflags, ...src, ...z3, ...wmem, ...extra, "-o", out],
+  // --wrap the libc allocator so EVERY raw malloc/calloc/free/realloc (Z3, in-tree callers) routes
+  // through __wrap_* (quickjs.c), which suppresses the COW barrier during a flow -> gm metadata stays
+  // out of the revertable delta (the gm-desync that caused the emscripten_builtin_malloc OOB recycle).
+  // OFF for ASAN (it owns malloc).
+  const wrap = asan ? [] : ["-Wl,--wrap=malloc", "-Wl,--wrap=calloc", "-Wl,--wrap=free", "-Wl,--wrap=realloc"];
+  run(EM_PY, [EMCC, ...cflags, ...src, ...z3, ...wmem, ...wrap, ...extra, "-o", out],
       { EM_CONFIG, EMSDK });
 }
 function size(f) {
@@ -293,8 +298,19 @@ async function cowBuild() {
   process.env.QJS_EXTRA_DEFINES = ((process.env.QJS_EXTRA_DEFINES || "") + " -DQJS_COW").trim();
   worker();   // -> qjs_worker.js (loader) + qjs_worker.wasm (standalone, COW on)
   stage();    // copies the non-SINGLE_FILE loader + hostedge.gen.js into the extension
-  const { instrument } = await import("./cow-barrier.mjs");
-  const r = instrument(new Uint8Array(readFileSync(join(QJS, "qjs_worker.wasm"))));
+  // COW_NO_BARRIER: skip the per-store write-barrier instrumentation entirely. Capture then
+  // comes ONLY from cow_set_value at the semantic var_ref/global write sites (sparse). This is
+  // the YIELDS-ABILITY experiment: the per-store barrier taxed every store and wedged the worker;
+  // semantic capture fires orders of magnitude less. Reversible flag — the per-store path stays.
+  let r;
+  if (process.env.COW_NO_BARRIER) {
+    const raw = new Uint8Array(readFileSync(join(QJS, "qjs_worker.wasm")));
+    r = { bytes: raw, stores: 0, ranges: 0, skipped: 0 };
+    console.log("[build] COW: per-store barrier SKIPPED (COW_NO_BARRIER) — capture via cow_set_value semantic sites only");
+  } else {
+    const { instrument } = await import("./cow-barrier.mjs");
+    r = instrument(new Uint8Array(readFileSync(join(QJS, "qjs_worker.wasm"))));
+  }
   const dst = resolve(ENGINE, "..", "extension", "lib", "qjs");
   const b64 = Buffer.from(r.bytes).toString("base64");
   writeFileSync(join(dst, "qjs_wasm.cow.gen.js"),

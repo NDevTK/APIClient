@@ -1973,7 +1973,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     processStdout();   // module-init @H/@S/@Z, aggregated once
     // COW-as-snapshot build: the engine takes the COW baseline at do_boot END and reverts
     // dirty-pages-only at do_drive START, so the host does NOT image/restore HEAPU8.
-    var _img = (self.__QJS_WASM) ? null : ((m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null);
+    var _img = (self.__QJS_WASM) ? null : ((m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null);   // TEST: host-image off (baseline) to isolate the minimal per-store barrier cost
     var _bt = (m._feTrace && m._feTrace["/boot.tr"]) ? m._feTrace["/boot.tr"].join("") : "";
     var _bd = [], _bfr = [], _btl = _bt.split("\n");
     for (var _bi = 0; _bi < _btl.length; _bi++) {
@@ -2011,7 +2011,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     if (_rebooted && !instAborted) {
       stdout.length = 0; stderr.length = 0;
       try { await m.callMain(["--fe-boot"].concat(bootArgs)); } catch (e) {}
-      var _img2 = (self.__QJS_WASM) ? null : ((m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null);   // COW-as-snapshot: no host image (engine baseline)
+      var _img2 = (self.__QJS_WASM) ? null : ((m.HEAPU8 && m.HEAPU8.length) ? m.HEAPU8.slice() : null);   // TEST: host-image off
       if (_img2) _img = _img2;
     }
     return _img;
