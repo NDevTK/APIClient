@@ -139,6 +139,11 @@ export function instrument(wasmBytes) {
   }
 
   if (!m.validate()) throw new Error("cow-barrier: module failed validation after instrumentation");
+  // WASM_NAMES=1: preserve the wasm name section THROUGH instrumentation (binaryen's emitBinary
+  // strips it by default) so a deep-grind shadow-stack-overflow trap names the recursing C fn
+  // (wasm-function[85]) instead of an opaque index — the context needed to trampoline it. Off by
+  // default (names add ~3.5MB to the per-page worker); the emcc side already gates --profiling-funcs.
+  if (process.env.WASM_NAMES) b.setDebugInfo(true);
   const out = m.emitBinary();
   m.dispose();
   return { bytes: out, stores: ptrW.length, ranges: rangeW.length, skipped };
