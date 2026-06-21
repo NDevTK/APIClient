@@ -618,6 +618,69 @@ async function cmdWorker(args) {
   });
 }
 
+// CPU-PROFILE the analysis worker while it processes a url — the ONLY way to see WHERE a
+// single-threaded HANG spins, since the worker can't answer evaluate() but CDP Profiler
+// samples its stack OUT-OF-PROCESS. usage: profile <url> [seconds]. Dumps top self-time fns.
+async function cmdProfile(args) {
+  const url = (args[0] || "").trim();
+  const secs = parseInt(args[1] || "15", 10);
+  await withBrowser(async (browser) => {
+    const lock = await readLock();
+    const extId = lock?.extId;
+    const ourl = `chrome-extension://${extId}/ast-worker.html`;
+    let w = null;
+    for (let i = 0; i < 40 && !w; i++) {
+      const t = browser.targets().find((t) => t.url().startsWith(ourl));
+      const pg = t ? await t.page().catch(() => null) : null;
+      if (pg) w = pg.workers().find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
+      if (!w) await sleep(150);
+    }
+    if (!w) { log("(no analysis worker)"); return; }
+    const client = w.client || w._client;   // the worker's CDPSession (works while the worker is wedged)
+    if (!client) { log("(no CDP client on worker)"); return; }
+    // Capture worker console (the print handler -> console.error) OUT-OF-PROCESS — readable mid-spin.
+    const consoleLines = [];
+    await client.send("Runtime.enable").catch(() => {});
+    const phaseCounts = {};
+    client.on("Runtime.consoleAPICalled", (e) => {
+      try { const s = (e.args || []).map((a) => (a.value != null ? a.value : (a.description || ""))).join(" ");
+        if (/@WHY|spin/.test(s)) { consoleLines.push(s); const m = /"phase":"([^"]+)"/.exec(s); if (m) phaseCounts[m[1]] = (phaseCounts[m[1]] || 0) + 1; } } catch (_) {}
+    });
+    await client.send("Profiler.enable");
+    await client.send("Profiler.setSamplingInterval", { interval: 60 });
+    await client.send("Profiler.start");
+    if (url) { try { const page = await getActivePage(browser); await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }); } catch (_) {} }
+    await sleep(secs * 1000);
+    if (consoleLines.length) { log("=== @WHY phase COUNTS (mid-spin) ==="); log(JSON.stringify(phaseCounts, null, 2)); log("=== sample lines ==="); log(JSON.stringify([...new Set(consoleLines)].slice(0, 8), null, 2)); }
+    const { profile } = await client.send("Profiler.stop");
+    const nodes = (profile && profile.nodes) || [];
+    const self = {};
+    for (const n of nodes) {
+      const f = n.callFrame || {};
+      const key = (f.functionName || "(anon)") + " @ " + ((f.url || "").split("/").pop()) + ":" + (f.lineNumber + 1);
+      self[key] = (self[key] || 0) + (n.hitCount || 0);
+    }
+    const total = Object.values(self).reduce((a, b) => a + b, 0) || 1;
+    const top = Object.entries(self).sort((a, b) => b[1] - a[1]).slice(0, 18)
+      .map(([k, v]) => ({ fn: k, hits: v, pct: +(100 * v / total).toFixed(1) }));
+    log("=== profile: top self-time (the hot spin) over " + secs + "s, " + total + " samples ===");
+    log(JSON.stringify(top, null, 2));
+    // Call-stack TO the hottest node (who is looping calling it).
+    const parentOf = {};
+    for (const n of nodes) for (const c of (n.children || [])) parentOf[c] = n.id;
+    const byId = {}; for (const n of nodes) byId[n.id] = n;
+    let hot = nodes.reduce((a, b) => ((b.hitCount || 0) > (a.hitCount || 0) ? b : a), nodes[0] || {});
+    const stack = []; let cur = hot;
+    for (let i = 0; i < 30 && cur; i++) {
+      const f = cur.callFrame || {};
+      stack.push((f.functionName || "(anon)") + " @ " + ((f.url || "").split("/").pop()) + ":" + (f.lineNumber + 1));
+      cur = byId[parentOf[cur.id]];
+    }
+    log("=== call stack to the hot node (innermost first) ===");
+    log(JSON.stringify(stack, null, 2));
+  });
+}
+
 // Resolve an engine-reported combined-bundle location (file:line[:col]) back to
 // a readable source snippet. The forced-exec engine line-numbers stack frames
 // (@DSTART, @WHY spin loopFile/loopLine) against the COMBINED bundle (slices
@@ -1242,7 +1305,7 @@ async function cmdNetDiff(args) {
 }
 
 
-const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, learnstate: cmdLearnState, reachgap: cmdReachGap, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
+const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, profile: cmdProfile, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, learnstate: cmdLearnState, reachgap: cmdReachGap, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
