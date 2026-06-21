@@ -644,7 +644,8 @@ async function cmdProfile(args) {
     const phaseCounts = {};
     client.on("Runtime.consoleAPICalled", (e) => {
       try { const s = (e.args || []).map((a) => (a.value != null ? a.value : (a.description || ""))).join(" ");
-        if (/@WHY|spin/.test(s)) { consoleLines.push(s); const m = /"phase":"([^"]+)"/.exec(s); if (m) phaseCounts[m[1]] = (phaseCounts[m[1]] || 0) + 1; } } catch (_) {}
+        if (/@WHY|spin/.test(s)) { consoleLines.push(s); const m = /"phase":"([^"]+)"/.exec(s); if (m) phaseCounts[m[1]] = (phaseCounts[m[1]] || 0) + 1; }
+        const pm = /^\s*(@\w+|@WHY \{"phase":"[^"]+")/.exec(s); if (pm) { const k = pm[1].slice(0, 40); phaseCounts["LINE:" + k] = (phaseCounts["LINE:" + k] || 0) + 1; } } catch (_) {}
     });
     await client.send("Profiler.enable");
     await client.send("Profiler.setSamplingInterval", { interval: 60 });
