@@ -1335,7 +1335,15 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         }
         var _url = null;
         if (/^https?:\/\//i.test(nm)) _url = nm;
-        else if (nm.slice(0, 3) === "/x/") _url = "https://" + nm.slice(3);   // engine's canonical CDN id → real URL
+        else if (nm.slice(0, 3) === "/x/") {
+          // engine's canonical CDN id → real URL. PRESERVE the page's scheme for a same-host chunk:
+          // an http page's same-origin import must fetch http, not a hardcoded https that fails / is
+          // mixed-content-blocked (the esm_cdn modfetch_throw). Cross-host CDN modules default https.
+          var _rest = nm.slice(3), _sch = "https://";
+          try { var _pm = /^(https?:)\/\/([^\/]+)/i.exec(_principalOrigin || sourceUrl || "");
+            if (_pm && (_rest === _pm[2] || _rest.indexOf(_pm[2] + "/") === 0)) _sch = _pm[1] + "//"; } catch (e) {}
+          _url = _sch + _rest;
+        }
         else { _modCache[nm] = { code: null }; return; }                      // local slice / non-fetchable id — not a network module
         var _prin = _principalOrigin, _src = sourceUrl;
         var _p = safeFetch(_url, { pageUrl: _src || "", pageOrigin: _prin, method: "GET", as: "script" }).then(function (resp) {
