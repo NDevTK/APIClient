@@ -2490,7 +2490,8 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
        still runs to rem=0; head-first only reorders WHICH runs first so
        endpoints stream early. */
     var _headPhase = true;
-    var _noProgRecycles = 0, _lastRecycleDriven = -1;   // a recycle loop with driven flat across many recycles is a provable no-progress spin
+    /* (deleted: _noProgRecycles/_lastRecycleDriven — the no-progress-recycle STOP bound.
+       Termination is the engine WFQ park + @DPAUSE, not a host recycle count.) */
     while (!_grindDone) {
       stdout.length = 0; stderr.length = 0;
       _stdoutCursor = 0;
@@ -2516,12 +2517,10 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         // recursion cycle) — distinguishes a worker-JS re-drive recursion (HOSTDRIVER
         // frames) from a wasm/QuickJS one, deciding WHERE the fix goes.
         self._whyRecords.push({ phase: "deep_callmain_throw", step: _deepStats.steps, err: String(e && e.message || e), drivenN: _driven.size, culprit: _culpritId || "(unknown)", culpritLoc: _culpritLoc, stack: String((e && e.stack) || "").slice(0, 1100) });
-        // A culprit that throws the SAME way on every re-drive is provably
-        // unhelpable (forced exec is deterministic) — count repeats so the recycle
-        // below can abandon it (mark driven) rather than re-drive it forever.
-        // Terminate-on-provable-pointlessness, NOT a cap: a one-off trap (count 1)
-        // still recycles and retries; only a deterministic RE-throw is abandoned.
-        if (_culpritId) { if (!self._deepThrowCounts) self._deepThrowCounts = {}; self._deepThrowCounts[_culpritId] = (self._deepThrowCounts[_culpritId] || 0) + 1; }
+        /* A throw here is now a REAL bug surfaced (above), not a swallowed stack
+           overflow: overflow is impossible (heap trampoline), and a non-terminating
+           orphan is PARKED by the engine WFQ (qjs_drive_run), never re-driven into a
+           throw. So the per-culprit throw-count + abandon are deleted — no count. */
       }
       // Final drain for any lines after the last JSPI yield (e.g. the
       // closing @DS the engine emits before returning from main).
@@ -2586,37 +2585,22 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
       if (_dpRecycleReason) {
         if (!self._whyRecords) self._whyRecords = [];
         self._whyRecords.push({ phase: "deep_recycle", reason: _dpRecycleReason, step: _deepStats.steps, rem: _drem });
-        /* No-progress recycle break — MADE to terminate (CLAUDE.md), not spun. A
-           recycle loop where driven hasn't advanced across many recycles is a
-           provably-pointless spin: a SYSTEMIC trap (e.g. an async-frame corruption
-           hitting a VARYING orphan each re-drive) the per-culprit abandon below
-           can't catch. Stop the grind so the head's endpoints persist instead of
-           looping forever; the underlying trap stays surfaced in _whyRecords. */
-        if (_driven.size === _lastRecycleDriven) _noProgRecycles++;
-        else { _noProgRecycles = 0; _lastRecycleDriven = _driven.size; }
-        if (_noProgRecycles >= 12) {
-          self._whyRecords.push({ phase: "deep_recycle_noprogress_stop", recycles: _noProgRecycles, driven: _driven.size, rem: _drem, step: _deepStats.steps });
-          _deepStats.stop = "recycle-noprogress";
-          break;
-        }
+        /* Recycle to a FRESH instance to keep driving the residue across the callMain
+           boundary (instance-memory management). The no-progress-recycle STOP (>=12)
+           and the per-culprit abandon (>=2 deterministic re-throws) are DELETED — both
+           were banned bounds that truncated work and silently dropped tail-exclusive
+           findings. Termination is now the engine's WFQ: qjs_drive_run PARKS a silent /
+           non-terminating orphan (qjs_flow_save snapshot + per-flow COW capture, ~0 CPU,
+           resumable) and emits @DPAUSE (paused-redrivable, handled above) when only
+           starved residue remains; residue===0 ends it otherwise — never a host count.
+           Overflow is impossible (heap trampoline) so the deterministic re-throw
+           "culprit" the abandon targeted no longer exists; a throw now stays surfaced in
+           _whyRecords (deep_callmain_throw) as a REAL bug to fix, not a swallowed
+           overflow re-driven into a recycle spin. */
         m = null;
         await new Promise(function (r) { setTimeout(r, 0); });
         m = await freshInstance();
         huntContext.onYieldDrain = _drainDeepStdout;
-        /* Abandon a culprit that has thrown identically ≥2× — re-driving it only
-           re-throws (forced exec is deterministic), which is what wedges the grind
-           in a recycle loop (esm.sh: one orphan overflowed 1231×, driven flat).
-           Mark it driven so the fresh instance advances to the remaining residue;
-           its OWN endpoints stay forfeit until the recursion-collapse fixpoint
-           bounds the overflow (the deeper root). Recorded, never silent. */
-        if (_dpCallThrew && self._currentOrphan && self._currentOrphan.id &&
-            self._deepThrowCounts && self._deepThrowCounts[self._currentOrphan.id] >= 2 &&
-            !_driven.has(self._currentOrphan.id)) {
-          var _ab = self._currentOrphan.id;
-          var _abLoc = (self._currentOrphan.file || "?") + ":" + self._currentOrphan.line + ":" + self._currentOrphan.col;
-          _driven.add(_ab);
-          self._whyRecords.push({ phase: "deep_orphan_abandoned", culprit: _ab, loc: _abLoc, throws: self._deepThrowCounts[_ab], step: _deepStats.steps });
-        }
         if (_driven.size) {
           // Rewrite /driven into the (fresh) instance's in-memory map so the recycle
           // resumes the right tail — qjs_dd_load reads it via fe_map_len/copy, no fopen.
