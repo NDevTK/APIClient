@@ -1442,12 +1442,12 @@ var _qjs_set_driving,
   _qjs_cow_pool_init,
   _qjs_cow_capture,
   _qjs_cow_to_baseline,
+  _qjs_cow_undo_revert_to,
   _qjs_cow_undo_revert,
   _qjs_cow_apply,
   _qjs_cow_discard,
   _qjs_cow_commit,
   _qjs_cow_undo_log,
-  _qjs_cow_undo_revert_to,
   ___trap,
   __emscripten_stack_restore,
   __emscripten_stack_alloc,
@@ -1471,12 +1471,12 @@ function assignWasmExports(wasmExports) {
   _qjs_cow_pool_init = Module['_qjs_cow_pool_init'] = wasmExports['qjs_cow_pool_init'];
   _qjs_cow_capture = Module['_qjs_cow_capture'] = wasmExports['qjs_cow_capture'];
   _qjs_cow_to_baseline = Module['_qjs_cow_to_baseline'] = wasmExports['qjs_cow_to_baseline'];
+  _qjs_cow_undo_revert_to = Module['_qjs_cow_undo_revert_to'] = wasmExports['qjs_cow_undo_revert_to'];
   _qjs_cow_undo_revert = Module['_qjs_cow_undo_revert'] = wasmExports['qjs_cow_undo_revert'];
   _qjs_cow_apply = Module['_qjs_cow_apply'] = wasmExports['qjs_cow_apply'];
   _qjs_cow_discard = Module['_qjs_cow_discard'] = wasmExports['qjs_cow_discard'];
   _qjs_cow_commit = Module['_qjs_cow_commit'] = wasmExports['qjs_cow_commit'];
   _qjs_cow_undo_log = Module['_qjs_cow_undo_log'] = wasmExports['qjs_cow_undo_log'];
-  _qjs_cow_undo_revert_to = Module['_qjs_cow_undo_revert_to'] = wasmExports['qjs_cow_undo_revert_to'];
   ___trap = wasmExports['__trap'];
   __emscripten_stack_restore = wasmExports['_emscripten_stack_restore'];
   __emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'];
