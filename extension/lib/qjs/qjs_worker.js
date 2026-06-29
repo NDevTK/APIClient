@@ -1448,6 +1448,10 @@ var _qjs_set_driving,
   _qjs_cow_discard,
   _qjs_cow_commit,
   _qjs_cow_undo_log,
+  _qjs_drive_evict,
+  _qjs_drive_evict_done,
+  _qjs_drive_restore_buf,
+  _qjs_drive_restore,
   ___trap,
   __emscripten_stack_restore,
   __emscripten_stack_alloc,
@@ -1477,6 +1481,10 @@ function assignWasmExports(wasmExports) {
   _qjs_cow_discard = Module['_qjs_cow_discard'] = wasmExports['qjs_cow_discard'];
   _qjs_cow_commit = Module['_qjs_cow_commit'] = wasmExports['qjs_cow_commit'];
   _qjs_cow_undo_log = Module['_qjs_cow_undo_log'] = wasmExports['qjs_cow_undo_log'];
+  _qjs_drive_evict = Module['_qjs_drive_evict'] = wasmExports['qjs_drive_evict'];
+  _qjs_drive_evict_done = Module['_qjs_drive_evict_done'] = wasmExports['qjs_drive_evict_done'];
+  _qjs_drive_restore_buf = Module['_qjs_drive_restore_buf'] = wasmExports['qjs_drive_restore_buf'];
+  _qjs_drive_restore = Module['_qjs_drive_restore'] = wasmExports['qjs_drive_restore'];
   ___trap = wasmExports['__trap'];
   __emscripten_stack_restore = wasmExports['_emscripten_stack_restore'];
   __emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'];
