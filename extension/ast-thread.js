@@ -86,6 +86,35 @@ function _idbAllKeys(store) {
     });
   });
 }
+// #5 eviction-to-IDB store — a DEDICATED DB so the evict store's version lifecycle is independent of
+// feDeepDB (no cross-open VersionError). Out-of-line keys (put(value, key)): the value is the raw
+// serialized-stack Uint8Array, the key is the engine's per-flow eviction key.
+function _evictDB() {
+  return new Promise(function (res, rej) {
+    var r = indexedDB.open("feEvictDB", 1);
+    r.onupgradeneeded = function () { var db = r.result; if (!db.objectStoreNames.contains("evict")) db.createObjectStore("evict"); };
+    r.onsuccess = function () { res(r.result); };
+    r.onerror = function () { rej(r.error); };
+  });
+}
+function _evictPut(key, bytes) {
+  return _evictDB().then(function (db) { return new Promise(function (res, rej) {
+    var tx = db.transaction("evict", "readwrite"); tx.objectStore("evict").put(bytes, key);
+    tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); };
+  }); });
+}
+function _evictGet(key) {
+  return _evictDB().then(function (db) { return new Promise(function (res) {
+    var tx = db.transaction("evict", "readonly"); var rq = tx.objectStore("evict").get(key);
+    rq.onsuccess = function () { res(rq.result || null); }; rq.onerror = function () { res(null); };
+  }); });
+}
+function _evictDel(key) {
+  return _evictDB().then(function (db) { return new Promise(function (res) {
+    var tx = db.transaction("evict", "readwrite"); tx.objectStore("evict").delete(key);
+    tx.oncomplete = function () { res(); }; tx.onerror = function () { res(); };
+  }); });
+}
 
 // ── Source-map path-param name resolution (offscreen-owned) ──────────────────
 // The worker (long-lived, has IndexedDB — unlike the ~30 s-evicted SW) fetches a
@@ -1302,6 +1331,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         try { for (var _i = 0; _i < scriptSrcUrls.length; _i++) _warm(scriptSrcUrls[_i] && scriptSrcUrls[_i].url); } catch (e) {}
         return await _warm(url);
       },
+      /* #5 eviction-to-IDB host half: the engine's qjs_idb_put/qjs_idb_get EM_ASYNC_JS bridge suspends
+         here while a cold parked flow's serialized stack is persisted to / fetched from the dedicated
+         feEvictDB, keyed by the engine's per-flow key. bytes is a Uint8Array already copied out of wasm
+         HEAPU8 by the bridge (HEAPU8.slice), safe to store directly; get resolves the Uint8Array or null. */
+      qjs_idb_put: function (key, bytes) { return _evictPut(String(key), bytes); },
+      qjs_idb_get: function (key) { return _evictGet(String(key)); },
       /* JSPI in-run ESM MODULE loader host half. The engine's js_module_load
          (quickjs-libc.c) suspends here when an `import` target is not yet staged
          in _feMap — the deep modular-ESM graph (directus index→rest→commands→
