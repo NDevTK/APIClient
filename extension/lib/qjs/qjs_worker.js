@@ -1436,6 +1436,9 @@ qjs_note_dfree.sig = 'vii';
 // Imports from the Wasm binary.
 var _qjs_set_driving,
   _main,
+  _qjs_set_bundle_hash,
+  _qjs_drive_persist_session,
+  _qjs_drive_reload_session,
   _qjs_take_yielded,
   _qjs_resume_chain_call,
   _qjs_cow_boot_baseline,
@@ -1449,6 +1452,9 @@ var _qjs_set_driving,
   _qjs_cow_undo_revert_to,
   _qjs_cow_undo_revert,
   _qjs_cow_apply,
+  _qjs_cow_delta_serialize,
+  _qjs_cow_delta_deserialize,
+  _qjs_cow_apply_xsession,
   _qjs_cow_discard,
   _qjs_cow_commit,
   _qjs_cow_undo_log,
@@ -1456,6 +1462,8 @@ var _qjs_set_driving,
   _qjs_drive_evict_done,
   _qjs_drive_restore_buf,
   _qjs_drive_restore,
+  _qjs_drive_serialize_flow,
+  _qjs_drive_reload_flow,
   _qjs_set_evic_floor,
   ___trap,
   __emscripten_stack_restore,
@@ -1470,6 +1478,9 @@ var _qjs_set_driving,
 function assignWasmExports(wasmExports) {
   _qjs_set_driving = Module['_qjs_set_driving'] = wasmExports['qjs_set_driving'];
   _main = Module['_main'] = wasmExports['__main_argc_argv'];
+  _qjs_set_bundle_hash = Module['_qjs_set_bundle_hash'] = wasmExports['qjs_set_bundle_hash'];
+  _qjs_drive_persist_session = Module['_qjs_drive_persist_session'] = wasmExports['qjs_drive_persist_session'];
+  _qjs_drive_reload_session = Module['_qjs_drive_reload_session'] = wasmExports['qjs_drive_reload_session'];
   _qjs_take_yielded = Module['_qjs_take_yielded'] = wasmExports['qjs_take_yielded'];
   _qjs_resume_chain_call = Module['_qjs_resume_chain_call'] = wasmExports['qjs_resume_chain_call'];
   _qjs_cow_boot_baseline = Module['_qjs_cow_boot_baseline'] = wasmExports['qjs_cow_boot_baseline'];
@@ -1483,6 +1494,9 @@ function assignWasmExports(wasmExports) {
   _qjs_cow_undo_revert_to = Module['_qjs_cow_undo_revert_to'] = wasmExports['qjs_cow_undo_revert_to'];
   _qjs_cow_undo_revert = Module['_qjs_cow_undo_revert'] = wasmExports['qjs_cow_undo_revert'];
   _qjs_cow_apply = Module['_qjs_cow_apply'] = wasmExports['qjs_cow_apply'];
+  _qjs_cow_delta_serialize = Module['_qjs_cow_delta_serialize'] = wasmExports['qjs_cow_delta_serialize'];
+  _qjs_cow_delta_deserialize = Module['_qjs_cow_delta_deserialize'] = wasmExports['qjs_cow_delta_deserialize'];
+  _qjs_cow_apply_xsession = Module['_qjs_cow_apply_xsession'] = wasmExports['qjs_cow_apply_xsession'];
   _qjs_cow_discard = Module['_qjs_cow_discard'] = wasmExports['qjs_cow_discard'];
   _qjs_cow_commit = Module['_qjs_cow_commit'] = wasmExports['qjs_cow_commit'];
   _qjs_cow_undo_log = Module['_qjs_cow_undo_log'] = wasmExports['qjs_cow_undo_log'];
@@ -1490,6 +1504,8 @@ function assignWasmExports(wasmExports) {
   _qjs_drive_evict_done = Module['_qjs_drive_evict_done'] = wasmExports['qjs_drive_evict_done'];
   _qjs_drive_restore_buf = Module['_qjs_drive_restore_buf'] = wasmExports['qjs_drive_restore_buf'];
   _qjs_drive_restore = Module['_qjs_drive_restore'] = wasmExports['qjs_drive_restore'];
+  _qjs_drive_serialize_flow = Module['_qjs_drive_serialize_flow'] = wasmExports['qjs_drive_serialize_flow'];
+  _qjs_drive_reload_flow = Module['_qjs_drive_reload_flow'] = wasmExports['qjs_drive_reload_flow'];
   _qjs_set_evic_floor = Module['_qjs_set_evic_floor'] = wasmExports['qjs_set_evic_floor'];
   ___trap = wasmExports['__trap'];
   __emscripten_stack_restore = wasmExports['_emscripten_stack_restore'];
