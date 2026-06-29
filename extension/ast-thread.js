@@ -1951,6 +1951,12 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
   // JS-side ABORT flag survives a memcpy, so re-boot a fresh instance). */
   var driveArg = fileArgs[fileArgs.length - 1];   // /d.js
   var bootArgs = fileArgs.slice(0, -1);           // /pre.js, --fe-script-start-lines, /h.js, /p.js, bundle .bc
+  // #5 cross-session: a stable 32-bit FNV-1a content hash of this bundle -> the IDB frontier key. The
+  // same page across browser restarts hashes the same (reload matches persist); a changed bundle gets a
+  // new key and never resumes a stale frontier. Passed on boot; the engine global persists for the instance.
+  var _bhash = 2166136261;
+  for (var _bf = 0; _bf < bundleFiles.length; _bf++) { var _bsrc = bundleFiles[_bf].src || ""; for (var _bc = 0; _bc < _bsrc.length; _bc++) { _bhash = ((_bhash ^ _bsrc.charCodeAt(_bc)) * 16777619) >>> 0; } }
+  bootArgs = bootArgs.concat(["--fe-bundle-hash=" + (_bhash >>> 0)]);
   // Boot the bundle ONCE, image HEAPU8, then restore + drive per schedule (no
   // per-schedule re-eval). The restore resets the bundle's state + footprint to
   // post-boot every drive, so the cross-schedule memory climb the old watchdog
@@ -2248,6 +2254,9 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
     var _isActive = self._activePageKey && _pk === self._activePageKey;
     if (work.length && !_isActive) await new Promise(function (r) { setTimeout(r, Math.min(THROTTLE_CAP_MS, Date.now() - _runT0)); });
   }
+  // #5 cross-session: AUTO-checkpoint the parked frontier to IDB (non-destructive copy; bundle-hash set
+  // at boot) every analysis so a browser restart resumes it via boot's reload_session.
+  try { await m.callMain(["--fe-persist"]); } catch (e) {}
   // Schedule BFS done. If the deep grind follows, RECYCLE to a fresh instance
   // for it rather than an explicit --fe-boot-end free of g_boot_ctx: tearing
   // down MS's async-heavy g_boot_ctx can trip the gc-leak assert and POISON the
