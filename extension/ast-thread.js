@@ -1336,7 +1336,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
          feEvictDB, keyed by the engine's per-flow key. bytes is a Uint8Array already copied out of wasm
          HEAPU8 by the bridge (HEAPU8.slice), safe to store directly; get resolves the Uint8Array or null. */
       qjs_idb_put: function (key, bytes) { return _evictPut(String(key), bytes); },
-      qjs_idb_get: function (key) { return _evictGet(String(key)); },
+      qjs_idb_get: function (key) { var k = String(key); return _evictGet(k).then(function (r) { if (r) _evictDel(k); return r; }); },   // consume on restore (in-session): free the IDB entry once fetched; a re-evicted flow gets a fresh key. Cross-session-resume will add a non-consuming variant.
       /* JSPI in-run ESM MODULE loader host half. The engine's js_module_load
          (quickjs-libc.c) suspends here when an `import` target is not yet staged
          in _feMap — the deep modular-ESM graph (directus index→rest→commands→

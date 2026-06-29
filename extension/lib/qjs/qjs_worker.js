@@ -1410,6 +1410,10 @@ function __asyncjs__qjs_load_module_host(module_name) { return Asyncify.handleAs
 __asyncjs__qjs_load_module_host.sig = 'vj';
 function __asyncjs__qjs_host_digest(algName,data,dataLen,out) { return Asyncify.handleAsync(async () => { var algN = Number(algName), dataN = Number(data), outN = Number(out); try { var alg = UTF8ToString(algN); var input = HEAPU8.slice(dataN, dataN + dataLen); var buf = await self.crypto.subtle.digest(alg, input); var u8 = new Uint8Array(buf); HEAPU8.set(u8, outN); return u8.length; } catch (e) { var msg = (e && e.message) ? e.message : String(e); var rec = '@WHY {"phase":"host_digest_throw","alg":"' + alg + '","len":' + dataLen + ',"err":' + JSON.stringify(msg) + "}"; if (typeof printErr === "function") printErr(rec); else if (typeof console !== "undefined") console.error(rec); return -1; } }); }
 __asyncjs__qjs_host_digest.sig = 'ijjij';
+function __asyncjs__qjs_idb_put(key,data,len) { return Asyncify.handleAsync(async () => { if (!Module.qjs_idb_put) return -1; try { var bytes = HEAPU8.slice(Number(data), Number(data) + len); await Module.qjs_idb_put(String(key), bytes); return 0; } catch (e) { if (typeof printErr === "function") printErr('@WHY {"phase":"idb_put_throw","err":' + JSON.stringify(String(e && e.message || e)) + "}"); return -1; } }); }
+__asyncjs__qjs_idb_put.sig = 'ijji';
+function __asyncjs__qjs_idb_get(key,out,maxlen) { return Asyncify.handleAsync(async () => { if (!Module.qjs_idb_get) return -1; try { var bytes = await Module.qjs_idb_get(String(key)); if (!bytes || bytes.length > maxlen) return -1; HEAPU8.set(bytes, Number(out)); return bytes.length; } catch (e) { if (typeof printErr === "function") printErr('@WHY {"phase":"idb_get_throw","err":' + JSON.stringify(String(e && e.message || e)) + "}"); return -1; } }); }
+__asyncjs__qjs_idb_get.sig = 'ijji';
 function __asyncjs__qjs_load_script_begin(url) { return Asyncify.handleAsync(async () => { if (!Module.qjs_load_script) return -1; try { var u = UTF8ToString(Number(url)); if (!u) return -1; var code = await Module.qjs_load_script(u); if (code == null) return -1; var bytes = new TextEncoder().encode(code); if (!Module.__feLoad) { Module.__feLoad = {}; Module.__feLoadNext = 1; } var h = Module.__feLoadNext++; Module.__feLoad[h] = bytes; return h; } catch (e) { var rec = '@WHY {"phase":"qjs_load_script_begin_throw","err":' + JSON.stringify(String(e && e.message || e)) + "}"; if (typeof printErr === "function") printErr(rec); return -1; } }); }
 __asyncjs__qjs_load_script_begin.sig = 'ij';
 function qjs_load_script_len(h) { var b = Module.__feLoad && Module.__feLoad[h]; return b ? b.length : -1; }
@@ -1452,6 +1456,7 @@ var _qjs_set_driving,
   _qjs_drive_evict_done,
   _qjs_drive_restore_buf,
   _qjs_drive_restore,
+  _qjs_set_evic_floor,
   ___trap,
   __emscripten_stack_restore,
   __emscripten_stack_alloc,
@@ -1485,6 +1490,7 @@ function assignWasmExports(wasmExports) {
   _qjs_drive_evict_done = Module['_qjs_drive_evict_done'] = wasmExports['qjs_drive_evict_done'];
   _qjs_drive_restore_buf = Module['_qjs_drive_restore_buf'] = wasmExports['qjs_drive_restore_buf'];
   _qjs_drive_restore = Module['_qjs_drive_restore'] = wasmExports['qjs_drive_restore'];
+  _qjs_set_evic_floor = Module['_qjs_set_evic_floor'] = wasmExports['qjs_set_evic_floor'];
   ___trap = wasmExports['__trap'];
   __emscripten_stack_restore = wasmExports['_emscripten_stack_restore'];
   __emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'];
@@ -1500,6 +1506,10 @@ var wasmImports = {
   __asyncjs__qjs_host_digest,
   /** @export */
   __asyncjs__qjs_host_yield,
+  /** @export */
+  __asyncjs__qjs_idb_get,
+  /** @export */
+  __asyncjs__qjs_idb_put,
   /** @export */
   __asyncjs__qjs_load_module_host,
   /** @export */
