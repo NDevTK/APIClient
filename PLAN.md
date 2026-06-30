@@ -210,24 +210,44 @@ route to / be discarded with the flow arena), and re-verify determinism (bootHas
 heap). Un-merging the arena header (separate refcount word) is the fallback if the free-suppression proves
 insufficient.
 
-## OPEN BUG (pre-existing, UNFIXED): gc_decref_underflow on a var_ref→object ref
+## RESOLVED (2026-06, cdba329): gc_decref_underflow — single-owner refcount for OBJECTS
 
-Both baseline `8231d48` and the merged engine hit `gc_decref_underflow child[gt=0 cid=1] parent[gt=3]`
-(empirically compared 2026-06: baseline drive=2 `wasm_abort=101`, merge drive=2 `wasm_abort=63` — SAME
-signature, so it is PRE-EXISTING, not a merge regression; the merge has FEWER). Decoded: a
-`JS_GC_OBJ_TYPE_VAR_REF` (closure cell) parent decrefs a `JS_CLASS_OBJECT` child below 0 during the cycle
-collector. The deep-grind RECYCLES past it (`deep_recycle`) — a MASKED bug + a recycle bound, both of which
-CLAUDE.md says to ELIMINATE, not tolerate. So this is genuinely-open work; do NOT call the engine "clean".
-LOCALIZED to the COW var_ref-pin path (`cow_put_var_ref` ~5485 + the typed vt-trail's `vref`/`free_var_ref`
-~21240). The closed-var_ref capture there already fixed one imbalance (prior `free_zero_bad rc=-1`
-double-decref, per its comment); another remains. LEADING HYPOTHESIS (unconfirmed): the OPEN var_ref path
-(pvalue → a live stack slot) is NOT captured by `cow_put_var_ref` (it skips open refs), so its cell write
-byte-logs and the FLOWEND revert restores the cell POINTER without the matching refcount adjustment → the
-object the cell held is decref'd by gc_decref but never re-incref'd on revert → underflow. NEXT (focused,
-NOT to be rushed — refcount fixes here regressed twice during the arena work): instrument to capture the
-offending var_ref's pvalue + the object's refcount + which COW path touched it when the assert fires;
-reproduce on chain_direct (it DOES fire there); then fix the imbalance and re-verify drive + determinism +
-that the underflow is GONE (not just recycled past). Status: localized, NOT fixed.
+ROOT, CONFIRMED model-free on chain_direct (supersedes the earlier in-edge-mismatch guess, which was
+WRONG — there was no missing slot edge): the COW word log byte-reverts the 8-byte arena block-header word
+at `p-8`, and the arena merged `ref_count` (int at header offset 4) INTO that word. So the revert clobbered
+the live ref_count that the refcount-EXACT typed trail (`cow_set_slot` / `cow_put_var_ref`) had set. The
+revert ORDER (typed trail FIRST, word log second) put the word log's raw byte-restore LAST → it always won.
+MEASURED decisively (instrumented, then stripped): `svWrites=0` (the victim's slot was never written by
+set_value during the flow → not a missed slot capture) AND `revDecFreeVal=0`/`revDecVarRef=0` (the typed
+trail did not decref it) AND `hdrHit=2`/`rcForced=1` (the word log restored the victim's HEADER word with
+ref_count=1 while the cycle collector saw 2 live in-edges). i.e. the typed trail correctly wanted rc=2; the
+word log erased its +1.
+FIX (landed): `qjs_cow_undo_revert_to` — when a logged word is an arena block-START word
+(`cow_is_header_word`, sound via the per-arena block stride, no false positives) restore only the LOW 4
+bytes (block_idx/block_size_idx/gc_type/mark — constant post-alloc since frees are flow-suppressed, or
+GC-transient for mark) and PRESERVE the live ref_count (high 4 bytes). The typed trail + balanced live
+execution own the count. CORRECTION to the earlier "DESIGN" note: it claimed BOTH halves were required
+(word-log-skips-refcount AND typed-trail-covers-every-write) and "either half alone is worse." That was
+WRONG — half 1 alone sufficed for objects, because the typed slot coverage (`cow_set_slot` is THE baseline
+property/element setter) is far more complete than that note assumed. RESULT: gc_decref_underflow 46 → 0,
+free_zero_bad 0, endpoints maintained (learnedCount=2), boot determinism unaffected (revert is post-baseline).
+KNOWN GAP: large (non-arena) allocations aren't covered by `cow_is_header_word`; if a large-object victim
+ever underflows, extend detection to the large-block list (none observed on chain_direct).
+
+## OPEN ROOT (next): shape over-decref (js_free_shape0, JS_REF_COUNT(sh)==0 assert)
+
+Once the object underflow was fixed, execution proceeds further and hits a PRE-EXISTING shape over-decref
+(`js_free_shape0` asserts a shape freed with rc<0) — formerly MASKED by the object underflow aborting first,
+NOT introduced by cdba329 (still recycled past; learnedCount stays 2). Same two-owner class but for shapes,
+which my fix deliberately EXCLUDES from header-preserve (`JS_GC_OBJ_TYPE_SHAPE`) because a shape's ref_count
+is changed by direct untyped `js_dup_shape`/`js_free_shape` everywhere — the defer trail (`cow_shape_transition`)
+reverts only the `p->shape` POINTER, not the count. So shapes are word-log-owned, yet the defer trail ALSO
+does `js_free_shape(new)` at revert → double management on a baseline shape whose rc was word-logged.
+Flow-allocated shapes are already flow-arena-routed (barrier-excluded, js_arena_malloc ~4048) so they are
+defer-trail-only; the residual is a BASELINE shape touched during a flow. NEXT: instrument `js_free_shape0`
+the same model-free way (which shape, rc, flow_in_arena, header-restored, defer-touched) → then make shapes
+single-owner too (either the defer trail stops touching the count, or the word log fully owns it without the
+defer trail's extra free). Do NOT call the engine "clean" until this is GONE, not recycled past.
 
 ## NOT yet verified at runtime — but now UNBLOCKED
 
