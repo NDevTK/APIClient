@@ -234,20 +234,29 @@ free_zero_bad 0, endpoints maintained (learnedCount=2), boot determinism unaffec
 KNOWN GAP: large (non-arena) allocations aren't covered by `cow_is_header_word`; if a large-object victim
 ever underflows, extend detection to the large-block list (none observed on chain_direct).
 
-## OPEN ROOT (next): shape over-decref (js_free_shape0, JS_REF_COUNT(sh)==0 assert)
+## OPEN ROOT (next): STALE SHAPE-kind defer entry — a use-after-free (LOCALIZED model-free)
 
-Once the object underflow was fixed, execution proceeds further and hits a PRE-EXISTING shape over-decref
-(`js_free_shape0` asserts a shape freed with rc<0) — formerly MASKED by the object underflow aborting first,
-NOT introduced by cdba329 (still recycled past; learnedCount stays 2). Same two-owner class but for shapes,
-which my fix deliberately EXCLUDES from header-preserve (`JS_GC_OBJ_TYPE_SHAPE`) because a shape's ref_count
-is changed by direct untyped `js_dup_shape`/`js_free_shape` everywhere — the defer trail (`cow_shape_transition`)
-reverts only the `p->shape` POINTER, not the count. So shapes are word-log-owned, yet the defer trail ALSO
-does `js_free_shape(new)` at revert → double management on a baseline shape whose rc was word-logged.
-Flow-allocated shapes are already flow-arena-routed (barrier-excluded, js_arena_malloc ~4048) so they are
-defer-trail-only; the residual is a BASELINE shape touched during a flow. NEXT: instrument `js_free_shape0`
-the same model-free way (which shape, rc, flow_in_arena, header-restored, defer-touched) → then make shapes
-single-owner too (either the defer trail stops touching the count, or the word log fully owns it without the
-defer trail's extra free). Do NOT call the engine "clean" until this is GONE, not recycled past.
+Once the object underflow was fixed, execution proceeds further and hits a PRE-EXISTING bug — formerly
+MASKED by the object underflow aborting first, NOT introduced by cdba329 (still recycled past; learnedCount
+stays 2; survives BOTH the low-byte-restore and the whole-header-preserve forms of the fix, so it is
+independent of the header handling). CHARACTERIZED model-free (instrumented, then stripped) — and it is NOT
+the refcount over-decref earlier guessed; it is a USE-AFTER-FREE:
+- `js_free_shape` is called on a block whose `gc_obj_type` is JS_OBJECT (gt=0), not SHAPE, with rc=0 — a
+  dangling "shape" pointer. The `js_free_shape0` assert was only the downstream symptom.
+- The CALLER is the COW SHAPE-kind defer trail: `qjs_cow_defer_revert_to` → `js_free_shape(neww)` (~21593).
+- Both the entry's `old` AND `neww` pointers are now baseline JS_OBJECTs (newGt=0 newFlowArena=0, oldGt=0
+  oldFlowArena=0), consumed while `g_flow_capture=1`. i.e. a SHAPE defer entry pushed in an earlier flow was
+  NOT consumed at that flow's boundary, the two shapes it referenced were later freed and their BASELINE
+  blocks reused as objects (frees run between flows, where they are not suppressed), and a LATER flow's
+  revert frees those long-dead pointers → UAF / type-confusion.
+ROOT CLASS: defer-trail lifecycle / wpos-mark accounting — a SHAPE entry outlives the flow that pushed it
+(`qjs_cow_defer_push` is gm-backed and persists; `qjs_cow_defer_revert_to(mark)` reverts entries with
+`wpos >= mark`, `qjs_cow_defer_commit` clears all — an entry orphaned by a segment/nested-flow mark mismatch
+lingers). The FIX is in that lifecycle (ensure every SHAPE entry is consumed — reverted or committed — at the
+flow that created it, so no entry outlives its shapes); a "skip if gt != SHAPE" guard at the free site would
+be MASKING (banned). This is the substrate that regressed twice during the arena work — fix it CAREFULLY with
+per-step verification (defer_revert_nonshape GONE + uf still 0 + drive + determinism), NOT a tail-of-session
+rush. Do NOT call the engine "clean" until this is GONE, not recycled past.
 
 ## NOT yet verified at runtime — but now UNBLOCKED
 
