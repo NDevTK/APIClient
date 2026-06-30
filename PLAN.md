@@ -375,6 +375,24 @@ not global — to see the FULL sequence of every rc change on one victim. That i
 multi-free whose individual steps each look locally valid. OR commit to the full single-owner rewrite above
 and accept it subsumes this. Engine stays at verified b5eea41.
 
+DEFINITIVE 2026-06-30 (per-shape free-history): `shape_frhist[rc=-1 frees=1 (rc0@0xce6c4)]` — the victim is
+freed exactly ONCE during the flow, and its rc was ALREADY 0 at that free (the single defer-free 0→-1). So it
+is NOT a multi-free: the BYTE-REVERT drove the rc to 0, then one defer-free underflowed it. The rc word's
+first flow-write had old=0 ⇒ the shape's block was rc=0 (a free block) when the flow first touched it ⇒ a
+FLOW-CREATED shape whose creation `rc=1` write (old=0) got byte-reverted to 0. THE ACTIONABLE ROOT + FIX:
+shapes are NOT header-preserved, so the word-log byte-reverts their rc; objects ARE fine under the same
+header-preserve because their refcount is reverted EXACTLY by the TYPED TRAIL (`cow_set_value` on baseline
+JSValue slots), whereas shapes have NO typed trail for rc — only the defer trail for `p->shape` transitions.
+So the single-owner shape fix is concretely: ADD a typed-trail layer for shape rc (capture every flow-time
+`js_dup_shape`/`js_free_shape` on a BASELINE shape, refcount-exact, like cow_set_value) AND header-preserve
+shapes — together. That removes the byte-revert from shape rc (so a flow-created shape's creation dup is never
+reverted-to-0) and makes the defer trail's transition handling consistent. (UNRESOLVED by measurement: how a
+flow-created shape landed in a BASELINE arena with fallbackCount=0 — the arena routing should send flow allocs
+to the flow arena; this contradiction means either shape allocation has a path that bypasses js_arena_malloc's
+flow routing, or flow_in_arena mis-classifies it. Worth checking js_malloc→js_arena_malloc for shapes as part
+of the rewrite.) ASSERT-ITERATION IS EXHAUSTED here (62+ builds, every point-model refuted) — the fix is the
+typed-trail+preserve rewrite, done as its own careful pass, not more diagnostics.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
