@@ -412,6 +412,31 @@ uncounted heap ref `to_baseline` leaves (the phantom-ref subtlety, like cow_set_
 -counts — that's why the transition-pin attempt mis-accounted). Verify shapeAssert 0 + endpoints 2 +
 determinism + that the grind's pause/resume is actually exercised by the fixture. Engine verified b5eea41.
 
+CORROBORATED 2026-07-01 (fixture-differential — a NEW axis confirming the park/resume root above) + the
+defer-STORAGE patch path is now CATALOGUED-EXHAUSTED (do not retry any of these). This session wrongly
+chased the defer-ARRAY storage (arena-aliasing) instead of the park/resume REFCOUNT the line-above
+localization already named — 8 builds, every one either hung or leaked, ALL on the SAME chain_direct flow:
+- **The over-decref/hang is PARK-SPECIFIC, proven by a fixture A/B.** A TRIVIAL fixture (object property
+  adds + two `fetch()` calls, NO fetch→fetch chain ⇒ NO park/resume) gives `shape0:0` + `learnedCount:2`
+  with EVERY defer patch; `chain_direct` (the `fromReply` fetch→fetch chain ⇒ parks the flow at the reply)
+  HANGS (`learnedCount:0`, worker stops yielding) with the same patches. Baseline b5eea41 handles BOTH
+  (chain_direct 2 / `shape0:2`; trivial 2). ⇒ what breaks is exactly the park/resume path of #21181, not the
+  storage — direct, independent confirmation of the `shape_site deferSite=1` + park re-push localization.
+- **Defer-STORAGE patches that are DEAD (8 builds, all refuted on the live harness):** (a) gm-back the trail
+  array via `__real_realloc` — HANG (realloc's internal free mutates gm free-list mid-flow, which the flow's
+  free-suppression forbids). (b) gm via `__real_malloc`+memcpy+leak — HANG. (c) +`rc>0` guard at the revert
+  free — HANG. (d) pop-only revert (free nothing) — HANG **and** leaves `neww` dangling in the shape hash
+  (next flow's `find_hashed_shape_prop` chain-walk loops). (e) arena-grow + pop-only — HANG (isolates: it's
+  not the grow). (f) PRE-GROW the gm reserve at FLOWBEG/`pool_warm` + keep the free (mirrors the word-log's
+  warm-then-bump) — HANG (so gm storage of THIS array is incompatible for a reason that stays unpinned; the
+  word-log's gm array is written only inside the export-SKIPPED `qjs_cow_undo_log`, whereas `qjs_cow_defer_push`
+  is `static` ⇒ INSTRUMENTED, the relevant asymmetry). (g) NULL `qjs_cow_defer`+cap at FLOWEND so each flow
+  re-allocates fresh (kills the cross-flow arena-reuse) — works on TRIVIAL (`shape0:0`) but HANGS chain_direct
+  AND adds a `list_empty(&rt->gc_obj_list)` teardown abort (leaks shapes). CONCLUSION: the defer trail's arena
+  storage is LOAD-BEARING and entangled with park/resume; the lever is the park/resume SHAPE refcount (pin at
+  `qjs_cow_park` / release at `qjs_cow_apply`+`delta_free`), tested against a PARKING fixture (chain_direct),
+  done FRESH. The PLAN said "do NOT attempt another defer-only patch" — heed it; this session proved it again.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
