@@ -322,6 +322,21 @@ applied to shapes — bigger, because direct (non-transition) shape dups during 
 tracked. This is the genuine rewrite; do it with the captured-channel measurement in hand, fresh, verified
 stepwise (shapeAssert 0 + endpoints 2 + no fzb + determinism).
 
+CONFIRMED 2026-06-30 — the defer-trail patch path is EXHAUSTED (two attempts, both refuted on the live
+harness): (a) dropping the defer revert-free for baseline new → REGRESSED (endpoints 0, worker hung). (b) a
+full defer PIN — `cow_shape_transition` takes an extra UNLOGGED `js_dup_shape(new)`, revert frees new 2× (p-ref
++ pin), commit 1× (pin), delta_free releases the SHAPE pin, pinned in the transition (not defer_push) so the
+park/resume re-push doesn't double-pin → a complete NO-OP: shapeAssert stayed 2, ab stayed 3, endpoints stayed
+2, BYTE-IDENTICAL to baseline across 3 cycles. DECISIVE CONCLUSION: the reliable `js_free_shape0` over-decref
+(JS_REF_COUNT(sh)==0, ~2/drive) is NOT the defer-trail stale entry — keeping new alive changed nothing. It is a
+DIFFERENT, NON-defer shape rc imbalance, i.e. the shape header-revert exclusion itself (word-log byte-reverts a
+baseline shape's rc, dropping a reference that should persist past the flow). The flaky `defer_revert_nonshape`
+(gt=0, some runs) is a SEPARATE, rarer defer-staleness symptom. So the ONLY remaining fix is the single-owner-
+shapes rewrite above (header-preserve shapes + route ALL flow-time shape rc through the trail) — and it must
+resolve the COUPLING: header-preserving shapes ALONE already asserted historically (bby44iozd) because the
+defer trail RELIES on shape rc being byte-reverted, so both halves must land together. Engine stays at verified
+b5eea41 until that lands; do NOT attempt another defer-only patch.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
