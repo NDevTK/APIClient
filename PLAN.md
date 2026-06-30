@@ -337,6 +337,26 @@ resolve the COUPLING: header-preserving shapes ALONE already asserted historical
 defer trail RELIES on shape rc being byte-reverted, so both halves must land together. Engine stays at verified
 b5eea41 until that lands; do NOT attempt another defer-only patch.
 
+MEASURED 2026-06-30 (reliable abort channel) — two more facts that SHARPEN the single-owner design:
+1. The both-baseline-shape transition probe (gate `!flow_in_arena(new) && !flow_in_arena(old)` in
+   cow_shape_transition) NEVER fired → in EVERY defer-tracked transition, new OR old is FLOW-ARENA (a shape
+   freshly created during the flow). So the defer trail mostly carries flow-arena shapes, whose rc the
+   bump-reset reclaims regardless of refcount — THAT is why the pin was a no-op (a pin can't protect arena
+   memory from the reset).
+2. At the over-decref, the victim block has inFlowArena=0, gt=0 (a BASELINE object) — a baseline shape that
+   was freed and its baseline block reused as an object, then the defer revert frees it again. The pin not
+   helping means the shape is released MORE times than rc+pin absorbs (a multi-free / double-consume), not a
+   single premature free.
+SINGLE-OWNER DESIGN SKETCH (the clean rewrite): a flow's only legitimate effect on a BASELINE shape's rc is
+the dups from FLOW-LOCAL objects it creates that reference that shape (object creation js_dup_shape's the
+shape). Today the word-log byte-reverts those (type-blindly, tangling with the defer trail). Instead, at
+FLOWEND BEFORE the arena bump-reset, FINALIZE the flow-local objects being discarded — decref each one's shape
+(and other baseline refs) exactly once — then reset; and header-PRESERVE shapes so the word-log stops touching
+shape rc. That makes the flow→baseline-shape rc delta single-owned by the finalize pass, removes the defer
+trail's reliance on byte-revert, and is symmetric with how flow-local objects are already discarded. NEXT:
+read the FLOWEND path (qjs_cow_undo_revert + the arena reset ~21831) and how flow-local objects' refs are
+handled today, then implement the finalize pass + shape header-preserve TOGETHER, verified stepwise.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
