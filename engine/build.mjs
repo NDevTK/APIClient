@@ -138,7 +138,10 @@ function emcc(extra, out) {
   // out of the revertable delta (the gm-desync that caused the emscripten_builtin_malloc OOB recycle).
   // OFF for ASAN (it owns malloc).
   const wrap = asan ? [] : ["-Wl,--wrap=malloc", "-Wl,--wrap=calloc", "-Wl,--wrap=free", "-Wl,--wrap=realloc"];
-  run(EM_PY, [EMCC, ...cflags, ...src, ...z3, ...wmem, ...wrap, ...extra, "-o", out],
+  // #5 cross-session determinism: override emscripten's _emscripten_date_now (WASMFS file-timestamp
+  // source) with a deterministic counter so a re-boot of the same bundle is byte-identical (see detclock.js).
+  const detclock = ["--js-library", "detclock.js"];
+  run(EM_PY, [EMCC, ...cflags, ...src, ...z3, ...wmem, ...wrap, ...detclock, ...extra, "-o", out],
       { EM_CONFIG, EMSDK });
 }
 function size(f) {

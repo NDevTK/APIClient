@@ -1233,6 +1233,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         // `diag` only saw the offscreen's re-logged resolverErrors). Surface COW
         // engagement/stats + stack-overflow @WHY to the worker console so diag captures them.
         if (self.__QJS_WASM && (s.indexOf('"phase":"cow_') >= 0 || s.indexOf('stack_overflow') >= 0)) { try { console.log(s); } catch (e) {} }
+        if (s.indexOf('"phase":"cow_boot_baseline"') >= 0 && !self.__bootHash) { self.__bootHash = [s.slice(s.indexOf('{'))]; }   /* #5 determinism regression probe: keep the FIRST post-boot baseline @WHY (bootHash) so a cross-restart check can confirm the boot stays byte-reproducible */
         stdout.push(s);
       },
       printErr: function (s) {
