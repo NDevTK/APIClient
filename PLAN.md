@@ -258,6 +258,27 @@ be MASKING (banned). This is the substrate that regressed twice during the arena
 per-step verification (defer_revert_nonshape GONE + uf still 0 + drive + determinism), NOT a tail-of-session
 rush. Do NOT call the engine "clean" until this is GONE, not recycled past.
 
+DEEPER MECHANISM (traced 2026-06): the SHAPE-kind defer entry holds a RAW shape pointer with NO ref of its
+own. `cow_shape_transition` KEEPS old's ref and lets `p->shape` hold new's ref; the entry just records the
+two pointers. When a flow PARKS (`qjs_cow_park` ~21126 copies defer entries to a delta; `qjs_cow_undo_revert_to`
+then reverts `p->shape` back to old) the new shape becomes ORPHANED — alive only by its un-decremented refcount
+but UNREACHABLE from the live graph — so the cycle collector can free it; its baseline block is then reused as
+an object, and the delta's `df_new` (re-pushed on resume, 21181) or a lingering live entry dangles → the gt=0
+free. `delta_free` (21201) frees only BUFFER-kind `df_new`, never SHAPE — so a discarded park also leaks shapes.
+CANDIDATE FIX (mirror the var_ref pin in `cow_put_var_ref`): in `qjs_cow_defer_push`, for is_shape, PIN both
+old and new (`js_dup_shape`, rc++) so neither can be freed while the entry/delta references them; the existing
+`js_free_shape(new)` on revert and `js_free_shape(old)` on commit then release the pins (re-balance the
+accounting: drop the reliance on the orphaned p-ref, since the pin now owns it), and `delta_free` must
+`js_free_shape` SHAPE-kind `df_new` too.
+BUT MEASURE FIRST (do not implement on this model alone): it is UNCONFIRMED what actually frees the orphaned
+shapes. The kept/orphaned ref INFLATES their refcount, which should protect them from BOTH refcount-free AND
+the cycle collector (gc_decref finds fewer in-edges than rc → gc_scan keeps them) — so the pin may be
+targeting the wrong free-path. Next decisive instrument: when a SHAPE `df_new`/defer pointer's block flips to
+gt!=SHAPE, capture WHAT freed it (instrument `js_free_shape0`/`remove_gc_object`/the arena free for that exact
+block, or tag the defer entry and watch its `neww`), distinguishing cycle-GC vs a discard/park path vs a
+double-consume (entry reverted AND committed). Only then implement the matching fix and verify stepwise
+(defer_revert_nonshape GONE + uf 0 + no new free_zero_bad + drive + determinism).
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
