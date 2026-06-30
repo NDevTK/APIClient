@@ -279,6 +279,26 @@ block, or tag the defer entry and watch its `neww`), distinguishing cycle-GC vs 
 double-consume (entry reverted AND committed). Only then implement the matching fix and verify stepwise
 (defer_revert_nonshape GONE + uf 0 + no new free_zero_bad + drive + determinism).
 
+TESTED 2026-06-30 — TWO theories FALSIFIED on the live harness (A/B verified, engine restored to b5eea41):
+1. "The defer revert `js_free_shape(new)` is a redundant DOUBLE-decrement (word-log already byte-reverts a
+   BASELINE new shape's rc), so skip it for baseline new" — WRONG. Building exactly that (free new only when
+   `flow_in_arena(new)`) REGRESSED the drive: learnedCount 2→0 and the offscreen worker hung (no stderr
+   response). Reverting restored learnedCount=2. CONCLUSION: the defer revert-free is LOAD-BEARING — it is the
+   sole release of new's p-ref; the word-log does NOT reliably byte-revert new's rc (if it did, removing the
+   free would be a no-op, not a regression). So the over-decref is NOT a double-decrement.
+2. Therefore the over-decref (`JS_REF_COUNT(sh)==0` at js_free_shape0, reliably ab=3/drive) is the STALE/
+   DANGLING entry after all: the defer-free correctly single-decrements in general, but occasionally its
+   `neww` already points at a freed+reused block (defer_revert_nonshape, gt=0) → decrements a reused object.
+PIN remains the only sound direction (keep new alive so the entry can't go stale) — but its accounting is
+NOT a simple "+pin, existing frees release it": the existing revert-free is load-bearing for the p-ref, so a
+pin needs its OWN release on BOTH revert and commit without disturbing that free, and whether that nets out
+depends on the same unknown (is new's rc byte-reverted). RESOLVE the unknown FIRST with a LIGHT probe (a
+single global counter/flag — NOT the O(n²) per-free defer-array scan used this session, which itself starved
+the drive to 0 endpoints and produced a false "regression" signal before being isolated). Measure: for one
+baseline new shape in a defer entry, does its rc word appear in the word-log (is it byte-reverted on revert)?
+That single bit determines the correct pin accounting. NOT a tail-of-session rush; one regression already
+happened here.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
