@@ -357,6 +357,24 @@ trail's reliance on byte-revert, and is symmetric with how flow-local objects ar
 read the FLOWEND path (qjs_cow_undo_revert + the arena reset ~21831) and how flow-local objects' refs are
 handled today, then implement the finalize pass + shape header-preserve TOGETHER, verified stepwise.
 
+RULED OUT 2026-06-30 (reliable abort-channel measurements on the `js_free_shape0` rc=-1 over-decref, ~2/drive):
+- NOT a defer-stale entry (the PIN was a byte-identical no-op).
+- NOT fixable by dropping the defer free for non-flow-arena new (REGRESSED: endpoints 0 + worker HANG, 3×).
+- NOT flow-arena reclamation (victim inFlowArena=0).
+- NOT an arena-exhaustion FALLBACK and NOT a large block: `shape_fb[rc=-1 largeOrFallback=0 fallbackCount=0
+  inArena=0]` — fallbackCount=0 (arena never exhausted), block_idx valid (small arena block).
+=> The victim is a TRUE-BASELINE small shape (allocated pre-flow, in a baseline arena) driven to rc=-1. A
+single byte-revert + single defer-free can only reach R-1 (≥0 for R≥1), so rc=-1 needs the shape released
+MORE than twice — a MULTI-free the global 256-entry freed-ring missed (firstRa=0 = ring wrapped). And the
+"drop the defer free" hang proves that free is load-bearing for SOME non-flow-arena new (a flow-created shape
+that landed in a BASELINE arena, needing the free) even though fallbackCount=0 — so the arena routing is NOT
+catching every flow-created shape, yet not via the fallback path. CONTRADICTION-LADEN — every model has been
+refuted by the next measurement. NEXT APPROACH (stop assert-iterating): instrument a PER-SHAPE complete
+rc-history log (every js_dup_shape/js_free_shape on a victim address, with caller) — a ring keyed by address,
+not global — to see the FULL sequence of every rc change on one victim. That is the only way to see a
+multi-free whose individual steps each look locally valid. OR commit to the full single-owner rewrite above
+and accept it subsumes this. Engine stays at verified b5eea41.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
