@@ -210,12 +210,20 @@ route to / be discarded with the flow arena), and re-verify determinism (bootHas
 heap). Un-merging the arena header (separate refcount word) is the fallback if the free-suppression proves
 insufficient.
 
-## NOT yet verified at runtime
+## NOT yet verified at runtime — but now UNBLOCKED
 
-- The cross-session ROUND-TRIP (persist → restart → reload → state survives). Blocker: need a fixture
-  that both DRIVES (global-assigned / class-method, like chain_direct) AND PARKS (silent for the
-  quantum), then isolating reloaded-flow output from the fresh drive. A plain top-level orphan does
-  not get driven; that's why the earlier attempt showed 0.
+- The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
+  determinism work, now unblocked.** Flow: the host calls `--fe-persist` every analysis (ast-thread.js
+  ~2260) → serialises parked flows to `feEvictDB`; boot's `reload_session` restores them IF
+  `g_boot_heap_hash` matches. Until determinism landed, the guard would have ALWAYS refused
+  (`xsession_boot_mismatch`) because the boot heap differed every restart — so the round-trip could never
+  have worked. Now boot is byte-reproducible, so the FIRST concrete check is: drive a page, restart with
+  IDB surviving, confirm boot emits `reload_session` ACCEPT (hash match) not `xsession_boot_mismatch`, then
+  that the reloaded flow RESUMES (emits @H). OPEN test-mechanics question: does `harness restart` preserve
+  the IDB (persistent profile) so the persisted session survives? — resolve before testing (start reuses a
+  stale profile; restart's IDB-survival must be confirmed). Still need a fixture that DRIVES and PARKS, and
+  to isolate reloaded-flow output from the fresh drive (recover chain_direct transiently; a plain top-level
+  orphan is not driven → the earlier 0).
 
 ## NEXT (best design assuming rewrite)
 
