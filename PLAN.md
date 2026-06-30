@@ -210,6 +210,25 @@ route to / be discarded with the flow arena), and re-verify determinism (bootHas
 heap). Un-merging the arena header (separate refcount word) is the fallback if the free-suppression proves
 insufficient.
 
+## OPEN BUG (pre-existing, UNFIXED): gc_decref_underflow on a var_ref→object ref
+
+Both baseline `8231d48` and the merged engine hit `gc_decref_underflow child[gt=0 cid=1] parent[gt=3]`
+(empirically compared 2026-06: baseline drive=2 `wasm_abort=101`, merge drive=2 `wasm_abort=63` — SAME
+signature, so it is PRE-EXISTING, not a merge regression; the merge has FEWER). Decoded: a
+`JS_GC_OBJ_TYPE_VAR_REF` (closure cell) parent decrefs a `JS_CLASS_OBJECT` child below 0 during the cycle
+collector. The deep-grind RECYCLES past it (`deep_recycle`) — a MASKED bug + a recycle bound, both of which
+CLAUDE.md says to ELIMINATE, not tolerate. So this is genuinely-open work; do NOT call the engine "clean".
+LOCALIZED to the COW var_ref-pin path (`cow_put_var_ref` ~5485 + the typed vt-trail's `vref`/`free_var_ref`
+~21240). The closed-var_ref capture there already fixed one imbalance (prior `free_zero_bad rc=-1`
+double-decref, per its comment); another remains. LEADING HYPOTHESIS (unconfirmed): the OPEN var_ref path
+(pvalue → a live stack slot) is NOT captured by `cow_put_var_ref` (it skips open refs), so its cell write
+byte-logs and the FLOWEND revert restores the cell POINTER without the matching refcount adjustment → the
+object the cell held is decref'd by gc_decref but never re-incref'd on revert → underflow. NEXT (focused,
+NOT to be rushed — refcount fixes here regressed twice during the arena work): instrument to capture the
+offending var_ref's pvalue + the object's refcount + which COW path touched it when the assert fires;
+reproduce on chain_direct (it DOES fire there); then fix the imbalance and re-verify drive + determinism +
+that the underflow is GONE (not just recycled past). Status: localized, NOT fixed.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
