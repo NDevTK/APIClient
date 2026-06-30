@@ -299,6 +299,29 @@ baseline new shape in a defer entry, does its rc word appear in the word-log (is
 That single bit determines the correct pin accounting. NOT a tail-of-session rush; one regression already
 happened here.
 
+PROBE BLOCKED (2026-06-30): a read-only `@SHAPEPROBE` counter (logged vs unlogged vs flow-arena new shapes
+at defer_push) emitted NOTHING via `fprintf(stderr)` across two runs while endpoints stayed 2 — so the
+measurement CHANNEL is the blocker, not the gate: raw `fprintf(stderr)` during normal (non-abort) execution
+does NOT reach the worker's `_lastStderr` (only `__assert_fail`/onAbort reliably does — same buffer-loss noted
+for aborts). NEXT measurement must use a captured channel: a ONE-SHOT `__assert_fail` carrying the counts when
+the count first reaches ~40 (accept the early abort — the drive aborts anyway). ALSO: SHAPE defer pushes are
+FLAKY run-to-run (defer_revert_nonshape fired in some runs, not others) — the DRIVE is not deterministic for
+shape transitions (boot is byte-reproducible; the WFQ/timing of which flows run is not), so the probe needs a
+run where shape transitions actually occur, or a more deterministic drive.
+
+REAL DESIGN DIRECTION (the rewrite, not a patch): the COW system has THREE revert mechanisms — word-log
+(byte-restore, type-blind), typed trail (refcount-exact JSValue slots), defer trail (buffer/shape pointers).
+Objects are now SINGLE-OWNER (header-preserve: word-log never reverts their rc; the typed trail + live
+execution own it) and that fixed the underflow. SHAPES still have SPLIT ownership (word-log byte-reverts the
+header for non-preserved shapes AND the defer trail frees new/old) — and the regression proved the split is
+load-bearing-in-a-tangled-way (the word-log does NOT reliably revert shape rc, so the defer-free can't simply
+be dropped). The sound fix is to make SHAPES single-owner too: header-PRESERVE shapes (stop the word-log from
+touching shape rc) and route EVERY flow-time shape rc change (js_dup_shape/js_free_shape, not just the
+transition) through the typed/defer trail so nothing leaks. That is the same unification that fixed objects,
+applied to shapes — bigger, because direct (non-transition) shape dups during a flow must also be trail-
+tracked. This is the genuine rewrite; do it with the captured-channel measurement in hand, fresh, verified
+stepwise (shapeAssert 0 + endpoints 2 + no fzb + determinism).
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
