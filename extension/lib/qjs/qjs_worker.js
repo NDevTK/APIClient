@@ -953,7 +953,8 @@ async function createWasm() {
 
   var _emscripten_get_now = () => performance.now();
   
-  var _emscripten_date_now = () => Date.now();
+  var qjsDetMs = 1750000000000;
+  function _emscripten_date_now() { return qjsDetMs++; }
   
   var nowIsMonotonic = 1;
   

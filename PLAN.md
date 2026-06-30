@@ -67,6 +67,10 @@ output value. Interpretation and recursion are never depth-capped (caps hide fin
 
 - WFQ value-of-information: per-flow `value` = emitted output/run; repick resumes highest-value first;
   eviction targets the lowest-value tail (one metric). RAM-gate (a second decider) removed.
+- **BYTE-REPRODUCIBLE BOOT** (fork `8231d48` / main `8fa0be1`, local — not pushed, sync pending): the
+  determinism cross-session resume rests on, MEASURED not assumed (see Design-decisions). Three entropy
+  layers closed (PRNG seed; quickjs wall-clock; emscripten `_emscripten_date_now`/WASMFS file timestamps
+  via `detclock.js`). Verified live: bootHash matches across two boots, 0 differing heap words, drive=2.
 - Cross-session resume END-TO-END (fork `ab721f9`): serialize/deserialize/`apply_xsession` (refcount is
   carried in the word-log heap words → no incref, no reuse hazard); `serialize_flow`/`reload_flow`
   (handle+chunks+delta one blob); `persist_session`/`reload_session` (IDB marker + `<hash>:<seq>`); boot
@@ -74,6 +78,137 @@ output value. Interpretation and recursion are never depth-capped (caps hide fin
   preemptive evict-to-IDB at the 128MB floor, value-ordered).
 - De-risk of a forced "rush" phase: reverted quantum/floor tunings (fork `44651a7` / main `a4ec393`).
 - VERIFIED on the live harness: drive learns endpoints (chain_direct = 2). Tree clean at `44651a7`.
+
+## RESOLVED: upstream sync vs the COW substrate (arena allocator)
+
+**FIXED + LANDED.** Root fix: `js_arena_malloc` routes flow-created objects to the #7 flow arena during a
+flow (only reuse flow-arena-backed arenas, else force `arena_new`→`rt->mf.js_malloc`→`g_flow_arena`, which
+is EXCLUDED from the COW barrier + bump-reset at FLOWEND; the `free_arena_list` add byte-reverts cleanly);
+`js_arena_free` skips `flow_in_arena` blocks. So the byte-restore + defer-trail only ever touch BASELINE
+objects — the inline-layout invariant — and NO defer-trail/refcount change is needed. VERIFIED on the live
+harness: full gate-set build (0 behind upstream), drive recovered 0→2, bootHash determinism holds across the
+merge, `js_free_shape0` underflow gone. The remaining `gc_decref_underflow` is the fork's PRE-EXISTING
+~1/vendor-grind recycle abort (present + accepted at the baseline `8231d48` that already runs drive=2). The
+historical investigation (two failed symptom-patch attempts that localized the root) is below for the record.
+
+## (historical) BLOCKER: upstream sync vs the COW substrate (arena allocator)
+
+Pushing the determinism work needs the fork current with upstream (the build enforces it). The merge of
+upstream/master (11 commits) is MECHANICALLY done — 5 quickjs.c conflicts resolved (keep our diagnostics,
+adopt upstream's `JS_REF_COUNT`/`JS_GC_MARK`/`JS_GC_TYPE` macros) + 36 field-access fixes
+(`sh->prop`→`get_shape_prop(sh)`), full build OK — preserved on fork branch **`wip-merge-arena` (6e8bd27)**.
+But it BREAKS the drive at runtime (drive=0, 68× `wasm_abort`: `JS_REF_COUNT(sh)==0` assert in
+`js_free_shape0`). ROOT CAUSE (measured via the abort reason): upstream's **arena allocator** (commit
+`9de2921`, NOT config-gated) merged the GC header into the allocator block header — `JSMallocBlockHeader`
+packs allocator metadata (`block_idx`/`free_next`/`block_size_idx`, low 4 bytes, written during the
+`--wrap`-SUPPRESSED malloc/free) AND `ref_count` (high 4 bytes, written during execution, COW-TRACKED)
+into the SAME 8-byte word before each object. COW reverts at 8-byte-word granularity, so reverting a
+refcount change also clobbers the allocator's free-list state in that word → corruption → shapes freed
+non-zero. UPDATE (attempt 1, on `wip-merge-arena`): added a flow-suppression guard to `js_arena_free` (mirror
+`__wrap_free`). It REDUCED aborts (68→57) but did NOT fix the drive (still drive=0). Re-decoding the abort:
+`js_free_shape` does `if (--JS_REF_COUNT(sh) <= 0) js_free_shape0(sh)` then `js_free_shape0` asserts
+`JS_REF_COUNT(sh) == 0` — so it is a shape refcount UNDERFLOW (decremented below 0), not (only) a free-list
+clobber. So the real fault is refcount ACCOUNTING: a shape decref'd more than incref'd under the arena
+layout. PRECISE ROOT CAUSE (traced to the vt-trail): `qjs_cow_vt_push(pv, js_dup(*pv), vr)` (quickjs.c ~5488)
+KEEPs a ref on `old` via `js_dup` (a refcount INCREF) and the trail frees `old` on revert/commit (a
+DECREF). With the OLD inline layout, `old`'s refcount lived INSIDE the object, and the revert order
+(typed-trail FIRST, THEN word-log replay) was MEASURE-TUNED so the word-log's capture of that incref and
+the trail's typed free balanced (the "free_zero_bad underflow if reversed" note). Upstream's arena
+allocator SPLIT the refcount (now at p-8, the block header) from the object body (at p), desynchronizing
+that tuned interaction: the word-log reverts the `js_dup` incref AND the trail's typed free decrements
+again → shape refcount UNDERFLOW → `js_free_shape0` abort. FIX DIRECTIONS (deep, pick after study — NOTE the UAF trap):
+  The `js_dup` incref is NOT removable naively — it is the KEEP ref that PINS `old` so it survives the flow
+  (without it `old` can be freed mid-flow → revert restores a dangling value → UAF). So the fix is to make
+  the pin's incref not get DOUBLE-reverted (once by the word-log capturing the p-8 write, once by the
+  trail's typed free), NOT to drop the pin. Options:
+  (a) exclude the p-8 refcount word from the WORD-LOG (so the trail's typed incref/free is the SOLE owner of
+      `old`'s refcount across the flow) — needs the barrier/revert to skip block-header words, and the
+      trail to also pin via the GC-mark/list so the object survives; or
+  (b) keep the word-log owning p-8, and make the trail push WITHOUT a typed free on revert (the word-log
+      already restores the refcount) BUT keep `old` pinned some other way for the flow's duration (e.g. a
+      separate pin list freed after the word-log replay). cross-session `apply_xsession`'s "re-push vt-trail
+      with NO incref" is the same idea — study why it is sound there and mirror the lifetime.
+The two mechanisms must own `old`'s refcount EXACTLY ONCE while still pinning it. Re-derive the revert order
+(currently typed-trail FIRST then word-log) under whichever wins — it was measure-tuned for the inline
+layout and must be re-measured for the split (p-8) layout.
+ATTEMPT 2 (shape refcount=1 before defer-free) FAILED — and revealed the DEEPER layer: setting
+`JS_REF_COUNT(nw)=1` fixed the high 4 bytes, but the SAME 8-byte block-header word's LOW 4 bytes
+(`block_idx`/`free_next`) were ALSO byte-restored to the baseline FREE-block state, so `js_free_shape0` →
+`js_arena_free(nw)` reads a free/garbage `block_idx` and corrupts the arena (drive went from
+recycling-abort to a silent HANG/no-output — strictly worse). REVERTED (wip back to `1ed3163`). KEY
+REALISATION: for a shape CREATED during a flow, the word-log byte-restore ALREADY reverts its whole block
+(memory + gc/hash links + block-header) to the baseline FREE state — i.e. the shape is already "unmade".
+The defer-trail's `js_free_shape(nw)` is then a DOUBLE-free against the arena. So the real fix is NOT to
+make the free succeed; it is to NOT free flow-created shapes on revert at all (the byte-restore is
+sufficient) — but the defer-trail exists because the OLD layout needed the explicit free (the inline
+refcount + the allocator state were NOT both reverted by the byte-restore there). So the defer-trail's
+ROLE itself must be re-derived under the arena layout: which of {memory revert, gc/hash unlink, block free}
+the byte-restore now covers vs what the trail must still do. THIS is the deep redesign — do it with the
+arena block-header semantics fully in hand, not by patching the free. (Un-merging the arena header so the
+refcount is its own word AND excluding the allocator-metadata word from the byte-restore is the likely
+shape of the answer, but verify the free-list stays consistent.)
+DEFINITIVE FIX DIRECTION (found by tracing the allocator — supersedes the defer-trail patching below):
+the fork ALREADY isolates flow-created objects cleanly — `js_def_malloc` routes them to the #7 flow arena
+(`g_flow_arena`), which is EXCLUDED from the COW barrier (never logged → never byte-reverted) and bump-RESET
+at FLOWEND. The arena-allocator regression is purely an ALLOCATION-PATH gap: `js_malloc_rt`→`js_arena_malloc`
+REUSES existing BASELINE arenas for small blocks (only a brand-new arena goes through `rt->mf.js_malloc` =
+flow-aware `js_def_malloc`). So a flow object that lands in a reused baseline arena has its block-header
+refcount written in the regular heap → logged → byte-reverted → the corruption. THE FIX is at allocation,
+not free/defer: during `g_flow_capture`, `js_arena_malloc` must serve flow objects from FLOW-ARENA-BACKED
+arenas (keep the `JSMallocBlockHeader` layout so `JS_REF_COUNT(p)` at p-8 still resolves, but the backing is
+in `g_flow_arena` → excluded + bump-reset), NEVER reusing baseline arenas. Concretely: keep a SEPARATE
+flow arena free-list (or force `arena_new` via `rt->mf.js_malloc` for every flow alloc and reset it at
+FLOWEND), and have `js_arena_free` skip `flow_in_arena` blocks. Then the byte-restore + defer-trail only
+ever touch BASELINE objects (the inline-layout invariant), and NO defer-trail shape-free change is needed.
+This is the clean integration of upstream's arena with the #7 flow arena — careful but well-scoped; do it
+with the arena block/free-list invariants fully in hand and verify park/evict (abandoned-pause) too.
+
+REWRITE-GRADE DIRECTION (concrete, actionable): the byte-restore should own OBJECT BODIES + baseline-field
+VALUES; a FLOW-CREATED object's block-header should be EXCLUDED from the byte-restore and owned by the
+defer-trail, which returns the block to the arena free-list on revert with the mid-flow `block_idx` intact.
+Two implementation hinges: (1) in `qjs_cow_defer_push`, when recording a flow-created new shape, mark its
+block-header word in the COW shadow bitmap so the word-log SKIPS it (the header stays mid-flow-valid for the
+free); (2) fix the `g_flow_capture` timing so the defer-trail's `js_arena_free` on revert actually RECLAIMS
+the block (today `js_arena_free` is a no-op while capture is set — the revert must run with capture in the
+right state, or call a capture-bypassing arena-free). Net: the byte-restore unmakes baseline-field changes;
+the defer-trail unmakes flow-created allocations via the real allocator. Verify free-list consistency + no
+leak after a park/evict (the abandoned-pause path) too.
+
+CONFIRMED EXACT MECHANISM (read the revert code): the typed trails suppress re-logging via `g_cow_busy=1`,
+and the order is "typed trail FIRST, then raw word log" (quickjs.c ~21271) — EXCEPT the SHAPE path: the
+word-log revert (`qjs_cow_undo_revert_to`) byte-restores first, THEN calls `qjs_cow_defer_revert_to`
+("AFTER the byte-restore — field is now old: free the orphaned new shape by kind", ~21074). For a shape
+CREATED during a flow: the word-log byte-restores its refcount word to the BASELINE value (the shape did
+not exist → the slot is free/zero), THEN the defer-trail does `js_free_shape(new)` → `--JS_REF_COUNT(sh)`
+→ underflow → `js_free_shape0` assert. With the INLINE layout the refcount lived in the shape BODY and this
+order balanced; relocating it to the block header (which the word-log treats as raw allocator state) broke
+it. So the precise fix site is the shape/refcount ownership between `qjs_cow_undo_revert_to`'s byte-restore
+and `qjs_cow_defer_revert_to`'s typed free — the refcount word must NOT be both byte-restored AND typed-freed.
+GUIDING PRINCIPLE (rewrite-grade, separation by data-kind): the root fragility is that COW is COUPLED to
+the physical layout of refcounts — the word-log captures refcount words by address AND the vt-trail manages
+them typed, kept in balance only by a measure-tuned revert order. That coupling is what upstream's
+relocation broke. The robust design separates by KIND: the word-log owns raw OBJECT BODIES (layout-agnostic
+bytes), the typed vt-trail owns REFCOUNTS/GC-STATE EXCLUSIVELY (via the `JS_REF_COUNT`/`JS_GC_*` macros, so
+it works wherever those fields physically live). Then COW is DECOUPLED from refcount layout — upstream can
+move refcounts anywhere and COW keeps working. So prefer direction (a): exclude block-header words from the
+word-log; the vt-trail becomes the sole, layout-agnostic owner of refcount snapshot/restore.
+This is a multi-part COW-substrate re-tuning — iterate carefully, do NOT rush. Determinism (bootHash)
+STILL holds across the merge; the official fork stays at the verified `8231d48` until this lands.
+
+ORIGINAL (free-list clobber hypothesis — partially right): the existing invariant is that NO
+free mutates allocator state during a flow — `__wrap_free` is already a NO-OP under `g_flow_capture`
+("the block survives; the revert restores references to it"). So during a flow the block-header word only
+ever takes REFCOUNT writes (logged) over STABLE allocator metadata → revert is consistent. Upstream's arena
+added a SECOND free path, `js_arena_free` (upstream quickjs.c ~1804: writes `block_idx`/`free_next`, pushes
+onto `first_free_block`), which `__wrap_free`'s suppression does NOT cover — so frees-during-flow now mutate
+block-header allocator metadata, and the word-granular refcount revert clobbers it. THE NEXT DIFF: guard
+`js_arena_free` with `if (g_flow_capture || g_grind_drive_active) return;` (mirror `__wrap_free`), on branch
+`wip-merge-arena`; rebuild; verify the `js_free_shape0` asserts vanish and drive≥2. THEN check the
+malloc/flow-arena (#7) coordination still holds under the arena allocator (flow-local allocs must still
+route to / be discarded with the flow arena), and re-verify determinism (bootHash) + `apply_xsession`
+(refcounts now at p-8 — confirm the word-log still carries them, since the block header IS in the hashed
+heap). Un-merging the arena header (separate refcount word) is the fallback if the free-suppression proves
+insufficient.
 
 ## NOT yet verified at runtime
 
