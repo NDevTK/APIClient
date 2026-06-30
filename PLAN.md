@@ -393,6 +393,25 @@ flow routing, or flow_in_arena mis-classifies it. Worth checking js_malloc→js_
 of the rewrite.) ASSERT-ITERATION IS EXHAUSTED here (62+ builds, every point-model refuted) — the fix is the
 typed-trail+preserve rewrite, done as its own careful pass, not more diagnostics.
 
+LOCALIZED 2026-06-30 — THE ACTUAL ROOT (supersedes the typed-trail guess above): two more decisive measures.
+(1) header-preserve-shapes is a NO-OP (3 cycles byte-identical) ⇒ the over-decref is NOT the byte-revert; the
+shape's rc is 0 in LIVE execution when the defer-free hits it. (2) `shape_site[rc=-1 deferSite=1]` ⇒ it's the
+defer REVERT freeing NEW. Reconciling with the transition-PIN also being a no-op: there are exactly TWO
+is_shape `qjs_cow_defer_push` callers — `cow_shape_transition` (21647, the pin covered it) and
+`qjs_cow_apply`'s PARK/RESUME RE-PUSH (21181, NEVER pinned). So the victim is a RE-PUSHED entry whose NEW shape
+lost its refcount WHILE PARKED. ROOT: `qjs_cow_park` (~21126-21131) copies df_old/df_new as RAW pointers +
+truncates the live trail; across the pause the shape's only liveness is an orphaned heap ref that the immediate
+`to_baseline` revert + the GLOBAL word-log shadow dedup (shared across sibling grind orphans) can drop → on
+resume the re-pushed entry's new is rc=0 → defer-revert → -1. This EXPLAINS every prior result: header-preserve
+no-op (rc dropped while parked, not by byte-revert), transition-pin no-op (wrong caller), defer-removal regress
+(load-bearing for non-parked entries), the inArena=0/no-fallback "contradiction" (the re-pushed pointer is to a
+shape captured in a PRIOR flow's state, classified against the CURRENT arena). FIX (careful, fresh, NOT
+tail-of-session): pin SHAPE df_new/df_old at `qjs_cow_park` so they survive the pause; release refcount-exactly
+at `qjs_cow_apply` (resume) / `delta_free` (abandon) / post-resume consume — accounting for the orphaned-but-
+uncounted heap ref `to_baseline` leaves (the phantom-ref subtlety, like cow_set_value; naive pinning over/under
+-counts — that's why the transition-pin attempt mis-accounted). Verify shapeAssert 0 + endpoints 2 +
+determinism + that the grind's pause/resume is actually exercised by the fixture. Engine verified b5eea41.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
