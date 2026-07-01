@@ -982,3 +982,21 @@ target). Within-session resume must NOT use the cross-session determinism gate (
 byte-identical reboot; within-session the flow's delta replays against the SAME live instance-family, or the
 host carries the flow object directly). This is the concrete UNBOUNDED-resume effort, now built on a verified
 root instead of a guess.
+
+## CRISP FIX SPEC for the resume gap (grounded + now VERIFIABLE) — persist parks before each boot boundary
+The gap is simpler than the determinism-gate scare: qjs_dd_load (driven-set) runs POST-baseline (quickjs.c:65047,
+in grind setup), so it does NOT diverge the boot hash => the cross-session determinism gate likely PASSES
+within-session. The real gap is PERSIST TIMING: --fe-persist (qjs_drive_persist_session) is called ONCE at the
+very end (ast-thread.js:2267), but instances are recycled (freshInstance @1555/1565/2138) and re-booted per
+schedule (--fe-boot @2024/2063/2070) throughout, and each boot boundary discards the park registry (trace:
+every cow_boot_baseline is followed by repick n:0). So by the time --fe-persist runs, the parks are long gone.
+FIX (JS-side, incremental, no engine change): call m.callMain(["--fe-persist"]) BEFORE each park-discarding
+boundary — before each freshInstance() that replaces a park-bearing m, and before/around each re-boot — so the
+parks serialize to IDB (keyed by bundle-hash) while they still exist; the fresh instance's reload_session (boot
+@qjsmain.c:1151, already wired) re-injects them and do_drive's repick (@1168) resumes them.
+VERIFY (now possible — flow_resume is diag-visible after b0af060): park park_test's heavyReport, then confirm
+`diag` shows flow_resume with the correct acc after a boot boundary (currently flow_resume=0). If the
+determinism gate DOES refuse (xsession_boot_mismatch @WHY appears), the secondary fix is to make the boot
+byte-identical (the boot hash is pre-driven-load already, so investigate what else diverges) OR carry the flow
+host-side. START HERE — this is grounded on the systematic trace, verifiable, and JS-first (low blast radius),
+unlike the 2 reverted engine attempts. It is the concrete UNBOUNDED-resume first step.
