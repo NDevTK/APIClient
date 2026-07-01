@@ -962,3 +962,23 @@ The exact wipe point is UNKNOWN — it must be found by SYSTEMATIC per-boundary 
 each callMain entry/exit, FreeRuntime/instance re-init, the grind-setup, boot-drain end) to see exactly where
 n drops 1->0 between a park and any resume — NOT another single guess. That trace + the fix is a focused fresh
 effort. Do NOT ship a resume fix built on an unverified wipe-point.
+
+## GROUNDED ROOT (2026-07-02, systematic trace — supersedes the 3 wrong guesses) — parks die at each fresh instance
+Instrumented ALL park-registry reset sites (repick entry, grind-setup free) + correlated with cow_boot_baseline,
+diag-visible. The trajectory is unambiguous: [boot -> repick(n:0) -> parks accumulate to n=2] then [NEXT boot ->
+repick(n:0) again] — the prior boot-group's parks are GONE at every fresh boot. Neither repick (64408) nor the
+grind-free (65017) fires with n=2, so the reset is the STATIC INITIALIZER (quickjs.c:64013 qjs_drive_n=0) that
+re-runs on each FRESH WASM INSTANCE. The analysis runs boot/schedule/grind phases on fresh instances (per-boot
+cow_boot_baseline), and qjs_drive_flow is per-instance linear memory => discarded on every instance.
+Why the existing IDB persist/reload doesn't bridge it: qjs_drive_reload_session is determinism-GATED
+(g_boot_heap_hash must match); within a session, successive boots DIVERGE (each loads the accumulated /driven
+set -> different heap -> different bootHash), so reload refuses (correct for cross-SESSION, wrong for
+within-session). And the RAM evict/restore path is per-instance (wiped by the fresh instance). So BOTH survival
+paths fail across within-session instance boundaries => within-session parks CANNOT resume by construction.
+This is the DEFINITIVE, systematically-observed root (not the earlier async/HEAPU8/COW-revert guesses).
+REWRITE FIX (now grounded): parks/Flows must be HOST-OWNED — serialized OUT of an instance before it is
+discarded and re-injected into the next, held by the JS scheduler ABOVE the wasm-instance lifecycle (PLAN.md
+target). Within-session resume must NOT use the cross-session determinism gate (that gate is for a fresh-session
+byte-identical reboot; within-session the flow's delta replays against the SAME live instance-family, or the
+host carries the flow object directly). This is the concrete UNBOUNDED-resume effort, now built on a verified
+root instead of a guess.
