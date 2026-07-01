@@ -947,3 +947,18 @@ allocations they own) from the COW word-log — export-skip the writers so cow_d
 frontier intact across drives; THEN qjs_drive_repick (do_drive) resumes them and flow_resume fires. VERIFY:
 park_test heavyReport -> flow_resume with correct acc after a drive. (Lesson: I asserted a "definitive" root
 by ASSUMING HEAPU8.set was live without checking _img is null for the COW build — measure/read, don't assume.)
+
+### CORRECTION 2 (2026-07-01) — cow_drive_restore is NOT the wipe either; STOP guessing, trace systematically
+Probed qjs_drive_n before/after qjs_cow_drive_restore: the probe NEVER fired (guarded on before>0), i.e.
+qjs_drive_n was ALWAYS 0 when cow_drive_restore runs => the registry is ALREADY empty by then. So the COW
+dirty-page revert is NOT what wipes the parks (Correction 1 was also wrong). That is now THREE wrong root
+guesses this session (async-frame, HEAPU8.set, cow_drive_restore) — each disproved by measurement. HONEST
+lesson: the park/registry lifecycle across the --fe-boot / --fe-drive / grind callMains is more complex than I
+can reliably pin by single guesses at a session tail; I keep asserting a mechanism then disproving it.
+VERIFIED FACTS to build on (only these): (1) flow_park fires 6x at the quantum — the PARK primitive works;
+(2) flow_resume NEVER fires — cross-callMain resume is unwired; (3) qjs_drive_n is 0 at cow_drive_restore
+(do_drive) but was 1 intermittently at the grind-setup free (65012); (4) HEAPU8.set is OFF for the COW build.
+The exact wipe point is UNKNOWN — it must be found by SYSTEMATIC per-boundary tracing (emit qjs_drive_n at:
+each callMain entry/exit, FreeRuntime/instance re-init, the grind-setup, boot-drain end) to see exactly where
+n drops 1->0 between a park and any resume — NOT another single guess. That trace + the fix is a focused fresh
+effort. Do NOT ship a resume fix built on an unverified wipe-point.
