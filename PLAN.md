@@ -832,3 +832,13 @@ apparently doesn't flow to an emitted endpoint. NEXT (endpoint-coverage value ar
 site-1 drives arg-taking methods and why the opaque-arg URL doesn't emit — confirm real vs fixture
 artifact BEFORE acting. To trigger the GRIND specifically (not static), the instance must be created
 by a FACTORY driven DURING the grind (qjs_deep_capture_inst), not constructed at top-level boot.
+
+### grind_orphan LEAD RETRACTED (2026-07-01) — it was a premature read, NOT a gap
+Re-ran with adequate wait: ALL parameterized methods DO emit — refund POST /invoices/{id}/refund,
+closeAccount DELETE /accounts/{uid}, plus the isolation top-level topRefund POST /orders/{id}/cancel
+(both {arg0} and {id} shapes). The earlier "refund/closeAccount emit nothing" was reading netdiff
+BEFORE analysis completed (learnedCount 2 was mid-flight, final is 6). So there is NO parameterized-
+method coverage gap — the static real-receiver drive emits concrete-base + opaque-arg URLs correctly.
+Discipline note: confirmed before acting, disproved the lead, corrected the record — do not inflate a
+mid-analysis read into a finding. grind_orphan remains a valid STATIC real-receiver demo; it does not
+reach the deep grind (would need a factory-created instance driven during the grind).
