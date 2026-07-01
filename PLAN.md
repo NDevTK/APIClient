@@ -1032,3 +1032,25 @@ __hostDrive's breadth; it must MOVE that opaque-arg global drive into the unifie
 collection must include top-level globals driven opaque-arg, with the same FLOWBEG/FLOWEND isolation). Measured,
 reverted. This scopes the __hostDrive merge precisely: the blocker is the opaque-arg global drive strategy, not
 preemptibility (that's already unified).
+
+## SYNTHESIS (2026-07-02) — both remaining one-BFS gaps reduce to the BOOT HARD GAP (in-flux baseline)
+FACTS (read + measured, not guessed):
+ - The grind frontier (qjs_deep_rb, quickjs.c:64976-86) DOES collect every un-fired function INCLUDING
+   top-level globals ("Drive every un-fired function once").
+ - Yet disabling __hostDrive's boot breadth drops coverage (spa_gated 5->4, grind_orphan 6->3), even though
+   the grind then collects those same un-fired globals.
+INFERENCE (reasonable, NOT yet verified — don't over-assert): the difference is not the frontier membership;
+it is the DRIVE CONTEXT. __hostDrive drives globals AT BOOT (in-flux heap: globals/closures freshly init'd,
+before the post-boot COW baseline @qjsmain:1150). The grind drives them POST-baseline (forking from the frozen
+baseline). A global whose reachable endpoint depends on boot-time in-flux state emits under __hostDrive but not
+under the grind's post-baseline fork. THE SAME ROOT as the resume gap: parks/flows created pre-baseline (boot)
+can't be snapshotted/replayed against a baseline that only exists post-boot.
+So the TWO remaining one-BFS items are ONE architectural problem: "Boot is the hard gap — the COW baseline is
+established post-boot; needs an IN-FLUX baseline so boot forks (both __hostDrive's global drives and boot-time
+parks) become snapshot-able like the grind's post-baseline forks." The rewrite that establishes an in-flux
+baseline DURING boot (so a boot drive is a first-class COW flow) unifies BOTH: __hostDrive's breadth folds into
+the one frontier (its globals become ordinary post-baseline-equivalent flows) AND boot parks become resumable.
+That is the single highest-leverage rewrite target, and it is exactly what CLAUDE.md's "Boot is the hard gap:
+single-path + frees-on-silent because the COW baseline is established post-boot" already names. VERIFY the
+inference first (drive a spa_gated global under the grind with __hostDrive off + trace why its @H doesn't emit —
+boot-state vs args) before building the in-flux-baseline rewrite.
