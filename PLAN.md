@@ -892,3 +892,19 @@ or the next callMain's image restore — and qjs_drive_repick (the ONLY resume) 
 any of these reset points AND make them survive the image restore (persist/evict), across the
 boot->grind->drive callMain lifecycle. This is the real, well-scoped work to make "UNBOUNDED,
 resumable" actually function; the PARK half already works (verified: flow_park fires at the quantum).
+
+### resume-fix attempts — both quick wires FAILED to demonstrably fire; need a deterministic park->resume test
+Two targeted attempts to wire the resume, both REVERTED (couldn't verify the active path):
+  1. qjs_drive_repick at the boot baseline (qjsmain.c:1150): flow_resume=0 — parks not in the registry there.
+  2. qjs_drive_repick right before the grind-setup free (quickjs.c:65012): flow_resume STILL 0 in the test
+     runs (the park that the earlier PROBE saw as n:1 there is INTERMITTENT — timing-dependent; in the
+     repick runs qjs_drive_n was 0, so repick was a no-op). No regression (spa_gated 5, grind_orphan 6), but
+     the ACTIVE path (repick with n>0 at grind-setup) never actually executed => unverified => not shipped
+     (B2a lesson: don't ship untested boot-context paths).
+ROOT of the difficulty: a boot/BFS park does NOT reliably survive within a callMain to any resume point — it
+is wiped early (image restore between callMains, and the grind-setup free). So the resume can't be
+demonstrated by opportunistically calling repick; it needs the flow to SURVIVE (persist/evict-to-IDB
+immediately on park, reachable independent of do_drive) THEN be resumed. PREREQUISITE for the fix: a
+DETERMINISTIC park->resume test (a fixture + instrumentation that reliably parks a flow AND observes
+flow_resume with correct output) — without it every fix is coded blind. That test + the persist-on-park
+wiring is the real, focused UNBOUNDED-resume effort. The PARK half + full observability are DONE and committed.
