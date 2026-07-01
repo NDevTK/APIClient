@@ -260,7 +260,19 @@ fully clear here: the residue's `1 promise` (a PENDING promise a reaction still 
 is the likely last ctx-rooter. PRE-EXISTING (baseline b5eea41's 3rd abort) + LATENT (endpoints emit before
 teardown) but real for the unbounded multi-page design (each page leaks its whole runtime). NEXT: instrument
 via `_lastWhy` WHICH promise/frame survives the settle/unwind pass and WHY, then extend the unwind. Measure-first.
-
+INVESTIGATED 2026-07-01 (bounded — no fix yet, but scoped for a fresh effort): the FreeRuntime_residue is on
+STDERR (5225, reliably in `_lastStderr`, NOT `_lastWhy`). Built a `survivor_promise` probe — a helper
+`qjs_promise_dbg(JSObject*, int*st,*fr,*rr)` after the JSPromiseData def (~61094) dumping {state,
+fulfillReact, rejectReact, rc}, called from the residue loop's JS_CLASS_PROMISE branch (~5209) via an inline
+`extern` decl (JS_FreeRuntime precedes the struct). KEY FINDINGS: (a) the abort is INTERMITTENT — fired ~1/3
+drives of chain_direct, 0/4 on another run; the residue is lost across the abort's worker reset unless caught
+on stderr. (b) an EXPLICIT deterministic-leak fixture (a never-resolving `new Promise` with a `.then`
+reaction that fetches, + an `async` awaiting a never-resolving promise) did NOT leak (abort:0) — the settle
+loop (`qjs_settle_pending_promises` + the fixpoint at ~65948) robustly UNWINDS those common forms. ⇒ the
+chain_direct survivor is a RARE, non-obvious form the settle misses (not a plain pending-promise-with-then,
+not a plain async-await). NEXT: needs a DETERMINISTIC repro of that specific form (or drive chain_direct in a
+loop with the survivor probe until it fires, then read state/reactions) before extending the unwind. The probe
+code is preserved here for re-application. Deep + latent (endpoints emit first); not a tail-of-session fix.
 ## (historical) OPEN ROOT: STALE SHAPE-kind defer entry — a use-after-free (LOCALIZED model-free)
 
 Once the object underflow was fixed, execution proceeds further and hits a PRE-EXISTING bug — formerly
