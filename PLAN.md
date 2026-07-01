@@ -44,6 +44,24 @@ output value. Interpretation and recursion are never depth-capped (caps hide fin
   the job pump preemptible (run JS_ExecutePendingJob continuations under qjs_driving so a spinner PARKS) — the
   "Boot is the hard gap" work. Only then is g_bfs_noprog fully dead. This is the concrete next one-BFS target.
 
+**JOB-PUMP PREEMPTIBILITY — the real obstacle + the design (READ from JS_ExecutePendingJob @4969):** a pending
+job runs as `res = e->job_func(e->ctx, e->argc, argv)` where job_func is a C function (js_promise_reaction_job /
+the async-resume thunk) that does a JS_Call INTERNALLY and then post-processes (resolves/rejects the result
+promise). So you CANNOT just wrap job_func in qjs_run_forced_flow: a trampoline yield from the inner JS_Call
+would unwind THROUGH job_func's C code (which then tries to resolve the promise with a half-value) — the park
+mechanism assumes a clean qjs_run_forced_flow→JS_CallInternal boundary, and a job_func doesn't have one. This is
+WHY the boot job pump is the hard gap, and why B2a (routing the drive, whose caller-side pump still ran jobs the
+old way) surfaced it. THE DESIGN (its own effort, verify on a REAL spinning-continuation page — spa_gated has
+none): make the promise/async job machinery trampoline-AWARE, mirroring how OP_call already trampolines. When a
+reaction/resume job's inner JS_CallInternal yields at the quantum, job_func must NOT complete-and-resolve; the
+job itself must PARK (snapshot the reaction/async-resume state + the heap-stack chain into qjs_drive_flow) and
+be re-enqueued so qjs_drive_repick resumes it — i.e. a job becomes a Flow like any other. Concretely: (1) a
+"driving job pump" that sets qjs_driving and, on qjs_yielded, parks the CURRENT job's continuation instead of
+letting job_func finish; (2) job_func variants (or a wrapper) that recognize the yield and defer their
+post-JS_Call resolution until the parked continuation actually completes on resume. Until then g_bfs_noprog
+stays (now @WHY-visible) as the ONLY non-preemptible-path backstop. Do NOT bolt a rushed version onto the core
+event loop — a bug here breaks ALL async, and it can't be caught by spa_gated.
+
 **ROOT CAUSE of the B2a hang — MEASURED, and the async hypothesis was DISPROVEN (this is why you measure):**
 - First guess (WRONG): async frames live in async_func_init's malloc buffer, not the arena qjs_park_forced_flow
   snapshots, so parking a mid-async flow corrupts. Tested it and it was wrong — see below.
