@@ -14,6 +14,38 @@ park + evict-to-IDB + cross-session-resume let a flow parked today resume after 
 A **single attention (WFQ) system** runs across all websites, ordering everything by emitted
 output value. Interpretation and recursion are never depth-capped (caps hide findings).
 
+## ARCHITECTURE CORRECTION (2026-07-01, user directive: "grind must not be a separate system — it's BFS")
+
+MEASURED + READ, the CURRENT reality violates "one BFS": there are TWO drive systems, not one.
+- **Breadth phase:** `hostedge.js __hostDrive` enumerates TOP-LEVEL GLOBAL FUNCTIONS and force-invokes each
+  via `__feDriveBreadth` → `qjs_run_forced_flow` (preemptible under `qjs_driving`, parks via
+  `qjs_park_forced_flow`). It DELIBERATELY does NOT drive object-graph methods (a `new Client()`'s methods,
+  a `window.__d={…}` namespace) — hostedge.js:1418-1427 hands those to "the deep grind."
+- **Grind phase (SEPARATE):** quickjs.c ~64989 flat-scans ALL un-fired `JSFunctionBytecode`, appends to
+  `qjs_deep_rb`, relevance-sorts, and drives them in its OWN WFQ loop (~65505: `qjs_deep_flow` registry +
+  `qjs_cow_capture` park) — distinct from `qjs_run_forced_flow`, even though that primitive's own comment says
+  "THE ONE... ONE preempt loop here, used everywhere — not a separate breadth path."
+This is the banned "second scheduler beside the one policy." Both are FLAT FRONTIERS of un-fired functions
+(the grind is not internally DFS — that part is fine); the sin is that they are SEPARATE (separate collection,
+separate loop, separate WFQ, sequential "breadth THEN depth"). The stale justification for the split
+(hostedge.js:1421 "object graphs can't be preempted, so don't walk them here") is FALSE now — `__feDriveBreadth`
+IS preemptible.
+
+TARGET (one BFS): a SINGLE frontier = {top-level fns ∪ object-graph orphans ∪ parked/resumable flows},
+collected once, WFQ-ordered by emitted-output value, driven by the ONE `qjs_run_forced_flow` primitive
+(preemptible + parkable + IDB-evictable + cross-session-resumable), in ONE continuous loop — NOT boot-epilogue
+breadth then a separate grind. Delete the grind's separate WFQ loop; delete `__hostDrive`'s "don't walk object
+graphs" carve-out (drive them through the same primitive with the same receiver-map/cold-instance capture).
+The CLAUDE.md phrase "Run BREADTH first THEN DEPTH (residue grind)" should be read as ONE BFS whose frontier
+happens to reach top-level fns before residue by WFQ value — NOT two systems.
+
+WHY IT MATTERS (and connects to "nothing parks"): with two systems, park lives mostly in the grind; a heavy
+flow that blocks anywhere non-preemptible stalls the whole thing, and the cross-session round-trip (park →
+evict-to-IDB → restart → reload → resume) — the actual "UNBOUNDED until disk limit" — stays unverified.
+STATUS: this is a substantial, correctness-critical refactor of the drive across hostedge.js + quickjs.c. Do
+it INCREMENTALLY with live verification at each step (analysis still emits @H, no drive hang, park demonstrably
+fires), NOT a big-bang. Do NOT rush it at the tail of a long session — that risks breaking the whole drive.
+
 ## SECURITY VIEW — two next targets (2026-07-01, from an XSS fixture: location.hash/search -> innerHTML/insertAdjacentHTML/document.write)
 
 The "two views" second half. On a fixture flowing OPAQUE input (location.hash, location.search) into DOM
