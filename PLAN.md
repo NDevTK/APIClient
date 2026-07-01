@@ -437,6 +437,32 @@ localization already named — 8 builds, every one either hung or leaked, ALL on
   `qjs_cow_park` / release at `qjs_cow_apply`+`delta_free`), tested against a PARKING fixture (chain_direct),
   done FRESH. The PLAN said "do NOT attempt another defer-only patch" — heed it; this session proved it again.
 
+DISAMBIGUATED 2026-07-01 (decisive — corrects a MULTI-SESSION conflation, incl. my line just above): a
+one-shot `parkprobe` abort at the top of `qjs_cow_capture` (fires on the first capture, reports dfn/nShape)
+did **NOT fire** on chain_direct (`anyCapture:false`) while `shape0` stayed 2. ⇒ **chain_direct NEVER PARKS**
+(no `qjs_cow_capture`/`apply` at all — its `fromReply` fetch→fetch chain is a synchronous host round-trip,
+not a COW suspend/resume). Therefore chain_direct's reliable `shape0:2` over-decref is **ENTIRELY NON-PARK** —
+it is the plain `cow_shape_transition`-push → `qjs_cow_defer_revert_to`-free path, NOT the park re-push. So the
+`shape_site[deferSite=1]` + "re-pushed entry whose new lost its rc while PARKED" localization above was measured
+on the **deep-GRIND** scenario (which DOES park), a DIFFERENT code path from chain_direct. TWO separate shape
+over-decrefs have been conflated across sessions:
+  1. **NON-PARK (chain_direct):** the live defer trail's revert frees a stale/aliased `neww` (the arena
+     cross-flow reuse — the defer array is arena-backed and its addresses get re-handed to the next flow's
+     objects). Every STORAGE fix for it (gm-back, NULL-at-FLOWEND) HANGS chain_direct (storage is load-bearing).
+     This is the one blocking a "clean" chain_direct. Fix is NOT storage and NOT the park pin — likely making
+     the non-park defer-revert free skip/repair the aliased entry at its root (why the arena addresses alias:
+     the trail array shares the bump region with flow objects and outlives a single flow's revert).
+  2. **PARK/GRIND:** the capture→pause→resume orphan. The SHAPE-pin fix (js_dup_shape old+new at
+     `qjs_cow_capture` ~21131; release js_free_shape at `qjs_cow_apply` after re-push ~21181 + at
+     `qjs_cow_delta_free` ~21201) was DESIGNED + IMPLEMENTED this session — sound by construction (mirrors the
+     typed-trail JS_DupValueRT-at-capture / release-at-apply lifecycle EXACTLY; also fixes the documented
+     `delta_free` SHAPE-ref leak) — but REVERTED UNVERIFIED because **no current fixture parks** (chain_direct
+     doesn't; the trivial fixture doesn't). **THE missing prerequisite for ALL park/resume work is a fixture
+     that actually drives the deep-grind PARK** (COW capture/apply). Build that FIRST (a bundle heavy enough to
+     trigger the orphan-suspend, or drive the grind directly), then re-apply the pin (it is a ~10-line 3-site
+     diff) and verify shape0/no-hang + the cross-session round-trip. Until a parking fixture exists, park fixes
+     are un-testable — do not push them. Engine stays at verified b5eea41.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
