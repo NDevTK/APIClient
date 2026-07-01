@@ -477,6 +477,16 @@ PARK TRIGGER + FIXTURE RECIPE (2026-07-01, so the next session builds it in one 
   (heavy is uncalled ⇒ grind orphan ⇒ silent ~640k ops ⇒ parks ⇒ resumes.) Tune the count to just exceed one
   quantum; caveat: park tests are SLOW (640k instrumented ops ≈ 1-2 min, and the worker blocks — poll _lastStderr
   via a one-shot `__assert_fail`, the only channel that survives). Confirm parking BEFORE testing the fix.
+  UPDATE 2026-07-01: measurement channel FIXED — `self._lastWhy` now buffers all @WHY (readable via
+  `harness worker "self._lastWhy"`), so `cow_stats` (captures/applies) is readable NON-destructively; no more
+  abort-probes. Used it to reconfirm chain_direct never parks (`captures:0`) cleanly. BUT the recipe above is
+  STILL UNVERIFIED and harder than hoped: an uncalled heavy orphan (`window.heavy` = 90k-iter object-churn loop,
+  ~1.1M ops) ALSO did not visibly park — the worker BLOCKED grinding it (@WHY stuck at 11 records for 250s, no
+  `cow_stats`, `orphan_drive` present but no `captures`). So BOTH a BFS heavy loop AND an uncalled heavy orphan
+  fail to trigger a clean park. OPEN: the `qjs_drive_run` park-quantum (64 silent windows) may not fire for
+  these drives, or the orphan drive routes differently, or forced-exec doesn't run the concrete loop as
+  sequential silent ops. Next session: instrument the silent-window counter / `qjs_drive_run` entry via the NEW
+  @WHY channel (non-destructive) to see WHY the quantum doesn't fire, before assuming any fixture parks.
 - **THE PARK-PIN FIX (sound-by-construction, mirrors the vt-trail; re-apply verbatim, ~10 lines, 3 sites):**
   1. `qjs_cow_capture` defer-capture loop (~21131), after copying df_old/df_new/df_kind:
      `if (qjs_cow_defer[k].is_shape) { if (d->df_new[k]) js_dup_shape((JSShape*)d->df_new[k]); if (d->df_old[k]) js_dup_shape((JSShape*)d->df_old[k]); }`
