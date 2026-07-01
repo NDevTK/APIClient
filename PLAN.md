@@ -1054,3 +1054,21 @@ That is the single highest-leverage rewrite target, and it is exactly what CLAUD
 single-path + frees-on-silent because the COW baseline is established post-boot" already names. VERIFY the
 inference first (drive a spa_gated global under the grind with __hostDrive off + trace why its @H doesn't emit —
 boot-state vs args) before building the in-flux-baseline rewrite.
+
+## VERIFICATION of the synthesis (2026-07-02) — PARTLY REFUTED; the __hostDrive loss is largely a DEDUP dup
+Found WHICH endpoint spa_gated loses when __hostDrive breadth is off: DELETE /admin/users/{arg0} — while
+/admin/users/{id} SURVIVES. Those are the SAME endpoint with different placeholder names: {arg0} = the
+opaque-POSITIONAL-arg naming from __hostDrive's DRIVEBREADTH(v, OPQ,OPQ,OPQ); {id} = the NAMED-arg naming from
+the grind/static drive. So on spa_gated, __hostDrive's only unique contribution is a DUPLICATE naming variant,
+not a unique boot-context endpoint. => the "both gaps reduce to the boot hard gap" synthesis is NOT
+well-supported on the __hostDrive side (I over-reached again; verifying caught it). grind_orphan's losses
+(lightPing /ping, heavyReport /reports/heavy) ARE unique top-level-FUNCTION endpoints, but grind_orphan is a
+self-written fixture with explicit function globals — weaker evidence.
+TWO honest takeaways:
+ 1. There is a real DEDUP GAP: the same endpoint reached via opaque-positional args ({arg0}) and named args
+    ({id}) is counted as TWO in netdiff. That INFLATES the moat metric. A param-placeholder-insensitive dedup
+    (endpoint identity = method + path-structure, {X} normalized) would collapse them. This is a concrete,
+    verifiable, LOW-RISK improvement to the metric's honesty — likely higher-value than the __hostDrive merge.
+ 2. __hostDrive's genuinely-unique value (top-level FUNCTION globals like ping/heavy) is real but its
+    "load-bearing 5->4" on spa_gated is mostly the dup. So the __hostDrive merge is LOWER priority than the
+    metric implied. Do NOT build the boot-hard-gap rewrite justified by this alone.
