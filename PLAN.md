@@ -23,13 +23,13 @@ derivable: `GET /api/v1/feed [key=pub_abc123]` (live), `GET /users/{id}/profile 
 /billing/subscription [account opaque, plan=pro]`, `DELETE /admin/users/{id} [id opaque]`. Concrete literals
 computed (key, plan); auth-gated params (user.id/token/account) correctly OPAQUE. No hang, no over-decref — the
 3bb3c96 fix holds on a richer bundle. **Use spa_gated.html as the moat regression/coverage fixture.**
-KNOWN COVERAGE GAP (next moat target, valuable): `adminDashboard`'s `/admin/metrics` was NOT learned — its
-guard `if (state.role !== 'admin') return` is a CONCRETE flag (`role:'guest'`), and forced-exec forces only
-OPAQUE branches, so the concrete-gated fetch is never reached. In a real app the auth flag is opaque-sourced
-(auth response / cookie) and WOULD be forced. The design question: should a COLD-DRIVEN ORPHAN (no real caller
-/ no real state) treat its internal concrete-flag guards as forceable too (flag-gated is an explicit moat
-target: "login/click/route/flag-gated, dead-but-shipped")? If yes, the orphan drive should force config/flag
-guards it reaches, not just opaque-value branches — measure the exploration cost vs the endpoints gained.
+FLAG-GATED COVERAGE VALIDATED (2026-07-01, second variant): with the auth flag from OPAQUE external input
+(`state.role = new URLSearchParams(location.search).get('role')`, the REALISTIC case), the engine FORCED the
+guard `if (state.role !== 'admin') return` and LEARNED `GET /api/v1/admin/metrics [scope=all]` while logged
+out. So the moat surfaces opaque-auth-gated admin endpoints exactly as intended. The original fixture's
+`/admin/metrics` miss was a FIXTURE ARTIFACT, not an engine gap: `role:'guest'` is a CONCRETE literal, and
+forcing a concrete branch would be INVENTING a path real execution can't take (banned — "RUN, DON'T INVENT").
+Real auth flags are opaque-sourced, so they ARE forced. Net: flag-gated coverage works; no engine change needed.
 The fixture (testing/fixtures is gitignored, so preserved here for exact recreation):
 ```html
 <!doctype html><html><body><script>
