@@ -247,9 +247,19 @@ object) and `js_free_shape`'d it. MEASURED definitively via the new `_lastWhy` c
 (cow-barrier.mjs:85) — the instrumentation was why the 6 prior gm attempts HUNG (barrier log/revert of the
 trail + cow_g clobber); export-skip mirrors the word-log's export-skipped writer `qjs_cow_undo_log`. VERIFIED
 live (chain_direct + trivial, plain restart): `shape0` 2→0, aborts 3→1 (both shape aborts gone), learnedCount
-stays 2, no hang, stable across reruns. Remaining: the PRE-EXISTING `list_empty(&rt->gc_obj_list)` module-cycle
-abort at JS_FreeRuntime (1/drive, separate — the next target). Scenario #2 (park/resume orphan) is SEPARATE and
+stays 2, no hang, stable across reruns. Scenario #2 (park/resume orphan) is SEPARATE and
 still open — the sound park-pin diff + parking-fixture recipe are preserved below.
+
+NEXT TARGET (the now-ONLY abort on chain_direct, 1/drive) — `list_empty(&rt->gc_obj_list)` at JS_FreeRuntime.
+CHARACTERIZED via `_lastWhy` FreeRuntime_residue: `{obj:918, bytecode:553, shape:222, varref:164, cfunc:260,
+context:1, ctxRc:1734, promise:1}`. The CONTEXT (rc 1734) is rooted at teardown, so it roots the whole bundle
+(every cfunc/bytecode holds a realm = a ctx ref) -> nothing frees -> the assert. This is the KNOWN, extensively-
+worked context-rooting issue (in-code machinery: `qjs_settle_pending_promises` ~61283, `free_generator_stack_rt`,
+the async-generator unwind ~61322 — they release ctx refs held by forced-exec's SUSPENDED frames). They didn't
+fully clear here: the residue's `1 promise` (a PENDING promise a reaction still points at, that settle missed)
+is the likely last ctx-rooter. PRE-EXISTING (baseline b5eea41's 3rd abort) + LATENT (endpoints emit before
+teardown) but real for the unbounded multi-page design (each page leaks its whole runtime). NEXT: instrument
+via `_lastWhy` WHICH promise/frame survives the settle/unwind pass and WHY, then extend the unwind. Measure-first.
 
 ## (historical) OPEN ROOT: STALE SHAPE-kind defer entry — a use-after-free (LOCALIZED model-free)
 
