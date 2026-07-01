@@ -30,6 +30,20 @@ OPAQUE branches, so the concrete-gated fetch is never reached. In a real app the
 / no real state) treat its internal concrete-flag guards as forceable too (flag-gated is an explicit moat
 target: "login/click/route/flag-gated, dead-but-shipped")? If yes, the orphan drive should force config/flag
 guards it reaches, not just opaque-value branches — measure the exploration cost vs the endpoints gained.
+The fixture (testing/fixtures is gitignored, so preserved here for exact recreation):
+```html
+<!doctype html><html><body><script>
+var API = { base: '/api/v1', key: 'pub_abc123' };
+var state = { user: null, role: 'guest' };
+function publicFeed(){ return fetch(API.base + '/feed?key=' + API.key); }
+function loadProfile(){ return fetch(API.base + '/users/' + state.user.id + '/profile', { headers: { Authorization: 'Bearer ' + state.user.token } }); }
+function adminDashboard(){ if (state.role !== 'admin') return; return fetch(API.base + '/admin/metrics?scope=all'); }
+function billingInfo(){ return fetch(API.base + '/billing/subscription', { method: 'POST', body: JSON.stringify({ account: state.user.accountId, plan: 'pro' }) }); }
+function deleteUser(id){ return fetch(API.base + '/admin/users/' + id, { method: 'DELETE' }); }
+window.__app = { loadProfile:loadProfile, adminDashboard:adminDashboard, billingInfo:billingInfo, deleteUser:deleteUser };
+publicFeed();
+</script></body></html>
+```
 
 ## Design decisions (settled — do not re-litigate)
 
