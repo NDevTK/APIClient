@@ -1235,6 +1235,13 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         if (self.__QJS_WASM && (s.indexOf('"phase":"cow_') >= 0 || s.indexOf('stack_overflow') >= 0)) { try { console.log(s); } catch (e) {} }
         if (s.indexOf('"phase":"cow_boot_baseline"') >= 0 && !self.__bootHash) { self.__bootHash = [s.slice(s.indexOf('{'))]; }   /* #5 determinism regression probe: keep the FIRST post-boot baseline @WHY (bootHash) so a cross-restart check can confirm the boot stays byte-reproducible */
         stdout.push(s);
+        /* Readable @WHY tap — symmetric with _lastStderr (1240). The engine's structured @WHY diagnostics
+           (cow_stats, resolverError, park/capture counts, saturation, phase reasons) print to STDOUT and were
+           only surfaced SELECTIVELY to the console (cow_/stack_overflow above), so NON-ABORT measurement had
+           no channel: every probe this whole line of work had to abuse __assert_fail (destructive, one-shot,
+           slow). Keep the last 500 @WHY lines in a rotating buffer readable via `harness worker "self._lastWhy"`.
+           Directive #6 "No silent failure — measure before hypothesizing": this is the missing measure channel. */
+        if (s.indexOf('@WHY') >= 0) { if (!self._lastWhy) self._lastWhy = []; self._lastWhy.push(s); if (self._lastWhy.length > 500) self._lastWhy.shift(); }
       },
       printErr: function (s) {
         stderr.push(s); if (!self._lastStderr) self._lastStderr = []; self._lastStderr.push(s); if (self._lastStderr.length > 500) self._lastStderr.shift();
