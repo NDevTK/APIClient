@@ -39,6 +39,33 @@ graphs" carve-out (drive them through the same primitive with the same receiver-
 The CLAUDE.md phrase "Run BREADTH first THEN DEPTH (residue grind)" should be read as ONE BFS whose frontier
 happens to reach top-level fns before residue by WFQ value — NOT two systems.
 
+REWRITE TARGET (the "assuming rewrite" design — dissolves the two-registry mess, not patches it). There is ONE
+type: a **Flow** = { resume-entry (either FRESH: fn+this+args+is_ctor, or PARKED: heap-stack chunk-chain +
+COW delta), wfqValue (emitted @H/@S this flow produced — the ONLY ordering key), state (READY|PARKED|DONE),
+optional receiver (real-instance `this` from qjs_deep_capture_inst) }. Everything the current code splits into
+"top-level global (breadth)", "object-graph orphan (grind)", "callback/orphan-enum arm", "re-entrant sub-flow"
+is JUST A Flow with a different resume-entry — no separate populations, no `qjs_deep_rb` vs `qjs_drive_flow`
+vs `qjs_deep_flow`. ONE registry: a growable Flow[] with a stable handle per Flow (the index question I asked
+is moot — a Flow gets its slot when it ENTERS the frontier, whatever its origin). ONE loop:
+  while (frontier has a READY|PARKED Flow):
+    f = pick-max-wfqValue (least-served among ties; DONE/firing removed)   // the single WFQ, priority.js's comparator
+    drive-or-resume f via qjs_run_forced_flow under qjs_driving for ONE quantum   // the ONE primitive
+    if it yielded-at-quantum: COW-capture into f's slot, state=PARKED, re-enqueue   // preempt, ~0 CPU
+    elif completed: state=DONE
+    (under memory pressure: serialize the coldest PARKED Flow's {COW delta + resume-entry} to IDB, evict)
+Seeding the frontier is ONE pass that collects {top-level fns ∪ every un-fired JSFunctionBytecode ∪ methods
+reachable on captured instances} as FRESH Flows — no boot-epilogue-breadth-then-grind. Cross-session: the
+PARKED Flow blobs in IDB are keyed by bundle-hash; deterministic reboot reloads + re-enqueues them (state
+still PARKED) so the loop resumes them — THAT is "unbounded until disk limit, resumable after restart."
+This makes `qjs_deep_flow`, the 65505 residue loop, and hostedge.js's separate `__hostDrive` breadth pass all
+redundant: delete them; keep only qjs_run_forced_flow + one registry + one loop + the receiver-map capture as
+a Flow field. It is a scheduler rewrite (multi-day, cross hostedge.js/quickjs.c), NOT a tail-of-session patch;
+the honest blocker to a partial edit is that today's two registries key resume DIFFERENTLY (per-orphan `_ix`
+vs arrival counter), so half-migrating parks-into-one / resumes-from-the-other and re-drives from scratch
+(lost progress) — the unified Flow handle is what removes that. Build it as its own effort, verified: after
+seeding, chain_direct still learns 2; a heavy orphan PARKS (its slot gets a COW delta) then RESUMES + emits;
+then the IDB round-trip.
+
 WHY IT MATTERS (and connects to "nothing parks"): with two systems, park lives mostly in the grind; a heavy
 flow that blocks anywhere non-preemptible stalls the whole thing, and the cross-session round-trip (park →
 evict-to-IDB → restart → reload → resume) — the actual "UNBOUNDED until disk limit" — stays unverified.
