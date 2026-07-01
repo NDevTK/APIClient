@@ -814,3 +814,21 @@ PARK TRIGGER + FIXTURE RECIPE (2026-07-01, so the next session builds it in one 
 Live Chrome harness (`testing/harness.js restart`), ONE targeted single-page design-correctness
 test of the actual property (not `alive`, not a count). Regression batteries / flat metrics across
 commits = benchmaxxing, banned. Build = a build step, not a verdict.
+
+## grind_orphan.html fixture (2026-07-01) — design-correctness attempt + a coverage LEAD
+Created testing/fixtures/grind_orphan.html (gitignored; content = an ApiClient class constructed at
+boot with methods NEVER called: listInvoices() [0-arg], refund(id), closeAccount(uid)).
+GOAL was to trigger the DEEP GRIND (spa_gated never reaches it — no orphan_drive phase, feDeepDB
+empty). RESULT: it did NOT trigger the grind — the STATIC phase's real-receiver map
+(js_fe_drive_static site 1, target_this) absorbed it (boot-constructed instance is found there, so
+no grind needed). It DID demonstrate the static real-receiver value: `this.base` resolved CONCRETELY
+=> `GET /api/v1/invoices?status=unpaid` from an uncalled method ("logged-in surface while logged out").
+LEAD (NOT yet confirmed real — it's a self-written fixture, do not inflate): the ARG-TAKING methods
+refund (POST /invoices/{id}/refund) and closeAccount (DELETE /accounts/{uid}) emitted NOTHING —
+not even reachedButOpaque/resolverError. closeAccount's URL shape (concrete-base + opaque-arg-at-end)
+is IDENTICAL to spa_gated's WORKING admin/users/{id}, so the differentiator is that these are
+parameterized METHODS driven via the static real-receiver path (site 1), whose opaque method-arg
+apparently doesn't flow to an emitted endpoint. NEXT (endpoint-coverage value area): trace whether
+site-1 drives arg-taking methods and why the opaque-arg URL doesn't emit — confirm real vs fixture
+artifact BEFORE acting. To trigger the GRIND specifically (not static), the instance must be created
+by a FACTORY driven DURING the grind (qjs_deep_capture_inst), not constructed at top-level boot.
