@@ -1232,7 +1232,7 @@ async function forcedAnalyze(code, sourceUrl, scriptUrls, pageHtml, seedOnly, de
         // consumes — without re-emitting they never reach a console listener (the harness
         // `diag` only saw the offscreen's re-logged resolverErrors). Surface COW
         // engagement/stats + stack-overflow @WHY to the worker console so diag captures them.
-        if (self.__QJS_WASM && (s.indexOf('"phase":"cow_') >= 0 || s.indexOf('stack_overflow') >= 0)) { try { console.log(s); } catch (e) {} }
+        if (self.__QJS_WASM && (s.indexOf('"phase":"cow_') >= 0 || s.indexOf('stack_overflow') >= 0 || s.indexOf('"phase":"flow_') >= 0 || s.indexOf('"phase":"grind_park"') >= 0)) { try { console.log(s); } catch (e) {} }   /* also surface the core WFQ scheduling events (flow_park/flow_resume/grind_park) to the console so `diag` captures them — they were worker-_lastWhy-only, which caused a false "0 parks" read */
         if (s.indexOf('"phase":"cow_boot_baseline"') >= 0 && !self.__bootHash) { self.__bootHash = [s.slice(s.indexOf('{'))]; }   /* #5 determinism regression probe: keep the FIRST post-boot baseline @WHY (bootHash) so a cross-restart check can confirm the boot stays byte-reproducible */
         stdout.push(s);
         /* Readable @WHY tap — symmetric with _lastStderr (1240). The engine's structured @WHY diagnostics
