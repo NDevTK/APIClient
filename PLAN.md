@@ -487,6 +487,16 @@ PARK TRIGGER + FIXTURE RECIPE (2026-07-01, so the next session builds it in one 
   these drives, or the orphan drive routes differently, or forced-exec doesn't run the concrete loop as
   sequential silent ops. Next session: instrument the silent-window counter / `qjs_drive_run` entry via the NEW
   @WHY channel (non-destructive) to see WHY the quantum doesn't fire, before assuming any fixture parks.
+  ARCH CLARIFICATION 2026-07-01 (why the worker blocks, so the next session doesn't mis-diagnose it as a
+  bug): the per-opcode return-to-scheduler goes to the wasm-INTERNAL WFQ, NOT the host (by design — CLAUDE.md
+  "per-opcode RETURN-to-scheduler ... NOT a JSPI suspend"). ast-thread.js yields to the HOST event loop only
+  at SCRIPT / deep-resume boundaries (`setTimeout(r,0)` ~1554/2137/2280, `_resumeIncompleteDeep` ~3163/3253),
+  never mid-script. So one heavy script/segment blocks the worker synchronously until it finishes — the host
+  schedules across PAGES (one wasm instance each), not within a page. ⇒ a park test inherently ties up the
+  worker for the whole heavy drive (minutes at the instrumented op-rate); read `cow_stats` via `_lastWhy`
+  AFTER it returns, and size the orphan to just exceed 640k ops so it completes. This also means the #5/#10
+  host-level attention (cross-page fibers, IDB eviction) can only act at those boundaries today — if within-a-
+  page eviction under memory pressure is ever needed mid-heavy-script, that host-yield gap is the design item.
 - **THE PARK-PIN FIX (sound-by-construction, mirrors the vt-trail; re-apply verbatim, ~10 lines, 3 sites):**
   1. `qjs_cow_capture` defer-capture loop (~21131), after copying df_old/df_new/df_kind:
      `if (qjs_cow_defer[k].is_shape) { if (d->df_new[k]) js_dup_shape((JSShape*)d->df_new[k]); if (d->df_old[k]) js_dup_shape((JSShape*)d->df_old[k]); }`
