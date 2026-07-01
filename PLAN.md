@@ -908,3 +908,27 @@ immediately on park, reachable independent of do_drive) THEN be resumed. PREREQU
 DETERMINISTIC park->resume test (a fixture + instrumentation that reliably parks a flow AND observes
 flow_resume with correct output) — without it every fix is coded blind. That test + the persist-on-park
 wiring is the real, focused UNBOUNDED-resume effort. The PARK half + full observability are DONE and committed.
+
+## DEFINITIVE ROOT of "nothing resumes" (2026-07-01) — the per-schedule image restore wipes the park registry
+Traced end to end. The host boots the bundle ONCE, saves the linear-memory image, and per BFS schedule does
+`mod.HEAPU8.set(bootImage)` (ast-thread.js restoreSync :2009 / :2015) to reset the heap to baseline before the
+next drive. That full-heap restore WIPES qjs_drive_flow (the park registry lives in that heap), so:
+  - every schedule's parks are destroyed at the next schedule's image restore (hence all flow_park are ix:0 —
+    a fresh, just-reset registry each time);
+  - qjs_drive_persist_session (--fe-persist, ast-thread.js:2267) sees qjs_drive_n==0 -> persists nothing;
+  - qjs_drive_reload_session / repick have nothing to reload/resume.
+The persist/evict/reload/repick INFRA all exists and is correct in isolation; it is just never reachable
+because the parks don't survive the HEAPU8.set. do_drive uses dirty-pages (:2032, no full restore) so
+WITHIN a do_drive callMain qjs_drive_run resumes fine — the break is strictly ACROSS the image-restore boundary.
+REWRITE-ALIGNED FIX (the honest best design, not a patch): a parked Flow must NOT live only in the wasm heap
+that HEAPU8.set wipes. Two coherent options:
+  (a) evict parks OUT of HEAPU8 to host-held JS blobs (qjs_drive_serialize/_evict already produce these) BEFORE
+      each restoreSync, and re-inject (qjs_drive_restore, address-fixup) AFTER — the eviction round-trip applied
+      at the image-restore boundary (within-session, no determinism-hash gate; that gate is only for the
+      cross-SESSION reload). This is the minimal wiring of existing primitives.
+  (b) the PLAN.md TARGET rewrite: ONE Flow registry where parks are first-class {RAM-hot | IDB-cold} entities
+      owned by the HOST scheduler across callMains, so the per-schedule heap reset never touches them — parks
+      and the WFQ live above the wasm-instance lifecycle, not inside its wiped heap.
+Either way, the PARK half works (verified) and observability (flow_park/grind_park/flow_resume) is in place;
+the RESUME half needs the flow to outlive HEAPU8.set. VERIFY WITH: park park_test's heavyReport, confirm
+flow_resume fires with the correct acc AFTER an image restore. This is the concrete UNBOUNDED-resume effort.
