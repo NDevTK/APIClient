@@ -29,19 +29,20 @@ output value. Interpretation and recursion are never depth-capped (caps hide fin
 4. engine f94ef60 — connectedCallback + handler-drain (hostedge) routed through DRIVEBREADTH.call(recv,fn,arg)
    = qjs_run_forced_flow, so a spinning callback PARKS+resumes instead of being thrown away.
 
-**g_bfs_noprog (the last BFS no-progress count) — WHY IT CAN'T BE DELETED YET (measured, not guessed):**
-- Routing js_fe_drive_static's 3 forced JS_Call sites through qjs_run_forced_flow (attempt B2a) REGRESSED
-  spa_gated 5→0 — a full boot collapse (even the __hostDrive endpoints vanished), i.e. a BOOT HANG. Reverted.
-- Diagnosis: the @T static-drive site 1 has an INLINE async pump (`while(JS_ExecutePendingJob)`); parking an
-  async flow mid-drive leaves a re-queuing continuation the non-preemptible pump spins on forever. This is the
-  SAME root as the remaining non-qjs_driving BFS execution path: the boot event-loop JOB PUMP (driver.js
-  flush()/pump() → JS_ExecutePendingJob) runs async continuations NON-preemptibly under g_bfs_drive_active.
-- So g_bfs_noprog is currently load-bearing for exactly two things: (a) js_fe_drive_static's forced JS_Calls
-  and (b) the boot job pump's continuations — both of which spin non-preemptibly. Deleting it now would hang
-  boot on any page with a spinning static target OR a spinning async continuation (spa_gated has neither, so
-  spa_gated would falsely "pass" — do NOT trust it here). THE FIX is to make the boot job pump preemptible
-  (route JS_ExecutePendingJob continuations through the primitive) — the "Boot is the hard gap" work. Only
-  then is g_bfs_noprog fully dead and deletable. This is the concrete next one-BFS target.
+**g_bfs_noprog (the last BFS no-progress count) — narrowed to the ASYNC JOB PUMPS (js_fe_drive_static DONE):**
+- DONE (engine e7d1b69): js_fe_drive_static's 3 forced JS_Call sites now route through qjs_run_forced_flow
+  (preemptible; a spinning static target PARKS, not the g_bfs throw). The B2a "hang" was actually
+  NON-CONVERGENCE (the forced-flow revert undid the in-drive qjs_executed marking → targets re-collected every
+  schedule → the BFS fixpoint never went flat); fixed by persisting b->qjs_driven at the drive-loop top (outside
+  the revert) + skipping qjs_driven in the collection filter. Verified spa_gated converges to 5, faster (~5s),
+  determinism preserved. So the static drives no longer need the g_bfs throw (they run under qjs_driving → park).
+- REMAINING g_bfs_noprog users = the ASYNC JOB PUMPS, which still run continuations with qjs_driving OFF under
+  g_bfs_drive_active: (a) js_fe_drive_static site-1's INLINE `while(JS_ExecutePendingJob)` async pump, and
+  (b) the boot event-loop pump (driver.js flush()/pump() → JS_ExecutePendingJob). A spinning async continuation
+  there is the last thing the g_bfs throw catches. Deleting g_bfs_noprog now would hang boot on a page with a
+  spinning async continuation (spa_gated has none, so it would falsely "pass" — do NOT trust it). THE FIX: make
+  the job pump preemptible (run JS_ExecutePendingJob continuations under qjs_driving so a spinner PARKS) — the
+  "Boot is the hard gap" work. Only then is g_bfs_noprog fully dead. This is the concrete next one-BFS target.
 
 **ROOT CAUSE of the B2a hang — MEASURED, and the async hypothesis was DISPROVEN (this is why you measure):**
 - First guess (WRONG): async frames live in async_func_init's malloc buffer, not the arena qjs_park_forced_flow
@@ -57,12 +58,28 @@ output value. Interpretation and recursion are never depth-capped (caps hide fin
   js_fe_drive_static's boot position / state (candidate: parking a flow into qjs_drive_flow at THIS boot point,
   before the grind owns the registry, corrupts a later boot step; or the require/directed-drive globals; NOT
   confirmed).
-- LOCALIZATION IS BLOCKED by tooling: the sync hang blocks worker-eval, and my @WHY probes (phase not `cow_`)
-  are stored only in the worker's self._lastWhy (unreadable while blocked), not console.log'd. NEXT DEBUG STEP:
-  prefix the probes `cow_static_pre/post` so line-1235's `cow_`-filter console.log's them, then capture via
-  `harness diag` (attaches the worker console) which survives the sync hang — that pinpoints whether site-2's
-  loop is even reached and which target/step blocks. Only then is the fix designed. This is its own effort —
-  do NOT rush it at a session tail. g_bfs_noprog now emits @WHY bfs_spin_skip so its firing stays measurable.
+- LOCALIZED (cow_-prefixed probes + `harness diag` on a fresh post-restart boot — the tooling that works;
+  `diag` captures the worker/background_page console incl. cow_ @WHY, and `restart` clears the AST cache so the
+  wasm actually re-boots): it is NOT a hang and NOT async. Every forced-flow drive RETURNS (all 4 targets print
+  cow_static_pre AND cow_static_post, kind=0 sync). The real failure is NON-CONVERGENCE: `cow_static_loop_begin`
+  fires 90+ times (js_fe_drive_static re-invoked per schedule) and learnedCount stays 0 — boot never finishes.
+- MECHANISM (CONFIRMED by the probe: all 90 loop_begins report nt=4 — the SAME 4 targets re-collected every
+  schedule; if the marking persisted the 2nd schedule would collect 0): the plain-JS_Call path leaves the
+  target's driven-marking PERSISTED so `if (b->qjs_executed) continue;` (quickjs.c ~66325) skips it next
+  schedule; routing through qjs_run_forced_flow loses that marking, so every target is re-collected + re-driven
+  every schedule → the BFS drive-count never goes flat → the driver's `while (m!==n||hm!==hp)` fixpoint never
+  converges → 90+ re-boots, 0 emit (boot never completes so nothing is learned).
+- THE FIX (well-specified, its own focused effort — verify carefully, do NOT rush at a session tail): persist a
+  driven-marking OUTSIDE the flow revert, exactly like the grind's post-`qjs_run_forced_flow` `b->qjs_driven=1`.
+  Use `qjs_driven` (+`qjs_driven_opaque` for the opaque drive), NOT `qjs_executed` — `qjs_executed` means "real
+  dynamic values captured", and setting it for an opaque force-drive would hide the target from the grind's
+  real-instance re-drive (value-depth loss). So: (1) set `b->qjs_driven=1; b->qjs_driven_opaque=1;` AFTER
+  `qjs_flow_revert(ctx)` for each of the 3 sites; (2) add `|| b->qjs_driven` to the collection filter at ~66325
+  so a boot-force-driven target isn't re-collected. RISK: `qjs_driven` is shared with the grind — verify the
+  grind still drives the object-graph residue (its re-drive-eligibility already keys on qjs_driven_opaque) and
+  spa_gated still = 5 AND now CONVERGES (learnedCount reaches 5, loop_begin count small/bounded).
+  g_bfs_noprog now emits @WHY bfs_spin_skip so its firing stays measurable. (Determinism separately CONFIRMED
+  this session: bootHash 16779628741915285990 reproducible across restarts — the resume foundation is intact.)
 
 REMAINING toward full one-BFS: (i) localize + fix the js_fe_drive_static / boot-job-pump sync hang (above) →
 route them through the primitive → delete g_bfs_noprog; (ii) __hostDrive's separate top-level-global breadth
