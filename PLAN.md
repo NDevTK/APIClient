@@ -1021,3 +1021,14 @@ RETURNS — the parks are gone before control ever comes back to the host. That 
      is LOST, resume is broken; if it emits, resume works. park_test's heavyReport has multiple drive paths so
      it does NOT isolate this. That isolation + engine-side instrumentation of qjs_drive_run's within-drive
      resume is the honest next step BEFORE any fix. I let the investigation outrun the evidence; correcting it.
+
+## MEASURED FACT (2026-07-02) — __hostDrive breadth is load-bearing even post-e7d1b69 (merge, don't delete)
+Disabled __hostDrive's top-level-global breadth loop (hostedge.js:1402) and measured: spa_gated 5->4,
+grind_orphan 6->3 (loses HALF its endpoints). So routing the @T static drive through the primitive (e7d1b69)
+did NOT make __hostDrive redundant — the static/grind drives do not reproduce __hostDrive's opaque-arg
+top-level-global drive (DRIVEBREADTH(v, OPQ, OPQ, OPQ)). grind_orphan's big drop confirms its endpoints come
+from top-level globals driven with opaque args. So the one-BFS "single frontier" merge CANNOT delete
+__hostDrive's breadth; it must MOVE that opaque-arg global drive into the unified frontier (the grind's
+collection must include top-level globals driven opaque-arg, with the same FLOWBEG/FLOWEND isolation). Measured,
+reverted. This scopes the __hostDrive merge precisely: the blocker is the opaque-arg global drive strategy, not
+preemptibility (that's already unified).
