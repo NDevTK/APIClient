@@ -1453,6 +1453,7 @@ var _qjs_set_driving,
   _qjs_cow_undo_revert_to,
   _qjs_cow_undo_revert,
   _qjs_cow_apply,
+  _qjs_cow_defer_push,
   _qjs_cow_delta_serialize,
   _qjs_cow_delta_deserialize,
   _qjs_cow_apply_xsession,
@@ -1495,6 +1496,7 @@ function assignWasmExports(wasmExports) {
   _qjs_cow_undo_revert_to = Module['_qjs_cow_undo_revert_to'] = wasmExports['qjs_cow_undo_revert_to'];
   _qjs_cow_undo_revert = Module['_qjs_cow_undo_revert'] = wasmExports['qjs_cow_undo_revert'];
   _qjs_cow_apply = Module['_qjs_cow_apply'] = wasmExports['qjs_cow_apply'];
+  _qjs_cow_defer_push = Module['_qjs_cow_defer_push'] = wasmExports['qjs_cow_defer_push'];
   _qjs_cow_delta_serialize = Module['_qjs_cow_delta_serialize'] = wasmExports['qjs_cow_delta_serialize'];
   _qjs_cow_delta_deserialize = Module['_qjs_cow_delta_deserialize'] = wasmExports['qjs_cow_delta_deserialize'];
   _qjs_cow_apply_xsession = Module['_qjs_cow_apply_xsession'] = wasmExports['qjs_cow_apply_xsession'];

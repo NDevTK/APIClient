@@ -234,7 +234,24 @@ free_zero_bad 0, endpoints maintained (learnedCount=2), boot determinism unaffec
 KNOWN GAP: large (non-arena) allocations aren't covered by `cow_is_header_word`; if a large-object victim
 ever underflows, extend detection to the large-block list (none observed on chain_direct).
 
-## OPEN ROOT (next): STALE SHAPE-kind defer entry — a use-after-free (LOCALIZED model-free)
+## RESOLVED 2026-07-01 (engine 3bb3c96): non-park shape over-decref — arena-aliased defer trail
+
+**FIXED + VERIFIED + PUSHED.** The reliable `js_free_shape0` rc=-1 over-decref (chain_direct's `shape0:2`,
+scenario #1 below) was the deferred-restore trail array being ARENA-backed: `qjs_cow_defer_push` grew it via
+`js_realloc_rt` → `js_def_realloc` → the flow arena, which bump-RESETS at FLOWEND, so the kept array pointer's
+addresses got re-handed to the next flow's objects → `defer_revert` read a CORRUPT entry (`neww` → a reused JS
+object) and `js_free_shape`'d it. MEASURED definitively via the new `_lastWhy` channel: `shape_overdecref
+{gt:0, inArena:0, deferSite:1, hashed:garbage}`. FIX (2 parts, both needed): (1) gm-back the array
+(`__real_malloc`+memcpy+leak, survives arena resets, mirrors `qjs_cow_undo_grow`); (2) make
+`qjs_cow_defer_push` `QJS_JSEXPORT`(KEEPALIVE) so the cow-barrier pass SKIPS instrumenting its stores
+(cow-barrier.mjs:85) — the instrumentation was why the 6 prior gm attempts HUNG (barrier log/revert of the
+trail + cow_g clobber); export-skip mirrors the word-log's export-skipped writer `qjs_cow_undo_log`. VERIFIED
+live (chain_direct + trivial, plain restart): `shape0` 2→0, aborts 3→1 (both shape aborts gone), learnedCount
+stays 2, no hang, stable across reruns. Remaining: the PRE-EXISTING `list_empty(&rt->gc_obj_list)` module-cycle
+abort at JS_FreeRuntime (1/drive, separate — the next target). Scenario #2 (park/resume orphan) is SEPARATE and
+still open — the sound park-pin diff + parking-fixture recipe are preserved below.
+
+## (historical) OPEN ROOT: STALE SHAPE-kind defer entry — a use-after-free (LOCALIZED model-free)
 
 Once the object underflow was fixed, execution proceeds further and hits a PRE-EXISTING bug — formerly
 MASKED by the object underflow aborting first, NOT introduced by cdba329 (still recycled past; learnedCount
