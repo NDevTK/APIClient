@@ -1000,3 +1000,24 @@ determinism gate DOES refuse (xsession_boot_mismatch @WHY appears), the secondar
 byte-identical (the boot hash is pre-driven-load already, so investigate what else diverges) OR carry the flow
 host-side. START HERE — this is grounded on the systematic trace, verifiable, and JS-first (low blast radius),
 unlike the 2 reverted engine attempts. It is the concrete UNBOUNDED-resume first step.
+
+## HONESTY CORRECTION (2026-07-02) — the "resume is broken" finding was OVERSTATED
+Persist-after-drive experiment (ast-thread.js, call --fe-persist right after each --fe-drive): it stored
+NOTHING (no xsession_reload, no mismatch, resume still 0). So qjs_drive_n is already 0 when the drive callMain
+RETURNS — the parks are gone before control ever comes back to the host. That has two honest consequences:
+  1. A HOST-side persist/fix cannot work — the parks don't survive to any host-observable point. Any real fix
+     must be ENGINE-side, at the park moment (inside qjs_park_forced_flow), or the whole model changes.
+  2. More importantly, I OVERSTATED the finding. flow_resume=0 only proves the REPICK path never fires in these
+     tests. It does NOT prove parked work is LOST. The parks are drained by drive-end via an unpinned mechanism
+     — plausibly qjs_drive_run resuming them WITHIN the drive (which does NOT emit flow_resume), i.e. resume may
+     actually WORK within-session and only the cross-drive/cross-session REPICK path is unexercised. And
+     heavyReport DID emit its full result, so its work was not lost (via the parked flow resumed, OR via a
+     separate non-parking drive — unresolved). So "the UNBOUNDED resume core is unwired/broken" (asserted in
+     several commits above) is NOT established — it is PLAUSIBLE but UNPROVEN. The only VERIFIED facts are:
+     parks fire (flow_park), the repick path (flow_resume) does not fire in these tests, parks are gone by
+     drive-end, and the cross-session persist/reload is inert here (stored nothing).
+  3. To actually establish whether resume is broken, isolate a heavy function reachable ONLY by a parking drive
+     (no plain-call/non-parking path) and whose result depends on completing PAST the quantum; if its endpoint
+     is LOST, resume is broken; if it emits, resume works. park_test's heavyReport has multiple drive paths so
+     it does NOT isolate this. That isolation + engine-side instrumentation of qjs_drive_run's within-drive
+     resume is the honest next step BEFORE any fix. I let the investigation outrun the evidence; correcting it.
