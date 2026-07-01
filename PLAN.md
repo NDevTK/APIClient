@@ -866,3 +866,16 @@ must SURVIVE the per-drive image restore (persist qjs_drive_flow across it, or e
 AND be resumed — either wire qjs_drive_repick into the boot drain once the baseline exists, or guarantee
 a --fe-drive pass drains them. Until resume works, "UNBOUNDED until disk limit, resumable" is ASPIRATIONAL,
 not real. The flow_park/grind_park/flow_resume @WHY are KEPT (this was invisible before — no-silent).
+
+### boot-resume EXPERIMENT (2026-07-01) — repick-at-baseline is a NO-OP; the parks reset BEFORE the baseline
+Wired qjs_drive_repick(g_boot_ctx) into the boot path right after qjs_cow_boot_baseline (qjsmain.c:1150).
+RESULT: flow_resume STILL fired 0 times (park stayed 6, park_test endpoints unchanged/correct, no crash).
+So the boot-time parks are NOT in qjs_drive_flow by the time the post-boot baseline exists — the registry
+is reset/emptied BETWEEN the park (during page/driver.js eval) and the baseline. Evidence: all 6 flow_park
+are ix:0 (each is the FIRST park in a fresh registry => qjs_drive_n is reset to 0 between parks). So the fix
+is NOT simply "call repick at the baseline" — it is understanding WHERE qjs_drive_n/qjs_drive_flow gets reset
+(candidates: a per-callMain re-init, the image restore, or the parks happen in a callMain that never reaches
+the boot-baseline block). REVERTED the no-op repick (don't ship a speculative stopgap that might be wrong when
+it does activate). NEXT DEBUG: probe qjs_drive_n at park time + at baseline time (are they the same callMain?),
+and find every writer of qjs_drive_n=0 / qjs_drive_flow=NULL besides qjs_drive_repick. This is the concrete
+path to making the UNBOUNDED resume real; it is a focused effort, not a session-tail patch.
