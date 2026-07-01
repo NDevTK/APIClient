@@ -842,3 +842,27 @@ method coverage gap — the static real-receiver drive emits concrete-base + opa
 Discipline note: confirmed before acting, disproved the lead, corrected the record — do not inflate a
 mid-analysis read into a finding. grind_orphan remains a valid STATIC real-receiver demo; it does not
 reach the deep grind (would need a factory-created instance driven during the grind).
+
+## MAJOR FINDING (2026-07-01, VERIFIED) — parks fire but NEVER resume; the UNBOUNDED core is broken
+Built park_test.html (gitignored): a heavy NEVER-CALLED global `heavyReport()` with a 20M-iteration
+loop then a fetch. Added observability @WHY at every park/resume site: flow_park (qjs_park_forced_flow),
+grind_park (qjs_drive_run), flow_resume (qjs_drive_repick). MEASUREMENT (read via `harness worker
+"self._lastWhy"` — NOT `diag`, which only console.log's cow_-prefixed @WHY, so it SILENTLY DROPPED these
+and gave a false "0 parks"; that cost a wrong conclusion — fix the diag filter or always read the worker):
+  - heavyReport DID PARK: flow_park fired 6x, each after ff_yielded slices:64 (hit the QJS_DEFER_QUANTUM
+    exactly). So the PARK half works — a heavy forced flow is preempted + snapshotted.
+  - flow_resume fired ZERO times. The parked flows are NEVER resumed. The endpoint still emitted only
+    because a SEPARATE non-parking drive ran the full loop — the parked flow's progress was discarded.
+  - All 6 parks are ix:0 => qjs_drive_n is reset to 0 before each park => the registry is wiped between
+    parks. qjs_drive_repick (the ONLY resume path) is called ONLY in qjsmain.c's do_drive (--fe-drive)
+    branch @1168, NEVER in the boot (--fe-boot rc==0) drain @1130-1149. And the per-drive IMAGE RESTORE
+    (linear-memory snapshot restore between callMains) wipes qjs_drive_flow (a linear-memory structure)
+    before any repick can drain it. So boot-time parks are LOST, not resumed.
+This is the concrete root of PLAN.md's long-standing "nothing parks/resumes" + "cross-session round-trip
+unverified": the PARK primitive is real and fires, but the RESUME half is unwired for the boot/BFS parks
+(and the IDB evict->reload cross-session path is downstream of that same unresumed registry). THE FIX
+(its own careful effort — boot/drive callMain + COW-baseline + image-restore interaction): parked flows
+must SURVIVE the per-drive image restore (persist qjs_drive_flow across it, or evict to IDB immediately)
+AND be resumed — either wire qjs_drive_repick into the boot drain once the baseline exists, or guarantee
+a --fe-drive pass drains them. Until resume works, "UNBOUNDED until disk limit, resumable" is ASPIRATIONAL,
+not real. The flow_park/grind_park/flow_resume @WHY are KEPT (this was invisible before — no-silent).
