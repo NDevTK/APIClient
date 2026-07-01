@@ -5877,6 +5877,27 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
         var epKey = isDynamic
           ? "AST DYN " + bundleId + " " + (callSite.enclosingFunction || "anon") + " " + callSite.method + " " + fc
           : "AST " + callSite.method + " " + csUrl.hostname + _csPath;   // include HOST: an endpoint is method+host+path. Path-only collapsed same-path endpoints across DIFFERENT hosts (and across sites in the cumulative store) → lost the moat's "many sites per session" surface. Mirrors the network key (method + hostname + pathname).
+        // DEDUP by STRUCTURAL identity: the SAME endpoint driven with opaque-POSITIONAL args ({arg0}, from
+        // __hostDrive's JS-side drive) and with NAMED args ({id}, from the grind's declared-name drive) yields
+        // TWO keys for ONE endpoint (verified: spa_gated 5 raw / 4 distinct). Collapse {..} path-param segments
+        // to a structural key; on collision keep the DECLARED-name record over the positional one. Only
+        // {placeholder} segments normalize, so genuinely-distinct endpoints (differing elsewhere) never merge.
+        // The stored KEY stays the raw path, so probe/replay of the surviving record are unaffected.
+        if (!isDynamic) {
+          if (!tab._epNorm) tab._epNorm = new Map();
+          var _structKey = "AST " + callSite.method + " " + csUrl.hostname + _csPath.replace(/\{[^}]*\}/g, "{}");
+          var _posRe = /\{arg\d+\}/;
+          var _priorKey = tab._epNorm.get(_structKey);
+          if (_priorKey && _priorKey !== epKey && tab.endpoints.has(_priorKey)) {
+            if (_posRe.test(_priorKey) && !_posRe.test(epKey)) {
+              tab.endpoints.delete(_priorKey); tab._epNorm.set(_structKey, epKey);   // prior positional, new declared -> upgrade (add epKey below)
+            } else {
+              epKey = _priorKey;   // keep prior (declared/equal); has() below is true -> skip add, no dup
+            }
+          } else {
+            tab._epNorm.set(_structKey, epKey);
+          }
+        }
         if (!tab.endpoints.has(epKey)) {
           var _epMeta = tab;
           tab.endpoints.set(epKey, {
