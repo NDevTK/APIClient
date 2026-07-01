@@ -1288,8 +1288,16 @@ async function cmdNetDiff(args) {
           if (e.source && e.source !== "ast_analysis") continue;
           unusedList.push(k + _fmtParams(e));
         }
+        // METRIC HONESTY: the same endpoint reached via opaque-POSITIONAL args ({arg0}) and NAMED args ({id})
+        // is stored under two keys and double-counted. Collapse path-param placeholders ({...} / %7B..%7D) to a
+        // canonical form so a placeholder-insensitive DISTINCT count is visible next to the raw count. Only the
+        // {placeholder} SEGMENT normalizes — genuinely-distinct endpoints differ in non-placeholder segments,
+        // so this cannot merge real endpoints (e.g. /users/{}/posts stays distinct from /users/{}/comments).
+        const _normKey = (s) => s.replace(/%7B[^%]*?%7D/gi, "%7B%7D").replace(/\{[^}]*\}/g, "{}");
+        const _unusedDistinct = new Set(unusedList.map((u) => _normKey(u.split("  [")[0]))).size;
         return { mode: "unused = learned-but-not-live (the unused API surface forced exec found — THE VALUE)",
                  learnedCount: learnedMap.size, liveDistinct: seen.size, unusedCount: unusedList.length,
+                 unusedDistinct: _unusedDistinct,   // placeholder-normalized (arg0/id collapsed) — the HONEST distinct-endpoint count
                  reachedButOpaque: _reached.length, reachedSamples: _reached.slice(0, 10),
                  moduleLinkFailures: _moduleLink.length, moduleLinkSamples: _moduleLink.slice(0, 10),
                  unused: unusedList.slice(0, 100) };
