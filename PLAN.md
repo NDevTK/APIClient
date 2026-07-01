@@ -43,28 +43,30 @@ output value. Interpretation and recursion are never depth-capped (caps hide fin
   (route JS_ExecutePendingJob continuations through the primitive) — the "Boot is the hard gap" work. Only
   then is g_bfs_noprog fully dead and deletable. This is the concrete next one-BFS target.
 
-**ROOT CAUSE of the B2a hang (READ from the engine, the exact next-diff spec) — async frames are not in the
-arena the park snapshots:** the L1 trampoline is un-gated for NORMAL→NORMAL calls, but async/generator CALLERS
-STAY ON THE C PATH (quickjs.c ~22877): their frames live in `async_func_init`'s malloc buffer + a
-`JSAsyncFunctionState`, NOT on the heap-stack ARENA chain that `qjs_park_forced_flow` snapshots (cow_mark /
-vt_mark / defer_mark cover the shared-heap word/typed/defer trails; the CALL STACK it captures is the arena
-trampoline chunk-chain only). So when `qjs_run_forced_flow` tries to PARK a flow that is mid-async (suspended at
-an await, its state in the malloc buffer), the snapshot misses that buffer → on the free-the-isolated-stack step
-(quickjs.c:21938) the async continuation is left dangling → the pump re-runs a corrupt/re-queuing job → boot
-hang. `qjs_run_forced_flow`'s own comment already flags this ("Falls back to free if the flow wrote shared-scope
-JSValue slots … the next increment"): async is that fall-back-to-free case, and free-not-park is exactly the
-lost-progress a spinning async continuation can't survive.
-THE EXACT NEXT DIFF (substantial engine work, its own effort — do NOT rush at a session tail): extend the park
-snapshot to capture a mid-async flow = `qjs_park_forced_flow` must also serialize the `async_func_init` malloc
-buffer + `JSAsyncFunctionState` (func_state: stack_buffer + sp + the frame) alongside the arena chunk-chain, and
-the resume path (`qjs_drive_repick`) must restore that buffer before re-entering. Only once a mid-async flow
-parks losslessly can (a) js_fe_drive_static route through the primitive and (b) the boot job pump run
-JS_ExecutePendingJob continuations under qjs_driving — at which point g_bfs_noprog (now emitting @WHY
-bfs_spin_skip so its firing is measurable) has no non-preemptible caller left and is deleted.
+**ROOT CAUSE of the B2a hang — MEASURED, and the async hypothesis was DISPROVEN (this is why you measure):**
+- First guess (WRONG): async frames live in async_func_init's malloc buffer, not the arena qjs_park_forced_flow
+  snapshots, so parking a mid-async flow corrupts. Tested it and it was wrong — see below.
+- PROBE: re-routed ONLY site 2 (the SYNC opaque static drive — no async pump, no directed state) through
+  qjs_run_forced_flow. It STILL hung boot (spa_gated 5→0). So the hang is NOT async-specific — a plain sync
+  static target routed through the primitive hangs too. The async-buffer theory is dead.
+- The hang is SYNCHRONOUS + context-general: `harness worker "self._lastWhy"` TIMES OUT during the hang (a
+  blocked worker can't service an eval) ⇒ the wasm boot is in a synchronous infinite loop/block, not an
+  async-job spin. It is SPECIFIC to calling qjs_run_forced_flow from js_fe_drive_static's context — the WORKING
+  DRIVEBREADTH path (__hostDrive) uses the IDENTICAL bracket (js_fe_flow_begin == qjs_flow_arm) and the IDENTICAL
+  primitive, yet does NOT hang. So the difference is neither the bracket nor the primitive; it is something about
+  js_fe_drive_static's boot position / state (candidate: parking a flow into qjs_drive_flow at THIS boot point,
+  before the grind owns the registry, corrupts a later boot step; or the require/directed-drive globals; NOT
+  confirmed).
+- LOCALIZATION IS BLOCKED by tooling: the sync hang blocks worker-eval, and my @WHY probes (phase not `cow_`)
+  are stored only in the worker's self._lastWhy (unreadable while blocked), not console.log'd. NEXT DEBUG STEP:
+  prefix the probes `cow_static_pre/post` so line-1235's `cow_`-filter console.log's them, then capture via
+  `harness diag` (attaches the worker console) which survives the sync hang — that pinpoints whether site-2's
+  loop is even reached and which target/step blocks. Only then is the fix designed. This is its own effort —
+  do NOT rush it at a session tail. g_bfs_noprog now emits @WHY bfs_spin_skip so its firing stays measurable.
 
-REMAINING toward full one-BFS: (i) park mid-async flows (async_func buffer capture) → route the boot job pump +
-js_fe_drive_static → delete g_bfs_noprog; (ii) __hostDrive's separate top-level-global breadth pass
-(load-bearing: disabling it alone regressed 5→4 — MERGE into the one frontier, don't delete); (iii) the
+REMAINING toward full one-BFS: (i) localize + fix the js_fe_drive_static / boot-job-pump sync hang (above) →
+route them through the primitive → delete g_bfs_noprog; (ii) __hostDrive's separate top-level-global breadth
+pass (load-bearing: disabling it alone regressed 5→4 — MERGE into the one frontier, don't delete); (iii) the
 single-Flow-registry rewrite below.
 
 
