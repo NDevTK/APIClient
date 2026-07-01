@@ -879,3 +879,16 @@ the boot-baseline block). REVERTED the no-op repick (don't ship a speculative st
 it does activate). NEXT DEBUG: probe qjs_drive_n at park time + at baseline time (are they the same callMain?),
 and find every writer of qjs_drive_n=0 / qjs_drive_flow=NULL besides qjs_drive_repick. This is the concrete
 path to making the UNBOUNDED resume real; it is a focused effort, not a session-tail patch.
+
+### park-registry reset points TRACED (2026-07-01) — the concrete resume-gap mechanism
+qjs_drive_n / qjs_drive_flow (the park registry) is reset/freed at exactly these sites:
+  - 64407: inside qjs_drive_repick (resets to 0 AFTER draining+resuming — correct).
+  - 65012-65015: the DEEP-GRIND SETUP unconditionally `js_free(qjs_drive_flow); qjs_drive_n=0`
+    (comment: "#5/#9 drive park registry") — it DISCARDS any parked flows without resuming them.
+  - (+ the per-callMain image restore wipes the whole linear-memory registry between callMains.)
+So a boot/BFS-time parked flow is destroyed by whichever comes first — the grind-setup free (65012)
+or the next callMain's image restore — and qjs_drive_repick (the ONLY resume) runs only in do_drive
+(qjsmain.c:1168), too late / in the wrong callMain. THE FIX must resume (repick) parked flows BEFORE
+any of these reset points AND make them survive the image restore (persist/evict), across the
+boot->grind->drive callMain lifecycle. This is the real, well-scoped work to make "UNBOUNDED,
+resumable" actually function; the PARK half already works (verified: flow_park fires at the quantum).
