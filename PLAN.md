@@ -932,3 +932,18 @@ that HEAPU8.set wipes. Two coherent options:
 Either way, the PARK half works (verified) and observability (flow_park/grind_park/flow_resume) is in place;
 the RESUME half needs the flow to outlive HEAPU8.set. VERIFY WITH: park park_test's heavyReport, confirm
 flow_resume fires with the correct acc AFTER an image restore. This is the concrete UNBOUNDED-resume effort.
+
+### CORRECTION (2026-07-01) — the HEAPU8.set root above is WRONG for the COW build; it's the COW revert
+Re-read ast-thread.js:2032-2033: for the COW/WASM build (self.__QJS_WASM), `_img = null` and "the host does
+NOT image/restore HEAPU8" — restoreSync is a NO-OP. So HEAPU8.set does NOT wipe the parks in the real build.
+The actual per-drive reset is the ENGINE's COW dirty-page revert (qjs_cow_drive_restore @qjsmain.c:1157, "replay
+the undo log to revert the PREVIOUS drive's mutations back to the boot baseline"). qjs_drive_flow (the park
+registry) is allocated/written DURING a drive => those writes are in the word-log => cow_drive_restore reverts
+them => the registry pointer resets to its baseline (NULL) and parks are lost. The registry is cross-drive WFQ
+state that must PERSIST across drives — it should be EXCLUDED from the COW revert, exactly like the over-decref
+fix made qjs_cow_defer_push QJS_JSEXPORT (export-skip, so the cow-barrier pass doesn't instrument its stores).
+CORRECTED FIX: exclude the park-registry writes (qjs_drive_flow/_cow/_mark/_n and the serialized chunk/delta
+allocations they own) from the COW word-log — export-skip the writers so cow_drive_restore leaves the parked
+frontier intact across drives; THEN qjs_drive_repick (do_drive) resumes them and flow_resume fires. VERIFY:
+park_test heavyReport -> flow_resume with correct acc after a drive. (Lesson: I asserted a "definitive" root
+by ASSUMING HEAPU8.set was live without checking _img is null for the COW build — measure/read, don't assume.)
