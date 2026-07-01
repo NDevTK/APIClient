@@ -16,6 +16,17 @@ output value. Interpretation and recursion are never depth-capped (caps hide fin
 
 ## ARCHITECTURE CORRECTION (2026-07-01, user directive: "grind must not be a separate system — it's BFS")
 
+**STEP 1 DONE + VERIFIED + PUSHED (engine 77f926a):** the residue grind's SEPARATE second scheduler is
+DELETED. qjs_deep_step_c drove orphans with its own WFQ registry (qjs_deep_flow/cow/vt) + open-coded
+park/resume + a spin-defer/pause-set/abandon-backstop (the banned "second scheduler beside the one policy").
+All removed — orphans now drive through THE ONE primitive qjs_run_forced_flow into the ONE registry
+qjs_drive_flow (drained by qjs_drive_repick), pick is sequential (the ONE WFQ = the primitive's quantum + host
+priority.js). VERIFIED: chain_direct=2, spa_gated=5 (both = baseline), no hang. The second scheduler was
+redundant. REMAINING toward full one-BFS: __hostDrive's separate top-level-global breadth pass still exists
+(disabling it alone regressed spa_gated 5→4, so it is load-bearing and must be MERGED into the one frontier,
+not deleted) + the eventual single-Flow-registry rewrite below.
+
+
 MEASURED + READ, the CURRENT reality violates "one BFS": there are TWO drive systems, not one.
 - **Breadth phase:** `hostedge.js __hostDrive` enumerates TOP-LEVEL GLOBAL FUNCTIONS and force-invokes each
   via `__feDriveBreadth` → `qjs_run_forced_flow` (preemptible under `qjs_driving`, parks via
