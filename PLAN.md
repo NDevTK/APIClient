@@ -16,15 +16,36 @@ output value. Interpretation and recursion are never depth-capped (caps hide fin
 
 ## ARCHITECTURE CORRECTION (2026-07-01, user directive: "grind must not be a separate system — it's BFS")
 
-**STEP 1 DONE + VERIFIED + PUSHED (engine 77f926a):** the residue grind's SEPARATE second scheduler is
-DELETED. qjs_deep_step_c drove orphans with its own WFQ registry (qjs_deep_flow/cow/vt) + open-coded
-park/resume + a spin-defer/pause-set/abandon-backstop (the banned "second scheduler beside the one policy").
-All removed — orphans now drive through THE ONE primitive qjs_run_forced_flow into the ONE registry
-qjs_drive_flow (drained by qjs_drive_repick), pick is sequential (the ONE WFQ = the primitive's quantum + host
-priority.js). VERIFIED: chain_direct=2, spa_gated=5 (both = baseline), no hang. The second scheduler was
-redundant. REMAINING toward full one-BFS: __hostDrive's separate top-level-global breadth pass still exists
-(disabling it alone regressed spa_gated 5→4, so it is load-bearing and must be MERGED into the one frontier,
-not deleted) + the eventual single-Flow-registry rewrite below.
+**DONE + VERIFIED + PUSHED this session (each spa_gated netdiff --unused = 5, identical endpoints):**
+1. engine 77f926a — residue grind's SEPARATE second scheduler DELETED (qjs_deep_flow/cow/vt registry +
+   open-coded park/resume + spin-defer/pause-set/abandon-backstop). Orphans drive through THE ONE primitive
+   qjs_run_forced_flow into the ONE registry qjs_drive_flow (drained by qjs_drive_repick).
+2. engine 1a78e68 — qjs_grind_interrupt's WFQ-OFF no-progress throw-defer + the vestigial fixpoint counters
+   (g_defer_fired / g_grind_completions / g_noprog_polls / g_progress_seen — banned no-progress counts) DELETED
+   (dead once qjs_deep_flow was gone: grind drives always run under qjs_driving).
+3. engine de2db63 — a PREEMPTIBLE BFS drive that spins now PARKS (defers to the YIELD_POLL park) instead of the
+   g_bfs no-progress THROW that dropped/lost it. Throw-skip remains only for the not-yet-preemptible plain-call
+   BFS drives.
+4. engine f94ef60 — connectedCallback + handler-drain (hostedge) routed through DRIVEBREADTH.call(recv,fn,arg)
+   = qjs_run_forced_flow, so a spinning callback PARKS+resumes instead of being thrown away.
+
+**g_bfs_noprog (the last BFS no-progress count) — WHY IT CAN'T BE DELETED YET (measured, not guessed):**
+- Routing js_fe_drive_static's 3 forced JS_Call sites through qjs_run_forced_flow (attempt B2a) REGRESSED
+  spa_gated 5→0 — a full boot collapse (even the __hostDrive endpoints vanished), i.e. a BOOT HANG. Reverted.
+- Diagnosis: the @T static-drive site 1 has an INLINE async pump (`while(JS_ExecutePendingJob)`); parking an
+  async flow mid-drive leaves a re-queuing continuation the non-preemptible pump spins on forever. This is the
+  SAME root as the remaining non-qjs_driving BFS execution path: the boot event-loop JOB PUMP (driver.js
+  flush()/pump() → JS_ExecutePendingJob) runs async continuations NON-preemptibly under g_bfs_drive_active.
+- So g_bfs_noprog is currently load-bearing for exactly two things: (a) js_fe_drive_static's forced JS_Calls
+  and (b) the boot job pump's continuations — both of which spin non-preemptibly. Deleting it now would hang
+  boot on any page with a spinning static target OR a spinning async continuation (spa_gated has neither, so
+  spa_gated would falsely "pass" — do NOT trust it here). THE FIX is to make the boot job pump preemptible
+  (route JS_ExecutePendingJob continuations through the primitive) — the "Boot is the hard gap" work. Only
+  then is g_bfs_noprog fully dead and deletable. This is the concrete next one-BFS target.
+
+REMAINING toward full one-BFS: (i) make the boot job pump preemptible → delete g_bfs_noprog; (ii) __hostDrive's
+separate top-level-global breadth pass (load-bearing: disabling it alone regressed 5→4 — MERGE into the one
+frontier, don't delete); (iii) the single-Flow-registry rewrite below.
 
 
 MEASURED + READ, the CURRENT reality violates "one BFS": there are TWO drive systems, not one.
