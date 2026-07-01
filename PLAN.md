@@ -14,6 +14,23 @@ park + evict-to-IDB + cross-session-resume let a flow parked today resume after 
 A **single attention (WFQ) system** runs across all websites, ordering everything by emitted
 output value. Interpretation and recursion are never depth-capped (caps hide findings).
 
+## MOAT DEMONSTRATED 2026-07-01 (engine 3bb3c96, fixture `testing/fixtures/spa_gated.html`)
+
+End-to-end proof of the core value on a realistic gated mini-SPA (the first non-diagnostic fixture in-tree):
+logged OUT, forced-exec learned the **logged-IN API surface** — `learnedCount:5, liveDistinct:1` (only
+`/feed` fires live). Surfaced the auth-gated, never-fired-logged-out endpoints WITH computed values where
+derivable: `GET /api/v1/feed [key=pub_abc123]` (live), `GET /users/{id}/profile [id opaque]`, `POST
+/billing/subscription [account opaque, plan=pro]`, `DELETE /admin/users/{id} [id opaque]`. Concrete literals
+computed (key, plan); auth-gated params (user.id/token/account) correctly OPAQUE. No hang, no over-decref — the
+3bb3c96 fix holds on a richer bundle. **Use spa_gated.html as the moat regression/coverage fixture.**
+KNOWN COVERAGE GAP (next moat target, valuable): `adminDashboard`'s `/admin/metrics` was NOT learned — its
+guard `if (state.role !== 'admin') return` is a CONCRETE flag (`role:'guest'`), and forced-exec forces only
+OPAQUE branches, so the concrete-gated fetch is never reached. In a real app the auth flag is opaque-sourced
+(auth response / cookie) and WOULD be forced. The design question: should a COLD-DRIVEN ORPHAN (no real caller
+/ no real state) treat its internal concrete-flag guards as forceable too (flag-gated is an explicit moat
+target: "login/click/route/flag-gated, dead-but-shipped")? If yes, the orphan drive should force config/flag
+guards it reaches, not just opaque-value branches — measure the exploration cost vs the endpoints gained.
+
 ## Design decisions (settled — do not re-litigate)
 
 - **The DETERMINISM BOUNDARY is the architecture (rewrite-grade framing).** Cross-session resume, the
