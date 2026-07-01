@@ -463,6 +463,32 @@ over-decrefs have been conflated across sessions:
      diff) and verify shape0/no-hang + the cross-session round-trip. Until a parking fixture exists, park fixes
      are un-testable — do not push them. Engine stays at verified b5eea41.
 
+PARK TRIGGER + FIXTURE RECIPE (2026-07-01, so the next session builds it in one shot):
+- **What parks:** `qjs_drive_run` (~64107) resumes a flow WHILE it emits @H/@S; on the FIRST window with
+  `QJS_DEFER_QUANTUM`(=64) consecutive SILENT yield-windows (~640k ops, no new emit) it PARKS — snapshot +
+  `qjs_cow_capture` + `qjs_cow_to_baseline` (~64115-64123). So parking = **a heavy, SILENT flow on the drive
+  loop.** This is a **deep-GRIND orphan-drive** path, NOT the BFS force-invoke path.
+- **A BFS heavy loop does NOT park (measured):** a fixture whose `window.go` runs a 250k-iter object-churn
+  loop then fetches — the parkprobe NEVER fired (worker blocked grinding ~170s, no abort ⇒ no capture). BFS
+  force-invokes don't route through `qjs_drive_run`, so a heavy *called* function is not enough.
+- **The recipe that SHOULD park:** make the heavy silent compute an **UNCALLED ORPHAN** (so the residue GRIND
+  drives it through `qjs_drive_run`), with object churn for shape entries, emitting only AFTER the silent span:
+  `window.go=()=>fetch('/api/quick');  window.heavy=function(){var t=0;for(var i=0;i<80000;i++){var o={};o.a=i;o.b=i*2;t+=o.a+o.b;}return fetch('/api/after?t='+t);};`
+  (heavy is uncalled ⇒ grind orphan ⇒ silent ~640k ops ⇒ parks ⇒ resumes.) Tune the count to just exceed one
+  quantum; caveat: park tests are SLOW (640k instrumented ops ≈ 1-2 min, and the worker blocks — poll _lastStderr
+  via a one-shot `__assert_fail`, the only channel that survives). Confirm parking BEFORE testing the fix.
+- **THE PARK-PIN FIX (sound-by-construction, mirrors the vt-trail; re-apply verbatim, ~10 lines, 3 sites):**
+  1. `qjs_cow_capture` defer-capture loop (~21131), after copying df_old/df_new/df_kind:
+     `if (qjs_cow_defer[k].is_shape) { if (d->df_new[k]) js_dup_shape((JSShape*)d->df_new[k]); if (d->df_old[k]) js_dup_shape((JSShape*)d->df_old[k]); }`
+  2. `qjs_cow_apply` re-push loop (~21181), after `qjs_cow_defer_push(...)`:
+     `if (dm->df_kind[j] && grt) { if (dm->df_new[j]) js_free_shape(grt,(JSShape*)dm->df_new[j]); if (dm->df_old[j]) js_free_shape(grt,(JSShape*)dm->df_old[j]); }`
+  3. `qjs_cow_delta_free` (~21201), replace the BUFFER-only free with kind-split (SHAPE releases BOTH pins),
+     wrapped in `g_cow_busy=1`: BUFFER→`js_free_rt(r,df_new)`, SHAPE→`js_free_shape(r,df_new)`+`js_free_shape(r,df_old)`.
+  Accounting: net-zero on steady state (+1 at capture / −1 at apply-after-re-push, or −1 at delta_free-abandon);
+  it only keeps `new`/`old` alive across the orphan window `to_baseline` opens. This fixes BOTH the park orphan
+  over-decref AND the documented `delta_free` SHAPE-ref leak. NOTE: it does NOT touch chan_direct's NON-PARK
+  over-decref (scenario #1 above) — that one is separate.
+
 ## NOT yet verified at runtime — but now UNBLOCKED
 
 - The cross-session ROUND-TRIP (persist → restart → reload → state survives) — **THE payoff of the
