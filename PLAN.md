@@ -14,6 +14,20 @@ park + evict-to-IDB + cross-session-resume let a flow parked today resume after 
 A **single attention (WFQ) system** runs across all websites, ordering everything by emitted
 output value. Interpretation and recursion are never depth-capped (caps hide findings).
 
+## SECURITY VIEW — two next targets (2026-07-01, from an XSS fixture: location.hash/search -> innerHTML/insertAdjacentHTML/document.write)
+
+The "two views" second half. On a fixture flowing OPAQUE input (location.hash, location.search) into DOM
+sinks, the engine analyzed fully (nWhy:209) and the `static_sites` @WHY showed `sink_wr:2, emitted:0` — it
+FOUND 2 static sink sites but EMITTED 0 `@S`. So the taint->sink->PoC EMISSION did not fire for a clear
+opaque->innerHTML flow. NEXT (security value area): trace WHY no @S emits — is the opaque location.hash taint
+reaching the innerHTML sink in the forced trace, and does the Z3-PoC emitter run? (measure via _lastWhy at the
+sink-write + taint-join). Repro fixture:
+```html
+<div id="out"></div><script>document.getElementById('out').innerHTML = location.hash.slice(1);</script>
+```
+ALSO SURFACED: a NEW `free_zero_bad` @WHY phase on this fixture (a refcount free-at-zero, not present on
+chain_direct) — a separate refcount issue the DOM-sink path triggers; instrument it (via _lastWhy) next.
+
 ## MOAT DEMONSTRATED 2026-07-01 (engine 3bb3c96, fixture `testing/fixtures/spa_gated.html`)
 
 End-to-end proof of the core value on a realistic gated mini-SPA (the first non-diagnostic fixture in-tree):
