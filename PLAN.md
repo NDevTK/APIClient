@@ -43,9 +43,29 @@ output value. Interpretation and recursion are never depth-capped (caps hide fin
   (route JS_ExecutePendingJob continuations through the primitive) — the "Boot is the hard gap" work. Only
   then is g_bfs_noprog fully dead and deletable. This is the concrete next one-BFS target.
 
-REMAINING toward full one-BFS: (i) make the boot job pump preemptible → delete g_bfs_noprog; (ii) __hostDrive's
-separate top-level-global breadth pass (load-bearing: disabling it alone regressed 5→4 — MERGE into the one
-frontier, don't delete); (iii) the single-Flow-registry rewrite below.
+**ROOT CAUSE of the B2a hang (READ from the engine, the exact next-diff spec) — async frames are not in the
+arena the park snapshots:** the L1 trampoline is un-gated for NORMAL→NORMAL calls, but async/generator CALLERS
+STAY ON THE C PATH (quickjs.c ~22877): their frames live in `async_func_init`'s malloc buffer + a
+`JSAsyncFunctionState`, NOT on the heap-stack ARENA chain that `qjs_park_forced_flow` snapshots (cow_mark /
+vt_mark / defer_mark cover the shared-heap word/typed/defer trails; the CALL STACK it captures is the arena
+trampoline chunk-chain only). So when `qjs_run_forced_flow` tries to PARK a flow that is mid-async (suspended at
+an await, its state in the malloc buffer), the snapshot misses that buffer → on the free-the-isolated-stack step
+(quickjs.c:21938) the async continuation is left dangling → the pump re-runs a corrupt/re-queuing job → boot
+hang. `qjs_run_forced_flow`'s own comment already flags this ("Falls back to free if the flow wrote shared-scope
+JSValue slots … the next increment"): async is that fall-back-to-free case, and free-not-park is exactly the
+lost-progress a spinning async continuation can't survive.
+THE EXACT NEXT DIFF (substantial engine work, its own effort — do NOT rush at a session tail): extend the park
+snapshot to capture a mid-async flow = `qjs_park_forced_flow` must also serialize the `async_func_init` malloc
+buffer + `JSAsyncFunctionState` (func_state: stack_buffer + sp + the frame) alongside the arena chunk-chain, and
+the resume path (`qjs_drive_repick`) must restore that buffer before re-entering. Only once a mid-async flow
+parks losslessly can (a) js_fe_drive_static route through the primitive and (b) the boot job pump run
+JS_ExecutePendingJob continuations under qjs_driving — at which point g_bfs_noprog (now emitting @WHY
+bfs_spin_skip so its firing is measurable) has no non-preemptible caller left and is deleted.
+
+REMAINING toward full one-BFS: (i) park mid-async flows (async_func buffer capture) → route the boot job pump +
+js_fe_drive_static → delete g_bfs_noprog; (ii) __hostDrive's separate top-level-global breadth pass
+(load-bearing: disabling it alone regressed 5→4 — MERGE into the one frontier, don't delete); (iii) the
+single-Flow-registry rewrite below.
 
 
 MEASURED + READ, the CURRENT reality violates "one BFS": there are TWO drive systems, not one.
