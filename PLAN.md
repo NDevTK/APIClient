@@ -452,6 +452,19 @@ over-decrefs have been conflated across sessions:
      This is the one blocking a "clean" chain_direct. Fix is NOT storage and NOT the park pin — likely making
      the non-park defer-revert free skip/repair the aliased entry at its root (why the arena addresses alias:
      the trail array shares the bump region with flow objects and outlives a single flow's revert).
+     **DEFINITIVE 2026-07-01 (non-abort @WHY probe at js_free_shape0, read via _lastWhy — resolves the
+     multi-session contradiction):** `shape_overdecref{rc:-1, gt:0, inArena:0, deferSite:1, hashed:248}` ×2.
+     gt=0 (JS_OBJECT not SHAPE) + hashed=248 (garbage; a real shape's is_hashed is 0/1) ⇒ `neww` is a
+     DANGLING pointer into a baseline block REUSED as a JS object — read from a CORRUPT defer entry. deferSite=1
+     ⇒ the defer revert. inArena=0 ⇒ baseline block. This KILLS both rival theories: NOT byte-revert-to-0 of a
+     flow-created shape (that would be a real shape, gt=SHAPE, inArena often=1), and NOT park (captures:0). It
+     is PURELY the arena-aliased trail array: its stale pointer overlaps the next flow's objects, so defer_revert
+     reads garbage {old,neww,...} and js_free_shape's a reused object (decrements THAT object's rc 0→-1 + would
+     double-tear it down). Analysis SURVIVES it (learnedCount stayed 2 with the free skipped) ⇒ the corrupted
+     object isn't fatally used here → latent, non-blocking. THE FIX must (a) stop the array aliasing AND (b) the
+     free-logic bug the aliasing masks (freeing the REAL neww then cascades → the gm/NULL hangs). The gm-hang is
+     unmeasurable-while-hanging (the @WHY channel needs the worker to yield); next: bisect the gm change
+     natively, or a dedicated non-arena non-gm trail region, or eliminate the trail for the non-park path.
   2. **PARK/GRIND:** the capture→pause→resume orphan. The SHAPE-pin fix (js_dup_shape old+new at
      `qjs_cow_capture` ~21131; release js_free_shape at `qjs_cow_apply` after re-push ~21181 + at
      `qjs_cow_delta_free` ~21201) was DESIGNED + IMPLEMENTED this session — sound by construction (mirrors the
