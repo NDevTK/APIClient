@@ -904,7 +904,15 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         if (JS_IsObject(mo)) JS_SetPropertyStr(ctx, mo, "random", JS_NewCFunction(ctx, js_opaque, "random", 0));
         JS_FreeValue(ctx, mo);
         JSValue dt = JS_GetPropertyStr(ctx, g, "Date");
-        if (JS_IsObject(dt)) JS_SetPropertyStr(ctx, dt, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
+        if (JS_IsObject(dt)) {
+            JS_SetPropertyStr(ctx, dt, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
+            JSValue dp = JS_GetPropertyStr(ctx, dt, "prototype");   /* new Date().getTime()/valueOf() -> opaque too */
+            if (JS_IsObject(dp)) {
+                JS_SetPropertyStr(ctx, dp, "getTime", JS_NewCFunction(ctx, js_opaque, "getTime", 0));
+                JS_SetPropertyStr(ctx, dp, "valueOf", JS_NewCFunction(ctx, js_opaque, "valueOf", 0));
+            }
+            JS_FreeValue(ctx, dp);
+        }
         JS_FreeValue(ctx, dt);
         JSValue perf = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
