@@ -134,7 +134,15 @@ async function runEngine(code, html, msg, quantum, recipes) {
     const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
     const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
       if (!canFetch || u.indexOf("{}") >= 0) return "";
-      try { const abs = new URL(u, msg.sourceUrl).href; const r = await self.safeFetch(abs, asScript ? { pageUrl: msg.sourceUrl, as: "script" } : { pageUrl: msg.sourceUrl }); return (r && r.ok && typeof r.body === "string") ? r.body : ""; } catch (_) { return ""; }
+      try {
+        const abs = new URL(u, msg.sourceUrl).href;
+        // chunks: as-script (CORB), never credentialed. replies: opt-in credentialed -> the AUTHENTICATED
+        // logged-in reply (the moat headline), gated by safeFetch's own SOP/CORS + GET-only. Default off.
+        const opts = asScript ? { pageUrl: msg.sourceUrl, as: "script" }
+                              : { pageUrl: msg.sourceUrl, credentialed: !!(msg && msg.credentialed) };
+        const r = await self.safeFetch(abs, opts);
+        return (r && r.ok && typeof r.body === "string") ? r.body : "";
+      } catch (_) { return ""; }
     };
     let guard = 0;
     while (M.ccall("qjs_step", "number", [], []) === 1 && guard++ < 5000) {
