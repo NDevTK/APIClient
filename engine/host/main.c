@@ -128,6 +128,23 @@ static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueCons
    return the CONCRETE server reply -> a reply field flowing into a downstream request param becomes a
    REAL example value instead of {}. Absent url -> opaque (the honest shape). */
 static JSValue g_reply_table = JS_UNDEFINED;
+/* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
+   unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
+   while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
+   so the flow resumes IN PLACE (no re-instantiate, no re-run). Node CLI resolves them opaque (shapes). */
+typedef struct { JSValue rf; char *url; int is_json; } Pending;
+static Pending *g_pending = NULL;
+static int g_pending_n = 0, g_pending_cap = 0;
+static void pending_add(JSContext *ctx, JSValue rf, const char *url, int is_json) {
+    if (g_pending_n >= g_pending_cap) {
+        int nc = g_pending_cap ? g_pending_cap * 2 : 32;
+        Pending *n = realloc(g_pending, (size_t)nc * sizeof(Pending));
+        if (!n) { JS_FreeValue(ctx, rf); return; }
+        g_pending = n; g_pending_cap = nc;
+    }
+    g_pending[g_pending_n].rf = rf; g_pending[g_pending_n].url = url ? strdup(url) : NULL; g_pending[g_pending_n].is_json = is_json;
+    g_pending_n++;
+}
 /* wrap val in an already-RESOLVED promise (consumes val) so `await`/`.then` chains continue synchronously. */
 static JSValue js_resolved(JSContext *ctx, JSValue val)
 {
@@ -161,27 +178,37 @@ static void reply_note_wanted(JSContext *ctx, JSValueConst this_val) {
     if (s) JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, u);
 }
-static JSValue js_resp_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+/* parse a concrete reply body into the value json()/text() should resolve to */
+static JSValue reply_value(JSContext *ctx, JSValueConst body_str, int is_json) {
+    if (!is_json) return JS_DupValue(ctx, body_str);
+    size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, body_str);
+    JSValue parsed = s ? JS_ParseJSON(ctx, s, len, "<reply>") : JS_EXCEPTION;
+    if (s) JS_FreeCString(ctx, s);
+    if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return JS_DupValue(ctx, g_opaque); }
+    return parsed;   /* CONCRETE reply object -> its fields are real example values */
+}
+/* r.json()/r.text(): concrete body -> resolve it; else PARK (unresolved promise + pending) if the url is
+   concrete (fetchable), so the offscreen provides the real reply IN PLACE; opaque if the url is a shape. */
+static JSValue resp_consume(JSContext *ctx, JSValueConst this_val, int is_json) {
     JSValue body = resp_body_str(ctx, this_val);
-    if (JS_IsString(body)) {
-        size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, body);
-        JSValue parsed = s ? JS_ParseJSON(ctx, s, len, "<reply>") : JS_EXCEPTION;
-        if (s) JS_FreeCString(ctx, s);
-        JS_FreeValue(ctx, body);
-        if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return js_resolved(ctx, JS_DupValue(ctx, g_opaque)); }
-        return js_resolved(ctx, parsed);   /* CONCRETE reply object -> its fields are real example values */
+    if (JS_IsString(body)) { JSValue v = reply_value(ctx, body, is_json); JS_FreeValue(ctx, body); return js_resolved(ctx, v); }
+    JS_FreeValue(ctx, body);
+    JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
+    const char *url = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
+    JSValue result;
+    if (url && url[0] && !strstr(url, "{}")) {   /* concrete url -> park for a real reply */
+        JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
+        if (!JS_IsException(promise)) { pending_add(ctx, JS_DupValue(ctx, rf[0]), url, is_json); JS_FreeValue(ctx, rf[0]); JS_FreeValue(ctx, rf[1]); result = promise; }
+        else result = js_resolved(ctx, JS_DupValue(ctx, g_opaque));
+    } else {
+        result = js_resolved(ctx, JS_DupValue(ctx, g_opaque));   /* shape url: not fetchable */
     }
-    JS_FreeValue(ctx, body);
-    reply_note_wanted(ctx, this_val);
-    return js_resolved(ctx, JS_DupValue(ctx, g_opaque));
+    if (url) JS_FreeCString(ctx, url);
+    JS_FreeValue(ctx, u);
+    return result;
 }
-static JSValue js_resp_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSValue body = resp_body_str(ctx, this_val);
-    if (JS_IsString(body)) return js_resolved(ctx, body);   /* concrete text (js_resolved consumes it) */
-    JS_FreeValue(ctx, body);
-    reply_note_wanted(ctx, this_val);
-    return js_resolved(ctx, JS_DupValue(ctx, g_opaque));
-}
+static JSValue js_resp_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 1); }
+static JSValue js_resp_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 0); }
 /* build a fetch Response whose identity is concrete (ok/status/url) but whose BODY is opaque. */
 static JSValue make_response(JSContext *ctx, const char *url)
 {
@@ -884,20 +911,71 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     return 0;
 }
 
-/* Advance the ONE scheduler. M1: runs the frontier to completion (returns 0 = DONE). M2 will return
-   1 = NEED_FETCH when all runnable flows are parked awaiting a real reply/chunk the offscreen supplies. */
+/* The distinct pending fetch urls (newline-joined) the offscreen must safe-fetch. Static buffer. */
+KEEP const char *qjs_pending(void)
+{
+    static char *buf = NULL; static size_t cap = 0;
+    size_t need = 1;
+    for (int i = 0; i < g_pending_n; i++) if (g_pending[i].url) need += strlen(g_pending[i].url) + 1;
+    if (need > cap) { char *n = realloc(buf, need); if (!n) return ""; buf = n; cap = need; }
+    size_t off = 0;
+    for (int i = 0; i < g_pending_n; i++) {
+        if (!g_pending[i].url) continue;
+        int dup = 0;
+        for (int j = 0; j < i; j++) if (g_pending[j].url && strcmp(g_pending[j].url, g_pending[i].url) == 0) { dup = 1; break; }
+        if (dup) continue;
+        size_t l = strlen(g_pending[i].url);
+        memcpy(buf + off, g_pending[i].url, l); off += l; buf[off++] = '\n';
+    }
+    buf[off] = 0;
+    return buf;
+}
+/* Resolve every pending consume of `url` with the concrete body (empty -> opaque); cache in the reply
+   table so a later response of the same url is concrete too. Continuations run on the next qjs_step. */
+KEEP void qjs_provide(const char *url, const char *body)
+{
+    JSContext *ctx = g_ctx; if (!ctx || !url) return;
+    int has = body && body[0];
+    if (has && JS_IsObject(g_reply_table)) JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));
+    for (int i = 0; i < g_pending_n; i++) {
+        if (!g_pending[i].url || strcmp(g_pending[i].url, url) != 0) continue;
+        JSValue v;
+        if (has) { JSValue bs = JS_NewString(ctx, body); v = reply_value(ctx, bs, g_pending[i].is_json); JS_FreeValue(ctx, bs); }
+        else v = JS_DupValue(ctx, g_opaque);
+        JSValue r = JS_Call(ctx, g_pending[i].rf, JS_UNDEFINED, 1, (JSValueConst *)&v); JS_FreeValue(ctx, r); JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, g_pending[i].rf); free(g_pending[i].url);
+        g_pending[i].rf = JS_UNDEFINED; g_pending[i].url = NULL;
+    }
+    int w = 0; for (int i = 0; i < g_pending_n; i++) if (g_pending[i].url) g_pending[w++] = g_pending[i];
+    g_pending_n = w;
+}
+/* Resolve ALL remaining pending with opaque (node CLI / finalize): chains continue as shapes. */
+KEEP void qjs_finalize(void)
+{
+    JSContext *ctx = g_ctx; if (!ctx) return;
+    for (int i = 0; i < g_pending_n; i++) {
+        if (!g_pending[i].url) continue;
+        JSValue v = JS_DupValue(ctx, g_opaque);
+        JSValue r = JS_Call(ctx, g_pending[i].rf, JS_UNDEFINED, 1, (JSValueConst *)&v); JS_FreeValue(ctx, r); JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, g_pending[i].rf); free(g_pending[i].url); g_pending[i].url = NULL;
+    }
+    g_pending_n = 0;
+}
+/* Advance the ONE scheduler; drain microtasks. Return 1 = NEED_FETCH (flows parked awaiting a real
+   reply the offscreen must provide via qjs_provide), else 0 = DONE. */
 KEEP int qjs_step(void)
 {
     if (!g_ctx) return 0;
     scheduler_run(g_ctx);
     js_std_loop(g_ctx);
-    return 0;
+    return g_pending_n > 0 ? 1 : 0;
 }
 
 KEEP void qjs_teardown(void)
 {
     JSContext *ctx = g_ctx;
     if (!ctx) return;
+    qjs_finalize();   /* resolve any stragglers opaque so no promise leaks */
     printf("@DONE emit=%d\n", g_emit_total); fflush(stdout);
     /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
        its held baseline values return to their slots, and drop the opaque marker. */
@@ -927,7 +1005,7 @@ int main(int argc, char **argv)
     int         quantum = (argc > 5 && argv[5][0]) ? atoi(argv[5]) : 0;
     const char *recipes = (argc > 6) ? argv[6] : NULL;
     if (qjs_init(boot, html, origin, replies, quantum, recipes) != 0) return 1;
-    if (boot) qjs_step();
+    if (boot) { while (qjs_step() == 1) qjs_finalize(); }   /* node CLI has no network -> resolve pending opaque (shapes) */
     qjs_teardown();
     return g_rc;
 }
