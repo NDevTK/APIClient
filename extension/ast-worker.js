@@ -98,6 +98,17 @@ function linesToAnalysis(lines, msg) {
    (usually empty); html (argv[2]) is the page. */
 function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
 function strHash(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
+/* Stable BUNDLE IDENTITY for the frontier key: the EXTERNAL <script src> set (content-hash filenames
+   like main.abc123.js ARE the app version), NOT the volatile HTML wrapper (per-request nonces/CSRF
+   tokens would change the key every visit -> the frontier would never resume). A redeploy changes a src
+   -> new key -> stale frontier invalidated. Inline-only pages fall back to the HTML hash (rare; they're
+   small, finish in one visit, never park). */
+function bundleId(html, code) {
+  const srcs = [];
+  const re = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
+  let m; while ((m = re.exec(html || "")) !== null) srcs.push(m[1]);
+  return srcs.length ? strHash(srcs.join("|")) : strHash((html || "") + (code || ""));
+}
 /* Cross-session flow FRONTIER (IndexedDB): the learned surface (globalStore) already persists; this
    persists the UNFINISHED frontier as compact replay recipes, keyed by origin+bundle-hash (a changed
    bundle invalidates stale orphan indices). A parked frontier resumes next visit/session -> ONE
@@ -257,7 +268,7 @@ self.astDispatch = async function astDispatch(msg) {
        via qjs_chunks/qjs_provide) + its fromReply consumes (in place). No re-run, no separate loops.
        CROSS-SESSION FRONTIER: with a host quantum, park the residue to IDB and resume it next visit. */
     const quantum = msg.quantum || 0;   // 0 = run to completion (default); >0 = per-visit CPU slice
-    const fkey = originOf(msg.sourceUrl) + "|" + strHash(html + code);
+    const fkey = originOf(msg.sourceUrl) + "|" + bundleId(html, code);   // STABLE across visits (bundle version, not volatile HTML)
     const prior = quantum ? await frontierGet(fkey) : null;      // resume this bundle's parked frontier
     const result = await runEngine(code, html, msg, quantum, prior && prior.recipes);
     if (quantum) {   // persist the residue into the GLOBAL frontier (rich entry for later rehydration)
