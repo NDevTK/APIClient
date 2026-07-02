@@ -41,6 +41,7 @@ typedef struct {
     int saved_c;         /* per-flow branch cursor (g_c) snapshot, restored on resume */
     double cpu;          /* back-edge CPU ticks since last emit (WFQ decay; reset to 0 on emit) */
     int visits;          /* times scheduled (UCB/fairness explore term) */
+    int orphan_idx;      /* cross-session locator: index in deterministic orphan collection (-1 = boot/yield, not park-replayable) */
 } Flow;
 static Flow   *g_reg = NULL;
 static int     g_reg_n = 0, g_reg_cap = 0;
@@ -49,6 +50,16 @@ static double  g_cur_val = 0;
 static Flow   *g_cur_flow = NULL;   /* running flow (a stable local copy; its weight is read by the yield hook) */
 static int     g_emit_total = 0;
 static JSRuntime *g_rt = NULL;
+/* Cross-session frontier (park/resume by REPLAY): deterministic orphan collection gives each function a
+   stable index; a parked flow's recipe = (orphan_idx, decision-vector). g_quantum > 0 = the host's
+   per-page CPU slice (cross-page fairness): after that many STARTERS the rest of the frontier is emitted
+   as @PARK recipes and the run stops, resumable next session. 0 = unlimited (run to completion). */
+static JSValue g_orphan_buf[4096];
+static int     g_orphan_n = 0;
+static int     g_cur_orphan_idx = -1;   /* running flow's orphan index (inherited by its branch siblings) */
+static int     g_quantum = 0;
+static int     g_started = 0;           /* starters begun this run (for the quantum) */
+static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
 
 /* decision-vector state for the RUNNING starter flow (branch-arm BFS) — grows unbounded */
@@ -77,6 +88,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val; g_reg[g_reg_n].is_resume = is_resume;
     g_reg[g_reg_n].dec = dec; g_reg[g_reg_n].dec_n = dec_n;
     g_reg[g_reg_n].fs = NULL; g_reg[g_reg_n].saved_c = 0; g_reg[g_reg_n].cpu = 0; g_reg[g_reg_n].visits = 0;
+    g_reg[g_reg_n].orphan_idx = -1;
     g_reg_n++; return 1;
 }
 
@@ -230,6 +242,7 @@ static int branch_decide(JSContext *ctx)
         for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
         sib[g_c] = 0;
         reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, 0, sib, g_c + 1);
+        g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;   /* sibling = same function (same locator), different decisions */
     }
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
     return 1;
@@ -567,8 +580,15 @@ static int seed_orphans(JSContext *ctx)
         int dup = 0;
         for (int j = 0; j < g_reg_n; j++)
             if (!g_reg[j].is_resume && JS_VALUE_GET_PTR(g_reg[j].handle) == JS_VALUE_GET_PTR(buf[i])) { dup = 1; break; }
+        /* also skip one already recorded in the stable buffer (queued/parked, not yet run) */
+        if (!dup) for (int j = 0; j < g_orphan_n; j++)
+            if (JS_VALUE_GET_PTR(g_orphan_buf[j]) == JS_VALUE_GET_PTR(buf[i])) { dup = 1; break; }
         if (dup) { JS_FreeValue(ctx, buf[i]); continue; }
+        int idx = -1;
+        if (g_orphan_n < 4096) { idx = g_orphan_n; g_orphan_buf[g_orphan_n++] = JS_DupValue(ctx, buf[i]); }  /* buffer owns a ref (stable locator) */
+        if (g_resume_mode) { JS_FreeValue(ctx, buf[i]); continue; }   /* resume: build locators only; recipes are seeded explicitly */
         reg_add(ctx, buf[i], 1.0, 0, NULL, 0);
+        g_reg[g_reg_n - 1].orphan_idx = idx;
         seeded++;
     }
     if (seeded > 0) { printf("@ORPHANS %d\n", seeded); fflush(stdout); }
@@ -606,6 +626,28 @@ static int wfq_yield(void)
     return 0;
 }
 
+/* Emit the remaining frontier as compact REPLAY recipes (orphan_idx + decision-vector) and clear it.
+   A parked flow is reconstructed next session by re-running boot + replaying its decisions — never by
+   serializing a live continuation. The host persists these lines to IDB; @PARK/@PARKED are read back. */
+static void park_frontier(JSContext *ctx)
+{
+    int parked = 0;
+    for (int i = 0; i < g_reg_n; i++) {
+        Flow *f = &g_reg[i];
+        if (f->orphan_idx >= 0) {   /* orphan-derived flows are replay-locatable; boot forks/yields are re-derived by boot */
+            printf("@PARK %d ", f->orphan_idx);
+            for (int j = 0; j < f->dec_n; j++) putchar(f->dec[j] ? '1' : '0');
+            putchar('\n');
+            parked++;
+        }
+        if (f->fs) JS_FlowFree(g_rt, f->fs);
+        JS_FreeValue(ctx, f->handle);
+        free(f->dec);
+    }
+    g_reg_n = 0;
+    printf("@PARKED %d\n", parked); fflush(stdout);
+}
+
 /* The ONE scheduler loop: pick the highest-WEIGHT flow (NON-FIFO), run it as a preemptible heap-frame
    quantum, re-queue it if it suspended (interleave), repeat. BFS by value-of-information: shallow
    high-emit flows finish ahead of the deep residue, which is starved to ~0 CPU (resumable). */
@@ -614,12 +656,17 @@ static void scheduler_run(JSContext *ctx)
     for (;;) {
         seed_orphans(ctx);          /* CONTINUOUS: pick up functions a prior flow defined dynamically (chunks) */
         if (g_reg_n == 0) break;
+        /* HOST QUANTUM (cross-page fairness): after g_quantum starters, PARK the rest of the frontier as
+           compact replay recipes (orphan_idx + decision-vector) and stop — resumable next session. Not a
+           bound: the parked flows are re-driven by re-running boot + replaying decisions. */
+        if (g_quantum > 0 && g_started >= g_quantum) { park_frontier(ctx); break; }
         int best = 0;
         for (int i = 1; i < g_reg_n; i++)
             if (flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
         Flow f = g_reg[best];                       /* f is a STABLE COPY: reg_add during the run may realloc g_reg */
         g_reg_n--; g_reg[best] = g_reg[g_reg_n];    /* swap-remove */
         f.visits++;
+        g_cur_orphan_idx = f.orphan_idx;            /* siblings forked during this flow inherit its locator */
         g_running = 1; g_cur_val = f.val; g_cur_flow = &f;
 
         if (f.is_resume) {
@@ -647,6 +694,7 @@ static void scheduler_run(JSContext *ctx)
         g_c = f.saved_c;
 
         if (f.fs == NULL) {                         /* STARTER: baseline + fresh heap frame */
+            g_started++;                            /* count starters against the host quantum */
             JS_CowRevert(ctx);                      /* revert JS shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
             dom_revert();                           /* revert DOM mutations to the post-boot baseline (per-flow isolation) */
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
@@ -728,6 +776,9 @@ int main(int argc, char **argv)
         if (JS_IsException(t)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
         else g_reply_table = t;
     }
+    if (argc > 5 && argv[5][0]) g_quantum = atoi(argv[5]);   /* host per-page CPU slice (0 = run to completion) */
+    const char *g_resume_recipes = (argc > 6) ? argv[6] : NULL;   /* parked frontier: "idx,dec;idx,dec;..." */
+    if (g_resume_recipes && g_resume_recipes[0]) g_resume_mode = 1;
 
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__emit", JS_NewCFunction(ctx, js_emit, "__emit", 1));
@@ -792,7 +843,28 @@ int main(int argc, char **argv)
         if (JS_IsException(v)) { js_std_dump_error(ctx); rc = 1; }
         JS_FreeValue(ctx, v);
         dom_run_scripts(ctx);   /* run the page's own inline scripts (from the parsed DOM) in document order */
-        seed_orphans(ctx);
+        seed_orphans(ctx);      /* normal: seed fresh orphan flows. resume: build g_orphan_buf locators only. */
+        if (g_resume_mode && g_resume_recipes) {
+            /* RESUME the parked frontier: each recipe "idx,dec" re-creates a flow = orphan g_orphan_buf[idx]
+               with its decision-vector, reconstructed by replay when the scheduler re-runs it. */
+            const char *p = g_resume_recipes; int resumed = 0;
+            while (*p) {
+                int idx = atoi(p);
+                const char *comma = strchr(p, ','), *semi = strchr(p, ';');
+                signed char *dec = NULL; int dec_n = 0;
+                if (comma && (!semi || comma < semi)) {
+                    const char *d = comma + 1, *end = semi ? semi : d + strlen(d);
+                    dec_n = (int)(end - d);
+                    if (dec_n > 0) { dec = (signed char *)malloc((size_t)dec_n); for (int i = 0; i < dec_n; i++) dec[i] = (d[i] == '1') ? 1 : 0; }
+                }
+                if (idx >= 0 && idx < g_orphan_n) {
+                    reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[idx]), 1.0, 0, dec, dec_n);
+                    g_reg[g_reg_n - 1].orphan_idx = idx; resumed++;
+                } else free(dec);
+                if (!semi) break; p = semi + 1;
+            }
+            printf("@RESUMED %d\n", resumed); fflush(stdout);
+        }
         JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
         g_dom_capture = 1;    /* DOM baseline is now fixed too; capture flow DOM mutations for per-flow revert */
         scheduler_run(ctx);
@@ -808,6 +880,8 @@ int main(int argc, char **argv)
     JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL);
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
+    for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
+    g_orphan_n = 0;
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
     js_std_free_handlers(rt);
     JS_FreeContext(ctx);
