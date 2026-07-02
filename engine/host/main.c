@@ -462,11 +462,27 @@ static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueCons
    keep it reachable (in g_handlers) so orphan-invoke drives it and surfaces its gated endpoints. */
 static JSValue g_handlers = JS_UNDEFINED;
 static int g_handler_n = 0;
+/* Handlers registered for 'message' (postMessage). Driven with a synthetic MessageEvent whose .data is
+   the source-tagged opaque {pm}, so a postMessage-XSS sink reports {pm} and the PoC assembler builds a
+   postMessage-delivered PoC. Borrowed refs (also held live in g_handlers). */
+static void *g_msg_handlers[128];
+static int g_msg_handler_n = 0;
+static JSValue g_msg_event = JS_UNDEFINED;   /* synthetic MessageEvent: { data: opaque("{pm}"), origin, source } */
 static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
     JSValueConst h = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
-    if (JS_IsFunction(ctx, h) && !JS_IsUndefined(g_handlers))
+    if (JS_IsFunction(ctx, h) && !JS_IsUndefined(g_handlers)) {
         JS_SetPropertyUint32(ctx, g_handlers, (uint32_t)g_handler_n++, JS_DupValue(ctx, h));
+        const char *type = argc >= 2 ? JS_ToCString(ctx, argv[0]) : NULL;   /* addEventListener(type, handler) */
+        if (type && strcmp(type, "message") == 0 && g_msg_handler_n < 128)
+            g_msg_handlers[g_msg_handler_n++] = JS_VALUE_GET_PTR(h);
+        if (type) JS_FreeCString(ctx, type);
+    }
     return JS_UNDEFINED;
+}
+static int is_msg_handler(JSValueConst h) {
+    void *p = JS_VALUE_GET_PTR(h);
+    for (int i = 0; i < g_msg_handler_n; i++) if (g_msg_handlers[i] == p) return 1;
+    return 0;
 }
 
 /* The page's OWN identity (principal) is CONCRETE for URL building — location.origin/protocol/host/
@@ -967,6 +983,10 @@ static void scheduler_run(JSContext *ctx)
             JS_CowRevert(ctx);                      /* revert JS shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
             dom_revert();                           /* revert DOM mutations to the post-boot baseline (per-flow isolation) */
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
+            /* A 'message' listener's first arg is a MessageEvent whose .data is attacker-controlled
+               (postMessage): drive it with the {pm} source-tagged event so a sink reaching e.data reports
+               {pm} and the PoC assembler builds a postMessage-delivered PoC. */
+            if (!JS_IsUndefined(g_msg_event) && is_msg_handler(f.handle)) oargs[0] = g_msg_event;
             /* Drive an orphan METHOD with its REAL receiver instance if one exists (this.field -> concrete
                boot value, a real example) else opaque this. Args stay opaque (external input). */
             JSValue recv = JS_FindReceiver(ctx, f.handle);
@@ -1047,7 +1067,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_ctx = ctx;
     /* Reset all scheduler/frontier state so ONE wasm instance can serve many page analyses (init/run/
        teardown reused) with no cross-page bleed. The arrays themselves are reused (not re-malloc'd). */
-    g_reg_n = 0; g_work = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL;
+    g_reg_n = 0; g_work = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL; g_msg_handler_n = 0;
     g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_quantum = 0;
     g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
     js_std_add_helpers(ctx, 0, NULL);
@@ -1077,6 +1097,12 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_opaque = JS_NewOpaqueShaped(ctx, "{}");   /* the default opaque (shape "{}"); generic propagation dups it */
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
+    /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source-tagged opaque. */
+    g_msg_event = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, g_msg_event, "data", JS_NewOpaqueShaped(ctx, "{pm}"));
+    JS_SetPropertyStr(ctx, g_msg_event, "origin", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, g_msg_event, "source", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, g_msg_event, "ports", JS_DupValue(ctx, g_opaque));
     JS_SetPropertyStr(ctx, g, "__driveOrphans", JS_NewCFunction(ctx, js_drive_orphans, "__driveOrphans", 0));
 
     /* Minimal browser environment: window/self = globalThis; OPAQUE external-input sources (location,
@@ -1326,6 +1352,7 @@ KEEP void qjs_teardown(void)
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_msg_event); g_msg_event = JS_UNDEFINED; g_msg_handler_n = 0;
     js_std_free_handlers(g_rt);
     JS_FreeContext(ctx);
     JS_FreeRuntime(g_rt);
