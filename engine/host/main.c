@@ -119,7 +119,14 @@ static int seed_orphans(JSContext *ctx)
     g_orphans_seeded = 1;
     static JSValue buf[4096];
     int n = JS_CollectOrphans(ctx, buf, 4096);
-    for (int i = 0; i < n; i++) reg_add(ctx, buf[i], 1.0, 0);   /* reg_add takes the dup'd ref; hint 1 */
+    for (int i = 0; i < n; i++) {
+        JSValue nm = JS_GetPropertyStr(ctx, buf[i], "name");
+        const char *s = JS_ToCString(ctx, nm);
+        printf("@ORPHAN name=%s\n", (s && s[0]) ? s : "(anon)"); fflush(stdout);
+        if (s) JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, nm);
+        reg_add(ctx, buf[i], 1.0, 0);   /* reg_add takes the dup'd ref; hint 1 */
+    }
     printf("@ORPHANS %d\n", n); fflush(stdout);
     return n;
 }
