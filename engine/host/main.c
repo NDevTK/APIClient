@@ -168,6 +168,29 @@ static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValue
     return JS_UNDEFINED;
 }
 
+/* The page's OWN identity (principal) is CONCRETE for URL building — location.origin/protocol/host/
+   hostname/port/pathname/href are REAL (a bundle does `location.origin + '/api/...'`; opaque here would
+   yield a "{}"-shaped garbage URL and lose the endpoint). Only the EXTERNAL-INPUT parts — search/hash —
+   stay OPAQUE (must never force a branch), yet carry a concrete example when page state already has one.
+   The host injects the real principal at wire time; g_origin is the node-harness placeholder. */
+static const char *g_origin   = "https://app.example.com";
+static const char *g_protocol = "https:";
+static const char *g_host     = "app.example.com";
+static JSValue make_location(JSContext *ctx)
+{
+    JSValue loc = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, loc, "origin",   JS_NewString(ctx, g_origin));
+    JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, g_protocol));
+    JS_SetPropertyStr(ctx, loc, "host",     JS_NewString(ctx, g_host));
+    JS_SetPropertyStr(ctx, loc, "hostname", JS_NewString(ctx, g_host));
+    JS_SetPropertyStr(ctx, loc, "port",     JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, "/"));
+    JS_SetPropertyStr(ctx, loc, "href",     JS_NewString(ctx, g_origin));   /* concrete base for new URL(path, href) */
+    JS_SetPropertyStr(ctx, loc, "search",   JS_DupValue(ctx, g_opaque));    /* external input: opaque (never forces a branch) */
+    JS_SetPropertyStr(ctx, loc, "hash",     JS_DupValue(ctx, g_opaque));    /* external input: opaque */
+    return loc;
+}
+
 /* __fork(fn, hint?): add a flow to the ONE registry (a STARTER, fresh decision vector). */
 static JSValue js_fork(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -357,15 +380,16 @@ int main(int argc, char **argv)
     JS_SetPropertyStr(ctx, g, "window", JS_DupValue(ctx, g));
     JS_SetPropertyStr(ctx, g, "self",   JS_DupValue(ctx, g));
     JS_SetPropertyStr(ctx, g, "globalThis", JS_DupValue(ctx, g));
-    JS_SetPropertyStr(ctx, g, "location", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, g, "location", make_location(ctx));   /* concrete principal identity; search/hash opaque */
     JS_SetPropertyStr(ctx, g, "navigator", JS_DupValue(ctx, g_opaque));
     JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
     {
         JSValue doc = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, doc, "cookie", JS_DupValue(ctx, g_opaque));
-        JS_SetPropertyStr(ctx, doc, "referrer", JS_DupValue(ctx, g_opaque));
-        JS_SetPropertyStr(ctx, doc, "URL", JS_DupValue(ctx, g_opaque));
+        JS_SetPropertyStr(ctx, doc, "cookie", JS_DupValue(ctx, g_opaque));      /* external/auth input: opaque */
+        JS_SetPropertyStr(ctx, doc, "referrer", JS_DupValue(ctx, g_opaque));    /* external input: opaque */
+        JS_SetPropertyStr(ctx, doc, "URL", JS_NewString(ctx, g_origin));        /* page identity: CONCRETE for URL building */
+        JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, g_host));       /* page identity: CONCRETE */
         JS_SetPropertyStr(ctx, doc, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
         JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_opaque_stub, "querySelector", 1));
         JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_opaque_stub, "getElementById", 1));
