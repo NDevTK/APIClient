@@ -302,6 +302,13 @@ static int branch_decide(JSContext *ctx)
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
     return 1;
 }
+/* crypto.getRandomValues(arr): the spec FILLS + RETURNS the same typed array. The bytes are external
+   randomness — nondeterministic, so filling them would (a) break replay soundness and (b) fabricate a
+   concrete value. We can't store an opaque in a numeric typed array, so we leave it unmodified (its
+   deterministic initial zeros) and return the SAME array, so `crypto.getRandomValues(new Uint8Array(n))`
+   and the fill-then-read idiom both work without throwing. randomUUID (the URL-relevant one) is opaque. */
+static JSValue js_crypto_getrandom(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{ return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_DupValue(ctx, g_opaque); }
 static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return branch_decide(ctx) ? JS_TRUE : JS_FALSE; }
 
@@ -1000,6 +1007,15 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JSValue perf = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
         JS_SetPropertyStr(ctx, g, "performance", perf);
+        /* Web Crypto: a MISSING host edge (crypto was undefined -> ReferenceError killed EVERY bundle that
+           mints a token/UUID/id). randomUUID = external randomness -> OPAQUE (forks branches, shapes URLs,
+           replay-sound); getRandomValues fills a numeric array in place (see stub); subtle = opaque (its
+           digest/encrypt results are external-derived). */
+        JSValue cr = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, cr, "randomUUID", JS_NewCFunction(ctx, js_opaque, "randomUUID", 0));
+        JS_SetPropertyStr(ctx, cr, "getRandomValues", JS_NewCFunction(ctx, js_crypto_getrandom, "getRandomValues", 1));
+        JS_SetPropertyStr(ctx, cr, "subtle", JS_DupValue(ctx, g_opaque));
+        JS_SetPropertyStr(ctx, g, "crypto", cr);
     }
     JS_FreeValue(ctx, g);
 
