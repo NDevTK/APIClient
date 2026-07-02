@@ -106,6 +106,28 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return promise;
 }
 
+/* __driveOrphans(): a FLOW SOURCE, not a phase. Collect every never-executed function object
+   (JS_CollectOrphans) and add each to the ONE registry as a starter flow. When the scheduler runs
+   one, it force-invokes the orphan (undefined args + this for now; opaque args next) — the orphan
+   computes its URL and fetches it, surfacing the UNUSED endpoint the bundle CAN reach but didn't. This
+   is the moat, and it is just "add flows to the ONE queue" — no separate grind runtime/loop/phase. */
+static int g_orphans_seeded = 0;   /* seed the orphan flow-source ONCE (idempotent): re-invoking an orphan
+                                      must not re-collect + re-invoke the whole set (a cascade). */
+static int seed_orphans(JSContext *ctx)
+{
+    if (g_orphans_seeded) return 0;
+    g_orphans_seeded = 1;
+    static JSValue buf[4096];
+    int n = JS_CollectOrphans(ctx, buf, 4096);
+    for (int i = 0; i < n; i++) reg_add(ctx, buf[i], 1.0, 0);   /* reg_add takes the dup'd ref; hint 1 */
+    printf("@ORPHANS %d\n", n); fflush(stdout);
+    return n;
+}
+static JSValue js_drive_orphans(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    return JS_NewInt32(ctx, seed_orphans(ctx));
+}
+
 /* The ONE scheduler loop: pick the highest-value flow (NON-FIFO), advance it ONE quantum
    (start it, or resume it to its next __yield / completion), repeat until the registry
    drains. A STARTER async fn runs synchronously to its first await inside JS_Call. A RESUMER
@@ -159,6 +181,7 @@ int main(int argc, char **argv)
     JS_SetPropertyStr(ctx, g, "__fork", JS_NewCFunction(ctx, js_fork, "__fork", 2));
     JS_SetPropertyStr(ctx, g, "__yield", JS_NewCFunction(ctx, js_yield, "__yield", 0));
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
+    JS_SetPropertyStr(ctx, g, "__driveOrphans", JS_NewCFunction(ctx, js_drive_orphans, "__driveOrphans", 0));
     JS_FreeValue(ctx, g);
 
     int rc = 0;
@@ -166,6 +189,10 @@ int main(int argc, char **argv)
         JSValue v = JS_Eval(ctx, argv[1], strlen(argv[1]), "<boot>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsException(v)) { js_std_dump_error(ctx); rc = 1; }
         JS_FreeValue(ctx, v);
+        /* After boot (the bundle ran; called functions are marked executed), seed the orphan flow-source
+           ONCE: the never-executed functions become flows in the ONE registry. Not a phase — just adding
+           flows; the ONE loop schedules them alongside anything boot forked. */
+        seed_orphans(ctx);
         scheduler_run(ctx);
         js_std_loop(ctx);
     }
