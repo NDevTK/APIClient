@@ -97,19 +97,40 @@ function linesToAnalysis(lines, msg) {
    DOM) — the bridge no longer scrapes scripts. code (argv[1]) is any brain-assembled extra scripts
    (usually empty); html (argv[2]) is the page. */
 function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
+function strHash(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
+/* Cross-session flow FRONTIER (IndexedDB): the learned surface (globalStore) already persists; this
+   persists the UNFINISHED frontier as compact replay recipes, keyed by origin+bundle-hash (a changed
+   bundle invalidates stale orphan indices). A parked frontier resumes next visit/session -> ONE
+   continuous attention across sessions, extracting more breadth each time until fully explored. */
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("apiclient-frontier", 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore("frontier"); };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function frontierGet(key) {
+  try { const db = await idbOpen(); return await new Promise((res) => { const t = db.transaction("frontier").objectStore("frontier").get(key); t.onsuccess = () => res(t.result || ""); t.onerror = () => res(""); }); }
+  catch (_) { return ""; }
+}
+async function frontierPut(key, val) {
+  try { const db = await idbOpen(); await new Promise((res) => { const s = db.transaction("frontier", "readwrite").objectStore("frontier"); const t = val ? s.put(val, key) : s.delete(key); t.onsuccess = () => res(); t.onerror = () => res(); }); }
+  catch (_) {}
+}
 /* Drive ONE persistent engine instance through the step protocol. fromReply is now IN PLACE: when the
    engine parks awaiting a reply (qjs_step -> NEED_FETCH), the TRUSTED offscreen safe-fetches each pending
    url (GET, page-origin SSRF) and qjs_provide()s the body, resuming the flow in the SAME instance -- no
    re-instantiate, no re-run of the whole page. */
-async function runEngine(code, html, msg) {
+async function runEngine(code, html, msg, quantum, recipes) {
   const lines = [];
   const M = await createQJS({ print: (s) => lines.push(s), printErr: (s) => lines.push(s), noInitialRun: true });
   const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
   const ptrs = [];
   const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
   try {
+    // argv: [extra-code, pageHtml, real-origin, fromReply(unused, in-place now), quantum, resume-recipes]
     M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number", "number"],
-      [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), 0, arg("")]);
+      [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), quantum || 0, arg(recipes || "")]);
     const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
     const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
       if (!canFetch || u.indexOf("{}") >= 0) return "";
@@ -183,8 +204,13 @@ self.astDispatch = async function astDispatch(msg) {
     if (!html && !code) return { success: true, result: linesToAnalysis([], msg) };
 
     /* ONE persistent instance runs the WHOLE analysis: the page + its chunks (fetched + eval'd in place
-       via qjs_chunks/qjs_provide) + its fromReply consumes (in place). No re-run, no separate loops. */
-    const result = await runEngine(code, html, msg);
+       via qjs_chunks/qjs_provide) + its fromReply consumes (in place). No re-run, no separate loops.
+       CROSS-SESSION FRONTIER: with a host quantum, park the residue to IDB and resume it next visit. */
+    const quantum = msg.quantum || 0;   // 0 = run to completion (default); >0 = per-visit CPU slice
+    const fkey = originOf(msg.sourceUrl) + "|" + strHash(html + code);
+    const recipes = quantum ? await frontierGet(fkey) : "";   // resume the parked frontier for this bundle
+    const result = await runEngine(code, html, msg, quantum, recipes);
+    if (quantum) await frontierPut(fkey, (result._park || []).join(";"));   // persist the new residue (empty -> fully explored)
     const endpoints = new Map();
     mergeCallsites(endpoints, result.fetchCallSites);
 
