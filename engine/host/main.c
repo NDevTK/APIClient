@@ -890,6 +890,21 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
         JS_SetPropertyStr(ctx, g, "document", doc);
     }
+    /* Time/random are EXTERNAL INPUT -> OPAQUE: a branch on Math.random()/Date.now() must FORK both arms
+       (not take a random one), and their VALUES are shapes not fabricated concretes. This is also a REPLAY
+       SOUNDNESS requirement -- non-deterministic values would shift orphan-collection order between
+       sessions and make a parked flow's (orphan_idx) recipe reconstruct the wrong flow. */
+    {
+        JSValue mo = JS_GetPropertyStr(ctx, g, "Math");
+        if (JS_IsObject(mo)) JS_SetPropertyStr(ctx, mo, "random", JS_NewCFunction(ctx, js_opaque, "random", 0));
+        JS_FreeValue(ctx, mo);
+        JSValue dt = JS_GetPropertyStr(ctx, g, "Date");
+        if (JS_IsObject(dt)) JS_SetPropertyStr(ctx, dt, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
+        JS_FreeValue(ctx, dt);
+        JSValue perf = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
+        JS_SetPropertyStr(ctx, g, "performance", perf);
+    }
     JS_FreeValue(ctx, g);
 
     if (boot) {
