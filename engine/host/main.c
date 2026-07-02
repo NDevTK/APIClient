@@ -396,6 +396,39 @@ static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
     JS_SetPropertyStr(ctx, o, "toJSON", JS_NewCFunction(ctx, js_url_tostring, "toJSON", 0));
     return o;
 }
+/* new Request(input, init): fetch(new Request(url,{method})) is common. Resolve the url (shape-aware, like
+   URL), expose .url/.method/.headers and toString->url so fetch(req) reads the endpoint. */
+static JSValue js_request_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
+    char resolved[2048];
+    const char *input = argc >= 1 ? JS_ToCString(ctx, argv[0]) : NULL;
+    url_resolve(input, g_origin, resolved, sizeof resolved);
+    if (input) JS_FreeCString(ctx, input);
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "url", JS_NewString(ctx, resolved));
+    JS_SetPropertyStr(ctx, o, "href", JS_NewString(ctx, resolved));   /* toString reads href -> fetch(req) sees the url */
+    JSValue method = JS_UNDEFINED;
+    if (argc >= 2 && JS_IsObject(argv[1])) method = JS_GetPropertyStr(ctx, argv[1], "method");
+    JS_SetPropertyStr(ctx, o, "method", JS_IsString(method) ? method : JS_NewString(ctx, "GET"));
+    if (!JS_IsString(method)) JS_FreeValue(ctx, method);
+    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_url_tostring, "toString", 0));
+    return o;
+}
+/* A generic Web object whose reads are opaque (external input) and whose writes are no-ops: Headers,
+   FormData, Blob, Response body, AbortController.signal, TextEncoder/Decoder. Prevents the ReferenceError
+   that would kill the flow, and keeps any value read out of it OPAQUE (never a fabricated concrete). */
+static JSValue js_webobj_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    const char *op[] = { "get", "getAll", "has", "keys", "values", "entries", "forEach", "encode", "decode",
+                         "text", "json", "arrayBuffer", "blob", "formData", "clone", "slice", "getReader" };
+    for (size_t i = 0; i < sizeof op / sizeof op[0]; i++)
+        JS_SetPropertyStr(ctx, o, op[i], JS_NewCFunction(ctx, js_opaque, op[i], 1));
+    const char *np[] = { "set", "append", "delete", "abort", "add", "addEventListener" };
+    for (size_t i = 0; i < sizeof np / sizeof np[0]; i++)
+        JS_SetPropertyStr(ctx, o, np[i], JS_NewCFunction(ctx, js_noop, np[i], 2));
+    JS_SetPropertyStr(ctx, o, "signal", JS_DupValue(ctx, g_opaque));   /* AbortController.signal */
+    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_opaque, "toString", 0));
+    return o;
+}
 /* new URLSearchParams(init): .get/getAll/has -> opaque (external input); toString -> opaque. */
 static JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
@@ -1137,6 +1170,13 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         /* URL / URLSearchParams: endpoint construction (see js_url_ctor). */
         JS_SetPropertyStr(ctx, g, "URL", JS_NewCFunction2(ctx, js_url_ctor, "URL", 2, JS_CFUNC_constructor, 0));
         JS_SetPropertyStr(ctx, g, "URLSearchParams", JS_NewCFunction2(ctx, js_searchparams_ctor, "URLSearchParams", 1, JS_CFUNC_constructor, 0));
+        JS_SetPropertyStr(ctx, g, "Request", JS_NewCFunction2(ctx, js_request_ctor, "Request", 2, JS_CFUNC_constructor, 0));
+        /* fetch-API + encoding + misc Web objects: opaque-read / no-op-write, so a bundle that constructs
+           them doesn't ReferenceError and any value read out stays opaque. */
+        const char *webctors[] = { "Headers", "Response", "FormData", "Blob", "File", "AbortController",
+                                   "TextEncoder", "TextDecoder", "FileReader", "EventSource", "BroadcastChannel" };
+        for (size_t wi = 0; wi < sizeof webctors / sizeof webctors[0]; wi++)
+            JS_SetPropertyStr(ctx, g, webctors[wi], JS_NewCFunction2(ctx, js_webobj_ctor, webctors[wi], 1, JS_CFUNC_constructor, 0));
     }
     JS_FreeValue(ctx, g);
 
