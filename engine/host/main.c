@@ -105,6 +105,11 @@ static JSValue js_emit(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
 }
 
 static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);   /* fwd: opaque-returning host stub */
+/* fromReply: a bridge-provided map { url -> concrete reply body text }. A real GET is fired by the
+   TRUSTED offscreen (safeFetch, one-per-endpoint) and its body injected here so r.json()/r.text()
+   return the CONCRETE server reply -> a reply field flowing into a downstream request param becomes a
+   REAL example value instead of {}. Absent url -> opaque (the honest shape). */
+static JSValue g_reply_table = JS_UNDEFINED;
 /* wrap val in an already-RESOLVED promise (consumes val) so `await`/`.then` chains continue synchronously. */
 static JSValue js_resolved(JSContext *ctx, JSValue val)
 {
@@ -122,6 +127,43 @@ static JSValue js_resolved(JSContext *ctx, JSValue val)
    (fromReply, one-per-endpoint) — opaque here keeps the chain alive without inventing a value. */
 static JSValue js_resp_body(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return js_resolved(ctx, JS_DupValue(ctx, g_opaque)); }
+/* the concrete reply body injected onto this Response (fromReply), or JS_UNDEFINED */
+static JSValue resp_body_str(JSContext *ctx, JSValueConst this_val) {
+    JSValue b = JS_GetPropertyStr(ctx, this_val, "__body");
+    if (JS_IsString(b)) return b;
+    JS_FreeValue(ctx, b); return JS_UNDEFINED;
+}
+/* the bundle is CONSUMING this reply's body but we have no concrete one -> a real bounded GET to this
+   (concrete) url is worth firing (the offscreen does it, one-per-endpoint). Emitted so the bridge fetches
+   ONLY consumed-reply endpoints, not every GET (a blind GET can hit /logout, /delete?id=). */
+static void reply_note_wanted(JSContext *ctx, JSValueConst this_val) {
+    JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
+    const char *s = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
+    if (s && s[0] && !strstr(s, "{}")) { printf("@REPLYWANT %s\n", s); fflush(stdout); }
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, u);
+}
+static JSValue js_resp_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue body = resp_body_str(ctx, this_val);
+    if (JS_IsString(body)) {
+        size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, body);
+        JSValue parsed = s ? JS_ParseJSON(ctx, s, len, "<reply>") : JS_EXCEPTION;
+        if (s) JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, body);
+        if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return js_resolved(ctx, JS_DupValue(ctx, g_opaque)); }
+        return js_resolved(ctx, parsed);   /* CONCRETE reply object -> its fields are real example values */
+    }
+    JS_FreeValue(ctx, body);
+    reply_note_wanted(ctx, this_val);
+    return js_resolved(ctx, JS_DupValue(ctx, g_opaque));
+}
+static JSValue js_resp_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue body = resp_body_str(ctx, this_val);
+    if (JS_IsString(body)) return js_resolved(ctx, body);   /* concrete text (js_resolved consumes it) */
+    JS_FreeValue(ctx, body);
+    reply_note_wanted(ctx, this_val);
+    return js_resolved(ctx, JS_DupValue(ctx, g_opaque));
+}
 /* build a fetch Response whose identity is concrete (ok/status/url) but whose BODY is opaque. */
 static JSValue make_response(JSContext *ctx, const char *url)
 {
@@ -130,8 +172,8 @@ static JSValue make_response(JSContext *ctx, const char *url)
     JS_SetPropertyStr(ctx, resp, "ok", JS_TRUE);
     JS_SetPropertyStr(ctx, resp, "status", JS_NewInt32(ctx, 200));
     JS_SetPropertyStr(ctx, resp, "statusText", JS_NewString(ctx, "OK"));
-    JS_SetPropertyStr(ctx, resp, "json", JS_NewCFunction(ctx, js_resp_body, "json", 0));
-    JS_SetPropertyStr(ctx, resp, "text", JS_NewCFunction(ctx, js_resp_body, "text", 0));
+    JS_SetPropertyStr(ctx, resp, "json", JS_NewCFunction(ctx, js_resp_json, "json", 0));
+    JS_SetPropertyStr(ctx, resp, "text", JS_NewCFunction(ctx, js_resp_text, "text", 0));
     JS_SetPropertyStr(ctx, resp, "blob", JS_NewCFunction(ctx, js_resp_body, "blob", 0));
     JS_SetPropertyStr(ctx, resp, "arrayBuffer", JS_NewCFunction(ctx, js_resp_body, "arrayBuffer", 0));
     JS_SetPropertyStr(ctx, resp, "formData", JS_NewCFunction(ctx, js_resp_body, "formData", 0));
@@ -139,6 +181,12 @@ static JSValue make_response(JSContext *ctx, const char *url)
         JSValue h = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, h, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
         JS_SetPropertyStr(ctx, resp, "headers", h);
+    }
+    /* fromReply: inject the concrete reply body for THIS url (r.json()/r.text() then return real data) */
+    if (url && JS_IsObject(g_reply_table)) {
+        JSValue b = JS_GetPropertyStr(ctx, g_reply_table, url);
+        if (JS_IsString(b)) JS_SetPropertyStr(ctx, resp, "__body", b);   /* consumes b */
+        else JS_FreeValue(ctx, b);
     }
     return resp;
 }
@@ -675,6 +723,11 @@ int main(int argc, char **argv)
     js_init_module_os(ctx, "os");
 
     if (argc > 3) set_origin(argv[3]);   /* real page principal (location.origin/host) injected by the host */
+    if (argc > 4 && argv[4][0]) {        /* fromReply table: { url -> concrete reply body } (offscreen safe-fetched) */
+        JSValue t = JS_ParseJSON(ctx, argv[4], strlen(argv[4]), "<replies>");
+        if (JS_IsException(t)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
+        else g_reply_table = t;
+    }
 
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__emit", JS_NewCFunction(ctx, js_emit, "__emit", 1));
@@ -754,6 +807,7 @@ int main(int argc, char **argv)
     g_dom_capture = 0; dom_revert();   /* drop DOM undo log (restore baseline) before teardown */
     JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL);
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
     js_std_free_handlers(rt);
     JS_FreeContext(ctx);

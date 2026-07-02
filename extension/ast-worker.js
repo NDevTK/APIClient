@@ -43,10 +43,12 @@ function linesToAnalysis(lines, msg) {
   const fetchCallSites = [];
   const resolverErrors = [];
   const chunkUrls = [];
+  const replyWant = [];
   let emitDone = null, orphans = 0;
   const seen = new Set();
   for (const raw of lines) {
     const ln = String(raw);
+    if (ln.startsWith("@REPLYWANT ")) { const u = ln.slice(11).trim(); if (u && replyWant.indexOf(u) < 0) replyWant.push(u); continue; }
     if (ln.startsWith("@H ")) {
       // format: "@H <METHOD> <url>" (js_fetch) or "@H <tag>" (__emit). First token = method if it's a verb.
       let rest = ln.slice(3).trim(), method = "GET";
@@ -83,7 +85,7 @@ function linesToAnalysis(lines, msg) {
     esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
     sourceMapTypes: [], sourceMapsByUrl: {}, traceMapsByUrl: {}, valueConstraints: [],
     sourceMapUrl: null, sourceMap: null, sourceUrl: msg.sourceUrl || "",
-    _orphans: orphans, _emitDone: emitDone,
+    _orphans: orphans, _emitDone: emitDone, _replyWant: replyWant,
   };
 }
 
@@ -92,7 +94,7 @@ function linesToAnalysis(lines, msg) {
    DOM) — the bridge no longer scrapes scripts. code (argv[1]) is any brain-assembled extra scripts
    (usually empty); html (argv[2]) is the page. */
 function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
-async function runEngine(code, html, msg) {
+async function runEngine(code, html, msg, replyTable) {
   const lines = [];
   const Module = await createQJS({
     print: (s) => lines.push(s),
@@ -100,7 +102,8 @@ async function runEngine(code, html, msg) {
     noInitialRun: true,
   });
   try {
-    Module.callMain([code || "", html || "", originOf(msg && msg.sourceUrl)]);   // argv[3] = real page principal
+    // argv: [extra-code, pageHtml, real-origin, fromReply-table-json]
+    Module.callMain([code || "", html || "", originOf(msg && msg.sourceUrl), replyTable ? JSON.stringify(replyTable) : ""]);
   } catch (e) {
     lines.push('@E {"phase":"callmain","err":' + JSON.stringify(String(e && e.message || e)) + "}");
   }
@@ -129,6 +132,7 @@ self.astDispatch = async function astDispatch(msg) {
     const result = await runEngine(code, html, msg);
     const endpoints = new Map();
     mergeCallsites(endpoints, result.fetchCallSites);
+    const replyWant = new Set(result._replyWant || []);
 
     /* CHUNK LOOP (the moat's "learn computed JS files loaded via a code path"): the untrusted engine
        DISCOVERS chunk URLs (static or JS-computed, via <script src> / createElement+.src+appendChild);
@@ -149,11 +153,29 @@ self.astDispatch = async function astDispatch(msg) {
           if (!r || !r.ok || !r.body) continue;
           const cr = await runEngine(r.body, html, msg);   // forced-execute the chunk against the page DOM
           mergeCallsites(endpoints, cr.fetchCallSites);
+          for (const w of cr._replyWant || []) replyWant.add(w);
           for (const nu of cr.chunkUrls || []) if (!chunkUrlsAll.has(nu)) { chunkUrlsAll.add(nu); next.push(nu); }  // nested chunks
         }
         frontier = next;
       }
       result.chunkUrls = [...chunkUrlsAll];
+    }
+
+    /* fromReply pass: a reply whose body the bundle CONSUMED (@REPLYWANT) may carry a field that flows
+       into a downstream request param. The TRUSTED offscreen fires ONE bounded GET per such endpoint
+       (safeFetch: GET-only, page-origin SSRF, credentials omitted); the engine re-runs with the concrete
+       replies so those params become REAL example values (orgId/user.id) instead of {}. */
+    if (typeof self.safeFetch === "function" && msg.sourceUrl && replyWant.size) {
+      const replyTable = {};
+      for (const u of replyWant) {
+        if (u.indexOf("{}") >= 0) continue;                      // opaque url -> unfetchable
+        let r; try { r = await self.safeFetch(u, { pageUrl: msg.sourceUrl }); } catch (_) { continue; }
+        if (r && r.ok && typeof r.body === "string") replyTable[u] = r.body;   // concrete reply body
+      }
+      if (Object.keys(replyTable).length) {
+        const rr = await runEngine(code, html, msg, replyTable);   // re-run with concrete replies injected
+        mergeCallsites(endpoints, rr.fetchCallSites);
+      }
     }
 
     result.fetchCallSites = [...endpoints.values()];
