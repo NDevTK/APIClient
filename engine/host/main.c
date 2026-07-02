@@ -239,17 +239,16 @@ static JSValue js_yield(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return promise;
 }
 
-/* orphan flow source (idempotent, main-driven after boot): never-executed fns become starter flows. */
-static int g_orphans_seeded = 0;
+/* orphan flow source — CONTINUOUS discovery, NOT a one-shot phase. Called every scheduler iteration so
+   functions defined DYNAMICALLY during a forced flow (a login-gated lazy CHUNK: eval/import of fetched
+   JS reached only by forcing the auth branch) become orphan flows and get driven -> we learn the
+   logged-in surface while logged out. Already-executed fns are not returned by JS_CollectOrphans;
+   already-queued fns are dup-skipped. Idempotent: re-running adds only NEW never-executed functions. */
 static int seed_orphans(JSContext *ctx)
 {
-    if (g_orphans_seeded) return 0;
-    g_orphans_seeded = 1;
     static JSValue buf[4096];
     int n = JS_CollectOrphans(ctx, buf, 4096), seeded = 0;
     for (int i = 0; i < n; i++) {
-        /* Skip a function already queued as a flow (e.g. an explicitly __fork'd one not yet run) — else it
-           would be force-invoked TWICE. Real bundles don't __fork, so this is usually a no-op. */
         int dup = 0;
         for (int j = 0; j < g_reg_n; j++)
             if (!g_reg[j].is_resume && JS_VALUE_GET_PTR(g_reg[j].handle) == JS_VALUE_GET_PTR(buf[i])) { dup = 1; break; }
@@ -257,7 +256,7 @@ static int seed_orphans(JSContext *ctx)
         reg_add(ctx, buf[i], 1.0, 0, NULL, 0);
         seeded++;
     }
-    printf("@ORPHANS %d\n", seeded); fflush(stdout);
+    if (seeded > 0) { printf("@ORPHANS %d\n", seeded); fflush(stdout); }
     return seeded;
 }
 static JSValue js_drive_orphans(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -297,7 +296,9 @@ static int wfq_yield(void)
    high-emit flows finish ahead of the deep residue, which is starved to ~0 CPU (resumable). */
 static void scheduler_run(JSContext *ctx)
 {
-    while (g_reg_n > 0) {
+    for (;;) {
+        seed_orphans(ctx);          /* CONTINUOUS: pick up functions a prior flow defined dynamically (chunks) */
+        if (g_reg_n == 0) break;
         int best = 0;
         for (int i = 1; i < g_reg_n; i++)
             if (flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
