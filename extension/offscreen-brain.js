@@ -7066,120 +7066,6 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 // is what a researcher would paste the PoC onto.
 const PROBE_ATTACKER_ORIGIN = "https://example.com/";
 
-// Compile a Z3 pocPlan into one self-contained attacker script handling complex
-// multi-step state: combined URL gates + an ORDERED postMessage sequence, with
-// the apiclientsink payload woven into the one sink-bearing field/event (other
-// fields keep their Z3-solved gate values so guards like `type==="render"`
-// still pass). Storage/cookie gates are NOT attacker-settable cross-origin, so
-// they are emitted as honest PRECONDITION comments — the exploit only fires if
-// the victim already has that state (a real finding nuance, never faked).
-function _buildPocJsFromPlan(pageUrl, marker, plan, opts) {
-  // The Z3 model already solved the EXACT exploit value for the sink-bearing
-  // field (emitted by qjs_z3_emit_poc into the @P/pocPlan event) — granular to
-  // THIS code path, not a template. We must USE that solved value, only weaving
-  // the proof hook into it: the engine's solved exploit expresses its payload as
-  // `alert(document.domain)`, so substitute `apiclientsink("<id>")` there so the
-  // run is detectable + correlated WITHOUT discarding Z3's solved structure.
-  const proofCall = 'apiclientsink("' + marker + '")';
-  function weaveProof(v) {
-    if (typeof v === "string" && /alert\s*\(\s*document\.domain\s*\)/.test(v)) {
-      return v.replace(/alert\s*\(\s*document\.domain\s*\)/g, proofCall);
-    }
-    return v;
-  }
-  // NO template fallback: every value here is the Z3-solved value from the @P
-  // plan. If a field has no solved value we leave it as the plan emitted it —
-  // never fabricate a payload.
-  function setByPath(obj, dotPath, val) {
-    const parts = String(dotPath).split(".");
-    let cur = obj;
-    for (let i = 0; i < parts.length - 1; i++) {
-      if (typeof cur[parts[i]] !== "object" || cur[parts[i]] === null) cur[parts[i]] = {};
-      cur = cur[parts[i]];
-    }
-    cur[parts[parts.length - 1]] = val;
-  }
-  function getByPath(obj, dotPath) {
-    const parts = String(dotPath).split(".");
-    let cur = obj;
-    for (let i = 0; i < parts.length; i++) { if (cur == null) return undefined; cur = cur[parts[i]]; }
-    return cur;
-  }
-  let url;
-  try { url = new URL(pageUrl); } catch (_) { url = null; }
-  const events = Array.isArray(plan.events) ? plan.events.slice().sort((a, b) => (a.seq || 0) - (b.seq || 0)) : [];
-  const sinkEvent = events.find((e) => e.carriesPayload);
-  if (url) {
-    // URL gate components are Z3-SOLVED values — used verbatim (proof woven if
-    // the solved value is itself the exploit string).
-    if (plan.url && plan.url.pathname) url.pathname = plan.url.pathname;
-    if (plan.url && plan.url.search) url.search = weaveProof(plan.url.search);
-    if (plan.url && plan.url.hash) { const h = weaveProof(plan.url.hash); url.hash = h[0] === "#" ? h : "#" + h; }
-  }
-  const targetUrl = url ? url.href : pageUrl;
-  const builtEvents = events.map((e) => {
-    let payload = (e.payload && typeof e.payload === "object") ? JSON.parse(JSON.stringify(e.payload)) : e.payload;
-    if (e.carriesPayload && e.payloadField) {
-      if (typeof payload !== "object" || payload === null) payload = {};
-      const solved = getByPath(payload, e.payloadField);
-      // ONLY the Z3-solved sink value (proof woven). No solved value ⇒ leave the
-      // plan's field untouched — never fabricate a template payload.
-      if (solved != null) setByPath(payload, e.payloadField, weaveProof(solved));
-    } else if (typeof payload === "string") {
-      payload = weaveProof(payload);   // a field may itself be the solved exploit string
-    }
-    return payload;
-  });
-  // Honest preconditions the attacker cannot set cross-origin.
-  let pre = "";
-  const stor = Array.isArray(plan.storage) ? plan.storage : [];
-  const cook = Array.isArray(plan.cookies) ? plan.cookies : [];
-  if (stor.length || cook.length) {
-    pre = "// PRECONDITION — the victim must already have this state (an attacker\n"
-        + "// CANNOT set another origin's storage/cookies; the exploit fires only if):\n";
-    stor.forEach((s) => { pre += "//   localStorage[" + JSON.stringify(s.key) + "] === " + JSON.stringify(s.value) + "\n"; });
-    cook.forEach((c) => { pre += "//   document.cookie contains " + JSON.stringify(c.value) + "\n"; });
-  }
-  if (!builtEvents.length) {
-    // URL-only complex plan (combined gates, no events).
-    return pre + "(function () {\n  window.open(" + JSON.stringify(targetUrl) + ", '_blank');\n})();\n";
-  }
-  // Open the gated target, then dispatch the ordered postMessage sequence. The
-  // opener handle is retained (COOP same-origin-allow-popups), so cross-origin
-  // postMessage to the opened window works.
-  const lines = [];
-  lines.push("(function () {");
-  lines.push("  var w = window.open(" + JSON.stringify(targetUrl) + ", '_blank');");
-  lines.push("  if (!w) { alert('allow popups for this PoC (the sequence needs the opened window)'); return; }");
-  lines.push("  var SEQ = " + JSON.stringify(builtEvents) + ";");
-  lines.push("  SEQ.forEach(function (data, i) {");
-  lines.push("    setTimeout(function () { try { w.postMessage(data, '*'); } catch (e) {} }, 500 + i * 600);");
-  lines.push("  });");
-  lines.push("})();");
-  return pre + lines.join("\n") + "\n";
-}
-
-function _buildPocJs(pageUrl, marker, opts) {
-  opts = opts || {};
-  // The PoC is compiled ONLY from the Z3 solve (the @P plan: solved values +
-  // channels + order). NO templates, no legacy strategy fallback. If there is no
-  // Z3 plan, there is NO PoC — `null` tells the caller not to offer one. (A
-  // proven REAL_EXPLOIT always carries a @P plan; an unproven/over-approx verdict
-  // never reaches here because the UI gates the PoC offer on REAL_EXPLOIT.)
-  const plan = opts.pocPlan;
-  if (!plan || !((Array.isArray(plan.events) && plan.events.length) ||
-                 (plan.url && (plan.url.hash || plan.url.search || plan.url.pathname)))) {
-    return null;
-  }
-  const header =
-    "// API-Client PoC — built from the Z3 solve over the page's real taint flow\n" +
-    "// (no template). Run on any attacker origin (e.g. https://example.com); the\n" +
-    "// target's OWN code reads the attacker-controlled input and reaches the sink.\n" +
-    "// apiclientsink(<finding-id>) is the proof hook (swap for e.g.\n" +
-    "// alert(document.domain) to demonstrate live). window.open needs a user\n" +
-    "// gesture — clicking Run provides it.\n";
-  return header + _buildPocJsFromPlan(pageUrl, marker, plan, opts);
-}
 
 // Sessions persist past completion so the popup can reopen after the
 // probe finishes and still render the result. Capped via TTL + LRU.
@@ -7203,19 +7089,13 @@ function _pruneProbeSessions() {
   }
 }
 
-// Prepare an exploit probe: build THE PoC artifact (_buildPocJs) and register a
-// session keyed by the finding's crypto.randomUUID for hit-correlation. No tab
-// is opened — the USER runs the PoC by clicking inside the sandboxed attacker
-// page (poc-sandbox.html); that click is the user activation window.open needs.
+// Register an exploit-probe session keyed by the finding's crypto.randomUUID for hit-correlation. The
+// PoC ARTIFACT itself is no longer compiled here — the Z3 pocPlan compiler was deleted (best-design:
+// forced execution is the whole engine). session.pocJs stays null until the forced-exec PoC (provenance
+// inversion + forced-exec search + concrete-replay verify) lands and populates it.
 function startExploitProbe(msg) {
   _pruneProbeSessions();
   const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions, pocPlan } = msg || {};
-  // pocPlan: the Z3-solved structured PoC (securitySinks[i].poc). _buildPocJs
-  // compiles it (via _buildPocJsFromPlan) into one self-contained script:
-  // {url:{hash,search,pathname}, events:[{kind,seq,payload,carriesPayload}],
-  // storage:[], cookies:[], verify:"marker"}. Strategy is OPTIONAL when pocPlan
-  // is present (the plan's solved values dictate the URL gates + postMessage
-  // sequence; storage/cookies become honest victim-preconditions, not faked).
   if (!strategy && !pocPlan) throw new Error("strategy required (hash | search | pathname | postmessage) or pocPlan from finding.poc");
   if (strategy === "search" && !paramName) {
     throw new Error("search strategy requires paramName — derive it from the finding's observed source (e.g. the argument to URLSearchParams.get)");
@@ -7264,16 +7144,10 @@ function startExploitProbe(msg) {
   // cross-origin attacker context. The SAME pocJs is what the popup displays.
   // When the PoC fires the sink, intercept.js → content.js → PROBE_HIT lands on
   // this session's marker, and EXPLOIT_PROBE_STATUS reports REAL EXPLOIT.
-  try {
-    session.pocJs = _buildPocJs(pageUrl, marker, {
-      strategy: strategy || (pocPlan ? "postmessage" : "hash"),
-      sinkType, sinkName, paramName, pocPlan: pocPlan || null,
-      fieldPath: session.fieldPath, decoders: session.decoders, preconditions: session.preconditions,
-    });
-  } catch (e) {
-    session.pocJs = null;
-    session.error = "PoC build failed: " + ((e && e.message) || String(e));
-  }
+  // PoC compilation removed with Z3 (best-design: forced execution is the whole engine). The
+  // replacement — a WORKING PoC compiled by REVERSING the traced flow (opaque provenance inversion +
+  // forced-exec search + concrete-replay verify, no solver, no template) — is the next focused build.
+  session.pocJs = null;
   session.status = "prepared";
   _probeSessions.set(marker, session);
   return session;
