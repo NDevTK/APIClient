@@ -121,6 +121,38 @@ function chunkFetchUrl(u) {
 function mergeCallsites(map, sites) {
   for (const s of sites || []) { const k = (s.method || "GET") + " " + s.url; if (!map.has(k)) map.set(k, s); }
 }
+function pathSegs(u) { const q = u.indexOf("?"); const p = q >= 0 ? u.slice(0, q) : u; return { segs: p.split("/"), query: q >= 0 ? u.slice(q) : "" }; }
+/* A concrete endpoint that is a SHAPE instantiated (e.g. /api/org/acme-42/members vs /api/org/{}/members)
+   is the SAME endpoint with its path placeholder filled — not a distinct one. Attach the concrete segment
+   as the shape's path-param example (the moat's KEY+VALUE) and drop the redundant concrete, so the surface
+   isn't double-counted. Only collapses a concrete INTO an existing shape (never merges two real resources). */
+function dedupShapeConcrete(map) {
+  const arr = [...map.values()];
+  const shapes = arr.filter((e) => e.url.indexOf("{}") >= 0);
+  if (!shapes.length) return;
+  for (const c of arr) {
+    if (c.url.indexOf("{}") >= 0) continue;                 // c must be concrete
+    for (const s of shapes) {
+      if ((s.method || "GET") !== (c.method || "GET")) continue;
+      const ss = pathSegs(s.url), cs = pathSegs(c.url);
+      if (ss.segs.length !== cs.segs.length || ss.query !== cs.query) continue;
+      let ok = true; const ex = [];
+      for (let i = 0; i < ss.segs.length; i++) {
+        if (ss.segs[i] === "{}") { if (cs.segs[i] && cs.segs[i].indexOf("{}") < 0) ex.push([i, cs.segs[i]]); else { ok = false; break; } }
+        else if (ss.segs[i] !== cs.segs[i]) { ok = false; break; }
+      }
+      if (ok && ex.length) {
+        for (const [i, v] of ex) {
+          let pp = (s.params || []).find((p) => p.location === "path" && p.name === "arg" + i);
+          if (!pp) { pp = { name: "arg" + i, location: "path", validValues: [] }; (s.params = s.params || []).push(pp); }
+          if (pp.validValues.indexOf(v) < 0) pp.validValues.push(v);   // concrete example for the path param
+        }
+        map.delete((c.method || "GET") + " " + c.url);
+        break;
+      }
+    }
+  }
+}
 
 self.astDispatch = async function astDispatch(msg) {
   try {
@@ -180,6 +212,7 @@ self.astDispatch = async function astDispatch(msg) {
       }
     }
 
+    dedupShapeConcrete(endpoints);   // collapse concrete instantiations into their shape (path-param examples)
     result.fetchCallSites = [...endpoints.values()];
     return { success: true, result };
   } catch (e) {
