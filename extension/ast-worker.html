@@ -19,4 +19,5 @@
      Shared with the analysis Worker (ast-thread.js importScripts). -->
 <script src="lib/safe-fetch.js"></script>
 <script src="offscreen-brain.js"></script>
-<script src="ast-worker.js"></script>
+<!-- v2 host bridge: ES6 module (imports the wasm factory lib/qjs/qjs.mjs), installs self.astDispatch. -->
+<script type="module" src="ast-worker.js"></script>

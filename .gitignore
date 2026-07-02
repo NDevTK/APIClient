@@ -9,3 +9,7 @@ testing/*.lock
 # COW build artifact: cow-barrier-instrumented wasm base64 blob (~38MB), regenerable via
 # `node engine/build.mjs cow`. Never committed — production ships the SINGLE_FILE qjs_worker.js.
 extension/lib/qjs/*.cow.gen.js
+# v2 engine build outputs staged into the extension by `node engine/build.mjs` (source of truth =
+# engine/host/main.c + the engine/qjs submodule). Regenerable; not committed to avoid binary churn.
+extension/lib/qjs/qjs.mjs
+extension/lib/qjs/qjs.wasm

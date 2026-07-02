@@ -25,7 +25,7 @@ async function getAnalyzerFingerprint() {
   if (_analyzerFingerprint) return _analyzerFingerprint;
   if (_analyzerFingerprintP) return _analyzerFingerprintP;
   _analyzerFingerprintP = (async () => {
-    var files = ["ast-thread.js", "lib/qjs/qjs_worker.js", "lib/qjs/hostedge.gen.js"];
+    var files = ["ast-worker.js", "lib/qjs/qjs.mjs"];   // v2 host bridge + engine module (wasm bytes bump via qjs.mjs's embedded fingerprint is out of scope; a wasm rebuild that changes behavior should bump ast-worker.js)
     var hashes = [];
     for (var i = 0; i < files.length; i++) {
       try {

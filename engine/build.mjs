@@ -10,7 +10,7 @@
  * harness once the browser target is wired.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -48,3 +48,11 @@ console.log("[build] emcc " + sources.length + " sources -> engine/host/out/qjs.
 const r = spawnSync(EMCC, args, { stdio: "inherit", shell: true, cwd: QJS });
 if (r.status !== 0) { console.error("[build] FAILED rc=" + r.status); process.exit(r.status || 1); }
 console.log("[build] OK -> " + resolve(join(OUT, "qjs.mjs")));
+
+/* Stage the ES6 module + wasm into the extension so the offscreen document (ast-worker.js) can
+   import them at chrome-extension://<id>/lib/qjs/qjs.mjs (which fetches qjs.wasm alongside). This
+   replaces the old sync.mjs staging of qjs_worker.js/hostedge.gen.js (dead with the fresh fork). */
+const STAGE = join(ENGINE, "..", "extension", "lib", "qjs");
+mkdirSync(STAGE, { recursive: true });
+for (const f of ["qjs.mjs", "qjs.wasm"]) copyFileSync(join(OUT, f), join(STAGE, f));
+console.log("[build] staged -> " + resolve(join(STAGE, "qjs.mjs")) + " (+ qjs.wasm)");
