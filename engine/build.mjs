@@ -10,7 +10,7 @@
  * harness once the browser target is wired.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, existsSync, copyFileSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,11 +18,43 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
 const QJS = join(ENGINE, "qjs");
 const HOST = join(ENGINE, "host");
 const OUT = join(HOST, "out");
-const EMSDK = join(ENGINE, ".work", "emsdk");
+const WORK = join(ENGINE, ".work");
+const EMSDK = join(WORK, "emsdk");
 const EMCC = join(EMSDK, "upstream", "emscripten", process.platform === "win32" ? "emcc.bat" : "emcc");
 
 if (!existsSync(EMCC)) { console.error("[build] emcc not found at " + EMCC); process.exit(1); }
 mkdirSync(OUT, { recursive: true });
+
+/* ── Lexbor DOM (HTML5 parser + DOM + CSS selectors) ─────────────────────────────
+   The moat runs the page's real bundle against a real DOM. Lexbor is pure C, compiles
+   to wasm, and links in the same module as quickjs. It's slow to compile (213 files),
+   so build it ONCE into a cached static archive (liblexbor.a) and link that; rebuilds
+   of the engine (quickjs + main.c) then stay fast. Rebuild the archive with
+   `node engine/build.mjs lexbor`. */
+const LEXBOR_SRC = join(ENGINE, "lexbor", "source");
+const LEXBOR_LIB = join(WORK, "liblexbor.o");   // relocatable partial-link object (emcc -o .a doesn't archive from .c)
+const LEXBOR_INC = LEXBOR_SRC;
+function findC(dir, out) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) { if (p.includes("windows_nt")) continue; findC(p, out); }  // posix port on emscripten
+    else if (e.name.endsWith(".c")) out.push(p);
+  }
+  return out;
+}
+function buildLexbor(force) {
+  if (!force && existsSync(LEXBOR_LIB)) return;
+  const srcs = findC(join(LEXBOR_SRC, "lexbor"), []);
+  console.log("[build] lexbor: compiling " + srcs.length + " sources -> liblexbor.a (once, ~minutes)");
+  const rsp = join(WORK, "lexbor.rsp");
+  const fwd = (s) => s.replace(/\\/g, "/");   // response-file backslashes are clang escapes -> forward-slash paths
+  writeFileSync(rsp, [...srcs.map(fwd), "-I", fwd(LEXBOR_INC), "-O2", "-w", "-D_GNU_SOURCE", "-r", "-o", fwd(LEXBOR_LIB)].join("\n"));
+  const r = spawnSync(EMCC, ["@" + rsp], { stdio: "inherit", shell: true, cwd: ENGINE });
+  if (r.status !== 0) { console.error("[build] lexbor FAILED rc=" + r.status); process.exit(r.status || 1); }
+  console.log("[build] lexbor OK -> " + LEXBOR_LIB);
+}
+buildLexbor(process.argv[2] === "lexbor");
+if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c"]
   .map((f) => join(QJS, f))
@@ -30,7 +62,9 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-
 
 const args = [
   ...sources,
+  LEXBOR_LIB,                 // link the cached Lexbor DOM archive
   "-I", QJS,
+  "-I", LEXBOR_INC,           // <lexbor/html/html.h> etc for main.c's DOM host-edges
   "-O1", "-w",
   "-D_GNU_SOURCE",
   "-sALLOW_MEMORY_GROWTH=1",
