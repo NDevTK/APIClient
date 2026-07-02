@@ -142,19 +142,17 @@ function _pushGlobalLog(entry, tabId, documentId, frameId) {
   while (globalRequestLog.length > MAX_REQUEST_LOG_ENTRIES) globalRequestLog.pop();
 }
 
-const _deepStatsByDoc = new Map(); // documentId → { rem, total, steps, stop, ts } — background deep-grind progress for the popup (transient; repopulated by AST_PARTIAL/AST_RESUMED)
-const _lastGrindStatsByDoc = new Map(); // documentId → last COMPLETED grind's _deepStats — NOT evicted (mirror of the above), so the per-grind frontier shape (dnf*/gs* drive-trace) stays inspectable after analysis completes. Cleared only on CLEAR_TAB.
 const _wsConnState = new Map(); // documentId → Map<wsId, { url, readyState }>
 
 // -- Review-completion eviction ---------------------------------------------
-// A document whose deep grind has COMPLETED is dropped from in-memory
-// state.docs to keep memory bounded across a long many-site session. Its
-// learnings already live in globalStore (the moat) and globalRequestLog
-// (traffic), and a completed grind deletes its own feDeepDB resume record.
-// Navigate-away NEVER evicts (only grind completion does); a browser reload
-// drops state.docs but the background grind resumes from feDeepDB + globalStore
-// reloads from IDB. The sweep is debounced so it runs after a merge plus any
-// chunk re-arm has settled.
+// A document whose analysis has COMPLETED (its ONE forced-exec run merged to
+// globalStore, its frontier residue parked to IDB via frontierPut) is dropped
+// from in-memory state.docs to keep RAM bounded across a long many-site session.
+// Its learnings live in globalStore (the moat) + globalRequestLog (traffic); its
+// unfinished exploration lives in the GLOBAL frontier (replay recipes), resumed by
+// the host WFQ — not by holding the doc's transient buffer in RAM. Navigate-away
+// never forces eviction; a doc is evictable once analysed and not re-analysing.
+// The sweep is debounced so it runs after the merge has settled.
 var _evictSweepTimer = null;
 function _scheduleEvictSweep() {
   if (_evictSweepTimer) return;
@@ -163,15 +161,10 @@ function _scheduleEvictSweep() {
 function _evictReviewedDocs() {
   var gone = [];
   state.docs.forEach(function (doc, documentId) {
-    var ds = _deepStatsByDoc.get(documentId);
-    // Terminal: a clean finish (stop "done" + rem 0) OR a stall (stop
-    // "no-progress"/"recycle-noprogress"; the loop EXITED, rem may be >0). A
-    // mid-grind partial carries stop "done" with rem>0; "n/a" is pre-grind.
-    var done = ds && ((ds.stop === "done" && ds.rem === 0) || ds.stop === "no-progress" || ds.stop === "recycle-noprogress");
-    if (!done) return;
-    var buf = _scriptBuffers.get(documentId);
-    if (buf && buf._chunkGrindDone === false) return;        // a chunk re-grind is pending
-    gone.push(documentId);
+    // Reviewed = its forced-exec run produced results (merged to globalStore) AND it is not
+    // currently being (re-)analysed. The parked frontier (IDB recipes) carries any residue.
+    var reviewed = doc && (doc._astResults || doc._astError) && !_analysisInflight.has(documentId);
+    if (reviewed) gone.push(documentId);
   });
   for (var i = 0; i < gone.length; i++) _evictReviewedDoc(gone[i]);
   if (gone.length) console.debug("[evict] dropped %d reviewed document(s) from state.docs", gone.length);
@@ -182,7 +175,6 @@ function _evictReviewedDoc(documentId) {
   // global) or _docOrigins (the credentialed-read principal stays; late same-doc
   // traffic is routed to globalStore-only by _docForLearning, never resurrecting).
   state.docs.delete(documentId);
-  _deepStatsByDoc.delete(documentId);
   _scriptBuffers.delete(documentId);
   _wsConnState.delete(documentId);
   _contentPings.delete(documentId);
@@ -861,8 +853,6 @@ async function clearGlobalStore() {
   globalStore.scopes.clear();
   globalStore.securityFindings.clear();
   globalStore.deepResumeMeta.clear();
-  _deepStatsByDoc.clear();
-  _lastGrindStatsByDoc.clear();
   // Drop any SW-side analyses still queued so a pending review can't repopulate
   // the store right after we wipe it (the offscreen worker's running/queued
   // grind is stopped separately via AST_CLEAR before this runs).
@@ -4783,11 +4773,10 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
   for (var smi = 0; smi < sourceMapScripts.length; smi++) {
     _fetchSourceMapForScript(tabId, tab, analysis, sourceMapScripts[smi].scriptUrl, sourceMapScripts[smi].smUrl);
   }
-
-  // Even on a cached eager-bundle hit, fold in the lazy chunks (the chunk
-  // re-analyses are cache hits too). Fire-and-forget: replay path is sync.
-  _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, analysis.esmImportUrls)
-    .catch(function (e) { console.debug("[AST:chunks] tab=%d replay error: %s", tabId, e && e.message); });
+  // Lazy chunks are loaded by the ONE scheduler IN PLACE: the engine emits @CHUNK during forced
+  // execution, runEngine fetches it (self.safeFetch) and qjs_provide evals it in the live instance,
+  // surfacing its endpoints in the SAME run. No host-side re-fetch/re-analyze round (that was a second
+  // scheduler — deleted). A chunk form the engine doesn't yet discover in-place is an engine gap to close.
 }
 
 // Deterministic in-flight signal for the diagnostic / e2e harness:
@@ -4796,193 +4785,6 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
 // instead of guessing a wall-clock budget — the wait scales with
 // real worker execution.
 const _analysisInflight = new Set();
-// Lazy-chunk download (ONE round — the eager-loader manifest, which already
-// includes the login-gated partials' chunks like 30129 / issues/preheat).
-// Folds the discovered chunks into the combined set and re-analyses so their
-// endpoints are learned. Bounded: a transitive fixpoint chases the whole
-// ~700-chunk graph; one round is the directly-lazy surface.
-// @security-contract  LOADER: lazy import()/chunk (chunkUrls are bundle-DISCOVERED = untrusted)
-//   loads:    JAVASCRIPT (executed as code)          quickjs-control: YES
-//   enforced: safeFetch(as:"script") -> CORB + SSRF; principal = THIS document's
-//             own trusted url (_chunkPageOrigin = buf.url); CORB-drops
-//             surface in _chunkDiag.corbBlocked.
-async function _maybeDownloadChunks(tabId, buf, chunkUrls, esmImportUrls) {
-  if (!buf) return;
-  // Terminal guard: once the final (no-fresh) round ran the grind, stop. Webpack
-  // script.src chunks follow ONE round; ESM import URLs (a bounded dependency tree)
-  // follow MULTI-round to fixpoint — see the candidate split below.
-  if (buf._chunkGrindDone) return;
-  // A page with NO discovered lazy chunks (a simple page, an inline-only
-  // message handler, learn.microsoft.com's no-split bundle) STILL needs the
-  // deep orphan-residue grind — it's what drives the gated/unreached
-  // functions (the multi-message handler that only reaches innerHTML after
-  // state-priming; wrapper-callers like mxe(){return M("/site-header.json")}).
-  // The old `chunkUrls.length === 0` early-return bypassed the
-  // `fresh.length === 0` deep-trigger below, so a zero-chunk page never ran
-  // the deep pass — confirmed live: poc_multi produced 0 security findings
-  // because its handler orphan was never driven. Normalise a missing/empty
-  // list to [] and fall through; the fresh-empty branch sets _chunkRoundDone
-  // and dispatches the deep pass exactly as the no-fresh-chunks case does.
-  if (!Array.isArray(chunkUrls)) chunkUrls = [];
-  if (!Array.isArray(esmImportUrls)) esmImportUrls = [];
-  // Round 1 considers BOTH webpack chunks + ESM imports; later rounds consider ONLY
-  // newly-surfaced ESM imports (transitive deps of fetched modules). This keeps a
-  // webpack app's huge script.src graph one-round (no transitive fetch storm) while
-  // following ESM `import` trees to fixpoint. _chunkSeen dedups → `fresh` shrinks →
-  // terminates. Only the final (fresh-empty) round runs the deep grind (_chunkGrindDone).
-  var _firstRound = !buf._chunkFetchStarted;
-  buf._chunkFetchStarted = true;
-  chunkUrls = _firstRound ? chunkUrls.concat(esmImportUrls) : esmImportUrls;
-  if (!buf._chunkSeen) buf._chunkSeen = new Set();
-  var known = new Set();
-  var maxOrder = 0;
-  for (var i = 0; i < buf.scripts.length; i++) {
-    if (buf.scripts[i].url) known.add(buf.scripts[i].url);
-    if (typeof buf.scripts[i].order === "number" && buf.scripts[i].order > maxOrder) maxOrder = buf.scripts[i].order;
-  }
-  /* Resolve chunk URLs (script/Worker/SharedWorker constructors) against
-     the page base BEFORE filtering. Worker/SharedWorker callers usually
-     pass a relative path (`new Worker("/static/worker.js")`); the
-     previous `^https?:\/\/` filter dropped them outright, so every fetch
-     surface inside Worker bundles was invisible. */
-  // Base = THIS document's own browser url (buf.url); fall back to its first
-  // fetched script URL. NEVER the tab's top-frame url — a sub-frame resolves its
-  // chunks against its OWN document, not the embedder.
-  var _baseUrl = buf.url || (buf.scripts.length && buf.scripts[0].url) || null;
-  var fresh = [];
-  for (var j = 0; j < chunkUrls.length; j++) {
-    var u = chunkUrls[j];
-    if (!u) continue;
-    var absU = null;
-    if (/^https?:\/\//i.test(u)) absU = u;
-    else if (_baseUrl) {
-      try { absU = new URL(u, _baseUrl).href; }
-      catch (e) {
-        console.warn("[chunkUrls] resolve failed for", u, "vs", _baseUrl, ":", e && e.message || e);
-        continue;
-      }
-    } else {
-      /* No base URL available — can't resolve a relative chunk path. The
-         emission is preserved on chunkUrls for diagnostic visibility but
-         not downloaded. Surface so the gap is visible. */
-      console.debug("[chunkUrls] dropped relative URL (no base):", u);
-      continue;
-    }
-    if (known.has(absU) || buf._chunkSeen.has(absU)) continue;
-    buf._chunkSeen.add(absU);
-    fresh.push(absU);
-  }
-  /* Chunk-pipeline observability (layers 1-2 of the include-fragment chain:
-     discover → fetch). Records per round what was received, deduped vs already-
-     shipped, and (updated in the fetch loop below) fetched OK / failed, plus
-     whether any custom-element-defining script (github-elements / element-
-     registry / behaviors) is present — so a missing endpoint's defining script
-     is TRACED through the pipeline, not guessed. Read via `harness offscreen
-     "return self._chunkDiag"`. */
-  if (!self._chunkDiag) self._chunkDiag = [];
-  var _ceRe = /github-elements|element-registry|behaviors|catalyst/i;
-  var _cdiag = { tab: tabId, received: chunkUrls.length, fresh: fresh.length,
-    dedupedAlreadyShipped: chunkUrls.length - fresh.length,
-    ceScriptsFresh: fresh.filter(function (u) { return _ceRe.test(u); }).map(function (u) { return u.split("/").pop().slice(0, 40); }),
-    fetchedOk: 0, fetchFailed: 0 };
-  self._chunkDiag.push(_cdiag);
-  if (self._chunkDiag.length > 20) self._chunkDiag.shift();
-  if (fresh.length === 0) {
-    // No new lazy chunks to fetch — but the deep grind (orphan residue
-    // drive) is valuable for EVERY page, not just chunk-heavy ones. It's
-    // what drives wrapper-callers like `mxe(){return M("/site-header.json")}`
-    // to resolve the concrete URL. Gating it behind a successful chunk
-    // download meant a no-lazy-chunk site (learn.microsoft.com) NEVER ran
-    // the deep grind, so its load-time wrapper fetches (site-header.json,
-    // toc.json, taxonomies, …) stayed unlearned — confirmed live: 5 ast
-    // endpoints, empty deep-status, 7 real fetch() calls missed. Run the
-    // deep pass once: _chunkRoundDone=true makes the inner call dispatch deep=true;
-    // _chunkGrindDone marks the grind ran so the grind pass's own trailing
-    // _maybeDownloadChunks returns (no re-loop). Reset both on throw so a wasm trap
-    // doesn't permanently lock out a later retry (mirrors the download path).
-    buf._chunkGrindDone = true;
-    buf._chunkRoundDone = true;
-    try { await _analyzeCombinedScriptsInner(tabId, buf); }
-    catch (e) { buf._chunkGrindDone = false; buf._chunkRoundDone = false; throw e; }
-    return;
-  }
-  console.debug("[AST:chunks] tab=%d: %d new lazy chunk(s) to download", tabId, fresh.length);
-  var added = 0;
-  var CONC = 8;
-  // Trusted page origin for safeFetch's origin-relative rule = THIS document's
-  // own browser url (buf.url), NOT the tab's top-frame url. Chunk URLs (cu) are
-  // bundle-DISCOVERED = attacker-controlled; the principal must be the document's
-  // OWN trusted origin so a localhost page loads its localhost chunks while a
-  // public page still cannot reach a private chunk.
-  var _chunkPageOrigin = buf.url || "";
-  for (var s = 0; s < fresh.length; s += CONC) {
-    var batch = fresh.slice(s, s + CONC);
-    // SW fetch (host_permissions: <all_urls>, cookies omitted) — NOT
-    // pageContextFetch. Chunk assets are public (github.githubassets.com); the
-    // page-context relay was flaky (a navigating/closing tab dropped fetches
-    // mid-flight, so the combined sometimes folded in only SOME chunks — the
-    // residue-variance bug that lost preheat). The SW fetch is independent of the
-    // tab's lifecycle and not subject to the offscreen's COEP.
-    var results = await Promise.all(batch.map(function (cu) {
-      // as:"script" — a chunk is loaded AS code, so safeFetch enforces CORB
-      // (cross-origin must be JS-typed) + SSRF with the page principal.
-      return safeFetch(cu, { pageUrl: _chunkPageOrigin, pageOrigin: buf.origin || "", method: "GET", as: "script" })
-        .then(function (resp) {
-          if (!resp.ok) return { u: cu, body: null, corb: resp.statusText === "blocked-corb" };
-          return { u: cu, body: resp.body };
-        })
-        .catch(function (e) { return { u: cu, body: null, err: String(e && e.message || e) }; });
-    }));
-    for (var ri = 0; ri < results.length; ri++) {
-      var rr = results[ri];
-      if (rr.body) {
-        buf.scripts.push({ url: rr.u, code: rr.body, order: ++maxOrder });
-        // Diagnostic: capture each fetched chunk body's first chars (read via
-        // `harness offscreen "return self._fetchedHeads"`). Localises an ESM
-        // content-mangle to the FETCH vs the downstream combine/slice — proved the
-        // esm.sh ''@1:1 SyntaxError is clean-at-fetch (c0:47) so combine-side.
-        try { if (!self._fetchedHeads) self._fetchedHeads = []; var _fb = String(rr.body || "");
-          self._fetchedHeads.push({ u: rr.u, len: _fb.length, c0: _fb.charCodeAt(0), head: _fb.slice(0, 30) });
-          if (self._fetchedHeads.length > 40) self._fetchedHeads.shift(); } catch (e) {}
-        added++;
-        _cdiag.fetchedOk++;
-      } else if (rr.corb) {
-        // A discovered import dropped because the cross-origin response wasn't
-        // JS-typed — surface it distinctly (not lumped into fetch failures) so a
-        // CORB-dropped chunk is observable, never a silent coverage loss.
-        _cdiag.corbBlocked = (_cdiag.corbBlocked || 0) + 1;
-        console.debug("[AST:chunks] CORB-blocked non-JS import %s", rr.u);
-      } else {
-        _cdiag.fetchFailed++;
-        console.debug("[AST:chunks] fetch failed %s: %s", rr.u, rr.err || "not-ok/empty");
-      }
-    }
-  }
-  if (added === 0) {
-    // Every candidate chunk failed to download — terminal (they won't change on
-    // retry; _chunkSeen dedups them). Run the deep grind on what we have.
-    buf._chunkGrindDone = true;
-    buf._chunkRoundDone = true;
-    try { await _analyzeCombinedScriptsInner(tabId, buf); }
-    catch (e) { buf._chunkGrindDone = false; buf._chunkRoundDone = false; throw e; }
-    return;
-  }
-  console.debug("[AST:chunks] tab=%d: folded in %d chunk(s), re-analysing (%d scripts total)",
-    tabId, added, buf.scripts.length);
-  /* Set _chunkRoundDone BEFORE the inner call so _analyzeCombinedScriptsInner
-     reads it as TRUE and passes seedOnly+deep=true to the worker (chunk-
-     fold round runs the SEED + deep-grind, NOT another full value-spread
-     BFS over the now-647-script bundle). The earlier "set after success
-     only" version turned round-2 into a full-BFS run that ate ~95s × 429
-     schedules and skipped the deep grind entirely — observed live as
-     deepStats.steps=0 on round-2. This is a FETCH round, NOT terminal: its trailing
-     _maybeDownloadChunks runs again and — _chunkGrindDone not yet set — follows THIS
-     round's newly-surfaced ESM transitive imports (the fixpoint loop; webpack chunks
-     are not re-considered after round 1). _chunkRoundDone reset on throw allows retry. */
-  buf._chunkRoundDone = true;
-  try { await _analyzeCombinedScriptsInner(tabId, buf); }
-  catch (e) { buf._chunkRoundDone = false; throw e; }
-}
 
 // Review queue. New pages (and their JS) are QUEUED, then a single drainer
 // reviews ONE page at a time. Combined with the worker throttling itself
@@ -5133,18 +4935,11 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // post-migration fix: round-1 scripts are engine-sourced (buf.scripts empty), so
   // the document identity lives in that leading pageHtml entry, not a per-script one.
   if (analyzerFp && scriptHashes.length === scripts.length + 1) {
-    // Cache key = (analyzer fingerprint) + (script content hashes) + (round
-    // mode). Any change to the analyzer worker files OR the analyzed scripts
-    // flips the key, so stale entries simply don't match. The round-mode
-    // suffix is load-bearing: round 1 (BFS, deep=false) and round 2 (deep
-    // orphan-residue grind, _chunkRoundDone=true) run the SAME script set but
-    // produce DIFFERENT results — round 2 adds the gated/unreached findings
-    // (the state-primed multi-message handler, wrapper-caller URLs). Without
-    // the suffix, round 2's identical key HIT round 1's cached BFS result and
-    // returned before dispatching the worker, so the deep grind NEVER ran on a
-    // zero-new-chunk page — confirmed live: poc_multi's multi-message XSS was
-    // never found because round 2 short-circuited on the round-1 cache entry.
-    cacheKey = analyzerFp + "|" + scriptHashes.join("+") + (buf._chunkRoundDone ? "|deep" : "");
+    // Cache key = (analyzer fingerprint) + (script content hashes). Any change to the analyzer
+    // worker files OR the analyzed scripts flips the key, so stale entries simply don't match.
+    // There is ONE analysis pass now (the engine drives BFS + orphan-residue + in-place chunks in
+    // the ONE scheduler); no round-mode suffix.
+    cacheKey = analyzerFp + "|" + scriptHashes.join("+");
     var cached = globalStore.scriptCache.get(cacheKey);
     if (cached) {
       console.debug("[AST:cache] Cache HIT for tab=%d (%d scripts, key=%s…)",
@@ -5203,32 +4998,6 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // own origin, never the embedder's.
   var tabUrl = buf.url || buf.pageUrl || "";
 
-  // Persist the resume metadata (combined→chunk line map + chunk source-map
-  // URLs) BEFORE the long deep grind, not after. The resume path is exactly the
-  // case where the SW evicts mid-grind, so the worker never returns and an
-  // after-the-fact save would never run; saving it up front lets the eventual
-  // AST_RESUMED merge re-resolve path-param names (owner/repo) the way the eager
-  // merge does. Keyed by documentId (NEVER url — same url != same content) to
-  // match the resume lookup.
-  if (buf._chunkRoundDone) {
-    try {
-      globalStore.deepResumeMeta.set(buf.docKey, {
-        scriptOffsets: scriptOffsets,
-        sourceMapScripts: sourceMapScripts,
-        savedAt: Date.now(),
-      });
-      scheduleSave();
-    } catch (e) {
-      /* Persisting the deep-resume metadata (combined→chunk line map +
-         per-chunk source-map URLs) failed. Without these, an SW-eviction
-         resume of the deep grind reads back the chunks but can't resolve
-         source-map names (e/a → owner/repo) on its merged @H records —
-         labels stay minified. Surface so a quota / IDB-lock condition
-         is diagnosable; the deep grind itself still runs. */
-      console.warn("[brain] deepResumeMeta persist failed:", e && e.message || e, "tabUrl=" + tabUrl);
-    }
-  }
-
   // Analyze combined in offscreen document (non-blocking)
   var analysis;
   var response;
@@ -5244,18 +5013,6 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
       scriptOffsets: scriptOffsets,
       sourceMapScripts: sourceMapScripts,
       pageHtml: getDoc(buf.docKey)._pageHtml || null,
-      // The chunk re-analysis pass (round 2, after _maybeDownloadChunks set
-      // _chunkRoundDone) runs SEED-ONLY: it folds in ~346 lazy chunks (~18 MB
-      // combined), where the full value-spread BFS would be a minutes-long
-      // cliff. The seed's loader/static drive recovers the chunk endpoints;
-      // round 1's full BFS already gave the eager endpoints their spread.
-      seedOnly: !!buf._chunkRoundDone,
-      // Deep orphan @T drive (render-gated chunk endpoints like preheat) on
-      // the chunk-fold round. It's THROTTLED+resumable now: the worker steps
-      // it in small batches with CPU yields between (qjsmain persistent
-      // runtime), so it learns the unused/login-gated surface at a low duty
-      // cycle in the background instead of pegging a core.
-      deep: !!buf._chunkRoundDone,
       // Host CPU slice (resource-pressure proxy): a page with more than this many forced STARTERS parks
       // its residue to the GLOBAL frontier (resumed later by value) instead of running to completion and
       // blocking the offscreen -> BFS ACROSS sites. Small pages (< quantum) finish in one visit unchanged.
@@ -5283,22 +5040,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     // them in isolation loses the cross-script interprocedural visibility (webpack
     // chunk exports, shared globals) the whole design depends on, and emitting that
     // degraded result would MASK the real failure. _astError (above) + the worker's
-    // @WHY/@E are the signal to root-cause; the resumable grind retries.
-    //
-    // BUT still dispatch the DEEP residue round on a RECOVERABLE failure. The big
-    // external-<script src> apps (github) abort round-1's combined BFS at the
-    // JS_FreeRuntime teardown leak (see :5212) and `return` here — which silently
-    // skips _maybeDownloadChunks below, so `_chunkRoundDone` never sets, `deep`
-    // (=!!buf._chunkRoundDone) is never true, and the ENTIRE deep residue (github's
-    // ~98k orphans — the unused/login-gated moat) is lost to one failed BFS. The
-    // deep round is independent of a clean round 1: it's seedOnly (so it enqueues NO
-    // BFS frontier — cannot path-explode) + resumable, and re-sources the page's
-    // scripts via the engine. Skip on a Clear (handled above) or an epoch reset.
-    // _maybeDownloadChunks self-guards re-fire via _chunkGrindDone (:4723).
-    if (_ep === _dataEpoch) {
-      try { await _maybeDownloadChunks(tabId, buf, [], []); }
-      catch (eDeep) { console.debug("[AST:combined] deep-on-failure dispatch threw tab=%d: %s", tabId, eDeep && (eDeep.message || eDeep)); }
-    }
+    // @WHY/@E are the signal to root-cause; the resumable frontier retries via replay recipes.
     return;
   }
   getDoc(buf.docKey)._astError = null;
@@ -5492,17 +5234,8 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     (analysis.dangerousPatterns && analysis.dangerousPatterns.length);
   if (!hasFindings && sourceMapScripts.length === 0) {
     console.debug("[AST:combined] No findings for tab=%d", tabId);
-    // The deep orphan-residue grind is exactly what surfaces the findings
-    // round 1's BFS couldn't reach — the state-primed multi-message handler,
-    // gated/login-only chunk endpoints, wrapper-caller URLs. So it MUST run
-    // even when round 1 found NOTHING. Returning here without triggering it
-    // was circular: a page whose ONLY finding needs the deep grind (poc_multi's
-    // multi-message XSS) found nothing in round 1 → returned → the deep grind
-    // never dispatched → the finding was never found. The other early returns
-    // above (sendToOffscreen throw, worker cleared, epoch reset) are genuine
-    // abort paths where skipping is correct; this "no findings yet" one is not.
-    try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, (analysis.esmImportUrls || []).concat(analysis.inRunModuleUrls || [])); }
-    catch (e) { console.debug("[AST:chunks] tab=%d error: %s", tabId, e && e.message); }
+    // The deep orphan-residue drive already ran IN the ONE scheduler (seed_orphans is continuous,
+    // chunks eval'd in place) — nothing more to dispatch here.
     return;
   }
 
@@ -5626,11 +5359,9 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     _fetchSourceMapForScript(tabId, tab, analysis, sourceMapScripts[smi].scriptUrl, sourceMapScripts[smi].smUrl);
   }
 
-  // Download the lazy chunks this run discovered and re-analyse the union —
-  // learns the login-gated endpoints (issues/preheat/index, …). Awaited so
-  // the in-flight signal covers it.
-  try { await _maybeDownloadChunks(tabId, buf, analysis.chunkUrls, (analysis.esmImportUrls || []).concat(analysis.inRunModuleUrls || [])); }
-  catch (e) { console.debug("[AST:chunks] tab=%d error: %s", tabId, e && e.message); }
+  // Lazy chunks were already fetched + eval'd IN PLACE by the ONE scheduler during this run
+  // (@CHUNK → runEngine safeFetch → qjs_provide), so their endpoints are in `analysis` already.
+  // No host-side re-fetch/re-analyze round.
 }
 
 function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
@@ -6031,26 +5762,10 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
       console.debug("[AST:merge] Security findings for %s: %d sinks, %d dangerous patterns",
         analysis.sourceUrl, secSinks.length, dangerousPats.length);
     }
-    // Record this document deep-grind stats so the eviction sweep can tell when
-    // analysis is COMPLETE (rem 0 + terminal stop). Covers main-response,
-    // _resumed, and cache-hit merges. Round-1/seed results carry rem -1 / stop
-    // "n/a" and never mark a doc reviewed.
-    if (analysis && analysis._deepStats && tab && tab.documentId) {
-      _deepStatsByDoc.set(tab.documentId, Object.assign({}, analysis._deepStats, { ts: Date.now() }));
-      // _deepStatsByDoc is EVICTED when the doc completes (the sweep clears it to release
-      // the doc), which left the per-grind frontier counters (dnf*/gs* drive-trace)
-      // unreadable post-analysis. Mirror into a NON-evicted map so the grind's frontier
-      // shape stays inspectable (popup deep-status / harness) after completion.
-      _lastGrindStatsByDoc.set(tab.documentId, Object.assign({}, analysis._deepStats, { ts: Date.now() }));
-    }
   }
-  // Schedule the eviction sweep on EVERY merge, not just the final one: a TERMINAL
-  // grind stat (a no-progress/recycle stall, or a clean done) can arrive on a streaming
-  // PARTIAL, and gating on !isPartial left such a reviewed doc parked in state.docs
-  // forever (a stuck no-progress grind — neither resumed nor evicted, CPU/memory held).
-  // The sweep re-validates the terminal condition per doc (line 163), so a mid-grind
-  // partial is a cheap no-op (debounced to one pending timer); only a concluded grind
-  // actually evicts.
+  // Schedule the eviction sweep after this merge: the doc's forced-exec run has produced
+  // results (globalStore updated, residue parked to IDB), so once it is no longer in-flight
+  // the sweep drops its transient RAM view. Debounced to one pending timer.
   _scheduleEvictSweep();
 }
 
@@ -6148,8 +5863,7 @@ function _mergeDeepResult(documentId, sourceUrl, result, doNames) {
     // documentId OR global: find the LIVE document by documentId and merge to it +
     // globalStore; a GONE document (resumed after the doc navigated away —
     // documentId no longer live) merges to globalStore ONLY via a transient view,
-    // NEVER url-matched to a same-url sibling. deepResumeMeta + _deepStatsByDoc are
-    // documentId-keyed.
+    // NEVER url-matched to a same-url sibling. deepResumeMeta is documentId-keyed.
     if (!documentId) { console.debug("[AST:deep] deep result with no documentId — dropping"); return; }
     var _rdoc = state.docs.get(documentId) || null;
     var _drm = globalStore.deepResumeMeta.get(documentId);
@@ -6182,41 +5896,9 @@ function _mergeDeepResult(documentId, sourceUrl, result, doNames) {
     mergeToGlobal(_rtab);
     if (_rdoc) notifyPopup(_rdoc.tabId);
     console.debug("[AST:deep] merged %s into doc=%s (tab=%s)", sourceUrl, documentId, _rdoc ? _rdoc.tabId : "(gone→global)");
-    // A chunk/script a gated-loader orphan inserted (createElement("script").src=)
-    // is discovered DURING the deep grind — it lands in result.chunkUrls HERE, not
-    // the initial analysis (which already ran _maybeDownloadChunks with an EMPTY list
-    // before the grind drove the loader). Without downloading it, the inserted
-    // library's endpoints — the programmatic-insert MOAT: a logged-out admin/lazy
-    // loader's whole API surface — are never learned. Feed grind-discovered chunks
-    // through the SAME safeFetch chokepoint + re-analysis. Re-arm the terminal
-    // _chunkGrindDone guard ONLY for a genuinely-fresh ABSOLUTE url (the loader
-    // re-inserts the same url each grind → _chunkSeen dedup → next pass fresh-empty
-    // → terminates, no loop).
-    if (result.chunkUrls && result.chunkUrls.length) {
-      // Per-document buffer is keyed by documentId (NEVER url — same url != same
-      // content) — get it directly by the deep result's documentId.
-      var _dbuf = _scriptBuffers.get(documentId) || null;
-      if (_dbuf) {
-        var _seen = _dbuf._chunkSeen;
-        var _hasFresh = false;
-        for (var _ci = 0; _ci < result.chunkUrls.length; _ci++) {
-          var _cu = result.chunkUrls[_ci];
-          if (_cu && /^https?:\/\//i.test(_cu) && !(_seen && _seen.has(_cu))) { _hasFresh = true; break; }
-        }
-        if (_hasFresh) {
-          _dbuf._chunkGrindDone = false;
-          // Also clear _chunkFetchStarted: _maybeDownloadChunks' line ~4755 drops
-          // webpack/script chunkUrls on non-first rounds (chunkUrls=esmImportUrls),
-          // keeping the webpack graph one-round — but a grind-discovered <script src>
-          // IS a genuinely-new script that must be fetched. Treat this as a fresh
-          // round so the script chunk is considered; _chunkSeen dedup (the _hasFresh
-          // guard above + the internal fresh filter) keeps it bounded / loop-free.
-          _dbuf._chunkFetchStarted = false;
-          _maybeDownloadChunks(_rtid, _dbuf, result.chunkUrls, (result.esmImportUrls || []).concat(result.inRunModuleUrls || []))
-            .catch(function (e) { console.debug("[AST:deep] grind-chunk download error: %s", e && e.message); });
-        }
-      }
-    }
+    // A chunk/script an orphan inserted (createElement("script").src=) during forced
+    // execution is fetched + eval'd IN PLACE by the ONE scheduler in the same run, so its
+    // endpoints are already in `result` — no host-side re-fetch round.
   } catch (e) { console.debug("[AST:deep] merge error: %s", e && e.message); }
 }
 
@@ -6343,19 +6025,12 @@ function handleContentMessage(msg, sender) {
     _buf.scripts = [];   // engine-sourced: Lexbor parses the HTML, qjs_run_doc_scripts runs inline + external scripts — one system
     _buf.pending = 0;
     _buf.loadFired = true;
-    _buf._chunkSeen = null; _buf._chunkFetchStarted = false;
-    _buf._chunkGrindDone = false; _buf._chunkRoundDone = false;
     // Prioritization is driven by THIS message: a document just delivered its one
     // CONTENT_HTML, so it is the live "analyze me now" signal — no webNavigation or
     // tab-activation guess about which frame is the main one. Stamp THIS document's
-    // load recency on its own buffer (the review-queue picker orders by it) and
-    // focus the worker's resumable grind on THIS document (DEEP_FOCUS bumps vts),
+    // load recency on its own buffer (the review-queue picker orders by it),
     // keyed by documentId (NEVER url — same url != same content).
     _buf.lastActivatedTs = Date.now();
-    if (_buf.docKey) {
-      try { sendToOffscreen({ type: "DEEP_FOCUS", documentId: _buf.docKey }); }
-      catch (e) { console.debug("[brain:CONTENT_HTML] DEEP_FOCUS dispatch failed: %s", e && e.message || e); }
-    }
     _analyzeCombinedScripts(_dk);   // through the review queue: per-document in-flight guard + recency priority (focused doc first), bounded CPU
     notifyPopup(tabId);
     return;
@@ -6379,53 +6054,6 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // the GLOBAL cumulative moat (serializeTabData overlays globalStore).
       const tab = _docFromMsg(msg) || _emptyDocView();
       const data = serializeTabData(tab);
-      if (data) {
-        // Per-tab head = THIS tab's grind ONLY. The previous cross-tab
-        // "most-recently-updated grind regardless of tab" fallback
-        // MISATTRIBUTED another page's progress to the active tab — e.g.
-        // after navigating a tab from github to learn.microsoft.com, the
-        // MS tab's deep-status read github's "complete", making it
-        // impossible to tell whether MS's own grind had run. Cross-tab
-        // visibility is the `_all` list below; the head must be accurate
-        // to the tab the popup is showing or it lies about which page has
-        // background work.
-        const _ds = tab ? _deepStatsByDoc.get(tab.documentId) : null;
-        if (_ds) data.deepStats = _ds;
-        // Cross-tab task-status surface: every page with a tracked grind, its
-        // progress, and whether it's currently paused for a higher-priority
-        // live review. Honest visibility into the background scheduling that
-        // would otherwise be invisible to the user. Display-only (no controls).
-        const _all = [];
-        _deepStatsByDoc.forEach((v, k) => {
-          const meta = state.docs.get(k) || {};   // k = documentId (grind is per-document)
-          _all.push({
-            documentId: k,
-            tabId: meta.tabId != null ? meta.tabId : null,
-            pageUrl: meta && meta.url ? meta.url : "",
-            title: meta && meta.title ? meta.title : "",
-            total: v.total || 0,
-            rem: typeof v.rem === "number" ? v.rem : (v.total || 0),
-            done: Math.max(0, (v.total || 0) - (typeof v.rem === "number" ? v.rem : 0)),
-            // stop="yielded@step…" → the grind paused mid-batch for a fresh
-            // page review (preemption). stop="complete" / null → finished or
-            // running normally. Surface verbatim so the UI can label it.
-            stop: v.stop || null,
-            steps: v.steps || 0,
-            ts: v.ts || 0,
-            // Phase-timing decomposition (ms) for measuring where real-bundle
-            // time goes — BFS phase vs deep grind, and the snapshot's own
-            // boot/memcpy cost (memcpy scales with image size; the unvalidated bit).
-            bfsMs: v.bfsMs || 0, bootMs: v.bootMs || 0, memcpyMs: v.memcpyMs || 0, bcMs: v.bcMs || 0, deepMs: v.deepMs || 0,
-            // Driving-completeness frontier: of the driven orphan @T functions,
-            // how many fired NO host call (threw before the fetch / returned
-            // without one). High dnf ⇒ the gaps are driven-but-not-firing
-            // (event-gated / deep opaque chain); low dnf ⇒ gaps are not-in-residue.
-            dnfThrew: v.dnfThrew || 0, dnfRet: v.dnfRet || 0,
-          });
-        });
-        _all.sort((a, b) => b.ts - a.ts);   // most-recent grind first (mirrors the scheduler's recency-ordered rotation)
-        data.allDeepStats = _all;
-      }
       sendResponse(data);
       return;
     }
