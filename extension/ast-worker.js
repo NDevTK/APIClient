@@ -140,7 +140,7 @@ function frontierWeight(e) {
    to merge into the GLOBAL surface). */
 async function driveFrontier(rounds, opts) {
   opts = opts || {};
-  const merged = new Map();
+  const advances = [];   // per-origin: { sourceUrl, result } so the brain merges each to its OWN origin
   for (let n = 0; n < (rounds || 1); n++) {
     const all = (await frontierAll()).filter((e) => e && e.recipes);
     if (!all.length) break;
@@ -148,16 +148,17 @@ async function driveFrontier(rounds, opts) {
     const top = all[0];
     const m2 = { type: "AST_ANALYZE", pageHtml: top.html, code: top.code, sourceUrl: top.sourceUrl, quantum: opts.quantum || top.quantum || 8, credentialed: top.credentialed };
     const r = await runEngine(top.code || "", top.html || "", m2, m2.quantum, top.recipes);
-    mergeCallsites(merged, r.fetchCallSites);
+    dedupShapeConcrete(new Map((r.fetchCallSites || []).map((s) => [(s.method || "GET") + " " + s.url, s])));
+    advances.push({ sourceUrl: top.sourceUrl, result: r });
     top.emit = (top.emit || 0) + (r.fetchCallSites || []).length;
     top.visits = (top.visits || 0) + 1;
     top.recipes = (r._park || []).join(";");
     top.ts = Date.now();
     await frontierPut(top.key, top);   // empty recipes -> deleted (fully explored)
   }
-  return [...merged.values()];
+  return advances;
 }
-self.driveFrontier = driveFrontier;   // the brain drives this on idle / after analysis; merges globally
+self.driveFrontier = driveFrontier;   // the brain drives this on idle / after analysis; merges each per-origin
 /* Drive ONE persistent engine instance through the step protocol. fromReply is now IN PLACE: when the
    engine parks awaiting a reply (qjs_step -> NEED_FETCH), the TRUSTED offscreen safe-fetches each pending
    url (GET, page-origin SSRF) and qjs_provide()s the body, resuming the flow in the SAME instance -- no

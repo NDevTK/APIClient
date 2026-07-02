@@ -109,6 +109,12 @@ const state = {
   docs: new Map(),
 };
 
+// Host CPU slice (resource-pressure proxy): a page with more than this many forced STARTERS parks its
+// deep residue to the GLOBAL frontier (resumed later by value order) instead of running to completion.
+// Large enough that ordinary pages finish in one visit; only genuinely huge bundles park -> BFS across
+// sites without regressing normal per-visit completeness.
+const FRONTIER_QUANTUM = 256;
+
 // GLOBAL network/PostMessage/MessageChannel traffic stream. The request log is
 // NOT per-document: a document is evicted from `state.docs` once its grind
 // completes (_maybeEvictReviewedDoc), but its captured traffic must survive that
@@ -430,6 +436,39 @@ function _emptyDocView() {
     apiKeys: new Map(), endpoints: new Map(), authContext: null, discoveryDocs: new Map(),
     probeResults: new Map(), scopes: new Map(), _valueIndex: createValueIndex(),
   };
+}
+
+/* Merge ONE global-frontier advance (a background exploration of some ORIGIN's parked residue) into the
+   cumulative moat. Keyed by its OWN sourceUrl via a transient view -> globalStore only (the origin's
+   page may not be open), the same gone-doc path _mergeDeepResult uses. This is how the host-level WFQ
+   arbiter's cross-site/cross-session learning reaches the real netdiff --unused surface. */
+function _mergeFrontierResult(sourceUrl, result) {
+  try {
+    if (!result || !result.fetchCallSites || !result.fetchCallSites.length) return;
+    var view = _emptyDocView();
+    view.url = sourceUrl || ""; view.tabUrl = sourceUrl || "";
+    result.sourceUrl = sourceUrl || result.sourceUrl || "";
+    mergeASTResultsIntoVDD(view, [result], null, true);
+    mergeToGlobal(view);
+  } catch (e) { console.debug("[frontier] merge error: %s", e && e.message); }
+}
+
+/* Opportunistic idle burst of the ONE host-level attention: advance the globally-highest-value parked
+   frontier a few rounds and merge each per-origin. Serialized (a single in-flight burst) + yields, so
+   it NEVER blocks a fresh tab's analysis -- BFS ACROSS sites: a deep site's residue resumes by value in
+   the background while new tabs are learned promptly via the review queue. */
+var _frontierBurstInFlight = false;
+function _driveGlobalFrontierBurst(rounds) {
+  if (_frontierBurstInFlight || typeof self.driveFrontier !== "function") return;
+  _frontierBurstInFlight = true;
+  Promise.resolve().then(async function () {
+    try {
+      var advances = await self.driveFrontier(rounds || 4);
+      for (var i = 0; i < (advances || []).length; i++) _mergeFrontierResult(advances[i].sourceUrl, advances[i].result);
+      if (advances && advances.length) { try { notifyPopup(null); } catch (_) {} }
+    } catch (e) { console.debug("[frontier] burst error: %s", e && e.message); }
+    finally { _frontierBurstInFlight = false; }
+  });
 }
 
 // The DocData a network-capture learner writes into. A live document -> its
@@ -5217,6 +5256,10 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
       // runtime), so it learns the unused/login-gated surface at a low duty
       // cycle in the background instead of pegging a core.
       deep: !!buf._chunkRoundDone,
+      // Host CPU slice (resource-pressure proxy): a page with more than this many forced STARTERS parks
+      // its residue to the GLOBAL frontier (resumed later by value) instead of running to completion and
+      // blocking the offscreen -> BFS ACROSS sites. Small pages (< quantum) finish in one visit unchanged.
+      quantum: FRONTIER_QUANTUM,
     });
   } catch (e) {
     console.debug("[AST:combined] sendToOffscreen failed for tab=%d: %s", tabId, e.message || e);
@@ -5560,6 +5603,10 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     mergeToGlobal(tab);
     notifyPopup(tabId);
   }
+
+  // Idle burst of the ONE host-level attention: advance other origins' parked frontiers by value
+  // (non-blocking, serialized). This page's own residue (if it parked) is now in the global frontier.
+  _driveGlobalFrontierBurst(4);
 
   // Fetch source maps — SCOPED to the chunks that actually hold a learned
   // fetch call site (so path-param names like e/a → owner/repo resolve),
