@@ -169,6 +169,11 @@ static int seed_orphans(JSContext *ctx)
 static JSValue js_drive_orphans(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return JS_NewInt32(ctx, seed_orphans(ctx)); }
 
+/* Per-flow isolation is the engine COW (JS_CowSetActive/JS_CowRevert): shared-state writes (var-refs =
+   globals/lexicals/closures; baseline-object property mutations) are captured while a flow explores, and
+   reverted to the post-boot BASELINE before the next STARTER runs — so an independent flow never sees
+   another's writes, yet a flow sees its OWN writes within its run. */
+
 /* The ONE scheduler loop: pick the highest-value flow (NON-FIFO), advance it ONE quantum, repeat. */
 static void scheduler_run(JSContext *ctx)
 {
@@ -193,6 +198,7 @@ static void scheduler_run(JSContext *ctx)
             g_dec_ensure(g_dec_n);
             for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
             g_c = 0;
+            JS_CowRevert(ctx);   /* per-flow isolation: revert shared-state to the post-boot baseline */
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
             r = JS_Call(ctx, f.handle, g_opaque, 8, oargs);
         }
@@ -242,6 +248,7 @@ int main(int argc, char **argv)
         if (JS_IsException(v)) { js_std_dump_error(ctx); rc = 1; }
         JS_FreeValue(ctx, v);
         seed_orphans(ctx);
+        JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
         scheduler_run(ctx);
         js_std_loop(ctx);
     }
