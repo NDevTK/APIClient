@@ -252,7 +252,6 @@ const globalStore = {
   // line map + the chunk source-map URL list, so path-param names (owner/repo)
   // can't be resolved. Persisting just those two small artefacts lets the
   // resume merge re-run the eager path's source-map name resolution.
-  deepResumeMeta: new Map(),
 };
 
 // In-flight exploit-probe sessions, keyed by marker. The EXPLOIT_PROBE
@@ -624,7 +623,6 @@ function _serializeGlobalStore() {
     securityFindings: Object.fromEntries(globalStore.securityFindings),
     scriptCache: Object.fromEntries(globalStore.scriptCache),
     discoveryChanges: Object.fromEntries(globalStore.discoveryChanges),
-    deepResumeMeta: Object.fromEntries(globalStore.deepResumeMeta),
     savedAt: Date.now(),
   };
 }
@@ -683,15 +681,6 @@ function _deserializeIntoGlobalStore(s) {
   if (s.discoveryChanges) {
     for (const [k, v] of Object.entries(s.discoveryChanges))
       globalStore.discoveryChanges.set(k, v);
-  }
-  if (s.deepResumeMeta) {
-    // Resume metadata for a page not revisited within a week is stale — its
-    // chunk hashes/source maps may have rotated, so drop it on restore.
-    var _drmTTL = 7 * 24 * 60 * 60 * 1000;
-    var _drmNow = Date.now();
-    for (const [k, v] of Object.entries(s.deepResumeMeta)) {
-      if (v && (_drmNow - (v.savedAt || 0)) < _drmTTL) globalStore.deepResumeMeta.set(k, v);
-    }
   }
 }
 
@@ -852,7 +841,6 @@ async function clearGlobalStore() {
   globalStore.probeResults.clear();
   globalStore.scopes.clear();
   globalStore.securityFindings.clear();
-  globalStore.deepResumeMeta.clear();
   // Drop any SW-side analyses still queued so a pending review can't repopulate
   // the store right after we wipe it (the offscreen worker's running/queued
   // grind is stopped separately via AST_CLEAR before this runs).
@@ -5845,78 +5833,6 @@ function _handleFormSubmit(documentId, msg, tabId, frameId) {
 // Now: raw HTML lands in CONTENT_HTML, gets parsed by Lexbor in the
 // worker; real endpoints come from forced execution observing actual
 // fetch/XHR at the host edge.
-// Merge a deep-grind deliverable (a mid-grind partial OR the final/resume
-// result) into the matching tab + globalStore. Shared by AST_PARTIAL (live
-// streaming during the grind) and AST_RESUMED (final after eviction). The
-// deepResumeMeta (persisted before the grind, survives eviction) carries the
-// line map + chunk source-map list; its absence means the bin/Clear reset
-// wiped it mid-grind, so the deliverable is dropped (no repopulating a reset
-// store). doNames re-fetches chunk source maps to relabel path params
-// (owner/repo) — done once on the final result, skipped on every partial so
-// the stream stays cheap.
-function _mergeDeepResult(documentId, sourceUrl, result, doNames) {
-  try {
-    if (!result) return;
-    // documentId keying, NEVER url (same url != same content — about:blank frames,
-    // same page in two tabs, logged-in-vs-out at one url are DIFFERENT documents).
-    // The worker echoes the grind's own documentId; find the LIVE document by it.
-    // documentId OR global: find the LIVE document by documentId and merge to it +
-    // globalStore; a GONE document (resumed after the doc navigated away —
-    // documentId no longer live) merges to globalStore ONLY via a transient view,
-    // NEVER url-matched to a same-url sibling. deepResumeMeta is documentId-keyed.
-    if (!documentId) { console.debug("[AST:deep] deep result with no documentId — dropping"); return; }
-    var _rdoc = state.docs.get(documentId) || null;
-    var _drm = globalStore.deepResumeMeta.get(documentId);
-    if (!_drm) { console.debug("[AST:deep] %s — no resume meta (reset/stale), dropping", documentId); return; }
-    var _rtab = _rdoc || _emptyDocView();   // live → doc + global; gone → globalStore only (transient, never stored)
-    if (_drm.scriptOffsets) result.scriptOffsets = _drm.scriptOffsets;
-    // Path-param name resolution (e→owner) for the deep grind is done in the
-    // OFFSCREEN worker (it owns the chunk JS + has IndexedDB + outlives the SW),
-    // which fetches each chunk's map by its real sourceMappingURL and attaches
-    // `_sourceMapName` to the call-site params BEFORE sending this result. The SW
-    // must NOT fetch maps here — it is evicted mid-grind, so any SW-side map fetch
-    // / cache is unreliable. The SW only merges what the worker resolved.
-    mergeASTResultsIntoVDD(_rtab, [result], null, !doNames);
-    // Surface the deep grind's resolverErrors too — the orphan drive is where
-    // most reached-but-opaque host calls (fully-opaque URLs from cold-orphan
-    // wrappers) come from, and they arrive on the partial/resumed result here,
-    // NOT the initial combined analysis. Without this the popup diagnostic
-    // would only ever show the seed pass's gaps. Deduped by message.
-    if (result.resolverErrors && result.resolverErrors.length) {
-      if (!Array.isArray(_rtab._resolverErrors)) _rtab._resolverErrors = [];
-      var _seenDre = new Set(_rtab._resolverErrors.map(function (r) { return r.message; }));
-      for (var _dri = 0; _dri < result.resolverErrors.length; _dri++) {
-        var _dre = result.resolverErrors[_dri];
-        if (_dre && !_seenDre.has(_dre.message)) {
-          _seenDre.add(_dre.message);
-          _rtab._resolverErrors.push({ context: _dre.context, message: _dre.message, snippet: _dre.snippet || null });
-        }
-      }
-    }
-    mergeToGlobal(_rtab);
-    if (_rdoc) notifyPopup(_rdoc.tabId);
-    console.debug("[AST:deep] merged %s into doc=%s (tab=%s)", sourceUrl, documentId, _rdoc ? _rdoc.tabId : "(gone→global)");
-    // A chunk/script an orphan inserted (createElement("script").src=) during forced
-    // execution is fetched + eval'd IN PLACE by the ONE scheduler in the same run, so its
-    // endpoints are already in `result` — no host-side re-fetch round.
-  } catch (e) { console.debug("[AST:deep] merge error: %s", e && e.message); }
-}
-
-// Manifest "matches" already restricts which pages they run on.
-// @security-contract  TRUST BOUNDARY: web content -> offscreen (trusted)
-//   sender:    UNTRUSTED content script (web origin); msg.* is attacker-shaped.
-//   principal: sender.tab.url (browser-provided) — NEVER msg.* — is the SSRF
-//              origin + window.location. The SAME-ORIGIN principal for a
-//              CREDENTIALED reply-seed read is the REQUESTING FRAME's browser
-//              origin (MessageSender.origin via _senderOrigin — documentId-keyed,
-//              opaque-unique) tracked per-buffer as frameOrigin: NEVER the top
-//              frame, NEVER URL-parsed (a page can sandbox its own iframe -> an
-//              opaque origin whose URL still looks normal), and a buffer that mixes
-//              two real origins collapses to a unique opaque token (fail-closed).
-//              Enforced below: requires sender.tab (drop otherwise); pageUrl =
-//              sender.tab.url (no msg.url fallback — see _analyzeCombinedScriptsInner).
-//   msg.code/url: analysis INPUT only (runs in the QuickJS sandbox, or is a
-//              safeFetch TARGET), never a trusted decision.
 function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
@@ -6148,8 +6064,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         //    wasm grind outright) and delete its resumable-grind DB — so no
         //    in-flight analysis or resume can repopulate what we wipe next.
         try { await sendToOffscreen({ type: "AST_CLEAR" }); } catch (e) {}
-        // 2. Global findings + the persisted gapiStore (and the SW-side review
-        //    queue / deepResumeMeta, cleared inside clearGlobalStore).
+        // 2. Global findings + the persisted gapiStore (cleared inside clearGlobalStore).
         await clearGlobalStore();
         // 3. All in-memory request logs + per-tab working state, so the next
         //    navigation starts from a genuinely empty slate.
