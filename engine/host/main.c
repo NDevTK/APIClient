@@ -327,6 +327,86 @@ static JSValue js_storage_get(JSContext *ctx, JSValueConst this_val, int argc, J
 /* structuredClone(x): deep-clone is identity for forced-exec purposes (shape/opacity carry through). */
 static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED; }
+
+/* URL / URLSearchParams: endpoint construction. `new URL(path, base).href|pathname` is how a huge share of
+   bundles build request URLs — undefined `URL` = ReferenceError = the endpoint is lost. Resolved with string
+   ops (not Lexbor) BECAUSE the input is often a SHAPE with opaque holes ("/api/{}/x") that no spec parser can
+   handle; holes flow through untouched so the endpoint is learned as its shape. searchParams.get is OPAQUE
+   (external input). Covers absolute / protocol-relative / origin-relative / relative against the page origin. */
+static const char *g_origin;   /* defined below; forward for the URL helpers */
+static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
+static void url_origin_of(const char *base, char *out, size_t outsz) {
+    const char *p = base ? strstr(base, "://") : NULL;
+    if (!p) { snprintf(out, outsz, "%s", g_origin); return; }
+    const char *h = p + 3; const char *slash = strchr(h, '/');
+    size_t n = slash ? (size_t)(slash - base) : strlen(base);
+    if (n >= outsz) n = outsz - 1;
+    memcpy(out, base, n); out[n] = 0;
+}
+static void url_resolve(const char *input, const char *base, char *out, size_t outsz) {
+    if (!input) input = "";
+    if (strstr(input, "://")) { snprintf(out, outsz, "%s", input); return; }        /* absolute */
+    if (input[0] == '/' && input[1] == '/') {                                        /* protocol-relative */
+        const char *p = base ? strstr(base, "://") : NULL; size_t plen = p ? (size_t)(p - base) + 1 : 6;
+        snprintf(out, outsz, "%.*s%s", (int)plen, base ? base : "https:", input); return;
+    }
+    char origin[600]; url_origin_of(base ? base : g_origin, origin, sizeof origin);
+    if (input[0] == '/') snprintf(out, outsz, "%s%s", origin, input);
+    else snprintf(out, outsz, "%s/%s", origin, input);
+}
+static void url_set(JSContext *ctx, JSValue o, const char *k, const char *s, size_t n) {
+    JS_SetPropertyStr(ctx, o, k, JS_NewStringLen(ctx, s, n));
+}
+static JSValue js_url_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{ return JS_GetPropertyStr(ctx, this_val, "href"); }
+static JSValue js_searchparams_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{ return JS_DupValue(ctx, g_opaque); }   /* query values are external input -> opaque */
+static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
+    char resolved[2048];
+    const char *input = argc >= 1 ? JS_ToCString(ctx, argv[0]) : NULL;
+    const char *base  = argc >= 2 && JS_IsString(argv[1]) ? JS_ToCString(ctx, argv[1]) : NULL;
+    url_resolve(input, base ? base : g_origin, resolved, sizeof resolved);
+    if (input) JS_FreeCString(ctx, input);
+    if (base) JS_FreeCString(ctx, base);
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "href", JS_NewString(ctx, resolved));
+    /* split scheme://host/path?query#frag */
+    const char *scol = strstr(resolved, "://");
+    const char *host = scol ? scol + 3 : resolved;
+    url_set(ctx, o, "protocol", resolved, scol ? (size_t)(scol - resolved) + 1 : 0);
+    const char *pe = host; while (*pe && *pe != '/' && *pe != '?' && *pe != '#') pe++;
+    url_set(ctx, o, "host", host, (size_t)(pe - host));
+    url_set(ctx, o, "hostname", host, (size_t)(pe - host));
+    { char org[700]; url_origin_of(resolved, org, sizeof org); JS_SetPropertyStr(ctx, o, "origin", JS_NewString(ctx, org)); }
+    const char *path = pe; const char *q = strchr(path, '?'); const char *hsh = strchr(path, '#');
+    const char *pend = q ? q : (hsh ? hsh : path + strlen(path));
+    url_set(ctx, o, "pathname", *path ? path : "/", *path ? (size_t)(pend - path) : 1);
+    if (q) { const char *qe = hsh ? hsh : q + strlen(q); url_set(ctx, o, "search", q, (size_t)(qe - q)); }
+    else JS_SetPropertyStr(ctx, o, "search", JS_NewString(ctx, ""));
+    if (hsh) JS_SetPropertyStr(ctx, o, "hash", JS_NewString(ctx, hsh)); else JS_SetPropertyStr(ctx, o, "hash", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, o, "port", JS_NewString(ctx, ""));
+    JSValue sp = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, sp, "get", JS_NewCFunction(ctx, js_searchparams_get, "get", 1));
+    JS_SetPropertyStr(ctx, sp, "getAll", JS_NewCFunction(ctx, js_searchparams_get, "getAll", 1));
+    JS_SetPropertyStr(ctx, sp, "has", JS_NewCFunction(ctx, js_searchparams_get, "has", 1));
+    JS_SetPropertyStr(ctx, sp, "toString", JS_NewCFunction(ctx, js_opaque, "toString", 0));
+    JS_SetPropertyStr(ctx, o, "searchParams", sp);
+    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_url_tostring, "toString", 0));
+    JS_SetPropertyStr(ctx, o, "toJSON", JS_NewCFunction(ctx, js_url_tostring, "toJSON", 0));
+    return o;
+}
+/* new URLSearchParams(init): .get/getAll/has -> opaque (external input); toString -> opaque. */
+static JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "get", JS_NewCFunction(ctx, js_searchparams_get, "get", 1));
+    JS_SetPropertyStr(ctx, o, "getAll", JS_NewCFunction(ctx, js_searchparams_get, "getAll", 1));
+    JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_searchparams_get, "has", 1));
+    JS_SetPropertyStr(ctx, o, "append", JS_NewCFunction(ctx, js_noop, "append", 2));
+    JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_noop, "set", 2));
+    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_opaque, "toString", 0));
+    return o;
+}
 static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return branch_decide(ctx) ? JS_TRUE : JS_FALSE; }
 
@@ -1054,6 +1134,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
             JS_SetPropertyStr(ctx, st, "key", JS_NewCFunction(ctx, js_storage_get, "key", 1));
             JS_SetPropertyStr(ctx, g, si ? "sessionStorage" : "localStorage", st);
         }
+        /* URL / URLSearchParams: endpoint construction (see js_url_ctor). */
+        JS_SetPropertyStr(ctx, g, "URL", JS_NewCFunction2(ctx, js_url_ctor, "URL", 2, JS_CFUNC_constructor, 0));
+        JS_SetPropertyStr(ctx, g, "URLSearchParams", JS_NewCFunction2(ctx, js_searchparams_ctor, "URLSearchParams", 1, JS_CFUNC_constructor, 0));
     }
     JS_FreeValue(ctx, g);
 
