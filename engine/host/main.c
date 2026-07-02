@@ -159,12 +159,16 @@ static void scheduler_run(JSContext *ctx)
             g_cur_fn = JS_UNDEFINED; g_dec_n = 0; g_c = 0;
             r = JS_Call(ctx, f.handle, JS_UNDEFINED, 1, &u);
         } else {
-            /* STARTER: load its decision vector, run it. __branch consumes/extends g_dec + forks siblings. */
+            /* STARTER: load its decision vector, run it. __branch consumes/extends g_dec + forks siblings.
+               Force-invoke with OPAQUE this + args (external input the tool must not concretely decide):
+               user.isAdmin / this.fooUrl become opaque (propagated), so gates fork and computed URLs are
+               shaped. A flow that ignores args (boot forks) is unaffected. */
             g_cur_fn = f.handle;
             g_dec_n = f.dec_n < DEC_MAX ? f.dec_n : DEC_MAX;
             for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
             g_c = 0;
-            r = JS_Call(ctx, f.handle, JS_UNDEFINED, 0, NULL);
+            JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
+            r = JS_Call(ctx, f.handle, g_opaque, 8, oargs);
         }
         if (JS_IsException(r)) js_std_dump_error(ctx);
         JS_FreeValue(ctx, r);
