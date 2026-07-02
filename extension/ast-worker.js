@@ -110,16 +110,17 @@ async function runEngine(code, html, msg) {
   try {
     M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number", "number"],
       [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), 0, arg("")]);
+    const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
+    const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
+      if (!canFetch || u.indexOf("{}") >= 0) return "";
+      try { const abs = new URL(u, msg.sourceUrl).href; const r = await self.safeFetch(abs, asScript ? { pageUrl: msg.sourceUrl, as: "script" } : { pageUrl: msg.sourceUrl }); return (r && r.ok && typeof r.body === "string") ? r.body : ""; } catch (_) { return ""; }
+    };
     let guard = 0;
     while (M.ccall("qjs_step", "number", [], []) === 1 && guard++ < 5000) {
-      const pend = String(M.ccall("qjs_pending", "string", [], [])).split("\n").filter(Boolean);
-      for (const u of pend) {
-        let body = "";
-        if (typeof self.safeFetch === "function" && msg && msg.sourceUrl && u.indexOf("{}") < 0) {
-          try { const abs = new URL(u, msg.sourceUrl).href; const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl }); if (r && r.ok && typeof r.body === "string") body = r.body; } catch (_) {}
-        }
-        M.ccall("qjs_provide", "void", ["string", "string"], [u, body]);   // concrete body, or "" -> opaque shape
-      }
+      const replies = String(M.ccall("qjs_pending", "string", [], [])).split("\n").filter(Boolean);
+      for (const u of replies) M.ccall("qjs_provide", "void", ["string", "string"], [u, await fetched(u, false)]);   // reply body -> resume in place
+      const chunks = String(M.ccall("qjs_chunks", "string", [], [])).split("\n").filter(Boolean);
+      for (const u of chunks) M.ccall("qjs_provide", "void", ["string", "string"], [u, await fetched(u, true)]);      // chunk JS -> eval in place
     }
     M.ccall("qjs_teardown", "void", [], []);
   } catch (e) {
@@ -181,36 +182,11 @@ self.astDispatch = async function astDispatch(msg) {
     const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
     if (!html && !code) return { success: true, result: linesToAnalysis([], msg) };
 
-    const result = await runEngine(code, html, msg);   // fromReply handled IN PLACE inside the step-loop
+    /* ONE persistent instance runs the WHOLE analysis: the page + its chunks (fetched + eval'd in place
+       via qjs_chunks/qjs_provide) + its fromReply consumes (in place). No re-run, no separate loops. */
+    const result = await runEngine(code, html, msg);
     const endpoints = new Map();
     mergeCallsites(endpoints, result.fetchCallSites);
-
-    /* CHUNK LOOP (the moat's "learn computed JS files loaded via a code path"): the untrusted engine
-       DISCOVERS chunk URLs (static or JS-computed, via <script src> / createElement+.src+appendChild);
-       the TRUSTED offscreen safe-fetches each (GET, page-origin SSRF, JS-typed) and the engine
-       forced-executes it WITH the page DOM -> its endpoints are learned. Iterate until no NEW chunk
-       (dedup by URL; disk is the floor, not a count). */
-    if (typeof self.safeFetch === "function" && msg.sourceUrl) {
-      const seen = new Set();
-      let frontier = (result.chunkUrls || []).slice();
-      const chunkUrlsAll = new Set(result.chunkUrls || []);
-      while (frontier.length) {
-        const next = [];
-        for (const cu of frontier) {
-          if (seen.has(cu)) continue; seen.add(cu);
-          const furl = chunkFetchUrl(cu);
-          if (!furl) continue;
-          let abs; try { abs = new URL(furl, msg.sourceUrl).href; } catch (_) { continue; }   // resolve relative -> absolute for safeFetch
-          let r; try { r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, as: "script" }); } catch (_) { continue; }
-          if (!r || !r.ok || !r.body) continue;
-          const cr = await runEngine(r.body, html, msg);   // forced-execute the chunk against the page DOM (fromReply in-place)
-          mergeCallsites(endpoints, cr.fetchCallSites);
-          for (const nu of cr.chunkUrls || []) if (!chunkUrlsAll.has(nu)) { chunkUrlsAll.add(nu); next.push(nu); }  // nested chunks
-        }
-        frontier = next;
-      }
-      result.chunkUrls = [...chunkUrlsAll];
-    }
 
     dedupShapeConcrete(endpoints);   // collapse concrete instantiations into their shape (path-param examples)
     result.fetchCallSites = [...endpoints.values()];

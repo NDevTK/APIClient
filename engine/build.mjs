@@ -74,7 +74,7 @@ const args = [
   "-sMODULARIZE=1",
   "-sEXPORT_ES6=1",
   "-sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,cwrap,stringToUTF8,lengthBytesUTF8,UTF8ToString",
-  "-sEXPORTED_FUNCTIONS=_main,_qjs_init,_qjs_step,_qjs_pending,_qjs_provide,_qjs_finalize,_qjs_teardown,_malloc,_free",
+  "-sEXPORTED_FUNCTIONS=_main,_qjs_init,_qjs_step,_qjs_pending,_qjs_chunks,_qjs_provide,_qjs_finalize,_qjs_teardown,_malloc,_free",
   "-sNODERAWFS=0",
   "-o", join(OUT, "qjs.mjs"),
 ];

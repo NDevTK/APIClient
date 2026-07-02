@@ -145,6 +145,16 @@ static void pending_add(JSContext *ctx, JSValue rf, const char *url, int is_json
     g_pending[g_pending_n].rf = rf; g_pending[g_pending_n].url = url ? strdup(url) : NULL; g_pending[g_pending_n].is_json = is_json;
     g_pending_n++;
 }
+/* Chunk-load pending (M3): an injected <script src> to fetch + eval IN PLACE (no promise; nothing awaits
+   it — like the browser's async script load). The offscreen provides the body; qjs_provide evals it. */
+static char **g_chunk_pending = NULL;
+static int g_chunk_n = 0, g_chunk_cap = 0;
+static void chunk_pending_add(const char *url) {
+    if (!url) return;
+    for (int i = 0; i < g_chunk_n; i++) if (strcmp(g_chunk_pending[i], url) == 0) return;   /* dedup */
+    if (g_chunk_n >= g_chunk_cap) { int nc = g_chunk_cap ? g_chunk_cap * 2 : 16; char **n = realloc(g_chunk_pending, (size_t)nc * sizeof(char *)); if (!n) return; g_chunk_pending = n; g_chunk_cap = nc; }
+    g_chunk_pending[g_chunk_n++] = strdup(url);
+}
 /* wrap val in an already-RESOLVED promise (consumes val) so `await`/`.then` chains continue synchronously. */
 static JSValue js_resolved(JSContext *ctx, JSValue val)
 {
@@ -455,7 +465,11 @@ static int el_is_script(lxb_dom_element_t *el) {
 static void script_maybe_load(lxb_dom_element_t *el) {
     if (!el_is_script(el)) return;
     size_t sl = 0; const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
-    if (src && sl) { printf("@CHUNK %.*s\n", (int)sl, (const char *)src); fflush(stdout); }
+    if (src && sl) {
+        printf("@CHUNK %.*s\n", (int)sl, (const char *)src); fflush(stdout);   /* informational */
+        char *u = strndup((const char *)src, sl);
+        if (u) { if (!strstr(u, "{}")) chunk_pending_add(u); free(u); }         /* concrete src -> fetch + eval in place */
+    }
 }
 static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
@@ -930,11 +944,40 @@ KEEP const char *qjs_pending(void)
     buf[off] = 0;
     return buf;
 }
+/* Chunk urls to fetch (as JS) + eval in place (newline-joined). Static buffer. */
+KEEP const char *qjs_chunks(void)
+{
+    static char *buf = NULL; static size_t cap = 0;
+    size_t need = 1;
+    for (int i = 0; i < g_chunk_n; i++) need += strlen(g_chunk_pending[i]) + 1;
+    if (need > cap) { char *n = realloc(buf, need); if (!n) return ""; buf = n; cap = need; }
+    size_t off = 0;
+    for (int i = 0; i < g_chunk_n; i++) { size_t l = strlen(g_chunk_pending[i]); memcpy(buf + off, g_chunk_pending[i], l); off += l; buf[off++] = '\n'; }
+    buf[off] = 0;
+    return buf;
+}
 /* Resolve every pending consume of `url` with the concrete body (empty -> opaque); cache in the reply
-   table so a later response of the same url is concrete too. Continuations run on the next qjs_step. */
+   table so a later response of the same url is concrete too. If `url` is a pending CHUNK, eval its body
+   in place — extending the page BASELINE (cow off during eval), so its defs are permanent (not a flow
+   write to be reverted) and its orphans get driven on the next step. Continuations run on the next step. */
 KEEP void qjs_provide(const char *url, const char *body)
 {
     JSContext *ctx = g_ctx; if (!ctx || !url) return;
+    for (int i = 0; i < g_chunk_n; i++) {
+        if (strcmp(g_chunk_pending[i], url) != 0) continue;
+        if (body && body[0]) {
+            JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
+            int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0);
+            JSValue v = JS_Eval(ctx, body, strlen(body), url, JS_EVAL_TYPE_GLOBAL);   /* chunk is new page code */
+            if (JS_IsException(v)) js_std_dump_error(ctx);
+            JS_FreeValue(ctx, v);
+            JS_CowSetActive(1); g_dom_capture = dsv;
+        }
+        free(g_chunk_pending[i]);
+        for (int j = i; j < g_chunk_n - 1; j++) g_chunk_pending[j] = g_chunk_pending[j + 1];
+        g_chunk_n--;
+        return;
+    }
     int has = body && body[0];
     if (has && JS_IsObject(g_reply_table)) JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));
     for (int i = 0; i < g_pending_n; i++) {
@@ -960,6 +1003,8 @@ KEEP void qjs_finalize(void)
         JS_FreeValue(ctx, g_pending[i].rf); free(g_pending[i].url); g_pending[i].url = NULL;
     }
     g_pending_n = 0;
+    for (int i = 0; i < g_chunk_n; i++) free(g_chunk_pending[i]);   /* node CLI can't fetch chunks -> drop */
+    g_chunk_n = 0;
 }
 /* Advance the ONE scheduler; drain microtasks. Return 1 = NEED_FETCH (flows parked awaiting a real
    reply the offscreen must provide via qjs_provide), else 0 = DONE. */
@@ -968,7 +1013,7 @@ KEEP int qjs_step(void)
     if (!g_ctx) return 0;
     scheduler_run(g_ctx);
     js_std_loop(g_ctx);
-    return g_pending_n > 0 ? 1 : 0;
+    return (g_pending_n > 0 || g_chunk_n > 0) ? 1 : 0;   /* NEED_FETCH: replies and/or chunks */
 }
 
 KEEP void qjs_teardown(void)
