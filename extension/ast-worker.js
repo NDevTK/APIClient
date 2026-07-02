@@ -91,6 +91,7 @@ function linesToAnalysis(lines, msg) {
    page HTML with its in-wasm Lexbor DOM and runs the document's scripts in order (against the real
    DOM) — the bridge no longer scrapes scripts. code (argv[1]) is any brain-assembled extra scripts
    (usually empty); html (argv[2]) is the page. */
+function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
 async function runEngine(code, html, msg) {
   const lines = [];
   const Module = await createQJS({
@@ -99,11 +100,23 @@ async function runEngine(code, html, msg) {
     noInitialRun: true,
   });
   try {
-    Module.callMain([code || "", html || ""]);
+    Module.callMain([code || "", html || "", originOf(msg && msg.sourceUrl)]);   // argv[3] = real page principal
   } catch (e) {
     lines.push('@E {"phase":"callmain","err":' + JSON.stringify(String(e && e.message || e)) + "}");
   }
   return linesToAnalysis(lines, msg);
+}
+
+/* A @CHUNK URL is fetchable only if its PATH is concrete — an opaque path segment ("/chunks/{}.js")
+   can't be resolved. An opaque QUERY ("?v={}") is fine: strip it (version params are optional). */
+function chunkFetchUrl(u) {
+  const q = u.indexOf("?");
+  const path = q >= 0 ? u.slice(0, q) : u;
+  if (path.indexOf("{}") >= 0) return null;   // opaque path -> unresolvable
+  return path;                                 // concrete path, query dropped
+}
+function mergeCallsites(map, sites) {
+  for (const s of sites || []) { const k = (s.method || "GET") + " " + s.url; if (!map.has(k)) map.set(k, s); }
 }
 
 self.astDispatch = async function astDispatch(msg) {
@@ -112,7 +125,38 @@ self.astDispatch = async function astDispatch(msg) {
     const html = msg.pageHtml || "";
     const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
     if (!html && !code) return { success: true, result: linesToAnalysis([], msg) };
+
     const result = await runEngine(code, html, msg);
+    const endpoints = new Map();
+    mergeCallsites(endpoints, result.fetchCallSites);
+
+    /* CHUNK LOOP (the moat's "learn computed JS files loaded via a code path"): the untrusted engine
+       DISCOVERS chunk URLs (static or JS-computed, via <script src> / createElement+.src+appendChild);
+       the TRUSTED offscreen safe-fetches each (GET, page-origin SSRF, JS-typed) and the engine
+       forced-executes it WITH the page DOM -> its endpoints are learned. Iterate until no NEW chunk
+       (dedup by URL; disk is the floor, not a count). */
+    if (typeof self.safeFetch === "function" && msg.sourceUrl) {
+      const seen = new Set();
+      let frontier = (result.chunkUrls || []).slice();
+      const chunkUrlsAll = new Set(result.chunkUrls || []);
+      while (frontier.length) {
+        const next = [];
+        for (const cu of frontier) {
+          if (seen.has(cu)) continue; seen.add(cu);
+          const furl = chunkFetchUrl(cu);
+          if (!furl) continue;
+          let r; try { r = await self.safeFetch(furl, { pageUrl: msg.sourceUrl, as: "script" }); } catch (_) { continue; }
+          if (!r || !r.ok || !r.body) continue;
+          const cr = await runEngine(r.body, html, msg);   // forced-execute the chunk against the page DOM
+          mergeCallsites(endpoints, cr.fetchCallSites);
+          for (const nu of cr.chunkUrls || []) if (!chunkUrlsAll.has(nu)) { chunkUrlsAll.add(nu); next.push(nu); }  // nested chunks
+        }
+        frontier = next;
+      }
+      result.chunkUrls = [...chunkUrlsAll];
+    }
+
+    result.fetchCallSites = [...endpoints.values()];
     return { success: true, result };
   } catch (e) {
     return { success: false, error: String(e && e.message || e), stack: e && e.stack };

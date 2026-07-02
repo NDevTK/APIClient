@@ -215,9 +215,21 @@ static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValue
    yield a "{}"-shaped garbage URL and lose the endpoint). Only the EXTERNAL-INPUT parts — search/hash —
    stay OPAQUE (must never force a branch), yet carry a concrete example when page state already has one.
    The host injects the real principal at wire time; g_origin is the node-harness placeholder. */
-static const char *g_origin   = "https://app.example.com";
+static const char *g_origin   = "https://app.example.com";   /* host-injected real page principal (argv[3]); placeholder for node tests */
 static const char *g_protocol = "https:";
 static const char *g_host     = "app.example.com";
+/* Split a real origin ("https://localhost:8765") into protocol + host for the concrete location.*. */
+static void set_origin(const char *origin) {
+    static char protobuf[64], hostbuf[256];
+    const char *p;
+    if (!origin || !origin[0]) return;
+    g_origin = origin;
+    p = strstr(origin, "://");
+    if (!p) return;
+    { size_t plen = (size_t)(p - origin) + 1; if (plen < sizeof protobuf) { memcpy(protobuf, origin, plen); protobuf[plen] = 0; g_protocol = protobuf; } }
+    { const char *h = p + 3; size_t hlen = strlen(h); const char *slash = strchr(h, '/'); if (slash) hlen = (size_t)(slash - h);
+      if (hlen < sizeof hostbuf) { memcpy(hostbuf, h, hlen); hostbuf[hlen] = 0; g_host = hostbuf; } }
+}
 static JSValue make_location(JSContext *ctx)
 {
     JSValue loc = JS_NewObject(ctx);
@@ -661,6 +673,8 @@ int main(int argc, char **argv)
     js_std_add_helpers(ctx, argc - 1, argv + 1);
     js_init_module_std(ctx, "std");
     js_init_module_os(ctx, "os");
+
+    if (argc > 3) set_origin(argv[3]);   /* real page principal (location.origin/host) injected by the host */
 
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__emit", JS_NewCFunction(ctx, js_emit, "__emit", 1));
