@@ -20,6 +20,10 @@
 #include <stdlib.h>
 #include "quickjs.h"
 #include "quickjs-libc.h"
+#include <lexbor/html/html.h>
+#include <lexbor/css/css.h>
+#include <lexbor/selectors/selectors.h>
+#include <lexbor/dom/dom.h>
 
 /* ---- the ONE flow registry (scheduler-owned memory) --------------------------------
    A flow is a STARTER (a function to force-invoke, with a decision vector for its branch choices) or
@@ -218,6 +222,101 @@ static JSValue make_location(JSContext *ctx)
     JS_SetPropertyStr(ctx, loc, "search",   JS_DupValue(ctx, g_opaque));    /* external input: opaque (never forces a branch) */
     JS_SetPropertyStr(ctx, loc, "hash",     JS_DupValue(ctx, g_opaque));    /* external input: opaque */
     return loc;
+}
+
+/* ── Real DOM (Lexbor) ───────────────────────────────────────────────────────────
+   The page's own structure/config is CONCRETE (a bundle reads `#cfg[data-api]` and builds a real
+   URL); only external-input values stay opaque. document.* is backed by a live Lexbor DOM parsed from
+   the page HTML, NOT a bridge-side scrape — so it can carry real attribute values now, and become
+   per-flow COW state + intercept dynamic script injection (steps C/D). */
+static lxb_html_document_t *g_dom = NULL;   /* parser + selectors are per-call (reuse corrupts the next query) */
+static JSClassID g_el_class_id;
+
+static JSValue el_wrap(JSContext *ctx, lxb_dom_element_t *el) {
+    if (!el) return JS_NULL;
+    JSValue o = JS_NewObjectClass(ctx, g_el_class_id);
+    if (JS_IsException(o)) return o;
+    JS_SetOpaque(o, el);
+    return o;
+}
+struct sel_ctx { lxb_dom_element_t *first; };
+static lxb_status_t sel_first_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t s, void *vp) {
+    struct sel_ctx *c = vp; (void)s;
+    if (!c->first) c->first = lxb_dom_interface_element(node);
+    return LXB_STATUS_OK;   /* let the traversal COMPLETE so g_sel resets cleanly for the next find
+                               (returning STOP mid-walk leaves internal state that breaks reuse) */
+}
+/* Find the first element matching a CSS selector, searching the whole parsed document. Fresh selectors
+   object + cleaned parser per call — reusing them across finds carries internal state that breaks the
+   next query (2nd querySelector returned null). The matched element is owned by g_dom, so tearing down
+   the per-call selectors/list doesn't free it. */
+static lxb_dom_element_t *dom_select_first(const char *sel, size_t len) {
+    if (!g_dom) return NULL;
+    lxb_css_parser_t *p = lxb_css_parser_create();
+    if (!p || lxb_css_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_css_parser_destroy(p, true); return NULL; }
+    lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)sel, len);
+    if (!list) { lxb_css_parser_destroy(p, true); return NULL; }
+    lxb_selectors_t *s = lxb_selectors_create();
+    if (!s || lxb_selectors_init(s) != LXB_STATUS_OK) { if (s) lxb_selectors_destroy(s, true); lxb_css_parser_destroy(p, true); return NULL; }
+    struct sel_ctx c = { NULL };
+    lxb_selectors_find(s, lxb_dom_interface_node(g_dom), list, sel_first_cb, &c);
+    lxb_selectors_destroy(s, true);
+    lxb_css_parser_destroy(p, true);   /* frees the list too (parser owns it); c.first lives in g_dom */
+    return c.first;
+}
+static JSValue js_el_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    if (!el || argc < 1) return JS_NULL;
+    const char *name = JS_ToCString(ctx, argv[0]);
+    if (!name) return JS_NULL;
+    size_t vlen = 0;
+    const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vlen);
+    JS_FreeCString(ctx, name);
+    return v ? JS_NewStringLen(ctx, (const char *)v, vlen) : JS_NULL;   /* REAL attribute value (concrete) */
+}
+static JSValue js_el_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_NULL;
+    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
+    lxb_dom_element_t *el = dom_select_first(s, strlen(s));   /* NB: document-scoped for now, not subtree */
+    JS_FreeCString(ctx, s);
+    return el_wrap(ctx, el);
+}
+static JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    if (!el) return JS_NULL;
+    size_t len = 0;
+    lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &len);
+    if (!txt) return JS_NewString(ctx, "");
+    JSValue r = JS_NewStringLen(ctx, (const char *)txt, len);
+    lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
+    return r;
+}
+static void el_install_methods(JSContext *ctx, JSValue proto) {
+    JS_SetPropertyStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_el_getAttribute, "getAttribute", 1));
+    JS_SetPropertyStr(ctx, proto, "querySelector", JS_NewCFunction(ctx, js_el_querySelector, "querySelector", 1));
+    JS_SetPropertyStr(ctx, proto, "getTextContent", JS_NewCFunction(ctx, js_el_textContent, "getTextContent", 0));
+}
+static JSValue js_doc_getElementById(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_NULL;
+    const char *id = JS_ToCString(ctx, argv[0]); if (!id) return JS_NULL;
+    char sel[512]; snprintf(sel, sizeof sel, "#%s", id);
+    lxb_dom_element_t *el = dom_select_first(sel, strlen(sel));
+    JS_FreeCString(ctx, id);
+    return el_wrap(ctx, el);
+}
+static JSValue js_doc_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_NULL;
+    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
+    lxb_dom_element_t *el = dom_select_first(s, strlen(s));
+    JS_FreeCString(ctx, s);
+    return el_wrap(ctx, el);
+}
+/* Parse page HTML into the live DOM + init the CSS-selector engine. Returns 0 on success. */
+static int dom_init(const char *html, size_t len) {
+    g_dom = lxb_html_document_create();
+    if (!g_dom) return -1;
+    if (html && len && lxb_html_document_parse(g_dom, (const lxb_char_t *)html, len) != LXB_STATUS_OK) return -1;
+    return 0;
 }
 
 /* __fork(fn, hint?): add a flow to the ONE registry (a STARTER, fresh decision vector). */
@@ -419,6 +518,20 @@ int main(int argc, char **argv)
        document.cookie, navigator, referrer) so a real bundle's gate on external input auto-forks without
        synthetic args; addEventListener = no-op (the handler is then a never-fired orphan, driven). This
        is the seam the real Lexbor DOM + real safe-fetch plug into during the host rewire. */
+    /* Real DOM: parse the page HTML (argv[2], optional) into a live Lexbor document + register the
+       Element JS class. The page's own structure/config is CONCRETE; document.* reads it. */
+    {
+        const char *html = (argc > 2) ? argv[2] : NULL;
+        if (dom_init(html, html ? strlen(html) : 0) != 0)
+            fprintf(stderr, "@E {\"phase\":\"dom_init\"}\n");
+        JS_NewClassID(rt, &g_el_class_id);
+        JSClassDef el_def = { "Element" };   /* lexbor owns the nodes; no JS finalizer */
+        JS_NewClass(rt, g_el_class_id, &el_def);
+        JSValue el_proto = JS_NewObject(ctx);
+        el_install_methods(ctx, el_proto);
+        JS_SetClassProto(ctx, g_el_class_id, el_proto);
+    }
+
     g_handlers = JS_NewArray(ctx);
     JS_SetPropertyStr(ctx, g, "__handlers", JS_DupValue(ctx, g_handlers));   /* reachable so handlers survive to orphan-collect */
     JS_SetPropertyStr(ctx, g, "window", JS_DupValue(ctx, g));
@@ -435,9 +548,9 @@ int main(int argc, char **argv)
         JS_SetPropertyStr(ctx, doc, "URL", JS_NewString(ctx, g_origin));        /* page identity: CONCRETE for URL building */
         JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, g_host));       /* page identity: CONCRETE */
         JS_SetPropertyStr(ctx, doc, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-        JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_opaque_stub, "querySelector", 1));
-        JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_opaque_stub, "getElementById", 1));
-        JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_opaque_stub, "createElement", 1));
+        JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));   /* real Lexbor DOM */
+        JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
+        JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_opaque_stub, "createElement", 1));   /* step C: real element + script-injection intercept */
         JS_SetPropertyStr(ctx, g, "document", doc);
     }
     JS_FreeValue(ctx, g);
