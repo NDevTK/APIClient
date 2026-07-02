@@ -64,7 +64,7 @@ static JSValue g_orphan_buf[4096];
 static int     g_orphan_n = 0;
 static int     g_cur_orphan_idx = -1;   /* running flow's orphan index (inherited by its branch siblings) */
 static int     g_quantum = 0;
-static int     g_started = 0;           /* starters begun this run (for the quantum) */
+static long    g_work = 0;              /* flow DISPATCHES this run (starter OR resume) — the quantum's work unit */
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
 
@@ -780,16 +780,19 @@ static void scheduler_run(JSContext *ctx)
     for (;;) {
         seed_orphans(ctx);          /* CONTINUOUS: pick up functions a prior flow defined dynamically (chunks) */
         if (g_reg_n == 0) break;
-        /* HOST QUANTUM (cross-page fairness): after g_quantum starters, PARK the rest of the frontier as
-           compact replay recipes (orphan_idx + decision-vector) and stop — resumable next session. Not a
-           bound: the parked flows are re-driven by re-running boot + replaying decisions. */
-        if (g_quantum > 0 && g_started >= g_quantum) { park_frontier(ctx); break; }
+        /* HOST QUANTUM (cross-page fairness) = RESOURCE PRESSURE on ALL work, not just starters: after
+           g_quantum flow DISPATCHES (starter OR resume/fetch-round), PARK the rest of the frontier as compact
+           replay recipes (orphan_idx + decision-vector) and stop — resumable next burst/session. Counting
+           resumes too is what makes a single DEEP await/fetch-loop flow yield to park (it never adds starters),
+           so no step-cap crutch is needed. Not a bound: parked flows re-drive by re-running boot + decisions. */
+        if (g_quantum > 0 && g_work >= g_quantum) { park_frontier(ctx); break; }
         int best = 0;
         for (int i = 1; i < g_reg_n; i++)
             if (flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
         Flow f = g_reg[best];                       /* f is a STABLE COPY: reg_add during the run may realloc g_reg */
         g_reg_n--; g_reg[best] = g_reg[g_reg_n];    /* swap-remove */
         f.visits++;
+        g_work++;                                   /* one flow got CPU (starter OR resume) — counts toward the quantum */
         g_cur_orphan_idx = f.orphan_idx;            /* siblings forked during this flow inherit its locator */
         g_running = 1; g_cur_val = f.val; g_cur_flow = &f;
 
@@ -818,7 +821,6 @@ static void scheduler_run(JSContext *ctx)
         g_c = f.saved_c;
 
         if (f.fs == NULL) {                         /* STARTER: baseline + fresh heap frame */
-            g_started++;                            /* count starters against the host quantum */
             JS_CowRevert(ctx);                      /* revert JS shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
             dom_revert();                           /* revert DOM mutations to the post-boot baseline (per-flow isolation) */
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
@@ -902,7 +904,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_ctx = ctx;
     /* Reset all scheduler/frontier state so ONE wasm instance can serve many page analyses (init/run/
        teardown reused) with no cross-page bleed. The arrays themselves are reused (not re-malloc'd). */
-    g_reg_n = 0; g_started = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL;
+    g_reg_n = 0; g_work = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL;
     g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_quantum = 0;
     g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
     js_std_add_helpers(ctx, 0, NULL);

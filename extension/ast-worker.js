@@ -213,8 +213,10 @@ async function runEngine(code, html, msg, quantum, recipes) {
         return (r && r.ok && typeof r.body === "string") ? r.body : "";
       } catch (_) { return ""; }
     };
-    let guard = 0;
-    while (M.ccall("qjs_step", "number", [], []) === 1 && guard++ < 5000) {
+    // NO step-cap: qjs_step returns 1 only while genuine fetch/chunk work is pending, and the engine's
+    // work-based QUANTUM parks the residue under resource pressure (a single deep await-loop yields too),
+    // so the loop terminates by PROGRESS + park, never a counter. A hang here = a quantum bug to root-fix.
+    while (M.ccall("qjs_step", "number", [], []) === 1) {
       const replies = String(M.ccall("qjs_pending", "string", [], [])).split("\n").filter(Boolean);
       for (const u of replies) M.ccall("qjs_provide", "void", ["string", "string"], [u, await fetched(u, false)]);   // reply body -> resume in place
       const chunks = String(M.ccall("qjs_chunks", "string", [], [])).split("\n").filter(Boolean);
