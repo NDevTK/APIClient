@@ -109,14 +109,55 @@ function idbOpen() {
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
+/* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, html, code,
+   recipes: "idx,dec;...", emit, visits, ts, credentialed }. Rehydration re-runs (html,code) + resumes
+   recipes -- so a parked flow on ANY site can be advanced later, even when that page isn't open. */
 async function frontierGet(key) {
-  try { const db = await idbOpen(); return await new Promise((res) => { const t = db.transaction("frontier").objectStore("frontier").get(key); t.onsuccess = () => res(t.result || ""); t.onerror = () => res(""); }); }
-  catch (_) { return ""; }
+  try { const db = await idbOpen(); return await new Promise((res) => { const t = db.transaction("frontier").objectStore("frontier").get(key); t.onsuccess = () => res(t.result || null); t.onerror = () => res(null); }); }
+  catch (_) { return null; }
 }
-async function frontierPut(key, val) {
-  try { const db = await idbOpen(); await new Promise((res) => { const s = db.transaction("frontier", "readwrite").objectStore("frontier"); const t = val ? s.put(val, key) : s.delete(key); t.onsuccess = () => res(); t.onerror = () => res(); }); }
+async function frontierPut(key, entry) {
+  try { const db = await idbOpen(); await new Promise((res) => { const s = db.transaction("frontier", "readwrite").objectStore("frontier"); const t = (entry && entry.recipes) ? s.put(entry, key) : s.delete(key); t.onsuccess = () => res(); t.onerror = () => res(); }); }
   catch (_) {}
 }
+async function frontierAll() {
+  try { const db = await idbOpen(); return await new Promise((res) => { const t = db.transaction("frontier").objectStore("frontier").getAll(); t.onsuccess = () => res(t.result || []); t.onerror = () => res([]); }); }
+  catch (_) { return []; }
+}
+/* The ONE WFQ weight (priority.js) at the HOST level: a parked frontier's value-of-information =
+   epRate (emits per visit) + an explore/fairness floor for under-visited frontiers. Same policy as the
+   within-page scheduler -- one attention, two levels. */
+function frontierWeight(e) {
+  const epRate = (e && e.visits) ? (e.emit || 0) / e.visits : (e && e.emit || 0);
+  const exploreBonus = 1 / ((e && e.visits || 0) + 1);
+  const P = self._priorityCmp;
+  return (P && P.flowWeight) ? P.flowWeight({ ctx: { epRate, exploreBonus } }) : (1 + epRate + exploreBonus);
+}
+/* THE HOST-LEVEL GLOBAL WFQ ARBITER: advance the globally-highest-value parked frontier across ALL
+   origins (rehydrate its bundle + resume its recipes for one quantum, re-park the residue), `rounds`
+   times. This is the "single ATTENTION across all sites" -- a high-value parked flow on site A outranks
+   a low-value fresh residue on site B by ONE value order. Returns the endpoints learned (for the brain
+   to merge into the GLOBAL surface). */
+async function driveFrontier(rounds, opts) {
+  opts = opts || {};
+  const merged = new Map();
+  for (let n = 0; n < (rounds || 1); n++) {
+    const all = (await frontierAll()).filter((e) => e && e.recipes);
+    if (!all.length) break;
+    all.sort((a, b) => frontierWeight(b) - frontierWeight(a));   // ONE global value order
+    const top = all[0];
+    const m2 = { type: "AST_ANALYZE", pageHtml: top.html, code: top.code, sourceUrl: top.sourceUrl, quantum: opts.quantum || top.quantum || 8, credentialed: top.credentialed };
+    const r = await runEngine(top.code || "", top.html || "", m2, m2.quantum, top.recipes);
+    mergeCallsites(merged, r.fetchCallSites);
+    top.emit = (top.emit || 0) + (r.fetchCallSites || []).length;
+    top.visits = (top.visits || 0) + 1;
+    top.recipes = (r._park || []).join(";");
+    top.ts = Date.now();
+    await frontierPut(top.key, top);   // empty recipes -> deleted (fully explored)
+  }
+  return [...merged.values()];
+}
+self.driveFrontier = driveFrontier;   // the brain drives this on idle / after analysis; merges globally
 /* Drive ONE persistent engine instance through the step protocol. fromReply is now IN PLACE: when the
    engine parks awaiting a reply (qjs_step -> NEED_FETCH), the TRUSTED offscreen safe-fetches each pending
    url (GET, page-origin SSRF) and qjs_provide()s the body, resuming the flow in the SAME instance -- no
@@ -216,9 +257,16 @@ self.astDispatch = async function astDispatch(msg) {
        CROSS-SESSION FRONTIER: with a host quantum, park the residue to IDB and resume it next visit. */
     const quantum = msg.quantum || 0;   // 0 = run to completion (default); >0 = per-visit CPU slice
     const fkey = originOf(msg.sourceUrl) + "|" + strHash(html + code);
-    const recipes = quantum ? await frontierGet(fkey) : "";   // resume the parked frontier for this bundle
-    const result = await runEngine(code, html, msg, quantum, recipes);
-    if (quantum) await frontierPut(fkey, (result._park || []).join(";"));   // persist the new residue (empty -> fully explored)
+    const prior = quantum ? await frontierGet(fkey) : null;      // resume this bundle's parked frontier
+    const result = await runEngine(code, html, msg, quantum, prior && prior.recipes);
+    if (quantum) {   // persist the residue into the GLOBAL frontier (rich entry for later rehydration)
+      await frontierPut(fkey, {
+        key: fkey, sourceUrl: msg.sourceUrl, html, code, credentialed: !!msg.credentialed, quantum,
+        recipes: (result._park || []).join(";"),
+        emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length,
+        visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
+      });
+    }
     const endpoints = new Map();
     mergeCallsites(endpoints, result.fetchCallSites);
 
