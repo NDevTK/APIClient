@@ -45,6 +45,7 @@ static double  g_cur_val = 0;
 static Flow   *g_cur_flow = NULL;   /* running flow (a stable local copy; its weight is read by the yield hook) */
 static int     g_emit_total = 0;
 static JSRuntime *g_rt = NULL;
+static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
 
 /* decision-vector state for the RUNNING starter flow (branch-arm BFS) — grows unbounded */
 static JSValue      g_cur_fn = JS_UNDEFINED;   /* the running starter's function (borrowed) so __branch can fork a sibling that re-runs it */
@@ -99,26 +100,55 @@ static JSValue js_emit(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return JS_UNDEFINED;
 }
 
+static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);   /* fwd: opaque-returning host stub */
+/* wrap val in an already-RESOLVED promise (consumes val) so `await`/`.then` chains continue synchronously. */
+static JSValue js_resolved(JSContext *ctx, JSValue val)
+{
+    JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
+    if (!JS_IsException(promise)) {
+        JSValue rr = JS_Call(ctx, rf[0], JS_UNDEFINED, 1, &val); JS_FreeValue(ctx, rr);
+        JS_FreeValue(ctx, rf[0]); JS_FreeValue(ctx, rf[1]);
+    }
+    JS_FreeValue(ctx, val);
+    return promise;
+}
+/* Response body accessor (.json/.text/.blob/.arrayBuffer/.formData): the body is EXTERNAL INPUT ->
+   OPAQUE, wrapped in a resolved promise so the fetch->reply->fetch chain CONTINUES and downstream
+   endpoints surface as shapes (`/api/next/{}`). A real concrete reply is the host safe-fetch's job
+   (fromReply, one-per-endpoint) — opaque here keeps the chain alive without inventing a value. */
+static JSValue js_resp_body(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{ return js_resolved(ctx, JS_DupValue(ctx, g_opaque)); }
+/* build a fetch Response whose identity is concrete (ok/status/url) but whose BODY is opaque. */
+static JSValue make_response(JSContext *ctx, const char *url)
+{
+    JSValue resp = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, resp, "url", JS_NewString(ctx, url ? url : ""));
+    JS_SetPropertyStr(ctx, resp, "ok", JS_TRUE);
+    JS_SetPropertyStr(ctx, resp, "status", JS_NewInt32(ctx, 200));
+    JS_SetPropertyStr(ctx, resp, "statusText", JS_NewString(ctx, "OK"));
+    JS_SetPropertyStr(ctx, resp, "json", JS_NewCFunction(ctx, js_resp_body, "json", 0));
+    JS_SetPropertyStr(ctx, resp, "text", JS_NewCFunction(ctx, js_resp_body, "text", 0));
+    JS_SetPropertyStr(ctx, resp, "blob", JS_NewCFunction(ctx, js_resp_body, "blob", 0));
+    JS_SetPropertyStr(ctx, resp, "arrayBuffer", JS_NewCFunction(ctx, js_resp_body, "arrayBuffer", 0));
+    JS_SetPropertyStr(ctx, resp, "formData", JS_NewCFunction(ctx, js_resp_body, "formData", 0));
+    {   /* headers.get(name) -> opaque (a response header is external input) */
+        JSValue h = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, h, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
+        JS_SetPropertyStr(ctx, resp, "headers", h);
+    }
+    return resp;
+}
 /* fetch(url): the moat's host edge. URL = whatever the bundle COMPUTED. Emit @H, raise value, return a
-   resolved promise wrapping a minimal response so `await fetch(...)`/`.then` continue. */
+   resolved promise wrapping the Response so `await fetch(...)`/`.then(r=>r.json())` chains continue. */
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     printf("@H %s\n", url ? url : "?"); fflush(stdout);
     g_emit_total++;
     if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
-    JSValue resp = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, resp, "url", JS_NewString(ctx, url ? url : ""));
-    JS_SetPropertyStr(ctx, resp, "ok", JS_TRUE);
-    JS_SetPropertyStr(ctx, resp, "status", JS_NewInt32(ctx, 200));
+    JSValue resp = make_response(ctx, url);
     if (url) JS_FreeCString(ctx, url);
-    JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
-    if (!JS_IsException(promise)) {
-        JSValue rr = JS_Call(ctx, rf[0], JS_UNDEFINED, 1, &resp); JS_FreeValue(ctx, rr);
-        JS_FreeValue(ctx, rf[0]); JS_FreeValue(ctx, rf[1]);
-    }
-    JS_FreeValue(ctx, resp);
-    return promise;
+    return js_resolved(ctx, resp);
 }
 
 /* __branch(): a FORCED DECISION POINT (a gate on opaque external input). If the running flow's decision
@@ -148,7 +178,6 @@ static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 
 /* __opaque(): return the OPAQUE sentinel — external input the tool must not concretely decide. A branch
    on it (if(__opaque())) auto-forks BOTH arms via the engine OP_if hook, no explicit __branch needed. */
-static JSValue g_opaque = JS_UNDEFINED;
 static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return JS_DupValue(ctx, g_opaque); }
 /* Minimal host-edge stubs for a browser bundle: a no-op (addEventListener etc — the handler stays a
@@ -305,7 +334,21 @@ static void scheduler_run(JSContext *ctx)
             JS_CowRevert(ctx);                      /* revert shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
             f.fs = JS_FlowNew(ctx, f.handle, g_opaque, 8, oargs);
-            if (!f.fs) { g_running = 0; g_cur_flow = NULL; JS_FreeValue(ctx, f.handle); free(f.dec); continue; }
+            if (!f.fs) {
+                /* ASYNC/generator (or non-bytecode) orphan: not sync-preemptible — it self-suspends via
+                   await/yield. Run via a plain call + drain its microtask chain to completion (the awaits
+                   land emits). Preemption of these is the async-per-flow-delta task, not this path. */
+                JS_SetFlowYieldHook(NULL);
+                JSValue r = JS_Call(ctx, f.handle, g_opaque, 8, oargs);
+                if (JS_IsException(r)) js_std_dump_error(ctx);
+                JS_FreeValue(ctx, r);
+                JSContext *c2; int jr2;
+                while ((jr2 = JS_ExecutePendingJob(g_rt, &c2)) > 0) { }
+                if (jr2 < 0) js_std_dump_error(c2 ? c2 : ctx);
+                g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
+                JS_FreeValue(ctx, f.handle); free(f.dec);
+                continue;
+            }
         }
         /* else SUSPENDED: resume in place. Its COW delta was empty at suspend + starters revert to
            baseline, so shared state == baseline == what this flow expects (it wrote nothing shared). */
