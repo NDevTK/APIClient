@@ -590,7 +590,12 @@ static void scheduler_run(JSContext *ctx)
             JS_CowRevert(ctx);                      /* revert JS shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
             dom_revert();                           /* revert DOM mutations to the post-boot baseline (per-flow isolation) */
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
-            f.fs = JS_FlowNew(ctx, f.handle, g_opaque, 8, oargs);
+            /* Drive an orphan METHOD with its REAL receiver instance if one exists (this.field -> concrete
+               boot value, a real example) else opaque this. Args stay opaque (external input). */
+            JSValue recv = JS_FindReceiver(ctx, f.handle);
+            JSValue this_val = JS_IsUndefined(recv) ? g_opaque : recv;
+            f.fs = JS_FlowNew(ctx, f.handle, this_val, 8, oargs);
+            JS_FreeValue(ctx, recv);
             if (!f.fs) {
                 /* ASYNC/generator (or non-bytecode) orphan: not sync-preemptible — it self-suspends via
                    await/yield. Run via a plain call + drain its microtask chain to completion (the awaits
