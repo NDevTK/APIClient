@@ -71,7 +71,8 @@ function linesToAnalysis(lines, msg) {
       // security view: an XSS/injection SINK reached by tainted (opaque) data. sp[0]=sink, rest=taint shape.
       const rest = ln.slice(3).trim(); const sp = rest.indexOf(" ");
       const sink = sp > 0 ? rest.slice(0, sp) : rest;
-      securitySinks.push({ type: sink, sink: sink, taint: "opaque", evidence: rest, source: "ast_analysis" });
+      const shape = sp > 0 ? rest.slice(sp + 1) : "{}";   // the tainted value's concrete/opaque interleaving (PoC seed)
+      securitySinks.push({ type: sink, sink: sink, taint: "opaque", shape: shape, evidence: rest, source: "ast_analysis" });
     } else if (ln.startsWith("@PARK ")) {
       const p = ln.slice(6).trim().split(/\s+/); park.push(p[0] + "," + (p[1] || ""));   // recipe: orphan_idx,decbits
     } else if (ln.startsWith("@ORPHANS ")) {

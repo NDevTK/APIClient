@@ -449,16 +449,22 @@ static void dom_insert_capture(lxb_dom_node_t *node) {
 static int host_opaque(JSValueConst v) {
     return JS_IsOpaque(v);   /* any shape-carrying opaque (taint), not just the default sentinel */
 }
-static void emit_sink(const char *sink) {
-    printf("@S %s {}\n", sink); fflush(stdout);   /* tainted value is opaque -> the shape {} */
+/* Emit an @S finding with the tainted value's real SHAPE (the concrete/opaque interleaving the PoC needs:
+   `'<h1>'+hash` sinks the value opaque("<h1>{}"), so the sink reports `<h1>{}`, not a blind `{}`). The
+   shape is the opaque's payload — read via JS_ToCString (ToString(opaque) returns its shape). Control
+   chars are folded to spaces so the one-line @S protocol stays parseable. */
+static void emit_sink(JSContext *ctx, const char *sink, JSValueConst tainted) {
+    const char *sh = JS_ToCString(ctx, tainted);
+    printf("@S %s ", sink);
+    if (sh) { for (const char *p = sh; *p; p++) putchar((*p == '\n' || *p == '\r') ? ' ' : *p); JS_FreeCString(ctx, sh); }
+    else printf("{}");
+    putchar('\n'); fflush(stdout);
     g_emit_total++;
     if (g_running && g_cur_flow) { g_cur_flow->val += 1.0; g_cur_flow->cpu = 0; }   /* @S raises value like @H (WFQ prioritizes sink-reaching flows) */
 }
-/* NOTE: @S currently fires only on a DIRECTLY opaque sink value. A CONCATENATED taint ('<h1>'+taint)
-   is missed because string ops convert opaque -> a concrete "{}" shape, LOSING the taint. The sound fix
-   is NOT a "{}" string-match (that is RUN-DON'T-MATCH banned) but opaque-WITH-PROVENANCE: taint stays
-   tainted through concat (carrying its shape + chain), so the sink sees it AND the chain yields the PoC.
-   Left honestly incomplete until provenance lands, never papered over with a heuristic. */
+/* Concatenated taint IS now caught: opaque-with-provenance keeps `'<h1>'+taint` opaque (shape "<h1>{}"),
+   so host_opaque() sees it at the sink and the shape gives the PoC its interleaving. The remaining PoC
+   work is source-tagging the hole ({hash}/{search}/{pm}) + the transform chain for filtered flows. */
 static void dom_revert(void) {   /* restore the DOM to the post-boot baseline (reverse order) */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {
         DomUndo *u = &g_dom_undo[i];
@@ -495,7 +501,7 @@ static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int arg
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
     if (!el || argc < 2) return JS_UNDEFINED;
     const char *name = JS_ToCString(ctx, argv[0]);
-    if (name && host_opaque(argv[1]) && is_sink_attr(name)) emit_sink("setAttribute");   /* @S: tainted into an on-handler or url attr */
+    if (name && host_opaque(argv[1]) && is_sink_attr(name)) emit_sink(ctx, "setAttribute", argv[1]);   /* @S: tainted into an on-handler or url attr */
     const char *val = JS_ToCString(ctx, argv[1]);
     if (name && val) { dom_attr_capture(el, name); lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val)); }
     if (name) JS_FreeCString(ctx, name);
@@ -504,12 +510,12 @@ static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int arg
 }
 /* el.insertAdjacentHTML(pos, html) — tainted html is a direct XSS sink. */
 static JSValue js_el_insertAdjacentHTML(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 2 && host_opaque(argv[1])) emit_sink("insertAdjacentHTML");
+    if (argc >= 2 && host_opaque(argv[1])) emit_sink(ctx, "insertAdjacentHTML", argv[1]);
     return JS_UNDEFINED;
 }
 /* el.innerHTML = / el.outerHTML = tainted -> XSS sink (the #1 DOM XSS). */
 static JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
-    if (host_opaque(val)) emit_sink(magic ? "outerHTML" : "innerHTML");
+    if (host_opaque(val)) emit_sink(ctx, magic ? "outerHTML" : "innerHTML", val);
     return JS_UNDEFINED;
 }
 static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return JS_DupValue(ctx, g_opaque); }
@@ -537,7 +543,7 @@ static JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) 
 static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
     const char *n = refl_name(magic);
-    if ((magic == 1 || magic == 2) && host_opaque(val)) emit_sink("href");   /* @S: tainted el.href/.action (javascript:/redirect) */
+    if ((magic == 1 || magic == 2) && host_opaque(val)) emit_sink(ctx, "href", val);   /* @S: tainted el.href/.action (javascript:/redirect) */
     const char *v = JS_ToCString(ctx, val);
     if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); JS_FreeCString(ctx, v); }
     return JS_UNDEFINED;
@@ -576,13 +582,13 @@ static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int a
 }
 /* document.write(tainted) -> XSS sink. */
 static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    for (int i = 0; i < argc; i++) if (host_opaque(argv[i])) { emit_sink("document.write"); break; }
+    for (int i = 0; i < argc; i++) if (host_opaque(argv[i])) { emit_sink(ctx, "document.write", argv[i]); break; }
     return JS_UNDEFINED;
 }
 /* eval(tainted) -> code-injection sink; eval(concrete) -> forced-execute (dynamic code path, orphans). */
 static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_UNDEFINED;
-    if (host_opaque(argv[0])) { emit_sink("eval"); return JS_DupValue(ctx, g_opaque); }
+    if (host_opaque(argv[0])) { emit_sink(ctx, "eval", argv[0]); return JS_DupValue(ctx, g_opaque); }
     if (JS_IsString(argv[0])) {
         size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
         JSValue r = s ? JS_Eval(ctx, s, len, "<eval>", JS_EVAL_TYPE_GLOBAL) : JS_UNDEFINED;
