@@ -125,6 +125,22 @@ static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 static JSValue g_opaque = JS_UNDEFINED;
 static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return JS_DupValue(ctx, g_opaque); }
+/* Minimal host-edge stubs for a browser bundle: a no-op (addEventListener etc — the handler stays a
+   never-fired function, so orphan-invoke drives it), and an opaque-returning stub (DOM reads that are
+   external input the tool must not concretely decide). A missing capability is a missing stub, never a
+   parallel resolver — the real Lexbor DOM replaces these when the host is wired. */
+static JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_UNDEFINED; }
+static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_DupValue(ctx, g_opaque); }
+/* addEventListener(type, handler): a registered handler that NEVER FIRES is exactly the unused surface —
+   keep it reachable (in g_handlers) so orphan-invoke drives it and surfaces its gated endpoints. */
+static JSValue g_handlers = JS_UNDEFINED;
+static int g_handler_n = 0;
+static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+    JSValueConst h = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
+    if (JS_IsFunction(ctx, h) && !JS_IsUndefined(g_handlers))
+        JS_SetPropertyUint32(ctx, g_handlers, (uint32_t)g_handler_n++, JS_DupValue(ctx, h));
+    return JS_UNDEFINED;
+}
 
 /* __fork(fn, hint?): add a flow to the ONE registry (a STARTER, fresh decision vector). */
 static JSValue js_fork(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -240,6 +256,31 @@ int main(int argc, char **argv)
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
     JS_SetPropertyStr(ctx, g, "__driveOrphans", JS_NewCFunction(ctx, js_drive_orphans, "__driveOrphans", 0));
+
+    /* Minimal browser environment: window/self = globalThis; OPAQUE external-input sources (location,
+       document.cookie, navigator, referrer) so a real bundle's gate on external input auto-forks without
+       synthetic args; addEventListener = no-op (the handler is then a never-fired orphan, driven). This
+       is the seam the real Lexbor DOM + real safe-fetch plug into during the host rewire. */
+    g_handlers = JS_NewArray(ctx);
+    JS_SetPropertyStr(ctx, g, "__handlers", JS_DupValue(ctx, g_handlers));   /* reachable so handlers survive to orphan-collect */
+    JS_SetPropertyStr(ctx, g, "window", JS_DupValue(ctx, g));
+    JS_SetPropertyStr(ctx, g, "self",   JS_DupValue(ctx, g));
+    JS_SetPropertyStr(ctx, g, "globalThis", JS_DupValue(ctx, g));
+    JS_SetPropertyStr(ctx, g, "location", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, g, "navigator", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    {
+        JSValue doc = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, doc, "cookie", JS_DupValue(ctx, g_opaque));
+        JS_SetPropertyStr(ctx, doc, "referrer", JS_DupValue(ctx, g_opaque));
+        JS_SetPropertyStr(ctx, doc, "URL", JS_DupValue(ctx, g_opaque));
+        JS_SetPropertyStr(ctx, doc, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+        JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_opaque_stub, "querySelector", 1));
+        JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_opaque_stub, "getElementById", 1));
+        JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_opaque_stub, "createElement", 1));
+        JS_SetPropertyStr(ctx, g, "document", doc);
+    }
     JS_FreeValue(ctx, g);
 
     int rc = 0;
@@ -260,6 +301,7 @@ int main(int argc, char **argv)
     JS_CowRevert(ctx);
     JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL);
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
     js_std_free_handlers(rt);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
