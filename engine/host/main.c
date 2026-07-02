@@ -447,7 +447,7 @@ static void dom_insert_capture(lxb_dom_node_t *node) {
    An XSS/injection SINK reached by OPAQUE (external-input-tainted) data is a security finding, weighted
    equally with @H. Opacity is the taint we already track: v is tainted iff it IS the opaque sentinel. */
 static int host_opaque(JSValueConst v) {
-    return JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT && JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(g_opaque);
+    return JS_IsOpaque(v);   /* any shape-carrying opaque (taint), not just the default sentinel */
 }
 static void emit_sink(const char *sink) {
     printf("@S %s {}\n", sink); fflush(stdout);   /* tainted value is opaque -> the shape {} */
@@ -910,7 +910,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval, "eval", 1));   /* eval(tainted) -> @S; eval(concrete) -> forced-execute */
     /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both
        arms via the decision-vector logic (real bundles: external input reaches OP_if as opaque). */
-    g_opaque = JS_NewObject(ctx);   /* kept alive for the process; marker is pointer identity */
+    JS_InitOpaqueClass(ctx);             /* register the shape-carrying opaque class */
+    g_opaque = JS_NewOpaqueShaped(ctx, "{}");   /* the default opaque (shape "{}"); generic propagation dups it */
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
     JS_SetPropertyStr(ctx, g, "__driveOrphans", JS_NewCFunction(ctx, js_drive_orphans, "__driveOrphans", 0));
