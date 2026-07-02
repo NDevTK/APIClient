@@ -454,6 +454,11 @@ static void emit_sink(const char *sink) {
     g_emit_total++;
     if (g_running && g_cur_flow) { g_cur_flow->val += 1.0; g_cur_flow->cpu = 0; }   /* @S raises value like @H (WFQ prioritizes sink-reaching flows) */
 }
+/* NOTE: @S currently fires only on a DIRECTLY opaque sink value. A CONCATENATED taint ('<h1>'+taint)
+   is missed because string ops convert opaque -> a concrete "{}" shape, LOSING the taint. The sound fix
+   is NOT a "{}" string-match (that is RUN-DON'T-MATCH banned) but opaque-WITH-PROVENANCE: taint stays
+   tainted through concat (carrying its shape + chain), so the sink sees it AND the chain yields the PoC.
+   Left honestly incomplete until provenance lands, never papered over with a heuristic. */
 static void dom_revert(void) {   /* restore the DOM to the post-boot baseline (reverse order) */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {
         DomUndo *u = &g_dom_undo[i];
