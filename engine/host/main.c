@@ -443,6 +443,17 @@ static void dom_insert_capture(lxb_dom_node_t *node) {
     if (!g_dom_capture) return;
     DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; dom_undo_push(u);
 }
+/* ── The SECURITY view (@S): the SECOND equal output of the one run ──────────────
+   An XSS/injection SINK reached by OPAQUE (external-input-tainted) data is a security finding, weighted
+   equally with @H. Opacity is the taint we already track: v is tainted iff it IS the opaque sentinel. */
+static int host_opaque(JSValueConst v) {
+    return JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT && JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(g_opaque);
+}
+static void emit_sink(const char *sink) {
+    printf("@S %s {}\n", sink); fflush(stdout);   /* tainted value is opaque -> the shape {} */
+    g_emit_total++;
+    if (g_running && g_cur_flow) { g_cur_flow->val += 1.0; g_cur_flow->cpu = 0; }   /* @S raises value like @H (WFQ prioritizes sink-reaching flows) */
+}
 static void dom_revert(void) {   /* restore the DOM to the post-boot baseline (reverse order) */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {
         DomUndo *u = &g_dom_undo[i];
@@ -471,16 +482,32 @@ static void script_maybe_load(lxb_dom_element_t *el) {
         if (u) { if (!strstr(u, "{}")) chunk_pending_add(u); free(u); }         /* concrete src -> fetch + eval in place */
     }
 }
+static int is_sink_attr(const char *n) {   /* attributes where tainted data is an XSS/redirect sink */
+    return n && (strncmp(n, "on", 2) == 0 || strcmp(n, "href") == 0 || strcmp(n, "src") == 0 ||
+                 strcmp(n, "action") == 0 || strcmp(n, "formaction") == 0 || strcmp(n, "srcdoc") == 0);
+}
 static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
     if (!el || argc < 2) return JS_UNDEFINED;
     const char *name = JS_ToCString(ctx, argv[0]);
+    if (name && host_opaque(argv[1]) && is_sink_attr(name)) emit_sink("setAttribute");   /* @S: tainted into an on-handler or url attr */
     const char *val = JS_ToCString(ctx, argv[1]);
     if (name && val) { dom_attr_capture(el, name); lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val)); }
     if (name) JS_FreeCString(ctx, name);
     if (val) JS_FreeCString(ctx, val);
     return JS_UNDEFINED;
 }
+/* el.insertAdjacentHTML(pos, html) — tainted html is a direct XSS sink. */
+static JSValue js_el_insertAdjacentHTML(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 2 && host_opaque(argv[1])) emit_sink("insertAdjacentHTML");
+    return JS_UNDEFINED;
+}
+/* el.innerHTML = / el.outerHTML = tainted -> XSS sink (the #1 DOM XSS). */
+static JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
+    if (host_opaque(val)) emit_sink(magic ? "outerHTML" : "innerHTML");
+    return JS_UNDEFINED;
+}
+static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return JS_DupValue(ctx, g_opaque); }
 static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *parent = JS_GetOpaque(this_val, g_el_class_id);
     lxb_dom_element_t *child = (argc > 0) ? JS_GetOpaque(argv[0], g_el_class_id) : NULL;
@@ -505,6 +532,7 @@ static JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) 
 static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
     const char *n = refl_name(magic);
+    if ((magic == 1 || magic == 2) && host_opaque(val)) emit_sink("href");   /* @S: tainted el.href/.action (javascript:/redirect) */
     const char *v = JS_ToCString(ctx, val);
     if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); JS_FreeCString(ctx, v); }
     return JS_UNDEFINED;
@@ -513,8 +541,17 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_el_getAttribute, "getAttribute", 1));
     JS_SetPropertyStr(ctx, proto, "setAttribute", JS_NewCFunction(ctx, js_el_setAttribute, "setAttribute", 2));
     JS_SetPropertyStr(ctx, proto, "appendChild", JS_NewCFunction(ctx, js_el_appendChild, "appendChild", 1));
+    JS_SetPropertyStr(ctx, proto, "insertAdjacentHTML", JS_NewCFunction(ctx, js_el_insertAdjacentHTML, "insertAdjacentHTML", 2));
     JS_SetPropertyStr(ctx, proto, "querySelector", JS_NewCFunction(ctx, js_el_querySelector, "querySelector", 1));
     JS_SetPropertyStr(ctx, proto, "getTextContent", JS_NewCFunction(ctx, js_el_textContent, "getTextContent", 0));
+    for (int i = 0; i < 2; i++) {   /* innerHTML (magic 0) / outerHTML (magic 1) setter = XSS sink */
+        JSAtom a = JS_NewAtom(ctx, i ? "outerHTML" : "innerHTML");
+        JS_DefinePropertyGetSet(ctx, proto, a,
+            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_get_html, "get", 0, JS_CFUNC_getter_magic, i),
+            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_set_html, "set", 1, JS_CFUNC_setter_magic, i),
+            JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, a);
+    }
     static const char *refl[] = { "src", "href", "action", "id" };
     for (int i = 0; i < 4; i++) {
         JSAtom a = JS_NewAtom(ctx, refl[i]);
@@ -531,6 +568,23 @@ static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int a
     lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)tag, strlen(tag), NULL);
     JS_FreeCString(ctx, tag);
     return el_wrap(ctx, el);
+}
+/* document.write(tainted) -> XSS sink. */
+static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    for (int i = 0; i < argc; i++) if (host_opaque(argv[i])) { emit_sink("document.write"); break; }
+    return JS_UNDEFINED;
+}
+/* eval(tainted) -> code-injection sink; eval(concrete) -> forced-execute (dynamic code path, orphans). */
+static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    if (host_opaque(argv[0])) { emit_sink("eval"); return JS_DupValue(ctx, g_opaque); }
+    if (JS_IsString(argv[0])) {
+        size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
+        JSValue r = s ? JS_Eval(ctx, s, len, "<eval>", JS_EVAL_TYPE_GLOBAL) : JS_UNDEFINED;
+        if (s) JS_FreeCString(ctx, s);
+        return r;
+    }
+    return JS_DupValue(ctx, argv[0]);   /* non-string: spec returns the arg unchanged */
 }
 static JSValue js_doc_getElementById(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_NULL;
@@ -848,6 +902,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "__branch", JS_NewCFunction(ctx, js_branch, "__branch", 0));
     JS_SetPropertyStr(ctx, g, "__opaque", JS_NewCFunction(ctx, js_opaque, "__opaque", 0));
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
+    JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval, "eval", 1));   /* eval(tainted) -> @S; eval(concrete) -> forced-execute */
     /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both
        arms via the decision-vector logic (real bundles: external input reaches OP_if as opaque). */
     g_opaque = JS_NewObject(ctx);   /* kept alive for the process; marker is pointer identity */
@@ -891,6 +946,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));   /* real Lexbor DOM */
         JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
         JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));   /* real element; appendChild intercepts <script src> */
+        JS_SetPropertyStr(ctx, doc, "write", JS_NewCFunction(ctx, js_doc_write, "write", 1));       /* document.write(tainted) -> @S */
+        JS_SetPropertyStr(ctx, doc, "writeln", JS_NewCFunction(ctx, js_doc_write, "writeln", 1));
         JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
         JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
         JS_SetPropertyStr(ctx, g, "document", doc);

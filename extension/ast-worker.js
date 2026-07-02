@@ -45,6 +45,7 @@ function linesToAnalysis(lines, msg) {
   const chunkUrls = [];
   const replyWant = [];
   const park = [];
+  const securitySinks = [];
   let emitDone = null, orphans = 0;
   const seen = new Set();
   for (const raw of lines) {
@@ -66,6 +67,11 @@ function linesToAnalysis(lines, msg) {
       fetchCallSites.push({ url, method, params: parseQueryParams(url), source: "ast_analysis" });
     } else if (ln.startsWith("@CHUNK ")) {
       const u = ln.slice(7).trim(); if (u && chunkUrls.indexOf(u) < 0) chunkUrls.push(u);   // external <script src> discovered
+    } else if (ln.startsWith("@S ")) {
+      // security view: an XSS/injection SINK reached by tainted (opaque) data. sp[0]=sink, rest=taint shape.
+      const rest = ln.slice(3).trim(); const sp = rest.indexOf(" ");
+      const sink = sp > 0 ? rest.slice(0, sp) : rest;
+      securitySinks.push({ type: sink, sink: sink, taint: "opaque", evidence: rest, source: "ast_analysis" });
     } else if (ln.startsWith("@PARK ")) {
       const p = ln.slice(6).trim().split(/\s+/); park.push(p[0] + "," + (p[1] || ""));   // recipe: orphan_idx,decbits
     } else if (ln.startsWith("@ORPHANS ")) {
@@ -83,8 +89,9 @@ function linesToAnalysis(lines, msg) {
     fetchCallSites,
     resolverErrors,
     chunkUrls,
+    securitySinks,
     // all sibling fields the brain reads unconditionally, present + empty so it never throws:
-    protoEnums: [], protoFieldMaps: [], securitySinks: [], dangerousPatterns: [],
+    protoEnums: [], protoFieldMaps: [], dangerousPatterns: [],
     esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
     sourceMapTypes: [], sourceMapsByUrl: {}, traceMapsByUrl: {}, valueConstraints: [],
     sourceMapUrl: null, sourceMap: null, sourceUrl: msg.sourceUrl || "",
