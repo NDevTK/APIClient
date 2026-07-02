@@ -254,6 +254,12 @@ int main(int argc, char **argv)
     }
 
     printf("@DONE emit=%d\n", g_emit_total); fflush(stdout);
+    /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
+       its held baseline values return to their slots, and drop the opaque marker. */
+    JS_CowSetActive(0);
+    JS_CowRevert(ctx);
+    JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL);
+    JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     js_std_free_handlers(rt);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
