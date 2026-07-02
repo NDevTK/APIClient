@@ -1440,13 +1440,14 @@ var _qjs_set_driving,
   _qjs_set_bundle_hash,
   _qjs_drive_persist_session,
   _qjs_drive_reload_session,
-  _qjs_take_yielded,
-  _qjs_resume_chain_call,
   _qjs_cow_boot_baseline,
-  _qjs_cow_drive_restore,
-  _qjs_drive_repick,
   _qjs_drive_run,
+  _qjs_cow_drive_restore,
+  _qjs_drive_pending,
+  _qjs_drive_repick,
   _qjs_cow_stats_emit,
+  _qjs_resume_chain_call,
+  _qjs_take_yielded,
   _qjs_cow_pool_init,
   _qjs_cow_capture,
   _qjs_cow_to_baseline,
@@ -1483,13 +1484,14 @@ function assignWasmExports(wasmExports) {
   _qjs_set_bundle_hash = Module['_qjs_set_bundle_hash'] = wasmExports['qjs_set_bundle_hash'];
   _qjs_drive_persist_session = Module['_qjs_drive_persist_session'] = wasmExports['qjs_drive_persist_session'];
   _qjs_drive_reload_session = Module['_qjs_drive_reload_session'] = wasmExports['qjs_drive_reload_session'];
-  _qjs_take_yielded = Module['_qjs_take_yielded'] = wasmExports['qjs_take_yielded'];
-  _qjs_resume_chain_call = Module['_qjs_resume_chain_call'] = wasmExports['qjs_resume_chain_call'];
   _qjs_cow_boot_baseline = Module['_qjs_cow_boot_baseline'] = wasmExports['qjs_cow_boot_baseline'];
-  _qjs_cow_drive_restore = Module['_qjs_cow_drive_restore'] = wasmExports['qjs_cow_drive_restore'];
-  _qjs_drive_repick = Module['_qjs_drive_repick'] = wasmExports['qjs_drive_repick'];
   _qjs_drive_run = Module['_qjs_drive_run'] = wasmExports['qjs_drive_run'];
+  _qjs_cow_drive_restore = Module['_qjs_cow_drive_restore'] = wasmExports['qjs_cow_drive_restore'];
+  _qjs_drive_pending = Module['_qjs_drive_pending'] = wasmExports['qjs_drive_pending'];
+  _qjs_drive_repick = Module['_qjs_drive_repick'] = wasmExports['qjs_drive_repick'];
   _qjs_cow_stats_emit = Module['_qjs_cow_stats_emit'] = wasmExports['qjs_cow_stats_emit'];
+  _qjs_resume_chain_call = Module['_qjs_resume_chain_call'] = wasmExports['qjs_resume_chain_call'];
+  _qjs_take_yielded = Module['_qjs_take_yielded'] = wasmExports['qjs_take_yielded'];
   _qjs_cow_pool_init = Module['_qjs_cow_pool_init'] = wasmExports['qjs_cow_pool_init'];
   _qjs_cow_capture = Module['_qjs_cow_capture'] = wasmExports['qjs_cow_capture'];
   _qjs_cow_to_baseline = Module['_qjs_cow_to_baseline'] = wasmExports['qjs_cow_to_baseline'];
