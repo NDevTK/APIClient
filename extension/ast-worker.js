@@ -42,6 +42,7 @@ function parseQueryParams(url) {
 function linesToAnalysis(lines, msg) {
   const fetchCallSites = [];
   const resolverErrors = [];
+  const chunkUrls = [];
   let emitDone = null, orphans = 0;
   const seen = new Set();
   for (const raw of lines) {
@@ -52,6 +53,8 @@ function linesToAnalysis(lines, msg) {
       if (seen.has(url)) continue;            // metric-layer dedup: distinct learned URLs
       seen.add(url);
       fetchCallSites.push({ url, method: "GET", params: parseQueryParams(url), source: "ast_analysis" });
+    } else if (ln.startsWith("@CHUNK ")) {
+      const u = ln.slice(7).trim(); if (u && chunkUrls.indexOf(u) < 0) chunkUrls.push(u);   // external <script src> discovered
     } else if (ln.startsWith("@ORPHANS ")) {
       orphans += parseInt(ln.slice(9).trim(), 10) || 0;
     } else if (ln.startsWith("@WHY ")) {
@@ -66,17 +69,21 @@ function linesToAnalysis(lines, msg) {
   return {
     fetchCallSites,
     resolverErrors,
+    chunkUrls,
     // all sibling fields the brain reads unconditionally, present + empty so it never throws:
     protoEnums: [], protoFieldMaps: [], securitySinks: [], dangerousPatterns: [],
-    chunkUrls: [], esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
+    esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
     sourceMapTypes: [], sourceMapsByUrl: {}, traceMapsByUrl: {}, valueConstraints: [],
     sourceMapUrl: null, sourceMap: null, sourceUrl: msg.sourceUrl || "",
     _orphans: orphans, _emitDone: emitDone,
   };
 }
 
-/* Run one bundle through a fresh v2 engine instance, capturing @H stdout. */
-async function runEngine(code, msg) {
+/* Run one page through a fresh v2 engine instance, capturing @H/@CHUNK stdout. The ENGINE parses the
+   page HTML with its in-wasm Lexbor DOM and runs the document's scripts in order (against the real
+   DOM) — the bridge no longer scrapes scripts. code (argv[1]) is any brain-assembled extra scripts
+   (usually empty); html (argv[2]) is the page. */
+async function runEngine(code, html, msg) {
   const lines = [];
   const Module = await createQJS({
     print: (s) => lines.push(s),
@@ -84,7 +91,7 @@ async function runEngine(code, msg) {
     noInitialRun: true,
   });
   try {
-    Module.callMain([code]);
+    Module.callMain([code || "", html || ""]);
   } catch (e) {
     lines.push('@E {"phase":"callmain","err":' + JSON.stringify(String(e && e.message || e)) + "}");
   }
@@ -94,9 +101,10 @@ async function runEngine(code, msg) {
 self.astDispatch = async function astDispatch(msg) {
   try {
     if (!msg || msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + (msg && msg.type) };
-    const code = msg.code || "";
-    if (!code) return { success: true, result: linesToAnalysis([], msg) };
-    const result = await runEngine(code, msg);
+    const html = msg.pageHtml || "";
+    const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
+    if (!html && !code) return { success: true, result: linesToAnalysis([], msg) };
+    const result = await runEngine(code, html, msg);
     return { success: true, result };
   } catch (e) {
     return { success: false, error: String(e && e.message || e), stack: e && e.stack };

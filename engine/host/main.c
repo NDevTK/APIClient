@@ -319,6 +319,46 @@ static int dom_init(const char *html, size_t len) {
     return 0;
 }
 
+/* Run the document's own scripts (in document order) against the real DOM — the moat runs the page's
+   UNMODIFIED bundle, so the ENGINE extracts + executes them, not a bridge-side scrape. Inline <script>
+   is eval'd in the global scope; external <script src> is surfaced as @CHUNK for safe-fetch + forced-
+   execute (step C — computed/injected src is the same edge). */
+struct scr_ctx { lxb_dom_element_t **els; int n, cap; };
+static lxb_status_t scr_collect_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t s, void *vp) {
+    struct scr_ctx *c = vp; (void)s;
+    if (c->n >= c->cap) { int nc = c->cap ? c->cap * 2 : 16;
+        lxb_dom_element_t **ne = realloc(c->els, (size_t)nc * sizeof(*ne)); if (!ne) return LXB_STATUS_OK; c->els = ne; c->cap = nc; }
+    c->els[c->n++] = lxb_dom_interface_element(node);
+    return LXB_STATUS_OK;   /* collect all in document order; eval AFTER traversal (eval may mutate the DOM) */
+}
+static void dom_run_scripts(JSContext *ctx) {
+    if (!g_dom) return;
+    lxb_css_parser_t *p = lxb_css_parser_create();
+    if (!p || lxb_css_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_css_parser_destroy(p, true); return; }
+    lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)"script", 6);
+    if (!list) { lxb_css_parser_destroy(p, true); return; }
+    lxb_selectors_t *sel = lxb_selectors_create();
+    if (!sel || lxb_selectors_init(sel) != LXB_STATUS_OK) { if (sel) lxb_selectors_destroy(sel, true); lxb_css_parser_destroy(p, true); return; }
+    struct scr_ctx c = { NULL, 0, 0 };
+    lxb_selectors_find(sel, lxb_dom_interface_node(g_dom), list, scr_collect_cb, &c);
+    lxb_selectors_destroy(sel, true); lxb_css_parser_destroy(p, true);
+    for (int i = 0; i < c.n; i++) {
+        lxb_dom_element_t *el = c.els[i];
+        size_t sl = 0;
+        const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
+        if (src && sl) { printf("@CHUNK %.*s\n", (int)sl, (const char *)src); fflush(stdout); continue; }  /* external -> step C */
+        size_t tl = 0;
+        lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
+        if (txt && tl) {
+            JSValue v = JS_Eval(ctx, (const char *)txt, tl, "<script>", JS_EVAL_TYPE_GLOBAL);
+            if (JS_IsException(v)) js_std_dump_error(ctx);
+            JS_FreeValue(ctx, v);
+        }
+        if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
+    }
+    free(c.els);
+}
+
 /* __fork(fn, hint?): add a flow to the ONE registry (a STARTER, fresh decision vector). */
 static JSValue js_fork(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -560,6 +600,7 @@ int main(int argc, char **argv)
         JSValue v = JS_Eval(ctx, argv[1], strlen(argv[1]), "<boot>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsException(v)) { js_std_dump_error(ctx); rc = 1; }
         JS_FreeValue(ctx, v);
+        dom_run_scripts(ctx);   /* run the page's own inline scripts (from the parsed DOM) in document order */
         seed_orphans(ctx);
         JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
         scheduler_run(ctx);
