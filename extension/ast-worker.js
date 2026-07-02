@@ -44,6 +44,7 @@ function linesToAnalysis(lines, msg) {
   const resolverErrors = [];
   const chunkUrls = [];
   const replyWant = [];
+  const park = [];
   let emitDone = null, orphans = 0;
   const seen = new Set();
   for (const raw of lines) {
@@ -65,6 +66,8 @@ function linesToAnalysis(lines, msg) {
       fetchCallSites.push({ url, method, params: parseQueryParams(url), source: "ast_analysis" });
     } else if (ln.startsWith("@CHUNK ")) {
       const u = ln.slice(7).trim(); if (u && chunkUrls.indexOf(u) < 0) chunkUrls.push(u);   // external <script src> discovered
+    } else if (ln.startsWith("@PARK ")) {
+      const p = ln.slice(6).trim().split(/\s+/); park.push(p[0] + "," + (p[1] || ""));   // recipe: orphan_idx,decbits
     } else if (ln.startsWith("@ORPHANS ")) {
       orphans += parseInt(ln.slice(9).trim(), 10) || 0;
     } else if (ln.startsWith("@WHY ")) {
@@ -85,7 +88,7 @@ function linesToAnalysis(lines, msg) {
     esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
     sourceMapTypes: [], sourceMapsByUrl: {}, traceMapsByUrl: {}, valueConstraints: [],
     sourceMapUrl: null, sourceMap: null, sourceUrl: msg.sourceUrl || "",
-    _orphans: orphans, _emitDone: emitDone, _replyWant: replyWant,
+    _orphans: orphans, _emitDone: emitDone, _replyWant: replyWant, _park: park,
   };
 }
 
@@ -94,18 +97,35 @@ function linesToAnalysis(lines, msg) {
    DOM) — the bridge no longer scrapes scripts. code (argv[1]) is any brain-assembled extra scripts
    (usually empty); html (argv[2]) is the page. */
 function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
-async function runEngine(code, html, msg, replyTable) {
+/* Drive ONE persistent engine instance through the step protocol. fromReply is now IN PLACE: when the
+   engine parks awaiting a reply (qjs_step -> NEED_FETCH), the TRUSTED offscreen safe-fetches each pending
+   url (GET, page-origin SSRF) and qjs_provide()s the body, resuming the flow in the SAME instance -- no
+   re-instantiate, no re-run of the whole page. */
+async function runEngine(code, html, msg) {
   const lines = [];
-  const Module = await createQJS({
-    print: (s) => lines.push(s),
-    printErr: (s) => lines.push(s),      // @WHY/@E go to stderr in the CLI
-    noInitialRun: true,
-  });
+  const M = await createQJS({ print: (s) => lines.push(s), printErr: (s) => lines.push(s), noInitialRun: true });
+  const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
+  const ptrs = [];
+  const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
   try {
-    // argv: [extra-code, pageHtml, real-origin, fromReply-table-json]
-    Module.callMain([code || "", html || "", originOf(msg && msg.sourceUrl), replyTable ? JSON.stringify(replyTable) : ""]);
+    M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number", "number"],
+      [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), 0, arg("")]);
+    let guard = 0;
+    while (M.ccall("qjs_step", "number", [], []) === 1 && guard++ < 5000) {
+      const pend = String(M.ccall("qjs_pending", "string", [], [])).split("\n").filter(Boolean);
+      for (const u of pend) {
+        let body = "";
+        if (typeof self.safeFetch === "function" && msg && msg.sourceUrl && u.indexOf("{}") < 0) {
+          try { const abs = new URL(u, msg.sourceUrl).href; const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl }); if (r && r.ok && typeof r.body === "string") body = r.body; } catch (_) {}
+        }
+        M.ccall("qjs_provide", "void", ["string", "string"], [u, body]);   // concrete body, or "" -> opaque shape
+      }
+    }
+    M.ccall("qjs_teardown", "void", [], []);
   } catch (e) {
-    lines.push('@E {"phase":"callmain","err":' + JSON.stringify(String(e && e.message || e)) + "}");
+    lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}");
+  } finally {
+    for (const p of ptrs) { try { M._free(p); } catch (_) {} }
   }
   return linesToAnalysis(lines, msg);
 }
@@ -161,10 +181,9 @@ self.astDispatch = async function astDispatch(msg) {
     const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
     if (!html && !code) return { success: true, result: linesToAnalysis([], msg) };
 
-    const result = await runEngine(code, html, msg);
+    const result = await runEngine(code, html, msg);   // fromReply handled IN PLACE inside the step-loop
     const endpoints = new Map();
     mergeCallsites(endpoints, result.fetchCallSites);
-    const replyWant = new Set(result._replyWant || []);
 
     /* CHUNK LOOP (the moat's "learn computed JS files loaded via a code path"): the untrusted engine
        DISCOVERS chunk URLs (static or JS-computed, via <script src> / createElement+.src+appendChild);
@@ -184,32 +203,13 @@ self.astDispatch = async function astDispatch(msg) {
           let abs; try { abs = new URL(furl, msg.sourceUrl).href; } catch (_) { continue; }   // resolve relative -> absolute for safeFetch
           let r; try { r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, as: "script" }); } catch (_) { continue; }
           if (!r || !r.ok || !r.body) continue;
-          const cr = await runEngine(r.body, html, msg);   // forced-execute the chunk against the page DOM
+          const cr = await runEngine(r.body, html, msg);   // forced-execute the chunk against the page DOM (fromReply in-place)
           mergeCallsites(endpoints, cr.fetchCallSites);
-          for (const w of cr._replyWant || []) replyWant.add(w);
           for (const nu of cr.chunkUrls || []) if (!chunkUrlsAll.has(nu)) { chunkUrlsAll.add(nu); next.push(nu); }  // nested chunks
         }
         frontier = next;
       }
       result.chunkUrls = [...chunkUrlsAll];
-    }
-
-    /* fromReply pass: a reply whose body the bundle CONSUMED (@REPLYWANT) may carry a field that flows
-       into a downstream request param. The TRUSTED offscreen fires ONE bounded GET per such endpoint
-       (safeFetch: GET-only, page-origin SSRF, credentials omitted); the engine re-runs with the concrete
-       replies so those params become REAL example values (orgId/user.id) instead of {}. */
-    if (typeof self.safeFetch === "function" && msg.sourceUrl && replyWant.size) {
-      const replyTable = {};
-      for (const u of replyWant) {
-        if (u.indexOf("{}") >= 0) continue;                      // opaque url -> unfetchable
-        let abs; try { abs = new URL(u, msg.sourceUrl).href; } catch (_) { continue; }   // resolve relative -> absolute
-        let r; try { r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl }); } catch (_) { continue; }
-        if (r && r.ok && typeof r.body === "string") replyTable[u] = r.body;   // key by the ORIGINAL url the engine's fetch sees
-      }
-      if (Object.keys(replyTable).length) {
-        const rr = await runEngine(code, html, msg, replyTable);   // re-run with concrete replies injected
-        mergeCallsites(endpoints, rr.fetchCallSites);
-      }
     }
 
     dedupShapeConcrete(endpoints);   // collapse concrete instantiations into their shape (path-param examples)
