@@ -270,6 +270,11 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         if (JS_IsString(m)) method = JS_ToCString(ctx, m);   /* opaque options -> .method opaque (not a string) -> GET */
         JS_FreeValue(ctx, m);
     }
+    if (!method && argc > 0 && JS_IsObject(argv[0])) {       /* fetch(new Request(url,{method})) -> read the Request's method */
+        JSValue m = JS_GetPropertyStr(ctx, argv[0], "method");
+        if (JS_IsString(m)) method = JS_ToCString(ctx, m);
+        JS_FreeValue(ctx, m);
+    }
     printf("@H %s %s\n", method ? method : "GET", url ? url : "?"); fflush(stdout);
     g_emit_total++;
     if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
