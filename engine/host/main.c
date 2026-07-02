@@ -147,11 +147,20 @@ static JSValue make_response(JSContext *ctx, const char *url)
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
-    printf("@H %s\n", url ? url : "?"); fflush(stdout);
+    /* HTTP method from the RequestInit (fetch(url,{method:'DELETE'})) — a big security signal (GET vs
+       DELETE/POST). A concrete string only; opaque/missing options -> GET. */
+    const char *method = NULL;
+    if (argc > 1 && JS_IsObject(argv[1])) {
+        JSValue m = JS_GetPropertyStr(ctx, argv[1], "method");
+        if (JS_IsString(m)) method = JS_ToCString(ctx, m);   /* opaque options -> .method opaque (not a string) -> GET */
+        JS_FreeValue(ctx, m);
+    }
+    printf("@H %s %s\n", method ? method : "GET", url ? url : "?"); fflush(stdout);
     g_emit_total++;
     if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
     JSValue resp = make_response(ctx, url);
     if (url) JS_FreeCString(ctx, url);
+    if (method) JS_FreeCString(ctx, method);
     return js_resolved(ctx, resp);
 }
 

@@ -48,11 +48,19 @@ function linesToAnalysis(lines, msg) {
   for (const raw of lines) {
     const ln = String(raw);
     if (ln.startsWith("@H ")) {
-      const url = ln.slice(3).trim();
-      if (!url || url === "?" ) continue;
-      if (seen.has(url)) continue;            // metric-layer dedup: distinct learned URLs
-      seen.add(url);
-      fetchCallSites.push({ url, method: "GET", params: parseQueryParams(url), source: "ast_analysis" });
+      // format: "@H <METHOD> <url>" (js_fetch) or "@H <tag>" (__emit). First token = method if it's a verb.
+      let rest = ln.slice(3).trim(), method = "GET";
+      const sp = rest.indexOf(" ");
+      if (sp > 0) {
+        const tok = rest.slice(0, sp).toUpperCase();
+        if (/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/.test(tok)) { method = tok; rest = rest.slice(sp + 1).trim(); }
+      }
+      const url = rest;
+      if (!url || url === "?") continue;
+      const key = method + " " + url;
+      if (seen.has(key)) continue;            // metric-layer dedup: distinct (method,url)
+      seen.add(key);
+      fetchCallSites.push({ url, method, params: parseQueryParams(url), source: "ast_analysis" });
     } else if (ln.startsWith("@CHUNK ")) {
       const u = ln.slice(7).trim(); if (u && chunkUrls.indexOf(u) < 0) chunkUrls.push(u);   // external <script src> discovered
     } else if (ln.startsWith("@ORPHANS ")) {
