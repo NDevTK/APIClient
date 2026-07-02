@@ -18,6 +18,14 @@
  */
 import createQJS from "./lib/qjs/qjs.mjs";
 
+/* An opaque HOLE in a shape: "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}/{pm}/{reply}).
+   A URL with any hole is not concretely fetchable; a path segment that IS a hole is a path placeholder. */
+const HOLE = /\{[a-z]*\}/;
+const HOLE_G = /\{[a-z]*\}/g;
+const SEG_HOLE = /^\{[a-z]*\}$/;
+const hasHole = (s) => HOLE.test(s || "");
+const normHoles = (s) => (s || "").replace(HOLE_G, "{}");   // endpoint IDENTITY is hole-source-insensitive ({search}=={hash}=={})
+
 /* Parse a learned URL's query string into per-param example values (the moat wants keys+values).
    A value of "{}" is the opaque SHAPE (external-input param); a concrete value is a real example. */
 function parseQueryParams(url) {
@@ -194,7 +202,7 @@ async function runEngine(code, html, msg, quantum, recipes) {
       [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), quantum || 0, arg(recipes || "")]);
     const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
     const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
-      if (!canFetch || u.indexOf("{}") >= 0) return "";
+      if (!canFetch || hasHole(u)) return "";
       try {
         const abs = new URL(u, msg.sourceUrl).href;
         // chunks: as-script (CORB), never credentialed. replies: opt-in credentialed -> the AUTHENTICATED
@@ -226,11 +234,11 @@ async function runEngine(code, html, msg, quantum, recipes) {
 function chunkFetchUrl(u) {
   const q = u.indexOf("?");
   const path = q >= 0 ? u.slice(0, q) : u;
-  if (path.indexOf("{}") >= 0) return null;   // opaque path -> unresolvable
+  if (hasHole(path)) return null;   // opaque path -> unresolvable
   return path;                                 // concrete path, query dropped
 }
 function mergeCallsites(map, sites) {
-  for (const s of sites || []) { const k = (s.method || "GET") + " " + s.url; if (!map.has(k)) map.set(k, s); }
+  for (const s of sites || []) { const k = (s.method || "GET") + " " + normHoles(s.url); if (!map.has(k)) map.set(k, s); }
 }
 function pathSegs(u) { const q = u.indexOf("?"); const p = q >= 0 ? u.slice(0, q) : u; return { segs: p.split("/"), query: q >= 0 ? u.slice(q) : "" }; }
 /* A concrete endpoint that is a SHAPE instantiated (e.g. /api/org/acme-42/members vs /api/org/{}/members)
@@ -239,17 +247,17 @@ function pathSegs(u) { const q = u.indexOf("?"); const p = q >= 0 ? u.slice(0, q
    isn't double-counted. Only collapses a concrete INTO an existing shape (never merges two real resources). */
 function dedupShapeConcrete(map) {
   const arr = [...map.values()];
-  const shapes = arr.filter((e) => e.url.indexOf("{}") >= 0);
+  const shapes = arr.filter((e) => hasHole(e.url));
   if (!shapes.length) return;
   for (const c of arr) {
-    if (c.url.indexOf("{}") >= 0) continue;                 // c must be concrete
+    if (hasHole(c.url)) continue;                 // c must be concrete
     for (const s of shapes) {
       if ((s.method || "GET") !== (c.method || "GET")) continue;
       const ss = pathSegs(s.url), cs = pathSegs(c.url);
       if (ss.segs.length !== cs.segs.length || ss.query !== cs.query) continue;
       let ok = true; const ex = [];
       for (let i = 0; i < ss.segs.length; i++) {
-        if (ss.segs[i] === "{}") { if (cs.segs[i] && cs.segs[i].indexOf("{}") < 0) ex.push([i, cs.segs[i]]); else { ok = false; break; } }
+        if (SEG_HOLE.test(ss.segs[i])) { if (cs.segs[i] && !hasHole(cs.segs[i])) ex.push([i, cs.segs[i]]); else { ok = false; break; } }
         else if (ss.segs[i] !== cs.segs[i]) { ok = false; break; }
       }
       if (ok && ex.length) {

@@ -68,6 +68,18 @@ static int     g_started = 0;           /* starters begun this run (for the quan
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
 
+/* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
+   has a '{' followed by only lowercase letters then '}'. Such a URL is not concretely fetchable. Generalizes
+   the old literal strstr("{}") checks so source-tagged holes are still recognized as opaque. */
+static int has_hole(const char *s) {
+    if (!s) return 0;
+    for (const char *p = s; (p = strchr(p, '{')); p++) {
+        const char *q = p + 1; while (*q >= 'a' && *q <= 'z') q++;
+        if (*q == '}') return 1;
+    }
+    return 0;
+}
+
 /* decision-vector state for the RUNNING starter flow (branch-arm BFS) — grows unbounded */
 static JSValue      g_cur_fn = JS_UNDEFINED;   /* the running starter's function (borrowed) so __branch can fork a sibling that re-runs it */
 static signed char *g_dec = NULL;              /* working decision vector: forced prefix + this flow's chosen-true suffix */
@@ -184,7 +196,7 @@ static JSValue resp_body_str(JSContext *ctx, JSValueConst this_val) {
 static void reply_note_wanted(JSContext *ctx, JSValueConst this_val) {
     JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
     const char *s = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
-    if (s && s[0] && !strstr(s, "{}")) { printf("@REPLYWANT %s\n", s); fflush(stdout); }
+    if (s && s[0] && !has_hole(s)) { printf("@REPLYWANT %s\n", s); fflush(stdout); }
     if (s) JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, u);
 }
@@ -206,7 +218,7 @@ static JSValue resp_consume(JSContext *ctx, JSValueConst this_val, int is_json) 
     JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
     const char *url = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
     JSValue result;
-    if (url && url[0] && !strstr(url, "{}")) {   /* concrete url -> park for a real reply */
+    if (url && url[0] && !has_hole(url)) {   /* concrete url -> park for a real reply */
         JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
         if (!JS_IsException(promise)) { pending_add(ctx, JS_DupValue(ctx, rf[0]), url, is_json); JS_FreeValue(ctx, rf[0]); JS_FreeValue(ctx, rf[1]); result = promise; }
         else result = js_resolved(ctx, JS_DupValue(ctx, g_opaque));
@@ -344,8 +356,8 @@ static JSValue make_location(JSContext *ctx)
     JS_SetPropertyStr(ctx, loc, "port",     JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, "/"));
     JS_SetPropertyStr(ctx, loc, "href",     JS_NewString(ctx, g_origin));   /* concrete base for new URL(path, href) */
-    JS_SetPropertyStr(ctx, loc, "search",   JS_DupValue(ctx, g_opaque));    /* external input: opaque (never forces a branch) */
-    JS_SetPropertyStr(ctx, loc, "hash",     JS_DupValue(ctx, g_opaque));    /* external input: opaque */
+    JS_SetPropertyStr(ctx, loc, "search",   JS_NewOpaqueShaped(ctx, "{search}"));  /* external input: opaque, source-tagged (PoC delivery = victim?...) */
+    JS_SetPropertyStr(ctx, loc, "hash",     JS_NewOpaqueShaped(ctx, "{hash}"));    /* external input: opaque, source-tagged (PoC delivery = victim#...) */
     return loc;
 }
 
@@ -490,7 +502,7 @@ static void script_maybe_load(lxb_dom_element_t *el) {
     if (src && sl) {
         printf("@CHUNK %.*s\n", (int)sl, (const char *)src); fflush(stdout);   /* informational */
         char *u = strndup((const char *)src, sl);
-        if (u) { if (!strstr(u, "{}")) chunk_pending_add(u); free(u); }         /* concrete src -> fetch + eval in place */
+        if (u) { if (!has_hole(u)) chunk_pending_add(u); free(u); }         /* concrete src -> fetch + eval in place */
     }
 }
 static int is_sink_attr(const char *n) {   /* attributes where tainted data is an XSS/redirect sink */
