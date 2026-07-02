@@ -823,6 +823,11 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JSContext *ctx = JS_NewContext(rt);
     if (!ctx) { fprintf(stderr, "@E {\"phase\":\"newcontext\"}\n"); JS_FreeRuntime(rt); return 1; }
     g_ctx = ctx;
+    /* Reset all scheduler/frontier state so ONE wasm instance can serve many page analyses (init/run/
+       teardown reused) with no cross-page bleed. The arrays themselves are reused (not re-malloc'd). */
+    g_reg_n = 0; g_started = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL;
+    g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_quantum = 0;
+    g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
     js_std_add_helpers(ctx, 0, NULL);
     js_init_module_std(ctx, "std");
     js_init_module_os(ctx, "os");
