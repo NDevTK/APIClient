@@ -24,25 +24,41 @@
 /* ---- the ONE flow registry (scheduler-owned memory) --------------------------------
    A flow is a STARTER (a function to force-invoke, with a decision vector for its branch choices) or
    a RESUMER (the resolve fn of a parked flow's __yield promise). Both carry value-of-information. */
-#define FLOW_MAX 16384
-#define DEC_MAX  4096
+/* NO BOUNDS: the registry and the decision vector grow dynamically (until RAM/disk, the platform floor
+   — the design's UNBOUNDED). No FLOW_MAX / DEC_MAX cap that would truncate distinct work the scheduler
+   would otherwise reach. (Eviction of the cold/low-value tail to IDB is the further step; growth removes
+   the artificial ceiling first.) */
 typedef struct { JSValue handle; double val; int is_resume; signed char *dec; int dec_n; } Flow;
-static Flow    g_reg[FLOW_MAX];
-static int     g_reg_n = 0;
+static Flow   *g_reg = NULL;
+static int     g_reg_n = 0, g_reg_cap = 0;
 static int     g_running = 0;
 static double  g_cur_val = 0;
 static int     g_emit_total = 0;
 static JSRuntime *g_rt = NULL;
 
-/* decision-vector state for the RUNNING starter flow (branch-arm BFS) */
+/* decision-vector state for the RUNNING starter flow (branch-arm BFS) — grows unbounded */
 static JSValue      g_cur_fn = JS_UNDEFINED;   /* the running starter's function (borrowed) so __branch can fork a sibling that re-runs it */
-static signed char  g_dec[DEC_MAX];            /* working decision vector: forced prefix + this flow's chosen-true suffix */
+static signed char *g_dec = NULL;              /* working decision vector: forced prefix + this flow's chosen-true suffix */
+static int          g_dec_cap = 0;
 static int          g_dec_n = 0;               /* length of decisions made/forced so far */
 static int          g_c = 0;                   /* cursor: next decision index __branch will consume */
 
+static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisions */
+    if (n <= g_dec_cap) return 1;
+    int nc = g_dec_cap ? g_dec_cap * 2 : 64; while (nc < n) nc *= 2;
+    signed char *nd = (signed char *)realloc(g_dec, (size_t)nc);
+    if (!nd) return 0;
+    g_dec = nd; g_dec_cap = nc; return 1;
+}
+
 static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, signed char *dec, int dec_n)
 {
-    if (g_reg_n >= FLOW_MAX) { printf("@WHY {\"phase\":\"reg_full\"}\n"); JS_FreeValue(ctx, handle); free(dec); return 0; }
+    if (g_reg_n >= g_reg_cap) {
+        int nc = g_reg_cap ? g_reg_cap * 2 : 256;
+        Flow *nr = (Flow *)realloc(g_reg, (size_t)nc * sizeof(Flow));
+        if (!nr) { printf("@WHY {\"phase\":\"reg_oom\"}\n"); JS_FreeValue(ctx, handle); free(dec); return 0; }
+        g_reg = nr; g_reg_cap = nc;
+    }
     g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val; g_reg[g_reg_n].is_resume = is_resume;
     g_reg[g_reg_n].dec = dec; g_reg[g_reg_n].dec_n = dec_n;
     g_reg_n++; return 1;
@@ -91,7 +107,7 @@ static int branch_decide(JSContext *ctx)
 {
     if (!g_running || JS_IsUndefined(g_cur_fn)) return 0;   /* only meaningful inside a starter flow */
     if (g_c < g_dec_n) return g_dec[g_c++] ? 1 : 0;         /* forced replay */
-    if (g_c >= DEC_MAX) return 1;                            /* depth floor: cap-free path is the trampoline, later */
+    if (!g_dec_ensure(g_c + 1)) return 1;                    /* only RAM/disk (the platform floor) bounds depth — not a cap */
     signed char *sib = (signed char *)malloc((size_t)(g_c + 1));
     if (sib) {
         for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
@@ -136,10 +152,19 @@ static int seed_orphans(JSContext *ctx)
     if (g_orphans_seeded) return 0;
     g_orphans_seeded = 1;
     static JSValue buf[4096];
-    int n = JS_CollectOrphans(ctx, buf, 4096);
-    for (int i = 0; i < n; i++) reg_add(ctx, buf[i], 1.0, 0, NULL, 0);
-    printf("@ORPHANS %d\n", n); fflush(stdout);
-    return n;
+    int n = JS_CollectOrphans(ctx, buf, 4096), seeded = 0;
+    for (int i = 0; i < n; i++) {
+        /* Skip a function already queued as a flow (e.g. an explicitly __fork'd one not yet run) — else it
+           would be force-invoked TWICE. Real bundles don't __fork, so this is usually a no-op. */
+        int dup = 0;
+        for (int j = 0; j < g_reg_n; j++)
+            if (!g_reg[j].is_resume && JS_VALUE_GET_PTR(g_reg[j].handle) == JS_VALUE_GET_PTR(buf[i])) { dup = 1; break; }
+        if (dup) { JS_FreeValue(ctx, buf[i]); continue; }
+        reg_add(ctx, buf[i], 1.0, 0, NULL, 0);
+        seeded++;
+    }
+    printf("@ORPHANS %d\n", seeded); fflush(stdout);
+    return seeded;
 }
 static JSValue js_drive_orphans(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return JS_NewInt32(ctx, seed_orphans(ctx)); }
@@ -164,7 +189,8 @@ static void scheduler_run(JSContext *ctx)
                user.isAdmin / this.fooUrl become opaque (propagated), so gates fork and computed URLs are
                shaped. A flow that ignores args (boot forks) is unaffected. */
             g_cur_fn = f.handle;
-            g_dec_n = f.dec_n < DEC_MAX ? f.dec_n : DEC_MAX;
+            g_dec_n = f.dec_n;
+            g_dec_ensure(g_dec_n);
             for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
             g_c = 0;
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
