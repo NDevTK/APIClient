@@ -84,23 +84,31 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
    re-runs the SAME function, replaying this flow's decisions so far then taking FALSE here; this flow
    takes TRUE (recorded so deeper new branches fork correctly). BFS over the decision tree -> both arms
    of every gate are explored, surfacing the branch-gated endpoints. */
-static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* branch_decide: the decision-vector fork logic (0/1). Called BOTH by __branch() (explicit) and by the
+   engine's OP_if hook when a branch condition is OPAQUE (real bundles). Forced replay of this flow's
+   decision prefix; a NEW decision forks the FALSE sibling (re-run the same function) and takes TRUE. */
+static int branch_decide(JSContext *ctx)
 {
-    if (!g_running || JS_IsUndefined(g_cur_fn)) return JS_FALSE;   /* only meaningful inside a starter flow */
-    if (g_c < g_dec_n) {                 /* forced replay */
-        return g_dec[g_c++] ? JS_TRUE : JS_FALSE;
-    }
-    if (g_c >= DEC_MAX) return JS_TRUE;  /* decision depth is the disk/RAM floor's problem later; cap-free path is the trampoline */
-    /* new branch at index g_c: fork the FALSE sibling (replay prefix g_dec[0..g_c-1] + false) */
+    if (!g_running || JS_IsUndefined(g_cur_fn)) return 0;   /* only meaningful inside a starter flow */
+    if (g_c < g_dec_n) return g_dec[g_c++] ? 1 : 0;         /* forced replay */
+    if (g_c >= DEC_MAX) return 1;                            /* depth floor: cap-free path is the trampoline, later */
     signed char *sib = (signed char *)malloc((size_t)(g_c + 1));
     if (sib) {
         for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
         sib[g_c] = 0;
         reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, 0, sib, g_c + 1);
     }
-    g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;   /* this flow takes TRUE, recorded */
-    return JS_TRUE;
+    g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
+    return 1;
 }
+static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{ return branch_decide(ctx) ? JS_TRUE : JS_FALSE; }
+
+/* __opaque(): return the OPAQUE sentinel — external input the tool must not concretely decide. A branch
+   on it (if(__opaque())) auto-forks BOTH arms via the engine OP_if hook, no explicit __branch needed. */
+static JSValue g_opaque = JS_UNDEFINED;
+static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{ return JS_DupValue(ctx, g_opaque); }
 
 /* __fork(fn, hint?): add a flow to the ONE registry (a STARTER, fresh decision vector). */
 static JSValue js_fork(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -188,7 +196,13 @@ int main(int argc, char **argv)
     JS_SetPropertyStr(ctx, g, "__fork", JS_NewCFunction(ctx, js_fork, "__fork", 2));
     JS_SetPropertyStr(ctx, g, "__yield", JS_NewCFunction(ctx, js_yield, "__yield", 0));
     JS_SetPropertyStr(ctx, g, "__branch", JS_NewCFunction(ctx, js_branch, "__branch", 0));
+    JS_SetPropertyStr(ctx, g, "__opaque", JS_NewCFunction(ctx, js_opaque, "__opaque", 0));
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
+    /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both
+       arms via the decision-vector logic (real bundles: external input reaches OP_if as opaque). */
+    g_opaque = JS_NewObject(ctx);   /* kept alive for the process; marker is pointer identity */
+    JS_SetOpaqueMarker(g_opaque);
+    JS_SetBranchHook(branch_decide);
     JS_SetPropertyStr(ctx, g, "__driveOrphans", JS_NewCFunction(ctx, js_drive_orphans, "__driveOrphans", 0));
     JS_FreeValue(ctx, g);
 
