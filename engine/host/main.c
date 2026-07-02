@@ -309,6 +309,24 @@ static int branch_decide(JSContext *ctx)
    and the fill-then-read idiom both work without throwing. randomUUID (the URL-relevant one) is opaque. */
 static JSValue js_crypto_getrandom(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_DupValue(ctx, g_opaque); }
+/* setTimeout/setInterval/requestAnimationFrame(cb, ...): a deferred callback is NOT a wait on real time —
+   it is just another BFS FLOW. Register cb in the ONE scheduler (reg_add) so it is driven, ordered, and
+   starved by the same WFQ as every other flow (the whole point: bundles that defer init in a timer still
+   get explored). Return an opaque timer id; the clear/cancel variants are no-ops (the WFQ starves it anyway). */
+static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    if (argc >= 1 && JS_IsFunction(ctx, argv[0]))
+        reg_add(ctx, JS_DupValue(ctx, argv[0]), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+    return JS_DupValue(ctx, g_opaque);
+}
+/* localStorage/sessionStorage.getItem(k): stored data is EXTERNAL INPUT (a token/flag put there earlier or
+   by another origin's code) -> OPAQUE (feeds auth headers/branches opaquely, replay-sound). set/remove/clear
+   are no-ops (writes don't drive discovery). */
+static JSValue js_storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{ return JS_DupValue(ctx, g_opaque); }
+/* structuredClone(x): deep-clone is identity for forced-exec purposes (shape/opacity carry through). */
+static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{ return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED; }
 static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return branch_decide(ctx) ? JS_TRUE : JS_FALSE; }
 
@@ -1016,6 +1034,26 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, cr, "getRandomValues", JS_NewCFunction(ctx, js_crypto_getrandom, "getRandomValues", 1));
         JS_SetPropertyStr(ctx, cr, "subtle", JS_DupValue(ctx, g_opaque));
         JS_SetPropertyStr(ctx, g, "crypto", cr);
+        /* Timers: a deferred callback is a FLOW in the one scheduler (see js_set_timer), not a real wait.
+           Missing these made every bundle that defers init in setTimeout learn nothing. */
+        JS_SetPropertyStr(ctx, g, "setTimeout", JS_NewCFunction(ctx, js_set_timer, "setTimeout", 2));
+        JS_SetPropertyStr(ctx, g, "setInterval", JS_NewCFunction(ctx, js_set_timer, "setInterval", 2));
+        JS_SetPropertyStr(ctx, g, "requestAnimationFrame", JS_NewCFunction(ctx, js_set_timer, "requestAnimationFrame", 1));
+        JS_SetPropertyStr(ctx, g, "requestIdleCallback", JS_NewCFunction(ctx, js_set_timer, "requestIdleCallback", 1));
+        JS_SetPropertyStr(ctx, g, "clearTimeout", JS_NewCFunction(ctx, js_noop, "clearTimeout", 1));
+        JS_SetPropertyStr(ctx, g, "clearInterval", JS_NewCFunction(ctx, js_noop, "clearInterval", 1));
+        JS_SetPropertyStr(ctx, g, "cancelAnimationFrame", JS_NewCFunction(ctx, js_noop, "cancelAnimationFrame", 1));
+        JS_SetPropertyStr(ctx, g, "structuredClone", JS_NewCFunction(ctx, js_structured_clone, "structuredClone", 1));
+        /* Web storage: values are external input -> opaque getItem; writes no-op. */
+        for (int si = 0; si < 2; si++) {
+            JSValue st = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, st, "getItem", JS_NewCFunction(ctx, js_storage_get, "getItem", 1));
+            JS_SetPropertyStr(ctx, st, "setItem", JS_NewCFunction(ctx, js_noop, "setItem", 2));
+            JS_SetPropertyStr(ctx, st, "removeItem", JS_NewCFunction(ctx, js_noop, "removeItem", 1));
+            JS_SetPropertyStr(ctx, st, "clear", JS_NewCFunction(ctx, js_noop, "clear", 0));
+            JS_SetPropertyStr(ctx, st, "key", JS_NewCFunction(ctx, js_storage_get, "key", 1));
+            JS_SetPropertyStr(ctx, g, si ? "sessionStorage" : "localStorage", st);
+        }
     }
     JS_FreeValue(ctx, g);
 
