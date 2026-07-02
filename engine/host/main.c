@@ -24,6 +24,12 @@
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
 #include <lexbor/dom/dom.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#define KEEP EMSCRIPTEN_KEEPALIVE   /* export qjs_init/step/teardown for the persistent-instance protocol */
+#else
+#define KEEP
+#endif
 
 /* ---- the ONE flow registry (scheduler-owned memory) --------------------------------
    A flow is a STARTER (a function to force-invoke, with a decision vector for its branch choices) or
@@ -756,7 +762,16 @@ static void scheduler_run(JSContext *ctx)
     JS_SetFlowYieldHook(NULL);
 }
 
-int main(int argc, char **argv)
+/* ── Persistent-instance protocol ─────────────────────────────────────────────────
+   ONE wasm instance per page, driven in steps by the offscreen: qjs_init (build runtime + env + boot +
+   seed the frontier), qjs_step (advance the ONE scheduler), qjs_teardown. This replaces the old
+   re-instantiate-and-re-run-per-pass model so chunks/fromReply/frontier become ONE continuous run
+   (in-place suspend/resume) instead of re-running the whole page. */
+static JSContext *g_ctx = NULL;
+static int g_rc = 0;
+
+KEEP int qjs_init(const char *boot, const char *html, const char *origin,
+                  const char *replies, int quantum, const char *recipes)
 {
     JSRuntime *rt = JS_NewRuntime();
     if (!rt) { fprintf(stderr, "@E {\"phase\":\"newruntime\"}\n"); return 1; }
@@ -766,19 +781,19 @@ int main(int argc, char **argv)
     js_std_init_handlers(rt);
     JSContext *ctx = JS_NewContext(rt);
     if (!ctx) { fprintf(stderr, "@E {\"phase\":\"newcontext\"}\n"); JS_FreeRuntime(rt); return 1; }
-    js_std_add_helpers(ctx, argc - 1, argv + 1);
+    g_ctx = ctx;
+    js_std_add_helpers(ctx, 0, NULL);
     js_init_module_std(ctx, "std");
     js_init_module_os(ctx, "os");
 
-    if (argc > 3) set_origin(argv[3]);   /* real page principal (location.origin/host) injected by the host */
-    if (argc > 4 && argv[4][0]) {        /* fromReply table: { url -> concrete reply body } (offscreen safe-fetched) */
-        JSValue t = JS_ParseJSON(ctx, argv[4], strlen(argv[4]), "<replies>");
+    if (origin && origin[0]) set_origin(origin);   /* real page principal (location.origin/host) */
+    if (replies && replies[0]) {                   /* fromReply table: { url -> concrete reply body } */
+        JSValue t = JS_ParseJSON(ctx, replies, strlen(replies), "<replies>");
         if (JS_IsException(t)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
         else g_reply_table = t;
     }
-    if (argc > 5 && argv[5][0]) g_quantum = atoi(argv[5]);   /* host per-page CPU slice (0 = run to completion) */
-    const char *g_resume_recipes = (argc > 6) ? argv[6] : NULL;   /* parked frontier: "idx,dec;idx,dec;..." */
-    if (g_resume_recipes && g_resume_recipes[0]) g_resume_mode = 1;
+    g_quantum = quantum;                           /* host per-page CPU slice (0 = run to completion) */
+    if (recipes && recipes[0]) g_resume_mode = 1;  /* resuming a parked frontier */
 
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__emit", JS_NewCFunction(ctx, js_emit, "__emit", 1));
@@ -801,7 +816,6 @@ int main(int argc, char **argv)
     /* Real DOM: parse the page HTML (argv[2], optional) into a live Lexbor document + register the
        Element JS class. The page's own structure/config is CONCRETE; document.* reads it. */
     {
-        const char *html = (argc > 2) ? argv[2] : NULL;
         if (dom_init(html, html ? strlen(html) : 0) != 0)
             fprintf(stderr, "@E {\"phase\":\"dom_init\"}\n");
         JS_NewClassID(rt, &g_el_class_id);
@@ -837,17 +851,16 @@ int main(int argc, char **argv)
     }
     JS_FreeValue(ctx, g);
 
-    int rc = 0;
-    if (argc > 1) {
-        JSValue v = JS_Eval(ctx, argv[1], strlen(argv[1]), "<boot>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(v)) { js_std_dump_error(ctx); rc = 1; }
+    if (boot) {
+        JSValue v = JS_Eval(ctx, boot, strlen(boot), "<boot>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(v)) { js_std_dump_error(ctx); g_rc = 1; }
         JS_FreeValue(ctx, v);
         dom_run_scripts(ctx);   /* run the page's own inline scripts (from the parsed DOM) in document order */
         seed_orphans(ctx);      /* normal: seed fresh orphan flows. resume: build g_orphan_buf locators only. */
-        if (g_resume_mode && g_resume_recipes) {
+        if (g_resume_mode && recipes) {
             /* RESUME the parked frontier: each recipe "idx,dec" re-creates a flow = orphan g_orphan_buf[idx]
                with its decision-vector, reconstructed by replay when the scheduler re-runs it. */
-            const char *p = g_resume_recipes; int resumed = 0;
+            const char *p = recipes; int resumed = 0;
             while (*p) {
                 int idx = atoi(p);
                 const char *comma = strchr(p, ','), *semi = strchr(p, ';');
@@ -867,10 +880,24 @@ int main(int argc, char **argv)
         }
         JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
         g_dom_capture = 1;    /* DOM baseline is now fixed too; capture flow DOM mutations for per-flow revert */
-        scheduler_run(ctx);
-        js_std_loop(ctx);
     }
+    return 0;
+}
 
+/* Advance the ONE scheduler. M1: runs the frontier to completion (returns 0 = DONE). M2 will return
+   1 = NEED_FETCH when all runnable flows are parked awaiting a real reply/chunk the offscreen supplies. */
+KEEP int qjs_step(void)
+{
+    if (!g_ctx) return 0;
+    scheduler_run(g_ctx);
+    js_std_loop(g_ctx);
+    return 0;
+}
+
+KEEP void qjs_teardown(void)
+{
+    JSContext *ctx = g_ctx;
+    if (!ctx) return;
     printf("@DONE emit=%d\n", g_emit_total); fflush(stdout);
     /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
        its held baseline values return to their slots, and drop the opaque marker. */
@@ -883,9 +910,24 @@ int main(int argc, char **argv)
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
-    js_std_free_handlers(rt);
+    js_std_free_handlers(g_rt);
     JS_FreeContext(ctx);
-    JS_FreeRuntime(rt);
+    JS_FreeRuntime(g_rt);
+    g_ctx = NULL; g_rt = NULL;
     fflush(stdout);
-    return rc;
+}
+
+/* node CLI entry (design-narrowing only): drive the persistent protocol once. */
+int main(int argc, char **argv)
+{
+    const char *boot    = (argc > 1) ? argv[1] : NULL;
+    const char *html    = (argc > 2) ? argv[2] : NULL;
+    const char *origin  = (argc > 3) ? argv[3] : NULL;
+    const char *replies = (argc > 4) ? argv[4] : NULL;
+    int         quantum = (argc > 5 && argv[5][0]) ? atoi(argv[5]) : 0;
+    const char *recipes = (argc > 6) ? argv[6] : NULL;
+    if (qjs_init(boot, html, origin, replies, quantum, recipes) != 0) return 1;
+    if (boot) qjs_step();
+    qjs_teardown();
+    return g_rc;
 }
