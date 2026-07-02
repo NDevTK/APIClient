@@ -77,6 +77,35 @@ static JSValue js_yield(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return promise;
 }
 
+/* fetch(url, opts?): the moat's HOST EDGE. The URL is whatever the bundle COMPUTED (run,
+   don't match). Emit @H <url> (the endpoint surfaced) and raise the running flow's value —
+   a flow that reaches a real network edge is high value-of-information, so its continuation
+   orders ahead of quiet flows. Returns a resolved promise wrapping a minimal response so
+   `await fetch(...)` / `.then(...)` continue; a REAL bounded safe-GET (origin-scoped, one
+   per endpoint) is wired when this runs against the browser host, not here. External input
+   (the response) stays OPAQUE for control-flow later; for now the stub is inert. */
+static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
+    printf("@H %s\n", url ? url : "?"); fflush(stdout);
+    g_emit_total++;
+    if (g_running) g_cur_val += 1.0;
+    JSValue resp = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, resp, "url", JS_NewString(ctx, url ? url : ""));
+    JS_SetPropertyStr(ctx, resp, "ok", JS_TRUE);
+    JS_SetPropertyStr(ctx, resp, "status", JS_NewInt32(ctx, 200));
+    if (url) JS_FreeCString(ctx, url);
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (!JS_IsException(promise)) {
+        JSValue rr = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &resp);
+        JS_FreeValue(ctx, rr);
+        JS_FreeValue(ctx, resolving[0]); JS_FreeValue(ctx, resolving[1]);
+    }
+    JS_FreeValue(ctx, resp);
+    return promise;
+}
+
 /* The ONE scheduler loop: pick the highest-value flow (NON-FIFO), advance it ONE quantum
    (start it, or resume it to its next __yield / completion), repeat until the registry
    drains. A STARTER async fn runs synchronously to its first await inside JS_Call. A RESUMER
@@ -90,19 +119,22 @@ static void scheduler_run(JSContext *ctx)
         g_reg_n--; g_reg[best] = g_reg[g_reg_n];   /* swap-remove */
         printf("@RUN val=%.0f resume=%d n=%d\n", f.val, f.is_resume, g_reg_n); fflush(stdout);
         g_running = 1; g_cur_val = f.val;
+        JSValue r;
         if (f.is_resume) {
             JSValue u = JS_UNDEFINED;
-            JSValue r = JS_Call(ctx, f.handle, JS_UNDEFINED, 1, &u);   /* resolve -> enqueue continuation */
-            if (JS_IsException(r)) js_std_dump_error(ctx);
-            JS_FreeValue(ctx, r);
-            JSContext *c1; int jr;
-            while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { /* run the woken continuation to next yield */ }
-            if (jr < 0) js_std_dump_error(c1 ? c1 : ctx);
+            r = JS_Call(ctx, f.handle, JS_UNDEFINED, 1, &u);   /* resolve -> enqueue continuation */
         } else {
-            JSValue r = JS_Call(ctx, f.handle, JS_UNDEFINED, 0, NULL); /* start: runs to first await/return */
-            if (JS_IsException(r)) js_std_dump_error(ctx);
-            JS_FreeValue(ctx, r);
+            r = JS_Call(ctx, f.handle, JS_UNDEFINED, 0, NULL); /* start: runs to first await/return */
         }
+        if (JS_IsException(r)) js_std_dump_error(ctx);
+        JS_FreeValue(ctx, r);
+        /* Drain THIS flow's continuation (fetch/await/microtask jobs) to its next park (__yield /
+           re-registered resumer) or completion — INSIDE the scheduler quantum, so no flow code runs
+           in js_std_loop (which would be a second execution point). Value-ordered parking is at the
+           __yield granularity; a flow's own microtask chain finishes its quantum here. */
+        JSContext *c1; int jr;
+        while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
+        if (jr < 0) js_std_dump_error(c1 ? c1 : ctx);
         g_running = 0;
         JS_FreeValue(ctx, f.handle);
     }
@@ -126,6 +158,7 @@ int main(int argc, char **argv)
     JS_SetPropertyStr(ctx, g, "__emit", JS_NewCFunction(ctx, js_emit, "__emit", 1));
     JS_SetPropertyStr(ctx, g, "__fork", JS_NewCFunction(ctx, js_fork, "__fork", 2));
     JS_SetPropertyStr(ctx, g, "__yield", JS_NewCFunction(ctx, js_yield, "__yield", 0));
+    JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
     JS_FreeValue(ctx, g);
 
     int rc = 0;
