@@ -300,10 +300,117 @@ static JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val, int argc
     lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     return r;
 }
+/* ── Per-flow DOM COW isolation ──────────────────────────────────────────────────
+   DOM mutations (attribute set, node insert) by a FORCED flow must not leak to sibling flows — the
+   same invariant as the JS-heap COW. A host-side undo log records the inverse of each mutation while
+   capture is active (during flow exploration, NOT boot which builds the baseline); dom_revert replays
+   it to restore the post-boot DOM baseline, called alongside JS_CowRevert before each starter. */
+typedef struct { int kind; lxb_dom_element_t *el; char *name; lxb_char_t *old; size_t old_len; int had; lxb_dom_node_t *node; } DomUndo;
+static DomUndo *g_dom_undo = NULL;
+static int g_dom_undo_n = 0, g_dom_undo_cap = 0, g_dom_capture = 0;
+static void dom_undo_push(DomUndo u) {
+    if (g_dom_undo_n >= g_dom_undo_cap) {
+        int nc = g_dom_undo_cap ? g_dom_undo_cap * 2 : 64;
+        DomUndo *n = realloc(g_dom_undo, (size_t)nc * sizeof(DomUndo)); if (!n) return; g_dom_undo = n; g_dom_undo_cap = nc;
+    }
+    g_dom_undo[g_dom_undo_n++] = u;
+}
+static void dom_attr_capture(lxb_dom_element_t *el, const char *name) {
+    if (!g_dom_capture) return;
+    size_t vl = 0; const lxb_char_t *cur = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vl);
+    DomUndo u; memset(&u, 0, sizeof u);
+    u.kind = 0; u.el = el; u.name = strdup(name); u.had = cur ? 1 : 0;
+    if (cur) { u.old = malloc(vl ? vl : 1); if (u.old) { memcpy(u.old, cur, vl); u.old_len = vl; } }
+    dom_undo_push(u);
+}
+static void dom_insert_capture(lxb_dom_node_t *node) {
+    if (!g_dom_capture) return;
+    DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; dom_undo_push(u);
+}
+static void dom_revert(void) {   /* restore the DOM to the post-boot baseline (reverse order) */
+    for (int i = g_dom_undo_n - 1; i >= 0; i--) {
+        DomUndo *u = &g_dom_undo[i];
+        if (u->kind == 0) {   /* attribute: restore old value, or remove if it didn't exist */
+            if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
+            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
+            free(u->name); free(u->old);
+        } else if (u->kind == 1) {   /* inserted node: detach it */
+            lxb_dom_node_remove(u->node);
+        }
+    }
+    g_dom_undo_n = 0;
+}
+
+static int el_is_script(lxb_dom_element_t *el) {
+    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
+    return nm && nl == 6 && memcmp(nm, "script", 6) == 0;
+}
+/* An inserted <script> with a src is a chunk LOAD (the URL may be JS-computed): surface it. */
+static void script_maybe_load(lxb_dom_element_t *el) {
+    if (!el_is_script(el)) return;
+    size_t sl = 0; const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
+    if (src && sl) { printf("@CHUNK %.*s\n", (int)sl, (const char *)src); fflush(stdout); }
+}
+static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    if (!el || argc < 2) return JS_UNDEFINED;
+    const char *name = JS_ToCString(ctx, argv[0]);
+    const char *val = JS_ToCString(ctx, argv[1]);
+    if (name && val) { dom_attr_capture(el, name); lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val)); }
+    if (name) JS_FreeCString(ctx, name);
+    if (val) JS_FreeCString(ctx, val);
+    return JS_UNDEFINED;
+}
+static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    lxb_dom_element_t *parent = JS_GetOpaque(this_val, g_el_class_id);
+    lxb_dom_element_t *child = (argc > 0) ? JS_GetOpaque(argv[0], g_el_class_id) : NULL;
+    if (parent && child) {
+        lxb_dom_node_insert_child(lxb_dom_interface_node(parent), lxb_dom_interface_node(child));
+        dom_insert_capture(lxb_dom_interface_node(child));
+        script_maybe_load(child);   /* injected <script src> (computed URL) -> discovered as a chunk */
+    }
+    return (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
+}
+/* reflected URL/identity properties (el.src = computedUrl / el.href / el.id) map to Lexbor attributes,
+   so a bundle setting .src via PROPERTY (the common script-injection form) is captured + intercepted. */
+static const char *refl_name(int magic) {
+    switch (magic) { case 0: return "src"; case 1: return "href"; case 2: return "action"; case 3: return "id"; default: return ""; }
+}
+static JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
+    const char *n = refl_name(magic); size_t vl = 0;
+    const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)n, strlen(n), &vl);
+    return v ? JS_NewStringLen(ctx, (const char *)v, vl) : JS_NewString(ctx, "");
+}
+static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
+    const char *n = refl_name(magic);
+    const char *v = JS_ToCString(ctx, val);
+    if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); JS_FreeCString(ctx, v); }
+    return JS_UNDEFINED;
+}
 static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_el_getAttribute, "getAttribute", 1));
+    JS_SetPropertyStr(ctx, proto, "setAttribute", JS_NewCFunction(ctx, js_el_setAttribute, "setAttribute", 2));
+    JS_SetPropertyStr(ctx, proto, "appendChild", JS_NewCFunction(ctx, js_el_appendChild, "appendChild", 1));
     JS_SetPropertyStr(ctx, proto, "querySelector", JS_NewCFunction(ctx, js_el_querySelector, "querySelector", 1));
     JS_SetPropertyStr(ctx, proto, "getTextContent", JS_NewCFunction(ctx, js_el_textContent, "getTextContent", 0));
+    static const char *refl[] = { "src", "href", "action", "id" };
+    for (int i = 0; i < 4; i++) {
+        JSAtom a = JS_NewAtom(ctx, refl[i]);
+        JS_DefinePropertyGetSet(ctx, proto, a,
+            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_refl_get, "get", 0, JS_CFUNC_getter_magic, i),
+            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_refl_set, "set", 1, JS_CFUNC_setter_magic, i),
+            JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, a);
+    }
+}
+static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (!g_dom || argc < 1) return JS_NULL;
+    const char *tag = JS_ToCString(ctx, argv[0]); if (!tag) return JS_NULL;
+    lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)tag, strlen(tag), NULL);
+    JS_FreeCString(ctx, tag);
+    return el_wrap(ctx, el);
 }
 static JSValue js_doc_getElementById(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_NULL;
@@ -480,7 +587,8 @@ static void scheduler_run(JSContext *ctx)
         g_c = f.saved_c;
 
         if (f.fs == NULL) {                         /* STARTER: baseline + fresh heap frame */
-            JS_CowRevert(ctx);                      /* revert shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
+            JS_CowRevert(ctx);                      /* revert JS shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
+            dom_revert();                           /* revert DOM mutations to the post-boot baseline (per-flow isolation) */
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
             f.fs = JS_FlowNew(ctx, f.handle, g_opaque, 8, oargs);
             if (!f.fs) {
@@ -599,7 +707,9 @@ int main(int argc, char **argv)
         JS_SetPropertyStr(ctx, doc, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
         JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));   /* real Lexbor DOM */
         JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
-        JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_opaque_stub, "createElement", 1));   /* step C: real element + script-injection intercept */
+        JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));   /* real element; appendChild intercepts <script src> */
+        JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
+        JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
         JS_SetPropertyStr(ctx, g, "document", doc);
     }
     JS_FreeValue(ctx, g);
@@ -612,6 +722,7 @@ int main(int argc, char **argv)
         dom_run_scripts(ctx);   /* run the page's own inline scripts (from the parsed DOM) in document order */
         seed_orphans(ctx);
         JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
+        g_dom_capture = 1;    /* DOM baseline is now fixed too; capture flow DOM mutations for per-flow revert */
         scheduler_run(ctx);
         js_std_loop(ctx);
     }
@@ -621,6 +732,7 @@ int main(int argc, char **argv)
        its held baseline values return to their slots, and drop the opaque marker. */
     JS_CowSetActive(0);
     JS_CowRevert(ctx);
+    g_dom_capture = 0; dom_revert();   /* drop DOM undo log (restore baseline) before teardown */
     JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL);
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
