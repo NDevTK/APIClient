@@ -28,11 +28,21 @@
    — the design's UNBOUNDED). No FLOW_MAX / DEC_MAX cap that would truncate distinct work the scheduler
    would otherwise reach. (Eviction of the cold/low-value tail to IDB is the further step; growth removes
    the artificial ceiling first.) */
-typedef struct { JSValue handle; double val; int is_resume; signed char *dec; int dec_n; } Flow;
+typedef struct {
+    JSValue handle;      /* the function (starter/suspended) or resolve fn (async __yield resume) */
+    double val;          /* accumulated value-of-information (emits raise it) */
+    int is_resume;       /* async __yield resume: JS_Call the resolve fn (not sync-preemptible) */
+    signed char *dec; int dec_n;  /* per-flow decision vector (branch-arm BFS) */
+    void *fs;            /* live heap frame if SUSPENDED mid-run (JS_FlowResume), else NULL */
+    int saved_c;         /* per-flow branch cursor (g_c) snapshot, restored on resume */
+    double cpu;          /* back-edge CPU ticks since last emit (WFQ decay; reset to 0 on emit) */
+    int visits;          /* times scheduled (UCB/fairness explore term) */
+} Flow;
 static Flow   *g_reg = NULL;
 static int     g_reg_n = 0, g_reg_cap = 0;
 static int     g_running = 0;
 static double  g_cur_val = 0;
+static Flow   *g_cur_flow = NULL;   /* running flow (a stable local copy; its weight is read by the yield hook) */
 static int     g_emit_total = 0;
 static JSRuntime *g_rt = NULL;
 
@@ -61,7 +71,21 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     }
     g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val; g_reg[g_reg_n].is_resume = is_resume;
     g_reg[g_reg_n].dec = dec; g_reg[g_reg_n].dec_n = dec_n;
+    g_reg[g_reg_n].fs = NULL; g_reg[g_reg_n].saved_c = 0; g_reg[g_reg_n].cpu = 0; g_reg[g_reg_n].visits = 0;
     g_reg_n++; return 1;
+}
+
+/* Re-add a SUSPENDED flow (a full copy, fs retained) so it interleaves back into the ONE registry. */
+static int reg_readd(JSContext *ctx, Flow f)
+{
+    if (g_reg_n >= g_reg_cap) {
+        int nc = g_reg_cap ? g_reg_cap * 2 : 256;
+        Flow *nr = (Flow *)realloc(g_reg, (size_t)nc * sizeof(Flow));
+        if (!nr) { printf("@WHY {\"phase\":\"reg_oom\"}\n");
+                   if (f.fs) JS_FlowFree(g_rt, f.fs); JS_FreeValue(ctx, f.handle); free(f.dec); return 0; }
+        g_reg = nr; g_reg_cap = nc;
+    }
+    g_reg[g_reg_n++] = f; return 1;
 }
 
 /* __emit(tag): the ONLY progress signal — a real host edge (@H) surfaced. */
@@ -70,7 +94,8 @@ static JSValue js_emit(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     const char *s = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     printf("@H %s\n", s ? s : "?"); fflush(stdout);
     if (s) JS_FreeCString(ctx, s);
-    g_emit_total++; if (g_running) g_cur_val += 1.0;
+    g_emit_total++;
+    if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
     return JS_UNDEFINED;
 }
 
@@ -80,7 +105,8 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
 {
     const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     printf("@H %s\n", url ? url : "?"); fflush(stdout);
-    g_emit_total++; if (g_running) g_cur_val += 1.0;
+    g_emit_total++;
+    if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
     JSValue resp = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, resp, "url", JS_NewString(ctx, url ? url : ""));
     JS_SetPropertyStr(ctx, resp, "ok", JS_TRUE);
@@ -190,43 +216,108 @@ static JSValue js_drive_orphans(JSContext *ctx, JSValueConst this_val, int argc,
    reverted to the post-boot BASELINE before the next STARTER runs — so an independent flow never sees
    another's writes, yet a flow sees its OWN writes within its run. */
 
-/* The ONE scheduler loop: pick the highest-value flow (NON-FIFO), advance it ONE quantum, repeat. */
+/* WFQ order key (ORDER-only, never drops a work item): base + accumulated value-of-information
+   (emits raise val) + an explore/fairness floor for rarely-scheduled flows - a CPU-since-emit decay
+   so a monopolizer (burns CPU, emits nothing) SINKS below productive/unrun flows and gets starved.
+   This is the ONE policy the host-level priority.js uses too; same formula, two levels. */
+static double flow_weight(const Flow *f)
+{
+    return 1.0 + f->val + 0.5 / (double)(f->visits + 1) - 0.01 * f->cpu;
+}
+
+/* The value-driven yield decision, called by the engine at each loop back-edge of the running TOP
+   flow frame. Ticks CPU (accounting, NOT a cap — the flow is resumable, never truncated), then yields
+   iff a PARKED flow now outranks the running one. The empty-COW-delta guard keeps interleaving correct
+   without per-flow deltas yet: a shared-state writer runs to completion (never suspended mid-write). */
+static int wfq_yield(void)
+{
+    if (!g_cur_flow) return 0;
+    g_cur_flow->cpu += 1.0;
+    if (JS_CowDepth() > 0) return 0;                 /* correctness guard: don't preempt a shared-state writer */
+    double rw = flow_weight(g_cur_flow);
+    for (int i = 0; i < g_reg_n; i++)
+        if (flow_weight(&g_reg[i]) > rw) return 1;   /* a parked flow now outranks the running quantum */
+    return 0;
+}
+
+/* The ONE scheduler loop: pick the highest-WEIGHT flow (NON-FIFO), run it as a preemptible heap-frame
+   quantum, re-queue it if it suspended (interleave), repeat. BFS by value-of-information: shallow
+   high-emit flows finish ahead of the deep residue, which is starved to ~0 CPU (resumable). */
 static void scheduler_run(JSContext *ctx)
 {
     while (g_reg_n > 0) {
         int best = 0;
-        for (int i = 1; i < g_reg_n; i++) if (g_reg[i].val > g_reg[best].val) best = i;
-        Flow f = g_reg[best];
-        g_reg_n--; g_reg[best] = g_reg[g_reg_n];   /* swap-remove */
-        g_running = 1; g_cur_val = f.val;
-        JSValue r;
+        for (int i = 1; i < g_reg_n; i++)
+            if (flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
+        Flow f = g_reg[best];                       /* f is a STABLE COPY: reg_add during the run may realloc g_reg */
+        g_reg_n--; g_reg[best] = g_reg[g_reg_n];    /* swap-remove */
+        f.visits++;
+        g_running = 1; g_cur_val = f.val; g_cur_flow = &f;
+
         if (f.is_resume) {
-            JSValue u = JS_UNDEFINED;
+            /* async __yield resume: drive the microtask to completion (a resolve fn, not sync-preemptible) */
             g_cur_fn = JS_UNDEFINED; g_dec_n = 0; g_c = 0;
-            r = JS_Call(ctx, f.handle, JS_UNDEFINED, 1, &u);
-        } else {
-            /* STARTER: load its decision vector, run it. __branch consumes/extends g_dec + forks siblings.
-               Force-invoke with OPAQUE this + args (external input the tool must not concretely decide):
-               user.isAdmin / this.fooUrl become opaque (propagated), so gates fork and computed URLs are
-               shaped. A flow that ignores args (boot forks) is unaffected. */
-            g_cur_fn = f.handle;
-            g_dec_n = f.dec_n;
-            g_dec_ensure(g_dec_n);
-            for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
-            g_c = 0;
-            JS_CowRevert(ctx);   /* per-flow isolation: revert shared-state to the post-boot baseline */
-            JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
-            r = JS_Call(ctx, f.handle, g_opaque, 8, oargs);
+            JS_SetFlowYieldHook(NULL);
+            JSValue u = JS_UNDEFINED;
+            JSValue r = JS_Call(ctx, f.handle, JS_UNDEFINED, 1, &u);
+            if (JS_IsException(r)) js_std_dump_error(ctx);
+            JS_FreeValue(ctx, r);
+            JSContext *c1; int jr;
+            while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
+            if (jr < 0) js_std_dump_error(c1 ? c1 : ctx);
+            g_running = 0; g_cur_flow = NULL;
+            JS_FreeValue(ctx, f.handle); free(f.dec);
+            continue;
         }
-        if (JS_IsException(r)) js_std_dump_error(ctx);
-        JS_FreeValue(ctx, r);
+
+        /* SYNC flow: load its per-flow scheduler state (decision vector + branch cursor). __branch
+           consumes/extends g_dec + forks siblings; force-invoke with OPAQUE this+args (external input
+           the tool must not concretely decide) so gates fork and computed URLs are shaped. */
+        g_cur_fn = f.handle;
+        g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);
+        for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
+        g_c = f.saved_c;
+
+        if (f.fs == NULL) {                         /* STARTER: baseline + fresh heap frame */
+            JS_CowRevert(ctx);                      /* revert shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
+            JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
+            f.fs = JS_FlowNew(ctx, f.handle, g_opaque, 8, oargs);
+            if (!f.fs) { g_running = 0; g_cur_flow = NULL; JS_FreeValue(ctx, f.handle); free(f.dec); continue; }
+        }
+        /* else SUSPENDED: resume in place. Its COW delta was empty at suspend + starters revert to
+           baseline, so shared state == baseline == what this flow expects (it wrote nothing shared). */
+
+        JS_SetFlowYieldHook(wfq_yield);
+        JSValue out = JS_UNDEFINED;
+        int st = JS_FlowResume(ctx, f.fs, &out);
+        JS_SetFlowYieldHook(NULL);
         JSContext *c1; int jr;
         while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
         if (jr < 0) js_std_dump_error(c1 ? c1 : ctx);
         g_running = 0; g_cur_fn = JS_UNDEFINED;
-        JS_FreeValue(ctx, f.handle);
-        free(f.dec);
+
+        if (st == 1) {
+            /* SUSPENDED at a back-edge: snapshot per-flow scheduler state and RE-QUEUE (interleave). */
+            f.saved_c = g_c;
+            f.val = g_cur_val;
+            if (g_dec_n > f.dec_n) {                /* grew (new branch decisions taken this quantum) */
+                signed char *nd = (signed char *)malloc((size_t)(g_dec_n > 0 ? g_dec_n : 1));
+                if (nd) { for (int i = 0; i < g_dec_n; i++) nd[i] = g_dec[i]; free(f.dec); f.dec = nd; }
+            } else {
+                for (int i = 0; i < g_dec_n && f.dec; i++) f.dec[i] = g_dec[i];
+            }
+            f.dec_n = g_dec_n;
+            g_cur_flow = NULL;
+            reg_readd(ctx, f);
+        } else {
+            /* COMPLETED/error: JS_FlowResume already freed the heap frame + its values. */
+            if (JS_IsException(out)) js_std_dump_error(ctx);
+            JS_FreeValue(ctx, out);
+            g_cur_flow = NULL;
+            JS_FreeValue(ctx, f.handle); free(f.dec);
+        }
     }
+    JS_SetFlowYieldHook(NULL);
 }
 
 int main(int argc, char **argv)
