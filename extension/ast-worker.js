@@ -149,7 +149,8 @@ self.astDispatch = async function astDispatch(msg) {
           if (seen.has(cu)) continue; seen.add(cu);
           const furl = chunkFetchUrl(cu);
           if (!furl) continue;
-          let r; try { r = await self.safeFetch(furl, { pageUrl: msg.sourceUrl, as: "script" }); } catch (_) { continue; }
+          let abs; try { abs = new URL(furl, msg.sourceUrl).href; } catch (_) { continue; }   // resolve relative -> absolute for safeFetch
+          let r; try { r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, as: "script" }); } catch (_) { continue; }
           if (!r || !r.ok || !r.body) continue;
           const cr = await runEngine(r.body, html, msg);   // forced-execute the chunk against the page DOM
           mergeCallsites(endpoints, cr.fetchCallSites);
@@ -169,8 +170,9 @@ self.astDispatch = async function astDispatch(msg) {
       const replyTable = {};
       for (const u of replyWant) {
         if (u.indexOf("{}") >= 0) continue;                      // opaque url -> unfetchable
-        let r; try { r = await self.safeFetch(u, { pageUrl: msg.sourceUrl }); } catch (_) { continue; }
-        if (r && r.ok && typeof r.body === "string") replyTable[u] = r.body;   // concrete reply body
+        let abs; try { abs = new URL(u, msg.sourceUrl).href; } catch (_) { continue; }   // resolve relative -> absolute
+        let r; try { r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl }); } catch (_) { continue; }
+        if (r && r.ok && typeof r.body === "string") replyTable[u] = r.body;   // key by the ORIGINAL url the engine's fetch sees
       }
       if (Object.keys(replyTable).length) {
         const rr = await runEngine(code, html, msg, replyTable);   // re-run with concrete replies injected
