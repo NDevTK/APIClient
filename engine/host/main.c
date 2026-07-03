@@ -1509,26 +1509,21 @@ static void drive_session(JSContext *ctx) {
     }
     g_in_session = 0;
 }
-/* Run a page script LIKE A BROWSER, whether classic or ESM. Try GLOBAL first (classic bundles); if that
-   throws (a top-level import/export is a SyntaxError in global scope), retry as a MODULE and drive the
-   evaluation to completion. Covers inline <script type=module> AND external module chunks (qjs_provide
-   doesn't know the tag) without a type sniff. Static imports resolve via the dyn-import hook path. */
-static void eval_page_script(JSContext *ctx, const char *code, size_t len, const char *name) {
-    /* COMPILE-ONLY as global first, so we distinguish a module (export/import is a SyntaxError in global
-       scope) from a classic script that merely throws at RUNTIME. Retrying the latter as a module would
-       double-run its side effects — so retry ONLY on a compile failure, never a run failure. */
-    JSValue fn = JS_Eval(ctx, code, len, name, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-    if (JS_IsException(fn)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));                         /* clear the SyntaxError */
+/* Run a page script LIKE A BROWSER. is_module is the REAL browser signal — the <script type="module">
+   attribute for inline, JS_DetectModule(body) for a fetched chunk — never a parse-failure guess. A classic
+   script runs GLOBAL and its runtime throw surfaces as @WHY (never swallowed); a module runs as ESM and, if
+   a static-import dep isn't fetched yet, defers into g_pendmod (retried on each qjs_provide). */
+static void eval_page_script(JSContext *ctx, const char *code, size_t len, const char *name, int is_module) {
+    if (is_module) {
         char nm[32]; snprintf(nm, sizeof nm, "<mod-%d>", g_modseq++);    /* unique so no name collision on defer/retry */
-        JSValue v = JS_Eval(ctx, code, len, nm, JS_EVAL_TYPE_MODULE);    /* ESM: export/import valid here */
-        if (JS_IsException(v)) { JS_FreeValue(ctx, JS_GetException(ctx)); pendmod_add(code, len); }  /* a static-import dep isn't fetched yet: defer + retry on provide */
+        JSValue v = JS_Eval(ctx, code, len, nm, JS_EVAL_TYPE_MODULE);
+        if (JS_IsException(v)) { JS_FreeValue(ctx, JS_GetException(ctx)); pendmod_add(code, len); }  /* dep not fetched yet: defer */
         else { JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {} }  /* module eval is async -> drive it */
         JS_FreeValue(ctx, v);
         return;
     }
-    JSValue v = JS_EvalFunction(ctx, fn);                                /* run the compiled global script (consumes fn) */
-    if (JS_IsException(v)) {   /* a genuine RUNTIME throw (not a defer) -> surface it, never silently swallow */
+    JSValue v = JS_Eval(ctx, code, len, name, JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(v)) {   /* a genuine RUNTIME throw -> surface it, never silently swallow */
         JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
         fprintf(stderr, "@WHY{phase:script-eval,name:%s,reason:%s}\n", name ? name : "?", m ? m : "throw");
         if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
@@ -1568,7 +1563,9 @@ static void dom_run_scripts(JSContext *ctx) {
             for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; }     /* inline body -> bundle id */
             bh ^= '|'; bh *= 16777619u;
             boot_script_cache((const char *)txt, tl);   /* cache for cross-flow @S candidate boot-replay */
-            eval_page_script(ctx, (const char *)txt, tl, "<script>");   /* classic or ESM, like a browser */
+            size_t tyl = 0; const lxb_char_t *ty = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tyl);
+            int is_mod = ty && tyl == 6 && memcmp(ty, "module", 6) == 0;   /* the browser's real signal */
+            eval_page_script(ctx, (const char *)txt, tl, "<script>", is_mod);
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
@@ -2153,7 +2150,7 @@ KEEP void qjs_provide(const char *url, const char *body)
             int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0);
             modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
             if (is_moddep(url)) pendmod_retry(ctx);              /* a static-import dep: the loader links+runs it in-graph (don't eval standalone -> no double side effects) */
-            else eval_page_script(ctx, body, strlen(body), url); /* classic external script / dynamic-import target: run standalone */
+            else eval_page_script(ctx, body, strlen(body), url, JS_DetectModule(body, strlen(body))); /* classic external script / dynamic-import target: run standalone (module vs classic by the real detector) */
             JS_CowSetActive(1); g_dom_capture = dsv;
             /* CACHE the chunk so boot-replay re-runs it under a candidate — a source stored / handler
                registered in an external chunk is then re-established with the concrete input (cross-flow
