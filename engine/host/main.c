@@ -536,11 +536,11 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
         return;
     }
     if (!JS_IsOpaque(val) || !JS_IsArray(g_solvetasks)) return;
-    const char *expr = JS_OpaqueExprC(val);
+    const char *shape = JS_OpaqueShapeC(val);   /* @H-style display: which source(s) reach this sink, transforms flattened */
     JSValue t = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, t, "sink", JS_NewString(ctx, sink));
     JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
-    JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, expr ? expr : "{}"));
+    JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, shape ? shape : "{}"));
     JS_SetPropertyStr(ctx, t, "gated", JS_NewBool(ctx, g_c > 0));
     uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_solvetasks, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
     JS_SetPropertyUint32(ctx, g_solvetasks, n, t);
