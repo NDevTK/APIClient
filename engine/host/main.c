@@ -45,6 +45,7 @@ typedef struct {
     int is_resume;       /* async __yield resume: JS_Call the resolve fn (not sync-preemptible) */
     signed char *dec; int dec_n;  /* per-flow decision vector (branch-arm BFS) */
     void *fs;            /* live heap frame if SUSPENDED mid-run (JS_FlowResume), else NULL */
+    void *cow; int cow_n, cow_cap;  /* this flow's HEAP COW DELTA, stashed while parked (unapplied); swapped in on resume */
     int saved_c;         /* per-flow branch cursor (g_c) snapshot, restored on resume */
     double cpu;          /* back-edge CPU ticks since last emit (WFQ decay; reset to 0 on emit) */
     int visits;          /* times scheduled (UCB/fairness explore term) */
@@ -112,6 +113,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val; g_reg[g_reg_n].is_resume = is_resume;
     g_reg[g_reg_n].dec = dec; g_reg[g_reg_n].dec_n = dec_n;
     g_reg[g_reg_n].fs = NULL; g_reg[g_reg_n].saved_c = 0; g_reg[g_reg_n].cpu = 0; g_reg[g_reg_n].visits = 0;
+    g_reg[g_reg_n].cow = NULL; g_reg[g_reg_n].cow_n = 0; g_reg[g_reg_n].cow_cap = 0;
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL;
     g_reg_n++; return 1;
 }
@@ -123,7 +125,8 @@ static int reg_readd(JSContext *ctx, Flow f)
         int nc = g_reg_cap ? g_reg_cap * 2 : 256;
         Flow *nr = (Flow *)realloc(g_reg, (size_t)nc * sizeof(Flow));
         if (!nr) { printf("@WHY {\"phase\":\"reg_oom\"}\n");
-                   if (f.fs) JS_FlowFree(g_rt, f.fs); JS_FreeValue(ctx, f.handle); free(f.dec); return 0; }
+                   if (f.fs) JS_FlowFree(g_rt, f.fs); if (f.cow) JS_CowBufFree(ctx, f.cow, f.cow_n);
+                   JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); return 0; }
         g_reg = nr; g_reg_cap = nc;
     }
     g_reg[g_reg_n++] = f; return 1;
@@ -1378,7 +1381,7 @@ static int wfq_yield(void)
 {
     if (!g_cur_flow) return 0;
     g_cur_flow->cpu += 1.0;
-    if (JS_CowDepth() > 0 || g_dom_undo_n > 0) return 0;   /* don't preempt a flow mid shared-state write (JS heap OR DOM) */
+    if (g_dom_undo_n > 0) return 0;   /* JS-heap writers ARE now preemptible (per-flow COW delta swaps on switch); a DOM writer still runs to completion until per-flow DOM deltas land */
     double rw = flow_weight(g_cur_flow);
     for (int i = 0; i < g_reg_n; i++)
         if (flow_weight(&g_reg[i]) > rw) return 1;   /* a parked flow now outranks the running quantum */
@@ -1404,6 +1407,7 @@ static void park_frontier(JSContext *ctx)
             }
         }
         if (f->fs) JS_FlowFree(g_rt, f->fs);
+        if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
         JS_FreeValue(ctx, f->handle);
         free(f->dec); free(f->candidate);
     }
@@ -1447,6 +1451,8 @@ static void scheduler_run(JSContext *ctx)
             JSContext *c1; int jr;
             while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
             if (jr < 0) js_std_dump_error(c1 ? c1 : ctx);
+            JS_CowRevert(ctx);                            /* discard the resume's heap writes -> baseline */
+            { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
             g_running = 0; g_cur_flow = NULL;
             JS_FreeValue(ctx, f.handle); free(f.dec);
             continue;
@@ -1460,9 +1466,9 @@ static void scheduler_run(JSContext *ctx)
         for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
         g_c = f.saved_c;
 
-        if (f.fs == NULL) {                         /* STARTER: baseline + fresh heap frame */
-            JS_CowRevert(ctx);                      /* revert JS shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
-            dom_revert();                           /* revert DOM mutations to the post-boot baseline (per-flow isolation) */
+        int is_starter = (f.fs == NULL);
+        if (is_starter) {                           /* STARTER: fresh heap frame + empty COW delta (globals left NULL by the previous flow's exit) */
+            dom_revert();                           /* revert DOM mutations to the post-boot baseline (DOM still serial) */
             /* @S CROSS-FLOW: a candidate flow re-runs boot with the concrete candidate pinned, so shared
                state a handler reads (window.x = location.hash set at boot) holds the candidate, not the
                baseline opaque. boot_replay_candidate reverts the global object to PRE-boot first (delete
@@ -1491,17 +1497,20 @@ static void scheduler_run(JSContext *ctx)
                 JSContext *c2; int jr2;
                 while ((jr2 = JS_ExecutePendingJob(g_rt, &c2)) > 0) { }
                 if (jr2 < 0) js_std_dump_error(c2 ? c2 : ctx);
-                if (f.candidate) boot_restore_globals(ctx);   /* put the post-boot baseline back */
+                JS_CowRevert(ctx);                            /* discard this flow's heap writes -> baseline */
+                { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* free the delta buffer, globals -> NULL */
+                if (f.candidate) { int sv = 0; JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); (void)sv; }   /* restore boot-created globals (host-side, uncaptured) */
                 g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
                 JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate);
                 continue;
             }
         }
-        /* else SUSPENDED: resume in place. Its COW delta was empty at suspend + starters revert to
-           baseline, so shared state == baseline == what this flow expects (it wrote nothing shared). */
+        /* RESUME: swap in the parked flow's OWN heap COW delta (unapplied while it slept) so it sees its own
+           shared-state writes again, not another flow's. Starters begin with an empty delta (globals NULL). */
+        if (!is_starter) { JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
 
-        /* Candidate flows run to COMPLETION (no yield): the boot-created-globals bracket (delete before
-           replay, restore after) must not straddle a suspension, and a candidate probe is short. */
+        /* Candidate flows run to COMPLETION (no yield): the boot-created-globals bracket must not straddle a
+           suspension. Other flows are preemptible mid heap-write now (per-flow COW delta). */
         JS_SetFlowYieldHook(f.candidate ? NULL : wfq_yield);
         JSValue out = JS_UNDEFINED;
         int st = JS_FlowResume(ctx, f.fs, &out);
@@ -1509,11 +1518,13 @@ static void scheduler_run(JSContext *ctx)
         JSContext *c1; int jr;
         while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
         if (jr < 0) js_std_dump_error(c1 ? c1 : ctx);
-        if (f.candidate) boot_restore_globals(ctx);   /* candidate flow completed (never suspends) -> restore baseline */
         g_running = 0; g_cur_fn = JS_UNDEFINED;
 
         if (st == 1) {
-            /* SUSPENDED at a back-edge: snapshot per-flow scheduler state and RE-QUEUE (interleave). */
+            /* SUSPENDED: UNAPPLY this flow's heap writes (baseline restored for the next flow) and STASH its
+               delta buffer; re-queue. On resume it re-applies. Interleaving of heap-writers is now sound. */
+            JS_CowUnapply(ctx);
+            f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap);
             f.saved_c = g_c;
             f.val = g_cur_val;
             if (g_dec_n > f.dec_n) {                /* grew (new branch decisions taken this quantum) */
@@ -1526,7 +1537,10 @@ static void scheduler_run(JSContext *ctx)
             g_cur_flow = NULL;
             reg_readd(ctx, f);
         } else {
-            /* COMPLETED/error: JS_FlowResume already freed the heap frame + its values. */
+            /* COMPLETED/error: discard this flow's heap writes (restore baseline) + free its delta buffer. */
+            JS_CowRevert(ctx);
+            { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
+            if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }   /* restore boot-created globals (host-side, uncaptured) */
             if (JS_IsException(out)) js_std_dump_error(ctx);
             JS_FreeValue(ctx, out);
             g_cur_flow = NULL;
