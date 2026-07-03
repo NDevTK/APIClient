@@ -551,6 +551,10 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
     JS_SetPropertyStr(ctx, t, "sink", JS_NewString(ctx, sink));
     JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
     JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, expr ? expr : "{}"));
+    /* branches taken to REACH this sink: 0 = unconditional data flow (a concrete candidate provably reaches
+       it, so the PoC is path-sound); >0 = gated, reachability of the concrete candidate needs a replay flow
+       through the real branches (the scheduler-integrated solve — the honest next step, not done here). */
+    JS_SetPropertyStr(ctx, t, "gated", JS_NewBool(ctx, g_c > 0));
     uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_solvetasks, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
     JS_SetPropertyUint32(ctx, g_solvetasks, n, t);
     g_emit_total++;   /* a reached sink is progress like @H */
@@ -572,16 +576,25 @@ static JSValue solve_all(JSContext *ctx) {
             int isdup = !JS_IsUndefined(dup); JS_FreeValue(ctx, dup);
             if (!isdup) {
                 JS_SetPropertyStr(ctx, seen, keybuf, JS_NewBool(ctx, 1));
+                JSValue gv = JS_GetPropertyStr(ctx, t, "gated"); int gated = JS_ToBool(ctx, gv); JS_FreeValue(ctx, gv);
                 char *poc = solve_task(ex, sc ? sc : "html");
+                /* the breakout is proven (real transforms ran). path-reachability is proven ONLY for an
+                   UNCONDITIONAL sink (gated==0); a gated sink needs the scheduler-integrated replay flow to
+                   confirm the concrete candidate satisfies the branches — so we DON'T claim it verified. */
+                int pathSound = (poc != NULL) && !gated;
                 JSValue rec = JS_NewObject(ctx);
                 JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink ? sink : "?"));
                 JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink ? sink : "?"));
                 JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "forced-exec"));
                 JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
                 JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
-                JS_SetPropertyStr(ctx, rec, "verified", JS_NewBool(ctx, poc != NULL));
+                JS_SetPropertyStr(ctx, rec, "verified", JS_NewBool(ctx, pathSound));
+                JS_SetPropertyStr(ctx, rec, "breakoutProven", JS_NewBool(ctx, poc != NULL));
+                JS_SetPropertyStr(ctx, rec, "pathGated", JS_NewBool(ctx, gated));
                 JS_SetPropertyStr(ctx, rec, "poc", poc ? JS_NewString(ctx, poc) : JS_NULL);
-                { char eb[900]; if (poc) snprintf(eb, sizeof eb, "sink %s <- input %s", sink ? sink : "?", poc);
+                { char eb[900];
+                  if (poc && !gated) snprintf(eb, sizeof eb, "sink %s <- input %s (unconditional: path-sound)", sink ? sink : "?", poc);
+                  else if (poc && gated) snprintf(eb, sizeof eb, "sink %s <- input %s (breakout proven; sink is branch-gated, reachability needs replay-verify)", sink ? sink : "?", poc);
                   else snprintf(eb, sizeof eb, "sink %s reachable; no candidate broke out (filters proved it safe)", sink ? sink : "?");
                   JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
                 if (poc) free(poc);
