@@ -138,7 +138,6 @@ function linesToAnalysis(lines, msg) {
    DOM) — the bridge no longer scrapes scripts. code (argv[1]) is any brain-assembled extra scripts
    (usually empty); html (argv[2]) is the page. */
 function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
-function strHash(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
 /* Stable BUNDLE IDENTITY for the frontier key: the EXTERNAL <script src> set (content-hash filenames
    like main.abc123.js ARE the app version), NOT the volatile HTML wrapper (per-request nonces/CSRF
    tokens would change the key every visit -> the frontier would never resume). A redeploy changes a src
@@ -263,14 +262,6 @@ async function runEngine(code, html, msg, quantum) {
   return _result;
 }
 
-/* A @CHUNK URL is fetchable only if its PATH is concrete — an opaque path segment ("/chunks/{}.js")
-   can't be resolved. An opaque QUERY ("?v={}") is fine: strip it (version params are optional). */
-function chunkFetchUrl(u) {
-  const q = u.indexOf("?");
-  const path = q >= 0 ? u.slice(0, q) : u;
-  if (hasHole(path)) return null;   // opaque path -> unresolvable
-  return path;                                 // concrete path, query dropped
-}
 function mergeCallsites(map, sites) {
   for (const s of sites || []) { const k = (s.method || "GET") + " " + normHoles(s.url); if (!map.has(k)) map.set(k, s); }
 }
