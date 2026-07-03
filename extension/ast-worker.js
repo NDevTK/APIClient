@@ -149,19 +149,9 @@ function strHash(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h <
    tokens would change the key every visit -> the frontier would never resume). A redeploy changes a src
    -> new key -> stale frontier invalidated. Inline-only pages fall back to the HTML hash (rare; they're
    small, finish in one visit, never park). */
-/* Cross-session frontier key = origin | bundle (external script srcs; URLs identify their content, stable
-   across visits + volatile HTML). It is only a RELEVANCE grouping for which parked recipes to pull on
-   resume, NOT a soundness boundary: recipes self-identify by function SOURCE hash (JS_OrphanHash), so
-   resuming a coarse group locates each recipe's function by what it IS (present -> drive; different context
-   / absent -> skip; never the wrong one). Over-merging same-bundle-different-context documents is therefore
-   SAFE, so no context sub-key is needed (that was a workaround for the old positional locator; the
-   source-identity root fix removes it). Shared state is re-established per document by re-running its boot. */
-function bundleId(html, code) {
-  const srcs = [];
-  const re = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
-  let m; while ((m = re.exec(html || "")) !== null) srcs.push(m[1]);
-  return srcs.length ? strHash(srcs.join("|")) : strHash((html || "") + (code || ""));
-}
+/* The document's bundle IDENTITY is computed by the ENGINE (qjs_bundle_id, a real Lexbor <script> scan) —
+   NOT a host-side regex. The frontier key = origin | that id, is only a RELEVANCE grouping for which parked
+   recipes to pull on resume (recipes self-identify by function SOURCE hash, so a coarse key is sound). */
 /* Cross-session flow FRONTIER (IndexedDB): the learned surface (globalStore) already persists; this
    persists the UNFINISHED frontier as compact replay recipes, keyed by origin+bundle-hash (a changed
    bundle invalidates stale orphan indices). A parked frontier resumes next visit/session -> ONE
@@ -211,7 +201,7 @@ async function driveFrontier(rounds, opts) {
     all.sort((a, b) => frontierWeight(b) - frontierWeight(a));   // ONE global value order
     const top = all[0];
     const m2 = { type: "AST_ANALYZE", pageHtml: top.html, code: top.code, sourceUrl: top.sourceUrl, quantum: opts.quantum || top.quantum || 8, credentialed: top.credentialed };
-    const r = await runEngine(top.code || "", top.html || "", m2, m2.quantum, top.recipes);
+    const r = await runEngine(top.code || "", top.html || "", m2, m2.quantum);   // runEngine re-derives the id + resumes top's recipes
     dedupShapeConcrete(new Map((r.fetchCallSites || []).map((s) => [(s.method || "GET") + " " + s.url, s])));
     advances.push({ sourceUrl: top.sourceUrl, result: r });
     top.emit = (top.emit || 0) + (r.fetchCallSites || []).length;
@@ -227,16 +217,25 @@ self.driveFrontier = driveFrontier;   // the brain drives this on idle / after a
    engine parks awaiting a reply (qjs_step -> NEED_FETCH), the TRUSTED offscreen safe-fetches each pending
    url (GET, page-origin SSRF) and qjs_provide()s the body, resuming the flow in the SAME instance -- no
    re-instantiate, no re-run of the whole page. */
-async function runEngine(code, html, msg, quantum, recipes) {
+async function runEngine(code, html, msg, quantum) {
   const lines = [];
+  let fkey = null, prior = null;   // frontier key (origin | engine bundle-id) + the parked entry, set in phase 1
   const M = await createQJS({ print: (s) => lines.push(s), printErr: (s) => lines.push(s), noInitialRun: true });
   const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
   const ptrs = [];
   const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
   try {
-    // argv: [extra-code, pageHtml, real-origin, fromReply(unused, in-place now), quantum, resume-recipes]
+    // PHASE 1 — parse + boot (Lexbor+quickjs): the engine runs the page's own scripts and computes the stable
+    // bundle IDENTITY from its REAL Lexbor <script> scan (no host regex). argv[6] recipes empty; seeded below.
     M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number", "number"],
-      [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), quantum || 0, arg(recipes || "")]);
+      [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), quantum || 0, arg("")]);
+    // The host's ONLY job here is the IDB bridge: look up this document's parked frontier by the ENGINE's
+    // bundle id (origin | id), then hand the recipes back for phase-2 seeding.
+    const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
+    fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
+    prior = quantum ? await frontierGet(fkey) : null;
+    // PHASE 2 — seed the frontier (fresh visit, or resume the parked recipes) + fix the COW baseline.
+    M.ccall("qjs_begin", "void", ["string"], [(prior && prior.recipes) ? prior.recipes : ""]);
     const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
     const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
       if (!canFetch || hasHole(u)) return "";
@@ -265,7 +264,9 @@ async function runEngine(code, html, msg, quantum, recipes) {
   } finally {
     for (const p of ptrs) { try { M._free(p); } catch (_) {} }
   }
-  return linesToAnalysis(lines, msg);
+  const _result = linesToAnalysis(lines, msg);
+  _result._fkey = fkey; _result._prior = prior;   // engine-computed frontier key + parked entry -> astDispatch persists
+  return _result;
 }
 
 /* A @CHUNK URL is fetchable only if its PATH is concrete — an opaque path segment ("/chunks/{}.js")
@@ -323,12 +324,13 @@ self.astDispatch = async function astDispatch(msg) {
        via qjs_chunks/qjs_provide) + its fromReply consumes (in place). No re-run, no separate loops.
        CROSS-SESSION FRONTIER: with a host quantum, park the residue to IDB and resume it next visit. */
     const quantum = msg.quantum || 0;   // 0 = run to completion (default); >0 = per-visit CPU slice
-    const fkey = originOf(msg.sourceUrl) + "|" + bundleId(html, code);   // STABLE across visits (bundle version, not volatile HTML)
-    const prior = quantum ? await frontierGet(fkey) : null;      // resume this bundle's parked frontier
-    const result = await runEngine(code, html, msg, quantum, prior && prior.recipes);
-    if (quantum) {   // persist the residue into the GLOBAL frontier (rich entry for later rehydration)
-      await frontierPut(fkey, {
-        key: fkey, sourceUrl: msg.sourceUrl, html, code, credentialed: !!msg.credentialed, quantum,
+    // runEngine does phase-1 init (engine computes the bundle id via Lexbor), the frontierGet by that id,
+    // and phase-2 seeding. It returns the ENGINE-computed frontier key (_fkey) + parked entry (_prior).
+    const result = await runEngine(code, html, msg, quantum);
+    if (quantum && result._fkey) {   // persist the residue into the GLOBAL frontier (rich entry for later rehydration)
+      const prior = result._prior;
+      await frontierPut(result._fkey, {
+        key: result._fkey, sourceUrl: msg.sourceUrl, html, code, credentialed: !!msg.credentialed, quantum,
         recipes: (result._park || []).join(";"),
         emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length,
         visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),

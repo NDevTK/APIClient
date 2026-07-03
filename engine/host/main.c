@@ -67,6 +67,7 @@ static int     g_cur_orphan_idx = -1;   /* running flow's orphan index (inherite
 static int     g_quantum = 0;
 static long    g_work = 0;              /* flow DISPATCHES this run (starter OR resume) — the quantum's work unit */
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
+static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
 
 /* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
@@ -883,20 +884,29 @@ static void dom_run_scripts(JSContext *ctx) {
     struct scr_ctx c = { NULL, 0, 0 };
     lxb_selectors_find(sel, lxb_dom_interface_node(g_dom), list, scr_collect_cb, &c);
     lxb_selectors_destroy(sel, true); lxb_css_parser_destroy(p, true);
+    uint32_t bh = 2166136261u;   /* FNV-1a bundle identity over the page's OWN scripts (Lexbor DOM, not regex) */
     for (int i = 0; i < c.n; i++) {
         lxb_dom_element_t *el = c.els[i];
         size_t sl = 0;
         const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
-        if (src && sl) { printf("@CHUNK %.*s\n", (int)sl, (const char *)src); fflush(stdout); continue; }  /* external -> step C */
+        if (src && sl) {
+            printf("@CHUNK %.*s\n", (int)sl, (const char *)src); fflush(stdout);   /* external -> step C */
+            for (size_t k = 0; k < sl; k++) { bh ^= src[k]; bh *= 16777619u; }     /* external src URL -> bundle id */
+            bh ^= '|'; bh *= 16777619u;
+            continue;
+        }
         size_t tl = 0;
         lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
         if (txt && tl) {
+            for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; }     /* inline body -> bundle id */
+            bh ^= '|'; bh *= 16777619u;
             JSValue v = JS_Eval(ctx, (const char *)txt, tl, "<script>", JS_EVAL_TYPE_GLOBAL);
             if (JS_IsException(v)) js_std_dump_error(ctx);
             JS_FreeValue(ctx, v);
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
+    g_bundle_id = bh ? bh : 1;
     free(c.els);
 }
 
@@ -1153,7 +1163,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         else g_reply_table = t;
     }
     g_quantum = quantum;                           /* host per-page CPU slice (0 = run to completion) */
-    if (recipes && recipes[0]) g_resume_mode = 1;  /* resuming a parked frontier */
+    (void)recipes;                                 /* recipes are seeded in phase-2 qjs_begin(), after the host reads the bundle-id */
 
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__emit", JS_NewCFunction(ctx, js_emit, "__emit", 1));
@@ -1288,37 +1298,51 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JSValue v = JS_Eval(ctx, boot, strlen(boot), "<boot>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsException(v)) { js_std_dump_error(ctx); g_rc = 1; }
         JS_FreeValue(ctx, v);
-        dom_run_scripts(ctx);   /* run the page's own inline scripts (from the parsed DOM) in document order */
-        seed_orphans(ctx);      /* normal: seed fresh orphan flows. resume: build g_orphan_buf locators only. */
-        if (g_resume_mode && recipes) {
-            /* RESUME the parked frontier: each recipe "hash,dec" re-creates a flow by LOCATING the orphan whose
-               stable identity (JS_OrphanHash = filename+line+col) matches — robust to collection order/context,
-               unlike a positional index. Reconstructed by replay when the scheduler re-runs it. A recipe whose
-               function is absent in THIS context simply doesn't match (skipped) — never drives the wrong one. */
-            const char *p = recipes; int resumed = 0;
-            while (*p) {
-                uint32_t want = (uint32_t)strtoul(p, NULL, 10);
-                const char *comma = strchr(p, ','), *semi = strchr(p, ';');
-                signed char *dec = NULL; int dec_n = 0;
-                if (comma && (!semi || comma < semi)) {
-                    const char *d = comma + 1, *end = semi ? semi : d + strlen(d);
-                    dec_n = (int)(end - d);
-                    if (dec_n > 0) { dec = (signed char *)malloc((size_t)dec_n); for (int i = 0; i < dec_n; i++) dec[i] = (d[i] == '1') ? 1 : 0; }
-                }
-                int found = -1;
-                for (int oi = 0; oi < g_orphan_n; oi++) { if (JS_OrphanHash(ctx, g_orphan_buf[oi]) == want) { found = oi; break; } }
-                if (found >= 0) {
-                    reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), 1.0, 0, dec, dec_n);
-                    g_reg[g_reg_n - 1].orphan_idx = found; resumed++;
-                } else free(dec);
-                if (!semi) break; p = semi + 1;
-            }
-            printf("@RESUMED %d\n", resumed); fflush(stdout);
-        }
-        JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
-        g_dom_capture = 1;    /* DOM baseline is now fixed too; capture flow DOM mutations for per-flow revert */
+        dom_run_scripts(ctx);   /* run the page's own inline scripts + compute g_bundle_id (Lexbor <script> scan) */
     }
-    return 0;
+    return 0;   /* boot done; g_bundle_id is now readable via qjs_bundle_id(). Host reads it, looks up the parked
+                   frontier by ORIGIN|bundle-id in IDB (its only job), then calls qjs_begin(recipes) to seed. */
+}
+
+/* The document's stable bundle IDENTITY = FNV-1a over its OWN scripts, computed by the REAL Lexbor <script>
+   scan in dom_run_scripts (never a host-side regex). The host uses origin|this as the frontier key. */
+KEEP unsigned qjs_bundle_id(void) { return (unsigned)g_bundle_id; }
+
+/* Phase 2 (after qjs_init + the host's frontierGet by bundle-id): seed the frontier and fix the COW baseline.
+   recipes NULL/"" -> a fresh visit (drive all orphans); non-empty -> RESUME by re-creating each parked flow,
+   located by its function SOURCE hash (JS_OrphanHash), decisions replayed by the scheduler. */
+KEEP void qjs_begin(const char *recipes)
+{
+    JSContext *ctx = g_ctx;
+    if (!ctx) return;
+    g_resume_mode = (recipes && recipes[0]) ? 1 : 0;
+    seed_orphans(ctx);      /* normal: seed fresh orphan flows. resume: build g_orphan_buf locators only. */
+    if (g_resume_mode) {
+        /* RESUME: each recipe "hash,dec" re-creates a flow by LOCATING the orphan whose stable SOURCE identity
+           (JS_OrphanHash) matches — robust to collection order/context. A recipe whose function is absent in
+           THIS context simply doesn't match (skipped) — never drives the wrong one. */
+        const char *p = recipes; int resumed = 0;
+        while (*p) {
+            uint32_t want = (uint32_t)strtoul(p, NULL, 10);
+            const char *comma = strchr(p, ','), *semi = strchr(p, ';');
+            signed char *dec = NULL; int dec_n = 0;
+            if (comma && (!semi || comma < semi)) {
+                const char *d = comma + 1, *end = semi ? semi : d + strlen(d);
+                dec_n = (int)(end - d);
+                if (dec_n > 0) { dec = (signed char *)malloc((size_t)dec_n); for (int i = 0; i < dec_n; i++) dec[i] = (d[i] == '1') ? 1 : 0; }
+            }
+            int found = -1;
+            for (int oi = 0; oi < g_orphan_n; oi++) { if (JS_OrphanHash(ctx, g_orphan_buf[oi]) == want) { found = oi; break; } }
+            if (found >= 0) {
+                reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), 1.0, 0, dec, dec_n);
+                g_reg[g_reg_n - 1].orphan_idx = found; resumed++;
+            } else free(dec);
+            if (!semi) break; p = semi + 1;
+        }
+        printf("@RESUMED %d\n", resumed); fflush(stdout);
+    }
+    JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
+    g_dom_capture = 1;    /* DOM baseline is now fixed too; capture flow DOM mutations for per-flow revert */
 }
 
 /* The distinct pending fetch urls (newline-joined) the offscreen must safe-fetch. Static buffer. */
@@ -1447,6 +1471,7 @@ int main(int argc, char **argv)
     int         quantum = (argc > 5 && argv[5][0]) ? atoi(argv[5]) : 0;
     const char *recipes = (argc > 6) ? argv[6] : NULL;
     if (qjs_init(boot, html, origin, replies, quantum, recipes) != 0) return 1;
+    qjs_begin(recipes);   /* phase 2: seed the frontier (fresh or resume) + fix the COW baseline */
     if (boot) { while (qjs_step() == 1) qjs_finalize(); }   /* node CLI has no network -> resolve pending opaque (shapes) */
     qjs_teardown();
     return g_rc;
