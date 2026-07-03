@@ -250,6 +250,36 @@ static void chunk_pending_add(const char *url) {
     if (g_chunk_n >= g_chunk_cap) { int nc = g_chunk_cap ? g_chunk_cap * 2 : 16; char **n = realloc(g_chunk_pending, (size_t)nc * sizeof(char *)); if (!n) return; g_chunk_pending = n; g_chunk_cap = nc; }
     g_chunk_pending[g_chunk_n++] = strdup(url);
 }
+
+/* ---- ESM static-import graph (browser-faithful) ----
+   A module's `import ... from "X"` is resolved SYNCHRONOUSLY at link time, but our fetch is async
+   (chunk_pending -> host -> qjs_provide). So: the module loader compiles a dep from cached source if we
+   have it; otherwise it requests the chunk (like a browser fetches the graph) and fails THIS link, and the
+   importing module is parked in g_pendmod, retried each time a chunk arrives, until the whole graph links. */
+typedef struct { char *url; char *src; size_t len; } ModSrc;
+static ModSrc *g_modsrc = NULL; static int g_modsrc_n = 0, g_modsrc_cap = 0;
+static void modsrc_put(const char *url, const char *src, size_t len) {
+    for (int i = 0; i < g_modsrc_n; i++) if (strcmp(g_modsrc[i].url, url) == 0) return;   /* first source wins */
+    if (g_modsrc_n >= g_modsrc_cap) { int nc = g_modsrc_cap ? g_modsrc_cap * 2 : 8; ModSrc *n = realloc(g_modsrc, (size_t)nc * sizeof(ModSrc)); if (!n) return; g_modsrc = n; g_modsrc_cap = nc; }
+    char *s = malloc(len + 1); if (!s) return; memcpy(s, src, len); s[len] = 0;
+    g_modsrc[g_modsrc_n].url = strdup(url); g_modsrc[g_modsrc_n].src = s; g_modsrc[g_modsrc_n].len = len; g_modsrc_n++;
+}
+static ModSrc *modsrc_get(const char *url) { for (int i = 0; i < g_modsrc_n; i++) if (strcmp(g_modsrc[i].url, url) == 0) return &g_modsrc[i]; return NULL; }
+/* URLs discovered as STATIC-import deps: link them IN-GRAPH (loader compiles them), never eval standalone
+   (that would double-run their side effects — the loader already links+runs them). */
+static char **g_moddep = NULL; static int g_moddep_n = 0, g_moddep_cap = 0;
+static void moddep_add(const char *u) { for (int i = 0; i < g_moddep_n; i++) if (strcmp(g_moddep[i], u) == 0) return; if (g_moddep_n >= g_moddep_cap) { int nc = g_moddep_cap ? g_moddep_cap * 2 : 8; char **n = realloc(g_moddep, (size_t)nc * sizeof(char *)); if (!n) return; g_moddep = n; g_moddep_cap = nc; } g_moddep[g_moddep_n++] = strdup(u); }
+static int is_moddep(const char *u) { for (int i = 0; i < g_moddep_n; i++) if (strcmp(g_moddep[i], u) == 0) return 1; return 0; }
+/* Modules whose link is deferred until their imported chunks arrive (source copy, retried on each provide). */
+typedef struct { char *src; size_t len; } PendMod;
+static PendMod *g_pendmod = NULL; static int g_pendmod_n = 0, g_pendmod_cap = 0;
+static int g_modseq = 0;   /* unique module names so a retry never collides with a prior failed link */
+static void pendmod_add(const char *src, size_t len) {
+    if (g_pendmod_n >= g_pendmod_cap) { int nc = g_pendmod_cap ? g_pendmod_cap * 2 : 8; PendMod *n = realloc(g_pendmod, (size_t)nc * sizeof(PendMod)); if (!n) return; g_pendmod = n; g_pendmod_cap = nc; }
+    char *s = malloc(len + 1); if (!s) return; memcpy(s, src, len); s[len] = 0;
+    g_pendmod[g_pendmod_n].src = s; g_pendmod[g_pendmod_n].len = len; g_pendmod_n++;
+}
+
 /* wrap val in an already-RESOLVED promise (consumes val) so `await`/`.then` chains continue synchronously. */
 static JSValue js_resolved(JSContext *ctx, JSValue val)
 {
@@ -1198,6 +1228,45 @@ static JSValue host_dyn_import(JSContext *ctx, const char *specifier) {
     }
     return JS_DupValue(ctx, g_opaque);
 }
+/* Identity normalize: keep the specifier VERBATIM (matches the host fetch contract — chunk URLs are passed
+   to qjs_provide exactly as written; the offscreen resolves relative/root-relative against the doc URL). */
+static char *host_module_normalize(JSContext *ctx, const char *base, const char *name, void *opaque) {
+    (void)base; (void)opaque; return js_strdup(ctx, name);
+}
+/* Resolve a static import: compile the dep from its FETCHED source; if not fetched yet, request it like a
+   browser and fail this link (the importer is retried when the chunk arrives). quickjs dedups by name, so a
+   given dep URL is compiled once and shared across the graph. */
+static JSModuleDef *host_module_loader(JSContext *ctx, const char *name, void *opaque) {
+    (void)opaque;
+    ModSrc *m = modsrc_get(name);
+    if (m && m->src) {
+        JSValue v = JS_Eval(ctx, m->src, m->len, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        if (JS_IsException(v)) { JS_FreeValue(ctx, JS_GetException(ctx)); return NULL; }
+        JSModuleDef *md = JS_VALUE_GET_PTR(v); JS_FreeValue(ctx, v); return md;   /* module kept alive by rt module_list */
+    }
+    moddep_add(name);
+    if (!has_hole(name)) { chunk_pending_add(name); arr_push_str(ctx, g_chunkurls, name); }   /* fetch the graph */
+    JS_ThrowReferenceError(ctx, "module not yet fetched: %s", name);
+    return NULL;
+}
+/* Re-attempt every deferred module link (a chunk just arrived). A fresh unique name per try avoids colliding
+   with a prior failed link; deps are shared by URL, so this converges in graph-depth arrivals. */
+static void pendmod_retry(JSContext *ctx) {
+    int progressed = 1;
+    while (progressed) {
+        progressed = 0;
+        for (int i = 0; i < g_pendmod_n; i++) {
+            char nm[32]; snprintf(nm, sizeof nm, "<mod-%d>", g_modseq++);
+            JSValue v = JS_Eval(ctx, g_pendmod[i].src, g_pendmod[i].len, nm, JS_EVAL_TYPE_MODULE);
+            if (JS_IsException(v)) { JS_FreeValue(ctx, JS_GetException(ctx)); JS_FreeValue(ctx, v); continue; }  /* still missing a dep */
+            { JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {} }
+            JS_FreeValue(ctx, v);
+            free(g_pendmod[i].src);
+            for (int j = i; j < g_pendmod_n - 1; j++) g_pendmod[j] = g_pendmod[j + 1];
+            g_pendmod_n--; i--; progressed = 1;
+        }
+    }
+}
 static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
     if (!el || argc < 2) return JS_UNDEFINED;
@@ -1449,14 +1518,16 @@ static void eval_page_script(JSContext *ctx, const char *code, size_t len, const
        scope) from a classic script that merely throws at RUNTIME. Retrying the latter as a module would
        double-run its side effects — so retry ONLY on a compile failure, never a run failure. */
     JSValue fn = JS_Eval(ctx, code, len, name, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-    JSValue v;
     if (JS_IsException(fn)) {
         JS_FreeValue(ctx, JS_GetException(ctx));                         /* clear the SyntaxError */
-        v = JS_Eval(ctx, code, len, name, JS_EVAL_TYPE_MODULE);          /* ESM: export/import valid here */
-        if (!JS_IsException(v)) { JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {} }  /* module eval is async -> drive it */
-    } else {
-        v = JS_EvalFunction(ctx, fn);                                    /* run the compiled global script (consumes fn) */
+        char nm[32]; snprintf(nm, sizeof nm, "<mod-%d>", g_modseq++);    /* unique so no name collision on defer/retry */
+        JSValue v = JS_Eval(ctx, code, len, nm, JS_EVAL_TYPE_MODULE);    /* ESM: export/import valid here */
+        if (JS_IsException(v)) { JS_FreeValue(ctx, JS_GetException(ctx)); pendmod_add(code, len); }  /* a static-import dep isn't fetched yet: defer + retry on provide */
+        else { JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {} }  /* module eval is async -> drive it */
+        JS_FreeValue(ctx, v);
+        return;
     }
+    JSValue v = JS_EvalFunction(ctx, fn);                                /* run the compiled global script (consumes fn) */
     if (JS_IsException(v)) JS_FreeValue(ctx, JS_GetException(ctx));
     JS_FreeValue(ctx, v);
 }
@@ -1854,6 +1925,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetBranchHook(branch_decide);
     JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
     JS_SetDynImportHook(host_dyn_import);   /* dynamic import() -> force-fetch the ESM chunk in place */
+    JS_SetModuleLoaderFunc(rt, host_module_normalize, host_module_loader, NULL);   /* static import -> fetch+link the graph like a browser */
     /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source (magic 2) — a
        getter so a candidate-replay flow injects the concrete payload here, exactly like location.hash. */
     g_msg_event = JS_NewObject(ctx);
@@ -2075,7 +2147,9 @@ KEEP void qjs_provide(const char *url, const char *body)
         if (body && body[0]) {
             JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
             int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0);
-            eval_page_script(ctx, body, strlen(body), url);   /* chunk is new page code — classic or ESM */
+            modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
+            if (is_moddep(url)) pendmod_retry(ctx);              /* a static-import dep: the loader links+runs it in-graph (don't eval standalone -> no double side effects) */
+            else eval_page_script(ctx, body, strlen(body), url); /* classic external script / dynamic-import target: run standalone */
             JS_CowSetActive(1); g_dom_capture = dsv;
             /* CACHE the chunk so boot-replay re-runs it under a candidate — a source stored / handler
                registered in an external chunk is then re-established with the concrete input (cross-flow
@@ -2142,6 +2216,12 @@ KEEP void qjs_teardown(void)
     free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
     for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
     free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
+    for (int i = 0; i < g_modsrc_n; i++) { free(g_modsrc[i].url); free(g_modsrc[i].src); }
+    free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
+    for (int i = 0; i < g_moddep_n; i++) free(g_moddep[i]);
+    free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
+    for (int i = 0; i < g_pendmod_n; i++) free(g_pendmod[i].src);
+    free(g_pendmod); g_pendmod = NULL; g_pendmod_n = g_pendmod_cap = 0; g_modseq = 0;
     if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
     g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
     for (int i = 0; i < g_attr_shadow_n; i++) { JS_FreeValue(ctx, g_attr_shadow[i].opaque); free(g_attr_shadow[i].name); }
