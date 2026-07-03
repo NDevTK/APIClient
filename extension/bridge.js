@@ -141,7 +141,12 @@ self.driveFrontier = driveFrontier;   // the brain drives this on idle / after a
    the cold tail is advanced separately by driveFrontier. Fetches don't block the pool: an engine awaiting a
    reply is 'fetching' and skipped until its body lands, so a slow fetch on doc A never stalls doc B.
    ──────────────────────────────────────────────────────────────────────────────────────────────────── */
-const POOL_CAP = 4;        // max HOT engines resident (RAM working set); cold tail -> IDB (driveFrontier)
+// The hot working set is bounded by ACTUAL RAM, not a fixed instance count: admit a new document engine
+// while resident WASM memory is under the budget (a light page's instance is a few MB, a heavy bundle's is
+// tens — a count would ignore that). Over the budget, new docs wait as cold recipes -> IDB (driveFrontier).
+// This is the RAM floor (like the disk floor), not a truncating bound. Always admit >=1 so a lone doc runs.
+const HOT_RAM_BUDGET = 512 * 1024 * 1024;   // bytes of summed live WASM memory before new engines wait
+function _residentBytes() { let b = 0; for (const e of _pool) { try { b += (e.M && e.M.HEAPU8) ? e.M.HEAPU8.length : 0; } catch (_) {} } return b; }
 
 // ---- Engine lifecycle over ONE wasm instance (one document) ----
 async function engineCreate(code, html, msg, quantum) {
@@ -233,8 +238,8 @@ const _hostOps = {
   setFloor: (eng, floor) => { try { eng.M.ccall("qjs_set_yield_floor", "void", ["number"], [floor]); } catch (_) {} },   // value yield: run until outranked by the runner-up
   step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { eng.lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}"); return 0; } },
   serviceFetch: engineServiceFetch,
-  admit: async () => {   // gate CREATION to the RAM cap: build an instance only when a slot is free
-    while (_pool.length < POOL_CAP && _waiting.length) {
+  admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
+    while (_waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
       const job = _waiting.shift();
       try { const eng = await _engineFactory(job.code, job.html, job.msg, job.quantum); eng._resolve = job.resolve; _pool.push(eng); }
       catch (e) { job.resolve(linesToAnalysis(['@E {"phase":"create","err":' + JSON.stringify(String(e && e.message || e)) + "}"], job.msg)); }
@@ -298,4 +303,4 @@ console.debug("[ast-worker v2] bridge ready (self.astDispatch installed)");
 
 /* Node-only: expose the PURE host-WFQ policy (no wasm) for deterministic unit tests of ordering/
    eviction/non-blocking-fetch. Never runs in the worker (no `module`). */
-if (typeof module !== "undefined" && module.exports) module.exports = { hostSchedule, engineWeight, POOL_CAP };
+if (typeof module !== "undefined" && module.exports) module.exports = { hostSchedule, engineWeight };
