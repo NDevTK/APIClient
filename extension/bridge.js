@@ -130,61 +130,142 @@ async function driveFrontier(rounds, opts) {
   return advances;
 }
 self.driveFrontier = driveFrontier;   // the brain drives this on idle / after analysis; merges each per-origin
-/* Drive ONE persistent engine instance through the step protocol. fromReply is now IN PLACE: when the
-   engine parks awaiting a reply (qjs_step -> NEED_FETCH), the TRUSTED offscreen safe-fetches each pending
-   url (GET, page-origin SSRF) and qjs_provide()s the body, resuming the flow in the SAME instance -- no
-   re-instantiate, no re-run of the whole page. */
-async function runEngine(code, html, msg, quantum) {
+/* ────────────────────────────────────────────────────────────────────────────────────────────────────
+   HOST-LEVEL WFQ (Level-1 of the ONE attention): interleave the LIVE document engines by value-of-
+   information, in SLICES, so no single document (or one deep path within it) monopolizes CPU. Each
+   document is one wasm instance (SECURITY.md: one instance per page); the engine exposes its best flow's
+   weight (qjs_top_weight) and yields HOT after a slice (qjs_step -> 2). The host ranks all live engines by
+   that weight and advances the winner one slice, then re-ranks — the same WFQ policy the C engine runs
+   over flows WITHIN a document, now over engines ACROSS documents. RAM is the bound: at most POOL_CAP hot
+   engines resident; the lowest-weight one is EVICTED (qjs_park -> replay recipe in IDB) under pressure, and
+   the cold tail is advanced separately by driveFrontier. Fetches don't block the pool: an engine awaiting a
+   reply is 'fetching' and skipped until its body lands, so a slow fetch on doc A never stalls doc B.
+   ──────────────────────────────────────────────────────────────────────────────────────────────────── */
+const POOL_CAP = 4;        // max HOT engines resident (RAM working set); cold tail -> IDB (driveFrontier)
+const HOST_SLICE = 64;     // flow dispatches per engine visit before the host WFQ re-ranks
+
+// ---- Engine lifecycle over ONE wasm instance (one document) ----
+async function engineCreate(code, html, msg, quantum, slice) {
   const lines = [];
-  let fkey = null, prior = null;   // frontier key (origin | engine bundle-id) + the parked entry, set in phase 1
   const createQJS = await getCreateQJS();
   const M = await createQJS({ print: (s) => lines.push(s), printErr: (s) => lines.push(s), noInitialRun: true });
-  const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
   const ptrs = [];
+  const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
   const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
-  try {
-    // PHASE 1 — parse + boot (Lexbor+quickjs): the engine runs the page's own scripts and computes the stable
-    // bundle IDENTITY from its REAL Lexbor <script> scan (no host regex). argv[6] recipes empty; seeded below.
-    M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number", "number"],
-      [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), quantum || 0, arg("")]);
-    // The host's ONLY job here is the IDB bridge: look up this document's parked frontier by the ENGINE's
-    // bundle id (origin | id), then hand the recipes back for phase-2 seeding.
-    const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
-    fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
-    prior = quantum ? await frontierGet(fkey) : null;
-    // PHASE 2 — seed the frontier (fresh visit, or resume the parked recipes) + fix the COW baseline.
-    M.ccall("qjs_begin", "void", ["string"], [(prior && prior.recipes) ? prior.recipes : ""]);
-    const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
-    const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
-      if (!canFetch || hasHole(u)) return "";
-      try {
-        const abs = new URL(u, msg.sourceUrl).href;
-        // chunks: as-script (CORB), never credentialed. replies: opt-in credentialed -> the AUTHENTICATED
-        // logged-in reply (the moat headline), gated by safeFetch's own SOP/CORS + GET-only. Default off.
-        const opts = asScript ? { pageUrl: msg.sourceUrl, as: "script" }
-                              : { pageUrl: msg.sourceUrl, credentialed: !!(msg && msg.credentialed) };
-        const r = await self.safeFetch(abs, opts);
-        return (r && r.ok && typeof r.body === "string") ? r.body : "";
-      } catch (_) { return ""; }
-    };
-    // NO step-cap: qjs_step returns 1 only while genuine fetch/chunk work is pending, and the engine's
-    // work-based QUANTUM parks the residue under resource pressure (a single deep await-loop yields too),
-    // so the loop terminates by PROGRESS + park, never a counter. A hang here = a quantum bug to root-fix.
-    while (M.ccall("qjs_step", "number", [], []) === 1) {
-      const replies = String(M.ccall("qjs_pending", "string", [], [])).split("\n").filter(Boolean);
-      for (const u of replies) M.ccall("qjs_provide", "void", ["string", "string"], [u, await fetched(u, false)]);   // reply body -> resume in place
-      const chunks = String(M.ccall("qjs_chunks", "string", [], [])).split("\n").filter(Boolean);
-      for (const u of chunks) M.ccall("qjs_provide", "void", ["string", "string"], [u, await fetched(u, true)]);      // chunk JS -> eval in place
+  // PHASE 1 — parse + boot; the engine computes the stable bundle IDENTITY from its Lexbor <script> scan.
+  M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number", "number"],
+    [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), quantum || 0, arg("")]);
+  const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
+  const fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
+  const prior = quantum ? await frontierGet(fkey) : null;
+  // PHASE 2 — seed the frontier (fresh, or resume parked recipes) + set the host slice for interleaving.
+  M.ccall("qjs_begin", "void", ["string"], [(prior && prior.recipes) ? prior.recipes : ""]);
+  if (slice > 0) M.ccall("qjs_set_slice", "void", ["number"], [slice]);
+  const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
+  const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
+    if (!canFetch || hasHole(u)) return "";
+    try {
+      const abs = new URL(u, msg.sourceUrl).href;
+      // chunks: as-script (CORB), never credentialed. replies: opt-in credentialed -> the AUTHENTICATED
+      // logged-in reply (the moat headline), gated by safeFetch's own SOP/CORS + GET-only. Default off.
+      const opts = asScript ? { pageUrl: msg.sourceUrl, as: "script" }
+                            : { pageUrl: msg.sourceUrl, credentialed: !!(msg && msg.credentialed) };
+      const r = await self.safeFetch(abs, opts);
+      return (r && r.ok && typeof r.body === "string") ? r.body : "";
+    } catch (_) { return ""; }
+  };
+  return { M, ptrs, lines, fkey, prior, msg, quantum, fetched, code, html, state: "hot" };
+}
+function engineWeight(eng) { return eng.state === "hot" ? +eng.M.ccall("qjs_top_weight", "number", [], []) : -Infinity; }
+async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
+  const M = eng.M;
+  const replies = String(M.ccall("qjs_pending", "string", [], [])).split("\n").filter(Boolean);
+  for (const u of replies) M.ccall("qjs_provide", "void", ["string", "string"], [u, await eng.fetched(u, false)]);
+  const chunks = String(M.ccall("qjs_chunks", "string", [], [])).split("\n").filter(Boolean);
+  for (const u of chunks) M.ccall("qjs_provide", "void", ["string", "string"], [u, await eng.fetched(u, true)]);
+}
+function engineFinalize(eng) {
+  try { eng.M.ccall("qjs_teardown", "void", [], []); }
+  catch (e) { eng.lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}"); }
+  for (const p of eng.ptrs) { try { eng.M._free(p); } catch (_) {} }
+  const result = linesToAnalysis(eng.lines, eng.msg);
+  result._fkey = eng.fkey; result._prior = eng.prior;   // engine-computed key + parked entry -> persisted below
+  return result;
+}
+
+/* THE PURE SCHEDULER POLICY (no wasm knowledge — engine ops are injected, so this is unit-testable with
+   mock engines). Each iteration: ADMIT waiting documents up to the RAM cap (ops.admit gates creation — no
+   instance is built until a slot is free), then advance the highest-weight HOT engine one slice and re-rank.
+   Slots turn over because each engine self-parks to the cold tier (IDB recipe) when it exhausts its quantum,
+   so a long-runner never holds a slot forever and no host-forced eviction/thrash is needed. */
+async function hostSchedule(pool, ops) {
+  for (;;) {
+    if (ops.admit) await ops.admit();   // gate creation to cap: seat waiting docs into freed slots
+    if (!pool.length) break;
+    const hot = pool.filter((e) => e.state === "hot");
+    if (!hot.length) {   // every live engine is mid-fetch: wait for the earliest body, then re-rank
+      const fetching = pool.filter((e) => e.state === "fetching");
+      if (!fetching.length) break;
+      await Promise.race(fetching.map((e) => e._fetchP));
+      continue;
     }
-    M.ccall("qjs_teardown", "void", [], []);
-  } catch (e) {
-    lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}");
-  } finally {
-    for (const p of ptrs) { try { M._free(p); } catch (_) {} }
+    let best = hot[0]; for (const e of hot) if (ops.weight(e) > ops.weight(best)) best = e;   // Level-1 WFQ pick
+    const st = ops.step(best);
+    if (st === 1) {   // NEED_FETCH: service asynchronously (non-blocking) so other engines keep advancing
+      best.state = "fetching";
+      best._fetchP = ops.serviceFetch(best).then(() => { best.state = "hot"; }, () => { best.state = "hot"; });
+    } else if (st === 0) {   // fully explored, or self-parked at quantum: finalize (residue -> IDB cold tier)
+      await ops.finish(best);
+    }
+    // st === 2: stays hot; the loop re-ranks (it may now be outranked by a sibling)
   }
-  const _result = linesToAnalysis(lines, msg);
-  _result._fkey = fkey; _result._prior = prior;   // engine-computed frontier key + parked entry -> astDispatch persists
-  return _result;
+}
+
+// ---- Engine-bound ops + the live pool ----
+const _pool = [];        // HOT/fetching engines (<= POOL_CAP resident wasm instances)
+const _waiting = [];      // documents awaiting a slot: { code, html, msg, quantum, resolve } — NO instance built yet
+let _hostDriving = false;
+let _engineFactory = engineCreate;   // injectable for tests
+const _hostOps = {
+  weight: engineWeight,
+  step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { eng.lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}"); return 0; } },
+  serviceFetch: engineServiceFetch,
+  admit: async () => {   // gate CREATION to the RAM cap: build an instance only when a slot is free
+    while (_pool.length < POOL_CAP && _waiting.length) {
+      const job = _waiting.shift();
+      try { const eng = await _engineFactory(job.code, job.html, job.msg, job.quantum, HOST_SLICE); eng._resolve = job.resolve; _pool.push(eng); }
+      catch (e) { job.resolve(linesToAnalysis(['@E {"phase":"create","err":' + JSON.stringify(String(e && e.message || e)) + "}"], job.msg)); }
+    }
+  },
+  finish: async (eng) => {   // fully explored, or self-parked at quantum -> persist residue to the cold tier + resolve
+    const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
+    const result = engineFinalize(eng);
+    if (eng.quantum && result._fkey) {   // persist into the GLOBAL frontier (cross-session cold tier)
+      const prior = result._prior;
+      await frontierPut(result._fkey, {
+        key: result._fkey, sourceUrl: eng.msg.sourceUrl, html: eng.html, code: eng.code,
+        credentialed: !!eng.msg.credentialed, quantum: eng.quantum, recipes: (result._park || []).join(";"),
+        emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
+      });
+    }
+    if (eng._resolve) eng._resolve(result);
+  },
+};
+function _hostKick() {
+  if (_hostDriving) return;
+  _hostDriving = true;
+  hostSchedule(_pool, _hostOps).catch((e) => console.debug("[host-wfq] %s", e && e.message)).finally(() => { _hostDriving = false; if (_pool.length || _waiting.length) _hostKick(); });
+}
+
+/* Run ONE engine to completion (slice 0) — the cold tier (driveFrontier) advances one parked frontier this
+   way; the LIVE tier uses the interleaving pool via astDispatch. */
+async function runEngine(code, html, msg, quantum) {
+  const eng = await engineCreate(code, html, msg, quantum, 0);
+  try {
+    let st;
+    while ((st = eng.M.ccall("qjs_step", "number", [], [])) !== 0) { if (st === 1) await engineServiceFetch(eng); }
+  } catch (e) { eng.lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}"); }
+  return engineFinalize(eng);
 }
 
 /* Endpoint IDENTITY (exact dedup by method+hole-normalized-url + shape/concrete collapse with path-param
@@ -198,22 +279,12 @@ self.astDispatch = async function astDispatch(msg) {
     const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
     if (!html && !code) return { success: true, result: linesToAnalysis([], msg) };
 
-    /* ONE persistent instance runs the WHOLE analysis: the page + its chunks (fetched + eval'd in place
-       via qjs_chunks/qjs_provide) + its fromReply consumes (in place). No re-run, no separate loops.
-       CROSS-SESSION FRONTIER: with a host quantum, park the residue to IDB and resume it next visit. */
-    const quantum = msg.quantum || 0;   // 0 = run to completion (default); >0 = per-visit CPU slice
-    // runEngine does phase-1 init (engine computes the bundle id via Lexbor), the frontierGet by that id,
-    // and phase-2 seeding. It returns the ENGINE-computed frontier key (_fkey) + parked entry (_prior).
-    const result = await runEngine(code, html, msg, quantum);
-    if (quantum && result._fkey) {   // persist the residue into the GLOBAL frontier (rich entry for later rehydration)
-      const prior = result._prior;
-      await frontierPut(result._fkey, {
-        key: result._fkey, sourceUrl: msg.sourceUrl, html, code, credentialed: !!msg.credentialed, quantum,
-        recipes: (result._park || []).join(";"),
-        emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length,
-        visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
-      });
-    }
+    /* ENQUEUE this document into the LIVE host WFQ pool. Its wasm instance interleaves in SLICES with every
+       other open document by value-of-information — no run-to-completion, no recency monopoly. The per-doc
+       promise resolves when THIS engine finalizes (fully explored or host-evicted); the pool persists its
+       residue to the GLOBAL frontier (cross-session cold tier). quantum>0 enables that IDB persistence. */
+    const quantum = msg.quantum || 0;
+    const result = await new Promise((resolve) => { _waiting.push({ code, html, msg, quantum, resolve }); _hostKick(); });
     return { success: true, result };   // result.fetchCallSites is already deduped by the engine
   } catch (e) {
     return { success: false, error: String(e && e.message || e), stack: e && e.stack };
@@ -221,3 +292,7 @@ self.astDispatch = async function astDispatch(msg) {
 };
 
 console.debug("[ast-worker v2] bridge ready (self.astDispatch installed)");
+
+/* Node-only: expose the PURE host-WFQ policy (no wasm) for deterministic unit tests of ordering/
+   eviction/non-blocking-fetch. Never runs in the worker (no `module`). */
+if (typeof module !== "undefined" && module.exports) module.exports = { hostSchedule, engineWeight, POOL_CAP, HOST_SLICE };
