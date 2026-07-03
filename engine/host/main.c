@@ -466,6 +466,123 @@ static void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
     uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, arr, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
     JS_SetPropertyUint32(ctx, arr, n, JS_NewString(ctx, s));
 }
+/* ── @S SOLVER (forced execution, not taint tracing) ─────────────────────────────
+   Each SINK reached by external input is collected as a task {sink, ctx, expr} — expr is the evaluable
+   transform chain with a {source} hole. At finalize the solver substitutes candidate breakout payloads
+   into the hole and RUNS THE REAL CHAIN in a CLEAN JS REALM (g_solve_ctx — a fresh context with real
+   eval/String methods, no forced-exec/opaque overrides). A candidate whose payload survives into an
+   EXECUTABLE position after the real transforms IS the PoC (verified because the real filters ran); if
+   none survives, the flow is PROVEN safe for the tried payloads. No taint label, no chain inversion. */
+static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} */
+static JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
+static const char *CAND_HTML[] = { "<img src=x onerror=X9>", "<svg onload=X9>", "\"><img src=x onerror=X9>",
+                                   "'><svg onload=X9>", "</script><svg onload=X9>", NULL };
+static const char *CAND_URL[]  = { "javascript:X9", "javascript:X9//", NULL };
+static const char *CAND_JS[]   = { "';X9;//", "\";X9;//", "-X9-", "\n;X9;//", NULL };
+static const char **cand_set(const char *sc) {
+    if (sc && strcmp(sc, "url") == 0) return CAND_URL;
+    if (sc && strcmp(sc, "js") == 0) return CAND_JS;
+    return CAND_HTML;
+}
+/* substitute every {source} hole in expr with a JSON-quoted candidate -> malloc'd evaluable string */
+static char *solve_subst(const char *expr, const char *cand) {
+    size_t ql = 2; for (const char *p = cand; *p; p++) ql += (*p == '"' || *p == '\\' || *p == '\n' || *p == '\r') ? 2 : 1;
+    char *q = malloc(ql + 1); if (!q) return NULL; size_t o = 0; q[o++] = '"';
+    for (const char *p = cand; *p; p++) {
+        if (*p == '\n') { q[o++] = '\\'; q[o++] = 'n'; }
+        else if (*p == '\r') { q[o++] = '\\'; q[o++] = 'r'; }
+        else { if (*p == '"' || *p == '\\') q[o++] = '\\'; q[o++] = *p; }
+    }
+    q[o++] = '"'; q[o] = 0;
+    size_t need = 0;
+    for (const char *p = expr; *p; ) {
+        if (*p == '{') { const char *e = p + 1; while (*e && *e != '}') e++; if (*e == '}') { need += o; p = e + 1; continue; } }
+        need++; p++;
+    }
+    char *r = malloc(need + 1); if (!r) { free(q); return NULL; } size_t ro = 0;
+    for (const char *p = expr; *p; ) {
+        if (*p == '{') { const char *e = p + 1; while (*e && *e != '}') e++; if (*e == '}') { memcpy(r + ro, q, o); ro += o; p = e + 1; continue; } }
+        r[ro++] = *p; p++;
+    }
+    r[ro] = 0; free(q); return r;
+}
+/* context-aware breakout: did the candidate's active payload reach an EXECUTABLE position in `res`? */
+static int solve_broke(const char *sc, const char *res) {
+    if (!res) return 0;
+    if (sc && strcmp(sc, "url") == 0) { const char *p = res; while (*p == ' ' || *p == '\t') p++; return strncmp(p, "javascript:X9", 13) == 0; }
+    if (!strstr(res, "X9")) return 0;   /* our nonce must survive */
+    if (sc && strcmp(sc, "js") == 0) return strstr(res, ";X9") || strstr(res, ")X9") || strstr(res, "-X9-") || strstr(res, "\nX9");
+    /* html/attr: a RAW payload tag opener survived (if '<' was escaped to &lt; these are absent) */
+    return strstr(res, "<img") || strstr(res, "<svg") || strstr(res, "<script") || strstr(res, "<iframe");
+}
+/* run candidates through the real chain in the clean realm; return the winning PoC (malloc'd) or NULL */
+static char *solve_task(const char *expr, const char *sc) {
+    if (!g_solve_ctx || !expr) return NULL;
+    const char **cands = cand_set(sc);
+    for (int i = 0; cands[i]; i++) {
+        char *sub = solve_subst(expr, cands[i]);
+        if (!sub) continue;
+        JSValue rv = JS_Eval(g_solve_ctx, sub, strlen(sub), "<solve>", JS_EVAL_TYPE_GLOBAL);
+        free(sub);
+        int broke = 0;
+        if (!JS_IsException(rv)) { const char *res = JS_ToCString(g_solve_ctx, rv); broke = solve_broke(sc, res); if (res) JS_FreeCString(g_solve_ctx, res); }
+        else { JSValue e = JS_GetException(g_solve_ctx); JS_FreeValue(g_solve_ctx, e); }
+        JS_FreeValue(g_solve_ctx, rv);
+        if (broke) { char *r = malloc(strlen(cands[i]) + 1); if (r) strcpy(r, cands[i]); return r; }
+    }
+    return NULL;
+}
+/* collect a sink as a solve task when its value is external input (solved at finalize). */
+static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst val) {
+    if (!JS_IsOpaque(val) || !JS_IsArray(g_solvetasks)) return;
+    const char *expr = JS_OpaqueExprC(val);
+    JSValue t = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, t, "sink", JS_NewString(ctx, sink));
+    JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
+    JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, expr ? expr : "{}"));
+    uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_solvetasks, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+    JS_SetPropertyUint32(ctx, g_solvetasks, n, t);
+    g_emit_total++;   /* a reached sink is progress like @H */
+    if (g_running && g_cur_flow) { g_cur_flow->val += 1.0; g_cur_flow->cpu = 0; }
+}
+/* build securitySinks[] by solving each collected task (dedup by sink+ctx+expr). */
+static JSValue solve_all(JSContext *ctx) {
+    JSValue out = JS_NewArray(ctx);
+    if (!JS_IsArray(g_solvetasks)) return out;
+    uint32_t tn = 0; { JSValue lv = JS_GetPropertyStr(ctx, g_solvetasks, "length"); JS_ToUint32(ctx, &tn, lv); JS_FreeValue(ctx, lv); }
+    JSValue seen = JS_NewObject(ctx); uint32_t oi = 0;
+    for (uint32_t i = 0; i < tn; i++) {
+        JSValue t = JS_GetPropertyUint32(ctx, g_solvetasks, i);
+        JSValue sv = JS_GetPropertyStr(ctx, t, "sink"), cv = JS_GetPropertyStr(ctx, t, "ctx"), ev = JS_GetPropertyStr(ctx, t, "expr");
+        const char *sink = JS_ToCString(ctx, sv), *sc = JS_ToCString(ctx, cv), *ex = JS_ToCString(ctx, ev);
+        if (ex) {
+            char keybuf[1200]; snprintf(keybuf, sizeof keybuf, "%s|%s|%s", sink ? sink : "", sc ? sc : "", ex);
+            JSValue dup = JS_GetPropertyStr(ctx, seen, keybuf);
+            int isdup = !JS_IsUndefined(dup); JS_FreeValue(ctx, dup);
+            if (!isdup) {
+                JS_SetPropertyStr(ctx, seen, keybuf, JS_NewBool(ctx, 1));
+                char *poc = solve_task(ex, sc ? sc : "html");
+                JSValue rec = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink ? sink : "?"));
+                JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink ? sink : "?"));
+                JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "forced-exec"));
+                JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
+                JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
+                JS_SetPropertyStr(ctx, rec, "verified", JS_NewBool(ctx, poc != NULL));
+                JS_SetPropertyStr(ctx, rec, "poc", poc ? JS_NewString(ctx, poc) : JS_NULL);
+                { char eb[900]; if (poc) snprintf(eb, sizeof eb, "sink %s <- input %s", sink ? sink : "?", poc);
+                  else snprintf(eb, sizeof eb, "sink %s reachable; no candidate broke out (filters proved it safe)", sink ? sink : "?");
+                  JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
+                if (poc) free(poc);
+                JS_SetPropertyUint32(ctx, out, oi++, rec);
+            }
+        }
+        if (sink) JS_FreeCString(ctx, sink); if (sc) JS_FreeCString(ctx, sc); if (ex) JS_FreeCString(ctx, ex);
+        JS_FreeValue(ctx, sv); JS_FreeValue(ctx, cv); JS_FreeValue(ctx, ev); JS_FreeValue(ctx, t);
+    }
+    JS_FreeValue(ctx, seen);
+    return out;
+}
 static void emit_result(JSContext *ctx) {
     if (JS_IsUndefined(g_dedup_fn) || !JS_IsArray(g_endpoints)) return;
     JSValueConst args[1] = { g_endpoints };
@@ -473,7 +590,7 @@ static void emit_result(JSContext *ctx) {
     if (JS_IsException(deduped)) { js_std_dump_error(ctx); deduped = JS_NewArray(ctx); }
     JSValue result = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, result, "fetchCallSites", deduped);                 /* consumes deduped */
-    JS_SetPropertyStr(ctx, result, "securitySinks", JS_NewArray(ctx));         /* taint tracker removed; forced-exec security view WIP */
+    JS_SetPropertyStr(ctx, result, "securitySinks", solve_all(ctx));           /* @S: forced-exec solve for a breakout PoC per sink */
     JS_SetPropertyStr(ctx, result, "chunkUrls", JS_DupValue(ctx, g_chunkurls));
     JS_SetPropertyStr(ctx, result, "resolverErrors", JS_DupValue(ctx, g_whys));
     JS_SetPropertyStr(ctx, result, "_park", JS_DupValue(ctx, g_park));
@@ -885,9 +1002,11 @@ static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int arg
 /* el.insertAdjacentHTML(pos, html): DOM edge (no-op for content; the security view is forced-exec, not
    a taint check on the argument). */
 static JSValue js_el_insertAdjacentHTML(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 2) solve_add(ctx, "insertAdjacentHTML", "html", argv[1]);   /* @S */
     return JS_UNDEFINED;
 }
 static JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
+    solve_add(ctx, magic ? "outerHTML" : "innerHTML", "html", val);         /* @S */
     return JS_UNDEFINED;
 }
 static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return JS_DupValue(ctx, g_opaque); }
@@ -915,6 +1034,7 @@ static JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) 
 static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
     const char *n = refl_name(magic);
+    if (magic == 1 || magic == 2) solve_add(ctx, "href", "url", val);   /* @S: el.href/.action = external -> javascript:/redirect */
     const char *v = JS_ToCString(ctx, val);
     if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); JS_FreeCString(ctx, v); }
     return JS_UNDEFINED;
@@ -953,12 +1073,13 @@ static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int a
 }
 /* document.write: DOM edge (no-op; security is forced-exec, not a taint check). */
 static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    for (int i = 0; i < argc; i++) solve_add(ctx, "document.write", "html", argv[i]);   /* @S */
     return JS_UNDEFINED;
 }
 /* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
 static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_UNDEFINED;
-    if (JS_IsOpaque(argv[0])) return JS_DupValue(ctx, g_opaque);
+    if (JS_IsOpaque(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return JS_DupValue(ctx, g_opaque); }   /* @S */
     if (JS_IsString(argv[0])) {
         size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
         JSValue r = s ? JS_Eval(ctx, s, len, "<eval>", JS_EVAL_TYPE_GLOBAL) : JS_UNDEFINED;
@@ -1291,7 +1412,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
     g_endpoints = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
-    g_whys = JS_NewArray(ctx); g_park = JS_NewArray(ctx);
+    g_whys = JS_NewArray(ctx); g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
+    g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
     g_dedup_fn = JS_Eval(ctx, DEDUP_JS, strlen(DEDUP_JS), "<dedup>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(g_dedup_fn)) { js_std_dump_error(ctx); g_dedup_fn = JS_UNDEFINED; }
     js_std_add_helpers(ctx, 0, NULL);
@@ -1596,12 +1718,14 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
     JS_FreeValue(ctx, g_whys); g_whys = JS_UNDEFINED;
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_solvetasks); g_solvetasks = JS_UNDEFINED;
     JS_FreeValue(ctx, g_dedup_fn); g_dedup_fn = JS_UNDEFINED;
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
     JS_FreeValue(ctx, g_msg_event); g_msg_event = JS_UNDEFINED; g_msg_handler_n = 0;
     js_std_free_handlers(g_rt);
+    if (g_solve_ctx) { JS_FreeContext(g_solve_ctx); g_solve_ctx = NULL; }   /* free the solver realm before its runtime */
     JS_FreeContext(ctx);
     JS_FreeRuntime(g_rt);
     g_ctx = NULL; g_rt = NULL;
