@@ -118,30 +118,45 @@ static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisio
    (src NULL = the branch carried no value-domain provenance). Normalized to "src IS / ISN'T tok". Rebuilt as
    the flow runs (branch_decide re-sees each cond), so it needs no per-flow persistence. Feasibility of a new
    constraint is checked against these; a provably-contradicted branch arm is PRUNED (no phantom @H). */
-typedef struct { char *src; char *tok; int is_eq; } Cons;   /* is_eq: 1 = src==tok holds, 0 = src!=tok holds */
+typedef struct { char *src; char *tok; int op; } Cons;   /* op = the HOLDING comparison (OPCMP_*) of src vs tok on this flow's path */
 static Cons *g_cons = NULL; static int g_cons_cap = 0, g_cons_n = 0;
 static void cons_reset(void) { for (int i = 0; i < g_cons_n; i++) { free(g_cons[i].src); free(g_cons[i].tok); } g_cons_n = 0; }
-static void cons_set(int i, const char *src, const char *tok, int is_eq) {   /* record the constraint that holds at decision i */
+static void cons_set(int i, const char *src, const char *tok, int op) {   /* record the constraint that holds at decision i */
     if (i >= g_cons_cap) { int nc = g_cons_cap ? g_cons_cap * 2 : 64; while (nc <= i) nc *= 2; Cons *n = realloc(g_cons, (size_t)nc * sizeof(Cons)); if (!n) return; g_cons = n; g_cons_cap = nc; }
-    for (int j = g_cons_n; j <= i; j++) { g_cons[j].src = NULL; g_cons[j].tok = NULL; g_cons[j].is_eq = 0; }   /* fill gaps */
+    for (int j = g_cons_n; j <= i; j++) { g_cons[j].src = NULL; g_cons[j].tok = NULL; g_cons[j].op = OPCMP_NONE; }   /* fill gaps */
     if (i >= g_cons_n) g_cons_n = i + 1;
     free(g_cons[i].src); free(g_cons[i].tok);
-    g_cons[i].src = src ? strdup(src) : NULL; g_cons[i].tok = tok ? strdup(tok) : NULL; g_cons[i].is_eq = is_eq;
+    g_cons[i].src = src ? strdup(src) : NULL; g_cons[i].tok = tok ? strdup(tok) : NULL; g_cons[i].op = op;
 }
-/* Is `src <is_eq> tok` consistent with the constraints already holding on this flow (indices < upto)? Only
-   provable EQ/NE contradictions return 0 — everything else is feasible (SOUND: never over-prune a real arm). */
-static int cons_feasible(const char *src, const char *tok, int is_eq, int upto) {
+static int opcmp_neg(int op) { switch (op) { case OPCMP_EQ: return OPCMP_NE; case OPCMP_NE: return OPCMP_EQ; case OPCMP_LT: return OPCMP_GE; case OPCMP_GE: return OPCMP_LT; case OPCMP_GT: return OPCMP_LE; case OPCMP_LE: return OPCMP_GT; } return OPCMP_NONE; }
+static int tok_num(const char *t, double *o) { if (!t || !*t) return 0; char *e; double d = strtod(t, &e); if (e == t || *e) return 0; *o = d; return 1; }
+static int cmp_sat(double x, int op, double v) { switch (op) { case OPCMP_EQ: return x == v; case OPCMP_NE: return x != v; case OPCMP_LT: return x < v; case OPCMP_GT: return x > v; case OPCMP_LE: return x <= v; case OPCMP_GE: return x >= v; } return 1; }
+/* Do `x op1 t1` and `x op2 t2` PROVABLY have no common x? Returns 1 only when certain (SOUND: never a false
+   contradiction) — pure string EQ/NE, or a numeric interval/point contradiction; anything unprovable -> 0. */
+static int pair_contradicts(int op1, const char *t1, int op2, const char *t2) {
+    int e1 = (op1 == OPCMP_EQ || op1 == OPCMP_NE), e2 = (op2 == OPCMP_EQ || op2 == OPCMP_NE);
+    int same = (t1 && t2 && strcmp(t1, t2) == 0);
+    if (e1 && e2) {   /* string equality/disequality */
+        if (op1 == OPCMP_EQ && op2 == OPCMP_EQ) return !same;                                   /* x==a & x==b (a!=b) */
+        if ((op1 == OPCMP_EQ && op2 == OPCMP_NE) || (op1 == OPCMP_NE && op2 == OPCMP_EQ)) return same;   /* x==a & x!=a */
+        return 0;
+    }
+    double a, b; if (!tok_num(t1, &a) || !tok_num(t2, &b)) return 0;   /* need numeric tokens to reason */
+    if (op1 == OPCMP_EQ) return !cmp_sat(a, op2, b);   /* x fixed to a: must satisfy op2 b */
+    if (op2 == OPCMP_EQ) return !cmp_sat(b, op1, a);
+    if (op1 == OPCMP_NE || op2 == OPCMP_NE) return 0;  /* excluding one point never empties a relational */
+    double L = -1e300, U = 1e300;                       /* both relational: empty iff lower bound > upper */
+    if (op1 == OPCMP_GT || op1 == OPCMP_GE) { if (a > L) L = a; } else { if (a < U) U = a; }
+    if (op2 == OPCMP_GT || op2 == OPCMP_GE) { if (b > L) L = b; } else { if (b < U) U = b; }
+    return L > U;
+}
+/* Is `src <op> tok` consistent with the constraints already holding on this flow (indices < upto)? */
+static int cons_feasible(const char *src, const char *tok, int op, int upto) {
     if (!src) return 1;
     for (int i = 0; i < upto && i < g_cons_n; i++) {
         Cons *c = &g_cons[i];
         if (!c->src || strcmp(c->src, src)) continue;
-        int same = (c->tok && tok && strcmp(c->tok, tok) == 0);
-        if (c->is_eq) {                 /* src is FIXED to c->tok */
-            if (is_eq && !same) return 0;   /* new src==tok, but src fixed to a different value */
-            if (!is_eq && same) return 0;   /* new src!=tok, but src fixed to tok */
-        } else {                        /* src != c->tok */
-            if (is_eq && same) return 0;    /* new src==tok, but src!=tok already holds */
-        }
+        if (pair_contradicts(op, tok, c->op, c->tok)) return 0;
     }
     return 1;
 }
@@ -149,7 +164,7 @@ static int cons_feasible(const char *src, const char *tok, int is_eq, int upto) 
    gate the code demands (`if(x=='admin')`) into the SOLVED @H example key/value instead of an opaque hole. */
 static const char *cons_fixed_value(const char *src) {
     if (!src) return NULL;
-    for (int i = 0; i < g_cons_n; i++) if (g_cons[i].src && g_cons[i].is_eq && !strcmp(g_cons[i].src, src)) return g_cons[i].tok;
+    for (int i = 0; i < g_cons_n; i++) if (g_cons[i].src && g_cons[i].op == OPCMP_EQ && !strcmp(g_cons[i].src, src)) return g_cons[i].tok;
     return NULL;
 }
 
@@ -791,23 +806,23 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
 {
     if (g_boot_replay || g_in_session) return 1;            /* boot-replay / attacker-session: take a fixed arm (per-handler branch exploration is the individual orphan flows' job) */
     if (!g_running || JS_IsUndefined(g_cur_fn)) return 0;   /* only meaningful inside a starter flow */
-    /* value-domain provenance of the condition: cond TRUE means `src <op> tok`. Normalize each arm to is_eq. */
+    /* value-domain provenance of the condition: cond TRUE means `src <op> tok`; false arm holds the negation. */
     const char *src = NULL, *tok = NULL; int op = JS_OpaqueCmp(cond, &src, &tok);
-    int has = (op == OPCMP_EQ || op == OPCMP_NE);
-    int true_eq = has ? (op == OPCMP_EQ ? 1 : 0) : 0, false_eq = !true_eq;
+    int has = (op != OPCMP_NONE) && src;
+    int true_op = op, false_op = opcmp_neg(op);
 
     if (g_c < g_dec_n) {                                    /* forced replay: take the recorded arm; RE-RECORD its constraint */
         int arm = g_dec[g_c] ? 1 : 0;
-        cons_set(g_c, has ? src : NULL, has ? tok : NULL, arm ? true_eq : false_eq);
+        cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? (arm ? true_op : false_op) : OPCMP_NONE);
         g_c++; return arm;
     }
     if (!g_dec_ensure(g_c + 1)) return 1;                    /* only RAM/disk (the platform floor) bounds depth — not a cap */
 
     /* NEW decision: PRUNE a provably-infeasible arm given the accumulated domain (no phantom @H); else fork. */
-    int tf = !has || cons_feasible(src, tok, true_eq, g_c);
-    int ff = !has || cons_feasible(src, tok, false_eq, g_c);
-    if (has && !tf && ff) { cons_set(g_c, src, tok, false_eq); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }   /* TRUE arm impossible */
-    if (has && !ff && tf) { cons_set(g_c, src, tok, true_eq);  g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }   /* FALSE arm impossible */
+    int tf = !has || cons_feasible(src, tok, true_op, g_c);
+    int ff = !has || cons_feasible(src, tok, false_op, g_c);
+    if (has && !tf && ff) { cons_set(g_c, src, tok, false_op); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }   /* TRUE arm impossible */
+    if (has && !ff && tf) { cons_set(g_c, src, tok, true_op);  g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }   /* FALSE arm impossible */
 
     signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* both arms feasible: fork FALSE sibling, take TRUE */
     if (sib) {
@@ -816,7 +831,7 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
         reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, 0, sib, g_c + 1);
         g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;   /* sibling = same function (same locator), different decisions */
     }
-    cons_set(g_c, has ? src : NULL, has ? tok : NULL, true_eq);
+    cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE);
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
     return 1;
 }
