@@ -457,13 +457,15 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
             JS_FreeValue(ctx, body);
         }
     }
-    if (JS_IsArray(g_endpoints)) {
+    /* A CANDIDATE flow carries a concrete @S breakout PAYLOAD as the source, so its fetch URLs contain the
+       payload — those are @S verification artifacts, NOT real @H endpoints. Only OPAQUE flows emit @H. */
+    if (JS_IsArray(g_endpoints) && !g_candidate) {
         uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_endpoints, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
         JS_SetPropertyUint32(ctx, g_endpoints, n, ep);   /* consumes ep */
+        g_emit_total++;
     } else {
         JS_FreeValue(ctx, ep);
     }
-    g_emit_total++;
     if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
     JSValue resp = make_response(ctx, url);
     if (url) JS_FreeCString(ctx, url);
@@ -1443,7 +1445,11 @@ static void dom_run_scripts(JSContext *ctx) {
         const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
         if (src && sl) {
             char *cu = strndup((const char *)src, sl);
-            if (cu) { arr_push_str(g_ctx, g_chunkurls, cu); free(cu); }             /* external src -> @RESULT.chunkUrls */
+            /* LOAD it like a real browser: an external <script src> is FETCHED (safe-fetch chokepoint,
+               cross-origin allowed — a real browser runs cross-origin scripts) and RUN through the engine,
+               exactly like a dynamically-injected one. chunk_pending_add -> host NEED_FETCH -> qjs_provide
+               evals + caches it, so the bundle's endpoints/handlers/cross-flow are analyzed. */
+            if (cu) { arr_push_str(g_ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu); }
             for (size_t k = 0; k < sl; k++) { bh ^= src[k]; bh *= 16777619u; }     /* external src URL -> bundle id */
             bh ^= '|'; bh *= 16777619u;
             continue;
@@ -1927,16 +1933,19 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_FreeValue(ctx, g);
 
     if (boot) {
-        JSValue v = JS_Eval(ctx, boot, strlen(boot), "<boot>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(v)) { js_std_dump_error(ctx); g_rc = 1; }
-        JS_FreeValue(ctx, v);
-        /* BOOT AS THE FIRST FLOW: capture the page's own boot (mutations + global creations) as a COW delta,
-           so a candidate flow can UNAPPLY it to a true pre-boot heap. The env `boot` string above is NOT
-           captured (it is the baseline runtime). */
+        /* `boot` (arg0) is the offscreen's combined-script preamble; capture+cache it in the boot delta with
+           the inline (dom_run_scripts) + fetched-external (qjs_provide) scripts so a candidate flow can
+           UNAPPLY to pre-boot and re-run the whole page boot under the concrete candidate. */
         JS_CowSetActive(1);
-        dom_run_scripts(ctx);   /* run the page's own inline scripts + compute g_bundle_id (Lexbor <script> scan) */
+        if (boot[0]) {
+            boot_script_cache(boot, strlen(boot));
+            JSValue v = JS_Eval(ctx, boot, strlen(boot), "<boot>", JS_EVAL_TYPE_GLOBAL);
+            if (JS_IsException(v)) { js_std_dump_error(ctx); g_rc = 1; }
+            JS_FreeValue(ctx, v);
+        }
+        dom_run_scripts(ctx);   /* run inline scripts + REQUEST external <script src> loads (fetched in qjs_step) + bundle id */
         JS_CowSetActive(0);
-        g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);   /* stash the boot delta (stays APPLIED: live heap is post-boot) */
+        g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);
     }
     return 0;   /* boot done; g_bundle_id is now readable via qjs_bundle_id(). Host reads it, looks up the parked
                    frontier by ORIGIN|bundle-id in IDB (its only job), then calls qjs_begin(recipes) to seed. */
