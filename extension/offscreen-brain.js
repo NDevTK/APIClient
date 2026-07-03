@@ -4795,18 +4795,22 @@ async function _drainReviewQueue() {
   _reviewDraining = true;
   try {
     while (_reviewQueue.length) {
-      /* Recency-priority pick instead of FIFO shift — when the user tabs to
-         a different page while an older queued tab is still waiting, the
-         tab they're LOOKING AT gets analyzed next. The comparator lives in
-         lib/priority.js (ORDER only, never COVERAGE — every queued tab still
-         gets analyzed eventually). buf.lastActivatedTs is stamped when a document
-         delivers its CONTENT_HTML (the load IS the user-attention signal);
-         documents without a recorded timestamp default to 0 and trail the
-         recently-loaded cohort. */
-      var docKey = self._priorityCmp.pickFromReviewQueue(_reviewQueue, function (k) {
-        var b = _scriptBuffers.get(k);
-        return (b && b.lastActivatedTs) || 0;
-      });
+      /* Recency-priority pick instead of FIFO shift — the tab the user is LOOKING
+         AT (most recently activated: lastActivatedTs, stamped at CONTENT_HTML) gets
+         analyzed next; docs without a timestamp default to 0 and trail. ORDER only,
+         never COVERAGE (every queued doc is still analyzed eventually). Inlined here —
+         the shared lib/priority.js WFQ mirror was DELETED (the C engine owns the real
+         WFQ: flow_weight/wfq_yield). Splicing IS the pick; the comparison is pure. */
+      var docKey = null;
+      if (_reviewQueue.length) {
+        var _bestI = 0, _bestTs = ((_scriptBuffers.get(_reviewQueue[0]) || {}).lastActivatedTs) | 0;
+        for (var _k = 1; _k < _reviewQueue.length; _k++) {
+          var _ts = ((_scriptBuffers.get(_reviewQueue[_k]) || {}).lastActivatedTs) | 0;
+          if (_ts > _bestTs) { _bestI = _k; _bestTs = _ts; }
+        }
+        docKey = _reviewQueue[_bestI];
+        _reviewQueue.splice(_bestI, 1);
+      }
       if (docKey == null) break;
       var buf = _scriptBuffers.get(docKey);
       if (!buf || !buf.pageHtml) continue;

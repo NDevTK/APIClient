@@ -259,6 +259,48 @@ static JSValue make_response(JSContext *ctx, const char *url)
     }
     return resp;
 }
+static int hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+/* Percent-decode a URL component (decodeURIComponent semantics: %XX -> byte; '+' stays '+'; a
+   malformed % is left literal; control chars flattened to space so they can't break a line) into a
+   NUL-terminated buffer. The ENGINE owns URL parsing — the host must never re-split the URL string. */
+static void url_pct_decode(const char *s, size_t n, char *out, size_t outcap) {
+    size_t o = 0;
+    for (size_t i = 0; i < n && o + 1 < outcap; i++) {
+        int hi, lo;
+        if (s[i] == '%' && i + 2 < n
+            && (hi = hexval(s[i+1])) >= 0 && (lo = hexval(s[i+2])) >= 0) {
+            int c = (hi << 4) | lo; out[o++] = (c == '\n' || c == '\r') ? ' ' : (char)c; i += 2;
+        } else {
+            out[o++] = (s[i] == '\n' || s[i] == '\r') ? ' ' : s[i];
+        }
+    }
+    out[o] = 0;
+}
+/* Emit each query pair of a COMPUTED url as `@Q name value` (js_fetch owns query parsing now — the host
+   just relays). A hole value ({search}) passes through literally (opacity marker, decoded downstream). */
+static void emit_query_params(const char *url) {
+    if (!url) return;
+    const char *q = strchr(url, '?'); if (!q) return;
+    q++;
+    const char *end = strchr(q, '#'); if (!end) end = q + strlen(q);
+    for (const char *p = q; p < end; ) {
+        const char *amp = memchr(p, '&', (size_t)(end - p)); if (!amp) amp = end;
+        const char *eq = memchr(p, '=', (size_t)(amp - p));
+        const char *ne = eq ? eq : amp;
+        const char *vb = eq ? eq + 1 : amp;
+        char nbuf[256], vbuf[512];
+        url_pct_decode(p, (size_t)(ne - p), nbuf, sizeof nbuf);
+        url_pct_decode(vb, (size_t)(amp - vb), vbuf, sizeof vbuf);
+        if (nbuf[0]) { printf("@Q %s %s\n", nbuf, vbuf); }
+        p = (amp < end) ? amp + 1 : end;
+    }
+    fflush(stdout);
+}
 /* fetch(url): the moat's host edge. URL = whatever the bundle COMPUTED. Emit @H, raise value, return a
    resolved promise wrapping the Response so `await fetch(...)`/`.then(r=>r.json())` chains continue. */
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -278,6 +320,7 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         JS_FreeValue(ctx, m);
     }
     printf("@H %s %s\n", method ? method : "GET", url ? url : "?"); fflush(stdout);
+    emit_query_params(url);   /* engine owns query parsing (@Q name value); host no longer re-splits the URL */
     /* REQUIRED HEADERS: a request's headers (Content-Type/Authorization/X-CSRF) are part of the endpoint
        spec + needed to REPLAY it. Read a plain-object `headers` from the RequestInit and emit @HDR per key;
        an opaque value (Authorization: 'Bearer '+token) emits its shape. Emitted right after @H so the brain

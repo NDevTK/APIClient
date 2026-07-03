@@ -11,12 +11,8 @@
 <script src="lib/stats.js"></script>
 <script src="lib/chains.js"></script>
 <script src="lib/trace-mapping.bundle.js"></script>
-<!-- Picker heuristics (ORDER only, never COVERAGE) — loaded before the brain
-     so its review-queue drain can use them. Same file the analysis Worker
-     loads via importScripts; both contexts share self._priorityCmp. -->
-<script src="lib/priority.js"></script>
-<!-- THE single external-fetch function (GET only, no cookies, http(s) only).
-     Shared with the analysis Worker (ast-thread.js importScripts). -->
+<!-- THE single external-fetch function (GET only, no cookies, http(s) only). -->
+
 <script src="lib/safe-fetch.js"></script>
 <script src="offscreen-brain.js"></script>
 <!-- v2 host bridge: ES6 module (imports the wasm factory lib/qjs/qjs.mjs), installs self.astDispatch. -->

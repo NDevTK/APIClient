@@ -26,24 +26,9 @@ const SEG_HOLE = /^\{[a-z]*\}$/;
 const hasHole = (s) => HOLE.test(s || "");
 const normHoles = (s) => (s || "").replace(HOLE_G, "{}");   // endpoint IDENTITY is hole-source-insensitive ({search}=={hash}=={})
 
-/* Parse a learned URL's query string into per-param example values (the moat wants keys+values).
-   A value of "{}" is the opaque SHAPE (external-input param); a concrete value is a real example. */
-function parseQueryParams(url) {
-  const params = [];
-  const q = url.indexOf("?");
-  if (q < 0) return params;
-  for (const pair of url.slice(q + 1).split("&")) {
-    if (!pair) continue;
-    const eq = pair.indexOf("=");
-    const name = eq >= 0 ? pair.slice(0, eq) : pair;
-    const val = eq >= 0 ? pair.slice(eq + 1) : "";
-    let dn = name, dv = val;
-    try { dn = decodeURIComponent(name); } catch (_) {}
-    try { dv = decodeURIComponent(val); } catch (_) {}
-    params.push({ name: dn, location: "query", validValues: dv ? [dv] : [] });
-  }
-  return params;
-}
+/* Query params are parsed by the ENGINE (Lexbor-canonical url -> `@Q name value` per pair); the host
+   only relays them. parseQueryParams (a JS re-split of the URL string) was DELETED — the engine owns
+   URL parsing like a browser, the host is a dumb relay. See the @Q handler in linesToAnalysis. */
 
 /* Map captured stdout lines -> the analysis object the brain consumes. Every sibling field the brain
    reads unconditionally is present (empty) so it never throws; fetchCallSites carries the @H records. */
@@ -72,7 +57,17 @@ function linesToAnalysis(lines, msg) {
       const key = method + " " + url;
       if (seen.has(key)) continue;            // metric-layer dedup: distinct (method,url)
       seen.add(key);
-      fetchCallSites.push({ url, method, params: parseQueryParams(url), source: "ast_analysis" });
+      fetchCallSites.push({ url, method, params: [], source: "ast_analysis" });
+    } else if (ln.startsWith("@Q ")) {
+      // engine-parsed query param for the endpoint just emitted: "@Q <name> <value>" (value may be a
+      // {} shape or empty). Binds to the most recent fetchCallSite (js_fetch emits @Q right after @H).
+      const rest = ln.slice(3); const sp = rest.indexOf(" ");
+      const name = sp >= 0 ? rest.slice(0, sp) : rest;
+      const value = sp >= 0 ? rest.slice(sp + 1) : "";
+      if (name && fetchCallSites.length) {
+        const last = fetchCallSites[fetchCallSites.length - 1];
+        (last.params = last.params || []).push({ name, location: "query", validValues: value ? [value] : [] });
+      }
     } else if (ln.startsWith("@HDR ")) {
       // required request header for the endpoint just emitted: "@HDR Name: value" (value may be a {} shape).
       // Binds to the most recent fetchCallSite (js_fetch emits @HDR immediately after its @H).
@@ -178,14 +173,13 @@ async function frontierAll() {
   try { const db = await idbOpen(); return await new Promise((res) => { const t = db.transaction("frontier").objectStore("frontier").getAll(); t.onsuccess = () => res(t.result || []); t.onerror = () => res([]); }); }
   catch (_) { return []; }
 }
-/* The ONE WFQ weight (priority.js) at the HOST level: a parked frontier's value-of-information =
-   epRate (emits per visit) + an explore/fairness floor for under-visited frontiers. Same policy as the
-   within-page scheduler -- one attention, two levels. */
+/* The ONE WFQ weight at the HOST level: a parked frontier's value-of-information = epRate (emits per
+   visit) + an explore/fairness floor for under-visited frontiers. Same formula the C engine owns
+   (flow_weight) -- one attention, two levels; the JS mirror lib/priority.js was DELETED. */
 function frontierWeight(e) {
   const epRate = (e && e.visits) ? (e.emit || 0) / e.visits : (e && e.emit || 0);
   const exploreBonus = 1 / ((e && e.visits || 0) + 1);
-  const P = self._priorityCmp;
-  return (P && P.flowWeight) ? P.flowWeight({ ctx: { epRate, exploreBonus } }) : (1 + epRate + exploreBonus);
+  return 1 + epRate + exploreBonus;   // same WFQ formula the C engine owns (flow_weight); lib/priority.js DELETED
 }
 /* THE HOST-LEVEL GLOBAL WFQ ARBITER: advance the globally-highest-value parked frontier across ALL
    origins (rehydrate its bundle + resume its recipes for one quantum, re-park the residue), `rounds`
