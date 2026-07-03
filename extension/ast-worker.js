@@ -82,8 +82,27 @@ function linesToAnalysis(lines, msg) {
         (last.headers = last.headers || {})[rest.slice(0, ci)] = rest.slice(ci + 2);
       }
     } else if (ln.startsWith("@BODY ")) {
-      // request body shape (POST/PATCH request schema) for the endpoint just emitted; binds to the last callsite.
-      if (fetchCallSites.length) fetchCallSites[fetchCallSites.length - 1].body = ln.slice(6);
+      // request body shape (POST/PATCH request schema) for the endpoint just emitted; binds to the last
+      // callsite. Parse JSON body fields into callSite.params with location:"body" so the EXISTING body-param
+      // consumer (offscreen learnFromAstCallSite + popup/OpenAPI) picks them up. Keep the raw shape too.
+      if (fetchCallSites.length) {
+        const last = fetchCallSites[fetchCallSites.length - 1];
+        const raw = ln.slice(6);
+        last.body = raw;
+        try {
+          const obj = JSON.parse(raw);
+          if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+            last.params = last.params || [];
+            for (const bk in obj) {
+              const bv = obj[bk];
+              const opaque = bv === null || bv === "{}" ||
+                (typeof bv === "object" && bv && !Array.isArray(bv) && Object.keys(bv).length === 0);
+              if (!last.params.some((p) => p.name === bk && p.location === "body"))
+                last.params.push({ name: bk, location: "body", validValues: opaque ? [] : [String(bv)] });
+            }
+          }
+        } catch (_) { /* non-JSON body kept as last.body raw */ }
+      }
     } else if (ln.startsWith("@CHUNK ")) {
       const u = ln.slice(7).trim(); if (u && chunkUrls.indexOf(u) < 0) chunkUrls.push(u);   // external <script src> discovered
     } else if (ln.startsWith("@S ")) {
