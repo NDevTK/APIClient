@@ -5,7 +5,7 @@
  * is the UNTRUSTED WASM: it loads the engine WASM (dynamic import), drives the qjs_step protocol,
  * safe-fetches replies/chunks (the safeFetch chokepoint the untrusted bundle must never bypass),
  * persists the cross-session frontier to IndexedDB, and JSON.parses the engine's ONE @RESULT. It
- * installs self.astDispatch / self.driveFrontier for the offscreen to call. NO analysis LOGIC here —
+ * installs self.astDispatch (+ self.kickHostPool) for the offscreen to call. NO analysis LOGIC here —
  * the C engine owns identity/dedup/detection; this is only the network/IDB/WASM edges.
  */
 /* The engine WASM factory is an ES module; this bridge lives in the CLASSIC offscreen-brain.js, so load
@@ -105,31 +105,8 @@ function frontierWeight(e) {
   const exploreBonus = 1 / ((e && e.visits || 0) + 1);
   return 1 + epRate + exploreBonus;   // same WFQ formula the C engine owns (flow_weight); lib/priority.js DELETED
 }
-/* THE HOST-LEVEL GLOBAL WFQ ARBITER: advance the globally-highest-value parked frontier across ALL
-   origins (rehydrate its bundle + resume its recipes for one quantum, re-park the residue), `rounds`
-   times. This is the "single ATTENTION across all sites" -- a high-value parked flow on site A outranks
-   a low-value fresh residue on site B by ONE value order. Returns the endpoints learned (for the brain
-   to merge into the GLOBAL surface). */
-async function driveFrontier(rounds, opts) {
-  opts = opts || {};
-  const advances = [];   // per-origin: { sourceUrl, result } so the brain merges each to its OWN origin
-  for (let n = 0; n < (rounds || 1); n++) {
-    const all = (await frontierAll()).filter((e) => e && e.recipes);
-    if (!all.length) break;
-    all.sort((a, b) => frontierWeight(b) - frontierWeight(a));   // ONE global value order
-    const top = all[0];
-    const m2 = { type: "AST_ANALYZE", pageHtml: top.html, code: top.code, sourceUrl: top.sourceUrl, quantum: opts.quantum || top.quantum || 8, credentialed: top.credentialed };
-    const r = await runEngine(top.code || "", top.html || "", m2, m2.quantum);   // engine re-derives id, resumes recipes, DEDUPS
-    advances.push({ sourceUrl: top.sourceUrl, result: r });
-    top.emit = (top.emit || 0) + (r.fetchCallSites || []).length;
-    top.visits = (top.visits || 0) + 1;
-    top.recipes = (r._park || []).join(";");
-    top.ts = Date.now();
-    await frontierPut(top.key, top);   // empty recipes -> deleted (fully explored)
-  }
-  return advances;
-}
-self.driveFrontier = driveFrontier;   // the brain drives this on idle / after analysis; merges each per-origin
+/* No separate cold-tier scheduler: parked frontiers are rehydrated into the SAME pool by _hostOps.admit
+   (ranked by frontierWeight, gated by the RAM budget) when live work drains — ONE WFQ, not two loops. */
 /* ────────────────────────────────────────────────────────────────────────────────────────────────────
    HOST-LEVEL WFQ (Level-1 of the ONE attention): interleave the LIVE document engines by value-of-
    information, in SLICES, so no single document (or one deep path within it) monopolizes CPU. Each
@@ -138,12 +115,12 @@ self.driveFrontier = driveFrontier;   // the brain drives this on idle / after a
    that weight and advances the winner one slice, then re-ranks — the same WFQ policy the C engine runs
    over flows WITHIN a document, now over engines ACROSS documents. RAM is the bound: at most POOL_CAP hot
    engines resident; the lowest-weight one is EVICTED (qjs_park -> replay recipe in IDB) under pressure, and
-   the cold tail is advanced separately by driveFrontier. Fetches don't block the pool: an engine awaiting a
+   the cold tail is rehydrated INTO this same pool by admit (one WFQ, no second loop). Fetches don't block the pool: an engine awaiting a
    reply is 'fetching' and skipped until its body lands, so a slow fetch on doc A never stalls doc B.
    ──────────────────────────────────────────────────────────────────────────────────────────────────── */
 // The hot working set is bounded by ACTUAL RAM, not a fixed instance count: admit a new document engine
 // while resident WASM memory is under the budget (a light page's instance is a few MB, a heavy bundle's is
-// tens — a count would ignore that). Over the budget, new docs wait as cold recipes -> IDB (driveFrontier).
+// tens — a count would ignore that). Over the budget, new docs wait as cold recipes -> IDB, pulled back into this pool by admit.
 // This is the RAM floor (like the disk floor), not a truncating bound. Always admit >=1 so a lone doc runs.
 const HOT_RAM_BUDGET = 512 * 1024 * 1024;   // bytes of summed live WASM memory before new engines wait
 function _residentBytes() { let b = 0; for (const e of _pool) { try { b += (e.M && e.M.HEAPU8) ? e.M.HEAPU8.length : 0; } catch (_) {} } return b; }
@@ -239,13 +216,28 @@ const _hostOps = {
   step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { eng.lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}"); return 0; } },
   serviceFetch: engineServiceFetch,
   admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
+    // 1) seat waiting LIVE documents (the user's open tabs) first
     while (_waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
       const job = _waiting.shift();
       try { const eng = await _engineFactory(job.code, job.html, job.msg, job.quantum); eng._resolve = job.resolve; _pool.push(eng); }
       catch (e) { job.resolve(linesToAnalysis(['@E {"phase":"create","err":' + JSON.stringify(String(e && e.message || e)) + "}"], job.msg)); }
     }
+    // 2) ONE frontier: when no LIVE work is pending/running and RAM has headroom, rehydrate the highest-value
+    //    COLD recipes into the SAME pool so they interleave with (and by) the one WFQ — not a second scheduler.
+    if (!_waiting.length && !_pool.some((e) => !e._cold) && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
+      const cold = (await frontierAll()).filter((e) => e && e.recipes && !_pool.some((p) => p.fkey === e.key));
+      cold.sort((a, b) => frontierWeight(b) - frontierWeight(a));   // one global value order
+      for (const c of cold) {
+        if (_pool.length > 0 && _residentBytes() >= HOT_RAM_BUDGET) break;
+        try {
+          const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl, credentialed: c.credentialed, quantum: c.quantum || 256 };
+          const eng = await engineCreate(c.code || "", c.html || "", msg, msg.quantum);
+          eng._cold = true; _pool.push(eng);
+        } catch (_) {}
+      }
+    }
   },
-  finish: async (eng) => {   // fully explored, or self-parked at quantum -> persist residue to the cold tier + resolve
+  finish: async (eng) => {   // fully explored, or self-parked at quantum -> persist residue to the cold tier + resolve/merge
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
     const result = engineFinalize(eng);
     if (eng.quantum && result._fkey) {   // persist into the GLOBAL frontier (cross-session cold tier)
@@ -256,6 +248,7 @@ const _hostOps = {
         emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
       });
     }
+    if (eng._cold) { try { if (typeof self.onFrontierAdvance === "function") self.onFrontierAdvance(eng.msg.sourceUrl, result); } catch (_) {} }   // no live caller -> merge to the moat here
     if (eng._resolve) eng._resolve(result);
   },
 };
@@ -264,17 +257,9 @@ function _hostKick() {
   _hostDriving = true;
   hostSchedule(_pool, _hostOps).catch((e) => console.debug("[host-wfq] %s", e && e.message)).finally(() => { _hostDriving = false; if (_pool.length || _waiting.length) _hostKick(); });
 }
-
-/* Run ONE engine to completion (slice 0) — the cold tier (driveFrontier) advances one parked frontier this
-   way; the LIVE tier uses the interleaving pool via astDispatch. */
-async function runEngine(code, html, msg, quantum) {
-  const eng = await engineCreate(code, html, msg, quantum);   // no floor set -> runs to completion (cold-tier single advance)
-  try {
-    let st;
-    while ((st = eng.M.ccall("qjs_step", "number", [], [])) !== 0) { if (st === 1) await engineServiceFetch(eng); }
-  } catch (e) { eng.lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}"); }
-  return engineFinalize(eng);
-}
+/* The offscreen kicks the pool on idle so parked COLD recipes get pulled in (admit re-checks the frontier)
+   even when no new document arrives — the single ATTENTION keeps advancing across sessions. */
+self.kickHostPool = _hostKick;
 
 /* Endpoint IDENTITY (exact dedup by method+hole-normalized-url + shape/concrete collapse with path-param
    examples) is the ENGINE's job now — it emits an already-deduped fetchCallSites in @RESULT. The host

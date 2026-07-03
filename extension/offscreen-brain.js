@@ -447,18 +447,13 @@ function _mergeFrontierResult(sourceUrl, result) {
    frontier a few rounds and merge each per-origin. Serialized (a single in-flight burst) + yields, so
    it NEVER blocks a fresh tab's analysis -- BFS ACROSS sites: a deep site's residue resumes by value in
    the background while new tabs are learned promptly via the review queue. */
-var _frontierBurstInFlight = false;
-function _driveGlobalFrontierBurst(rounds) {
-  if (_frontierBurstInFlight || typeof self.driveFrontier !== "function") return;
-  _frontierBurstInFlight = true;
-  Promise.resolve().then(async function () {
-    try {
-      var advances = await self.driveFrontier(rounds || 4);
-      for (var i = 0; i < (advances || []).length; i++) _mergeFrontierResult(advances[i].sourceUrl, advances[i].result);
-      if (advances && advances.length) { try { notifyPopup(null); } catch (_) {} }
-    } catch (e) { console.debug("[frontier] burst error: %s", e && e.message); }
-    finally { _frontierBurstInFlight = false; }
-  });
+// The bridge's ONE host pool advances cold parked recipes itself (admit rehydrates the highest-value ones
+// when live work drains). A cold engine finalizing calls back here so its facts merge to the GLOBAL moat.
+self.onFrontierAdvance = function (sourceUrl, result) {
+  try { _mergeFrontierResult(sourceUrl, result); notifyPopup(null); } catch (_) {}
+};
+function _driveGlobalFrontierBurst() {   // idle nudge: kick the ONE pool to re-check the cold frontier
+  try { if (typeof self.kickHostPool === "function") self.kickHostPool(); } catch (_) {}
 }
 
 // The DocData a network-capture learner writes into. A live document -> its
