@@ -490,6 +490,19 @@ static const char **cand_set(const char *sc) {
     if (sc && strcmp(sc, "js") == 0) return CAND_JS;
     return CAND_HTML;
 }
+/* GATE TOKENS: concrete strings the REAL code tested tainted input against (startsWith('cmd:'), =='x'…).
+   The forced-exec search prefixes/suffixes each base payload with them so a gated sink is solved by the
+   concrete input the gate requires — no symbolic solver, just what the code itself demanded. Deduped
+   (identical token -> identical candidates, pure waste); no length/count bound (a gate may require a long
+   exact prefix, and the WFQ starves low-value search flows rather than a cap dropping them). */
+static char **g_gate_tokens = NULL; static int g_gate_n = 0, g_gate_cap = 0;
+static void gate_collect(const char *token) {
+    if (!token || !token[0]) return;
+    for (int i = 0; i < g_gate_n; i++) if (strcmp(g_gate_tokens[i], token) == 0) return;
+    if (g_gate_n >= g_gate_cap) { int nc = g_gate_cap ? g_gate_cap * 2 : 32;
+        char **n = realloc(g_gate_tokens, (size_t)nc * sizeof(char *)); if (!n) return; g_gate_tokens = n; g_gate_cap = nc; }
+    g_gate_tokens[g_gate_n++] = strdup(token);
+}
 /* context-aware breakout: did the candidate's active payload reach an EXECUTABLE position in `res`? */
 static int solve_broke(const char *sc, const char *res) {
     if (!res) return 0;
@@ -560,7 +573,18 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
         if (!done) {
             JS_SetPropertyStr(ctx, g_enqueued, ek, JS_NewBool(ctx, 1));
             const char **cands = cand_set(sctx);
-            for (int i = 0; cands[i]; i++) reg_add_cand(ctx, hitfn, cands[i]);
+            for (int i = 0; cands[i]; i++) {
+                reg_add_cand(ctx, hitfn, cands[i]);
+                /* GATE-GUIDED variants: try each observed gate token as a PREFIX and SUFFIX of the payload,
+                   so startsWith('cmd:')/endsWith(...)/includes(...) gates are satisfied by the concrete input
+                   the real code demanded. The one that passes the gate reaches the sink and breaks out. */
+                for (int g = 0; g < g_gate_n; g++) {
+                    size_t lt = strlen(g_gate_tokens[g]), lc = strlen(cands[i]);
+                    char *pre = malloc(lt + lc + 1), *suf = malloc(lt + lc + 1);
+                    if (pre) { memcpy(pre, g_gate_tokens[g], lt); memcpy(pre + lt, cands[i], lc + 1); reg_add_cand(ctx, hitfn, pre); free(pre); }
+                    if (suf) { memcpy(suf, cands[i], lc); memcpy(suf + lc, g_gate_tokens[g], lt + 1); reg_add_cand(ctx, hitfn, suf); free(suf); }
+                }
+            }
         }
     }
 }
@@ -873,8 +897,15 @@ static void set_origin(const char *origin) {
    set): returns the CONCRETE candidate string, so the real code runs the transforms concretely and the sink
    sees a real value — reachability + breakout decided by the REAL code, in the ONE scheduler. */
 static const char *g_source_tag[] = { "{hash}", "{search}", "{pm}" };   /* 0=location.hash 1=location.search 2=postMessage e.data */
+static const char *g_source_pfx[] = { "#", "?", "" };                   /* realistic leading char so slice(1)/substring behave faithfully */
 static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
-    if (g_candidate) return JS_NewString(ctx, g_candidate);
+    if (g_candidate) {   /* a replay flow injects the CONCRETE candidate — with the source's real prefix, so
+                            code that strips it (location.hash.slice(1), search.substring(1)) sees the true payload. */
+        const char *pfx = g_source_pfx[magic]; size_t lp = strlen(pfx), lc = strlen(g_candidate);
+        char *buf = malloc(lp + lc + 1); if (!buf) return JS_NewString(ctx, g_candidate);
+        memcpy(buf, pfx, lp); memcpy(buf + lp, g_candidate, lc + 1);
+        JSValue r = JS_NewString(ctx, buf); free(buf); return r;
+    }
     return JS_NewOpaqueShaped(ctx, g_source_tag[magic]);
 }
 static void def_source(JSContext *ctx, JSValueConst loc, const char *name, int magic) {
@@ -1496,6 +1527,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_opaque = JS_NewOpaqueShaped(ctx, "{}");   /* the default opaque (shape "{}"); generic propagation dups it */
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
+    JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
     JS_SetDynImportHook(host_dyn_import);   /* dynamic import() -> force-fetch the ESM chunk in place */
     /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source (magic 2) — a
        getter so a candidate-replay flow injects the concrete payload here, exactly like location.hash. */
@@ -1765,7 +1797,9 @@ KEEP void qjs_teardown(void)
     JS_CowSetActive(0);
     JS_CowRevert(ctx);
     g_dom_capture = 0; dom_revert();   /* drop DOM undo log (restore baseline) before teardown */
-    JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL);
+    JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
+    for (int i = 0; i < g_gate_n; i++) free(g_gate_tokens[i]);
+    free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
