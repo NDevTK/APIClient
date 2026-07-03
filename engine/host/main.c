@@ -145,6 +145,13 @@ static int cons_feasible(const char *src, const char *tok, int is_eq, int upto) 
     }
     return 1;
 }
+/* VALUE-SOLVING: the concrete value the running flow FIXED `src` to (an `==` constraint), or NULL. Turns a
+   gate the code demands (`if(x=='admin')`) into the SOLVED @H example key/value instead of an opaque hole. */
+static const char *cons_fixed_value(const char *src) {
+    if (!src) return NULL;
+    for (int i = 0; i < g_cons_n; i++) if (g_cons[i].src && g_cons[i].is_eq && !strcmp(g_cons[i].src, src)) return g_cons[i].tok;
+    return NULL;
+}
 
 typedef struct DomUndo DomUndo;                 /* per-flow DOM COW delta buffer (defined below) */
 static void dom_buf_free(DomUndo *buf, int n);
@@ -446,12 +453,14 @@ static void build_query_params(JSContext *ctx, const char *url, JSValueConst par
         char nbuf[256], vbuf[512];
         url_pct_decode(p, (size_t)(ne - p), nbuf, sizeof nbuf);
         url_pct_decode(vb, (size_t)(amp - vb), vbuf, sizeof vbuf);
+        const char *solved = (vbuf[0] == '{') ? cons_fixed_value(vbuf) : NULL;   /* domain-fixed source -> SOLVED concrete example key */
         if (nbuf[0]) {
             JSValue po = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, po, "name", JS_NewString(ctx, nbuf));
             JS_SetPropertyStr(ctx, po, "location", JS_NewString(ctx, "query"));
             JSValue vv = JS_NewArray(ctx);
-            if (vbuf[0]) JS_SetPropertyUint32(ctx, vv, 0, JS_NewString(ctx, vbuf));
+            if (solved) JS_SetPropertyUint32(ctx, vv, 0, JS_NewString(ctx, solved));
+            else if (vbuf[0]) JS_SetPropertyUint32(ctx, vv, 0, JS_NewString(ctx, vbuf));
             JS_SetPropertyStr(ctx, po, "validValues", vv);
             JS_SetPropertyUint32(ctx, params, idx++, po);
         }
