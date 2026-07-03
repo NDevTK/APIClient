@@ -1009,7 +1009,7 @@ static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
         memcpy(buf, pfx, lp); memcpy(buf + lp, g_candidate, lc + 1);
         JSValue r = JS_NewString(ctx, buf); free(buf); return r;
     }
-    return JS_NewOpaqueShaped(ctx, g_source_tag[magic]);
+    return JS_NewOpaqueSourced(ctx, g_source_tag[magic], g_source_tag[magic]);   /* stamp root source identity for the per-flow value domain */
 }
 static void def_source(JSContext *ctx, JSValueConst loc, const char *name, int magic) {
     JSAtom a = JS_NewAtom(ctx, name);
