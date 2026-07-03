@@ -145,10 +145,14 @@ static int pair_contradicts(int op1, const char *t1, int op2, const char *t2) {
     if (op1 == OPCMP_EQ) return !cmp_sat(a, op2, b);   /* x fixed to a: must satisfy op2 b */
     if (op2 == OPCMP_EQ) return !cmp_sat(b, op1, a);
     if (op1 == OPCMP_NE || op2 == OPCMP_NE) return 0;  /* excluding one point never empties a relational */
-    double L = -1e300, U = 1e300;                       /* both relational: empty iff lower bound > upper */
-    if (op1 == OPCMP_GT || op1 == OPCMP_GE) { if (a > L) L = a; } else { if (a < U) U = a; }
-    if (op2 == OPCMP_GT || op2 == OPCMP_GE) { if (b > L) L = b; } else { if (b < U) U = b; }
-    return L > U;
+    int lower1 = (op1 == OPCMP_GT || op1 == OPCMP_GE); /* both relational: a lower bound (GT/GE) vs an upper (LT/LE) */
+    int lower2 = (op2 == OPCMP_GT || op2 == OPCMP_GE);
+    if (lower1 == lower2) return 0;                     /* same side -> the tighter wins, never empty */
+    double lo = lower1 ? a : b, hi = lower1 ? b : a;
+    int lo_strict = (lower1 ? op1 : op2) == OPCMP_GT;   /* GT excludes the boundary */
+    int hi_strict = (lower1 ? op2 : op1) == OPCMP_LT;   /* LT excludes the boundary */
+    if (lo > hi) return 1;
+    return (lo == hi && (lo_strict || hi_strict));      /* (5,5] / [5,5) / (5,5) empty; [5,5]={5} not */
 }
 /* Is `src <op> tok` consistent with the constraints already holding on this flow (indices < upto)? */
 static int cons_feasible(const char *src, const char *tok, int op, int upto) {
