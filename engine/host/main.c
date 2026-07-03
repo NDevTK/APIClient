@@ -724,6 +724,13 @@ static void set_origin(const char *origin) {
     { const char *h = p + 3; size_t hlen = strlen(h); const char *slash = strchr(h, '/'); if (slash) hlen = (size_t)(slash - h);
       if (hlen < sizeof hostbuf) { memcpy(hostbuf, h, hlen); hostbuf[hlen] = 0; g_host = hostbuf; } }
 }
+/* location.assign(x)/replace(x): navigating to tainted external input is an open-redirect / javascript:
+   URI XSS sink. Flag it when the target is opaque (tainted); a concrete navigation is not a finding. */
+static JSValue js_location_nav(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    if (argc >= 1 && host_opaque(argv[0])) emit_sink(ctx, "location", argv[0]);
+    return JS_UNDEFINED;
+}
 static JSValue make_location(JSContext *ctx)
 {
     JSValue loc = JS_NewObject(ctx);
@@ -734,6 +741,8 @@ static JSValue make_location(JSContext *ctx)
     JS_SetPropertyStr(ctx, loc, "port",     JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, "/"));
     JS_SetPropertyStr(ctx, loc, "href",     JS_NewString(ctx, g_origin));   /* concrete base for new URL(path, href) */
+    JS_SetPropertyStr(ctx, loc, "assign",   JS_NewCFunction(ctx, js_location_nav, "assign", 1));   /* @S: redirect sink */
+    JS_SetPropertyStr(ctx, loc, "replace",  JS_NewCFunction(ctx, js_location_nav, "replace", 1));  /* @S: redirect sink */
     JS_SetPropertyStr(ctx, loc, "search",   JS_NewOpaqueShaped(ctx, "{search}"));  /* external input: opaque, source-tagged (PoC delivery = victim?...) */
     JS_SetPropertyStr(ctx, loc, "hash",     JS_NewOpaqueShaped(ctx, "{hash}"));    /* external input: opaque, source-tagged (PoC delivery = victim#...) */
     return loc;
