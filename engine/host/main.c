@@ -519,6 +519,16 @@ static void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
     uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, arr, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
     JS_SetPropertyUint32(ctx, arr, n, JS_NewString(ctx, s));
 }
+/* Structured zero-result/error reason -> @RESULT.resolverErrors (the ONE no-silent-failure channel the host
+   consumes). Replaces the stderr "@WHY{...}" prints that the host never parsed (it matched "@WHY ", not "@WHY{"). */
+static void why_add(JSContext *ctx, const char *phase, const char *reason) {
+    if (!JS_IsArray(g_whys)) return;
+    uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_whys, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "context", JS_NewString(ctx, phase ? phase : "why"));
+    JS_SetPropertyStr(ctx, o, "message", JS_NewString(ctx, reason ? reason : ""));
+    JS_SetPropertyUint32(ctx, g_whys, n, o);
+}
 /* ── @S SOLVER (forced execution, not taint tracing) ─────────────────────────────
    Each SINK reached by external input is collected as a task {sink, ctx, expr} — expr is the evaluable
    transform chain with a {source} hole. At finalize the solver substitutes candidate breakout payloads
@@ -681,7 +691,8 @@ static JSValue solve_all(JSContext *ctx) {
                 if (!rpoc) {
                     /* no working PoC yet — external input reaches this sink but no candidate broke out. Surface
                        WHY (search unresolved), never a finding. */
-                    fprintf(stderr, "@WHY{phase:solve,reason:no-breakout-yet,sink:%s,ctx:%s,shape:%s}\n", sink ? sink : "?", sc ? sc : "?", ex ? ex : "?");
+                    char rz[300]; snprintf(rz, sizeof rz, "no-breakout-yet sink=%s ctx=%s shape=%s", sink ? sink : "?", sc ? sc : "?", ex ? ex : "?");
+                    why_add(ctx, "solve", rz);
                 } else {
                     JSValue rec = JS_NewObject(ctx);
                     JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink ? sink : "?"));
@@ -1564,7 +1575,8 @@ static void eval_page_script(JSContext *ctx, const char *code, size_t len, const
     JSValue v = JS_Eval(ctx, code, len, name, JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(v)) {   /* a genuine RUNTIME throw -> surface it, never silently swallow */
         JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
-        fprintf(stderr, "@WHY{phase:script-eval,name:%s,reason:%s}\n", name ? name : "?", m ? m : "throw");
+        char rz[300]; snprintf(rz, sizeof rz, "%s: %s", name ? name : "?", m ? m : "throw");
+        why_add(ctx, "script-eval", rz);
         if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
     }
     JS_FreeValue(ctx, v);
@@ -2265,6 +2277,9 @@ KEEP void qjs_teardown(void)
     JSContext *ctx = g_ctx;
     if (!ctx) return;
     qjs_finalize();   /* resolve any stragglers opaque so no promise leaks */
+    /* Unresolved module/dyn-import residue -> @WHY BEFORE emit_result (so it lands in resolverErrors). */
+    if (g_dynpend_n) { char rz[64]; snprintf(rz, sizeof rz, "unresolved dynamic import x%d (chunk never fetched)", g_dynpend_n); why_add(ctx, "dyn-import", rz); }
+    if (g_pendmod_n) { char rz[64]; snprintf(rz, sizeof rz, "unresolved module graph x%d (dep never fetched)", g_pendmod_n); why_add(ctx, "module-link", rz); }
     emit_result(ctx);   /* dedup in-engine + emit the ONE @RESULT json (endpoints/sinks/chunks/errors/park/_emit) */
     /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
        its held baseline values return to their slots, and drop the opaque marker. */
@@ -2280,10 +2295,8 @@ KEEP void qjs_teardown(void)
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
     for (int i = 0; i < g_moddep_n; i++) free(g_moddep[i]);
     free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
-    if (g_dynpend_n) fprintf(stderr, "@WHY{phase:dyn-import,reason:unresolved,count:%d}\n", g_dynpend_n);   /* chunk never fetched -> surface, don't vanish */
     for (int i = 0; i < g_dynpend_n; i++) { JS_FreeValue(ctx, g_dynpend[i].resolve); free(g_dynpend[i].spec); }  /* abandon the promise (teardown) — no JS run post-revert */
     free(g_dynpend); g_dynpend = NULL; g_dynpend_n = g_dynpend_cap = 0;
-    if (g_pendmod_n) fprintf(stderr, "@WHY{phase:module-link,reason:unresolved-graph,count:%d}\n", g_pendmod_n);  /* a module never linked (dep never fetched) -> surface, don't vanish */
     for (int i = 0; i < g_pendmod_n; i++) free(g_pendmod[i].src);
     free(g_pendmod); g_pendmod = NULL; g_pendmod_n = g_pendmod_cap = 0; g_modseq = 0;
     if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
