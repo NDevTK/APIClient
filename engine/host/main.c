@@ -517,6 +517,8 @@ static int branch_decide(JSContext *ctx)
    and the fill-then-read idiom both work without throwing. randomUUID (the URL-relevant one) is opaque. */
 static JSValue js_crypto_getrandom(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_DupValue(ctx, g_opaque); }
+static int host_opaque(JSValueConst v);                                        /* defined below */
+static void emit_sink(JSContext *ctx, const char *sink, JSValueConst tainted);  /* defined below */
 /* setTimeout/setInterval/requestAnimationFrame(cb, ...): a deferred callback is NOT a wait on real time —
    it is just another BFS FLOW. Register cb in the ONE scheduler (reg_add) so it is driven, ordered, and
    starved by the same WFQ as every other flow (the whole point: bundles that defer init in a timer still
@@ -525,6 +527,8 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
 {
     if (argc >= 1 && JS_IsFunction(ctx, argv[0]))
         reg_add(ctx, JS_DupValue(ctx, argv[0]), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+    else if (argc >= 1 && host_opaque(argv[0]))
+        emit_sink(ctx, "setTimeout", argv[0]);   /* setTimeout(taintedString) executes the string as code -> eval sink */
     return JS_DupValue(ctx, g_opaque);
 }
 /* localStorage/sessionStorage.getItem(k): stored data is EXTERNAL INPUT (a token/flag put there earlier or
