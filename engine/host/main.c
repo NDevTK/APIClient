@@ -160,12 +160,28 @@ static int cons_feasible(const char *src, const char *tok, int op, int upto) {
     }
     return 1;
 }
-/* VALUE-SOLVING: the concrete value the running flow FIXED `src` to (an `==` constraint), or NULL. Turns a
-   gate the code demands (`if(x=='admin')`) into the SOLVED @H example key/value instead of an opaque hole. */
+/* VALUE-SOLVING: a concrete value SATISFYING the running flow's constraints on `src`, or NULL. An `==` gate
+   fixes it exactly (`x=='admin'` -> "admin"); relational gates solve a value in the feasible numeric range
+   (`x>5` -> "6", `x<3` -> "2"). Turns the gate the code DEMANDS into the SOLVED @H example instead of a hole. */
 static const char *cons_fixed_value(const char *src) {
+    static char buf[40];   /* single-threaded wasm; url_solve_holes copies the result before the next call */
     if (!src) return NULL;
     for (int i = 0; i < g_cons_n; i++) if (g_cons[i].src && g_cons[i].op == OPCMP_EQ && !strcmp(g_cons[i].src, src)) return g_cons[i].tok;
-    return NULL;
+    double lo = -1e300, hi = 1e300; int lo_ex = 0, hi_ex = 0, has_rel = 0;   /* accumulate the numeric range */
+    for (int i = 0; i < g_cons_n; i++) {
+        Cons *c = &g_cons[i]; double v;
+        if (!c->src || strcmp(c->src, src) || !tok_num(c->tok, &v)) continue;
+        if (c->op == OPCMP_GT)      { if (v >= lo) { lo = v; lo_ex = 1; } has_rel = 1; }
+        else if (c->op == OPCMP_GE) { if (v >  lo) { lo = v; lo_ex = 0; } has_rel = 1; }
+        else if (c->op == OPCMP_LT) { if (v <= hi) { hi = v; hi_ex = 1; } has_rel = 1; }
+        else if (c->op == OPCMP_LE) { if (v <  hi) { hi = v; hi_ex = 0; } has_rel = 1; }
+    }
+    if (!has_rel) return NULL;
+    double pick = (lo > -1e300) ? (lo_ex ? lo + 1 : lo) : (hi_ex ? hi - 1 : hi);
+    if (hi < 1e300 && (hi_ex ? pick >= hi : pick > hi)) pick = (lo + hi) / 2;   /* lower pick overshot -> midpoint */
+    if (pick == (double)(long long)pick) snprintf(buf, sizeof buf, "%lld", (long long)pick);
+    else snprintf(buf, sizeof buf, "%g", pick);
+    return buf;
 }
 /* Substitute each `{src}` hole the running flow FIXED (== gate) with its concrete value, so a URL built from
    gated input surfaces the SOLVED key in BOTH path and query (/api/{hash} -> /api/admin). NULL if nothing
