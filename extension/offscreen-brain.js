@@ -1616,6 +1616,8 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
             const _val = _cSegs[_i];
             if (_val.charAt(0) === "{") continue;
             const _hole = _tSegs[_i].slice(1, -1);
+            if (!_hole) continue;   // generic {} hole -> the ENGINE's shape/concrete collapse owns its path-param
+                                    // example (arg{i}); creating m.parameters[""] here made a duplicate empty-name @path param.
             if (!m.parameters[_hole]) m.parameters[_hole] = { type: "string", location: "path", required: true, description: "Learned (concrete value from live traffic)" };
             _mergeAstValues(m.parameters[_hole], [_val], _val);
           }
