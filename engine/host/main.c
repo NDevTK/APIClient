@@ -606,6 +606,15 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
                     if (pre) { memcpy(pre, g_gate_tokens[g], lt); memcpy(pre + lt, cands[i], lc + 1); reg_add_cand(ctx, hitfn, pre, vt); free(pre); }
                     if (suf) { memcpy(suf, cands[i], lc); memcpy(suf + lc, g_gate_tokens[g], lt + 1); reg_add_cand(ctx, hitfn, suf, vt); free(suf); }
                 }
+                /* CORRELATED gates (`startsWith('cmd:') && endsWith('!end')`): tokens are collected in EXECUTION
+                   order, so the earlier gate is the PREFIX check and the later the SUFFIX/contains check. An
+                   ADJACENT-pair candidate earlier+payload+later satisfies both — O(N), no method tracking. */
+                for (int g = 0; g + 1 < g_gate_n; g++) {
+                    size_t l0 = strlen(g_gate_tokens[g]), l1 = strlen(g_gate_tokens[g + 1]), lc = strlen(cands[i]);
+                    char *comb = malloc(l0 + lc + l1 + 1);
+                    if (comb) { memcpy(comb, g_gate_tokens[g], l0); memcpy(comb + l0, cands[i], lc); memcpy(comb + l0 + lc, g_gate_tokens[g + 1], l1 + 1);
+                        reg_add_cand(ctx, hitfn, comb, vt); free(comb); }
+                }
             }
         }
     }
