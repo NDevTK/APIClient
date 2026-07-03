@@ -478,7 +478,7 @@ static void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
    EXECUTABLE position after the real transforms IS the PoC (verified because the real filters ran); if
    none survives, the flow is PROVEN safe for the tried payloads. No taint label, no chain inversion. */
 static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (the finalize expr-eval pre-filter) */
-static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow confirmed (path+breakout sound) */
+static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow drove through the real code+branches to the sink where it broke out. The ONLY @S output: a working PoC is self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
 static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
 static JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
 static const char *CAND_HTML[] = { "<img src=x onerror=X9>", "<svg onload=X9>", "\"><img src=x onerror=X9>",
@@ -527,10 +527,13 @@ static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand) {
      candidate-replay flows once per (orphan,sink,ctx) into the ONE scheduler. */
 static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst val) {
     if (g_candidate) {
+        /* This flow drove a CONCRETE candidate through the real code+branches to the sink. If it broke out,
+           THAT candidate is a working PoC — the only sound @S output. No breakout -> nothing recorded (not a
+           "safe" verdict: the search may still solve a gate with a better candidate). */
         const char *cv = JS_ToCString(ctx, val);
         if (cv && solve_broke(sctx, cv) && JS_IsObject(g_verified)) {
             char key[300]; snprintf(key, sizeof key, "%s|%s", sink, sctx);
-            JS_SetPropertyStr(ctx, g_verified, key, JS_NewString(ctx, g_candidate));   /* path+breakout verified */
+            JS_SetPropertyStr(ctx, g_verified, key, JS_NewString(ctx, g_candidate));
         }
         if (cv) JS_FreeCString(ctx, cv);
         return;
@@ -577,33 +580,33 @@ static JSValue solve_all(JSContext *ctx) {
             int isdup = !JS_IsUndefined(dup); JS_FreeValue(ctx, dup);
             if (!isdup) {
                 JS_SetPropertyStr(ctx, seen, keybuf, JS_NewBool(ctx, 1));
-                JSValue gv = JS_GetPropertyStr(ctx, t, "gated"); int gated = JS_ToBool(ctx, gv); JS_FreeValue(ctx, gv);
-                /* PREFER a REPLAY-VERIFIED PoC (a candidate that ran through the real code+branches to the sink
-                   and broke out — path+breakout sound). Fall back to the finalize expr-eval (data-flow only). */
+                /* The ONLY @S finding is a WORKING PoC: a candidate a REPLAY flow drove through the real
+                   code+branches to this sink where it BROKE OUT. No PoC -> emit NOTHING here (a @WHY search
+                   signal, not a "safe"/"verified:false" verdict — absence of a PoC never proves safety; the
+                   forced-exec search may still solve a gate like startsWith('cmd:') with a better candidate). */
+                char vk[300]; snprintf(vk, sizeof vk, "%s|%s", sink ? sink : "", sc ? sc : "");
                 char *rpoc = NULL;
-                if (JS_IsObject(g_verified)) { char vk[300]; snprintf(vk, sizeof vk, "%s|%s", sink ? sink : "", sc ? sc : "");
+                if (JS_IsObject(g_verified)) {
                     JSValue vv = JS_GetPropertyStr(ctx, g_verified, vk);
                     if (JS_IsString(vv)) { const char *s = JS_ToCString(ctx, vv); if (s) { rpoc = strdup(s); JS_FreeCString(ctx, s); } }
                     JS_FreeValue(ctx, vv); }
-                /* @S PoC comes ONLY from the SCHEDULER-REPLAY (a candidate flow that ran through the real
-                   code+branches to this sink and broke out). The finalize expr-eval fallback is DELETED —
-                   it was a second mechanism outside the ONE scheduler that couldn't prove reachability. */
-                int replayVerified = (rpoc != NULL);
-                JSValue rec = JS_NewObject(ctx);
-                JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink ? sink : "?"));
-                JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink ? sink : "?"));
-                JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "forced-exec"));
-                JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
-                JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
-                JS_SetPropertyStr(ctx, rec, "verified", JS_NewBool(ctx, replayVerified));
-                JS_SetPropertyStr(ctx, rec, "pathGated", JS_NewBool(ctx, gated));
-                JS_SetPropertyStr(ctx, rec, "poc", rpoc ? JS_NewString(ctx, rpoc) : JS_NULL);
-                { char eb[900];
-                  if (replayVerified) snprintf(eb, sizeof eb, "sink %s <- input %s (scheduler-replay VERIFIED: candidate reached the sink + broke out)", sink ? sink : "?", rpoc);
-                  else snprintf(eb, sizeof eb, "sink %s reached by external input; no candidate replay broke out (proven safe for tried payloads, or not yet reached in replay)", sink ? sink : "?");
-                  JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
-                if (rpoc) free(rpoc);
-                JS_SetPropertyUint32(ctx, out, oi++, rec);
+                if (!rpoc) {
+                    /* no working PoC yet — external input reaches this sink but no candidate broke out. Surface
+                       WHY (search unresolved), never a finding. */
+                    fprintf(stderr, "@WHY{phase:solve,reason:no-breakout-yet,sink:%s,ctx:%s,shape:%s}\n", sink ? sink : "?", sc ? sc : "?", ex ? ex : "?");
+                } else {
+                    JSValue rec = JS_NewObject(ctx);
+                    JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink ? sink : "?"));
+                    JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink ? sink : "?"));
+                    JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "forced-exec"));
+                    JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
+                    JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
+                    JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
+                    { char eb[900]; snprintf(eb, sizeof eb, "sink %s <- input %s (forced-exec: this exact input, driven through the real code, breaks out at the sink)", sink ? sink : "?", rpoc);
+                      JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
+                    free(rpoc);
+                    JS_SetPropertyUint32(ctx, out, oi++, rec);
+                }
             }
         }
         if (sink) JS_FreeCString(ctx, sink); if (sc) JS_FreeCString(ctx, sc); if (ex) JS_FreeCString(ctx, ex);
@@ -1460,7 +1463,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
     g_endpoints = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
     g_whys = JS_NewArray(ctx); g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
-    g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: verified PoCs + enqueue dedup */
+    g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
     if (g_solve_ctx) { const char *x9 = "globalThis.X9=function(){globalThis.__f9=1};globalThis.__f9=0;";
         JSValue xr = JS_Eval(g_solve_ctx, x9, strlen(x9), "<x9>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, xr); }   /* X9 fire-tracker for the js-sink verify */
