@@ -865,8 +865,28 @@ static int g_handler_n = 0;
 static void *g_msg_handlers[128];
 static int g_msg_handler_n = 0;
 static JSValue g_msg_event = JS_UNDEFINED;   /* synthetic MessageEvent: { data: opaque("{pm}"), origin, source } */
+/* Handlers RE-REGISTERED during a candidate boot_replay (addEventListener) — captured so a closure handler
+   (which isn't on any global) can be re-resolved to its candidate-closure version. Transient per candidate
+   flow; cleared after the drive. */
+static JSValue *g_replay_handlers = NULL; static int g_replay_handler_n = 0, g_replay_handler_cap = 0;
+static void *g_replay_msg[128]; static int g_replay_msg_n = 0;   /* re-registered 'message' handler ptrs (candidate closure) */
+static void replay_handlers_clear(JSContext *ctx) {
+    for (int i = 0; i < g_replay_handler_n; i++) JS_FreeValue(ctx, g_replay_handlers[i]);
+    g_replay_handler_n = 0; g_replay_msg_n = 0;
+}
 static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
-    if (g_boot_replay) return JS_UNDEFINED;   /* replay re-establishes state, not the handler set (already seeded) */
+    JSValueConst h0 = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
+    if (g_boot_replay) {   /* capture the re-registered handler (candidate closure) for re-resolution; don't grow g_handlers */
+        if (JS_IsFunction(ctx, h0)) {
+            if (g_replay_handler_n >= g_replay_handler_cap) { int nc = g_replay_handler_cap ? g_replay_handler_cap * 2 : 16;
+                JSValue *n = realloc(g_replay_handlers, (size_t)nc * sizeof(JSValue)); if (n) { g_replay_handlers = n; g_replay_handler_cap = nc; } }
+            if (g_replay_handler_n < g_replay_handler_cap) g_replay_handlers[g_replay_handler_n++] = JS_DupValue(ctx, h0);
+            const char *type = argc >= 2 ? JS_ToCString(ctx, argv[0]) : NULL;   /* a re-registered 'message' handler must still be driven with the {pm} event */
+            if (type && strcmp(type, "message") == 0 && g_replay_msg_n < 128) g_replay_msg[g_replay_msg_n++] = JS_VALUE_GET_PTR(h0);
+            if (type) JS_FreeCString(ctx, type);
+        }
+        return JS_UNDEFINED;
+    }
     JSValueConst h = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
     if (JS_IsFunction(ctx, h) && !JS_IsUndefined(g_handlers)) {
         JS_SetPropertyUint32(ctx, g_handlers, (uint32_t)g_handler_n++, JS_DupValue(ctx, h));
@@ -880,6 +900,7 @@ static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValue
 static int is_msg_handler(JSValueConst h) {
     void *p = JS_VALUE_GET_PTR(h);
     for (int i = 0; i < g_msg_handler_n; i++) if (g_msg_handlers[i] == p) return 1;
+    for (int i = 0; i < g_replay_msg_n; i++) if (g_replay_msg[i] == p) return 1;   /* re-resolved candidate 'message' closure */
     return 0;
 }
 
@@ -1350,19 +1371,28 @@ static void boot_restore_globals(JSContext *ctx) {
 static JSValue resolve_replayed_handler(JSContext *ctx, JSValueConst orig) {
     if (JS_IsUndefined(orig)) return JS_UNDEFINED;
     uint32_t want = JS_OrphanHash(ctx, orig);
-    JSValue g = JS_GetGlobalObject(ctx), found = JS_UNDEFINED;
-    JSPropertyEnum *tab = NULL; uint32_t n = 0;
-    if (JS_GetOwnPropertyNames(ctx, &tab, &n, g, JS_GPN_STRING_MASK) == 0) {
-        for (uint32_t i = 0; i < n && JS_IsUndefined(found); i++) {
-            JSValue v = JS_GetProperty(ctx, g, tab[i].atom);
-            if (JS_IsFunction(ctx, v) && JS_VALUE_GET_PTR(v) != JS_VALUE_GET_PTR(orig) && JS_OrphanHash(ctx, v) == want)
-                found = JS_DupValue(ctx, v);
-            JS_FreeValue(ctx, v);
-        }
-        JS_FreePropertyEnum(ctx, tab, n);
+    JSValue found = JS_UNDEFINED;
+    /* FIRST the handlers boot_replay re-registered via addEventListener (a closure handler isn't on any
+       global) — then the global functions (window.h = closure, module pattern). */
+    for (int i = 0; i < g_replay_handler_n && JS_IsUndefined(found); i++) {
+        JSValueConst v = g_replay_handlers[i];
+        if (JS_VALUE_GET_PTR(v) != JS_VALUE_GET_PTR(orig) && JS_OrphanHash(ctx, v) == want) found = JS_DupValue(ctx, v);
     }
-    JS_FreeValue(ctx, g);
-    return found;
+    if (JS_IsUndefined(found)) {
+        JSValue g = JS_GetGlobalObject(ctx);
+        JSPropertyEnum *tab = NULL; uint32_t n = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &n, g, JS_GPN_STRING_MASK) == 0) {
+            for (uint32_t i = 0; i < n && JS_IsUndefined(found); i++) {
+                JSValue v = JS_GetProperty(ctx, g, tab[i].atom);
+                if (JS_IsFunction(ctx, v) && JS_VALUE_GET_PTR(v) != JS_VALUE_GET_PTR(orig) && JS_OrphanHash(ctx, v) == want)
+                    found = JS_DupValue(ctx, v);
+                JS_FreeValue(ctx, v);
+            }
+            JS_FreePropertyEnum(ctx, tab, n);
+        }
+        JS_FreeValue(ctx, g);
+    }
+    return found;   /* g_replay_handlers/msg stay valid until is_msg_handler(drive) has run; cleared after the drive */
 }
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
@@ -1608,12 +1638,12 @@ static void scheduler_run(JSContext *ctx)
                 dom_revert();                                 /* discard this flow's DOM writes -> baseline */
                 { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
                 if (f.candidate) { int sv = 0; JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); (void)sv; }   /* restore boot-created globals (host-side, uncaptured) */
-                JS_FreeValue(ctx, resolved);
+                JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);
                 g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
                 JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate);
                 continue;
             }
-            JS_FreeValue(ctx, resolved);   /* JS_FlowNew dup'd the drive handle; drop our resolved ref */
+            JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);   /* JS_FlowNew dup'd the drive handle; drop our resolved ref + transient replay handlers */
         }
         /* RESUME: swap in the parked flow's OWN heap COW delta (unapplied while it slept) so it sees its own
            shared-state writes again, not another flow's. Starters begin with an empty delta (globals NULL). */
@@ -2015,6 +2045,7 @@ KEEP void qjs_teardown(void)
     g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
     for (int i = 0; i < g_attr_shadow_n; i++) { JS_FreeValue(ctx, g_attr_shadow[i].opaque); free(g_attr_shadow[i].name); }
     free(g_attr_shadow); g_attr_shadow = NULL; g_attr_shadow_n = g_attr_shadow_cap = 0;
+    replay_handlers_clear(ctx); free(g_replay_handlers); g_replay_handlers = NULL; g_replay_handler_cap = 0;
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
