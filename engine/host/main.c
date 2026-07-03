@@ -49,6 +49,9 @@ typedef struct {
     double cpu;          /* back-edge CPU ticks since last emit (WFQ decay; reset to 0 on emit) */
     int visits;          /* times scheduled (UCB/fairness explore term) */
     int orphan_idx;      /* cross-session locator: index in deterministic orphan collection (-1 = boot/yield, not park-replayable) */
+    char *candidate;     /* @S REPLAY flow: a concrete breakout payload the source getters return (instead of opaque),
+                            so this flow re-runs the orphan through the REAL code+branches with the candidate; the sink
+                            then sees a CONCRETE value and checks breakout. NULL = a normal opaque exploration flow. */
 } Flow;
 static Flow   *g_reg = NULL;
 static int     g_reg_n = 0, g_reg_cap = 0;
@@ -69,6 +72,7 @@ static long    g_work = 0;              /* flow DISPATCHES this run (starter OR 
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
+static char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
 /* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
    has a '{' followed by only lowercase letters then '}'. Such a URL is not concretely fetchable. Generalizes
@@ -108,7 +112,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val; g_reg[g_reg_n].is_resume = is_resume;
     g_reg[g_reg_n].dec = dec; g_reg[g_reg_n].dec_n = dec_n;
     g_reg[g_reg_n].fs = NULL; g_reg[g_reg_n].saved_c = 0; g_reg[g_reg_n].cpu = 0; g_reg[g_reg_n].visits = 0;
-    g_reg[g_reg_n].orphan_idx = -1;
+    g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL;
     g_reg_n++; return 1;
 }
 
@@ -473,7 +477,9 @@ static void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
    eval/String methods, no forced-exec/opaque overrides). A candidate whose payload survives into an
    EXECUTABLE position after the real transforms IS the PoC (verified because the real filters ran); if
    none survives, the flow is PROVEN safe for the tried payloads. No taint label, no chain inversion. */
-static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} */
+static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (the finalize expr-eval pre-filter) */
+static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow confirmed (path+breakout sound) */
+static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
 static JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
 static const char *CAND_HTML[] = { "<img src=x onerror=X9>", "<svg onload=X9>", "\"><img src=x onerror=X9>",
                                    "'><svg onload=X9>", "</script><svg onload=X9>", NULL };
@@ -483,28 +489,6 @@ static const char **cand_set(const char *sc) {
     if (sc && strcmp(sc, "url") == 0) return CAND_URL;
     if (sc && strcmp(sc, "js") == 0) return CAND_JS;
     return CAND_HTML;
-}
-/* substitute every {source} hole in expr with a JSON-quoted candidate -> malloc'd evaluable string */
-static char *solve_subst(const char *expr, const char *cand) {
-    size_t ql = 2; for (const char *p = cand; *p; p++) ql += (*p == '"' || *p == '\\' || *p == '\n' || *p == '\r') ? 2 : 1;
-    char *q = malloc(ql + 1); if (!q) return NULL; size_t o = 0; q[o++] = '"';
-    for (const char *p = cand; *p; p++) {
-        if (*p == '\n') { q[o++] = '\\'; q[o++] = 'n'; }
-        else if (*p == '\r') { q[o++] = '\\'; q[o++] = 'r'; }
-        else { if (*p == '"' || *p == '\\') q[o++] = '\\'; q[o++] = *p; }
-    }
-    q[o++] = '"'; q[o] = 0;
-    size_t need = 0;
-    for (const char *p = expr; *p; ) {
-        if (*p == '{') { const char *e = p + 1; while (*e && *e != '}') e++; if (*e == '}') { need += o; p = e + 1; continue; } }
-        need++; p++;
-    }
-    char *r = malloc(need + 1); if (!r) { free(q); return NULL; } size_t ro = 0;
-    for (const char *p = expr; *p; ) {
-        if (*p == '{') { const char *e = p + 1; while (*e && *e != '}') e++; if (*e == '}') { memcpy(r + ro, q, o); ro += o; p = e + 1; continue; } }
-        r[ro++] = *p; p++;
-    }
-    r[ro] = 0; free(q); return r;
 }
 /* context-aware breakout: did the candidate's active payload reach an EXECUTABLE position in `res`? */
 static int solve_broke(const char *sc, const char *res) {
@@ -526,39 +510,56 @@ static int solve_broke(const char *sc, const char *res) {
     /* html/attr: a RAW payload tag opener survived (if '<' was escaped to &lt; these are absent) */
     return strstr(res, "<img") || strstr(res, "<svg") || strstr(res, "<script") || strstr(res, "<iframe");
 }
-/* run candidates through the real chain in the clean realm; return the winning PoC (malloc'd) or NULL */
-static char *solve_task(const char *expr, const char *sc) {
-    if (!g_solve_ctx || !expr) return NULL;
-    const char **cands = cand_set(sc);
-    for (int i = 0; cands[i]; i++) {
-        char *sub = solve_subst(expr, cands[i]);
-        if (!sub) continue;
-        JSValue rv = JS_Eval(g_solve_ctx, sub, strlen(sub), "<solve>", JS_EVAL_TYPE_GLOBAL);
-        free(sub);
-        int broke = 0;
-        if (!JS_IsException(rv)) { const char *res = JS_ToCString(g_solve_ctx, rv); broke = solve_broke(sc, res); if (res) JS_FreeCString(g_solve_ctx, res); }
-        else { JSValue e = JS_GetException(g_solve_ctx); JS_FreeValue(g_solve_ctx, e); }
-        JS_FreeValue(g_solve_ctx, rv);
-        if (broke) { char *r = malloc(strlen(cands[i]) + 1); if (r) strcpy(r, cands[i]); return r; }
+/* enqueue an @S REPLAY flow: re-run the CURRENT orphan with `cand` as the concrete source, driven by the
+   ONE scheduler (high initial value so the search runs soon; transient — never parked as a recipe). */
+static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand) {
+    if (JS_IsUndefined(fn)) return;
+    if (reg_add(ctx, JS_DupValue(ctx, fn), 2.0, 0, NULL, 0)) {
+        g_reg[g_reg_n - 1].candidate = strdup(cand);
+        g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;
     }
-    return NULL;
 }
-/* collect a sink as a solve task when its value is external input (solved at finalize). */
+/* Sink reached. DUAL-MODE:
+   - REPLAY flow (g_candidate set): `val` is the CONCRETE transformed candidate that ran through the REAL
+     code+branches to get here. If it breaks out, this PoC is PATH+BREAKOUT verified (reachability proven by
+     the real branches) -> record it under "sink|ctx".
+   - NORMAL flow (opaque val): record the finalize task (pre-filter/proven-safe display) AND enqueue
+     candidate-replay flows once per (orphan,sink,ctx) into the ONE scheduler. */
 static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst val) {
+    if (g_candidate) {
+        const char *cv = JS_ToCString(ctx, val);
+        if (cv && solve_broke(sctx, cv) && JS_IsObject(g_verified)) {
+            char key[300]; snprintf(key, sizeof key, "%s|%s", sink, sctx);
+            JS_SetPropertyStr(ctx, g_verified, key, JS_NewString(ctx, g_candidate));   /* path+breakout verified */
+        }
+        if (cv) JS_FreeCString(ctx, cv);
+        return;
+    }
     if (!JS_IsOpaque(val) || !JS_IsArray(g_solvetasks)) return;
     const char *expr = JS_OpaqueExprC(val);
     JSValue t = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, t, "sink", JS_NewString(ctx, sink));
     JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
     JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, expr ? expr : "{}"));
-    /* branches taken to REACH this sink: 0 = unconditional data flow (a concrete candidate provably reaches
-       it, so the PoC is path-sound); >0 = gated, reachability of the concrete candidate needs a replay flow
-       through the real branches (the scheduler-integrated solve — the honest next step, not done here). */
     JS_SetPropertyStr(ctx, t, "gated", JS_NewBool(ctx, g_c > 0));
     uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_solvetasks, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
     JS_SetPropertyUint32(ctx, g_solvetasks, n, t);
     g_emit_total++;   /* a reached sink is progress like @H */
     if (g_running && g_cur_flow) { g_cur_flow->val += 1.0; g_cur_flow->cpu = 0; }
+    /* SPAWN candidate-replay flows in the ONE scheduler. Re-drive the FUNCTION that reached this sink (the
+       nearest bytecode fn on the stack — works even at BOOT, where there is no orphan flow context) with each
+       concrete candidate. Dedup by fn-SOURCE-IDENTITY (position-independent) + sink + ctx — avoids re-enqueue,
+       not work-truncation: each candidate still runs once and the WFQ orders/starves them. */
+    JSValueConst hitfn = JS_CurrentScriptFn(ctx);
+    if (JS_IsObject(g_enqueued) && !JS_IsUndefined(hitfn)) {
+        char ek[320]; snprintf(ek, sizeof ek, "%u|%s|%s", JS_OrphanHash(ctx, hitfn), sink, sctx);
+        JSValue e = JS_GetPropertyStr(ctx, g_enqueued, ek); int done = !JS_IsUndefined(e); JS_FreeValue(ctx, e);
+        if (!done) {
+            JS_SetPropertyStr(ctx, g_enqueued, ek, JS_NewBool(ctx, 1));
+            const char **cands = cand_set(sctx);
+            for (int i = 0; cands[i]; i++) reg_add_cand(ctx, hitfn, cands[i]);
+        }
+    }
 }
 /* build securitySinks[] by solving each collected task (dedup by sink+ctx+expr). */
 static JSValue solve_all(JSContext *ctx) {
@@ -577,27 +578,31 @@ static JSValue solve_all(JSContext *ctx) {
             if (!isdup) {
                 JS_SetPropertyStr(ctx, seen, keybuf, JS_NewBool(ctx, 1));
                 JSValue gv = JS_GetPropertyStr(ctx, t, "gated"); int gated = JS_ToBool(ctx, gv); JS_FreeValue(ctx, gv);
-                char *poc = solve_task(ex, sc ? sc : "html");
-                /* the breakout is proven (real transforms ran). path-reachability is proven ONLY for an
-                   UNCONDITIONAL sink (gated==0); a gated sink needs the scheduler-integrated replay flow to
-                   confirm the concrete candidate satisfies the branches — so we DON'T claim it verified. */
-                int pathSound = (poc != NULL) && !gated;
+                /* PREFER a REPLAY-VERIFIED PoC (a candidate that ran through the real code+branches to the sink
+                   and broke out — path+breakout sound). Fall back to the finalize expr-eval (data-flow only). */
+                char *rpoc = NULL;
+                if (JS_IsObject(g_verified)) { char vk[300]; snprintf(vk, sizeof vk, "%s|%s", sink ? sink : "", sc ? sc : "");
+                    JSValue vv = JS_GetPropertyStr(ctx, g_verified, vk);
+                    if (JS_IsString(vv)) { const char *s = JS_ToCString(ctx, vv); if (s) { rpoc = strdup(s); JS_FreeCString(ctx, s); } }
+                    JS_FreeValue(ctx, vv); }
+                /* @S PoC comes ONLY from the SCHEDULER-REPLAY (a candidate flow that ran through the real
+                   code+branches to this sink and broke out). The finalize expr-eval fallback is DELETED —
+                   it was a second mechanism outside the ONE scheduler that couldn't prove reachability. */
+                int replayVerified = (rpoc != NULL);
                 JSValue rec = JS_NewObject(ctx);
                 JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink ? sink : "?"));
                 JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink ? sink : "?"));
                 JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "forced-exec"));
                 JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
                 JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
-                JS_SetPropertyStr(ctx, rec, "verified", JS_NewBool(ctx, pathSound));
-                JS_SetPropertyStr(ctx, rec, "breakoutProven", JS_NewBool(ctx, poc != NULL));
+                JS_SetPropertyStr(ctx, rec, "verified", JS_NewBool(ctx, replayVerified));
                 JS_SetPropertyStr(ctx, rec, "pathGated", JS_NewBool(ctx, gated));
-                JS_SetPropertyStr(ctx, rec, "poc", poc ? JS_NewString(ctx, poc) : JS_NULL);
+                JS_SetPropertyStr(ctx, rec, "poc", rpoc ? JS_NewString(ctx, rpoc) : JS_NULL);
                 { char eb[900];
-                  if (poc && !gated) snprintf(eb, sizeof eb, "sink %s <- input %s (unconditional: path-sound)", sink ? sink : "?", poc);
-                  else if (poc && gated) snprintf(eb, sizeof eb, "sink %s <- input %s (breakout proven; sink is branch-gated, reachability needs replay-verify)", sink ? sink : "?", poc);
-                  else snprintf(eb, sizeof eb, "sink %s reachable; no candidate broke out (filters proved it safe)", sink ? sink : "?");
+                  if (replayVerified) snprintf(eb, sizeof eb, "sink %s <- input %s (scheduler-replay VERIFIED: candidate reached the sink + broke out)", sink ? sink : "?", rpoc);
+                  else snprintf(eb, sizeof eb, "sink %s reached by external input; no candidate replay broke out (proven safe for tried payloads, or not yet reached in replay)", sink ? sink : "?");
                   JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
-                if (poc) free(poc);
+                if (rpoc) free(rpoc);
                 JS_SetPropertyUint32(ctx, out, oi++, rec);
             }
         }
@@ -860,6 +865,22 @@ static void set_origin(const char *origin) {
     { const char *h = p + 3; size_t hlen = strlen(h); const char *slash = strchr(h, '/'); if (slash) hlen = (size_t)(slash - h);
       if (hlen < sizeof hostbuf) { memcpy(hostbuf, h, hlen); hostbuf[hlen] = 0; g_host = hostbuf; } }
 }
+/* An external-input SOURCE getter (location.hash=magic 0, location.search=magic 1). Normal exploration:
+   returns the source-tagged OPAQUE (control-flow forks, @H/@S record the shape). @S REPLAY flow (g_candidate
+   set): returns the CONCRETE candidate string, so the real code runs the transforms concretely and the sink
+   sees a real value — reachability + breakout decided by the REAL code, in the ONE scheduler. */
+static const char *g_source_tag[] = { "{hash}", "{search}", "{pm}" };   /* 0=location.hash 1=location.search 2=postMessage e.data */
+static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
+    if (g_candidate) return JS_NewString(ctx, g_candidate);
+    return JS_NewOpaqueShaped(ctx, g_source_tag[magic]);
+}
+static void def_source(JSContext *ctx, JSValueConst loc, const char *name, int magic) {
+    JSAtom a = JS_NewAtom(ctx, name);
+    JS_DefinePropertyGetSet(ctx, loc, a,
+        JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_source_get, "get", 0, JS_CFUNC_getter_magic, magic),
+        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, a);
+}
 static JSValue make_location(JSContext *ctx)
 {
     JSValue loc = JS_NewObject(ctx);
@@ -870,8 +891,8 @@ static JSValue make_location(JSContext *ctx)
     JS_SetPropertyStr(ctx, loc, "port",     JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, "/"));
     JS_SetPropertyStr(ctx, loc, "href",     JS_NewString(ctx, g_origin));   /* concrete base for new URL(path, href) */
-    JS_SetPropertyStr(ctx, loc, "search",   JS_NewOpaqueShaped(ctx, "{search}"));  /* external input: opaque, source-tagged (PoC delivery = victim?...) */
-    JS_SetPropertyStr(ctx, loc, "hash",     JS_NewOpaqueShaped(ctx, "{hash}"));    /* external input: opaque, source-tagged (PoC delivery = victim#...) */
+    def_source(ctx, loc, "hash",   0);   /* external input: opaque (or candidate on @S replay) */
+    def_source(ctx, loc, "search", 1);
     return loc;
 }
 
@@ -1276,7 +1297,7 @@ static void park_frontier(JSContext *ctx)
     int parked = 0;
     for (int i = 0; i < g_reg_n; i++) {
         Flow *f = &g_reg[i];
-        if (f->orphan_idx >= 0 && f->orphan_idx < g_orphan_n) {   /* orphan-derived flows are replay-locatable */
+        if (!f->candidate && f->orphan_idx >= 0 && f->orphan_idx < g_orphan_n) {   /* orphan-derived flows are replay-locatable (NOT transient @S candidate flows) */
             uint32_t oh = JS_OrphanHash(ctx, g_orphan_buf[f->orphan_idx]);   /* stable identity, not the positional index */
             if (oh) {
                 char rec[80]; int o = snprintf(rec, sizeof rec, "%u,", oh);
@@ -1288,7 +1309,7 @@ static void park_frontier(JSContext *ctx)
         }
         if (f->fs) JS_FlowFree(g_rt, f->fs);
         JS_FreeValue(ctx, f->handle);
-        free(f->dec);
+        free(f->dec); free(f->candidate);
     }
     g_reg_n = 0;
     (void)parked;   /* recipes accumulated into g_park -> @RESULT._park (no separate @PARKED line) */
@@ -1317,6 +1338,7 @@ static void scheduler_run(JSContext *ctx)
         g_work++;                                   /* one flow got CPU (starter OR resume) — counts toward the quantum */
         g_cur_orphan_idx = f.orphan_idx;            /* siblings forked during this flow inherit its locator */
         g_running = 1; g_cur_val = f.val; g_cur_flow = &f;
+        g_candidate = f.candidate;   /* @S replay flow: source getters return this concrete candidate (else NULL=opaque) */
 
         if (f.is_resume) {
             /* async __yield resume: drive the microtask to completion (a resolve fn, not sync-preemptible) */
@@ -1402,8 +1424,9 @@ static void scheduler_run(JSContext *ctx)
             if (JS_IsException(out)) js_std_dump_error(ctx);
             JS_FreeValue(ctx, out);
             g_cur_flow = NULL;
-            JS_FreeValue(ctx, f.handle); free(f.dec);
+            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate);   /* candidate owned by a completed replay flow */
         }
+        g_candidate = NULL;   /* clear the replay candidate; a suspended flow re-sets it from f.candidate on resume */
     }
     JS_SetFlowYieldHook(NULL);
 }
@@ -1437,6 +1460,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
     g_endpoints = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
     g_whys = JS_NewArray(ctx); g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
+    g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: verified PoCs + enqueue dedup */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
     if (g_solve_ctx) { const char *x9 = "globalThis.X9=function(){globalThis.__f9=1};globalThis.__f9=0;";
         JSValue xr = JS_Eval(g_solve_ctx, x9, strlen(x9), "<x9>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, xr); }   /* X9 fire-tracker for the js-sink verify */
@@ -1470,9 +1494,10 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
     JS_SetDynImportHook(host_dyn_import);   /* dynamic import() -> force-fetch the ESM chunk in place */
-    /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source-tagged opaque. */
+    /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source (magic 2) — a
+       getter so a candidate-replay flow injects the concrete payload here, exactly like location.hash. */
     g_msg_event = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, g_msg_event, "data", JS_NewOpaqueShaped(ctx, "{pm}"));
+    def_source(ctx, g_msg_event, "data", 2);
     JS_SetPropertyStr(ctx, g_msg_event, "origin", JS_DupValue(ctx, g_opaque));
     JS_SetPropertyStr(ctx, g_msg_event, "source", JS_DupValue(ctx, g_opaque));
     JS_SetPropertyStr(ctx, g_msg_event, "ports", JS_DupValue(ctx, g_opaque));
@@ -1745,6 +1770,8 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_whys); g_whys = JS_UNDEFINED;
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
     JS_FreeValue(ctx, g_solvetasks); g_solvetasks = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_verified); g_verified = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_enqueued); g_enqueued = JS_UNDEFINED;
     JS_FreeValue(ctx, g_dedup_fn); g_dedup_fn = JS_UNDEFINED;
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;
