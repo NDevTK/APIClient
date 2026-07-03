@@ -1528,7 +1528,11 @@ static void eval_page_script(JSContext *ctx, const char *code, size_t len, const
         return;
     }
     JSValue v = JS_EvalFunction(ctx, fn);                                /* run the compiled global script (consumes fn) */
-    if (JS_IsException(v)) JS_FreeValue(ctx, JS_GetException(ctx));
+    if (JS_IsException(v)) {   /* a genuine RUNTIME throw (not a defer) -> surface it, never silently swallow */
+        JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
+        fprintf(stderr, "@WHY{phase:script-eval,name:%s,reason:%s}\n", name ? name : "?", m ? m : "throw");
+        if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
+    }
     JS_FreeValue(ctx, v);
 }
 static void dom_run_scripts(JSContext *ctx) {
@@ -2220,6 +2224,7 @@ KEEP void qjs_teardown(void)
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
     for (int i = 0; i < g_moddep_n; i++) free(g_moddep[i]);
     free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
+    if (g_pendmod_n) fprintf(stderr, "@WHY{phase:module-link,reason:unresolved-graph,count:%d}\n", g_pendmod_n);  /* a module never linked (dep never fetched) -> surface, don't vanish */
     for (int i = 0; i < g_pendmod_n; i++) free(g_pendmod[i].src);
     free(g_pendmod); g_pendmod = NULL; g_pendmod_n = g_pendmod_cap = 0; g_modseq = 0;
     if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
