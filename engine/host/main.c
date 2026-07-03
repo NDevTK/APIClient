@@ -77,6 +77,9 @@ static int     g_orphan_n = 0;
 static int     g_cur_orphan_idx = -1;   /* running flow's orphan index (inherited by its branch siblings) */
 static int     g_quantum = 0;
 static long    g_work = 0;              /* flow DISPATCHES this run (starter OR resume) — the quantum's work unit */
+static int     g_slice = 0;             /* host SLICE budget: dispatches per qjs_step before yielding HOT to the host
+                                           cross-document WFQ (0 = run to completion/park, the cold driveFrontier path) */
+static long    g_slice_done = 0;        /* dispatches in the CURRENT qjs_step slice (reset each qjs_step) */
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
@@ -1699,6 +1702,11 @@ static void scheduler_run(JSContext *ctx)
            resumes too is what makes a single DEEP await/fetch-loop flow yield to park (it never adds starters),
            so no step-cap crutch is needed. Not a bound: parked flows re-drive by re-running boot + decisions. */
         if (g_quantum > 0 && g_work >= g_quantum) { park_frontier(ctx); break; }
+        /* HOST SLICE (cross-document fairness): after g_slice dispatches, YIELD back to the host WFQ with the
+           frontier left HOT in g_reg (NOT parked to IDB). The host re-ranks this engine's qjs_top_weight()
+           against every other live engine + top cold recipe and resumes the winner. This is Level-1 of the
+           one WFQ — a CPU-bound document can no longer monopolize; it's preempted by a higher-value document. */
+        if (g_slice > 0 && g_slice_done >= g_slice) break;
         int best = 0;
         for (int i = 1; i < g_reg_n; i++)
             if (flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
@@ -1712,6 +1720,7 @@ static void scheduler_run(JSContext *ctx)
         }
         f.visits++;
         g_work++;                                   /* one flow got CPU (starter OR resume) — counts toward the quantum */
+        g_slice_done++;                             /* and toward the host slice (yield-hot boundary) */
         g_cur_orphan_idx = f.orphan_idx;            /* siblings forked during this flow inherit its locator */
         g_running = 1; g_cur_val = f.val; g_cur_flow = &f;
         g_candidate = f.candidate;   /* @S replay flow: source getters return this concrete candidate (else NULL=opaque) */
@@ -2193,12 +2202,25 @@ KEEP void qjs_finalize(void)
 }
 /* Advance the ONE scheduler; drain microtasks. Return 1 = NEED_FETCH (flows parked awaiting a real
    reply the offscreen must provide via qjs_provide), else 0 = DONE. */
+/* Host cross-document WFQ enablers (Level-1): the host ranks a live engine by its best flow's weight and
+   advances engines in SLICES so no document monopolizes. qjs_set_slice(0) restores run-to-completion. */
+KEEP void qjs_set_slice(int n) { g_slice = n < 0 ? 0 : n; }
+KEEP double qjs_top_weight(void)     /* this engine's value-of-information = its best flow's weight (0 if idle/done) */
+{
+    double best = 0; int seen = 0;
+    for (int i = 0; i < g_reg_n; i++) { double w = flow_weight(&g_reg[i]); if (!seen || w > best) { best = w; seen = 1; } }
+    return seen ? best : 0.0;
+}
+
 KEEP int qjs_step(void)
 {
     if (!g_ctx) return 0;
+    g_slice_done = 0;                                    /* fresh slice each host visit */
     scheduler_run(g_ctx);
     js_std_loop(g_ctx);
-    return (g_pending_n > 0 || g_chunk_n > 0) ? 1 : 0;   /* NEED_FETCH: replies and/or chunks */
+    if (g_pending_n > 0 || g_chunk_n > 0) return 1;      /* NEED_FETCH: replies and/or chunks */
+    if (g_reg_n > 0) return 2;                           /* HOT work remains (slice yielded) — host re-ranks + resumes */
+    return 0;                                            /* fully explored (or parked) — done */
 }
 
 KEEP void qjs_teardown(void)
