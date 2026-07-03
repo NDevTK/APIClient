@@ -458,7 +458,6 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
    result as ONE `@RESULT <json>` line (JSON.stringify — correct escaping, single line). The host does
    ONE JSON.parse and relays it: no @H/@P/@HDR/@BODY text protocol, no host-side re-parse, no host
    identity. Sinks/chunks/errors/park are added to the same object by their accumulate sites. */
-static JSValue g_sinks = JS_UNDEFINED;        /* JS array of @S records */
 static JSValue g_chunkurls = JS_UNDEFINED;    /* JS array of discovered external <script src> */
 static JSValue g_whys = JS_UNDEFINED;         /* JS array of {context,message} zero-result/error reasons */
 static JSValue g_park = JS_UNDEFINED;         /* JS array of "hash,decbits" frontier replay recipes */
@@ -474,7 +473,7 @@ static void emit_result(JSContext *ctx) {
     if (JS_IsException(deduped)) { js_std_dump_error(ctx); deduped = JS_NewArray(ctx); }
     JSValue result = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, result, "fetchCallSites", deduped);                 /* consumes deduped */
-    JS_SetPropertyStr(ctx, result, "securitySinks", JS_DupValue(ctx, g_sinks));
+    JS_SetPropertyStr(ctx, result, "securitySinks", JS_NewArray(ctx));         /* taint tracker removed; forced-exec security view WIP */
     JS_SetPropertyStr(ctx, result, "chunkUrls", JS_DupValue(ctx, g_chunkurls));
     JS_SetPropertyStr(ctx, result, "resolverErrors", JS_DupValue(ctx, g_whys));
     JS_SetPropertyStr(ctx, result, "_park", JS_DupValue(ctx, g_park));
@@ -517,8 +516,6 @@ static int branch_decide(JSContext *ctx)
    and the fill-then-read idiom both work without throwing. randomUUID (the URL-relevant one) is opaque. */
 static JSValue js_crypto_getrandom(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_DupValue(ctx, g_opaque); }
-static int host_opaque(JSValueConst v);                                        /* defined below */
-static void emit_sink(JSContext *ctx, const char *sink, JSValueConst tainted);  /* defined below */
 /* setTimeout/setInterval/requestAnimationFrame(cb, ...): a deferred callback is NOT a wait on real time —
    it is just another BFS FLOW. Register cb in the ONE scheduler (reg_add) so it is driven, ordered, and
    starved by the same WFQ as every other flow (the whole point: bundles that defer init in a timer still
@@ -527,8 +524,6 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
 {
     if (argc >= 1 && JS_IsFunction(ctx, argv[0]))
         reg_add(ctx, JS_DupValue(ctx, argv[0]), g_running ? g_cur_val : 1.0, 0, NULL, 0);
-    else if (argc >= 1 && host_opaque(argv[0]))
-        emit_sink(ctx, "setTimeout", argv[0]);   /* setTimeout(taintedString) executes the string as code -> eval sink */
     return JS_DupValue(ctx, g_opaque);
 }
 /* localStorage/sessionStorage.getItem(k): stored data is EXTERNAL INPUT (a token/flag put there earlier or
@@ -724,13 +719,6 @@ static void set_origin(const char *origin) {
     { const char *h = p + 3; size_t hlen = strlen(h); const char *slash = strchr(h, '/'); if (slash) hlen = (size_t)(slash - h);
       if (hlen < sizeof hostbuf) { memcpy(hostbuf, h, hlen); hostbuf[hlen] = 0; g_host = hostbuf; } }
 }
-/* location.assign(x)/replace(x): navigating to tainted external input is an open-redirect / javascript:
-   URI XSS sink. Flag it when the target is opaque (tainted); a concrete navigation is not a finding. */
-static JSValue js_location_nav(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    if (argc >= 1 && host_opaque(argv[0])) emit_sink(ctx, "location", argv[0]);
-    return JS_UNDEFINED;
-}
 static JSValue make_location(JSContext *ctx)
 {
     JSValue loc = JS_NewObject(ctx);
@@ -741,8 +729,6 @@ static JSValue make_location(JSContext *ctx)
     JS_SetPropertyStr(ctx, loc, "port",     JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, "/"));
     JS_SetPropertyStr(ctx, loc, "href",     JS_NewString(ctx, g_origin));   /* concrete base for new URL(path, href) */
-    JS_SetPropertyStr(ctx, loc, "assign",   JS_NewCFunction(ctx, js_location_nav, "assign", 1));   /* @S: redirect sink */
-    JS_SetPropertyStr(ctx, loc, "replace",  JS_NewCFunction(ctx, js_location_nav, "replace", 1));  /* @S: redirect sink */
     JS_SetPropertyStr(ctx, loc, "search",   JS_NewOpaqueShaped(ctx, "{search}"));  /* external input: opaque, source-tagged (PoC delivery = victim?...) */
     JS_SetPropertyStr(ctx, loc, "hash",     JS_NewOpaqueShaped(ctx, "{hash}"));    /* external input: opaque, source-tagged (PoC delivery = victim#...) */
     return loc;
@@ -842,38 +828,12 @@ static void dom_insert_capture(lxb_dom_node_t *node) {
     if (!g_dom_capture) return;
     DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; dom_undo_push(u);
 }
-/* ── The SECURITY view (@S): the SECOND equal output of the one run ──────────────
-   An XSS/injection SINK reached by OPAQUE (external-input-tainted) data is a security finding, weighted
-   equally with @H. Opacity is the taint we already track: v is tainted iff it IS the opaque sentinel. */
-static int host_opaque(JSValueConst v) {
-    return JS_IsOpaque(v);   /* any shape-carrying opaque (taint), not just the default sentinel */
-}
-/* Emit an @S finding with the tainted value's real SHAPE (the concrete/opaque interleaving the PoC needs:
-   `'<h1>'+hash` sinks the value opaque("<h1>{}"), so the sink reports `<h1>{}`, not a blind `{}`). The
-   shape is the opaque's payload — read via JS_ToCString (ToString(opaque) returns its shape). Control
-   chars are folded to spaces so the one-line @S protocol stays parseable. */
-static void emit_sink(JSContext *ctx, const char *sink, JSValueConst tainted) {
-    const char *sh = JS_ToCString(ctx, tainted);
-    JSValue shape = sh ? js_str_flat(ctx, sh, 512) : JS_NewString(ctx, "{}");
-    if (sh) JS_FreeCString(ctx, sh);
-    const char *shs = JS_ToCString(ctx, shape);
-    JSValue rec = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink));
-    JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink));
-    JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "opaque"));
-    JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, shs ? shs : "{}"));
-    { char ev[600]; snprintf(ev, sizeof ev, "%s %s", sink, shs ? shs : "{}"); JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, ev)); }
-    JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
-    if (shs) JS_FreeCString(ctx, shs);
-    JS_FreeValue(ctx, shape);
-    if (JS_IsArray(g_sinks)) { uint32_t n=0; JSValue lv=JS_GetPropertyStr(ctx,g_sinks,"length"); JS_ToUint32(ctx,&n,lv); JS_FreeValue(ctx,lv); JS_SetPropertyUint32(ctx, g_sinks, n, rec); }
-    else JS_FreeValue(ctx, rec);
-    g_emit_total++;
-    if (g_running && g_cur_flow) { g_cur_flow->val += 1.0; g_cur_flow->cpu = 0; }   /* @S raises value like @H (WFQ prioritizes sink-reaching flows) */
-}
-/* Concatenated taint IS now caught: opaque-with-provenance keeps `'<h1>'+taint` opaque (shape "<h1>{}"),
-   so host_opaque() sees it at the sink and the shape gives the PoC its interleaving. The remaining PoC
-   work is source-tagging the hole ({hash}/{search}/{pm}) + the transform chain for filtered flows. */
+/* ── The SECURITY view (@S) ──────────────────────────────────────────────────────
+   REMOVED the taint tracker (opaque-reaches-sink via host_opaque/emit_sink). Taint tracing is a separate
+   mechanism bolted alongside forced execution; forced execution SUBSUMES it — the security view is being
+   rebuilt as forced-exec with concrete marker payloads that flow through the REAL code (transforms/filters
+   apply natively) and are observed breaking out at a sink. Until that lands, sinks are ordinary host edges
+   (no-op for the injected content) and emit no @S. */
 static void dom_revert(void) {   /* restore the DOM to the post-boot baseline (reverse order) */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {
         DomUndo *u = &g_dom_undo[i];
@@ -912,29 +872,22 @@ static JSValue host_dyn_import(JSContext *ctx, const char *specifier) {
     }
     return JS_DupValue(ctx, g_opaque);
 }
-static int is_sink_attr(const char *n) {   /* attributes where tainted data is an XSS/redirect sink */
-    return n && (strncmp(n, "on", 2) == 0 || strcmp(n, "href") == 0 || strcmp(n, "src") == 0 ||
-                 strcmp(n, "action") == 0 || strcmp(n, "formaction") == 0 || strcmp(n, "srcdoc") == 0);
-}
 static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
     if (!el || argc < 2) return JS_UNDEFINED;
     const char *name = JS_ToCString(ctx, argv[0]);
-    if (name && host_opaque(argv[1]) && is_sink_attr(name)) emit_sink(ctx, "setAttribute", argv[1]);   /* @S: tainted into an on-handler or url attr */
     const char *val = JS_ToCString(ctx, argv[1]);
     if (name && val) { dom_attr_capture(el, name); lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val)); }
     if (name) JS_FreeCString(ctx, name);
     if (val) JS_FreeCString(ctx, val);
     return JS_UNDEFINED;
 }
-/* el.insertAdjacentHTML(pos, html) — tainted html is a direct XSS sink. */
+/* el.insertAdjacentHTML(pos, html): DOM edge (no-op for content; the security view is forced-exec, not
+   a taint check on the argument). */
 static JSValue js_el_insertAdjacentHTML(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 2 && host_opaque(argv[1])) emit_sink(ctx, "insertAdjacentHTML", argv[1]);
     return JS_UNDEFINED;
 }
-/* el.innerHTML = / el.outerHTML = tainted -> XSS sink (the #1 DOM XSS). */
 static JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
-    if (host_opaque(val)) emit_sink(ctx, magic ? "outerHTML" : "innerHTML", val);
     return JS_UNDEFINED;
 }
 static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return JS_DupValue(ctx, g_opaque); }
@@ -962,7 +915,6 @@ static JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) 
 static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
     const char *n = refl_name(magic);
-    if ((magic == 1 || magic == 2) && host_opaque(val)) emit_sink(ctx, "href", val);   /* @S: tainted el.href/.action (javascript:/redirect) */
     const char *v = JS_ToCString(ctx, val);
     if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); JS_FreeCString(ctx, v); }
     return JS_UNDEFINED;
@@ -999,15 +951,14 @@ static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int a
     JS_FreeCString(ctx, tag);
     return el_wrap(ctx, el);
 }
-/* document.write(tainted) -> XSS sink. */
+/* document.write: DOM edge (no-op; security is forced-exec, not a taint check). */
 static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    for (int i = 0; i < argc; i++) if (host_opaque(argv[i])) { emit_sink(ctx, "document.write", argv[i]); break; }
     return JS_UNDEFINED;
 }
-/* eval(tainted) -> code-injection sink; eval(concrete) -> forced-execute (dynamic code path, orphans). */
+/* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
 static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_UNDEFINED;
-    if (host_opaque(argv[0])) { emit_sink(ctx, "eval", argv[0]); return JS_DupValue(ctx, g_opaque); }
+    if (JS_IsOpaque(argv[0])) return JS_DupValue(ctx, g_opaque);
     if (JS_IsString(argv[0])) {
         size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
         JSValue r = s ? JS_Eval(ctx, s, len, "<eval>", JS_EVAL_TYPE_GLOBAL) : JS_UNDEFINED;
@@ -1339,7 +1290,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
-    g_endpoints = JS_NewArray(ctx); g_sinks = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
+    g_endpoints = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
     g_whys = JS_NewArray(ctx); g_park = JS_NewArray(ctx);
     g_dedup_fn = JS_Eval(ctx, DEDUP_JS, strlen(DEDUP_JS), "<dedup>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(g_dedup_fn)) { js_std_dump_error(ctx); g_dedup_fn = JS_UNDEFINED; }
@@ -1363,7 +1314,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "__branch", JS_NewCFunction(ctx, js_branch, "__branch", 0));
     JS_SetPropertyStr(ctx, g, "__opaque", JS_NewCFunction(ctx, js_opaque, "__opaque", 0));
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
-    JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval, "eval", 1));   /* eval(tainted) -> @S; eval(concrete) -> forced-execute */
+    JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval, "eval", 1));   /* eval(concrete) -> forced-execute */
     /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both
        arms via the decision-vector logic (real bundles: external input reaches OP_if as opaque). */
     JS_InitOpaqueClass(ctx);             /* register the shape-carrying opaque class */
@@ -1415,7 +1366,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));   /* real Lexbor DOM */
         JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
         JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));   /* real element; appendChild intercepts <script src> */
-        JS_SetPropertyStr(ctx, doc, "write", JS_NewCFunction(ctx, js_doc_write, "write", 1));       /* document.write(tainted) -> @S */
+        JS_SetPropertyStr(ctx, doc, "write", JS_NewCFunction(ctx, js_doc_write, "write", 1));       /* DOM edge (no-op) */
         JS_SetPropertyStr(ctx, doc, "writeln", JS_NewCFunction(ctx, js_doc_write, "writeln", 1));
         JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
         JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
@@ -1642,7 +1593,6 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_sinks); g_sinks = JS_UNDEFINED;
     JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
     JS_FreeValue(ctx, g_whys); g_whys = JS_UNDEFINED;
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
