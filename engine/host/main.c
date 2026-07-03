@@ -1282,41 +1282,21 @@ static void boot_replay(JSContext *ctx) {
     }
     g_boot_replay = 0;
 }
-/* Global properties BOOT created (via the add_property hook). A candidate flow reverts the global object to
-   its PRE-boot state (delete these) before boot_replay, so a GUARDED init `if(!window.d){window.d=src}`
-   re-fires under the concrete candidate; boot_restore_globals() puts the post-boot baseline back after the
-   drive so the next (opaque) flow is unaffected. This is the boot-as-a-flow property-creation revert, scoped
-   to global-object properties (the common cross-flow store); let/const on global_var_obj is a known gap. */
-static JSAtom *g_boot_created = NULL; static int g_boot_created_n = 0, g_boot_created_cap = 0;
-static int g_track_gcreate = 0;
-static JSValue *g_boot_saved = NULL;
-static void gcreate_collect(JSContext *ctx, JSAtom prop) {
-    if (!g_track_gcreate) return;
-    for (int i = 0; i < g_boot_created_n; i++) if (g_boot_created[i] == prop) return;   /* dedup */
-    if (g_boot_created_n >= g_boot_created_cap) { int nc = g_boot_created_cap ? g_boot_created_cap * 2 : 64;
-        JSAtom *n = realloc(g_boot_created, (size_t)nc * sizeof(JSAtom)); if (!n) return; g_boot_created = n; g_boot_created_cap = nc; }
-    g_boot_created[g_boot_created_n++] = JS_DupAtom(ctx, prop);
-}
+/* BOOT AS THE FIRST FLOW: the page's boot (its inline scripts) is captured as a COW DELTA — g_boot_delta —
+   exactly like any flow (mutations + global CREATIONS). It stays APPLIED between opaque flows (its effects
+   are the post-boot baseline). A candidate flow UNAPPLIES it to reach a TRUE pre-boot heap (boot's globals
+   deleted, so a guarded init `if(!window.d){window.d=src}` re-fires), re-runs boot under the concrete
+   candidate as its OWN delta, drives, then REAPPLIES g_boot_delta so the next opaque flow sees post-boot.
+   No host-side property save/delete/restore — the delta IS the mechanism (heap; DOM boot stays baseline). */
+static void *g_boot_delta = NULL; static int g_boot_delta_n = 0, g_boot_delta_cap = 0;
 static void boot_replay_candidate(JSContext *ctx) {
-    JSValue g = JS_GetGlobalObject(ctx);
-    JSValue *ns = realloc(g_boot_saved, (size_t)(g_boot_created_n > 0 ? g_boot_created_n : 1) * sizeof(JSValue));
-    if (!ns) { JS_FreeValue(ctx, g); boot_replay(ctx); return; }   /* OOM: fall back to post-boot re-run */
-    g_boot_saved = ns;
-    for (int i = 0; i < g_boot_created_n; i++) {
-        g_boot_saved[i] = JS_GetProperty(ctx, g, g_boot_created[i]);   /* hold post-boot value */
-        JS_DeleteProperty(ctx, g, g_boot_created[i], 0);              /* pre-boot: absent */
-    }
-    JS_FreeValue(ctx, g);
-    boot_replay(ctx);   /* re-create globals under the concrete candidate (guards re-fire) */
+    if (g_boot_delta) { JS_CowBufLoad(g_boot_delta, g_boot_delta_n, g_boot_delta_cap); JS_CowUnapply(ctx);
+        g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap); }   /* heap -> pre-boot; stash unapplied */
+    boot_replay(ctx);   /* re-run boot under the concrete candidate (guards re-fire), captured in the candidate's own delta */
 }
 static void boot_restore_globals(JSContext *ctx) {
-    if (!g_boot_saved) return;
-    JSValue g = JS_GetGlobalObject(ctx);
-    for (int i = 0; i < g_boot_created_n; i++) {
-        JS_DeleteProperty(ctx, g, g_boot_created[i], 0);                        /* drop the candidate re-creation */
-        JS_SetProperty(ctx, g, g_boot_created[i], g_boot_saved[i]);            /* restore post-boot baseline (consumes saved) */
-    }
-    JS_FreeValue(ctx, g);
+    if (g_boot_delta) { JS_CowBufLoad(g_boot_delta, g_boot_delta_n, g_boot_delta_cap); JS_CowApply(ctx);
+        g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap); }   /* heap -> post-boot; stash applied */
 }
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
@@ -1678,7 +1658,6 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
     JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
-    JS_SetGCreateHook(gcreate_collect);   /* track global props boot creates -> candidate flows revert to pre-boot */
     JS_SetDynImportHook(host_dyn_import);   /* dynamic import() -> force-fetch the ESM chunk in place */
     /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source (magic 2) — a
        getter so a candidate-replay flow injects the concrete payload here, exactly like location.hash. */
@@ -1799,9 +1778,13 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JSValue v = JS_Eval(ctx, boot, strlen(boot), "<boot>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsException(v)) { js_std_dump_error(ctx); g_rc = 1; }
         JS_FreeValue(ctx, v);
-        g_track_gcreate = 1;    /* track ONLY the page's own global creations (not env boot) for candidate pre-boot revert */
+        /* BOOT AS THE FIRST FLOW: capture the page's own boot (mutations + global creations) as a COW delta,
+           so a candidate flow can UNAPPLY it to a true pre-boot heap. The env `boot` string above is NOT
+           captured (it is the baseline runtime). */
+        JS_CowSetActive(1);
         dom_run_scripts(ctx);   /* run the page's own inline scripts + compute g_bundle_id (Lexbor <script> scan) */
-        g_track_gcreate = 0;
+        JS_CowSetActive(0);
+        g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);   /* stash the boot delta (stays APPLIED: live heap is post-boot) */
     }
     return 0;   /* boot done; g_bundle_id is now readable via qjs_bundle_id(). Host reads it, looks up the parked
                    frontier by ORIGIN|bundle-id in IDB (its only job), then calls qjs_begin(recipes) to seed. */
@@ -1950,14 +1933,13 @@ KEEP void qjs_teardown(void)
     JS_CowSetActive(0);
     JS_CowRevert(ctx);
     g_dom_capture = 0; dom_revert();   /* drop DOM undo log (restore baseline) before teardown */
-    JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL); JS_SetGCreateHook(NULL);
+    JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
     for (int i = 0; i < g_gate_n; i++) free(g_gate_tokens[i]);
     free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
     for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
     free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
-    for (int i = 0; i < g_boot_created_n; i++) JS_FreeAtom(ctx, g_boot_created[i]);
-    free(g_boot_created); g_boot_created = NULL; g_boot_created_n = g_boot_created_cap = 0;
-    free(g_boot_saved); g_boot_saved = NULL; g_track_gcreate = 0;
+    if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
+    g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
