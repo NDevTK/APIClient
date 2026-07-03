@@ -276,6 +276,37 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         JS_FreeValue(ctx, m);
     }
     printf("@H %s %s\n", method ? method : "GET", url ? url : "?"); fflush(stdout);
+    /* REQUIRED HEADERS: a request's headers (Content-Type/Authorization/X-CSRF) are part of the endpoint
+       spec + needed to REPLAY it. Read a plain-object `headers` from the RequestInit and emit @HDR per key;
+       an opaque value (Authorization: 'Bearer '+token) emits its shape. Emitted right after @H so the brain
+       binds them to this endpoint. */
+    {
+        JSValueConst init = (argc > 1 && JS_IsObject(argv[1])) ? argv[1] : ((argc > 0 && JS_IsObject(argv[0])) ? argv[0] : JS_UNDEFINED);
+        if (JS_IsObject(init)) {
+            JSValue hdrs = JS_GetPropertyStr(ctx, init, "headers");
+            if (JS_IsObject(hdrs) && !JS_IsOpaque(hdrs)) {
+                JSPropertyEnum *tab = NULL; uint32_t hn = 0;
+                if (JS_GetOwnPropertyNames(ctx, &tab, &hn, hdrs, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+                    for (uint32_t hi = 0; hi < hn; hi++) {
+                        const char *hk = JS_AtomToCString(ctx, tab[hi].atom);
+                        JSValue hv = JS_GetProperty(ctx, hdrs, tab[hi].atom);
+                        const char *hvs = JS_ToCString(ctx, hv);
+                        if (hk && hvs) {
+                            printf("@HDR %s: ", hk);
+                            for (const char *p = hvs; *p; p++) putchar((*p == '\n' || *p == '\r') ? ' ' : *p);
+                            putchar('\n');
+                        }
+                        if (hk) JS_FreeCString(ctx, hk);
+                        if (hvs) JS_FreeCString(ctx, hvs);
+                        JS_FreeValue(ctx, hv);
+                    }
+                    JS_FreePropertyEnum(ctx, tab, hn);
+                }
+            }
+            JS_FreeValue(ctx, hdrs);
+        }
+        fflush(stdout);
+    }
     g_emit_total++;
     if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
     JSValue resp = make_response(ctx, url);

@@ -73,6 +73,14 @@ function linesToAnalysis(lines, msg) {
       if (seen.has(key)) continue;            // metric-layer dedup: distinct (method,url)
       seen.add(key);
       fetchCallSites.push({ url, method, params: parseQueryParams(url), source: "ast_analysis" });
+    } else if (ln.startsWith("@HDR ")) {
+      // required request header for the endpoint just emitted: "@HDR Name: value" (value may be a {} shape).
+      // Binds to the most recent fetchCallSite (js_fetch emits @HDR immediately after its @H).
+      const rest = ln.slice(5); const ci = rest.indexOf(": ");
+      if (ci > 0 && fetchCallSites.length) {
+        const last = fetchCallSites[fetchCallSites.length - 1];
+        (last.headers = last.headers || {})[rest.slice(0, ci)] = rest.slice(ci + 2);
+      }
     } else if (ln.startsWith("@CHUNK ")) {
       const u = ln.slice(7).trim(); if (u && chunkUrls.indexOf(u) < 0) chunkUrls.push(u);   // external <script src> discovered
     } else if (ln.startsWith("@S ")) {
