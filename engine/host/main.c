@@ -80,6 +80,8 @@ static long    g_work = 0;              /* flow DISPATCHES this run (starter OR 
 static int     g_slice = 0;             /* host SLICE budget: dispatches per qjs_step before yielding HOT to the host
                                            cross-document WFQ (0 = run to completion/park, the cold driveFrontier path) */
 static long    g_slice_done = 0;        /* dispatches in the CURRENT qjs_step slice (reset each qjs_step) */
+static long    g_switches = 0;          /* flow SUSPEND/re-queue events (interleave) — surfaced in @RESULT._switches so
+                                           "fair to all flows, incl. at depth" is MEASURED, not asserted */
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
@@ -727,6 +729,7 @@ static void emit_result(JSContext *ctx) {
     JS_SetPropertyStr(ctx, result, "_park", JS_DupValue(ctx, g_park));
     JS_SetPropertyStr(ctx, result, "_orphans", JS_NewInt32(ctx, g_orphan_n));
     JS_SetPropertyStr(ctx, result, "_emit", JS_NewInt32(ctx, g_emit_total));
+    JS_SetPropertyStr(ctx, result, "_switches", JS_NewInt64(ctx, g_switches));   /* flow interleave events (fairness, incl. at depth) */
     JSValue json = JS_JSONStringify(ctx, result, JS_UNDEFINED, JS_UNDEFINED);
     JS_FreeValue(ctx, result);
     if (JS_IsString(json)) { const char *js = JS_ToCString(ctx, json); if (js) { printf("@RESULT %s\n", js); JS_FreeCString(ctx, js); } }
@@ -1887,6 +1890,7 @@ static void scheduler_run(JSContext *ctx)
         if (st == 1) {
             /* SUSPENDED: UNAPPLY this flow's heap writes (baseline restored for the next flow) and STASH its
                delta buffer; re-queue. On resume it re-applies. Interleaving of heap-writers is now sound. */
+            g_switches++;   /* one flow was preempted mid-run -> a real context switch (interleave), MEASURED */
             JS_CowUnapply(ctx);
             f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap);
             dom_unapply();
@@ -1941,7 +1945,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_ctx = ctx;
     /* Reset all scheduler/frontier state so ONE wasm instance can serve many page analyses (init/run/
        teardown reused) with no cross-page bleed. The arrays themselves are reused (not re-malloc'd). */
-    g_reg_n = 0; g_work = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL; g_msg_handler_n = 0;
+    g_reg_n = 0; g_work = 0; g_switches = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL; g_msg_handler_n = 0;
     g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_quantum = 0;
     g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
