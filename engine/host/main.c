@@ -54,7 +54,11 @@ typedef struct {
     char *candidate;     /* @S REPLAY flow: a concrete breakout payload the source getters return (instead of opaque),
                             so this flow re-runs the orphan through the REAL code+branches with the candidate; the sink
                             then sees a CONCRETE value and checks breakout. NULL = a normal opaque exploration flow. */
+    int session;         /* ATTACKER SESSION flow: fire ALL registered handlers in seed order over ONE accumulating
+                            COW delta (handler A's tainted write to shared state is visible to handler B), modeling an
+                            attacker firing a sequence of events — the sound way to reach cross-handler sinks. */
 } Flow;
+static int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
 static Flow   *g_reg = NULL;
 static int     g_reg_n = 0, g_reg_cap = 0;
 static int     g_running = 0;
@@ -118,7 +122,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].fs = NULL; g_reg[g_reg_n].saved_c = 0; g_reg[g_reg_n].cpu = 0; g_reg[g_reg_n].visits = 0;
     g_reg[g_reg_n].cow = NULL; g_reg[g_reg_n].cow_n = 0; g_reg[g_reg_n].cow_cap = 0;
     g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
-    g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL;
+    g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0;
     g_reg_n++; return 1;
 }
 
@@ -534,6 +538,10 @@ static int solve_broke(const char *sc, const char *res) {
 /* enqueue an @S REPLAY flow: re-run the CURRENT orphan with `cand` as the concrete source, driven by the
    ONE scheduler (high initial value so the search runs soon; transient — never parked as a recipe). */
 static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand) {
+    if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
+        if (reg_add(ctx, JS_UNDEFINED, 2.0, 0, NULL, 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
+        return;
+    }
     if (JS_IsUndefined(fn)) return;
     if (reg_add(ctx, JS_DupValue(ctx, fn), 2.0, 0, NULL, 0)) {
         g_reg[g_reg_n - 1].candidate = strdup(cand);
@@ -678,7 +686,7 @@ static void emit_result(JSContext *ctx) {
 static int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a cross-flow @S candidate */
 static int branch_decide(JSContext *ctx)
 {
-    if (g_boot_replay) return 1;                            /* during boot-replay: don't fork/consume the handler flow's decision vector — just re-establish one path's shared state (source-derived conds are already concrete) */
+    if (g_boot_replay || g_in_session) return 1;            /* boot-replay / attacker-session: take a fixed arm (per-handler branch exploration is the individual orphan flows' job) */
     if (!g_running || JS_IsUndefined(g_cur_fn)) return 0;   /* only meaningful inside a starter flow */
     if (g_c < g_dec_n) return g_dec[g_c++] ? 1 : 0;         /* forced replay */
     if (!g_dec_ensure(g_c + 1)) return 1;                    /* only RAM/disk (the platform floor) bounds depth — not a cap */
@@ -1394,6 +1402,29 @@ static JSValue resolve_replayed_handler(JSContext *ctx, JSValueConst orig) {
     }
     return found;   /* g_replay_handlers/msg stay valid until is_msg_handler(drive) has run; cleared after the drive */
 }
+/* ATTACKER SESSION: fire ALL registered handlers in seed order over the CURRENT (accumulating) COW delta,
+   modeling an attacker firing a sequence of events. Handler A's tainted write to shared state persists to
+   handler B (no revert between them), so a cross-handler sink — source stored by A, sunk by B — is reached:
+   opaque -> the sink is DETECTED (task recorded), candidate -> breakout is VERIFIED. Branches take a fixed
+   arm here (per-handler branch exploration is the individual orphan flows' job); the session adds only the
+   cross-handler STATE dimension. */
+static void drive_session(JSContext *ctx) {
+    if (JS_IsUndefined(g_handlers)) return;
+    g_in_session = 1;
+    uint32_t hn = 0; { JSValue lv = JS_GetPropertyStr(ctx, g_handlers, "length"); JS_ToUint32(ctx, &hn, lv); JS_FreeValue(ctx, lv); }
+    for (uint32_t i = 0; i < hn; i++) {
+        JSValue h = JS_GetPropertyUint32(ctx, g_handlers, i);
+        if (JS_IsFunction(ctx, h)) {
+            JSValueConst arg = (is_msg_handler(h) && !JS_IsUndefined(g_msg_event)) ? g_msg_event : g_opaque;
+            JSValue r = JS_Call(ctx, h, g_opaque, 1, &arg);
+            if (JS_IsException(r)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }   /* a handler throwing doesn't stop the session */
+            JS_FreeValue(ctx, r);
+            JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {}
+        }
+        JS_FreeValue(ctx, h);
+    }
+    g_in_session = 0;
+}
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
     lxb_css_parser_t *p = lxb_css_parser_create();
@@ -1587,6 +1618,24 @@ static void scheduler_run(JSContext *ctx)
             { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
             g_running = 0; g_cur_flow = NULL;
             JS_FreeValue(ctx, f.handle); free(f.dec);
+            continue;
+        }
+
+        if (f.session) {
+            /* ATTACKER SESSION: fire all handlers in seed order over one accumulating COW delta (cross-handler
+               shared state), run to completion (no preemption — the sequence must not straddle a suspend). A
+               candidate session re-runs boot with the candidate first; both revert their delta at the end. */
+            g_cur_fn = JS_UNDEFINED; g_dec_n = 0; g_c = 0;
+            g_candidate = f.candidate;
+            JS_SetFlowYieldHook(NULL);
+            if (f.candidate) boot_replay_candidate(ctx);
+            drive_session(ctx);
+            replay_handlers_clear(ctx);
+            JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
+            dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
+            if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }
+            g_candidate = NULL; g_running = 0; g_cur_flow = NULL;
+            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate);
             continue;
         }
 
@@ -1932,6 +1981,9 @@ KEEP void qjs_begin(const char *recipes)
     }
     JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
     g_dom_capture = 1;    /* DOM baseline is now fixed too; capture flow DOM mutations for per-flow revert */
+    /* Seed ONE attacker-SESSION flow when the page has >=2 handlers — it fires them in sequence over
+       accumulating shared state, the sound way to reach cross-handler sinks (source stored by A, sunk by B). */
+    if (!g_resume_mode && g_handler_n >= 2) { reg_add(ctx, JS_UNDEFINED, 1.2, 0, NULL, 0); g_reg[g_reg_n - 1].session = 1; }
 }
 
 /* The distinct pending fetch urls (newline-joined) the offscreen must safe-fetch. Static buffer. */
