@@ -973,11 +973,14 @@ static void park_frontier(JSContext *ctx)
     int parked = 0;
     for (int i = 0; i < g_reg_n; i++) {
         Flow *f = &g_reg[i];
-        if (f->orphan_idx >= 0) {   /* orphan-derived flows are replay-locatable; boot forks/yields are re-derived by boot */
-            printf("@PARK %d ", f->orphan_idx);
-            for (int j = 0; j < f->dec_n; j++) putchar(f->dec[j] ? '1' : '0');
-            putchar('\n');
-            parked++;
+        if (f->orphan_idx >= 0 && f->orphan_idx < g_orphan_n) {   /* orphan-derived flows are replay-locatable */
+            uint32_t oh = JS_OrphanHash(ctx, g_orphan_buf[f->orphan_idx]);   /* stable identity, not the positional index */
+            if (oh) {
+                printf("@PARK %u ", oh);
+                for (int j = 0; j < f->dec_n; j++) putchar(f->dec[j] ? '1' : '0');
+                putchar('\n');
+                parked++;
+            }
         }
         if (f->fs) JS_FlowFree(g_rt, f->fs);
         JS_FreeValue(ctx, f->handle);
@@ -1275,11 +1278,13 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         dom_run_scripts(ctx);   /* run the page's own inline scripts (from the parsed DOM) in document order */
         seed_orphans(ctx);      /* normal: seed fresh orphan flows. resume: build g_orphan_buf locators only. */
         if (g_resume_mode && recipes) {
-            /* RESUME the parked frontier: each recipe "idx,dec" re-creates a flow = orphan g_orphan_buf[idx]
-               with its decision-vector, reconstructed by replay when the scheduler re-runs it. */
+            /* RESUME the parked frontier: each recipe "hash,dec" re-creates a flow by LOCATING the orphan whose
+               stable identity (JS_OrphanHash = filename+line+col) matches — robust to collection order/context,
+               unlike a positional index. Reconstructed by replay when the scheduler re-runs it. A recipe whose
+               function is absent in THIS context simply doesn't match (skipped) — never drives the wrong one. */
             const char *p = recipes; int resumed = 0;
             while (*p) {
-                int idx = atoi(p);
+                uint32_t want = (uint32_t)strtoul(p, NULL, 10);
                 const char *comma = strchr(p, ','), *semi = strchr(p, ';');
                 signed char *dec = NULL; int dec_n = 0;
                 if (comma && (!semi || comma < semi)) {
@@ -1287,9 +1292,11 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
                     dec_n = (int)(end - d);
                     if (dec_n > 0) { dec = (signed char *)malloc((size_t)dec_n); for (int i = 0; i < dec_n; i++) dec[i] = (d[i] == '1') ? 1 : 0; }
                 }
-                if (idx >= 0 && idx < g_orphan_n) {
-                    reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[idx]), 1.0, 0, dec, dec_n);
-                    g_reg[g_reg_n - 1].orphan_idx = idx; resumed++;
+                int found = -1;
+                for (int oi = 0; oi < g_orphan_n; oi++) { if (JS_OrphanHash(ctx, g_orphan_buf[oi]) == want) { found = oi; break; } }
+                if (found >= 0) {
+                    reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), 1.0, 0, dec, dec_n);
+                    g_reg[g_reg_n - 1].orphan_idx = found; resumed++;
                 } else free(dec);
                 if (!semi) break; p = semi + 1;
             }
