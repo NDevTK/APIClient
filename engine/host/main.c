@@ -114,6 +114,37 @@ static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisio
     if (!nd) return 0;
     g_dec = nd; g_dec_cap = nc; return 1;
 }
+/* PER-FLOW VALUE DOMAIN: the constraints on external sources that HOLD on this flow's path, one per decision
+   (src NULL = the branch carried no value-domain provenance). Normalized to "src IS / ISN'T tok". Rebuilt as
+   the flow runs (branch_decide re-sees each cond), so it needs no per-flow persistence. Feasibility of a new
+   constraint is checked against these; a provably-contradicted branch arm is PRUNED (no phantom @H). */
+typedef struct { char *src; char *tok; int is_eq; } Cons;   /* is_eq: 1 = src==tok holds, 0 = src!=tok holds */
+static Cons *g_cons = NULL; static int g_cons_cap = 0, g_cons_n = 0;
+static void cons_reset(void) { for (int i = 0; i < g_cons_n; i++) { free(g_cons[i].src); free(g_cons[i].tok); } g_cons_n = 0; }
+static void cons_set(int i, const char *src, const char *tok, int is_eq) {   /* record the constraint that holds at decision i */
+    if (i >= g_cons_cap) { int nc = g_cons_cap ? g_cons_cap * 2 : 64; while (nc <= i) nc *= 2; Cons *n = realloc(g_cons, (size_t)nc * sizeof(Cons)); if (!n) return; g_cons = n; g_cons_cap = nc; }
+    for (int j = g_cons_n; j <= i; j++) { g_cons[j].src = NULL; g_cons[j].tok = NULL; g_cons[j].is_eq = 0; }   /* fill gaps */
+    if (i >= g_cons_n) g_cons_n = i + 1;
+    free(g_cons[i].src); free(g_cons[i].tok);
+    g_cons[i].src = src ? strdup(src) : NULL; g_cons[i].tok = tok ? strdup(tok) : NULL; g_cons[i].is_eq = is_eq;
+}
+/* Is `src <is_eq> tok` consistent with the constraints already holding on this flow (indices < upto)? Only
+   provable EQ/NE contradictions return 0 — everything else is feasible (SOUND: never over-prune a real arm). */
+static int cons_feasible(const char *src, const char *tok, int is_eq, int upto) {
+    if (!src) return 1;
+    for (int i = 0; i < upto && i < g_cons_n; i++) {
+        Cons *c = &g_cons[i];
+        if (!c->src || strcmp(c->src, src)) continue;
+        int same = (c->tok && tok && strcmp(c->tok, tok) == 0);
+        if (c->is_eq) {                 /* src is FIXED to c->tok */
+            if (is_eq && !same) return 0;   /* new src==tok, but src fixed to a different value */
+            if (!is_eq && same) return 0;   /* new src!=tok, but src fixed to tok */
+        } else {                        /* src != c->tok */
+            if (is_eq && same) return 0;    /* new src==tok, but src!=tok already holds */
+        }
+    }
+    return 1;
+}
 
 typedef struct DomUndo DomUndo;                 /* per-flow DOM COW delta buffer (defined below) */
 static void dom_buf_free(DomUndo *buf, int n);
@@ -747,19 +778,36 @@ static void emit_result(JSContext *ctx) {
    engine's OP_if hook when a branch condition is OPAQUE (real bundles). Forced replay of this flow's
    decision prefix; a NEW decision forks the FALSE sibling (re-run the same function) and takes TRUE. */
 static int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a cross-flow @S candidate */
-static int branch_decide(JSContext *ctx)
+static int branch_decide(JSContext *ctx, JSValueConst cond)
 {
     if (g_boot_replay || g_in_session) return 1;            /* boot-replay / attacker-session: take a fixed arm (per-handler branch exploration is the individual orphan flows' job) */
     if (!g_running || JS_IsUndefined(g_cur_fn)) return 0;   /* only meaningful inside a starter flow */
-    if (g_c < g_dec_n) return g_dec[g_c++] ? 1 : 0;         /* forced replay */
+    /* value-domain provenance of the condition: cond TRUE means `src <op> tok`. Normalize each arm to is_eq. */
+    const char *src = NULL, *tok = NULL; int op = JS_OpaqueCmp(cond, &src, &tok);
+    int has = (op == OPCMP_EQ || op == OPCMP_NE);
+    int true_eq = has ? (op == OPCMP_EQ ? 1 : 0) : 0, false_eq = !true_eq;
+
+    if (g_c < g_dec_n) {                                    /* forced replay: take the recorded arm; RE-RECORD its constraint */
+        int arm = g_dec[g_c] ? 1 : 0;
+        cons_set(g_c, has ? src : NULL, has ? tok : NULL, arm ? true_eq : false_eq);
+        g_c++; return arm;
+    }
     if (!g_dec_ensure(g_c + 1)) return 1;                    /* only RAM/disk (the platform floor) bounds depth — not a cap */
-    signed char *sib = (signed char *)malloc((size_t)(g_c + 1));
+
+    /* NEW decision: PRUNE a provably-infeasible arm given the accumulated domain (no phantom @H); else fork. */
+    int tf = !has || cons_feasible(src, tok, true_eq, g_c);
+    int ff = !has || cons_feasible(src, tok, false_eq, g_c);
+    if (has && !tf && ff) { cons_set(g_c, src, tok, false_eq); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }   /* TRUE arm impossible */
+    if (has && !ff && tf) { cons_set(g_c, src, tok, true_eq);  g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }   /* FALSE arm impossible */
+
+    signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* both arms feasible: fork FALSE sibling, take TRUE */
     if (sib) {
         for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
         sib[g_c] = 0;
         reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, 0, sib, g_c + 1);
         g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;   /* sibling = same function (same locator), different decisions */
     }
+    cons_set(g_c, has ? src : NULL, has ? tok : NULL, true_eq);
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
     return 1;
 }
@@ -914,7 +962,7 @@ static JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int
     return o;
 }
 static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{ return branch_decide(ctx) ? JS_TRUE : JS_FALSE; }
+{ return branch_decide(ctx, argc > 0 ? argv[0] : JS_UNDEFINED) ? JS_TRUE : JS_FALSE; }
 
 /* __opaque(): return the OPAQUE sentinel — external input the tool must not concretely decide. A branch
    on it (if(__opaque())) auto-forks BOTH arms via the engine OP_if hook, no explicit __branch needed. */
@@ -1823,6 +1871,7 @@ static void scheduler_run(JSContext *ctx)
         g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);
         for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
         g_c = f.saved_c;
+        cons_reset();   /* rebuild the value domain as this flow re-sees its branch conditions (starter = full; resume = from saved_c) */
 
         int is_starter = (f.fs == NULL);
         if (is_starter) {                           /* STARTER: fresh heap frame + empty heap/DOM deltas (both left NULL by the previous flow's exit) */
@@ -2299,6 +2348,7 @@ KEEP void qjs_teardown(void)
     free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
     for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
     free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
+    cons_reset(); free(g_cons); g_cons = NULL; g_cons_cap = 0;   /* free the per-flow value-domain constraint set */
     for (int i = 0; i < g_modsrc_n; i++) { free(g_modsrc[i].url); free(g_modsrc[i].src); }
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
     for (int i = 0; i < g_moddep_n; i++) free(g_moddep[i]);
