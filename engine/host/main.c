@@ -57,6 +57,8 @@ typedef struct {
     int session;         /* ATTACKER SESSION flow: fire ALL registered handlers in seed order over ONE accumulating
                             COW delta (handler A's tainted write to shared state is visible to handler B), modeling an
                             attacker firing a sequence of events — the sound way to reach cross-handler sinks. */
+    char *vtarget;       /* @S candidate flow: the "sink|ctx" it verifies. Once that's in g_verified, this flow is
+                            REDUNDANT (another candidate already broke out) -> skip it, saving a full bundle re-run. */
 } Flow;
 static int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
 static Flow   *g_reg = NULL;
@@ -122,7 +124,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].fs = NULL; g_reg[g_reg_n].saved_c = 0; g_reg[g_reg_n].cpu = 0; g_reg[g_reg_n].visits = 0;
     g_reg[g_reg_n].cow = NULL; g_reg[g_reg_n].cow_n = 0; g_reg[g_reg_n].cow_cap = 0;
     g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
-    g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0;
+    g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
     g_reg_n++; return 1;
 }
 
@@ -135,7 +137,7 @@ static int reg_readd(JSContext *ctx, Flow f)
         if (!nr) { printf("@WHY {\"phase\":\"reg_oom\"}\n");
                    if (f.fs) JS_FlowFree(g_rt, f.fs); if (f.cow) JS_CowBufFree(ctx, f.cow, f.cow_n);
                    if (f.dom) dom_buf_free((DomUndo *)f.dom, f.dom_n);
-                   JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); return 0; }
+                   JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); return 0; }
         g_reg = nr; g_reg_cap = nc;
     }
     g_reg[g_reg_n++] = f; return 1;
@@ -539,15 +541,16 @@ static int solve_broke(const char *sc, const char *res) {
 }
 /* enqueue an @S REPLAY flow: re-run the CURRENT orphan with `cand` as the concrete source, driven by the
    ONE scheduler (high initial value so the search runs soon; transient — never parked as a recipe). */
-static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand) {
+static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand, const char *target) {
     if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
         if (reg_add(ctx, JS_UNDEFINED, 2.0, 0, NULL, 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
-        return;
+        return;   /* a session verifies MANY sinks -> not tagged with one vtarget */
     }
     if (JS_IsUndefined(fn)) return;
     if (reg_add(ctx, JS_DupValue(ctx, fn), 2.0, 0, NULL, 0)) {
         g_reg[g_reg_n - 1].candidate = strdup(cand);
         g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;
+        if (target) g_reg[g_reg_n - 1].vtarget = strdup(target);
     }
 }
 /* Sink reached. DUAL-MODE:
@@ -590,17 +593,18 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
         JSValue e = JS_GetPropertyStr(ctx, g_enqueued, ek); int done = !JS_IsUndefined(e); JS_FreeValue(ctx, e);
         if (!done) {
             JS_SetPropertyStr(ctx, g_enqueued, ek, JS_NewBool(ctx, 1));
+            char vt[300]; snprintf(vt, sizeof vt, "%s|%s", sink, sctx);   /* the sink|ctx these candidates verify -> skip once one breaks out */
             const char **cands = cand_set(sctx);
             for (int i = 0; cands[i]; i++) {
-                reg_add_cand(ctx, hitfn, cands[i]);
+                reg_add_cand(ctx, hitfn, cands[i], vt);
                 /* GATE-GUIDED variants: try each observed gate token as a PREFIX and SUFFIX of the payload,
                    so startsWith('cmd:')/endsWith(...)/includes(...) gates are satisfied by the concrete input
                    the real code demanded. The one that passes the gate reaches the sink and breaks out. */
                 for (int g = 0; g < g_gate_n; g++) {
                     size_t lt = strlen(g_gate_tokens[g]), lc = strlen(cands[i]);
                     char *pre = malloc(lt + lc + 1), *suf = malloc(lt + lc + 1);
-                    if (pre) { memcpy(pre, g_gate_tokens[g], lt); memcpy(pre + lt, cands[i], lc + 1); reg_add_cand(ctx, hitfn, pre); free(pre); }
-                    if (suf) { memcpy(suf, cands[i], lc); memcpy(suf + lc, g_gate_tokens[g], lt + 1); reg_add_cand(ctx, hitfn, suf); free(suf); }
+                    if (pre) { memcpy(pre, g_gate_tokens[g], lt); memcpy(pre + lt, cands[i], lc + 1); reg_add_cand(ctx, hitfn, pre, vt); free(pre); }
+                    if (suf) { memcpy(suf, cands[i], lc); memcpy(suf + lc, g_gate_tokens[g], lt + 1); reg_add_cand(ctx, hitfn, suf, vt); free(suf); }
                 }
             }
         }
@@ -1576,7 +1580,7 @@ static void park_frontier(JSContext *ctx)
         if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
         if (f->dom) dom_buf_free((DomUndo *)f->dom, f->dom_n);   /* and its DOM delta */
         JS_FreeValue(ctx, f->handle);
-        free(f->dec); free(f->candidate);
+        free(f->dec); free(f->candidate); free(f->vtarget);
     }
     g_reg_n = 0;
     (void)parked;   /* recipes accumulated into g_park -> @RESULT._park (no separate @PARKED line) */
@@ -1601,6 +1605,12 @@ static void scheduler_run(JSContext *ctx)
             if (flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
         Flow f = g_reg[best];                       /* f is a STABLE COPY: reg_add during the run may realloc g_reg */
         g_reg_n--; g_reg[best] = g_reg[g_reg_n];    /* swap-remove */
+        /* REDUNDANT @S candidate: another candidate already broke out this sink (in g_verified) -> skip it,
+           saving a full boot-replay/bundle re-run. Not a bound: the sink IS solved; the work is duplicate. */
+        if (f.vtarget && JS_IsObject(g_verified)) {
+            JSValue vv = JS_GetPropertyStr(ctx, g_verified, f.vtarget); int solved = JS_IsString(vv); JS_FreeValue(ctx, vv);
+            if (solved) { JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); continue; }
+        }
         f.visits++;
         g_work++;                                   /* one flow got CPU (starter OR resume) — counts toward the quantum */
         g_cur_orphan_idx = f.orphan_idx;            /* siblings forked during this flow inherit its locator */
@@ -1641,7 +1651,7 @@ static void scheduler_run(JSContext *ctx)
             dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
             if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }
             g_candidate = NULL; g_running = 0; g_cur_flow = NULL;
-            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate);
+            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
             continue;
         }
 
@@ -1695,7 +1705,7 @@ static void scheduler_run(JSContext *ctx)
                 if (f.candidate) { int sv = 0; JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); (void)sv; }   /* restore boot-created globals (host-side, uncaptured) */
                 JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);
                 g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
-                JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate);
+                JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
                 continue;
             }
             JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);   /* JS_FlowNew dup'd the drive handle; drop our resolved ref + transient replay handlers */
@@ -1746,7 +1756,7 @@ static void scheduler_run(JSContext *ctx)
             if (JS_IsException(out)) js_std_dump_error(ctx);
             JS_FreeValue(ctx, out);
             g_cur_flow = NULL;
-            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate);   /* candidate owned by a completed replay flow */
+            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);   /* candidate owned by a completed replay flow */
         }
         g_candidate = NULL;   /* clear the replay candidate; a suspended flow re-sets it from f.candidate on resume */
     }
