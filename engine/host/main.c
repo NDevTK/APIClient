@@ -1110,8 +1110,7 @@ static int seed_orphans(JSContext *ctx)
         g_reg[g_reg_n - 1].orphan_idx = idx;
         seeded++;
     }
-    if (seeded > 0) { printf("@ORPHANS %d\n", seeded); fflush(stdout); }
-    return seeded;
+    return seeded;   /* count surfaces in @RESULT._orphans (via g_orphan_n) — no dead @ORPHANS line */
 }
 static JSValue js_drive_orphans(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return JS_NewInt32(ctx, seed_orphans(ctx)); }
@@ -1611,8 +1610,7 @@ KEEP void qjs_teardown(void)
     JSContext *ctx = g_ctx;
     if (!ctx) return;
     qjs_finalize();   /* resolve any stragglers opaque so no promise leaks */
-    emit_result(ctx);   /* dedup in-engine + emit the ONE @RESULT json (endpoints/sinks/chunks/errors/park) */
-    printf("@DONE emit=%d\n", g_emit_total); fflush(stdout);
+    emit_result(ctx);   /* dedup in-engine + emit the ONE @RESULT json (endpoints/sinks/chunks/errors/park/_emit) */
     /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
        its held baseline values return to their slots, and drop the opaque marker. */
     JS_CowSetActive(0);
