@@ -709,6 +709,17 @@ static void script_maybe_load(lxb_dom_element_t *el) {
         if (u) { if (!has_hole(u)) chunk_pending_add(u); free(u); }         /* concrete src -> fetch + eval in place */
     }
 }
+/* dynamic import(specifier): force-fetch the ESM chunk in place (like a browser lazy-load, forced). Make the
+   concrete specifier a pending chunk (fetched + eval'd; its functions become orphans the scheduler drives)
+   and surface @CHUNK. The module namespace is OPAQUE (forced-exec runs the CODE, not the real exports). */
+static JSValue host_dyn_import(JSContext *ctx, const char *specifier) {
+    if (specifier && specifier[0] && !has_hole(specifier)) {
+        printf("@CHUNK %s\n", specifier); fflush(stdout);
+        char *u = strdup(specifier);
+        if (u) { chunk_pending_add(u); free(u); }
+    }
+    return JS_DupValue(ctx, g_opaque);
+}
 static int is_sink_attr(const char *n) {   /* attributes where tainted data is an XSS/redirect sink */
     return n && (strncmp(n, "on", 2) == 0 || strcmp(n, "href") == 0 || strcmp(n, "src") == 0 ||
                  strcmp(n, "action") == 0 || strcmp(n, "formaction") == 0 || strcmp(n, "srcdoc") == 0);
@@ -1142,6 +1153,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_opaque = JS_NewOpaqueShaped(ctx, "{}");   /* the default opaque (shape "{}"); generic propagation dups it */
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
+    JS_SetDynImportHook(host_dyn_import);   /* dynamic import() -> force-fetch the ESM chunk in place */
     /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source-tagged opaque. */
     g_msg_event = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, g_msg_event, "data", JS_NewOpaqueShaped(ctx, "{pm}"));
