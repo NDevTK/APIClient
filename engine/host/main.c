@@ -478,7 +478,7 @@ static JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate
 static const char *CAND_HTML[] = { "<img src=x onerror=X9>", "<svg onload=X9>", "\"><img src=x onerror=X9>",
                                    "'><svg onload=X9>", "</script><svg onload=X9>", NULL };
 static const char *CAND_URL[]  = { "javascript:X9", "javascript:X9//", NULL };
-static const char *CAND_JS[]   = { "';X9;//", "\";X9;//", "-X9-", "\n;X9;//", NULL };
+static const char *CAND_JS[]   = { "1;X9();//", "';X9();//", "\";X9();//", ");X9();//", "\n;X9();//", NULL };
 static const char **cand_set(const char *sc) {
     if (sc && strcmp(sc, "url") == 0) return CAND_URL;
     if (sc && strcmp(sc, "js") == 0) return CAND_JS;
@@ -511,7 +511,18 @@ static int solve_broke(const char *sc, const char *res) {
     if (!res) return 0;
     if (sc && strcmp(sc, "url") == 0) { const char *p = res; while (*p == ' ' || *p == '\t') p++; return strncmp(p, "javascript:X9", 13) == 0; }
     if (!strstr(res, "X9")) return 0;   /* our nonce must survive */
-    if (sc && strcmp(sc, "js") == 0) return strstr(res, ";X9") || strstr(res, ")X9") || strstr(res, "-X9-") || strstr(res, "\nX9");
+    if (sc && strcmp(sc, "js") == 0) {
+        /* eval sink: the sink VALUE is code — RUN it in the clean realm; X9() firing = real code injection
+           (sound, unlike a substring match which false-positives when X9 lands inside a string literal). */
+        if (!g_solve_ctx) return 0;
+        JSValue r0 = JS_Eval(g_solve_ctx, "globalThis.__f9=0", 17, "<r>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, r0);
+        JSValue cr = JS_Eval(g_solve_ctx, res, strlen(res), "<sinkcode>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(cr)) { JSValue e = JS_GetException(g_solve_ctx); JS_FreeValue(g_solve_ctx, e); }
+        JS_FreeValue(g_solve_ctx, cr);
+        JSValue fv = JS_Eval(g_solve_ctx, "globalThis.__f9", 15, "<f>", JS_EVAL_TYPE_GLOBAL);
+        int fired = JS_ToBool(g_solve_ctx, fv); JS_FreeValue(g_solve_ctx, fv);
+        return fired;
+    }
     /* html/attr: a RAW payload tag opener survived (if '<' was escaped to &lt; these are absent) */
     return strstr(res, "<img") || strstr(res, "<svg") || strstr(res, "<script") || strstr(res, "<iframe");
 }
@@ -1414,6 +1425,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_endpoints = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
     g_whys = JS_NewArray(ctx); g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
+    if (g_solve_ctx) { const char *x9 = "globalThis.X9=function(){globalThis.__f9=1};globalThis.__f9=0;";
+        JSValue xr = JS_Eval(g_solve_ctx, x9, strlen(x9), "<x9>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, xr); }   /* X9 fire-tracker for the js-sink verify */
     g_dedup_fn = JS_Eval(ctx, DEDUP_JS, strlen(DEDUP_JS), "<dedup>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(g_dedup_fn)) { js_std_dump_error(ctx); g_dedup_fn = JS_UNDEFINED; }
     js_std_add_helpers(ctx, 0, NULL);
