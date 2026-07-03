@@ -167,6 +167,32 @@ static const char *cons_fixed_value(const char *src) {
     for (int i = 0; i < g_cons_n; i++) if (g_cons[i].src && g_cons[i].op == OPCMP_EQ && !strcmp(g_cons[i].src, src)) return g_cons[i].tok;
     return NULL;
 }
+/* Substitute each `{src}` hole the running flow FIXED (== gate) with its concrete value, so a URL built from
+   gated input surfaces the SOLVED key in BOTH path and query (/api/{hash} -> /api/admin). NULL if nothing
+   solved. The @H shape is re-derived downstream, so grouping is unaffected — only the example gains a value. */
+static char *url_solve_holes(JSContext *ctx, const char *url) {
+    (void)ctx;
+    if (!url || !strchr(url, '{')) return NULL;
+    size_t cap = strlen(url) + 64, len = 0; char *out = malloc(cap); if (!out) return NULL;
+    int changed = 0;
+    for (const char *p = url; *p; ) {
+        if (*p == '{') {
+            const char *close = strchr(p, '}');
+            if (close && (size_t)(close - p + 1) < 64) {
+                char hole[64]; size_t hl = (size_t)(close - p + 1); memcpy(hole, p, hl); hole[hl] = 0;
+                const char *fixed = cons_fixed_value(hole);
+                if (fixed) { size_t fl = strlen(fixed);
+                    while (len + fl + 1 > cap) { cap *= 2; char *n = realloc(out, cap); if (!n) { free(out); return NULL; } out = n; }
+                    memcpy(out + len, fixed, fl); len += fl; p = close + 1; changed = 1; continue; }
+            }
+        }
+        if (len + 2 > cap) { cap *= 2; char *n = realloc(out, cap); if (!n) { free(out); return NULL; } out = n; }
+        out[len++] = *p++;
+    }
+    out[len] = 0;
+    if (!changed) { free(out); return NULL; }
+    return out;
+}
 
 typedef struct DomUndo DomUndo;                 /* per-flow DOM COW delta buffer (defined below) */
 static void dom_buf_free(DomUndo *buf, int n);
@@ -468,14 +494,12 @@ static void build_query_params(JSContext *ctx, const char *url, JSValueConst par
         char nbuf[256], vbuf[512];
         url_pct_decode(p, (size_t)(ne - p), nbuf, sizeof nbuf);
         url_pct_decode(vb, (size_t)(amp - vb), vbuf, sizeof vbuf);
-        const char *solved = (vbuf[0] == '{') ? cons_fixed_value(vbuf) : NULL;   /* domain-fixed source -> SOLVED concrete example key */
         if (nbuf[0]) {
             JSValue po = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, po, "name", JS_NewString(ctx, nbuf));
             JS_SetPropertyStr(ctx, po, "location", JS_NewString(ctx, "query"));
             JSValue vv = JS_NewArray(ctx);
-            if (solved) JS_SetPropertyUint32(ctx, vv, 0, JS_NewString(ctx, solved));
-            else if (vbuf[0]) JS_SetPropertyUint32(ctx, vv, 0, JS_NewString(ctx, vbuf));
+            if (vbuf[0]) JS_SetPropertyUint32(ctx, vv, 0, JS_NewString(ctx, vbuf));   /* eurl already value-solved upstream */
             JS_SetPropertyStr(ctx, po, "validValues", vv);
             JS_SetPropertyUint32(ctx, params, idx++, po);
         }
@@ -509,12 +533,15 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         if (JS_IsString(m)) method = JS_ToCString(ctx, m);
         JS_FreeValue(ctx, m);
     }
+    char *usolved = url_solve_holes(ctx, url);   /* value-solving: {src} holes the flow fixed -> concrete key (path + query) */
+    const char *eurl = usolved ? usolved : url;
     JSValue ep = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, ep, "method", JS_NewString(ctx, method ? method : "GET"));
-    JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, url ? url : "?"));
+    JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, eurl ? eurl : "?"));
     JS_SetPropertyStr(ctx, ep, "source", JS_NewString(ctx, "ast_analysis"));
     JSValue params = JS_NewArray(ctx);
-    build_query_params(ctx, url, params);
+    build_query_params(ctx, eurl, params);
+    free(usolved);
     JS_SetPropertyStr(ctx, ep, "params", params);
     /* REQUIRED HEADERS + REQUEST BODY: part of the endpoint spec (replay). A plain-object `headers` ->
        ep.headers{name:value}; a POST/PATCH body (already stringified by the bundle; opaque fields -> {}
