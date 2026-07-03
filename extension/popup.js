@@ -1761,615 +1761,70 @@ function renderDataPanel() {
 
 // ─── Security Panel ──────────────────────────────────────────────────────────
 
-// Popup-scoped map of findingKey → sessionId for probes kicked off this
-// session. Keeps the UI glued to the SW-side _probeSessions Map so that
-// after the first click we only show status — no duplicate probes.
-const _probeInFlight = new Map();
-
-// Probes whose result has been rendered at least once, used to avoid
-// flashing the "Running…" state when the user reopens a card that was
-// already verified. Keyed by findingKey → { hits, status, strategy, at }.
-const _probeResults = new Map();
-
-// Embedded PoC sandboxes (poc-sandbox.html), keyed by a per-iframe pocId. The
-// sandbox is a real cross-origin attacker context that evals the EXACT PoC JS
-// on the user's click; we postMessage the PoC to it once it signals POC_READY,
-// and watch for POC_RAN to know the user fired it.
-const _pocSandboxes = new Map();
-let _pocIdSeq = 0;
-
-// One listener for messages FROM the embedded PoC sandbox iframes.
-window.addEventListener("message", (e) => {
-  const d = e.data;
-  if (!d || typeof d !== "object") return;
-  if (d.type !== "POC_READY" && d.type !== "POC_RAN") return;
-  // Match the sender window to the iframe we created (its contentWindow), then
-  // look up the PoC we staged for it. We never trust message content for the
-  // PoC body — only for the ready/ran signal.
-  for (const [pocId, ent] of _pocSandboxes) {
-    const ifr = document.querySelector('iframe[data-poc-id="' + pocId + '"]');
-    if (!ifr || ifr.contentWindow !== e.source) continue;
-    if (d.type === "POC_READY") {
-      try { e.source.postMessage({ type: "POC_SETUP", pocJs: ent.pocJs, marker: ent.marker }, "*"); } catch (_) {}
-    } else if (d.type === "POC_RAN") {
-      if (ent.statusEl) {
-        ent.statusEl.textContent = d.error
-          ? "PoC threw in the sandbox: " + d.error
-          : "PoC executed — waiting for the sink to fire…";
-      }
-      // The user fired it; poll the session's hits for the verdict.
-      if (ent.resultEl && !_probeInFlight.has(ent.key)) {
-        _probeInFlight.set(ent.key, ent.marker);
-        _pollProbe(ent.resultEl, ent.key, ent.marker);
-      }
-    }
-    return;
-  }
-});
-
-// Stable key for a finding INSIDE THE POPUP — independent of the
-// harness's SHA-1-based id. We just need something unique within a tab
-// so delegated handlers can route clicks back to the right finding.
+// Stable-ish key for a finding card within a tab. The engine emits a working PoC
+// per (sink, source-shape); key by that + source url.
 function _findingKey(entry) {
-  const loc = entry.item && entry.item.location;
-  const kind = entry.kind === "sink"
-    ? (entry.item.type || "?") + ":" + (entry.item.sink || "?")
-    : (entry.item.type || "?");
-  return (entry.sourceUrl || "(inline)") + "|L" + (loc ? loc.line : "?") + ":C" + (loc ? loc.column : "?") + "|" + entry.kind + "|" + kind;
+  const it = entry.item || {};
+  return (entry.sourceUrl || "(inline)") + "|" + (it.sink || it.type || "?") + "|" + (it.shape || "") + "|" + (it.poc || "");
 }
 
-// Render one forced path's data-flow hops (source → ops → sink) as an ordered
-// list. Each hop is a psi term step the engine computed.
-function _renderDataFlowHops(hops) {
-  if (!Array.isArray(hops) || !hops.length) return "";
-  let rows = "";
-  for (let i = 0; i < hops.length; i++) {
-    const h = hops[i];
-    const at = h.at ? ("L" + h.at.line + ":C" + h.at.column) : "";
-    var snippetHtml = h.code ? '<div class="hop-snippet"><code>' + esc(String(h.code).slice(0, 200)) + '</code></div>' : '';
-    var kindHtml = h.kind ? '<code>[' + esc(h.kind) + ']</code> ' : '';
-    rows += '<li>' + kindHtml + esc(h.desc || "")
-      + (at ? ' <span class="hop-at">' + esc(at) + '</span>' : '') + snippetHtml + '</li>';
-  }
-  return '<ol class="taint-hops">' + rows + '</ol>';
-}
-// Render the conditionals (Φ) the forced run took to reach the sink. Each is a
-// gate + the branch direction; this is what lets a reviewer judge a candidate
-// FP (a gate pins the value) from a live path. The condition expression and
-// branch are exactly what QuickJS forced.
-function _renderConditions(conds) {
-  if (!Array.isArray(conds) || !conds.length) return '<div class="taint-conds-empty">no path conditions — the source reaches the sink unconditionally</div>';
-  let rows = "";
-  for (let i = 0; i < conds.length; i++) {
-    const c = conds[i];
-    const took = c.decision ? "true" : "false";
-    rows += '<li><span class="cond-branch cond-' + took + '">' + took + '</span> <code>' + esc(c.expr || "?") + '</code></li>';
-  }
-  return '<ul class="taint-conds">' + rows + '</ul>';
-}
-// Render the interprocedural call chain — which FUNCTIONS the taint passed
-// through on the way to the sink (innermost first, as QuickJS's stack reports).
-function _renderCallChain(chain) {
-  if (!Array.isArray(chain) || !chain.length) return "";
-  let rows = "";
-  for (let i = 0; i < chain.length; i++) {
-    const f = chain[i];
-    const nm = f.name ? esc(f.name) : "(anonymous)";
-    const loc = (f.line != null) ? ("L" + f.line + ":C" + (f.column != null ? f.column : f.col)) : "";
-    rows += '<li><code>' + nm + '</code> <span class="hop-at">' + esc(loc) + '</span></li>';
-  }
-  return '<ol class="taint-callchain">' + rows + '</ol>';
-}
-function _renderTaintPathDetails(item) {
-  // Structured forced-execution trace. Built from the engine's psi (data flow),
-  // Φ (conditionals), the @S call chain (interprocedural), and the Z3 verdict
-  // classification — so a reviewer can tell a PoC from a pinned candidate-FP
-  // from a PoC-generation failure, and see EVERY distinct path to the sink.
-  const dataFlow = Array.isArray(item.taintPath) ? item.taintPath : [];
-  const conds = Array.isArray(item.conditions) ? item.conditions : [];
-  const chain = Array.isArray(item.callChain) ? item.callChain : [];
-  const paths = Array.isArray(item.paths) ? item.paths : [];
-  if (!dataFlow.length && !conds.length && !chain.length && !paths.length) return "";
-
-  const vr = item.verdictReason || null;
-  const reasonClass = vr ? ("vr-" + esc(vr.reason)) : "";
-  const reasonHtml = vr
-    ? '<div class="verdict-reason ' + reasonClass + '" title="What the Z3 static verdict actually means — the Verify probe is the only dynamic confirmation.">' + esc(vr.text) + '</div>'
-    : "";
-
-  // Primary path: data flow + conditionals + interprocedural chain.
-  let primary = "";
-  if (item.source) primary += '<div class="taint-section-h">source</div><div class="taint-source"><code>' + esc(String(item.source)) + '</code></div>';
-  if (dataFlow.length) primary += '<div class="taint-section-h">data flow (' + dataFlow.length + ' hop' + (dataFlow.length === 1 ? "" : "s") + ')</div>' + _renderDataFlowHops(dataFlow);
-  primary += '<div class="taint-section-h">path conditions (' + conds.length + ')</div>' + _renderConditions(conds);
-  if (chain.length) primary += '<div class="taint-section-h">interprocedural call chain (' + chain.length + ' frame' + (chain.length === 1 ? "" : "s") + ')</div>' + _renderCallChain(chain);
-
-  // Alternate forced paths to the SAME sink. Each is a distinct gating path the
-  // forced multi-path execution found — represents the multiple interprocedural
-  // routes a single linear chain can't show.
-  let altHtml = "";
-  if (paths.length > 1) {
-    let alts = "";
-    for (let pi = 0; pi < paths.length; pi++) {
-      const p = paths[pi];
-      const pvr = p.verdictReason ? '<span class="badge poc-' + esc(String(p.verdict || "").toLowerCase()) + '">' + esc(({ REAL_EXPLOIT: "PoC", TAINT_REACH: "taint", Z3_ERROR: "Z3 error" })[p.verdict] || p.verdict || "") + '</span> ' : "";
-      const pconds = Array.isArray(p.conditions) ? p.conditions : [];
-      const pchain = Array.isArray(p.callChain) ? p.callChain : [];
-      alts += '<li class="alt-path">' + pvr + 'path ' + (pi + 1)
-        + '<div class="taint-section-h">conditions (' + pconds.length + ')</div>' + _renderConditions(pconds)
-        + (pchain.length ? '<div class="taint-section-h">call chain (' + pchain.length + ')</div>' + _renderCallChain(pchain) : "")
-        + '</li>';
-    }
-    altHtml = '<details class="taint-details alt-paths"><summary>' + paths.length + ' distinct forced paths to this sink</summary><ul class="alt-path-list">' + alts + '</ul></details>';
-  }
-
-  const summary = vr ? ("taint trace — " + esc(vr.reason)) : "taint trace (forced execution)";
-  return reasonHtml
-    + '<details class="taint-details"><summary>' + summary + '</summary>'
-    + '<div class="taint-body">' + primary + '</div></details>'
-    + altHtml;
-}
-
-// Reachability gates the AST extracted between source and sink
-// (`if (x === 'exec')`, `switch (x) { case 'add': … }`, early-return
-// guards). Each entry tells the reviewer "the probe must pin field X
-// to literal Y for this sink to run" — both so the reviewer can
-// understand why the finding is real AND so they can read the same
-// payload the probe is about to deliver.
-function _renderPreconditionsDetails(item) {
-  if (!Array.isArray(item.preconditions) || !item.preconditions.length) return "";
-  let rows = "";
-  for (const p of item.preconditions) {
-    const pathLabel = Array.isArray(p.path) && p.path.length
-      ? p.path.map(s => JSON.stringify(s)).join(".")
-      : "<root>";
-    rows += '<li><code>' + esc(pathLabel) + '</code> <span class="hop-at">'
-      + esc(String(p.op || "===")) + '</span> <code>' + esc(JSON.stringify(p.value)) + '</code></li>';
-  }
-  return '<details class="taint-details"><summary>preconditions (' + item.preconditions.length
-    + ') — sink reachable only when these fields equal the pinned values</summary>'
-    + '<ul class="taint-hops">' + rows + '</ul></details>';
-}
-
-// Per-sink sanitizer audit: which sanitizer-shaped calls the
-// classifier saw in the enclosing function and whether each matched
-// on-path. A reviewer uses this to judge whether the sanitized/not-
-// sanitized decision was correct without tracing the minified
-// source by hand.
-function _renderSanitizerDetails(item) {
-  const sr = item.sanitizerReport;
-  if (!sr || !Array.isArray(sr.candidates) || !sr.candidates.length) return "";
-  let rows = "";
-  for (const c of sr.candidates) {
-    const at = c.loc ? ("L" + c.loc.line + ":C" + c.loc.column) : "?";
-    const verdict = c.matched ? (c.onPath ? "matched, on-path" : "matched, branch-only") : "rejected";
-    rows += '<li><code>' + esc(c.label || "?") + '</code> <span class="hop-at">' + esc(at) + '</span> '
-      + '[<span class="san-verdict san-' + (c.matched ? (c.onPath ? 'match' : 'branch') : 'reject') + '">' + esc(verdict) + '</span>]'
-      + '<div class="san-reason">' + esc(c.matchReason || "") + '</div></li>';
-  }
-  return '<details class="taint-details"><summary>sanitizer report: ' + esc(sr.decision || "?") + '  ('
-    + sr.candidates.length + ' candidate ' + (sr.candidates.length === 1 ? 'call' : 'calls') + ' in scope)</summary>'
-    + '<ul class="taint-hops">' + rows + '</ul></details>';
-}
-
-// Render a Z3-produced multi-source PoC: shows the ordered attacker
-// steps (URL setup, postMessage payloads, storage/cookie injections)
-// and a "Run multi-step PoC" button that orchestrates the attack
-// against the target tab via background._runStructuredPlan. The
-// rendered steps are exactly what the orchestrator dispatches —
-// reviewer sees the recipe before executing.
-function _renderPocRow(entry, i, poc) {
-  const key = _findingKey(entry);
-  const stepBlocks = [];
-  // URL setup row (hash/search/pathname) — applied at chrome.tabs.create
-  if (poc.url && (poc.url.hash || poc.url.search || poc.url.pathname)) {
-    const parts = [];
-    if (poc.url.hash) parts.push('hash=' + esc(poc.url.hash));
-    if (poc.url.search) parts.push('search=' + esc(poc.url.search));
-    if (poc.url.pathname) parts.push('path=' + esc(poc.url.pathname));
-    stepBlocks.push('<div class="poc-step poc-url">URL: ' + parts.join(' &nbsp; ') + '</div>');
-  }
-  // Pre-injection state (storage, cookies)
-  if (Array.isArray(poc.storage) && poc.storage.length) {
-    for (const it of poc.storage)
-      stepBlocks.push('<div class="poc-step poc-pre">localStorage.setItem(<b>' + esc(it.key || '') + '</b>, ' + esc(JSON.stringify(it.value || '')) + ')</div>');
-  }
-  if (Array.isArray(poc.cookies) && poc.cookies.length) {
-    for (const it of poc.cookies)
-      stepBlocks.push('<div class="poc-step poc-pre">document.cookie = ' + esc(JSON.stringify(it.value || '')) + '</div>');
-  }
-  // Ordered events (postMessage sequence)
-  for (let ei = 0; ei < poc.events.length; ei++) {
-    const ev = poc.events[ei];
-    const carried = ev.carriesPayload ? ' <span class="poc-marker-tag" title="this event carries the marker that intercept.js detects at the sink">[sink-bearing]</span>' : '';
-    stepBlocks.push('<div class="poc-step poc-event">'
-      + 'Step ' + (ei + 1) + ' &middot; <code>window.postMessage(</code>'
-      + '<pre class="poc-payload">' + esc(JSON.stringify(ev.payload, null, 2)) + '</pre>'
-      + '<code>, "*")</code>' + carried + '</div>');
-  }
-  const stepHtml = stepBlocks.length
-    ? '<details class="poc-steps"><summary>PoC plan (' + stepBlocks.length + ' step' + (stepBlocks.length === 1 ? '' : 's') + ')</summary>' + stepBlocks.join('') + '</details>'
-    : '<div class="poc-na">PoC has no actionable steps</div>';
-
-  const resultHtml = '<div class="probe-result" data-finding-key="' + esc(key) + '"></div>';
-  const probeData = {
-    pocPlan: poc,
-    sourceUrl: entry.sourceUrl || null,
-    pageUrl: entry.pageUrl || null,
-    sinkType: entry.item.type || null,
-    sinkName: entry.item.sink || null,
-  };
-  const btnAttrs =
-    ' data-finding-key="' + esc(key) + '"'
-    + ' data-probe=\'' + esc(JSON.stringify(probeData)) + '\''
-    + ' data-finding-idx="' + i + '"';
-  // No verdict tag here — the Z3 verdict is a badge at the top of the box
-  // (with type + severity). This row holds only the dynamic Run/probe result.
-  return '<div class="probe-row poc-row">'
-    + stepHtml
-    + '<button class="probe-btn poc-run-btn"' + btnAttrs + '>Load PoC</button>'
-    + '<span class="probe-hint">compiles the EXACT PoC JavaScript from the Z3 solve (no template) and embeds a cross-origin attacker sandbox — click <b>Run PoC</b> inside it (your click is the user gesture). The payload calls <code>apiclientsink(&lt;finding-id&gt;)</code>, which intercept.js relays only when the browser ACTUALLY executes it → REAL EXPLOIT. CSP blocking the handler → no call → NOT REPRODUCED.</span>'
-    + resultHtml + '</div>';
-}
-
-function _renderVerifyRow(entry, i) {
-  // Offer a PoC ONLY for a proven, solvable exploit. REAL_EXPLOIT means Z3
-  // SOUNDLY solved a source-connected exploit; for anything else
-  // (EXPLOIT_UNPROVEN / TAINT_REACH / INFEASIBLE / Z3_ERROR) we do NOT offer to
-  // build a PoC — there is no soundly-solved exploit to run, so a "Load PoC"
-  // button would be a lie. The verdict-reason banner explains the situation.
-  if (entry.item && entry.item.verdict && entry.item.verdict !== "REAL_EXPLOIT") {
-    return "";
-  }
-  // Only sinks carry a taint source the probe can exercise. Dangerous
-  // patterns (prototype pollution, regex ReDoS, etc.) aren't probed by
-  // URL/postMessage strategies — show a subdued row explaining why.
-  if (entry.kind !== "sink") {
-    return '<div class="probe-row"><span class="probe-na">pattern finding — not probeable via URL/postMessage</span></div>';
-  }
-  // The PoC is compiled ONLY from the Z3 solve (the @P plan: solved values +
-  // channels + order). If a REAL_EXPLOIT carries that plan, offer it; otherwise
-  // we offer NOTHING — there is no legacy/template strategy probe. (A sound
-  // REAL_EXPLOIT always carries a @P plan, so this is the live path.)
-  const poc = entry.item.poc;
-  if (poc && Array.isArray(poc.events) && (poc.events.length || (poc.url && (poc.url.hash || poc.url.search || poc.url.pathname)) || (poc.storage && poc.storage.length) || (poc.cookies && poc.cookies.length))) {
-    return _renderPocRow(entry, i, poc);
-  }
-  return "";
-}
-
-function _wireVerifyButtons(container) {
-  container.querySelectorAll(".probe-btn").forEach((btn) => {
-    btn.addEventListener("click", () => _handleVerifyClick(btn));
-  });
-}
-
-function _resumeInflightProbes(container) {
-  // If a previous render kicked off a probe that's still running, or
-  // recently completed, restore its result without re-sending. Lets the
-  // reviewer close/reopen panels without losing state.
-  container.querySelectorAll(".probe-result").forEach((resultEl) => {
-    const key = resultEl.dataset.findingKey;
-    if (_probeResults.has(key)) {
-      _renderProbeResult(resultEl, _probeResults.get(key));
-    } else if (_probeInFlight.has(key)) {
-      resultEl.textContent = "Running probe…";
-      resultEl.className = "probe-result probe-running";
-      _pollProbe(resultEl, key, _probeInFlight.get(key));
-    }
-  });
-}
-
-async function _handleVerifyClick(btn) {
-  const key = btn.dataset.findingKey;
-  let probeData = {};
-  try { probeData = JSON.parse(btn.dataset.probe || "{}"); }
-  catch (e) {
-    // The probe payload was set by renderSecurityPanel; a JSON.parse throw
-    // means an earlier serializer wrote malformed data into the data-attribute.
-    // Surface so the broken probe definition is visible (probeData stays {}
-    // and the exploit-verify dispatches with empty payload, which will fail
-    // probe-side — having the parse diagnostic narrows where to look).
-    console.warn("[popup:_handleVerifyClick] data-probe parse failed key=%s: %s", key, e && e.message || e);
-  }
-  const card = btn.closest(".card");
-  const resultEl = card ? card.querySelector('.probe-result') : null;
-  if (!resultEl) return;
-
-  btn.disabled = true;
-  const prevLabel = btn.textContent;
-  btn.textContent = "Loading PoC…";
-  resultEl.textContent = "Building PoC…";
-  resultEl.className = "probe-result probe-running";
-
-  try {
-    // PREPARE the PoC: the brain builds the exact attacker JavaScript and
-    // registers a session (marker) so a later sink-hit correlates back. It does
-    // NOT open any tab — the USER runs the PoC by clicking inside the embedded
-    // sandbox (that click is the user activation window.open needs).
-    const start = await new Promise((resolve) => {
-      chrome.runtime.sendMessage({
-        type: "EXPLOIT_PROBE_START",
-        strategy: probeData.strategy || null,
-        pocPlan: probeData.pocPlan || null,
-        paramName: probeData.paramName || null,
-        fieldPath: probeData.fieldPath || [],
-        sinkType: probeData.sinkType || null,
-        sinkName: probeData.sinkName || null,
-        decoders: Array.isArray(probeData.decoders) ? probeData.decoders : [],
-        preconditions: Array.isArray(probeData.preconditions) ? probeData.preconditions : [],
-        pageUrl: probeData.pageUrl || null,
-        sourceUrl: probeData.sourceUrl || null,
-        findingId: key,
-        waitMs: 5000,
-      }, (r) => resolve(r));
-    });
-    if (!start || !start.sessionId || !start.pocJs) {
-      resultEl.textContent = "Could not build PoC: " + ((start && start.error) || "no response");
-      resultEl.className = "probe-result probe-err";
-      btn.disabled = false; btn.textContent = prevLabel;
-      return;
-    }
-    _renderPocSandbox(card, resultEl, key, start.sessionId, start.pocJs);
-    btn.textContent = "PoC ready ▾";
-  } finally {
-    if (btn.textContent === "Loading PoC…") btn.textContent = prevLabel;
-  }
-}
-
-// Stage the unified PoC: show the EXACT JavaScript (copyable) and embed the
-// sandboxed attacker page that will eval that same JS on the user's click. One
-// artifact — displayed == executed. No separate run system.
-function _renderPocSandbox(card, resultEl, key, marker, pocJs) {
-  let host = card.querySelector(".poc-sandbox-host");
-  if (!host) {
-    host = document.createElement("div");
-    host.className = "poc-sandbox-host";
-    resultEl.parentNode.insertBefore(host, resultEl);
-  }
-  const pocId = "poc" + (++_pocIdSeq);
-  host.innerHTML =
-    '<div class="poc-js-head">PoC JavaScript — runs verbatim on a cross-origin attacker origin (copy &amp; reuse on e.g. https://example.com):</div>'
-    + '<pre class="poc-js"><code></code></pre>'
-    + '<button class="poc-copy-btn">Copy PoC</button>'
-    + '<div class="poc-sandbox-head">Attacker sandbox — click <b>Run PoC</b> below (your click is the user gesture window.open needs):</div>'
-    + '<iframe class="poc-sandbox-frame" data-poc-id="' + pocId + '" src="poc-sandbox.html"></iframe>';
-  host.querySelector(".poc-js code").textContent = pocJs;
-  const copyBtn = host.querySelector(".poc-copy-btn");
-  copyBtn.addEventListener("click", () => {
-    navigator.clipboard.writeText(pocJs).then(
-      () => { copyBtn.textContent = "Copied ✓"; setTimeout(() => { copyBtn.textContent = "Copy PoC"; }, 1500); },
-      () => { copyBtn.textContent = "Copy failed"; }
-    );
-  });
-  resultEl.className = "probe-result";
-  resultEl.innerHTML = '<span class="poc-status">PoC staged — click Run PoC in the sandbox above.</span>';
-  _pocSandboxes.set(pocId, { pocJs, marker, key, resultEl, statusEl: resultEl.querySelector(".poc-status") });
-}
-
-async function _pollProbe(resultEl, findingKey, sessionId) {
-  // The PoC is fired by the user's click in the sandbox; the verdict arrives as
-  // a PROBE_HIT (apiclientsink relayed by marker). We poll the session's hits.
-  const deadline = Date.now() + 60000;
-  while (Date.now() < deadline) {
-    const s = await new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_STATUS", sessionId }, (r) => resolve(r));
-    });
-    if (!s || s.error) {
-      resultEl.textContent = "Error: " + ((s && s.error) || "session lost");
-      resultEl.className = "probe-result probe-err";
-      _probeInFlight.delete(findingKey);
-      return;
-    }
-    const hits = s.hits || [];
-    if (hits.length || s.executed) {
-      const snapshot = { hits, executed: s.executed || null, status: "done", error: s.error || null, strategy: s.strategy };
-      _probeResults.set(findingKey, snapshot);
-      _probeInFlight.delete(findingKey);
-      _renderProbeResult(resultEl, snapshot);
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  // No hit yet — the user may not have clicked Run, the payload may be blocked,
-  // or the gate values may not match. Leave the sandbox staged for a retry.
-  resultEl.className = "probe-result probe-miss";
-  resultEl.innerHTML = '<span class="poc-status">NOT REPRODUCED yet — apiclientsink never fired. Click Run PoC again, or the target may sanitize / gate the value.</span>';
-  _probeInFlight.delete(findingKey);
-}
-
-function _renderProbeResult(resultEl, snapshot) {
-  if (snapshot.status === "error" || snapshot.error) {
-    resultEl.className = "probe-result probe-err";
-    resultEl.textContent = "Probe failed: " + (snapshot.error || "unknown");
-    return;
-  }
-  const hits = snapshot.hits || [];
-  const executed = snapshot.executed || null;
-
-  // Verdict from the EXACT-PoC run: when the PoC the user fired in the sandbox
-  // reaches a sink, intercept.js's apiclientsink relays a PROBE_HIT (by marker).
-  // Any hit (or a read exec flag) ⇒ REAL EXPLOIT — the browser actually executed
-  // the attacker payload. No hit ⇒ NOT REPRODUCED (the dynamic ground truth that
-  // the static "PoC" verdict is UNTESTED against).
-  const firedOrigins = executed ? Object.keys(executed).filter(k => executed[k]) : [];
-  const fireCount = hits.length || firedOrigins.length;
-  if (!fireCount) {
-    resultEl.className = "probe-result probe-miss";
-    resultEl.innerHTML = '<div class="probe-miss-head">NOT REPRODUCED — apiclientsink never fired. The payload may be blocked by CSP, the gate values may not match, or the target didn\'t parse/execute it.</div>';
-    return;
-  }
-
-  resultEl.className = "probe-result probe-hit";
-  // The payload injects multiple vectors (e.g. <img onerror> + <svg onload>) so
-  // a sanitizer that strips one can't hide the finding; fireCount is how many of
-  // those vectors actually executed — all carry the same finding id, so any
-  // count ≥ 1 is the same confirmed exploit, not N separate bugs.
-  let html = '<div class="probe-hit-head">REAL EXPLOIT — payload executed'
-    + (fireCount > 1 ? ' (' + fireCount + ' of the injected vectors fired)' : '')
-    + '</div><ul class="probe-hits">';
-  for (const origin of firedOrigins) {
-    html += '<li><code>' + esc(origin) + '</code></li>';
-  }
-  html += '</ul>';
-  if (hits.length) {
-    html += '<div class="probe-hit-subhead">apiclientsink invocations (' + hits.length + '):</div><ul class="probe-hits probe-hits-dim">';
-    for (const h of hits.slice(0, 6)) {
-      const url = h.url ? ' <span class="probe-hit-url">' + esc(String(h.url).slice(0, 80)) + '</span>' : '';
-      html += '<li><code>' + esc(h.sink) + '</code>' + url + '</li>';
-    }
-    if (hits.length > 6) html += '<li>… +' + (hits.length - 6) + ' more</li>';
-    html += '</ul>';
-  }
-  // Show the probe "recipe" — what the SW actually sent. Lets a
-  // reviewer audit "is the precondition shape right? did we pre-
-  // encode the decoder chain correctly?" without digging into logs.
-  const recipe = snapshot.recipe;
-  if (recipe) {
-    const parts = [];
-    if (recipe.sinkType) parts.push('sinkType=' + recipe.sinkType);
-    if (recipe.paramName) parts.push('param=' + JSON.stringify(recipe.paramName));
-    if (Array.isArray(recipe.fieldPath) && recipe.fieldPath.length) {
-      parts.push('fieldPath=' + recipe.fieldPath.map(s => JSON.stringify(s)).join("."));
-    }
-    if (Array.isArray(recipe.decoders) && recipe.decoders.length) {
-      parts.push('decoders=' + recipe.decoders.join("→"));
-    }
-    if (Array.isArray(recipe.preconditions) && recipe.preconditions.length) {
-      const gates = recipe.preconditions.map(p => {
-        const k = Array.isArray(p.path) && p.path.length ? p.path.map(s => JSON.stringify(s)).join(".") : "<root>";
-        return k + (p.op || "===") + JSON.stringify(p.value);
-      }).join(", ");
-      parts.push('gates={' + gates + '}');
-    }
-    if (parts.length) {
-      html += '<details class="probe-recipe"><summary>probe recipe — what was actually sent</summary>'
-        + '<pre>' + esc(parts.join("\n")) + '</pre></details>';
-    }
-  }
-  resultEl.innerHTML = html;
-}
 
 function renderSecurityPanel() {
   const container = document.getElementById("security-findings");
   const empty = document.getElementById("security-empty");
 
   const findings = tabData?.securityFindings || [];
-  // Fingerprint: count of sinks + patterns across all findings
+  // Each securitySink IS a WORKING PoC: the engine emits it ONLY when a concrete
+  // candidate, driven through the real code + branches + filters, BROKE OUT at the
+  // sink (self-verifying by replay). There is no severity/verdict to compute — a
+  // proven XSS exploit is HIGH, full stop; absence of a finding is NOT "safe".
   let secCount = 0;
-  for (let i = 0; i < findings.length; i++) {
-    secCount += (findings[i].securitySinks || []).length + (findings[i].dangerousPatterns || []).length;
-  }
+  for (let i = 0; i < findings.length; i++) secCount += (findings[i].securitySinks || []).length;
   const fp = findings.length + ":" + secCount;
   if (fp === _lastSecFp) return;
   _lastSecFp = fp;
 
   container.innerHTML = "";
 
-  // Flatten all sinks and patterns with their source URL
   var allItems = [];
   for (var fi = 0; fi < findings.length; fi++) {
     var f = findings[fi];
     var srcLabel = f.sourceUrl ? _shortUrl(f.sourceUrl) : "(unknown)";
-    for (var si = 0; si < (f.securitySinks || []).length; si++) {
-      var s = f.securitySinks[si];
-      allItems.push({ kind: "sink", item: s, sourceUrl: f.sourceUrl, srcLabel: srcLabel, pageUrl: f.pageUrl });
-    }
-    for (var di = 0; di < (f.dangerousPatterns || []).length; di++) {
-      var d = f.dangerousPatterns[di];
-      allItems.push({ kind: "pattern", item: d, sourceUrl: f.sourceUrl, srcLabel: srcLabel, pageUrl: f.pageUrl });
-    }
+    for (var si = 0; si < (f.securitySinks || []).length; si++)
+      allItems.push({ item: f.securitySinks[si], sourceUrl: f.sourceUrl, srcLabel: srcLabel, pageUrl: f.pageUrl });
   }
 
-  if (!allItems.length) {
-    empty.style.display = "block";
-    return;
-  }
+  if (!allItems.length) { empty.style.display = "block"; return; }
   empty.style.display = "none";
 
-  // Sort: high first, then medium, then low
-  var sevOrder = { high: 0, medium: 1, low: 2 };
-  allItems.sort(function(a, b) {
-    return (sevOrder[a.item.severity] || 2) - (sevOrder[b.item.severity] || 2);
-  });
-
-  var html = '<div class="section-header">Vulnerabilities <span class="badge badge-status">' + allItems.length + '</span></div>';
+  var html = '<div class="section-header">Working XSS PoCs <span class="badge badge-status">' + allItems.length + '</span></div>';
 
   for (var i = 0; i < allItems.length; i++) {
     var entry = allItems[i];
     var item = entry.item;
-    var sev = item.severity || "low";
-    var sevBadge = '<span class="badge badge-' + esc(sev) + '">' + esc(sev.toUpperCase()) + '</span>';
-    var loc = item.location ? "L" + item.location.line + ":" + item.location.column : "";
-
 
     var srcLink = entry.sourceUrl && /^https?:\/\//i.test(entry.sourceUrl)
       ? '<a href="' + esc(entry.sourceUrl) + '" target="_blank" title="' + esc(entry.sourceUrl) + '">' + esc(entry.srcLabel) + '</a>'
       : esc(entry.srcLabel);
-    if (entry.pageUrl && entry.pageUrl !== entry.sourceUrl) {
+    if (entry.pageUrl && entry.pageUrl !== entry.sourceUrl)
       srcLink += ' <span class="page-context" title="' + esc(entry.pageUrl) + '">in ' + esc(_shortUrl(entry.pageUrl)) + '</span>';
-    }
 
-    if (entry.kind === "sink") {
-      var typeBadge = "";
-      if (item.type === "xss") typeBadge = '<span class="badge badge-xss">XSS</span>';
-      else if (item.type === "eval") typeBadge = '<span class="badge badge-eval">EVAL</span>';
-      else if (item.type === "redirect") typeBadge = '<span class="badge badge-redirect">REDIRECT</span>';
-      else typeBadge = '<span class="badge badge-danger">' + esc(item.type.toUpperCase()) + '</span>';
+    // shape = which external source(s) reach the sink (e.g. "<h1>{hash}"); poc = the
+    // exact input that breaks out; evidence = one-line proof from the forced-exec run.
+    var shapeHtml = item.shape ? '<div class="card-value" title="external source(s) that reach this sink, transforms flattened">source&nbsp;shape: <code>' + esc(item.shape) + '</code></div>' : "";
+    var pocHtml = item.poc
+      ? '<div class="card-poc"><span class="poc-lbl">breakout input</span> <code class="poc-payload">' + esc(item.poc) + '</code></div>'
+      : "";
+    var evHtml = item.evidence ? '<div class="card-dims">' + esc(item.evidence) + '</div>' : "";
 
-      var sourceDesc = item.sourceType === "user-controlled"
-        ? "user-controlled" + (item.source ? ": " + esc(item.source) : "")
-        : item.sourceType === "dynamic" ? "dynamic value" : "literal value";
-
-      var sinkDimsHtml = Array.isArray(item.sinkDims)
-        ? '<div class="card-dims" title="attacker-controlled dims surviving to the sink">sinkDims: {' + esc(item.sinkDims.join(",") || "none") + '}</div>'
-        : "";
-
-      // The ONLY verdict badge is "PoC" — and ONLY for REAL_EXPLOIT, where Z3
-      // SOUNDLY solved a source-connected exploit (a candidate PoC, untested
-      // until Verify fires it). Every other verdict — EXPLOIT_UNPROVEN (SAT only
-      // under an unsound over-approx), TAINT_REACH, INFEASIBLE, Z3_ERROR — gets
-      // NO badge: the verdict-reason banner explains it in words and no PoC is
-      // offered. A badge for those would over-claim solvability.
-      var vBadge = item.verdict === "REAL_EXPLOIT"
-        ? '<span class="badge poc-real_exploit" title="Z3 soundly solved a source-connected exploit (candidate PoC) — UNTESTED until Verify fires it.">PoC</span> '
-        : '';
-      var verifyHtmlSink = _renderVerifyRow(entry, i);
-      html += '<div class="card" data-finding-key="' + esc(_findingKey(entry)) + '">'
-        + '<div class="card-label">' + typeBadge + ' ' + sevBadge + ' ' + vBadge + esc(item.sink) + '</div>'
-        + '<div class="card-value">' + esc(sourceDesc) + '</div>'
-        + sinkDimsHtml
-        + _renderTaintPathDetails(item)
-        + _renderPreconditionsDetails(item)
-        + _renderSanitizerDetails(item)
-        + '<div class="card-meta">' + srcLink + (loc ? " " + esc(loc) : "") + '</div>'
-        + verifyHtmlSink
-        + '</div>';
-    } else {
-      var patBadge = '<span class="badge badge-danger">' + esc((item.type || "pattern").toUpperCase().replace(/-/g, " ")) + '</span>';
-      var patSinkDimsHtml = Array.isArray(item.sinkDims)
-        ? '<div class="card-dims" title="attacker-controlled dims surviving to the sink">sinkDims: {' + esc(item.sinkDims.join(",") || "none") + '}</div>'
-        : "";
-      var verifyHtmlPat = _renderVerifyRow(entry, i);
-      html += '<div class="card" data-finding-key="' + esc(_findingKey(entry)) + '">'
-        + '<div class="card-label">' + patBadge + ' ' + sevBadge + '</div>'
-        + '<div class="card-value">' + esc(item.description || item.type) + '</div>'
-        + patSinkDimsHtml
-        + _renderTaintPathDetails(item)
-        + '<div class="card-meta">' + srcLink + (loc ? " " + esc(loc) : "") + '</div>'
-        + verifyHtmlPat
-        + '</div>';
-    }
+    html += '<div class="card" data-finding-key="' + esc(_findingKey(entry)) + '">'
+      + '<div class="card-label"><span class="badge badge-xss">XSS PoC</span> <span class="badge badge-high">HIGH</span> ' + esc(item.sink || item.type || "?") + '</div>'
+      + shapeHtml + pocHtml + evHtml
+      + '<div class="card-meta">' + srcLink + '</div>'
+      + '</div>';
   }
 
   container.innerHTML = html;
-  _wireVerifyButtons(container);
-  _resumeInflightProbes(container);
-  // The source viewer (+ Prism + Babel) was removed: the taint path now shows
-  // the per-hop code inline (each hop's source line, sliced at analysis time),
-  // and `harness finding <id>` gives full context — so the standalone viewer's
-  // syntax-highlighted source browse is no longer needed. Code snippets render
-  // as plain <code>; no Prism.highlightElement, no viewer.html tab.
 }
 
 // ─── Send Panel ──────────────────────────────────────────────────────────────
