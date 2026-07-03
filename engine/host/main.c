@@ -142,6 +142,60 @@ static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueCons
    return the CONCRETE server reply -> a reply field flowing into a downstream request param becomes a
    REAL example value instead of {}. Absent url -> opaque (the honest shape). */
 static JSValue g_reply_table = JS_UNDEFINED;
+static JSContext *g_ctx;   /* the run's context (defined = NULL below); fwd-declared for Lexbor callbacks */
+/* ENDPOINT REGISTRY + IDENTITY: the engine ACCUMULATES every learned endpoint (method/url/params/
+   headers/body) as a JS object here, and at finalize DEDUPS them (exact by method+hole-normalized url,
+   then collapses a concrete instance into its shape with a path-param example) and emits the deduped
+   set. Identity is the ENGINE's, not the host's (the JS mergeCallsites/dedupShapeConcrete were DELETED).
+   The dedup runs on the engine's OWN quickjs (g_dedup_fn) — proven logic, executed in-engine, never a
+   host context-switch. */
+static JSValue g_endpoints = JS_UNDEFINED;   /* JS array of {method,url,params,headers,body} */
+static JSValue g_dedup_fn = JS_UNDEFINED;    /* (eps) => deduped array, evaluated once at init */
+static const char *DEDUP_JS =
+"(function(eps){"
+"  var HOLE=/\\{[a-z]*\\}/,HOLE_G=/\\{[a-z]*\\}/g,SEG_HOLE=/^\\{[a-z]*\\}$/;"
+"  var hasHole=function(s){return HOLE.test(s||'');};"
+"  var normHoles=function(s){return (s||'').replace(HOLE_G,'{}');};"
+"  var pathSegs=function(u){var q=u.indexOf('?');var p=q>=0?u.slice(0,q):u;return {segs:p.split('/'),query:q>=0?u.slice(q):''};};"
+"  for(var bi=0;bi<eps.length;bi++){var e=eps[bi];"
+"    if(e.body){try{var bo=JSON.parse(e.body);"
+"      if(bo&&typeof bo==='object'&&!Array.isArray(bo)){e.params=e.params||[];"
+"        for(var bk in bo){var bv=bo[bk];"
+"          var op=bv===null||bv==='{}'||(typeof bv==='object'&&bv&&!Array.isArray(bv)&&Object.keys(bv).length===0);"
+"          var has=false;for(var qi=0;qi<e.params.length;qi++){if(e.params[qi].name===bk&&e.params[qi].location==='body'){has=true;break;}}"
+"          if(!has)e.params.push({name:bk,location:'body',validValues:op?[]:[String(bv)]});"
+"        }"
+"      }"
+"    }catch(_e){}}"
+"  }"
+"  var map=new Map();"
+"  for(var i=0;i<eps.length;i++){var s=eps[i];var k=(s.method||'GET')+' '+normHoles(s.url);if(!map.has(k))map.set(k,s);}"
+"  var arr=[];map.forEach(function(v){arr.push(v);});"
+"  var shapes=arr.filter(function(e){return hasHole(e.url);});"
+"  if(shapes.length){"
+"    for(var ci=0;ci<arr.length;ci++){var c=arr[ci];if(hasHole(c.url))continue;"
+"      for(var si=0;si<shapes.length;si++){var sh=shapes[si];"
+"        if((sh.method||'GET')!==(c.method||'GET'))continue;"
+"        var ss=pathSegs(sh.url),cs=pathSegs(c.url);"
+"        if(ss.segs.length!==cs.segs.length||ss.query!==cs.query)continue;"
+"        var ok=true,ex=[];"
+"        for(var j=0;j<ss.segs.length;j++){"
+"          if(SEG_HOLE.test(ss.segs[j])){if(cs.segs[j]&&!hasHole(cs.segs[j]))ex.push([j,cs.segs[j]]);else{ok=false;break;}}"
+"          else if(ss.segs[j]!==cs.segs[j]){ok=false;break;}"
+"        }"
+"        if(ok&&ex.length){"
+"          for(var e2=0;e2<ex.length;e2++){var idx=ex[e2][0],v=ex[e2][1];"
+"            var pp=null,pl=sh.params||[];for(var pi=0;pi<pl.length;pi++){if(pl[pi].location==='path'&&pl[pi].name==='arg'+idx){pp=pl[pi];break;}}"
+"            if(!pp){pp={name:'arg'+idx,location:'path',validValues:[]};(sh.params=sh.params||[]).push(pp);}"
+"            if(pp.validValues.indexOf(v)<0)pp.validValues.push(v);"
+"          }"
+"          map.delete((c.method||'GET')+' '+c.url);break;"
+"        }"
+"      }"
+"    }"
+"  }"
+"  var out=[];map.forEach(function(v){out.push(v);});return out;"
+"})";
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
@@ -281,13 +335,15 @@ static void url_pct_decode(const char *s, size_t n, char *out, size_t outcap) {
     }
     out[o] = 0;
 }
-/* Emit each query pair of a COMPUTED url as `@Q name value` (js_fetch owns query parsing now — the host
-   just relays). A hole value ({search}) passes through literally (opacity marker, decoded downstream). */
-static void emit_query_params(const char *url) {
+/* Build query-param objects ({name,location:"query",validValues:[value?]}) from a COMPUTED url onto the
+   endpoint's params array. The engine owns URL parsing (Lexbor-canonical); the host never re-splits the
+   URL string. A hole value ({search}) passes through literally (opacity marker, decoded downstream). */
+static void build_query_params(JSContext *ctx, const char *url, JSValueConst params) {
     if (!url) return;
     const char *q = strchr(url, '?'); if (!q) return;
     q++;
     const char *end = strchr(q, '#'); if (!end) end = q + strlen(q);
+    uint32_t idx = 0;
     for (const char *p = q; p < end; ) {
         const char *amp = memchr(p, '&', (size_t)(end - p)); if (!amp) amp = end;
         const char *eq = memchr(p, '=', (size_t)(amp - p));
@@ -296,13 +352,29 @@ static void emit_query_params(const char *url) {
         char nbuf[256], vbuf[512];
         url_pct_decode(p, (size_t)(ne - p), nbuf, sizeof nbuf);
         url_pct_decode(vb, (size_t)(amp - vb), vbuf, sizeof vbuf);
-        if (nbuf[0]) { printf("@Q %s %s\n", nbuf, vbuf); }
+        if (nbuf[0]) {
+            JSValue po = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, po, "name", JS_NewString(ctx, nbuf));
+            JS_SetPropertyStr(ctx, po, "location", JS_NewString(ctx, "query"));
+            JSValue vv = JS_NewArray(ctx);
+            if (vbuf[0]) JS_SetPropertyUint32(ctx, vv, 0, JS_NewString(ctx, vbuf));
+            JS_SetPropertyStr(ctx, po, "validValues", vv);
+            JS_SetPropertyUint32(ctx, params, idx++, po);
+        }
         p = (amp < end) ? amp + 1 : end;
     }
-    fflush(stdout);
 }
-/* fetch(url): the moat's host edge. URL = whatever the bundle COMPUTED. Emit @H, raise value, return a
-   resolved promise wrapping the Response so `await fetch(...)`/`.then(r=>r.json())` chains continue. */
+/* A JS string with control chars flattened to space (so an emitted line can't break), capped at cap. */
+static JSValue js_str_flat(JSContext *ctx, const char *s, int cap) {
+    char buf[1024]; int n = 0;
+    for (const char *p = s; *p && n < cap && n < (int)sizeof(buf) - 1; p++, n++)
+        buf[n] = (*p == '\n' || *p == '\r') ? ' ' : *p;
+    buf[n] = 0;
+    return JS_NewString(ctx, buf);
+}
+/* fetch(url): the moat's host edge. URL = whatever the bundle COMPUTED. ACCUMULATE the endpoint record
+   (method/url/params/headers/body) into g_endpoints — identity/dedup runs in-engine at finalize — raise
+   the flow's value (the WFQ progress signal), and return a resolved promise wrapping the Response. */
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
@@ -319,52 +391,52 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         if (JS_IsString(m)) method = JS_ToCString(ctx, m);
         JS_FreeValue(ctx, m);
     }
-    printf("@H %s %s\n", method ? method : "GET", url ? url : "?"); fflush(stdout);
-    emit_query_params(url);   /* engine owns query parsing (@Q name value); host no longer re-splits the URL */
-    /* REQUIRED HEADERS: a request's headers (Content-Type/Authorization/X-CSRF) are part of the endpoint
-       spec + needed to REPLAY it. Read a plain-object `headers` from the RequestInit and emit @HDR per key;
-       an opaque value (Authorization: 'Bearer '+token) emits its shape. Emitted right after @H so the brain
-       binds them to this endpoint. */
+    JSValue ep = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, ep, "method", JS_NewString(ctx, method ? method : "GET"));
+    JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, url ? url : "?"));
+    JS_SetPropertyStr(ctx, ep, "source", JS_NewString(ctx, "ast_analysis"));
+    JSValue params = JS_NewArray(ctx);
+    build_query_params(ctx, url, params);
+    JS_SetPropertyStr(ctx, ep, "params", params);
+    /* REQUIRED HEADERS + REQUEST BODY: part of the endpoint spec (replay). A plain-object `headers` ->
+       ep.headers{name:value}; a POST/PATCH body (already stringified by the bundle; opaque fields -> {}
+       shape) -> ep.body. Both control-flattened + capped so a value can't break the emitted line. */
     {
         JSValueConst init = (argc > 1 && JS_IsObject(argv[1])) ? argv[1] : ((argc > 0 && JS_IsObject(argv[0])) ? argv[0] : JS_UNDEFINED);
         if (JS_IsObject(init)) {
             JSValue hdrs = JS_GetPropertyStr(ctx, init, "headers");
             if (JS_IsObject(hdrs) && !JS_IsOpaque(hdrs)) {
+                JSValue hobj = JS_NewObject(ctx); int any = 0;
                 JSPropertyEnum *tab = NULL; uint32_t hn = 0;
                 if (JS_GetOwnPropertyNames(ctx, &tab, &hn, hdrs, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
                     for (uint32_t hi = 0; hi < hn; hi++) {
                         const char *hk = JS_AtomToCString(ctx, tab[hi].atom);
                         JSValue hv = JS_GetProperty(ctx, hdrs, tab[hi].atom);
                         const char *hvs = JS_ToCString(ctx, hv);
-                        if (hk && hvs) {
-                            printf("@HDR %s: ", hk);
-                            for (const char *p = hvs; *p; p++) putchar((*p == '\n' || *p == '\r') ? ' ' : *p);
-                            putchar('\n');
-                        }
+                        if (hk && hvs) { JS_SetPropertyStr(ctx, hobj, hk, js_str_flat(ctx, hvs, 512)); any = 1; }
                         if (hk) JS_FreeCString(ctx, hk);
                         if (hvs) JS_FreeCString(ctx, hvs);
                         JS_FreeValue(ctx, hv);
                     }
                     JS_FreePropertyEnum(ctx, tab, hn);
                 }
+                if (any) JS_SetPropertyStr(ctx, ep, "headers", hobj); else JS_FreeValue(ctx, hobj);
             }
             JS_FreeValue(ctx, hdrs);
-            /* REQUEST BODY shape: a POST/PATCH body (JSON.stringify({name,email})) is the request schema.
-               The bundle already stringified it, so init.body is the string (opaque fields -> {} shape).
-               Capped so a huge upload body can't flood the line. */
             JSValue body = JS_GetPropertyStr(ctx, init, "body");
             if (!JS_IsUndefined(body) && !JS_IsNull(body)) {
                 const char *bs = JS_ToCString(ctx, body);
-                if (bs && bs[0]) {
-                    printf("@BODY ");
-                    int bn = 0; for (const char *p = bs; *p && bn < 600; p++, bn++) putchar((*p == '\n' || *p == '\r') ? ' ' : *p);
-                    putchar('\n');
-                }
+                if (bs && bs[0]) JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bs, 600));
                 if (bs) JS_FreeCString(ctx, bs);
             }
             JS_FreeValue(ctx, body);
         }
-        fflush(stdout);
+    }
+    if (JS_IsArray(g_endpoints)) {
+        uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_endpoints, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+        JS_SetPropertyUint32(ctx, g_endpoints, n, ep);   /* consumes ep */
+    } else {
+        JS_FreeValue(ctx, ep);
     }
     g_emit_total++;
     if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
@@ -372,6 +444,38 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     if (url) JS_FreeCString(ctx, url);
     if (method) JS_FreeCString(ctx, method);
     return js_resolved(ctx, resp);
+}
+/* At finalize: DEDUP the accumulated endpoints in-engine (g_dedup_fn) and emit the whole structured
+   result as ONE `@RESULT <json>` line (JSON.stringify — correct escaping, single line). The host does
+   ONE JSON.parse and relays it: no @H/@P/@HDR/@BODY text protocol, no host-side re-parse, no host
+   identity. Sinks/chunks/errors/park are added to the same object by their accumulate sites. */
+static JSValue g_sinks = JS_UNDEFINED;        /* JS array of @S records */
+static JSValue g_chunkurls = JS_UNDEFINED;    /* JS array of discovered external <script src> */
+static JSValue g_whys = JS_UNDEFINED;         /* JS array of {context,message} zero-result/error reasons */
+static JSValue g_park = JS_UNDEFINED;         /* JS array of "hash,decbits" frontier replay recipes */
+static void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
+    if (!JS_IsArray(arr) || !s) return;
+    uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, arr, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+    JS_SetPropertyUint32(ctx, arr, n, JS_NewString(ctx, s));
+}
+static void emit_result(JSContext *ctx) {
+    if (JS_IsUndefined(g_dedup_fn) || !JS_IsArray(g_endpoints)) return;
+    JSValueConst args[1] = { g_endpoints };
+    JSValue deduped = JS_Call(ctx, g_dedup_fn, JS_UNDEFINED, 1, args);
+    if (JS_IsException(deduped)) { js_std_dump_error(ctx); deduped = JS_NewArray(ctx); }
+    JSValue result = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, result, "fetchCallSites", deduped);                 /* consumes deduped */
+    JS_SetPropertyStr(ctx, result, "securitySinks", JS_DupValue(ctx, g_sinks));
+    JS_SetPropertyStr(ctx, result, "chunkUrls", JS_DupValue(ctx, g_chunkurls));
+    JS_SetPropertyStr(ctx, result, "resolverErrors", JS_DupValue(ctx, g_whys));
+    JS_SetPropertyStr(ctx, result, "_park", JS_DupValue(ctx, g_park));
+    JS_SetPropertyStr(ctx, result, "_orphans", JS_NewInt32(ctx, g_orphan_n));
+    JS_SetPropertyStr(ctx, result, "_emit", JS_NewInt32(ctx, g_emit_total));
+    JSValue json = JS_JSONStringify(ctx, result, JS_UNDEFINED, JS_UNDEFINED);
+    JS_FreeValue(ctx, result);
+    if (JS_IsString(json)) { const char *js = JS_ToCString(ctx, json); if (js) { printf("@RESULT %s\n", js); JS_FreeCString(ctx, js); } }
+    JS_FreeValue(ctx, json);
+    fflush(stdout);
 }
 
 /* __branch(): a FORCED DECISION POINT (a gate on opaque external input). If the running flow's decision
@@ -728,10 +832,20 @@ static int host_opaque(JSValueConst v) {
    chars are folded to spaces so the one-line @S protocol stays parseable. */
 static void emit_sink(JSContext *ctx, const char *sink, JSValueConst tainted) {
     const char *sh = JS_ToCString(ctx, tainted);
-    printf("@S %s ", sink);
-    if (sh) { for (const char *p = sh; *p; p++) putchar((*p == '\n' || *p == '\r') ? ' ' : *p); JS_FreeCString(ctx, sh); }
-    else printf("{}");
-    putchar('\n'); fflush(stdout);
+    JSValue shape = sh ? js_str_flat(ctx, sh, 512) : JS_NewString(ctx, "{}");
+    if (sh) JS_FreeCString(ctx, sh);
+    const char *shs = JS_ToCString(ctx, shape);
+    JSValue rec = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink));
+    JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink));
+    JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "opaque"));
+    JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, shs ? shs : "{}"));
+    { char ev[600]; snprintf(ev, sizeof ev, "%s %s", sink, shs ? shs : "{}"); JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, ev)); }
+    JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
+    if (shs) JS_FreeCString(ctx, shs);
+    JS_FreeValue(ctx, shape);
+    if (JS_IsArray(g_sinks)) { uint32_t n=0; JSValue lv=JS_GetPropertyStr(ctx,g_sinks,"length"); JS_ToUint32(ctx,&n,lv); JS_FreeValue(ctx,lv); JS_SetPropertyUint32(ctx, g_sinks, n, rec); }
+    else JS_FreeValue(ctx, rec);
     g_emit_total++;
     if (g_running && g_cur_flow) { g_cur_flow->val += 1.0; g_cur_flow->cpu = 0; }   /* @S raises value like @H (WFQ prioritizes sink-reaching flows) */
 }
@@ -761,9 +875,8 @@ static void script_maybe_load(lxb_dom_element_t *el) {
     if (!el_is_script(el)) return;
     size_t sl = 0; const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
     if (src && sl) {
-        printf("@CHUNK %.*s\n", (int)sl, (const char *)src); fflush(stdout);   /* informational */
         char *u = strndup((const char *)src, sl);
-        if (u) { if (!has_hole(u)) chunk_pending_add(u); free(u); }         /* concrete src -> fetch + eval in place */
+        if (u) { arr_push_str(g_ctx, g_chunkurls, u); if (!has_hole(u)) chunk_pending_add(u); free(u); }   /* -> chunkUrls + fetch in place */
     }
 }
 /* dynamic import(specifier): force-fetch the ESM chunk in place (like a browser lazy-load, forced). Make the
@@ -771,7 +884,7 @@ static void script_maybe_load(lxb_dom_element_t *el) {
    and surface @CHUNK. The module namespace is OPAQUE (forced-exec runs the CODE, not the real exports). */
 static JSValue host_dyn_import(JSContext *ctx, const char *specifier) {
     if (specifier && specifier[0] && !has_hole(specifier)) {
-        printf("@CHUNK %s\n", specifier); fflush(stdout);
+        arr_push_str(ctx, g_chunkurls, specifier);   /* -> @RESULT.chunkUrls */
         char *u = strdup(specifier);
         if (u) { chunk_pending_add(u); free(u); }
     }
@@ -933,7 +1046,8 @@ static void dom_run_scripts(JSContext *ctx) {
         size_t sl = 0;
         const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
         if (src && sl) {
-            printf("@CHUNK %.*s\n", (int)sl, (const char *)src); fflush(stdout);   /* external -> step C */
+            char *cu = strndup((const char *)src, sl);
+            if (cu) { arr_push_str(g_ctx, g_chunkurls, cu); free(cu); }             /* external src -> @RESULT.chunkUrls */
             for (size_t k = 0; k < sl; k++) { bh ^= src[k]; bh *= 16777619u; }     /* external src URL -> bundle id */
             bh ^= '|'; bh *= 16777619u;
             continue;
@@ -1048,9 +1162,10 @@ static void park_frontier(JSContext *ctx)
         if (f->orphan_idx >= 0 && f->orphan_idx < g_orphan_n) {   /* orphan-derived flows are replay-locatable */
             uint32_t oh = JS_OrphanHash(ctx, g_orphan_buf[f->orphan_idx]);   /* stable identity, not the positional index */
             if (oh) {
-                printf("@PARK %u ", oh);
-                for (int j = 0; j < f->dec_n; j++) putchar(f->dec[j] ? '1' : '0');
-                putchar('\n');
+                char rec[80]; int o = snprintf(rec, sizeof rec, "%u,", oh);
+                for (int j = 0; j < f->dec_n && o < (int)sizeof(rec) - 1; j++) rec[o++] = f->dec[j] ? '1' : '0';
+                rec[o] = 0;
+                arr_push_str(ctx, g_park, rec);   /* "hash,decbits" replay recipe -> @RESULT._park */
                 parked++;
             }
         }
@@ -1059,7 +1174,7 @@ static void park_frontier(JSContext *ctx)
         free(f->dec);
     }
     g_reg_n = 0;
-    printf("@PARKED %d\n", parked); fflush(stdout);
+    (void)parked;   /* recipes accumulated into g_park -> @RESULT._park (no separate @PARKED line) */
 }
 
 /* The ONE scheduler loop: pick the highest-WEIGHT flow (NON-FIFO), run it as a preemptible heap-frame
@@ -1201,6 +1316,12 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_reg_n = 0; g_work = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL; g_msg_handler_n = 0;
     g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_quantum = 0;
     g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
+    /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
+       result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
+    g_endpoints = JS_NewArray(ctx); g_sinks = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
+    g_whys = JS_NewArray(ctx); g_park = JS_NewArray(ctx);
+    g_dedup_fn = JS_Eval(ctx, DEDUP_JS, strlen(DEDUP_JS), "<dedup>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(g_dedup_fn)) { js_std_dump_error(ctx); g_dedup_fn = JS_UNDEFINED; }
     js_std_add_helpers(ctx, 0, NULL);
     js_init_module_std(ctx, "std");
     js_init_module_os(ctx, "os");
@@ -1490,6 +1611,7 @@ KEEP void qjs_teardown(void)
     JSContext *ctx = g_ctx;
     if (!ctx) return;
     qjs_finalize();   /* resolve any stragglers opaque so no promise leaks */
+    emit_result(ctx);   /* dedup in-engine + emit the ONE @RESULT json (endpoints/sinks/chunks/errors/park) */
     printf("@DONE emit=%d\n", g_emit_total); fflush(stdout);
     /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
        its held baseline values return to their slots, and drop the opaque marker. */
@@ -1499,6 +1621,12 @@ KEEP void qjs_teardown(void)
     JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL);
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_sinks); g_sinks = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_whys); g_whys = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_dedup_fn); g_dedup_fn = JS_UNDEFINED;
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;

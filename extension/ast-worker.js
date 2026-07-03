@@ -18,118 +18,43 @@
  */
 import createQJS from "./lib/qjs/qjs.mjs";
 
-/* An opaque HOLE in a shape: "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}/{pm}/{reply}).
-   A URL with any hole is not concretely fetchable; a path segment that IS a hole is a path placeholder. */
+/* A URL with an opaque HOLE ("{}"/"{tag}") is not concretely fetchable (used to gate reply/chunk fetch).
+   Endpoint IDENTITY (hole-normalization, shape/concrete collapse) is the ENGINE's now — the host's
+   normHoles/SEG_HOLE/pathSegs/mergeCallsites/dedupShapeConcrete were DELETED. */
 const HOLE = /\{[a-z]*\}/;
-const HOLE_G = /\{[a-z]*\}/g;
-const SEG_HOLE = /^\{[a-z]*\}$/;
 const hasHole = (s) => HOLE.test(s || "");
-const normHoles = (s) => (s || "").replace(HOLE_G, "{}");   // endpoint IDENTITY is hole-source-insensitive ({search}=={hash}=={})
 
-/* Query params are parsed by the ENGINE (Lexbor-canonical url -> `@Q name value` per pair); the host
-   only relays them. parseQueryParams (a JS re-split of the URL string) was DELETED — the engine owns
-   URL parsing like a browser, the host is a dumb relay. See the @Q handler in linesToAnalysis. */
-
-/* Map captured stdout lines -> the analysis object the brain consumes. Every sibling field the brain
-   reads unconditionally is present (empty) so it never throws; fetchCallSites carries the @H records. */
+/* Map the engine's ONE structured `@RESULT <json>` line -> the analysis object the brain consumes.
+   The ENGINE builds + DEDUPS the whole result (endpoints/params/headers/body, @S sinks, chunkUrls,
+   errors, park recipes) and JSON.stringifies it; the host does ONE JSON.parse and relays — NO per-line
+   @H/@Q/@HDR/@BODY parsing, NO host identity/dedup (all DELETED, the engine owns it like a browser).
+   @E lines (host-side protocol errors) are still surfaced so a zero-result never fails silently. Every
+   sibling field the brain reads unconditionally is present (empty) so it never throws. */
 function linesToAnalysis(lines, msg) {
-  const fetchCallSites = [];
-  const resolverErrors = [];
-  const chunkUrls = [];
-  const replyWant = [];
-  const park = [];
-  const securitySinks = [];
-  let emitDone = null, orphans = 0;
-  const seen = new Set();
+  let result = null;
+  const extraErrors = [];
   for (const raw of lines) {
     const ln = String(raw);
-    if (ln.startsWith("@REPLYWANT ")) { const u = ln.slice(11).trim(); if (u && replyWant.indexOf(u) < 0) replyWant.push(u); continue; }
-    if (ln.startsWith("@H ")) {
-      // format: "@H <METHOD> <url>" (js_fetch) or "@H <tag>" (__emit). First token = method if it's a verb.
-      let rest = ln.slice(3).trim(), method = "GET";
-      const sp = rest.indexOf(" ");
-      if (sp > 0) {
-        const tok = rest.slice(0, sp).toUpperCase();
-        if (/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/.test(tok)) { method = tok; rest = rest.slice(sp + 1).trim(); }
-      }
-      const url = rest;
-      if (!url || url === "?") continue;
-      const key = method + " " + url;
-      if (seen.has(key)) continue;            // metric-layer dedup: distinct (method,url)
-      seen.add(key);
-      fetchCallSites.push({ url, method, params: [], source: "ast_analysis" });
-    } else if (ln.startsWith("@Q ")) {
-      // engine-parsed query param for the endpoint just emitted: "@Q <name> <value>" (value may be a
-      // {} shape or empty). Binds to the most recent fetchCallSite (js_fetch emits @Q right after @H).
-      const rest = ln.slice(3); const sp = rest.indexOf(" ");
-      const name = sp >= 0 ? rest.slice(0, sp) : rest;
-      const value = sp >= 0 ? rest.slice(sp + 1) : "";
-      if (name && fetchCallSites.length) {
-        const last = fetchCallSites[fetchCallSites.length - 1];
-        (last.params = last.params || []).push({ name, location: "query", validValues: value ? [value] : [] });
-      }
-    } else if (ln.startsWith("@HDR ")) {
-      // required request header for the endpoint just emitted: "@HDR Name: value" (value may be a {} shape).
-      // Binds to the most recent fetchCallSite (js_fetch emits @HDR immediately after its @H).
-      const rest = ln.slice(5); const ci = rest.indexOf(": ");
-      if (ci > 0 && fetchCallSites.length) {
-        const last = fetchCallSites[fetchCallSites.length - 1];
-        (last.headers = last.headers || {})[rest.slice(0, ci)] = rest.slice(ci + 2);
-      }
-    } else if (ln.startsWith("@BODY ")) {
-      // request body shape (POST/PATCH request schema) for the endpoint just emitted; binds to the last
-      // callsite. Parse JSON body fields into callSite.params with location:"body" so the EXISTING body-param
-      // consumer (offscreen learnFromAstCallSite + popup/OpenAPI) picks them up. Keep the raw shape too.
-      if (fetchCallSites.length) {
-        const last = fetchCallSites[fetchCallSites.length - 1];
-        const raw = ln.slice(6);
-        last.body = raw;
-        try {
-          const obj = JSON.parse(raw);
-          if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-            last.params = last.params || [];
-            for (const bk in obj) {
-              const bv = obj[bk];
-              const opaque = bv === null || bv === "{}" ||
-                (typeof bv === "object" && bv && !Array.isArray(bv) && Object.keys(bv).length === 0);
-              if (!last.params.some((p) => p.name === bk && p.location === "body"))
-                last.params.push({ name: bk, location: "body", validValues: opaque ? [] : [String(bv)] });
-            }
-          }
-        } catch (_) { /* non-JSON body kept as last.body raw */ }
-      }
-    } else if (ln.startsWith("@CHUNK ")) {
-      const u = ln.slice(7).trim(); if (u && chunkUrls.indexOf(u) < 0) chunkUrls.push(u);   // external <script src> discovered
-    } else if (ln.startsWith("@S ")) {
-      // security view: an XSS/injection SINK reached by tainted (opaque) data. sp[0]=sink, rest=taint shape.
-      const rest = ln.slice(3).trim(); const sp = rest.indexOf(" ");
-      const sink = sp > 0 ? rest.slice(0, sp) : rest;
-      const shape = sp > 0 ? rest.slice(sp + 1) : "{}";   // the tainted value's concrete/opaque interleaving (PoC seed)
-      securitySinks.push({ type: sink, sink: sink, taint: "opaque", shape: shape, evidence: rest, source: "ast_analysis" });
-    } else if (ln.startsWith("@PARK ")) {
-      const p = ln.slice(6).trim().split(/\s+/); park.push(p[0] + "," + (p[1] || ""));   // recipe: orphan_idx,decbits
-    } else if (ln.startsWith("@ORPHANS ")) {
-      orphans += parseInt(ln.slice(9).trim(), 10) || 0;
-    } else if (ln.startsWith("@WHY ")) {
-      try { const o = JSON.parse(ln.slice(5)); resolverErrors.push({ context: o.phase || "why", message: o.reason || ln, snippet: null, replyExample: null }); }
-      catch (_) { resolverErrors.push({ context: "why", message: ln.slice(5), snippet: null, replyExample: null }); }
+    if (ln.startsWith("@RESULT ")) {
+      try { result = JSON.parse(ln.slice(8)); }
+      catch (e) { extraErrors.push({ context: "result-parse", message: String(e && e.message || e), snippet: null, replyExample: null }); }
     } else if (ln.startsWith("@E ")) {
-      resolverErrors.push({ context: "engine", message: ln.slice(3), snippet: null, replyExample: null });
-    } else if (ln.startsWith("@DONE")) {
-      emitDone = ln;
+      extraErrors.push({ context: "engine", message: ln.slice(3), snippet: null, replyExample: null });
     }
   }
+  result = result || {};
   return {
-    fetchCallSites,
-    resolverErrors,
-    chunkUrls,
-    securitySinks,
-    // all sibling fields the brain reads unconditionally, present + empty so it never throws:
+    fetchCallSites: result.fetchCallSites || [],
+    resolverErrors: (result.resolverErrors || []).concat(extraErrors),
+    chunkUrls: result.chunkUrls || [],
+    securitySinks: result.securitySinks || [],
+    // sibling fields the brain reads unconditionally, present + empty so it never throws:
     protoEnums: [], protoFieldMaps: [], dangerousPatterns: [],
     esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
     sourceMapTypes: [], sourceMapsByUrl: {}, traceMapsByUrl: {}, valueConstraints: [],
-    sourceMapUrl: null, sourceMap: null, sourceUrl: msg.sourceUrl || "",
-    _orphans: orphans, _emitDone: emitDone, _replyWant: replyWant, _park: park,
+    sourceMapUrl: null, sourceMap: null, sourceUrl: (msg && msg.sourceUrl) || "",
+    _orphans: result._orphans || 0, _emitDone: result._emit != null ? ("emit=" + result._emit) : "",
+    _replyWant: [], _park: result._park || [],
   };
 }
 
@@ -194,8 +119,7 @@ async function driveFrontier(rounds, opts) {
     all.sort((a, b) => frontierWeight(b) - frontierWeight(a));   // ONE global value order
     const top = all[0];
     const m2 = { type: "AST_ANALYZE", pageHtml: top.html, code: top.code, sourceUrl: top.sourceUrl, quantum: opts.quantum || top.quantum || 8, credentialed: top.credentialed };
-    const r = await runEngine(top.code || "", top.html || "", m2, m2.quantum);   // runEngine re-derives the id + resumes top's recipes
-    dedupShapeConcrete(new Map((r.fetchCallSites || []).map((s) => [(s.method || "GET") + " " + s.url, s])));
+    const r = await runEngine(top.code || "", top.html || "", m2, m2.quantum);   // engine re-derives id, resumes recipes, DEDUPS
     advances.push({ sourceUrl: top.sourceUrl, result: r });
     top.emit = (top.emit || 0) + (r.fetchCallSites || []).length;
     top.visits = (top.visits || 0) + 1;
@@ -262,41 +186,9 @@ async function runEngine(code, html, msg, quantum) {
   return _result;
 }
 
-function mergeCallsites(map, sites) {
-  for (const s of sites || []) { const k = (s.method || "GET") + " " + normHoles(s.url); if (!map.has(k)) map.set(k, s); }
-}
-function pathSegs(u) { const q = u.indexOf("?"); const p = q >= 0 ? u.slice(0, q) : u; return { segs: p.split("/"), query: q >= 0 ? u.slice(q) : "" }; }
-/* A concrete endpoint that is a SHAPE instantiated (e.g. /api/org/acme-42/members vs /api/org/{}/members)
-   is the SAME endpoint with its path placeholder filled — not a distinct one. Attach the concrete segment
-   as the shape's path-param example (the moat's KEY+VALUE) and drop the redundant concrete, so the surface
-   isn't double-counted. Only collapses a concrete INTO an existing shape (never merges two real resources). */
-function dedupShapeConcrete(map) {
-  const arr = [...map.values()];
-  const shapes = arr.filter((e) => hasHole(e.url));
-  if (!shapes.length) return;
-  for (const c of arr) {
-    if (hasHole(c.url)) continue;                 // c must be concrete
-    for (const s of shapes) {
-      if ((s.method || "GET") !== (c.method || "GET")) continue;
-      const ss = pathSegs(s.url), cs = pathSegs(c.url);
-      if (ss.segs.length !== cs.segs.length || ss.query !== cs.query) continue;
-      let ok = true; const ex = [];
-      for (let i = 0; i < ss.segs.length; i++) {
-        if (SEG_HOLE.test(ss.segs[i])) { if (cs.segs[i] && !hasHole(cs.segs[i])) ex.push([i, cs.segs[i]]); else { ok = false; break; } }
-        else if (ss.segs[i] !== cs.segs[i]) { ok = false; break; }
-      }
-      if (ok && ex.length) {
-        for (const [i, v] of ex) {
-          let pp = (s.params || []).find((p) => p.location === "path" && p.name === "arg" + i);
-          if (!pp) { pp = { name: "arg" + i, location: "path", validValues: [] }; (s.params = s.params || []).push(pp); }
-          if (pp.validValues.indexOf(v) < 0) pp.validValues.push(v);   // concrete example for the path param
-        }
-        map.delete((c.method || "GET") + " " + c.url);
-        break;
-      }
-    }
-  }
-}
+/* Endpoint IDENTITY (exact dedup by method+hole-normalized-url + shape/concrete collapse with path-param
+   examples) is the ENGINE's job now — it emits an already-deduped fetchCallSites in @RESULT. The host
+   mergeCallsites/dedupShapeConcrete/pathSegs were DELETED. */
 
 self.astDispatch = async function astDispatch(msg) {
   try {
@@ -321,12 +213,7 @@ self.astDispatch = async function astDispatch(msg) {
         visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
       });
     }
-    const endpoints = new Map();
-    mergeCallsites(endpoints, result.fetchCallSites);
-
-    dedupShapeConcrete(endpoints);   // collapse concrete instantiations into their shape (path-param examples)
-    result.fetchCallSites = [...endpoints.values()];
-    return { success: true, result };
+    return { success: true, result };   // result.fetchCallSites is already deduped by the engine
   } catch (e) {
     return { success: false, error: String(e && e.message || e), stack: e && e.stack };
   }
