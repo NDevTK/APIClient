@@ -4830,20 +4830,18 @@ async function _drainReviewQueue() {
          up via the cache-miss path. */
       if (_analysisInflight.has(docKey)) continue;   // per-DOCUMENT in-flight guard (distinct documents of a tab may overlap)
       _analysisInflight.add(docKey);
-      /* Fire-and-forget — do NOT await. Each document is analyzed in its
-         OWN fresh wasm instance (bridge.runEngine). Not awaiting lets
-         several documents' analyses be in flight at once; they interleave
-         COOPERATIVELY only at the JS event loop's await points (each
-         runEngine awaits its network fetch/chunk replies) — there is NO
-         priority arbitration BETWEEN live instances here (the within-page
-         value-ordered WFQ lives in the C engine over one instance's g_reg;
-         CROSS-document value ordering is realized separately in
-         _driveGlobalFrontierBurst -> driveFrontier, which re-ranks the
-         GLOBAL union of parked IDB recipes by frontierWeight). This
-         recency pick only orders which doc STARTS next. The per-doc cache
-         + _dataEpoch guard keep results attribution-correct under overlap;
-         errors surface via analysis.resolverErrors / _astError, never a
-         bare catch. */
+      /* Fire-and-forget — do NOT await. astDispatch ENQUEUES this document
+         into the host WFQ pool (bridge.js): a bounded set of live wasm
+         instances the pool interleaves by value-of-information (each engine
+         exposes qjs_top_weight; it advances the highest one a slice, then
+         re-ranks) — so this is TWO levels of ONE WFQ: flows within a doc
+         (C engine, g_reg) and engines across docs (the host pool). This
+         recency pick only orders the doc's ENTRY into the pool; the pool
+         then arbitrates by weight and admission-gates creation to the RAM
+         cap. The cold tail (parked recipes) is advanced separately by
+         _driveGlobalFrontierBurst -> driveFrontier. The per-doc cache +
+         _dataEpoch guard keep results attribution-correct; errors surface
+         via analysis.resolverErrors / _astError, never a bare catch. */
       _analyzeCombinedScriptsInner(tabId, buf)
         .catch(function (e) { console.debug("[AST:queue] doc review error: %s", e && e.message); })
         .finally(function () { _analysisInflight.delete(docKey); });
