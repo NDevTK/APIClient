@@ -1220,16 +1220,52 @@ static void script_maybe_load(lxb_dom_element_t *el) {
         if (u) { arr_push_str(g_ctx, g_chunkurls, u); if (!has_hole(u)) chunk_pending_add(u); free(u); }   /* -> chunkUrls + fetch in place */
     }
 }
-/* dynamic import(specifier): force-fetch the ESM chunk in place (like a browser lazy-load, forced). Make the
-   concrete specifier a pending chunk (fetched + eval'd; its functions become orphans the scheduler drives)
-   and surface @CHUNK. The module namespace is OPAQUE (forced-exec runs the CODE, not the real exports). */
-static JSValue host_dyn_import(JSContext *ctx, const char *specifier) {
-    if (specifier && specifier[0] && !has_hole(specifier)) {
-        arr_push_str(ctx, g_chunkurls, specifier);   /* -> @RESULT.chunkUrls */
-        char *u = strdup(specifier);
-        if (u) { chunk_pending_add(u); free(u); }
+static void resolve_with(JSContext *ctx, JSValueConst resolve, JSValue val) {   /* resolve borrowed; val consumed */
+    JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, (JSValueConst *)&val); JS_FreeValue(ctx, r); JS_FreeValue(ctx, val);
+}
+/* Link a dynamic-import chunk from its FETCHED source and hand back its REAL namespace (concrete exports).
+   Returns 0 if not fetched yet, or if a static dep in the chunk isn't ready (retried on the next provide). */
+static int dynimport_link(JSContext *ctx, const char *spec, JSValue *out_ns) {
+    ModSrc *m = modsrc_get(spec);
+    if (!m || !m->src) return 0;
+    JSValue fn = JS_Eval(ctx, m->src, m->len, spec, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (JS_IsException(fn)) { JS_FreeValue(ctx, JS_GetException(ctx)); return 0; }
+    JSModuleDef *md = JS_VALUE_GET_PTR(fn);
+    JSValue ev = JS_EvalFunction(ctx, fn);   /* instantiate (loader resolves deps) + evaluate */
+    if (JS_IsException(ev)) { JS_FreeValue(ctx, JS_GetException(ctx)); JS_FreeValue(ctx, ev); return 0; }
+    { JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {} }
+    JS_FreeValue(ctx, ev);
+    *out_ns = JS_GetModuleNamespace(ctx, md);   /* the concrete exports */
+    return 1;
+}
+/* import() promises parked until their chunk (and its deps) are fetched. */
+typedef struct { char *spec; JSValue resolve; } DynPend;
+static DynPend *g_dynpend = NULL; static int g_dynpend_n = 0, g_dynpend_cap = 0;
+static void dynpend_add(const char *spec, JSValue resolve) {   /* resolve is a DUP we own */
+    if (g_dynpend_n >= g_dynpend_cap) { int nc = g_dynpend_cap ? g_dynpend_cap * 2 : 8; DynPend *n = realloc(g_dynpend, (size_t)nc * sizeof(DynPend)); if (!n) { JS_FreeValue(g_ctx, resolve); return; } g_dynpend = n; g_dynpend_cap = nc; }
+    g_dynpend[g_dynpend_n].spec = strdup(spec); g_dynpend[g_dynpend_n].resolve = resolve; g_dynpend_n++;
+}
+static void dynpend_retry(JSContext *ctx) {   /* a chunk arrived: resolve every now-linkable parked import() */
+    for (int i = 0; i < g_dynpend_n; i++) {
+        JSValue ns;
+        if (dynimport_link(ctx, g_dynpend[i].spec, &ns)) {
+            resolve_with(ctx, g_dynpend[i].resolve, ns); JS_FreeValue(ctx, g_dynpend[i].resolve); free(g_dynpend[i].spec);
+            for (int j = i; j < g_dynpend_n - 1; j++) g_dynpend[j] = g_dynpend[j + 1];
+            g_dynpend_n--; i--;
+        }
     }
-    return JS_DupValue(ctx, g_opaque);
+}
+/* dynamic import(specifier): force-fetch + LINK the ESM chunk like a browser lazy-load (forced). The chunk's
+   exports are the page's OWN code (concrete, not external input), so resolve the import() promise with the
+   REAL namespace once linked — a value that flows to a fetch/sink is then solved, not lost to an opaque {}. */
+static void host_dyn_import(JSContext *ctx, const char *specifier, JSValueConst resolve, JSValueConst reject) {
+    (void)reject;
+    if (!specifier || !specifier[0] || has_hole(specifier)) { resolve_with(ctx, resolve, JS_DupValue(ctx, g_opaque)); return; }
+    arr_push_str(ctx, g_chunkurls, specifier);   /* -> @RESULT.chunkUrls */
+    JSValue ns;
+    if (dynimport_link(ctx, specifier, &ns)) { resolve_with(ctx, resolve, ns); return; }   /* already fetched -> real namespace now */
+    chunk_pending_add(specifier); moddep_add(specifier);   /* fetch it; PARK the resolve until it (and its deps) land */
+    dynpend_add(specifier, JS_DupValue(ctx, resolve));
 }
 /* Identity normalize: keep the specifier VERBATIM (matches the host fetch contract — chunk URLs are passed
    to qjs_provide exactly as written; the offscreen resolves relative/root-relative against the doc URL). */
@@ -2158,8 +2194,9 @@ KEEP void qjs_provide(const char *url, const char *body)
             JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
             int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0);
             modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
-            if (is_moddep(url)) pendmod_retry(ctx);              /* a static-import dep: the loader links+runs it in-graph (don't eval standalone -> no double side effects) */
-            else eval_page_script(ctx, body, strlen(body), url, JS_DetectModule(body, strlen(body))); /* classic external script / dynamic-import target: run standalone (module vs classic by the real detector) */
+            dynpend_retry(ctx);                                  /* resolve any parked dynamic import() now linkable */
+            if (is_moddep(url)) pendmod_retry(ctx);              /* a static-import dep OR dyn-import chunk: link in-graph (don't eval standalone -> no double side effects) */
+            else eval_page_script(ctx, body, strlen(body), url, JS_DetectModule(body, strlen(body))); /* classic external script: run standalone (module vs classic by the real detector) */
             JS_CowSetActive(1); g_dom_capture = dsv;
             /* CACHE the chunk so boot-replay re-runs it under a candidate — a source stored / handler
                registered in an external chunk is then re-established with the concrete input (cross-flow
@@ -2243,6 +2280,9 @@ KEEP void qjs_teardown(void)
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
     for (int i = 0; i < g_moddep_n; i++) free(g_moddep[i]);
     free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
+    if (g_dynpend_n) fprintf(stderr, "@WHY{phase:dyn-import,reason:unresolved,count:%d}\n", g_dynpend_n);   /* chunk never fetched -> surface, don't vanish */
+    for (int i = 0; i < g_dynpend_n; i++) { JS_FreeValue(ctx, g_dynpend[i].resolve); free(g_dynpend[i].spec); }  /* abandon the promise (teardown) — no JS run post-revert */
+    free(g_dynpend); g_dynpend = NULL; g_dynpend_n = g_dynpend_cap = 0;
     if (g_pendmod_n) fprintf(stderr, "@WHY{phase:module-link,reason:unresolved-graph,count:%d}\n", g_pendmod_n);  /* a module never linked (dep never fetched) -> surface, don't vanish */
     for (int i = 0; i < g_pendmod_n; i++) free(g_pendmod[i].src);
     free(g_pendmod); g_pendmod = NULL; g_pendmod_n = g_pendmod_cap = 0; g_modseq = 0;
