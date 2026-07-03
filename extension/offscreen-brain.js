@@ -6353,73 +6353,18 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return true;
     }
 
-    // EXPLOIT_PROBE_STATUS: return everything known about a running or
-    // completed probe. Sessions persist past completion (TTL 10 min)
-    // so a closed-and-reopened popup can still render the result.
+    // EXPLOIT_PROBE_STATUS: report whether the engine's poc, run against the real page, fired the sink.
+    // Correlation is the relayed apiclientsink(<marker>) hit (intercept.js → content.js → PROBE_HIT). A hit
+    // = REAL EXPLOIT (Chrome agrees with the engine); no hit = divergence / CSP-blocked.
     case "EXPLOIT_PROBE_STATUS": {
       const ses = msg.sessionId ? _probeSessions.get(msg.sessionId) : null;
       if (!ses) { sendResponse({ error: "session not found or expired" }); return; }
-      // Correlation is via the relayed apiclientsink(<id>) hits (content.js →
-      // PROBE_HIT), which content.js drains durably from the documentElement
-      // mirror even if it loaded after the sink fired. No tab-finding / flag-read
-      // needed: hits arrive by id.
-      {
-        sendResponse({
-        success: true,
-        status: ses.status,
-        marker: ses.marker,
-        strategy: ses.strategy,
-        pageUrl: ses.pageUrl,
-        hits: ses.hits.slice(),
-        executed: ses.executed || null,
-        // The EXACT PoC JavaScript that was run on the attacker origin — the
-        // single artifact the UI both displays and executes (no separate
-        // payload system). A researcher copies this and runs it verbatim.
-        pocJs: ses.pocJs || null,
-        attackerOrigin: PROBE_ATTACKER_ORIGIN,
-        startedAt: ses.createdAt,
-        finishedAt: ses.finishedAt || null,
-        error: ses.error || null,
-        // Expose the recipe the probe actually used so the reviewer can
-        // audit "what did we send, why didn't it fire, is the AST's
-        // precondition/decoder chain accurate?" without digging into
-        // background logs.
-        recipe: {
-          sinkType: ses.sinkType || null,
-          sinkName: ses.sinkName || null,
-          paramName: ses.paramName || null,
-          fieldPath: Array.isArray(ses.fieldPath) ? ses.fieldPath.slice() : [],
-          decoders: Array.isArray(ses.decoders) ? ses.decoders.slice() : [],
-          preconditions: Array.isArray(ses.preconditions) ? ses.preconditions.slice() : [],
-          // Orchestrator-populated fields (_runStructuredPlan): targetUrl,
-          // events. Lets a reviewer see EXACTLY what URL + payloads the
-          // SW dispatched, so a NOT REPRODUCED can be traced back to a
-          // concrete gap (URL gate, payload shape, CSP).
-          targetUrl: ses.recipe && ses.recipe.targetUrl || null,
-          events: ses.recipe && Array.isArray(ses.recipe.events) ? ses.recipe.events : null,
-        },
-        });
-      }
-      return;
-    }
-
-    // EXPLOIT_PROBE_LIST: enumerate recent sessions so the popup can
-    // show a "probe history" view alongside findings.
-    case "EXPLOIT_PROBE_LIST": {
-      const out = [];
-      for (const [marker, ses] of _probeSessions) {
-        out.push({
-          sessionId: marker,
-          status: ses.status,
-          strategy: ses.strategy,
-          pageUrl: ses.pageUrl,
-          hitCount: ses.hits.length,
-          startedAt: ses.createdAt,
-          finishedAt: ses.finishedAt || null,
-        });
-      }
-      out.sort((a, b) => b.startedAt - a.startedAt);
-      sendResponse({ success: true, sessions: out });
+      sendResponse({
+        success: true, status: ses.status, marker: ses.marker, pageUrl: ses.pageUrl,
+        hits: ses.hits.slice(), executed: ses.executed || null,
+        pocJs: ses.pocJs || null, error: ses.error || null,
+        startedAt: ses.createdAt, finishedAt: ses.finishedAt || null,
+      });
       return;
     }
 
@@ -6659,20 +6604,6 @@ function _pruneProbeSessions() {
 // Template-FREE: the payload is COMPUTED from the sink's PARSE CONTEXT (scanned from the concrete text
 // around the hole), and the DELIVERY vector comes from the hole's SOURCE tag ({hash}/{search}/{pm}).
 // Returns {pocJs, payload, context, source, delivery} or null (with why) when the shape lacks a source.
-function _htmlHoleContext(prefix) {
-  // Walk the concrete HTML before the hole, tracking tag/attribute state, to know how the attacker
-  // input must break OUT to reach an executable position. This is observation of the real interleaving,
-  // not a signature match.
-  var inTag = false, quote = null;
-  for (var i = 0; i < prefix.length; i++) {
-    var c = prefix[i];
-    if (quote) { if (c === quote) quote = null; continue; }
-    if (inTag) { if (c === '"' || c === "'") quote = c; else if (c === '>') inTag = false; }
-    else if (c === '<') inTag = true;
-  }
-  if (quote) return quote === '"' ? "attr-dq" : "attr-sq";
-  return inTag ? "tag" : "text";
-}
 // ENGINE AGREEMENT: the live PoC is the ENGINE's exact solved breakout input (its `poc` field) — the input
 // a candidate-replay flow drove through the REAL page code+branches+filters to the sink where it broke out.
 // We do NOT re-derive a payload from the shape (that second solver would diverge: it wouldn't carry the
@@ -6715,62 +6646,36 @@ function buildPocFromShape(sinkName, poc, shape, pageUrl, marker) {
 }
 function startExploitProbe(msg) {
   _pruneProbeSessions();
-  const { strategy, waitMs, findingId, paramName, fieldPath, sinkType, sinkName, decoders, preconditions, pocPlan, shape, poc } = msg || {};
-  if (!poc && !strategy && !pocPlan && !shape) throw new Error("need the engine's poc + shape (from the @S finding)");
-  if (strategy === "search" && !paramName) {
-    throw new Error("search strategy requires paramName — derive it from the finding's observed source (e.g. the argument to URLSearchParams.get)");
-  }
-  if (fieldPath && !Array.isArray(fieldPath)) throw new Error("fieldPath must be an array of string field names");
-  if (pocPlan && (typeof pocPlan !== "object" || !Array.isArray(pocPlan.events))) {
-    throw new Error("pocPlan must be an object with events[] array — pass the finding's `poc` field verbatim");
-  }
+  const { waitMs, findingId, sinkName, shape, poc } = msg || {};
+  if (!poc || !shape) throw new Error("need the engine's poc + source shape (from the @S finding)");
 
-  // Resolve pageUrl from the finding the probe is verifying.
-  // globalStore.securityFindings records pageUrl when the finding is
-  // observed; we read it directly rather than asking the caller to
-  // supply it (the caller may not know, and we must never guess which
-  // tab a finding came from). Caller can pass msg.pageUrl to override
-  // — e.g. harness's --page-url for the reviewer who audited the site.
+  // pageUrl: the page the finding was observed on (recorded in securityFindings). The caller may pass it;
+  // else resolve from the finding. Never guessed.
   let pageUrl = msg && msg.pageUrl ? msg.pageUrl : null;
-  if (!pageUrl && findingId && msg.sourceUrl) {
+  if (!pageUrl && msg.sourceUrl) {
     const entry = globalStore.securityFindings.get(msg.sourceUrl);
     if (entry && entry.pageUrl) pageUrl = entry.pageUrl;
   }
 
-  const wait = Math.max(1000, Math.min(30000, Number(waitMs) || 5000));
-  // The correlation id is a crypto.randomUUID — it rides INSIDE the PoC payload
-  // (apiclientsink("<id>")), is relayed back by intercept.js → content.js, and
-  // keys this session. Never placed in the URL.
+  const wait = Math.max(1000, Math.min(30000, Number(waitMs) || 6000));
+  // The correlation id is a crypto.randomUUID — it rides INSIDE the payload as apiclientsink("<id>"),
+  // relayed back by intercept.js → content.js, and keys this session. Never placed in the URL.
   const marker = (self.crypto && crypto.randomUUID)
     ? crypto.randomUUID()
     : ("probe-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10));
   const session = {
-    marker, status: "running", strategy: strategy || (pocPlan ? "pocPlan" : null),
-    pageUrl: pageUrl || null,
+    marker, status: "running", pageUrl: pageUrl || null,
     findingId: findingId || null, sourceUrl: (msg && msg.sourceUrl) || null,
-    paramName: paramName || null,
-    fieldPath: Array.isArray(fieldPath) ? fieldPath.slice() : [],
-    sinkType: sinkType || null, sinkName: sinkName || null,
-    decoders: Array.isArray(decoders) ? decoders.slice() : [],
-    preconditions: Array.isArray(preconditions) ? preconditions.slice() : [],
-    pocPlan: pocPlan || null,
-    waitMs: wait,
-    hits: [], openedTabs: [], createdAt: Date.now(), finishedAt: null, error: null,
+    sinkName: sinkName || null, waitMs: wait,
+    hits: [], createdAt: Date.now(), finishedAt: null, error: null,
   };
-  // Build THE PoC artifact and register the session for hit-correlation. We do
-  // NOT auto-open any tab: the PoC is executed by the USER clicking Run inside
-  // the sandboxed attacker page (poc-sandbox.html) — that real click is the user
-  // activation window.open needs, and the sandbox's opaque origin is a genuine
-  // cross-origin attacker context. The SAME pocJs is what the popup displays.
-  // When the PoC fires the sink, intercept.js → content.js → PROBE_HIT lands on
-  // this session's marker, and EXPLOIT_PROBE_STATUS reports REAL EXPLOIT.
-  // Compile THE PoC by REVERSING the captured @S taint shape (opaque provenance): parse context around
-  // the source-tagged hole → context-appropriate payload calling the verifier's apiclientsink(marker) →
-  // delivery from the source tag. No solver, no template. Feeds the EXISTING PROBE_HIT correlation.
-  var _poc = (poc && shape) ? buildPocFromShape(sinkName || sinkType, poc, shape, session.pageUrl, marker) : null;
+  // ENGINE AGREEMENT: build the delivery from the engine's EXACT poc (X9 -> apiclientsink) via its source.
+  // The user runs it by clicking Run in the sandboxed attacker page (poc-sandbox.html) — that real click is
+  // the user activation window.open needs. When the real page's sink fires, intercept.js → content.js →
+  // PROBE_HIT lands on this marker and EXPLOIT_PROBE_STATUS reports REAL EXPLOIT (Chrome-confirmed).
+  var _poc = buildPocFromShape(sinkName, poc, shape, session.pageUrl, marker);
   session.pocJs = (_poc && _poc.pocJs) || null;
-  session.pocMeta = _poc ? { context: _poc.context, source: _poc.source, payload: _poc.payload, delivery: _poc.delivery } : null;
-  session.pocWhy = _poc && !_poc.pocJs ? _poc.why : null;   // @WHY when a shape can't yield a client-deliverable PoC
+  session.pocWhy = _poc && !_poc.pocJs ? _poc.why : null;   // @WHY when the source isn't client-deliverable
   session.status = "prepared";
   _probeSessions.set(marker, session);
   return session;
