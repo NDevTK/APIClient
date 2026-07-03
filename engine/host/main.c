@@ -46,6 +46,7 @@ typedef struct {
     signed char *dec; int dec_n;  /* per-flow decision vector (branch-arm BFS) */
     void *fs;            /* live heap frame if SUSPENDED mid-run (JS_FlowResume), else NULL */
     void *cow; int cow_n, cow_cap;  /* this flow's HEAP COW DELTA, stashed while parked (unapplied); swapped in on resume */
+    void *dom; int dom_n, dom_cap;  /* this flow's DOM COW DELTA, same swap discipline */
     int saved_c;         /* per-flow branch cursor (g_c) snapshot, restored on resume */
     double cpu;          /* back-edge CPU ticks since last emit (WFQ decay; reset to 0 on emit) */
     int visits;          /* times scheduled (UCB/fairness explore term) */
@@ -102,6 +103,8 @@ static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisio
     g_dec = nd; g_dec_cap = nc; return 1;
 }
 
+typedef struct DomUndo DomUndo;                 /* per-flow DOM COW delta buffer (defined below) */
+static void dom_buf_free(DomUndo *buf, int n);
 static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, signed char *dec, int dec_n)
 {
     if (g_reg_n >= g_reg_cap) {
@@ -114,6 +117,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].dec = dec; g_reg[g_reg_n].dec_n = dec_n;
     g_reg[g_reg_n].fs = NULL; g_reg[g_reg_n].saved_c = 0; g_reg[g_reg_n].cpu = 0; g_reg[g_reg_n].visits = 0;
     g_reg[g_reg_n].cow = NULL; g_reg[g_reg_n].cow_n = 0; g_reg[g_reg_n].cow_cap = 0;
+    g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL;
     g_reg_n++; return 1;
 }
@@ -126,6 +130,7 @@ static int reg_readd(JSContext *ctx, Flow f)
         Flow *nr = (Flow *)realloc(g_reg, (size_t)nc * sizeof(Flow));
         if (!nr) { printf("@WHY {\"phase\":\"reg_oom\"}\n");
                    if (f.fs) JS_FlowFree(g_rt, f.fs); if (f.cow) JS_CowBufFree(ctx, f.cow, f.cow_n);
+                   if (f.dom) dom_buf_free((DomUndo *)f.dom, f.dom_n);
                    JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); return 0; }
         g_reg = nr; g_reg_cap = nc;
     }
@@ -1008,7 +1013,16 @@ static JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val, int argc
    same invariant as the JS-heap COW. A host-side undo log records the inverse of each mutation while
    capture is active (during flow exploration, NOT boot which builds the baseline); dom_revert replays
    it to restore the post-boot DOM baseline, called alongside JS_CowRevert before each starter. */
-typedef struct { int kind; lxb_dom_element_t *el; char *name; lxb_char_t *old; size_t old_len; int had; lxb_dom_node_t *node; } DomUndo;
+/* PER-FLOW DOM COW DELTA (mirrors the JS heap delta): `old` = baseline value/absence (kind 0 attr) or the
+   inserted node's detach position (kind 1); `cur` = the flow's value, held while parked. Swapped on
+   context-switch so a DOM writer interleaves like a heap writer. */
+typedef struct DomUndo {
+    int kind; lxb_dom_element_t *el; char *name;
+    lxb_char_t *old; size_t old_len; int had;                 /* kind 0: baseline attr */
+    lxb_char_t *cur; size_t cur_len; int cur_had;             /* kind 0: flow's attr (valid while parked) */
+    lxb_dom_node_t *node, *parent, *next;                     /* kind 1: inserted node + detach position */
+    int detached;                                             /* kind 1: currently detached (unapplied) */
+} DomUndo;
 static DomUndo *g_dom_undo = NULL;
 static int g_dom_undo_n = 0, g_dom_undo_cap = 0, g_dom_capture = 0;
 static void dom_undo_push(DomUndo u) {
@@ -1036,19 +1050,57 @@ static void dom_insert_capture(lxb_dom_node_t *node) {
    rebuilt as forced-exec with concrete marker payloads that flow through the REAL code (transforms/filters
    apply natively) and are observed breaking out at a sink. Until that lands, sinks are ordinary host edges
    (no-op for the injected content) and emit no @S. */
-static void dom_revert(void) {   /* restore the DOM to the post-boot baseline (reverse order) */
+static void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (reverse order); empties the delta */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {
         DomUndo *u = &g_dom_undo[i];
         if (u->kind == 0) {   /* attribute: restore old value, or remove if it didn't exist */
             if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
             else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
-            free(u->name); free(u->old);
-        } else if (u->kind == 1) {   /* inserted node: detach it */
+            free(u->name); free(u->old); free(u->cur);
+        } else if (u->kind == 1 && !u->detached) {   /* inserted node: detach it (baseline had none) */
             lxb_dom_node_remove(u->node);
         }
     }
     g_dom_undo_n = 0;
 }
+/* UNAPPLY (flow -> parked): save the flow's DOM values, restore the baseline, so the next flow sees the
+   baseline DOM. Reverse order. */
+static void dom_unapply(void) {
+    for (int i = g_dom_undo_n - 1; i >= 0; i--) {
+        DomUndo *u = &g_dom_undo[i];
+        if (u->kind == 0) {
+            size_t vl = 0; const lxb_char_t *c = lxb_dom_element_get_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), &vl);
+            free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = c ? 1 : 0;   /* stash the flow's attr */
+            if (c) { u->cur = malloc(vl ? vl : 1); if (u->cur) { memcpy(u->cur, c, vl); u->cur_len = vl; } }
+            if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
+            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
+        } else if (u->kind == 1 && !u->detached) {
+            u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
+            u->next = lxb_dom_interface_node(u->node)->next;
+            lxb_dom_node_remove(u->node); u->detached = 1;
+        }
+    }
+}
+/* APPLY (parked -> flow): restore the flow's DOM values over the baseline. Forward order. */
+static void dom_apply(void) {
+    for (int i = 0; i < g_dom_undo_n; i++) {
+        DomUndo *u = &g_dom_undo[i];
+        if (u->kind == 0) {
+            if (u->cur_had && u->cur) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->cur, u->cur_len);
+            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
+        } else if (u->kind == 1 && u->detached) {
+            if (u->next) lxb_dom_node_insert_before(u->next, u->node);
+            else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
+            u->detached = 0;
+        }
+    }
+}
+static void dom_buf_free(DomUndo *buf, int n) {   /* free a parked DOM delta buffer (its nodes stay detached, owned by the doc) */
+    for (int i = 0; i < n; i++) { free(buf[i].name); free(buf[i].old); free(buf[i].cur); }
+    free(buf);
+}
+static void *dom_buf_take(int *n, int *cap) { void *b = g_dom_undo; *n = g_dom_undo_n; *cap = g_dom_undo_cap; g_dom_undo = NULL; g_dom_undo_n = 0; g_dom_undo_cap = 0; return b; }
+static void dom_buf_load(void *buf, int n, int cap) { g_dom_undo = (DomUndo *)buf; g_dom_undo_n = n; g_dom_undo_cap = cap; }
 
 static int el_is_script(lxb_dom_element_t *el) {
     size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
@@ -1381,7 +1433,8 @@ static int wfq_yield(void)
 {
     if (!g_cur_flow) return 0;
     g_cur_flow->cpu += 1.0;
-    if (g_dom_undo_n > 0) return 0;   /* JS-heap writers ARE now preemptible (per-flow COW delta swaps on switch); a DOM writer still runs to completion until per-flow DOM deltas land */
+    /* Both the JS heap AND the Lexbor DOM are per-flow COW deltas that swap on context-switch, so a flow is
+       preemptible mid-write to either — no writer runs to completion. */
     double rw = flow_weight(g_cur_flow);
     for (int i = 0; i < g_reg_n; i++)
         if (flow_weight(&g_reg[i]) > rw) return 1;   /* a parked flow now outranks the running quantum */
@@ -1408,6 +1461,7 @@ static void park_frontier(JSContext *ctx)
         }
         if (f->fs) JS_FlowFree(g_rt, f->fs);
         if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
+        if (f->dom) dom_buf_free((DomUndo *)f->dom, f->dom_n);   /* and its DOM delta */
         JS_FreeValue(ctx, f->handle);
         free(f->dec); free(f->candidate);
     }
@@ -1453,6 +1507,8 @@ static void scheduler_run(JSContext *ctx)
             if (jr < 0) js_std_dump_error(c1 ? c1 : ctx);
             JS_CowRevert(ctx);                            /* discard the resume's heap writes -> baseline */
             { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
+            dom_revert();                                 /* discard the resume's DOM writes -> baseline */
+            { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
             g_running = 0; g_cur_flow = NULL;
             JS_FreeValue(ctx, f.handle); free(f.dec);
             continue;
@@ -1467,8 +1523,7 @@ static void scheduler_run(JSContext *ctx)
         g_c = f.saved_c;
 
         int is_starter = (f.fs == NULL);
-        if (is_starter) {                           /* STARTER: fresh heap frame + empty COW delta (globals left NULL by the previous flow's exit) */
-            dom_revert();                           /* revert DOM mutations to the post-boot baseline (DOM still serial) */
+        if (is_starter) {                           /* STARTER: fresh heap frame + empty heap/DOM deltas (both left NULL by the previous flow's exit) */
             /* @S CROSS-FLOW: a candidate flow re-runs boot with the concrete candidate pinned, so shared
                state a handler reads (window.x = location.hash set at boot) holds the candidate, not the
                baseline opaque. boot_replay_candidate reverts the global object to PRE-boot first (delete
@@ -1499,6 +1554,8 @@ static void scheduler_run(JSContext *ctx)
                 if (jr2 < 0) js_std_dump_error(c2 ? c2 : ctx);
                 JS_CowRevert(ctx);                            /* discard this flow's heap writes -> baseline */
                 { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* free the delta buffer, globals -> NULL */
+                dom_revert();                                 /* discard this flow's DOM writes -> baseline */
+                { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
                 if (f.candidate) { int sv = 0; JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); (void)sv; }   /* restore boot-created globals (host-side, uncaptured) */
                 g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
                 JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate);
@@ -1507,7 +1564,10 @@ static void scheduler_run(JSContext *ctx)
         }
         /* RESUME: swap in the parked flow's OWN heap COW delta (unapplied while it slept) so it sees its own
            shared-state writes again, not another flow's. Starters begin with an empty delta (globals NULL). */
-        if (!is_starter) { JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
+        if (!is_starter) {
+            JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
+            dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
+        }
 
         /* Candidate flows run to COMPLETION (no yield): the boot-created-globals bracket must not straddle a
            suspension. Other flows are preemptible mid heap-write now (per-flow COW delta). */
@@ -1525,6 +1585,8 @@ static void scheduler_run(JSContext *ctx)
                delta buffer; re-queue. On resume it re-applies. Interleaving of heap-writers is now sound. */
             JS_CowUnapply(ctx);
             f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap);
+            dom_unapply();
+            f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
             f.saved_c = g_c;
             f.val = g_cur_val;
             if (g_dec_n > f.dec_n) {                /* grew (new branch decisions taken this quantum) */
@@ -1540,6 +1602,8 @@ static void scheduler_run(JSContext *ctx)
             /* COMPLETED/error: discard this flow's heap writes (restore baseline) + free its delta buffer. */
             JS_CowRevert(ctx);
             { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
+            dom_revert();
+            { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
             if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }   /* restore boot-created globals (host-side, uncaptured) */
             if (JS_IsException(out)) js_std_dump_error(ctx);
             JS_FreeValue(ctx, out);
