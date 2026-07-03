@@ -1440,6 +1440,26 @@ static void drive_session(JSContext *ctx) {
     }
     g_in_session = 0;
 }
+/* Run a page script LIKE A BROWSER, whether classic or ESM. Try GLOBAL first (classic bundles); if that
+   throws (a top-level import/export is a SyntaxError in global scope), retry as a MODULE and drive the
+   evaluation to completion. Covers inline <script type=module> AND external module chunks (qjs_provide
+   doesn't know the tag) without a type sniff. Static imports resolve via the dyn-import hook path. */
+static void eval_page_script(JSContext *ctx, const char *code, size_t len, const char *name) {
+    /* COMPILE-ONLY as global first, so we distinguish a module (export/import is a SyntaxError in global
+       scope) from a classic script that merely throws at RUNTIME. Retrying the latter as a module would
+       double-run its side effects — so retry ONLY on a compile failure, never a run failure. */
+    JSValue fn = JS_Eval(ctx, code, len, name, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    JSValue v;
+    if (JS_IsException(fn)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));                         /* clear the SyntaxError */
+        v = JS_Eval(ctx, code, len, name, JS_EVAL_TYPE_MODULE);          /* ESM: export/import valid here */
+        if (!JS_IsException(v)) { JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {} }  /* module eval is async -> drive it */
+    } else {
+        v = JS_EvalFunction(ctx, fn);                                    /* run the compiled global script (consumes fn) */
+    }
+    if (JS_IsException(v)) JS_FreeValue(ctx, JS_GetException(ctx));
+    JS_FreeValue(ctx, v);
+}
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
     lxb_css_parser_t *p = lxb_css_parser_create();
@@ -1473,9 +1493,7 @@ static void dom_run_scripts(JSContext *ctx) {
             for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; }     /* inline body -> bundle id */
             bh ^= '|'; bh *= 16777619u;
             boot_script_cache((const char *)txt, tl);   /* cache for cross-flow @S candidate boot-replay */
-            JSValue v = JS_Eval(ctx, (const char *)txt, tl, "<script>", JS_EVAL_TYPE_GLOBAL);
-            if (JS_IsException(v)) js_std_dump_error(ctx);
-            JS_FreeValue(ctx, v);
+            eval_page_script(ctx, (const char *)txt, tl, "<script>");   /* classic or ESM, like a browser */
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
@@ -2057,9 +2075,7 @@ KEEP void qjs_provide(const char *url, const char *body)
         if (body && body[0]) {
             JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
             int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0);
-            JSValue v = JS_Eval(ctx, body, strlen(body), url, JS_EVAL_TYPE_GLOBAL);   /* chunk is new page code */
-            if (JS_IsException(v)) js_std_dump_error(ctx);
-            JS_FreeValue(ctx, v);
+            eval_page_script(ctx, body, strlen(body), url);   /* chunk is new page code — classic or ESM */
             JS_CowSetActive(1); g_dom_capture = dsv;
             /* CACHE the chunk so boot-replay re-runs it under a candidate — a source stored / handler
                registered in an external chunk is then re-established with the concrete input (cross-flow
