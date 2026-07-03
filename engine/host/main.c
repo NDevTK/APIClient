@@ -667,8 +667,10 @@ static void emit_result(JSContext *ctx) {
 /* branch_decide: the decision-vector fork logic (0/1). Called BOTH by __branch() (explicit) and by the
    engine's OP_if hook when a branch condition is OPAQUE (real bundles). Forced replay of this flow's
    decision prefix; a NEW decision forks the FALSE sibling (re-run the same function) and takes TRUE. */
+static int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a cross-flow @S candidate */
 static int branch_decide(JSContext *ctx)
 {
+    if (g_boot_replay) return 1;                            /* during boot-replay: don't fork/consume the handler flow's decision vector — just re-establish one path's shared state (source-derived conds are already concrete) */
     if (!g_running || JS_IsUndefined(g_cur_fn)) return 0;   /* only meaningful inside a starter flow */
     if (g_c < g_dec_n) return g_dec[g_c++] ? 1 : 0;         /* forced replay */
     if (!g_dec_ensure(g_c + 1)) return 1;                    /* only RAM/disk (the platform floor) bounds depth — not a cap */
@@ -856,6 +858,7 @@ static void *g_msg_handlers[128];
 static int g_msg_handler_n = 0;
 static JSValue g_msg_event = JS_UNDEFINED;   /* synthetic MessageEvent: { data: opaque("{pm}"), origin, source } */
 static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+    if (g_boot_replay) return JS_UNDEFINED;   /* replay re-establishes state, not the handler set (already seeded) */
     JSValueConst h = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
     if (JS_IsFunction(ctx, h) && !JS_IsUndefined(g_handlers)) {
         JS_SetPropertyUint32(ctx, g_handlers, (uint32_t)g_handler_n++, JS_DupValue(ctx, h));
@@ -1202,6 +1205,28 @@ static lxb_status_t scr_collect_cb(lxb_dom_node_t *node, lxb_css_selector_specif
     c->els[c->n++] = lxb_dom_interface_element(node);
     return LXB_STATUS_OK;   /* collect all in document order; eval AFTER traversal (eval may mutate the DOM) */
 }
+/* BOOT-REPLAY substrate: the page's inline <script> texts, cached at first boot. A cross-flow @S candidate
+   (source stored in shared state at boot, sunk in a SEPARATELY-driven handler) needs that shared state
+   re-established with the CONCRETE candidate — the handler reads the stored value, not the source directly.
+   So the candidate flow re-runs boot with g_candidate pinned (source getters return concrete), then drives
+   the handler; the re-run's writes are COW-captured + reverted like any flow, so isolation holds. Limits
+   (need full boot-as-flow): external <script src> chunks aren't re-run, and top-level const re-declare
+   throws (caught -> partial state). */
+static char **g_boot_scripts = NULL; static int g_boot_n = 0, g_boot_cap = 0;
+static void boot_script_cache(const char *txt, size_t len) {
+    if (g_boot_n >= g_boot_cap) { int nc = g_boot_cap ? g_boot_cap * 2 : 8;
+        char **n = realloc(g_boot_scripts, (size_t)nc * sizeof(char *)); if (!n) return; g_boot_scripts = n; g_boot_cap = nc; }
+    char *s = malloc(len + 1); if (!s) return; memcpy(s, txt, len); s[len] = 0; g_boot_scripts[g_boot_n++] = s;
+}
+static void boot_replay(JSContext *ctx) {
+    g_boot_replay = 1;
+    for (int i = 0; i < g_boot_n; i++) {
+        JSValue v = JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(v)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }   /* swallow re-declare etc; partial re-established state is still sound (only the candidate's path matters) */
+        JS_FreeValue(ctx, v);
+    }
+    g_boot_replay = 0;
+}
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
     lxb_css_parser_t *p = lxb_css_parser_create();
@@ -1230,6 +1255,7 @@ static void dom_run_scripts(JSContext *ctx) {
         if (txt && tl) {
             for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; }     /* inline body -> bundle id */
             bh ^= '|'; bh *= 16777619u;
+            boot_script_cache((const char *)txt, tl);   /* cache for cross-flow @S candidate boot-replay */
             JSValue v = JS_Eval(ctx, (const char *)txt, tl, "<script>", JS_EVAL_TYPE_GLOBAL);
             if (JS_IsException(v)) js_std_dump_error(ctx);
             JS_FreeValue(ctx, v);
@@ -1401,6 +1427,10 @@ static void scheduler_run(JSContext *ctx)
         if (f.fs == NULL) {                         /* STARTER: baseline + fresh heap frame */
             JS_CowRevert(ctx);                      /* revert JS shared-state to the post-boot baseline (safe: only empty-delta flows suspend) */
             dom_revert();                           /* revert DOM mutations to the post-boot baseline (per-flow isolation) */
+            /* @S CROSS-FLOW: a candidate flow re-runs boot with the concrete candidate pinned, so shared
+               state a handler reads (window.x = location.hash set at boot) holds the candidate, not the
+               baseline opaque. The re-run's writes are COW-captured and reverted by the next flow. */
+            if (f.candidate) boot_replay(ctx);
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
             /* A 'message' listener's first arg is a MessageEvent whose .data is attacker-controlled
                (postMessage): drive it with the {pm} source-tagged event so a sink reaching e.data reports
@@ -1800,6 +1830,8 @@ KEEP void qjs_teardown(void)
     JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
     for (int i = 0; i < g_gate_n; i++) free(g_gate_tokens[i]);
     free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
+    for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
+    free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
