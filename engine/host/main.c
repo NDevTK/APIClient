@@ -2033,6 +2033,11 @@ KEEP void qjs_provide(const char *url, const char *body)
             if (JS_IsException(v)) js_std_dump_error(ctx);
             JS_FreeValue(ctx, v);
             JS_CowSetActive(1); g_dom_capture = dsv;
+            /* CACHE the chunk so boot-replay re-runs it under a candidate — a source stored / handler
+               registered in an external chunk is then re-established with the concrete input (cross-flow
+               through CHUNK state). The re-run's writes are captured in the candidate flow's own COW delta
+               (creations included) and reverted, so no leak. */
+            boot_script_cache(body, strlen(body));
         }
         free(g_chunk_pending[i]);
         for (int j = i; j < g_chunk_n - 1; j++) g_chunk_pending[j] = g_chunk_pending[j + 1];
