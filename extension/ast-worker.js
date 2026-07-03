@@ -149,24 +149,18 @@ function strHash(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h <
    tokens would change the key every visit -> the frontier would never resume). A redeploy changes a src
    -> new key -> stale frontier invalidated. Inline-only pages fall back to the HTML hash (rare; they're
    small, finish in one visit, never park). */
-/* Cross-session frontier key = the CONTEXT identity, not just the bundle. The SAME external script behaves
-   DIFFERENTLY per document (shared state: inline config, other scripts, DOM) — so a parked flow's replay
-   recipe is only valid against the SAME baseline. Key by external srcs (URLs identify their content) PLUS
-   the INLINE script bodies (the context that differentiates documents) + brain code. Identical context ->
-   same key -> cross-visit resume; different context -> distinct key -> its OWN BFS (fairly scheduled by the
-   global WFQ). We deliberately exclude the volatile non-script HTML (nonces/timestamps) so a stable context
-   still resumes, but never merge two different script contexts. */
+/* Cross-session frontier key = origin | bundle (external script srcs; URLs identify their content, stable
+   across visits + volatile HTML). It is only a RELEVANCE grouping for which parked recipes to pull on
+   resume, NOT a soundness boundary: recipes self-identify by function SOURCE hash (JS_OrphanHash), so
+   resuming a coarse group locates each recipe's function by what it IS (present -> drive; different context
+   / absent -> skip; never the wrong one). Over-merging same-bundle-different-context documents is therefore
+   SAFE, so no context sub-key is needed (that was a workaround for the old positional locator; the
+   source-identity root fix removes it). Shared state is re-established per document by re-running its boot. */
 function bundleId(html, code) {
-  const srcs = [], inlines = [];
-  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
-  let m;
-  while ((m = re.exec(html || "")) !== null) {
-    const srcM = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(m[1] || "");
-    if (srcM) srcs.push(srcM[1]);                              // external: URL = content identity
-    else if (m[2] && m[2].trim()) inlines.push(m[2].trim());   // inline: the context-differentiating body
-  }
-  if (!srcs.length && !inlines.length) return strHash((html || "") + (code || ""));
-  return strHash(srcs.join("|") + " " + inlines.join(" ") + " " + (code || ""));
+  const srcs = [];
+  const re = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
+  let m; while ((m = re.exec(html || "")) !== null) srcs.push(m[1]);
+  return srcs.length ? strHash(srcs.join("|")) : strHash((html || "") + (code || ""));
 }
 /* Cross-session flow FRONTIER (IndexedDB): the learned surface (globalStore) already persists; this
    persists the UNFINISHED frontier as compact replay recipes, keyed by origin+bundle-hash (a changed
