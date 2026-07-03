@@ -81,6 +81,9 @@ function linesToAnalysis(lines, msg) {
         const last = fetchCallSites[fetchCallSites.length - 1];
         (last.headers = last.headers || {})[rest.slice(0, ci)] = rest.slice(ci + 2);
       }
+    } else if (ln.startsWith("@BODY ")) {
+      // request body shape (POST/PATCH request schema) for the endpoint just emitted; binds to the last callsite.
+      if (fetchCallSites.length) fetchCallSites[fetchCallSites.length - 1].body = ln.slice(6);
     } else if (ln.startsWith("@CHUNK ")) {
       const u = ln.slice(7).trim(); if (u && chunkUrls.indexOf(u) < 0) chunkUrls.push(u);   // external <script src> discovered
     } else if (ln.startsWith("@S ")) {

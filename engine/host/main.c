@@ -304,6 +304,20 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
                 }
             }
             JS_FreeValue(ctx, hdrs);
+            /* REQUEST BODY shape: a POST/PATCH body (JSON.stringify({name,email})) is the request schema.
+               The bundle already stringified it, so init.body is the string (opaque fields -> {} shape).
+               Capped so a huge upload body can't flood the line. */
+            JSValue body = JS_GetPropertyStr(ctx, init, "body");
+            if (!JS_IsUndefined(body) && !JS_IsNull(body)) {
+                const char *bs = JS_ToCString(ctx, body);
+                if (bs && bs[0]) {
+                    printf("@BODY ");
+                    int bn = 0; for (const char *p = bs; *p && bn < 600; p++, bn++) putchar((*p == '\n' || *p == '\r') ? ' ' : *p);
+                    putchar('\n');
+                }
+                if (bs) JS_FreeCString(ctx, bs);
+            }
+            JS_FreeValue(ctx, body);
         }
         fflush(stdout);
     }

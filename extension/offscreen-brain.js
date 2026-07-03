@@ -1675,6 +1675,27 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     }
   }
 
+  // JSON/text request body (fetch init.body from @BODY): the request SCHEMA. Parse the JSON shape into
+  // body params (field name + literal example OR opaque = external input), analogous to query params —
+  // an opaque field serialized to `{}` (empty object) by JSON.stringify. Non-JSON body kept as raw shape.
+  if (typeof callSite.body === "string" && callSite.body) {
+    m.requestBodyRaw = callSite.body.slice(0, 600);
+    try {
+      const parsed = JSON.parse(callSite.body);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        if (!m.bodyParams) m.bodyParams = {};
+        for (const bk in parsed) {
+          const bv = parsed[bk];
+          const isOpaque = bv === null || bv === "{}" ||
+            (typeof bv === "object" && bv && !Array.isArray(bv) && Object.keys(bv).length === 0);
+          const norm = isOpaque ? { kind: "opaque" } : { kind: "literal", value: bv };
+          const prev = m.bodyParams[bk];
+          if (!prev || (prev.kind === "opaque" && norm.kind === "literal")) m.bodyParams[bk] = norm;
+        }
+      }
+    } catch (_) { /* non-JSON body: raw shape retained in requestBodyRaw */ }
+  }
+
   // Binary body: hostedge.bodyShape captured the full byte sequence + the
   // worker's magic-byte sniffer classified the wire format (protobuf,
   // grpc-web, gzip, zlib, json, bytes). For protobuf/grpc-web, decode via
