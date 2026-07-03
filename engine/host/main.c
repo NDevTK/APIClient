@@ -24,6 +24,7 @@
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
 #include <lexbor/dom/dom.h>
+#include <lexbor/url/url.h>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #define KEEP EMSCRIPTEN_KEEPALIVE   /* export qjs_init/step/teardown for the persistent-instance protocol */
@@ -379,31 +380,33 @@ static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int ar
 { return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED; }
 
 /* URL / URLSearchParams: endpoint construction. `new URL(path, base).href|pathname` is how a huge share of
-   bundles build request URLs — undefined `URL` = ReferenceError = the endpoint is lost. Resolved with string
-   ops (not Lexbor) BECAUSE the input is often a SHAPE with opaque holes ("/api/{}/x") that no spec parser can
-   handle; holes flow through untouched so the endpoint is learned as its shape. searchParams.get is OPAQUE
-   (external input). Covers absolute / protocol-relative / origin-relative / relative against the page origin. */
+   bundles build request URLs — undefined `URL` = ReferenceError = the endpoint is lost. A CONCRETE input is
+   resolved by the REAL vendored LEXBOR URL parser (bind-before-build: existing Lexbor module, never a
+   hand-rolled string resolver). An OPAQUE input (external-input-tainted, or a shape with {} holes Lexbor
+   can't parse) -> OPAQUE, so its shape flows through untouched (the endpoint is learned as its shape) and
+   the tool never concretely decides external input. searchParams.get is OPAQUE (query values = external). */
 static const char *g_origin;   /* defined below; forward for the URL helpers */
 static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
-static void url_origin_of(const char *base, char *out, size_t outsz) {
-    const char *p = base ? strstr(base, "://") : NULL;
-    if (!p) { snprintf(out, outsz, "%s", g_origin); return; }
-    const char *h = p + 3; const char *slash = strchr(h, '/');
-    size_t n = slash ? (size_t)(slash - base) : strlen(base);
-    if (n >= outsz) n = outsz - 1;
-    memcpy(out, base, n); out[n] = 0;
+/* Resolve a URL with the vendored LEXBOR URL module (the real WHATWG URL Standard parser) — never a
+   hand-rolled string resolver. Returns the serialized absolute href (malloc'd; caller frees) or NULL on a
+   parse failure (-> the caller yields opaque, never an invented value). */
+struct url_ser_buf { char *s; size_t n, cap; };
+static lxb_status_t url_ser_cb(const lxb_char_t *data, size_t len, void *cbctx) {
+    struct url_ser_buf *b = cbctx;
+    if (b->n + len + 1 > b->cap) { size_t nc = (b->n + len + 1) * 2 + 64; char *ns = realloc(b->s, nc); if (!ns) return LXB_STATUS_ERROR_MEMORY_ALLOCATION; b->s = ns; b->cap = nc; }
+    memcpy(b->s + b->n, data, len); b->n += len; b->s[b->n] = 0;
+    return LXB_STATUS_OK;
 }
-static void url_resolve(const char *input, const char *base, char *out, size_t outsz) {
-    if (!input) input = "";
-    if (strstr(input, "://")) { snprintf(out, outsz, "%s", input); return; }        /* absolute */
-    if (input[0] == '/' && input[1] == '/') {                                        /* protocol-relative */
-        const char *p = base ? strstr(base, "://") : NULL; size_t plen = p ? (size_t)(p - base) + 1 : 6;
-        snprintf(out, outsz, "%.*s%s", (int)plen, base ? base : "https:", input); return;
-    }
-    char origin[600]; url_origin_of(base ? base : g_origin, origin, sizeof origin);
-    if (input[0] == '/') snprintf(out, outsz, "%s%s", origin, input);
-    else snprintf(out, outsz, "%s/%s", origin, input);
+static char *url_resolve(const char *input, const char *base) {
+    lxb_url_parser_t *p = lxb_url_parser_create();
+    if (!p || lxb_url_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_url_parser_destroy(p, true); return NULL; }
+    lxb_url_t *bu = (base && base[0]) ? lxb_url_parse(p, NULL, (const lxb_char_t *)base, strlen(base)) : NULL;
+    lxb_url_t *u = lxb_url_parse(p, bu, (const lxb_char_t *)(input ? input : ""), input ? strlen(input) : 0);
+    char *out = NULL;
+    if (u) { struct url_ser_buf b = {0}; if (lxb_url_serialize(u, url_ser_cb, &b, false) == LXB_STATUS_OK) out = b.s; else free(b.s); }
+    lxb_url_parser_destroy(p, true);   /* frees bu, u, and internal buffers */
+    return out;
 }
 static void url_set(JSContext *ctx, JSValue o, const char *k, const char *s, size_t n) {
     JS_SetPropertyStr(ctx, o, k, JS_NewStringLen(ctx, s, n));
@@ -413,22 +416,27 @@ static JSValue js_url_tostring(JSContext *ctx, JSValueConst this_val, int argc, 
 static JSValue js_searchparams_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return JS_DupValue(ctx, g_opaque); }   /* query values are external input -> opaque */
 static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
-    char resolved[2048];
+    /* opaque (external-input-tainted) URL -> return the INPUT opaque so its SHAPE flows through unchanged
+       (never concretely resolved — RUN-DON'T-MATCH). A concrete input is resolved by the REAL Lexbor parser. */
+    if (argc >= 1 && JS_IsOpaque(argv[0])) return JS_DupValue(ctx, argv[0]);
     const char *input = argc >= 1 ? JS_ToCString(ctx, argv[0]) : NULL;
     const char *base  = argc >= 2 && JS_IsString(argv[1]) ? JS_ToCString(ctx, argv[1]) : NULL;
-    url_resolve(input, base ? base : g_origin, resolved, sizeof resolved);
+    char *resolved = (input && !has_hole(input)) ? url_resolve(input, base ? base : g_origin) : NULL;
+    JSValue shaped = (input && has_hole(input)) ? JS_NewOpaqueShaped(ctx, input) : JS_UNDEFINED;  /* {}-shape string -> keep shape */
     if (input) JS_FreeCString(ctx, input);
     if (base) JS_FreeCString(ctx, base);
+    if (!resolved) return JS_IsUndefined(shaped) ? JS_DupValue(ctx, g_opaque) : shaped;   /* shape/parse-fail -> opaque, never invent */
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "href", JS_NewString(ctx, resolved));
-    /* split scheme://host/path?query#frag */
+    /* Extract components from Lexbor's CANONICAL output (scheme://host/path?query#frag) — trivial split of a
+       spec-parsed string, NOT a resolver reimplementation (Lexbor did the resolution). */
     const char *scol = strstr(resolved, "://");
     const char *host = scol ? scol + 3 : resolved;
     url_set(ctx, o, "protocol", resolved, scol ? (size_t)(scol - resolved) + 1 : 0);
     const char *pe = host; while (*pe && *pe != '/' && *pe != '?' && *pe != '#') pe++;
     url_set(ctx, o, "host", host, (size_t)(pe - host));
     url_set(ctx, o, "hostname", host, (size_t)(pe - host));
-    { char org[700]; url_origin_of(resolved, org, sizeof org); JS_SetPropertyStr(ctx, o, "origin", JS_NewString(ctx, org)); }
+    url_set(ctx, o, "origin", resolved, (size_t)(pe - resolved));
     const char *path = pe; const char *q = strchr(path, '?'); const char *hsh = strchr(path, '#');
     const char *pend = q ? q : (hsh ? hsh : path + strlen(path));
     url_set(ctx, o, "pathname", *path ? path : "/", *path ? (size_t)(pend - path) : 1);
@@ -436,6 +444,7 @@ static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
     else JS_SetPropertyStr(ctx, o, "search", JS_NewString(ctx, ""));
     if (hsh) JS_SetPropertyStr(ctx, o, "hash", JS_NewString(ctx, hsh)); else JS_SetPropertyStr(ctx, o, "hash", JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, o, "port", JS_NewString(ctx, ""));
+    free(resolved);
     JSValue sp = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, sp, "get", JS_NewCFunction(ctx, js_searchparams_get, "get", 1));
     JS_SetPropertyStr(ctx, sp, "getAll", JS_NewCFunction(ctx, js_searchparams_get, "getAll", 1));
@@ -449,13 +458,17 @@ static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
 /* new Request(input, init): fetch(new Request(url,{method})) is common. Resolve the url (shape-aware, like
    URL), expose .url/.method/.headers and toString->url so fetch(req) reads the endpoint. */
 static JSValue js_request_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
-    char resolved[2048];
+    /* opaque input -> return the input opaque (url shape flows); concrete -> Lexbor-resolved url. */
+    if (argc >= 1 && JS_IsOpaque(argv[0])) return JS_DupValue(ctx, argv[0]);
     const char *input = argc >= 1 ? JS_ToCString(ctx, argv[0]) : NULL;
-    url_resolve(input, g_origin, resolved, sizeof resolved);
+    char *resolved = (input && !has_hole(input)) ? url_resolve(input, g_origin) : NULL;
+    JSValue rshaped = (input && has_hole(input)) ? JS_NewOpaqueShaped(ctx, input) : JS_UNDEFINED;
     if (input) JS_FreeCString(ctx, input);
+    if (!resolved) return JS_IsUndefined(rshaped) ? JS_DupValue(ctx, g_opaque) : rshaped;
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "url", JS_NewString(ctx, resolved));
     JS_SetPropertyStr(ctx, o, "href", JS_NewString(ctx, resolved));   /* toString reads href -> fetch(req) sees the url */
+    free(resolved);
     JSValue method = JS_UNDEFINED;
     if (argc >= 2 && JS_IsObject(argv[1])) method = JS_GetPropertyStr(ctx, argv[1], "method");
     JS_SetPropertyStr(ctx, o, "method", JS_IsString(method) ? method : JS_NewString(ctx, "GET"));
