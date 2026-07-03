@@ -571,7 +571,11 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
             JSValue body = JS_GetPropertyStr(ctx, init, "body");
             if (!JS_IsUndefined(body) && !JS_IsNull(body)) {
                 const char *bs = JS_ToCString(ctx, body);
-                if (bs && bs[0]) JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bs, 600));
+                if (bs && bs[0]) {
+                    char *bsolved = url_solve_holes(ctx, bs);   /* value-solve {src} body holes the flow fixed (JSON.stringify keeps the shape now) */
+                    JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bsolved ? bsolved : bs, 600));
+                    free(bsolved);
+                }
                 if (bs) JS_FreeCString(ctx, bs);
             }
             JS_FreeValue(ctx, body);
