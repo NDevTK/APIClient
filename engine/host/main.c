@@ -1331,6 +1331,28 @@ static void boot_restore_globals(JSContext *ctx) {
     if (g_boot_delta) { JS_CowBufLoad(g_boot_delta, g_boot_delta_n, g_boot_delta_cap); JS_CowApply(ctx);
         g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap); }   /* heap -> post-boot; stash applied */
 }
+/* CLOSURE cross-flow: an orphan handler captured at seed time (f.handle) closes over the BASELINE source;
+   boot_replay under the candidate re-created that handler with the CANDIDATE closure. Re-resolve to the
+   fresh one by SOURCE IDENTITY (same JS_OrphanHash) among the current global functions, so the candidate
+   actually flows through the closure the handler reads. Returns a NEW ref (caller frees), or JS_UNDEFINED
+   if none differs (then the original handle is correct — e.g. it reads a shared global boot_replay updated). */
+static JSValue resolve_replayed_handler(JSContext *ctx, JSValueConst orig) {
+    if (JS_IsUndefined(orig)) return JS_UNDEFINED;
+    uint32_t want = JS_OrphanHash(ctx, orig);
+    JSValue g = JS_GetGlobalObject(ctx), found = JS_UNDEFINED;
+    JSPropertyEnum *tab = NULL; uint32_t n = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &n, g, JS_GPN_STRING_MASK) == 0) {
+        for (uint32_t i = 0; i < n && JS_IsUndefined(found); i++) {
+            JSValue v = JS_GetProperty(ctx, g, tab[i].atom);
+            if (JS_IsFunction(ctx, v) && JS_VALUE_GET_PTR(v) != JS_VALUE_GET_PTR(orig) && JS_OrphanHash(ctx, v) == want)
+                found = JS_DupValue(ctx, v);
+            JS_FreeValue(ctx, v);
+        }
+        JS_FreePropertyEnum(ctx, tab, n);
+    }
+    JS_FreeValue(ctx, g);
+    return found;
+}
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
     lxb_css_parser_t *p = lxb_css_parser_create();
@@ -1543,23 +1565,28 @@ static void scheduler_run(JSContext *ctx)
                boot-created globals) so a guarded init re-fires; boot_restore_globals restores after. The
                re-run's other writes are COW-captured and reverted by the next flow. */
             if (f.candidate) boot_replay_candidate(ctx);
+            /* CLOSURE cross-flow: for a candidate flow, drive the handler boot_replay RE-CREATED (candidate
+               closure), located by source identity — else the ORIGINAL f.handle (baseline closure) is driven
+               and the candidate never reaches a closure-captured source. Non-candidate flows drive f.handle. */
+            JSValue drive = f.handle, resolved = JS_UNDEFINED;
+            if (f.candidate) { resolved = resolve_replayed_handler(ctx, f.handle); if (!JS_IsUndefined(resolved)) drive = resolved; }
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
             /* A 'message' listener's first arg is a MessageEvent whose .data is attacker-controlled
                (postMessage): drive it with the {pm} source-tagged event so a sink reaching e.data reports
                {pm} and the PoC assembler builds a postMessage-delivered PoC. */
-            if (!JS_IsUndefined(g_msg_event) && is_msg_handler(f.handle)) oargs[0] = g_msg_event;
+            if (!JS_IsUndefined(g_msg_event) && is_msg_handler(drive)) oargs[0] = g_msg_event;
             /* Drive an orphan METHOD with its REAL receiver instance if one exists (this.field -> concrete
                boot value, a real example) else opaque this. Args stay opaque (external input). */
-            JSValue recv = JS_FindReceiver(ctx, f.handle);
+            JSValue recv = JS_FindReceiver(ctx, drive);
             JSValue this_val = JS_IsUndefined(recv) ? g_opaque : recv;
-            f.fs = JS_FlowNew(ctx, f.handle, this_val, 8, oargs);
+            f.fs = JS_FlowNew(ctx, drive, this_val, 8, oargs);
             JS_FreeValue(ctx, recv);
             if (!f.fs) {
                 /* ASYNC/generator (or non-bytecode) orphan: not sync-preemptible — it self-suspends via
                    await/yield. Run via a plain call + drain its microtask chain to completion (the awaits
                    land emits). Preemption of these is the async-per-flow-delta task, not this path. */
                 JS_SetFlowYieldHook(NULL);
-                JSValue r = JS_Call(ctx, f.handle, g_opaque, 8, oargs);
+                JSValue r = JS_Call(ctx, drive, g_opaque, 8, oargs);
                 if (JS_IsException(r)) js_std_dump_error(ctx);
                 JS_FreeValue(ctx, r);
                 JSContext *c2; int jr2;
@@ -1570,10 +1597,12 @@ static void scheduler_run(JSContext *ctx)
                 dom_revert();                                 /* discard this flow's DOM writes -> baseline */
                 { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
                 if (f.candidate) { int sv = 0; JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); (void)sv; }   /* restore boot-created globals (host-side, uncaptured) */
+                JS_FreeValue(ctx, resolved);
                 g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
                 JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate);
                 continue;
             }
+            JS_FreeValue(ctx, resolved);   /* JS_FlowNew dup'd the drive handle; drop our resolved ref */
         }
         /* RESUME: swap in the parked flow's OWN heap COW delta (unapplied while it slept) so it sees its own
            shared-state writes again, not another flow's. Starters begin with an empty delta (globals NULL). */
