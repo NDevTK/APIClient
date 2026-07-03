@@ -4824,24 +4824,26 @@ async function _drainReviewQueue() {
          would trap "memory access out of bounds" mid-eval. The previous
          absence of this guard produced 7 concurrent round-2 retries on
          github, each duplicating the 17MB compiled-bytecode footprint.
-         Different tabId CAN still run concurrently — JSPI scheduler
-         interleaves them at yield points. The re-queue isn't dropped;
-         the late scripts are folded into the current buf and the next
-         drain iteration after the in-flight one finishes will pick them
+         Different tabId CAN still overlap (see below). The re-queue isn't
+         dropped; the late scripts are folded into the current buf and the
+         next drain iteration after the in-flight one finishes picks them
          up via the cache-miss path. */
-      if (_analysisInflight.has(docKey)) continue;   // per-DOCUMENT in-flight guard (distinct documents of a tab may analyse concurrently, bounded by the grind cap)
+      if (_analysisInflight.has(docKey)) continue;   // per-DOCUMENT in-flight guard (distinct documents of a tab may overlap)
       _analysisInflight.add(docKey);
-      /* Fire-and-forget — do NOT await. With the worker's JSPI scheduler
-         (ast-thread.js _yieldDrain + _flowCmp), each page's analysis runs
-         in its own wasm instance and interleaves with others at JSPI yield
-         points by lexicographic priority (active-page focus, reaches-host-
-         edge, recent emissions, visit recency, anti-starvation). Awaiting
-         here would serialize and reduce the scheduler to a trivial pick-
-         the-only-fiber loop — the same behavior we'd get without JSPI.
-         The brain's per-tab cache + _dataEpoch guard already keep results
-         attribution-correct under concurrency; errors surface via
-         analysis.resolverErrors (worker-side) or _astError (this side),
-         not lost via a bare catch. */
+      /* Fire-and-forget — do NOT await. Each document is analyzed in its
+         OWN fresh wasm instance (bridge.runEngine). Not awaiting lets
+         several documents' analyses be in flight at once; they interleave
+         COOPERATIVELY only at the JS event loop's await points (each
+         runEngine awaits its network fetch/chunk replies) — there is NO
+         priority arbitration BETWEEN live instances here (the within-page
+         value-ordered WFQ lives in the C engine over one instance's g_reg;
+         CROSS-document value ordering is realized separately in
+         _driveGlobalFrontierBurst -> driveFrontier, which re-ranks the
+         GLOBAL union of parked IDB recipes by frontierWeight). This
+         recency pick only orders which doc STARTS next. The per-doc cache
+         + _dataEpoch guard keep results attribution-correct under overlap;
+         errors surface via analysis.resolverErrors / _astError, never a
+         bare catch. */
       _analyzeCombinedScriptsInner(tabId, buf)
         .catch(function (e) { console.debug("[AST:queue] doc review error: %s", e && e.message); })
         .finally(function () { _analysisInflight.delete(docKey); });
@@ -5052,18 +5054,13 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // can resolve a path param's minified name to its real source-map name.
   analysis.scriptOffsets = scriptOffsets;
 
-  // NOTE: lazy-chunk consumption (download the chunk URLs the forced run
-  // recorded — analysis.chunkUrls — and re-review the combined whole) is
-  // intentionally NOT run inline here: it must not BLOCK the initial
-  // endpoint population, and re-analyzing the 8 MB+ combined set is only
-  // affordable once the worker reuses its instance across schedules. Today
-  // each github schedule aborts at JS_FreeRuntime (the teardown GC leak) so
-  // ast-thread recycles (re-instantiates the 36 MB instance) every
-  // schedule, which makes even one combined re-analysis prohibitively slow
-  // live. The discovery half stands (hostedge records chunk URLs →
-  // analysis.chunkUrls); wiring the download+combined-review back in is
-  // gated on the persistent-runtime / fresh-context-per-schedule fix that
-  // removes the per-schedule re-instantiation.
+  // NOTE: lazy-chunk consumption is no longer a separate host-side re-review
+  // step. The C engine now fetches every discovered chunk IN-RUN: it surfaces
+  // chunk URLs (analysis.chunkUrls) and bridge.runEngine's step loop fetches
+  // each and feeds it back via qjs_provide, so the chunk's code (classic, or a
+  // linked ESM module graph) is analyzed inside the same instance as it arrives.
+  // There is no combined-whole re-analysis and no per-schedule re-instantiation
+  // to gate on.
 
   if (analysis._timings) {
     // Surface per-script AST latency on the analysis result so the
@@ -5082,7 +5079,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   //
   // BUT: don't cache a DEGENERATE result — a run that produced zero learned
   // facts AND surfaced a resolverError is a host-model gap (e.g. the wasm
-  // aborted mid-bundle, JSPI suspend failed, GC residue assert tripped).
+  // aborted mid-bundle, or a host-edge stub is missing).
   // Caching it under the script-hash key would block re-analysis even after
   // the engine bug is fixed: the next navigation hashes the same scripts,
   // hits the cache, replays the empty result. The analyzer-fingerprint
