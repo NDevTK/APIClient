@@ -2,9 +2,9 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' https: http: data:">
 <!-- The offscreen document hosts the API-learning BRAIN (offscreen-brain.js, the
      former service worker) where it has a stable lifetime + IndexedDB. Its lib/*
-     dependencies load first (same set the SW used to importScripts), then the
-     brain, then ast-worker.js which owns the analysis Web Worker and exposes
-     self.astDispatch for the brain to call directly. -->
+     dependencies load first, then the brain — which now ALSO contains the v2 host
+     bridge (merged from the deleted ast-worker.js): it dynamic-import()s the engine
+     WASM and installs self.astDispatch. One trusted file, no split. -->
 <script src="lib/protobuf.js"></script>
 <script src="lib/discovery.js"></script>
 <script src="lib/req2proto.js"></script>
@@ -14,6 +14,8 @@
 <!-- THE single external-fetch function (GET only, no cookies, http(s) only). -->
 
 <script src="lib/safe-fetch.js"></script>
+<!-- the analysis brain (LOGIC — being deleted into the engine over time). -->
 <script src="offscreen-brain.js"></script>
-<!-- v2 host bridge: ES6 module (imports the wasm factory lib/qjs/qjs.mjs), installs self.astDispatch. -->
-<script type="module" src="ast-worker.js"></script>
+<!-- the v2 host bridge: the ONLY irreducible trusted-zone JS (SECURITY.md) — dynamic-import()s the
+     engine WASM lib/qjs/qjs.mjs, drives qjs_step, safe-fetches, persists IDB, installs self.astDispatch. -->
+<script src="bridge.js"></script>
