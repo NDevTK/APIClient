@@ -142,10 +142,9 @@ self.driveFrontier = driveFrontier;   // the brain drives this on idle / after a
    reply is 'fetching' and skipped until its body lands, so a slow fetch on doc A never stalls doc B.
    ──────────────────────────────────────────────────────────────────────────────────────────────────── */
 const POOL_CAP = 4;        // max HOT engines resident (RAM working set); cold tail -> IDB (driveFrontier)
-const HOST_SLICE = 64;     // flow dispatches per engine visit before the host WFQ re-ranks
 
 // ---- Engine lifecycle over ONE wasm instance (one document) ----
-async function engineCreate(code, html, msg, quantum, slice) {
+async function engineCreate(code, html, msg, quantum) {
   const lines = [];
   const createQJS = await getCreateQJS();
   const M = await createQJS({ print: (s) => lines.push(s), printErr: (s) => lines.push(s), noInitialRun: true });
@@ -158,9 +157,9 @@ async function engineCreate(code, html, msg, quantum, slice) {
   const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
   const fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
   const prior = quantum ? await frontierGet(fkey) : null;
-  // PHASE 2 — seed the frontier (fresh, or resume parked recipes) + set the host slice for interleaving.
+  // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
+  // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
   M.ccall("qjs_begin", "void", ["string"], [(prior && prior.recipes) ? prior.recipes : ""]);
-  if (slice > 0) M.ccall("qjs_set_slice", "void", ["number"], [slice]);
   const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
   const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
     if (!canFetch || hasHole(u)) return "";
@@ -195,9 +194,10 @@ function engineFinalize(eng) {
 
 /* THE PURE SCHEDULER POLICY (no wasm knowledge — engine ops are injected, so this is unit-testable with
    mock engines). Each iteration: ADMIT waiting documents up to the RAM cap (ops.admit gates creation — no
-   instance is built until a slot is free), then advance the highest-weight HOT engine one slice and re-rank.
-   Slots turn over because each engine self-parks to the cold tier (IDB recipe) when it exhausts its quantum,
-   so a long-runner never holds a slot forever and no host-forced eviction/thrash is needed. */
+   instance is built until a slot is free), then advance the highest-weight HOT engine and re-rank. Before
+   stepping it the host sets its VALUE yield-floor to the RUNNER-UP engine's weight (ops.setFloor), so the
+   engine runs until it's outranked then yields HOT — no fixed slice count (a banned step-cap). Slots turn
+   over because each engine self-parks to the cold tier (IDB recipe) at its quantum. */
 async function hostSchedule(pool, ops) {
   for (;;) {
     if (ops.admit) await ops.admit();   // gate creation to cap: seat waiting docs into freed slots
@@ -209,7 +209,9 @@ async function hostSchedule(pool, ops) {
       await Promise.race(fetching.map((e) => e._fetchP));
       continue;
     }
-    let best = hot[0]; for (const e of hot) if (ops.weight(e) > ops.weight(best)) best = e;   // Level-1 WFQ pick
+    let best = hot[0], runner = -Infinity;   // Level-1 WFQ pick + the runner-up weight (the value yield floor)
+    for (const e of hot) { const w = ops.weight(e); if (w > ops.weight(best)) { runner = ops.weight(best); best = e; } else if (w > runner) runner = w; }
+    if (ops.setFloor) ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked-by-runner-up => yield; lone engine => run on
     const st = ops.step(best);
     if (st === 1) {   // NEED_FETCH: service asynchronously (non-blocking) so other engines keep advancing
       best.state = "fetching";
@@ -228,12 +230,13 @@ let _hostDriving = false;
 let _engineFactory = engineCreate;   // injectable for tests
 const _hostOps = {
   weight: engineWeight,
+  setFloor: (eng, floor) => { try { eng.M.ccall("qjs_set_yield_floor", "void", ["number"], [floor]); } catch (_) {} },   // value yield: run until outranked by the runner-up
   step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { eng.lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}"); return 0; } },
   serviceFetch: engineServiceFetch,
   admit: async () => {   // gate CREATION to the RAM cap: build an instance only when a slot is free
     while (_pool.length < POOL_CAP && _waiting.length) {
       const job = _waiting.shift();
-      try { const eng = await _engineFactory(job.code, job.html, job.msg, job.quantum, HOST_SLICE); eng._resolve = job.resolve; _pool.push(eng); }
+      try { const eng = await _engineFactory(job.code, job.html, job.msg, job.quantum); eng._resolve = job.resolve; _pool.push(eng); }
       catch (e) { job.resolve(linesToAnalysis(['@E {"phase":"create","err":' + JSON.stringify(String(e && e.message || e)) + "}"], job.msg)); }
     }
   },
@@ -260,7 +263,7 @@ function _hostKick() {
 /* Run ONE engine to completion (slice 0) — the cold tier (driveFrontier) advances one parked frontier this
    way; the LIVE tier uses the interleaving pool via astDispatch. */
 async function runEngine(code, html, msg, quantum) {
-  const eng = await engineCreate(code, html, msg, quantum, 0);
+  const eng = await engineCreate(code, html, msg, quantum);   // no floor set -> runs to completion (cold-tier single advance)
   try {
     let st;
     while ((st = eng.M.ccall("qjs_step", "number", [], [])) !== 0) { if (st === 1) await engineServiceFetch(eng); }
@@ -295,4 +298,4 @@ console.debug("[ast-worker v2] bridge ready (self.astDispatch installed)");
 
 /* Node-only: expose the PURE host-WFQ policy (no wasm) for deterministic unit tests of ordering/
    eviction/non-blocking-fetch. Never runs in the worker (no `module`). */
-if (typeof module !== "undefined" && module.exports) module.exports = { hostSchedule, engineWeight, POOL_CAP, HOST_SLICE };
+if (typeof module !== "undefined" && module.exports) module.exports = { hostSchedule, engineWeight, POOL_CAP };
