@@ -2146,6 +2146,36 @@ static JSValue js_el_classlist_get(JSContext *ctx, JSValueConst this_val) {
     JS_SetPropertyStr(ctx, o, "toggle", JS_NewCFunction(ctx, js_noop, "toggle", 1));
     return o;
 }
+/* DOM TRAVERSAL: parentNode/children/firstElementChild/nextElementSibling were undefined -> `el.children
+   .length` / `el.parentNode.x` THREW, killing DOM-walking bundles. Return REAL el_wrap'd element nodes from
+   Lexbor so a tree walk that reaches a fetch/sink is explored. children is a REAL array (.length/.forEach/[i]
+   all work). Only ELEMENT nodes (text nodes aren't wrapped — a walker keying on .children matches the browser). */
+static int node_is_element(lxb_dom_node_t *n) { return n && n->type == LXB_DOM_NODE_TYPE_ELEMENT; }
+static JSValue js_el_parent(JSContext *ctx, JSValueConst this_val) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_NULL;
+    lxb_dom_node_t *p = lxb_dom_interface_node(el)->parent;
+    return node_is_element(p) ? el_wrap(ctx, lxb_dom_interface_element(p)) : JS_NULL;
+}
+static JSValue js_el_children(JSContext *ctx, JSValueConst this_val) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    JSValue arr = JS_NewArray(ctx); if (!el) return arr;
+    uint32_t idx = 0;
+    for (lxb_dom_node_t *n = lxb_dom_interface_node(el)->first_child; n; n = n->next)
+        if (node_is_element(n)) JS_SetPropertyUint32(ctx, arr, idx++, el_wrap(ctx, lxb_dom_interface_element(n)));
+    return arr;
+}
+static JSValue js_el_first_el_child(JSContext *ctx, JSValueConst this_val) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_NULL;
+    for (lxb_dom_node_t *n = lxb_dom_interface_node(el)->first_child; n; n = n->next)
+        if (node_is_element(n)) return el_wrap(ctx, lxb_dom_interface_element(n));
+    return JS_NULL;
+}
+static JSValue js_el_next_el_sib(JSContext *ctx, JSValueConst this_val) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_NULL;
+    for (lxb_dom_node_t *n = lxb_dom_interface_node(el)->next; n; n = n->next)
+        if (node_is_element(n)) return el_wrap(ctx, lxb_dom_interface_element(n));
+    return JS_NULL;
+}
 static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_el_getAttribute, "getAttribute", 1));
     JS_SetPropertyStr(ctx, proto, "setAttribute", JS_NewCFunction(ctx, js_el_setAttribute, "setAttribute", 2));
@@ -2224,6 +2254,18 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     { JSAtom a = JS_NewAtom(ctx, "classList");
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_classlist_get, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, a); }
+    /* traversal getters -> real el_wrap'd nodes (property name : backing getter) */
+    struct { const char *prop; JSCFunction *fn; } trav[] = {
+        { "parentNode", (JSCFunction *)js_el_parent }, { "parentElement", (JSCFunction *)js_el_parent },
+        { "children", (JSCFunction *)js_el_children }, { "childNodes", (JSCFunction *)js_el_children },
+        { "firstChild", (JSCFunction *)js_el_first_el_child }, { "firstElementChild", (JSCFunction *)js_el_first_el_child },
+        { "nextSibling", (JSCFunction *)js_el_next_el_sib }, { "nextElementSibling", (JSCFunction *)js_el_next_el_sib },
+    };
+    for (int i = 0; i < (int)(sizeof trav / sizeof trav[0]); i++) {
+        JSAtom a = JS_NewAtom(ctx, trav[i].prop);
+        JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, trav[i].fn, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, a);
+    }
 }
 static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (!g_dom || argc < 1) return JS_NULL;
