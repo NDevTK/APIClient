@@ -1555,6 +1555,19 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "insertAdjacentHTML", JS_NewCFunction(ctx, js_el_insertAdjacentHTML, "insertAdjacentHTML", 2));
     JS_SetPropertyStr(ctx, proto, "querySelector", JS_NewCFunction(ctx, js_el_querySelector, "querySelector", 1));
     JS_SetPropertyStr(ctx, proto, "getTextContent", JS_NewCFunction(ctx, js_el_textContent, "getTextContent", 0));
+    /* ELEMENT-LEVEL EVENT HANDLERS: most SPAs attach click/submit/change handlers to ELEMENTS (buttons, forms),
+       not window. addEventListener must REGISTER them (js_add_listener -> g_handlers -> orphan-driven) — else
+       the call throws (undefined method), killing the script and losing every element handler's endpoints/sinks.
+       remove/dispatch are no-ops; click/submit/focus/blur are no-ops so a call doesn't throw (the handler is
+       reached by driving, not by a synthetic dispatch). */
+    JS_SetPropertyStr(ctx, proto, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, proto, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    JS_SetPropertyStr(ctx, proto, "dispatchEvent", JS_NewCFunction(ctx, js_noop, "dispatchEvent", 1));
+    JS_SetPropertyStr(ctx, proto, "click", JS_NewCFunction(ctx, js_noop, "click", 0));
+    JS_SetPropertyStr(ctx, proto, "submit", JS_NewCFunction(ctx, js_noop, "submit", 0));
+    JS_SetPropertyStr(ctx, proto, "focus", JS_NewCFunction(ctx, js_noop, "focus", 0));
+    JS_SetPropertyStr(ctx, proto, "blur", JS_NewCFunction(ctx, js_noop, "blur", 0));
+    JS_SetPropertyStr(ctx, proto, "remove", JS_NewCFunction(ctx, js_noop, "remove", 0));
     for (int i = 0; i < 2; i++) {   /* innerHTML (magic 0) / outerHTML (magic 1) setter = XSS sink */
         JSAtom a = JS_NewAtom(ctx, i ? "outerHTML" : "innerHTML");
         JS_DefinePropertyGetSet(ctx, proto, a,
