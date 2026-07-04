@@ -1548,6 +1548,32 @@ static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); JS_FreeCString(ctx, v); }
     return JS_UNDEFINED;
 }
+/* Common element APIs that real bundles call constantly — MISSING ones throw and kill the script (like
+   addEventListener did), losing all coverage after. matches -> opaque bool (a branch FORKS, exploring both);
+   closest -> the element itself (a real node whose methods/attrs work — never throw/null); style -> a plain
+   object so `el.style.x=v` never throws; dataset -> the element's REAL data-* attributes (an endpoint often
+   lives in data-url), camelCased, so `el.dataset.url` yields the concrete value, not undefined. */
+static JSValue js_el_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_DupValue(ctx, g_opaque); }
+static JSValue js_el_closest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_DupValue(ctx, this_val); }
+static JSValue js_el_style_get(JSContext *ctx, JSValueConst this_val) { return JS_NewObject(ctx); }
+static JSValue js_el_dataset_get(JSContext *ctx, JSValueConst this_val) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    JSValue o = JS_NewObject(ctx);
+    if (!el) return o;
+    for (lxb_dom_attr_t *a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
+        size_t nlen; const lxb_char_t *nm = lxb_dom_attr_qualified_name(a, &nlen);
+        if (!nm || nlen <= 5 || memcmp(nm, "data-", 5) != 0) continue;
+        char key[128]; int ki = 0;                                   /* data-foo-bar -> fooBar */
+        for (size_t i = 5; i < nlen && ki < 126; i++) {
+            if (nm[i] == '-' && i + 1 < nlen) { i++; char c = (char)nm[i]; key[ki++] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c; }
+            else key[ki++] = (char)nm[i];
+        }
+        key[ki] = 0;
+        size_t vlen; const lxb_char_t *v = lxb_dom_attr_value(a, &vlen);
+        JS_SetPropertyStr(ctx, o, key, v ? JS_NewStringLen(ctx, (const char *)v, vlen) : JS_NewString(ctx, ""));
+    }
+    return o;
+}
 static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_el_getAttribute, "getAttribute", 1));
     JS_SetPropertyStr(ctx, proto, "setAttribute", JS_NewCFunction(ctx, js_el_setAttribute, "setAttribute", 2));
@@ -1568,6 +1594,14 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "focus", JS_NewCFunction(ctx, js_noop, "focus", 0));
     JS_SetPropertyStr(ctx, proto, "blur", JS_NewCFunction(ctx, js_noop, "blur", 0));
     JS_SetPropertyStr(ctx, proto, "remove", JS_NewCFunction(ctx, js_noop, "remove", 0));
+    JS_SetPropertyStr(ctx, proto, "matches", JS_NewCFunction(ctx, js_el_matches, "matches", 1));
+    JS_SetPropertyStr(ctx, proto, "closest", JS_NewCFunction(ctx, js_el_closest, "closest", 1));
+    { JSAtom a = JS_NewAtom(ctx, "style");
+      JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_style_get, "get style", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+      JS_FreeAtom(ctx, a); }
+    { JSAtom a = JS_NewAtom(ctx, "dataset");
+      JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_dataset_get, "get dataset", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+      JS_FreeAtom(ctx, a); }
     for (int i = 0; i < 2; i++) {   /* innerHTML (magic 0) / outerHTML (magic 1) setter = XSS sink */
         JSAtom a = JS_NewAtom(ctx, i ? "outerHTML" : "innerHTML");
         JS_DefinePropertyGetSet(ctx, proto, a,
