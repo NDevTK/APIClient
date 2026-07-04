@@ -382,10 +382,10 @@ static JSValue js_resolved(JSContext *ctx, JSValue val)
     JS_FreeValue(ctx, val);
     return promise;
 }
-/* Response body accessor (.json/.text/.blob/.arrayBuffer/.formData): the body is EXTERNAL INPUT ->
-   OPAQUE, wrapped in a resolved promise so the fetch->reply->fetch chain CONTINUES and downstream
-   endpoints surface as shapes (`/api/next/{}`). A real concrete reply is the host safe-fetch's job
-   (fromReply, one-per-endpoint) — opaque here keeps the chain alive without inventing a value. */
+/* Response body accessor for .blob/.arrayBuffer/.formData (binary/complex bodies): opaque, wrapped in a
+   resolved promise so the fetch chain CONTINUES. NOTE json()/text() do NOT come here — resp_consume LOADS
+   the real same-origin reply (fromReply, one-per-endpoint) so config/data fields are CONCRETE, not shapes:
+   a same-origin reply is TRUSTED app data to load, not external-input opacity. */
 static JSValue js_resp_body(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return js_resolved(ctx, JS_DupValue(ctx, g_opaque)); }
 /* the concrete reply body injected onto this Response (fromReply), or JS_UNDEFINED */
