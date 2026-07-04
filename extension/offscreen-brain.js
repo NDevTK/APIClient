@@ -5665,7 +5665,9 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
         if (!tab.endpoints.has(epKey)) {
           var _epMeta = tab;
           tab.endpoints.set(epKey, {
-            url: isDynamic ? callSite.url : csUrl.href,
+            // new URL().href percent-encodes shape holes ({} -> %7B%7D); decode so the endpoint URL keeps
+            // the canonical `{}` param placeholder the dedup/UI recognize (path is already decoded via _csPath).
+            url: isDynamic ? callSite.url : csUrl.href.replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
             method: callSite.method,
             host: isDynamic ? sourceHost : csUrl.hostname,
             path: isDynamic ? callSite.url : _csPath,
