@@ -1081,6 +1081,17 @@ static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValu
    parallel resolver — the real Lexbor DOM replaces these when the host is wired. */
 static JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_UNDEFINED; }
 static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_DupValue(ctx, g_opaque); }
+/* A CONSTRUCTABLE base class so `class X extends HTMLElement {…}` DEFINES (else it throws and the whole Web
+   Component — with its connectedCallback endpoints/sinks — is LOST). super() returns the default derived
+   `this`; connectedCallback then becomes an uncalled method the orphan driver reaches like any other. */
+static JSValue js_ctor_stub(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) { return JS_UNDEFINED; }
+static void def_ctor(JSContext *ctx, JSValueConst g, const char *name) {
+    JSValue c = JS_NewCFunction2(ctx, js_ctor_stub, name, 0, JS_CFUNC_constructor, 0);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetConstructor(ctx, c, proto);   /* c.prototype = proto (an OBJECT) so `class X extends <c>` is valid */
+    JS_FreeValue(ctx, proto);
+    JS_SetPropertyStr(ctx, g, name, c);
+}
 /* addEventListener(type, handler): a registered handler that NEVER FIRES is exactly the unused surface —
    keep it reachable (in g_handlers) so orphan-invoke drives it and surfaces its gated endpoints. */
 static JSValue g_handlers = JS_UNDEFINED;
@@ -2228,6 +2239,22 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
         JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
         JS_SetPropertyStr(ctx, g, "document", doc);
+    }
+    /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
+       methods (connectedCallback etc.) become uncalled methods the orphan driver reaches -> the element's
+       endpoints/sinks are learned by EXECUTION (spec), not by reading a DOM attribute. customElements.define
+       is a no-op: the ctor's methods are already reachable + orphan-driven. */
+    def_ctor(ctx, g, "EventTarget"); def_ctor(ctx, g, "Node"); def_ctor(ctx, g, "Element");
+    def_ctor(ctx, g, "HTMLElement"); def_ctor(ctx, g, "HTMLDivElement"); def_ctor(ctx, g, "HTMLInputElement");
+    def_ctor(ctx, g, "HTMLButtonElement"); def_ctor(ctx, g, "HTMLFormElement"); def_ctor(ctx, g, "HTMLAnchorElement");
+    def_ctor(ctx, g, "HTMLSpanElement"); def_ctor(ctx, g, "HTMLImageElement"); def_ctor(ctx, g, "SVGElement");
+    {
+        JSValue ce = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, ce, "define", JS_NewCFunction(ctx, js_noop, "define", 2));
+        JS_SetPropertyStr(ctx, ce, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
+        JS_SetPropertyStr(ctx, ce, "whenDefined", JS_NewCFunction(ctx, js_opaque_stub, "whenDefined", 1));
+        JS_SetPropertyStr(ctx, ce, "upgrade", JS_NewCFunction(ctx, js_noop, "upgrade", 1));
+        JS_SetPropertyStr(ctx, g, "customElements", ce);
     }
     /* Time/random are EXTERNAL INPUT -> OPAQUE: a branch on Math.random()/Date.now() must FORK both arms
        (not take a random one), and their VALUES are shapes not fabricated concretes. This is also a REPLAY
