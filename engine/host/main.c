@@ -644,6 +644,33 @@ static JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueCo
     for (int i = 0; i < 7; i++) JS_SetPropertyStr(ctx, o, m[i], JS_NewCFunction(ctx, js_opaque_stub, m[i], 1));
     return o;
 }
+/* WebSocket / EventSource: `new X(url)` — the url IS an endpoint (WS/SSE handshake is a GET), emit it. The
+   object has send/close/addEventListener (onmessage handler -> driven) so real usage never throws. */
+static JSValue js_ws_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    if (argc >= 1) {
+        char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
+        if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
+        if (!u) u = JS_ToCString(ctx, argv[0]);
+        if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
+        JS_FreeValue(ctx, ex);
+        if (url) {
+            char *usolved = url_solve_holes(ctx, url); const char *eurl = usolved ? usolved : url;
+            JSValue ep = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, ep, "method", JS_NewString(ctx, "GET"));
+            JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, eurl));
+            JS_SetPropertyStr(ctx, ep, "source", JS_NewString(ctx, "ast_analysis"));
+            JSValue params = JS_NewArray(ctx); build_query_params(ctx, eurl, params); JS_SetPropertyStr(ctx, ep, "params", params);
+            record_endpoint(ctx, ep); free(usolved); free(url);
+        }
+    }
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "send", JS_NewCFunction(ctx, js_noop, "send", 1));
+    JS_SetPropertyStr(ctx, o, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
+    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    JS_SetPropertyStr(ctx, o, "readyState", JS_NewInt32(ctx, 1));
+    return o;
+}
 static JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "matches", JS_DupValue(ctx, g_opaque));   /* opaque -> a branch on it FORKS */
@@ -1359,6 +1386,24 @@ static JSValue dom_select_all(JSContext *ctx, lxb_dom_node_t *root, const char *
     lxb_css_parser_destroy(p, true);
     return arr;
 }
+/* REAL element.matches(sel): does THIS element match the selector? A single-node Lexbor match — deterministic
+   over the parsed DOM (element state is the app's own DOM, not attacker input), so COMPUTE the real bool
+   (RUN, DON'T MATCH), never a stub. closest walks node->parent running the same real match. */
+static lxb_status_t sel_match_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t s, void *vp) { (void)node; (void)s; *(int *)vp = 1; return LXB_STATUS_OK; }
+static int dom_node_matches(lxb_dom_element_t *el, const char *sel, size_t len) {
+    if (!el || !sel) return 0;
+    lxb_css_parser_t *p = lxb_css_parser_create();
+    if (!p || lxb_css_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_css_parser_destroy(p, true); return 0; }
+    lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)sel, len);
+    if (!list) { lxb_css_parser_destroy(p, true); return 0; }
+    lxb_selectors_t *s = lxb_selectors_create();
+    if (!s || lxb_selectors_init(s) != LXB_STATUS_OK) { if (s) lxb_selectors_destroy(s, true); lxb_css_parser_destroy(p, true); return 0; }
+    int matched = 0;
+    lxb_selectors_match_node(s, lxb_dom_interface_node(el), list, sel_match_cb, &matched);
+    lxb_selectors_destroy(s, true);
+    lxb_css_parser_destroy(p, true);
+    return matched;
+}
 static JSValue js_el_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_NewArray(ctx);
     const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NewArray(ctx);
@@ -1704,8 +1749,39 @@ static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueCons
    closest -> the element itself (a real node whose methods/attrs work — never throw/null); style -> a plain
    object so `el.style.x=v` never throws; dataset -> the element's REAL data-* attributes (an endpoint often
    lives in data-url), camelCased, so `el.dataset.url` yields the concrete value, not undefined. */
-static JSValue js_el_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_DupValue(ctx, g_opaque); }
-static JSValue js_el_closest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_DupValue(ctx, this_val); }
+static JSValue js_el_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    if (!el || argc < 1) return JS_FALSE;
+    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_FALSE;
+    int m = dom_node_matches(el, s, strlen(s)); JS_FreeCString(ctx, s);
+    return m ? JS_TRUE : JS_FALSE;
+}
+static JSValue js_el_closest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    if (!el || argc < 1) return JS_NULL;
+    const char *s = JS_ToCString(ctx, argv[0]); size_t sl = s ? strlen(s) : 0;
+    JSValue r = JS_NULL;
+    for (lxb_dom_node_t *n = lxb_dom_interface_node(el); n && n->type == LXB_DOM_NODE_TYPE_ELEMENT; n = lxb_dom_node_parent(n))
+        if (s && dom_node_matches(lxb_dom_interface_element(n), s, sl)) { r = el_wrap(ctx, lxb_dom_interface_element(n)); break; }
+    if (s) JS_FreeCString(ctx, s);
+    return r;
+}
+static JSValue js_el_has_attr(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    if (!el || argc < 1) return JS_FALSE;
+    const char *n = JS_ToCString(ctx, argv[0]); if (!n) return JS_FALSE;
+    bool h = lxb_dom_element_has_attribute(el, (const lxb_char_t *)n, strlen(n)); JS_FreeCString(ctx, n);
+    return h ? JS_TRUE : JS_FALSE;
+}
+static JSValue js_el_contains(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    lxb_dom_element_t *self = JS_GetOpaque(this_val, g_el_class_id);
+    lxb_dom_element_t *other = (argc >= 1) ? JS_GetOpaque(argv[0], g_el_class_id) : NULL;
+    if (!self || !other) return JS_FALSE;
+    for (lxb_dom_node_t *n = lxb_dom_interface_node(other); n; n = lxb_dom_node_parent(n))
+        if (n == lxb_dom_interface_node(self)) return JS_TRUE;
+    return JS_FALSE;
+}
+static JSValue js_el_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_DupValue(ctx, this_val); }   /* cloneNode -> a real node */
 static JSValue js_el_style_get(JSContext *ctx, JSValueConst this_val) { return JS_NewObject(ctx); }
 static JSValue js_el_dataset_get(JSContext *ctx, JSValueConst this_val) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
@@ -1747,10 +1823,10 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "remove", JS_NewCFunction(ctx, js_noop, "remove", 0));
     JS_SetPropertyStr(ctx, proto, "matches", JS_NewCFunction(ctx, js_el_matches, "matches", 1));
     JS_SetPropertyStr(ctx, proto, "closest", JS_NewCFunction(ctx, js_el_closest, "closest", 1));
-    JS_SetPropertyStr(ctx, proto, "cloneNode", JS_NewCFunction(ctx, js_el_closest, "cloneNode", 1));   /* returns a real node (self) whose methods/attrs work */
-    JS_SetPropertyStr(ctx, proto, "contains", JS_NewCFunction(ctx, js_el_matches, "contains", 1));     /* opaque bool -> forks */
-    JS_SetPropertyStr(ctx, proto, "hasAttribute", JS_NewCFunction(ctx, js_el_matches, "hasAttribute", 1));
-    JS_SetPropertyStr(ctx, proto, "toggleAttribute", JS_NewCFunction(ctx, js_el_matches, "toggleAttribute", 1));
+    JS_SetPropertyStr(ctx, proto, "cloneNode", JS_NewCFunction(ctx, js_el_self, "cloneNode", 1));       /* returns a real node (self) whose methods/attrs work */
+    JS_SetPropertyStr(ctx, proto, "contains", JS_NewCFunction(ctx, js_el_contains, "contains", 1));     /* REAL descendant check */
+    JS_SetPropertyStr(ctx, proto, "hasAttribute", JS_NewCFunction(ctx, js_el_has_attr, "hasAttribute", 1));   /* REAL */
+    JS_SetPropertyStr(ctx, proto, "toggleAttribute", JS_NewCFunction(ctx, js_el_has_attr, "toggleAttribute", 1));
     JS_SetPropertyStr(ctx, proto, "querySelectorAll", JS_NewCFunction(ctx, js_el_querySelectorAll, "querySelectorAll", 1));
     JS_SetPropertyStr(ctx, proto, "insertBefore", JS_NewCFunction(ctx, js_el_appendChild, "insertBefore", 2));   /* intercepts <script src> like appendChild */
     JS_SetPropertyStr(ctx, proto, "replaceChild", JS_NewCFunction(ctx, js_el_appendChild, "replaceChild", 2));
@@ -2479,7 +2555,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "MutationObserver", JS_NewCFunction2(ctx, js_observer_ctor, "MutationObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "ResizeObserver", JS_NewCFunction2(ctx, js_observer_ctor, "ResizeObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "PerformanceObserver", JS_NewCFunction2(ctx, js_observer_ctor, "PerformanceObserver", 1, JS_CFUNC_constructor, 0));
-    JS_SetPropertyStr(ctx, g, "WebSocket", JS_NewCFunction2(ctx, js_observer_ctor, "WebSocket", 1, JS_CFUNC_constructor, 0));   /* stub: send/close absent -> observer shape has no-ops; url endpoint is a smaller follow-up */
+    JS_SetPropertyStr(ctx, g, "WebSocket", JS_NewCFunction2(ctx, js_ws_ctor, "WebSocket", 1, JS_CFUNC_constructor, 0));         /* url endpoint emitted; send/close/addEventListener present */
+    JS_SetPropertyStr(ctx, g, "EventSource", JS_NewCFunction2(ctx, js_ws_ctor, "EventSource", 1, JS_CFUNC_constructor, 0));     /* SSE: url is a GET endpoint; onmessage handler driven */
     JS_SetPropertyStr(ctx, g, "getComputedStyle", JS_NewCFunction(ctx, js_get_computed_style, "getComputedStyle", 1));
     JS_SetPropertyStr(ctx, g, "matchMedia", JS_NewCFunction(ctx, js_match_media, "matchMedia", 1));
     JS_SetPropertyStr(ctx, g, "CustomEvent", JS_NewCFunction2(ctx, js_event_ctor, "CustomEvent", 2, JS_CFUNC_constructor, 0));
@@ -2561,7 +2638,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         /* fetch-API + encoding + misc Web objects: opaque-read / no-op-write, so a bundle that constructs
            them doesn't ReferenceError and any value read out stays opaque. */
         const char *webctors[] = { "Headers", "Response", "FormData", "Blob", "File", "AbortController",
-                                   "TextEncoder", "TextDecoder", "FileReader", "EventSource", "BroadcastChannel" };
+                                   "TextEncoder", "TextDecoder", "FileReader", "BroadcastChannel" };   /* EventSource -> js_ws_ctor (emits the SSE url) */
         for (size_t wi = 0; wi < sizeof webctors / sizeof webctors[0]; wi++)
             JS_SetPropertyStr(ctx, g, webctors[wi], JS_NewCFunction2(ctx, js_webobj_ctor, webctors[wi], 1, JS_CFUNC_constructor, 0));
     }
