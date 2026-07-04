@@ -1335,15 +1335,115 @@ static JSValue js_webobj_ctor(JSContext *ctx, JSValueConst new_target, int argc,
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_opaque, "toString", 0));
     return o;
 }
-/* new URLSearchParams(init): .get/getAll/has -> opaque (external input); toString -> opaque. */
+/* URLSearchParams: a REAL object recording init + append()/set() fields (like FormData), so
+   `new URLSearchParams({team:cfg.team,r:cfg.region}).toString()` -> a CONCOLIC query string carrying both the
+   SHAPE ("team={team}&r={region}") and, when every value has a concrete example, the encoded EXAMPLE
+   ("team=eng+team&r=us-east-1") -- not the old bare-opaque stub that discarded the params. get() returns the
+   stored (concolic) value; unknown key -> opaque (external input). */
+static void sp_encode(char *buf, int cap, int *o, const char *s) {   /* form-urlencode: space->+, reserved->%XX */
+    static const char *hex = "0123456789ABCDEF";
+    for (; *s && *o < cap - 3; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == ' ') buf[(*o)++] = '+';
+        else if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c=='-'||c=='_'||c=='.'||c=='~') buf[(*o)++] = (char)c;
+        else { buf[(*o)++] = '%'; buf[(*o)++] = hex[c >> 4]; buf[(*o)++] = hex[c & 15]; }
+    }
+    buf[*o] = 0;
+}
+static void sp_store(JSContext *ctx, JSValueConst this_val, JSValueConst key, JSValueConst val) {
+    JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
+    if (!JS_IsObject(f)) { JS_FreeValue(ctx, f); f = JS_NewObject(ctx); JS_SetPropertyStr(ctx, this_val, "__fields", JS_DupValue(ctx, f)); }
+    const char *k = JS_ToCString(ctx, key);
+    if (k) { JS_SetPropertyStr(ctx, f, k, JS_DupValue(ctx, val)); JS_FreeCString(ctx, k); }
+    JS_FreeValue(ctx, f);
+}
+static JSValue js_sp_append(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 2) sp_store(ctx, this_val, argv[0], argv[1]);
+    return JS_UNDEFINED;
+}
+static JSValue js_sp_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 1) {
+        JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
+        if (JS_IsObject(f)) {
+            const char *k = JS_ToCString(ctx, argv[0]);
+            if (k) { JSValue v = JS_GetPropertyStr(ctx, f, k); JS_FreeCString(ctx, k);
+                     if (!JS_IsUndefined(v)) { JS_FreeValue(ctx, f); return v; } JS_FreeValue(ctx, v); }
+        }
+        JS_FreeValue(ctx, f);
+    }
+    return JS_DupValue(ctx, g_opaque);   /* unknown key -> external input */
+}
+static JSValue js_sp_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
+    if (!JS_IsObject(f)) { JS_FreeValue(ctx, f); return JS_NewString(ctx, ""); }
+    char shape[1600]; int so = 0; shape[0] = 0;
+    char examp[1600]; int eo = 0; examp[0] = 0;
+    int any_opaque = 0, all_examples = 1;
+    JSPropertyEnum *tab = NULL; uint32_t n = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &n, f, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        for (uint32_t i = 0; i < n; i++) {
+            const char *k = JS_AtomToCString(ctx, tab[i].atom);
+            JSValue v = JS_GetProperty(ctx, f, tab[i].atom);
+            int op = JS_IsOpaque(v); if (op) any_opaque = 1;
+            const char *vsh; int free_vsh = 0;
+            if (op) vsh = JS_OpaqueShapeC(v); else { vsh = JS_ToCString(ctx, v); free_vsh = 1; }
+            if (k && vsh && so < (int)sizeof(shape) - 2) so += snprintf(shape + so, sizeof(shape) - so, "%s%s=%s", so ? "&" : "", k, vsh);
+            JSValue vex = op ? JS_OpaqueExample(ctx, v) : JS_DupValue(ctx, v);
+            if (JS_IsUndefined(vex) || JS_IsNull(vex)) all_examples = 0;
+            else if (k && eo < (int)sizeof(examp) - 2) {
+                const char *ve = JS_ToCString(ctx, vex);
+                if (ve) { eo += snprintf(examp + eo, sizeof(examp) - eo, "%s%s=", eo ? "&" : "", k); sp_encode(examp, (int)sizeof(examp), &eo, ve); JS_FreeCString(ctx, ve); }
+                else all_examples = 0;
+            }
+            JS_FreeValue(ctx, vex);
+            if (vsh && free_vsh) JS_FreeCString(ctx, vsh);
+            if (k) JS_FreeCString(ctx, k);
+            JS_FreeValue(ctx, v);
+        }
+        JS_FreePropertyEnum(ctx, tab, n);
+    }
+    JS_FreeValue(ctx, f);
+    if (!any_opaque) return JS_NewStringLen(ctx, shape, so);   /* all-concrete params -> a plain string */
+    JSValue r = JS_NewOpaqueSourced(ctx, shape, "{}");         /* tainted query keeps its shape + @S taint */
+    if (all_examples && JS_IsOpaque(r)) JS_SetOpaqueExample(ctx, r, JS_NewStringLen(ctx, examp, eo));
+    return r;
+}
+static void sp_init(JSContext *ctx, JSValueConst o, JSValueConst init) {
+    if (JS_IsString(init)) {                                    /* "a=1&b=2" (leading '?' tolerated) */
+        const char *s = JS_ToCString(ctx, init); if (!s) return;
+        const char *p = s; if (*p == '?') p++;
+        while (*p) {
+            const char *amp = strchr(p, '&'); const char *end = amp ? amp : p + strlen(p);
+            const char *eq = memchr(p, '=', (size_t)(end - p));
+            if (eq) { JSValue k = JS_NewStringLen(ctx, p, (size_t)(eq - p)); JSValue v = JS_NewStringLen(ctx, eq + 1, (size_t)(end - eq - 1));
+                      sp_store(ctx, o, k, v); JS_FreeValue(ctx, k); JS_FreeValue(ctx, v); }
+            if (!amp) break; p = amp + 1;
+        }
+        JS_FreeCString(ctx, s);
+    } else if (JS_IsObject(init)) {                            /* {k:v} record (the common case) */
+        JSPropertyEnum *tab = NULL; uint32_t n = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &n, init, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < n; i++) {
+                JSValue kv = JS_AtomToString(ctx, tab[i].atom);
+                JSValue v = JS_GetProperty(ctx, init, tab[i].atom);
+                sp_store(ctx, o, kv, v);
+                JS_FreeValue(ctx, kv); JS_FreeValue(ctx, v);
+            }
+            JS_FreePropertyEnum(ctx, tab, n);
+        }
+    }
+}
 static JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "get", JS_NewCFunction(ctx, js_searchparams_get, "get", 1));
-    JS_SetPropertyStr(ctx, o, "getAll", JS_NewCFunction(ctx, js_searchparams_get, "getAll", 1));
-    JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_searchparams_get, "has", 1));
-    JS_SetPropertyStr(ctx, o, "append", JS_NewCFunction(ctx, js_noop, "append", 2));
-    JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_noop, "set", 2));
-    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_opaque, "toString", 0));
+    JS_SetPropertyStr(ctx, o, "__fields", JS_NewObject(ctx));
+    if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) sp_init(ctx, o, argv[0]);
+    JS_SetPropertyStr(ctx, o, "get", JS_NewCFunction(ctx, js_sp_get, "get", 1));
+    JS_SetPropertyStr(ctx, o, "getAll", JS_NewCFunction(ctx, js_sp_get, "getAll", 1));
+    JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_sp_get, "has", 1));
+    JS_SetPropertyStr(ctx, o, "append", JS_NewCFunction(ctx, js_sp_append, "append", 2));
+    JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_sp_append, "set", 2));
+    JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_noop, "delete", 1));
+    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
     return o;
 }
 static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
