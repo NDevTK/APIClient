@@ -3066,6 +3066,13 @@ KEEP void qjs_begin(const char *recipes)
        gate (redux/vuex login-action -> thunk, or handler A -> handler B). Forks on the resulting opaque
        gates; the WFQ starves it if the page has no real cross-flow state. */
     if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 2) { reg_add(ctx, JS_UNDEFINED, 1.2, 0, NULL, 0); g_reg[g_reg_n - 1].session = 1; }
+    /* BOOT AS THE FIRST FLOW: enqueue a FORKING re-run of boot so its TOP-LEVEL opaque gates are EXPLORED. The
+       initial boot (dom_run_scripts) ran MONOLITHICALLY before the scheduler (g_running=0 -> branch_decide took
+       the false arm on every opaque gate), so a page whose auth-gated surface sits behind a boot-level
+       `if(localStorage.getItem('token'))` / cookie / `if(window.__FLAGS.admin)` gate with NO fetch would NEVER
+       be surfaced. A reply also enqueues one (qjs_provide, to re-run boot with the reply synchronous); this
+       covers the no-reply case. The WFQ starves it if boot has no forkable gate. */
+    if (!g_resume_mode && g_boot_n > 0) reg_add_boot(ctx, NULL, 0);
 }
 
 /* The distinct pending fetch urls (newline-joined) the offscreen must safe-fetch. Static buffer. */
