@@ -1461,6 +1461,17 @@ static void def_source(JSContext *ctx, JSValueConst loc, const char *name, int m
         JS_UNDEFINED, JS_PROP_CONFIGURABLE);
     JS_FreeAtom(ctx, a);
 }
+/* @S: a NAVIGATION (location.href=/.assign/.replace, or location=) is a sink — a javascript: URL runs,
+   an attacker-controlled URL is an open redirect. url context (solve_broke checks a javascript:X9 prefix). */
+static JSValue js_location_nav(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+    if (argc >= 1) solve_add(ctx, "location.assign", "url", argv[0]);
+    return JS_UNDEFINED;
+}
+static JSValue js_location_href_get(JSContext *ctx, JSValueConst t) { return JS_NewString(ctx, g_origin); }  /* concrete base for new URL(path, location.href) */
+static JSValue js_location_href_set(JSContext *ctx, JSValueConst t, JSValueConst val) {
+    solve_add(ctx, "location.href", "url", val);   /* @S: location.href = javascript:/redirect */
+    return JS_UNDEFINED;
+}
 static JSValue make_location(JSContext *ctx)
 {
     JSValue loc = JS_NewObject(ctx);
@@ -1470,7 +1481,15 @@ static JSValue make_location(JSContext *ctx)
     JS_SetPropertyStr(ctx, loc, "hostname", JS_NewString(ctx, g_host));
     JS_SetPropertyStr(ctx, loc, "port",     JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, "/"));
-    JS_SetPropertyStr(ctx, loc, "href",     JS_NewString(ctx, g_origin));   /* concrete base for new URL(path, href) */
+    JSAtom ha = JS_NewAtom(ctx, "href");   /* href: getter = concrete base; SETTER = @S navigation sink */
+    JS_DefinePropertyGetSet(ctx, loc, ha,
+        JS_NewCFunction2(ctx, (JSCFunction *)js_location_href_get, "get href", 0, JS_CFUNC_getter, 0),
+        JS_NewCFunction2(ctx, (JSCFunction *)js_location_href_set, "set href", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, ha);
+    JS_SetPropertyStr(ctx, loc, "assign",  JS_NewCFunction(ctx, js_location_nav, "assign", 1));   /* @S nav sinks */
+    JS_SetPropertyStr(ctx, loc, "replace", JS_NewCFunction(ctx, js_location_nav, "replace", 1));
+    JS_SetPropertyStr(ctx, loc, "reload",  JS_NewCFunction(ctx, js_noop, "reload", 0));
+    JS_SetPropertyStr(ctx, loc, "toString", JS_NewCFunction(ctx, (JSCFunction *)js_location_href_get, "toString", 0));
     def_source(ctx, loc, "hash",   0);   /* external input: opaque (or candidate on @S replay) */
     def_source(ctx, loc, "search", 1);
     return loc;
