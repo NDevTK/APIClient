@@ -2023,8 +2023,24 @@ static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc
 }
 /* reflected URL/identity properties (el.src = computedUrl / el.href / el.id) map to Lexbor attributes,
    so a bundle setting .src via PROPERTY (the common script-injection form) is captured + intercepted. */
-static const char *refl_name(int magic) {
-    switch (magic) { case 0: return "src"; case 1: return "href"; case 2: return "action"; case 3: return "id"; default: return ""; }
+static const char *refl_name(int magic) {   /* property magic -> the ATTRIBUTE it reflects (className -> class) */
+    switch (magic) {
+        case 0: return "src"; case 1: return "href"; case 2: return "action"; case 3: return "id";
+        case 4: return "value"; case 5: return "name"; case 6: return "type"; case 7: return "class";
+        case 8: return "alt"; case 9: return "title"; case 10: return "placeholder";
+        default: return "";
+    }
+}
+/* tagName / nodeName: the element's tag, UPPERCASE for HTML (spec) — Lexbor lowercases. Real bundles branch
+   on el.tagName constantly (`if(el.tagName==='A')`); undefined broke that. */
+static JSValue js_el_tagname(JSContext *ctx, JSValueConst this_val) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
+    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
+    if (!nm) return JS_NewString(ctx, "");
+    char buf[64]; size_t n = nl < 63 ? nl : 63;
+    for (size_t i = 0; i < n; i++) { char c = (char)nm[i]; buf[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c; }
+    buf[n] = 0;
+    return JS_NewString(ctx, buf);
 }
 static JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
@@ -2155,13 +2171,21 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
             JS_PROP_CONFIGURABLE);
         JS_FreeAtom(ctx, a);
     }
-    static const char *refl[] = { "src", "href", "action", "id" };
-    for (int i = 0; i < 4; i++) {
+    /* Attribute-REFLECTED properties real bundles read constantly (undefined broke every read + branch). The
+       PROPERTY name may differ from the attribute (className -> class); refl_name maps it. value/name/type are
+       an input's shipped defaults (concrete page config). */
+    static const char *refl[] = { "src", "href", "action", "id", "value", "name", "type", "className", "alt", "title", "placeholder" };
+    for (int i = 0; i < (int)(sizeof refl / sizeof refl[0]); i++) {
         JSAtom a = JS_NewAtom(ctx, refl[i]);
         JS_DefinePropertyGetSet(ctx, proto, a,
             JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_refl_get, "get", 0, JS_CFUNC_getter_magic, i),
             JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_refl_set, "set", 1, JS_CFUNC_setter_magic, i),
             JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, a);
+    }
+    for (int i = 0; i < 2; i++) {   /* tagName / nodeName -> the uppercase tag */
+        JSAtom a = JS_NewAtom(ctx, i ? "nodeName" : "tagName");
+        JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_tagname, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
         JS_FreeAtom(ctx, a);
     }
 }
