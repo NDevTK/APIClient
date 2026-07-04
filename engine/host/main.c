@@ -2304,7 +2304,12 @@ static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSV
 /* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
 static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_UNDEFINED;
-    if (JS_IsOpaque(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return JS_DupValue(ctx, g_opaque); }   /* @S */
+    if (JS_IsOpaque(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return JS_DupValue(ctx, g_opaque); }   /* @S: opaque reaches eval -> detect + spawn candidate replays */
+    /* @S SOLVE: on a candidate-REPLAY flow the payload arrives here as a CONCRETE string (the real code
+       transformed it). eval's arg IS the sink code, so RECORD it for the breakout check — do NOT JS_Eval it in
+       the engine (that would run the X9 payload against an undefined X9 and never verify the sink). Without
+       this, `eval(location.hash)` was never solved (the replay executed the payload instead of checking it). */
+    if (g_candidate && JS_IsString(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return JS_DupValue(ctx, g_opaque); }
     if (JS_IsString(argv[0])) {
         size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
         JSValue r = s ? JS_Eval(ctx, s, len, "<eval>", JS_EVAL_TYPE_GLOBAL) : JS_UNDEFINED;
