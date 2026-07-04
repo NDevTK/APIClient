@@ -1472,6 +1472,12 @@ static JSValue js_location_href_set(JSContext *ctx, JSValueConst t, JSValueConst
     solve_add(ctx, "location.href", "url", val);   /* @S: location.href = javascript:/redirect */
     return JS_UNDEFINED;
 }
+static JSValue g_location = JS_UNDEFINED;   /* the location object; window.location is a getset over it so `location = url` is a nav sink */
+static JSValue js_window_location_get(JSContext *ctx, JSValueConst t) { return JS_DupValue(ctx, g_location); }
+static JSValue js_window_location_set(JSContext *ctx, JSValueConst t, JSValueConst val) {
+    solve_add(ctx, "location", "url", val);   /* @S: `location = url` / `window.location = url` navigation */
+    return JS_UNDEFINED;
+}
 static JSValue make_location(JSContext *ctx)
 {
     JSValue loc = JS_NewObject(ctx);
@@ -2737,7 +2743,14 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "window", JS_DupValue(ctx, g));
     JS_SetPropertyStr(ctx, g, "self",   JS_DupValue(ctx, g));
     JS_SetPropertyStr(ctx, g, "globalThis", JS_DupValue(ctx, g));
-    JS_SetPropertyStr(ctx, g, "location", make_location(ctx));   /* concrete principal identity; search/hash opaque */
+    /* window.location: a getset over the location object so `location = 'javascript:..'` / `= url` (a common
+       navigation shorthand) is an @S nav sink; reads return the object (location.href/.hash/.assign work). */
+    { JSValue loc = make_location(ctx); JS_FreeValue(ctx, g_location); g_location = JS_DupValue(ctx, loc);
+      JSAtom la = JS_NewAtom(ctx, "location");
+      JS_DefinePropertyGetSet(ctx, g, la,
+          JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_get, "get", 0, JS_CFUNC_getter, 0),
+          JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_set, "set", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
+      JS_FreeAtom(ctx, la); JS_FreeValue(ctx, loc); }
     {   /* navigator: a REAL object so sendBeacon(url) emits its endpoint, with the OPAQUE sentinel as its
            PROTOTYPE so EVERY other member (userAgent/language/clipboard/…) still falls through to opaque —
            no throw on an unstubbed method, no lost analytics endpoint. */
@@ -3115,6 +3128,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_verified); g_verified = JS_UNDEFINED;
     JS_FreeValue(ctx, g_enqueued); g_enqueued = JS_UNDEFINED;
     JS_FreeValue(ctx, g_dedup_fn); g_dedup_fn = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_location); g_location = JS_UNDEFINED;
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
