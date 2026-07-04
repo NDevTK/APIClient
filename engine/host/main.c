@@ -1405,6 +1405,14 @@ static JSValue el_wrap(JSContext *ctx, lxb_dom_element_t *el) {
     JS_SetOpaque(o, el);
     return o;
 }
+/* new Image()/Audio()/Option(): missing constructors threw (killing the script). Return a REAL wrapped
+   element (its methods/attrs work); .src is stored via the element's src setter — NOT emitted as @H, since
+   an image/media load is a STATIC ASSET (magic-byte, not URL), so emitting would pollute with asset noise. */
+static JSValue js_media_el_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    if (!g_dom) return JS_NewObject(ctx);
+    lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)"img", 3, NULL);
+    return el ? el_wrap(ctx, el) : JS_NewObject(ctx);
+}
 struct sel_ctx { lxb_dom_element_t *first; };
 static lxb_status_t sel_first_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t s, void *vp) {
     struct sel_ctx *c = vp; (void)s;
@@ -2639,6 +2647,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "EventSource", JS_NewCFunction2(ctx, js_ws_ctor, "EventSource", 1, JS_CFUNC_constructor, 0));     /* SSE: url is a GET endpoint; onmessage handler driven */
     JS_SetPropertyStr(ctx, g, "getComputedStyle", JS_NewCFunction(ctx, js_get_computed_style, "getComputedStyle", 1));
     JS_SetPropertyStr(ctx, g, "matchMedia", JS_NewCFunction(ctx, js_match_media, "matchMedia", 1));
+    JS_SetPropertyStr(ctx, g, "Image", JS_NewCFunction2(ctx, js_media_el_ctor, "Image", 2, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "Audio", JS_NewCFunction2(ctx, js_media_el_ctor, "Audio", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "Option", JS_NewCFunction2(ctx, js_media_el_ctor, "Option", 4, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "CustomEvent", JS_NewCFunction2(ctx, js_event_ctor, "CustomEvent", 2, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "Event", JS_NewCFunction2(ctx, js_event_ctor, "Event", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "scrollTo", JS_NewCFunction(ctx, js_noop, "scrollTo", 2));
