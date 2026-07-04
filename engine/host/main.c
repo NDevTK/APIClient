@@ -646,6 +646,31 @@ static JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueCo
 }
 /* WebSocket / EventSource: `new X(url)` — the url IS an endpoint (WS/SSE handshake is a GET), emit it. The
    object has send/close/addEventListener (onmessage handler -> driven) so real usage never throws. */
+/* navigator.sendBeacon(url, data): a real REQUEST (analytics/telemetry endpoint) — emit @H like fetch. */
+static JSValue js_send_beacon(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 1) {
+        char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
+        if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
+        if (!u) u = JS_ToCString(ctx, argv[0]);
+        if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
+        JS_FreeValue(ctx, ex);
+        if (url) {
+            char *usolved = url_solve_holes(ctx, url); const char *eurl = usolved ? usolved : url;
+            JSValue ep = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, ep, "method", JS_NewString(ctx, "POST"));
+            JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, eurl));
+            JS_SetPropertyStr(ctx, ep, "source", JS_NewString(ctx, "ast_analysis"));
+            JSValue params = JS_NewArray(ctx); build_query_params(ctx, eurl, params); JS_SetPropertyStr(ctx, ep, "params", params);
+            if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+                const char *bs = JS_ToCString(ctx, argv[1]);
+                if (bs && bs[0]) { char *bsolved = url_solve_holes(ctx, bs); JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bsolved ? bsolved : bs, 600)); free(bsolved); }
+                if (bs) JS_FreeCString(ctx, bs);
+            }
+            record_endpoint(ctx, ep); free(usolved); free(url);
+        }
+    }
+    return JS_TRUE;
+}
 static JSValue js_ws_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
     if (argc >= 1) {
         char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
@@ -2509,7 +2534,14 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "self",   JS_DupValue(ctx, g));
     JS_SetPropertyStr(ctx, g, "globalThis", JS_DupValue(ctx, g));
     JS_SetPropertyStr(ctx, g, "location", make_location(ctx));   /* concrete principal identity; search/hash opaque */
-    JS_SetPropertyStr(ctx, g, "navigator", JS_DupValue(ctx, g_opaque));
+    {   /* navigator: a REAL object so sendBeacon(url) emits its endpoint, with the OPAQUE sentinel as its
+           PROTOTYPE so EVERY other member (userAgent/language/clipboard/…) still falls through to opaque —
+           no throw on an unstubbed method, no lost analytics endpoint. */
+        JSValue nav = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, nav, "sendBeacon", JS_NewCFunction(ctx, js_send_beacon, "sendBeacon", 2));
+        JS_SetPrototype(ctx, nav, g_opaque);
+        JS_SetPropertyStr(ctx, g, "navigator", nav);
+    }
     JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
     {
