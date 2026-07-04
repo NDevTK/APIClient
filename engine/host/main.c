@@ -2113,6 +2113,39 @@ static JSValue js_el_dataset_get(JSContext *ctx, JSValueConst this_val) {
     }
     return o;
 }
+/* classList: real bundles branch on `el.classList.contains('active')` constantly; undefined THREW. contains
+   checks the REAL class attribute (whitespace-separated tokens) — concrete page structure, like className.
+   add/remove/toggle are UI no-ops (not endpoint-relevant). */
+static int class_has_token(const lxb_char_t *cls, size_t cl, const char *tok) {
+    if (!cls || !tok || !tok[0]) return 0;
+    size_t tk = strlen(tok), i = 0;
+    while (i < cl) {
+        while (i < cl && (cls[i]==' '||cls[i]=='\t'||cls[i]=='\n'||cls[i]=='\r'||cls[i]=='\f')) i++;
+        size_t s = i;
+        while (i < cl && !(cls[i]==' '||cls[i]=='\t'||cls[i]=='\n'||cls[i]=='\r'||cls[i]=='\f')) i++;
+        if (i - s == tk && !memcmp(cls + s, tok, tk)) return 1;
+    }
+    return 0;
+}
+static JSValue js_classlist_contains(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue elw = JS_GetPropertyStr(ctx, this_val, "__el");
+    lxb_dom_element_t *el = JS_GetOpaque(elw, g_el_class_id); JS_FreeValue(ctx, elw);
+    if (!el || argc < 1) return JS_FALSE;
+    size_t cl = 0; const lxb_char_t *cls = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"class", 5, &cl);
+    const char *tok = JS_ToCString(ctx, argv[0]);
+    int found = class_has_token(cls, cl, tok);
+    if (tok) JS_FreeCString(ctx, tok);
+    return found ? JS_TRUE : JS_FALSE;
+}
+static JSValue js_el_classlist_get(JSContext *ctx, JSValueConst this_val) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "__el", JS_DupValue(ctx, this_val));
+    JS_SetPropertyStr(ctx, o, "contains", JS_NewCFunction(ctx, js_classlist_contains, "contains", 1));
+    JS_SetPropertyStr(ctx, o, "add", JS_NewCFunction(ctx, js_noop, "add", 1));
+    JS_SetPropertyStr(ctx, o, "remove", JS_NewCFunction(ctx, js_noop, "remove", 1));
+    JS_SetPropertyStr(ctx, o, "toggle", JS_NewCFunction(ctx, js_noop, "toggle", 1));
+    return o;
+}
 static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_el_getAttribute, "getAttribute", 1));
     JS_SetPropertyStr(ctx, proto, "setAttribute", JS_NewCFunction(ctx, js_el_setAttribute, "setAttribute", 2));
@@ -2188,6 +2221,9 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
         JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_tagname, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
         JS_FreeAtom(ctx, a);
     }
+    { JSAtom a = JS_NewAtom(ctx, "classList");
+      JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_classlist_get, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+      JS_FreeAtom(ctx, a); }
 }
 static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (!g_dom || argc < 1) return JS_NULL;
