@@ -454,38 +454,16 @@ static void reply_note_wanted(JSContext *ctx, JSValueConst this_val) {
    role/flag gate reaches the gated endpoint) AND carries its real value as the example (so a gate-INDEPENDENT
    field keeps its real value on the forced arm: /api/billing/enterprise/acme-42, not /{}). NUMBERS stay
    concrete — an opaque numeric would make `for(i<n)` / `.length` loops infinite (the known catastrophe). */
-static JSValue concolic_wrap(JSContext *ctx, JSValue v, const char *key) {
-    int tag = JS_VALUE_GET_TAG(v);
-    if (tag == JS_TAG_STRING || tag == JS_TAG_BOOL) {
-        char shape[80]; snprintf(shape, sizeof shape, "{%s}", (key && key[0]) ? key : "reply");
-        const char *src = (key && key[0]) ? key : "reply";
-        JSValue o = JS_NewOpaqueSourced(ctx, shape, src);
-        if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, v); return o; }   /* consumes v */
-        JS_FreeValue(ctx, o); return v;                                     /* opaque class off -> leave concrete */
-    }
-    if (JS_IsObject(v) && !JS_IsFunction(ctx, v)) {   /* recurse: keep the object/array STRUCTURE real */
-        JSPropertyEnum *tab = NULL; uint32_t n = 0;
-        if (JS_GetOwnPropertyNames(ctx, &tab, &n, v, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
-            for (uint32_t i = 0; i < n; i++) {
-                const char *k = JS_AtomToCString(ctx, tab[i].atom);
-                JSValue pv = JS_GetProperty(ctx, v, tab[i].atom);
-                JS_SetProperty(ctx, v, tab[i].atom, concolic_wrap(ctx, pv, k));   /* consumes pv, then the wrapped */
-                if (k) JS_FreeCString(ctx, k);
-            }
-            JS_FreePropertyEnum(ctx, tab, n);
-        }
-        return v;
-    }
-    return v;   /* number / null / undefined -> concrete (real value, no fork, no loop hazard) */
-}
-/* parse a concrete reply body into the value json()/text() should resolve to */
+/* parse a concrete reply body into the value json()/text() should resolve to. String/bool leaves become
+   concolic (fork + real example) via the SHARED JS_ConcolicWrap — the ONE home, also used by JSON.parse of
+   an SSR data blob (same trust boundary: loaded same-origin app data). */
 static JSValue reply_value(JSContext *ctx, JSValueConst body_str, int is_json) {
     if (!is_json) return JS_DupValue(ctx, body_str);   /* text: unchanged (avoid regressing text->JSON.parse) */
     size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, body_str);
     JSValue parsed = s ? JS_ParseJSON(ctx, s, len, "<reply>") : JS_EXCEPTION;
     if (s) JS_FreeCString(ctx, s);
     if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return JS_DupValue(ctx, g_opaque); }
-    return concolic_wrap(ctx, parsed, "reply");   /* structure real; string/bool leaves concolic (fork + real example) */
+    return JS_ConcolicWrap(ctx, parsed, "reply");   /* structure real; string/bool leaves concolic (fork + real example) */
 }
 /* r.json()/r.text(): concrete body -> resolve it; else PARK (unresolved promise + pending) if the url is
    concrete (fetchable), so the offscreen provides the real reply IN PLACE; opaque if the url is a shape. */
@@ -1790,6 +1768,22 @@ static JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val) {   /* .
     if (!txt) return JS_NewString(ctx, "");
     JSValue r = JS_NewStringLen(ctx, (const char *)txt, len);
     lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
+    /* SSR DATA: a <script type=...json...> blob is server-injected app data (the TRUST boundary, like a
+       reply) — declared DATA, not executable code (real <script> code already ran as boot). Return it
+       CONCOLIC so JSON.parse of it FORKS gates on loaded values (`if(data.user.role==='admin')` -> the
+       logged-in/admin surface) while fields keep real examples. Matched by the server-DECLARED MIME type
+       (structural), never a bundle name. */
+    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
+    if (nm && nl == 6 && !memcmp(nm, "script", 6)) {
+        size_t tl = 0; const lxb_char_t *ty = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tl);
+        int is_json = 0;
+        for (size_t i = 0; ty && i + 4 <= tl; i++) if (!memcmp(ty + i, "json", 4)) { is_json = 1; break; }
+        if (is_json) {
+            JSValue o = JS_NewOpaqueSourced(ctx, "{ssr}", "ssr");
+            if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, r); return o; }   /* consumes r */
+            JS_FreeValue(ctx, o);
+        }
+    }
     return r;
 }
 /* ── Per-flow DOM COW isolation ──────────────────────────────────────────────────
