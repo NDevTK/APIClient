@@ -1623,20 +1623,13 @@ static void boot_script_cache(const char *txt, size_t len) {
 }
 static void boot_replay(JSContext *ctx) {
     g_boot_replay = 1;
+    /* The caller (boot_replay_candidate) UNAPPLIED g_boot_delta first, so boot's globals — including captured
+       top-level let/const CREATIONS — are ABSENT: re-declaration compiles cleanly at global scope. No block-
+       wrap workaround (dead once the COW captures let/const). A residual throw means an UNCAPTURED creation
+       (COW gap to close at the root) or a real host-edge divergence — surfaced, never swallowed. */
     for (int i = 0; i < g_boot_n; i++) {
-        size_t sl = strlen(g_boot_scripts[i]);
-        JSValue v = JS_Eval(ctx, g_boot_scripts[i], sl, "<boot-replay>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(v)) {
-            JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); JS_FreeValue(ctx, v);
-            /* A top-level let/const re-declaration is a COMPILE error (nothing ran) -> retry in a BLOCK so
-               the lexicals become block-scoped (re-runnable); a handler closing over `let d = source` then
-               captures the candidate. Only failing scripts are wrapped, so the common path is untouched. */
-            char *w = malloc(sl + 4);
-            if (w) { w[0] = '{'; w[1] = '\n'; memcpy(w + 2, g_boot_scripts[i], sl); w[sl + 2] = '\n'; w[sl + 3] = '}';
-                v = JS_Eval(ctx, w, sl + 4, "<boot-replay>", JS_EVAL_TYPE_GLOBAL); free(w); }
-            else v = JS_UNDEFINED;
-        }
-        if (JS_IsException(v)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }   /* swallow residual; partial state is still sound */
+        JSValue v = JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(v)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); printf("@WHY {\"phase\":\"boot-replay\",\"reason\":\"boot script threw on re-run (uncaptured global creation or host-edge divergence)\"}\n"); fflush(stdout); }
         JS_FreeValue(ctx, v);
     }
     g_boot_replay = 0;
