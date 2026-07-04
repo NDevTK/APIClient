@@ -699,33 +699,20 @@ static JSValue js_formdata_append(JSContext *ctx, JSValueConst this_val, int arg
     }
     return JS_UNDEFINED;
 }
-static JSValue js_formdata_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
-    if (!JS_IsObject(f)) { JS_FreeValue(ctx, f); return JS_NewString(ctx, ""); }
-    JSPropertyEnum *tab = NULL; uint32_t n = 0; char buf[1200]; int o = 0; buf[0] = 0;
-    if (JS_GetOwnPropertyNames(ctx, &tab, &n, f, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
-        for (uint32_t i = 0; i < n; i++) {
-            const char *k = JS_AtomToCString(ctx, tab[i].atom);
-            JSValue v = JS_GetProperty(ctx, f, tab[i].atom);
-            int free_vs = !JS_IsOpaque(v); const char *vs = free_vs ? JS_ToCString(ctx, v) : JS_OpaqueShapeC(v);
-            if (k && vs && o < (int)sizeof(buf) - 2) o += snprintf(buf + o, sizeof(buf) - o, "%s%s=%s", o ? "&" : "", k, vs);
-            if (k) JS_FreeCString(ctx, k);
-            if (vs && free_vs) JS_FreeCString(ctx, vs);
-            JS_FreeValue(ctx, v);
-        }
-        JS_FreePropertyEnum(ctx, tab, n);
-    }
-    JS_FreeValue(ctx, f);
-    return JS_NewStringLen(ctx, buf, o);
-}
+/* FormData shares the CONCOLIC serializer with URLSearchParams (js_sp_tostring, defined below): both store
+   __fields and serialize to "k=v&…" carrying the concrete example when known, the shape otherwise. So a
+   `fetch(url,{body:fd})` POST body surfaces REAL field values (the moat wants request-body examples, and a
+   POST is never fired to learn -> the example can only come from this forced-exec serialization). */
+static JSValue js_sp_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_formdata_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "__fields", JS_NewObject(ctx));
     JS_SetPropertyStr(ctx, o, "append", JS_NewCFunction(ctx, js_formdata_append, "append", 2));
     JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_formdata_append, "set", 2));
     JS_SetPropertyStr(ctx, o, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
     JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_opaque_stub, "has", 1));
     JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_noop, "delete", 1));
-    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_formdata_tostring, "toString", 0));
+    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
     return o;
 }
 /* navigator.sendBeacon(url, data): a real REQUEST (analytics/telemetry endpoint) — emit @H like fetch. */
@@ -853,7 +840,22 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
             JS_FreeValue(ctx, hdrs);
             JSValue body = JS_GetPropertyStr(ctx, init, "body");
             if (!JS_IsUndefined(body) && !JS_IsNull(body)) {
-                const char *bs = JS_ToCString(ctx, body);
+                const char *bs = NULL;
+                /* CONCOLIC body: a pre-stringified opaque (URLSearchParams(..).toString(), a concat) OR an
+                   OBJECT body (FormData) whose toString() returns a concolic opaque -> invoke toString to get
+                   the concolic serialization, then read its concrete EXAMPLE (the JS ToString coercion would
+                   otherwise flatten the opaque to its shape before we see the example). */
+                JSValue braw = JS_DupValue(ctx, body);
+                if (JS_IsObject(braw) && !JS_IsOpaque(braw)) {
+                    JSValue ts = JS_GetPropertyStr(ctx, braw, "toString");
+                    if (JS_IsFunction(ctx, ts)) { JSValue r = JS_Call(ctx, ts, braw, 0, NULL); if (!JS_IsException(r)) { JS_FreeValue(ctx, braw); braw = r; } else { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); } }
+                    JS_FreeValue(ctx, ts);
+                }
+                JSValue exbody = JS_OpaqueExample(ctx, braw);
+                if (!JS_IsUndefined(exbody)) bs = JS_ToCString(ctx, exbody);
+                JS_FreeValue(ctx, exbody);
+                if (!bs) bs = JS_ToCString(ctx, braw);          /* else the shape (opaque) or a plain string */
+                JS_FreeValue(ctx, braw);
                 if (bs && bs[0]) {
                     char *bsolved = url_solve_holes(ctx, bs);   /* value-solve {src} body holes the flow fixed (JSON.stringify keeps the shape now) */
                     JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bsolved ? bsolved : bs, 600));
