@@ -325,24 +325,40 @@ static const char *DEDUP_JS =
 "  }"
 "  var out=[];map.forEach(function(v){out.push(v);});return out;"
 "})";
-/* SELF-HOSTED Array.prototype.forEach: the C js_array_every holds its loop counter on the C STACK
-   across each callback JS_Call, so a fn recursing THROUGH the callback (node.children.forEach(walk))
-   C-recurses and overflows -- the continuation-holding re-entry the tail-forward trampoline cannot
-   reach. As bytecode, the loop is a HEAP frame and the callback dispatches via the (trampolined) call
-   path, so recursion through forEach is unbounded and snapshot/preempt/replay work at any iteration
-   depth (verified to depth 3000). Defined as a NON-CLOSURE (no IIFE, no captured var_refs, intrinsics
-   read as globals): an init-defined CLOSURE does NOT trampoline its deep recursion -- a real engine
-   defect at the pre-boot-baseline/var_ref boundary; a non-closure avoids it (init non-closures
-   trampoline, like the pages' own boot fns). `>>>0` is internal ToUint32 (exact for real arrays;
-   length>2^32 array-likes don't exist in practice). Spec-faithful: ToObject(this), HasProperty
-   (`k in O`) skips holes, (value,index,array) args, thisArg, returns undefined. */
+/* SELF-HOSTED Array.prototype iterators (forEach/map/filter/some/every): the C js_array_every holds
+   its loop counter/accumulator on the C STACK across each callback JS_Call, so a fn recursing THROUGH
+   the callback (node.children.forEach(walk)) C-recurses and overflows -- the continuation-holding
+   re-entry the tail-forward trampoline cannot reach. As bytecode, the loop is a HEAP frame and the
+   callback dispatches via the (trampolined) call path, so recursion through any of them is unbounded
+   and snapshot/preempt/replay work at any iteration depth (verified to depth 3000). Each is a
+   NON-CLOSURE (no IIFE, no captured var_refs, no shared helper -> no global pollution): an init-defined
+   CLOSURE does NOT trampoline its deep recursion -- a real engine defect at the pre-boot-baseline/
+   var_ref boundary; a non-closure avoids it (init non-closures trampoline, like the pages' boot fns).
+   `>>>0` is internal ToUint32 (exact for real arrays; length>2^32 array-likes don't exist in practice).
+   Spec-faithful: ToObject(this), HasProperty (`k in O`) skips holes, (value,index,array) args, thisArg,
+   early-exit for some/every, hole-preserving map. Deviation: map/filter build a plain Array (Symbol.
+   species not honored) -- effectively never overridden in real bundles. */
 static const char *ARRAY_PRELUDE_JS =
-"Object.defineProperty(Array.prototype,'forEach',{value:function forEach(cb,thisArg){"
+"Object.defineProperty(Array.prototype,'forEach',{writable:true,enumerable:false,configurable:true,value:function forEach(cb,thisArg){"
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.forEach: callback is not a function');"
 "  var O=Object(this),L=O.length>>>0;"
-"  for(var k=0;k<L;k++){if(k in O){cb.call(thisArg,O[k],k,O);}}"
-"  return undefined;"
-"},writable:true,enumerable:false,configurable:true});";
+"  for(var k=0;k<L;k++){if(k in O){cb.call(thisArg,O[k],k,O);}}return undefined;}});"
+"Object.defineProperty(Array.prototype,'map',{writable:true,enumerable:false,configurable:true,value:function map(cb,thisArg){"  /* holes preserved; species not honored (plain Array) */
+"  if(typeof cb!=='function')throw new TypeError('Array.prototype.map: callback is not a function');"
+"  var O=Object(this),L=O.length>>>0,A=new Array(L);"
+"  for(var k=0;k<L;k++){if(k in O){A[k]=cb.call(thisArg,O[k],k,O);}}return A;}});"
+"Object.defineProperty(Array.prototype,'filter',{writable:true,enumerable:false,configurable:true,value:function filter(cb,thisArg){"
+"  if(typeof cb!=='function')throw new TypeError('Array.prototype.filter: callback is not a function');"
+"  var O=Object(this),L=O.length>>>0,A=[],n=0;"
+"  for(var k=0;k<L;k++){if(k in O){var v=O[k];if(cb.call(thisArg,v,k,O))A[n++]=v;}}return A;}});"
+"Object.defineProperty(Array.prototype,'some',{writable:true,enumerable:false,configurable:true,value:function some(cb,thisArg){"  /* early-exit on first truthy */
+"  if(typeof cb!=='function')throw new TypeError('Array.prototype.some: callback is not a function');"
+"  var O=Object(this),L=O.length>>>0;"
+"  for(var k=0;k<L;k++){if(k in O){if(cb.call(thisArg,O[k],k,O))return true;}}return false;}});"
+"Object.defineProperty(Array.prototype,'every',{writable:true,enumerable:false,configurable:true,value:function every(cb,thisArg){"  /* early-exit on first falsy */
+"  if(typeof cb!=='function')throw new TypeError('Array.prototype.every: callback is not a function');"
+"  var O=Object(this),L=O.length>>>0;"
+"  for(var k=0;k<L;k++){if(k in O){if(!cb.call(thisArg,O[k],k,O))return false;}}return true;}});";
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
