@@ -2031,6 +2031,17 @@ static const char *refl_name(int magic) {   /* property magic -> the ATTRIBUTE i
         default: return "";
     }
 }
+/* BOOLEAN reflected props (checked/disabled/hidden/...): the PROPERTY is true iff the attribute is present.
+   undefined was falsy (no throw) but wrong — `el.checked===true` / faithful form state needs the real bool. */
+static const char *bool_name(int magic) {
+    switch (magic) { case 0: return "checked"; case 1: return "disabled"; case 2: return "hidden";
+        case 3: return "selected"; case 4: return "required"; case 5: return "readonly"; case 6: return "multiple"; default: return ""; }
+}
+static JSValue js_el_bool_get(JSContext *ctx, JSValueConst this_val, int magic) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_FALSE;
+    const char *n = bool_name(magic);
+    return lxb_dom_element_has_attribute(el, (const lxb_char_t *)n, strlen(n)) ? JS_TRUE : JS_FALSE;
+}
 /* tagName / nodeName: the element's tag, UPPERCASE for HTML (spec) — Lexbor lowercases. Real bundles branch
    on el.tagName constantly (`if(el.tagName==='A')`); undefined broke that. */
 static JSValue js_el_tagname(JSContext *ctx, JSValueConst this_val) {
@@ -2254,6 +2265,12 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     { JSAtom a = JS_NewAtom(ctx, "classList");
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_classlist_get, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, a); }
+    static const char *boolp[] = { "checked", "disabled", "hidden", "selected", "required", "readOnly", "multiple" };
+    for (int i = 0; i < (int)(sizeof boolp / sizeof boolp[0]); i++) {   /* boolean attribute-presence props */
+        JSAtom a = JS_NewAtom(ctx, boolp[i]);
+        JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_bool_get, "get", 0, JS_CFUNC_getter_magic, i), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, a);
+    }
     /* traversal getters -> real el_wrap'd nodes (property name : backing getter) */
     struct { const char *prop; JSCFunction *fn; } trav[] = {
         { "parentNode", (JSCFunction *)js_el_parent }, { "parentElement", (JSCFunction *)js_el_parent },
