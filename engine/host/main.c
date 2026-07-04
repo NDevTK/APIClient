@@ -1207,6 +1207,8 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
 {
     if (argc >= 1 && JS_IsFunction(ctx, argv[0]))
         reg_add(ctx, JS_DupValue(ctx, argv[0]), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+    else if (argc >= 1 && (JS_IsString(argv[0]) || JS_IsOpaque(argv[0])))
+        solve_add(ctx, "setTimeout", "js", argv[0]);   /* @S: setTimeout(STRING) EVALs the string -> js-context sink (like eval); string(candidate)+opaque(detect) both, like the other sinks */
     return JS_DupValue(ctx, g_opaque);
 }
 /* localStorage/sessionStorage.getItem(k): stored data is EXTERNAL INPUT (a token/flag put there earlier or
@@ -1863,6 +1865,12 @@ static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int arg
     /* baseline/opaque flow storing OPAQUE external input -> record the taint in the shadow (concrete value ->
        clear any stale taint). A candidate flow (concrete source) writes only the real attr, not the shadow. */
     if (!g_candidate) attr_shadow_set(ctx, el, name, is_opq ? argv[1] : JS_UNDEFINED);
+    /* @S: a tainted value written into an EXECUTABLE attribute. on* handler => the value IS js code (js
+       context); href/src/action => a javascript: URL (url context). Called unconditionally like the other
+       sinks so solve_add both DETECTS (opaque flow) and VERIFIES the breakout (candidate flow). */
+    if (name[0] == 'o' && name[1] == 'n') solve_add(ctx, "setAttribute", "js", argv[1]);
+    else if (!strcmp(name, "href") || !strcmp(name, "src") || !strcmp(name, "action") || !strcmp(name, "formaction"))
+        solve_add(ctx, "setAttribute", "url", argv[1]);
     const char *val = is_opq ? JS_OpaqueShapeC(argv[1]) : JS_ToCString(ctx, argv[1]);   /* opaque -> its @H shape (display); else the concrete string */
     if (val) { dom_attr_capture(el, name); lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val)); }
     if (val && !is_opq) JS_FreeCString(ctx, val);   /* JS_OpaqueShapeC returns an internal pointer — don't free */
