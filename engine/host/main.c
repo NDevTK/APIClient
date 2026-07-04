@@ -59,8 +59,12 @@ typedef struct {
                             attacker firing a sequence of events — the sound way to reach cross-handler sinks. */
     char *vtarget;       /* @S candidate flow: the "sink|ctx" it verifies. Once that's in g_verified, this flow is
                             REDUNDANT (another candidate already broke out) -> skip it, saving a full bundle re-run. */
+    int is_boot;         /* BOOT FLOW: re-run the page's boot (inline scripts) from the PRISTINE pre-boot baseline as a
+                            FORKING starter, so an async reply (now cached, resolves synchronously on re-run) drives its
+                            continuation's gated branches WITH the concolic example — the faithful boot-as-flow. */
 } Flow;
 static int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
+static int g_in_boot_flow = 0; /* a BOOT flow is re-running boot: fork boot siblings; suppress handler re-registration */
 static Flow   *g_reg = NULL;
 static int     g_reg_n = 0, g_reg_cap = 0;
 static int     g_running = 0;
@@ -216,6 +220,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].cow = NULL; g_reg[g_reg_n].cow_n = 0; g_reg[g_reg_n].cow_cap = 0;
     g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
+    g_reg[g_reg_n].is_boot = 0;
     g_reg_n++; return 1;
 }
 
@@ -878,10 +883,11 @@ static void emit_result(JSContext *ctx) {
    engine's OP_if hook when a branch condition is OPAQUE (real bundles). Forced replay of this flow's
    decision prefix; a NEW decision forks the FALSE sibling (re-run the same function) and takes TRUE. */
 static int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a cross-flow @S candidate */
+static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n);   /* fwd: defined near boot_replay */
 static int branch_decide(JSContext *ctx, JSValueConst cond)
 {
     if (g_boot_replay || g_in_session) return 1;            /* boot-replay / attacker-session: take a fixed arm (per-handler branch exploration is the individual orphan flows' job) */
-    if (!g_running || JS_IsUndefined(g_cur_fn)) return 0;   /* only meaningful inside a starter flow */
+    if (!g_running || (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow)) return 0;   /* meaningful inside a starter flow OR a boot flow (which has no fn handle — it re-runs boot) */
     /* value-domain provenance of the condition: cond TRUE means `src <op> tok`; false arm holds the negation. */
     const char *src = NULL, *tok = NULL; int op = JS_OpaqueCmp(cond, &src, &tok);
     int has = (op != OPCMP_NONE) && src;
@@ -904,8 +910,9 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
     if (sib) {
         for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
         sib[g_c] = 0;
-        reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, 0, sib, g_c + 1);
-        g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;   /* sibling = same function (same locator), different decisions */
+        if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);   /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
+        else { reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, 0, sib, g_c + 1);
+               g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx; }   /* sibling = same function (same locator), different decisions */
     }
     cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE);
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
@@ -1095,6 +1102,7 @@ static void replay_handlers_clear(JSContext *ctx) {
 }
 static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
     JSValueConst h0 = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
+    if (g_in_boot_flow) return JS_UNDEFINED;   /* boot flow re-run: handlers already registered by the initial boot — don't duplicate g_handlers */
     if (g_boot_replay) {   /* capture the re-registered handler (candidate closure) for re-resolution; don't grow g_handlers */
         if (JS_IsFunction(ctx, h0)) {
             if (g_replay_handler_n >= g_replay_handler_cap) { int nc = g_replay_handler_cap ? g_replay_handler_cap * 2 : 16;
@@ -1627,18 +1635,26 @@ static void boot_script_cache(const char *txt, size_t len) {
         char **n = realloc(g_boot_scripts, (size_t)nc * sizeof(char *)); if (!n) return; g_boot_scripts = n; g_boot_cap = nc; }
     char *s = malloc(len + 1); if (!s) return; memcpy(s, txt, len); s[len] = 0; g_boot_scripts[g_boot_n++] = s;
 }
-static void boot_replay(JSContext *ctx) {
-    g_boot_replay = 1;
-    /* The caller (boot_replay_candidate) UNAPPLIED g_boot_delta first, so boot's globals — including captured
-       top-level let/const CREATIONS — are ABSENT: re-declaration compiles cleanly at global scope. No block-
-       wrap workaround (dead once the COW captures let/const). A residual throw means an UNCAPTURED creation
-       (COW gap to close at the root) or a real host-edge divergence — surfaced, never swallowed. */
+/* Re-run the page's inline boot scripts per-script at GLOBAL scope (faithful — top-level var/let/const/function
+   land exactly where the browser puts them). The CALLER unapplies g_boot_delta first, so boot's globals —
+   including captured let/const CREATIONS — are ABSENT: re-declaration compiles cleanly, no block-wrap. A
+   residual throw means an UNCAPTURED creation (COW gap to close at the root) or a real host-edge divergence —
+   surfaced via @WHY, never swallowed. Branch behaviour is the caller's (g_boot_replay=1 fixed-arm for @S
+   candidates; g_in_boot_flow=1 FORKING for a boot flow). */
+static void boot_scripts_run(JSContext *ctx) {
     for (int i = 0; i < g_boot_n; i++) {
         JSValue v = JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsException(v)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); printf("@WHY {\"phase\":\"boot-replay\",\"reason\":\"boot script threw on re-run (uncaptured global creation or host-edge divergence)\"}\n"); fflush(stdout); }
         JS_FreeValue(ctx, v);
     }
-    g_boot_replay = 0;
+}
+static void boot_replay(JSContext *ctx) { g_boot_replay = 1; boot_scripts_run(ctx); g_boot_replay = 0; }
+/* Enqueue a BOOT FLOW: re-run boot as a FORKING starter (decision vector), so cached async replies resolve
+   synchronously and their continuations' gated branches fork with the concolic example. */
+static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n) {
+    if (!reg_add(ctx, JS_UNDEFINED, 1.3, 0, dec, dec_n)) return 0;
+    g_reg[g_reg_n - 1].is_boot = 1;
+    return 1;
 }
 /* BOOT AS THE FIRST FLOW: the page's boot (its inline scripts) is captured as a COW DELTA — g_boot_delta —
    exactly like any flow (mutations + global CREATIONS). It stays APPLIED between opaque flows (its effects
@@ -1959,6 +1975,30 @@ static void scheduler_run(JSContext *ctx)
             dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
             if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }
             g_candidate = NULL; g_running = 0; g_cur_flow = NULL;
+            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
+            continue;
+        }
+
+        if (f.is_boot) {
+            /* BOOT FLOW: re-run boot from the PRISTINE pre-boot baseline as a FORKING starter. Cached replies
+               resolve synchronously (make_response injects __body), so a reply-consuming continuation runs
+               IN-LINE and its gated branches FORK with the concolic example (unreachable via the non-forking
+               promise-resume). Runs to completion (no mid-boot preempt); COW-isolated + reverted like any flow. */
+            g_cur_fn = JS_UNDEFINED;
+            g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);
+            for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
+            g_c = 0; cons_reset();
+            JS_SetFlowYieldHook(NULL);
+            if (g_boot_delta) { JS_CowBufLoad(g_boot_delta, g_boot_delta_n, g_boot_delta_cap); JS_CowUnapply(ctx);   /* heap -> pre-boot (globals incl let/const deleted) */
+                                g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap); }
+            g_in_boot_flow = 1;
+            boot_scripts_run(ctx);                                        /* re-run boot, FORKING; cached replies resolve sync */
+            { JSContext *cb; int jr; while ((jr = JS_ExecutePendingJob(g_rt, &cb)) > 0) { } if (jr < 0) js_std_dump_error(cb ? cb : ctx); }   /* drain continuations (they fork too) */
+            g_in_boot_flow = 0;
+            JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* discard this flow's writes -> pre-boot */
+            dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
+            JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1);   /* reapply g_boot_delta -> post-boot baseline for the next opaque flow */
+            g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
             JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
             continue;
         }
@@ -2376,7 +2416,16 @@ KEEP void qjs_provide(const char *url, const char *body)
         return;
     }
     int has = body && body[0];
-    if (has && JS_IsObject(g_reply_table)) JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));
+    if (has) {
+        /* CACHE the reply so a re-run's make_response injects __body (r.json()/r.text() -> CONCOLIC synchronously),
+           creating g_reply_table if the host seeded none. On a NEW url, enqueue a FORKING BOOT FLOW: it re-runs
+           boot with this reply now synchronous, so a reply-GATED continuation forks WITH the concolic example
+           (the value reaches gated fetches, not just ungated). */
+        if (!JS_IsObject(g_reply_table)) { JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_NewObject(ctx); }
+        JSValue prev = JS_GetPropertyStr(ctx, g_reply_table, url); int is_new = !JS_IsString(prev); JS_FreeValue(ctx, prev);
+        JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));
+        if (is_new && g_boot_n > 0) reg_add_boot(ctx, NULL, 0);
+    }
     for (int i = 0; i < g_pending_n; i++) {
         if (!g_pending[i].url || strcmp(g_pending[i].url, url) != 0) continue;
         JSValue v;
