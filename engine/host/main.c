@@ -1555,6 +1555,11 @@ static JSValue js_location_href_set(JSContext *ctx, JSValueConst t, JSValueConst
     return JS_UNDEFINED;
 }
 static JSValue g_location = JS_UNDEFINED;   /* the location object; window.location is a getset over it so `location = url` is a nav sink */
+/* document.currentScript: the executing <script> element during boot — the CONFIG-INJECTION source (an embed
+   reads `document.currentScript.dataset.apiKey` / .getAttribute('data-endpoint')). Set per-script in
+   dom_run_scripts, NULL otherwise. */
+static JSValue g_current_script = JS_NULL;
+static JSValue js_doc_currentscript(JSContext *ctx, JSValueConst t) { return JS_DupValue(ctx, g_current_script); }
 static JSValue js_window_location_get(JSContext *ctx, JSValueConst t) { return JS_DupValue(ctx, g_location); }
 static JSValue js_window_location_set(JSContext *ctx, JSValueConst t, JSValueConst val) {
     solve_add(ctx, "location", "url", val);   /* @S: `location = url` / `window.location = url` navigation */
@@ -2535,7 +2540,9 @@ static void dom_run_scripts(JSContext *ctx) {
             boot_script_cache((const char *)txt, tl);   /* cache for cross-flow @S candidate boot-replay */
             size_t tyl = 0; const lxb_char_t *ty = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tyl);
             int is_mod = ty && tyl == 6 && memcmp(ty, "module", 6) == 0;   /* the browser's real signal */
+            g_current_script = el_wrap(ctx, el);   /* document.currentScript during this inline script */
             eval_page_script(ctx, (const char *)txt, tl, "<script>", is_mod);
+            JS_FreeValue(ctx, g_current_script); g_current_script = JS_NULL;
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
@@ -3018,6 +3025,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
           JS_FreeAtom(ctx, a); }
         JS_SetPropertyStr(ctx, doc, "forms", dom_select_all(ctx, NULL, "form", 4));
         JS_SetPropertyStr(ctx, doc, "scripts", dom_select_all(ctx, NULL, "script", 6));
+        { JSAtom a = JS_NewAtom(ctx, "currentScript");   /* getter: the executing script, changes per inline script */
+          JS_DefinePropertyGetSet(ctx, doc, a, JS_NewCFunction2(ctx, (JSCFunction *)js_doc_currentscript, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+          JS_FreeAtom(ctx, a); }
         JS_SetPropertyStr(ctx, g, "document", doc);
     }
     /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
