@@ -3005,6 +3005,19 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, doc, "writeln", JS_NewCFunction(ctx, js_doc_write, "writeln", 1));
         JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
         JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
+        /* Common document members real bundles read (undefined broke `documentElement.x`, a readyState gate,
+           document.location.href, `for(form of document.forms)`). documentElement = <html>; readyState is
+           COMPLETE (boot ran -> a ready gate takes the ready arm / init() runs); location aliases
+           window.location (getset -> `document.location = url` is still a nav @S sink); forms/scripts are
+           snapshots of the shipped structure. */
+        JS_SetPropertyStr(ctx, doc, "documentElement", el_wrap(ctx, dom_select_first(NULL, "html", 4)));
+        JS_SetPropertyStr(ctx, doc, "readyState", JS_NewString(ctx, "complete"));
+        { JSAtom a = JS_NewAtom(ctx, "location");
+          JS_DefinePropertyGetSet(ctx, doc, a, JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_get, "get", 0, JS_CFUNC_getter, 0),
+              JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_set, "set", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
+          JS_FreeAtom(ctx, a); }
+        JS_SetPropertyStr(ctx, doc, "forms", dom_select_all(ctx, NULL, "form", 4));
+        JS_SetPropertyStr(ctx, doc, "scripts", dom_select_all(ctx, NULL, "script", 6));
         JS_SetPropertyStr(ctx, g, "document", doc);
     }
     /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
