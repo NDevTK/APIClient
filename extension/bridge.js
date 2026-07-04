@@ -97,13 +97,18 @@ async function frontierAll() {
   try { const db = await idbOpen(); return await new Promise((res) => { const t = db.transaction("frontier").objectStore("frontier").getAll(); t.onsuccess = () => res(t.result || []); t.onerror = () => res([]); }); }
   catch (_) { return []; }
 }
-/* The ONE WFQ weight at the HOST level: a parked frontier's value-of-information = epRate (emits per
-   visit) + an explore/fairness floor for under-visited frontiers. Same formula the C engine owns
-   (flow_weight) -- one attention, two levels; the JS mirror lib/priority.js was DELETED. */
+/* HOST-level value-of-information for a PARKED frontier's rehydration order. It shares the engine's WFQ
+   POLICY (rank by value + an exploration bonus, never drop a work item) but NOT the engine's exact formula:
+   flow_weight is additive `val + optimism − per-opcode cpu-aging`; a parked frontier has no live per-opcode
+   CPU to age by, so its expected FUTURE productivity is best estimated by emit-per-VISIT (efficiency),
+   guarded against 0/0 on an unvisited entry (so the spec's anti-ratio point — the 0/0 degeneracy on unrun
+   LIVE flows — doesn't apply here). Same attention, two levels; the estimator adapts to each level's
+   granularity. The duplicate JS scheduler lib/priority.js was DELETED. */
 function frontierWeight(e) {
-  const epRate = (e && e.visits) ? (e.emit || 0) / e.visits : (e && e.emit || 0);
-  const exploreBonus = 1 / ((e && e.visits || 0) + 1);
-  return 1 + epRate + exploreBonus;   // same WFQ formula the C engine owns (flow_weight); lib/priority.js DELETED
+  const emit = (e && e.emit) || 0, visits = (e && e.visits) || 0;
+  const rate = visits ? emit / visits : emit;   // expected emit per rehydration — future productivity, not raw total
+  const exploreBonus = 1 / (visits + 1);         // optimism: never starve an unvisited / under-visited frontier
+  return 1 + rate + exploreBonus;
 }
 /* No separate cold-tier scheduler: parked frontiers are rehydrated into the SAME pool by _hostOps.admit
    (ranked by frontierWeight, gated by the RAM budget) when live work drains — ONE WFQ, not two loops. */
