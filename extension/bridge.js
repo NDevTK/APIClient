@@ -28,8 +28,10 @@ const hasHole = (s) => HOLE.test(s || "");
 function linesToAnalysis(lines, msg) {
   let result = null;
   const extraErrors = [];
+  let resumed = 0;
   for (const raw of lines) {
     const ln = String(raw);
+    if (ln.startsWith("@RESUMED ")) { resumed = parseInt(ln.slice(9), 10) || 0; continue; }
     if (ln.startsWith("@RESULT ")) {
       try { result = JSON.parse(ln.slice(8)); }
       catch (e) { extraErrors.push({ context: "result-parse", message: String(e && e.message || e), snippet: null, replyExample: null }); }
@@ -46,7 +48,14 @@ function linesToAnalysis(lines, msg) {
   // Surface the scheduler's interleave counter so fairness/deep-preemption is OBSERVABLE (verification +
   // a real signal that the single BFS actually context-switches, not just runs FIFO). A cumulative global
   // across steps; the mapped field carries the per-result value.
-  try { self._engineMeta = { switches: result._switches || 0, orphans: result._orphans || 0, park: (result._park || []).length }; } catch (_) {}
+  try {
+    const m = { switches: result._switches || 0, orphans: result._orphans || 0, park: (result._park || []).length, resumed: resumed, work: result._work || 0, quantum: result._quantum || 0, url: (msg && msg.sourceUrl) || "" };
+    self._engineMeta = m;
+    // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
+    // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
+    (self._engineLog = self._engineLog || []).push(m);
+    if (self._engineLog.length > 200) self._engineLog.shift();
+  } catch (_) {}
   return {
     _switches: result._switches || 0,
     fetchCallSites: result.fetchCallSites || [],

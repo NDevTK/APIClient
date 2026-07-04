@@ -1135,6 +1135,8 @@ static void emit_result(JSContext *ctx) {
     JS_SetPropertyStr(ctx, result, "_orphans", JS_NewInt32(ctx, g_orphan_n));
     JS_SetPropertyStr(ctx, result, "_emit", JS_NewInt32(ctx, g_emit_total));
     JS_SetPropertyStr(ctx, result, "_switches", JS_NewInt64(ctx, g_switches));   /* flow interleave events (fairness, incl. at depth) */
+    JS_SetPropertyStr(ctx, result, "_work", JS_NewInt64(ctx, g_work));           /* flow dispatches this run (vs _quantum -> did it PARK?) */
+    JS_SetPropertyStr(ctx, result, "_quantum", JS_NewInt32(ctx, g_quantum));     /* host CPU slice (0 = run to completion, never parks) */
     JSValue json = JS_JSONStringify(ctx, result, JS_UNDEFINED, JS_UNDEFINED);
     JS_FreeValue(ctx, result);
     if (JS_IsString(json)) { const char *js = JS_ToCString(ctx, json); if (js) { printf("@RESULT %s\n", js); JS_FreeCString(ctx, js); } }
