@@ -179,6 +179,14 @@ function _evictReviewedDoc(documentId) {
   _contentPings.delete(documentId);
 }
 
+// Shape/template holes ({}, {id}) survive new URL().href/.pathname as %7B..%7D (the WHATWG path
+// percent-encode set includes {}). Decode so a learned endpoint URL/path keeps the canonical hole the
+// dedup + UI recognize. Idempotent — normal URLs never contain %7B — so applying it broadly is safe.
+// The single home for this decode (previously duplicated inline at several endpoint builders).
+function _decHoles(s) {
+  return typeof s === "string" ? s.replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}") : s;
+}
+
 // A document's SECURITY ORIGIN for same-origin checks — the BROWSER-provided
 // MessageSender.origin of the REQUESTING FRAME (authoritative), NEVER parsed from
 // sender.url/tab.url and NEVER the top frame's: a page can sandbox its own iframes,
@@ -1257,12 +1265,7 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
     };
   }
 
-  // __feUrlShape path-template params ({id}) survive new URL() as
-  // %7B..%7D (the WHATWG path percent-encode set includes {}); decode so
-  // a templated method reads `{id}`, not `%7Bid%7D`. Harmless for normal
-  // paths — they never contain %7B.
-  const _decTpl = (s) => s.replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}");
-  const segments = urlObj.pathname.split("/").filter(Boolean).map(_decTpl);
+  const segments = urlObj.pathname.split("/").filter(Boolean).map(_decHoles);
   const interfaceParts = interfaceName.split("/");
 
   // Method segments are everything after the interface prefix
@@ -1442,7 +1445,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   if (!doc.resources.learned.methods[methodName] && !probedMethod) {
     doc.resources.learned.methods[methodName] = {
       id: methodId,
-      path: csUrl.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
+      path: _decHoles(csUrl.pathname.substring(1)),
       httpMethod: callSite.method,
       parameters: {},
       request: null,
@@ -1935,7 +1938,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
   if (!doc.resources.learned.methods[methodName] && !probedMethod) {
     doc.resources.learned.methods[methodName] = {
       id: methodId,
-      path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
+      path: _decHoles(url.pathname.substring(1)),
       httpMethod: method,
       parameters: {},
       request: null,
@@ -2023,7 +2026,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
           if (!doc.resources.learned.methods[call.rpcId]) {
             doc.resources.learned.methods[call.rpcId] = {
               id: callMethodId,
-              path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
+              path: _decHoles(url.pathname.substring(1)),
               httpMethod: "POST",
               parameters: {},
               request: null,
@@ -2621,7 +2624,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
         if (!callM) {
           doc.resources.learned.methods[chunkKey] = {
             id: `${interfaceName.replace(/\//g, ".")}.${chunkKey}`,
-            path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
+            path: _decHoles(url.pathname.substring(1)),
             httpMethod: entry.method || "GET",
             parameters: {},
             request: null,
@@ -2653,7 +2656,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
         if (!callM) {
           doc.resources.learned.methods[res.rpcId] = {
             id: `${interfaceName.replace(/\//g, ".")}.${res.rpcId}`,
-            path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
+            path: _decHoles(url.pathname.substring(1)),
             httpMethod: "POST",
             parameters: {},
             request: null,
@@ -2773,7 +2776,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
             if (!partM) {
               doc.resources.learned.methods[partKey] = {
                 id: `${interfaceName.replace(/\//g, ".")}.${partKey}`,
-                path: url.pathname.substring(1).replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
+                path: _decHoles(url.pathname.substring(1)),
                 httpMethod: entry.method || "POST",
                 parameters: {},
                 request: null,
@@ -5195,7 +5198,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
                   var _epk = "replyex " + _chainMethod + " " + _eu.host + _eu.pathname;
                   if (!tab.endpoints.has(_epk)) {
                     tab.endpoints.set(_epk, {
-                      url: _eu.href, method: _chainMethod, host: _eu.host, path: _eu.pathname,
+                      url: _decHoles(_eu.href), method: _chainMethod, host: _eu.host, path: _decHoles(_eu.pathname),
                       service: extractInterfaceName(_eu), source: "reply_example",
                       valueSource: "reply-example", replyFrom: { endpoint: _srcEp, field: Object.keys(_ex).join(",") },
                       pageUrl: _rcPrincipal, firstSeen: Date.now(),
@@ -5637,7 +5640,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
         // %7B/%7D. Decode so the learned endpoint path keeps the OpenAPI
         // template ({id}) instead of %7Bid%7D — used for BOTH the dedup key
         // and the stored path so they stay consistent.
-        var _csPath = csUrl.pathname.replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}");
+        var _csPath = _decHoles(csUrl.pathname);
         var epKey = isDynamic
           ? "AST DYN " + bundleId + " " + (callSite.enclosingFunction || "anon") + " " + callSite.method + " " + fc
           : "AST " + callSite.method + " " + csUrl.hostname + _csPath;   // include HOST: an endpoint is method+host+path. Path-only collapsed same-path endpoints across DIFFERENT hosts (and across sites in the cumulative store) → lost the moat's "many sites per session" surface. Mirrors the network key (method + hostname + pathname).
@@ -5667,7 +5670,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
           tab.endpoints.set(epKey, {
             // new URL().href percent-encodes shape holes ({} -> %7B%7D); decode so the endpoint URL keeps
             // the canonical `{}` param placeholder the dedup/UI recognize (path is already decoded via _csPath).
-            url: isDynamic ? callSite.url : csUrl.href.replace(/%7[Bb]/g, "{").replace(/%7[Dd]/g, "}"),
+            url: isDynamic ? callSite.url : _decHoles(csUrl.href),
             method: callSite.method,
             host: isDynamic ? sourceHost : csUrl.hostname,
             path: isDynamic ? callSite.url : _csPath,
@@ -5716,10 +5719,10 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
         var deKey = "DOM " + (domEp.source || "html") + " " + deResolved.href;
         if (tab.endpoints.has(deKey)) continue;
         tab.endpoints.set(deKey, {
-          url: deResolved.href,
+          url: _decHoles(deResolved.href),
           method: "?",
           host: deResolved.hostname,
-          path: deResolved.pathname,
+          path: _decHoles(deResolved.pathname),
           service: extractInterfaceName(deResolved),
           source: "dom_" + (domEp.source || "html").replace(/-/g, "_"),
           pageUrl: deBase,
