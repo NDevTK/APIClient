@@ -925,6 +925,45 @@ static void gate_collect(const char *token) {
         char **n = realloc(g_gate_tokens, (size_t)nc * sizeof(char *)); if (!n) return; g_gate_tokens = n; g_gate_cap = nc; }
     g_gate_tokens[g_gate_n++] = strdup(token);
 }
+static int mem_has_x9(const lxb_char_t *s, size_t n) {   /* the X9 fire-marker survives, as raw bytes (values aren't null-terminated) */
+    if (!s) return 0;
+    for (size_t i = 0; i + 1 < n; i++) if (s[i] == 'X' && s[i + 1] == '9') return 1;
+    return 0;
+}
+struct x9_walk { int found; };
+static lxb_status_t x9_walk_cb(lxb_dom_node_t *node, void *vctx) {
+    struct x9_walk *c = vctx;
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return LXB_STATUS_OK;
+    lxb_dom_element_t *el = lxb_dom_interface_element(node);
+    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);   /* <script>...X9...</script> executes */
+    if (nl == 6 && nm && memcmp(nm, "script", 6) == 0) {
+        size_t cl = 0; lxb_char_t *ct = lxb_dom_node_text_content(lxb_dom_interface_node(node), &cl);
+        if (mem_has_x9(ct, cl)) { c->found = 1; return LXB_STATUS_STOP; }
+    }
+    for (lxb_dom_attr_t *a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
+        size_t al = 0; const lxb_char_t *an = lxb_dom_attr_local_name(a, &al);   /* on* event handler with X9 -> a LIVE handler (Lexbor lowercases names) */
+        if (al >= 3 && an && an[0] == 'o' && an[1] == 'n') {
+            size_t vl = 0; const lxb_char_t *av = lxb_dom_attr_value(a, &vl);
+            if (mem_has_x9(av, vl)) { c->found = 1; return LXB_STATUS_STOP; }
+        }
+    }
+    return LXB_STATUS_OK;
+}
+/* PARSE the sink string like a real browser (Lexbor) and check X9 reached an EXECUTABLE position: a live
+   element's on* handler, or <script> content. A tag opener trapped inside an ATTRIBUTE value
+   (href="<img onerror=X9>") or in TEXT (&lt;img..) is INERT -> NOT a breakout. Replaces the naive
+   strstr("<img") which false-positived whenever a raw tag survived ANYWHERE, incl. attribute-trapped. */
+static int solve_broke_html(const char *res) {
+    lxb_html_document_t *doc = lxb_html_document_create();
+    if (!doc) return 0;
+    struct x9_walk c = { 0 };
+    if (lxb_html_document_parse(doc, (const lxb_char_t *)res, strlen(res)) == LXB_STATUS_OK) {
+        lxb_dom_node_t *root = lxb_dom_interface_node(lxb_html_document_body_element(doc));
+        if (root) lxb_dom_node_simple_walk(root, x9_walk_cb, &c);
+    }
+    lxb_html_document_destroy(doc);
+    return c.found;
+}
 /* context-aware breakout: did the candidate's active payload reach an EXECUTABLE position in `res`? */
 static int solve_broke(const char *sc, const char *res) {
     if (!res) return 0;
@@ -942,8 +981,10 @@ static int solve_broke(const char *sc, const char *res) {
         int fired = JS_ToBool(g_solve_ctx, fv); JS_FreeValue(g_solve_ctx, fv);
         return fired;
     }
-    /* html/attr: a RAW payload tag opener survived (if '<' was escaped to &lt; these are absent) */
-    return strstr(res, "<img") || strstr(res, "<svg") || strstr(res, "<script") || strstr(res, "<iframe");
+    /* html/attr: PARSE like a browser and require X9 in an EXECUTABLE position (live on* handler / <script>),
+       not merely a raw tag opener surviving somewhere (that false-positives when the payload is trapped in an
+       attribute value, e.g. `<a href="<img onerror=X9>">`). */
+    return solve_broke_html(res);
 }
 /* enqueue an @S REPLAY flow: re-run the CURRENT orphan with `cand` as the concrete source, driven by the
    ONE scheduler (high initial value so the search runs soon; transient — never parked as a recipe). */
