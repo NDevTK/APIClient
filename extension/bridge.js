@@ -43,7 +43,12 @@ function linesToAnalysis(lines, msg) {
     }
   }
   result = result || {};
+  // Surface the scheduler's interleave counter so fairness/deep-preemption is OBSERVABLE (verification +
+  // a real signal that the single BFS actually context-switches, not just runs FIFO). A cumulative global
+  // across steps; the mapped field carries the per-result value.
+  try { self._engineMeta = { switches: result._switches || 0, orphans: result._orphans || 0, park: (result._park || []).length }; } catch (_) {}
   return {
+    _switches: result._switches || 0,
     fetchCallSites: result.fetchCallSites || [],
     resolverErrors: (result.resolverErrors || []).concat(extraErrors),
     chunkUrls: result.chunkUrls || [],
