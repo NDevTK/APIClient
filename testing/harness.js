@@ -157,7 +157,7 @@ async function getPopupPage(browser) {
 // Data / the "Service Worker" dir (deleting the SW dir breaks the extension's
 // background SW startup → no offscreen doc → analysis never runs) and the rest of
 // the profile so authenticated sites stay logged in. Use after `node engine/build.mjs stage`.
-async function cmdRestart(args) {
+async function cmdRestart(args, keepIdb) {
   const lock = await readLock();
   if (lock && lock.pid) {
     try {
@@ -182,8 +182,14 @@ async function cmdRestart(args) {
   // IndexedDB (learned-state reset) + V8 Code Cache (so a rebuilt wasm blob is NOT
   // served from a stale compiled-bytecode entry — see the header comment). Both are
   // pure caches; cookies/login live in other dirs and survive.
-  try { await fsp.rm(path.join(PROFILE_DIR, "Default/IndexedDB"), { recursive: true, force: true }); log("cleared Default/IndexedDB"); }
-  catch (e) { /* absent dir is fine */ }
+  // `restart-keep` PRESERVES IndexedDB so cross-SESSION resume (the UNBOUNDED frontier surviving a browser
+  // restart — a core design claim) is verifiable on the REAL thing: park recipes, restart-keep, re-visit,
+  // confirm they rehydrate. Plain `restart` still wipes IDB for a clean-state test.
+  if (keepIdb) { log("KEEPING Default/IndexedDB (cross-session resume test)"); }
+  else {
+    try { await fsp.rm(path.join(PROFILE_DIR, "Default/IndexedDB"), { recursive: true, force: true }); log("cleared Default/IndexedDB"); }
+    catch (e) { /* absent dir is fine */ }
+  }
   try { await fsp.rm(path.join(PROFILE_DIR, "Default/Code Cache"), { recursive: true, force: true }); log("cleared Default/Code Cache"); }
   catch (e) { /* absent dir is fine */ }
   await cmdStart(args);
@@ -1314,7 +1320,7 @@ async function cmdNetDiff(args) {
 }
 
 
-const CMDS = { start: cmdStart, restart: cmdRestart, page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, profile: cmdProfile, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, learnstate: cmdLearnState, reachgap: cmdReachGap, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
+const CMDS = { start: cmdStart, restart: cmdRestart, "restart-keep": (a) => cmdRestart(a, true), page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, profile: cmdProfile, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, learnstate: cmdLearnState, reachgap: cmdReachGap, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
