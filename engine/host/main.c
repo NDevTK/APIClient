@@ -646,6 +646,48 @@ static JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueCo
 }
 /* WebSocket / EventSource: `new X(url)` — the url IS an endpoint (WS/SSE handshake is a GET), emit it. The
    object has send/close/addEventListener (onmessage handler -> driven) so real usage never throws. */
+/* FormData: a real object recording append()/set() fields, so a `fetch(url,{body:fd})` POST surfaces the
+   real request params (name=value&…) instead of an opaque body. Opaque (external-input) field values keep
+   their shape. js_fetch's JS_ToCString(body) invokes toString -> the serialization. */
+static JSValue js_formdata_append(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 2) {
+        JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
+        if (!JS_IsObject(f)) { JS_FreeValue(ctx, f); f = JS_NewObject(ctx); JS_SetPropertyStr(ctx, this_val, "__fields", JS_DupValue(ctx, f)); }
+        const char *k = JS_ToCString(ctx, argv[0]);
+        if (k) { JS_SetPropertyStr(ctx, f, k, JS_DupValue(ctx, argv[1])); JS_FreeCString(ctx, k); }
+        JS_FreeValue(ctx, f);
+    }
+    return JS_UNDEFINED;
+}
+static JSValue js_formdata_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
+    if (!JS_IsObject(f)) { JS_FreeValue(ctx, f); return JS_NewString(ctx, ""); }
+    JSPropertyEnum *tab = NULL; uint32_t n = 0; char buf[1200]; int o = 0; buf[0] = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &n, f, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        for (uint32_t i = 0; i < n; i++) {
+            const char *k = JS_AtomToCString(ctx, tab[i].atom);
+            JSValue v = JS_GetProperty(ctx, f, tab[i].atom);
+            int free_vs = !JS_IsOpaque(v); const char *vs = free_vs ? JS_ToCString(ctx, v) : JS_OpaqueShapeC(v);
+            if (k && vs && o < (int)sizeof(buf) - 2) o += snprintf(buf + o, sizeof(buf) - o, "%s%s=%s", o ? "&" : "", k, vs);
+            if (k) JS_FreeCString(ctx, k);
+            if (vs && free_vs) JS_FreeCString(ctx, vs);
+            JS_FreeValue(ctx, v);
+        }
+        JS_FreePropertyEnum(ctx, tab, n);
+    }
+    JS_FreeValue(ctx, f);
+    return JS_NewStringLen(ctx, buf, o);
+}
+static JSValue js_formdata_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "append", JS_NewCFunction(ctx, js_formdata_append, "append", 2));
+    JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_formdata_append, "set", 2));
+    JS_SetPropertyStr(ctx, o, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
+    JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_opaque_stub, "has", 1));
+    JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_noop, "delete", 1));
+    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_formdata_tostring, "toString", 0));
+    return o;
+}
 /* navigator.sendBeacon(url, data): a real REQUEST (analytics/telemetry endpoint) — emit @H like fetch. */
 static JSValue js_send_beacon(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc >= 1) {
@@ -2669,8 +2711,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, g, "Request", JS_NewCFunction2(ctx, js_request_ctor, "Request", 2, JS_CFUNC_constructor, 0));
         /* fetch-API + encoding + misc Web objects: opaque-read / no-op-write, so a bundle that constructs
            them doesn't ReferenceError and any value read out stays opaque. */
-        const char *webctors[] = { "Headers", "Response", "FormData", "Blob", "File", "AbortController",
-                                   "TextEncoder", "TextDecoder", "FileReader", "BroadcastChannel" };   /* EventSource -> js_ws_ctor (emits the SSE url) */
+        JS_SetPropertyStr(ctx, g, "FormData", JS_NewCFunction2(ctx, js_formdata_ctor, "FormData", 0, JS_CFUNC_constructor, 0));   /* real: records fields -> POST body params */
+        const char *webctors[] = { "Headers", "Response", "Blob", "File", "AbortController",
+                                   "TextEncoder", "TextDecoder", "FileReader", "BroadcastChannel" };   /* EventSource -> js_ws_ctor; FormData -> js_formdata_ctor */
         for (size_t wi = 0; wi < sizeof webctors / sizeof webctors[0]; wi++)
             JS_SetPropertyStr(ctx, g, webctors[wi], JS_NewCFunction2(ctx, js_webobj_ctor, webctors[wi], 1, JS_CFUNC_constructor, 0));
     }
