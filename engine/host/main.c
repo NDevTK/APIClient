@@ -636,6 +636,14 @@ static JSValue js_observer_ctor(JSContext *ctx, JSValueConst nt, int argc, JSVal
 static JSValue js_get_computed_style(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     JSValue o = JS_NewObject(ctx); JS_SetPropertyStr(ctx, o, "getPropertyValue", JS_NewCFunction(ctx, js_opaque_stub, "getPropertyValue", 1)); return o;
 }
+/* Intl.NumberFormat/DateTimeFormat/etc.: `new Intl.X().format(v)` threw (not built into this quickjs). A
+   constructor returning {format/…} whose results are opaque (locale-formatted external input). */
+static JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    const char *m[] = { "format", "formatToParts", "formatRange", "formatRangeToParts", "resolvedOptions", "select", "compare" };
+    for (int i = 0; i < 7; i++) JS_SetPropertyStr(ctx, o, m[i], JS_NewCFunction(ctx, js_opaque_stub, m[i], 1));
+    return o;
+}
 static JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "matches", JS_DupValue(ctx, g_opaque));   /* opaque -> a branch on it FORKS */
@@ -1326,6 +1334,67 @@ static lxb_dom_element_t *dom_select_first(lxb_dom_node_t *root, const char *sel
     lxb_css_parser_destroy(p, true);   /* frees the list too (parser owns it); c.first lives in g_dom */
     return c.first;
 }
+/* querySelectorAll / getElementsBy* : collect ALL matches into a real array so a for-of/forEach over the
+   result iterates real elements (their attrs/methods drive endpoints) — an empty NodeList would starve
+   an inline loop body of coverage. Same root-scoping as dom_select_first. */
+struct sel_all_ctx { JSContext *ctx; JSValue arr; uint32_t n; };
+static lxb_status_t sel_all_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t s, void *vp) {
+    struct sel_all_ctx *c = vp; (void)s;
+    JS_SetPropertyUint32(c->ctx, c->arr, c->n++, el_wrap(c->ctx, lxb_dom_interface_element(node)));
+    return LXB_STATUS_OK;
+}
+static JSValue dom_select_all(JSContext *ctx, lxb_dom_node_t *root, const char *sel, size_t len) {
+    JSValue arr = JS_NewArray(ctx);
+    if (!root) root = g_dom ? lxb_dom_interface_node(g_dom) : NULL;
+    if (!root) return arr;
+    lxb_css_parser_t *p = lxb_css_parser_create();
+    if (!p || lxb_css_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_css_parser_destroy(p, true); return arr; }
+    lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)sel, len);
+    if (!list) { lxb_css_parser_destroy(p, true); return arr; }
+    lxb_selectors_t *s = lxb_selectors_create();
+    if (!s || lxb_selectors_init(s) != LXB_STATUS_OK) { if (s) lxb_selectors_destroy(s, true); lxb_css_parser_destroy(p, true); return arr; }
+    struct sel_all_ctx c = { ctx, arr, 0 };
+    lxb_selectors_find(s, root, list, sel_all_cb, &c);
+    lxb_selectors_destroy(s, true);
+    lxb_css_parser_destroy(p, true);
+    return arr;
+}
+static JSValue js_el_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_NewArray(ctx);
+    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NewArray(ctx);
+    lxb_dom_element_t *self_el = JS_GetOpaque(this_val, g_el_class_id);
+    JSValue r = dom_select_all(ctx, self_el ? lxb_dom_interface_node(self_el) : NULL, s, strlen(s));
+    JS_FreeCString(ctx, s); return r;
+}
+static JSValue js_doc_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_NewArray(ctx);
+    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NewArray(ctx);
+    JSValue r = dom_select_all(ctx, NULL, s, strlen(s)); JS_FreeCString(ctx, s); return r;
+}
+static JSValue js_doc_getByClass(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_NewArray(ctx);
+    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NewArray(ctx);
+    char sel[256]; snprintf(sel, sizeof sel, ".%s", s); JS_FreeCString(ctx, s);
+    return dom_select_all(ctx, NULL, sel, strlen(sel));   /* getElementsByClassName -> .cls */
+}
+static JSValue js_el_rect(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {   /* getBoundingClientRect stub */
+    JSValue o = JS_NewObject(ctx);
+    const char *k[] = { "top", "left", "right", "bottom", "width", "height", "x", "y" };
+    for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, o, k[i], JS_NewInt32(ctx, 0));
+    return o;
+}
+/* Event / CustomEvent constructors: `new CustomEvent('x',{detail})` threw when missing. An object carrying
+   type + detail (attacker-influenceable in a dispatched event -> detail opaque unless the init provided it). */
+static JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    if (argc >= 1) JS_SetPropertyStr(ctx, o, "type", JS_DupValue(ctx, argv[0]));
+    if (argc >= 2 && JS_IsObject(argv[1])) { JSValue d = JS_GetPropertyStr(ctx, argv[1], "detail"); JS_SetPropertyStr(ctx, o, "detail", JS_IsUndefined(d) ? JS_DupValue(ctx, g_opaque) : d); }
+    else JS_SetPropertyStr(ctx, o, "detail", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, o, "preventDefault", JS_NewCFunction(ctx, js_noop, "preventDefault", 0));
+    JS_SetPropertyStr(ctx, o, "stopPropagation", JS_NewCFunction(ctx, js_noop, "stopPropagation", 0));
+    JS_SetPropertyStr(ctx, o, "target", JS_DupValue(ctx, g_opaque));
+    return o;
+}
 /* DOM ATTRIBUTE SHADOW TAINT: Lexbor stores attribute values as bytes, so an OPAQUE external-input value set
    via setAttribute would be ToString'd -> taint LOST -> a source stashed in a data-attribute and read back
    (getAttribute) in a separate flow goes undetected. Keep a shadow map (element,name)->opaque so an
@@ -1681,6 +1750,17 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "cloneNode", JS_NewCFunction(ctx, js_el_closest, "cloneNode", 1));   /* returns a real node (self) whose methods/attrs work */
     JS_SetPropertyStr(ctx, proto, "contains", JS_NewCFunction(ctx, js_el_matches, "contains", 1));     /* opaque bool -> forks */
     JS_SetPropertyStr(ctx, proto, "hasAttribute", JS_NewCFunction(ctx, js_el_matches, "hasAttribute", 1));
+    JS_SetPropertyStr(ctx, proto, "toggleAttribute", JS_NewCFunction(ctx, js_el_matches, "toggleAttribute", 1));
+    JS_SetPropertyStr(ctx, proto, "querySelectorAll", JS_NewCFunction(ctx, js_el_querySelectorAll, "querySelectorAll", 1));
+    JS_SetPropertyStr(ctx, proto, "insertBefore", JS_NewCFunction(ctx, js_el_appendChild, "insertBefore", 2));   /* intercepts <script src> like appendChild */
+    JS_SetPropertyStr(ctx, proto, "replaceChild", JS_NewCFunction(ctx, js_el_appendChild, "replaceChild", 2));
+    JS_SetPropertyStr(ctx, proto, "before", JS_NewCFunction(ctx, js_el_appendChild, "before", 1));
+    JS_SetPropertyStr(ctx, proto, "after", JS_NewCFunction(ctx, js_el_appendChild, "after", 1));
+    JS_SetPropertyStr(ctx, proto, "setAttributeNS", JS_NewCFunction(ctx, js_noop, "setAttributeNS", 3));
+    JS_SetPropertyStr(ctx, proto, "removeAttribute", JS_NewCFunction(ctx, js_noop, "removeAttribute", 1));
+    JS_SetPropertyStr(ctx, proto, "replaceChildren", JS_NewCFunction(ctx, js_noop, "replaceChildren", 0));
+    JS_SetPropertyStr(ctx, proto, "scrollIntoView", JS_NewCFunction(ctx, js_noop, "scrollIntoView", 0));
+    JS_SetPropertyStr(ctx, proto, "getBoundingClientRect", JS_NewCFunction(ctx, js_el_rect, "getBoundingClientRect", 0));
     { JSAtom a = JS_NewAtom(ctx, "style");
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_style_get, "get style", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, a); }
@@ -2367,6 +2447,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
         JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));   /* real element; appendChild intercepts <script src> */
         JS_SetPropertyStr(ctx, doc, "createTextNode", JS_NewCFunction(ctx, js_opaque_stub, "createTextNode", 1));       /* text-node stub (opaque) — non-throwing */
+        JS_SetPropertyStr(ctx, doc, "querySelectorAll", JS_NewCFunction(ctx, js_doc_querySelectorAll, "querySelectorAll", 1));
+        JS_SetPropertyStr(ctx, doc, "getElementsByTagName", JS_NewCFunction(ctx, js_doc_querySelectorAll, "getElementsByTagName", 1));   /* tag IS a selector */
+        JS_SetPropertyStr(ctx, doc, "getElementsByClassName", JS_NewCFunction(ctx, js_doc_getByClass, "getElementsByClassName", 1));
         JS_SetPropertyStr(ctx, doc, "createDocumentFragment", JS_NewCFunction(ctx, js_opaque_stub, "createDocumentFragment", 0));   /* opaque container — non-throwing (methods -> opaque) */
         JS_SetPropertyStr(ctx, doc, "write", JS_NewCFunction(ctx, js_doc_write, "write", 1));       /* DOM edge (no-op) */
         JS_SetPropertyStr(ctx, doc, "writeln", JS_NewCFunction(ctx, js_doc_write, "writeln", 1));
@@ -2399,6 +2482,17 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "WebSocket", JS_NewCFunction2(ctx, js_observer_ctor, "WebSocket", 1, JS_CFUNC_constructor, 0));   /* stub: send/close absent -> observer shape has no-ops; url endpoint is a smaller follow-up */
     JS_SetPropertyStr(ctx, g, "getComputedStyle", JS_NewCFunction(ctx, js_get_computed_style, "getComputedStyle", 1));
     JS_SetPropertyStr(ctx, g, "matchMedia", JS_NewCFunction(ctx, js_match_media, "matchMedia", 1));
+    JS_SetPropertyStr(ctx, g, "CustomEvent", JS_NewCFunction2(ctx, js_event_ctor, "CustomEvent", 2, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "Event", JS_NewCFunction2(ctx, js_event_ctor, "Event", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "scrollTo", JS_NewCFunction(ctx, js_noop, "scrollTo", 2));
+    JS_SetPropertyStr(ctx, g, "scrollBy", JS_NewCFunction(ctx, js_noop, "scrollBy", 2));
+    JS_SetPropertyStr(ctx, g, "scroll", JS_NewCFunction(ctx, js_noop, "scroll", 2));
+    {   /* Intl: locale formatters (constructors) — results opaque */
+        JSValue intl = JS_NewObject(ctx);
+        const char *cn[] = { "NumberFormat", "DateTimeFormat", "Collator", "RelativeTimeFormat", "ListFormat", "PluralRules", "Segmenter", "DisplayNames" };
+        for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, intl, cn[i], JS_NewCFunction2(ctx, js_intl_ctor, cn[i], 0, JS_CFUNC_constructor, 0));
+        JS_SetPropertyStr(ctx, g, "Intl", intl);
+    }
     {   /* history: pushState/replaceState/back/forward/go are no-ops (SPA routing side effects); state opaque */
         JSValue h = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, h, "pushState", JS_NewCFunction(ctx, js_noop, "pushState", 3));
