@@ -554,6 +554,97 @@ static JSValue js_str_flat(JSContext *ctx, const char *s, int cap) {
     buf[n] = 0;
     return JS_NewString(ctx, buf);
 }
+static JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);            /* fwd */
+static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);/* fwd */
+/* The shared @H sink: record one endpoint (consumes `ep`) + raise the running flow's value. A CANDIDATE flow
+   carries a concrete @S breakout PAYLOAD, so its request URLs are @S artifacts, NOT real @H — only OPAQUE
+   flows emit. fetch AND XMLHttpRequest funnel through here so XHR-based apps are learned like fetch ones. */
+static void record_endpoint(JSContext *ctx, JSValue ep) {
+    if (JS_IsArray(g_endpoints) && !g_candidate) {
+        uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_endpoints, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+        JS_SetPropertyUint32(ctx, g_endpoints, n, ep);   /* consumes ep */
+        g_emit_total++;
+    } else {
+        JS_FreeValue(ctx, ep);
+    }
+    if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
+}
+/* XMLHttpRequest — a PRIMARY request mechanism (many apps use it over fetch). Missing, `new XMLHttpRequest()`
+   threw and lost every XHR endpoint. open() stashes method+url; send() emits the endpoint through the shared
+   sink (concolic-example URL + query params + body), like fetch. Response fields are opaque (external input). */
+static JSValue js_xhr_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 1) JS_SetPropertyStr(ctx, this_val, "__method", JS_DupValue(ctx, argv[0]));
+    if (argc >= 2) JS_SetPropertyStr(ctx, this_val, "__url", JS_DupValue(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+static JSValue js_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue mv = JS_GetPropertyStr(ctx, this_val, "__method");
+    JSValue uv = JS_GetPropertyStr(ctx, this_val, "__url");
+    const char *method = JS_IsString(mv) ? JS_ToCString(ctx, mv) : NULL;
+    char *url = NULL;
+    { JSValue exurl = JS_OpaqueExample(ctx, uv); const char *u = NULL;   /* concolic URL -> real computed value */
+      if (!JS_IsUndefined(exurl)) u = JS_ToCString(ctx, exurl);
+      if (!u && (JS_IsString(uv) || JS_IsOpaque(uv))) u = JS_ToCString(ctx, uv);
+      if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
+      JS_FreeValue(ctx, exurl); }
+    if (url) {
+        char *usolved = url_solve_holes(ctx, url); const char *eurl = usolved ? usolved : url;
+        JSValue ep = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, ep, "method", JS_NewString(ctx, method ? method : "GET"));
+        JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, eurl));
+        JS_SetPropertyStr(ctx, ep, "source", JS_NewString(ctx, "ast_analysis"));
+        JSValue params = JS_NewArray(ctx); build_query_params(ctx, eurl, params); JS_SetPropertyStr(ctx, ep, "params", params);
+        if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+            const char *bs = JS_ToCString(ctx, argv[0]);
+            if (bs && bs[0]) { char *bsolved = url_solve_holes(ctx, bs); JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bsolved ? bsolved : bs, 600)); free(bsolved); }
+            if (bs) JS_FreeCString(ctx, bs);
+        }
+        record_endpoint(ctx, ep);
+        free(usolved); free(url);
+    }
+    if (method) JS_FreeCString(ctx, method);
+    JS_FreeValue(ctx, mv); JS_FreeValue(ctx, uv);
+    return JS_UNDEFINED;
+}
+static JSValue js_xhr_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "open", JS_NewCFunction(ctx, js_xhr_open, "open", 2));
+    JS_SetPropertyStr(ctx, o, "send", JS_NewCFunction(ctx, js_xhr_send, "send", 1));
+    JS_SetPropertyStr(ctx, o, "setRequestHeader", JS_NewCFunction(ctx, js_noop, "setRequestHeader", 2));
+    JS_SetPropertyStr(ctx, o, "abort", JS_NewCFunction(ctx, js_noop, "abort", 0));
+    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));   /* onload handler -> driven */
+    JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    JS_SetPropertyStr(ctx, o, "getResponseHeader", JS_NewCFunction(ctx, js_opaque_stub, "getResponseHeader", 1));
+    JS_SetPropertyStr(ctx, o, "getAllResponseHeaders", JS_NewCFunction(ctx, js_opaque_stub, "getAllResponseHeaders", 0));
+    JS_SetPropertyStr(ctx, o, "responseText", JS_DupValue(ctx, g_opaque));   /* response = external input */
+    JS_SetPropertyStr(ctx, o, "response", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, 200));
+    JS_SetPropertyStr(ctx, o, "readyState", JS_NewInt32(ctx, 4));
+    return o;
+}
+/* Observers (Intersection/Mutation/Resize/Performance): missing constructors threw. A no-op object (observe/
+   disconnect/etc.) prevents the throw; the callback passed to the constructor is an uncalled function the
+   orphan driver reaches, so its endpoints/sinks are still learned. */
+static JSValue js_observer_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "observe", JS_NewCFunction(ctx, js_noop, "observe", 2));
+    JS_SetPropertyStr(ctx, o, "unobserve", JS_NewCFunction(ctx, js_noop, "unobserve", 1));
+    JS_SetPropertyStr(ctx, o, "disconnect", JS_NewCFunction(ctx, js_noop, "disconnect", 0));
+    JS_SetPropertyStr(ctx, o, "takeRecords", JS_NewCFunction(ctx, js_noop, "takeRecords", 0));
+    return o;
+}
+static JSValue js_get_computed_style(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    JSValue o = JS_NewObject(ctx); JS_SetPropertyStr(ctx, o, "getPropertyValue", JS_NewCFunction(ctx, js_opaque_stub, "getPropertyValue", 1)); return o;
+}
+static JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "matches", JS_DupValue(ctx, g_opaque));   /* opaque -> a branch on it FORKS */
+    JS_SetPropertyStr(ctx, o, "media", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, o, "addListener", JS_NewCFunction(ctx, js_add_listener, "addListener", 1));
+    JS_SetPropertyStr(ctx, o, "removeListener", JS_NewCFunction(ctx, js_noop, "removeListener", 1));
+    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    return o;
+}
 /* fetch(url): the moat's host edge. URL = whatever the bundle COMPUTED. ACCUMULATE the endpoint record
    (method/url/params/headers/body) into g_endpoints — identity/dedup runs in-engine at finalize — raise
    the flow's value (the WFQ progress signal), and return a resolved promise wrapping the Response. */
@@ -631,16 +722,7 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
             JS_FreeValue(ctx, body);
         }
     }
-    /* A CANDIDATE flow carries a concrete @S breakout PAYLOAD as the source, so its fetch URLs contain the
-       payload — those are @S verification artifacts, NOT real @H endpoints. Only OPAQUE flows emit @H. */
-    if (JS_IsArray(g_endpoints) && !g_candidate) {
-        uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_endpoints, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
-        JS_SetPropertyUint32(ctx, g_endpoints, n, ep);   /* consumes ep */
-        g_emit_total++;
-    } else {
-        JS_FreeValue(ctx, ep);
-    }
-    if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
+    record_endpoint(ctx, ep);   /* the shared @H sink (dedup at finalize) — fetch AND XMLHttpRequest use it */
     JSValue resp = make_response(ctx, url);
     if (url) JS_FreeCString(ctx, url);
     if (method) JS_FreeCString(ctx, method);
@@ -1596,6 +1678,9 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "remove", JS_NewCFunction(ctx, js_noop, "remove", 0));
     JS_SetPropertyStr(ctx, proto, "matches", JS_NewCFunction(ctx, js_el_matches, "matches", 1));
     JS_SetPropertyStr(ctx, proto, "closest", JS_NewCFunction(ctx, js_el_closest, "closest", 1));
+    JS_SetPropertyStr(ctx, proto, "cloneNode", JS_NewCFunction(ctx, js_el_closest, "cloneNode", 1));   /* returns a real node (self) whose methods/attrs work */
+    JS_SetPropertyStr(ctx, proto, "contains", JS_NewCFunction(ctx, js_el_matches, "contains", 1));     /* opaque bool -> forks */
+    JS_SetPropertyStr(ctx, proto, "hasAttribute", JS_NewCFunction(ctx, js_el_matches, "hasAttribute", 1));
     { JSAtom a = JS_NewAtom(ctx, "style");
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_style_get, "get style", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, a); }
@@ -2281,6 +2366,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));   /* real Lexbor DOM */
         JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
         JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));   /* real element; appendChild intercepts <script src> */
+        JS_SetPropertyStr(ctx, doc, "createTextNode", JS_NewCFunction(ctx, js_opaque_stub, "createTextNode", 1));       /* text-node stub (opaque) — non-throwing */
+        JS_SetPropertyStr(ctx, doc, "createDocumentFragment", JS_NewCFunction(ctx, js_opaque_stub, "createDocumentFragment", 0));   /* opaque container — non-throwing (methods -> opaque) */
         JS_SetPropertyStr(ctx, doc, "write", JS_NewCFunction(ctx, js_doc_write, "write", 1));       /* DOM edge (no-op) */
         JS_SetPropertyStr(ctx, doc, "writeln", JS_NewCFunction(ctx, js_doc_write, "writeln", 1));
         JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
@@ -2302,6 +2389,25 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, ce, "whenDefined", JS_NewCFunction(ctx, js_opaque_stub, "whenDefined", 1));
         JS_SetPropertyStr(ctx, ce, "upgrade", JS_NewCFunction(ctx, js_noop, "upgrade", 1));
         JS_SetPropertyStr(ctx, g, "customElements", ce);
+    }
+    /* COMMON BROWSER APIs real bundles call constantly — a MISSING one threw and killed the script. */
+    JS_SetPropertyStr(ctx, g, "XMLHttpRequest", JS_NewCFunction2(ctx, js_xhr_ctor, "XMLHttpRequest", 0, JS_CFUNC_constructor, 0));   /* primary request mechanism -> emits @H */
+    JS_SetPropertyStr(ctx, g, "IntersectionObserver", JS_NewCFunction2(ctx, js_observer_ctor, "IntersectionObserver", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "MutationObserver", JS_NewCFunction2(ctx, js_observer_ctor, "MutationObserver", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "ResizeObserver", JS_NewCFunction2(ctx, js_observer_ctor, "ResizeObserver", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "PerformanceObserver", JS_NewCFunction2(ctx, js_observer_ctor, "PerformanceObserver", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "WebSocket", JS_NewCFunction2(ctx, js_observer_ctor, "WebSocket", 1, JS_CFUNC_constructor, 0));   /* stub: send/close absent -> observer shape has no-ops; url endpoint is a smaller follow-up */
+    JS_SetPropertyStr(ctx, g, "getComputedStyle", JS_NewCFunction(ctx, js_get_computed_style, "getComputedStyle", 1));
+    JS_SetPropertyStr(ctx, g, "matchMedia", JS_NewCFunction(ctx, js_match_media, "matchMedia", 1));
+    {   /* history: pushState/replaceState/back/forward/go are no-ops (SPA routing side effects); state opaque */
+        JSValue h = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, h, "pushState", JS_NewCFunction(ctx, js_noop, "pushState", 3));
+        JS_SetPropertyStr(ctx, h, "replaceState", JS_NewCFunction(ctx, js_noop, "replaceState", 3));
+        JS_SetPropertyStr(ctx, h, "back", JS_NewCFunction(ctx, js_noop, "back", 0));
+        JS_SetPropertyStr(ctx, h, "forward", JS_NewCFunction(ctx, js_noop, "forward", 0));
+        JS_SetPropertyStr(ctx, h, "go", JS_NewCFunction(ctx, js_noop, "go", 1));
+        JS_SetPropertyStr(ctx, h, "state", JS_DupValue(ctx, g_opaque));
+        JS_SetPropertyStr(ctx, g, "history", h);
     }
     /* Time/random are EXTERNAL INPUT -> OPAQUE: a branch on Math.random()/Date.now() must FORK both arms
        (not take a random one), and their VALUES are shapes not fabricated concretes. This is also a REPLAY
