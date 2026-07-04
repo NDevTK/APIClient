@@ -1782,7 +1782,7 @@ static JSValue js_el_querySelector(JSContext *ctx, JSValueConst this_val, int ar
     JS_FreeCString(ctx, s);
     return el_wrap(ctx, el);
 }
-static JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+static JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val) {   /* .textContent / .innerText getter */
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
     if (!el) return JS_NULL;
     size_t len = 0;
@@ -2109,7 +2109,15 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "appendChild", JS_NewCFunction(ctx, js_el_appendChild, "appendChild", 1));
     JS_SetPropertyStr(ctx, proto, "insertAdjacentHTML", JS_NewCFunction(ctx, js_el_insertAdjacentHTML, "insertAdjacentHTML", 2));
     JS_SetPropertyStr(ctx, proto, "querySelector", JS_NewCFunction(ctx, js_el_querySelector, "querySelector", 1));
-    JS_SetPropertyStr(ctx, proto, "getTextContent", JS_NewCFunction(ctx, js_el_textContent, "getTextContent", 0));
+    /* textContent / innerText are PROPERTIES in the real DOM (`el.textContent`), never methods — a
+       getTextContent METHOD left `.textContent` UNDEFINED, so the ubiquitous label-text read and the SSR
+       data pattern `JSON.parse(script.textContent)` silently returned undefined (and threw). Define the
+       standard getters; the non-standard method is deleted (nothing used it). */
+    for (int i = 0; i < 2; i++) {
+        JSAtom a = JS_NewAtom(ctx, i ? "innerText" : "textContent");
+        JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_textContent, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, a);
+    }
     /* ELEMENT-LEVEL EVENT HANDLERS: most SPAs attach click/submit/change handlers to ELEMENTS (buttons, forms),
        not window. addEventListener must REGISTER them (js_add_listener -> g_handlers -> orphan-driven) — else
        the call throws (undefined method), killing the script and losing every element handler's endpoints/sinks.
