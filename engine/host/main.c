@@ -2144,9 +2144,11 @@ static JSValue resolve_replayed_handler(JSContext *ctx, JSValueConst orig) {
    arm here (per-handler branch exploration is the individual orphan flows' job); the session adds only the
    cross-handler STATE dimension. */
 static void drive_session(JSContext *ctx) {
-    if (JS_IsUndefined(g_handlers)) return;
     g_in_session = 1;
-    uint32_t hn = 0; { JSValue lv = JS_GetPropertyStr(ctx, g_handlers, "length"); JS_ToUint32(ctx, &hn, lv); JS_FreeValue(ctx, lv); }
+    /* First the event handlers (addEventListener), each with its real event arg (msg handlers get the
+       synthetic {pm} MessageEvent so postMessage-XSS is modeled). */
+    uint32_t hn = 0;
+    if (!JS_IsUndefined(g_handlers)) { JSValue lv = JS_GetPropertyStr(ctx, g_handlers, "length"); JS_ToUint32(ctx, &hn, lv); JS_FreeValue(ctx, lv); }
     for (uint32_t i = 0; i < hn; i++) {
         JSValue h = JS_GetPropertyUint32(ctx, g_handlers, i);
         if (JS_IsFunction(ctx, h)) {
@@ -2157,6 +2159,23 @@ static void drive_session(JSContext *ctx) {
             JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {}
         }
         JS_FreeValue(ctx, h);
+    }
+    /* Then the collected ORPHANS (never-executed fns: exposed framework actions/thunks — redux/vuex where a
+       login ACTION sets store state from an opaque reply and a THUNK gates on it -- are plain fns, NOT
+       addEventListener handlers, so the handler-only session missed the cross-action state dimension). Fired
+       in seed (definition) order over the SAME accumulating delta so an earlier action's opaque write reaches
+       a later thunk's gate. Deduped against the handlers already fired above. Opaque args (external input). */
+    for (int oi = 0; oi < g_orphan_n; oi++) {
+        JSValueConst fn = g_orphan_buf[oi];
+        if (!JS_IsFunction(ctx, fn)) continue;
+        int is_h = 0;
+        for (uint32_t i = 0; i < hn && !is_h; i++) { JSValue h = JS_GetPropertyUint32(ctx, g_handlers, i); if (JS_VALUE_GET_PTR(h) == JS_VALUE_GET_PTR(fn)) is_h = 1; JS_FreeValue(ctx, h); }
+        if (is_h) continue;   /* already fired as a handler */
+        JSValueConst arg = g_opaque;
+        JSValue r = JS_Call(ctx, fn, g_opaque, 1, &arg);
+        if (JS_IsException(r)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
+        JS_FreeValue(ctx, r);
+        JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {}
     }
     g_in_session = 0;
 }
@@ -2856,7 +2875,11 @@ KEEP void qjs_begin(const char *recipes)
     g_dom_capture = 1;    /* DOM baseline is now fixed too; capture flow DOM mutations for per-flow revert */
     /* Seed ONE attacker-SESSION flow when the page has >=2 handlers — it fires them in sequence over
        accumulating shared state, the sound way to reach cross-handler sinks (source stored by A, sunk by B). */
-    if (!g_resume_mode && g_handler_n >= 2) { reg_add(ctx, JS_UNDEFINED, 1.2, 0, NULL, 0); g_reg[g_reg_n - 1].session = 1; }
+    /* Seed ONE exploratory session if >=2 entry points (handlers OR orphans) could share state: it fires them
+       in sequence over an accumulating delta so a cross-handler/cross-action opaque write reaches a later
+       gate (redux/vuex login-action -> thunk, or handler A -> handler B). Forks on the resulting opaque
+       gates; the WFQ starves it if the page has no real cross-flow state. */
+    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 2) { reg_add(ctx, JS_UNDEFINED, 1.2, 0, NULL, 0); g_reg[g_reg_n - 1].session = 1; }
 }
 
 /* The distinct pending fetch urls (newline-joined) the offscreen must safe-fetch. Static buffer. */
