@@ -949,7 +949,10 @@ static int solve_broke(const char *sc, const char *res) {
    ONE scheduler (high initial value so the search runs soon; transient — never parked as a recipe). */
 static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand, const char *target) {
     if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
-        if (reg_add(ctx, JS_UNDEFINED, 2.0, 0, NULL, 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
+        signed char *sdec = NULL;   /* inherit THIS session's decision vector so the candidate replays the SAME arms that reached the sink (an exploratory session now forks) */
+        if (g_dec_n > 0) { sdec = (signed char *)malloc((size_t)g_dec_n); if (sdec) for (int i = 0; i < g_dec_n; i++) sdec[i] = g_dec[i]; }
+        if (reg_add(ctx, JS_UNDEFINED, 2.0, 0, sdec, sdec ? g_dec_n : 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
+        else free(sdec);
         return;   /* a session verifies MANY sinks -> not tagged with one vtarget */
     }
     if (JS_IsUndefined(fn)) return;
@@ -1108,10 +1111,11 @@ static void emit_result(JSContext *ctx) {
    decision prefix; a NEW decision forks the FALSE sibling (re-run the same function) and takes TRUE. */
 static int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a cross-flow @S candidate */
 static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n);   /* fwd: defined near boot_replay */
+static int reg_add_session(JSContext *ctx, signed char *dec, int dec_n); /* fwd: an exploratory session that FORKS */
 static int branch_decide(JSContext *ctx, JSValueConst cond)
 {
-    if (g_boot_replay || g_in_session) return 1;            /* boot-replay / attacker-session: take a fixed arm (per-handler branch exploration is the individual orphan flows' job) */
-    if (!g_running || (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow)) return 0;   /* meaningful inside a starter flow OR a boot flow (which has no fn handle — it re-runs boot) */
+    if (g_boot_replay) return 1;                            /* boot-replay: fixed arm (re-establishing shared state for an @S candidate, no vector to replay) */
+    if (!g_running || (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow && !g_in_session)) return 0;   /* meaningful inside a starter flow, a boot flow, OR a session flow (all re-run without a single fn handle) */
     /* value-domain provenance of the condition: cond TRUE means `src <op> tok`; false arm holds the negation. */
     const char *src = NULL, *tok = NULL; int op = JS_OpaqueCmp(cond, &src, &tok);
     int has = (op != OPCMP_NONE) && src;
@@ -1124,6 +1128,10 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
     }
     if (!g_dec_ensure(g_c + 1)) return 1;                    /* only RAM/disk (the platform floor) bounds depth — not a cap */
 
+    /* A CANDIDATE session (verifying an @S breakout) takes a fixed arm for a NEW branch — it replays the
+       detecting session's vector (above) then follows through with the candidate, it does not re-explore. */
+    if (g_in_session && g_candidate) { cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE); g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }
+
     /* NEW decision: PRUNE a provably-infeasible arm given the accumulated domain (no phantom @H); else fork. */
     int tf = !has || cons_feasible(src, tok, true_op, g_c);
     int ff = !has || cons_feasible(src, tok, false_op, g_c);
@@ -1134,7 +1142,8 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
     if (sib) {
         for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
         sib[g_c] = 0;
-        if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);   /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
+        if (g_in_session) reg_add_session(ctx, sib, g_c + 1);      /* an exploratory session forks ANOTHER session (re-fire handlers with the sibling vector) */
+        else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);  /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
         else { reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, 0, sib, g_c + 1);
                g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx; }   /* sibling = same function (same locator), different decisions */
     }
@@ -2070,6 +2079,17 @@ static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n) {
     g_reg[g_reg_n - 1].is_boot = 1;
     return 1;
 }
+/* An EXPLORATORY attacker-session that FORKS: re-fire ALL handlers over one accumulating delta, replaying
+   `dec` then forking new opaque branches. This is how a gate in handler B on state that handler A wrote from
+   an OPAQUE source (the canonical "login handler sets auth flag; gated code reads it" SPA pattern) gets its
+   admin arm explored — a per-handler orphan flow can't (it's COW-isolated from A's write), and a fixed-arm
+   session can't (it never forks). A candidate session (verifying a breakout) stays fixed-arm; only this
+   exploratory kind forks. */
+static int reg_add_session(JSContext *ctx, signed char *dec, int dec_n) {
+    if (!reg_add(ctx, JS_UNDEFINED, 1.2, 0, dec, dec_n)) return 0;
+    g_reg[g_reg_n - 1].session = 1;
+    return 1;
+}
 /* BOOT AS THE FIRST FLOW: the page's boot (its inline scripts) is captured as a COW DELTA — g_boot_delta —
    exactly like any flow (mutations + global CREATIONS). It stays APPLIED between opaque flows (its effects
    are the post-boot baseline). A candidate flow UNAPPLIES it to reach a TRUE pre-boot heap (boot's globals
@@ -2379,7 +2399,10 @@ static void scheduler_run(JSContext *ctx)
             /* ATTACKER SESSION: fire all handlers in seed order over one accumulating COW delta (cross-handler
                shared state), run to completion (no preemption — the sequence must not straddle a suspend). A
                candidate session re-runs boot with the candidate first; both revert their delta at the end. */
-            g_cur_fn = JS_UNDEFINED; g_dec_n = 0; g_c = 0;
+            g_cur_fn = JS_UNDEFINED;
+            g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);                     /* replay this session's decisions; new opaque branches fork siblings */
+            for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
+            g_c = 0; cons_reset();
             g_candidate = f.candidate;
             JS_SetFlowYieldHook(NULL);
             if (f.candidate) boot_replay_candidate(ctx);
