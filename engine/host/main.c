@@ -404,14 +404,43 @@ static void reply_note_wanted(JSContext *ctx, JSValueConst this_val) {
     if (s) JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, u);
 }
+/* CONCOLIC leaf-wrap: a trusted loaded reply is ONE value whose STRUCTURE stays REAL (Object.keys/map/for-in/
+   array index all work natively) but whose STRING/BOOL leaves become concolic — each FORKS at a branch (so a
+   role/flag gate reaches the gated endpoint) AND carries its real value as the example (so a gate-INDEPENDENT
+   field keeps its real value on the forced arm: /api/billing/enterprise/acme-42, not /{}). NUMBERS stay
+   concrete — an opaque numeric would make `for(i<n)` / `.length` loops infinite (the known catastrophe). */
+static JSValue concolic_wrap(JSContext *ctx, JSValue v, const char *key) {
+    int tag = JS_VALUE_GET_TAG(v);
+    if (tag == JS_TAG_STRING || tag == JS_TAG_BOOL) {
+        char shape[80]; snprintf(shape, sizeof shape, "{%s}", (key && key[0]) ? key : "reply");
+        const char *src = (key && key[0]) ? key : "reply";
+        JSValue o = JS_NewOpaqueSourced(ctx, shape, src);
+        if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, v); return o; }   /* consumes v */
+        JS_FreeValue(ctx, o); return v;                                     /* opaque class off -> leave concrete */
+    }
+    if (JS_IsObject(v) && !JS_IsFunction(ctx, v)) {   /* recurse: keep the object/array STRUCTURE real */
+        JSPropertyEnum *tab = NULL; uint32_t n = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &n, v, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < n; i++) {
+                const char *k = JS_AtomToCString(ctx, tab[i].atom);
+                JSValue pv = JS_GetProperty(ctx, v, tab[i].atom);
+                JS_SetProperty(ctx, v, tab[i].atom, concolic_wrap(ctx, pv, k));   /* consumes pv, then the wrapped */
+                if (k) JS_FreeCString(ctx, k);
+            }
+            JS_FreePropertyEnum(ctx, tab, n);
+        }
+        return v;
+    }
+    return v;   /* number / null / undefined -> concrete (real value, no fork, no loop hazard) */
+}
 /* parse a concrete reply body into the value json()/text() should resolve to */
 static JSValue reply_value(JSContext *ctx, JSValueConst body_str, int is_json) {
-    if (!is_json) return JS_DupValue(ctx, body_str);
+    if (!is_json) return JS_DupValue(ctx, body_str);   /* text: unchanged (avoid regressing text->JSON.parse) */
     size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, body_str);
     JSValue parsed = s ? JS_ParseJSON(ctx, s, len, "<reply>") : JS_EXCEPTION;
     if (s) JS_FreeCString(ctx, s);
     if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return JS_DupValue(ctx, g_opaque); }
-    return parsed;   /* CONCRETE reply object -> its fields are real example values */
+    return concolic_wrap(ctx, parsed, "reply");   /* structure real; string/bool leaves concolic (fork + real example) */
 }
 /* r.json()/r.text(): concrete body -> resolve it; else PARK (unresolved promise + pending) if the url is
    concrete (fetchable), so the offscreen provides the real reply IN PLACE; opaque if the url is a shape. */
@@ -525,7 +554,17 @@ static JSValue js_str_flat(JSContext *ctx, const char *s, int cap) {
    the flow's value (the WFQ progress signal), and return a resolved promise wrapping the Response. */
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
-    const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
+    /* CONCOLIC: a URL built from a trusted-loaded reply is a symbol carrying the REAL computed URL as its
+       example — use it, so a gated arm emits /api/billing/enterprise/acme-42 (the merge layer shapes it +
+       records the value) instead of losing the gate-independent value to a {} shape. Pure-symbolic attacker
+       input has no example -> the shape, as before. */
+    const char *url = NULL;
+    if (argc > 0) {
+        JSValue exurl = JS_OpaqueExample(ctx, argv[0]);
+        if (!JS_IsUndefined(exurl)) url = JS_ToCString(ctx, exurl);
+        JS_FreeValue(ctx, exurl);
+        if (!url) url = JS_ToCString(ctx, argv[0]);
+    }
     /* HTTP method from the RequestInit (fetch(url,{method:'DELETE'})) — a big security signal (GET vs
        DELETE/POST). A concrete string only; opaque/missing options -> GET. */
     const char *method = NULL;
