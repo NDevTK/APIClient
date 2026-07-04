@@ -325,6 +325,24 @@ static const char *DEDUP_JS =
 "  }"
 "  var out=[];map.forEach(function(v){out.push(v);});return out;"
 "})";
+/* SELF-HOSTED Array.prototype.forEach: the C js_array_every holds its loop counter on the C STACK
+   across each callback JS_Call, so a fn recursing THROUGH the callback (node.children.forEach(walk))
+   C-recurses and overflows -- the continuation-holding re-entry the tail-forward trampoline cannot
+   reach. As bytecode, the loop is a HEAP frame and the callback dispatches via the (trampolined) call
+   path, so recursion through forEach is unbounded and snapshot/preempt/replay work at any iteration
+   depth (verified to depth 3000). Defined as a NON-CLOSURE (no IIFE, no captured var_refs, intrinsics
+   read as globals): an init-defined CLOSURE does NOT trampoline its deep recursion -- a real engine
+   defect at the pre-boot-baseline/var_ref boundary; a non-closure avoids it (init non-closures
+   trampoline, like the pages' own boot fns). `>>>0` is internal ToUint32 (exact for real arrays;
+   length>2^32 array-likes don't exist in practice). Spec-faithful: ToObject(this), HasProperty
+   (`k in O`) skips holes, (value,index,array) args, thisArg, returns undefined. */
+static const char *ARRAY_PRELUDE_JS =
+"Object.defineProperty(Array.prototype,'forEach',{value:function forEach(cb,thisArg){"
+"  if(typeof cb!=='function')throw new TypeError('Array.prototype.forEach: callback is not a function');"
+"  var O=Object(this),L=O.length>>>0;"
+"  for(var k=0;k<L;k++){if(k in O){cb.call(thisArg,O[k],k,O);}}"
+"  return undefined;"
+"},writable:true,enumerable:false,configurable:true});";
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
@@ -2528,6 +2546,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JSValue xr = JS_Eval(g_solve_ctx, x9, strlen(x9), "<x9>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, xr); }   /* X9 fire-tracker for the js-sink verify */
     g_dedup_fn = JS_Eval(ctx, DEDUP_JS, strlen(DEDUP_JS), "<dedup>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(g_dedup_fn)) { js_std_dump_error(ctx); g_dedup_fn = JS_UNDEFINED; }
+    { JSValue pv = JS_Eval(ctx, ARRAY_PRELUDE_JS, strlen(ARRAY_PRELUDE_JS), "<array-prelude>", JS_EVAL_TYPE_GLOBAL);
+      if (JS_IsException(pv)) { fprintf(stderr, "@E {\"phase\":\"array-prelude\"}\n"); js_std_dump_error(ctx); }
+      JS_FreeValue(ctx, pv); }
     js_std_add_helpers(ctx, 0, NULL);
     js_init_module_std(ctx, "std");
     js_init_module_os(ctx, "os");
