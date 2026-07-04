@@ -1207,8 +1207,12 @@ static lxb_status_t sel_first_cb(lxb_dom_node_t *node, lxb_css_selector_specific
    object + cleaned parser per call — reusing them across finds carries internal state that breaks the
    next query (2nd querySelector returned null). The matched element is owned by g_dom, so tearing down
    the per-call selectors/list doesn't free it. */
-static lxb_dom_element_t *dom_select_first(const char *sel, size_t len) {
-    if (!g_dom) return NULL;
+/* `root` scopes the search: an ELEMENT node -> its subtree (element.querySelector), NULL -> the whole
+   document (document.querySelector/getElementById). Document-scoping an element query returns matches
+   OUTSIDE the receiver's subtree -> the wrong element -> a wrong learned value; the root fixes that. */
+static lxb_dom_element_t *dom_select_first(lxb_dom_node_t *root, const char *sel, size_t len) {
+    if (!root) root = g_dom ? lxb_dom_interface_node(g_dom) : NULL;
+    if (!root) return NULL;
     lxb_css_parser_t *p = lxb_css_parser_create();
     if (!p || lxb_css_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_css_parser_destroy(p, true); return NULL; }
     lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)sel, len);
@@ -1216,7 +1220,7 @@ static lxb_dom_element_t *dom_select_first(const char *sel, size_t len) {
     lxb_selectors_t *s = lxb_selectors_create();
     if (!s || lxb_selectors_init(s) != LXB_STATUS_OK) { if (s) lxb_selectors_destroy(s, true); lxb_css_parser_destroy(p, true); return NULL; }
     struct sel_ctx c = { NULL };
-    lxb_selectors_find(s, lxb_dom_interface_node(g_dom), list, sel_first_cb, &c);
+    lxb_selectors_find(s, root, list, sel_first_cb, &c);
     lxb_selectors_destroy(s, true);
     lxb_css_parser_destroy(p, true);   /* frees the list too (parser owns it); c.first lives in g_dom */
     return c.first;
@@ -1262,7 +1266,8 @@ static JSValue js_el_getAttribute(JSContext *ctx, JSValueConst this_val, int arg
 static JSValue js_el_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_NULL;
     const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
-    lxb_dom_element_t *el = dom_select_first(s, strlen(s));   /* NB: document-scoped for now, not subtree */
+    lxb_dom_element_t *self_el = JS_GetOpaque(this_val, g_el_class_id);   /* SUBTREE-scope to the receiver element */
+    lxb_dom_element_t *el = dom_select_first(self_el ? lxb_dom_interface_node(self_el) : NULL, s, strlen(s));
     JS_FreeCString(ctx, s);
     return el_wrap(ctx, el);
 }
@@ -1577,14 +1582,14 @@ static JSValue js_doc_getElementById(JSContext *ctx, JSValueConst this_val, int 
     if (argc < 1) return JS_NULL;
     const char *id = JS_ToCString(ctx, argv[0]); if (!id) return JS_NULL;
     char sel[512]; snprintf(sel, sizeof sel, "#%s", id);
-    lxb_dom_element_t *el = dom_select_first(sel, strlen(sel));
+    lxb_dom_element_t *el = dom_select_first(NULL, sel, strlen(sel));
     JS_FreeCString(ctx, id);
     return el_wrap(ctx, el);
 }
 static JSValue js_doc_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_NULL;
     const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
-    lxb_dom_element_t *el = dom_select_first(s, strlen(s));
+    lxb_dom_element_t *el = dom_select_first(NULL, s, strlen(s));
     JS_FreeCString(ctx, s);
     return el_wrap(ctx, el);
 }
@@ -1612,9 +1617,10 @@ static lxb_status_t scr_collect_cb(lxb_dom_node_t *node, lxb_css_selector_specif
    (source stored in shared state at boot, sunk in a SEPARATELY-driven handler) needs that shared state
    re-established with the CONCRETE candidate — the handler reads the stored value, not the source directly.
    So the candidate flow re-runs boot with g_candidate pinned (source getters return concrete), then drives
-   the handler; the re-run's writes are COW-captured + reverted like any flow, so isolation holds. Limits
-   (need full boot-as-flow): external <script src> chunks aren't re-run, and top-level const re-declare
-   throws (caught -> partial state). */
+   the handler; the re-run's writes are COW-captured + reverted like any flow, so isolation holds. A
+   top-level const/let re-declares CLEANLY because the pre-boot unapply (boot_replay_candidate) deletes its
+   captured CREATION, so no re-declaration clash. Remaining limit (full boot-as-flow): external <script src>
+   chunks aren't re-run — a source stored in a fetched chunk isn't re-established under the candidate. */
 static char **g_boot_scripts = NULL; static int g_boot_n = 0, g_boot_cap = 0;
 static void boot_script_cache(const char *txt, size_t len) {
     if (g_boot_n >= g_boot_cap) { int nc = g_boot_cap ? g_boot_cap * 2 : 8;
