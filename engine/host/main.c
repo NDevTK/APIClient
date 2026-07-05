@@ -2385,6 +2385,22 @@ static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 /* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
+/* new Function(...args, BODY): the body is compiled as code -> an eval-class @S sink. Wrap the builtin:
+   attacker/candidate body -> solve_add + a harmless callable (so `new Function(x)()` doesn't throw); anything
+   else DELEGATES to the real Function (saved), so identity behaviour is preserved. wrap.prototype is set to
+   the real Function.prototype so `x instanceof Function` still holds. */
+static JSValue g_real_function = JS_UNDEFINED;
+static JSValue js_function_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
+    if (argc >= 1) {
+        JSValueConst body = argv[argc - 1];
+        if (JS_IsOpaque(body) || (g_candidate && JS_IsString(body))) {
+            solve_add(ctx, "Function", "js", body);   /* @S: body is code */
+            return JS_NewCFunction(ctx, js_noop, "", 0);   /* callable no-op so new Function(x)() is safe */
+        }
+    }
+    return JS_IsUndefined(g_real_function) ? JS_NewCFunction(ctx, js_noop, "", 0)
+                                           : JS_CallConstructor(ctx, g_real_function, argc, argv);   /* real compile */
+}
 static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_UNDEFINED;
     if (JS_IsOpaque(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return JS_DupValue(ctx, g_opaque); }   /* @S: opaque reaches eval -> detect + spawn candidate replays */
@@ -3138,6 +3154,15 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     /* COMMON BROWSER APIs real bundles call constantly — a MISSING one threw and killed the script. */
     JS_SetPropertyStr(ctx, g, "XMLHttpRequest", JS_NewCFunction2(ctx, js_xhr_ctor, "XMLHttpRequest", 0, JS_CFUNC_constructor, 0));   /* primary request mechanism -> emits @H */
     JS_SetPropertyStr(ctx, g, "DOMParser", JS_NewCFunction2(ctx, js_domparser_ctor, "DOMParser", 0, JS_CFUNC_constructor, 0));   /* parseFromString -> {parsedhtml} taint -> appendChild @S */
+    { JSValue realFn = JS_GetPropertyStr(ctx, g, "Function");   /* wrap Function: new Function(attacker) is an eval-class @S sink */
+      if (JS_IsFunction(ctx, realFn)) {
+          JS_FreeValue(ctx, g_real_function); g_real_function = JS_DupValue(ctx, realFn);
+          JSValue wrap = JS_NewCFunction2(ctx, js_function_ctor, "Function", 1, JS_CFUNC_constructor, 0);
+          JSValue proto = JS_GetPropertyStr(ctx, realFn, "prototype");   /* preserve so `x instanceof Function` holds */
+          if (!JS_IsUndefined(proto)) JS_SetPropertyStr(ctx, wrap, "prototype", proto); else JS_FreeValue(ctx, proto);
+          JS_SetPropertyStr(ctx, g, "Function", wrap);
+      }
+      JS_FreeValue(ctx, realFn); }
     JS_SetPropertyStr(ctx, g, "IntersectionObserver", JS_NewCFunction2(ctx, js_observer_ctor, "IntersectionObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "MutationObserver", JS_NewCFunction2(ctx, js_observer_ctor, "MutationObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "ResizeObserver", JS_NewCFunction2(ctx, js_observer_ctor, "ResizeObserver", 1, JS_CFUNC_constructor, 0));
@@ -3479,6 +3504,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
     JS_FreeValue(ctx, g_msg_event); g_msg_event = JS_UNDEFINED; g_msg_handler_n = 0;
     js_std_free_handlers(g_rt);
+    JS_FreeValue(ctx, g_real_function); g_real_function = JS_UNDEFINED;
     if (g_solve_ctx) { JS_FreeContext(g_solve_ctx); g_solve_ctx = NULL; }   /* free the solver realm before its runtime */
     JS_FreeContext(ctx);
     JS_FreeRuntime(g_rt);
