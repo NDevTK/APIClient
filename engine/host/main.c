@@ -591,14 +591,6 @@ static void build_query_params(JSContext *ctx, const char *url, JSValueConst par
         p = (amp < end) ? amp + 1 : end;
     }
 }
-/* A JS string with control chars flattened to space (so an emitted line can't break), capped at cap. */
-static JSValue js_str_flat(JSContext *ctx, const char *s, int cap) {
-    char buf[1024]; int n = 0;
-    for (const char *p = s; *p && n < cap && n < (int)sizeof(buf) - 1; p++, n++)
-        buf[n] = (*p == '\n' || *p == '\r') ? ' ' : *p;
-    buf[n] = 0;
-    return JS_NewString(ctx, buf);
-}
 static JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);            /* fwd */
 static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);/* fwd */
 /* The shared @H sink: record one endpoint (consumes `ep`) + raise the running flow's value. A CANDIDATE flow
@@ -633,7 +625,7 @@ static void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) 
             JSValue hex = JS_IsOpaque(hv) ? JS_OpaqueExample(ctx, hv) : JS_UNDEFINED;
             const char *hvs = !JS_IsUndefined(hex) ? JS_ToCString(ctx, hex) : JS_ToCString(ctx, hv);
             JS_FreeValue(ctx, hex);
-            if (hk && hvs) { JS_SetPropertyStr(ctx, hobj, hk, js_str_flat(ctx, hvs, 512)); any = 1; }
+            if (hk && hvs) { JS_SetPropertyStr(ctx, hobj, hk, JS_NewString(ctx, hvs)); any = 1; }
             if (hk) JS_FreeCString(ctx, hk);
             if (hvs) JS_FreeCString(ctx, hvs);
             JS_FreeValue(ctx, hv);
@@ -677,7 +669,7 @@ static JSValue js_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         JSValue params = JS_NewArray(ctx); build_query_params(ctx, eurl, params); JS_SetPropertyStr(ctx, ep, "params", params);
         if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
             const char *bs = JS_ToCString(ctx, argv[0]);
-            if (bs && bs[0]) { char *bsolved = url_solve_holes(ctx, bs); JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bsolved ? bsolved : bs, 600)); free(bsolved); }
+            if (bs && bs[0]) { char *bsolved = url_solve_holes(ctx, bs); JS_SetPropertyStr(ctx, ep, "body", JS_NewString(ctx, bsolved ? bsolved : bs)); free(bsolved); }
             if (bs) JS_FreeCString(ctx, bs);
         }
         { JSValue h = JS_GetPropertyStr(ctx, this_val, "__headers"); capture_headers(ctx, ep, h); JS_FreeValue(ctx, h); }
@@ -774,7 +766,7 @@ static JSValue js_send_beacon(JSContext *ctx, JSValueConst this_val, int argc, J
             JSValue params = JS_NewArray(ctx); build_query_params(ctx, eurl, params); JS_SetPropertyStr(ctx, ep, "params", params);
             if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
                 const char *bs = JS_ToCString(ctx, argv[1]);
-                if (bs && bs[0]) { char *bsolved = url_solve_holes(ctx, bs); JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bsolved ? bsolved : bs, 600)); free(bsolved); }
+                if (bs && bs[0]) { char *bsolved = url_solve_holes(ctx, bs); JS_SetPropertyStr(ctx, ep, "body", JS_NewString(ctx, bsolved ? bsolved : bs)); free(bsolved); }
                 if (bs) JS_FreeCString(ctx, bs);
             }
             record_endpoint(ctx, ep); free(usolved); free(url);
@@ -884,7 +876,7 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
                 JS_FreeValue(ctx, braw);
                 if (bs && bs[0]) {
                     char *bsolved = url_solve_holes(ctx, bs);   /* value-solve {src} body holes the flow fixed (JSON.stringify keeps the shape now) */
-                    JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bsolved ? bsolved : bs, 600));
+                    JS_SetPropertyStr(ctx, ep, "body", JS_NewString(ctx, bsolved ? bsolved : bs));
                     free(bsolved);
                 }
                 if (bs) JS_FreeCString(ctx, bs);
