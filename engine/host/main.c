@@ -590,6 +590,42 @@ static void record_endpoint(JSContext *ctx, JSValue ep) {
 /* XMLHttpRequest — a PRIMARY request mechanism (many apps use it over fetch). Missing, `new XMLHttpRequest()`
    threw and lost every XHR endpoint. open() stashes method+url; send() emits the endpoint through the shared
    sink (concolic-example URL + query params + body), like fetch. Response fields are opaque (external input). */
+/* Capture request header name:value pairs into ep.headers (required-headers replay spec). Reads a plain
+   object OR a `new Headers()`'s __fields, and a concolic value's EXAMPLE (`'Bearer '+token` -> the real token).
+   ONE home for fetch + XHR (no duplication). */
+static void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) {
+    if (!JS_IsObject(hdrs) || JS_IsOpaque(hdrs)) return;
+    JSValue hf = JS_GetPropertyStr(ctx, hdrs, "__fields");
+    JSValueConst hsrc = JS_IsObject(hf) ? (JSValueConst)hf : hdrs;
+    JSValue hobj = JS_NewObject(ctx); int any = 0;
+    JSPropertyEnum *tab = NULL; uint32_t hn = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &hn, hsrc, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        for (uint32_t hi = 0; hi < hn; hi++) {
+            const char *hk = JS_AtomToCString(ctx, tab[hi].atom);
+            JSValue hv = JS_GetProperty(ctx, hsrc, tab[hi].atom);
+            JSValue hex = JS_IsOpaque(hv) ? JS_OpaqueExample(ctx, hv) : JS_UNDEFINED;
+            const char *hvs = !JS_IsUndefined(hex) ? JS_ToCString(ctx, hex) : JS_ToCString(ctx, hv);
+            JS_FreeValue(ctx, hex);
+            if (hk && hvs) { JS_SetPropertyStr(ctx, hobj, hk, js_str_flat(ctx, hvs, 512)); any = 1; }
+            if (hk) JS_FreeCString(ctx, hk);
+            if (hvs) JS_FreeCString(ctx, hvs);
+            JS_FreeValue(ctx, hv);
+        }
+        JS_FreePropertyEnum(ctx, tab, hn);
+    }
+    JS_FreeValue(ctx, hf);
+    if (any) JS_SetPropertyStr(ctx, ep, "headers", hobj); else JS_FreeValue(ctx, hobj);
+}
+static JSValue js_xhr_setheader(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 2) {   /* store into __headers so js_xhr_send captures the auth/CSRF/custom headers */
+        JSValue h = JS_GetPropertyStr(ctx, this_val, "__headers");
+        if (!JS_IsObject(h)) { JS_FreeValue(ctx, h); h = JS_NewObject(ctx); JS_SetPropertyStr(ctx, this_val, "__headers", JS_DupValue(ctx, h)); }
+        const char *k = JS_ToCString(ctx, argv[0]);
+        if (k) { JS_SetPropertyStr(ctx, h, k, JS_DupValue(ctx, argv[1])); JS_FreeCString(ctx, k); }
+        JS_FreeValue(ctx, h);
+    }
+    return JS_UNDEFINED;
+}
 static JSValue js_xhr_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc >= 1) JS_SetPropertyStr(ctx, this_val, "__method", JS_DupValue(ctx, argv[0]));
     if (argc >= 2) JS_SetPropertyStr(ctx, this_val, "__url", JS_DupValue(ctx, argv[1]));
@@ -617,6 +653,7 @@ static JSValue js_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSVa
             if (bs && bs[0]) { char *bsolved = url_solve_holes(ctx, bs); JS_SetPropertyStr(ctx, ep, "body", js_str_flat(ctx, bsolved ? bsolved : bs, 600)); free(bsolved); }
             if (bs) JS_FreeCString(ctx, bs);
         }
+        { JSValue h = JS_GetPropertyStr(ctx, this_val, "__headers"); capture_headers(ctx, ep, h); JS_FreeValue(ctx, h); }
         record_endpoint(ctx, ep);
         free(usolved); free(url);
     }
@@ -628,7 +665,7 @@ static JSValue js_xhr_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "open", JS_NewCFunction(ctx, js_xhr_open, "open", 2));
     JS_SetPropertyStr(ctx, o, "send", JS_NewCFunction(ctx, js_xhr_send, "send", 1));
-    JS_SetPropertyStr(ctx, o, "setRequestHeader", JS_NewCFunction(ctx, js_noop, "setRequestHeader", 2));
+    JS_SetPropertyStr(ctx, o, "setRequestHeader", JS_NewCFunction(ctx, js_xhr_setheader, "setRequestHeader", 2));
     JS_SetPropertyStr(ctx, o, "abort", JS_NewCFunction(ctx, js_noop, "abort", 0));
     JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));   /* onload handler -> driven */
     JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
@@ -798,31 +835,7 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         JSValueConst init = (argc > 1 && JS_IsObject(argv[1])) ? argv[1] : ((argc > 0 && JS_IsObject(argv[0])) ? argv[0] : JS_UNDEFINED);
         if (JS_IsObject(init)) {
             JSValue hdrs = JS_GetPropertyStr(ctx, init, "headers");
-            if (JS_IsObject(hdrs) && !JS_IsOpaque(hdrs)) {
-                /* a `new Headers()` stores its pairs in __fields (its OWN props are methods) -> read those */
-                JSValue hf = JS_GetPropertyStr(ctx, hdrs, "__fields");
-                JSValueConst hsrc = JS_IsObject(hf) ? (JSValueConst)hf : (JSValueConst)hdrs;
-                JSValue hobj = JS_NewObject(ctx); int any = 0;
-                JSPropertyEnum *tab = NULL; uint32_t hn = 0;
-                if (JS_GetOwnPropertyNames(ctx, &tab, &hn, hsrc, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
-                    for (uint32_t hi = 0; hi < hn; hi++) {
-                        const char *hk = JS_AtomToCString(ctx, tab[hi].atom);
-                        JSValue hv = JS_GetProperty(ctx, hsrc, tab[hi].atom);
-                        /* CONCOLIC header value: `'Bearer '+token` is a concolic opaque -> use its example so
-                           Authorization shows the real token, not the {} shape. */
-                        JSValue hex = JS_IsOpaque(hv) ? JS_OpaqueExample(ctx, hv) : JS_UNDEFINED;
-                        const char *hvs = !JS_IsUndefined(hex) ? JS_ToCString(ctx, hex) : JS_ToCString(ctx, hv);
-                        JS_FreeValue(ctx, hex);
-                        if (hk && hvs) { JS_SetPropertyStr(ctx, hobj, hk, js_str_flat(ctx, hvs, 512)); any = 1; }
-                        if (hk) JS_FreeCString(ctx, hk);
-                        if (hvs) JS_FreeCString(ctx, hvs);
-                        JS_FreeValue(ctx, hv);
-                    }
-                    JS_FreePropertyEnum(ctx, tab, hn);
-                }
-                JS_FreeValue(ctx, hf);
-                if (any) JS_SetPropertyStr(ctx, ep, "headers", hobj); else JS_FreeValue(ctx, hobj);
-            }
+            capture_headers(ctx, ep, hdrs);   /* shared with XHR: plain object / Headers __fields, concolic value */
             JS_FreeValue(ctx, hdrs);
             JSValue body = JS_GetPropertyStr(ctx, init, "body");
             if (!JS_IsUndefined(body) && !JS_IsNull(body)) {
