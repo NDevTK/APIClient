@@ -2708,21 +2708,6 @@ static JSValue js_session_drain(JSContext *ctx, JSValueConst this_val, int argc,
     JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {}   /* per-fn microtask drain, parity with the C loop */
     return JS_UNDEFINED;
 }
-/* SYNCHRONOUS FALLBACK ONLY: the session normally runs as a PREEMPTIBLE __driveSession heap-frame flow (see
-   the f.session branch in scheduler_run). This runs it via a plain call, used solely if JS_FlowNew can't make
-   a frame for __driveSession (it always can — plain bytecode — so this is defensive, not a live path). */
-static void drive_session(JSContext *ctx) {
-    g_in_session = 1;
-    JSValue g = JS_GetGlobalObject(ctx);
-    JSValue ds = JS_GetPropertyStr(ctx, g, "__driveSession");
-    if (JS_IsFunction(ctx, ds)) {
-        JSValue r = JS_Call(ctx, ds, JS_UNDEFINED, 0, NULL);
-        if (JS_IsException(r)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
-        JS_FreeValue(ctx, r);
-    }
-    JS_FreeValue(ctx, ds); JS_FreeValue(ctx, g);
-    g_in_session = 0;
-}
 /* Run a page script LIKE A BROWSER. is_module is the REAL browser signal — the <script type="module">
    attribute for inline, JS_DetectModule(body) for a fetched chunk — never a parse-failure guess. A classic
    script runs GLOBAL and its runtime throw surfaces as @WHY (never swallowed); a module runs as ESM and, if
@@ -2988,9 +2973,8 @@ static void scheduler_run(JSContext *ctx)
                 f.fs = JS_FlowNew(ctx, ds, JS_UNDEFINED, 0, NULL);        /* preemptible frame for the self-hosted session loop */
                 JS_FreeValue(ctx, ds); JS_FreeValue(ctx, gg);
                 replay_handlers_clear(ctx);                              /* candidate boot-replay's transient listeners done (session fires g_handlers) */
-                if (!f.fs) {                                             /* __driveSession not a bytecode frame (shouldn't happen) -> synchronous fallback, still correct */
-                    JS_SetFlowYieldHook(NULL);
-                    drive_session(ctx);
+                if (!f.fs) {                                             /* JS_FlowNew couldn't frame __driveSession (alloc failure, or setup eval failed) — SURFACE it, never mask with a synchronous stopgap */
+                    printf("@WHY {\"phase\":\"session\",\"reason\":\"__driveSession not flow-able (alloc/setup) — session skipped\"}\n"); fflush(stdout);
                     JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
                     dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
                     g_candidate = NULL; g_running = 0; g_cur_flow = NULL;
