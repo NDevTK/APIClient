@@ -207,12 +207,26 @@ function engineFinalize(eng) {
    be IMPOSSIBLE to overlook: a LOUD console.error banner + a persistent batch flag + total discard of the
    engine's findings (engineFinalize). NOT a quiet @E buried in resolverErrors — that is how the g_optaint
    teardown leak hid for so long. Experimental stage: a crash halts trust in that engine, never softened. */
+function crashBanner(stage, m) {   // LOUD + a persistent batch flag; EVERY abort path (create/step/teardown) routes here — no crash is ever quiet
+  try { self._engineCrashOccurred = (self._engineCrashOccurred || 0) + 1; } catch (_) {}
+  try { console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, findings DISCARDED, NOT swallowed ====\n" + m + "\n"); } catch (_) {}
+}
 function engineCrash(eng, stage, e) {
   const m = String((e && e.message) || e);
   eng._crashed = true;
   eng.lines.push('@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}");
-  try { self._engineCrashOccurred = (self._engineCrashOccurred || 0) + 1; } catch (_) {}
-  try { console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, findings DISCARDED, NOT swallowed ====\n" + m + "\n"); } catch (_) {}
+  crashBanner(stage, m);
+}
+// A crash BEFORE the engine object exists (creation/boot abort). Same rule: LOUD, findings discarded,
+// marked _engineCrashed — never a quiet "degenerate result" the reviewer reads as a boring empty page.
+function crashResult(stage, e, msg) {
+  const m = String((e && e.message) || e);
+  crashBanner(stage, m);
+  const r = linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg);
+  r._engineCrashed = true;
+  r.fetchCallSites = []; r.securitySinks = []; r.chunkUrls = []; r.domEndpoints = [];
+  r.esmImportUrls = []; r.inRunModuleUrls = []; r.protoEnums = []; r.protoFieldMaps = []; r.dangerousPatterns = []; r._park = []; r._prior = null;
+  return r;
 }
 
 /* THE PURE SCHEDULER POLICY (no wasm knowledge — engine ops are injected, so this is unit-testable with
@@ -261,7 +275,7 @@ const _hostOps = {
     while (_waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
       const job = _waiting.shift();
       try { const eng = await _engineFactory(job.code, job.html, job.msg, job.quantum); eng._resolve = job.resolve; _pool.push(eng); }
-      catch (e) { job.resolve(linesToAnalysis(['@E {"phase":"create","err":' + JSON.stringify(String(e && e.message || e)) + "}"], job.msg)); }
+      catch (e) { job.resolve(crashResult("create", e, job.msg)); }   // boot/creation abort: LOUD failure, not a quiet degenerate result
     }
     // 2) ONE frontier: when no LIVE work is pending/running and RAM has headroom, rehydrate the highest-value
     //    COLD recipes into the SAME pool so they interleave with (and by) the one WFQ — not a second scheduler.
@@ -274,7 +288,7 @@ const _hostOps = {
           const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl, credentialed: c.credentialed, quantum: c.quantum || 256 };
           const eng = await engineCreate(c.code || "", c.html || "", msg, msg.quantum);
           eng._cold = true; _pool.push(eng);
-        } catch (_) {}
+        } catch (e) { crashBanner("create-cold", String((e && e.message) || e)); }   // was silently swallowed — a cold-rehydration abort must be LOUD too
       }
     }
   },
