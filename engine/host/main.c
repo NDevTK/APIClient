@@ -3653,6 +3653,10 @@ KEEP void qjs_teardown(void)
        its held baseline values return to their slots, and drop the opaque marker. */
     JS_CowSetActive(0);
     JS_CowRevert(ctx);
+    JS_OptaintReset(ctx);   /* release the cross-flow opaque-taint set: it js_dup()s every tainted object and is
+                               GLOBAL (only reset at the NEXT qjs_begin), so a run that ends in teardown without a
+                               following analysis leaks every tainted object (the reply objects) and JS_FreeRuntime
+                               asserts gc_obj_list non-empty. Reset here so the final run frees cleanly too. */
     g_dom_capture = 0; dom_revert();   /* drop DOM undo log (restore baseline) before teardown */
     JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
     for (int i = 0; i < g_gate_n; i++) free(g_gate_tokens[i]);
