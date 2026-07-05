@@ -6609,12 +6609,17 @@ function _pruneProbeSessions() {
 // We only (a) map the engine's fire-marker X9 -> the verifier's proof hook apiclientsink(marker), and
 // (b) DELIVER it to the REAL page via the source (hash/search/pm), so real Chrome — not the model — is the
 // ground truth. Disagreement (engine says breakout, Chrome doesn't fire) is a precise engine-fidelity bug.
-function buildPocFromShape(sinkName, poc, shape, pageUrl, marker) {
+function buildPocFromShape(sinkName, poc, shape, pageUrl, marker, srcpath) {
   if (!poc || !pageUrl) return { pocJs: null, why: "missing engine poc / pageUrl" };
   if (!shape) return { pocJs: null, why: "missing source shape" };
   var m = /\{(hash|search|pm|reply)\}/.exec(shape);   // which attacker-controlled source the engine's poc rides
   if (!m) return { pocJs: null, why: "hole source unknown (generic {}) — no delivery vector; complete source-tagging first" };
   var source = m[1];
+  // STRUCTURED attacker input: srcpath ("{pm}.html", "{pm}.a.b") means the sink read a FIELD of the source
+  // object, so the payload must ride in that field (post {html:payload}), not the bare value. The field path
+  // is everything after the source token; empty = whole-value use (unchanged).
+  var fieldPath = null;
+  if (srcpath) { var fm = /^\{(?:hash|search|pm|reply)\}\.(.+)$/.exec(srcpath); if (fm) fieldPath = fm[1].split("."); }
   var call = "apiclientsink('" + marker + "')";           // the verifier's proof hook (marker = crypto.randomUUID)
   // The engine's X9 is a bare fire-marker: `onerror=X9`, `javascript:X9`, `1;X9();//`. Map every X9 (call or
   // ref form) to the apiclientsink CALL so the real sink, on firing, relays the proof. This is the ONLY edit
@@ -6634,9 +6639,13 @@ function buildPocFromShape(sinkName, poc, shape, pageUrl, marker) {
     delivery = "navigate victim to a URL whose query string is the payload";
     pocJs = "window.open(" + JSON.stringify(base) + ', "_blank");';
   } else if (source === "pm") {
-    delivery = "open the victim, then postMessage the payload from the attacker window";
+    // The message value: the bare payload for whole-value use, else an OBJECT nesting the payload at the read
+    // field path (`{html}=e.data; sink(html)` -> post {html:payload}; `e.data.a.b` -> {a:{b:payload}}).
+    var msgVal = payload;
+    if (fieldPath) { for (var fi = fieldPath.length - 1; fi >= 0; fi--) { var o = {}; o[fieldPath[fi]] = msgVal; msgVal = o; } }
+    delivery = "open the victim, then postMessage the " + (fieldPath ? "object {" + fieldPath.join(".") + ":payload}" : "payload") + " from the attacker window";
     pocJs = "var w = window.open(" + JSON.stringify(pageUrl.split("#")[0]) + ', "_blank");' +
-            " setTimeout(function(){ try { w && w.postMessage(" + JSON.stringify(payload) + ', "*"); } catch (e) {} }, 800);';
+            " setTimeout(function(){ try { w && w.postMessage(" + JSON.stringify(msgVal) + ', "*"); } catch (e) {} }, 800);';
   } else {   // reply: server-reflected — needs the server to echo attacker input; can't be delivered client-side alone
     return { pocJs: null, why: "source is a server reply (reflected) — PoC needs server-side reflection, not client delivery", source: source, payload: payload, context: context };
   }
@@ -6644,7 +6653,7 @@ function buildPocFromShape(sinkName, poc, shape, pageUrl, marker) {
 }
 function startExploitProbe(msg) {
   _pruneProbeSessions();
-  const { waitMs, findingId, sinkName, shape, poc } = msg || {};
+  const { waitMs, findingId, sinkName, shape, poc, srcpath } = msg || {};
   if (!poc || !shape) throw new Error("need the engine's poc + source shape (from the @S finding)");
 
   // pageUrl: the page the finding was observed on (recorded in securityFindings). The caller may pass it;
@@ -6671,7 +6680,7 @@ function startExploitProbe(msg) {
   // The user runs it by clicking Run in the sandboxed attacker page (poc-sandbox.html) — that real click is
   // the user activation window.open needs. When the real page's sink fires, intercept.js → content.js →
   // PROBE_HIT lands on this marker and EXPLOIT_PROBE_STATUS reports REAL EXPLOIT (Chrome-confirmed).
-  var _poc = buildPocFromShape(sinkName, poc, shape, session.pageUrl, marker);
+  var _poc = buildPocFromShape(sinkName, poc, shape, session.pageUrl, marker, srcpath);
   session.pocJs = (_poc && _poc.pocJs) || null;
   session.pocWhy = _poc && !_poc.pocJs ? _poc.why : null;   // @WHY when the source isn't client-deliverable
   session.status = "prepared";

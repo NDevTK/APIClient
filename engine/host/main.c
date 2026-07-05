@@ -1034,6 +1034,8 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
     JS_SetPropertyStr(ctx, t, "sink", JS_NewString(ctx, sink));
     JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
     JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, shape ? shape : "{}"));
+    { const char *sp = JS_OpaqueSrcC(val);   /* @S structured delivery: the source LEAF path ("{pm}.html") -> post {html:payload}, not a bare string */
+      if (sp && sp[0]) JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp)); }
     JS_SetPropertyStr(ctx, t, "gated", JS_NewBool(ctx, g_c > 0));
     uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_solvetasks, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
     JS_SetPropertyUint32(ctx, g_solvetasks, n, t);
@@ -1084,7 +1086,9 @@ static JSValue solve_all(JSContext *ctx) {
     for (uint32_t i = 0; i < tn; i++) {
         JSValue t = JS_GetPropertyUint32(ctx, g_solvetasks, i);
         JSValue sv = JS_GetPropertyStr(ctx, t, "sink"), cv = JS_GetPropertyStr(ctx, t, "ctx"), ev = JS_GetPropertyStr(ctx, t, "expr");
+        JSValue spv = JS_GetPropertyStr(ctx, t, "srcpath");
         const char *sink = JS_ToCString(ctx, sv), *sc = JS_ToCString(ctx, cv), *ex = JS_ToCString(ctx, ev);
+        const char *srcpath = JS_IsString(spv) ? JS_ToCString(ctx, spv) : NULL;
         if (ex) {
             char keybuf[1200]; snprintf(keybuf, sizeof keybuf, "%s|%s|%s", sink ? sink : "", sc ? sc : "", ex);
             JSValue dup = JS_GetPropertyStr(ctx, seen, keybuf);
@@ -1112,6 +1116,7 @@ static JSValue solve_all(JSContext *ctx) {
                     JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink ? sink : "?"));
                     JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "forced-exec"));
                     JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
+                    if (srcpath && srcpath[0]) JS_SetPropertyStr(ctx, rec, "srcpath", JS_NewString(ctx, srcpath));   /* structured delivery hint */
                     JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
                     JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
                     { char eb[900]; snprintf(eb, sizeof eb, "sink %s <- input %s (forced-exec: this exact input, driven through the real code, breaks out at the sink)", sink ? sink : "?", rpoc);
@@ -1122,7 +1127,8 @@ static JSValue solve_all(JSContext *ctx) {
             }
         }
         if (sink) JS_FreeCString(ctx, sink); if (sc) JS_FreeCString(ctx, sc); if (ex) JS_FreeCString(ctx, ex);
-        JS_FreeValue(ctx, sv); JS_FreeValue(ctx, cv); JS_FreeValue(ctx, ev); JS_FreeValue(ctx, t);
+        if (srcpath) JS_FreeCString(ctx, srcpath);
+        JS_FreeValue(ctx, sv); JS_FreeValue(ctx, cv); JS_FreeValue(ctx, ev); JS_FreeValue(ctx, spv); JS_FreeValue(ctx, t);
     }
     JS_FreeValue(ctx, seen);
     return out;
