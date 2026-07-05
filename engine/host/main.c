@@ -1577,6 +1577,13 @@ static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
         const char *pfx = g_source_pfx[magic]; size_t lp = strlen(pfx), lc = strlen(g_candidate);
         char *buf = malloc(lp + lc + 1); if (!buf) return JS_NewString(ctx, g_candidate);
         memcpy(buf, pfx, lp); memcpy(buf + lp, g_candidate, lc + 1);
+        if (magic == 2) {   /* postMessage e.data can be an OBJECT: return a CANDIDATE-CARRIER opaque so a FIELD
+                               sink (`{html}=e.data; el.innerHTML=html`) delivers the candidate, while whole-value
+                               use (`el.innerHTML=e.data`) reads the same candidate as the example. */
+            JSValue c = JS_NewOpaqueSourced(ctx, g_source_tag[2], g_source_tag[2]);
+            JS_SetOpaqueExample(ctx, c, JS_NewString(ctx, buf)); JS_SetOpaqueCarrier(ctx, c);
+            free(buf); return c;
+        }
         JSValue r = JS_NewString(ctx, buf); free(buf); return r;
     }
     return JS_NewOpaqueSourced(ctx, g_source_tag[magic], g_source_tag[magic]);   /* stamp root source identity for the per-flow value domain */
