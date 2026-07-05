@@ -186,11 +186,22 @@ async function engineServiceFetch(eng) {   // one round: resolve every pending r
 }
 function engineFinalize(eng) {
   try { eng.M.ccall("qjs_teardown", "void", [], []); }
-  catch (e) { eng.lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}"); }
+  catch (e) { engineCrash(eng, "teardown", e); }
   for (const p of eng.ptrs) { try { eng.M._free(p); } catch (_) {} }
   const result = linesToAnalysis(eng.lines, eng.msg);
   result._fkey = eng.fkey; result._prior = eng.prior;   // engine-computed key + parked entry -> persisted below
+  result._engineCrashed = !!eng._crashed;   // a WASM abort is a should-never-happen: surfaced, never buried among normal @WHY
   return result;
+}
+/* A WASM Aborted() is the engine CRASHING — a should-never-happen. We can't let it take down the whole
+   multi-engine scheduler (one page's crash must not kill analysis of the user's other tabs), so it stays
+   scoped to this engine — but it must be LOUD and unmissable, NOT a quiet @E buried in resolverErrors (that
+   is how the g_optaint teardown leak hid for so long). console.error + a distinct engine-crash marker. */
+function engineCrash(eng, stage, e) {
+  const m = String((e && e.message) || e);
+  eng._crashed = true;
+  eng.lines.push('@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}");
+  try { console.error("[bridge] ENGINE CRASH (" + stage + ") — WASM aborted, NOT swallowed:", m); } catch (_) {}
 }
 
 /* THE PURE SCHEDULER POLICY (no wasm knowledge — engine ops are injected, so this is unit-testable with
@@ -232,7 +243,7 @@ let _engineFactory = engineCreate;   // injectable for tests
 const _hostOps = {
   weight: engineWeight,
   setFloor: (eng, floor) => { try { eng.M.ccall("qjs_set_yield_floor", "void", ["number"], [floor]); } catch (_) {} },   // value yield: run until outranked by the runner-up
-  step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { eng.lines.push('@E {"phase":"protocol","err":' + JSON.stringify(String(e && e.message || e)) + "}"); return 0; } },
+  step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { engineCrash(eng, "step", e); return 0; } },   // crashed instance -> finalize (loud), don't keep stepping a dead engine
   serviceFetch: engineServiceFetch,
   admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
     // 1) seat waiting LIVE documents (the user's open tabs) first
