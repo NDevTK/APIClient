@@ -2708,10 +2708,9 @@ static JSValue js_session_drain(JSContext *ctx, JSValueConst this_val, int argc,
     JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {}   /* per-fn microtask drain, parity with the C loop */
     return JS_UNDEFINED;
 }
-/* ATTACKER SESSION: fire ALL registered handlers in seed order over the CURRENT accumulating COW delta — a
-   cross-handler sink (source stored by A, sunk by B) is reached. Now SELF-HOSTED as __driveSession (bytecode)
-   so the loop is a heap frame; run synchronously here for STAGE-1 parity, next stage makes the session a
-   resumable flow so run-to-completion is gone. */
+/* SYNCHRONOUS FALLBACK ONLY: the session normally runs as a PREEMPTIBLE __driveSession heap-frame flow (see
+   the f.session branch in scheduler_run). This runs it via a plain call, used solely if JS_FlowNew can't make
+   a frame for __driveSession (it always can — plain bytecode — so this is defensive, not a live path). */
 static void drive_session(JSContext *ctx) {
     g_in_session = 1;
     JSValue g = JS_GetGlobalObject(ctx);
@@ -2935,6 +2934,7 @@ static void scheduler_run(JSContext *ctx)
         g_cur_orphan_idx = f.orphan_idx;            /* siblings forked during this flow inherit its locator */
         g_running = 1; g_cur_val = f.val; g_cur_flow = &f;
         g_candidate = f.candidate;   /* @S replay flow: source getters return this concrete candidate (else NULL=opaque) */
+        g_in_session = f.session;    /* a session flow: sinks reached inside enqueue candidate sessions; cleared for every other flow */
 
         if (f.is_resume) {
             /* async __yield resume: drive the microtask to completion (a resolve fn, not sync-preemptible) */
@@ -2957,23 +2957,74 @@ static void scheduler_run(JSContext *ctx)
         }
 
         if (f.session) {
-            /* ATTACKER SESSION: fire all handlers in seed order over one accumulating COW delta (cross-handler
-               shared state), run to completion (no preemption — the sequence must not straddle a suspend). A
-               candidate session re-runs boot with the candidate first; both revert their delta at the end. */
+            /* ATTACKER SESSION as a PREEMPTIBLE FLOW: __driveSession (bytecode) fires all handlers in seed
+               order over ONE accumulating COW delta (cross-handler shared state). Run as a heap-frame flow so
+               it YIELDS per-opcode like any other — run-to-completion is GONE. On suspend the accumulated delta
+               unapplies/reapplies exactly like a sync flow's, so handler A's tainted write still reaches B
+               after an interleave. A CANDIDATE session alone stays run-to-completion (yield NULL): its
+               boot-globals bracket (boot_replay_candidate .. boot_restore_globals) is host-side/uncaptured and
+               must not straddle a suspend — the ONE remaining carve-out, and it never suspends. */
             g_cur_fn = JS_UNDEFINED;
-            g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);                     /* replay this session's decisions; new opaque branches fork siblings */
-            for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
-            g_c = 0; cons_reset();
-            g_candidate = f.candidate;
+            int sess_starter = (f.fs == NULL);
+            if (sess_starter) {
+                g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);                 /* replay this session's decisions; new opaque branches fork siblings */
+                for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
+                g_c = 0; cons_reset();
+                if (f.candidate) boot_replay_candidate(ctx);
+                JSValue gg = JS_GetGlobalObject(ctx);
+                JSValue ds = JS_GetPropertyStr(ctx, gg, "__driveSession");
+                f.fs = JS_FlowNew(ctx, ds, JS_UNDEFINED, 0, NULL);        /* preemptible frame for the self-hosted session loop */
+                JS_FreeValue(ctx, ds); JS_FreeValue(ctx, gg);
+                if (!f.fs) {                                             /* __driveSession not a bytecode frame (shouldn't happen) -> synchronous fallback, still correct */
+                    JS_SetFlowYieldHook(NULL);
+                    drive_session(ctx);
+                    replay_handlers_clear(ctx);
+                    JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
+                    dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
+                    if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }
+                    g_candidate = NULL; g_running = 0; g_cur_flow = NULL;
+                    JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
+                    continue;
+                }
+            } else {                                                     /* RESUME: reload decisions + swap in this session's OWN accumulated delta */
+                g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);
+                for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
+                g_c = f.saved_c; cons_reset();
+                JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
+                dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
+            }
+            JS_SetFlowYieldHook(f.candidate ? NULL : wfq_yield);
+            JSValue out = JS_UNDEFINED;
+            int st = JS_FlowResume(ctx, f.fs, &out);
             JS_SetFlowYieldHook(NULL);
-            if (f.candidate) boot_replay_candidate(ctx);
-            drive_session(ctx);
-            replay_handlers_clear(ctx);
-            JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
-            dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-            if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }
-            g_candidate = NULL; g_running = 0; g_cur_flow = NULL;
-            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
+            JSContext *c1; int jr; while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
+            if (jr < 0) js_std_dump_error(c1 ? c1 : ctx);
+            g_running = 0; g_cur_fn = JS_UNDEFINED;
+            if (st == 1) {                                               /* SUSPENDED: stash accumulated delta + re-queue (interleave with other flows) */
+                g_switches++;
+                JS_CowUnapply(ctx); f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap);
+                dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
+                f.saved_c = g_c; f.val = g_cur_val;
+                if (g_dec_n > f.dec_n) {
+                    signed char *nd = (signed char *)malloc((size_t)(g_dec_n > 0 ? g_dec_n : 1));
+                    if (nd) { for (int i = 0; i < g_dec_n; i++) nd[i] = g_dec[i]; free(f.dec); f.dec = nd; }
+                } else {
+                    for (int i = 0; i < g_dec_n && f.dec; i++) f.dec[i] = g_dec[i];
+                }
+                f.dec_n = g_dec_n;
+                g_cur_flow = NULL;
+                reg_readd(ctx, f);
+            } else {                                                     /* COMPLETED: clear replay handlers, revert this session's delta, restore candidate globals */
+                replay_handlers_clear(ctx);
+                JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
+                dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
+                if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }
+                if (JS_IsException(out)) js_std_dump_error(ctx);
+                JS_FreeValue(ctx, out);
+                g_cur_flow = NULL;
+                JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
+            }
+            g_candidate = NULL;
             continue;
         }
 
