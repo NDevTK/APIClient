@@ -2673,40 +2673,55 @@ static JSValue resolve_replayed_handler(JSContext *ctx, JSValueConst orig) {
    opaque -> the sink is DETECTED (task recorded), candidate -> breakout is VERIFIED. Branches take a fixed
    arm here (per-handler branch exploration is the individual orphan flows' job); the session adds only the
    cross-handler STATE dimension. */
-static void drive_session(JSContext *ctx) {
-    g_in_session = 1;
-    /* First the event handlers (addEventListener), each with its real event arg (msg handlers get the
-       synthetic {pm} MessageEvent so postMessage-XSS is modeled). */
-    uint32_t hn = 0;
+/* __sessionFns(): the session fire list as [fn, event] pairs — event handlers (msg handlers get the synthetic
+   {pm} MessageEvent) then the collected ORPHANS (deduped vs handlers, opaque arg). Exposed so the session LOOP
+   is SELF-HOSTED bytecode (like the array methods) rather than a C loop that can't yield mid-iteration and so
+   runs to completion — a violation of the per-opcode-yield core. */
+static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue arr = JS_NewArray(ctx); uint32_t n = 0, hn = 0;
     if (!JS_IsUndefined(g_handlers)) { JSValue lv = JS_GetPropertyStr(ctx, g_handlers, "length"); JS_ToUint32(ctx, &hn, lv); JS_FreeValue(ctx, lv); }
     for (uint32_t i = 0; i < hn; i++) {
         JSValue h = JS_GetPropertyUint32(ctx, g_handlers, i);
         if (JS_IsFunction(ctx, h)) {
-            JSValueConst arg = (is_msg_handler(h) && !JS_IsUndefined(g_msg_event)) ? g_msg_event : g_opaque;
-            JSValue r = JS_Call(ctx, h, g_opaque, 1, &arg);
-            if (JS_IsException(r)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }   /* a handler throwing doesn't stop the session */
-            JS_FreeValue(ctx, r);
-            JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {}
+            JSValueConst ev = (is_msg_handler(h) && !JS_IsUndefined(g_msg_event)) ? g_msg_event : g_opaque;
+            JSValue pair = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, h));
+            JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, ev));
+            JS_SetPropertyUint32(ctx, arr, n++, pair);
         }
         JS_FreeValue(ctx, h);
     }
-    /* Then the collected ORPHANS (never-executed fns: exposed framework actions/thunks — redux/vuex where a
-       login ACTION sets store state from an opaque reply and a THUNK gates on it -- are plain fns, NOT
-       addEventListener handlers, so the handler-only session missed the cross-action state dimension). Fired
-       in seed (definition) order over the SAME accumulating delta so an earlier action's opaque write reaches
-       a later thunk's gate. Deduped against the handlers already fired above. Opaque args (external input). */
     for (int oi = 0; oi < g_orphan_n; oi++) {
         JSValueConst fn = g_orphan_buf[oi];
         if (!JS_IsFunction(ctx, fn)) continue;
         int is_h = 0;
         for (uint32_t i = 0; i < hn && !is_h; i++) { JSValue h = JS_GetPropertyUint32(ctx, g_handlers, i); if (JS_VALUE_GET_PTR(h) == JS_VALUE_GET_PTR(fn)) is_h = 1; JS_FreeValue(ctx, h); }
-        if (is_h) continue;   /* already fired as a handler */
-        JSValueConst arg = g_opaque;
-        JSValue r = JS_Call(ctx, fn, g_opaque, 1, &arg);
+        if (is_h) continue;
+        JSValue pair = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, fn));
+        JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, g_opaque));
+        JS_SetPropertyUint32(ctx, arr, n++, pair);
+    }
+    return arr;
+}
+static JSValue js_session_drain(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {}   /* per-fn microtask drain, parity with the C loop */
+    return JS_UNDEFINED;
+}
+/* ATTACKER SESSION: fire ALL registered handlers in seed order over the CURRENT accumulating COW delta — a
+   cross-handler sink (source stored by A, sunk by B) is reached. Now SELF-HOSTED as __driveSession (bytecode)
+   so the loop is a heap frame; run synchronously here for STAGE-1 parity, next stage makes the session a
+   resumable flow so run-to-completion is gone. */
+static void drive_session(JSContext *ctx) {
+    g_in_session = 1;
+    JSValue g = JS_GetGlobalObject(ctx);
+    JSValue ds = JS_GetPropertyStr(ctx, g, "__driveSession");
+    if (JS_IsFunction(ctx, ds)) {
+        JSValue r = JS_Call(ctx, ds, JS_UNDEFINED, 0, NULL);
         if (JS_IsException(r)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
         JS_FreeValue(ctx, r);
-        JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {}
     }
+    JS_FreeValue(ctx, ds); JS_FreeValue(ctx, g);
     g_in_session = 0;
 }
 /* Run a page script LIKE A BROWSER. is_module is the REAL browser signal — the <script type="module">
@@ -3182,6 +3197,18 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g_msg_event, "source", JS_DupValue(ctx, g_opaque));
     JS_SetPropertyStr(ctx, g_msg_event, "ports", JS_DupValue(ctx, g_opaque));
     JS_SetPropertyStr(ctx, g, "__driveOrphans", JS_NewCFunction(ctx, js_drive_orphans, "__driveOrphans", 0));
+    JS_SetPropertyStr(ctx, g, "__sessionFns", JS_NewCFunction(ctx, js_session_fns, "__sessionFns", 0));
+    JS_SetPropertyStr(ctx, g, "__sessionDrain", JS_NewCFunction(ctx, js_session_drain, "__sessionDrain", 0));
+    {   /* SELF-HOSTED attacker-session loop (bytecode) — fire each [fn,event] pair over the accumulating COW
+           delta, per-fn microtask drain. CALLED ONCE HERE (handlers empty -> no-op) so its bytecode is marked
+           EXECUTED and JS_CollectOrphans does NOT collect it: a driven-as-orphan __driveSession would fire all
+           handlers outside a session and pollute the candidate-enqueue dedup (broke xss_const's boot-replay). */
+        const char *sj = "var __driveSession=function(){var fns=__sessionFns();for(var i=0;i<fns.length;i++){try{fns[i][0](fns[i][1]);}catch(e){}__sessionDrain();}};";
+        JSValue sr = JS_Eval(ctx, sj, strlen(sj), "<session>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(ctx, sr);
+        JSValue ds = JS_GetPropertyStr(ctx, g, "__driveSession");
+        if (JS_IsFunction(ctx, ds)) { JSValue r = JS_Call(ctx, ds, JS_UNDEFINED, 0, NULL); JS_FreeValue(ctx, r); }
+        JS_FreeValue(ctx, ds);
+    }
 
     /* Minimal browser environment: window/self = globalThis; OPAQUE external-input sources (location,
        document.cookie, navigator, referrer) so a real bundle's gate on external input auto-forks without
