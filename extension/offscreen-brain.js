@@ -5150,105 +5150,19 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     // cap); diagnostic buffer, not analysis state, so it drops nothing learned.
     if (!Array.isArray(tab._resolverErrors)) tab._resolverErrors = [];
     var _seenRe = new Set(tab._resolverErrors.map(function (r) { return r.message; }));
-    // Reply-example seed (CLAUDE.md opaque-with-example policy): a fromReply
-    // chain — fetch(reply.field) — names its SOURCE endpoint + field. Fire ONE
-    // bounded safe GET per source (cached → no spam + deterministic; GET-only →
-    // no account change; origin-scoped under safeFetch's OWN SOP/CORS with the
-    // page principal) and extract the field — the real value the bundle CANNOT
-    // compute (server input). The endpoint + field stay forced-exec-learned;
-    // this only fills the EXAMPLE, a marked sample, never a branch decider.
-    var _rcPrincipal = buf.url || buf.pageUrl || "";
-    if (!tab._replyCache) tab._replyCache = {};
+    // The fromReply reply-example (a fully-opaque URL that IS a reply field ->
+    // fetch the source, extract the field) is ENGINE-SIDE now: g_reply_table +
+    // @REPLYWANT/qjs_provide inject the concrete reply so r.json() returns the
+    // real value in-flow. That logic must NOT live in this bridge (engine is the
+    // browser; the offscreen only relays safeFetch/IDB/chrome). So resolverErrors
+    // here is purely a DIAGNOSTIC surface (@E crashes) for the popup.
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
       var _re = analysis.resolverErrors[_rei];
       console.debug("[AST:resolver] %s: %s", _re.context, _re.message);
       if (_re.stack) console.debug(_re.stack);
-      if (_rcPrincipal && _re.fromReply && _re.opaqueSources && _re.opaqueFields && _re.opaqueFields.length) {
-        var _src = null;
-        for (var _si = 0; _si < _re.opaqueSources.length; _si++) {
-          var _os = _re.opaqueSources[_si];
-          if (typeof _os === "string" && _os.indexOf("fetch.") === 0 && _os.indexOf(" ") > 0) { _src = _os; break; }
-        }
-        var _srcEp = _src ? _src.slice(_src.indexOf(" ") + 1) : null;
-        var _absSrc = null;
-        // Resolve against the page principal — safeFetch wants an absolute URL +
-        // checks its origin vs the principal (origin-relative SSRF: same-origin
-        // ok, public->private blocked). A bundle's source URL is relative.
-        if (_srcEp && _srcEp.indexOf("{") < 0) { try { _absSrc = new URL(_srcEp, _rcPrincipal).href; } catch (e) {} }
-        if (_absSrc) {
-          var _reply = tab._replyCache[_absSrc];
-          if (_reply === undefined) {
-            try {
-              // Same-origin → credentialed (the user's session = the authed API
-              // surface). Cross-origin → PUBLIC non-credentialed: a public
-              // discovery/config doc (oidc .well-known) serves ACAO:* which
-              // safeFetch's credentialed CORS would block, and creds must NEVER
-              // leak cross-origin. Per the CLAUDE.md origin-scoped policy.
-              // Principal ORIGIN = the requesting document's browser origin (per-frame,
-              // documentId-keyed, opaque-unique) tracked on the buffer — NOT parsed from a
-              // URL (a sandboxed frame's URL parses to a real origin it does NOT have).
-              // Opaque / mixed / untracked ("null:<uuid>" or "null") matches no real
-              // target, so the credentialed read never fires; pageOrigin also flows to
-              // safeFetch's own SOP (defense in depth).
-              var _rcOrigin = buf.origin || "";   // THIS document's authoritative origin (set from sender on CONTENT_HTML); "" -> fail closed
-              var _sameOrig = false; try { var _to = new URL(_absSrc).origin; _sameOrig = _rcOrigin.indexOf("://") > 0 && _to === _rcOrigin; } catch (e) {}
-              var _resp = await safeFetch(_absSrc, { pageUrl: _rcPrincipal, pageOrigin: _rcOrigin, method: "GET", credentialed: _sameOrig });
-              _reply = (_resp && _resp.ok && typeof _resp.body === "string") ? _resp.body : null;
-            } catch (e) { _reply = null; }
-            tab._replyCache[_absSrc] = _reply;
-          }
-          if (_reply) {
-            var _json = null; try { _json = JSON.parse(_reply); } catch (e) {}
-            if (_json && typeof _json === "object") {
-              var _ex = {};
-              for (var _fi = 0; _fi < _re.opaqueFields.length; _fi++) {
-                var _fld = _re.opaqueFields[_fi];
-                if (typeof _json[_fld] === "string") _ex[_fld] = _json[_fld];
-              }
-              if (Object.keys(_ex).length) {
-                _re.replyExample = { source: _srcEp, fields: _ex };
-                // Surface the chained endpoint in the moat: a FULLY-opaque URL
-                // that IS a reply field resolves to the field's real value (a
-                // server-provided URL — marked reply-example, never computed).
-                // forced exec already learned the chained fetch fired; the GET
-                // only supplies its URL. (Templated chains stay {hole} endpoints,
-                // not resolverErrors, so this only fires for whole-URL chains.)
-                var _cm = /"method":"(\w+)"/.exec(_re.message || "");
-                var _chainMethod = _cm ? _cm[1] : "GET";
-                // Reconstruct the chained URL: substitute the recovered field
-                // values INTO the URL template (rawUrl, e.g. "{apiHost}/api/widgets")
-                // so the literal PATH survives the opaque host; a fully-opaque URL
-                // (the whole URL IS one field) uses each field value directly.
-                var _tmpl = (typeof _re.rawUrl === "string" && _re.rawUrl.indexOf("{") >= 0) ? _re.rawUrl : null;
-                var _chainUrls = [];
-                if (_tmpl) {
-                  var _su = _tmpl;
-                  for (var _f in _ex) _su = _su.split("{" + _f + "}").join(_ex[_f]);
-                  if (_su.indexOf("{") < 0) _chainUrls.push(_su);
-                } else {
-                  for (var _f2 in _ex) _chainUrls.push(_ex[_f2]);
-                }
-                for (var _ci = 0; _ci < _chainUrls.length; _ci++) {
-                  var _eu = null; try { _eu = new URL(_chainUrls[_ci], _rcPrincipal); } catch (e) {}
-                  if (!_eu || (_eu.protocol !== "http:" && _eu.protocol !== "https:")) continue;
-                  var _epk = "replyex " + _chainMethod + " " + _eu.host + _eu.pathname;
-                  if (!tab.endpoints.has(_epk)) {
-                    tab.endpoints.set(_epk, {
-                      url: _decHoles(_eu.href), method: _chainMethod, host: _eu.host, path: _decHoles(_eu.pathname),
-                      service: extractInterfaceName(_eu), source: "reply_example",
-                      valueSource: "reply-example", replyFrom: { endpoint: _srcEp, field: Object.keys(_ex).join(",") },
-                      pageUrl: _rcPrincipal, firstSeen: Date.now(),
-                    });
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
       if (!_seenRe.has(_re.message)) {
         _seenRe.add(_re.message);
-        tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null, replyExample: _re.replyExample || null });
+        tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null });
       }
     }
   }
