@@ -3463,6 +3463,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         dom_run_scripts(ctx);   /* run inline scripts + REQUEST external <script src> loads (fetched in qjs_step) + bundle id */
         JS_CowSetActive(0);
         g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);
+        JS_SetFlowLocalMark(1);   /* baseline is now fixed: every object a FLOW creates hereafter is flow-private (COW/taint skip it) */
     }
     return 0;   /* boot done; g_bundle_id is now readable via qjs_bundle_id(). Host reads it, looks up the parked
                    frontier by ORIGIN|bundle-id in IDB (its only job), then calls qjs_begin(recipes) to seed. */
@@ -3565,12 +3566,12 @@ KEEP void qjs_provide(const char *url, const char *body)
         if (strcmp(g_chunk_pending[i], url) != 0) continue;
         if (body && body[0]) {
             JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
-            int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0);
+            int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0); JS_SetFlowLocalMark(0);   /* a lazy CHUNK's globals are BASELINE (shared, re-run in boot-replay), not flow-local — mark 0 while it evals */
             modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
             dynpend_retry(ctx);                                  /* resolve any parked dynamic import() now linkable */
             if (is_moddep(url)) pendmod_retry(ctx);              /* a static-import dep OR dyn-import chunk: link in-graph (don't eval standalone -> no double side effects) */
             else eval_page_script(ctx, body, strlen(body), url, JS_DetectModule(body, strlen(body))); /* classic external script: run standalone (module vs classic by the real detector) */
-            JS_CowSetActive(1); g_dom_capture = dsv;
+            JS_CowSetActive(1); JS_SetFlowLocalMark(1); g_dom_capture = dsv;
             /* CACHE the chunk so boot-replay re-runs it under a candidate — a source stored / handler
                registered in an external chunk is then re-established with the concrete input (cross-flow
                through CHUNK state). The re-run's writes are captured in the candidate flow's own COW delta
