@@ -376,7 +376,22 @@ static const char *ARRAY_PRELUDE_JS =
 "Object.defineProperty(Array.prototype,'indexOf',{writable:true,enumerable:false,configurable:true,value:function indexOf(sv,fi){"
 "  var O=Object(this),L=O.length>>>0; if(L===0)return -1;"
 "  var n=fi|0,k=n>=0?n:L+n; if(k<0)k=0;"
-"  for(;k<L;k++){if(k in O&&O[k]===sv)return k;} return -1;}});";
+"  for(;k<L;k++){if(k in O&&O[k]===sv)return k;} return -1;}});"
+/* lastIndexOf (=== + hole-skip, reverse) and find/findIndex (PREDICATE) collapse the same way: the C
+   builtins run JS_ToBool on an opaque predicate-result -> concrete -> no fork. Self-hosted, the truthiness
+   test is OP_if which propagates opacity, so `arr.find(x=>x===input)`-gated code forks + explores. */
+"Object.defineProperty(Array.prototype,'lastIndexOf',{writable:true,enumerable:false,configurable:true,value:function lastIndexOf(sv,fi){"
+"  var O=Object(this),L=O.length>>>0; if(L===0)return -1;"
+"  var n=arguments.length>1?fi|0:L-1,k=n>=0?(n<L-1?n:L-1):L+n;"
+"  for(;k>=0;k--){if(k in O&&O[k]===sv)return k;} return -1;}});"
+"Object.defineProperty(Array.prototype,'find',{writable:true,enumerable:false,configurable:true,value:function find(cb,thisArg){"
+"  if(typeof cb!=='function')throw new TypeError('Array.prototype.find: callback is not a function');"
+"  var O=Object(this),L=O.length>>>0;"
+"  for(var k=0;k<L;k++){var v=O[k]; if(cb.call(thisArg,v,k,O))return v;} return undefined;}});"
+"Object.defineProperty(Array.prototype,'findIndex',{writable:true,enumerable:false,configurable:true,value:function findIndex(cb,thisArg){"
+"  if(typeof cb!=='function')throw new TypeError('Array.prototype.findIndex: callback is not a function');"
+"  var O=Object(this),L=O.length>>>0;"
+"  for(var k=0;k<L;k++){if(cb.call(thisArg,O[k],k,O))return k;} return -1;}});";
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
