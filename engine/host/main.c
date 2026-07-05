@@ -62,6 +62,9 @@ typedef struct {
     int is_boot;         /* BOOT FLOW: re-run the page's boot (inline scripts) from the PRISTINE pre-boot baseline as a
                             FORKING starter, so an async reply (now cached, resolves synchronously on re-run) drives its
                             continuation's gated branches WITH the concolic example — the faithful boot-as-flow. */
+    int origin_unsat;    /* @S: this flow reached its sink by force-passing an attacker-UNSATISFIABLE origin check
+                            (e.origin.endsWith('.trusted.com') — can't host a subdomain of trusted.com). solve_add
+                            suppresses the PoC (unreachable cross-origin), like the === case via cons_fixed_value. */
 } Flow;
 static int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
 static int g_in_boot_flow = 0; /* a BOOT flow is re-running boot: fork boot siblings; suppress handler re-registration */
@@ -220,7 +223,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].cow = NULL; g_reg[g_reg_n].cow_n = 0; g_reg[g_reg_n].cow_cap = 0;
     g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
-    g_reg[g_reg_n].is_boot = 0;
+    g_reg[g_reg_n].is_boot = 0; g_reg[g_reg_n].origin_unsat = 0;
     g_reg_n++; return 1;
 }
 
@@ -926,7 +929,15 @@ static void gate_collect(const char *token, const char *src) {
        'trusted<img..>'. Drop it here (the data search is unaffected; the same string, if ALSO a real data gate
        elsewhere, is collected there with a data src). Per-flow origin-constraint SURFACING for delivery is a
        separate concern needing per-flow attribution. */
-    if (src && (strncmp(src, "{origin}", 8) == 0 || strncmp(src, "{source}", 8) == 0)) return;
+    if (src && (strncmp(src, "{origin}", 8) == 0 || strncmp(src, "{source}", 8) == 0)) {
+        /* A subdomain-SUFFIX check `e.origin.endsWith('.trusted.com')` is attacker-UNSATISFIABLE (they cannot
+           host a subdomain of trusted.com), so a sink gated behind it is unreachable cross-origin -> flag the
+           running flow for @S suppression. (startsWith/includes/indexOf stay reportable: 'trusted.com.evil.com'
+           bypasses them. A non-dotted endsWith('trusted.com') is bypassable too — 'eviltrusted.com'.) */
+        size_t sl = strlen(src);
+        if (token[0] == '.' && sl >= 9 && strcmp(src + sl - 9, ".endsWith") == 0 && g_cur_flow) g_cur_flow->origin_unsat = 1;
+        return;   /* origin/source constraints never feed the DATA-payload candidate search */
+    }
     for (int i = 0; i < g_gate_n; i++) if (strcmp(g_gate_tokens[i], token) == 0) return;
     if (g_gate_n >= g_gate_cap) { int nc = g_gate_cap ? g_gate_cap * 2 : 32;
         char **n = realloc(g_gate_tokens, (size_t)nc * sizeof(char *)); if (!n) return; g_gate_tokens = n; g_gate_cap = nc; }
@@ -1038,7 +1049,7 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
            attacker CANNOT forge that origin, so the sink is unreachable cross-origin -> the candidate would be a
            FALSE PoC. Suppress. (A substring/regex origin check records NO EQ constraint, so it is NOT suppressed
            -- those are genuinely bypassable and stay reportable, the origin-bypass frontier.) */
-        if (cons_fixed_value("{origin}")) return;
+        if (cons_fixed_value("{origin}") || (g_cur_flow && g_cur_flow->origin_unsat)) return;
         /* This flow drove a CONCRETE candidate through the real code+branches to the sink. If it broke out,
            THAT candidate is a working PoC — the only sound @S output. No breakout -> nothing recorded (not a
            "safe" verdict: the search may still solve a gate with a better candidate). */
