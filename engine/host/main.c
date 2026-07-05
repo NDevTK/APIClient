@@ -361,7 +361,22 @@ static const char *ARRAY_PRELUDE_JS =
 "Object.defineProperty(Array.prototype,'every',{writable:true,enumerable:false,configurable:true,value:function every(cb,thisArg){"  /* early-exit on first falsy */
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.every: callback is not a function');"
 "  var O=Object(this),L=O.length>>>0;"
-"  for(var k=0;k<L;k++){if(k in O){if(!cb.call(thisArg,O[k],k,O))return false;}}return true;}});";
+"  for(var k=0;k<L;k++){if(k in O){if(!cb.call(thisArg,O[k],k,O))return false;}}return true;}});"
+/* includes/indexOf are SELF-HOSTED not for overflow but for OPACITY-BY-CONSTRUCTION: the C builtins collapse
+   `arr.includes(opaqueInput)` to a concrete false/-1 (identity compare), so a list-membership GATE
+   (`if(allowed.includes(input))`) never forks and the gated code is never explored (missed @H). As bytecode
+   the compare is OP_strict_eq, which propagates opacity -> the branch forks (explore) AND records the
+   `{src}==element` constraint, so an ORIGIN whitelist auto-suppresses @S via cons_fixed_value while a DATA
+   whitelist stays a real reachable sink. One mechanism, both outcomes. (SameValueZero for includes; strict
+   === + hole-skip for indexOf; fromIndex via |0 — the prelude's small-index simplification.) */
+"Object.defineProperty(Array.prototype,'includes',{writable:true,enumerable:false,configurable:true,value:function includes(sv,fi){"
+"  var O=Object(this),L=O.length>>>0; if(L===0)return false;"
+"  var n=fi|0,k=n>=0?n:L+n; if(k<0)k=0;"
+"  for(;k<L;k++){var v=O[k]; if(v===sv||(v!==v&&sv!==sv))return true;} return false;}});"
+"Object.defineProperty(Array.prototype,'indexOf',{writable:true,enumerable:false,configurable:true,value:function indexOf(sv,fi){"
+"  var O=Object(this),L=O.length>>>0; if(L===0)return -1;"
+"  var n=fi|0,k=n>=0?n:L+n; if(k<0)k=0;"
+"  for(;k<L;k++){if(k in O&&O[k]===sv)return k;} return -1;}});";
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
