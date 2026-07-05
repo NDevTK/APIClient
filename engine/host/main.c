@@ -2904,6 +2904,12 @@ static void park_frontier(JSContext *ctx)
     (void)parked;   /* recipes accumulated into g_park -> @RESULT._park (no separate @PARKED line) */
 }
 
+/* A BOOT FLOW is pending (reply-triggered forking re-run or a boot-fork sibling) — the quantum must not park
+   it: it delivers an already-fetched reply's gated surface and has no replay recipe if dropped. */
+static int reg_has_boot(void) {
+    for (int i = 0; i < g_reg_n; i++) if (g_reg[i].is_boot) return 1;
+    return 0;
+}
 /* The ONE scheduler loop: pick the highest-WEIGHT flow (NON-FIFO), run it as a preemptible heap-frame
    quantum, re-queue it if it suspended (interleave), repeat. BFS by value-of-information: shallow
    high-emit flows finish ahead of the deep residue, which is starved to ~0 CPU (resumable). */
@@ -2916,8 +2922,14 @@ static void scheduler_run(JSContext *ctx)
            g_quantum flow DISPATCHES (starter OR resume/fetch-round), PARK the rest of the frontier as compact
            replay recipes (orphan_idx + decision-vector) and stop — resumable next burst/session. Counting
            resumes too is what makes a single DEEP await/fetch-loop flow yield to park (it never adds starters),
-           so no step-cap crutch is needed. Not a bound: parked flows re-drive by re-running boot + decisions. */
-        if (g_quantum > 0 && g_work >= g_quantum) { park_frontier(ctx); break; }
+           so no step-cap crutch is needed. Not a bound: parked flows re-drive by re-running boot + decisions.
+           EXCEPTION — never park while a BOOT FLOW is pending: a reply-triggered forking boot (reg_add_boot on
+           a NEW reply) is the DELIVERY of an already-fetched reply — the moat's headline gated/logged-in surface
+           — and it carries NO orphan_idx, so park_frontier would DROP it with no recipe (permanently lost, not
+           deferred). Parking productive reply-delivery is exactly the "truncates distinct work" a bound must
+           never do; the WFQ, not the quantum, orders the boot-fork tree, and it drains (finite reply-gated
+           branches) before the orphan residue parks. */
+        if (g_quantum > 0 && g_work >= g_quantum && !reg_has_boot()) { park_frontier(ctx); break; }
         int best = 0;
         for (int i = 1; i < g_reg_n; i++)
             if (flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
