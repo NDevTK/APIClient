@@ -1677,8 +1677,8 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     }
   }
 
-  // (Request body @BODY -> params[location:body] feeds the doc.schemas[…Request] builder above AND the
-  //  globalStore endpoint's requestBody field at registration — the durable, popup/OpenAPI-visible copy.)
+  // (Request body @BODY -> params[location:body] feeds the doc.schemas[…Request] builder above — the SINGLE
+  //  request-body surface the Send panel + OpenAPI export read. No endpoint-entry copy; that was dead.)
 
   // Binary body: hostedge.bodyShape captured the full byte sequence + the
   // worker's magic-byte sniffer classified the wire format (protobuf,
@@ -5684,15 +5684,10 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
             // host edge, per-header literal/opaque) — transport metadata shown
             // in the Send panel so the endpoint is actually usable.
             requiredHeaders: (callSite.headers && Object.keys(callSite.headers).length) ? callSite.headers : null,
-            // AST-captured request BODY schema (@BODY -> params[location:body]): field -> concrete example or
-            // "{}" (opaque/external input). Shown in the Send panel + OpenAPI export so a POST is usable.
-            requestBody: (function () {
-              var bp = (callSite.params || []).filter(function (p) { return (p.location || "query") === "body"; });
-              if (!bp.length) return null;
-              var o = {};
-              bp.forEach(function (p) { o[p.name] = (p.validValues && p.validValues.length) ? p.validValues[0] : "{}"; });
-              return o;
-            })(),
+            // (Request body: the @BODY params[location:body] feed the discovery method schema, which is the
+            //  SINGLE source the Send panel (schema.requestBody) and OpenAPI export (convertDiscoveryToOpenApi)
+            //  read. An endpoint-entry requestBody copy was DEAD — resolveEndpointSchema never surfaced it — so
+            //  it is deleted, not duplicated here.)
             firstSeen: Date.now(),
           });
           newEndpoints++;
