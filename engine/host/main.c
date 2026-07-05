@@ -2636,13 +2636,6 @@ static void boot_replay_candidate(JSContext *ctx) {
     if (g_boot_delta) JS_CowSeedBootInverse(ctx, g_boot_delta, g_boot_delta_n);
     boot_replay(ctx);   /* re-run boot under the concrete candidate (guards re-fire), captured in the candidate's own delta */
 }
-/* Reapply g_boot_delta to the shared heap (post-boot baseline). Used ONLY by the boot FLOW (is_boot), which
-   unapplies g_boot_delta on the shared heap to re-run boot forking — a separate run-to-completion carve-out.
-   Candidate flows no longer need this: their boot-undo lives in the flow delta (JS_CowSeedBootInverse). */
-static void boot_restore_globals(JSContext *ctx) {
-    if (g_boot_delta) { JS_CowBufLoad(g_boot_delta, g_boot_delta_n, g_boot_delta_cap); JS_CowApply(ctx);
-        g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap); }   /* heap -> post-boot; stash applied */
-}
 /* CLOSURE cross-flow: an orphan handler captured at seed time (f.handle) closes over the BASELINE source;
    boot_replay under the candidate re-created that handler with the CANDIDATE closure. Re-resolve to the
    fresh one by SOURCE IDENTITY (same JS_OrphanHash) among the current global functions, so the candidate
@@ -3048,21 +3041,21 @@ static void scheduler_run(JSContext *ctx)
             /* BOOT FLOW: re-run boot from the PRISTINE pre-boot baseline as a FORKING starter. Cached replies
                resolve synchronously (make_response injects __body), so a reply-consuming continuation runs
                IN-LINE and its gated branches FORK with the concolic example (unreachable via the non-forking
-               promise-resume). Runs to completion (no mid-boot preempt); COW-isolated + reverted like any flow. */
+               promise-resume). The boot-undo lives IN the flow delta (JS_CowSeedBootInverse — the SAME primitive
+               candidate flows use), so JS_CowRevert restores the post-boot baseline with NO host-side bracket:
+               one uniform COW-delta mechanism, and g_boot_delta stays the canonical baseline (only READ). */
             g_cur_fn = JS_UNDEFINED;
             g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);
             for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
             g_c = 0; cons_reset();
             JS_SetFlowYieldHook(NULL);
-            if (g_boot_delta) { JS_CowBufLoad(g_boot_delta, g_boot_delta_n, g_boot_delta_cap); JS_CowUnapply(ctx);   /* heap -> pre-boot (globals incl let/const deleted) */
-                                g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap); }
+            if (g_boot_delta) JS_CowSeedBootInverse(ctx, g_boot_delta, g_boot_delta_n);   /* seed flow delta with boot-inverse; heap -> pre-boot (globals incl let/const deleted), RECORDED */
             g_in_boot_flow = 1;
             boot_scripts_run(ctx);                                        /* re-run boot, FORKING; cached replies resolve sync */
             { JSContext *cb; int jr; while ((jr = JS_ExecutePendingJob(g_rt, &cb)) > 0) { } if (jr < 0) js_std_dump_error(cb ? cb : ctx); }   /* drain continuations (they fork too) */
             g_in_boot_flow = 0;
-            JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* discard this flow's writes -> pre-boot */
+            JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* revert boot-inverse + re-run writes -> post-boot baseline */
             dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-            JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1);   /* reapply g_boot_delta -> post-boot baseline for the next opaque flow */
             g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
             JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
             continue;
