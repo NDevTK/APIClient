@@ -1824,7 +1824,7 @@ function renderSecurityPanel() {
     var canVerify = item.poc && item.shape && /\{(hash|search|pm)\}/.test(item.shape) && entry.pageUrl;
     var verifyHtml = "";
     if (canVerify) {
-      var probe = JSON.stringify({ poc: item.poc, shape: item.shape, srcpath: item.srcpath, sinkName: item.sink, sourceUrl: entry.sourceUrl, pageUrl: entry.pageUrl, findingId: key });
+      var probe = JSON.stringify({ poc: item.poc, shape: item.shape, srcpath: item.srcpath, gatefields: item.gatefields, sinkName: item.sink, sourceUrl: entry.sourceUrl, pageUrl: entry.pageUrl, findingId: key });
       verifyHtml = '<div class="verify-row">'
         + '<button class="verify-btn" data-probe=\'' + esc(probe) + '\' data-key="' + esc(key) + '">Verify in real Chrome</button>'
         + '<span class="verify-hint">loads the real page with the engine’s EXACT payload in a sandboxed attacker window — the sink firing <code>apiclientsink</code> is ground-truth REAL EXPLOIT (no fire → engine/Chrome divergence)</span>'

@@ -1004,6 +1004,22 @@ static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand, cons
         if (target) g_reg[g_reg_n - 1].vtarget = strdup(target);
     }
 }
+/* @S STRUCTURED DELIVERY: every EQ gate the flow took on a SIBLING field of the same attacker object
+   ({pm}.type=='render' while the sink reads {pm}.html) is a field the delivery object MUST set, or the real
+   handler's gate blocks the sink. Collect those {root}.field==token pairs into {field:token}; the sink field
+   carries the payload separately. NULL if none (whole-value or ungated). */
+static JSValue collect_gate_fields(JSContext *ctx, const char *root) {
+    if (!root || !root[0]) return JS_UNDEFINED;
+    size_t rl = strlen(root); JSValue o = JS_UNDEFINED;
+    for (int i = 0; i < g_cons_n; i++) {
+        Cons *c = &g_cons[i];
+        if (c->src && c->op == OPCMP_EQ && c->tok && !strncmp(c->src, root, rl) && c->src[rl] == '.') {
+            if (JS_IsUndefined(o)) o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, c->src + rl + 1, JS_NewString(ctx, c->tok));   /* field path after "{root}." -> required token */
+        }
+    }
+    return o;
+}
 /* Sink reached. DUAL-MODE:
    - REPLAY flow (g_candidate set): `val` is the CONCRETE transformed candidate that ran through the REAL
      code+branches to get here. If it breaks out, this PoC is PATH+BREAKOUT verified (reachability proven by
@@ -1035,7 +1051,13 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
     JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
     JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, shape ? shape : "{}"));
     { const char *sp = JS_OpaqueSrcC(val);   /* @S structured delivery: the source LEAF path ("{pm}.html") -> post {html:payload}, not a bare string */
-      if (sp && sp[0]) JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp)); }
+      if (sp && sp[0]) {
+          JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp));
+          char root[64]; const char *rb = strchr(sp, '}');   /* source token "{pm}" -> collect sibling gate fields the handler requires */
+          if (rb && (size_t)(rb - sp + 1) < sizeof root) { size_t rl = (size_t)(rb - sp + 1); memcpy(root, sp, rl); root[rl] = 0;
+              JSValue gf = collect_gate_fields(ctx, root);
+              if (!JS_IsUndefined(gf)) JS_SetPropertyStr(ctx, t, "gatefields", gf); }
+      } }
     JS_SetPropertyStr(ctx, t, "gated", JS_NewBool(ctx, g_c > 0));
     uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_solvetasks, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
     JS_SetPropertyUint32(ctx, g_solvetasks, n, t);
@@ -1087,6 +1109,7 @@ static JSValue solve_all(JSContext *ctx) {
         JSValue t = JS_GetPropertyUint32(ctx, g_solvetasks, i);
         JSValue sv = JS_GetPropertyStr(ctx, t, "sink"), cv = JS_GetPropertyStr(ctx, t, "ctx"), ev = JS_GetPropertyStr(ctx, t, "expr");
         JSValue spv = JS_GetPropertyStr(ctx, t, "srcpath");
+        JSValue gfv = JS_GetPropertyStr(ctx, t, "gatefields");
         const char *sink = JS_ToCString(ctx, sv), *sc = JS_ToCString(ctx, cv), *ex = JS_ToCString(ctx, ev);
         const char *srcpath = JS_IsString(spv) ? JS_ToCString(ctx, spv) : NULL;
         if (ex) {
@@ -1117,6 +1140,7 @@ static JSValue solve_all(JSContext *ctx) {
                     JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "forced-exec"));
                     JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
                     if (srcpath && srcpath[0]) JS_SetPropertyStr(ctx, rec, "srcpath", JS_NewString(ctx, srcpath));   /* structured delivery hint */
+                    if (JS_IsObject(gfv)) JS_SetPropertyStr(ctx, rec, "gatefields", JS_DupValue(ctx, gfv));   /* sibling gate fields the delivery object must set */
                     JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
                     JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
                     { char eb[900]; snprintf(eb, sizeof eb, "sink %s <- input %s (forced-exec: this exact input, driven through the real code, breaks out at the sink)", sink ? sink : "?", rpoc);
@@ -1128,7 +1152,7 @@ static JSValue solve_all(JSContext *ctx) {
         }
         if (sink) JS_FreeCString(ctx, sink); if (sc) JS_FreeCString(ctx, sc); if (ex) JS_FreeCString(ctx, ex);
         if (srcpath) JS_FreeCString(ctx, srcpath);
-        JS_FreeValue(ctx, sv); JS_FreeValue(ctx, cv); JS_FreeValue(ctx, ev); JS_FreeValue(ctx, spv); JS_FreeValue(ctx, t);
+        JS_FreeValue(ctx, sv); JS_FreeValue(ctx, cv); JS_FreeValue(ctx, ev); JS_FreeValue(ctx, spv); JS_FreeValue(ctx, gfv); JS_FreeValue(ctx, t);
     }
     JS_FreeValue(ctx, seen);
     return out;
