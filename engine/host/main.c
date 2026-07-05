@@ -1892,6 +1892,11 @@ static int el_is_script(lxb_dom_element_t *el) {
 /* An inserted <script> with a src is a chunk LOAD (the URL may be JS-computed): surface it. */
 static void script_maybe_load(lxb_dom_element_t *el) {
     if (!el_is_script(el)) return;
+    /* A candidate-REPLAY flow (g_candidate set) VERIFIES a known sink; it must not DISCOVER chunks. Here
+       `s.src` is derived from the injected candidate PAYLOAD (e.g. "javascript:X9"), NOT a real chunk URL —
+       chunk_pending_add'ing it is nonsensical and drives a fetch/provide feedback that livelocks a
+       multi-sink handler. Chunk discovery is a NORMAL-flow concern; skip it under a candidate. */
+    if (g_candidate) return;
     size_t sl = 0; const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
     if (src && sl) {
         char *u = strndup((const char *)src, sl);
