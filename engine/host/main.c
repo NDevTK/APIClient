@@ -994,7 +994,12 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
         /* This flow drove a CONCRETE candidate through the real code+branches to the sink. If it broke out,
            THAT candidate is a working PoC — the only sound @S output. No breakout -> nothing recorded (not a
            "safe" verdict: the search may still solve a gate with a better candidate). */
-        const char *cv = JS_ToCString(ctx, val);
+        /* For a {parsedhtml}-tainted node (DOMParser/Range), the sink value is an OPAQUE carrying the candidate
+           as its EXAMPLE — ToString'ing it gives the shape, not the payload. Read the example so the real
+           candidate HTML is breakout-checked; a plain-string sink value is used directly. */
+        JSValue exv = JS_IsOpaque(val) ? JS_OpaqueExample(ctx, val) : JS_UNDEFINED;
+        const char *cv = !JS_IsUndefined(exv) ? JS_ToCString(ctx, exv) : JS_ToCString(ctx, val);
+        JS_FreeValue(ctx, exv);
         if (cv && solve_broke(sctx, cv) && JS_IsObject(g_verified)) {
             char key[300]; snprintf(key, sizeof key, "%s|%s", sink, sctx);
             JS_SetPropertyStr(ctx, g_verified, key, JS_NewString(ctx, g_candidate));
@@ -1719,6 +1724,39 @@ static JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueC
     JS_SetPropertyStr(ctx, o, "target", JS_DupValue(ctx, g_opaque));
     return o;
 }
+/* DOMParser.parseFromString / Range.createContextualFragment: parse attacker HTML into a subtree that carries
+   {parsedhtml} TAINT, so a later appendChild of it into the LIVE DOM is the @S sink (js_el_appendChild). The
+   example carries the input (the concrete candidate on a replay flow) so solve_broke_html verifies breakout.
+   Non-throwing constructors (these were undefined -> `new DOMParser()` threw, losing all coverage after). */
+static JSValue js_parse_html_tainted(JSContext *ctx, JSValueConst input) {
+    JSValue r = JS_NewOpaqueSourced(ctx, "{parsedhtml}", "parsedhtml");
+    if (JS_IsOpaque(r)) {
+        JSValue ex = JS_UNDEFINED;
+        if (JS_IsOpaque(input)) ex = JS_OpaqueExample(ctx, input);                    /* concolic input keeps its example */
+        else if (g_candidate && JS_IsString(input)) ex = JS_DupValue(ctx, input);     /* replay: the concrete candidate */
+        if (!JS_IsUndefined(ex)) JS_SetOpaqueExample(ctx, r, ex); else JS_FreeValue(ctx, ex);
+    }
+    return r;
+}
+static JSValue js_domparser_parse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return argc >= 1 ? js_parse_html_tainted(ctx, argv[0]) : JS_DupValue(ctx, g_opaque);
+}
+static JSValue js_domparser_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "parseFromString", JS_NewCFunction(ctx, js_domparser_parse, "parseFromString", 2));
+    return o;
+}
+static JSValue js_range_ccf(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return argc >= 1 ? js_parse_html_tainted(ctx, argv[0]) : JS_DupValue(ctx, g_opaque);
+}
+static JSValue js_doc_createrange(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "createContextualFragment", JS_NewCFunction(ctx, js_range_ccf, "createContextualFragment", 1));
+    const char *noops[] = { "selectNode", "selectNodeContents", "setStart", "setEnd", "deleteContents", "insertNode", "surroundContents", "cloneContents" };
+    for (size_t i = 0; i < sizeof noops / sizeof noops[0]; i++)
+        JS_SetPropertyStr(ctx, o, noops[i], JS_NewCFunction(ctx, js_noop, noops[i], 1));
+    return o;
+}
 /* DOM ATTRIBUTE SHADOW TAINT: Lexbor stores attribute values as bytes, so an OPAQUE external-input value set
    via setAttribute would be ToString'd -> taint LOST -> a source stashed in a data-attribute and read back
    (getAttribute) in a separate flow goes undetected. Keep a shadow map (element,name)->opaque so an
@@ -2023,6 +2061,13 @@ static JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueCons
 static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return JS_DupValue(ctx, g_opaque); }
 static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *parent = JS_GetOpaque(this_val, g_el_class_id);
+    /* @S: inserting a {parsedhtml}-TAINTED node (from DOMParser.parseFromString / Range.createContextual-
+       Fragment of attacker input) into the LIVE DOM is XSS. The distinct source avoids a false positive on a
+       safe text node (createTextNode is a plain opaque, not {parsedhtml}); replay verifies real breakout. */
+    if (argc > 0 && JS_IsOpaque(argv[0])) {
+        const char *sh = JS_OpaqueShapeC(argv[0]);
+        if (sh && strcmp(sh, "{parsedhtml}") == 0) solve_add(ctx, "appendChild", "html", argv[0]);
+    }
     lxb_dom_element_t *child = (argc > 0) ? JS_GetOpaque(argv[0], g_el_class_id) : NULL;
     if (parent && child) {
         lxb_dom_node_insert_child(lxb_dom_interface_node(parent), lxb_dom_interface_node(child));
@@ -3046,6 +3091,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));   /* real Lexbor DOM */
         JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
         JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));   /* real element; appendChild intercepts <script src> */
+        JS_SetPropertyStr(ctx, doc, "createRange", JS_NewCFunction(ctx, js_doc_createrange, "createRange", 0));   /* createContextualFragment -> {parsedhtml} taint */
         JS_SetPropertyStr(ctx, doc, "createTextNode", JS_NewCFunction(ctx, js_opaque_stub, "createTextNode", 1));       /* text-node stub (opaque) — non-throwing */
         JS_SetPropertyStr(ctx, doc, "querySelectorAll", JS_NewCFunction(ctx, js_doc_querySelectorAll, "querySelectorAll", 1));
         JS_SetPropertyStr(ctx, doc, "getElementsByTagName", JS_NewCFunction(ctx, js_doc_querySelectorAll, "getElementsByTagName", 1));   /* tag IS a selector */
@@ -3091,6 +3137,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     }
     /* COMMON BROWSER APIs real bundles call constantly — a MISSING one threw and killed the script. */
     JS_SetPropertyStr(ctx, g, "XMLHttpRequest", JS_NewCFunction2(ctx, js_xhr_ctor, "XMLHttpRequest", 0, JS_CFUNC_constructor, 0));   /* primary request mechanism -> emits @H */
+    JS_SetPropertyStr(ctx, g, "DOMParser", JS_NewCFunction2(ctx, js_domparser_ctor, "DOMParser", 0, JS_CFUNC_constructor, 0));   /* parseFromString -> {parsedhtml} taint -> appendChild @S */
     JS_SetPropertyStr(ctx, g, "IntersectionObserver", JS_NewCFunction2(ctx, js_observer_ctor, "IntersectionObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "MutationObserver", JS_NewCFunction2(ctx, js_observer_ctor, "MutationObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "ResizeObserver", JS_NewCFunction2(ctx, js_observer_ctor, "ResizeObserver", 1, JS_CFUNC_constructor, 0));
