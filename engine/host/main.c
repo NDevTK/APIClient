@@ -2853,16 +2853,11 @@ static double flow_weight(const Flow *f)
     return 1.0 + f->val + 0.5 / (double)(f->visits + 1) - 0.01 * f->cpu;
 }
 
-/* The value-driven yield decision, called by the engine at each loop back-edge of the running TOP
-   flow frame. Ticks CPU (accounting, NOT a cap — the flow is resumable, never truncated), then yields
-   iff a PARKED flow now outranks the running one. The empty-delta guard keeps interleaving correct
-   without per-flow deltas yet: a shared-state writer runs to completion (never suspended mid-write).
-   SHARED STATE IS BOTH VIEWS — the JS heap (COW log, JS_CowDepth) AND the Lexbor DOM (undo log,
-   g_dom_undo_n). A flow mid-DOM-mutation must NOT be suspended: dom_revert reverts the GLOBAL undo log
-   to baseline before the next starter, so a DOM writer preempted mid-write would resume against a DOM
-   its own writes were erased from. Guard on BOTH so "resumable DOM state switching" is sound (a DOM
-   writer runs to completion, same as a JS-heap writer); per-flow DOM deltas are the later refinement
-   that would let even a DOM writer be preempted. */
+/* The value-driven yield decision, called by the engine at each loop back-edge of the running TOP flow
+   frame. Ticks CPU (accounting, NOT a cap — the flow is resumable, never truncated), then yields iff a
+   PARKED flow now outranks the running one. The JS heap AND Lexbor DOM are per-flow COW deltas that swap on
+   context-switch (JS_CowBufTake/Load + dom delta), so a flow is preemptible mid-write to EITHER — no writer
+   runs to completion, no empty-delta guard. */
 static int wfq_yield(void)
 {
     if (!g_cur_flow) return 0;
