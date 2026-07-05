@@ -919,8 +919,14 @@ static const char **cand_set(const char *sc) {
    (identical token -> identical candidates, pure waste); no length/count bound (a gate may require a long
    exact prefix, and the WFQ starves low-value search flows rather than a cap dropping them). */
 static char **g_gate_tokens = NULL; static int g_gate_n = 0, g_gate_cap = 0;
-static void gate_collect(const char *token) {
+static void gate_collect(const char *token, const char *src) {
     if (!token || !token[0]) return;
+    /* An {origin}/{source} constraint bounds the ATTACKER'S ORIGIN (`e.origin.indexOf('trusted')`), NOT the
+       data payload — feeding it to the data-candidate search would build nonsense candidates like
+       'trusted<img..>'. Drop it here (the data search is unaffected; the same string, if ALSO a real data gate
+       elsewhere, is collected there with a data src). Per-flow origin-constraint SURFACING for delivery is a
+       separate concern needing per-flow attribution. */
+    if (src && (strncmp(src, "{origin}", 8) == 0 || strncmp(src, "{source}", 8) == 0)) return;
     for (int i = 0; i < g_gate_n; i++) if (strcmp(g_gate_tokens[i], token) == 0) return;
     if (g_gate_n >= g_gate_cap) { int nc = g_gate_cap ? g_gate_cap * 2 : 32;
         char **n = realloc(g_gate_tokens, (size_t)nc * sizeof(char *)); if (!n) return; g_gate_tokens = n; g_gate_cap = nc; }
