@@ -2628,10 +2628,17 @@ static int reg_add_session(JSContext *ctx, signed char *dec, int dec_n) {
    No host-side property save/delete/restore — the delta IS the mechanism (heap; DOM boot stays baseline). */
 static void *g_boot_delta = NULL; static int g_boot_delta_n = 0, g_boot_delta_cap = 0;
 static void boot_replay_candidate(JSContext *ctx) {
-    if (g_boot_delta) { JS_CowBufLoad(g_boot_delta, g_boot_delta_n, g_boot_delta_cap); JS_CowUnapply(ctx);
-        g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap); }   /* heap -> pre-boot; stash unapplied */
+    /* Seed the RUNNING candidate flow's OWN delta with the boot INVERSE (heap -> pre-boot, RECORDED so a
+       suspend/revert restores the post-boot baseline), then re-run boot under the concrete candidate as more
+       of the SAME delta. The whole boot-undo + candidate-replay is ONE preemptible flow delta — no host-side
+       bracket, so a candidate flow yields per-opcode like any other. g_boot_delta is only READ (canonical
+       post-boot baseline for non-candidate flows), never unapplied on the shared heap. */
+    if (g_boot_delta) JS_CowSeedBootInverse(ctx, g_boot_delta, g_boot_delta_n);
     boot_replay(ctx);   /* re-run boot under the concrete candidate (guards re-fire), captured in the candidate's own delta */
 }
+/* Reapply g_boot_delta to the shared heap (post-boot baseline). Used ONLY by the boot FLOW (is_boot), which
+   unapplies g_boot_delta on the shared heap to re-run boot forking — a separate run-to-completion carve-out.
+   Candidate flows no longer need this: their boot-undo lives in the flow delta (JS_CowSeedBootInverse). */
 static void boot_restore_globals(JSContext *ctx) {
     if (g_boot_delta) { JS_CowBufLoad(g_boot_delta, g_boot_delta_n, g_boot_delta_cap); JS_CowApply(ctx);
         g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap); }   /* heap -> post-boot; stash applied */
@@ -2959,11 +2966,11 @@ static void scheduler_run(JSContext *ctx)
         if (f.session) {
             /* ATTACKER SESSION as a PREEMPTIBLE FLOW: __driveSession (bytecode) fires all handlers in seed
                order over ONE accumulating COW delta (cross-handler shared state). Run as a heap-frame flow so
-               it YIELDS per-opcode like any other — run-to-completion is GONE. On suspend the accumulated delta
-               unapplies/reapplies exactly like a sync flow's, so handler A's tainted write still reaches B
-               after an interleave. A CANDIDATE session alone stays run-to-completion (yield NULL): its
-               boot-globals bracket (boot_replay_candidate .. boot_restore_globals) is host-side/uncaptured and
-               must not straddle a suspend — the ONE remaining carve-out, and it never suspends. */
+               it YIELDS per-opcode like any other — run-to-completion is GONE, candidate sessions included: a
+               candidate's boot-undo now lives IN the flow delta (JS_CowSeedBootInverse), so a suspend's
+               JS_CowUnapply restores the post-boot baseline with no host-side bracket. On suspend the
+               accumulated delta unapplies/reapplies exactly like a sync flow's, so handler A's tainted write
+               still reaches B after an interleave. */
             g_cur_fn = JS_UNDEFINED;
             int sess_starter = (f.fs == NULL);
             if (sess_starter) {
@@ -2975,13 +2982,12 @@ static void scheduler_run(JSContext *ctx)
                 JSValue ds = JS_GetPropertyStr(ctx, gg, "__driveSession");
                 f.fs = JS_FlowNew(ctx, ds, JS_UNDEFINED, 0, NULL);        /* preemptible frame for the self-hosted session loop */
                 JS_FreeValue(ctx, ds); JS_FreeValue(ctx, gg);
+                replay_handlers_clear(ctx);                              /* candidate boot-replay's transient listeners done (session fires g_handlers) */
                 if (!f.fs) {                                             /* __driveSession not a bytecode frame (shouldn't happen) -> synchronous fallback, still correct */
                     JS_SetFlowYieldHook(NULL);
                     drive_session(ctx);
-                    replay_handlers_clear(ctx);
                     JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
                     dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-                    if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }
                     g_candidate = NULL; g_running = 0; g_cur_flow = NULL;
                     JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
                     continue;
@@ -2993,7 +2999,7 @@ static void scheduler_run(JSContext *ctx)
                 JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
                 dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
             }
-            JS_SetFlowYieldHook(f.candidate ? NULL : wfq_yield);
+            JS_SetFlowYieldHook(wfq_yield);
             JSValue out = JS_UNDEFINED;
             int st = JS_FlowResume(ctx, f.fs, &out);
             JS_SetFlowYieldHook(NULL);
@@ -3014,11 +3020,9 @@ static void scheduler_run(JSContext *ctx)
                 f.dec_n = g_dec_n;
                 g_cur_flow = NULL;
                 reg_readd(ctx, f);
-            } else {                                                     /* COMPLETED: clear replay handlers, revert this session's delta, restore candidate globals */
-                replay_handlers_clear(ctx);
+            } else {                                                     /* COMPLETED: revert this session's delta (boot-inverse included -> post-boot baseline) */
                 JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
                 dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-                if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }
                 if (JS_IsException(out)) js_std_dump_error(ctx);
                 JS_FreeValue(ctx, out);
                 g_cur_flow = NULL;
@@ -3065,9 +3069,9 @@ static void scheduler_run(JSContext *ctx)
         if (is_starter) {                           /* STARTER: fresh heap frame + empty heap/DOM deltas (both left NULL by the previous flow's exit) */
             /* @S CROSS-FLOW: a candidate flow re-runs boot with the concrete candidate pinned, so shared
                state a handler reads (window.x = location.hash set at boot) holds the candidate, not the
-               baseline opaque. boot_replay_candidate reverts the global object to PRE-boot first (delete
-               boot-created globals) so a guarded init re-fires; boot_restore_globals restores after. The
-               re-run's other writes are COW-captured and reverted by the next flow. */
+               baseline opaque. boot_replay_candidate SEEDS this flow's delta with the boot-inverse (heap ->
+               pre-boot so a guarded init re-fires) then replays boot under the candidate — all in the flow's
+               OWN delta, so a suspend/revert restores the post-boot baseline with no host-side bracket. */
             if (f.candidate) boot_replay_candidate(ctx);
             /* CLOSURE cross-flow: for a candidate flow, drive the handler boot_replay RE-CREATED (candidate
                closure), located by source identity — else the ORIGINAL f.handle (baseline closure) is driven
@@ -3100,7 +3104,6 @@ static void scheduler_run(JSContext *ctx)
                 { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* free the delta buffer, globals -> NULL */
                 dom_revert();                                 /* discard this flow's DOM writes -> baseline */
                 { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-                if (f.candidate) { int sv = 0; JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); (void)sv; }   /* restore boot-created globals (host-side, uncaptured) */
                 JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);
                 g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
                 JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
@@ -3115,9 +3118,10 @@ static void scheduler_run(JSContext *ctx)
             dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
         }
 
-        /* Candidate flows run to COMPLETION (no yield): the boot-created-globals bracket must not straddle a
-           suspension. Other flows are preemptible mid heap-write now (per-flow COW delta). */
-        JS_SetFlowYieldHook(f.candidate ? NULL : wfq_yield);
+        /* EVERY sync flow is preemptible mid heap-write (per-flow COW delta), CANDIDATE flows included: the
+           candidate boot-undo lives in the flow delta (JS_CowSeedBootInverse), so a suspend's JS_CowUnapply
+           restores the post-boot baseline — no host-side bracket to straddle. */
+        JS_SetFlowYieldHook(wfq_yield);
         JSValue out = JS_UNDEFINED;
         int st = JS_FlowResume(ctx, f.fs, &out);
         JS_SetFlowYieldHook(NULL);
@@ -3151,7 +3155,6 @@ static void scheduler_run(JSContext *ctx)
             { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
             dom_revert();
             { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-            if (f.candidate) { JS_CowSetActive(0); boot_restore_globals(ctx); JS_CowSetActive(1); }   /* restore boot-created globals (host-side, uncaptured) */
             if (JS_IsException(out)) js_std_dump_error(ctx);
             JS_FreeValue(ctx, out);
             g_cur_flow = NULL;
