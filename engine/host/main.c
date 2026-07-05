@@ -1967,7 +1967,11 @@ static int g_dom_undo_n = 0, g_dom_undo_cap = 0, g_dom_capture = 0;
 static void dom_undo_push(DomUndo u) {
     if (g_dom_undo_n >= g_dom_undo_cap) {
         int nc = g_dom_undo_cap ? g_dom_undo_cap * 2 : 64;
-        DomUndo *n = realloc(g_dom_undo, (size_t)nc * sizeof(DomUndo)); if (!n) return; g_dom_undo = n; g_dom_undo_cap = nc;
+        /* Skipping a DOM capture silently breaks DOM isolation (this flow's DOM write never reverts -> leaks
+           into the next flow's baseline -> wrong sinks/taint). OOM is a should-never-happen: CRASH, never skip. */
+        DomUndo *n = realloc(g_dom_undo, (size_t)nc * sizeof(DomUndo));
+        if (!n) { fflush(stdout); fprintf(stderr, "@E {\"phase\":\"dom-cow-oom\",\"reason\":\"DOM undo-log realloc failed — DOM isolation would be silently corrupted\"}\n"); fflush(stderr); abort(); }
+        g_dom_undo = n; g_dom_undo_cap = nc;
     }
     g_dom_undo[g_dom_undo_n++] = u;
 }
