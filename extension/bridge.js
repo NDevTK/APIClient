@@ -148,7 +148,11 @@ function _residentBytes() { let b = 0; for (const e of _pool) { try { b += (e.M 
 async function engineCreate(code, html, msg, quantum) {
   const lines = [];
   const createQJS = await getCreateQJS();
-  const M = await createQJS({ print: (s) => lines.push(s), printErr: (s) => lines.push(s), noInitialRun: true });
+  // @DBG is the ONLY dev-trace channel: routed to console.debug, NEVER into `lines` — so it is never parsed
+  // as @E/@RESULT and never pollutes resolverErrors. @E/@WHY stays STRICTLY for fatal should-never-happen
+  // states (they abort); a diagnostic must never masquerade as one. (CLAUDE.md: @WHY is fatal, not a log.)
+  const sink = (s) => { if (typeof s === "string" && s.startsWith("@DBG ")) { try { console.debug(s); } catch (_) {} return; } lines.push(s); };
+  const M = await createQJS({ print: sink, printErr: sink, noInitialRun: true });
   const ptrs = [];
   const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
   const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
