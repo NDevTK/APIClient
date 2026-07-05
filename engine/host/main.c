@@ -799,13 +799,20 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         if (JS_IsObject(init)) {
             JSValue hdrs = JS_GetPropertyStr(ctx, init, "headers");
             if (JS_IsObject(hdrs) && !JS_IsOpaque(hdrs)) {
+                /* a `new Headers()` stores its pairs in __fields (its OWN props are methods) -> read those */
+                JSValue hf = JS_GetPropertyStr(ctx, hdrs, "__fields");
+                JSValueConst hsrc = JS_IsObject(hf) ? (JSValueConst)hf : (JSValueConst)hdrs;
                 JSValue hobj = JS_NewObject(ctx); int any = 0;
                 JSPropertyEnum *tab = NULL; uint32_t hn = 0;
-                if (JS_GetOwnPropertyNames(ctx, &tab, &hn, hdrs, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+                if (JS_GetOwnPropertyNames(ctx, &tab, &hn, hsrc, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
                     for (uint32_t hi = 0; hi < hn; hi++) {
                         const char *hk = JS_AtomToCString(ctx, tab[hi].atom);
-                        JSValue hv = JS_GetProperty(ctx, hdrs, tab[hi].atom);
-                        const char *hvs = JS_ToCString(ctx, hv);
+                        JSValue hv = JS_GetProperty(ctx, hsrc, tab[hi].atom);
+                        /* CONCOLIC header value: `'Bearer '+token` is a concolic opaque -> use its example so
+                           Authorization shows the real token, not the {} shape. */
+                        JSValue hex = JS_IsOpaque(hv) ? JS_OpaqueExample(ctx, hv) : JS_UNDEFINED;
+                        const char *hvs = !JS_IsUndefined(hex) ? JS_ToCString(ctx, hex) : JS_ToCString(ctx, hv);
+                        JS_FreeValue(ctx, hex);
                         if (hk && hvs) { JS_SetPropertyStr(ctx, hobj, hk, js_str_flat(ctx, hvs, 512)); any = 1; }
                         if (hk) JS_FreeCString(ctx, hk);
                         if (hvs) JS_FreeCString(ctx, hvs);
@@ -813,6 +820,7 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
                     }
                     JS_FreePropertyEnum(ctx, tab, hn);
                 }
+                JS_FreeValue(ctx, hf);
                 if (any) JS_SetPropertyStr(ctx, ep, "headers", hobj); else JS_FreeValue(ctx, hobj);
             }
             JS_FreeValue(ctx, hdrs);
@@ -1429,6 +1437,25 @@ static JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int
     JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_sp_append, "set", 2));
     JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_noop, "delete", 1));
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
+    return o;
+}
+/* Headers: a REAL object storing append()/set() header fields (__fields), so `fetch(url,{headers:h})` with a
+   `new Headers()` surfaces the REAL required headers (auth/CSRF/custom) instead of the object's own METHODS
+   (the old js_webobj_ctor stub -> the header capture iterated get/set/has/... as bogus headers). js_fetch
+   reads __fields when present. */
+static JSValue js_headers_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "__fields", JS_NewObject(ctx));
+    if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) sp_init(ctx, o, argv[0]);
+    JS_SetPropertyStr(ctx, o, "append", JS_NewCFunction(ctx, js_sp_append, "append", 2));
+    JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_sp_append, "set", 2));
+    JS_SetPropertyStr(ctx, o, "get", JS_NewCFunction(ctx, js_sp_get, "get", 1));
+    JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_sp_get, "has", 1));
+    JS_SetPropertyStr(ctx, o, "getSetCookie", JS_NewCFunction(ctx, js_sp_get, "getSetCookie", 0));
+    JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_noop, "delete", 1));
+    JS_SetPropertyStr(ctx, o, "forEach", JS_NewCFunction(ctx, js_noop, "forEach", 1));
+    for (int i = 0; i < 3; i++) { const char *it[] = { "keys", "values", "entries" };
+        JS_SetPropertyStr(ctx, o, it[i], JS_NewCFunction(ctx, js_opaque_stub, it[i], 0)); }
     return o;
 }
 static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -3253,7 +3280,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         /* fetch-API + encoding + misc Web objects: opaque-read / no-op-write, so a bundle that constructs
            them doesn't ReferenceError and any value read out stays opaque. */
         JS_SetPropertyStr(ctx, g, "FormData", JS_NewCFunction2(ctx, js_formdata_ctor, "FormData", 0, JS_CFUNC_constructor, 0));   /* real: records fields -> POST body params */
-        const char *webctors[] = { "Headers", "Response", "Blob", "File", "AbortController",
+        JS_SetPropertyStr(ctx, g, "Headers", JS_NewCFunction2(ctx, js_headers_ctor, "Headers", 1, JS_CFUNC_constructor, 0));   /* real: records header fields -> required headers */
+        const char *webctors[] = { "Response", "Blob", "File", "AbortController",
                                    "TextEncoder", "TextDecoder", "FileReader", "BroadcastChannel" };   /* EventSource -> js_ws_ctor; FormData -> js_formdata_ctor */
         for (size_t wi = 0; wi < sizeof webctors / sizeof webctors[0]; wi++)
             JS_SetPropertyStr(ctx, g, webctors[wi], JS_NewCFunction2(ctx, js_webobj_ctor, webctors[wi], 1, JS_CFUNC_constructor, 0));
