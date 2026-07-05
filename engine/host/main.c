@@ -2037,7 +2037,7 @@ static const char *refl_name(int magic) {   /* property magic -> the ATTRIBUTE i
     switch (magic) {
         case 0: return "src"; case 1: return "href"; case 2: return "action"; case 3: return "id";
         case 4: return "value"; case 5: return "name"; case 6: return "type"; case 7: return "class";
-        case 8: return "alt"; case 9: return "title"; case 10: return "placeholder";
+        case 8: return "alt"; case 9: return "title"; case 10: return "placeholder"; case 11: return "srcdoc";
         default: return "";
     }
 }
@@ -2073,6 +2073,7 @@ static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
     const char *n = refl_name(magic);
     if (magic == 1 || magic == 2) solve_add(ctx, "href", "url", val);   /* @S: el.href/.action = external -> javascript:/redirect */
+    else if (magic == 11) solve_add(ctx, "srcdoc", "html", val);        /* @S: iframe.srcdoc renders attacker HTML in the frame */
     const char *v = JS_ToCString(ctx, val);
     if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); JS_FreeCString(ctx, v); }
     return JS_UNDEFINED;
@@ -2290,7 +2291,7 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     /* Attribute-REFLECTED properties real bundles read constantly (undefined broke every read + branch). The
        PROPERTY name may differ from the attribute (className -> class); refl_name maps it. value/name/type are
        an input's shipped defaults (concrete page config). */
-    static const char *refl[] = { "src", "href", "action", "id", "value", "name", "type", "className", "alt", "title", "placeholder" };
+    static const char *refl[] = { "src", "href", "action", "id", "value", "name", "type", "className", "alt", "title", "placeholder", "srcdoc" };
     for (int i = 0; i < (int)(sizeof refl / sizeof refl[0]); i++) {
         JSAtom a = JS_NewAtom(ctx, refl[i]);
         JS_DefinePropertyGetSet(ctx, proto, a,
