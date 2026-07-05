@@ -190,18 +190,29 @@ function engineFinalize(eng) {
   for (const p of eng.ptrs) { try { eng.M._free(p); } catch (_) {} }
   const result = linesToAnalysis(eng.lines, eng.msg);
   result._fkey = eng.fkey; result._prior = eng.prior;   // engine-computed key + parked entry -> persisted below
-  result._engineCrashed = !!eng._crashed;   // a WASM abort is a should-never-happen: surfaced, never buried among normal @WHY
+  if (eng._crashed) {
+    // NEVER BUILD ON AN UNCERTAIN ARCHITECTURE. A WASM abort means this engine crashed — every finding it
+    // produced is from a crashed (untrustworthy) instance, so DISCARD them all. The result is a pure FAILURE:
+    // only the crash marker + the error, so the crash is impossible to overlook and nothing downstream (cache,
+    // popup, moat) ever consumes a crashed engine's output. Experimental stage: fail hard, then fix the ROOT.
+    result._engineCrashed = true;
+    result.fetchCallSites = []; result.securitySinks = []; result.chunkUrls = []; result.domEndpoints = [];
+    result.esmImportUrls = []; result.inRunModuleUrls = []; result.protoEnums = []; result.protoFieldMaps = [];
+    result.dangerousPatterns = []; result._park = []; result._prior = null;
+  }
   return result;
 }
-/* A WASM Aborted() is the engine CRASHING — a should-never-happen. We can't let it take down the whole
-   multi-engine scheduler (one page's crash must not kill analysis of the user's other tabs), so it stays
-   scoped to this engine — but it must be LOUD and unmissable, NOT a quiet @E buried in resolverErrors (that
-   is how the g_optaint teardown leak hid for so long). console.error + a distinct engine-crash marker. */
+/* A WASM Aborted() is the engine CRASHING — a should-never-happen. It stays scoped to this engine (one page's
+   crash must not throw and kill the whole multi-engine scheduler serving the user's other tabs), but it must
+   be IMPOSSIBLE to overlook: a LOUD console.error banner + a persistent batch flag + total discard of the
+   engine's findings (engineFinalize). NOT a quiet @E buried in resolverErrors — that is how the g_optaint
+   teardown leak hid for so long. Experimental stage: a crash halts trust in that engine, never softened. */
 function engineCrash(eng, stage, e) {
   const m = String((e && e.message) || e);
   eng._crashed = true;
   eng.lines.push('@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}");
-  try { console.error("[bridge] ENGINE CRASH (" + stage + ") — WASM aborted, NOT swallowed:", m); } catch (_) {}
+  try { self._engineCrashOccurred = (self._engineCrashOccurred || 0) + 1; } catch (_) {}
+  try { console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, findings DISCARDED, NOT swallowed ====\n" + m + "\n"); } catch (_) {}
 }
 
 /* THE PURE SCHEDULER POLICY (no wasm knowledge — engine ops are injected, so this is unit-testable with
