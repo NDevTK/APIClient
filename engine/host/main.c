@@ -211,7 +211,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     if (g_reg_n >= g_reg_cap) {
         int nc = g_reg_cap ? g_reg_cap * 2 : 256;
         Flow *nr = (Flow *)realloc(g_reg, (size_t)nc * sizeof(Flow));
-        if (!nr) { printf("@WHY {\"phase\":\"reg_oom\"}\n"); JS_FreeValue(ctx, handle); free(dec); return 0; }
+        if (!nr) { fflush(stdout); fprintf(stderr, "@E {\"phase\":\"reg_oom\"}\n"); fflush(stderr); abort(); }   /* OOM is a fatal error: crash, never continue with a dropped flow */
         g_reg = nr; g_reg_cap = nc;
     }
     g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val; g_reg[g_reg_n].is_resume = is_resume;
@@ -230,10 +230,7 @@ static int reg_readd(JSContext *ctx, Flow f)
     if (g_reg_n >= g_reg_cap) {
         int nc = g_reg_cap ? g_reg_cap * 2 : 256;
         Flow *nr = (Flow *)realloc(g_reg, (size_t)nc * sizeof(Flow));
-        if (!nr) { printf("@WHY {\"phase\":\"reg_oom\"}\n");
-                   if (f.fs) JS_FlowFree(g_rt, f.fs); if (f.cow) JS_CowBufFree(ctx, f.cow, f.cow_n);
-                   if (f.dom) dom_buf_free((DomUndo *)f.dom, f.dom_n);
-                   JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); return 0; }
+        if (!nr) { fflush(stdout); fprintf(stderr, "@E {\"phase\":\"reg_oom\"}\n"); fflush(stderr); abort(); }   /* OOM is a fatal error: crash, never continue with a dropped flow */
         g_reg = nr; g_reg_cap = nc;
     }
     g_reg[g_reg_n++] = f; return 1;
@@ -913,15 +910,17 @@ static void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
     uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, arr, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
     JS_SetPropertyUint32(ctx, arr, n, JS_NewString(ctx, s));
 }
-/* Structured zero-result/error reason -> @RESULT.resolverErrors (the ONE no-silent-failure channel the host
-   consumes). Replaces the stderr "@WHY{...}" prints that the host never parsed (it matched "@WHY ", not "@WHY{"). */
+/* @WHY IS A FATAL ERROR, NOT A DIAGNOSTIC. A zero-result / gap / unresolved path means the design failed to
+   handle something the moat requires. Emitting a @RESULT and CONTINUING would ship DEGRADED output that hides
+   the gap behind a logged reason the reviewer ignores — the exact "0 endpoints + 0 errors is the worst output"
+   trap, one level up. So every @WHY CRASHES the review WITHOUT continuing: the fix is to eliminate the ROOT so
+   it never fires — never log-and-continue, never skip, never delete the check. The design goal is ZERO @WHY. */
 static void why_add(JSContext *ctx, const char *phase, const char *reason) {
-    if (!JS_IsArray(g_whys)) return;
-    uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_whys, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "context", JS_NewString(ctx, phase ? phase : "why"));
-    JS_SetPropertyStr(ctx, o, "message", JS_NewString(ctx, reason ? reason : ""));
-    JS_SetPropertyUint32(ctx, g_whys, n, o);
+    (void)ctx;
+    fflush(stdout);
+    fprintf(stderr, "@E {\"phase\":\"%s\",\"reason\":\"%s\"}\n", phase ? phase : "why", reason ? reason : "");
+    fflush(stderr);
+    abort();   /* crash without continuing — a @WHY is an unfixed gap, surfaced loud, never papered over */
 }
 /* ── @S SOLVER (forced execution, not taint tracing) ─────────────────────────────
    Each SINK reached by external input is collected as a task {sink, ctx, expr} — expr is the evaluable
@@ -2592,12 +2591,16 @@ static void boot_script_cache(const char *txt, size_t len) {
    land exactly where the browser puts them). The CALLER unapplies g_boot_delta first, so boot's globals —
    including captured let/const CREATIONS — are ABSENT: re-declaration compiles cleanly, no block-wrap. A
    residual throw means an UNCAPTURED creation (COW gap to close at the root) or a real host-edge divergence —
-   surfaced via @WHY, never swallowed. Branch behaviour is the caller's (g_boot_replay=1 fixed-arm for @S
-   candidates; g_in_boot_flow=1 FORKING for a boot flow). */
+   a FATAL bug: crash with the real exception, never swallow it. Branch behaviour is the caller's
+   (g_boot_replay=1 fixed-arm for @S candidates; g_in_boot_flow=1 FORKING for a boot flow). */
 static void boot_scripts_run(JSContext *ctx) {
     for (int i = 0; i < g_boot_n; i++) {
         JSValue v = JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(v)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); printf("@WHY {\"phase\":\"boot-replay\",\"reason\":\"boot script threw on re-run (uncaptured global creation or host-edge divergence)\"}\n"); fflush(stdout); }
+        if (JS_IsException(v)) {   /* boot re-run must be faithful — a throw is a COW/host gap to FIX, not to log past */
+            JSValue e = JS_GetException(ctx); const char *em = JS_ToCString(ctx, e);
+            fflush(stdout); fprintf(stderr, "@E {\"phase\":\"boot-replay\",\"reason\":\"boot script threw on re-run: %s\"}\n", em ? em : "?"); fflush(stderr);
+            abort();
+        }
         JS_FreeValue(ctx, v);
     }
 }
@@ -2973,14 +2976,7 @@ static void scheduler_run(JSContext *ctx)
                 f.fs = JS_FlowNew(ctx, ds, JS_UNDEFINED, 0, NULL);        /* preemptible frame for the self-hosted session loop */
                 JS_FreeValue(ctx, ds); JS_FreeValue(ctx, gg);
                 replay_handlers_clear(ctx);                              /* candidate boot-replay's transient listeners done (session fires g_handlers) */
-                if (!f.fs) {                                             /* JS_FlowNew couldn't frame __driveSession (alloc failure, or setup eval failed) — SURFACE it, never mask with a synchronous stopgap */
-                    printf("@WHY {\"phase\":\"session\",\"reason\":\"__driveSession not flow-able (alloc/setup) — session skipped\"}\n"); fflush(stdout);
-                    JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
-                    dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-                    g_candidate = NULL; g_running = 0; g_cur_flow = NULL;
-                    JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
-                    continue;
-                }
+                if (!f.fs) why_add(ctx, "session", "__driveSession not flow-able (alloc failure) — FATAL");   /* @WHY = crash: __driveSession is guaranteed bytecode, so NULL is a real (OOM) error to surface, never skip */
             } else {                                                     /* RESUME: reload decisions + swap in this session's OWN accumulated delta */
                 g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);
                 for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
