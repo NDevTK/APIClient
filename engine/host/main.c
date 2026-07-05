@@ -1028,6 +1028,11 @@ static JSValue collect_gate_fields(JSContext *ctx, const char *root) {
      candidate-replay flows once per (orphan,sink,ctx) into the ONE scheduler. */
 static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst val) {
     if (g_candidate) {
+        /* @S SOUNDNESS: if this path force-passed an EXACT origin gate (`e.origin === 'https://trusted'`), the
+           attacker CANNOT forge that origin, so the sink is unreachable cross-origin -> the candidate would be a
+           FALSE PoC. Suppress. (A substring/regex origin check records NO EQ constraint, so it is NOT suppressed
+           -- those are genuinely bypassable and stay reportable, the origin-bypass frontier.) */
+        if (cons_fixed_value("{origin}")) return;
         /* This flow drove a CONCRETE candidate through the real code+branches to the sink. If it broke out,
            THAT candidate is a working PoC — the only sound @S output. No breakout -> nothing recorded (not a
            "safe" verdict: the search may still solve a gate with a better candidate). */
@@ -3129,7 +3134,11 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        getter so a candidate-replay flow injects the concrete payload here, exactly like location.hash. */
     g_msg_event = JS_NewObject(ctx);
     def_source(ctx, g_msg_event, "data", 2);
-    JS_SetPropertyStr(ctx, g_msg_event, "origin", JS_DupValue(ctx, g_opaque));
+    /* origin/source are ATTACKER-UNCONTROLLABLE (the browser stamps e.origin to the sender's REAL origin). Tag
+       origin as its own source "{origin}" so an EQ gate on it (`e.origin === 'https://trusted'`) is recognized
+       as a real, un-forgeable check: a sink reached ONLY by force-passing it is NOT cross-origin exploitable
+       and must not emit a PoC (solve_add suppresses on cons_fixed_value("{origin}")). */
+    JS_SetPropertyStr(ctx, g_msg_event, "origin", JS_NewOpaqueSourced(ctx, "{origin}", "{origin}"));
     JS_SetPropertyStr(ctx, g_msg_event, "source", JS_DupValue(ctx, g_opaque));
     JS_SetPropertyStr(ctx, g_msg_event, "ports", JS_DupValue(ctx, g_opaque));
     JS_SetPropertyStr(ctx, g, "__driveOrphans", JS_NewCFunction(ctx, js_drive_orphans, "__driveOrphans", 0));
