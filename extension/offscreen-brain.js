@@ -709,6 +709,39 @@ async function loadGlobalStore() {
   }
 }
 
+// UNION a page's discovery doc INTO the existing global doc so the cumulative
+// cross-site frontier ACCUMULATES methods (and their path-param example values)
+// across pages/sessions. Previously mergeToGlobal set `doc: v.doc`, so the last
+// same-host page's doc REPLACED the prior one — silently dropping every earlier
+// page's learned endpoints + concrete values (the moat's whole cumulative point).
+function _mergeDocInto(existingDoc, newDoc) {
+  if (!existingDoc || !existingDoc.resources) return newDoc || existingDoc || null;
+  if (!newDoc || !newDoc.resources) return existingDoc;
+  for (const bk in newDoc.resources) {
+    const nb = newDoc.resources[bk];
+    if (!nb || !nb.methods) continue;
+    let eb = existingDoc.resources[bk];
+    if (!eb) { existingDoc.resources[bk] = nb; continue; }
+    if (!eb.methods) eb.methods = {};
+    for (const mk in nb.methods) {
+      const nm = nb.methods[mk], em = eb.methods[mk];
+      if (!em) { eb.methods[mk] = nm; continue; }   // distinct endpoint from another page -> keep both
+      if (nm.parameters) {                          // same method key: union each param's example values
+        em.parameters = em.parameters || {};
+        for (const pn in nm.parameters) {
+          const np = nm.parameters[pn], ep = em.parameters[pn];
+          if (!ep) { em.parameters[pn] = np; continue; }
+          const ev = Array.isArray(ep._astValidValues) ? ep._astValidValues : [];
+          const nv = Array.isArray(np._astValidValues) ? np._astValidValues : [];
+          for (const x of nv) if (ev.indexOf(x) < 0) ev.push(x);
+          if (ev.length) ep._astValidValues = ev;
+        }
+      }
+    }
+  }
+  if (newDoc.schemas) { existingDoc.schemas = existingDoc.schemas || {}; for (const sk in newDoc.schemas) if (!existingDoc.schemas[sk]) existingDoc.schemas[sk] = newDoc.schemas[sk]; }
+  return existingDoc;
+}
 function mergeToGlobal(tab) {
   for (const [k, v] of tab.apiKeys) {
     const existing = globalStore.apiKeys.get(k);
@@ -774,7 +807,7 @@ function mergeToGlobal(tab) {
         method: v.method,
         apiKey: v.apiKey,
         fetchedAt: v.fetchedAt,
-        doc: v.doc || null,
+        doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc) || null,   // UNION, not replace: keep every page's methods
         grouping: v.grouping || null,
         pageUrls: _mergedPageUrls,
         frameOrigins: _mergedFrameOrigins,
