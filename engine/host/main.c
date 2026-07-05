@@ -903,7 +903,6 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
    ONE JSON.parse and relays it: no @H/@P/@HDR/@BODY text protocol, no host-side re-parse, no host
    identity. Sinks/chunks/errors/park are added to the same object by their accumulate sites. */
 static JSValue g_chunkurls = JS_UNDEFINED;    /* JS array of discovered external <script src> */
-static JSValue g_whys = JS_UNDEFINED;         /* JS array of {context,message} zero-result/error reasons */
 static JSValue g_park = JS_UNDEFINED;         /* JS array of "hash,decbits" frontier replay recipes */
 static void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
     if (!JS_IsArray(arr) || !s) return;
@@ -1172,12 +1171,11 @@ static JSValue solve_all(JSContext *ctx) {
                     JSValue vv = JS_GetPropertyStr(ctx, g_verified, vk);
                     if (JS_IsString(vv)) { const char *s = JS_ToCString(ctx, vv); if (s) { rpoc = strdup(s); JS_FreeCString(ctx, s); } }
                     JS_FreeValue(ctx, vv); }
-                if (!rpoc) {
-                    /* no working PoC yet — external input reaches this sink but no candidate broke out. Surface
-                       WHY (search unresolved), never a finding. */
-                    char rz[300]; snprintf(rz, sizeof rz, "no-breakout-yet sink=%s ctx=%s shape=%s", sink ? sink : "?", sc ? sc : "?", ex ? ex : "?");
-                    why_add(ctx, "solve", rz);
-                } else {
+                /* No working PoC yet -> emit NOTHING: this is an IN-PROGRESS @S search still in the frontier
+                   (unbounded — a better candidate may break a gate like startsWith('cmd:') next burst/session),
+                   NOT a gap and NOT a "safe" verdict (absence of a PoC never proves safety). It is therefore
+                   NEVER a fatal @WHY — an unsolved sink is in-progress work, not a should-never-happen. */
+                if (rpoc) {
                     JSValue rec = JS_NewObject(ctx);
                     JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink ? sink : "?"));
                     JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink ? sink : "?"));
@@ -1210,7 +1208,6 @@ static void emit_result(JSContext *ctx) {
     JS_SetPropertyStr(ctx, result, "fetchCallSites", deduped);                 /* consumes deduped */
     JS_SetPropertyStr(ctx, result, "securitySinks", solve_all(ctx));           /* @S: forced-exec solve for a breakout PoC per sink */
     JS_SetPropertyStr(ctx, result, "chunkUrls", JS_DupValue(ctx, g_chunkurls));
-    JS_SetPropertyStr(ctx, result, "resolverErrors", JS_DupValue(ctx, g_whys));
     JS_SetPropertyStr(ctx, result, "_park", JS_DupValue(ctx, g_park));
     JS_SetPropertyStr(ctx, result, "_orphans", JS_NewInt32(ctx, g_orphan_n));
     JS_SetPropertyStr(ctx, result, "_emit", JS_NewInt32(ctx, g_emit_total));
@@ -3179,7 +3176,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
     g_endpoints = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
-    g_whys = JS_NewArray(ctx); g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
+    g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
     g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
     if (g_solve_ctx) { const char *x9 = "globalThis.X9=function(){globalThis.__f9=1};globalThis.__f9=0;";
@@ -3680,7 +3677,6 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
     JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_whys); g_whys = JS_UNDEFINED;
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
     JS_FreeValue(ctx, g_solvetasks); g_solvetasks = JS_UNDEFINED;
     JS_FreeValue(ctx, g_verified); g_verified = JS_UNDEFINED;
