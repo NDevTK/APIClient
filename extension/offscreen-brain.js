@@ -1667,7 +1667,10 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     if (!m.requiredHeaders) m.requiredHeaders = {};
     for (const hk in callSite.headers) {
       const hv = callSite.headers[hk];
-      const norm = (typeof hv === "string") ? { kind: "literal", value: hv } : hv;
+      // A value with a {hole} is a SHAPE (from a symbolic flow); a hole-free value is CONCRETE (a concolic
+      // flow computed the real token/key). Classify holes as "opaque" so the CONCRETE value supersedes the
+      // shape on merge (consistent with param example values) instead of first-write-wins.
+      const norm = (typeof hv === "string") ? { kind: /\{[a-z]*\}/.test(hv) ? "opaque" : "literal", value: hv } : hv;
       if (!norm || !norm.kind) continue;
       const prev = m.requiredHeaders[hk];
       if (!prev || (prev.kind === "opaque" && norm.kind === "literal")) m.requiredHeaders[hk] = norm;
