@@ -406,9 +406,14 @@ static const char *ARRAY_PRELUDE_JS =
    comparisons, exploding combinatorially and crashing the engine (observed: internal opaque-array sorts during
    xss_const analysis aborted). The C sort correctly COLLAPSES an opaque comparison to a concrete order — and
    the ORDER of opaque elements is meaningless for @H/@S discovery anyway, so collapse is the RIGHT behavior.
-   The only thing self-hosting would buy is unbounded deep COMPARATOR recursion (rare); that overflow should be
-   fixed at its root — the wasm stack guard must throw a catchable RangeError instead of trapping — not by
-   trading a common fork-explosion for it. (deep_reentrant.html documents the remaining hard-abort.) */
+   The only thing self-hosting would buy is unbounded deep COMPARATOR recursion (rare). That is NOT worth a
+   soft-fail: in an UNBOUNDED BFS the only limits are physical (disk, RAM, C stack), and hitting one is a genuine
+   resource wall — exactly like IDB filling up crashes as OOM. So a real stack overflow must CRASH LOUD (the
+   offensive-programming floor), never be caught-and-continued (masking a bound). The way to push the floor back
+   is to make overflow IMPOSSIBLE where REDUCIBLE — self-host the continuation-holding re-entrants that only RUN
+   the callback (String.replace, JSON.stringify — like reduce, no branch, so no fork-explosion) so recursion
+   THROUGH them trampolines and never C-recurses. sort cannot (it branches -> forks), so its deep-comparator
+   overflow correctly crashes as the floor. (deep_reentrant.html exercises the residual crashers.) */
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
