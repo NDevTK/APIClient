@@ -819,8 +819,8 @@ static JSValue js_get_computed_style(JSContext *ctx, JSValueConst t, int c, JSVa
    constructor returning {format/…} whose results are opaque (locale-formatted external input). */
 static JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
-    const char *m[] = { "format", "formatToParts", "formatRange", "formatRangeToParts", "resolvedOptions", "select", "compare" };
-    for (int i = 0; i < 7; i++) JS_SetPropertyStr(ctx, o, m[i], JS_NewCFunction(ctx, js_opaque_stub, m[i], 1));
+    const char *m[] = { "format", "formatToParts", "formatRange", "formatRangeToParts", "resolvedOptions", "select", "compare", "of" };  /* .of = Intl.DisplayNames */
+    for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, o, m[i], JS_NewCFunction(ctx, js_opaque_stub, m[i], 1));
     return o;
 }
 /* WebSocket / EventSource: `new X(url)` — the url IS an endpoint (WS/SSE handshake is a GET), emit it. The
@@ -1494,6 +1494,20 @@ static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_url_tostring, "toString", 0));
     JS_SetPropertyStr(ctx, o, "toJSON", JS_NewCFunction(ctx, js_url_tostring, "toJSON", 0));
     return o;
+}
+/* URL.canParse(input, base): a static bool used to guard `new URL()`. Opaque/holey input -> true (don't
+   collapse exploration on external input); concrete -> whether Lexbor actually parses it. */
+static JSValue js_url_canparse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_FALSE;
+    if (JS_IsOpaque(argv[0])) return JS_TRUE;
+    const char *input = JS_ToCString(ctx, argv[0]);
+    const char *base = (argc >= 2 && JS_IsString(argv[1])) ? JS_ToCString(ctx, argv[1]) : NULL;
+    int ok = 0;
+    if (input && has_hole(input)) ok = 1;
+    else if (input) { char *r = url_resolve(input, base ? base : g_origin); if (r) { ok = 1; free(r); } }
+    if (input) JS_FreeCString(ctx, input);
+    if (base) JS_FreeCString(ctx, base);
+    return ok ? JS_TRUE : JS_FALSE;
 }
 /* new Request(input, init): fetch(new Request(url,{method})) is common. Resolve the url (shape-aware, like
    URL), expose .url/.method/.headers and toString->url so fetch(req) reads the endpoint. */
@@ -2516,6 +2530,19 @@ static JSValue js_form_submit(JSContext *ctx, JSValueConst this_val, int argc, J
     free(url);
     return JS_UNDEFINED;
 }
+/* el.getAttributeNames(): the element's attribute names, in order — a real DOM API frameworks use to reflect
+   attrs. Missing, it threw and killed the page. */
+static JSValue js_el_getattrnames(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue arr = JS_NewArray(ctx);
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    if (!el) return arr;
+    uint32_t i = 0;
+    for (lxb_dom_attr_t *a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
+        size_t nl = 0; const lxb_char_t *nm = lxb_dom_attr_qualified_name(a, &nl);
+        if (nm) JS_SetPropertyUint32(ctx, arr, i++, JS_NewStringLen(ctx, (const char *)nm, nl));
+    }
+    return arr;
+}
 static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *parent = JS_GetOpaque(this_val, g_el_class_id);
     /* @S: inserting a {parsedhtml}-TAINTED node (from DOMParser.parseFromString / Range.createContextual-
@@ -2767,6 +2794,7 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "cloneNode", JS_NewCFunction(ctx, js_el_self, "cloneNode", 1));       /* returns a real node (self) whose methods/attrs work */
     JS_SetPropertyStr(ctx, proto, "contains", JS_NewCFunction(ctx, js_el_contains, "contains", 1));     /* REAL descendant check */
     JS_SetPropertyStr(ctx, proto, "hasAttribute", JS_NewCFunction(ctx, js_el_has_attr, "hasAttribute", 1));   /* REAL */
+    JS_SetPropertyStr(ctx, proto, "getAttributeNames", JS_NewCFunction(ctx, js_el_getattrnames, "getAttributeNames", 0));   /* REAL */
     JS_SetPropertyStr(ctx, proto, "toggleAttribute", JS_NewCFunction(ctx, js_el_has_attr, "toggleAttribute", 1));
     JS_SetPropertyStr(ctx, proto, "querySelectorAll", JS_NewCFunction(ctx, js_el_querySelectorAll, "querySelectorAll", 1));
     JS_SetPropertyStr(ctx, proto, "insertBefore", JS_NewCFunction(ctx, js_el_appendChild, "insertBefore", 2));   /* intercepts <script src> like appendChild */
@@ -3797,7 +3825,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
             JS_SetPropertyStr(ctx, g, si ? "sessionStorage" : "localStorage", st);
         }
         /* URL / URLSearchParams: endpoint construction (see js_url_ctor). */
-        JS_SetPropertyStr(ctx, g, "URL", JS_NewCFunction2(ctx, js_url_ctor, "URL", 2, JS_CFUNC_constructor, 0));
+        { JSValue urlctor = JS_NewCFunction2(ctx, js_url_ctor, "URL", 2, JS_CFUNC_constructor, 0);
+          JS_SetPropertyStr(ctx, urlctor, "canParse", JS_NewCFunction(ctx, js_url_canparse, "canParse", 2));   /* static URL.canParse */
+          JS_SetPropertyStr(ctx, g, "URL", urlctor); }
         JS_SetPropertyStr(ctx, g, "URLSearchParams", JS_NewCFunction2(ctx, js_searchparams_ctor, "URLSearchParams", 1, JS_CFUNC_constructor, 0));
         JS_SetPropertyStr(ctx, g, "Request", JS_NewCFunction2(ctx, js_request_ctor, "Request", 2, JS_CFUNC_constructor, 0));
         /* fetch-API + encoding + misc Web objects: opaque-read / no-op-write, so a bundle that constructs
