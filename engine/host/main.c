@@ -3302,6 +3302,7 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
             JSValue pair = JS_NewArray(ctx);
             JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, h));
             JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, ev));
+            JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);   /* handlers fire with this=undefined */
             JS_SetPropertyUint32(ctx, arr, n++, pair);
         }
         JS_FreeValue(ctx, h);
@@ -3315,6 +3316,7 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
         JSValue pair = JS_NewArray(ctx);
         JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, fn));
         JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, g_opaque));
+        JS_SetPropertyUint32(ctx, pair, 2, JS_FindReceiver(ctx, fn));   /* real receiver (upgraded custom-element instance) so this.attachShadow/getAttribute work when the session fires connectedCallback */
         JS_SetPropertyUint32(ctx, arr, n++, pair);
     }
     return arr;
@@ -3896,7 +3898,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
            (connectedCallback wiring a click handler), which must fire over the SAME delta so their captured
            context (a DOM attr set by the producer) is intact. Each fn fires AT MOST ONCE (tracked by identity)
            so a producer is never re-fired (which would re-register endlessly). */
-        const char *sj = "var __driveSession=function(){var fired=[],fns=__sessionFns();var seen=function(f){for(var k=0;k<fired.length;k++)if(fired[k]===f)return 1;return 0;};var any=1;while(any){any=0;for(var i=0;i<fns.length;i++){if(seen(fns[i][0]))continue;fired.push(fns[i][0]);try{fns[i][0](fns[i][1]);}catch(e){}__sessionDrain();any=1;}if(any)fns=__sessionFns();}};";
+        const char *sj = "var __driveSession=function(){var fired=[],fns=__sessionFns();var seen=function(f){for(var k=0;k<fired.length;k++)if(fired[k]===f)return 1;return 0;};var any=1;while(any){any=0;for(var i=0;i<fns.length;i++){if(seen(fns[i][0]))continue;fired.push(fns[i][0]);try{fns[i][0].call(fns[i][2],fns[i][1]);}catch(e){}__sessionDrain();any=1;}if(any)fns=__sessionFns();}};";
         JSValue sr = JS_Eval(ctx, sj, strlen(sj), "<session>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(ctx, sr);
         JSValue ds = JS_GetPropertyStr(ctx, g, "__driveSession");
         if (JS_IsFunction(ctx, ds)) { JSValue r = JS_Call(ctx, ds, JS_UNDEFINED, 0, NULL); JS_FreeValue(ctx, r); }
