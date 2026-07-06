@@ -1993,6 +1993,28 @@ static int is_msg_handler(JSValueConst h) {
     for (int i = 0; i < g_replay_msg_n; i++) if (g_replay_msg[i] == p) return 1;   /* re-resolved candidate 'message' closure */
     return 0;
 }
+/* el.onclick/onsubmit/onmouseover/... = fn : an event handler PROPERTY. A real browser attaches it to the
+   (persistent) DOM element, so it fires regardless of whether the app retains the JS wrapper. Our orphan
+   driver only reaches handlers that are REACHABLE, so an onX set on a transient wrapper
+   (document.querySelector('.b').onclick = fn) was LOST. Register it in g_handlers (exactly like
+   addEventListener) so it is driven independent of wrapper reachability. */
+static const char *ON_EVENTS[] = {
+    "click","dblclick","mousedown","mouseup","mouseover","mouseout","mouseenter","mouseleave","mousemove",
+    "keydown","keyup","keypress","submit","change","input","focus","blur","load","error","message",
+    "scroll","resize","touchstart","touchend","touchmove","pointerdown","pointerup","pointermove",
+    "contextmenu","readystatechange","animationend","transitionend","dragstart","dragend","drop",
+    "paste","copy","cut","wheel","play","pause","ended","canplay","loadeddata"
+};
+#define N_ON_EVENTS ((int)(sizeof ON_EVENTS / sizeof ON_EVENTS[0]))
+static JSValue js_el_on_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
+    if (JS_IsFunction(ctx, val) && magic >= 0 && magic < N_ON_EVENTS) {
+        JSValue tv = JS_NewString(ctx, ON_EVENTS[magic]);
+        JSValueConst a[2] = { tv, val };
+        js_add_listener(ctx, this_val, 2, a);   /* same registration path -> driven; 'message' tracking too */
+        JS_FreeValue(ctx, tv);
+    }
+    return JS_UNDEFINED;
+}
 
 /* The page's OWN identity (principal) is CONCRETE for URL building — location.origin/protocol/host/
    hostname/port/pathname/href are REAL (a bundle does `location.origin + '/api/...'`; opaque here would
@@ -2953,6 +2975,13 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     { JSAtom a = JS_NewAtom(ctx, "content");   /* template.content -> inert fragment (queryable, cloneable) */
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_content_get, "get content", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, a); }
+    for (int i = 0; i < N_ON_EVENTS; i++) {   /* on<event> = fn -> register in g_handlers (driven regardless of wrapper reachability) */
+        char nm[40]; snprintf(nm, sizeof nm, "on%s", ON_EVENTS[i]);
+        JSAtom a = JS_NewAtom(ctx, nm);
+        JS_DefinePropertyGetSet(ctx, proto, a, JS_UNDEFINED,
+            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_on_set, "on-set", 1, JS_CFUNC_setter_magic, i), JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, a);
+    }
     { JSAtom a = JS_NewAtom(ctx, "dataset");
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_dataset_get, "get dataset", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, a); }
