@@ -1957,9 +1957,14 @@ static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueCons
    Component — with its connectedCallback endpoints/sinks — is LOST). super() returns the default derived
    `this`; connectedCallback then becomes an uncalled method the orphan driver reaches like any other. */
 static JSValue js_ctor_stub(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) { return JS_UNDEFINED; }
+static JSValue g_el_proto = JS_UNDEFINED;   /* the element-method proto; custom-element bases chain to it (def_ctor), freed in qjs_teardown */
 static void def_ctor(JSContext *ctx, JSValueConst g, const char *name) {
     JSValue c = JS_NewCFunction2(ctx, js_ctor_stub, name, 0, JS_CFUNC_constructor, 0);
     JSValue proto = JS_NewObject(ctx);
+    /* A custom element IS an HTMLElement: `class X extends HTMLElement{}` instances inherit the DOM element
+       methods (this.attachShadow/querySelector/getAttribute in a lifecycle callback) by chaining the base
+       prototype to the element proto. */
+    if (!JS_IsUndefined(g_el_proto)) JS_SetPrototype(ctx, proto, g_el_proto);
     JS_SetConstructor(ctx, c, proto);   /* c.prototype = proto (an OBJECT) so `class X extends <c>` is valid */
     JS_FreeValue(ctx, proto);
     JS_SetPropertyStr(ctx, g, name, c);
@@ -3860,6 +3865,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_NewClass(rt, g_el_class_id, &el_def);
         JSValue el_proto = JS_NewObject(ctx);
         el_install_methods(ctx, el_proto);
+        g_el_proto = JS_DupValue(ctx, el_proto);   /* custom-element bases (def_ctor) inherit these methods; freed in qjs_teardown */
         JS_SetClassProto(ctx, g_el_class_id, el_proto);
     }
 
@@ -4322,6 +4328,7 @@ KEEP void qjs_teardown(void)
     for (int i = 0; i < g_attr_shadow_n; i++) { JS_FreeValue(ctx, g_attr_shadow[i].opaque); free(g_attr_shadow[i].name); }
     free(g_attr_shadow); g_attr_shadow = NULL; g_attr_shadow_n = g_attr_shadow_cap = 0;
     replay_handlers_clear(ctx); free(g_replay_handlers); g_replay_handlers = NULL; g_replay_handler_cap = 0;
+    JS_FreeValue(ctx, g_el_proto); g_el_proto = JS_UNDEFINED;   /* the element-method proto ref (custom-element base chain) */
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
