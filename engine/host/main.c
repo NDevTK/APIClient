@@ -1438,6 +1438,12 @@ static JSValue js_sp_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 static void sp_init(JSContext *ctx, JSValueConst o, JSValueConst init);
 static JSValue js_url_sp_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_url_sp_delete(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+/* __fields iteration, shared by url.searchParams / standalone URLSearchParams / Headers — a MISSING forEach or
+   keys/values/entries throws, and uncaught in boot that discards the whole page (fatal @WHY). */
+static JSValue js_sp_forEach(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static JSValue js_sp_keys(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static JSValue js_sp_values(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static JSValue js_sp_entries(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     /* opaque (external-input-tainted) URL -> return the INPUT opaque so its SHAPE flows through unchanged
        (never concretely resolved — RUN-DON'T-MATCH). A concrete input is resolved by the REAL Lexbor parser. */
@@ -1479,9 +1485,10 @@ static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
     JS_SetPropertyStr(ctx, sp, "append", JS_NewCFunction(ctx, js_url_sp_set, "append", 2));
     JS_SetPropertyStr(ctx, sp, "delete", JS_NewCFunction(ctx, js_url_sp_delete, "delete", 1));
     JS_SetPropertyStr(ctx, sp, "sort", JS_NewCFunction(ctx, js_noop, "sort", 0));
-    JS_SetPropertyStr(ctx, sp, "forEach", JS_NewCFunction(ctx, js_noop, "forEach", 1));
-    for (int i = 0; i < 3; i++) { const char *it[] = { "keys", "values", "entries" };
-        JS_SetPropertyStr(ctx, sp, it[i], JS_NewCFunction(ctx, js_opaque_stub, it[i], 0)); }
+    JS_SetPropertyStr(ctx, sp, "forEach", JS_NewCFunction(ctx, js_sp_forEach, "forEach", 1));
+    JS_SetPropertyStr(ctx, sp, "keys", JS_NewCFunction(ctx, js_sp_keys, "keys", 0));
+    JS_SetPropertyStr(ctx, sp, "values", JS_NewCFunction(ctx, js_sp_values, "values", 0));
+    JS_SetPropertyStr(ctx, sp, "entries", JS_NewCFunction(ctx, js_sp_entries, "entries", 0));
     JS_SetPropertyStr(ctx, sp, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
     JS_SetPropertyStr(ctx, o, "searchParams", sp);
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_url_tostring, "toString", 0));
@@ -1623,6 +1630,51 @@ static void sp_init(JSContext *ctx, JSValueConst o, JSValueConst init) {
         }
     }
 }
+static JSValue js_sp_forEach(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_UNDEFINED;
+    JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
+    if (JS_IsObject(f)) {
+        JSPropertyEnum *tab = NULL; uint32_t n = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &n, f, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < n; i++) {
+                JSValue v = JS_GetProperty(ctx, f, tab[i].atom);
+                JSValue k = JS_AtomToString(ctx, tab[i].atom);
+                JSValueConst args[3] = { v, k, this_val };   /* spec order: (value, key, parent) */
+                JSValue r = JS_Call(ctx, argv[0], JS_UNDEFINED, 3, args);
+                JS_FreeValue(ctx, r); JS_FreeValue(ctx, v); JS_FreeValue(ctx, k);
+            }
+            JS_FreePropertyEnum(ctx, tab, n);
+        }
+    }
+    JS_FreeValue(ctx, f);
+    return JS_UNDEFINED;
+}
+/* keys/values/entries -> a plain ARRAY (iterable: for-of / spread / Array.from all work; an opaque stub would
+   throw in for-of). mode: 0=keys 1=values 2=entries. */
+static JSValue sp_iter_build(JSContext *ctx, JSValueConst this_val, int mode) {
+    JSValue arr = JS_NewArray(ctx); uint32_t idx = 0;
+    JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
+    if (JS_IsObject(f)) {
+        JSPropertyEnum *tab = NULL; uint32_t n = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &n, f, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < n; i++) {
+                JSValue k = JS_AtomToString(ctx, tab[i].atom);
+                JSValue v = JS_GetProperty(ctx, f, tab[i].atom);
+                JSValue item;
+                if (mode == 0) { item = k; JS_FreeValue(ctx, v); }
+                else if (mode == 1) { item = v; JS_FreeValue(ctx, k); }
+                else { item = JS_NewArray(ctx); JS_SetPropertyUint32(ctx, item, 0, k); JS_SetPropertyUint32(ctx, item, 1, v); }
+                JS_SetPropertyUint32(ctx, arr, idx++, item);
+            }
+            JS_FreePropertyEnum(ctx, tab, n);
+        }
+    }
+    JS_FreeValue(ctx, f);
+    return arr;
+}
+static JSValue js_sp_keys(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)    { return sp_iter_build(ctx, t, 0); }
+static JSValue js_sp_values(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)  { return sp_iter_build(ctx, t, 1); }
+static JSValue js_sp_entries(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return sp_iter_build(ctx, t, 2); }
 /* Serialize a searchParams' __fields to a CONCRETE query string (no leading '?'): concrete values %-encoded,
    an opaque value -> its example (%-encoded) if known, else its literal {shape} hole. malloc'd; caller frees. */
 static char *sp_serialize(JSContext *ctx, JSValueConst sp) {
@@ -1697,7 +1749,12 @@ static JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int
     JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_sp_get, "has", 1));
     JS_SetPropertyStr(ctx, o, "append", JS_NewCFunction(ctx, js_sp_append, "append", 2));
     JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_sp_append, "set", 2));
-    JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_noop, "delete", 1));
+    JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_url_sp_delete, "delete", 1));   /* real: removes from __fields (no __owner -> writeback no-ops) */
+    JS_SetPropertyStr(ctx, o, "sort", JS_NewCFunction(ctx, js_noop, "sort", 0));
+    JS_SetPropertyStr(ctx, o, "forEach", JS_NewCFunction(ctx, js_sp_forEach, "forEach", 1));
+    JS_SetPropertyStr(ctx, o, "keys", JS_NewCFunction(ctx, js_sp_keys, "keys", 0));
+    JS_SetPropertyStr(ctx, o, "values", JS_NewCFunction(ctx, js_sp_values, "values", 0));
+    JS_SetPropertyStr(ctx, o, "entries", JS_NewCFunction(ctx, js_sp_entries, "entries", 0));
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
     return o;
 }
@@ -1714,10 +1771,11 @@ static JSValue js_headers_ctor(JSContext *ctx, JSValueConst new_target, int argc
     JS_SetPropertyStr(ctx, o, "get", JS_NewCFunction(ctx, js_sp_get, "get", 1));
     JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_sp_get, "has", 1));
     JS_SetPropertyStr(ctx, o, "getSetCookie", JS_NewCFunction(ctx, js_sp_get, "getSetCookie", 0));
-    JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_noop, "delete", 1));
-    JS_SetPropertyStr(ctx, o, "forEach", JS_NewCFunction(ctx, js_noop, "forEach", 1));
-    for (int i = 0; i < 3; i++) { const char *it[] = { "keys", "values", "entries" };
-        JS_SetPropertyStr(ctx, o, it[i], JS_NewCFunction(ctx, js_opaque_stub, it[i], 0)); }
+    JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_url_sp_delete, "delete", 1));   /* real: removes from __fields */
+    JS_SetPropertyStr(ctx, o, "forEach", JS_NewCFunction(ctx, js_sp_forEach, "forEach", 1));
+    JS_SetPropertyStr(ctx, o, "keys", JS_NewCFunction(ctx, js_sp_keys, "keys", 0));
+    JS_SetPropertyStr(ctx, o, "values", JS_NewCFunction(ctx, js_sp_values, "values", 0));
+    JS_SetPropertyStr(ctx, o, "entries", JS_NewCFunction(ctx, js_sp_entries, "entries", 0));
     return o;
 }
 static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
