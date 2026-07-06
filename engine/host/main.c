@@ -1047,7 +1047,7 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         if (JS_IsString(m)) method = JS_ToCString(ctx, m);   /* opaque options -> .method opaque (not a string) -> GET */
         JS_FreeValue(ctx, m);
     }
-    if (!method && argc > 0 && JS_IsObject(argv[0])) {       /* fetch(new Request(url,{method})) -> read the Request's method */
+    if (!method && argc > 0 && JS_IsObject(argv[0]) && !JS_IsOpaque(argv[0])) {   /* fetch(new Request(url,{method})); an opaque URL is not a Request */
         JSValue m = JS_GetPropertyStr(ctx, argv[0], "method");
         if (JS_IsString(m)) method = JS_ToCString(ctx, m);
         JS_FreeValue(ctx, m);
@@ -1066,7 +1066,11 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
        ep.headers{name:value}; a POST/PATCH body (already stringified by the bundle; opaque fields -> {}
        shape) -> ep.body. Both control-flattened + capped so a value can't break the emitted line. */
     {
-        JSValueConst init = (argc > 1 && JS_IsObject(argv[1])) ? argv[1] : ((argc > 0 && JS_IsObject(argv[0])) ? argv[0] : JS_UNDEFINED);
+        /* init = the RequestInit (argv[1]) or a Request object (argv[0]). An OPAQUE argv[0] is the URL itself
+           (opaque values ARE objects), NOT an init — reading its phantom .body/.headers invented a spurious
+           body param on a plain GET(opaqueUrl). Exclude opaque here. */
+        JSValueConst init = (argc > 1 && JS_IsObject(argv[1])) ? argv[1]
+                          : ((argc > 0 && JS_IsObject(argv[0]) && !JS_IsOpaque(argv[0])) ? argv[0] : JS_UNDEFINED);
         if (JS_IsObject(init)) {
             JSValue hdrs = JS_GetPropertyStr(ctx, init, "headers");
             capture_headers(ctx, ep, hdrs);   /* shared with XHR: plain object / Headers __fields, concolic value */
