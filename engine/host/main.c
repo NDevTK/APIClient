@@ -4207,11 +4207,13 @@ KEEP void qjs_begin(const char *recipes)
     g_dom_capture = 1;    /* DOM baseline is now fixed too; capture flow DOM mutations for per-flow revert */
     /* Seed ONE attacker-SESSION flow when the page has >=2 handlers — it fires them in sequence over
        accumulating shared state, the sound way to reach cross-handler sinks (source stored by A, sunk by B). */
-    /* Seed ONE exploratory session if >=2 entry points (handlers OR orphans) could share state: it fires them
-       in sequence over an accumulating delta so a cross-handler/cross-action opaque write reaches a later
-       gate (redux/vuex login-action -> thunk, or handler A -> handler B). Forks on the resulting opaque
-       gates; the WFQ starves it if the page has no real cross-flow state. */
-    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 2) { reg_add(ctx, JS_UNDEFINED, 1.2, 0, NULL, 0); g_reg[g_reg_n - 1].session = 1; }
+    /* Seed ONE exploratory session for ANY entry point (handler OR orphan): it fires them in sequence over an
+       accumulating delta so a cross-handler/cross-action opaque write reaches a later gate (redux/vuex
+       login-action -> thunk, or handler A -> handler B) AND a handler wired MID-drive (connectedCallback ->
+       click) is fired over that delta with its producer's context. The old >=2 gate was a BOUND that truncated
+       nested-handler discovery on a single-component page; the WFQ starves a session with no real cross-flow
+       state, so >=1 costs ~nothing when unproductive. */
+    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) { reg_add(ctx, JS_UNDEFINED, 1.2, 0, NULL, 0); g_reg[g_reg_n - 1].session = 1; }
     /* BOOT AS THE FIRST FLOW: enqueue a FORKING re-run of boot so its TOP-LEVEL opaque gates are EXPLORED. The
        initial boot (dom_run_scripts) ran MONOLITHICALLY before the scheduler (g_running=0 -> branch_decide took
        the false arm on every opaque gate), so a page whose auth-gated surface sits behind a boot-level
