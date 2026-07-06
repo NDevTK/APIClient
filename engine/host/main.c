@@ -531,13 +531,13 @@ static void chunk_pending_add(const char *url) {
    (chunk_pending -> host -> qjs_provide). So: the module loader compiles a dep from cached source if we
    have it; otherwise it requests the chunk (like a browser fetches the graph) and fails THIS link, and the
    importing module is parked in g_pendmod, retried each time a chunk arrives, until the whole graph links. */
-typedef struct { char *url; char *src; size_t len; } ModSrc;
+typedef struct { char *url; char *src; size_t len; JSValue ns; } ModSrc;   /* ns = cached module namespace once linked (a module is a SINGLETON — evaluated once, re-import returns this) */
 static ModSrc *g_modsrc = NULL; static int g_modsrc_n = 0, g_modsrc_cap = 0;
 static void modsrc_put(const char *url, const char *src, size_t len) {
     for (int i = 0; i < g_modsrc_n; i++) if (strcmp(g_modsrc[i].url, url) == 0) return;   /* first source wins */
     if (g_modsrc_n >= g_modsrc_cap) { int nc = g_modsrc_cap ? g_modsrc_cap * 2 : 8; ModSrc *n = realloc(g_modsrc, (size_t)nc * sizeof(ModSrc)); if (!n) return; g_modsrc = n; g_modsrc_cap = nc; }
     char *s = malloc(len + 1); if (!s) return; memcpy(s, src, len); s[len] = 0;
-    g_modsrc[g_modsrc_n].url = strdup(url); g_modsrc[g_modsrc_n].src = s; g_modsrc[g_modsrc_n].len = len; g_modsrc_n++;
+    g_modsrc[g_modsrc_n].url = strdup(url); g_modsrc[g_modsrc_n].src = s; g_modsrc[g_modsrc_n].len = len; g_modsrc[g_modsrc_n].ns = JS_UNDEFINED; g_modsrc_n++;
 }
 static ModSrc *modsrc_get(const char *url) { for (int i = 0; i < g_modsrc_n; i++) if (strcmp(g_modsrc[i].url, url) == 0) return &g_modsrc[i]; return NULL; }
 /* URLs discovered as STATIC-import deps: link them IN-GRAPH (loader compiles them), never eval standalone
@@ -2522,6 +2522,7 @@ static void resolve_with(JSContext *ctx, JSValueConst resolve, JSValue val) {   
 static int dynimport_link(JSContext *ctx, const char *spec, JSValue *out_ns) {
     ModSrc *m = modsrc_get(spec);
     if (!m || !m->src) return 0;
+    if (!JS_IsUndefined(m->ns)) { *out_ns = JS_DupValue(ctx, m->ns); return 1; }   /* SINGLETON: already evaluated — a boot-replay / repeat import() returns the cached namespace, never re-evaluates (re-eval aborts + violates module semantics) */
     JSValue fn = JS_Eval(ctx, m->src, m->len, spec, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
     if (JS_IsException(fn)) { JS_FreeValue(ctx, JS_GetException(ctx)); return 0; }
     JSModuleDef *md = JS_VALUE_GET_PTR(fn);
@@ -2530,6 +2531,7 @@ static int dynimport_link(JSContext *ctx, const char *spec, JSValue *out_ns) {
     { JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {} }
     JS_FreeValue(ctx, ev);
     *out_ns = JS_GetModuleNamespace(ctx, md);   /* the concrete exports */
+    m->ns = JS_DupValue(ctx, *out_ns);   /* cache the singleton namespace for idempotent re-import */
     return 1;
 }
 /* import() promises parked until their chunk (and its deps) are fetched. Both the resolve AND reject
@@ -4293,9 +4295,11 @@ KEEP void qjs_provide(const char *url, const char *body)
             JS_CowSetActive(1); JS_SetFlowLocalMark(1); g_dom_capture = dsv;
             /* CACHE the chunk so boot-replay re-runs it under a candidate — a source stored / handler
                registered in an external chunk is then re-established with the concrete input (cross-flow
-               through CHUNK state). The re-run's writes are captured in the candidate flow's own COW delta
-               (creations included) and reverted, so no leak. */
-            boot_script_cache(body, strlen(body));
+               through CHUNK state). ONLY a CLASSIC chunk: an ES MODULE is a SINGLETON established once by the
+               module loader (dynimport_link/pendmod), and boot_scripts_run evals a cached script as a CLASSIC
+               global — re-running `export...` there is a syntax error -> abort. Module cross-flow state comes
+               from the linked singleton (re-resolved on the boot-replay import), never from re-running it. */
+            if (!JS_DetectModule(body, strlen(body))) boot_script_cache(body, strlen(body));
         } else {
             dynpend_reject_spec(ctx, url);   /* empty body = 404/failed fetch: reject this chunk's parked import() so it doesn't leak */
         }
@@ -4394,7 +4398,7 @@ KEEP void qjs_teardown(void)
     for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
     free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
     cons_reset(); free(g_cons); g_cons = NULL; g_cons_cap = 0;   /* free the per-flow value-domain constraint set */
-    for (int i = 0; i < g_modsrc_n; i++) { free(g_modsrc[i].url); free(g_modsrc[i].src); }
+    for (int i = 0; i < g_modsrc_n; i++) { free(g_modsrc[i].url); free(g_modsrc[i].src); JS_FreeValue(ctx, g_modsrc[i].ns); }
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
     for (int i = 0; i < g_moddep_n; i++) free(g_moddep[i]);
     free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
