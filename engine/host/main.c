@@ -86,6 +86,11 @@ static double  g_yield_floor = -1e300;  /* host cross-document WFQ: yield HOT to
                                            -1e300 = no runner-up (single engine): run to completion/park. */
 static int     g_made_progress = 0;     /* dispatched >=1 flow this qjs_step? (guards zero-work ping-pong; NOT a cap) */
 static long    g_switches = 0;          /* flow SUSPEND/re-queue events (interleave) -> @RESULT._switches */
+/* Highest weight among the PARKED flows (g_reg, excluding the running one). A parked flow's weight is CONSTANT
+   while parked (val/visits/cpu don't change), so it changes only when a flow is ADDED (reg_add). Cache it:
+   recompute once per dispatch, update O(1) on reg_add. wfq_yield then decides preemption in O(1) instead of
+   scanning the whole registry EVERY opcode — same decision, no per-opcode O(N) on the productive flow. */
+static double  g_max_parked = -1e300;
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
@@ -220,7 +225,9 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
     g_reg[g_reg_n].is_boot = 0;
-    g_reg_n++; return 1;
+    g_reg_n++;
+    { double w = 1.5 + val; if (w > g_max_parked) g_max_parked = w; }   /* fresh flow: visits=0,cpu=0 -> weight=1.5+val (keeps g_max_parked current for wfq_yield) */
+    return 1;
 }
 
 /* Re-add a SUSPENDED flow (a full copy, fs retained) so it interleaves back into the ONE registry. */
@@ -3436,10 +3443,7 @@ static int wfq_yield(void)
     g_cur_flow->cpu += 1.0;
     /* Both the JS heap AND the Lexbor DOM are per-flow COW deltas that swap on context-switch, so a flow is
        preemptible mid-write to either — no writer runs to completion. */
-    double rw = flow_weight(g_cur_flow);
-    for (int i = 0; i < g_reg_n; i++)
-        if (flow_weight(&g_reg[i]) > rw) return 1;   /* a parked flow now outranks the running flow -> yield */
-    return 0;
+    return (g_max_parked > flow_weight(g_cur_flow)) ? 1 : 0;   /* O(1): a parked flow outranks the running one -> yield (g_max_parked maintained at dispatch + reg_add) */
 }
 
 /* Emit the remaining frontier as compact REPLAY recipes (orphan_idx + decision-vector) and clear it.
@@ -3519,6 +3523,11 @@ static void scheduler_run(JSContext *ctx)
         g_made_progress = 1;                        /* dispatched a flow this visit (progress guard, not a cap) */
         g_cur_orphan_idx = f.orphan_idx;            /* siblings forked during this flow inherit its locator */
         g_running = 1; g_cur_val = f.val; g_cur_flow = &f;
+        /* recompute g_max_parked over the PARKED flows (g_reg now excludes the running flow, swap-removed above);
+           reg_add keeps it current as this flow forks. O(N) once per dispatch (the pick already scanned O(N)),
+           so wfq_yield stays O(1) per opcode. */
+        g_max_parked = -1e300;
+        for (int i = 0; i < g_reg_n; i++) { double w = flow_weight(&g_reg[i]); if (w > g_max_parked) g_max_parked = w; }
         g_candidate = f.candidate;   /* @S replay flow: source getters return this concrete candidate (else NULL=opaque) */
         g_in_session = f.session;    /* a session flow: sinks reached inside enqueue candidate sessions; cleared for every other flow */
 
