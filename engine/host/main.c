@@ -400,6 +400,15 @@ static const char *ARRAY_PRELUDE_JS =
 "  var O=Object(this),L=O.length>>>0,k=L-1,acc;"
 "  if(arguments.length>1){acc=iv;}else{while(k>=0&&!(k in O))k--;if(k<0)throw new TypeError('Reduce of empty array with no initial value');acc=O[k--];}"
 "  for(;k>=0;k--){if(k in O)acc=cb(acc,O[k],k,O);}return acc;}});";
+/* Array.sort is deliberately NOT self-hosted. Unlike forEach/map/reduce (which only RUN the callback and add
+   no branch of their own), sort BRANCHES on the comparator result to place each element — so as bytecode a
+   comparison of an OPAQUE-carrying element (`cf(...)<=0` on an opaque) FORKS, and sort does O(n log n) such
+   comparisons, exploding combinatorially and crashing the engine (observed: internal opaque-array sorts during
+   xss_const analysis aborted). The C sort correctly COLLAPSES an opaque comparison to a concrete order — and
+   the ORDER of opaque elements is meaningless for @H/@S discovery anyway, so collapse is the RIGHT behavior.
+   The only thing self-hosting would buy is unbounded deep COMPARATOR recursion (rare); that overflow should be
+   fixed at its root — the wasm stack guard must throw a catchable RangeError instead of trapping — not by
+   trading a common fork-explosion for it. (deep_reentrant.html documents the remaining hard-abort.) */
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
