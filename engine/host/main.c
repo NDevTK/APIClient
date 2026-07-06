@@ -416,20 +416,16 @@ static const char *ARRAY_PRELUDE_JS =
 "    return out+str.slice(last);}"
 "  var ss=String(search),i=str.indexOf(ss);if(i===-1)return str;"
 "  return str.slice(0,i)+String(repl(ss,i,str))+str.slice(i+ss.length);}});})();";
-/* Array.sort is deliberately NOT self-hosted. Unlike forEach/map/reduce (which only RUN the callback and add
-   no branch of their own), sort BRANCHES on the comparator result to place each element — so as bytecode a
-   comparison of an OPAQUE-carrying element (`cf(...)<=0` on an opaque) FORKS, and sort does O(n log n) such
-   comparisons, exploding combinatorially and crashing the engine (observed: internal opaque-array sorts during
-   xss_const analysis aborted). The C sort correctly COLLAPSES an opaque comparison to a concrete order — and
-   the ORDER of opaque elements is meaningless for @H/@S discovery anyway, so collapse is the RIGHT behavior.
-   The only thing self-hosting would buy is unbounded deep COMPARATOR recursion (rare). That is NOT worth a
-   soft-fail: in an UNBOUNDED BFS the only limits are physical (disk, RAM, C stack), and hitting one is a genuine
-   resource wall — exactly like IDB filling up crashes as OOM. So a real stack overflow must CRASH LOUD (the
-   offensive-programming floor), never be caught-and-continued (masking a bound). The way to push the floor back
-   is to make overflow IMPOSSIBLE where REDUCIBLE — self-host the continuation-holding re-entrants that only RUN
-   the callback (String.replace, JSON.stringify — like reduce, no branch, so no fork-explosion) so recursion
-   THROUGH them trampolines and never C-recurses. sort cannot (it branches -> forks), so its deep-comparator
-   overflow correctly crashes as the floor. (deep_reentrant.html exercises the residual crashers.) */
+/* Array.sort is the C builtin FOR NOW; the TARGET (CLAUDE.md: overflow impossible by construction) is to
+   self-host it like forEach/map/reduce/replace so its comparator recursion trampolines unbounded. The NAIVE
+   self-host fork-EXPLODES: sort BRANCHES on the comparator to place each element, so `cf(...)<=0` on an OPAQUE
+   result FORKS, and O(n log n) such compares explode combinatorially (observed: internal opaque-array sorts
+   during xss_const analysis aborted). The FIX is NOT "stay C" (that lowers the standard) — it is a __cmpConcrete
+   intrinsic: the self-hosted sort RUNS the comparator (trampolined, so its emits/side-effects happen) but
+   CONCRETIZES the opaque order bit to a definite order instead of forking, because element ORDER is meaningless
+   for @H/@S — exactly the collapse the C sort already does via JS_ToBool, minus the C-stack recursion. Until
+   that lands, sort's deep-comparator overflow CRASHES LOUD as a not-yet-done floor (never soft-failed/capped).
+   TODO(self-host sort via __cmpConcrete). deep_reentrant.html exercises the residual crash. */
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
