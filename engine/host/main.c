@@ -2534,52 +2534,21 @@ static int dynimport_link(JSContext *ctx, const char *spec, JSValue *out_ns) {
     m->ns = JS_DupValue(ctx, *out_ns);   /* cache the singleton namespace for idempotent re-import */
     return 1;
 }
-/* import() promises parked until their chunk (and its deps) are fetched. Both the resolve AND reject
-   capabilities are held: on link success the promise resolves to the real namespace; if the chunk comes back
-   EMPTY (404/failed), qjs_provide REJECTS it (below) so quickjs releases the pending-import promise it
-   internally roots — settling it in the live run context, never at teardown (where that aborts). */
-typedef struct { char *spec; JSValue resolve; JSValue reject; } DynPend;
-static DynPend *g_dynpend = NULL; static int g_dynpend_n = 0, g_dynpend_cap = 0;
-static void dynpend_add(const char *spec, JSValue resolve, JSValue reject) {   /* resolve+reject are DUPs we own */
-    if (g_dynpend_n >= g_dynpend_cap) { int nc = g_dynpend_cap ? g_dynpend_cap * 2 : 8; DynPend *n = realloc(g_dynpend, (size_t)nc * sizeof(DynPend)); if (!n) { JS_FreeValue(g_ctx, resolve); JS_FreeValue(g_ctx, reject); return; } g_dynpend = n; g_dynpend_cap = nc; }
-    g_dynpend[g_dynpend_n].spec = strdup(spec); g_dynpend[g_dynpend_n].resolve = resolve; g_dynpend[g_dynpend_n].reject = reject; g_dynpend_n++;
-}
-static void dynpend_retry(JSContext *ctx) {   /* a chunk arrived: resolve every now-linkable parked import() */
-    for (int i = 0; i < g_dynpend_n; i++) {
-        JSValue ns;
-        if (dynimport_link(ctx, g_dynpend[i].spec, &ns)) {
-            resolve_with(ctx, g_dynpend[i].resolve, ns); JS_FreeValue(ctx, g_dynpend[i].resolve); JS_FreeValue(ctx, g_dynpend[i].reject); free(g_dynpend[i].spec);
-            for (int j = i; j < g_dynpend_n - 1; j++) g_dynpend[j] = g_dynpend[j + 1];
-            g_dynpend_n--; i--;
-        }
-    }
-}
-/* A chunk arrived EMPTY (404/failed fetch) => its import() is a failed module load: REJECT the parked
-   promise (spec-faithful) so quickjs releases the pending-import it internally roots — else the promise +
-   its `.then` reaction leak into JS_FreeRuntime (the gc_obj_list assert). Done HERE, in qjs_provide's live
-   run context (NOT at teardown, where settling a dynamic-import promise aborts). Rejecting skips the
-   `onFulfilled` (m.load) reaction, so no user code runs on a missing module. */
-static void dynpend_reject_spec(JSContext *ctx, const char *spec) {
-    for (int i = 0; i < g_dynpend_n; i++) {
-        if (strcmp(g_dynpend[i].spec, spec) != 0) continue;
-        JSValue reason = JS_DupValue(ctx, g_opaque);
-        JSValue r = JS_Call(ctx, g_dynpend[i].reject, JS_UNDEFINED, 1, (JSValueConst *)&reason);
-        JS_FreeValue(ctx, r); JS_FreeValue(ctx, reason);
-        JS_FreeValue(ctx, g_dynpend[i].resolve); JS_FreeValue(ctx, g_dynpend[i].reject); free(g_dynpend[i].spec);
-        for (int j = i; j < g_dynpend_n - 1; j++) g_dynpend[j] = g_dynpend[j + 1];
-        g_dynpend_n--; i--;
-    }
-}
-/* dynamic import(specifier): force-fetch + LINK the ESM chunk like a browser lazy-load (forced). The chunk's
-   exports are the page's OWN code (concrete, not external input), so resolve the import() promise with the
-   REAL namespace once linked — a value that flows to a fetch/sink is then solved, not lost to an opaque {}. */
+/* dynamic import(specifier): a module is a BASE-OWNED SINGLETON, linked once in the base context when its
+   chunk arrives (qjs_provide). import() NEVER parks a persistent promise inside a flow — a parked promise
+   would outlive the flow's COW revert and later resolve against torn-down state (leaking the module realm +
+   running m.load on a dead context). Instead: resolve to the linked singleton if ready, else register the
+   fetch and resolve OPAQUE now; the chunk-link enqueues a forking boot re-run (like a reply), and THAT
+   re-run's import resolves to the singleton synchronously in a LIVE flow. So there is no async-park state at
+   all — provision-driven re-runs replace it. */
 static void host_dyn_import(JSContext *ctx, const char *specifier, JSValueConst resolve, JSValueConst reject) {
+    (void)reject;
     if (!specifier || !specifier[0] || has_hole(specifier)) { resolve_with(ctx, resolve, JS_DupValue(ctx, g_opaque)); return; }
     arr_push_str(ctx, g_chunkurls, specifier);   /* -> @RESULT.chunkUrls */
     JSValue ns;
-    if (dynimport_link(ctx, specifier, &ns)) { resolve_with(ctx, resolve, ns); return; }   /* already fetched -> real namespace now */
-    chunk_pending_add(specifier); moddep_add(specifier);   /* fetch it; PARK the resolve+reject until it (and its deps) land */
-    dynpend_add(specifier, JS_DupValue(ctx, resolve), JS_DupValue(ctx, reject));
+    if (dynimport_link(ctx, specifier, &ns)) { resolve_with(ctx, resolve, ns); return; }   /* linked singleton -> real namespace */
+    chunk_pending_add(specifier); moddep_add(specifier);   /* register the fetch; the chunk-link re-run drives the real resolution */
+    resolve_with(ctx, resolve, JS_DupValue(ctx, g_opaque));   /* not linked yet: opaque NOW, no persistent park in a revertible flow */
 }
 /* Identity normalize: keep the specifier VERBATIM (matches the host fetch contract — chunk URLs are passed
    to qjs_provide exactly as written; the offscreen resolves relative/root-relative against the doc URL). */
@@ -4289,19 +4258,23 @@ KEEP void qjs_provide(const char *url, const char *body)
             JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
             int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0); JS_SetFlowLocalMark(0);   /* a lazy CHUNK's globals are BASELINE (shared, re-run in boot-replay), not flow-local — mark 0 while it evals */
             modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
-            dynpend_retry(ctx);                                  /* resolve any parked dynamic import() now linkable */
             if (is_moddep(url)) pendmod_retry(ctx);              /* a static-import dep OR dyn-import chunk: link in-graph (don't eval standalone -> no double side effects) */
             else eval_page_script(ctx, body, strlen(body), url, JS_DetectModule(body, strlen(body))); /* classic external script: run standalone (module vs classic by the real detector) */
+            if (JS_DetectModule(body, strlen(body))) {
+                /* MODULE chunk: link the SINGLETON now, in the BASE context (COW off here), caching its
+                   namespace; then enqueue a forking boot re-run so a reply/chunk-gated import() resolves to
+                   the singleton SYNCHRONOUSLY in a LIVE flow (m.load runs + tears down cleanly). This is the
+                   provision-driven re-run that REPLACES the deleted async-park — the same rule a new reply
+                   uses. */
+                JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
+                if (!g_resume_mode && g_boot_n > 0) reg_add_boot(ctx, NULL, 0);
+            } else {
+                /* CLASSIC chunk: cache so boot-replay re-runs it (a source stored / handler registered in an
+                   external classic script is re-established under a candidate). A module is NOT cached — it is
+                   a singleton, and boot_scripts_run evals a cached script as a CLASSIC global (`export...` -> abort). */
+                boot_script_cache(body, strlen(body));
+            }
             JS_CowSetActive(1); JS_SetFlowLocalMark(1); g_dom_capture = dsv;
-            /* CACHE the chunk so boot-replay re-runs it under a candidate — a source stored / handler
-               registered in an external chunk is then re-established with the concrete input (cross-flow
-               through CHUNK state). ONLY a CLASSIC chunk: an ES MODULE is a SINGLETON established once by the
-               module loader (dynimport_link/pendmod), and boot_scripts_run evals a cached script as a CLASSIC
-               global — re-running `export...` there is a syntax error -> abort. Module cross-flow state comes
-               from the linked singleton (re-resolved on the boot-replay import), never from re-running it. */
-            if (!JS_DetectModule(body, strlen(body))) boot_script_cache(body, strlen(body));
-        } else {
-            dynpend_reject_spec(ctx, url);   /* empty body = 404/failed fetch: reject this chunk's parked import() so it doesn't leak */
         }
         free(g_chunk_pending[i]);
         for (int j = i; j < g_chunk_n - 1; j++) g_chunk_pending[j] = g_chunk_pending[j + 1];
@@ -4379,8 +4352,7 @@ KEEP void qjs_teardown(void)
     JSContext *ctx = g_ctx;
     if (!ctx) return;
     qjs_finalize();   /* resolve any stragglers opaque so no promise leaks */
-    /* Unresolved module/dyn-import residue -> @WHY BEFORE emit_result (so it lands in resolverErrors). */
-    if (g_dynpend_n) { char rz[64]; snprintf(rz, sizeof rz, "unresolved dynamic import x%d (chunk never fetched)", g_dynpend_n); why_add(ctx, "dyn-import", rz); }
+    /* Unresolved module graph residue -> @WHY BEFORE emit_result (so it lands in resolverErrors). */
     if (g_pendmod_n) { char rz[64]; snprintf(rz, sizeof rz, "unresolved module graph x%d (dep never fetched)", g_pendmod_n); why_add(ctx, "module-link", rz); }
     emit_result(ctx);   /* dedup in-engine + emit the ONE @RESULT json (endpoints/sinks/chunks/errors/park/_emit) */
     /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
@@ -4402,8 +4374,6 @@ KEEP void qjs_teardown(void)
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
     for (int i = 0; i < g_moddep_n; i++) free(g_moddep[i]);
     free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
-    for (int i = 0; i < g_dynpend_n; i++) { JS_FreeValue(ctx, g_dynpend[i].resolve); JS_FreeValue(ctx, g_dynpend[i].reject); free(g_dynpend[i].spec); }  /* dynpend_settle normally empties this; safety net if any remain */
-    free(g_dynpend); g_dynpend = NULL; g_dynpend_n = g_dynpend_cap = 0;
     for (int i = 0; i < g_pendmod_n; i++) free(g_pendmod[i].src);
     free(g_pendmod); g_pendmod = NULL; g_pendmod_n = g_pendmod_cap = 0; g_modseq = 0;
     if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
