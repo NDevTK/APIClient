@@ -400,6 +400,29 @@ static const char *ARRAY_PRELUDE_JS =
 "  var O=Object(this),L=O.length>>>0,k=L-1,acc;"
 "  if(arguments.length>1){acc=iv;}else{while(k>=0&&!(k in O))k--;if(k<0)throw new TypeError('Reduce of empty array with no initial value');acc=O[k--];}"
 "  for(;k>=0;k--){if(k in O)acc=cb(acc,O[k],k,O);}return acc;}});"
+/* Array.sort: SELF-HOSTED (iterative bottom-up merge, stable) so the COMPARATOR dispatches via the trampolined
+   OP_call — deep comparator recursion is UNBOUNDED, not a C-stack trap. The ordering branch must NOT fork on an
+   OPAQUE compare (element order is meaningless for @H/@S; O(n log n) forks would explode): `__isOpaque` (a
+   concrete-bool leaf) collapses a meaningless opaque order to 0, while the comparator STILL runs (its emits/side
+   effects happen). Concrete comparisons use plain JS operators (spec-correct UTF-16 default order; a concrete
+   compare never forks). No nested function (that crashes the trampoline). undefined sorts after all values, holes
+   last (comparator never sees them); NaN comparator result -> 0; comparator `this` is undefined; in-place. */
+"Object.defineProperty(Array.prototype,'sort',{writable:true,enumerable:false,configurable:true,value:function sort(cmp){"
+"  if(cmp!==undefined&&typeof cmp!=='function')throw new TypeError('Array.prototype.sort: comparator is not a function');"
+"  var O=Object(this),L=O.length>>>0,items=[],undef=0,holes=0,k;"
+"  for(k=0;k<L;k++){if(k in O){var v=O[k];if(v===undefined)undef++;else items.push(v);}else holes++;}"
+"  var cf=cmp?function(a,b){var r=cmp(a,b);if(__isOpaque(r))return 0;var d=+r;return d!==d?0:d;}"
+"           :function(a,b){if(__isOpaque(a)||__isOpaque(b))return 0;var sa=''+a,sb=''+b;return sa<sb?-1:(sa>sb?1:0);};"
+"  var N=items.length,buf=new Array(N),w,lo,mid,hi,i,j,t;"
+"  for(w=1;w<N;w*=2){for(lo=0;lo<N;lo+=2*w){mid=lo+w<N?lo+w:N;hi=lo+2*w<N?lo+2*w:N;i=lo;j=mid;t=lo;"
+"    while(i<mid&&j<hi){if(cf(items[i],items[j])<=0)buf[t++]=items[i++];else buf[t++]=items[j++];}"
+"    while(i<mid)buf[t++]=items[i++];while(j<hi)buf[t++]=items[j++];"
+"    for(t=lo;t<hi;t++)items[t]=buf[t];}}"
+"  var idx=0;"
+"  for(k=0;k<items.length;k++)O[idx++]=items[k];"
+"  for(k=0;k<undef;k++)O[idx++]=undefined;"
+"  for(k=0;k<holes;k++)delete O[idx++];"
+"  return O;}});"
 /* String.prototype.replace with a FUNCTION replacer: self-hosted so recursion THROUGH the replacer
    trampolines (unbounded, like reduce) and an opaque match/group propagates through it. Only the function
    path is self-hosted; a STRING replacer delegates to the original C builtin (`_o`, captured in the IIFE so
@@ -416,16 +439,6 @@ static const char *ARRAY_PRELUDE_JS =
 "    return out+str.slice(last);}"
 "  var ss=String(search),i=str.indexOf(ss);if(i===-1)return str;"
 "  return str.slice(0,i)+String(repl(ss,i,str))+str.slice(i+ss.length);}});})();";
-/* Array.sort is the C builtin FOR NOW; the TARGET (CLAUDE.md: overflow impossible by construction) is to
-   self-host it like forEach/map/reduce/replace so its comparator recursion trampolines unbounded. The NAIVE
-   self-host fork-EXPLODES: sort BRANCHES on the comparator to place each element, so `cf(...)<=0` on an OPAQUE
-   result FORKS, and O(n log n) such compares explode combinatorially (observed: internal opaque-array sorts
-   during xss_const analysis aborted). The FIX is NOT "stay C" (that lowers the standard) — it is a __cmpConcrete
-   intrinsic: the self-hosted sort RUNS the comparator (trampolined, so its emits/side-effects happen) but
-   CONCRETIZES the opaque order bit to a definite order instead of forking, because element ORDER is meaningless
-   for @H/@S — exactly the collapse the C sort already does via JS_ToBool, minus the C-stack recursion. Until
-   that lands, sort's deep-comparator overflow CRASHES LOUD as a not-yet-done floor (never soft-failed/capped).
-   TODO(self-host sort via __cmpConcrete). deep_reentrant.html exercises the residual crash. */
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
@@ -2829,6 +2842,15 @@ static JSValue js_yield(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     JS_FreeValue(ctx, rf[1]);
     return promise;
 }
+/* __isOpaque(v): CONCRETE bool (never forks), the ONE primitive the self-hosted Array.sort needs. A branch on an
+   OPAQUE value forks; sort must NOT fork on the meaningless ORDER of opaque elements (O(n log n) forks explode).
+   So the sort's comparators call __isOpaque to collapse an opaque compare to 0 WITHOUT an OP_if fork — the
+   comparator itself still RUNS (via the trampolined OP_call, so deep comparator recursion stays unbounded and its
+   emits happen); only the order bit concretizes. A leaf (holds no continuation), so it never adds C recursion. */
+static JSValue js_is_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    return JS_NewBool(ctx, argc > 0 && JS_IsOpaque(argv[0]));
+}
 
 /* orphan flow source — CONTINUOUS discovery, NOT a one-shot phase. Called every scheduler iteration so
    functions defined DYNAMICALLY during a forced flow (a login-gated lazy CHUNK: eval/import of fetched
@@ -3216,6 +3238,11 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
     g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
+    /* PLATFORM BUILTINS: everything compiled here (x9, dedup, the Array/String prelude) is engine-internal, not
+       page code — mark it born-executed so orphan-collection NEVER force-invokes it. Without this, an uncalled
+       prelude method (e.g. Array.sort, which unlike forEach permits an undefined comparator) is orphan-driven
+       with OPAQUE args and its `k<L`/`cmp?` branches fork-explode. Page bundles compile with the flag OFF. */
+    JS_SetBuiltinCompile(ctx, 1);
     if (g_solve_ctx) { const char *x9 = "globalThis.X9=function(){globalThis.__f9=1};globalThis.__f9=0;";
         JSValue xr = JS_Eval(g_solve_ctx, x9, strlen(x9), "<x9>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, xr); }   /* X9 fire-tracker for the js-sink verify */
     g_dedup_fn = JS_Eval(ctx, DEDUP_JS, strlen(DEDUP_JS), "<dedup>", JS_EVAL_TYPE_GLOBAL);
@@ -3223,6 +3250,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     { JSValue pv = JS_Eval(ctx, ARRAY_PRELUDE_JS, strlen(ARRAY_PRELUDE_JS), "<array-prelude>", JS_EVAL_TYPE_GLOBAL);
       if (JS_IsException(pv)) { fprintf(stderr, "@E {\"phase\":\"array-prelude\"}\n"); js_std_dump_error(ctx); }
       JS_FreeValue(ctx, pv); }
+    JS_SetBuiltinCompile(ctx, 0);   /* page bundles are NOT builtins: their unused functions stay orphans (the moat) */
     js_std_add_helpers(ctx, 0, NULL);
     js_init_module_std(ctx, "std");
     js_init_module_os(ctx, "os");
@@ -3240,6 +3268,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "__fork", JS_NewCFunction(ctx, js_fork, "__fork", 2));
     JS_SetPropertyStr(ctx, g, "__yield", JS_NewCFunction(ctx, js_yield, "__yield", 0));
     JS_SetPropertyStr(ctx, g, "__branch", JS_NewCFunction(ctx, js_branch, "__branch", 0));
+    JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_opaque, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
     JS_SetPropertyStr(ctx, g, "__opaque", JS_NewCFunction(ctx, js_opaque, "__opaque", 0));
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval, "eval", 1));   /* eval(concrete) -> forced-execute */
