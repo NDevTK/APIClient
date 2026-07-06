@@ -2774,6 +2774,19 @@ static JSValue js_el_contains(JSContext *ctx, JSValueConst this_val, int argc, J
 }
 static JSValue js_el_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_DupValue(ctx, this_val); }   /* cloneNode -> a real node */
 static JSValue js_el_style_get(JSContext *ctx, JSValueConst this_val) { return JS_NewObject(ctx); }
+/* template.content: the inert DocumentFragment holding the <template>'s parsed children. Apps instantiate a
+   template via template.content.cloneNode(true) / .querySelector(...) (the core <template> / lit-html / web-
+   component idiom); undefined here made that a fatal TypeError. Wrap the Lexbor content fragment (a node) so
+   querySelector/childNodes/firstElementChild traverse the inert content and handlers wired to it are driven. */
+static JSValue js_el_content_get(JSContext *ctx, JSValueConst this_val) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    if (!el) return JS_UNDEFINED;
+    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
+    if (!nm || nl != 8 || memcmp(nm, "template", 8) != 0) return JS_UNDEFINED;   /* .content only exists on <template> */
+    lxb_dom_document_fragment_t *frag = ((lxb_html_template_element_t *)el)->content;
+    if (!frag) return JS_UNDEFINED;
+    return el_wrap(ctx, (lxb_dom_element_t *)frag);   /* fragment IS a node; querySelector/childNodes walk it */
+}
 static JSValue js_el_dataset_get(JSContext *ctx, JSValueConst this_val) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
     JSValue o = JS_NewObject(ctx);
@@ -2936,6 +2949,9 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "getBoundingClientRect", JS_NewCFunction(ctx, js_el_rect, "getBoundingClientRect", 0));
     { JSAtom a = JS_NewAtom(ctx, "style");
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_style_get, "get style", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+      JS_FreeAtom(ctx, a); }
+    { JSAtom a = JS_NewAtom(ctx, "content");   /* template.content -> inert fragment (queryable, cloneable) */
+      JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_content_get, "get content", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, a); }
     { JSAtom a = JS_NewAtom(ctx, "dataset");
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_dataset_get, "get dataset", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
