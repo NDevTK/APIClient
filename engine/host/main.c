@@ -4431,6 +4431,7 @@ KEEP void qjs_teardown(void)
     js_std_free_handlers(g_rt);
     JS_FreeValue(ctx, g_real_function); g_real_function = JS_UNDEFINED;
     if (g_solve_ctx) { JS_FreeContext(g_solve_ctx); g_solve_ctx = NULL; }   /* free the solver realm before its runtime */
+    JS_RunGC(g_rt);   /* CYCLE-collect now the global roots are dropped: an unreachable promise<->reaction cycle (e.g. a discarded import() chain) is benign garbage refcounting can't reclaim; the gc_obj_list assert then fires ONLY for a genuinely ROOTED leak (a real bug), not for collectible cycles */
     JS_FreeContext(ctx);
     JS_FreeRuntime(g_rt);
     g_ctx = NULL; g_rt = NULL;
