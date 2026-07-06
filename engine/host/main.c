@@ -468,10 +468,10 @@ static const char *ARRAY_PRELUDE_JS =
 "      if(c<=56319&&c2>=56320&&c2<=57343){out+=ch+s.charAt(i+1);i++;}else{var h2=c.toString(16);out+=BS+'u'+'0000'.slice(h2.length)+h2;}}"
 "    else out+=ch;}return out+Q;}"
 "  function ser(key,holder){var value=holder[key];"
-"    if(__isOpaque(value))return value;"
+"    if(__isOpaque(value)){var _ex=__opaqueExample(value);if(_ex===undefined)return value;value=_ex;}"
 "    if(value!==null&&typeof value==='object'&&typeof value.toJSON==='function')value=value.toJSON(key);"
 "    if(replacerFn)value=replacerFn.call(holder,key,value);"
-"    if(__isOpaque(value))return value;"
+"    if(__isOpaque(value)){var _ex=__opaqueExample(value);if(_ex===undefined)return value;value=_ex;}"
 "    if(value!==null&&typeof value==='object'){if(value instanceof Number)value=Number(value);else if(value instanceof String)value=String(value);else if(value instanceof Boolean)value=value.valueOf();}"
 "    if(value===null)return 'null';if(value===true)return 'true';if(value===false)return 'false';"
 "    var t=typeof value;"
@@ -2917,6 +2917,14 @@ static JSValue js_is_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSV
 {
     return JS_NewBool(ctx, argc > 0 && JS_IsOpaque(argv[0]));
 }
+/* __opaqueExample(v): the CONCRETE example an opaque carries (config/reply loaded data), or undefined for a
+   pure attacker symbol (location.hash / cross-origin postMessage — no example). Self-hosted JSON.stringify
+   uses this so a CONFIG value serializes to its real value (`{"orgId":"acme-42"}`, the concolic example
+   propagating through an op) while ATTACKER input stays the taint-preserving opaque. A leaf. */
+static JSValue js_opaque_example(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    return argc > 0 ? JS_OpaqueExample(ctx, argv[0]) : JS_UNDEFINED;
+}
 
 /* orphan flow source — CONTINUOUS discovery, NOT a one-shot phase. Called every scheduler iteration so
    functions defined DYNAMICALLY during a forced flow (a login-gated lazy CHUNK: eval/import of fetched
@@ -3335,6 +3343,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "__yield", JS_NewCFunction(ctx, js_yield, "__yield", 0));
     JS_SetPropertyStr(ctx, g, "__branch", JS_NewCFunction(ctx, js_branch, "__branch", 0));
     JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_opaque, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
+    JS_SetPropertyStr(ctx, g, "__opaqueExample", JS_NewCFunction(ctx, js_opaque_example, "__opaqueExample", 1));   /* self-hosted stringify: a config opaque's concrete example (else undefined) */
     JS_SetPropertyStr(ctx, g, "__opaque", JS_NewCFunction(ctx, js_opaque, "__opaque", 0));
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval, "eval", 1));   /* eval(concrete) -> forced-execute */
