@@ -3257,14 +3257,30 @@ static void dom_run_scripts(JSContext *ctx) {
         size_t tl = 0;
         lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
         if (txt && tl) {
-            for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; }     /* inline body -> bundle id */
-            bh ^= '|'; bh *= 16777619u;
-            boot_script_cache((const char *)txt, tl);   /* cache for cross-flow @S candidate boot-replay */
+            /* A real browser EXECUTES a <script> only if its type is empty, "module", or a JavaScript MIME type.
+               A DATA block (application/json __NEXT_DATA__ / Redux preloaded state, ld+json, importmap,
+               text/template) is NEVER executed — it stays in the DOM as data (getElementById().textContent reads
+               it, the SSR-seed moat). Eval'ing its JSON as JS is a syntax error that, uncaught, aborted the WHOLE
+               SSR page. So decide executability by type; a data script is parsed-but-not-run (and not part of the
+               JS bundle identity / boot-replay set). */
             size_t tyl = 0; const lxb_char_t *ty = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tyl);
-            int is_mod = ty && tyl == 6 && memcmp(ty, "module", 6) == 0;   /* the browser's real signal */
-            g_current_script = el_wrap(ctx, el);   /* document.currentScript during this inline script */
-            eval_page_script(ctx, (const char *)txt, tl, "<script>", is_mod);
-            JS_FreeValue(ctx, g_current_script); g_current_script = JS_NULL;
+            int is_mod = 0, is_exec = 1;
+            if (ty && tyl) {
+                char tb[64]; size_t tn = tyl < 63 ? tyl : 63;
+                for (size_t k = 0; k < tn; k++) { char ch = (char)ty[k]; tb[k] = (ch >= 'A' && ch <= 'Z') ? (char)(ch + 32) : ch; }
+                tb[tn] = 0;
+                if (strcmp(tb, "module") == 0) is_mod = 1;
+                else if (strstr(tb, "javascript") || strstr(tb, "ecmascript")) is_exec = 1;   /* JS MIME type */
+                else is_exec = 0;   /* json / ld+json / importmap / template / babel / speculationrules -> data */
+            }
+            if (is_exec) {
+                for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; }     /* inline JS body -> bundle id */
+                bh ^= '|'; bh *= 16777619u;
+                boot_script_cache((const char *)txt, tl);   /* cache for cross-flow @S candidate boot-replay */
+                g_current_script = el_wrap(ctx, el);   /* document.currentScript during this inline script */
+                eval_page_script(ctx, (const char *)txt, tl, "<script>", is_mod);
+                JS_FreeValue(ctx, g_current_script); g_current_script = JS_NULL;
+            }
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
