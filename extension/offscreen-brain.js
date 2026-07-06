@@ -108,12 +108,6 @@ const state = {
   docs: new Map(),
 };
 
-// Host CPU slice (resource-pressure proxy): a page with more than this many forced STARTERS parks its
-// deep residue to the GLOBAL frontier (resumed later by value order) instead of running to completion.
-// Large enough that ordinary pages finish in one visit; only genuinely huge bundles park -> BFS across
-// sites without regressing normal per-visit completeness.
-const FRONTIER_QUANTUM = 256;
-
 // GLOBAL network/PostMessage/MessageChannel traffic stream. The request log is
 // NOT per-document: a document is evicted from `state.docs` once its grind
 // completes (_maybeEvictReviewedDoc), but its captured traffic must survive that
@@ -5043,10 +5037,10 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
       scriptOffsets: scriptOffsets,
       sourceMapScripts: sourceMapScripts,
       pageHtml: getDoc(buf.docKey)._pageHtml || null,
-      // Host CPU slice (resource-pressure proxy): a page with more than this many forced STARTERS parks
-      // its residue to the GLOBAL frontier (resumed later by value) instead of running to completion and
-      // blocking the offscreen -> BFS ACROSS sites. Small pages (< quantum) finish in one visit unchanged.
-      quantum: FRONTIER_QUANTUM,
+      // Participate in the GLOBAL cross-session frontier: this engine's residue parks to IDB under RAM
+      // pressure (resource-driven, host-side) and rehydrates by value order later. With headroom the page
+      // runs to completion in one visit — nothing is lost to a clock; there is NO dispatch/step quantum.
+      persist: true,
     });
   } catch (e) {
     console.debug("[AST:combined] sendToOffscreen failed for tab=%d: %s", tabId, e.message || e);

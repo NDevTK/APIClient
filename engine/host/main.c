@@ -73,14 +73,13 @@ static Flow   *g_cur_flow = NULL;   /* running flow (a stable local copy; its we
 static int     g_emit_total = 0;
 static JSRuntime *g_rt = NULL;
 /* Cross-session frontier (park/resume by REPLAY): deterministic orphan collection gives each function a
-   stable index; a parked flow's recipe = (orphan_idx, decision-vector). g_quantum > 0 = the host's
-   per-page CPU slice (cross-page fairness): after that many STARTERS the rest of the frontier is emitted
-   as @PARK recipes and the run stops, resumable next session. 0 = unlimited (run to completion). */
+   stable index; a parked flow's recipe = (orphan_idx, decision-vector). Parking is RAM-PRESSURE-driven
+   (g_park_requested, host-set), never a dispatch/step count — with headroom the page runs to completion. */
 static JSValue g_orphan_buf[4096];
 static int     g_orphan_n = 0;
 static int     g_cur_orphan_idx = -1;   /* running flow's orphan index (inherited by its branch siblings) */
-static int     g_quantum = 0;
-static long    g_work = 0;              /* flow DISPATCHES this run (starter OR resume) — the quantum's work unit */
+static int     g_park_requested = 0;   /* host sets this under RAM pressure -> park the cold tail to IDB (NOT a dispatch count) */
+static long    g_work = 0;              /* flow DISPATCHES this run (starter OR resume) — diagnostic only, never a park trigger */
 static double  g_yield_floor = -1e300;  /* host cross-document WFQ: yield HOT to the host the moment this engine's best
                                            flow no longer outranks the RUNNER-UP engine (whose weight the host sets here).
                                            VALUE-driven, never a dispatch count — the WFQ, not a clock, decides the switch.
@@ -1204,8 +1203,8 @@ static void emit_result(JSContext *ctx) {
     JS_SetPropertyStr(ctx, result, "_orphans", JS_NewInt32(ctx, g_orphan_n));
     JS_SetPropertyStr(ctx, result, "_emit", JS_NewInt32(ctx, g_emit_total));
     JS_SetPropertyStr(ctx, result, "_switches", JS_NewInt64(ctx, g_switches));   /* flow interleave events (fairness, incl. at depth) */
-    JS_SetPropertyStr(ctx, result, "_work", JS_NewInt64(ctx, g_work));           /* flow dispatches this run (vs _quantum -> did it PARK?) */
-    JS_SetPropertyStr(ctx, result, "_quantum", JS_NewInt32(ctx, g_quantum));     /* host CPU slice (0 = run to completion, never parks) */
+    JS_SetPropertyStr(ctx, result, "_work", JS_NewInt64(ctx, g_work));           /* flow dispatches this run (diagnostic) */
+    JS_SetPropertyStr(ctx, result, "_parked", JS_NewInt32(ctx, g_park_requested)); /* 1 = host RAM pressure forced a cold-tier park this run */
     JSValue json = JS_JSONStringify(ctx, result, JS_UNDEFINED, JS_UNDEFINED);
     JS_FreeValue(ctx, result);
     if (JS_IsString(json)) { const char *js = JS_ToCString(ctx, json); if (js) { printf("@RESULT %s\n", js); JS_FreeCString(ctx, js); } }
@@ -2846,7 +2845,7 @@ static int wfq_yield(void)
        preemptible mid-write to either — no writer runs to completion. */
     double rw = flow_weight(g_cur_flow);
     for (int i = 0; i < g_reg_n; i++)
-        if (flow_weight(&g_reg[i]) > rw) return 1;   /* a parked flow now outranks the running quantum */
+        if (flow_weight(&g_reg[i]) > rw) return 1;   /* a parked flow now outranks the running flow -> yield */
     return 0;
 }
 
@@ -2878,32 +2877,33 @@ static void park_frontier(JSContext *ctx)
     (void)parked;   /* recipes accumulated into g_park -> @RESULT._park (no separate @PARKED line) */
 }
 
-/* A BOOT FLOW is pending (reply-triggered forking re-run or a boot-fork sibling) — the quantum must not park
-   it: it delivers an already-fetched reply's gated surface and has no replay recipe if dropped. */
+/* A BOOT FLOW is pending (reply-triggered forking re-run or a boot-fork sibling) — a RAM-pressure park must
+   not drop it: it delivers an already-fetched reply's gated surface and has no replay recipe if dropped. */
 static int reg_has_boot(void) {
     for (int i = 0; i < g_reg_n; i++) if (g_reg[i].is_boot) return 1;
     return 0;
 }
 /* The ONE scheduler loop: pick the highest-WEIGHT flow (NON-FIFO), run it as a preemptible heap-frame
-   quantum, re-queue it if it suspended (interleave), repeat. BFS by value-of-information: shallow
+   flow (per-opcode yield, no slice count), re-queue it if it suspended (interleave), repeat. BFS by value-of-information: shallow
    high-emit flows finish ahead of the deep residue, which is starved to ~0 CPU (resumable). */
 static void scheduler_run(JSContext *ctx)
 {
     for (;;) {
         seed_orphans(ctx);          /* CONTINUOUS: pick up functions a prior flow defined dynamically (chunks) */
         if (g_reg_n == 0) break;
-        /* HOST QUANTUM (cross-page fairness) = RESOURCE PRESSURE on ALL work, not just starters: after
-           g_quantum flow DISPATCHES (starter OR resume/fetch-round), PARK the rest of the frontier as compact
-           replay recipes (orphan_idx + decision-vector) and stop — resumable next burst/session. Counting
-           resumes too is what makes a single DEEP await/fetch-loop flow yield to park (it never adds starters),
-           so no step-cap crutch is needed. Not a bound: parked flows re-drive by re-running boot + decisions.
+        /* COLD-TIER PARK (cross-page/cross-session fairness) = RESOURCE PRESSURE on ALL work, not just
+           starters: on RAM PRESSURE (host-driven, RESOURCE-based — NEVER a dispatch count; a per-N slice is
+           the banned step-cap the value yield-floor below already avoids), PARK the rest of the frontier as replay
+           recipes (orphan_idx + decision-vector) to the IDB cold tier and stop — resumable next burst/session.
+           The host sets g_park_requested when resident RAM crosses the working-set floor. With RAM headroom (a
+           lone engine, a small page) it NEVER fires, so the page runs to COMPLETION in one visit — findings are
+           never lost to a clock. Not a bound: parked flows re-drive by re-running boot + decisions, and BFS has
+           already extracted the productive breadth, so pressure only ever touches the least-valuable starved tail.
            EXCEPTION — never park while a BOOT FLOW is pending: a reply-triggered forking boot (reg_add_boot on
            a NEW reply) is the DELIVERY of an already-fetched reply — the moat's headline gated/logged-in surface
            — and it carries NO orphan_idx, so park_frontier would DROP it with no recipe (permanently lost, not
-           deferred). Parking productive reply-delivery is exactly the "truncates distinct work" a bound must
-           never do; the WFQ, not the quantum, orders the boot-fork tree, and it drains (finite reply-gated
-           branches) before the orphan residue parks. */
-        if (g_quantum > 0 && g_work >= g_quantum && !reg_has_boot()) { park_frontier(ctx); break; }
+           deferred). The WFQ, not a clock, orders the boot-fork tree; it drains (finite reply-gated branches). */
+        if (g_park_requested && !reg_has_boot()) { park_frontier(ctx); break; }
         int best = 0;
         for (int i = 1; i < g_reg_n; i++)
             if (flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
@@ -2922,7 +2922,7 @@ static void scheduler_run(JSContext *ctx)
             if (solved) { JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); continue; }
         }
         f.visits++;
-        g_work++;                                   /* one flow got CPU (starter OR resume) — counts toward the quantum */
+        g_work++;                                   /* one flow got CPU (starter OR resume) — diagnostic tally */
         g_made_progress = 1;                        /* dispatched a flow this visit (progress guard, not a cap) */
         g_cur_orphan_idx = f.orphan_idx;            /* siblings forked during this flow inherit its locator */
         g_running = 1; g_cur_val = f.val; g_cur_flow = &f;
@@ -3118,7 +3118,7 @@ static void scheduler_run(JSContext *ctx)
             f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
             f.saved_c = g_c;
             f.val = g_cur_val;
-            if (g_dec_n > f.dec_n) {                /* grew (new branch decisions taken this quantum) */
+            if (g_dec_n > f.dec_n) {                /* grew (new branch decisions taken this flow-run) */
                 signed char *nd = (signed char *)malloc((size_t)(g_dec_n > 0 ? g_dec_n : 1));
                 if (nd) { for (int i = 0; i < g_dec_n; i++) nd[i] = g_dec[i]; free(f.dec); f.dec = nd; }
             } else {
@@ -3152,7 +3152,7 @@ static JSContext *g_ctx = NULL;
 static int g_rc = 0;
 
 KEEP int qjs_init(const char *boot, const char *html, const char *origin,
-                  const char *replies, int quantum, const char *recipes)
+                  const char *replies, const char *recipes)
 {
     JSRuntime *rt = JS_NewRuntime();
     if (!rt) { fprintf(stderr, "@E {\"phase\":\"newruntime\"}\n"); return 1; }
@@ -3166,7 +3166,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     /* Reset all scheduler/frontier state so ONE wasm instance can serve many page analyses (init/run/
        teardown reused) with no cross-page bleed. The arrays themselves are reused (not re-malloc'd). */
     g_reg_n = 0; g_work = 0; g_switches = 0; g_yield_floor = -1e300; g_made_progress = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL; g_msg_handler_n = 0;
-    g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_quantum = 0;
+    g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_park_requested = 0;
     g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
     JS_OptaintReset(ctx);   /* clear cross-flow opaque-taint set from any prior page analysis */
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
@@ -3192,7 +3192,6 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         if (JS_IsException(t)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
         else g_reply_table = t;
     }
-    g_quantum = quantum;                           /* host per-page CPU slice (0 = run to completion) */
     (void)recipes;                                 /* recipes are seeded in phase-2 qjs_begin(), after the host reads the bundle-id */
 
     JSValue g = JS_GetGlobalObject(ctx);
@@ -3619,6 +3618,10 @@ KEEP void qjs_finalize(void)
    until its best flow no longer outranks that floor, then yields HOT. VALUE-driven, not a slice count.
    Floor -1e300 (default / lone engine) = run to completion. */
 KEEP void qjs_set_yield_floor(double w) { g_yield_floor = w; }
+/* Host RAM-pressure signal (cold-tier): when resident RAM crosses the working-set floor the host raises this,
+   and the scheduler parks its remaining frontier as replay recipes to IDB and yields. RESOURCE-driven, never a
+   dispatch count — with headroom it is never raised and the page runs to completion in one visit. */
+KEEP void qjs_request_park(void) { g_park_requested = 1; }
 KEEP double qjs_top_weight(void)     /* this engine's value-of-information = its best flow's weight (0 if idle/done) */
 {
     double best = 0; int seen = 0;
@@ -3704,9 +3707,8 @@ int main(int argc, char **argv)
     const char *html    = (argc > 2) ? argv[2] : NULL;
     const char *origin  = (argc > 3) ? argv[3] : NULL;
     const char *replies = (argc > 4) ? argv[4] : NULL;
-    int         quantum = (argc > 5 && argv[5][0]) ? atoi(argv[5]) : 0;
-    const char *recipes = (argc > 6) ? argv[6] : NULL;
-    if (qjs_init(boot, html, origin, replies, quantum, recipes) != 0) return 1;
+    const char *recipes = (argc > 5) ? argv[5] : NULL;
+    if (qjs_init(boot, html, origin, replies, recipes) != 0) return 1;
     qjs_begin(recipes);   /* phase 2: seed the frontier (fresh or resume) + fix the COW baseline */
     if (boot) { while (qjs_step() == 1) qjs_finalize(); }   /* node CLI has no network -> resolve pending opaque (shapes) */
     qjs_teardown();

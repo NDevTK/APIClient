@@ -49,7 +49,7 @@ function linesToAnalysis(lines, msg) {
   // a real signal that the single BFS actually context-switches, not just runs FIFO). A cumulative global
   // across steps; the mapped field carries the per-result value.
   try {
-    const m = { switches: result._switches || 0, orphans: result._orphans || 0, park: (result._park || []).length, resumed: resumed, work: result._work || 0, quantum: result._quantum || 0, url: (msg && msg.sourceUrl) || "" };
+    const m = { switches: result._switches || 0, orphans: result._orphans || 0, park: (result._park || []).length, resumed: resumed, work: result._work || 0, parked: result._parked || 0, url: (msg && msg.sourceUrl) || "" };
     self._engineMeta = m;
     // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
     // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
@@ -145,7 +145,7 @@ const HOT_RAM_BUDGET = 512 * 1024 * 1024;   // bytes of summed live WASM memory 
 function _residentBytes() { let b = 0; for (const e of _pool) { try { b += (e.M && e.M.HEAPU8) ? e.M.HEAPU8.length : 0; } catch (_) {} } return b; }
 
 // ---- Engine lifecycle over ONE wasm instance (one document) ----
-async function engineCreate(code, html, msg, quantum) {
+async function engineCreate(code, html, msg, persist) {
   const lines = [];
   const createQJS = await getCreateQJS();
   // @DBG is the ONLY dev-trace channel: routed to console.debug, NEVER into `lines` — so it is never parsed
@@ -157,11 +157,11 @@ async function engineCreate(code, html, msg, quantum) {
   const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
   const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
   // PHASE 1 — parse + boot; the engine computes the stable bundle IDENTITY from its Lexbor <script> scan.
-  M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number", "number"],
-    [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), quantum || 0, arg("")]);
+  M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
+    [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), arg("")]);
   const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
   const fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
-  const prior = quantum ? await frontierGet(fkey) : null;
+  const prior = persist ? await frontierGet(fkey) : null;
   // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
   // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
   M.ccall("qjs_begin", "void", ["string"], [(prior && prior.recipes) ? prior.recipes : ""]);
@@ -178,7 +178,7 @@ async function engineCreate(code, html, msg, quantum) {
       return (r && r.ok && typeof r.body === "string") ? r.body : "";
     } catch (_) { return ""; }
   };
-  return { M, ptrs, lines, fkey, prior, msg, quantum, fetched, code, html, state: "hot" };
+  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, code, html, state: "hot" };
 }
 function engineWeight(eng) { return eng.state === "hot" ? +eng.M.ccall("qjs_top_weight", "number", [], []) : -Infinity; }
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
@@ -238,7 +238,7 @@ function crashResult(stage, e, msg) {
    instance is built until a slot is free), then advance the highest-weight HOT engine and re-rank. Before
    stepping it the host sets its VALUE yield-floor to the RUNNER-UP engine's weight (ops.setFloor), so the
    engine runs until it's outranked then yields HOT — no fixed slice count (a banned step-cap). Slots turn
-   over because each engine self-parks to the cold tier (IDB recipe) at its quantum. */
+   over because each engine self-parks to the cold tier (IDB recipe) under RAM pressure (ops.requestPark). */
 async function hostSchedule(pool, ops) {
   for (;;) {
     if (ops.admit) await ops.admit();   // gate creation to cap: seat waiting docs into freed slots
@@ -253,11 +253,13 @@ async function hostSchedule(pool, ops) {
     let best = hot[0], runner = -Infinity;   // Level-1 WFQ pick + the runner-up weight (the value yield floor)
     for (const e of hot) { const w = ops.weight(e); if (w > ops.weight(best)) { runner = ops.weight(best); best = e; } else if (w > runner) runner = w; }
     if (ops.setFloor) ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked-by-runner-up => yield; lone engine => run on
+    if (ops.requestPark && ops.underPressure && ops.underPressure())   // RAM over the working-set floor => tell the top engine to park its cold tail to IDB and yield (resource-driven, not a clock)
+      ops.requestPark(best);
     const st = ops.step(best);
     if (st === 1) {   // NEED_FETCH: service asynchronously (non-blocking) so other engines keep advancing
       best.state = "fetching";
       best._fetchP = ops.serviceFetch(best).then(() => { best.state = "hot"; }, () => { best.state = "hot"; });
-    } else if (st === 0) {   // fully explored, or self-parked at quantum: finalize (residue -> IDB cold tier)
+    } else if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
       await ops.finish(best);
     }
     // st === 2: stays hot; the loop re-ranks (it may now be outranked by a sibling)
@@ -266,19 +268,21 @@ async function hostSchedule(pool, ops) {
 
 // ---- Engine-bound ops + the live pool ----
 const _pool = [];        // HOT/fetching engines (<= POOL_CAP resident wasm instances)
-const _waiting = [];      // documents awaiting a slot: { code, html, msg, quantum, resolve } — NO instance built yet
+const _waiting = [];      // documents awaiting a slot: { code, html, msg, persist, resolve } — NO instance built yet
 let _hostDriving = false;
 let _engineFactory = engineCreate;   // injectable for tests
 const _hostOps = {
   weight: engineWeight,
   setFloor: (eng, floor) => { try { eng.M.ccall("qjs_set_yield_floor", "void", ["number"], [floor]); } catch (_) {} },   // value yield: run until outranked by the runner-up
+  underPressure: () => _residentBytes() >= HOT_RAM_BUDGET,   // summed live wasm memory over the working-set floor
+  requestPark: (eng) => { try { eng.M.ccall("qjs_request_park", "void", [], []); } catch (_) {} },   // cold-tier park under RAM pressure (resource-driven)
   step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { engineCrash(eng, "step", e); return 0; } },   // crashed instance -> finalize (loud), don't keep stepping a dead engine
   serviceFetch: engineServiceFetch,
   admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
     // 1) seat waiting LIVE documents (the user's open tabs) first
     while (_waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
       const job = _waiting.shift();
-      try { const eng = await _engineFactory(job.code, job.html, job.msg, job.quantum); eng._resolve = job.resolve; _pool.push(eng); }
+      try { const eng = await _engineFactory(job.code, job.html, job.msg, job.persist); eng._resolve = job.resolve; _pool.push(eng); }
       catch (e) { job.resolve(crashResult("create", e, job.msg)); }   // boot/creation abort: LOUD failure, not a quiet degenerate result
     }
     // 2) ONE frontier: when no LIVE work is pending/running and RAM has headroom, rehydrate the highest-value
@@ -289,21 +293,21 @@ const _hostOps = {
       for (const c of cold) {
         if (_pool.length > 0 && _residentBytes() >= HOT_RAM_BUDGET) break;
         try {
-          const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl, credentialed: c.credentialed, quantum: c.quantum || 256 };
-          const eng = await engineCreate(c.code || "", c.html || "", msg, msg.quantum);
+          const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl, credentialed: c.credentialed, persist: true };
+          const eng = await engineCreate(c.code || "", c.html || "", msg, true);   // a rehydrated cold recipe always participates in the frontier
           eng._cold = true; _pool.push(eng);
         } catch (e) { crashBanner("create-cold", String((e && e.message) || e)); }   // was silently swallowed — a cold-rehydration abort must be LOUD too
       }
     }
   },
-  finish: async (eng) => {   // fully explored, or self-parked at quantum -> persist residue to the cold tier + resolve/merge
+  finish: async (eng) => {   // fully explored, or self-parked under RAM pressure -> persist residue to the cold tier + resolve/merge
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
     const result = engineFinalize(eng);
-    if (eng.quantum && result._fkey) {   // persist into the GLOBAL frontier (cross-session cold tier)
+    if (eng.persist && result._fkey) {   // persist into the GLOBAL frontier (cross-session cold tier)
       const prior = result._prior;
       await frontierPut(result._fkey, {
         key: result._fkey, sourceUrl: eng.msg.sourceUrl, html: eng.html, code: eng.code,
-        credentialed: !!eng.msg.credentialed, quantum: eng.quantum, recipes: (result._park || []).join(";"),
+        credentialed: !!eng.msg.credentialed, recipes: (result._park || []).join(";"),
         emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
       });
     }
@@ -334,9 +338,9 @@ self.astDispatch = async function astDispatch(msg) {
     /* ENQUEUE this document into the LIVE host WFQ pool. Its wasm instance interleaves in SLICES with every
        other open document by value-of-information — no run-to-completion, no recency monopoly. The per-doc
        promise resolves when THIS engine finalizes (fully explored or host-evicted); the pool persists its
-       residue to the GLOBAL frontier (cross-session cold tier). quantum>0 enables that IDB persistence. */
-    const quantum = msg.quantum || 0;
-    const result = await new Promise((resolve) => { _waiting.push({ code, html, msg, quantum, resolve }); _hostKick(); });
+       residue to the GLOBAL frontier (cross-session cold tier). msg.persist enables that IDB persistence. */
+    const persist = !!msg.persist;
+    const result = await new Promise((resolve) => { _waiting.push({ code, html, msg, persist, resolve }); _hostKick(); });
     return { success: true, result };   // result.fetchCallSites is already deduped by the engine
   } catch (e) {
     return { success: false, error: String(e && e.message || e), stack: e && e.stack };
