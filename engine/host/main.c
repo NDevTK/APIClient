@@ -3892,7 +3892,11 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
            delta, per-fn microtask drain. CALLED ONCE HERE (handlers empty -> no-op) so its bytecode is marked
            EXECUTED and JS_CollectOrphans does NOT collect it: a driven-as-orphan __driveSession would fire all
            handlers outside a session and pollute the candidate-enqueue dedup (broke xss_const's boot-replay). */
-        const char *sj = "var __driveSession=function(){var fns=__sessionFns();for(var i=0;i<fns.length;i++){try{fns[i][0](fns[i][1]);}catch(e){}__sessionDrain();}};";
+        /* Re-poll __sessionFns after each pass: a fn fired over the accumulating delta may REGISTER new handlers
+           (connectedCallback wiring a click handler), which must fire over the SAME delta so their captured
+           context (a DOM attr set by the producer) is intact. Each fn fires AT MOST ONCE (tracked by identity)
+           so a producer is never re-fired (which would re-register endlessly). */
+        const char *sj = "var __driveSession=function(){var fired=[],fns=__sessionFns();var seen=function(f){for(var k=0;k<fired.length;k++)if(fired[k]===f)return 1;return 0;};var any=1;while(any){any=0;for(var i=0;i<fns.length;i++){if(seen(fns[i][0]))continue;fired.push(fns[i][0]);try{fns[i][0](fns[i][1]);}catch(e){}__sessionDrain();any=1;}if(any)fns=__sessionFns();}};";
         JSValue sr = JS_Eval(ctx, sj, strlen(sj), "<session>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(ctx, sr);
         JSValue ds = JS_GetPropertyStr(ctx, g, "__driveSession");
         if (JS_IsFunction(ctx, ds)) { JSValue r = JS_Call(ctx, ds, JS_UNDEFINED, 0, NULL); JS_FreeValue(ctx, r); }
