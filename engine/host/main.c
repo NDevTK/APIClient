@@ -438,7 +438,59 @@ static const char *ARRAY_PRELUDE_JS =
 "      out+=str.slice(last,off)+String(repl.apply(undefined,args));last=off+ms.length;if(!g)break;if(ms.length===0)search.lastIndex++;}"
 "    return out+str.slice(last);}"
 "  var ss=String(search),i=str.indexOf(ss);if(i===-1)return str;"
-"  return str.slice(0,i)+String(repl(ss,i,str))+str.slice(i+ss.length);}});})();";
+"  return str.slice(0,i)+String(repl(ss,i,str))+str.slice(i+ss.length);}});})();"
+/* JSON.stringify: self-hosted so deep object-graph recursion AND a recursive replacer trampoline (unbounded).
+   Q/BS/NL = fromCharCode(34/92/10) keep literal quote/backslash/newline OUT of this C string. __isOpaque
+   short-circuits an OPAQUE value to ITSELF (taint PRESERVED — never de-tainted to a placeholder) BEFORE any
+   typeof/type-dispatch that would fork on it. Spec-faithful (40k-case node differential vs native): toJSON,
+   replacer fn/array, space (number clamped<=10 / string), wrapper unwrap, circular throws, undefined/function
+   omitted, valid surrogate pairs literal + lone surrogates escaped. Recursive `ser` (nested-closure non-tail
+   recursion — needs the trampoline caller_var_refs fix). */
+"(function(){var Q=String.fromCharCode(34),BS=String.fromCharCode(92),NL=String.fromCharCode(10);"
+"JSON.stringify=function stringify(value,replacer,space){"
+"  var replacerFn=null,propertyList=null;"
+"  if(typeof replacer==='function')replacerFn=replacer;"
+"  else if(Array.isArray(replacer)){propertyList=[];var seen={};"
+"    for(var ri=0;ri<replacer.length;ri++){var rv=replacer[ri],item;"
+"      if(typeof rv==='string')item=rv;else if(typeof rv==='number')item=String(rv);"
+"      else if(rv&&(rv instanceof String||rv instanceof Number))item=String(rv);else continue;"
+"      if(!seen[item]){seen[item]=1;propertyList.push(item);}}}"
+"  var gap='';"
+"  if(typeof space==='object'&&space!==null){if(space instanceof Number)space=Number(space);else if(space instanceof String)space=String(space);}"
+"  if(typeof space==='number'){var sn=space<10?Math.floor(space):10;if(sn>=1)gap=' '.repeat(sn);}"
+"  else if(typeof space==='string')gap=space.length<=10?space:space.slice(0,10);"
+"  var stack=[],indent='';"
+"  function quote(s){var out=Q;for(var i=0;i<s.length;i++){var c=s.charCodeAt(i),ch=s.charAt(i);"
+"    if(ch===Q)out+=BS+Q;else if(ch===BS)out+=BS+BS;"
+"    else if(c===8)out+=BS+'b';else if(c===12)out+=BS+'f';else if(c===10)out+=BS+'n';else if(c===13)out+=BS+'r';else if(c===9)out+=BS+'t';"
+"    else if(c<32){var h=c.toString(16);out+=BS+'u'+'0000'.slice(h.length)+h;}"
+"    else if(c>=55296&&c<=57343){var c2=i+1<s.length?s.charCodeAt(i+1):0;"
+"      if(c<=56319&&c2>=56320&&c2<=57343){out+=ch+s.charAt(i+1);i++;}else{var h2=c.toString(16);out+=BS+'u'+'0000'.slice(h2.length)+h2;}}"
+"    else out+=ch;}return out+Q;}"
+"  function ser(key,holder){var value=holder[key];"
+"    if(__isOpaque(value))return value;"
+"    if(value!==null&&typeof value==='object'&&typeof value.toJSON==='function')value=value.toJSON(key);"
+"    if(replacerFn)value=replacerFn.call(holder,key,value);"
+"    if(__isOpaque(value))return value;"
+"    if(value!==null&&typeof value==='object'){if(value instanceof Number)value=Number(value);else if(value instanceof String)value=String(value);else if(value instanceof Boolean)value=value.valueOf();}"
+"    if(value===null)return 'null';if(value===true)return 'true';if(value===false)return 'false';"
+"    var t=typeof value;"
+"    if(t==='string')return quote(value);"
+"    if(t==='number')return isFinite(value)?String(value):'null';"
+"    if(t==='bigint')throw new TypeError('Do not know how to serialize a BigInt');"
+"    if(t==='object'){"
+"      for(var si=0;si<stack.length;si++)if(stack[si]===value)throw new TypeError('Converting circular structure to JSON');"
+"      stack.push(value);var stepback=indent;indent+=gap;var res;"
+"      if(Array.isArray(value)){var parts=[];for(var ai=0;ai<value.length;ai++){var e=ser(String(ai),value);"
+"        if(__isOpaque(e))parts.push(e);else parts.push(e===undefined?'null':e);}"
+"        if(parts.length===0)res='[]';else if(gap==='')res='['+parts.join(',')+']';else res='['+NL+indent+parts.join(','+NL+indent)+NL+stepback+']';}"
+"      else{var keys=propertyList||Object.keys(value),members=[];"
+"        for(var ki=0;ki<keys.length;ki++){var pk=keys[ki],ps=ser(pk,value);"
+"          if(__isOpaque(ps)||ps!==undefined)members.push(quote(pk)+(gap===''?':':': ')+ps);}"
+"        if(members.length===0)res='{}';else if(gap==='')res='{'+members.join(',')+'}';else res='{'+NL+indent+members.join(','+NL+indent)+NL+stepback+'}';}"
+"      stack.pop();indent=stepback;return res;}"
+"    return undefined;}"
+"  var wrapper={};wrapper['']=value;return ser('',wrapper);};})();";
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
