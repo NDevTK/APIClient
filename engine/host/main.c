@@ -399,7 +399,23 @@ static const char *ARRAY_PRELUDE_JS =
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.reduceRight: callback is not a function');"
 "  var O=Object(this),L=O.length>>>0,k=L-1,acc;"
 "  if(arguments.length>1){acc=iv;}else{while(k>=0&&!(k in O))k--;if(k<0)throw new TypeError('Reduce of empty array with no initial value');acc=O[k--];}"
-"  for(;k>=0;k--){if(k in O)acc=cb(acc,O[k],k,O);}return acc;}});";
+"  for(;k>=0;k--){if(k in O)acc=cb(acc,O[k],k,O);}return acc;}});"
+/* String.prototype.replace with a FUNCTION replacer: self-hosted so recursion THROUGH the replacer
+   trampolines (unbounded, like reduce) and an opaque match/group propagates through it. Only the function
+   path is self-hosted; a STRING replacer delegates to the original C builtin (`_o`, captured in the IIFE so
+   no global is polluted) which keeps all the $&/$1/$<name> substitution semantics. Flat while-loop, no nested
+   function (that crashes the trampoline). Matches native across 40k randomized regex/string/function cases.
+   `repl.apply` is a tail-forward (already trampolined); exec is a leaf C call holding no continuation. */
+"(function(){var _o=String.prototype.replace;"
+"Object.defineProperty(String.prototype,'replace',{writable:true,enumerable:false,configurable:true,value:function replace(search,repl){"
+"  if(typeof repl!=='function')return _o.call(this,search,repl);"
+"  var str=String(this);"
+"  if(search instanceof RegExp){var g=search.global,out='',last=0,m;if(g)search.lastIndex=0;"
+"    while((m=search.exec(str))!==null){var ms=m[0],off=m.index,args=Array.prototype.slice.call(m);args.push(off,str);if(m.groups!==undefined)args.push(m.groups);"
+"      out+=str.slice(last,off)+String(repl.apply(undefined,args));last=off+ms.length;if(!g)break;if(ms.length===0)search.lastIndex++;}"
+"    return out+str.slice(last);}"
+"  var ss=String(search),i=str.indexOf(ss);if(i===-1)return str;"
+"  return str.slice(0,i)+String(repl(ss,i,str))+str.slice(i+ss.length);}});})();";
 /* Array.sort is deliberately NOT self-hosted. Unlike forEach/map/reduce (which only RUN the callback and add
    no branch of their own), sort BRANCHES on the comparator result to place each element — so as bytecode a
    comparison of an OPAQUE-carrying element (`cf(...)<=0` on an opaque) FORKS, and sort does O(n log n) such
