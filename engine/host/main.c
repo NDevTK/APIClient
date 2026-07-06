@@ -1430,8 +1430,14 @@ static void url_set(JSContext *ctx, JSValue o, const char *k, const char *s, siz
 }
 static JSValue js_url_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return JS_GetPropertyStr(ctx, this_val, "href"); }
-static JSValue js_searchparams_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{ return JS_DupValue(ctx, g_opaque); }   /* query values are external input -> opaque */
+/* url.searchParams shares the concolic __fields machinery with standalone URLSearchParams (js_sp_*), PLUS a
+   back-ref to its owner URL so set/append/delete REBUILD the owner's href/search -> fetch(url) emits the
+   app-BUILT query (a query the app SETS is the app constructing the request: concrete, not external input).
+   Reads stay opaque for unknown keys (external query input). Defs live with the sp machinery below. */
+static JSValue js_sp_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static void sp_init(JSContext *ctx, JSValueConst o, JSValueConst init);
+static JSValue js_url_sp_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static JSValue js_url_sp_delete(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     /* opaque (external-input-tainted) URL -> return the INPUT opaque so its SHAPE flows through unchanged
        (never concretely resolved — RUN-DON'T-MATCH). A concrete input is resolved by the REAL Lexbor parser. */
@@ -1463,10 +1469,20 @@ static JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
     JS_SetPropertyStr(ctx, o, "port", JS_NewString(ctx, ""));
     free(resolved);
     JSValue sp = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, sp, "get", JS_NewCFunction(ctx, js_searchparams_get, "get", 1));
-    JS_SetPropertyStr(ctx, sp, "getAll", JS_NewCFunction(ctx, js_searchparams_get, "getAll", 1));
-    JS_SetPropertyStr(ctx, sp, "has", JS_NewCFunction(ctx, js_searchparams_get, "has", 1));
-    JS_SetPropertyStr(ctx, sp, "toString", JS_NewCFunction(ctx, js_opaque, "toString", 0));
+    JS_SetPropertyStr(ctx, sp, "__fields", JS_NewObject(ctx));
+    { JSValue sv = JS_GetPropertyStr(ctx, o, "search"); sp_init(ctx, sp, sv); JS_FreeValue(ctx, sv); }   /* seed from the URL's existing query ("?a=1") */
+    JS_SetPropertyStr(ctx, sp, "__owner", JS_DupValue(ctx, o));   /* back-ref for writeback (o<->sp cycle; cycle-GC collected) */
+    JS_SetPropertyStr(ctx, sp, "get", JS_NewCFunction(ctx, js_sp_get, "get", 1));
+    JS_SetPropertyStr(ctx, sp, "getAll", JS_NewCFunction(ctx, js_sp_get, "getAll", 1));
+    JS_SetPropertyStr(ctx, sp, "has", JS_NewCFunction(ctx, js_sp_get, "has", 1));
+    JS_SetPropertyStr(ctx, sp, "set", JS_NewCFunction(ctx, js_url_sp_set, "set", 2));
+    JS_SetPropertyStr(ctx, sp, "append", JS_NewCFunction(ctx, js_url_sp_set, "append", 2));
+    JS_SetPropertyStr(ctx, sp, "delete", JS_NewCFunction(ctx, js_url_sp_delete, "delete", 1));
+    JS_SetPropertyStr(ctx, sp, "sort", JS_NewCFunction(ctx, js_noop, "sort", 0));
+    JS_SetPropertyStr(ctx, sp, "forEach", JS_NewCFunction(ctx, js_noop, "forEach", 1));
+    for (int i = 0; i < 3; i++) { const char *it[] = { "keys", "values", "entries" };
+        JS_SetPropertyStr(ctx, sp, it[i], JS_NewCFunction(ctx, js_opaque_stub, it[i], 0)); }
+    JS_SetPropertyStr(ctx, sp, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
     JS_SetPropertyStr(ctx, o, "searchParams", sp);
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_url_tostring, "toString", 0));
     JS_SetPropertyStr(ctx, o, "toJSON", JS_NewCFunction(ctx, js_url_tostring, "toJSON", 0));
@@ -1606,6 +1622,71 @@ static void sp_init(JSContext *ctx, JSValueConst o, JSValueConst init) {
             JS_FreePropertyEnum(ctx, tab, n);
         }
     }
+}
+/* Serialize a searchParams' __fields to a CONCRETE query string (no leading '?'): concrete values %-encoded,
+   an opaque value -> its example (%-encoded) if known, else its literal {shape} hole. malloc'd; caller frees. */
+static char *sp_serialize(JSContext *ctx, JSValueConst sp) {
+    char buf[1600]; int o = 0; buf[0] = 0;
+    JSValue f = JS_GetPropertyStr(ctx, sp, "__fields");
+    if (JS_IsObject(f)) {
+        JSPropertyEnum *tab = NULL; uint32_t n = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &n, f, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < n; i++) {
+                const char *k = JS_AtomToCString(ctx, tab[i].atom);
+                JSValue v = JS_GetProperty(ctx, f, tab[i].atom);
+                char *valstr = NULL; int is_shape = 0;
+                if (JS_IsOpaque(v)) {
+                    JSValue ex = JS_OpaqueExample(ctx, v);
+                    if (!JS_IsUndefined(ex)) { const char *s = JS_ToCString(ctx, ex); if (s) { valstr = strdup(s); JS_FreeCString(ctx, s); } }
+                    JS_FreeValue(ctx, ex);
+                    if (!valstr) { const char *sh = JS_OpaqueShapeC(v); valstr = strdup(sh ? sh : "{}"); is_shape = 1; }
+                } else { const char *s = JS_ToCString(ctx, v); if (s) { valstr = strdup(s); JS_FreeCString(ctx, s); } }
+                if (k && valstr && o < (int)sizeof(buf) - 2) {
+                    o += snprintf(buf + o, sizeof(buf) - o, "%s%s=", o ? "&" : "", k);
+                    if (is_shape) o += snprintf(buf + o, sizeof(buf) - o, "%s", valstr);   /* keep {hole} literal for url_solve/build_query */
+                    else sp_encode(buf, (int)sizeof(buf), &o, valstr);
+                }
+                free(valstr);
+                if (k) JS_FreeCString(ctx, k);
+                JS_FreeValue(ctx, v);
+            }
+            JS_FreePropertyEnum(ctx, tab, n);
+        }
+    }
+    JS_FreeValue(ctx, f);
+    return strdup(buf);
+}
+/* After a set/append/delete on url.searchParams, rebuild the owner URL's search + href so a later fetch(url)
+   / url.href read sees the app-built query. */
+static void url_sp_writeback(JSContext *ctx, JSValueConst sp) {
+    JSValue owner = JS_GetPropertyStr(ctx, sp, "__owner");
+    if (!JS_IsObject(owner)) { JS_FreeValue(ctx, owner); return; }
+    char *q = sp_serialize(ctx, sp);
+    char search[1700]; if (q && q[0]) snprintf(search, sizeof search, "?%s", q); else search[0] = 0;
+    JS_SetPropertyStr(ctx, owner, "search", JS_NewString(ctx, search));
+    JSValue vo = JS_GetPropertyStr(ctx, owner, "origin");   const char *origin = JS_ToCString(ctx, vo);
+    JSValue vp = JS_GetPropertyStr(ctx, owner, "pathname"); const char *path   = JS_ToCString(ctx, vp);
+    JSValue vh = JS_GetPropertyStr(ctx, owner, "hash");     const char *hash   = JS_ToCString(ctx, vh);
+    char href[2048]; snprintf(href, sizeof href, "%s%s%s%s", origin ? origin : "", path ? path : "", search, hash ? hash : "");
+    JS_SetPropertyStr(ctx, owner, "href", JS_NewString(ctx, href));
+    if (origin) JS_FreeCString(ctx, origin); if (path) JS_FreeCString(ctx, path); if (hash) JS_FreeCString(ctx, hash);
+    JS_FreeValue(ctx, vo); JS_FreeValue(ctx, vp); JS_FreeValue(ctx, vh);
+    free(q); JS_FreeValue(ctx, owner);
+}
+static JSValue js_url_sp_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 2) sp_store(ctx, this_val, argv[0], argv[1]);   /* __fields is name-keyed: append coalesces to set (matches standalone) */
+    url_sp_writeback(ctx, this_val);
+    return JS_UNDEFINED;
+}
+static JSValue js_url_sp_delete(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 1) {
+        JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
+        if (JS_IsObject(f)) { const char *k = JS_ToCString(ctx, argv[0]);
+            if (k) { JSAtom a = JS_NewAtom(ctx, k); JS_DeleteProperty(ctx, f, a, 0); JS_FreeAtom(ctx, a); JS_FreeCString(ctx, k); } }
+        JS_FreeValue(ctx, f);
+    }
+    url_sp_writeback(ctx, this_val);
+    return JS_UNDEFINED;
 }
 static JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
