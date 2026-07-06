@@ -854,6 +854,19 @@ static JSValue js_formdata_ctor(JSContext *ctx, JSValueConst nt, int argc, JSVal
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
     return o;
 }
+/* navigator.serviceWorker.register(url): the SW SCRIPT is code with its OWN endpoints (fetch/message/push
+   handlers make requests) — fetch + analyze it like a <script src>/Worker chunk. Returns a Promise. */
+static JSValue js_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc >= 1) {
+        char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
+        if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
+        if (!u) u = JS_ToCString(ctx, argv[0]);
+        if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
+        JS_FreeValue(ctx, ex);
+        if (url) { if (!has_hole(url)) chunk_pending_add(url); free(url); }   /* -> host fetch + engine analyze */
+    }
+    return js_resolved(ctx, JS_DupValue(ctx, g_opaque));   /* Promise<ServiceWorkerRegistration> */
+}
 /* navigator.sendBeacon(url, data): a real REQUEST (analytics/telemetry endpoint) — emit @H like fetch. */
 static JSValue js_send_beacon(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc >= 1) {
@@ -3859,6 +3872,14 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
            no throw on an unstubbed method, no lost analytics endpoint. */
         JSValue nav = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, nav, "sendBeacon", JS_NewCFunction(ctx, js_send_beacon, "sendBeacon", 2));
+        {   /* serviceWorker.register(url) -> analyze the SW script (its endpoints); other members -> opaque */
+            JSValue sw = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, sw, "register", JS_NewCFunction(ctx, js_sw_register, "register", 1));
+            JS_SetPropertyStr(ctx, sw, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));   /* onmessage handler driven */
+            JS_SetPropertyStr(ctx, sw, "ready", js_resolved(ctx, JS_DupValue(ctx, g_opaque)));
+            JS_SetPrototype(ctx, sw, g_opaque);
+            JS_SetPropertyStr(ctx, nav, "serviceWorker", sw);
+        }
         JS_SetPrototype(ctx, nav, g_opaque);
         JS_SetPropertyStr(ctx, g, "navigator", nav);
     }
