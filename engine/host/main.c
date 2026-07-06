@@ -904,6 +904,116 @@ static JSValue js_ws_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueCons
     JS_SetPropertyStr(ctx, o, "readyState", JS_NewInt32(ctx, 1));
     return o;
 }
+/* Worker / SharedWorker(url): the worker SCRIPT is code with its OWN endpoints -> fetch + analyze it like a
+   <script src> chunk (chunk_pending_add). The object exposes postMessage/terminate + addEventListener (the
+   onmessage handler is driven) and a .port (SharedWorker). */
+static JSValue js_worker_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    if (argc >= 1) {
+        char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
+        if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
+        if (!u) u = JS_ToCString(ctx, argv[0]);
+        if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
+        JS_FreeValue(ctx, ex);
+        if (url) { if (!has_hole(url)) chunk_pending_add(url); free(url); }   /* -> host fetch + engine analyze */
+    }
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "postMessage", JS_NewCFunction(ctx, js_noop, "postMessage", 1));
+    JS_SetPropertyStr(ctx, o, "terminate", JS_NewCFunction(ctx, js_noop, "terminate", 0));
+    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    JSValue port = JS_NewObject(ctx);   /* SharedWorker.port (MessagePort) */
+    JS_SetPropertyStr(ctx, port, "postMessage", JS_NewCFunction(ctx, js_noop, "postMessage", 1));
+    JS_SetPropertyStr(ctx, port, "start", JS_NewCFunction(ctx, js_noop, "start", 0));
+    JS_SetPropertyStr(ctx, port, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
+    JS_SetPropertyStr(ctx, port, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, o, "port", port);
+    return o;
+}
+/* MessagePort / MessageChannel / BroadcastChannel: postMessage-style objects whose message handler is driven. */
+static JSValue js_msgport_new(JSContext *ctx) {
+    JSValue p = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, p, "postMessage", JS_NewCFunction(ctx, js_noop, "postMessage", 1));
+    JS_SetPropertyStr(ctx, p, "start", JS_NewCFunction(ctx, js_noop, "start", 0));
+    JS_SetPropertyStr(ctx, p, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
+    JS_SetPropertyStr(ctx, p, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, p, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    return p;
+}
+static JSValue js_msg_channel_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "port1", js_msgport_new(ctx));
+    JS_SetPropertyStr(ctx, o, "port2", js_msgport_new(ctx));
+    return o;
+}
+static JSValue js_broadcast_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    JSValue o = js_msgport_new(ctx);   /* same shape (postMessage/close/addEventListener) */
+    JS_SetPropertyStr(ctx, o, "name", (argc >= 1) ? JS_ToString(ctx, argv[0]) : JS_NewString(ctx, ""));
+    return o;
+}
+static JSValue js_notification_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
+    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    return o;
+}
+static JSValue js_notif_request_perm(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)
+{ return js_resolved(ctx, JS_NewString(ctx, "default")); }   /* Notification.requestPermission() -> Promise<"default"> */
+/* AbortSignal.timeout(ms) / .any([...]) / .abort(): a live-signal object (aborted=false so a branch on it forks). */
+static JSValue js_abortsignal_make(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    JSValue s = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, s, "aborted", JS_FALSE);
+    JS_SetPropertyStr(ctx, s, "reason", JS_UNDEFINED);
+    JS_SetPropertyStr(ctx, s, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, s, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    JS_SetPropertyStr(ctx, s, "throwIfAborted", JS_NewCFunction(ctx, js_noop, "throwIfAborted", 0));
+    return s;
+}
+/* indexedDB: the page's own DB (bundles cache tokens/state). A full async model is a separate task; this is a
+   NON-throwing object graph whose stored VALUES are opaque (external state -> an auth gate on them forks). */
+static JSValue js_idb_request(JSContext *ctx, JSValue result) {
+    JSValue r = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, r, "result", result);
+    JS_SetPropertyStr(ctx, r, "error", JS_NULL);
+    JS_SetPropertyStr(ctx, r, "readyState", JS_NewString(ctx, "done"));
+    JS_SetPropertyStr(ctx, r, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, r, "onsuccess", JS_NULL);
+    JS_SetPropertyStr(ctx, r, "onerror", JS_NULL);
+    JS_SetPropertyStr(ctx, r, "onupgradeneeded", JS_NULL);
+    return r;
+}
+static JSValue js_idb_opaque_req(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)   /* get/getAll/... -> request, result opaque */
+{ return js_idb_request(ctx, JS_DupValue(ctx, g_opaque)); }
+static JSValue js_idb_store(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
+static JSValue js_idb_store_self(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)   /* index()/objectStore() -> a store */
+{ return js_idb_store(ctx, t, c, v); }
+static JSValue js_idb_store(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    JSValue s = JS_NewObject(ctx);
+    const char *reqm[] = { "get", "getAll", "getAllKeys", "getKey", "count", "add", "put", "delete", "clear", "openCursor", "openKeyCursor" };
+    for (size_t i = 0; i < sizeof reqm / sizeof reqm[0]; i++) JS_SetPropertyStr(ctx, s, reqm[i], JS_NewCFunction(ctx, js_idb_opaque_req, reqm[i], 1));
+    JS_SetPropertyStr(ctx, s, "index", JS_NewCFunction(ctx, js_idb_store_self, "index", 1));
+    JS_SetPropertyStr(ctx, s, "createIndex", JS_NewCFunction(ctx, js_idb_store_self, "createIndex", 1));
+    return s;
+}
+static JSValue js_idb_tx(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    JSValue tx = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, tx, "objectStore", JS_NewCFunction(ctx, js_idb_store_self, "objectStore", 1));
+    JS_SetPropertyStr(ctx, tx, "abort", JS_NewCFunction(ctx, js_noop, "abort", 0));
+    JS_SetPropertyStr(ctx, tx, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    return tx;
+}
+static JSValue js_idb_db(JSContext *ctx) {
+    JSValue db = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, db, "transaction", JS_NewCFunction(ctx, js_idb_tx, "transaction", 2));
+    JS_SetPropertyStr(ctx, db, "createObjectStore", JS_NewCFunction(ctx, js_idb_store_self, "createObjectStore", 1));
+    JS_SetPropertyStr(ctx, db, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
+    JS_SetPropertyStr(ctx, db, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JSValue names = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, names, "contains", JS_NewCFunction(ctx, js_opaque_stub, "contains", 1));
+    JS_SetPropertyStr(ctx, db, "objectStoreNames", names);
+    return db;
+}
+static JSValue js_idb_open(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)
+{ return js_idb_request(ctx, js_idb_db(ctx)); }
 static JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "matches", JS_DupValue(ctx, g_opaque));   /* opaque -> a branch on it FORKS */
@@ -3747,6 +3857,31 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "PerformanceObserver", JS_NewCFunction2(ctx, js_observer_ctor, "PerformanceObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "WebSocket", JS_NewCFunction2(ctx, js_ws_ctor, "WebSocket", 1, JS_CFUNC_constructor, 0));         /* url endpoint emitted; send/close/addEventListener present */
     JS_SetPropertyStr(ctx, g, "EventSource", JS_NewCFunction2(ctx, js_ws_ctor, "EventSource", 1, JS_CFUNC_constructor, 0));     /* SSE: url is a GET endpoint; onmessage handler driven */
+    JS_SetPropertyStr(ctx, g, "Worker", JS_NewCFunction2(ctx, js_worker_ctor, "Worker", 2, JS_CFUNC_constructor, 0));           /* worker script -> chunk (fetch+analyze); onmessage driven */
+    JS_SetPropertyStr(ctx, g, "SharedWorker", JS_NewCFunction2(ctx, js_worker_ctor, "SharedWorker", 2, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "MessageChannel", JS_NewCFunction2(ctx, js_msg_channel_ctor, "MessageChannel", 0, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "BroadcastChannel", JS_NewCFunction2(ctx, js_broadcast_ctor, "BroadcastChannel", 1, JS_CFUNC_constructor, 0));   /* real postMessage/close/addEventListener (was a webobj stub lacking postMessage) */
+    {   /* Notification: constructor + static permission / requestPermission */
+        JSValue nf = JS_NewCFunction2(ctx, js_notification_ctor, "Notification", 2, JS_CFUNC_constructor, 0);
+        JS_SetPropertyStr(ctx, nf, "permission", JS_NewString(ctx, "default"));
+        JS_SetPropertyStr(ctx, nf, "requestPermission", JS_NewCFunction(ctx, js_notif_request_perm, "requestPermission", 0));
+        JS_SetPropertyStr(ctx, g, "Notification", nf);
+    }
+    {   /* AbortSignal: static timeout/any/abort -> a live signal (AbortController itself is a webctor) */
+        JSValue as = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, as, "timeout", JS_NewCFunction(ctx, js_abortsignal_make, "timeout", 1));
+        JS_SetPropertyStr(ctx, as, "any", JS_NewCFunction(ctx, js_abortsignal_make, "any", 1));
+        JS_SetPropertyStr(ctx, as, "abort", JS_NewCFunction(ctx, js_abortsignal_make, "abort", 0));
+        JS_SetPropertyStr(ctx, g, "AbortSignal", as);
+    }
+    {   /* indexedDB: non-throwing object graph; stored values opaque (state-gated code forks) */
+        JSValue idb = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, idb, "open", JS_NewCFunction(ctx, js_idb_open, "open", 2));
+        JS_SetPropertyStr(ctx, idb, "deleteDatabase", JS_NewCFunction(ctx, js_idb_open, "deleteDatabase", 1));
+        JS_SetPropertyStr(ctx, idb, "databases", JS_NewCFunction(ctx, js_opaque_stub, "databases", 0));
+        JS_SetPropertyStr(ctx, idb, "cmp", JS_NewCFunction(ctx, js_opaque_stub, "cmp", 2));
+        JS_SetPropertyStr(ctx, g, "indexedDB", idb);
+    }
     JS_SetPropertyStr(ctx, g, "getComputedStyle", JS_NewCFunction(ctx, js_get_computed_style, "getComputedStyle", 1));
     JS_SetPropertyStr(ctx, g, "matchMedia", JS_NewCFunction(ctx, js_match_media, "matchMedia", 1));
     JS_SetPropertyStr(ctx, g, "Image", JS_NewCFunction2(ctx, js_media_el_ctor, "Image", 2, JS_CFUNC_constructor, 0));
@@ -3835,7 +3970,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, g, "FormData", JS_NewCFunction2(ctx, js_formdata_ctor, "FormData", 0, JS_CFUNC_constructor, 0));   /* real: records fields -> POST body params */
         JS_SetPropertyStr(ctx, g, "Headers", JS_NewCFunction2(ctx, js_headers_ctor, "Headers", 1, JS_CFUNC_constructor, 0));   /* real: records header fields -> required headers */
         const char *webctors[] = { "Response", "Blob", "File", "AbortController",
-                                   "TextEncoder", "TextDecoder", "FileReader", "BroadcastChannel" };   /* EventSource -> js_ws_ctor; FormData -> js_formdata_ctor */
+                                   "TextEncoder", "TextDecoder", "FileReader" };   /* EventSource -> js_ws_ctor; FormData -> js_formdata_ctor; BroadcastChannel -> js_broadcast_ctor */
         for (size_t wi = 0; wi < sizeof webctors / sizeof webctors[0]; wi++)
             JS_SetPropertyStr(ctx, g, webctors[wi], JS_NewCFunction2(ctx, js_webobj_ctor, webctors[wi], 1, JS_CFUNC_constructor, 0));
     }
