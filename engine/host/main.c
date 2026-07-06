@@ -384,7 +384,22 @@ static const char *ARRAY_PRELUDE_JS =
 "Object.defineProperty(Array.prototype,'findIndex',{writable:true,enumerable:false,configurable:true,value:function findIndex(cb,thisArg){"
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.findIndex: callback is not a function');"
 "  var O=Object(this),L=O.length>>>0;"
-"  for(var k=0;k<L;k++){if(cb.call(thisArg,O[k],k,O))return k;} return -1;}});";
+"  for(var k=0;k<L;k++){if(cb.call(thisArg,O[k],k,O))return k;} return -1;}});"
+/* reduce/reduceRight: siblings of forEach/map, self-hosted for the SAME two reasons — (1) OVERFLOW: the C
+   builtin holds the accumulator on the C stack across each callback, so `arr.reduce((_,v)=>recur(v))` C-recurses
+   and TRAPS the wasm stack (hard abort, not a catchable throw); as bytecode the callback dispatches via the
+   trampolined OP_call, unbounded. (2) OPACITY: the callback runs as bytecode so an opaque accumulator/element
+   propagates through it. No thisArg (spec: callback `this` is undefined) -> plain cb(...). */
+"Object.defineProperty(Array.prototype,'reduce',{writable:true,enumerable:false,configurable:true,value:function reduce(cb,iv){"
+"  if(typeof cb!=='function')throw new TypeError('Array.prototype.reduce: callback is not a function');"
+"  var O=Object(this),L=O.length>>>0,k=0,acc;"
+"  if(arguments.length>1){acc=iv;}else{while(k<L&&!(k in O))k++;if(k>=L)throw new TypeError('Reduce of empty array with no initial value');acc=O[k++];}"
+"  for(;k<L;k++){if(k in O)acc=cb(acc,O[k],k,O);}return acc;}});"
+"Object.defineProperty(Array.prototype,'reduceRight',{writable:true,enumerable:false,configurable:true,value:function reduceRight(cb,iv){"
+"  if(typeof cb!=='function')throw new TypeError('Array.prototype.reduceRight: callback is not a function');"
+"  var O=Object(this),L=O.length>>>0,k=L-1,acc;"
+"  if(arguments.length>1){acc=iv;}else{while(k>=0&&!(k in O))k--;if(k<0)throw new TypeError('Reduce of empty array with no initial value');acc=O[k--];}"
+"  for(;k>=0;k--){if(k in O)acc=cb(acc,O[k],k,O);}return acc;}});";
 /* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
    unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
    while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
