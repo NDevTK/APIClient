@@ -253,14 +253,24 @@ async function hostSchedule(pool, ops) {
     let best = hot[0], runner = -Infinity;   // Level-1 WFQ pick + the runner-up weight (the value yield floor)
     for (const e of hot) { const w = ops.weight(e); if (w > ops.weight(best)) { runner = ops.weight(best); best = e; } else if (w > runner) runner = w; }
     if (ops.setFloor) ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked-by-runner-up => yield; lone engine => run on
-    if (ops.requestPark && ops.underPressure && ops.underPressure())   // RAM over the working-set floor => tell the top engine to park its cold tail to IDB and yield (resource-driven, not a clock)
-      ops.requestPark(best);
-    const st = ops.step(best);
+    // Normally step `best` (the highest-value engine). But under RAM pressure with >1 engine competing for the
+    // working-set floor, step the LOWEST-value engine after flagging it to PARK — evicting it to the IDB cold
+    // tier (residue -> replay recipes) frees RAM so the top engines keep running (Level-1: "the lowest-weight
+    // one is EVICTED under pressure"). Parking needs a step (the flag is read inside qjs_step), and `best` never
+    // steps the low engine, so we must target it directly. A LONE over-budget engine is never parked: no slot
+    // contention, it runs to completion (admission gates new docs until it frees its slot; hard OOM crashes loud).
+    let target = best;
+    if (ops.requestPark && ops.underPressure && hot.length > 1 && ops.underPressure()) {
+      target = hot[0];
+      for (const e of hot) if (ops.weight(e) < ops.weight(target)) target = e;
+      ops.requestPark(target);
+    }
+    const st = ops.step(target);
     if (st === 1) {   // NEED_FETCH: service asynchronously (non-blocking) so other engines keep advancing
-      best.state = "fetching";
-      best._fetchP = ops.serviceFetch(best).then(() => { best.state = "hot"; }, () => { best.state = "hot"; });
+      target.state = "fetching";
+      target._fetchP = ops.serviceFetch(target).then(() => { target.state = "hot"; }, () => { target.state = "hot"; });
     } else if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
-      await ops.finish(best);
+      await ops.finish(target);
     }
     // st === 2: stays hot; the loop re-ranks (it may now be outranked by a sibling)
   }
