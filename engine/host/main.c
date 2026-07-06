@@ -2532,34 +2532,52 @@ static int dynimport_link(JSContext *ctx, const char *spec, JSValue *out_ns) {
     *out_ns = JS_GetModuleNamespace(ctx, md);   /* the concrete exports */
     return 1;
 }
-/* import() promises parked until their chunk (and its deps) are fetched. */
-typedef struct { char *spec; JSValue resolve; } DynPend;
+/* import() promises parked until their chunk (and its deps) are fetched. Both the resolve AND reject
+   capabilities are held: on link success the promise resolves to the real namespace; if the chunk comes back
+   EMPTY (404/failed), qjs_provide REJECTS it (below) so quickjs releases the pending-import promise it
+   internally roots — settling it in the live run context, never at teardown (where that aborts). */
+typedef struct { char *spec; JSValue resolve; JSValue reject; } DynPend;
 static DynPend *g_dynpend = NULL; static int g_dynpend_n = 0, g_dynpend_cap = 0;
-static void dynpend_add(const char *spec, JSValue resolve) {   /* resolve is a DUP we own */
-    if (g_dynpend_n >= g_dynpend_cap) { int nc = g_dynpend_cap ? g_dynpend_cap * 2 : 8; DynPend *n = realloc(g_dynpend, (size_t)nc * sizeof(DynPend)); if (!n) { JS_FreeValue(g_ctx, resolve); return; } g_dynpend = n; g_dynpend_cap = nc; }
-    g_dynpend[g_dynpend_n].spec = strdup(spec); g_dynpend[g_dynpend_n].resolve = resolve; g_dynpend_n++;
+static void dynpend_add(const char *spec, JSValue resolve, JSValue reject) {   /* resolve+reject are DUPs we own */
+    if (g_dynpend_n >= g_dynpend_cap) { int nc = g_dynpend_cap ? g_dynpend_cap * 2 : 8; DynPend *n = realloc(g_dynpend, (size_t)nc * sizeof(DynPend)); if (!n) { JS_FreeValue(g_ctx, resolve); JS_FreeValue(g_ctx, reject); return; } g_dynpend = n; g_dynpend_cap = nc; }
+    g_dynpend[g_dynpend_n].spec = strdup(spec); g_dynpend[g_dynpend_n].resolve = resolve; g_dynpend[g_dynpend_n].reject = reject; g_dynpend_n++;
 }
 static void dynpend_retry(JSContext *ctx) {   /* a chunk arrived: resolve every now-linkable parked import() */
     for (int i = 0; i < g_dynpend_n; i++) {
         JSValue ns;
         if (dynimport_link(ctx, g_dynpend[i].spec, &ns)) {
-            resolve_with(ctx, g_dynpend[i].resolve, ns); JS_FreeValue(ctx, g_dynpend[i].resolve); free(g_dynpend[i].spec);
+            resolve_with(ctx, g_dynpend[i].resolve, ns); JS_FreeValue(ctx, g_dynpend[i].resolve); JS_FreeValue(ctx, g_dynpend[i].reject); free(g_dynpend[i].spec);
             for (int j = i; j < g_dynpend_n - 1; j++) g_dynpend[j] = g_dynpend[j + 1];
             g_dynpend_n--; i--;
         }
+    }
+}
+/* A chunk arrived EMPTY (404/failed fetch) => its import() is a failed module load: REJECT the parked
+   promise (spec-faithful) so quickjs releases the pending-import it internally roots — else the promise +
+   its `.then` reaction leak into JS_FreeRuntime (the gc_obj_list assert). Done HERE, in qjs_provide's live
+   run context (NOT at teardown, where settling a dynamic-import promise aborts). Rejecting skips the
+   `onFulfilled` (m.load) reaction, so no user code runs on a missing module. */
+static void dynpend_reject_spec(JSContext *ctx, const char *spec) {
+    for (int i = 0; i < g_dynpend_n; i++) {
+        if (strcmp(g_dynpend[i].spec, spec) != 0) continue;
+        JSValue reason = JS_DupValue(ctx, g_opaque);
+        JSValue r = JS_Call(ctx, g_dynpend[i].reject, JS_UNDEFINED, 1, (JSValueConst *)&reason);
+        JS_FreeValue(ctx, r); JS_FreeValue(ctx, reason);
+        JS_FreeValue(ctx, g_dynpend[i].resolve); JS_FreeValue(ctx, g_dynpend[i].reject); free(g_dynpend[i].spec);
+        for (int j = i; j < g_dynpend_n - 1; j++) g_dynpend[j] = g_dynpend[j + 1];
+        g_dynpend_n--; i--;
     }
 }
 /* dynamic import(specifier): force-fetch + LINK the ESM chunk like a browser lazy-load (forced). The chunk's
    exports are the page's OWN code (concrete, not external input), so resolve the import() promise with the
    REAL namespace once linked — a value that flows to a fetch/sink is then solved, not lost to an opaque {}. */
 static void host_dyn_import(JSContext *ctx, const char *specifier, JSValueConst resolve, JSValueConst reject) {
-    (void)reject;
     if (!specifier || !specifier[0] || has_hole(specifier)) { resolve_with(ctx, resolve, JS_DupValue(ctx, g_opaque)); return; }
     arr_push_str(ctx, g_chunkurls, specifier);   /* -> @RESULT.chunkUrls */
     JSValue ns;
     if (dynimport_link(ctx, specifier, &ns)) { resolve_with(ctx, resolve, ns); return; }   /* already fetched -> real namespace now */
-    chunk_pending_add(specifier); moddep_add(specifier);   /* fetch it; PARK the resolve until it (and its deps) land */
-    dynpend_add(specifier, JS_DupValue(ctx, resolve));
+    chunk_pending_add(specifier); moddep_add(specifier);   /* fetch it; PARK the resolve+reject until it (and its deps) land */
+    dynpend_add(specifier, JS_DupValue(ctx, resolve), JS_DupValue(ctx, reject));
 }
 /* Identity normalize: keep the specifier VERBATIM (matches the host fetch contract — chunk URLs are passed
    to qjs_provide exactly as written; the offscreen resolves relative/root-relative against the doc URL). */
@@ -4278,6 +4296,8 @@ KEEP void qjs_provide(const char *url, const char *body)
                through CHUNK state). The re-run's writes are captured in the candidate flow's own COW delta
                (creations included) and reverted, so no leak. */
             boot_script_cache(body, strlen(body));
+        } else {
+            dynpend_reject_spec(ctx, url);   /* empty body = 404/failed fetch: reject this chunk's parked import() so it doesn't leak */
         }
         free(g_chunk_pending[i]);
         for (int j = i; j < g_chunk_n - 1; j++) g_chunk_pending[j] = g_chunk_pending[j + 1];
@@ -4378,7 +4398,7 @@ KEEP void qjs_teardown(void)
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
     for (int i = 0; i < g_moddep_n; i++) free(g_moddep[i]);
     free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
-    for (int i = 0; i < g_dynpend_n; i++) { JS_FreeValue(ctx, g_dynpend[i].resolve); free(g_dynpend[i].spec); }  /* abandon the promise (teardown) — no JS run post-revert */
+    for (int i = 0; i < g_dynpend_n; i++) { JS_FreeValue(ctx, g_dynpend[i].resolve); JS_FreeValue(ctx, g_dynpend[i].reject); free(g_dynpend[i].spec); }  /* dynpend_settle normally empties this; safety net if any remain */
     free(g_dynpend); g_dynpend = NULL; g_dynpend_n = g_dynpend_cap = 0;
     for (int i = 0; i < g_pendmod_n; i++) free(g_pendmod[i].src);
     free(g_pendmod); g_pendmod = NULL; g_pendmod_n = g_pendmod_cap = 0; g_modseq = 0;
