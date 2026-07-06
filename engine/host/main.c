@@ -1623,8 +1623,10 @@ static JSValue js_url_canparse(JSContext *ctx, JSValueConst this_val, int argc, 
     if (base) JS_FreeCString(ctx, base);
     return ok ? JS_TRUE : JS_FALSE;
 }
-/* new Request(input, init): fetch(new Request(url,{method})) is common. Resolve the url (shape-aware, like
-   URL), expose .url/.method/.headers and toString->url so fetch(req) reads the endpoint. */
+static JSValue js_el_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);   /* fwd: dup this (clone) */
+/* new Request(input, init): fetch(new Request(url,{method,headers,body})) is a ubiquitous modern idiom. The
+   Request must carry method + HEADERS + BODY forward so fetch(req) captures the full endpoint spec (required
+   auth/CSRF headers, request body) — not just the url. Resolve the url shape-aware (like URL). */
 static JSValue js_request_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     /* opaque input -> return the input opaque (url shape flows); concrete -> Lexbor-resolved url. */
     if (argc >= 1 && JS_IsOpaque(argv[0])) return JS_DupValue(ctx, argv[0]);
@@ -1638,9 +1640,21 @@ static JSValue js_request_ctor(JSContext *ctx, JSValueConst new_target, int argc
     JS_SetPropertyStr(ctx, o, "href", JS_NewString(ctx, resolved));   /* toString reads href -> fetch(req) sees the url */
     free(resolved);
     JSValue method = JS_UNDEFINED;
-    if (argc >= 2 && JS_IsObject(argv[1])) method = JS_GetPropertyStr(ctx, argv[1], "method");
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        method = JS_GetPropertyStr(ctx, argv[1], "method");
+        JSValue h = JS_GetPropertyStr(ctx, argv[1], "headers");   /* -> fetch(req) capture_headers */
+        if (!JS_IsUndefined(h) && !JS_IsNull(h)) JS_SetPropertyStr(ctx, o, "headers", h); else JS_FreeValue(ctx, h);
+        JSValue b = JS_GetPropertyStr(ctx, argv[1], "body");      /* -> fetch(req) ep.body */
+        if (!JS_IsUndefined(b) && !JS_IsNull(b)) JS_SetPropertyStr(ctx, o, "body", b); else JS_FreeValue(ctx, b);
+    }
     JS_SetPropertyStr(ctx, o, "method", JS_IsString(method) ? method : JS_NewString(ctx, "GET"));
     if (!JS_IsString(method)) JS_FreeValue(ctx, method);
+    /* body-reading methods a bundle may call on the Request (opaque = external body); clone -> self. */
+    JS_SetPropertyStr(ctx, o, "clone", JS_NewCFunction(ctx, js_el_self, "clone", 0));
+    JS_SetPropertyStr(ctx, o, "json", JS_NewCFunction(ctx, js_opaque_stub, "json", 0));
+    JS_SetPropertyStr(ctx, o, "text", JS_NewCFunction(ctx, js_opaque_stub, "text", 0));
+    JS_SetPropertyStr(ctx, o, "arrayBuffer", JS_NewCFunction(ctx, js_opaque_stub, "arrayBuffer", 0));
+    JS_SetPropertyStr(ctx, o, "formData", JS_NewCFunction(ctx, js_opaque_stub, "formData", 0));
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_url_tostring, "toString", 0));
     return o;
 }
