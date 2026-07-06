@@ -280,7 +280,7 @@ static const char *DEDUP_JS =
 "        for(var bk in bo){var bv=bo[bk];"
 "          var op=bv===null||bv==='{}'||(typeof bv==='object'&&bv&&!Array.isArray(bv)&&Object.keys(bv).length===0);"
 "          var has=false;for(var qi=0;qi<e.params.length;qi++){if(e.params[qi].name===bk&&e.params[qi].location==='body'){has=true;break;}}"
-"          if(!has)e.params.push({name:bk,location:'body',validValues:op?[]:[String(bv)]});"
+"          if(!has)e.params.push({name:bk,location:'body',validValues:op?[]:[(typeof bv==='object'&&bv)?JSON.stringify(bv):String(bv)]});"
 "        }"
 "      }else if(e.body.indexOf('=')>=0&&e.body.charAt(0)!=='{'&&e.body.charAt(0)!=='['){e.params=e.params||[];"
 "        var frms=e.body.split('&');for(var fpi=0;fpi<frms.length;fpi++){var feq=frms[fpi].indexOf('=');if(feq<0)continue;"
