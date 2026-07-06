@@ -165,6 +165,15 @@ async function engineCreate(code, html, msg, persist) {
   // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
   // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
   M.ccall("qjs_begin", "void", ["string"], [(prior && prior.recipes) ? prior.recipes : ""]);
+  // DEV-ONLY verification hook (a real page never carries this query param): force the RAM-pressure park so
+  // the cross-session round trip (park recipes -> IDB -> restart-keep -> resume) is VERIFIABLE without a 512MB
+  // working set. Keyed off the URL (flows reliably through msg.sourceUrl to here, unlike a cross-context
+  // global). The engine still runs boot to completion first (reg_has_boot guards the park), then parks its
+  // residue as recipes. The query param does NOT change the frontier key (origin+bundle), so a later plain
+  // visit resumes the same recipes.
+  if (msg && typeof msg.sourceUrl === "string" && /[?&]__forcepark=1\b/.test(msg.sourceUrl)) {
+    try { M.ccall("qjs_request_park", "void", [], []); } catch (_) {}
+  }
   const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
   const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
     if (!canFetch || hasHole(u)) return "";
