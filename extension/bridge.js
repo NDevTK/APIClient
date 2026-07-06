@@ -171,7 +171,9 @@ async function engineCreate(code, html, msg, persist) {
   // global). The engine still runs boot to completion first (reg_has_boot guards the park), then parks its
   // residue as recipes. The query param does NOT change the frontier key (origin+bundle), so a later plain
   // visit resumes the same recipes.
-  if (msg && typeof msg.sourceUrl === "string" && /[?&]__forcepark=1\b/.test(msg.sourceUrl)) {
+  // Only on the INITIAL park (no recipes to resume yet); firing while resuming would re-park the rehydrated
+  // recipes forever (the stored sourceUrl keeps the query param), so a cold/re-visit resume never runs.
+  if (msg && typeof msg.sourceUrl === "string" && /[?&]__forcepark=1\b/.test(msg.sourceUrl) && !(prior && prior.recipes)) {
     try { M.ccall("qjs_request_park", "void", [], []); } catch (_) {}
   }
   const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
