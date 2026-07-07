@@ -1181,7 +1181,12 @@ static JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate
    (X9 -> apiclientsink) is ground truth; these are built to survive it, not to game the static Lexbor check. */
 static const char *CAND_HTML[] = { "<img src=x onerror=X9>", "<svg onload=X9>", "\"><img src=x onerror=X9>",
                                    "'><svg onload=X9>", "</script><svg onload=X9>",
-                                   "x\" onerror=X9 y=\"", "x' onerror=X9 y='", "x onerror=X9 ", NULL };
+                                   "x\" onerror=X9 y=\"", "x' onerror=X9 y='", "x onerror=X9 ",
+                                   /* the input may land in a JS SUB-context of the HTML — an on* handler's string
+                                      (`onerror="log('INPUT')"`) or an inline <script> string — so try JS-string
+                                      breakouts too; solve_broke_html + x9_executable reject them in a pure-HTML
+                                      context (no live handler forms), so this adds reach, never a false hit. */
+                                   "';X9();//", "\";X9();//", ");X9();//", "1;X9();//", NULL };
 static const char *CAND_URL[]  = { "javascript:X9", "javascript:X9//", NULL };
 static const char *CAND_JS[]   = { "1;X9();//", "';X9();//", "\";X9();//", ");X9();//", "\n;X9();//", NULL };
 static const char **cand_set(const char *sc) {
@@ -1217,26 +1222,33 @@ static int mem_has_x9(const lxb_char_t *s, size_t n) {   /* the X9 fire-marker s
     for (size_t i = 0; i + 1 < n; i++) if (s[i] == 'X' && s[i + 1] == '9') return 1;
     return 0;
 }
-/* EXECUTION-confirmed breakout: an on* handler / <script> body is a PoC only if it is VALID JS that actually
-   CALLS the fire-marker — not merely CONTAINS the bytes "X9". Mirror the live-verify mapping (X9 / X9() -> a
-   CALL): rewrite the marker to a call to X9 (the __f9-setter already installed in g_solve_ctx) and RUN it. A
-   malformed handler (`onerror=X9"` — a syntax error) or X9-as-inert-text throws/never calls -> __f9 stays 0 ->
-   NOT a breakout. This is the firing-VALIDITY layer the engine can decide; live Chrome remains ground truth
-   for whether the EVENT itself fires (empty-src onerror, interaction-only handlers). */
+/* FIRING breakout: an on* handler / <script> body is a PoC only if, RUN as JS, the fire-marker actually
+   EXECUTES — not merely if it appears (byte-present) or the code compiles. Rewrite the marker to a call
+   (X9 -> X9(), mirroring the live-verify X9 -> apiclientsink mapping) and RUN it under `with(__u){…}`, a
+   universal no-op stub so app functions undefined in this clean realm don't throw (`log('')` -> no-op —
+   completeness, no false-negative on real handlers), then check X9 fired. This REJECTS the two classes the
+   static/compile checks accept: X9 trapped inside a STRING literal (`log('<img onerror=X9>')` — never runs)
+   and a malformed handler (`onerror=X9"` — a syntax error). What only live Chrome can still judge is whether
+   the DOM EVENT itself fires (empty-src onerror, interaction-only) — that stays ground truth, never softened. */
 static int x9_fires(const lxb_char_t *code, size_t len) {
     if (!g_solve_ctx || !code || !len) return 0;
-    char *buf = malloc(len * 2 + 1); if (!buf) return 0;   /* X9 -> X9() grows +2 per marker */
+    char *m = malloc(len * 2 + 1); if (!m) return 0;   /* X9 -> X9() grows +2 per marker */
     size_t o = 0;
     for (size_t i = 0; i < len; ) {
         if (i + 1 < len && code[i] == 'X' && code[i + 1] == '9') {
-            buf[o++] = 'X'; buf[o++] = '9';
+            m[o++] = 'X'; m[o++] = '9';
             if (i + 2 < len && code[i + 2] == '(') { i += 2; }   /* already X9( -> leave the call as authored */
-            else { buf[o++] = '('; buf[o++] = ')'; i += 2; }     /* reference X9 -> a CALL X9() */
-        } else { buf[o++] = (char)code[i++]; }
+            else { m[o++] = '('; m[o++] = ')'; i += 2; }         /* reference X9 -> a CALL X9() */
+        } else { m[o++] = (char)code[i++]; }
     }
-    buf[o] = 0;
-    JSValue r0 = JS_Eval(g_solve_ctx, "globalThis.__f9=0", 17, "<r>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, r0);
-    JSValue cr = JS_Eval(g_solve_ctx, buf, o, "<handler>", JS_EVAL_TYPE_GLOBAL);
+    m[o] = 0;
+    size_t cap = o + 64; char *buf = malloc(cap);
+    if (!buf) { free(m); return 0; }
+    /* `\n;` closes any trailing `//` line-comment so a `…;X9();//'` handler still runs X9() */
+    int n = snprintf(buf, cap, "globalThis.__f9=0;with(globalThis.__u){%s\n;}", m);
+    free(m);
+    if (n < 0 || (size_t)n >= cap) { free(buf); return 0; }
+    JSValue cr = JS_Eval(g_solve_ctx, buf, (size_t)n, "<handler>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(cr)) { JSValue e = JS_GetException(g_solve_ctx); JS_FreeValue(g_solve_ctx, e); }
     JS_FreeValue(g_solve_ctx, cr);
     free(buf);
@@ -3882,8 +3894,17 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        prelude method (e.g. Array.sort, which unlike forEach permits an undefined comparator) is orphan-driven
        with OPAQUE args and its `k<L`/`cmp?` branches fork-explode. Page bundles compile with the flag OFF. */
     JS_SetBuiltinCompile(ctx, 1);
-    if (g_solve_ctx) { const char *x9 = "globalThis.X9=function(){globalThis.__f9=1};globalThis.__f9=0;";
-        JSValue xr = JS_Eval(g_solve_ctx, x9, strlen(x9), "<x9>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, xr); }   /* X9 fire-tracker for the js-sink verify */
+    if (g_solve_ctx) {
+        /* X9 = the fire-tracker; __u = a UNIVERSAL no-op stub (a callable/indexable Proxy that answers EVERY
+           name) so a handler run under `with(__u){…}` never throws on an app function undefined in this clean
+           realm (`log('')` -> no-op) — completeness — while an X9 in an EXECUTABLE position still calls the
+           tracker and an X9 trapped inside a string/comment does not. `has` returns true so `with` intercepts
+           all free names; get returns X9's setter for 'X9' else the stub itself (chainable, callable). */
+        const char *x9 =
+            "globalThis.X9=function(){globalThis.__f9=1};globalThis.__f9=0;"
+            "globalThis.__u=new Proxy(function(){return globalThis.__u},"
+            "{has:function(){return true},get:function(t,k){return k==='X9'?globalThis.X9:globalThis.__u}});";
+        JSValue xr = JS_Eval(g_solve_ctx, x9, strlen(x9), "<x9>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, xr); }   /* fire-tracker + universal stub for the handler-firing verify */
     g_dedup_fn = JS_Eval(ctx, DEDUP_JS, strlen(DEDUP_JS), "<dedup>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(g_dedup_fn)) { js_std_dump_error(ctx); g_dedup_fn = JS_UNDEFINED; }
     { JSValue pv = JS_Eval(ctx, ARRAY_PRELUDE_JS, strlen(ARRAY_PRELUDE_JS), "<array-prelude>", JS_EVAL_TYPE_GLOBAL);
