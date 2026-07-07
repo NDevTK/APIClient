@@ -312,16 +312,6 @@ static int reg_readd(JSContext *ctx, Flow f)
     g_reg[g_reg_n++] = f; return 1;
 }
 
-/* __emit(tag): the ONLY progress signal — a real host edge (@H) surfaced. */
-static JSValue js_emit(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    const char *s = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
-    printf("@H %s\n", s ? s : "?"); fflush(stdout);
-    if (s) JS_FreeCString(ctx, s);
-    g_emit_total++;
-    if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
-    return JS_UNDEFINED;
-}
 
 static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);   /* fwd: opaque-returning host stub */
 /* fromReply: a bridge-provided map { url -> concrete reply body text }. A real GET is fired by the
@@ -2161,8 +2151,9 @@ static JSValue js_headers_ctor(JSContext *ctx, JSValueConst new_target, int argc
     JS_SetPropertyStr(ctx, o, "entries", JS_NewCFunction(ctx, js_sp_entries, "entries", 0));
     return o;
 }
-/* __opaque(): return the OPAQUE sentinel — external input the tool must not concretely decide. A branch
-   on it (if(__opaque())) auto-forks BOTH arms via the engine OP_if hook, no explicit __branch needed. */
+/* Return the OPAQUE sentinel — external input the tool must not concretely decide. The shared handler for
+   every "unknown/non-deterministic value" host edge (Math.random, Date.now, crypto.randomUUID, performance.now,
+   …); a branch on its result auto-forks BOTH arms via the engine OP_if hook (branch_decide). */
 static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return JS_DupValue(ctx, g_opaque); }
 /* Minimal host-edge stubs for a browser bundle: a no-op (addEventListener etc — the handler stays a
@@ -4149,10 +4140,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     (void)recipes;                                 /* recipes are seeded in phase-2 qjs_begin(), after the host reads the bundle-id */
 
     JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "__emit", JS_NewCFunction(ctx, js_emit, "__emit", 1));
     JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_opaque, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
     JS_SetPropertyStr(ctx, g, "__opaqueExample", JS_NewCFunction(ctx, js_opaque_example, "__opaqueExample", 1));   /* self-hosted stringify: a config opaque's concrete example (else undefined) */
-    JS_SetPropertyStr(ctx, g, "__opaque", JS_NewCFunction(ctx, js_opaque, "__opaque", 0));
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval, "eval", 1));   /* eval(concrete) -> forced-execute */
     /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both
