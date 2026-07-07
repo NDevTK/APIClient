@@ -3510,11 +3510,21 @@ static void park_frontier(JSContext *ctx)
         if (!f->candidate && f->orphan_idx >= 0 && f->orphan_idx < g_orphan_n) {   /* orphan-derived flows are replay-locatable (NOT transient @S candidate flows) */
             uint32_t oh = JS_OrphanHash(ctx, g_orphan_buf[f->orphan_idx]);   /* stable identity, not the positional index */
             if (oh) {
-                char rec[80]; int o = snprintf(rec, sizeof rec, "%u,", oh);
-                for (int j = 0; j < f->dec_n && o < (int)sizeof(rec) - 1; j++) rec[o++] = f->dec[j] ? '1' : '0';
-                rec[o] = 0;
-                arr_push_str(ctx, g_park, rec);   /* "hash,decbits" replay recipe -> @RESULT._park */
-                parked++;
+                /* recipe = "hash,decbits,valcenti" in a DYNAMIC buffer. The decision vector is UNBOUNDED: a
+                   fixed buffer would TRUNCATE a deep flow's decisions -> a wrong (shorter) replay path, a
+                   hidden depth bound (the cardinal violation). valcenti = accumulated value*100 (the flow's
+                   emitted-value score, integer-encoded to keep the recipe compact) so the cold tier ranks
+                   rehydration by prior frontierWeight instead of treating every recipe as unproven. */
+                size_t cap = 16 + (size_t)(f->dec_n > 0 ? f->dec_n : 0) + 20;
+                char *rec = (char *)malloc(cap);
+                if (rec) {
+                    int o = snprintf(rec, cap, "%u,", oh);
+                    for (int j = 0; j < f->dec_n; j++) rec[o++] = f->dec[j] ? '1' : '0';
+                    snprintf(rec + o, cap - (size_t)o, ",%d", (int)(f->val * 100.0));
+                    arr_push_str(ctx, g_park, rec);   /* "hash,decbits,valcenti" replay recipe -> @RESULT._park */
+                    free(rec);
+                    parked++;
+                }
             }
         }
         if (f->fs) JS_FlowFree(g_rt, f->fs);
@@ -3524,7 +3534,7 @@ static void park_frontier(JSContext *ctx)
         free(f->dec); free(f->candidate); free(f->vtarget);
     }
     g_reg_n = 0;
-    (void)parked;   /* recipes accumulated into g_park -> @RESULT._park (no separate @PARKED line) */
+    printf("@PARKED %d\n", parked); fflush(stdout);   /* cold-tier park count (observability, symmetric with @RESUMED) — never a silent drop */
 }
 
 /* A BOOT FLOW is pending (reply-triggered forking re-run or a boot-fork sibling) — a RAM-pressure park must
@@ -4187,16 +4197,22 @@ KEEP void qjs_begin(const char *recipes)
         while (*p) {
             uint32_t want = (uint32_t)strtoul(p, NULL, 10);
             const char *comma = strchr(p, ','), *semi = strchr(p, ';');
-            signed char *dec = NULL; int dec_n = 0;
+            signed char *dec = NULL; int dec_n = 0; double rval = 1.0;
             if (comma && (!semi || comma < semi)) {
                 const char *d = comma + 1, *end = semi ? semi : d + strlen(d);
-                dec_n = (int)(end - d);
+                /* recipe = "hash,decbits[,valcenti]": the decision vector ends at the SECOND comma (the
+                   accumulated-value field) when present, else at the recipe end. A legacy "hash,decbits"
+                   recipe with no value field defaults rval=1.0 (unproven) — backward compatible. */
+                const char *comma2 = (const char *)memchr(d, ',', (size_t)(end - d));
+                const char *decend = comma2 ? comma2 : end;
+                dec_n = (int)(decend - d);
                 if (dec_n > 0) { dec = (signed char *)malloc((size_t)dec_n); for (int i = 0; i < dec_n; i++) dec[i] = (d[i] == '1') ? 1 : 0; }
+                if (comma2) { double v = strtol(comma2 + 1, NULL, 10) / 100.0; if (v > 0) rval = v; }   /* prior frontierWeight seed */
             }
             int found = -1;
             for (int oi = 0; oi < g_orphan_n; oi++) { if (JS_OrphanHash(ctx, g_orphan_buf[oi]) == want) { found = oi; break; } }
             if (found >= 0) {
-                reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), 1.0, 0, dec, dec_n);
+                reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), rval, 0, dec, dec_n);   /* resume with the PRIOR accumulated value, not a flat 1.0 */
                 g_reg[g_reg_n - 1].orphan_idx = found; resumed++;
             } else free(dec);
             if (!semi) break; p = semi + 1;
