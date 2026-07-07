@@ -249,6 +249,7 @@ function crashResult(stage, e, msg) {
    thread services its message port — triage/GET_STATE evals, postMessage from the offscreen, other timers —
    while a lone engine keeps exploring its byte-identical frontier across qjs_step re-entries. MessageChannel is
    sub-ms (setTimeout(0) is clamped ~4ms and would dominate a 12ms quantum). §NO BOUNDS: a thread-yield, not a cap. */
+const PARTIAL_MS = 750;   // incremental-merge cadence: a hot engine surfaces its current findings this often
 const _macroChan = (typeof MessageChannel !== "undefined") ? new MessageChannel() : null;
 function macroYield() {
   if (_macroChan) return new Promise((res) => { _macroChan.port1.onmessage = () => res(); _macroChan.port2.postMessage(0); });
@@ -292,10 +293,13 @@ async function hostSchedule(pool, ops) {
       target._fetchP = ops.serviceFetch(target).then(() => { target.state = "hot"; }, () => { target.state = "hot"; });
     } else if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
       await ops.finish(target);
-    } else {   // st === 2: engine yielded HOT on its cooperative quantum (frontier intact). RETURN TO THE EVENT
-      // LOOP via a MACROtask so the ONE worker thread services its message port (evals, postMessage, other
-      // timers) before we re-enter and RESUME the byte-identical frontier. Without this a lone engine's
-      // qjs_step chain never lets the worker breathe — the freeze this whole quantum machinery removes.
+    } else {   // st === 2: engine yielded HOT on its cooperative quantum (frontier intact).
+      // INCREMENTAL MERGE: a lone UNBOUNDED engine (reply-gated recursion) never reaches st===0, so without
+      // this its already-emitted breadth never surfaces (@RESULT is teardown-only). Snapshot + merge on a
+      // coarse cadence so the cumulative moat learns while exploration continues.
+      if (ops.streamPartial) ops.streamPartial(target);
+      // Then RETURN TO THE EVENT LOOP via a MACROtask so the ONE thread services its message port (evals,
+      // postMessage, timers) before we re-enter and RESUME the byte-identical frontier — the anti-freeze yield.
       await macroYield();
     }
   }
@@ -311,6 +315,26 @@ const _hostOps = {
   setFloor: (eng, floor) => { try { eng.M.ccall("qjs_set_yield_floor", "void", ["number"], [floor]); } catch (_) {} },   // value yield: run until outranked by the runner-up
   underPressure: () => _residentBytes() >= HOT_RAM_BUDGET,   // summed live wasm memory over the working-set floor
   requestPark: (eng) => { try { eng.M.ccall("qjs_request_park", "void", [], []); } catch (_) {} },   // cold-tier park under RAM pressure (resource-driven)
+  /* INCREMENTAL MERGE (coarse cadence): snapshot a HOT engine's current findings + merge to the cumulative
+     moat WITHOUT waiting for a finalize that an unbounded engine never reaches. First sight starts the clock,
+     so short analyses (finalize before PARTIAL_MS) never pay for it. qjs_emit_partial appends a fresh @RESULT
+     to eng.lines (teardown-free); we parse just that snapshot, CONSUME the line (bound eng.lines growth — the
+     final teardown re-emits its own @RESULT), and merge via onFrontierAdvance (globalStore, dedup-idempotent). */
+  streamPartial: (eng) => {
+    const now = Date.now();
+    if (!eng._lastPartial) { eng._lastPartial = now; return; }
+    if (now - eng._lastPartial < PARTIAL_MS) return;
+    eng._lastPartial = now;
+    try {
+      eng.M.ccall("qjs_emit_partial", "void", [], []);
+      let idx = -1;
+      for (let i = eng.lines.length - 1; i >= 0; i--) if (String(eng.lines[i]).startsWith("@RESULT ")) { idx = i; break; }
+      if (idx < 0) return;
+      const partial = linesToAnalysis([eng.lines[idx]], eng.msg);   // parse only the snapshot line
+      eng.lines.splice(idx, 1);                                     // consume it
+      if (partial.fetchCallSites.length && typeof self.onFrontierAdvance === "function") self.onFrontierAdvance(eng.msg.sourceUrl, partial);
+    } catch (_) {}
+  },
   step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { engineCrash(eng, "step", e); return 0; } },   // crashed instance -> finalize (loud), don't keep stepping a dead engine
   serviceFetch: engineServiceFetch,
   admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom

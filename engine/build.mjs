@@ -74,7 +74,7 @@ const args = [
   "-sMODULARIZE=1",
   "-sEXPORT_ES6=1",
   "-sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,cwrap,stringToUTF8,lengthBytesUTF8,UTF8ToString,HEAPU8",
-  "-sEXPORTED_FUNCTIONS=_main,_qjs_init,_qjs_bundle_id,_qjs_begin,_qjs_step,_qjs_set_yield_floor,_qjs_request_park,_qjs_top_weight,_qjs_pending,_qjs_chunks,_qjs_provide,_qjs_finalize,_qjs_teardown,_malloc,_free",
+  "-sEXPORTED_FUNCTIONS=_main,_qjs_init,_qjs_bundle_id,_qjs_begin,_qjs_step,_qjs_emit_partial,_qjs_set_yield_floor,_qjs_request_park,_qjs_top_weight,_qjs_pending,_qjs_chunks,_qjs_provide,_qjs_finalize,_qjs_teardown,_malloc,_free",
   "-sNODERAWFS=0",
   "-o", join(OUT, "qjs.mjs"),
 ];
