@@ -1563,14 +1563,17 @@ static JSValue solve_all(JSContext *ctx) {
     JS_FreeValue(ctx, seen);
     return out;
 }
-static void emit_result(JSContext *ctx) {
+/* with_sinks=0 (INCREMENTAL snapshot): emit endpoints/chunks only, SKIP solve_all — the @S solve re-runs boot
+   (boot-replay candidate verification) which is a teardown-time operation, unsafe to trigger while the
+   scheduler still holds live flows. Endpoints are the moat's incremental need; @S PoCs surface at finalize. */
+static void emit_result_ex(JSContext *ctx, int with_sinks) {
     if (JS_IsUndefined(g_dedup_fn) || !JS_IsArray(g_endpoints)) return;
     JSValueConst args[1] = { g_endpoints };
     JSValue deduped = JS_Call(ctx, g_dedup_fn, JS_UNDEFINED, 1, args);
     if (JS_IsException(deduped)) { js_std_dump_error(ctx); deduped = JS_NewArray(ctx); }
     JSValue result = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, result, "fetchCallSites", deduped);                 /* consumes deduped */
-    JS_SetPropertyStr(ctx, result, "securitySinks", solve_all(ctx));           /* @S: forced-exec solve for a breakout PoC per sink */
+    JS_SetPropertyStr(ctx, result, "securitySinks", with_sinks ? solve_all(ctx) : JS_NewArray(ctx));   /* @S: forced-exec solve (teardown-only; skipped for a mid-run snapshot) */
     JS_SetPropertyStr(ctx, result, "chunkUrls", JS_DupValue(ctx, g_chunkurls));
     JS_SetPropertyStr(ctx, result, "_park", JS_DupValue(ctx, g_park));
     JS_SetPropertyStr(ctx, result, "_orphans", JS_NewInt32(ctx, g_orphan_n));
@@ -1584,6 +1587,7 @@ static void emit_result(JSContext *ctx) {
     JS_FreeValue(ctx, json);
     fflush(stdout);
 }
+static void emit_result(JSContext *ctx) { emit_result_ex(ctx, 1); }   /* teardown: full result incl. @S solve */
 
 /* __branch(): a FORCED DECISION POINT (a gate on opaque external input). If the running flow's decision
    vector already fixes this point, replay it. Otherwise it's a NEW branch: FORK a sibling flow that
@@ -3713,8 +3717,7 @@ static void park_frontier(JSContext *ctx)
         if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
         if (f->dom) dom_buf_free((DomUndo *)f->dom, f->dom_n);   /* and its DOM delta */
         JS_FreeValue(ctx, f->handle);
-        free(f->dec); free(f->candidate); free(f->vtarget);
-    }
+        free(f->dec); free(f->candidate); free(f->vtarget);    }
     g_reg_n = 0;
     printf("@PARKED %d\n", parked); fflush(stdout);   /* cold-tier park count (observability, symmetric with @RESUMED) — never a silent drop */
 }
@@ -3859,8 +3862,7 @@ static void scheduler_run(JSContext *ctx)
                 if (JS_IsException(out)) js_std_dump_error(ctx);
                 JS_FreeValue(ctx, out);
                 g_cur_flow = NULL;
-                JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
-            }
+                JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);            }
             g_candidate = NULL;
             continue;
         }
@@ -3885,8 +3887,7 @@ static void scheduler_run(JSContext *ctx)
             JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* revert boot-inverse + re-run writes -> post-boot baseline */
             dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
             g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
-            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
-            continue;
+            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);            continue;
         }
 
         /* SYNC flow: load its per-flow scheduler state (decision vector + branch cursor). __branch
@@ -3920,28 +3921,8 @@ static void scheduler_run(JSContext *ctx)
                boot value, a real example) else opaque this. Args stay opaque (external input). */
             JSValue recv = JS_FindReceiver(ctx, drive);
             JSValue this_val = JS_IsUndefined(recv) ? g_opaque : recv;
-            f.fs = JS_FlowNew(ctx, drive, this_val, 8, oargs);
+            f.fs = JS_FlowNew(ctx, drive, this_val, 8, oargs);   /* async funcs included now — JS_FlowNew accepts them */
             JS_FreeValue(ctx, recv);
-            if (!f.fs) {
-                /* ASYNC/generator (or non-bytecode) orphan: not sync-preemptible — it self-suspends via
-                   await/yield. Run via a plain call + drain its microtask chain to completion (the awaits
-                   land emits). Preemption of these is the async-per-flow-delta task, not this path. */
-                JS_SetFlowYieldHook(NULL);
-                JSValue r = JS_Call(ctx, drive, g_opaque, 8, oargs);
-                if (JS_IsException(r)) js_std_dump_error(ctx);
-                JS_FreeValue(ctx, r);
-                JSContext *c2; int jr2;
-                while ((jr2 = JS_ExecutePendingJob(g_rt, &c2)) > 0) { }
-                if (jr2 < 0) js_std_dump_error(c2 ? c2 : ctx);
-                JS_CowRevert(ctx);                            /* discard this flow's heap writes -> baseline */
-                { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* free the delta buffer, globals -> NULL */
-                dom_revert();                                 /* discard this flow's DOM writes -> baseline */
-                { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-                JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);
-                g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
-                JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);
-                continue;
-            }
             JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);   /* JS_FlowNew dup'd the drive handle; drop our resolved ref + transient replay handlers */
         }
         /* RESUME: swap in the parked flow's OWN heap COW delta (unapplied while it slept) so it sees its own
@@ -4568,6 +4549,14 @@ KEEP int qjs_step(void)
     if (g_reg_n > 0) return 2;                           /* HOT work remains (value-yielded) — host re-ranks + resumes */
     return 0;                                            /* fully explored (or parked) — done */
 }
+
+/* INCREMENTAL MERGE: snapshot the CURRENT findings (endpoints/@S/chunks) as a fresh @RESULT WITHOUT teardown,
+   so a lone UNBOUNDED engine (a reply-gated recursion that never drains) still surfaces its already-emitted
+   breadth to the cumulative moat instead of learning nothing until a finalize that never comes. emit_result is
+   teardown-free (dedup + collect verified @S + stringify, no state mutation); solve_all only COLLECTS verified
+   PoCs (the solving is in replay flows), so this is repeat-safe. The host calls it on a coarse cadence for a
+   hot engine and merges the snapshot (globalStore is cumulative + dedup-idempotent, so re-merge is sound). */
+KEEP void qjs_emit_partial(void) { if (g_ctx) emit_result_ex(g_ctx, 0); }   /* endpoints-only snapshot (no @S boot-replay mid-run) */
 
 KEEP void qjs_teardown(void)
 {
