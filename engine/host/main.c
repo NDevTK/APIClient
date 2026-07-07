@@ -4,16 +4,14 @@
  * flow the loop schedules. No phases, no separate grind, no second loop.
  *
  * Capabilities so far, each verified on the proven loop:
- *  - value-ordered (NON-FIFO) flow registry in scheduler-owned C memory; everything-a-flow (__fork).
+ *  - value-ordered (NON-FIFO) flow registry in scheduler-owned C memory; everything-a-flow (reg_add).
  *  - PREEMPTION: a flow suspends per-opcode (wfq_yield) + resumes WITH STATE via quickjs-ng async-frame suspend.
  *  - fetch(url) host edge -> @H (the COMPUTED endpoint), all flow code runs in the ONE loop.
  *  - ORPHAN-INVOKE: force-invoke never-executed functions (JS_CollectOrphans) -> the UNUSED endpoints.
- *  - FORCED BRANCH-ARMS (this milestone): __branch() explores BOTH arms of a gated branch by
- *    decision-vector BFS — a flow re-runs its function with a forced-choice table; a new decision
- *    returns true for this flow and FORKS a sibling that replays the prefix then takes false. This
- *    surfaces the branch-gated (login/flag-gated) endpoints. Value-ordered, so productive paths first.
- *    (Auto-forking at OP_if on OPAQUE external input — so real bundles need no __branch — is the next
- *    engine capability; the decision-vector scheduling is proven here.)
+ *  - FORCED BRANCH-ARMS: auto-forking at OP_if on OPAQUE external input (branch_decide via the engine's
+ *    JS_SetBranchHook) explores BOTH arms of a gated branch by decision-vector BFS — a new decision returns
+ *    true for this flow and FORKS a sibling that replays the prefix then takes false, surfacing the
+ *    branch-gated (login/flag-gated) endpoints. Value-ordered, so productive paths first.
  */
 #include <stdio.h>
 #include <string.h>
@@ -137,11 +135,11 @@ static int has_hole(const char *s) {
 }
 
 /* decision-vector state for the RUNNING starter flow (branch-arm BFS) — grows unbounded */
-static JSValue      g_cur_fn = JS_UNDEFINED;   /* the running starter's function (borrowed) so __branch can fork a sibling that re-runs it */
+static JSValue      g_cur_fn = JS_UNDEFINED;   /* the running starter's function (borrowed) so branch_decide can fork a sibling that re-runs it */
 static signed char *g_dec = NULL;              /* working decision vector: forced prefix + this flow's chosen-true suffix */
 static int          g_dec_cap = 0;
 static int          g_dec_n = 0;               /* length of decisions made/forced so far */
-static int          g_c = 0;                   /* cursor: next decision index __branch will consume */
+static int          g_c = 0;                   /* cursor: next decision index branch_decide will consume */
 
 static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisions */
     if (n <= g_dec_cap) return 1;
@@ -1653,14 +1651,12 @@ static void emit_result_ex(JSContext *ctx, int with_sinks) {
 }
 static void emit_result(JSContext *ctx) { emit_result_ex(ctx, 1); }   /* teardown: full result incl. @S solve */
 
-/* __branch(): a FORCED DECISION POINT (a gate on opaque external input). If the running flow's decision
-   vector already fixes this point, replay it. Otherwise it's a NEW branch: FORK a sibling flow that
-   re-runs the SAME function, replaying this flow's decisions so far then taking FALSE here; this flow
-   takes TRUE (recorded so deeper new branches fork correctly). BFS over the decision tree -> both arms
-   of every gate are explored, surfacing the branch-gated endpoints. */
-/* branch_decide: the decision-vector fork logic (0/1). Called BOTH by __branch() (explicit) and by the
-   engine's OP_if hook when a branch condition is OPAQUE (real bundles). Forced replay of this flow's
-   decision prefix; a NEW decision forks the FALSE sibling (re-run the same function) and takes TRUE. */
+/* branch_decide: the decision-vector fork logic (0/1) at a gate on opaque external input. Called by the
+   engine's OP_if hook (JS_SetBranchHook) when a branch condition is OPAQUE (real bundles). If the running
+   flow's decision vector already fixes this point, replay it. Otherwise it's a NEW branch: FORK a sibling
+   flow that re-runs the SAME function, replaying this flow's decisions so far then taking FALSE here; this
+   flow takes TRUE (recorded so deeper new branches fork correctly). BFS over the decision tree -> both arms
+   of every gate are explored, surfacing the branch-gated (login/flag-gated) endpoints. */
 static int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a cross-flow @S candidate */
 static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n);   /* fwd: defined near boot_replay */
 static int reg_add_session(JSContext *ctx, signed char *dec, int dec_n); /* fwd: an exploratory session that FORKS */
@@ -2165,9 +2161,6 @@ static JSValue js_headers_ctor(JSContext *ctx, JSValueConst new_target, int argc
     JS_SetPropertyStr(ctx, o, "entries", JS_NewCFunction(ctx, js_sp_entries, "entries", 0));
     return o;
 }
-static JSValue js_branch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{ return branch_decide(ctx, argc > 0 ? argv[0] : JS_UNDEFINED) ? JS_TRUE : JS_FALSE; }
-
 /* __opaque(): return the OPAQUE sentinel — external input the tool must not concretely decide. A branch
    on it (if(__opaque())) auto-forks BOTH arms via the engine OP_if hook, no explicit __branch needed. */
 static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -3694,14 +3687,6 @@ static void dom_run_scripts(JSContext *ctx) {
     free(c.els);
 }
 
-/* __fork(fn, hint?): add a flow to the ONE registry (a STARTER, fresh decision vector). */
-static JSValue js_fork(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "__fork(fn)");
-    double hint = 0; if (argc > 1) JS_ToFloat64(ctx, &hint, argv[1]);
-    reg_add(ctx, JS_DupValue(ctx, argv[0]), hint, NULL, 0);
-    return JS_UNDEFINED;
-}
 
 /* __isOpaque(v): CONCRETE bool (never forks), the ONE primitive the self-hosted Array.sort needs. A branch on an
    OPAQUE value forks; sort must NOT fork on the meaningless ORDER of opaque elements (O(n log n) forks explode).
@@ -4167,8 +4152,6 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
 
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__emit", JS_NewCFunction(ctx, js_emit, "__emit", 1));
-    JS_SetPropertyStr(ctx, g, "__fork", JS_NewCFunction(ctx, js_fork, "__fork", 2));
-    JS_SetPropertyStr(ctx, g, "__branch", JS_NewCFunction(ctx, js_branch, "__branch", 0));
     JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_opaque, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
     JS_SetPropertyStr(ctx, g, "__opaqueExample", JS_NewCFunction(ctx, js_opaque_example, "__opaqueExample", 1));   /* self-hosted stringify: a config opaque's concrete example (else undefined) */
     JS_SetPropertyStr(ctx, g, "__opaque", JS_NewCFunction(ctx, js_opaque, "__opaque", 0));
