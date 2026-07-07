@@ -1353,6 +1353,60 @@ static JSValue collect_gate_fields(JSContext *ctx, const char *root) {
     }
     return o;
 }
+/* ── CONTEXT-AWARE @S CONSTRUCTION (the frontier: derive the breakout, don't pick from a fixed table) ──
+   The sink SHAPE encodes the literal HTML around the {source} hole (`<textarea>{hash}</textarea>`). PARSE it
+   with the REAL browser parser, find the hole's context, and CONSTRUCT the minimal escape — the RCDATA /
+   RAWTEXT (<textarea>/<title>/<style>/<xmp>/<iframe>/<noembed>/<noframes>) and COMMENT contexts a flat
+   candidate list can NEVER reach, because their breakout is the CLOSING token (</textarea>, -->) which is
+   knowable ONLY from the surrounding structure. */
+#define CTX_LOC "Lz9Qk7Wm"
+static int mem_has_loc(const lxb_char_t *s, size_t n) {
+    if (!s) return 0; const char *L = CTX_LOC; size_t Ln = strlen(L);
+    for (size_t i = 0; i + Ln <= n; i++) { size_t j = 0; while (j < Ln && s[i + j] == (lxb_char_t)L[j]) j++; if (j == Ln) return 1; }
+    return 0;
+}
+static int is_rawtext_tag(const char *t) {
+    return t && (!strcmp(t, "textarea") || !strcmp(t, "title") || !strcmp(t, "style") || !strcmp(t, "xmp") ||
+                 !strcmp(t, "iframe") || !strcmp(t, "noembed") || !strcmp(t, "noframes") || !strcmp(t, "script"));
+}
+struct ctx_probe { int found; int is_comment; char tag[16]; };
+static lxb_status_t ctx_probe_cb(lxb_dom_node_t *node, void *vctx) {
+    struct ctx_probe *c = vctx;
+    if (c->found) return LXB_STATUS_STOP;
+    if (node->type != LXB_DOM_NODE_TYPE_TEXT && node->type != LXB_DOM_NODE_TYPE_COMMENT) return LXB_STATUS_OK;
+    size_t l = 0; lxb_char_t *t = lxb_dom_node_text_content(node, &l);
+    if (!t || !mem_has_loc(t, l)) return LXB_STATUS_OK;
+    if (node->type == LXB_DOM_NODE_TYPE_COMMENT) { c->is_comment = 1; c->found = 1; return LXB_STATUS_STOP; }
+    lxb_dom_node_t *par = node->parent;   /* the RAWTEXT element whose content the hole sits in */
+    if (par && par->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(lxb_dom_interface_element(par), &nl);
+        if (nm && nl > 0 && nl < sizeof(c->tag)) { memcpy(c->tag, nm, nl); c->tag[nl] = 0; c->found = 1; return LXB_STATUS_STOP; }
+    }
+    return LXB_STATUS_OK;
+}
+static void construct_ctx_breakout(JSContext *ctx, const char *shape, JSValueConst hitfn, const char *vt) {
+    if (!shape || !strchr(shape, '{')) return;   /* no hole -> no surrounding structure to construct from */
+    size_t sl = strlen(shape);
+    char *wl = (char *)malloc(sl + 16); if (!wl) return;   /* the shape with each {..} hole replaced by the locator */
+    size_t o = 0;
+    for (size_t i = 0; i < sl; ) {
+        if (shape[i] == '{') { const char *e = strchr(shape + i, '}'); if (e) { size_t Ln = strlen(CTX_LOC); if (o + Ln < sl + 15) { memcpy(wl + o, CTX_LOC, Ln); o += Ln; } i = (size_t)(e - shape) + 1; continue; } }
+        if (o < sl + 15) wl[o++] = shape[i]; i++;
+    }
+    wl[o] = 0;
+    struct ctx_probe cp = { 0, 0, {0} };
+    lxb_html_document_t *doc = lxb_html_document_create();
+    if (doc) {
+        if (lxb_html_document_parse(doc, (const lxb_char_t *)wl, o) == LXB_STATUS_OK)
+            lxb_dom_node_simple_walk(lxb_dom_interface_node(doc), ctx_probe_cb, &cp);
+        lxb_html_document_destroy(doc);
+    }
+    free(wl);
+    char cand[64];
+    if (cp.is_comment) { snprintf(cand, sizeof cand, "--><svg onload=X9>"); reg_add_cand(ctx, hitfn, cand, vt); }
+    else if (cp.found && is_rawtext_tag(cp.tag)) { snprintf(cand, sizeof cand, "</%s><svg onload=X9>", cp.tag); reg_add_cand(ctx, hitfn, cand, vt); }
+    /* normal text / attribute context -> the base candidates already reach it; construct nothing extra */
+}
 /* Sink reached. DUAL-MODE:
    - REPLAY flow (g_candidate set): `val` is the CONCRETE transformed candidate that ran through the REAL
      code+branches to get here. If it breaks out, this PoC is PATH+BREAKOUT verified (reachability proven by
@@ -1434,6 +1488,7 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
                         reg_add_cand(ctx, hitfn, comb, vt); free(comb); }
                 }
             }
+            construct_ctx_breakout(ctx, shape, hitfn, vt);   /* CONSTRUCT the RCDATA/comment escape from the sink's structure (base candidates only reach text/attr) */
         }
     }
 }
