@@ -3732,8 +3732,6 @@ static int seed_orphans(JSContext *ctx)
     }
     return seeded;   /* count surfaces in @RESULT._orphans (via g_orphan_n) — no dead @ORPHANS line */
 }
-static JSValue js_drive_orphans(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{ return JS_NewInt32(ctx, seed_orphans(ctx)); }
 
 /* Per-flow isolation is the engine COW (JS_CowSetActive/JS_CowRevert): shared-state writes (var-refs =
    globals/lexicals/closures; baseline-object property mutations) are captured while a flow explores, and
@@ -4181,7 +4179,6 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g_msg_event, "origin", JS_NewOpaqueSourced(ctx, "{origin}", "{origin}"));
     JS_SetPropertyStr(ctx, g_msg_event, "source", JS_DupValue(ctx, g_opaque));
     JS_SetPropertyStr(ctx, g_msg_event, "ports", JS_DupValue(ctx, g_opaque));
-    JS_SetPropertyStr(ctx, g, "__driveOrphans", JS_NewCFunction(ctx, js_drive_orphans, "__driveOrphans", 0));
     JS_SetPropertyStr(ctx, g, "__sessionFns", JS_NewCFunction(ctx, js_session_fns, "__sessionFns", 0));
     JS_SetPropertyStr(ctx, g, "__sessionDrain", JS_NewCFunction(ctx, js_session_drain, "__sessionDrain", 0));
     {   /* SELF-HOSTED attacker-session loop (bytecode) — fire each [fn,event] pair over the accumulating COW
