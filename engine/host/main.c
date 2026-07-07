@@ -1217,6 +1217,33 @@ static int mem_has_x9(const lxb_char_t *s, size_t n) {   /* the X9 fire-marker s
     for (size_t i = 0; i + 1 < n; i++) if (s[i] == 'X' && s[i + 1] == '9') return 1;
     return 0;
 }
+/* EXECUTION-confirmed breakout: an on* handler / <script> body is a PoC only if it is VALID JS that actually
+   CALLS the fire-marker — not merely CONTAINS the bytes "X9". Mirror the live-verify mapping (X9 / X9() -> a
+   CALL): rewrite the marker to a call to X9 (the __f9-setter already installed in g_solve_ctx) and RUN it. A
+   malformed handler (`onerror=X9"` — a syntax error) or X9-as-inert-text throws/never calls -> __f9 stays 0 ->
+   NOT a breakout. This is the firing-VALIDITY layer the engine can decide; live Chrome remains ground truth
+   for whether the EVENT itself fires (empty-src onerror, interaction-only handlers). */
+static int x9_fires(const lxb_char_t *code, size_t len) {
+    if (!g_solve_ctx || !code || !len) return 0;
+    char *buf = malloc(len * 2 + 1); if (!buf) return 0;   /* X9 -> X9() grows +2 per marker */
+    size_t o = 0;
+    for (size_t i = 0; i < len; ) {
+        if (i + 1 < len && code[i] == 'X' && code[i + 1] == '9') {
+            buf[o++] = 'X'; buf[o++] = '9';
+            if (i + 2 < len && code[i + 2] == '(') { i += 2; }   /* already X9( -> leave the call as authored */
+            else { buf[o++] = '('; buf[o++] = ')'; i += 2; }     /* reference X9 -> a CALL X9() */
+        } else { buf[o++] = (char)code[i++]; }
+    }
+    buf[o] = 0;
+    JSValue r0 = JS_Eval(g_solve_ctx, "globalThis.__f9=0", 17, "<r>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, r0);
+    JSValue cr = JS_Eval(g_solve_ctx, buf, o, "<handler>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(cr)) { JSValue e = JS_GetException(g_solve_ctx); JS_FreeValue(g_solve_ctx, e); }
+    JS_FreeValue(g_solve_ctx, cr);
+    free(buf);
+    JSValue fv = JS_Eval(g_solve_ctx, "globalThis.__f9", 15, "<f>", JS_EVAL_TYPE_GLOBAL);
+    int fired = JS_ToBool(g_solve_ctx, fv); JS_FreeValue(g_solve_ctx, fv);
+    return fired;
+}
 struct x9_walk { int found; };
 static lxb_status_t x9_walk_cb(lxb_dom_node_t *node, void *vctx) {
     struct x9_walk *c = vctx;
@@ -1225,13 +1252,13 @@ static lxb_status_t x9_walk_cb(lxb_dom_node_t *node, void *vctx) {
     size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);   /* <script>...X9...</script> executes */
     if (nl == 6 && nm && memcmp(nm, "script", 6) == 0) {
         size_t cl = 0; lxb_char_t *ct = lxb_dom_node_text_content(lxb_dom_interface_node(node), &cl);
-        if (mem_has_x9(ct, cl)) { c->found = 1; return LXB_STATUS_STOP; }
+        if (mem_has_x9(ct, cl) && x9_fires(ct, cl)) { c->found = 1; return LXB_STATUS_STOP; }   /* VALID JS that calls the marker, not just contains it */
     }
     for (lxb_dom_attr_t *a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
         size_t al = 0; const lxb_char_t *an = lxb_dom_attr_local_name(a, &al);   /* on* event handler with X9 -> a LIVE handler (Lexbor lowercases names) */
         if (al >= 3 && an && an[0] == 'o' && an[1] == 'n') {
             size_t vl = 0; const lxb_char_t *av = lxb_dom_attr_value(a, &vl);
-            if (mem_has_x9(av, vl)) { c->found = 1; return LXB_STATUS_STOP; }
+            if (mem_has_x9(av, vl) && x9_fires(av, vl)) { c->found = 1; return LXB_STATUS_STOP; }   /* handler must EXECUTE the marker call, not merely contain X9 */
         }
     }
     return LXB_STATUS_OK;
