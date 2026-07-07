@@ -1695,6 +1695,17 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
     return 1;
 }
+/* Does the CURRENT context fork/decide opaque branches (so an opaque-collection iterator can yield an opaque
+   `done` and let the loop-back branch fork/terminate), or is it the MONOLITHIC initial boot where branch_decide
+   returns 0 unconditionally (an opaque loop-back cond would resolve 'continue' forever)? Mirrors branch_decide's
+   non-zero condition EXACTLY — the single source of truth for "will the branch do something other than fall
+   through". */
+static int ctx_forks(void) {
+    if (g_boot_replay) return 1;                                                   /* fixed-arm replay (exit after 1) */
+    if (!g_running) return 0;
+    if (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow && !g_in_session) return 0;    /* monolithic boot -> drive-once */
+    return 1;
+}
 /* crypto.getRandomValues(arr): the spec FILLS + RETURNS the same typed array. The bytes are external
    randomness — nondeterministic, so filling them would (a) break replay soundness and (b) fabricate a
    concrete value. We can't store an opaque in a numeric typed array, so we leave it unmodified (its
@@ -4158,6 +4169,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_opaque = JS_NewOpaqueShaped(ctx, "{}");   /* the default opaque (shape "{}"); generic propagation dups it */
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
+    JS_SetForkableHook(ctx_forks);  /* an opaque-collection iterator forks (opaque done) only where branch_decide decides */
     JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
     JS_SetCbHook(drive_opaque_cb);  /* a callback passed to a method on OPAQUE input (forEach/map/then/…) -> drive it as a flow */
     JS_SetAsyncCallHook(reg_add_async_call);  /* a native async CALL -> a preemptible/parkable scheduler flow (async-as-flow) */
