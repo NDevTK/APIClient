@@ -1833,9 +1833,17 @@ function renderSecurityPanel() {
       verifyHtml = '<div class="verify-na">live-verify needs a client-deliverable source (hash/search/pm) + a page url</div>';
     }
 
+    // POLICY-RELATIVE severity: a model breakout the page's CSP blocks on real Chrome is NOT a clean HIGH XSS —
+    // it needs a policy-permitted vector. Show CSP-BLOCKED (medium) + the per-sink-vector reason from the engine.
+    var sevBadge = item.cspBlocked
+      ? '<span class="badge badge-medium" title="broke out in the model, but the page CSP blocks THIS vector on real Chrome — needs a policy-permitted vector">CSP-BLOCKED</span>'
+      : '<span class="badge badge-high">HIGH</span>';
+    var cspHtml = item.cspBlocked
+      ? '<div class="card-dims"' + (item.csp ? ' title="' + esc(item.csp) + '"' : "") + '>⚠ ' + esc(item.cspReason || "the page CSP blocks this vector") + '</div>'
+      : "";
     html += '<div class="card" data-finding-key="' + esc(key) + '">'
-      + '<div class="card-label"><span class="badge badge-xss">XSS PoC</span> <span class="badge badge-high">HIGH</span> ' + esc(item.sink || item.type || "?") + '</div>'
-      + shapeHtml + pocHtml + evHtml
+      + '<div class="card-label"><span class="badge badge-xss">XSS PoC</span> ' + sevBadge + ' ' + esc(item.sink || item.type || "?") + '</div>'
+      + shapeHtml + pocHtml + evHtml + cspHtml
       + '<div class="card-meta">' + srcLink + '</div>'
       + verifyHtml
       + '</div>';
