@@ -395,12 +395,14 @@ static const char *DEDUP_JS =
    early-exit for some/every, hole-preserving map. Deviation: map/filter build a plain Array (Symbol.
    species not honored) -- effectively never overridden in real bundles. */
 static const char *ARRAY_PRELUDE_JS =
-/* An OPAQUE array (a reply/injected-state/attacker value, unknown length) must DRIVE the callback — reach
-   the per-element fetch/sink — exactly ONCE, never loop on an opaque length (that forks true forever ->
-   OOM abort). __alen: length is 1 for an opaque array (every element is the SAME indistinguishable opaque,
-   so iterations 2..N emit nothing new — recognizing identical work, NOT a bound); __ain: past the hole
-   check an opaque array always "has" index k so cb still runs. Concrete arrays are unchanged. */
-"var __alen=function(O){return __isOpaque(O)?1:(O.length>>>0);};"
+/* An OPAQUE array (a reply/injected-state/attacker value, unknown length) FORKS UNBOUNDED like any opaque
+   loop: __alen returns O.length UNCHANGED (opaque survives >>>0), so `k < __alen(O)` is an opaque compare
+   that forks (continue vs exit) each iteration. NOT 'driven once' — predicting iterations 2..N redundant is
+   the banned seen-set (§EVERY-RUNTIME-JOB / opacity-boundary). Safe now that each cb call is its OWN bounded
+   flow (the cb-hook) and the loop index is frame-local (not COW), so the deep continue-tail is parkable +
+   value-outranked (paged to disk), never a single-delta OOM. __ain: an opaque array always "has" index k so
+   cb still runs. Concrete arrays are unchanged. */
+"var __alen=function(O){return O.length>>>0;};"
 "var __ain=function(O,k){return __isOpaque(O)||(k in O);};"
 "Object.defineProperty(Array.prototype,'forEach',{writable:true,enumerable:false,configurable:true,value:function forEach(cb,thisArg){"
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.forEach: callback is not a function');"
