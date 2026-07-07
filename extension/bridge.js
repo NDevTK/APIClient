@@ -244,6 +244,16 @@ function crashResult(stage, e, msg) {
   return r;
 }
 
+/* MACROTASK yield (worker/offscreen). Between engine quanta the host MUST return to the event loop with a
+   MACROtask (not just an awaited microtask, which the message queue never interleaves with) so the ONE worker
+   thread services its message port — triage/GET_STATE evals, postMessage from the offscreen, other timers —
+   while a lone engine keeps exploring its byte-identical frontier across qjs_step re-entries. MessageChannel is
+   sub-ms (setTimeout(0) is clamped ~4ms and would dominate a 12ms quantum). §NO BOUNDS: a thread-yield, not a cap. */
+const _macroChan = (typeof MessageChannel !== "undefined") ? new MessageChannel() : null;
+function macroYield() {
+  if (_macroChan) return new Promise((res) => { _macroChan.port1.onmessage = () => res(); _macroChan.port2.postMessage(0); });
+  return new Promise((res) => setTimeout(res, 0));
+}
 /* THE PURE SCHEDULER POLICY (no wasm knowledge — engine ops are injected, so this is unit-testable with
    mock engines). Each iteration: ADMIT waiting documents up to the RAM cap (ops.admit gates creation — no
    instance is built until a slot is free), then advance the highest-weight HOT engine and re-rank. Before
@@ -282,8 +292,12 @@ async function hostSchedule(pool, ops) {
       target._fetchP = ops.serviceFetch(target).then(() => { target.state = "hot"; }, () => { target.state = "hot"; });
     } else if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
       await ops.finish(target);
+    } else {   // st === 2: engine yielded HOT on its cooperative quantum (frontier intact). RETURN TO THE EVENT
+      // LOOP via a MACROtask so the ONE worker thread services its message port (evals, postMessage, other
+      // timers) before we re-enter and RESUME the byte-identical frontier. Without this a lone engine's
+      // qjs_step chain never lets the worker breathe — the freeze this whole quantum machinery removes.
+      await macroYield();
     }
-    // st === 2: stays hot; the loop re-ranks (it may now be outranked by a sibling)
   }
 }
 

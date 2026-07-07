@@ -85,6 +85,20 @@ static double  g_yield_floor = -1e300;  /* host cross-document WFQ: yield HOT to
                                            VALUE-driven, never a dispatch count — the WFQ, not a clock, decides the switch.
                                            -1e300 = no runner-up (single engine): run to completion/park. */
 static int     g_made_progress = 0;     /* dispatched >=1 flow this qjs_step? (guards zero-work ping-pong; NOT a cap) */
+/* COOPERATIVE QUANTUM (§NO BOUNDS: a thread-YIELD, never a cap). The ONE worker thread is shared across all
+   engines + the message pump + incremental merge; so the running flow hands the thread back to the host loop
+   after a bounded wall-clock slice and RESUMES the byte-identical frontier from g_reg. Wall-clock (the honest
+   measure of thread-hogging), not an opcode count. g_quantum_start is stamped at each scheduler_run entry; both
+   wfq_yield (per-opcode, so a long single flow yields mid-run) and scheduler_run's loop head (so it RETURNS to
+   qjs_step rather than re-dispatching the just-expired flow) consult it. Truncates no work, drops no flow. */
+#define QUANTUM_MS 12.0
+#define QUANTUM_SAMPLE 512u   /* read the wall clock once per this many back-edges (perf: emscripten_get_now
+                                 crosses WASM->JS; sampling throttles that). NOT a work bound — it drops/skips
+                                 NO flow (the §NO BOUNDS razor); it only throttles WHEN the 12ms wall-clock
+                                 quantum is sampled, and the frontier resumes byte-identical regardless. */
+static double  g_quantum_start = 0.0;
+static unsigned g_quantum_sample = 0;
+static int quantum_expired(void) { return g_made_progress && (emscripten_get_now() - g_quantum_start) > QUANTUM_MS; }
 static long    g_switches = 0;          /* flow SUSPEND/re-queue events (interleave) -> @RESULT._switches */
 /* Highest weight among the PARKED flows (g_reg, excluding the running one). A parked flow's weight is CONSTANT
    while parked (val/visits/cpu don't change), so it changes only when a flow is ADDED (reg_add). Cache it:
@@ -1178,7 +1192,6 @@ static void why_add(JSContext *ctx, const char *phase, const char *reason) {
 static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (the finalize expr-eval pre-filter) */
 static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow drove through the real code+branches to the sink where it broke out. The ONLY @S output: a working PoC is self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
 static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
-static JSValue g_cb_driven = JS_UNDEFINED;    /* fn-SOURCE-hash -> 1: a callback-to-opaque already registered as a flow (drive each UNIQUE cb ONCE; else an unbounded recursion calling x.forEach(cb) per level floods g_reg) */
 static JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
 /* Tag-context (open a new tag / break out of a quoted attr WITH a new tag) THEN attribute-injection into
    the EXISTING tag with NO `<` — the latter is the only breakout when a filter escapes `<`/`>` but reflects
@@ -1646,18 +1659,12 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
    as a starter FLOW (exactly like a deferred timer). The scheduler force-invokes it with opaque args so its
    per-element endpoints/sinks are reached; transient (no orphan_idx), WFQ-ordered/starved like any flow. */
 static void drive_opaque_cb(JSContext *ctx, JSValueConst cb) {
-    /* Drive each UNIQUE callback (by function SOURCE identity) ONCE. Without this, an unbounded recursion
-       that calls `x.forEach(cb)` at every level registers the SAME cb as a fresh flow per level -> g_reg
-       grows without bound and the scheduler never drains (a hang). One flow explores cb with opaque args;
-       more are identical. NOT a bound on distinct work — it's collapsing byte-identical re-registration. */
-    uint32_t h = JS_OrphanHash(ctx, cb);
-    if (h && JS_IsObject(g_cb_driven)) {
-        char k[16]; snprintf(k, sizeof k, "%u", h);
-        JSValue seen = JS_GetPropertyStr(ctx, g_cb_driven, k);
-        int dup = !JS_IsUndefined(seen); JS_FreeValue(ctx, seen);
-        if (dup) return;
-        JS_SetPropertyStr(ctx, g_cb_driven, k, JS_NewBool(ctx, 1));
-    }
+    /* Register cb as a starter FLOW. NO seen-set: an unbounded recursion that calls `x.forEach(cb)` per level
+       registers cb per level, but every level past the first drives cb with the SAME opaque args -> emits
+       nothing new -> the WFQ STARVES those flows to ~0 CPU and RAM-pressure PARKS the tail to the IDB cold
+       tier (unbounded-until-disk, the intended design). A dedup keyed by function identity was a BANNED
+       seen-set (§NO BOUNDS: "only emitted output — never identity — proves a flow is done") masking the
+       recursion as a hang; the cooperative quantum keeps the worker responsive while it starves + parks. */
     reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, 0, NULL, 0);
 }
 /* localStorage/sessionStorage.getItem(k): stored data is EXTERNAL INPUT (a token/flag put there earlier or
@@ -3665,7 +3672,11 @@ static int wfq_yield(void)
     g_cur_flow->cpu += 1.0;
     /* Both the JS heap AND the Lexbor DOM are per-flow COW deltas that swap on context-switch, so a flow is
        preemptible mid-write to either — no writer runs to completion. */
-    return (g_max_parked > flow_weight(g_cur_flow)) ? 1 : 0;   /* O(1): a parked flow outranks the running one -> yield (g_max_parked maintained at dispatch + reg_add) */
+    if (g_max_parked > flow_weight(g_cur_flow)) return 1;   /* VALUE yield: a parked flow outranks the running one (g_max_parked maintained at dispatch + reg_add) */
+    /* COOPERATIVE-QUANTUM yield (orthogonal, thread-sharing): held the worker thread a full wall-clock slice
+       -> suspend + return to host, resume identical frontier. Clock sampled every QUANTUM_SAMPLE back-edges. */
+    if (++g_quantum_sample >= QUANTUM_SAMPLE) { g_quantum_sample = 0; return quantum_expired(); }
+    return 0;
 }
 
 /* Emit the remaining frontier as compact REPLAY recipes (orphan_idx + decision-vector) and clear it.
@@ -3719,9 +3730,17 @@ static int reg_has_boot(void) {
    high-emit flows finish ahead of the deep residue, which is starved to ~0 CPU (resumable). */
 static void scheduler_run(JSContext *ctx)
 {
+    g_quantum_start = emscripten_get_now();   /* fresh cooperative slice per scheduler_run (per qjs_step) */
     for (;;) {
         seed_orphans(ctx);          /* CONTINUOUS: pick up functions a prior flow defined dynamically (chunks) */
         if (g_reg_n == 0) break;
+        /* COOPERATIVE-QUANTUM RETURN (§NO BOUNDS: a thread-yield, NOT a cap): held the worker thread a full
+           wall-clock slice -> return to qjs_step (which reports HOT work remains) so the host loop pumps the
+           worker's message queue / interleaves other engines / streams findings, then re-enters and RESUMES the
+           byte-identical frontier. Distinct from the value yield-floor (which flow) and RAM park (evict tail):
+           this is purely WHEN to let the one thread breathe. wfq_yield already suspended the running flow on the
+           same signal, so here we just stop re-dispatching and hand control back. */
+        if (quantum_expired()) break;
         /* COLD-TIER PARK (cross-page/cross-session fairness) = RESOURCE PRESSURE on ALL work, not just
            starters: on RAM PRESSURE (host-driven, RESOURCE-based — NEVER a dispatch count; a per-N slice is
            the banned step-cap the value yield-floor below already avoids), PARK the rest of the frontier as replay
@@ -4009,7 +4028,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
     g_endpoints = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
     g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
-    g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx); g_cb_driven = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
+    g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
     /* PLATFORM BUILTINS: everything compiled here (x9, dedup, the Array/String prelude) is engine-internal, not
        page code — mark it born-executed so orphan-collection NEVER force-invokes it. Without this, an uncalled
@@ -4594,7 +4613,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
     JS_FreeValue(ctx, g_solvetasks); g_solvetasks = JS_UNDEFINED;
     JS_FreeValue(ctx, g_verified); g_verified = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_enqueued); g_enqueued = JS_UNDEFINED; JS_FreeValue(ctx, g_cb_driven); g_cb_driven = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_enqueued); g_enqueued = JS_UNDEFINED;
     JS_FreeValue(ctx, g_dedup_fn); g_dedup_fn = JS_UNDEFINED;
     JS_FreeValue(ctx, g_location); g_location = JS_UNDEFINED;
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
