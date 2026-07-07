@@ -326,6 +326,16 @@ static const char *DEDUP_JS =
 "      }"
 "    }"
 "  }"
+"  var parseQ=function(q){var o={};if(!q)return o;var s=q.charAt(0)==='?'?q.slice(1):q;if(!s)return o;var ps=s.split('&');for(var i=0;i<ps.length;i++){var eq=ps[i].indexOf('=');o[eq>=0?ps[i].slice(0,eq):ps[i]]=eq>=0?ps[i].slice(eq+1):'';}return o;};"
+"  arr=[];map.forEach(function(v){arr.push(v);});"                                        /* QUERY-PHANTOM collapse: a bare {} query value (from an opaque-degraded run) is a PHANTOM of its concrete sibling (the boot re-run's concolic example) — delete it so the real value wins, not the {} */
+"  for(var qi=0;qi<arr.length;qi++){var ph0=arr[qi];var ps0=pathSegs(ph0.url);if(ps0.query.indexOf('{}')<0)continue;var pq=parseQ(ps0.query),pk=Object.keys(pq);"
+"    for(var cj=0;cj<arr.length;cj++){var cc=arr[cj];if(cc===ph0)continue;if((cc.method||'GET')!==(ph0.method||'GET'))continue;var cs0=pathSegs(cc.url);"
+"      if(ps0.segs.join('/')!==cs0.segs.join('/'))continue;var cq0=parseQ(cs0.query);if(Object.keys(cq0).length!==pk.length)continue;"
+"      var ok0=true,better=false;for(var ki=0;ki<pk.length;ki++){var kk=pk[ki];if(!(kk in cq0)){ok0=false;break;}"
+"        if(pq[kk]==='{}'){if(cq0[kk]!=='{}'&&!hasHole(cq0[kk]))better=true;}else if(pq[kk]!==cq0[kk]){ok0=false;break;}}"
+"      if(ok0&&better){map.delete((ph0.method||'GET')+' '+ph0.url);break;}"                /* concrete sibling dominates -> drop the {} phantom */
+"    }"
+"  }"
 "  var out=[];map.forEach(function(v){out.push(v);});return out;"
 "})";
 /* SELF-HOSTED Array.prototype iterators (forEach/map/filter/some/every): the C js_array_every holds
