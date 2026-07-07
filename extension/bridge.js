@@ -288,16 +288,17 @@ async function hostSchedule(pool, ops) {
       ops.requestPark(target);
     }
     const st = ops.step(target);
+    // INCREMENTAL MERGE (both hot AND fetch-parked): a lone UNBOUNDED engine never reaches st===0, so without
+    // this its already-emitted breadth never surfaces (@RESULT is teardown-only). A FETCH-HEAVY engine (lazy
+    // chunks / a reply loop) is perpetually st===1, never st===2 — so surfacing ONLY on st===2 leaves it at
+    // zero (the realish symptom). Snapshot + merge on a coarse cadence on every non-final step.
+    if (st !== 0 && ops.streamPartial) ops.streamPartial(target);
     if (st === 1) {   // NEED_FETCH: service asynchronously (non-blocking) so other engines keep advancing
       target.state = "fetching";
       target._fetchP = ops.serviceFetch(target).then(() => { target.state = "hot"; }, () => { target.state = "hot"; });
     } else if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
       await ops.finish(target);
     } else {   // st === 2: engine yielded HOT on its cooperative quantum (frontier intact).
-      // INCREMENTAL MERGE: a lone UNBOUNDED engine (reply-gated recursion) never reaches st===0, so without
-      // this its already-emitted breadth never surfaces (@RESULT is teardown-only). Snapshot + merge on a
-      // coarse cadence so the cumulative moat learns while exploration continues.
-      if (ops.streamPartial) ops.streamPartial(target);
       // Then RETURN TO THE EVENT LOOP via a MACROtask so the ONE thread services its message port (evals,
       // postMessage, timers) before we re-enter and RESUME the byte-identical frontier — the anti-freeze yield.
       await macroYield();
