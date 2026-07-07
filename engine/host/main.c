@@ -277,6 +277,26 @@ static int reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, J
     f->areject = JS_DupValue(ctx, reject);
     return 1;
 }
+/* JSReactionHook target: a settled promise's REACTION (.then/.catch/.finally handler). Run handler(value) as a
+   preemptible/parkable flow and SETTLE the chained promise on completion (resolve with the return value / reject
+   on throw) — so a .then-based recursion is a TREE of flows, not a non-preemptible drain. A pass-through reaction
+   (no handler) settles the chained promise directly. Non-bytecode handler / non-main-ctx -> native job (return 0). */
+static int reaction_flow(JSContext *ctx, JSValueConst handler, JSValueConst value, int is_reject, JSValueConst resolve, JSValueConst reject) {
+    if (ctx != g_ctx) return 0;                 /* main analysis ctx only, never the @S solve realm */
+    if (JS_IsUndefined(handler)) {              /* pass-through: fulfill->resolve, reject->reject the chained promise with value */
+        JSValueConst fn = is_reject ? reject : resolve;
+        if (!JS_IsUndefined(fn)) { JSValue r = JS_Call(ctx, fn, JS_UNDEFINED, 1, (JSValueConst *)&value); if (JS_IsException(r)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); } JS_FreeValue(ctx, r); }
+        return 1;
+    }
+    void *fs = JS_FlowNew(ctx, handler, JS_UNDEFINED, 1, (JSValueConst *)&value);
+    if (!fs) return 0;                          /* non-bytecode handler (C fn / bound) -> native job */
+    reg_add(ctx, JS_DupValue(ctx, handler), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+    Flow *f = &g_reg[g_reg_n - 1];
+    f->fs = fs;
+    f->aresolve = JS_DupValue(ctx, resolve);
+    f->areject = JS_DupValue(ctx, reject);
+    return 1;
+}
 
 /* Re-add a SUSPENDED flow (a full copy, fs retained) so it interleaves back into the ONE registry. */
 static int reg_readd(JSContext *ctx, Flow f)
@@ -4141,6 +4161,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
     JS_SetCbHook(drive_opaque_cb);  /* a callback passed to a method on OPAQUE input (forEach/map/then/…) -> drive it as a flow */
     JS_SetAsyncCallHook(reg_add_async_call);  /* a native async CALL -> a preemptible/parkable scheduler flow (async-as-flow) */
+    JS_SetReactionHook(reaction_flow);        /* a settled promise's .then/.catch/.finally reaction -> a scheduler flow too */
     JS_SetDynImportHook(host_dyn_import);   /* dynamic import() -> force-fetch the ESM chunk in place */
     JS_SetModuleLoaderFunc(rt, host_module_normalize, host_module_loader, NULL);   /* static import -> fetch+link the graph like a browser */
     /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source (magic 2) — a
