@@ -1584,6 +1584,13 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         solve_add(ctx, "setTimeout", "js", argv[0]);   /* @S: setTimeout(STRING) EVALs the string -> js-context sink (like eval); string(candidate)+opaque(detect) both, like the other sinks */
     return JS_DupValue(ctx, g_opaque);
 }
+/* JS_SetCbHook target: a callback passed to a method CALLED ON opaque input (items.forEach(cb) where items
+   is a reply/injected-state array) — the method-on-opaque returns opaque without invoking cb, so register cb
+   as a starter FLOW (exactly like a deferred timer). The scheduler force-invokes it with opaque args so its
+   per-element endpoints/sinks are reached; transient (no orphan_idx), WFQ-ordered/starved like any flow. */
+static void drive_opaque_cb(JSContext *ctx, JSValueConst cb) {
+    reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+}
 /* localStorage/sessionStorage.getItem(k): stored data is EXTERNAL INPUT (a token/flag put there earlier or
    by another origin's code) -> OPAQUE (feeds auth headers/branches opaquely, replay-sound). set/remove/clear
    are no-ops (writes don't drive discovery). */
@@ -3947,6 +3954,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
     JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
+    JS_SetCbHook(drive_opaque_cb);  /* a callback passed to a method on OPAQUE input (forEach/map/then/…) -> drive it as a flow */
     JS_SetDynImportHook(host_dyn_import);   /* dynamic import() -> force-fetch the ESM chunk in place */
     JS_SetModuleLoaderFunc(rt, host_module_normalize, host_module_loader, NULL);   /* static import -> fetch+link the graph like a browser */
     /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source (magic 2) — a
