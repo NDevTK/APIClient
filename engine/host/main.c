@@ -62,6 +62,11 @@ typedef struct {
     int is_boot;         /* BOOT FLOW: re-run the page's boot (inline scripts) from the PRISTINE pre-boot baseline as a
                             FORKING starter, so an async reply (now cached, resolves synchronously on re-run) drives its
                             continuation's gated branches WITH the concolic example — the faithful boot-as-flow. */
+    JSValue aresolve;    /* ASYNC-CALL flow: resolve fn of the invocation's result promise. On COMPLETION the scheduler
+                            calls it with the return value, so an `await asyncFn()` caller-flow's promise settles and it
+                            resumes. JS_UNDEFINED for a non-async-call flow. f.fs holds the pre-created async state. */
+    JSValue await_promise;   /* ASYNC-CALL flow PARKED on a still-pending await promise (JS_FlowResume returned 2): the
+                                scheduler polls its state + resumes (JS_FlowResumeInject) once it settles. UNDEFINED = runnable. */
 } Flow;
 static int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
 static int g_in_boot_flow = 0; /* a BOOT flow is re-running boot: fork boot siblings; suppress handler re-registration */
@@ -239,9 +244,28 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
     g_reg[g_reg_n].is_boot = 0;
+    g_reg[g_reg_n].aresolve = JS_UNDEFINED; g_reg[g_reg_n].await_promise = JS_UNDEFINED;
     g_reg_n++;
     { double w = 1.5 + val; if (w > g_max_parked) g_max_parked = w; }   /* fresh flow: visits=0,cpu=0 -> weight=1.5+val (keeps g_max_parked current for wfq_yield) */
     return 1;
+}
+/* Release an async-call flow's owned refs (result-promise resolve fn + a parked await promise). No-op for a
+   non-async-call flow (both UNDEFINED), so safe at every Flow free site. */
+static void flow_free_async_refs(JSContext *ctx, Flow *f) {
+    JS_FreeValue(ctx, f->aresolve); f->aresolve = JS_UNDEFINED;
+    JS_FreeValue(ctx, f->await_promise); f->await_promise = JS_UNDEFINED;
+}
+/* JSAsyncCallHook target: the bundle CALLED a native async function. `fs` is its pre-created live
+   JSAsyncFunctionState (real args captured); `resolve` is the result-promise's resolve fn (settled on
+   COMPLETION so an `await asyncFn()` caller-flow resumes). Register it as a flow driven from its START via
+   JS_FlowResume (f.fs pre-set => dispatched as a resume with an empty delta). So a fire-and-forget async
+   recursion (loadPage(d.next)) is a TREE of preemptible/parkable flows, each its own bounded COW delta —
+   NOT a non-preemptible promise-reaction drain whose single delta cow-oom-aborts. */
+static void reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, JSValueConst resolve) {
+    reg_add(ctx, JS_DupValue(ctx, func_obj), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+    Flow *f = &g_reg[g_reg_n - 1];
+    f->fs = fs;                                 /* the live async state — the flow owns + frees it (JS_FlowResume) */
+    f->aresolve = JS_DupValue(ctx, resolve);
 }
 
 /* Re-add a SUSPENDED flow (a full copy, fs retained) so it interleaves back into the ONE registry. */
@@ -3717,7 +3741,7 @@ static void park_frontier(JSContext *ctx)
         if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
         if (f->dom) dom_buf_free((DomUndo *)f->dom, f->dom_n);   /* and its DOM delta */
         JS_FreeValue(ctx, f->handle);
-        free(f->dec); free(f->candidate); free(f->vtarget);    }
+        free(f->dec); free(f->candidate); free(f->vtarget); flow_free_async_refs(ctx, f);    }
     g_reg_n = 0;
     printf("@PARKED %d\n", parked); fflush(stdout);   /* cold-tier park count (observability, symmetric with @RESUMED) — never a silent drop */
 }
@@ -3757,9 +3781,15 @@ static void scheduler_run(JSContext *ctx)
            — and it carries NO orphan_idx, so park_frontier would DROP it with no recipe (permanently lost, not
            deferred). The WFQ, not a clock, orders the boot-fork tree; it drains (finite reply-gated branches). */
         if (g_park_requested && !reg_has_boot()) { park_frontier(ctx); break; }
-        int best = 0;
-        for (int i = 1; i < g_reg_n; i++)
-            if (flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
+        int best = -1;
+        for (int i = 0; i < g_reg_n; i++) {
+            /* an async-call flow still PARKED on a pending await is not runnable: skip it until its promise
+               settles (a runnable flow — the callee it awaits — completes + resolves it). Its RESOLVED value
+               is delivered on the next dispatch (JS_FlowResumeInject). */
+            if (!JS_IsUndefined(g_reg[i].await_promise) && JS_PromiseState(ctx, g_reg[i].await_promise) == JS_PROMISE_PENDING) continue;
+            if (best < 0 || flow_weight(&g_reg[i]) > flow_weight(&g_reg[best])) best = i;
+        }
+        if (best < 0) break;   /* every remaining flow is parked on a pending await (a genuine cycle) -> nothing runnable */
         /* HOST-LEVEL VALUE YIELD (cross-document fairness): yield HOT to the host WFQ the moment this engine's
            BEST flow no longer outranks the runner-up ENGINE (weight set by the host in g_yield_floor) — the
            frontier stays in g_reg, the host re-ranks all live engines + the top cold recipe and resumes the
@@ -3937,7 +3967,19 @@ static void scheduler_run(JSContext *ctx)
            restores the post-boot baseline — no host-side bracket to straddle. */
         JS_SetFlowYieldHook(wfq_yield);
         JSValue out = JS_UNDEFINED;
-        int st = JS_FlowResume(ctx, f.fs, &out);
+        int st;
+        if (!JS_IsUndefined(f.await_promise)) {
+            /* Resume an async-call flow whose awaited promise has now SETTLED (the pick loop only selects a
+               runnable/settled flow): inject the settled value (or throw the rejection) and drive. */
+            JSValue ap = f.await_promise; f.await_promise = JS_UNDEFINED;
+            int rej = (JS_PromiseState(ctx, ap) == JS_PROMISE_REJECTED);
+            JSValue av = JS_PromiseResult(ctx, ap);
+            JS_FreeValue(ctx, ap);
+            st = JS_FlowResumeInject(ctx, f.fs, av, rej, &out);
+            JS_FreeValue(ctx, av);
+        } else {
+            st = JS_FlowResume(ctx, f.fs, &out);
+        }
         JS_SetFlowYieldHook(NULL);
         JSContext *c1; int jr;
         while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
@@ -3963,6 +4005,20 @@ static void scheduler_run(JSContext *ctx)
             f.dec_n = g_dec_n;
             g_cur_flow = NULL;
             reg_readd(ctx, f);
+        } else if (st == 2) {
+            /* PENDING await (an async-call flow awaited a still-unsettled promise `out`): STASH its delta like a
+               suspend + record the promise; the pick loop deprioritizes it until settled, then it resumes via
+               JS_FlowResumeInject. (An unawaited or already-resolved await never parks — settled inline.) */
+            g_switches++;
+            JS_CowUnapply(ctx); f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap);
+            dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
+            f.saved_c = g_c; f.val = g_cur_val;
+            if (g_dec_n > f.dec_n) { signed char *nd = (signed char *)malloc((size_t)(g_dec_n > 0 ? g_dec_n : 1)); if (nd) { for (int i = 0; i < g_dec_n; i++) nd[i] = g_dec[i]; free(f.dec); f.dec = nd; } }
+            else { for (int i = 0; i < g_dec_n && f.dec; i++) f.dec[i] = g_dec[i]; }
+            f.dec_n = g_dec_n;
+            f.await_promise = out;   /* the pending promise (ownership transferred; out NOT freed here) */
+            g_cur_flow = NULL;
+            reg_readd(ctx, f);
         } else {
             /* COMPLETED/error: discard this flow's heap writes (restore baseline) + free its delta buffer. */
             JS_CowRevert(ctx);
@@ -3970,9 +4026,16 @@ static void scheduler_run(JSContext *ctx)
             dom_revert();
             { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
             if (JS_IsException(out)) js_std_dump_error(ctx);
+            if (!JS_IsUndefined(f.aresolve)) {   /* async-call flow: SETTLE its result promise so an awaiting caller-flow resumes */
+                JSValueConst rv = JS_IsException(out) ? JS_UNDEFINED : (JSValueConst)out;
+                JSValue rr = JS_Call(ctx, f.aresolve, JS_UNDEFINED, 1, &rv);
+                if (JS_IsException(rr)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
+                JS_FreeValue(ctx, rr);
+            }
             JS_FreeValue(ctx, out);
             g_cur_flow = NULL;
             JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);   /* candidate owned by a completed replay flow */
+            flow_free_async_refs(ctx, &f);
         }
         g_candidate = NULL;   /* clear the replay candidate; a suspended flow re-sets it from f.candidate on resume */
     }
@@ -4063,6 +4126,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetBranchHook(branch_decide);
     JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
     JS_SetCbHook(drive_opaque_cb);  /* a callback passed to a method on OPAQUE input (forEach/map/then/…) -> drive it as a flow */
+    JS_SetAsyncCallHook(reg_add_async_call);  /* a native async CALL -> a preemptible/parkable scheduler flow (async-as-flow) */
     JS_SetDynImportHook(host_dyn_import);   /* dynamic import() -> force-fetch the ESM chunk in place */
     JS_SetModuleLoaderFunc(rt, host_module_normalize, host_module_loader, NULL);   /* static import -> fetch+link the graph like a browser */
     /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source (magic 2) — a
