@@ -3510,18 +3510,20 @@ static void park_frontier(JSContext *ctx)
         if (!f->candidate && f->orphan_idx >= 0 && f->orphan_idx < g_orphan_n) {   /* orphan-derived flows are replay-locatable (NOT transient @S candidate flows) */
             uint32_t oh = JS_OrphanHash(ctx, g_orphan_buf[f->orphan_idx]);   /* stable identity, not the positional index */
             if (oh) {
-                /* recipe = "hash,decbits,valcenti" in a DYNAMIC buffer. The decision vector is UNBOUNDED: a
-                   fixed buffer would TRUNCATE a deep flow's decisions -> a wrong (shorter) replay path, a
+                /* recipe = "hash,decbits,valcenti,visits" in a DYNAMIC buffer. The decision vector is UNBOUNDED:
+                   a fixed buffer would TRUNCATE a deep flow's decisions -> a wrong (shorter) replay path, a
                    hidden depth bound (the cardinal violation). valcenti = accumulated value*100 (the flow's
-                   emitted-value score, integer-encoded to keep the recipe compact) so the cold tier ranks
-                   rehydration by prior frontierWeight instead of treating every recipe as unproven. */
-                size_t cap = 16 + (size_t)(f->dec_n > 0 ? f->dec_n : 0) + 20;
+                   emitted-value score) and visits = times scheduled: TOGETHER they are the cold-tier
+                   frontierWeight estimator (emit-per-VISIT, the guarded rate CLAUDE.md ranks rehydration by),
+                   and on reseed they restore the UCB explore term so a heavily-explored low-yield recipe
+                   correctly defers to unproven ones instead of resuming as if brand-new. */
+                size_t cap = 16 + (size_t)(f->dec_n > 0 ? f->dec_n : 0) + 40;
                 char *rec = (char *)malloc(cap);
                 if (rec) {
                     int o = snprintf(rec, cap, "%u,", oh);
                     for (int j = 0; j < f->dec_n; j++) rec[o++] = f->dec[j] ? '1' : '0';
-                    snprintf(rec + o, cap - (size_t)o, ",%d", (int)(f->val * 100.0));
-                    arr_push_str(ctx, g_park, rec);   /* "hash,decbits,valcenti" replay recipe -> @RESULT._park */
+                    snprintf(rec + o, cap - (size_t)o, ",%d,%d", (int)(f->val * 100.0), f->visits);
+                    arr_push_str(ctx, g_park, rec);   /* "hash,decbits,valcenti,visits" replay recipe -> @RESULT._park */
                     free(rec);
                     parked++;
                 }
@@ -4197,23 +4199,29 @@ KEEP void qjs_begin(const char *recipes)
         while (*p) {
             uint32_t want = (uint32_t)strtoul(p, NULL, 10);
             const char *comma = strchr(p, ','), *semi = strchr(p, ';');
-            signed char *dec = NULL; int dec_n = 0; double rval = 1.0;
+            signed char *dec = NULL; int dec_n = 0; double rval = 1.0; int rvis = 0;
             if (comma && (!semi || comma < semi)) {
                 const char *d = comma + 1, *end = semi ? semi : d + strlen(d);
-                /* recipe = "hash,decbits[,valcenti]": the decision vector ends at the SECOND comma (the
-                   accumulated-value field) when present, else at the recipe end. A legacy "hash,decbits"
-                   recipe with no value field defaults rval=1.0 (unproven) — backward compatible. */
+                /* recipe = "hash,decbits[,valcenti[,visits]]": the decision vector ends at the SECOND comma
+                   (the accumulated-value field) when present, else at the recipe end; visits follows a THIRD
+                   comma. A legacy "hash,decbits" recipe (no value/visits) defaults rval=1.0/rvis=0 (unproven)
+                   — backward compatible. */
                 const char *comma2 = (const char *)memchr(d, ',', (size_t)(end - d));
                 const char *decend = comma2 ? comma2 : end;
                 dec_n = (int)(decend - d);
                 if (dec_n > 0) { dec = (signed char *)malloc((size_t)dec_n); for (int i = 0; i < dec_n; i++) dec[i] = (d[i] == '1') ? 1 : 0; }
-                if (comma2) { double v = strtol(comma2 + 1, NULL, 10) / 100.0; if (v > 0) rval = v; }   /* prior frontierWeight seed */
+                if (comma2) {
+                    double v = strtol(comma2 + 1, NULL, 10) / 100.0; if (v > 0) rval = v;   /* prior accumulated value */
+                    const char *comma3 = (const char *)memchr(comma2 + 1, ',', (size_t)(end - (comma2 + 1)));
+                    if (comma3) { long vs = strtol(comma3 + 1, NULL, 10); if (vs > 0 && vs < (1L << 30)) rvis = (int)vs; }   /* prior visit count (UCB explore term) */
+                }
             }
             int found = -1;
             for (int oi = 0; oi < g_orphan_n; oi++) { if (JS_OrphanHash(ctx, g_orphan_buf[oi]) == want) { found = oi; break; } }
             if (found >= 0) {
                 reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), rval, 0, dec, dec_n);   /* resume with the PRIOR accumulated value, not a flat 1.0 */
-                g_reg[g_reg_n - 1].orphan_idx = found; resumed++;
+                g_reg[g_reg_n - 1].orphan_idx = found; g_reg[g_reg_n - 1].visits = rvis;   /* restore visits so UCB reflects prior exploration */
+                resumed++;
             } else free(dec);
             if (!semi) break; p = semi + 1;
         }
