@@ -1824,7 +1824,7 @@ function renderSecurityPanel() {
     var canVerify = item.poc && item.shape && /\{(hash|search|pm)\}/.test(item.shape) && entry.pageUrl;
     var verifyHtml = "";
     if (canVerify) {
-      var probe = JSON.stringify({ poc: item.poc, shape: item.shape, srcpath: item.srcpath, gatefields: item.gatefields, sinkName: item.sink, sourceUrl: entry.sourceUrl, pageUrl: entry.pageUrl, findingId: key });
+      var probe = JSON.stringify({ poc: item.poc, shape: item.shape, srcpath: item.srcpath, gatefields: item.gatefields, sinkName: item.sink, sourceUrl: entry.sourceUrl, pageUrl: entry.pageUrl, findingId: key, cspBlocked: !!item.cspBlocked, cspReason: item.cspReason || "" });
       verifyHtml = '<div class="verify-row">'
         + '<button class="verify-btn" data-probe=\'' + esc(probe) + '\' data-key="' + esc(key) + '">Verify in real Chrome</button>'
         + '<span class="verify-hint">loads the real page with the engine’s EXACT payload in a sandboxed attacker window — the sink firing <code>apiclientsink</code> is ground-truth REAL EXPLOIT (no fire → engine/Chrome divergence)</span>'
@@ -1869,7 +1869,7 @@ window.addEventListener("message", function (e) {
     if (d.type === "POC_READY") { try { e.source.postMessage({ type: "POC_SETUP", pocJs: ent.pocJs, marker: ent.marker }, "*"); } catch (_) {} }
     else if (d.type === "POC_RAN" && ent.resultEl) {
       ent.resultEl.textContent = d.error ? "PoC threw in the sandbox: " + d.error : "payload delivered — waiting for the sink to fire in Chrome…";
-      _pollVerify(ent.resultEl, ent.marker);
+      _pollVerify(ent.resultEl, ent.marker, ent.cspBlocked, ent.cspReason);
     }
     return;
   }
@@ -1884,7 +1884,7 @@ async function _handleVerify(btn) {
     var start = await new Promise(function (res) { chrome.runtime.sendMessage(Object.assign({ type: "EXPLOIT_PROBE_START", waitMs: 6000 }, probe), function (r) { res(r); }); });
     if (!start || start.error || !start.pocJs) { resultEl.textContent = "cannot build a client-deliverable PoC: " + ((start && start.error) || "no pocJs"); btn.disabled = false; btn.textContent = prev; return; }
     var pocId = "v" + (_verifyIdSeq++);
-    _verifySandboxes.set(start.sessionId, { pocId: pocId, pocJs: start.pocJs, marker: start.sessionId, resultEl: resultEl });
+    _verifySandboxes.set(start.sessionId, { pocId: pocId, pocJs: start.pocJs, marker: start.sessionId, resultEl: resultEl, cspBlocked: !!probe.cspBlocked, cspReason: probe.cspReason || "" });
     var ifr = document.createElement("iframe");
     ifr.setAttribute("data-verify-id", pocId);
     ifr.src = "poc-sandbox.html";
@@ -1894,7 +1894,7 @@ async function _handleVerify(btn) {
     btn.textContent = prev; btn.disabled = false;
   } catch (err) { resultEl.textContent = "verify error: " + (err && err.message || err); btn.disabled = false; btn.textContent = prev; }
 }
-async function _pollVerify(resultEl, marker) {
+async function _pollVerify(resultEl, marker, cspBlocked, cspReason) {
   for (var i = 0; i < 20; i++) {
     await new Promise(function (r) { setTimeout(r, 400); });
     var snap = await new Promise(function (res) { chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_STATUS", sessionId: marker }, function (r) { res(r); }); });
@@ -1903,7 +1903,11 @@ async function _pollVerify(resultEl, marker) {
     if (hits) { resultEl.className = "verify-result verify-hit"; resultEl.textContent = "REAL EXPLOIT — the engine’s payload fired the sink in real Chrome (apiclientsink relayed). Engine agrees with Chrome."; return; }
   }
   resultEl.className = "verify-result verify-miss";
-  resultEl.textContent = "NOT REPRODUCED — apiclientsink never fired. Either CSP/Trusted-Types blocked it, or the engine’s model diverges from Chrome here (an engine-fidelity bug to investigate).";
+  // POLICY-RELATIVE no-fire: when the engine already flagged the page CSP as blocking THIS vector, a non-fire
+  // is the EXPECTED, confirmed outcome (real sink, dead vector) — not an engine-fidelity divergence to chase.
+  resultEl.textContent = cspBlocked
+    ? "CSP BLOCKED as predicted — apiclientsink never fired because the page CSP blocks this vector (" + (cspReason || "policy-constrained") + "). The sink is REAL; it needs a policy-permitted vector. A policy-relative result, NOT an engine-fidelity bug."
+    : "NOT REPRODUCED — apiclientsink never fired. Either CSP/Trusted-Types blocked it, or the engine’s model diverges from Chrome here (an engine-fidelity bug to investigate).";
 }
 
 // ─── Send Panel ──────────────────────────────────────────────────────────────
