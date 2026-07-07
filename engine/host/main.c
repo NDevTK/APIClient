@@ -1178,6 +1178,7 @@ static void why_add(JSContext *ctx, const char *phase, const char *reason) {
 static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (the finalize expr-eval pre-filter) */
 static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow drove through the real code+branches to the sink where it broke out. The ONLY @S output: a working PoC is self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
 static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
+static JSValue g_cb_driven = JS_UNDEFINED;    /* fn-SOURCE-hash -> 1: a callback-to-opaque already registered as a flow (drive each UNIQUE cb ONCE; else an unbounded recursion calling x.forEach(cb) per level floods g_reg) */
 static JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
 /* Tag-context (open a new tag / break out of a quoted attr WITH a new tag) THEN attribute-injection into
    the EXISTING tag with NO `<` — the latter is the only breakout when a filter escapes `<`/`>` but reflects
@@ -1645,6 +1646,18 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
    as a starter FLOW (exactly like a deferred timer). The scheduler force-invokes it with opaque args so its
    per-element endpoints/sinks are reached; transient (no orphan_idx), WFQ-ordered/starved like any flow. */
 static void drive_opaque_cb(JSContext *ctx, JSValueConst cb) {
+    /* Drive each UNIQUE callback (by function SOURCE identity) ONCE. Without this, an unbounded recursion
+       that calls `x.forEach(cb)` at every level registers the SAME cb as a fresh flow per level -> g_reg
+       grows without bound and the scheduler never drains (a hang). One flow explores cb with opaque args;
+       more are identical. NOT a bound on distinct work — it's collapsing byte-identical re-registration. */
+    uint32_t h = JS_OrphanHash(ctx, cb);
+    if (h && JS_IsObject(g_cb_driven)) {
+        char k[16]; snprintf(k, sizeof k, "%u", h);
+        JSValue seen = JS_GetPropertyStr(ctx, g_cb_driven, k);
+        int dup = !JS_IsUndefined(seen); JS_FreeValue(ctx, seen);
+        if (dup) return;
+        JS_SetPropertyStr(ctx, g_cb_driven, k, JS_NewBool(ctx, 1));
+    }
     reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, 0, NULL, 0);
 }
 /* localStorage/sessionStorage.getItem(k): stored data is EXTERNAL INPUT (a token/flag put there earlier or
@@ -3996,7 +4009,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
     g_endpoints = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
     g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
-    g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
+    g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx); g_cb_driven = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
     /* PLATFORM BUILTINS: everything compiled here (x9, dedup, the Array/String prelude) is engine-internal, not
        page code — mark it born-executed so orphan-collection NEVER force-invokes it. Without this, an uncalled
@@ -4581,7 +4594,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
     JS_FreeValue(ctx, g_solvetasks); g_solvetasks = JS_UNDEFINED;
     JS_FreeValue(ctx, g_verified); g_verified = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_enqueued); g_enqueued = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_enqueued); g_enqueued = JS_UNDEFINED; JS_FreeValue(ctx, g_cb_driven); g_cb_driven = JS_UNDEFINED;
     JS_FreeValue(ctx, g_dedup_fn); g_dedup_fn = JS_UNDEFINED;
     JS_FreeValue(ctx, g_location); g_location = JS_UNDEFINED;
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
