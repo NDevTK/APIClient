@@ -71,6 +71,8 @@ typedef struct {
     JSValue await_promise;   /* ASYNC-CALL flow PARKED on a still-pending await promise (JS_FlowResume returned 2): the
                                 scheduler polls its state + resumes (JS_FlowResumeInject) once it settles. UNDEFINED = runnable. */
 } Flow;
+static JSContext *g_ctx;       /* fwd: the MAIN analysis context (defined near the persistent-instance protocol) — the
+                                  async/reaction hooks claim a call as a flow ONLY for this ctx, never the @S solve realm */
 static int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
 static int g_in_boot_flow = 0; /* a BOOT flow is re-running boot: fork boot siblings; suppress handler re-registration */
 static Flow   *g_reg = NULL;
@@ -265,12 +267,15 @@ static void flow_free_async_refs(JSContext *ctx, Flow *f) {
    JS_FlowResume (f.fs pre-set => dispatched as a resume with an empty delta). So a fire-and-forget async
    recursion (loadPage(d.next)) is a TREE of preemptible/parkable flows, each its own bounded COW delta —
    NOT a non-preemptible promise-reaction drain whose single delta cow-oom-aborts. */
-static void reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, JSValueConst resolve, JSValueConst reject) {
+static int reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, JSValueConst resolve, JSValueConst reject) {
+    if (ctx != g_ctx) return 0;                 /* CLAIM only for the MAIN analysis ctx; the @S solve realm (g_solve_ctx)
+                                                   runs async native — routing its call into the main g_reg is cross-ctx corruption */
     reg_add(ctx, JS_DupValue(ctx, func_obj), g_running ? g_cur_val : 1.0, 0, NULL, 0);
     Flow *f = &g_reg[g_reg_n - 1];
     f->fs = fs;                                 /* the live async state — the flow owns + frees it (JS_FlowResume) */
     f->aresolve = JS_DupValue(ctx, resolve);
     f->areject = JS_DupValue(ctx, reject);
+    return 1;
 }
 
 /* Re-add a SUSPENDED flow (a full copy, fs retained) so it interleaves back into the ONE registry. */
