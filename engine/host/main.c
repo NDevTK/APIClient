@@ -65,6 +65,9 @@ typedef struct {
     JSValue aresolve;    /* ASYNC-CALL flow: resolve fn of the invocation's result promise. On COMPLETION the scheduler
                             calls it with the return value, so an `await asyncFn()` caller-flow's promise settles and it
                             resumes. JS_UNDEFINED for a non-async-call flow. f.fs holds the pre-created async state. */
+    JSValue areject;     /* ASYNC-CALL flow: reject fn of the result promise. On a THROWN completion the scheduler calls
+                            it with the exception, so the awaiting caller's await re-throws (try/catch/.catch runs — a
+                            throw path can itself reach a sink), never a silent resolve-with-undefined. */
     JSValue await_promise;   /* ASYNC-CALL flow PARKED on a still-pending await promise (JS_FlowResume returned 2): the
                                 scheduler polls its state + resumes (JS_FlowResumeInject) once it settles. UNDEFINED = runnable. */
 } Flow;
@@ -244,7 +247,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
     g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
     g_reg[g_reg_n].is_boot = 0;
-    g_reg[g_reg_n].aresolve = JS_UNDEFINED; g_reg[g_reg_n].await_promise = JS_UNDEFINED;
+    g_reg[g_reg_n].aresolve = JS_UNDEFINED; g_reg[g_reg_n].areject = JS_UNDEFINED; g_reg[g_reg_n].await_promise = JS_UNDEFINED;
     g_reg_n++;
     { double w = 1.5 + val; if (w > g_max_parked) g_max_parked = w; }   /* fresh flow: visits=0,cpu=0 -> weight=1.5+val (keeps g_max_parked current for wfq_yield) */
     return 1;
@@ -253,6 +256,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
    non-async-call flow (both UNDEFINED), so safe at every Flow free site. */
 static void flow_free_async_refs(JSContext *ctx, Flow *f) {
     JS_FreeValue(ctx, f->aresolve); f->aresolve = JS_UNDEFINED;
+    JS_FreeValue(ctx, f->areject); f->areject = JS_UNDEFINED;
     JS_FreeValue(ctx, f->await_promise); f->await_promise = JS_UNDEFINED;
 }
 /* JSAsyncCallHook target: the bundle CALLED a native async function. `fs` is its pre-created live
@@ -261,11 +265,12 @@ static void flow_free_async_refs(JSContext *ctx, Flow *f) {
    JS_FlowResume (f.fs pre-set => dispatched as a resume with an empty delta). So a fire-and-forget async
    recursion (loadPage(d.next)) is a TREE of preemptible/parkable flows, each its own bounded COW delta —
    NOT a non-preemptible promise-reaction drain whose single delta cow-oom-aborts. */
-static void reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, JSValueConst resolve) {
+static void reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, JSValueConst resolve, JSValueConst reject) {
     reg_add(ctx, JS_DupValue(ctx, func_obj), g_running ? g_cur_val : 1.0, 0, NULL, 0);
     Flow *f = &g_reg[g_reg_n - 1];
     f->fs = fs;                                 /* the live async state — the flow owns + frees it (JS_FlowResume) */
     f->aresolve = JS_DupValue(ctx, resolve);
+    f->areject = JS_DupValue(ctx, reject);
 }
 
 /* Re-add a SUSPENDED flow (a full copy, fs retained) so it interleaves back into the ONE registry. */
@@ -4025,12 +4030,14 @@ static void scheduler_run(JSContext *ctx)
             { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
             dom_revert();
             { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-            if (JS_IsException(out)) js_std_dump_error(ctx);
-            if (!JS_IsUndefined(f.aresolve)) {   /* async-call flow: SETTLE its result promise so an awaiting caller-flow resumes */
-                JSValueConst rv = JS_IsException(out) ? JS_UNDEFINED : (JSValueConst)out;
-                JSValue rr = JS_Call(ctx, f.aresolve, JS_UNDEFINED, 1, &rv);
-                if (JS_IsException(rr)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
-                JS_FreeValue(ctx, rr);
+            if (!JS_IsUndefined(f.aresolve)) {
+                /* async-call flow: SETTLE its result promise so an awaiting caller-flow resumes — REJECT on a
+                   thrown completion (st==3, out=exception value) so the awaiter re-throws (try/catch/.catch runs),
+                   else RESOLVE with the return value (st==0). */
+                JSValue fn = (st == 3) ? f.areject : f.aresolve;
+                if (!JS_IsUndefined(fn)) { JSValue rr = JS_Call(ctx, fn, JS_UNDEFINED, 1, (JSValueConst *)&out); if (JS_IsException(rr)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); } JS_FreeValue(ctx, rr); }
+            } else if (JS_IsException(out)) {
+                js_std_dump_error(ctx);   /* a non-async (sync orphan/boot) flow threw on opaque input — the exploration surface */
             }
             JS_FreeValue(ctx, out);
             g_cur_flow = NULL;
