@@ -118,7 +118,7 @@ static char    *g_csp = NULL;           /* the page's <meta http-equiv=Content-S
                                            policy; header-CSP needs response-header plumbing). An @S PoC must SURVIVE it:
                                            an inline on-handler or script vector is DEAD under a script-src without
                                            'unsafe-inline', so a finding is POLICY-RELATIVE (sink real, CSP blocks inline). */
-static int csp_inline_blocked(const char *csp);   /* fwd: solve_all (above its definition) reports policy-relative findings */
+static int csp_lacks(const char *csp, const char *tok);   /* fwd: solve_all (above its definition) reports policy-relative findings per sink class */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
 static char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
@@ -1597,9 +1597,14 @@ static JSValue solve_all(JSContext *ctx) {
                     if (JS_IsObject(gfv)) JS_SetPropertyStr(ctx, rec, "gatefields", JS_DupValue(ctx, gfv));   /* sibling gate fields the delivery object must set */
                     JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
                     JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
-                    if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE: the model broke out, but the page's CSP may block THIS vector on real Chrome */
+                    if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE, PER SINK CLASS: the model broke out, but the page's CSP may block THIS vector on real Chrome */
+                        int is_eval = sink && (strcmp(sink, "eval") == 0 || strcmp(sink, "Function") == 0 || strcmp(sink, "setTimeout") == 0);
+                        int blocked = csp_lacks(g_csp, is_eval ? "unsafe-eval" : "unsafe-inline");   /* eval-vector needs 'unsafe-eval'; inline/nav-vector needs 'unsafe-inline' */
                         JS_SetPropertyStr(ctx, rec, "csp", JS_NewString(ctx, g_csp));
-                        JS_SetPropertyStr(ctx, rec, "cspInlineBlocked", JS_NewBool(ctx, csp_inline_blocked(g_csp)));
+                        JS_SetPropertyStr(ctx, rec, "cspBlocked", JS_NewBool(ctx, blocked));
+                        if (blocked) JS_SetPropertyStr(ctx, rec, "cspReason", JS_NewString(ctx, is_eval ?
+                            "CSP script-src lacks 'unsafe-eval' -> the eval/Function/setTimeout(string) vector is blocked on real Chrome (needs a permitted vector)" :
+                            "CSP script-src lacks 'unsafe-inline' -> the inline handler/script/javascript: vector is blocked on real Chrome (needs a permitted vector)"));
                     }
                     { char eb[900]; snprintf(eb, sizeof eb, "sink %s <- input %s (forced-exec: this exact input, driven through the real code, breaks out at the sink)", sink ? sink : "?", rpoc);
                       JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
@@ -3602,19 +3607,24 @@ static lxb_status_t csp_scan_cb(lxb_dom_node_t *node, void *vctx) {
     if (cv && cl) *out = strndup((const char *)cv, cl);
     return LXB_STATUS_OK;
 }
-/* Does this CSP forbid an INLINE script vector (inline <script> / on* handler / javascript: URL)? TRUE when the
-   effective script directive (script-src, else default-src) is present and lacks 'unsafe-inline'. No such
-   directive -> scripts unrestricted -> not blocked. Minimal but sound for the dominant reflected-XSS vector; an
-   @S finding whose PoC is an inline vector is then reported as CSP-constrained, not a bare XSS. */
-static int csp_inline_blocked(const char *csp) {
+/* Does the effective script directive (script-src, else default-src) LACK keyword `tok`? I.e. is a vector that
+   requires that keyword BLOCKED? TRUE when the directive is present and does not contain `tok`. No such
+   directive -> scripts unrestricted -> not blocked. This is the CSP relevance test per SINK CLASS: an inline
+   vector (inline <script>/on* handler/javascript: URL) needs 'unsafe-inline'; an eval vector (eval/Function/
+   setTimeout(string)) needs 'unsafe-eval' — a CSP may permit one and forbid the other, so the @S finding must
+   report the constraint for ITS vector, not a blanket 'unsafe-inline'. Minimal but sound (a nonce/hash/
+   strict-dynamic policy without the keyword still blocks the blanket inline/eval vector we model). */
+static int csp_lacks(const char *csp, const char *tok) {
     if (!csp) return 0;
     const char *d = strstr(csp, "script-src");
     if (!d) d = strstr(csp, "default-src");
     if (!d) return 0;
     const char *end = strchr(d, ';'); size_t dl = end ? (size_t)(end - d) : strlen(d);
-    for (size_t i = 0; i + 13 <= dl; i++) if (memcmp(d + i, "unsafe-inline", 13) == 0) return 0;
+    size_t tl = strlen(tok);
+    for (size_t i = 0; i + tl <= dl; i++) if (memcmp(d + i, tok, tl) == 0) return 0;
     return 1;
 }
+static int csp_inline_blocked(const char *csp) { return csp_lacks(csp, "unsafe-inline"); }
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
     free(g_csp); g_csp = NULL;   /* fresh document: re-read its meta-CSP (the frontier key + policy are per-document) */
