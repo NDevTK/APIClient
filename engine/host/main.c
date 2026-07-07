@@ -498,21 +498,25 @@ static const char *ARRAY_PRELUDE_JS =
 "      stack.pop();indent=stepback;return res;}"
 "    return undefined;}"
 "  var wrapper={};wrapper['']=value;return ser('',wrapper);};})();";
-/* In-place fetch (pivot M2): a reply-consume (r.json()/r.text()) with no concrete body PARKS — an
-   unresolved promise whose resolve fn is held here with the (concrete) url. qjs_step returns NEED_FETCH
-   while any are pending; the offscreen safe-fetches and qjs_provide()s the body, resolving the promise
-   so the flow resumes IN PLACE (no re-instantiate, no re-run). Node CLI resolves them opaque (shapes). */
-typedef struct { JSValue rf; char *url; int is_json; } Pending;
+/* Reply FETCH registration: a reply-consume (r.json()/r.text()) with no cached body registers its (concrete)
+   url so qjs_step returns NEED_FETCH; the offscreen safe-fetches + qjs_provide()s the body, which CACHES it and
+   enqueues a forking BOOT RE-RUN that re-runs boot with the reply now synchronously concolic (make_response
+   injects __body) — the reply is delivered CONCOLIC in a LIVE flow. NO promise is parked: a parked resolve fn
+   held across the fetch is persistent async state OUTSIDE the per-flow COW delta (it outlives the flow's revert
+   and resolves against torn-down heap). r.json() resolves OPAQUE in place; concrete comes from the re-run. */
+typedef struct { char *url; int is_json; } Pending;
 static Pending *g_pending = NULL;
 static int g_pending_n = 0, g_pending_cap = 0;
-static void pending_add(JSContext *ctx, JSValue rf, const char *url, int is_json) {
+static void reply_fetch_register(const char *url, int is_json) {
+    if (!url) return;
+    for (int i = 0; i < g_pending_n; i++) if (g_pending[i].url && strcmp(g_pending[i].url, url) == 0) return;   /* dedup: one fetch per url */
     if (g_pending_n >= g_pending_cap) {
         int nc = g_pending_cap ? g_pending_cap * 2 : 32;
         Pending *n = realloc(g_pending, (size_t)nc * sizeof(Pending));
-        if (!n) { JS_FreeValue(ctx, rf); return; }
+        if (!n) return;
         g_pending = n; g_pending_cap = nc;
     }
-    g_pending[g_pending_n].rf = rf; g_pending[g_pending_n].url = url ? strdup(url) : NULL; g_pending[g_pending_n].is_json = is_json;
+    g_pending[g_pending_n].url = strdup(url); g_pending[g_pending_n].is_json = is_json;
     g_pending_n++;
 }
 /* Chunk-load pending (M3): an injected <script src> to fetch + eval IN PLACE (no promise; nothing awaits
@@ -604,25 +608,20 @@ static JSValue reply_value(JSContext *ctx, JSValueConst body_str, int is_json) {
     if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return JS_DupValue(ctx, g_opaque); }
     return JS_ConcolicWrap(ctx, parsed, "reply");   /* structure real; string/bool leaves concolic (fork + real example) */
 }
-/* r.json()/r.text(): concrete body -> resolve it; else PARK (unresolved promise + pending) if the url is
-   concrete (fetchable), so the offscreen provides the real reply IN PLACE; opaque if the url is a shape. */
+/* r.json()/r.text(): a CACHED body resolves CONCOLIC (the boot re-run's path, make_response injected __body);
+   else REGISTER the fetch (concrete url) and resolve OPAQUE in place. The reply's provision enqueues a forking
+   boot re-run that re-runs boot with the reply now synchronously concolic — delivery is the re-run, never a
+   parked promise (persistent async state outside the flow's COW delta, which is what leaked). */
 static JSValue resp_consume(JSContext *ctx, JSValueConst this_val, int is_json) {
     JSValue body = resp_body_str(ctx, this_val);
     if (JS_IsString(body)) { JSValue v = reply_value(ctx, body, is_json); JS_FreeValue(ctx, body); return js_resolved(ctx, v); }
     JS_FreeValue(ctx, body);
     JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
     const char *url = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
-    JSValue result;
-    if (url && url[0] && !has_hole(url)) {   /* concrete url -> park for a real reply */
-        JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
-        if (!JS_IsException(promise)) { pending_add(ctx, JS_DupValue(ctx, rf[0]), url, is_json); JS_FreeValue(ctx, rf[0]); JS_FreeValue(ctx, rf[1]); result = promise; }
-        else result = js_resolved(ctx, JS_DupValue(ctx, g_opaque));
-    } else {
-        result = js_resolved(ctx, JS_DupValue(ctx, g_opaque));   /* shape url: not fetchable */
-    }
+    if (url && url[0] && !has_hole(url)) reply_fetch_register(url, is_json);   /* concrete url -> fetch it; the boot re-run delivers it concolic */
     if (url) JS_FreeCString(ctx, url);
     JS_FreeValue(ctx, u);
-    return result;
+    return js_resolved(ctx, JS_DupValue(ctx, g_opaque));   /* opaque NOW; concrete via the provision-driven re-run */
 }
 static JSValue js_resp_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 1); }
 static JSValue js_resp_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 0); }
@@ -4292,28 +4291,19 @@ KEEP void qjs_provide(const char *url, const char *body)
         JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));
         if (is_new && g_boot_n > 0) reg_add_boot(ctx, NULL, 0);
     }
-    for (int i = 0; i < g_pending_n; i++) {
-        if (!g_pending[i].url || strcmp(g_pending[i].url, url) != 0) continue;
-        JSValue v;
-        if (has) { JSValue bs = JS_NewString(ctx, body); v = reply_value(ctx, bs, g_pending[i].is_json); JS_FreeValue(ctx, bs); }
-        else v = JS_DupValue(ctx, g_opaque);
-        JSValue r = JS_Call(ctx, g_pending[i].rf, JS_UNDEFINED, 1, (JSValueConst *)&v); JS_FreeValue(ctx, r); JS_FreeValue(ctx, v);
-        JS_FreeValue(ctx, g_pending[i].rf); free(g_pending[i].url);
-        g_pending[i].rf = JS_UNDEFINED; g_pending[i].url = NULL;
+    for (int i = 0; i < g_pending_n; i++) {   /* the reply is CACHED + a boot re-run enqueued above; just drop the fetch registration (no promise to resolve) */
+        if (g_pending[i].url && strcmp(g_pending[i].url, url) == 0) { free(g_pending[i].url); g_pending[i].url = NULL; }
     }
     int w = 0; for (int i = 0; i < g_pending_n; i++) if (g_pending[i].url) g_pending[w++] = g_pending[i];
     g_pending_n = w;
 }
-/* Resolve ALL remaining pending with opaque (node CLI / finalize): chains continue as shapes. */
+/* Drop all remaining fetch registrations (a reply/chunk never fetched): r.json() already resolved OPAQUE in
+   place, so there is nothing to settle — just free the url list. */
 KEEP void qjs_finalize(void)
 {
     JSContext *ctx = g_ctx; if (!ctx) return;
-    for (int i = 0; i < g_pending_n; i++) {
-        if (!g_pending[i].url) continue;
-        JSValue v = JS_DupValue(ctx, g_opaque);
-        JSValue r = JS_Call(ctx, g_pending[i].rf, JS_UNDEFINED, 1, (JSValueConst *)&v); JS_FreeValue(ctx, r); JS_FreeValue(ctx, v);
-        JS_FreeValue(ctx, g_pending[i].rf); free(g_pending[i].url); g_pending[i].url = NULL;
-    }
+    (void)ctx;
+    for (int i = 0; i < g_pending_n; i++) free(g_pending[i].url);
     g_pending_n = 0;
     for (int i = 0; i < g_chunk_n; i++) free(g_chunk_pending[i]);   /* node CLI can't fetch chunks -> drop */
     g_chunk_n = 0;
