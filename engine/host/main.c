@@ -348,30 +348,37 @@ static const char *DEDUP_JS =
    CLOSURE does NOT trampoline its deep recursion -- a real engine defect at the pre-boot-baseline/
    var_ref boundary; a non-closure avoids it (init non-closures trampoline, like the pages' boot fns).
    `>>>0` is internal ToUint32 (exact for real arrays; length>2^32 array-likes don't exist in practice).
-   Spec-faithful: ToObject(this), HasProperty (`k in O`) skips holes, (value,index,array) args, thisArg,
+   Spec-faithful: ToObject(this), HasProperty (`__ain(O,k)`) skips holes, (value,index,array) args, thisArg,
    early-exit for some/every, hole-preserving map. Deviation: map/filter build a plain Array (Symbol.
    species not honored) -- effectively never overridden in real bundles. */
 static const char *ARRAY_PRELUDE_JS =
+/* An OPAQUE array (a reply/injected-state/attacker value, unknown length) must DRIVE the callback — reach
+   the per-element fetch/sink — exactly ONCE, never loop on an opaque length (that forks true forever ->
+   OOM abort). __alen: length is 1 for an opaque array (every element is the SAME indistinguishable opaque,
+   so iterations 2..N emit nothing new — recognizing identical work, NOT a bound); __ain: past the hole
+   check an opaque array always "has" index k so cb still runs. Concrete arrays are unchanged. */
+"var __alen=function(O){return __isOpaque(O)?1:(O.length>>>0);};"
+"var __ain=function(O,k){return __isOpaque(O)||(k in O);};"
 "Object.defineProperty(Array.prototype,'forEach',{writable:true,enumerable:false,configurable:true,value:function forEach(cb,thisArg){"
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.forEach: callback is not a function');"
-"  var O=Object(this),L=O.length>>>0;"
-"  for(var k=0;k<L;k++){if(k in O){cb.call(thisArg,O[k],k,O);}}return undefined;}});"
+"  var O=Object(this),L=__alen(O);"
+"  for(var k=0;k<L;k++){if(__ain(O,k)){cb.call(thisArg,O[k],k,O);}}return undefined;}});"
 "Object.defineProperty(Array.prototype,'map',{writable:true,enumerable:false,configurable:true,value:function map(cb,thisArg){"  /* holes preserved; species not honored (plain Array) */
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.map: callback is not a function');"
-"  var O=Object(this),L=O.length>>>0,A=new Array(L);"
-"  for(var k=0;k<L;k++){if(k in O){A[k]=cb.call(thisArg,O[k],k,O);}}return A;}});"
+"  var O=Object(this),L=__alen(O),A=new Array(L);"
+"  for(var k=0;k<L;k++){if(__ain(O,k)){A[k]=cb.call(thisArg,O[k],k,O);}}return A;}});"
 "Object.defineProperty(Array.prototype,'filter',{writable:true,enumerable:false,configurable:true,value:function filter(cb,thisArg){"
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.filter: callback is not a function');"
-"  var O=Object(this),L=O.length>>>0,A=[],n=0;"
-"  for(var k=0;k<L;k++){if(k in O){var v=O[k];if(cb.call(thisArg,v,k,O))A[n++]=v;}}return A;}});"
+"  var O=Object(this),L=__alen(O),A=[],n=0;"
+"  for(var k=0;k<L;k++){if(__ain(O,k)){var v=O[k];if(cb.call(thisArg,v,k,O))A[n++]=v;}}return A;}});"
 "Object.defineProperty(Array.prototype,'some',{writable:true,enumerable:false,configurable:true,value:function some(cb,thisArg){"  /* early-exit on first truthy */
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.some: callback is not a function');"
-"  var O=Object(this),L=O.length>>>0;"
-"  for(var k=0;k<L;k++){if(k in O){if(cb.call(thisArg,O[k],k,O))return true;}}return false;}});"
+"  var O=Object(this),L=__alen(O);"
+"  for(var k=0;k<L;k++){if(__ain(O,k)){if(cb.call(thisArg,O[k],k,O))return true;}}return false;}});"
 "Object.defineProperty(Array.prototype,'every',{writable:true,enumerable:false,configurable:true,value:function every(cb,thisArg){"  /* early-exit on first falsy */
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.every: callback is not a function');"
-"  var O=Object(this),L=O.length>>>0;"
-"  for(var k=0;k<L;k++){if(k in O){if(!cb.call(thisArg,O[k],k,O))return false;}}return true;}});"
+"  var O=Object(this),L=__alen(O);"
+"  for(var k=0;k<L;k++){if(__ain(O,k)){if(!cb.call(thisArg,O[k],k,O))return false;}}return true;}});"
 /* includes/indexOf are SELF-HOSTED not for overflow but for OPACITY-BY-CONSTRUCTION: the C builtins collapse
    `arr.includes(opaqueInput)` to a concrete false/-1 (identity compare), so a list-membership GATE
    (`if(allowed.includes(input))`) never forks and the gated code is never explored (missed @H). As bytecode
@@ -380,27 +387,27 @@ static const char *ARRAY_PRELUDE_JS =
    whitelist stays a real reachable sink. One mechanism, both outcomes. (SameValueZero for includes; strict
    === + hole-skip for indexOf; fromIndex via |0 — the prelude's small-index simplification.) */
 "Object.defineProperty(Array.prototype,'includes',{writable:true,enumerable:false,configurable:true,value:function includes(sv,fi){"
-"  var O=Object(this),L=O.length>>>0; if(L===0)return false;"
+"  var O=Object(this),L=__alen(O); if(L===0)return false;"
 "  var n=fi|0,k=n>=0?n:L+n; if(k<0)k=0;"
 "  for(;k<L;k++){var v=O[k]; if(v===sv||(v!==v&&sv!==sv))return true;} return false;}});"
 "Object.defineProperty(Array.prototype,'indexOf',{writable:true,enumerable:false,configurable:true,value:function indexOf(sv,fi){"
-"  var O=Object(this),L=O.length>>>0; if(L===0)return -1;"
+"  var O=Object(this),L=__alen(O); if(L===0)return -1;"
 "  var n=fi|0,k=n>=0?n:L+n; if(k<0)k=0;"
-"  for(;k<L;k++){if(k in O&&O[k]===sv)return k;} return -1;}});"
+"  for(;k<L;k++){if(__ain(O,k)&&O[k]===sv)return k;} return -1;}});"
 /* lastIndexOf (=== + hole-skip, reverse) and find/findIndex (PREDICATE) collapse the same way: the C
    builtins run JS_ToBool on an opaque predicate-result -> concrete -> no fork. Self-hosted, the truthiness
    test is OP_if which propagates opacity, so `arr.find(x=>x===input)`-gated code forks + explores. */
 "Object.defineProperty(Array.prototype,'lastIndexOf',{writable:true,enumerable:false,configurable:true,value:function lastIndexOf(sv,fi){"
-"  var O=Object(this),L=O.length>>>0; if(L===0)return -1;"
+"  var O=Object(this),L=__alen(O); if(L===0)return -1;"
 "  var n=arguments.length>1?fi|0:L-1,k=n>=0?(n<L-1?n:L-1):L+n;"
-"  for(;k>=0;k--){if(k in O&&O[k]===sv)return k;} return -1;}});"
+"  for(;k>=0;k--){if(__ain(O,k)&&O[k]===sv)return k;} return -1;}});"
 "Object.defineProperty(Array.prototype,'find',{writable:true,enumerable:false,configurable:true,value:function find(cb,thisArg){"
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.find: callback is not a function');"
-"  var O=Object(this),L=O.length>>>0;"
+"  var O=Object(this),L=__alen(O);"
 "  for(var k=0;k<L;k++){var v=O[k]; if(cb.call(thisArg,v,k,O))return v;} return undefined;}});"
 "Object.defineProperty(Array.prototype,'findIndex',{writable:true,enumerable:false,configurable:true,value:function findIndex(cb,thisArg){"
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.findIndex: callback is not a function');"
-"  var O=Object(this),L=O.length>>>0;"
+"  var O=Object(this),L=__alen(O);"
 "  for(var k=0;k<L;k++){if(cb.call(thisArg,O[k],k,O))return k;} return -1;}});"
 /* reduce/reduceRight: siblings of forEach/map, self-hosted for the SAME two reasons — (1) OVERFLOW: the C
    builtin holds the accumulator on the C stack across each callback, so `arr.reduce((_,v)=>recur(v))` C-recurses
@@ -409,14 +416,14 @@ static const char *ARRAY_PRELUDE_JS =
    propagates through it. No thisArg (spec: callback `this` is undefined) -> plain cb(...). */
 "Object.defineProperty(Array.prototype,'reduce',{writable:true,enumerable:false,configurable:true,value:function reduce(cb,iv){"
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.reduce: callback is not a function');"
-"  var O=Object(this),L=O.length>>>0,k=0,acc;"
-"  if(arguments.length>1){acc=iv;}else{while(k<L&&!(k in O))k++;if(k>=L)throw new TypeError('Reduce of empty array with no initial value');acc=O[k++];}"
-"  for(;k<L;k++){if(k in O)acc=cb(acc,O[k],k,O);}return acc;}});"
+"  var O=Object(this),L=__alen(O),k=0,acc;"
+"  if(arguments.length>1){acc=iv;}else{while(k<L&&!(__ain(O,k)))k++;if(k>=L)throw new TypeError('Reduce of empty array with no initial value');acc=O[k++];}"
+"  for(;k<L;k++){if(__ain(O,k))acc=cb(acc,O[k],k,O);}return acc;}});"
 "Object.defineProperty(Array.prototype,'reduceRight',{writable:true,enumerable:false,configurable:true,value:function reduceRight(cb,iv){"
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.reduceRight: callback is not a function');"
-"  var O=Object(this),L=O.length>>>0,k=L-1,acc;"
-"  if(arguments.length>1){acc=iv;}else{while(k>=0&&!(k in O))k--;if(k<0)throw new TypeError('Reduce of empty array with no initial value');acc=O[k--];}"
-"  for(;k>=0;k--){if(k in O)acc=cb(acc,O[k],k,O);}return acc;}});"
+"  var O=Object(this),L=__alen(O),k=L-1,acc;"
+"  if(arguments.length>1){acc=iv;}else{while(k>=0&&!(__ain(O,k)))k--;if(k<0)throw new TypeError('Reduce of empty array with no initial value');acc=O[k--];}"
+"  for(;k>=0;k--){if(__ain(O,k))acc=cb(acc,O[k],k,O);}return acc;}});"
 /* Array.sort: SELF-HOSTED (iterative bottom-up merge, stable) so the COMPARATOR dispatches via the trampolined
    OP_call — deep comparator recursion is UNBOUNDED, not a C-stack trap. The ordering branch must NOT fork on an
    OPAQUE compare (element order is meaningless for @H/@S; O(n log n) forks would explode): `__isOpaque` (a
@@ -426,8 +433,8 @@ static const char *ARRAY_PRELUDE_JS =
    last (comparator never sees them); NaN comparator result -> 0; comparator `this` is undefined; in-place. */
 "Object.defineProperty(Array.prototype,'sort',{writable:true,enumerable:false,configurable:true,value:function sort(cmp){"
 "  if(cmp!==undefined&&typeof cmp!=='function')throw new TypeError('Array.prototype.sort: comparator is not a function');"
-"  var O=Object(this),L=O.length>>>0,items=[],undef=0,holes=0,k;"
-"  for(k=0;k<L;k++){if(k in O){var v=O[k];if(v===undefined)undef++;else items.push(v);}else holes++;}"
+"  var O=Object(this),L=__alen(O),items=[],undef=0,holes=0,k;"
+"  for(k=0;k<L;k++){if(__ain(O,k)){var v=O[k];if(v===undefined)undef++;else items.push(v);}else holes++;}"
 "  var cf=cmp?function(a,b){var r=cmp(a,b);if(__isOpaque(r))return 0;var d=+r;return d!==d?0:d;}"
 "           :function(a,b){if(__isOpaque(a)||__isOpaque(b))return 0;var sa=''+a,sb=''+b;return sa<sb?-1:(sa>sb?1:0);};"
 "  var N=items.length,buf=new Array(N),w,lo,mid,hi,i,j,t;"
