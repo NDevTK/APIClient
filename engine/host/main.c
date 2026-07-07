@@ -1263,13 +1263,13 @@ static int x9_fires(const lxb_char_t *code, size_t len) {
     int fired = JS_ToBool(g_solve_ctx, fv); JS_FreeValue(g_solve_ctx, fv);
     return fired;
 }
-struct x9_walk { int found; };
+struct x9_walk { int found; int script_exec; };   /* script_exec: does THIS sink run a parsed <script>? (document.write/srcdoc yes; innerHTML/outerHTML/insertAdjacentHTML NO — HTML-parser-inserted scripts are inert) */
 static lxb_status_t x9_walk_cb(lxb_dom_node_t *node, void *vctx) {
     struct x9_walk *c = vctx;
     if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return LXB_STATUS_OK;
     lxb_dom_element_t *el = lxb_dom_interface_element(node);
-    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);   /* <script>...X9...</script> executes */
-    if (nl == 6 && nm && memcmp(nm, "script", 6) == 0) {
+    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
+    if (c->script_exec && nl == 6 && nm && memcmp(nm, "script", 6) == 0) {   /* a <script> is only a breakout on a sink that EXECUTES parsed scripts */
         size_t cl = 0; lxb_char_t *ct = lxb_dom_node_text_content(lxb_dom_interface_node(node), &cl);
         if (mem_has_x9(ct, cl) && x9_fires(ct, cl)) { c->found = 1; return LXB_STATUS_STOP; }   /* VALID JS that calls the marker, not just contains it */
     }
@@ -1286,10 +1286,10 @@ static lxb_status_t x9_walk_cb(lxb_dom_node_t *node, void *vctx) {
    element's on* handler, or <script> content. A tag opener trapped inside an ATTRIBUTE value
    (href="<img onerror=X9>") or in TEXT (&lt;img..) is INERT -> NOT a breakout. Replaces the naive
    strstr("<img") which false-positived whenever a raw tag survived ANYWHERE, incl. attribute-trapped. */
-static int solve_broke_html(const char *res) {
+static int solve_broke_html(const char *res, int script_exec) {
     lxb_html_document_t *doc = lxb_html_document_create();
     if (!doc) return 0;
-    struct x9_walk c = { 0 };
+    struct x9_walk c = { 0, script_exec };
     if (lxb_html_document_parse(doc, (const lxb_char_t *)res, strlen(res)) == LXB_STATUS_OK) {
         lxb_dom_node_t *root = lxb_dom_interface_node(lxb_html_document_body_element(doc));
         if (root) lxb_dom_node_simple_walk(root, x9_walk_cb, &c);
@@ -1314,10 +1314,11 @@ static int solve_broke(const char *sc, const char *res) {
         int fired = JS_ToBool(g_solve_ctx, fv); JS_FreeValue(g_solve_ctx, fv);
         return fired;
     }
-    /* html/attr: PARSE like a browser and require X9 in an EXECUTABLE position (live on* handler / <script>),
-       not merely a raw tag opener surviving somewhere (that false-positives when the payload is trapped in an
-       attribute value, e.g. `<a href="<img onerror=X9>">`). */
-    return solve_broke_html(res);
+    /* html/attr: PARSE like a browser and require X9 in an EXECUTABLE position (live on* handler, or <script>
+       ONLY on a script-executing sink), not merely a raw tag opener surviving somewhere (that false-positives
+       when the payload is trapped in an attribute value, e.g. `<a href="<img onerror=X9>">`). A parsed <script>
+       is INERT under innerHTML/outerHTML/insertAdjacentHTML — sink ctx "htmls" (document.write/srcdoc) executes it. */
+    return solve_broke_html(res, sc && strcmp(sc, "htmls") == 0);
 }
 /* enqueue an @S REPLAY flow: re-run the CURRENT orphan with `cand` as the concrete source, driven by the
    ONE scheduler (high initial value so the search runs soon; transient — never parked as a recipe). */
@@ -2848,7 +2849,7 @@ static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
     const char *n = refl_name(magic);
     if (magic == 1 || magic == 2) solve_add(ctx, "href", "url", val);   /* @S: el.href/.action = external -> javascript:/redirect */
-    else if (magic == 11) solve_add(ctx, "srcdoc", "html", val);        /* @S: iframe.srcdoc renders attacker HTML in the frame */
+    else if (magic == 11) solve_add(ctx, "srcdoc", "htmls", val);        /* @S: iframe.srcdoc renders attacker HTML in the frame */
     const char *v = JS_ToCString(ctx, val);
     if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); JS_FreeCString(ctx, v); }
     return JS_UNDEFINED;
@@ -3173,7 +3174,7 @@ static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int a
 }
 /* document.write: DOM edge (no-op; security is forced-exec, not a taint check). */
 static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    for (int i = 0; i < argc; i++) solve_add(ctx, "document.write", "html", argv[i]);   /* @S */
+    for (int i = 0; i < argc; i++) solve_add(ctx, "document.write", "htmls", argv[i]);   /* @S */
     return JS_UNDEFINED;
 }
 /* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
