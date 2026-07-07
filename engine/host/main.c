@@ -117,6 +117,11 @@ static long    g_switches = 0;          /* flow SUSPEND/re-queue events (interle
 static double  g_max_parked = -1e300;
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
+static char    *g_csp = NULL;           /* the page's <meta http-equiv=Content-Security-Policy> content (the DOM-visible
+                                           policy; header-CSP needs response-header plumbing). An @S PoC must SURVIVE it:
+                                           an inline on-handler or script vector is DEAD under a script-src without
+                                           'unsafe-inline', so a finding is POLICY-RELATIVE (sink real, CSP blocks inline). */
+static int csp_inline_blocked(const char *csp);   /* fwd: solve_all (above its definition) reports policy-relative findings */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
 static char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
@@ -1605,6 +1610,10 @@ static JSValue solve_all(JSContext *ctx) {
                     if (JS_IsObject(gfv)) JS_SetPropertyStr(ctx, rec, "gatefields", JS_DupValue(ctx, gfv));   /* sibling gate fields the delivery object must set */
                     JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
                     JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
+                    if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE: the model broke out, but the page's CSP may block THIS vector on real Chrome */
+                        JS_SetPropertyStr(ctx, rec, "csp", JS_NewString(ctx, g_csp));
+                        JS_SetPropertyStr(ctx, rec, "cspInlineBlocked", JS_NewBool(ctx, csp_inline_blocked(g_csp)));
+                    }
                     { char eb[900]; snprintf(eb, sizeof eb, "sink %s <- input %s (forced-exec: this exact input, driven through the real code, breaks out at the sink)", sink ? sink : "?", rpoc);
                       JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
                     free(rpoc);
@@ -3592,8 +3601,41 @@ static void eval_page_script(JSContext *ctx, const char *code, size_t len, const
     }
     JS_FreeValue(ctx, v);
 }
+/* Scan the parsed DOM for the FIRST <meta http-equiv="Content-Security-Policy" content="…">. The real Lexbor
+   DOM (never a regex), like the bundle-id script scan. First policy wins (multiple metas -> browser enforces
+   the intersection; the first is the overwhelmingly common case). */
+static lxb_status_t csp_scan_cb(lxb_dom_node_t *node, void *vctx) {
+    char **out = (char **)vctx;
+    if (*out) return LXB_STATUS_STOP;
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return LXB_STATUS_OK;
+    lxb_dom_element_t *el = lxb_dom_interface_element(node);
+    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
+    if (nl != 4 || !nm || memcmp(nm, "meta", 4) != 0) return LXB_STATUS_OK;
+    size_t hl = 0; const lxb_char_t *he = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"http-equiv", 10, &hl);
+    if (!he || hl != 23) return LXB_STATUS_OK;   /* strlen("content-security-policy") == 23 */
+    static const char want[] = "content-security-policy";
+    for (size_t k = 0; k < 23; k++) { char ch = (char)he[k]; if (ch >= 'A' && ch <= 'Z') ch += 32; if (ch != want[k]) return LXB_STATUS_OK; }
+    size_t cl = 0; const lxb_char_t *cv = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"content", 7, &cl);
+    if (cv && cl) *out = strndup((const char *)cv, cl);
+    return LXB_STATUS_OK;
+}
+/* Does this CSP forbid an INLINE script vector (inline <script> / on* handler / javascript: URL)? TRUE when the
+   effective script directive (script-src, else default-src) is present and lacks 'unsafe-inline'. No such
+   directive -> scripts unrestricted -> not blocked. Minimal but sound for the dominant reflected-XSS vector; an
+   @S finding whose PoC is an inline vector is then reported as CSP-constrained, not a bare XSS. */
+static int csp_inline_blocked(const char *csp) {
+    if (!csp) return 0;
+    const char *d = strstr(csp, "script-src");
+    if (!d) d = strstr(csp, "default-src");
+    if (!d) return 0;
+    const char *end = strchr(d, ';'); size_t dl = end ? (size_t)(end - d) : strlen(d);
+    for (size_t i = 0; i + 13 <= dl; i++) if (memcmp(d + i, "unsafe-inline", 13) == 0) return 0;
+    return 1;
+}
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
+    free(g_csp); g_csp = NULL;   /* fresh document: re-read its meta-CSP (the frontier key + policy are per-document) */
+    lxb_dom_node_simple_walk(lxb_dom_interface_node(g_dom), csp_scan_cb, &g_csp);
     lxb_css_parser_t *p = lxb_css_parser_create();
     if (!p || lxb_css_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_css_parser_destroy(p, true); return; }
     lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)"script", 6);
@@ -4692,6 +4734,7 @@ KEEP void qjs_teardown(void)
     free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
     for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
     free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
+    free(g_csp); g_csp = NULL;
     cons_reset(); free(g_cons); g_cons = NULL; g_cons_cap = 0;   /* free the per-flow value-domain constraint set */
     for (int i = 0; i < g_modsrc_n; i++) { free(g_modsrc[i].url); free(g_modsrc[i].src); JS_FreeValue(ctx, g_modsrc[i].ns); }
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
