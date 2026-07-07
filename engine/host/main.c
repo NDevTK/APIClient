@@ -3172,9 +3172,48 @@ static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int a
     JS_FreeValue(ctx, ctor);
     return el_wrap(ctx, el);
 }
-/* document.write: DOM edge (no-op; security is forced-exec, not a taint check). */
+/* document.write EXECUTES the script it injects — a real browser runs `document.write('<script>code</script>')`
+   as TOP-LEVEL code in GLOBAL scope, in document order. Parse the CONCRETE written HTML and run each inline
+   <script> exactly like an inline one (dom_run_scripts) — a plain top-level JS_Eval, NEVER wrapped in a function
+   (that makes top-level `var`s function-local: a wrong-scope workaround). Branches + computed URLs are then
+   explored, not merely URL-literals string-extracted. A written script that throws is caught; pathological
+   document.write-of-a-script recursion is a loud crash TODO, never a re-entrancy-guard workaround. */
+static lxb_status_t dw_script_run_cb(lxb_dom_node_t *node, void *vctx) {
+    JSContext *ctx = vctx;
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return LXB_STATUS_OK;
+    lxb_dom_element_t *el = lxb_dom_interface_element(node);
+    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
+    if (!(nl == 6 && nm && memcmp(nm, "script", 6) == 0)) return LXB_STATUS_OK;
+    size_t sl = 0;
+    if (lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl) && sl) return LXB_STATUS_OK;   /* external <script src>: @S + string-extract only for now */
+    size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
+    if (!txt || tl == 0) return LXB_STATUS_OK;
+    char *code = strndup((const char *)txt, tl);   /* null-terminate for JS_Eval */
+    if (!code) return LXB_STATUS_OK;
+    JSValue r = JS_Eval(ctx, code, tl, "<docwrite>", JS_EVAL_TYPE_GLOBAL);   /* TOP-LEVEL, global scope */
+    if (JS_IsException(r)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
+    JS_FreeValue(ctx, r);
+    free(code);
+    return LXB_STATUS_OK;
+}
+static void doc_write_run_scripts(JSContext *ctx, const char *html) {
+    lxb_html_document_t *doc = lxb_html_document_create();
+    if (!doc) return;
+    if (lxb_html_document_parse(doc, (const lxb_char_t *)html, strlen(html)) == LXB_STATUS_OK) {
+        lxb_dom_node_t *root = lxb_dom_interface_node(lxb_html_document_body_element(doc));
+        if (root) lxb_dom_node_simple_walk(root, dw_script_run_cb, ctx);
+    }
+    lxb_html_document_destroy(doc);
+}
 static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    for (int i = 0; i < argc; i++) solve_add(ctx, "document.write", "htmls", argv[i]);   /* @S */
+    for (int i = 0; i < argc; i++) {
+        solve_add(ctx, "document.write", "htmls", argv[i]);   /* @S: written HTML is attacker-influenced -> XSS check */
+        if (JS_IsString(argv[i])) {                           /* CONCRETE written HTML: run its inline scripts top-level */
+            const char *html = JS_ToCString(ctx, argv[i]);
+            if (html && strstr(html, "<script")) doc_write_run_scripts(ctx, html);
+            if (html) JS_FreeCString(ctx, html);
+        }
+    }
     return JS_UNDEFINED;
 }
 /* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
