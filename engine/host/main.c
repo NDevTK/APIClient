@@ -5,7 +5,7 @@
  *
  * Capabilities so far, each verified on the proven loop:
  *  - value-ordered (NON-FIFO) flow registry in scheduler-owned C memory; everything-a-flow (__fork).
- *  - PREEMPTION: a flow parks (await __yield) + resumes WITH STATE via quickjs-ng async-frame suspend.
+ *  - PREEMPTION: a flow suspends per-opcode (wfq_yield) + resumes WITH STATE via quickjs-ng async-frame suspend.
  *  - fetch(url) host edge -> @H (the COMPUTED endpoint), all flow code runs in the ONE loop.
  *  - ORPHAN-INVOKE: force-invoke never-executed functions (JS_CollectOrphans) -> the UNUSED endpoints.
  *  - FORCED BRANCH-ARMS (this milestone): __branch() explores BOTH arms of a gated branch by
@@ -33,16 +33,15 @@
 #endif
 
 /* ---- the ONE flow registry (scheduler-owned memory) --------------------------------
-   A flow is a STARTER (a function to force-invoke, with a decision vector for its branch choices) or
-   a RESUMER (the resolve fn of a parked flow's __yield promise). Both carry value-of-information. */
+   A flow is a STARTER (a function to force-invoke, with a decision vector for its branch choices); it may be
+   SUSPENDED mid-run (fs = live heap frame, JS_FlowResume) and re-queued. All carry value-of-information. */
 /* NO BOUNDS: the registry and the decision vector grow dynamically (until RAM/disk, the platform floor
    — the design's UNBOUNDED). No FLOW_MAX / DEC_MAX cap that would truncate distinct work the scheduler
    would otherwise reach. (Eviction of the cold/low-value tail to IDB is the further step; growth removes
    the artificial ceiling first.) */
 typedef struct {
-    JSValue handle;      /* the function (starter/suspended) or resolve fn (async __yield resume) */
+    JSValue handle;      /* the function (starter/suspended) */
     double val;          /* accumulated value-of-information (emits raise it) */
-    int is_resume;       /* async __yield resume: JS_Call the resolve fn (not sync-preemptible) */
     signed char *dec; int dec_n;  /* per-flow decision vector (branch-arm BFS) */
     void *fs;            /* live heap frame if SUSPENDED mid-run (JS_FlowResume), else NULL */
     void *cow; int cow_n, cow_cap;  /* this flow's HEAP COW DELTA, stashed while parked (unapplied); swapped in on resume */
@@ -239,7 +238,7 @@ static char *url_solve_holes(JSContext *ctx, const char *url) {
 
 typedef struct DomUndo DomUndo;                 /* per-flow DOM COW delta buffer (defined below) */
 static void dom_buf_free(DomUndo *buf, int n);
-static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, signed char *dec, int dec_n)
+static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int dec_n)
 {
     if (g_reg_n >= g_reg_cap) {
         int nc = g_reg_cap ? g_reg_cap * 2 : 256;
@@ -247,7 +246,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, int is_resume, si
         if (!nr) { fflush(stdout); fprintf(stderr, "@E {\"phase\":\"reg_oom\"}\n"); fflush(stderr); abort(); }   /* OOM is a fatal error: crash, never continue with a dropped flow */
         g_reg = nr; g_reg_cap = nc;
     }
-    g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val; g_reg[g_reg_n].is_resume = is_resume;
+    g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val;
     g_reg[g_reg_n].dec = dec; g_reg[g_reg_n].dec_n = dec_n;
     g_reg[g_reg_n].fs = NULL; g_reg[g_reg_n].saved_c = 0; g_reg[g_reg_n].cpu = 0; g_reg[g_reg_n].visits = 0;
     g_reg[g_reg_n].cow = NULL; g_reg[g_reg_n].cow_n = 0; g_reg[g_reg_n].cow_cap = 0;
@@ -275,7 +274,7 @@ static void flow_free_async_refs(JSContext *ctx, Flow *f) {
 static int reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, JSValueConst resolve, JSValueConst reject) {
     if (ctx != g_ctx) return 0;                 /* CLAIM only for the MAIN analysis ctx; the @S solve realm (g_solve_ctx)
                                                    runs async native — routing its call into the main g_reg is cross-ctx corruption */
-    reg_add(ctx, JS_DupValue(ctx, func_obj), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+    reg_add(ctx, JS_DupValue(ctx, func_obj), g_running ? g_cur_val : 1.0, NULL, 0);
     Flow *f = &g_reg[g_reg_n - 1];
     f->fs = fs;                                 /* the live async state — the flow owns + frees it (JS_FlowResume) */
     f->aresolve = JS_DupValue(ctx, resolve);
@@ -295,7 +294,7 @@ static int reaction_flow(JSContext *ctx, JSValueConst handler, JSValueConst valu
     }
     void *fs = JS_FlowNew(ctx, handler, JS_UNDEFINED, 1, (JSValueConst *)&value);
     if (!fs) return 0;                          /* non-bytecode handler (C fn / bound) -> native job */
-    reg_add(ctx, JS_DupValue(ctx, handler), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+    reg_add(ctx, JS_DupValue(ctx, handler), g_running ? g_cur_val : 1.0, NULL, 0);
     Flow *f = &g_reg[g_reg_n - 1];
     f->fs = fs;
     f->aresolve = JS_DupValue(ctx, resolve);
@@ -1401,12 +1400,12 @@ static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand, cons
     if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
         signed char *sdec = NULL;   /* inherit THIS session's decision vector so the candidate replays the SAME arms that reached the sink (an exploratory session now forks) */
         if (g_dec_n > 0) { sdec = (signed char *)malloc((size_t)g_dec_n); if (sdec) for (int i = 0; i < g_dec_n; i++) sdec[i] = g_dec[i]; }
-        if (reg_add(ctx, JS_UNDEFINED, 2.0, 0, sdec, sdec ? g_dec_n : 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
+        if (reg_add(ctx, JS_UNDEFINED, 2.0, sdec, sdec ? g_dec_n : 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
         else free(sdec);
         return;   /* a session verifies MANY sinks -> not tagged with one vtarget */
     }
     if (JS_IsUndefined(fn)) return;
-    if (reg_add(ctx, JS_DupValue(ctx, fn), 2.0, 0, NULL, 0)) {
+    if (reg_add(ctx, JS_DupValue(ctx, fn), 2.0, NULL, 0)) {
         g_reg[g_reg_n - 1].candidate = strdup(cand);
         g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;
         if (target) g_reg[g_reg_n - 1].vtarget = strdup(target);
@@ -1697,7 +1696,7 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
         sib[g_c] = 0;
         if (g_in_session) reg_add_session(ctx, sib, g_c + 1);      /* an exploratory session forks ANOTHER session (re-fire handlers with the sibling vector) */
         else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);  /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
-        else { reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, 0, sib, g_c + 1);
+        else { reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1);
                g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx; }   /* sibling = same function (same locator), different decisions */
     }
     cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE);
@@ -1729,7 +1728,7 @@ static JSValue js_crypto_getrandom(JSContext *ctx, JSValueConst this_val, int ar
 static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     if (argc >= 1 && JS_IsFunction(ctx, argv[0]))
-        reg_add(ctx, JS_DupValue(ctx, argv[0]), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+        reg_add(ctx, JS_DupValue(ctx, argv[0]), g_running ? g_cur_val : 1.0, NULL, 0);
     else if (argc >= 1 && (JS_IsString(argv[0]) || JS_IsOpaque(argv[0])))
         solve_add(ctx, "setTimeout", "js", argv[0]);   /* @S: setTimeout(STRING) EVALs the string -> js-context sink (like eval); string(candidate)+opaque(detect) both, like the other sinks */
     return JS_DupValue(ctx, g_opaque);
@@ -1745,7 +1744,7 @@ static void drive_opaque_cb(JSContext *ctx, JSValueConst cb) {
        tier (unbounded-until-disk, the intended design). A dedup keyed by function identity was a BANNED
        seen-set (§NO BOUNDS: "only emitted output — never identity — proves a flow is done") masking the
        recursion as a hang; the cooperative quantum keeps the worker responsive while it starves + parks. */
-    reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, 0, NULL, 0);
+    reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, NULL, 0);
 }
 /* localStorage/sessionStorage.getItem(k): stored data is EXTERNAL INPUT (a token/flag put there earlier or
    by another origin's code) -> OPAQUE (feeds auth headers/branches opaquely, replay-sound). set/remove/clear
@@ -3474,7 +3473,7 @@ static void boot_replay(JSContext *ctx) { g_boot_replay = 1; boot_scripts_run(ct
 /* Enqueue a BOOT FLOW: re-run boot as a FORKING starter (decision vector), so cached async replies resolve
    synchronously and their continuations' gated branches fork with the concolic example. */
 static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n) {
-    if (!reg_add(ctx, JS_UNDEFINED, 1.3, 0, dec, dec_n)) return 0;
+    if (!reg_add(ctx, JS_UNDEFINED, 1.3, dec, dec_n)) return 0;
     g_reg[g_reg_n - 1].is_boot = 1;
     return 1;
 }
@@ -3485,7 +3484,7 @@ static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n) {
    session can't (it never forks). A candidate session (verifying a breakout) stays fixed-arm; only this
    exploratory kind forks. */
 static int reg_add_session(JSContext *ctx, signed char *dec, int dec_n) {
-    if (!reg_add(ctx, JS_UNDEFINED, 1.2, 0, dec, dec_n)) return 0;
+    if (!reg_add(ctx, JS_UNDEFINED, 1.2, dec, dec_n)) return 0;
     g_reg[g_reg_n - 1].session = 1;
     return 1;
 }
@@ -3700,19 +3699,10 @@ static JSValue js_fork(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
 {
     if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_ThrowTypeError(ctx, "__fork(fn)");
     double hint = 0; if (argc > 1) JS_ToFloat64(ctx, &hint, argv[1]);
-    reg_add(ctx, JS_DupValue(ctx, argv[0]), hint, 0, NULL, 0);
+    reg_add(ctx, JS_DupValue(ctx, argv[0]), hint, NULL, 0);
     return JS_UNDEFINED;
 }
 
-/* __yield(): PARK the running flow; its resolve fn becomes a RESUMER carrying the flow's value. */
-static JSValue js_yield(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
-    if (JS_IsException(promise)) return promise;
-    reg_add(ctx, rf[0], g_cur_val, 1, NULL, 0);
-    JS_FreeValue(ctx, rf[1]);
-    return promise;
-}
 /* __isOpaque(v): CONCRETE bool (never forks), the ONE primitive the self-hosted Array.sort needs. A branch on an
    OPAQUE value forks; sort must NOT fork on the meaningless ORDER of opaque elements (O(n log n) forks explode).
    So the sort's comparators call __isOpaque to collapse an opaque compare to 0 WITHOUT an OP_if fork — the
@@ -3743,7 +3733,7 @@ static int seed_orphans(JSContext *ctx)
     for (int i = 0; i < n; i++) {
         int dup = 0;
         for (int j = 0; j < g_reg_n; j++)
-            if (!g_reg[j].is_resume && JS_VALUE_GET_PTR(g_reg[j].handle) == JS_VALUE_GET_PTR(buf[i])) { dup = 1; break; }
+            if (JS_VALUE_GET_PTR(g_reg[j].handle) == JS_VALUE_GET_PTR(buf[i])) { dup = 1; break; }
         /* also skip one already recorded in the stable buffer (queued/parked, not yet run) */
         if (!dup) for (int j = 0; j < g_orphan_n; j++)
             if (JS_VALUE_GET_PTR(g_orphan_buf[j]) == JS_VALUE_GET_PTR(buf[i])) { dup = 1; break; }
@@ -3751,7 +3741,7 @@ static int seed_orphans(JSContext *ctx)
         int idx = -1;
         if (g_orphan_n < 4096) { idx = g_orphan_n; g_orphan_buf[g_orphan_n++] = JS_DupValue(ctx, buf[i]); }  /* buffer owns a ref (stable locator) */
         if (g_resume_mode) { JS_FreeValue(ctx, buf[i]); continue; }   /* resume: build locators only; recipes are seeded explicitly */
-        reg_add(ctx, buf[i], 1.0, 0, NULL, 0);
+        reg_add(ctx, buf[i], 1.0, NULL, 0);
         g_reg[g_reg_n - 1].orphan_idx = idx;
         seeded++;
     }
@@ -3901,26 +3891,6 @@ static void scheduler_run(JSContext *ctx)
         for (int i = 0; i < g_reg_n; i++) { double w = flow_weight(&g_reg[i]); if (w > g_max_parked) g_max_parked = w; }
         g_candidate = f.candidate;   /* @S replay flow: source getters return this concrete candidate (else NULL=opaque) */
         g_in_session = f.session;    /* a session flow: sinks reached inside enqueue candidate sessions; cleared for every other flow */
-
-        if (f.is_resume) {
-            /* async __yield resume: drive the microtask to completion (a resolve fn, not sync-preemptible) */
-            g_cur_fn = JS_UNDEFINED; g_dec_n = 0; g_c = 0;
-            JS_SetFlowYieldHook(NULL);
-            JSValue u = JS_UNDEFINED;
-            JSValue r = JS_Call(ctx, f.handle, JS_UNDEFINED, 1, &u);
-            if (JS_IsException(r)) js_std_dump_error(ctx);
-            JS_FreeValue(ctx, r);
-            JSContext *c1; int jr;
-            while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
-            if (jr < 0) js_std_dump_error(c1 ? c1 : ctx);
-            JS_CowRevert(ctx);                            /* discard the resume's heap writes -> baseline */
-            { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
-            dom_revert();                                 /* discard the resume's DOM writes -> baseline */
-            { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
-            g_running = 0; g_cur_flow = NULL;
-            JS_FreeValue(ctx, f.handle); free(f.dec);
-            continue;
-        }
 
         if (f.session) {
             /* ATTACKER SESSION as a PREEMPTIBLE FLOW: __driveSession (bytecode) fires all handlers in seed
@@ -4198,7 +4168,6 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__emit", JS_NewCFunction(ctx, js_emit, "__emit", 1));
     JS_SetPropertyStr(ctx, g, "__fork", JS_NewCFunction(ctx, js_fork, "__fork", 2));
-    JS_SetPropertyStr(ctx, g, "__yield", JS_NewCFunction(ctx, js_yield, "__yield", 0));
     JS_SetPropertyStr(ctx, g, "__branch", JS_NewCFunction(ctx, js_branch, "__branch", 0));
     JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_opaque, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
     JS_SetPropertyStr(ctx, g, "__opaqueExample", JS_NewCFunction(ctx, js_opaque_example, "__opaqueExample", 1));   /* self-hosted stringify: a config opaque's concrete example (else undefined) */
@@ -4552,7 +4521,7 @@ KEEP void qjs_begin(const char *recipes)
             int found = -1;
             for (int oi = 0; oi < g_orphan_n; oi++) { if (JS_OrphanHash(ctx, g_orphan_buf[oi]) == want) { found = oi; break; } }
             if (found >= 0) {
-                reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), rval, 0, dec, dec_n);   /* resume with the PRIOR accumulated value, not a flat 1.0 */
+                reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), rval, dec, dec_n);   /* resume with the PRIOR accumulated value, not a flat 1.0 */
                 g_reg[g_reg_n - 1].orphan_idx = found; g_reg[g_reg_n - 1].visits = rvis;   /* restore visits so UCB reflects prior exploration */
                 resumed++;
             } else free(dec);
@@ -4570,7 +4539,7 @@ KEEP void qjs_begin(const char *recipes)
        click) is fired over that delta with its producer's context. The old >=2 gate was a BOUND that truncated
        nested-handler discovery on a single-component page; the WFQ starves a session with no real cross-flow
        state, so >=1 costs ~nothing when unproductive. */
-    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) { reg_add(ctx, JS_UNDEFINED, 1.2, 0, NULL, 0); g_reg[g_reg_n - 1].session = 1; }
+    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) { reg_add(ctx, JS_UNDEFINED, 1.2, NULL, 0); g_reg[g_reg_n - 1].session = 1; }
     /* BOOT AS THE FIRST FLOW: enqueue a FORKING re-run of boot so its TOP-LEVEL opaque gates are EXPLORED. The
        initial boot (dom_run_scripts) ran MONOLITHICALLY before the scheduler (g_running=0 -> branch_decide took
        the false arm on every opaque gate), so a page whose auth-gated surface sits behind a boot-level
