@@ -26,6 +26,13 @@ JSValue js_storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
         const char *k = JS_ToCString(ctx, argv[0]);
         if (k) {
             JSValue v = JS_GetPropertyStr(ctx, g_storage, k); JS_FreeCString(ctx, k);
+            /* @S CANDIDATE flow reading a TAINTED key: web storage is attacker-tamperable across tabs/sessions,
+               so a value the app round-tripped from an attacker source is itself an attacker-delivered value.
+               DELIVER THE CANDIDATE here (exactly like a source getter), so a STORED/second-order sink
+               (handler A plants localStorage, handler B reads+sinks) breaks out WITHOUT needing to re-run the
+               planter — the sink handler alone reads the candidate. Only tainted keys (stored opaque): a
+               concrete app value is not made attacker-controlled. */
+            { extern char *g_candidate; if (g_candidate && JS_IsOpaque(v)) { JS_FreeValue(ctx, v); return JS_NewString(ctx, g_candidate); } }
             if (JS_IsOpaque(v)) return v;                                  /* stored an opaque (e.g. setItem of location.hash): round-trip its taint */
             if (!JS_IsUndefined(v) && !JS_IsNull(v)) {                     /* stored a concrete value: opaque-for-control-flow carrying it as the example */
                 JSValue o = JS_NewOpaqueSourced(ctx, "{ls}", "ls");
