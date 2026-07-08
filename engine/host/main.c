@@ -3472,7 +3472,12 @@ static lxb_status_t dw_script_run_cb(lxb_dom_node_t *node, void *vctx) {
     size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
     if (!(nl == 6 && nm && memcmp(nm, "script", 6) == 0)) return LXB_STATUS_OK;
     size_t sl = 0;
-    if (lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl) && sl) return LXB_STATUS_OK;   /* external <script src>: @S + string-extract only for now */
+    const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
+    if (src && sl) {   /* external <script src>: a chunk LOAD (document.write('<script src=...>')) — fetch + run it, not just string-extract */
+        char *u = strndup((const char *)src, sl);
+        if (u) { arr_push_str(ctx, g_chunkurls, u); if (!has_hole(u)) chunk_pending_add(u); free(u); }
+        return LXB_STATUS_OK;
+    }
     size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
     if (!txt || tl == 0) return LXB_STATUS_OK;
     char *code = strndup((const char *)txt, tl);   /* null-terminate for JS_Eval */
@@ -3487,7 +3492,9 @@ static void doc_write_run_scripts(JSContext *ctx, const char *html) {
     lxb_html_document_t *doc = lxb_html_document_create();
     if (!doc) return;
     if (lxb_html_document_parse(doc, (const lxb_char_t *)html, strlen(html)) == LXB_STATUS_OK) {
-        lxb_dom_node_t *root = lxb_dom_interface_node(lxb_html_document_body_element(doc));
+        /* Walk the WHOLE document, not just <body>: a bare `<script src>` (the common document.write form)
+           parses into <head>, so a body-only walk never reached it — the external-script load silently no-op'd. */
+        lxb_dom_node_t *root = lxb_dom_interface_node(doc);
         if (root) lxb_dom_node_simple_walk(root, dw_script_run_cb, ctx);
     }
     lxb_html_document_destroy(doc);
@@ -3495,11 +3502,18 @@ static void doc_write_run_scripts(JSContext *ctx, const char *html) {
 static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     for (int i = 0; i < argc; i++) {
         solve_add(ctx, "document.write", "htmls", argv[i]);   /* @S: written HTML is attacker-influenced -> XSS check */
-        if (JS_IsString(argv[i])) {                           /* CONCRETE written HTML: run its inline scripts top-level */
-            const char *html = JS_ToCString(ctx, argv[i]);
+        /* CONCRETE or CONCOLIC written HTML: run its inline scripts + load its <script src> chunks. A concolic
+           value (a reply/computed HTML like '<script src="'+cfg.url+'">') is an opaque OBJECT, not a JS string,
+           so JS_IsString alone skipped it — dropping the real example. Prefer the concolic example (concrete
+           src), exactly like fetch/import/script.src. */
+        JSValue ex = JS_IsString(argv[i]) ? JS_UNDEFINED : JS_OpaqueExample(ctx, argv[i]);
+        JSValueConst hv = !JS_IsUndefined(ex) ? ex : argv[i];
+        if (JS_IsString(hv)) {
+            const char *html = JS_ToCString(ctx, hv);
             if (html && strstr(html, "<script")) doc_write_run_scripts(ctx, html);
             if (html) JS_FreeCString(ctx, html);
         }
+        JS_FreeValue(ctx, ex);
     }
     return JS_UNDEFINED;
 }
