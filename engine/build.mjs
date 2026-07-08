@@ -58,7 +58,7 @@ if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt;
 
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c"]
   .map((f) => join(QJS, f))
-  .concat([join(HOST, "main.c"), join(HOST, "solve_html.c"), join(HOST, "csp.c"), join(HOST, "dom_select.c"), join(HOST, "dom_cow.c"), join(HOST, "storage.c"), join(HOST, "url.c"), join(HOST, "opaque.c"), join(HOST, "reply.c"), join(HOST, "xhr.c"), join(HOST, "fetch.c")]);
+  .concat([join(HOST, "main.c"), join(HOST, "solve_html.c"), join(HOST, "csp.c"), join(HOST, "dom_select.c"), join(HOST, "dom_cow.c"), join(HOST, "storage.c"), join(HOST, "url.c"), join(HOST, "opaque.c"), join(HOST, "reply.c"), join(HOST, "xhr.c"), join(HOST, "fetch.c"), join(HOST, "endpoint.c")]);
 
 const args = [
   ...sources,

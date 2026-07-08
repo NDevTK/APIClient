@@ -33,6 +33,7 @@
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
 #include "xhr.h"          /* XMLHttpRequest emulation -> the @H recorder, its own TU */
 #include "fetch.h"        /* the fetch() host edge -> the @H recorder, its own TU */
+#include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #define KEEP EMSCRIPTEN_KEEPALIVE   /* export qjs_init/step/teardown for the persistent-instance protocol */
@@ -91,8 +92,14 @@ static int     g_reg_n = 0, g_reg_cap = 0;
 static int     g_running = 0;
 static double  g_cur_val = 0;
 static Flow   *g_cur_flow = NULL;   /* running flow (a stable local copy; its weight is read by the yield hook) */
-static int     g_emit_total = 0;
+int            g_emit_total = 0;    /* non-static: the emit counter (endpoint.c bumps it on a recorded @H) */
 static JSRuntime *g_rt = NULL;
+/* Raise the running flow's emitted VALUE (the WFQ progress signal) by one emit. Encapsulates the g_cur_flow
+   write so host-edge components (endpoint.c) can signal an emit WITHOUT the Flow struct — the scheduler owns
+   the flow record; they just say "I emitted". */
+void flow_emit_value(void) {
+    if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
+}
 /* Cross-session frontier (park/resume by REPLAY): deterministic orphan collection gives each function a
    stable index; a parked flow's recipe = (orphan_idx, decision-vector). Parking is RAM-PRESSURE-driven
    (g_park_requested, host-set), never a dispatch/step count — with headroom the page runs to completion. */
@@ -130,7 +137,7 @@ static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 /* CSP (g_csp/g_header_csp + csp_lacks/csp_derive/csp_set_header/csp_free) lives in csp.c — included below. */
 /* g_opaque + js_noop/js_opaque/js_opaque_stub + opaque_init/free live in opaque.c (included via opaque.h). */
-static char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
+char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
 /* has_hole (opaque-hole URL test) is in url.c (included via url.h). */
 
@@ -398,7 +405,7 @@ static JSContext *g_ctx;   /* the run's context (defined = NULL below); fwd-decl
    set. Identity is the ENGINE's, not the host's (the JS mergeCallsites/dedupShapeConcrete were DELETED).
    The dedup runs on the engine's OWN quickjs (g_dedup_fn) — proven logic, executed in-engine, never a
    host context-switch. */
-static JSValue g_endpoints = JS_UNDEFINED;   /* JS array of {method,url,params,headers,body} */
+/* g_endpoints (the @H array) is in endpoint.c — extern via endpoint.h; main.c's finalize reads it. */
 static JSValue g_dedup_fn = JS_UNDEFINED;    /* (eps) => deduped array, evaluated once at init */
 static const char *DEDUP_JS =
 "(function(eps){"
@@ -742,19 +749,7 @@ JSValue js_resolved(JSContext *ctx, JSValue val)
 /* make_response + the Response json()/text()/body accessors + reply-body concolic-wrap are in reply.c. */
 /* URL query-parameter extraction (hexval + url_pct_decode + build_query_params) is in url.c (pure). */
 JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* fwd (non-static: xhr.c borrows it) */
-/* The shared @H sink: record one endpoint (consumes `ep`) + raise the running flow's value. A CANDIDATE flow
-   carries a concrete @S breakout PAYLOAD, so its request URLs are @S artifacts, NOT real @H — only OPAQUE
-   flows emit. fetch AND XMLHttpRequest funnel through here so XHR-based apps are learned like fetch ones. */
-void record_endpoint(JSContext *ctx, JSValue ep) {
-    if (JS_IsArray(g_endpoints) && !g_candidate) {
-        uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_endpoints, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
-        JS_SetPropertyUint32(ctx, g_endpoints, n, ep);   /* consumes ep */
-        g_emit_total++;
-    } else {
-        JS_FreeValue(ctx, ep);
-    }
-    if (g_running) { g_cur_val += 1.0; if (g_cur_flow) { g_cur_flow->val = g_cur_val; g_cur_flow->cpu = 0; } }
-}
+/* record_endpoint + g_endpoints (the shared @H sink) are in endpoint.c (included via endpoint.h). */
 /* XMLHttpRequest — a PRIMARY request mechanism (many apps use it over fetch). Missing, `new XMLHttpRequest()`
    threw and lost every XHR endpoint. open() stashes method+url; send() emits the endpoint through the shared
    sink (concolic-example URL + query params + body), like fetch. Response fields are opaque (external input). */
@@ -3648,7 +3643,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_OptaintReset(ctx);   /* clear cross-flow opaque-taint set from any prior page analysis */
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
-    g_endpoints = JS_NewArray(ctx); g_chunkurls = JS_NewArray(ctx);
+    endpoint_init(ctx); g_chunkurls = JS_NewArray(ctx);
     g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
     g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
@@ -4257,7 +4252,7 @@ KEEP void qjs_teardown(void)
     opaque_free(ctx);
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     storage_free(ctx);
-    JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
+    endpoint_free(ctx);
     JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
     JS_FreeValue(ctx, g_solvetasks); g_solvetasks = JS_UNDEFINED;

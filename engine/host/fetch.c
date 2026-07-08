@@ -3,12 +3,12 @@
 #include "fetch.h"
 #include "reply.h"   /* make_response */
 #include "url.h"     /* build_query_params */
+#include "endpoint.h"   /* record_endpoint */
 
 /* Borrowed from main.c (the @H recording side): the URL hole-solver, request-header capture, the shared
    endpoint sink, and the resolved-promise helper. */
 extern char *url_solve_holes(JSContext *ctx, const char *url);
 extern void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs);
-extern void record_endpoint(JSContext *ctx, JSValue ep);
 extern JSValue js_resolved(JSContext *ctx, JSValue val);
 
 JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
