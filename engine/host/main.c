@@ -1184,7 +1184,7 @@ static void construct_ctx_breakout(JSContext *ctx, const char *shape, JSValueCon
      the real branches) -> record it under "sink|ctx".
    - NORMAL flow (opaque val): record the finalize task (pre-filter/proven-safe display) AND enqueue
      candidate-replay flows once per (orphan,sink,ctx) into the ONE scheduler. */
-static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst val) {
+void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst val) {
     if (g_candidate) {
         /* @S SOUNDNESS: if this path force-passed an EXACT origin gate (`e.origin === 'https://trusted'`), the
            attacker CANNOT forge that origin, so the sink is unreachable cross-origin -> the candidate would be a
@@ -3473,6 +3473,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JSContext *ctx = JS_NewContext(rt);
     if (!ctx) { fprintf(stderr, "@E {\"phase\":\"newcontext\"}\n"); JS_FreeRuntime(rt); return 1; }
     g_ctx = ctx;
+    dom_cow_set_ctx(ctx);   /* the DOM delta needs a ctx to dup/free the per-flow attr TAINT shadow it now carries */
     /* Reset all scheduler/frontier state so ONE wasm instance can serve many page analyses (init/run/
        teardown reused) with no cross-page bleed. The arrays themselves are reused (not re-malloc'd). */
     g_reg_n = 0; g_work = 0; g_switches = 0; g_yield_floor = -1e300; g_made_progress = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL; g_msg_handler_n = 0;

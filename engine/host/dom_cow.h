@@ -10,10 +10,16 @@
 #define ENGINE_HOST_DOM_COW_H
 
 #include <lexbor/html/html.h>
+#include "quickjs.h"
 
 /* Capture gate: while non-zero, DOM mutations are recorded into the running flow's delta. The scheduler sets
    it (0 pre-baseline / during a shared chunk eval, 1 once the per-flow baseline is fixed). */
 extern int g_dom_capture;
+
+/* The DOM delta also carries each captured attribute's TAINT SHADOW (attr_shadow) so a source stashed in a DOM
+   attribute is isolated per flow EXACTLY like the attribute's value — set once at init so the swap logic can
+   dup/free the shadow's opaque JSValues without threading a context through every host-edge/scheduler call. */
+void dom_cow_set_ctx(JSContext *ctx);
 
 /* Host-edge hooks — record a mutation BEFORE it happens so it can be reverted. */
 void dom_attr_capture(lxb_dom_element_t *el, const char *name);   /* pre-write attribute baseline */
