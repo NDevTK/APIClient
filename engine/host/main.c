@@ -1947,6 +1947,11 @@ static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int arg
     const char *name = JS_ToCString(ctx, argv[0]);
     if (!name) return JS_UNDEFINED;
     int is_opq = JS_IsOpaque(argv[1]);
+    /* Capture the TRUE pre-write baseline (attr value AND taint shadow) into the per-flow COW delta BEFORE
+       mutating either — else dom_attr_capture snapshots this flow's OWN shadow write as the baseline, so a
+       context-switch's unapply can't restore the real (empty) baseline and the stashed taint is lost the
+       instant a switch lands between setAttribute and a later getAttribute (the DOM-stash round-trip bug). */
+    dom_attr_capture(el, name);
     /* baseline/opaque flow storing OPAQUE external input -> record the taint in the shadow (concrete value ->
        clear any stale taint). A candidate flow (concrete source) writes only the real attr, not the shadow. */
     if (!g_candidate) attr_shadow_set(ctx, el, name, is_opq ? argv[1] : JS_UNDEFINED);
@@ -1956,9 +1961,17 @@ static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int arg
     if (name[0] == 'o' && name[1] == 'n') solve_add(ctx, "setAttribute", "js", argv[1]);
     else if (!strcmp(name, "href") || !strcmp(name, "src") || !strcmp(name, "action") || !strcmp(name, "formaction"))
         solve_add(ctx, "setAttribute", "url", argv[1]);
-    const char *val = is_opq ? JS_OpaqueShapeC(argv[1]) : JS_ToCString(ctx, argv[1]);   /* opaque -> its @H shape (display); else the concrete string */
-    if (val) { dom_attr_capture(el, name); lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val)); }
-    if (val && !is_opq) JS_FreeCString(ctx, val);   /* JS_OpaqueShapeC returns an internal pointer — don't free */
+    /* CONCOLIC EXAMPLE to Lexbor: a candidate flow's concrete payload (or a computed/reply value) must round-trip
+       through getAttribute, which — in a candidate flow — bypasses the taint shadow and reads the REAL Lexbor
+       attr. Writing only the display shape degraded a DOM-stashed candidate to its shape, so it never broke out
+       at the downstream sink (the cross-handler / stash-and-read @S round-trip). Prefer the example; fall back to
+       the shape for a pure symbol (attacker input with no example). */
+    JSValue exv = is_opq ? JS_OpaqueExample(ctx, argv[1]) : JS_UNDEFINED;
+    int ex_str = is_opq && !JS_IsUndefined(exv);
+    const char *val = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_OpaqueShapeC(argv[1]) : JS_ToCString(ctx, argv[1]));
+    if (val) lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val));   /* baseline captured above (before the shadow write) */
+    if (val && (ex_str || !is_opq)) JS_FreeCString(ctx, val);   /* ToString'd (example/concrete) frees; JS_OpaqueShapeC internal pointer does not */
+    JS_FreeValue(ctx, exv);
     JS_FreeCString(ctx, name);
     return JS_UNDEFINED;
 }
@@ -2053,10 +2066,14 @@ static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueCons
        holey shape written into Lexbor: getAttribute would not round-trip the taint, and script_maybe_load
        could not chunk-load a reply-driven <script src> by its example. The Lexbor attr stores the display
        shape; the shadow carries the concolic (taint + example). */
+    dom_attr_capture(el, n);   /* capture pre-write baseline (attr + taint shadow) BEFORE mutating either — see js_el_setAttribute */
     if (!g_candidate) attr_shadow_set(ctx, el, n, is_opq ? val : JS_UNDEFINED);
-    const char *v = is_opq ? JS_OpaqueShapeC(val) : JS_ToCString(ctx, val);
-    if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); }
-    if (v && !is_opq) JS_FreeCString(ctx, v);   /* JS_OpaqueShapeC returns an internal pointer — don't free */
+    JSValue exv = is_opq ? JS_OpaqueExample(ctx, val) : JS_UNDEFINED;   /* write the concolic EXAMPLE to Lexbor so it round-trips through getAttribute (see js_el_setAttribute) */
+    int ex_str = is_opq && !JS_IsUndefined(exv);
+    const char *v = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_OpaqueShapeC(val) : JS_ToCString(ctx, val));
+    if (v) lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v));
+    if (v && (ex_str || !is_opq)) JS_FreeCString(ctx, v);   /* ToString'd frees; JS_OpaqueShapeC internal pointer does not */
+    JS_FreeValue(ctx, exv);
     return JS_UNDEFINED;
 }
 /* Common element APIs that real bundles call constantly — MISSING ones throw and kill the script (like
