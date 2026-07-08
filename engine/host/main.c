@@ -27,6 +27,7 @@
 #include "csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
 #include "dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
 #include "dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
+#include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #define KEEP EMSCRIPTEN_KEEPALIVE   /* export qjs_init/step/teardown for the persistent-instance protocol */
@@ -123,7 +124,7 @@ static double  g_max_parked = -1e300;
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 /* CSP (g_csp/g_header_csp + csp_lacks/csp_derive/csp_set_header/csp_free) lives in csp.c — included below. */
-static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
+JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide (non-static: shared with the split component TUs, e.g. storage.c) */
 static char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
 /* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
@@ -395,11 +396,7 @@ static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueCons
    return the CONCRETE server reply -> a reply field flowing into a downstream request param becomes a
    REAL example value instead of {}. Absent url -> opaque (the honest shape). */
 static JSValue g_reply_table = JS_UNDEFINED;
-static JSValue g_storage = JS_UNDEFINED;   /* key -> value the bundle setItem'd THIS run. getItem returns it as the
-                                              @H EXAMPLE while staying opaque-for-control-flow (web storage is
-                                              attacker-tamperable across sessions/tabs, so a gate on it still FORKS
-                                              and @S taint holds) — recovers values the bundle round-trips through
-                                              localStorage/sessionStorage instead of degrading them to a {} shape. */
+/* g_storage + js_storage_get/set + storage_free live in storage.c (localStorage/sessionStorage concolic). */
 static JSContext *g_ctx;   /* the run's context (defined = NULL below); fwd-declared for Lexbor callbacks */
 /* ENDPOINT REGISTRY + IDENTITY: the engine ACCUMULATES every learned endpoint (method/url/params/
    headers/body) as a JS object here, and at finalize DEDUPS them (exact by method+hole-normalized url,
@@ -1488,6 +1485,7 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
         if (cv && solve_broke(sctx, cv) && JS_IsObject(g_verified)) {
             char key[300]; snprintf(key, sizeof key, "%s|%s", sink, sctx);
             JS_SetPropertyStr(ctx, g_verified, key, JS_NewString(ctx, g_candidate));
+            printf("@DBG broke [%s]\n", sink); fflush(stdout);
         }
         if (cv) JS_FreeCString(ctx, cv);
         return;
@@ -1719,37 +1717,6 @@ static void drive_opaque_cb(JSContext *ctx, JSValueConst cb) {
        seen-set (§NO BOUNDS: "only emitted output — never identity — proves a flow is done") masking the
        recursion as a hang; the cooperative quantum keeps the worker responsive while it starves + parks. */
     reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, NULL, 0);
-}
-/* localStorage/sessionStorage.setItem(k,v): record v keyed by k so a later getItem(k) recovers it as the @H
-   example. NOT a discovery driver itself, but the value it stores is (a URL/id round-tripped through storage). */
-static JSValue js_storage_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 2) {
-        if (!JS_IsObject(g_storage)) { JS_FreeValue(ctx, g_storage); g_storage = JS_NewObject(ctx); }
-        const char *k = JS_ToCString(ctx, argv[0]);
-        if (k) { JS_SetPropertyStr(ctx, g_storage, k, JS_DupValue(ctx, argv[1])); JS_FreeCString(ctx, k); }
-    }
-    return JS_UNDEFINED;
-}
-/* localStorage/sessionStorage.getItem(k): stored data is EXTERNAL INPUT (attacker-tamperable across sessions/
-   tabs) -> OPAQUE for control-flow (feeds auth headers/branches opaquely, forks gates, @S taint, replay-sound).
-   BUT if the bundle setItem'd k THIS run, carry that value as the concrete @H EXAMPLE (concolic, like a config/
-   reply): opaque for forking, real value for the endpoint key. Not set this run -> bare opaque. */
-static JSValue js_storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    if (argc >= 1 && JS_IsObject(g_storage)) {
-        const char *k = JS_ToCString(ctx, argv[0]);
-        if (k) {
-            JSValue v = JS_GetPropertyStr(ctx, g_storage, k); JS_FreeCString(ctx, k);
-            if (JS_IsOpaque(v)) return v;                                  /* stored an opaque (e.g. setItem of location.hash): round-trip its taint */
-            if (!JS_IsUndefined(v) && !JS_IsNull(v)) {                     /* stored a concrete value: opaque-for-control-flow carrying it as the example */
-                JSValue o = JS_NewOpaqueSourced(ctx, "{ls}", "ls");
-                if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, v); return o; }   /* consumes v */
-                JS_FreeValue(ctx, o); return v;
-            }
-            JS_FreeValue(ctx, v);
-        }
-    }
-    return JS_DupValue(ctx, g_opaque);
 }
 /* structuredClone(x): deep-clone is identity for forced-exec purposes (shape/opacity carry through). */
 static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -4579,7 +4546,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_ce_instances); g_ce_instances = JS_UNDEFINED;   /* retained upgraded instances */
     JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_storage); g_storage = JS_UNDEFINED;
+    storage_free(ctx);
     JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
     JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
