@@ -69,7 +69,9 @@ typedef struct {
                                 scheduler polls its state + resumes (JS_FlowResumeInject) once it settles. UNDEFINED = runnable. */
     JSValue rthis; JSValue *rargs; int rargc;   /* async-call RE-RUN RECIPE (func = handle) captured pristine at claim, so a
                                                    reject-replay sibling can JS_FlowNew the same call from scratch. */
-    int reject_target;       /* reject-replay sibling: the await index this flow must force to REJECT (-1 = primary/normal, fulfils all). */
+    signed char *rejvec; int rejvec_n;   /* reject-replay decision vector: rejvec[ix]==1 forces await #ix to reject. NULL/0 =
+                                            primary (fulfils all, forks a sibling per await). Unbounded: a sibling's catch-arm awaits
+                                            are NEW territory (ix>=rejvec_n) so they fork too -> nested try/catch reject arms reached. */
 } Flow;
 static JSContext *g_ctx;       /* fwd: the MAIN analysis context (defined near the persistent-instance protocol) — the
                                   async/reaction hooks claim a call as a flow ONLY for this ctx, never the @S solve realm */
@@ -255,7 +257,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec,
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
     g_reg[g_reg_n].is_boot = 0;
     g_reg[g_reg_n].aresolve = JS_UNDEFINED; g_reg[g_reg_n].areject = JS_UNDEFINED; g_reg[g_reg_n].await_promise = JS_UNDEFINED;
-    g_reg[g_reg_n].rthis = JS_UNDEFINED; g_reg[g_reg_n].rargs = NULL; g_reg[g_reg_n].rargc = 0; g_reg[g_reg_n].reject_target = -1;
+    g_reg[g_reg_n].rthis = JS_UNDEFINED; g_reg[g_reg_n].rargs = NULL; g_reg[g_reg_n].rargc = 0; g_reg[g_reg_n].rejvec = NULL; g_reg[g_reg_n].rejvec_n = 0;
     g_reg_n++;
     { double w = 1.5 + val; if (w > g_max_parked) g_max_parked = w; }   /* fresh flow: visits=0,cpu=0 -> weight=1.5+val (keeps g_max_parked current for wfq_yield) */
     return 1;
@@ -268,6 +270,7 @@ static void flow_free_async_refs(JSContext *ctx, Flow *f) {
     JS_FreeValue(ctx, f->await_promise); f->await_promise = JS_UNDEFINED;
     JS_FreeValue(ctx, f->rthis); f->rthis = JS_UNDEFINED;
     if (f->rargs) { for (int i = 0; i < f->rargc; i++) JS_FreeValue(ctx, f->rargs[i]); free(f->rargs); f->rargs = NULL; f->rargc = 0; }
+    free(f->rejvec); f->rejvec = NULL; f->rejvec_n = 0;
 }
 /* JSAsyncCallHook target: the bundle CALLED a native async function. `fs` is its pre-created live
    JSAsyncFunctionState (real args captured); `resolve` is the result-promise's resolve fn (settled on
@@ -301,12 +304,25 @@ static int reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, J
 static void await_decide(JSContext *ctx, int await_ix) {
     if (ctx != g_ctx || !g_cur_flow) return;
     if (JS_IsUndefined(g_cur_flow->handle) || JS_IsException(g_cur_flow->handle)) return;   /* only recipe-carrying async-call flows */
-    void *sfs = JS_FlowNew(ctx, g_cur_flow->handle, g_cur_flow->rthis, g_cur_flow->rargc, (JSValueConst *)g_cur_flow->rargs);
-    if (!sfs) return;                            /* non-bytecode / alloc fail: no sibling (the fulfil arm still explored) */
-    Flow *pf = g_cur_flow;                       /* stable (stack copy); reg_add may realloc g_reg */
+    Flow *pf = g_cur_flow;                        /* stable (stack copy); reg_add may realloc g_reg */
+    void *sfs = JS_FlowNew(ctx, pf->handle, pf->rthis, pf->rargc, (JSValueConst *)pf->rargs);
+    if (!sfs) return;                             /* non-bytecode / alloc fail: no sibling (the fulfil arm still explored) */
+    /* sibling reject vector = this flow's recorded rejects (replayed) + a NEW reject at await_ix. So a sibling
+       that entered a catch (rejected an earlier await) forks FURTHER siblings for the catch's own awaits. */
+    int n = await_ix + 1;
+    signed char *rv = (signed char *)malloc((size_t)n);
+    if (!rv) { JS_FlowFree(g_rt, sfs); return; }
+    for (int i = 0; i < n; i++) rv[i] = (i < pf->rejvec_n && pf->rejvec) ? pf->rejvec[i] : 0;
+    rv[await_ix] = 1;
     reg_add(ctx, JS_DupValue(ctx, pf->handle), g_cur_val, NULL, 0);
     Flow *sib = &g_reg[g_reg_n - 1];
-    sib->fs = sfs; sib->reject_target = await_ix;
+    sib->fs = sfs; sib->rejvec = rv; sib->rejvec_n = n;
+    /* carry the recipe so the sibling can spawn its OWN nested reject-siblings */
+    sib->rthis = JS_DupValue(ctx, pf->rthis);
+    if (pf->rargc > 0 && pf->rargs) {
+        sib->rargs = (JSValue *)malloc((size_t)pf->rargc * sizeof(JSValue));
+        if (sib->rargs) { sib->rargc = pf->rargc; for (int i = 0; i < pf->rargc; i++) sib->rargs[i] = JS_DupValue(ctx, pf->rargs[i]); }
+    }
 }
 /* JSReactionHook target: a settled promise's REACTION (.then/.catch/.finally handler). Run handler(value) as a
    preemptible/parkable flow and SETTLE the chained promise on completion (resolve with the return value / reject
@@ -4065,7 +4081,7 @@ static void scheduler_run(JSContext *ctx)
            candidate boot-undo lives in the flow delta (JS_CowSeedBootInverse), so a suspend's JS_CowUnapply
            restores the post-boot baseline — no host-side bracket to straddle. */
         JS_SetFlowYieldHook(wfq_yield);
-        JS_SetFlowRejectTarget(f.reject_target);   /* -1 for a normal flow (fulfils all awaits + forks reject-siblings); >=0 for a reject-replay sibling (forces that await to reject) */
+        JS_SetFlowRejectVec(f.rejvec, f.rejvec_n);   /* NULL/0 = normal flow (fulfils all awaits + forks reject-siblings); a reject-replay sibling forces its recorded awaits to reject */
         JSValue out = JS_UNDEFINED;
         int st;
         if (!JS_IsUndefined(f.await_promise)) {
@@ -4080,7 +4096,7 @@ static void scheduler_run(JSContext *ctx)
         } else {
             st = JS_FlowResume(ctx, f.fs, &out);
         }
-        JS_SetFlowRejectTarget(-1);
+        JS_SetFlowRejectVec(NULL, 0);
         JS_SetFlowYieldHook(NULL);
         JSContext *c1; int jr;
         while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
