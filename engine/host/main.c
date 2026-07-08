@@ -3096,9 +3096,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
             "{has:function(){return true},get:function(t,k){return k==='X9'?globalThis.X9:globalThis.__u}});";
         JSValue xr = JS_Eval(g_solve_ctx, x9, strlen(x9), "<x9>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, xr); }   /* fire-tracker + universal stub for the handler-firing verify */
     g_dedup_fn = JS_Eval(ctx, DEDUP_JS, strlen(DEDUP_JS), "<dedup>", JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(g_dedup_fn)) { js_std_dump_error(ctx); g_dedup_fn = JS_UNDEFINED; }
+    if (JS_IsException(g_dedup_fn)) { js_std_dump_error(ctx); DFAIL("dedup fn failed to compile — engine self-host bug"); g_dedup_fn = JS_UNDEFINED; }
     { JSValue pv = JS_Eval(ctx, ARRAY_PRELUDE_JS, strlen(ARRAY_PRELUDE_JS), "<array-prelude>", JS_EVAL_TYPE_GLOBAL);
-      if (JS_IsException(pv)) { fprintf(stderr, "@E {\"phase\":\"array-prelude\"}\n"); js_std_dump_error(ctx); }
+      if (JS_IsException(pv)) { js_std_dump_error(ctx); DFAIL("array prelude failed to compile — engine self-host bug"); }
       JS_FreeValue(ctx, pv); }
     JS_SetBuiltinCompile(ctx, 0);   /* page bundles are NOT builtins: their unused functions stay orphans (the moat) */
     js_std_add_helpers(ctx, 0, NULL);
@@ -3168,7 +3168,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        Element JS class. The page's own structure/config is CONCRETE; document.* reads it. */
     {
         if (dom_init(html, html ? strlen(html) : 0) != 0)
-            fprintf(stderr, "@E {\"phase\":\"dom_init\"}\n");
+            DFAIL("dom_init failed — Lexbor parses any HTML, so a failure is an engine/resource bug, not a page");
         JS_NewClassID(rt, &g_el_class_id);
         JSClassDef el_def = { "Element" };   /* lexbor owns the nodes; no JS finalizer */
         JS_NewClass(rt, g_el_class_id, &el_def);
