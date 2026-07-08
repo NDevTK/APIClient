@@ -1485,7 +1485,6 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
         if (cv && solve_broke(sctx, cv) && JS_IsObject(g_verified)) {
             char key[300]; snprintf(key, sizeof key, "%s|%s", sink, sctx);
             JS_SetPropertyStr(ctx, g_verified, key, JS_NewString(ctx, g_candidate));
-            printf("@DBG broke [%s]\n", sink); fflush(stdout);
         }
         if (cv) JS_FreeCString(ctx, cv);
         return;
