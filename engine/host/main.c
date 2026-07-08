@@ -28,6 +28,7 @@
 #include "csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
 #include "dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
 #include "dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
+#include "attr_shadow.h"  /* DOM attribute taint side-map ((el,name)->opaque), its own TU */
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
@@ -2155,24 +2156,7 @@ static JSValue js_doc_createrange(JSContext *ctx, JSValueConst this_val, int arg
    OPAQUE/exploration flow reading the attr gets the opaque back (taint preserved, the sink is detected),
    while a CANDIDATE flow reads the REAL concrete attr so the payload flows through the real DOM. Populated at
    boot (baseline); candidate flows never write it (they set the real attr, isolated by the DOM COW delta). */
-typedef struct { lxb_dom_element_t *el; char *name; JSValue opaque; } AttrShadow;
-static AttrShadow *g_attr_shadow = NULL; static int g_attr_shadow_n = 0, g_attr_shadow_cap = 0;
-static int attr_shadow_find(lxb_dom_element_t *el, const char *name) {
-    for (int i = 0; i < g_attr_shadow_n; i++) if (g_attr_shadow[i].el == el && strcmp(g_attr_shadow[i].name, name) == 0) return i;
-    return -1;
-}
-static void attr_shadow_set(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst opaque) {
-    int i = attr_shadow_find(el, name);
-    if (JS_IsUndefined(opaque)) {   /* concrete overwrite -> clear any stale taint */
-        if (i >= 0) { JS_FreeValue(ctx, g_attr_shadow[i].opaque); free(g_attr_shadow[i].name); g_attr_shadow[i] = g_attr_shadow[--g_attr_shadow_n]; }
-        return;
-    }
-    if (i >= 0) { JS_FreeValue(ctx, g_attr_shadow[i].opaque); g_attr_shadow[i].opaque = JS_DupValue(ctx, opaque); return; }
-    if (g_attr_shadow_n >= g_attr_shadow_cap) { int nc = g_attr_shadow_cap ? g_attr_shadow_cap * 2 : 16;
-        AttrShadow *n = realloc(g_attr_shadow, (size_t)nc * sizeof(AttrShadow)); if (!n) return; g_attr_shadow = n; g_attr_shadow_cap = nc; }
-    g_attr_shadow[g_attr_shadow_n].el = el; g_attr_shadow[g_attr_shadow_n].name = strdup(name);
-    g_attr_shadow[g_attr_shadow_n].opaque = JS_DupValue(ctx, opaque); g_attr_shadow_n++;
-}
+/* AttrShadow (the DOM attribute taint side-map) is in attr_shadow.c — accessed via attr_shadow_find/set/opaque. */
 static JSValue js_el_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
     if (!el || argc < 1) return JS_NULL;
@@ -2180,7 +2164,7 @@ static JSValue js_el_getAttribute(JSContext *ctx, JSValueConst this_val, int arg
     if (!name) return JS_NULL;
     if (!g_candidate) {   /* baseline/opaque flow: preserve taint stashed in this attr */
         int i = attr_shadow_find(el, name);
-        if (i >= 0) { JS_FreeCString(ctx, name); return JS_DupValue(ctx, g_attr_shadow[i].opaque); }
+        if (i >= 0) { JS_FreeCString(ctx, name); return JS_DupValue(ctx, attr_shadow_opaque(i)); }
     }
     size_t vlen = 0;
     const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vlen);
@@ -2247,7 +2231,7 @@ static void script_maybe_load(lxb_dom_element_t *el) {
        leaves only the holey SHAPE in the Lexbor attribute, so the real chunk URL lives in the shadow. */
     int si = attr_shadow_find(el, "src");
     if (si >= 0) {
-        JSValue ex = JS_OpaqueExample(g_ctx, g_attr_shadow[si].opaque);
+        JSValue ex = JS_OpaqueExample(g_ctx, attr_shadow_opaque(si));
         if (!JS_IsUndefined(ex)) { const char *e = JS_ToCString(g_ctx, ex); if (e) { u = strdup(e); JS_FreeCString(g_ctx, e); } }
         JS_FreeValue(g_ctx, ex);
     }
@@ -2381,11 +2365,11 @@ static void form_enc(const char *s, char *out, size_t cap) {   /* application/x-
 }
 static char *form_field_value(JSContext *ctx, lxb_dom_element_t *el) {   /* malloc'd; caller frees */
     int si = attr_shadow_find(el, "value");
-    if (si >= 0 && JS_IsOpaque(g_attr_shadow[si].opaque)) {
-        JSValue ex = JS_OpaqueExample(ctx, g_attr_shadow[si].opaque); char *r = NULL;
+    if (si >= 0 && JS_IsOpaque(attr_shadow_opaque(si))) {
+        JSValue ex = JS_OpaqueExample(ctx, attr_shadow_opaque(si)); char *r = NULL;
         if (!JS_IsUndefined(ex)) { const char *s = JS_ToCString(ctx, ex); if (s) { r = strdup(s); JS_FreeCString(ctx, s); } }
         JS_FreeValue(ctx, ex);
-        if (!r) { const char *sh = JS_OpaqueShapeC(g_attr_shadow[si].opaque); r = strdup(sh ? sh : "{opaque}"); }
+        if (!r) { const char *sh = JS_OpaqueShapeC(attr_shadow_opaque(si)); r = strdup(sh ? sh : "{opaque}"); }
         return r;
     }
     size_t vl = 0; const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"value", 5, &vl);
@@ -4243,8 +4227,7 @@ KEEP void qjs_teardown(void)
     free(g_pendmod); g_pendmod = NULL; g_pendmod_n = g_pendmod_cap = 0; g_modseq = 0;
     if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
     g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
-    for (int i = 0; i < g_attr_shadow_n; i++) { JS_FreeValue(ctx, g_attr_shadow[i].opaque); free(g_attr_shadow[i].name); }
-    free(g_attr_shadow); g_attr_shadow = NULL; g_attr_shadow_n = g_attr_shadow_cap = 0;
+    attr_shadow_free(ctx);
     replay_handlers_clear(ctx); free(g_replay_handlers); g_replay_handlers = NULL; g_replay_handler_cap = 0;
     JS_FreeValue(ctx, g_el_proto); g_el_proto = JS_UNDEFINED;   /* the element-method proto ref (custom-element base chain) */
     JS_FreeValue(ctx, g_ce_registry); g_ce_registry = JS_UNDEFINED;   /* customElements.define registry */
