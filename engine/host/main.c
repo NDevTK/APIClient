@@ -3853,26 +3853,41 @@ static void park_frontier(JSContext *ctx)
     int parked = 0;
     for (int i = 0; i < g_reg_n; i++) {
         Flow *f = &g_reg[i];
-        if (!f->candidate && f->orphan_idx >= 0 && f->orphan_idx < g_orphan_n) {   /* orphan-derived flows are replay-locatable (NOT transient @S candidate flows) */
-            uint32_t oh = JS_OrphanHash(ctx, g_orphan_buf[f->orphan_idx]);   /* stable identity, not the positional index */
-            if (oh) {
-                /* recipe = "hash,decbits,valcenti,visits" in a DYNAMIC buffer. The decision vector is UNBOUNDED:
-                   a fixed buffer would TRUNCATE a deep flow's decisions -> a wrong (shorter) replay path, a
-                   hidden depth bound (the cardinal violation). valcenti = accumulated value*100 (the flow's
-                   emitted-value score) and visits = times scheduled: TOGETHER they are the cold-tier
-                   frontierWeight estimator (emit-per-VISIT, the guarded rate CLAUDE.md ranks rehydration by),
-                   and on reseed they restore the UCB explore term so a heavily-explored low-yield recipe
-                   correctly defers to unproven ones instead of resuming as if brand-new. */
-                size_t cap = 16 + (size_t)(f->dec_n > 0 ? f->dec_n : 0) + 40;
-                char *rec = (char *)malloc(cap);
-                if (rec) {
-                    int o = snprintf(rec, cap, "%u,", oh);
-                    for (int j = 0; j < f->dec_n; j++) rec[o++] = f->dec[j] ? '1' : '0';
-                    snprintf(rec + o, cap - (size_t)o, ",%d,%d", (int)(f->val * 100.0), f->visits);
-                    arr_push_str(ctx, g_park, rec);   /* "hash,decbits,valcenti,visits" replay recipe -> @RESULT._park */
-                    free(rec);
-                    parked++;
-                }
+        /* A flow is COLD-PARKABLE iff it self-relocates by FUNCTION SOURCE on the next session. TWO kinds:
+           (1) an ORPHAN-derived flow — located among the re-collected orphans by JS_OrphanHash;
+           (2) an ASYNC-call flow — its OWN async function re-fires when phase-1 boot re-runs, so the live flow
+               is re-created and phase-2 resume re-attaches this decvec by hash (async marker 'a'). The
+               unification (await + branch decisions in ONE g_dec) is exactly what makes an async decvec a
+               replayable recipe: re-driving the re-fired async call with it reconstructs its await/branch path.
+           @S candidate flows are transient (never parked); a boot-triggered async flow persists, a
+           handler-triggered one re-explores when its handler re-drives (still never lost, just not skipped-to). */
+        uint32_t oh = 0; int async_rec = 0;
+        if (!f->candidate && f->orphan_idx >= 0 && f->orphan_idx < g_orphan_n) {
+            oh = JS_OrphanHash(ctx, g_orphan_buf[f->orphan_idx]);   /* stable identity, not the positional index */
+        } else if (!f->candidate && f->is_async && JS_IsFunction(ctx, f->handle)) {
+            oh = JS_OrphanHash(ctx, f->handle);   /* async flow: locate by its OWN function's source */
+            async_rec = 1;
+        }
+        if (oh) {
+            /* recipe = "[a]hash,decbits,valcenti,visits" in a DYNAMIC buffer. The decision vector is UNBOUNDED:
+               a fixed buffer would TRUNCATE a deep flow's decisions -> a wrong (shorter) replay path, a
+               hidden depth bound (the cardinal violation). valcenti = accumulated value*100 (the flow's
+               emitted-value score) and visits = times scheduled: TOGETHER they are the cold-tier
+               frontierWeight estimator (emit-per-VISIT, the guarded rate CLAUDE.md ranks rehydration by),
+               and on reseed they restore the UCB explore term so a heavily-explored low-yield recipe
+               correctly defers to unproven ones instead of resuming as if brand-new. A leading 'a' marks an
+               async recipe (re-attach to a re-fired async call), else an orphan recipe (drive the orphan). */
+            size_t cap = 17 + (size_t)(f->dec_n > 0 ? f->dec_n : 0) + 40;
+            char *rec = (char *)malloc(cap);
+            if (rec) {
+                int o = 0;
+                if (async_rec) rec[o++] = 'a';
+                o += snprintf(rec + o, cap - (size_t)o, "%u,", oh);
+                for (int j = 0; j < f->dec_n; j++) rec[o++] = f->dec[j] ? '1' : '0';
+                snprintf(rec + o, cap - (size_t)o, ",%d,%d", (int)(f->val * 100.0), f->visits);
+                arr_push_str(ctx, g_park, rec);   /* "[a]hash,decbits,valcenti,visits" replay recipe -> @RESULT._park */
+                free(rec);
+                parked++;
             }
         }
         if (f->fs) JS_FlowFree(g_rt, f->fs);
@@ -4558,6 +4573,8 @@ KEEP void qjs_begin(const char *recipes)
            THIS context simply doesn't match (skipped) — never drives the wrong one. */
         const char *p = recipes; int resumed = 0;
         while (*p) {
+            int async_rec = 0;
+            if (*p == 'a') { async_rec = 1; p++; }   /* async recipe: re-attach decvec to the re-fired async call, not drive an orphan */
             uint32_t want = (uint32_t)strtoul(p, NULL, 10);
             const char *comma = strchr(p, ','), *semi = strchr(p, ';');
             signed char *dec = NULL; int dec_n = 0; double rval = 1.0; int rvis = 0;
@@ -4576,6 +4593,24 @@ KEEP void qjs_begin(const char *recipes)
                     const char *comma3 = (const char *)memchr(comma2 + 1, ',', (size_t)(end - (comma2 + 1)));
                     if (comma3) { long vs = strtol(comma3 + 1, NULL, 10); if (vs > 0 && vs < (1L << 30)) rvis = (int)vs; }   /* prior visit count (UCB explore term) */
                 }
+            }
+            if (async_rec) {
+                /* ASYNC recipe: phase-1 boot already re-ran and re-fired the async call, so its live flow is
+                   ALREADY in g_reg (a fresh frame at its start, no decvec). Re-attach this recipe's decvec by
+                   source hash so it REPLAYS its parked await/branch path instead of re-forking from scratch. A
+                   handler-triggered async call has not re-fired yet (no live flow) -> unmatched, re-explored
+                   when its handler drives (never lost). Match a flow whose decvec is still unset so two recipes
+                   for the same async source attach to distinct live re-fires. */
+                int matched = 0;
+                for (int ri = 0; ri < g_reg_n; ri++) {
+                    Flow *rf = &g_reg[ri];
+                    if (rf->is_async && !rf->dec && JS_IsFunction(ctx, rf->handle) && JS_OrphanHash(ctx, rf->handle) == want) {
+                        rf->dec = dec; rf->dec_n = dec_n; rf->val = rval; rf->visits = rvis;
+                        matched = 1; resumed++; break;
+                    }
+                }
+                if (!matched) free(dec);
+                if (!semi) break; p = semi + 1; continue;
             }
             int found = -1;
             for (int oi = 0; oi < g_orphan_n; oi++) { if (JS_OrphanHash(ctx, g_orphan_buf[oi]) == want) { found = oi; break; } }
