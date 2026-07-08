@@ -67,6 +67,9 @@ typedef struct {
                             throw path can itself reach a sink), never a silent resolve-with-undefined. */
     JSValue await_promise;   /* ASYNC-CALL flow PARKED on a still-pending await promise (JS_FlowResume returned 2): the
                                 scheduler polls its state + resumes (JS_FlowResumeInject) once it settles. UNDEFINED = runnable. */
+    JSValue rthis; JSValue *rargs; int rargc;   /* async-call RE-RUN RECIPE (func = handle) captured pristine at claim, so a
+                                                   reject-replay sibling can JS_FlowNew the same call from scratch. */
+    int reject_target;       /* reject-replay sibling: the await index this flow must force to REJECT (-1 = primary/normal, fulfils all). */
 } Flow;
 static JSContext *g_ctx;       /* fwd: the MAIN analysis context (defined near the persistent-instance protocol) — the
                                   async/reaction hooks claim a call as a flow ONLY for this ctx, never the @S solve realm */
@@ -252,6 +255,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec,
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
     g_reg[g_reg_n].is_boot = 0;
     g_reg[g_reg_n].aresolve = JS_UNDEFINED; g_reg[g_reg_n].areject = JS_UNDEFINED; g_reg[g_reg_n].await_promise = JS_UNDEFINED;
+    g_reg[g_reg_n].rthis = JS_UNDEFINED; g_reg[g_reg_n].rargs = NULL; g_reg[g_reg_n].rargc = 0; g_reg[g_reg_n].reject_target = -1;
     g_reg_n++;
     { double w = 1.5 + val; if (w > g_max_parked) g_max_parked = w; }   /* fresh flow: visits=0,cpu=0 -> weight=1.5+val (keeps g_max_parked current for wfq_yield) */
     return 1;
@@ -262,6 +266,8 @@ static void flow_free_async_refs(JSContext *ctx, Flow *f) {
     JS_FreeValue(ctx, f->aresolve); f->aresolve = JS_UNDEFINED;
     JS_FreeValue(ctx, f->areject); f->areject = JS_UNDEFINED;
     JS_FreeValue(ctx, f->await_promise); f->await_promise = JS_UNDEFINED;
+    JS_FreeValue(ctx, f->rthis); f->rthis = JS_UNDEFINED;
+    if (f->rargs) { for (int i = 0; i < f->rargc; i++) JS_FreeValue(ctx, f->rargs[i]); free(f->rargs); f->rargs = NULL; f->rargc = 0; }
 }
 /* JSAsyncCallHook target: the bundle CALLED a native async function. `fs` is its pre-created live
    JSAsyncFunctionState (real args captured); `resolve` is the result-promise's resolve fn (settled on
@@ -277,7 +283,30 @@ static int reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, J
     f->fs = fs;                                 /* the live async state — the flow owns + frees it (JS_FlowResume) */
     f->aresolve = JS_DupValue(ctx, resolve);
     f->areject = JS_DupValue(ctx, reject);
+    /* Capture the PRISTINE re-run recipe (this + args, before the call runs) so an await FORK can spawn a
+       reject-replay sibling (re-run the same call, forcing one await to reject -> the inline try/catch arm). */
+    JSValueConst rthis = JS_UNDEFINED, *rargs = NULL; int rargc = 0;
+    JS_FlowRecipe(fs, NULL, &rthis, &rargc, &rargs);
+    f->rthis = JS_DupValue(ctx, rthis);
+    if (rargc > 0 && rargs) {
+        f->rargs = (JSValue *)malloc((size_t)rargc * sizeof(JSValue));
+        if (f->rargs) { f->rargc = rargc; for (int i = 0; i < rargc; i++) f->rargs[i] = JS_DupValue(ctx, rargs[i]); }
+    }
     return 1;
+}
+/* JSFlowAwaitHook target: the PRIMARY async flow just fulfilled its await #await_ix. FORK a reject-replay
+   sibling — re-run the SAME call (recipe) from scratch, forcing await #await_ix to REJECT, so the inline
+   try/catch catch arm runs and its endpoints/sinks are surfaced (orphan-driving reaches only .catch(fn), not
+   an inline catch block). WFQ-starved like any flow; the primary itself is UNCHANGED (still fulfils). */
+static void await_decide(JSContext *ctx, int await_ix) {
+    if (ctx != g_ctx || !g_cur_flow) return;
+    if (JS_IsUndefined(g_cur_flow->handle) || JS_IsException(g_cur_flow->handle)) return;   /* only recipe-carrying async-call flows */
+    void *sfs = JS_FlowNew(ctx, g_cur_flow->handle, g_cur_flow->rthis, g_cur_flow->rargc, (JSValueConst *)g_cur_flow->rargs);
+    if (!sfs) return;                            /* non-bytecode / alloc fail: no sibling (the fulfil arm still explored) */
+    Flow *pf = g_cur_flow;                       /* stable (stack copy); reg_add may realloc g_reg */
+    reg_add(ctx, JS_DupValue(ctx, pf->handle), g_cur_val, NULL, 0);
+    Flow *sib = &g_reg[g_reg_n - 1];
+    sib->fs = sfs; sib->reject_target = await_ix;
 }
 /* JSReactionHook target: a settled promise's REACTION (.then/.catch/.finally handler). Run handler(value) as a
    preemptible/parkable flow and SETTLE the chained promise on completion (resolve with the return value / reject
@@ -4036,6 +4065,7 @@ static void scheduler_run(JSContext *ctx)
            candidate boot-undo lives in the flow delta (JS_CowSeedBootInverse), so a suspend's JS_CowUnapply
            restores the post-boot baseline — no host-side bracket to straddle. */
         JS_SetFlowYieldHook(wfq_yield);
+        JS_SetFlowRejectTarget(f.reject_target);   /* -1 for a normal flow (fulfils all awaits + forks reject-siblings); >=0 for a reject-replay sibling (forces that await to reject) */
         JSValue out = JS_UNDEFINED;
         int st;
         if (!JS_IsUndefined(f.await_promise)) {
@@ -4050,6 +4080,7 @@ static void scheduler_run(JSContext *ctx)
         } else {
             st = JS_FlowResume(ctx, f.fs, &out);
         }
+        JS_SetFlowRejectTarget(-1);
         JS_SetFlowYieldHook(NULL);
         JSContext *c1; int jr;
         while ((jr = JS_ExecutePendingJob(g_rt, &c1)) > 0) { }
@@ -4196,6 +4227,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetCbHook(drive_opaque_cb);  /* a callback passed to a method on OPAQUE input (forEach/map/then/…) -> drive it as a flow */
     JS_SetAsyncCallHook(reg_add_async_call);  /* a native async CALL -> a preemptible/parkable scheduler flow (async-as-flow) */
     JS_SetReactionHook(reaction_flow);        /* a settled promise's .then/.catch/.finally reaction -> a scheduler flow too */
+    JS_SetFlowAwaitHook(await_decide);        /* each fulfilled await forks a reject-replay sibling -> the inline try/catch catch arm is explored */
     JS_SetDynImportHook(host_dyn_import);   /* dynamic import() -> force-fetch the ESM chunk in place */
     JS_SetModuleLoaderFunc(rt, host_module_normalize, host_module_loader, NULL);   /* static import -> fetch+link the graph like a browser */
     /* synthetic MessageEvent for driving 'message' handlers: .data is the {pm} source (magic 2) — a
