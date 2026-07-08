@@ -26,6 +26,7 @@
 #include "solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
 #include "dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
+#include "dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #define KEEP EMSCRIPTEN_KEEPALIVE   /* export qjs_init/step/teardown for the persistent-instance protocol */
@@ -237,8 +238,8 @@ static char *url_solve_holes(JSContext *ctx, const char *url) {
     return out;
 }
 
-typedef struct DomUndo DomUndo;                 /* per-flow DOM COW delta buffer (defined below) */
-static void dom_buf_free(DomUndo *buf, int n);
+/* Per-flow DOM COW delta (dom_attr_capture/insert_capture + dom_apply/unapply/revert + dom_buf_*) is in
+   dom_cow.c — included via dom_cow.h above; the buffer is an opaque void* on the Flow. */
 static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int dec_n)
 {
     if (g_reg_n >= g_reg_cap) {
@@ -2556,95 +2557,6 @@ static JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val) {   /* .
 /* PER-FLOW DOM COW DELTA (mirrors the JS heap delta): `old` = baseline value/absence (kind 0 attr) or the
    inserted node's detach position (kind 1); `cur` = the flow's value, held while parked. Swapped on
    context-switch so a DOM writer interleaves like a heap writer. */
-typedef struct DomUndo {
-    int kind; lxb_dom_element_t *el; char *name;
-    lxb_char_t *old; size_t old_len; int had;                 /* kind 0: baseline attr */
-    lxb_char_t *cur; size_t cur_len; int cur_had;             /* kind 0: flow's attr (valid while parked) */
-    lxb_dom_node_t *node, *parent, *next;                     /* kind 1: inserted node + detach position */
-    int detached;                                             /* kind 1: currently detached (unapplied) */
-} DomUndo;
-static DomUndo *g_dom_undo = NULL;
-static int g_dom_undo_n = 0, g_dom_undo_cap = 0, g_dom_capture = 0;
-static void dom_undo_push(DomUndo u) {
-    if (g_dom_undo_n >= g_dom_undo_cap) {
-        int nc = g_dom_undo_cap ? g_dom_undo_cap * 2 : 64;
-        /* Skipping a DOM capture silently breaks DOM isolation (this flow's DOM write never reverts -> leaks
-           into the next flow's baseline -> wrong sinks/taint). OOM is a should-never-happen: CRASH, never skip. */
-        DomUndo *n = realloc(g_dom_undo, (size_t)nc * sizeof(DomUndo));
-        if (!n) { fflush(stdout); fprintf(stderr, "@E {\"phase\":\"dom-cow-oom\",\"reason\":\"DOM undo-log realloc failed — DOM isolation would be silently corrupted\"}\n"); fflush(stderr); abort(); }
-        g_dom_undo = n; g_dom_undo_cap = nc;
-    }
-    g_dom_undo[g_dom_undo_n++] = u;
-}
-static void dom_attr_capture(lxb_dom_element_t *el, const char *name) {
-    if (!g_dom_capture) return;
-    size_t vl = 0; const lxb_char_t *cur = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vl);
-    DomUndo u; memset(&u, 0, sizeof u);
-    u.kind = 0; u.el = el; u.name = strdup(name); u.had = cur ? 1 : 0;
-    if (cur) { u.old = malloc(vl ? vl : 1); if (u.old) { memcpy(u.old, cur, vl); u.old_len = vl; } }
-    dom_undo_push(u);
-}
-static void dom_insert_capture(lxb_dom_node_t *node) {
-    if (!g_dom_capture) return;
-    DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; dom_undo_push(u);
-}
-/* ── The SECURITY view (@S) ──────────────────────────────────────────────────────
-   REMOVED the taint tracker (opaque-reaches-sink via host_opaque/emit_sink). Taint tracing is a separate
-   mechanism bolted alongside forced execution; forced execution SUBSUMES it — the security view is being
-   rebuilt as forced-exec with concrete marker payloads that flow through the REAL code (transforms/filters
-   apply natively) and are observed breaking out at a sink. Until that lands, sinks are ordinary host edges
-   (no-op for the injected content) and emit no @S. */
-static void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (reverse order); empties the delta */
-    for (int i = g_dom_undo_n - 1; i >= 0; i--) {
-        DomUndo *u = &g_dom_undo[i];
-        if (u->kind == 0) {   /* attribute: restore old value, or remove if it didn't exist */
-            if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
-            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
-            free(u->name); free(u->old); free(u->cur);
-        } else if (u->kind == 1 && !u->detached) {   /* inserted node: detach it (baseline had none) */
-            lxb_dom_node_remove(u->node);
-        }
-    }
-    g_dom_undo_n = 0;
-}
-/* UNAPPLY (flow -> parked): save the flow's DOM values, restore the baseline, so the next flow sees the
-   baseline DOM. Reverse order. */
-static void dom_unapply(void) {
-    for (int i = g_dom_undo_n - 1; i >= 0; i--) {
-        DomUndo *u = &g_dom_undo[i];
-        if (u->kind == 0) {
-            size_t vl = 0; const lxb_char_t *c = lxb_dom_element_get_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), &vl);
-            free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = c ? 1 : 0;   /* stash the flow's attr */
-            if (c) { u->cur = malloc(vl ? vl : 1); if (u->cur) { memcpy(u->cur, c, vl); u->cur_len = vl; } }
-            if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
-            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
-        } else if (u->kind == 1 && !u->detached) {
-            u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
-            u->next = lxb_dom_interface_node(u->node)->next;
-            lxb_dom_node_remove(u->node); u->detached = 1;
-        }
-    }
-}
-/* APPLY (parked -> flow): restore the flow's DOM values over the baseline. Forward order. */
-static void dom_apply(void) {
-    for (int i = 0; i < g_dom_undo_n; i++) {
-        DomUndo *u = &g_dom_undo[i];
-        if (u->kind == 0) {
-            if (u->cur_had && u->cur) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->cur, u->cur_len);
-            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
-        } else if (u->kind == 1 && u->detached) {
-            if (u->next) lxb_dom_node_insert_before(u->next, u->node);
-            else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
-            u->detached = 0;
-        }
-    }
-}
-static void dom_buf_free(DomUndo *buf, int n) {   /* free a parked DOM delta buffer (its nodes stay detached, owned by the doc) */
-    for (int i = 0; i < n; i++) { free(buf[i].name); free(buf[i].old); free(buf[i].cur); }
-    free(buf);
-}
-static void *dom_buf_take(int *n, int *cap) { void *b = g_dom_undo; *n = g_dom_undo_n; *cap = g_dom_undo_cap; g_dom_undo = NULL; g_dom_undo_n = 0; g_dom_undo_cap = 0; return b; }
-static void dom_buf_load(void *buf, int n, int cap) { g_dom_undo = (DomUndo *)buf; g_dom_undo_n = n; g_dom_undo_cap = cap; }
 
 static int el_is_script(lxb_dom_element_t *el) {
     size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
@@ -3743,7 +3655,7 @@ static void park_frontier(JSContext *ctx)
         }
         if (f->fs) JS_FlowFree(g_rt, f->fs);
         if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
-        if (f->dom) dom_buf_free((DomUndo *)f->dom, f->dom_n);   /* and its DOM delta */
+        if (f->dom) dom_buf_free(f->dom, f->dom_n);   /* and its DOM delta */
         JS_FreeValue(ctx, f->handle);
         free(f->dec); free(f->candidate); free(f->vtarget); flow_free_async_refs(ctx, f);    }
     g_reg_n = 0;
@@ -3872,7 +3784,7 @@ static void scheduler_run(JSContext *ctx)
                 reg_readd(ctx, f);
             } else {                                                     /* COMPLETED: revert this session's delta (boot-inverse included -> post-boot baseline) */
                 JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
-                dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
+                dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free(db, dn); }
                 if (JS_IsException(out)) js_std_dump_error(ctx);
                 JS_FreeValue(ctx, out);
                 g_cur_flow = NULL;
@@ -3899,7 +3811,7 @@ static void scheduler_run(JSContext *ctx)
             { JSContext *cb; int jr; while ((jr = JS_ExecutePendingJob(g_rt, &cb)) > 0) { } if (jr < 0) js_std_dump_error(cb ? cb : ctx); }   /* drain continuations (they fork too) */
             g_in_boot_flow = 0;
             JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* revert boot-inverse + re-run writes -> post-boot baseline */
-            dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
+            dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free(db, dn); }
             g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
             JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);            continue;
         }
@@ -4008,7 +3920,7 @@ static void scheduler_run(JSContext *ctx)
             JS_CowRevert(ctx);
             { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }
             dom_revert();
-            { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free((DomUndo *)db, dn); }
+            { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free(db, dn); }
             if (!JS_IsUndefined(f.aresolve)) {
                 /* async-call flow: SETTLE its result promise so an awaiting caller-flow resumes — REJECT on a
                    thrown completion (st==3, out=exception value) so the awaiter re-throws (try/catch/.catch runs),
