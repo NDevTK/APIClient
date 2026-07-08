@@ -742,16 +742,6 @@ static JSValue resp_body_str(JSContext *ctx, JSValueConst this_val) {
     if (JS_IsString(b)) return b;
     JS_FreeValue(ctx, b); return JS_UNDEFINED;
 }
-/* the bundle is CONSUMING this reply's body but we have no concrete one -> a real bounded GET to this
-   (concrete) url is worth firing (the offscreen does it, one-per-endpoint). Emitted so the bridge fetches
-   ONLY consumed-reply endpoints, not every GET (a blind GET can hit /logout, /delete?id=). */
-static void reply_note_wanted(JSContext *ctx, JSValueConst this_val) {
-    JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
-    const char *s = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
-    if (s && s[0] && !has_hole(s)) { printf("@REPLYWANT %s\n", s); fflush(stdout); }
-    if (s) JS_FreeCString(ctx, s);
-    JS_FreeValue(ctx, u);
-}
 /* CONCOLIC leaf-wrap: a trusted loaded reply is ONE value whose STRUCTURE stays REAL (Object.keys/map/for-in/
    array index all work natively) but whose STRING/BOOL leaves become concolic — each FORKS at a branch (so a
    role/flag gate reaches the gated endpoint) AND carries its real value as the example (so a gate-INDEPENDENT
@@ -776,19 +766,40 @@ static JSValue resp_consume(JSContext *ctx, JSValueConst this_val, int is_json) 
     JSValue body = resp_body_str(ctx, this_val);
     if (JS_IsString(body)) { JSValue v = reply_value(ctx, body, is_json); JS_FreeValue(ctx, body); return js_resolved(ctx, v); }
     JS_FreeValue(ctx, body);
-    JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
-    const char *url = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
-    if (url && url[0] && !has_hole(url)) reply_fetch_register(url, is_json);   /* concrete url -> fetch it; the boot re-run delivers it concolic */
-    if (url) JS_FreeCString(ctx, url);
-    JS_FreeValue(ctx, u);
+    /* NEVER fire a real request for a state-mutating method (POST/PUT/DELETE/...): the reply stays opaque,
+       its values sourced only from the local forced-exec path. A cached body (above) still resolves — that
+       is existing data, not a new request. */
+    JSValue nf = JS_GetPropertyStr(ctx, this_val, "__nofire");
+    int nofire = JS_ToBool(ctx, nf); JS_FreeValue(ctx, nf);
+    if (!nofire) {
+        JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
+        const char *url = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
+        if (url && url[0] && !has_hole(url)) reply_fetch_register(url, is_json);   /* concrete SAFE-GET url -> fetch it; the boot re-run delivers it concolic */
+        if (url) JS_FreeCString(ctx, url);
+        JS_FreeValue(ctx, u);
+    }
     return js_resolved(ctx, JS_DupValue(ctx, g_opaque));   /* opaque NOW; concrete via the provision-driven re-run */
 }
 static JSValue js_resp_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 1); }
 static JSValue js_resp_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 0); }
+/* GET/HEAD are the ONLY methods safe to FIRE a real request for (to learn a reply) — every other method
+   (POST/PUT/DELETE/PATCH/unknown) is STATE-MUTATING, so firing it would cause the REAL server side effect
+   the tool must never trigger (CLAUDE.md: a state-mutating request is NEVER fired to learn; its example
+   values come only from the local forced-exec path). Case-insensitive; NULL/empty = default GET = safe. */
+static int method_is_safe_get(const char *m) {
+    if (!m || !m[0]) return 1;
+    char b[8]; int i = 0;
+    for (; m[i] && i < 7; i++) { char c = m[i]; b[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c; }
+    b[i] = 0;
+    return (strcmp(b, "GET") == 0 || strcmp(b, "HEAD") == 0);
+}
 /* build a fetch Response whose identity is concrete (ok/status/url) but whose BODY is opaque. */
-static JSValue make_response(JSContext *ctx, const char *url)
+static JSValue make_response(JSContext *ctx, const char *url, const char *method)
 {
     JSValue resp = JS_NewObject(ctx);
+    /* Mark a state-mutating response so r.json()/r.text() resolves opaque WITHOUT registering a real fetch:
+       the server side effect is REAL, so its reply is NEVER learned by firing — only by local forced-exec. */
+    JS_SetPropertyStr(ctx, resp, "__nofire", JS_NewBool(ctx, !method_is_safe_get(method)));
     JS_SetPropertyStr(ctx, resp, "url", JS_NewString(ctx, url ? url : ""));
     JS_SetPropertyStr(ctx, resp, "ok", JS_TRUE);
     JS_SetPropertyStr(ctx, resp, "status", JS_NewInt32(ctx, 200));
@@ -1283,7 +1294,7 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         }
     }
     record_endpoint(ctx, ep);   /* the shared @H sink (dedup at finalize) — fetch AND XMLHttpRequest use it */
-    JSValue resp = make_response(ctx, url);
+    JSValue resp = make_response(ctx, url, method);   /* method gates reply-firing: a POST/DELETE reply is never fetched */
     if (url) JS_FreeCString(ctx, url);
     if (method) JS_FreeCString(ctx, method);
     return js_resolved(ctx, resp);
