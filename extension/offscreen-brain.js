@@ -7118,6 +7118,24 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
     }
   }
 
+  // AST-learned PATH-PARAM examples persisted on the endpoint (they survive doc eviction, unlike the rich
+  // per-document method schema resolveEndpointSchema otherwise reads). Surface them so the reviewer sees the
+  // REAL learned values (e.g. orgId=acme-42, the logged-in surface the tool exists to learn) even after the
+  // per-doc schema was evicted — a learned-but-invisible value defeats the point.
+  if (ep && Array.isArray(ep.pathParams) && ep.pathParams.length) {
+    parameters = parameters || {};
+    for (const pp of ep.pathParams) {
+      const cur = parameters[pp.name] || { name: pp.name, type: "string", location: "path", required: true, description: "AST-learned path segment" };
+      const vals = (cur._astValidValues || []).slice();
+      for (const val of (pp.values || [])) if (vals.indexOf(val) < 0) vals.push(val);
+      cur._astValidValues = vals;
+      cur._astValueSource = cur._astValueSource || "ast_forced_exec";
+      if ((cur._exampleValue === undefined || cur._exampleValue === null) && vals.length) { cur._exampleValue = vals[0]; cur._exampleValueSource = "ast"; }
+      parameters[pp.name] = cur;
+    }
+    if (source === "none") source = "ast";
+  }
+
   return {
     source,
     method: discoveryMethod,
