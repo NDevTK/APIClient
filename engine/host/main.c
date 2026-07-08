@@ -31,6 +31,7 @@
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
+#include "xhr.h"          /* XMLHttpRequest emulation -> the @H recorder, its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #define KEEP EMSCRIPTEN_KEEPALIVE   /* export qjs_init/step/teardown for the persistent-instance protocol */
@@ -208,7 +209,7 @@ static const char *cons_fixed_value(const char *src) {
 /* Substitute each `{src}` hole the running flow FIXED (== gate) with its concrete value, so a URL built from
    gated input surfaces the SOLVED key in BOTH path and query (/api/{hash} -> /api/admin). NULL if nothing
    solved. The @H shape is re-derived downstream, so grouping is unaffected — only the example gains a value. */
-static char *url_solve_holes(JSContext *ctx, const char *url) {
+char *url_solve_holes(JSContext *ctx, const char *url) {
     (void)ctx;
     if (!url || !strchr(url, '{')) return NULL;
     size_t cap = strlen(url) + 64, len = 0; char *out = malloc(cap); if (!out) return NULL;
@@ -739,11 +740,11 @@ JSValue js_resolved(JSContext *ctx, JSValue val)
 }
 /* make_response + the Response json()/text()/body accessors + reply-body concolic-wrap are in reply.c. */
 /* URL query-parameter extraction (hexval + url_pct_decode + build_query_params) is in url.c (pure). */
-static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);/* fwd */
+JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* fwd (non-static: xhr.c borrows it) */
 /* The shared @H sink: record one endpoint (consumes `ep`) + raise the running flow's value. A CANDIDATE flow
    carries a concrete @S breakout PAYLOAD, so its request URLs are @S artifacts, NOT real @H — only OPAQUE
    flows emit. fetch AND XMLHttpRequest funnel through here so XHR-based apps are learned like fetch ones. */
-static void record_endpoint(JSContext *ctx, JSValue ep) {
+void record_endpoint(JSContext *ctx, JSValue ep) {
     if (JS_IsArray(g_endpoints) && !g_candidate) {
         uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_endpoints, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
         JS_SetPropertyUint32(ctx, g_endpoints, n, ep);   /* consumes ep */
@@ -759,7 +760,7 @@ static void record_endpoint(JSContext *ctx, JSValue ep) {
 /* Capture request header name:value pairs into ep.headers (required-headers replay spec). Reads a plain
    object OR a `new Headers()`'s __fields, and a concolic value's EXAMPLE (`'Bearer '+token` -> the real token).
    ONE home for fetch + XHR (no duplication). */
-static void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) {
+void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) {
     if (!JS_IsObject(hdrs) || JS_IsOpaque(hdrs)) return;
     JSValue hf = JS_GetPropertyStr(ctx, hdrs, "__fields");
     JSValueConst hsrc = JS_IsObject(hf) ? (JSValueConst)hf : hdrs;
@@ -781,67 +782,6 @@ static void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) 
     }
     JS_FreeValue(ctx, hf);
     if (any) JS_SetPropertyStr(ctx, ep, "headers", hobj); else JS_FreeValue(ctx, hobj);
-}
-static JSValue js_xhr_setheader(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 2) {   /* store into __headers so js_xhr_send captures the auth/CSRF/custom headers */
-        JSValue h = JS_GetPropertyStr(ctx, this_val, "__headers");
-        if (!JS_IsObject(h)) { JS_FreeValue(ctx, h); h = JS_NewObject(ctx); JS_SetPropertyStr(ctx, this_val, "__headers", JS_DupValue(ctx, h)); }
-        const char *k = JS_ToCString(ctx, argv[0]);
-        if (k) { JS_SetPropertyStr(ctx, h, k, JS_DupValue(ctx, argv[1])); JS_FreeCString(ctx, k); }
-        JS_FreeValue(ctx, h);
-    }
-    return JS_UNDEFINED;
-}
-static JSValue js_xhr_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 1) JS_SetPropertyStr(ctx, this_val, "__method", JS_DupValue(ctx, argv[0]));
-    if (argc >= 2) JS_SetPropertyStr(ctx, this_val, "__url", JS_DupValue(ctx, argv[1]));
-    return JS_UNDEFINED;
-}
-static JSValue js_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSValue mv = JS_GetPropertyStr(ctx, this_val, "__method");
-    JSValue uv = JS_GetPropertyStr(ctx, this_val, "__url");
-    const char *method = JS_IsString(mv) ? JS_ToCString(ctx, mv) : NULL;
-    char *url = NULL;
-    { JSValue exurl = JS_OpaqueExample(ctx, uv); const char *u = NULL;   /* concolic URL -> real computed value */
-      if (!JS_IsUndefined(exurl)) u = JS_ToCString(ctx, exurl);
-      if (!u && (JS_IsString(uv) || JS_IsOpaque(uv))) u = JS_ToCString(ctx, uv);
-      if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
-      JS_FreeValue(ctx, exurl); }
-    if (url) {
-        char *usolved = url_solve_holes(ctx, url); const char *eurl = usolved ? usolved : url;
-        JSValue ep = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, ep, "method", JS_NewString(ctx, method ? method : "GET"));
-        JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, eurl));
-        JS_SetPropertyStr(ctx, ep, "source", JS_NewString(ctx, "ast_analysis"));
-        JSValue params = JS_NewArray(ctx); build_query_params(ctx, eurl, params); JS_SetPropertyStr(ctx, ep, "params", params);
-        if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
-            const char *bs = JS_ToCString(ctx, argv[0]);
-            if (bs && bs[0]) { char *bsolved = url_solve_holes(ctx, bs); JS_SetPropertyStr(ctx, ep, "body", JS_NewString(ctx, bsolved ? bsolved : bs)); free(bsolved); }
-            if (bs) JS_FreeCString(ctx, bs);
-        }
-        { JSValue h = JS_GetPropertyStr(ctx, this_val, "__headers"); capture_headers(ctx, ep, h); JS_FreeValue(ctx, h); }
-        record_endpoint(ctx, ep);
-        free(usolved); free(url);
-    }
-    if (method) JS_FreeCString(ctx, method);
-    JS_FreeValue(ctx, mv); JS_FreeValue(ctx, uv);
-    return JS_UNDEFINED;
-}
-static JSValue js_xhr_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "open", JS_NewCFunction(ctx, js_xhr_open, "open", 2));
-    JS_SetPropertyStr(ctx, o, "send", JS_NewCFunction(ctx, js_xhr_send, "send", 1));
-    JS_SetPropertyStr(ctx, o, "setRequestHeader", JS_NewCFunction(ctx, js_xhr_setheader, "setRequestHeader", 2));
-    JS_SetPropertyStr(ctx, o, "abort", JS_NewCFunction(ctx, js_noop, "abort", 0));
-    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));   /* onload handler -> driven */
-    JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    JS_SetPropertyStr(ctx, o, "getResponseHeader", JS_NewCFunction(ctx, js_opaque_stub, "getResponseHeader", 1));
-    JS_SetPropertyStr(ctx, o, "getAllResponseHeaders", JS_NewCFunction(ctx, js_opaque_stub, "getAllResponseHeaders", 0));
-    JS_SetPropertyStr(ctx, o, "responseText", JS_DupValue(ctx, g_opaque));   /* response = external input */
-    JS_SetPropertyStr(ctx, o, "response", JS_DupValue(ctx, g_opaque));
-    JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, 200));
-    JS_SetPropertyStr(ctx, o, "readyState", JS_NewInt32(ctx, 4));
-    return o;
 }
 /* Observers (Intersection/Mutation/Resize/Performance): missing constructors threw. A no-op object (observe/
    disconnect/etc.) prevents the throw; the callback passed to the constructor is an uncalled function the
@@ -2041,7 +1981,7 @@ static void replay_handlers_clear(JSContext *ctx) {
     for (int i = 0; i < g_replay_handler_n; i++) JS_FreeValue(ctx, g_replay_handlers[i]);
     g_replay_handler_n = 0; g_replay_msg_n = 0;
 }
-static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
     JSValueConst h0 = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
     if (g_in_boot_flow) return JS_UNDEFINED;   /* boot flow re-run: handlers already registered by the initial boot — don't duplicate g_handlers */
     if (g_boot_replay) {   /* capture the re-registered handler (candidate closure) for re-resolution; don't grow g_handlers */
