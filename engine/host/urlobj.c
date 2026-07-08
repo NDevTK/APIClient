@@ -174,15 +174,22 @@ static JSValue js_sp_append(JSContext *ctx, JSValueConst this_val, int argc, JSV
 }
 static JSValue js_sp_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc >= 1) {
+        const char *k = JS_ToCString(ctx, argv[0]);
         JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
-        if (JS_IsObject(f)) {
-            const char *k = JS_ToCString(ctx, argv[0]);
-            if (k) { JSValue v = JS_GetPropertyStr(ctx, f, k); JS_FreeCString(ctx, k);
-                     if (!JS_IsUndefined(v)) { JS_FreeValue(ctx, f); return v; } JS_FreeValue(ctx, v); }
+        if (JS_IsObject(f) && k) {
+            JSValue v = JS_GetPropertyStr(ctx, f, k);
+            if (!JS_IsUndefined(v)) { JS_FreeValue(ctx, f); JS_FreeCString(ctx, k); return v; }
+            JS_FreeValue(ctx, v);
         }
         JS_FreeValue(ctx, f);
+        /* Unknown key -> external input, but KEYED by the param name so distinct params are DISTINCT concolic
+           values: p.get('mode') and p.get('data') must not collapse to the SAME bare opaque, or a gate on one
+           (`mode==='preview'`) is wrongly conflated with the sink on the other and the sibling-gated sink can't
+           be solved. The key identity also gives the @H a real shape ({mode}) instead of a bare {}. */
+        if (k) { char shp[80]; snprintf(shp, sizeof shp, "{%s}", k);
+                 JSValue o = JS_NewOpaqueSourced(ctx, shp, k); JS_FreeCString(ctx, k); return o; }
     }
-    return JS_DupValue(ctx, g_opaque);   /* unknown key -> external input */
+    return JS_DupValue(ctx, g_opaque);   /* no key -> generic external input */
 }
 JSValue js_sp_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
