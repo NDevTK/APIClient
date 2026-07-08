@@ -270,6 +270,35 @@ static void flow_free_async_refs(JSContext *ctx, Flow *f) {
     JS_FreeValue(ctx, f->rthis); f->rthis = JS_UNDEFINED;
     if (f->rargs) { for (int i = 0; i < f->rargc; i++) JS_FreeValue(ctx, f->rargs[i]); free(f->rargs); f->rargs = NULL; f->rargc = 0; }
 }
+/* PENDING ASYNC-RECIPE MAP — cross-session resume for async-call flows. A parked async flow persists as
+   ("a" + source-hash + decvec); on resume qjs_begin loads each into this map, and it is attached to the
+   re-fired async call by SOURCE HASH at TWO consult sites of ONE map: (1) a post-load SWEEP over flows the
+   phase-1 boot already re-created (those calls fired before this map existed, so they cannot consult it at
+   call time), and (2) reg_add_async_call for a HANDLER-triggered call that fires in phase 3, after the map
+   is live. Both replay the flow's parked await/branch path instead of re-forking from scratch. Unconsumed
+   entries (a handler that never re-fires this session) are freed at teardown — never a leak, never lost
+   (a never-fired handler's recipe simply waits for the session where it does fire). */
+typedef struct { uint32_t hash; signed char *dec; int dec_n; double val; int visits; int used; } AsyncRecipe;
+static AsyncRecipe *g_arec = NULL; static int g_arec_n = 0, g_arec_cap = 0;
+/* Attach the first UNUSED recipe whose source hash matches this fresh async flow's function. Ownership of
+   `dec` transfers to the flow (freed at flow teardown); the map slot is marked used. Returns 1 if attached. */
+static int arec_attach(JSContext *ctx, Flow *f) {
+    if (!f->is_async || f->dec || !JS_IsFunction(ctx, f->handle)) return 0;
+    uint32_t h = JS_OrphanHash(ctx, f->handle);
+    for (int i = 0; i < g_arec_n; i++) {
+        if (!g_arec[i].used && g_arec[i].hash == h) {   /* an EMPTY decvec (dec=NULL) still attaches: it restores prior val/visits (UCB), exactly as an orphan recipe does */
+            f->dec = g_arec[i].dec; f->dec_n = g_arec[i].dec_n; f->val = g_arec[i].val; f->visits = g_arec[i].visits;
+            g_arec[i].dec = NULL; g_arec[i].used = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+static void arec_free(void) {
+    for (int i = 0; i < g_arec_n; i++) free(g_arec[i].dec);
+    free(g_arec); g_arec = NULL; g_arec_n = g_arec_cap = 0;
+}
+
 /* JSAsyncCallHook target: the bundle CALLED a native async function. `fs` is its pre-created live
    JSAsyncFunctionState (real args captured); `resolve` is the result-promise's resolve fn (settled on
    COMPLETION so an `await asyncFn()` caller-flow resumes). Register it as a flow driven from its START via
@@ -294,6 +323,7 @@ static int reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, J
         f->rargs = (JSValue *)malloc((size_t)rargc * sizeof(JSValue));
         if (f->rargs) { f->rargc = rargc; for (int i = 0; i < rargc; i++) f->rargs[i] = JS_DupValue(ctx, rargs[i]); }
     }
+    arec_attach(ctx, f);   /* resume: a handler-triggered async call (fired after qjs_begin) replays its parked path */
     return 1;
 }
 /* Spawn a re-run sibling of an async flow: a fresh call state from the RECIPE (func+args), the decision vector
@@ -4201,6 +4231,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        teardown reused) with no cross-page bleed. The arrays themselves are reused (not re-malloc'd). */
     g_reg_n = 0; g_work = 0; g_switches = 0; g_yield_floor = -1e300; g_made_progress = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL; g_msg_handler_n = 0;
     g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_park_requested = 0;
+    arec_free();   /* fresh session: drop any async recipes a prior teardown missed (idempotent) */
     g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
     JS_OptaintReset(ctx);   /* clear cross-flow opaque-taint set from any prior page analysis */
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
@@ -4595,21 +4626,14 @@ KEEP void qjs_begin(const char *recipes)
                 }
             }
             if (async_rec) {
-                /* ASYNC recipe: phase-1 boot already re-ran and re-fired the async call, so its live flow is
-                   ALREADY in g_reg (a fresh frame at its start, no decvec). Re-attach this recipe's decvec by
-                   source hash so it REPLAYS its parked await/branch path instead of re-forking from scratch. A
-                   handler-triggered async call has not re-fired yet (no live flow) -> unmatched, re-explored
-                   when its handler drives (never lost). Match a flow whose decvec is still unset so two recipes
-                   for the same async source attach to distinct live re-fires. */
-                int matched = 0;
-                for (int ri = 0; ri < g_reg_n; ri++) {
-                    Flow *rf = &g_reg[ri];
-                    if (rf->is_async && !rf->dec && JS_IsFunction(ctx, rf->handle) && JS_OrphanHash(ctx, rf->handle) == want) {
-                        rf->dec = dec; rf->dec_n = dec_n; rf->val = rval; rf->visits = rvis;
-                        matched = 1; resumed++; break;
-                    }
-                }
-                if (!matched) free(dec);
+                /* ASYNC recipe: park it in the pending map (g_arec). It attaches to the re-fired async call
+                   by source hash at ONE of two consult sites of this one map — the post-loop SWEEP below (for
+                   a boot-triggered call already re-created by phase-1 boot) or reg_add_async_call (for a
+                   handler-triggered call that fires later in phase 3). Either way it REPLAYS its parked
+                   await/branch path instead of re-forking from scratch. */
+                if (g_arec_n >= g_arec_cap) { int nc = g_arec_cap ? g_arec_cap * 2 : 8; AsyncRecipe *na = (AsyncRecipe *)realloc(g_arec, (size_t)nc * sizeof(AsyncRecipe)); if (na) { g_arec = na; g_arec_cap = nc; } }
+                if (g_arec_n < g_arec_cap) { g_arec[g_arec_n].hash = want; g_arec[g_arec_n].dec = dec; g_arec[g_arec_n].dec_n = dec_n; g_arec[g_arec_n].val = rval; g_arec[g_arec_n].visits = rvis; g_arec[g_arec_n].used = 0; g_arec_n++; }
+                else free(dec);
                 if (!semi) break; p = semi + 1; continue;
             }
             int found = -1;
@@ -4621,6 +4645,9 @@ KEEP void qjs_begin(const char *recipes)
             } else free(dec);
             if (!semi) break; p = semi + 1;
         }
+        /* SWEEP: attach async recipes to the flows phase-1 boot already re-created (their calls fired before
+           the map existed). Handler-triggered recipes stay pending for reg_add_async_call in phase 3. */
+        for (int ri = 0; ri < g_reg_n; ri++) if (arec_attach(ctx, &g_reg[ri])) resumed++;
         printf("@RESUMED %d\n", resumed); fflush(stdout);
     }
     JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
@@ -4779,6 +4806,7 @@ KEEP void qjs_teardown(void)
 {
     JSContext *ctx = g_ctx;
     if (!ctx) return;
+    arec_free();   /* free any async recipes whose handler never re-fired this session (never lost — waits for the session that fires it) */
     qjs_finalize();   /* resolve any stragglers opaque so no promise leaks */
     /* Unresolved module graph residue -> @WHY BEFORE emit_result (so it lands in resolverErrors). */
     if (g_pendmod_n) { char rz[64]; snprintf(rz, sizeof rz, "unresolved module graph x%d (dep never fetched)", g_pendmod_n); why_add(ctx, "module-link", rz); }

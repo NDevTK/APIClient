@@ -168,13 +168,17 @@ async function engineCreate(code, html, msg, persist) {
   // DEV-ONLY verification hook (a real page never carries this query param): force the RAM-pressure park so
   // the cross-session round trip (park recipes -> IDB -> restart-keep -> resume) is VERIFIABLE without a 512MB
   // working set. Keyed off the URL (flows reliably through msg.sourceUrl to here, unlike a cross-context
-  // global). The engine still runs boot to completion first (reg_has_boot guards the park), then parks its
-  // residue as recipes. The query param does NOT change the frontier key (origin+bundle), so a later plain
-  // visit resumes the same recipes.
+  // global). The query param does NOT change the frontier key (origin+bundle), so a later plain visit resumes.
+  // The park is DEFERRED N steps (not requested here, before any step) so it fires MID-EXPLORATION — after
+  // boot + the first flow bursts have RUN, FORKED, and SUSPENDED — exactly like a production RAM-pressure park
+  // (hostSchedule requests park only after engines have stepped, line ~285). Requesting it pre-step parked at
+  // work=1 with EMPTY decvecs (nothing had run), so decvec REPLAY (the whole point of a recipe) went untested;
+  // deferring parks real residue whose recipes carry non-empty decision vectors AND handler-driven async flows.
   // Only on the INITIAL park (no recipes to resume yet); firing while resuming would re-park the rehydrated
   // recipes forever (the stored sourceUrl keeps the query param), so a cold/re-visit resume never runs.
+  let _forceparkSteps = 0;
   if (msg && typeof msg.sourceUrl === "string" && /[?&]__forcepark=1\b/.test(msg.sourceUrl) && !(prior && prior.recipes)) {
-    try { M.ccall("qjs_request_park", "void", [], []); } catch (_) {}
+    _forceparkSteps = 2;   // park after boot + the first flow burst: flows have RUN + SUSPENDED (real decvecs) but not yet drained
   }
   const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
   const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
@@ -189,7 +193,7 @@ async function engineCreate(code, html, msg, persist) {
       return (r && r.ok && typeof r.body === "string") ? r.body : "";
     } catch (_) { return ""; }
   };
-  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, code, html, state: "hot" };
+  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, code, html, state: "hot", _forceparkSteps };
 }
 function engineWeight(eng) { return eng.state === "hot" ? +eng.M.ccall("qjs_top_weight", "number", [], []) : -Infinity; }
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
@@ -288,6 +292,9 @@ async function hostSchedule(pool, ops) {
       ops.requestPark(target);
     }
     const st = ops.step(target);
+    // DEV __forcepark: request the park only after N dispatches, so it captures MID-EXPLORATION residue
+    // (recipes with real decvecs + handler-driven async flows), mirroring a production RAM-pressure park.
+    if (target._forceparkSteps > 0 && --target._forceparkSteps === 0) ops.requestPark(target);
     // INCREMENTAL MERGE (both hot AND fetch-parked): a lone UNBOUNDED engine never reaches st===0, so without
     // this its already-emitted breadth never surfaces (@RESULT is teardown-only). A FETCH-HEAVY engine (lazy
     // chunks / a reply loop) is perpetually st===1, never st===2 — so surfacing ONLY on st===2 leaves it at
