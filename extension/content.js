@@ -241,18 +241,26 @@
     // unfetchable — so it THROWS (unhandled rejection, loud in the console), never a silent no-analysis and
     // never a 404/500 error-page body smuggled in as "the bundle". No .catch, no try/catch, no r.ok fallback:
     // if this surfaces, the target (or the dev fixture server) is broken and MUST be seen, not papered over.
-    fetch(location.href, { credentials: "same-origin" }).then(function (r) {
-      if (!r.ok) throw new Error("page fetch " + r.status + " for " + location.href + " — refusing to analyse a non-OK response as the bundle");
+    // The DOCUMENT's navigation URL — NOT location.href. An SPA (the tool's PRIMARY target) calls
+    // history.pushState/replaceState, which MUTATES location.href to a client-route that the server does not
+    // serve — so fetch(location.href) would GET a 404 for /dashboard and, being offensive, THROW, silently
+    // losing the ENTIRE analysis of the real bundle. PerformanceNavigationTiming.name is the actual URL the
+    // browser navigated to (the doc that shipped the bundle), immutable by pushState. Fallback to location.href
+    // only if the timing entry is unavailable.
+    var docUrl = location.href;
+    try { var _nav = performance.getEntriesByType("navigation")[0]; if (_nav && _nav.name) docUrl = _nav.name; } catch (_e) {}
+    fetch(docUrl, { credentials: "same-origin" }).then(function (r) {
+      if (!r.ok) throw new Error("page fetch " + r.status + " for " + docUrl + " — refusing to analyse a non-OK response as the bundle");
       var headers = {};
       r.headers.forEach(function (v, k) { headers[k.toLowerCase()] = v; });
       return r.text().then(function (html) {
-        if (!html) throw new Error("empty page body for " + location.href + " — no bundle to analyse");
+        if (!html) throw new Error("empty page body for " + docUrl + " — no bundle to analyse");
         _sendChunked({
           type: "CONTENT_HTML",
           html: html,
           responseHeaders: headers,
           origin: location.origin,
-          pageUrl: location.href,
+          pageUrl: docUrl,
           reason: why,
         }, "html");
       });
