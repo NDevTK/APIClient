@@ -118,10 +118,14 @@ static long    g_switches = 0;          /* flow SUSPEND/re-queue events (interle
 static double  g_max_parked = -1e300;
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
-static char    *g_csp = NULL;           /* the page's <meta http-equiv=Content-Security-Policy> content (the DOM-visible
-                                           policy; header-CSP needs response-header plumbing). An @S PoC must SURVIVE it:
-                                           an inline on-handler or script vector is DEAD under a script-src without
-                                           'unsafe-inline', so a finding is POLICY-RELATIVE (sink real, CSP blocks inline). */
+static char    *g_csp = NULL;           /* the page's EFFECTIVE Content-Security-Policy — the real HTTP response
+                                           header (g_header_csp, PRIMARY) when present, else the <meta http-equiv>
+                                           policy. An @S PoC must SURVIVE it: an inline on-handler or script vector is
+                                           DEAD under a script-src without 'unsafe-inline', so a finding is
+                                           POLICY-RELATIVE (sink real, CSP blocks inline). */
+static char    *g_header_csp = NULL;    /* the REAL Content-Security-Policy RESPONSE HEADER (from fetch(location.href),
+                                           same-origin so readable) — the policy the browser actually enforces, primary
+                                           over meta-CSP. NULL when the response carried no CSP header. */
 static int csp_lacks(const char *csp, const char *tok);   /* fwd: solve_all (above its definition) reports policy-relative findings per sink class */
 static JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide */
 static char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
@@ -3785,8 +3789,12 @@ static int csp_lacks(const char *csp, const char *tok) {
 static int csp_inline_blocked(const char *csp) { return csp_lacks(csp, "unsafe-inline"); }
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
-    free(g_csp); g_csp = NULL;   /* fresh document: re-read its meta-CSP (the frontier key + policy are per-document) */
-    lxb_dom_node_simple_walk(lxb_dom_interface_node(g_dom), csp_scan_cb, &g_csp);
+    free(g_csp); g_csp = NULL;   /* fresh document: re-derive its EFFECTIVE policy (per-document) */
+    if (g_header_csp && g_header_csp[0]) {
+        g_csp = strdup(g_header_csp);   /* the REAL HTTP CSP header — the primary policy the browser enforces */
+    } else {
+        lxb_dom_node_simple_walk(lxb_dom_interface_node(g_dom), csp_scan_cb, &g_csp);   /* no header CSP: fall back to <meta> (static hosting) */
+    }
     lxb_css_parser_t *p = lxb_css_parser_create();
     if (!p || lxb_css_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_css_parser_destroy(p, true); return; }
     lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)"script", 6);
@@ -4265,7 +4273,7 @@ static JSContext *g_ctx = NULL;
 static int g_rc = 0;
 
 KEEP int qjs_init(const char *boot, const char *html, const char *origin,
-                  const char *replies, const char *recipes)
+                  const char *replies, const char *csp)
 {
     JSRuntime *rt = JS_NewRuntime();
     if (!rt) { fprintf(stderr, "@E {\"phase\":\"newruntime\"}\n"); return 1; }
@@ -4323,7 +4331,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         if (JS_IsException(t)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
         else g_reply_table = t;
     }
-    (void)recipes;                                 /* recipes are seeded in phase-2 qjs_begin(), after the host reads the bundle-id */
+    free(g_header_csp); g_header_csp = (csp && csp[0]) ? strdup(csp) : NULL;   /* REAL HTTP CSP header (fetch(location.href)); dom_run_scripts makes it the effective g_csp, primary over meta. (recipes are seeded in phase-2 qjs_begin.) */
 
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_opaque, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
@@ -4878,6 +4886,7 @@ KEEP void qjs_teardown(void)
     for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
     free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
     free(g_csp); g_csp = NULL;
+    free(g_header_csp); g_header_csp = NULL;
     cons_reset(); free(g_cons); g_cons = NULL; g_cons_cap = 0;   /* free the per-flow value-domain constraint set */
     for (int i = 0; i < g_modsrc_n; i++) { free(g_modsrc[i].url); free(g_modsrc[i].src); JS_FreeValue(ctx, g_modsrc[i].ns); }
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;

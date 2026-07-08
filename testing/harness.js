@@ -338,9 +338,15 @@ async function cmdGoto(args) {
     let page;
     try { page = await getActivePage(browser); }
     catch (e) { page = await browser.newPage(); }
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    // OFFENSIVE: a dead/404 fixture server must CRASH here, never silently load a Chrome error page that
+    // then "analyses" as a passing run (the exact false-confidence that hid a down server for a whole
+    // session). page.goto returns the main navigation Response; a null response (net error) or a non-OK
+    // status is an unexpected state — fail hard so the broken server is seen, not papered over.
+    const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    if (!resp) throw new Error("goto " + url + " returned NO response (server unreachable / net error) — fix the fixture server before testing");
+    if (!resp.ok()) throw new Error("goto " + url + " -> HTTP " + resp.status() + " (not OK) — the target/fixture server is broken; refusing to analyse an error page");
     await page.bringToFront();
-    log("navigated to " + page.url());
+    log("navigated to " + page.url() + " [" + resp.status() + "]");
   });
 }
 

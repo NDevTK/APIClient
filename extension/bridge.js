@@ -157,8 +157,12 @@ async function engineCreate(code, html, msg, persist) {
   const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
   const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
   // PHASE 1 — parse + boot; the engine computes the stable bundle IDENTITY from its Lexbor <script> scan.
+  // The real HTTP Content-Security-Policy RESPONSE HEADER (captured same-origin by content.js fetch(location.href),
+  // lowercased) is the PRIMARY policy the engine uses for policy-relative XSS verdicts — header-CSP overrides
+  // the <meta> scan, which alone missed the header entirely (a header-CSP-blocked sink was reported exploitable).
+  const _csp = (msg && msg.responseHeaders && msg.responseHeaders["content-security-policy"]) || "";
   M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
-    [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), arg("")]);
+    [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), arg(_csp)]);
   const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
   const fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
   const prior = persist ? await frontierGet(fkey) : null;

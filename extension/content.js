@@ -229,16 +229,34 @@
   // executes under forced exec → @H records observe real fetch/XHR
   // with method, args, call site.
   function _sendPageHtml(why) {
-    var html;
-    try { html = document.documentElement.outerHTML; } catch (_) { return; }
-    if (!html) return;
-    _sendChunked({
-      type: "CONTENT_HTML",
-      html: html,
-      origin: location.origin,
-      pageUrl: location.href,
-      reason: why,
-    }, "html");
+    // REAL server response, not the rendered DOM: fetch(location.href) returns the UNMODIFIED HTML the
+    // server shipped PLUS the real response headers — and because location.href is same-origin, EVERY
+    // header is readable (Content-Security-Policy, Content-Type), unlike a cross-origin offscreen fetch.
+    // outerHTML was the post-execution DOM: document.write output serialized as real <script> elements
+    // (the engine then re-ran them + fatally crashed on their undefined refs), a JS-mutated tree, and NO
+    // headers — so the engine analysed a rendered page, not the shipped bundle, and judged XSS against
+    // meta-CSP only (missing the primary header CSP). This is the moat's ground truth: the bundle + its
+    // real policy. (Same-origin credentialed by default = the actual document the browser received.)
+    // OFFENSIVE: a non-OK status, a failed fetch, or an empty body is an UNEXPECTED state — the bundle is
+    // unfetchable — so it THROWS (unhandled rejection, loud in the console), never a silent no-analysis and
+    // never a 404/500 error-page body smuggled in as "the bundle". No .catch, no try/catch, no r.ok fallback:
+    // if this surfaces, the target (or the dev fixture server) is broken and MUST be seen, not papered over.
+    fetch(location.href, { credentials: "same-origin" }).then(function (r) {
+      if (!r.ok) throw new Error("page fetch " + r.status + " for " + location.href + " — refusing to analyse a non-OK response as the bundle");
+      var headers = {};
+      r.headers.forEach(function (v, k) { headers[k.toLowerCase()] = v; });
+      return r.text().then(function (html) {
+        if (!html) throw new Error("empty page body for " + location.href + " — no bundle to analyse");
+        _sendChunked({
+          type: "CONTENT_HTML",
+          html: html,
+          responseHeaders: headers,
+          origin: location.origin,
+          pageUrl: location.href,
+          reason: why,
+        }, "html");
+      });
+    });
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────

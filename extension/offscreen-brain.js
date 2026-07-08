@@ -5037,6 +5037,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
       scriptOffsets: scriptOffsets,
       sourceMapScripts: sourceMapScripts,
       pageHtml: getDoc(buf.docKey)._pageHtml || null,
+      responseHeaders: getDoc(buf.docKey)._responseHeaders || {},   // real CSP/Content-Type -> engine (header-CSP is the PRIMARY policy; meta-CSP is secondary)
       // Participate in the GLOBAL cross-session frontier: this engine's residue parks to IDB under RAM
       // pressure (resource-driven, host-side) and rehydrates by value order later. With headroom the page
       // runs to completion in one visit — nothing is lost to a clock; there is NO dispatch/step quantum.
@@ -5872,6 +5873,7 @@ function handleContentMessage(msg, sender) {
     // document's analysis (safeFetch SSRF origin + window.location + the credentialed
     // reply-seed) is THIS document's own origin/url, from the browser-provided sender.
     doc._pageHtml = String(msg.html || "");
+    doc._responseHeaders = msg.responseHeaders || {};   // real navigation response headers (CSP, Content-Type) — same-origin fetch(location.href), so all readable
     var _dk = documentId;
     var _buf = _scriptBuffers.get(_dk);
     if (!_buf) { _buf = {}; _scriptBuffers.set(_dk, _buf); }
