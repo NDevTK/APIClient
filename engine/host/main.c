@@ -1738,7 +1738,26 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
         if (g_in_session) reg_add_session(ctx, sib, g_c + 1);      /* an exploratory session forks ANOTHER session (re-fire handlers with the sibling vector) */
         else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);  /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
         else { reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1);
-               g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx; }   /* sibling = same function (same locator), different decisions */
+               Flow *bs = &g_reg[g_reg_n - 1];
+               bs->orphan_idx = g_cur_orphan_idx;   /* sibling = same function (same locator), different decisions */
+               /* A branch inside an async reject-sibling's CATCH: the branch-sibling must ALSO reject the same
+                  awaits (else it can't re-enter the catch this branch lives in), so re-run via the recipe carrying
+                  the parent's reject vector — composing the branch + await-reject decisions. (rejvec_n==0 = a
+                  normal flow: unchanged, re-runs g_cur_fn as a plain starter.) */
+               if (g_cur_flow && g_cur_flow->rejvec_n > 0) {
+                   void *bfs = JS_FlowNew(ctx, g_cur_fn, g_cur_flow->rthis, g_cur_flow->rargc, (JSValueConst *)g_cur_flow->rargs);
+                   if (bfs) {
+                       bs->fs = bfs;
+                       bs->rthis = JS_DupValue(ctx, g_cur_flow->rthis);
+                       if (g_cur_flow->rargc > 0 && g_cur_flow->rargs) {
+                           bs->rargs = (JSValue *)malloc((size_t)g_cur_flow->rargc * sizeof(JSValue));
+                           if (bs->rargs) { bs->rargc = g_cur_flow->rargc; for (int i = 0; i < g_cur_flow->rargc; i++) bs->rargs[i] = JS_DupValue(ctx, g_cur_flow->rargs[i]); }
+                       }
+                       bs->rejvec = (signed char *)malloc((size_t)g_cur_flow->rejvec_n);
+                       if (bs->rejvec) { bs->rejvec_n = g_cur_flow->rejvec_n; for (int i = 0; i < g_cur_flow->rejvec_n; i++) bs->rejvec[i] = g_cur_flow->rejvec[i]; }
+                   }
+               }
+        }
     }
     cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE);
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
