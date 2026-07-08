@@ -30,6 +30,7 @@
 #include "dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
+#include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #define KEEP EMSCRIPTEN_KEEPALIVE   /* export qjs_init/step/teardown for the persistent-instance protocol */
@@ -129,17 +130,7 @@ static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scri
 /* g_opaque + js_noop/js_opaque/js_opaque_stub + opaque_init/free live in opaque.c (included via opaque.h). */
 static char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
-/* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
-   has a '{' followed by only lowercase letters then '}'. Such a URL is not concretely fetchable. Generalizes
-   the old literal strstr("{}") checks so source-tagged holes are still recognized as opaque. */
-static int has_hole(const char *s) {
-    if (!s) return 0;
-    for (const char *p = s; (p = strchr(p, '{')); p++) {
-        const char *q = p + 1; while (*q >= 'a' && *q <= 'z') q++;
-        if (*q == '}') return 1;
-    }
-    return 0;
-}
+/* has_hole (opaque-hole URL test) is in url.c (included via url.h). */
 
 /* decision-vector state for the RUNNING starter flow (branch-arm BFS) — grows unbounded */
 static JSValue      g_cur_fn = JS_UNDEFINED;   /* the running starter's function (borrowed) so branch_decide can fork a sibling that re-runs it */
@@ -396,7 +387,7 @@ static int reg_readd(JSContext *ctx, Flow f)
    TRUSTED offscreen (safeFetch, one-per-endpoint) and its body injected here so r.json()/r.text()
    return the CONCRETE server reply -> a reply field flowing into a downstream request param becomes a
    REAL example value instead of {}. Absent url -> opaque (the honest shape). */
-static JSValue g_reply_table = JS_UNDEFINED;
+JSValue g_reply_table = JS_UNDEFINED;
 /* g_storage + js_storage_get/set + storage_free live in storage.c (localStorage/sessionStorage concolic). */
 static JSContext *g_ctx;   /* the run's context (defined = NULL below); fwd-declared for Lexbor callbacks */
 /* ENDPOINT REGISTRY + IDENTITY: the engine ACCUMULATES every learned endpoint (method/url/params/
@@ -665,7 +656,7 @@ static const char *ARRAY_PRELUDE_JS =
 typedef struct { char *url; int is_json; } Pending;
 static Pending *g_pending = NULL;
 static int g_pending_n = 0, g_pending_cap = 0;
-static void reply_fetch_register(const char *url, int is_json) {
+void reply_fetch_register(const char *url, int is_json) {
     if (!url) return;
     for (int i = 0; i < g_pending_n; i++) if (g_pending[i].url && strcmp(g_pending[i].url, url) == 0) return;   /* dedup: one fetch per url */
     if (g_pending_n >= g_pending_cap) {
@@ -736,7 +727,7 @@ static void pendmod_add(const char *src, size_t len) {
 }
 
 /* wrap val in an already-RESOLVED promise (consumes val) so `await`/`.then` chains continue synchronously. */
-static JSValue js_resolved(JSContext *ctx, JSValue val)
+JSValue js_resolved(JSContext *ctx, JSValue val)
 {
     JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
     if (!JS_IsException(promise)) {
@@ -746,87 +737,7 @@ static JSValue js_resolved(JSContext *ctx, JSValue val)
     JS_FreeValue(ctx, val);
     return promise;
 }
-/* Response body accessor for .blob/.arrayBuffer/.formData (binary/complex bodies): opaque, wrapped in a
-   resolved promise so the fetch chain CONTINUES. NOTE json()/text() do NOT come here — resp_consume LOADS
-   the real same-origin reply (fromReply, one-per-endpoint) so config/data fields are CONCRETE, not shapes:
-   a same-origin reply is TRUSTED app data to load, not external-input opacity. */
-static JSValue js_resp_body(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{ return js_resolved(ctx, JS_DupValue(ctx, g_opaque)); }
-/* the concrete reply body injected onto this Response (fromReply), or JS_UNDEFINED */
-static JSValue resp_body_str(JSContext *ctx, JSValueConst this_val) {
-    JSValue b = JS_GetPropertyStr(ctx, this_val, "__body");
-    if (JS_IsString(b)) return b;
-    JS_FreeValue(ctx, b); return JS_UNDEFINED;
-}
-/* the bundle is CONSUMING this reply's body but we have no concrete one -> a real bounded GET to this
-   (concrete) url is worth firing (the offscreen does it, one-per-endpoint). Emitted so the bridge fetches
-   ONLY consumed-reply endpoints, not every GET (a blind GET can hit /logout, /delete?id=). */
-static void reply_note_wanted(JSContext *ctx, JSValueConst this_val) {
-    JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
-    const char *s = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
-    if (s && s[0] && !has_hole(s)) { printf("@REPLYWANT %s\n", s); fflush(stdout); }
-    if (s) JS_FreeCString(ctx, s);
-    JS_FreeValue(ctx, u);
-}
-/* CONCOLIC leaf-wrap: a trusted loaded reply is ONE value whose STRUCTURE stays REAL (Object.keys/map/for-in/
-   array index all work natively) but whose STRING/BOOL leaves become concolic — each FORKS at a branch (so a
-   role/flag gate reaches the gated endpoint) AND carries its real value as the example (so a gate-INDEPENDENT
-   field keeps its real value on the forced arm: /api/billing/enterprise/acme-42, not /{}). NUMBERS stay
-   concrete — an opaque numeric would make `for(i<n)` / `.length` loops infinite (the known catastrophe). */
-/* parse a concrete reply body into the value json()/text() should resolve to. String/bool leaves become
-   concolic (fork + real example) via the SHARED JS_ConcolicWrap — the ONE home, also used by JSON.parse of
-   an SSR data blob (same trust boundary: loaded same-origin app data). */
-static JSValue reply_value(JSContext *ctx, JSValueConst body_str, int is_json) {
-    if (!is_json) return JS_DupValue(ctx, body_str);   /* text: unchanged (avoid regressing text->JSON.parse) */
-    size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, body_str);
-    JSValue parsed = s ? JS_ParseJSON(ctx, s, len, "<reply>") : JS_EXCEPTION;
-    if (s) JS_FreeCString(ctx, s);
-    if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return JS_DupValue(ctx, g_opaque); }
-    return JS_ConcolicWrap(ctx, parsed, "reply");   /* structure real; string/bool leaves concolic (fork + real example) */
-}
-/* r.json()/r.text(): a CACHED body resolves CONCOLIC (the boot re-run's path, make_response injected __body);
-   else REGISTER the fetch (concrete url) and resolve OPAQUE in place. The reply's provision enqueues a forking
-   boot re-run that re-runs boot with the reply now synchronously concolic — delivery is the re-run, never a
-   parked promise (persistent async state outside the flow's COW delta, which is what leaked). */
-static JSValue resp_consume(JSContext *ctx, JSValueConst this_val, int is_json) {
-    JSValue body = resp_body_str(ctx, this_val);
-    if (JS_IsString(body)) { JSValue v = reply_value(ctx, body, is_json); JS_FreeValue(ctx, body); return js_resolved(ctx, v); }
-    JS_FreeValue(ctx, body);
-    JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
-    const char *url = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
-    if (url && url[0] && !has_hole(url)) reply_fetch_register(url, is_json);   /* concrete url -> fetch it; the boot re-run delivers it concolic */
-    if (url) JS_FreeCString(ctx, url);
-    JS_FreeValue(ctx, u);
-    return js_resolved(ctx, JS_NewOpaqueSourced(ctx, "{reply}", "reply"));   /* opaque NOW (source-tagged {reply}, not an untagged {} sentinel); concrete via the provision-driven re-run. A pre-reply field used as a URL/param reads {reply}, honest about its provenance, until the boot re-run delivers the concrete example. */
-}
-static JSValue js_resp_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 1); }
-static JSValue js_resp_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 0); }
-/* build a fetch Response whose identity is concrete (ok/status/url) but whose BODY is opaque. */
-static JSValue make_response(JSContext *ctx, const char *url)
-{
-    JSValue resp = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, resp, "url", JS_NewString(ctx, url ? url : ""));
-    JS_SetPropertyStr(ctx, resp, "ok", JS_TRUE);
-    JS_SetPropertyStr(ctx, resp, "status", JS_NewInt32(ctx, 200));
-    JS_SetPropertyStr(ctx, resp, "statusText", JS_NewString(ctx, "OK"));
-    JS_SetPropertyStr(ctx, resp, "json", JS_NewCFunction(ctx, js_resp_json, "json", 0));
-    JS_SetPropertyStr(ctx, resp, "text", JS_NewCFunction(ctx, js_resp_text, "text", 0));
-    JS_SetPropertyStr(ctx, resp, "blob", JS_NewCFunction(ctx, js_resp_body, "blob", 0));
-    JS_SetPropertyStr(ctx, resp, "arrayBuffer", JS_NewCFunction(ctx, js_resp_body, "arrayBuffer", 0));
-    JS_SetPropertyStr(ctx, resp, "formData", JS_NewCFunction(ctx, js_resp_body, "formData", 0));
-    {   /* headers.get(name) -> opaque (a response header is external input) */
-        JSValue h = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, h, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
-        JS_SetPropertyStr(ctx, resp, "headers", h);
-    }
-    /* fromReply: inject the concrete reply body for THIS url (r.json()/r.text() then return real data) */
-    if (url && JS_IsObject(g_reply_table)) {
-        JSValue b = JS_GetPropertyStr(ctx, g_reply_table, url);
-        if (JS_IsString(b)) JS_SetPropertyStr(ctx, resp, "__body", b);   /* consumes b */
-        else JS_FreeValue(ctx, b);
-    }
-    return resp;
-}
+/* make_response + the Response json()/text()/body accessors + reply-body concolic-wrap are in reply.c. */
 /* URL query-parameter extraction (hexval + url_pct_decode + build_query_params) is in url.c (pure). */
 static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);/* fwd */
 /* The shared @H sink: record one endpoint (consumes `ep`) + raise the running flow's value. A CANDIDATE flow

@@ -6,6 +6,10 @@
 
 #include "quickjs.h"
 
+/* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
+   has a '{' followed by only lowercase letters then '}'. Such a URL is not concretely fetchable. */
+int has_hole(const char *s);
+
 /* Build {name, location:"query", validValues:[value?]} objects from `url`'s query string onto `params`
    (a JS array). A hole value ({search}) passes through literally (opacity marker, decoded downstream). */
 void build_query_params(JSContext *ctx, const char *url, JSValueConst params);

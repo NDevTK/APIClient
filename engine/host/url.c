@@ -2,6 +2,17 @@
 #include <string.h>
 #include "url.h"
 
+/* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
+   has a '{' followed by only lowercase letters then '}'. Such a URL is not concretely fetchable. Generalizes
+   the old literal strstr("{}") checks so source-tagged holes are still recognized as opaque. */
+int has_hole(const char *s) {
+    if (!s) return 0;
+    for (const char *p = s; (p = strchr(p, '{')); p++) {
+        const char *q = p + 1; while (*q >= 'a' && *q <= 'z') q++;
+        if (*q == '}') return 1;
+    }
+    return 0;
+}
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
