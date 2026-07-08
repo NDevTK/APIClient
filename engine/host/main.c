@@ -3729,34 +3729,23 @@ static JSValue js_session_drain(JSContext *ctx, JSValueConst this_val, int argc,
    attribute for inline, JS_DetectModule(body) for a fetched chunk — never a parse-failure guess. A classic
    script runs GLOBAL and its runtime throw surfaces as @WHY (never swallowed); a module runs as ESM and, if
    a static-import dep isn't fetched yet, defers into g_pendmod (retried on each qjs_provide). */
-static int eval_page_script(JSContext *ctx, const char *code, size_t len, const char *name, int is_module) {
+static void eval_page_script(JSContext *ctx, const char *code, size_t len, const char *name, int is_module) {
     if (is_module) {
         char nm[32]; snprintf(nm, sizeof nm, "<mod-%d>", g_modseq++);    /* unique so no name collision on defer/retry */
         JSValue v = JS_Eval(ctx, code, len, nm, JS_EVAL_TYPE_MODULE);
         if (JS_IsException(v)) { JS_FreeValue(ctx, JS_GetException(ctx)); pendmod_add(code, len); }  /* dep not fetched yet: defer */
         else { JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {} }  /* module eval is async -> drive it */
         JS_FreeValue(ctx, v);
-        return 0;
+        return;
     }
     JSValue v = JS_Eval(ctx, code, len, name, JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(v)) {
-        /* BROWSER-FAITHFUL: a page inline-script's RUNTIME throw halts THAT script (exactly a real browser's
-           uncaught console error) and boot CONTINUES with the next script — it must NEVER crash the whole
-           analysis. Real app pages routinely ship a throwing inline script (an undefined global, a script-order
-           race, a broken third-party), and a fatal @WHY there would discard every finding and make the tool
-           useless on the real sites it targets. The throw is SURFACED as a non-fatal resolver error (visible +
-           findable, so a genuine missing host-edge is still fixed), not swallowed. Only an ENGINE-INVARIANT
-           violation (a NULL that can't be NULL, an unbalanced COW/tramp stack) stays a fatal @WHY. */
+    if (JS_IsException(v)) {   /* a genuine RUNTIME throw -> surface it, never silently swallow */
         JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
-        fflush(stdout);
-        fprintf(stderr, "@E script-eval %s: %.200s\n", name ? name : "?", m ? m : "throw");
-        fflush(stderr);
+        char rz[300]; snprintf(rz, sizeof rz, "%s: %s", name ? name : "?", m ? m : "throw");
+        why_add(ctx, "script-eval", rz);
         if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
-        JS_FreeValue(ctx, v);
-        return 1;   /* threw: caller must NOT cache this script for boot-replay (it isn't faithful boot state) */
     }
     JS_FreeValue(ctx, v);
-    return 0;
 }
 /* Scan the parsed DOM for the FIRST <meta http-equiv="Content-Security-Policy" content="…">. The real Lexbor
    DOM (never a regex), like the bundle-id script scan. First policy wins (multiple metas -> browser enforces
@@ -3845,10 +3834,10 @@ static void dom_run_scripts(JSContext *ctx) {
             if (is_exec) {
                 for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; }     /* inline JS body -> bundle id */
                 bh ^= '|'; bh *= 16777619u;
+                boot_script_cache((const char *)txt, tl);   /* cache for cross-flow @S candidate boot-replay */
                 g_current_script = el_wrap(ctx, el);   /* document.currentScript during this inline script */
-                int threw = eval_page_script(ctx, (const char *)txt, tl, "<script>", is_mod);
+                eval_page_script(ctx, (const char *)txt, tl, "<script>", is_mod);
                 JS_FreeValue(ctx, g_current_script); g_current_script = JS_NULL;
-                if (!threw) boot_script_cache((const char *)txt, tl);   /* cache for @S boot-replay ONLY a script that ran cleanly — a throwing page script is browser-faithfully skipped from replay, so boot_scripts_run's divergence-abort still catches a genuine COW gap */
             }
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
