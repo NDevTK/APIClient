@@ -9,9 +9,7 @@
 #define ENGINE_HOST_STORAGE_H
 
 #include "quickjs.h"
-
-/* The OPAQUE sentinel (main.c) — getItem returns it when nothing was stored for the key this run. */
-extern JSValue g_opaque;
+#include "opaque.h"   /* g_opaque — getItem returns it when nothing was stored for the key this run */
 
 JSValue js_storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);   /* getItem / key */
 JSValue js_storage_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);   /* setItem */

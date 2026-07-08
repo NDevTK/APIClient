@@ -23,6 +23,7 @@
 #include <lexbor/selectors/selectors.h>
 #include <lexbor/dom/dom.h>
 #include <lexbor/url/url.h>
+#include "opaque.h"       /* the OPAQUE sentinel g_opaque + js_noop/js_opaque/js_opaque_stub, its own TU */
 #include "solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
 #include "dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
@@ -125,7 +126,7 @@ static double  g_max_parked = -1e300;
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 /* CSP (g_csp/g_header_csp + csp_lacks/csp_derive/csp_set_header/csp_free) lives in csp.c — included below. */
-JSValue g_opaque = JS_UNDEFINED;   /* the OPAQUE sentinel: external input the tool must not concretely decide (non-static: shared with the split component TUs, e.g. storage.c) */
+/* g_opaque + js_noop/js_opaque/js_opaque_stub + opaque_init/free live in opaque.c (included via opaque.h). */
 static char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
 /* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
@@ -391,7 +392,6 @@ static int reg_readd(JSContext *ctx, Flow f)
 }
 
 
-static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);   /* fwd: opaque-returning host stub */
 /* fromReply: a bridge-provided map { url -> concrete reply body text }. A real GET is fired by the
    TRUSTED offscreen (safeFetch, one-per-endpoint) and its body injected here so r.json()/r.text()
    return the CONCRETE server reply -> a reply field flowing into a downstream request param becomes a
@@ -828,7 +828,6 @@ static JSValue make_response(JSContext *ctx, const char *url)
     return resp;
 }
 /* URL query-parameter extraction (hexval + url_pct_decode + build_query_params) is in url.c (pure). */
-static JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);            /* fwd */
 static JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);/* fwd */
 /* The shared @H sink: record one endpoint (consumes `ep`) + raise the running flow's value. A CANDIDATE flow
    carries a concrete @S breakout PAYLOAD, so its request URLs are @S artifacts, NOT real @H — only OPAQUE
@@ -1679,8 +1678,6 @@ static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int ar
    can't parse) -> OPAQUE, so its shape flows through untouched (the endpoint is learned as its shape) and
    the tool never concretely decides external input. searchParams.get is OPAQUE (query values = external). */
 static const char *g_origin;   /* defined below; forward for the URL helpers */
-static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-static JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
 /* Resolve a URL with the vendored LEXBOR URL module (the real WHATWG URL Standard parser) — never a
    hand-rolled string resolver. Returns the serialized absolute href (malloc'd; caller frees) or NULL on a
    parse failure (-> the caller yields opaque, never an invented value). */
@@ -2085,14 +2082,7 @@ static JSValue js_headers_ctor(JSContext *ctx, JSValueConst new_target, int argc
 /* Return the OPAQUE sentinel — external input the tool must not concretely decide. The shared handler for
    every "unknown/non-deterministic value" host edge (Math.random, Date.now, crypto.randomUUID, performance.now,
    …); a branch on its result auto-forks BOTH arms via the engine OP_if hook (branch_decide). */
-static JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{ return JS_DupValue(ctx, g_opaque); }
-/* Minimal host-edge stubs for a browser bundle: a no-op (addEventListener etc — the handler stays a
-   never-fired function, so orphan-invoke drives it), and an opaque-returning stub (DOM reads that are
-   external input the tool must not concretely decide). A missing capability is a missing stub, never a
-   parallel resolver — the real Lexbor DOM replaces these when the host is wired. */
-static JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_UNDEFINED; }
-static JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_DupValue(ctx, g_opaque); }
+/* js_opaque/js_noop/js_opaque_stub are in opaque.c (included via opaque.h). */
 /* A CONSTRUCTABLE base class so `class X extends HTMLElement {…}` DEFINES (else it throws and the whole Web
    Component — with its connectedCallback endpoints/sinks — is LOST). super() returns the default derived
    `this`; connectedCallback then becomes an uncalled method the orphan driver reaches like any other. */
@@ -3934,7 +3924,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both
        arms via the decision-vector logic (real bundles: external input reaches OP_if as opaque). */
     JS_InitOpaqueClass(ctx);             /* register the shape-carrying opaque class */
-    g_opaque = JS_NewOpaqueShaped(ctx, "{}");   /* the default opaque (shape "{}"); generic propagation dups it */
+    opaque_init(ctx);
     JS_SetOpaqueMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
     JS_SetForkableHook(ctx_forks);  /* an opaque-collection iterator forks (opaque done) only where branch_decide decides */
@@ -4494,7 +4484,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_el_proto); g_el_proto = JS_UNDEFINED;   /* the element-method proto ref (custom-element base chain) */
     JS_FreeValue(ctx, g_ce_registry); g_ce_registry = JS_UNDEFINED;   /* customElements.define registry */
     JS_FreeValue(ctx, g_ce_instances); g_ce_instances = JS_UNDEFINED;   /* retained upgraded instances */
-    JS_FreeValue(ctx, g_opaque); g_opaque = JS_UNDEFINED;
+    opaque_free(ctx);
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     storage_free(ctx);
     JS_FreeValue(ctx, g_endpoints); g_endpoints = JS_UNDEFINED;
