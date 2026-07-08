@@ -23,6 +23,7 @@
 #include <lexbor/selectors/selectors.h>
 #include <lexbor/dom/dom.h>
 #include <lexbor/url/url.h>
+#include "check.h"        /* CHECK (always fatal: OOM/security) / DCHECK (dev-only fatal: should-never-happen), its own TU */
 #include "opaque.h"       /* the OPAQUE sentinel g_opaque + js_noop/js_opaque/js_opaque_stub, its own TU */
 #include "solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
@@ -253,7 +254,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec,
     if (g_reg_n >= g_reg_cap) {
         int nc = g_reg_cap ? g_reg_cap * 2 : 256;
         Flow *nr = (Flow *)realloc(g_reg, (size_t)nc * sizeof(Flow));
-        if (!nr) { fflush(stdout); fprintf(stderr, "@E {\"phase\":\"reg_oom\"}\n"); fflush(stderr); abort(); }   /* OOM is a fatal error: crash, never continue with a dropped flow */
+        CHECK(nr, "reg_oom: flow-registry realloc failed — OOM is a physical floor, never continue with a dropped flow");
         g_reg = nr; g_reg_cap = nc;
     }
     g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val;
@@ -390,7 +391,7 @@ static int reg_readd(JSContext *ctx, Flow f)
     if (g_reg_n >= g_reg_cap) {
         int nc = g_reg_cap ? g_reg_cap * 2 : 256;
         Flow *nr = (Flow *)realloc(g_reg, (size_t)nc * sizeof(Flow));
-        if (!nr) { fflush(stdout); fprintf(stderr, "@E {\"phase\":\"reg_oom\"}\n"); fflush(stderr); abort(); }   /* OOM is a fatal error: crash, never continue with a dropped flow */
+        CHECK(nr, "reg_oom: flow-registry realloc failed — OOM is a physical floor, never continue with a dropped flow");
         g_reg = nr; g_reg_cap = nc;
     }
     g_reg[g_reg_n++] = f; return 1;
@@ -1041,9 +1042,13 @@ void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
 static void why_add(JSContext *ctx, const char *phase, const char *reason) {
     (void)ctx;
     fflush(stdout);
-    fprintf(stderr, "@E {\"phase\":\"%s\",\"reason\":\"%s\"}\n", phase ? phase : "why", reason ? reason : "");
+    fprintf(stderr, "@WHY {\"phase\":\"%s\",\"reason\":\"%s\"}\n", phase ? phase : "why", reason ? reason : "");
     fflush(stderr);
-    abort();   /* crash without continuing — a @WHY is an unfixed gap, surfaced loud, never papered over */
+#if APICLIENT_DEV
+    abort();   /* DEV: a @WHY is a SHOULD-NEVER-HAPPEN forcing function — crash at the origin, never log-and-continue (design goal: ZERO @WHY). This is a runtime-reasoned DFAIL. */
+#endif
+    /* RELEASE: the gap is genuinely unsupportable outside development (features can't be built there), so the
+       @WHY is surfaced but the USER is not crashed — the release exemption, never a dev-mode fallback. */
 }
 /* ── @S SOLVER (forced execution, not taint tracing) ─────────────────────────────
    Each SINK reached by external input is collected as a task {sink, ctx, expr} — expr is the evaluable
@@ -2425,10 +2430,11 @@ static void boot_script_cache(const char *txt, size_t len) {
 static void boot_scripts_run(JSContext *ctx) {
     for (int i = 0; i < g_boot_n; i++) {
         JSValue v = JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(v)) {   /* boot re-run must be faithful — a throw is a COW/host gap to FIX, not to log past */
+        if (JS_IsException(v)) {   /* boot re-run must be faithful — a throw is a COW/host gap or not-yet-built capability */
             JSValue e = JS_GetException(ctx); const char *em = JS_ToCString(ctx, e);
-            fflush(stdout); fprintf(stderr, "@E {\"phase\":\"boot-replay\",\"reason\":\"boot script threw on re-run: %s\"}\n", em ? em : "?"); fflush(stderr);
-            abort();
+            char rz[300]; snprintf(rz, sizeof rz, "boot script threw on re-run: %s", em ? em : "?");
+            if (em) JS_FreeCString(ctx, em); JS_FreeValue(ctx, e);
+            DFAIL(rz);   /* DEV: crash at the origin (build the faithful-replay capability). RELEASE: surfaced, not user-crashed (exemption). */
         }
         JS_FreeValue(ctx, v);
     }
