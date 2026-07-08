@@ -1344,27 +1344,15 @@ static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (
 static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow drove through the real code+branches to the sink where it broke out. The ONLY @S output: a working PoC is self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
 static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
 static JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
-/* Tag-context (open a new tag / break out of a quoted attr WITH a new tag) THEN attribute-injection into
-   the EXISTING tag with NO `<` — the latter is the only breakout when a filter escapes `<`/`>` but reflects
-   into a quoted/unquoted attribute value (`<img src="PAYLOAD">`, extremely common). These must actually FIRE,
-   not just parse to a live handler: the leading `x` makes `src="x"` a 404 so `onerror` triggers on the REAL
-   page (an empty src does not), and the trailing `y=`/`y='` swallows the template's own closing quote so the
-   injected handler is clean JS (`onerror=X9`, not `onerror=X9"` which is a syntax error). The live-verify
-   (X9 -> apiclientsink) is ground truth; these are built to survive it, not to game the static Lexbor check. */
-static const char *CAND_HTML[] = { "<img src=x onerror=X9>", "<svg onload=X9>", "\"><img src=x onerror=X9>",
-                                   "'><svg onload=X9>", "</script><svg onload=X9>",
-                                   "x\" onerror=X9 y=\"", "x' onerror=X9 y='", "x onerror=X9 ",
-                                   /* the input may land in a JS SUB-context of the HTML — an on* handler's string
-                                      (`onerror="log('INPUT')"`) or an inline <script> string — so try JS-string
-                                      breakouts too; solve_broke_html + x9_executable reject them in a pure-HTML
-                                      context (no live handler forms), so this adds reach, never a false hit. */
-                                   "';X9();//", "\";X9();//", ");X9();//", "1;X9();//", NULL };
+/* url/js sinks: the breakout VECTOR is fixed by the context itself — a URL sink executes a `javascript:`
+   scheme, an eval/Function/setTimeout sink executes a JS-string/expression escape — so these are the
+   context-determined bases (not an HTML-payload guess-list; the HTML-context breakout is CONSTRUCTED from the
+   observed sink structure by construct_ctx_breakout). x9_fires proves each actually executes. */
 static const char *CAND_URL[]  = { "javascript:X9", "javascript:X9//", NULL };
 static const char *CAND_JS[]   = { "1;X9();//", "';X9();//", "\";X9();//", ");X9();//", "\n;X9();//", NULL };
 static const char **cand_set(const char *sc) {
     if (sc && strcmp(sc, "url") == 0) return CAND_URL;
-    if (sc && strcmp(sc, "js") == 0) return CAND_JS;
-    return CAND_HTML;
+    return CAND_JS;   /* only reached for non-HTML sinks (url handled above, js here); HTML goes to construct_ctx_breakout */
 }
 /* GATE TOKENS: concrete strings the REAL code tested tainted input against (startsWith('cmd:'), =='x'…).
    The forced-exec search prefixes/suffixes each base payload with them so a gated sink is solved by the
@@ -1534,23 +1522,75 @@ static int is_rawtext_tag(const char *t) {
     return t && (!strcmp(t, "textarea") || !strcmp(t, "title") || !strcmp(t, "style") || !strcmp(t, "xmp") ||
                  !strcmp(t, "iframe") || !strcmp(t, "noembed") || !strcmp(t, "noframes") || !strcmp(t, "script"));
 }
-struct ctx_probe { int found; int is_comment; char tag[16]; };
+/* Where the hole's bytes actually LANDED, read from the REAL Lexbor parse of the sink output — never guessed.
+   is_attr=1: inside an ATTRIBUTE VALUE of element `tag` (so the firing vector is chosen from `tag`'s browser
+   semantics). is_comment: inside <!-- -->. tag+found (text child): element content (rawtext or normal text). */
+struct ctx_probe { int found; int is_comment; int is_attr; char tag[16]; };
 static lxb_status_t ctx_probe_cb(lxb_dom_node_t *node, void *vctx) {
     struct ctx_probe *c = vctx;
     if (c->found) return LXB_STATUS_STOP;
+    if (node->type == LXB_DOM_NODE_TYPE_ELEMENT) {   /* the locator may sit in one of THIS element's attribute values */
+        lxb_dom_element_t *el = lxb_dom_interface_element(node);
+        for (lxb_dom_attr_t *a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
+            size_t vl = 0; const lxb_char_t *av = lxb_dom_attr_value(a, &vl);
+            if (av && mem_has_loc(av, vl)) {
+                size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
+                if (nm && nl > 0 && nl < sizeof(c->tag)) { memcpy(c->tag, nm, nl); c->tag[nl] = 0; }
+                c->is_attr = 1; c->found = 1; return LXB_STATUS_STOP;
+            }
+        }
+        return LXB_STATUS_OK;
+    }
     if (node->type != LXB_DOM_NODE_TYPE_TEXT && node->type != LXB_DOM_NODE_TYPE_COMMENT) return LXB_STATUS_OK;
     size_t l = 0; lxb_char_t *t = lxb_dom_node_text_content(node, &l);
     if (!t || !mem_has_loc(t, l)) return LXB_STATUS_OK;
     if (node->type == LXB_DOM_NODE_TYPE_COMMENT) { c->is_comment = 1; c->found = 1; return LXB_STATUS_STOP; }
-    lxb_dom_node_t *par = node->parent;   /* the RAWTEXT element whose content the hole sits in */
+    lxb_dom_node_t *par = node->parent;   /* the element whose text content the hole sits in (rawtext or normal) */
     if (par && par->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(lxb_dom_interface_element(par), &nl);
         if (nm && nl > 0 && nl < sizeof(c->tag)) { memcpy(c->tag, nm, nl); c->tag[nl] = 0; c->found = 1; return LXB_STATUS_STOP; }
     }
     return LXB_STATUS_OK;
 }
+/* Browser semantics (a FACT, like is_rawtext_tag): which elements AUTO-FIRE an event handler with NO user
+   interaction — the vector for a `<`-free attribute injection onto the element the hole already sits in.
+   img/input/iframe/embed/object/script/link/source fire `onerror` on a broken resource; body/svg/video/audio
+   fire `onload`. A generic element (div/span/a/...) has no auto-firing handler, so only a tag-injection
+   (which needs `<`) can break out of it. */
+static const char *elem_fire_event(const char *tag) {
+    if (!tag) return NULL;
+    if (!strcmp(tag, "img") || !strcmp(tag, "input") || !strcmp(tag, "iframe") || !strcmp(tag, "embed") ||
+        !strcmp(tag, "object") || !strcmp(tag, "script") || !strcmp(tag, "link") || !strcmp(tag, "source")) return "onerror";
+    if (!strcmp(tag, "body") || !strcmp(tag, "svg") || !strcmp(tag, "video") || !strcmp(tag, "audio")) return "onload";
+    return NULL;
+}
+/* Emit ONE candidate + its GATE-satisfying variants: each observed gate token as a PREFIX and a SUFFIX, and
+   an adjacent-pair for correlated gates (startsWith('a')&&endsWith('b')) — the concrete input the REAL code
+   demanded, so a gated sink is reached. ONE home for both the constructed HTML-context candidates and the
+   url/js base candidates; x9_fires proves each actually executes. */
+static void emit_cand(JSContext *ctx, JSValueConst hitfn, const char *cand, const char *vt) {
+    reg_add_cand(ctx, hitfn, cand, vt);
+    size_t lc = strlen(cand);
+    for (int g = 0; g < g_gate_n; g++) {
+        size_t lt = strlen(g_gate_tokens[g]);
+        char *pre = malloc(lt + lc + 1), *suf = malloc(lt + lc + 1);
+        if (pre) { memcpy(pre, g_gate_tokens[g], lt); memcpy(pre + lt, cand, lc + 1); reg_add_cand(ctx, hitfn, pre, vt); free(pre); }
+        if (suf) { memcpy(suf, cand, lc); memcpy(suf + lc, g_gate_tokens[g], lt + 1); reg_add_cand(ctx, hitfn, suf, vt); free(suf); }
+    }
+    for (int g = 0; g + 1 < g_gate_n; g++) {
+        size_t l0 = strlen(g_gate_tokens[g]), l1 = strlen(g_gate_tokens[g + 1]), lc2 = strlen(cand);
+        char *comb = malloc(l0 + lc2 + l1 + 1);
+        if (comb) { memcpy(comb, g_gate_tokens[g], l0); memcpy(comb + l0, cand, lc2); memcpy(comb + l0 + lc2, g_gate_tokens[g + 1], l1 + 1); reg_add_cand(ctx, hitfn, comb, vt); free(comb); }
+    }
+}
+/* CONSTRUCT the @S breakout for an HTML-context sink FROM THE OBSERVED SINK STRUCTURE — never a fixed list.
+   The sink's OWN output shape (`<img src="{}">`, `<!--{}-->`, `<textarea>{}`, or bare `{}`) is parsed by the
+   REAL Lexbor parser to locate the hole's parse context, and the char immediately before the hole gives the
+   quoting; the minimal ESCAPE into an executable position is DERIVED from that context, and the firing VECTOR
+   is a browser-semantic AUTO-FIRING element (`<svg onload>`/`<img onerror>`), not a guessed payload. x9_fires
+   then proves each actually executes in this exact context. */
 static void construct_ctx_breakout(JSContext *ctx, const char *shape, JSValueConst hitfn, const char *vt) {
-    if (!shape || !strchr(shape, '{')) return;   /* no hole -> no surrounding structure to construct from */
+    if (!shape || !strchr(shape, '{')) { emit_cand(ctx, hitfn, "<svg onload=X9>", vt); return; }   /* whole output IS the input -> HTML-text context */
     size_t sl = strlen(shape);
     char *wl = (char *)malloc(sl + 16); if (!wl) return;   /* the shape with each {..} hole replaced by the locator */
     size_t o = 0;
@@ -1559,7 +1599,7 @@ static void construct_ctx_breakout(JSContext *ctx, const char *shape, JSValueCon
         if (o < sl + 15) wl[o++] = shape[i]; i++;
     }
     wl[o] = 0;
-    struct ctx_probe cp = { 0, 0, {0} };
+    struct ctx_probe cp = { 0 };
     lxb_html_document_t *doc = lxb_html_document_create();
     if (doc) {
         if (lxb_html_document_parse(doc, (const lxb_char_t *)wl, o) == LXB_STATUS_OK)
@@ -1567,10 +1607,27 @@ static void construct_ctx_breakout(JSContext *ctx, const char *shape, JSValueCon
         lxb_html_document_destroy(doc);
     }
     free(wl);
-    char cand[64];
-    if (cp.is_comment) { snprintf(cand, sizeof cand, "--><svg onload=X9>"); reg_add_cand(ctx, hitfn, cand, vt); }
-    else if (cp.found && is_rawtext_tag(cp.tag)) { snprintf(cand, sizeof cand, "</%s><svg onload=X9>", cp.tag); reg_add_cand(ctx, hitfn, cand, vt); }
-    /* normal text / attribute context -> the base candidates already reach it; construct nothing extra */
+    if (cp.is_comment) { emit_cand(ctx, hitfn, "--><svg onload=X9>", vt); return; }   /* inside <!-- --> : close the comment first */
+    if (cp.found && is_rawtext_tag(cp.tag)) { char c[48]; snprintf(c, sizeof c, "</%s><svg onload=X9>", cp.tag); emit_cand(ctx, hitfn, c, vt); return; }   /* rawtext element: close it */
+    /* Derive the breakout from the REAL parse FACTS, not a per-context payload guess. The quote to close comes
+       from the sink output (the char Lexbor's attribute value was wrapped in); the firing VECTOR for a `<`-free
+       injection comes from the ELEMENT Lexbor said the hole sits in (elem_fire_event). */
+    const char *hole = strchr(shape, '{'); char q = (hole && hole > shape) ? hole[-1] : 0;
+    const char *qs = (q == '"') ? "\"" : (q == '\'') ? "'" : "";
+    if (cp.is_attr) {
+        char b[96];
+        snprintf(b, sizeof b, "%s><svg onload=X9>", qs); emit_cand(ctx, hitfn, b, vt);   /* TAG-injection: close the quote+tag, inject a known auto-firing element (uses `<`) */
+        const char *ev = elem_fire_event(cp.tag);   /* the element's OWN auto-firing event — the `<`-free vector when `<` is filtered */
+        if (ev) {   /* add a handler to the element the hole already sits in: a bad value breaks its resource so the event fires; `y=` swallows the template's closing quote */
+            if (qs[0]) snprintf(b, sizeof b, "x%s %s=X9 y=%s", qs, ev, qs);
+            else       snprintf(b, sizeof b, "x %s=X9 ", ev);   /* unquoted attribute */
+            emit_cand(ctx, hitfn, b, vt);
+        }
+        return;
+    }
+    /* HTML-text context (or the probe couldn't place it): a firing element IS the breakout. */
+    emit_cand(ctx, hitfn, "<svg onload=X9>", vt);
+    emit_cand(ctx, hitfn, "<img src=x onerror=X9>", vt);
 }
 /* Sink reached. DUAL-MODE:
    - REPLAY flow (g_candidate set): `val` is the CONCRETE transformed candidate that ran through the REAL
@@ -1631,29 +1688,16 @@ static void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValu
         if (!done) {
             JS_SetPropertyStr(ctx, g_enqueued, ek, JS_NewBool(ctx, 1));
             char vt[300]; snprintf(vt, sizeof vt, "%s|%s", sink, sctx);   /* the sink|ctx these candidates verify -> skip once one breaks out */
-            const char **cands = cand_set(sctx);
-            for (int i = 0; cands[i]; i++) {
-                reg_add_cand(ctx, hitfn, cands[i], vt);
-                /* GATE-GUIDED variants: try each observed gate token as a PREFIX and SUFFIX of the payload,
-                   so startsWith('cmd:')/endsWith(...)/includes(...) gates are satisfied by the concrete input
-                   the real code demanded. The one that passes the gate reaches the sink and breaks out. */
-                for (int g = 0; g < g_gate_n; g++) {
-                    size_t lt = strlen(g_gate_tokens[g]), lc = strlen(cands[i]);
-                    char *pre = malloc(lt + lc + 1), *suf = malloc(lt + lc + 1);
-                    if (pre) { memcpy(pre, g_gate_tokens[g], lt); memcpy(pre + lt, cands[i], lc + 1); reg_add_cand(ctx, hitfn, pre, vt); free(pre); }
-                    if (suf) { memcpy(suf, cands[i], lc); memcpy(suf + lc, g_gate_tokens[g], lt + 1); reg_add_cand(ctx, hitfn, suf, vt); free(suf); }
-                }
-                /* CORRELATED gates (`startsWith('cmd:') && endsWith('!end')`): tokens are collected in EXECUTION
-                   order, so the earlier gate is the PREFIX check and the later the SUFFIX/contains check. An
-                   ADJACENT-pair candidate earlier+payload+later satisfies both — O(N), no method tracking. */
-                for (int g = 0; g + 1 < g_gate_n; g++) {
-                    size_t l0 = strlen(g_gate_tokens[g]), l1 = strlen(g_gate_tokens[g + 1]), lc = strlen(cands[i]);
-                    char *comb = malloc(l0 + lc + l1 + 1);
-                    if (comb) { memcpy(comb, g_gate_tokens[g], l0); memcpy(comb + l0, cands[i], lc); memcpy(comb + l0 + lc, g_gate_tokens[g + 1], l1 + 1);
-                        reg_add_cand(ctx, hitfn, comb, vt); free(comb); }
-                }
+            /* HTML-context sinks: CONSTRUCT the breakout from the observed sink STRUCTURE (parse context +
+               quoting), never a fixed HTML payload list. url/js sinks: the vector is itself context-fixed
+               (javascript: scheme for a URL sink, a JS-string/expression escape for eval/Function/setTimeout),
+               so drive those bases. Both funnel through emit_cand -> gate-token variants + firing verify. */
+            if (sctx && (strcmp(sctx, "html") == 0 || strcmp(sctx, "htmls") == 0)) {
+                construct_ctx_breakout(ctx, shape, hitfn, vt);
+            } else {
+                const char **cands = cand_set(sctx);
+                for (int i = 0; cands[i]; i++) emit_cand(ctx, hitfn, cands[i], vt);
             }
-            construct_ctx_breakout(ctx, shape, hitfn, vt);   /* CONSTRUCT the RCDATA/comment escape from the sink's structure (base candidates only reach text/attr) */
         }
     }
 }
