@@ -789,6 +789,17 @@ function mergeToGlobal(tab) {
       if (ge.lastSeen) v.lastSeen = Date.now();
       if (ge._firstSeenGlobal) v._firstSeenGlobal = ge._firstSeenGlobal;
       v._isNew = false;
+      // UNION path-param examples so a later paramless re-emit (e.g. a re-visit before the concolic reply
+      // re-run landed) never DROPS values a prior emit learned — the moat is monotonic.
+      if (ge.pathParams || v.pathParams) {
+        var _mp = new Map();
+        for (var _s of [ge.pathParams || [], v.pathParams || []]) for (var _pp of _s) {
+          var _cur = _mp.get(_pp.name) || new Set();
+          for (var _val of (_pp.values || [])) _cur.add(_val);
+          _mp.set(_pp.name, _cur);
+        }
+        v.pathParams = Array.from(_mp, function (e) { return { name: e[0], values: Array.from(e[1]).slice(0, 20) }; });
+      }
     }
     globalStore.endpoints.set(k, v);
   }
@@ -5631,6 +5642,14 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
             // host edge, per-header literal/opaque) — transport metadata shown
             // in the Send panel so the endpoint is actually usable.
             requiredHeaders: (callSite.headers && Object.keys(callSite.headers).length) ? callSite.headers : null,
+            // Concrete PATH-PARAM examples the engine computed (e.g. a reply field `orgId=acme-42` collapsed
+            // into /api/org/{}/members). The rich per-doc method schema carries these, but it is EVICTED after
+            // review, so without persisting them onto the flat endpoint the cumulative moat loses the real
+            // learned values — the whole point of the tool. Carried here so they survive eviction.
+            pathParams: (function () {
+              var pp = (callSite.params || []).filter(function (p) { return (p.location === "path") && p.validValues && p.validValues.length; });
+              return pp.length ? pp.map(function (p) { return { name: p.name, values: p.validValues.slice(0, 20) }; }) : null;
+            })(),
             // (Request body: the @BODY params[location:body] feed the discovery method schema, which is the
             //  SINGLE source the Send panel (schema.requestBody) and OpenAPI export (convertDiscoveryToOpenApi)
             //  read. An endpoint-entry requestBody copy was DEAD — resolveEndpointSchema never surfaced it — so
