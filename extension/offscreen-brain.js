@@ -436,7 +436,12 @@ function _emptyDocView() {
    arbiter's cross-site/cross-session learning reaches the real netdiff --unused surface. */
 function _mergeFrontierResult(sourceUrl, result) {
   try {
-    if (!result || !result.fetchCallSites || !result.fetchCallSites.length) return;
+    // Merge on EITHER surface: an XSS-only page carries verified @S PoCs with no endpoints. Gating on
+    // fetchCallSites alone dropped every incremental sink (they only surface here now, not just at teardown).
+    if (!result) return;
+    var hasEps = result.fetchCallSites && result.fetchCallSites.length;
+    var hasSinks = result.securitySinks && result.securitySinks.length;
+    if (!hasEps && !hasSinks) return;
     var view = _emptyDocView();
     view.url = sourceUrl || ""; view.tabUrl = sourceUrl || "";
     result.sourceUrl = sourceUrl || result.sourceUrl || "";

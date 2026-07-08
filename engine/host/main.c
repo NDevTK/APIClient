@@ -1317,17 +1317,20 @@ static JSValue solve_all(JSContext *ctx) {
     JS_FreeValue(ctx, seen);
     return out;
 }
-/* with_sinks=0 (INCREMENTAL snapshot): emit endpoints/chunks only, SKIP solve_all — the @S solve re-runs boot
-   (boot-replay candidate verification) which is a teardown-time operation, unsafe to trigger while the
-   scheduler still holds live flows. Endpoints are the moat's incremental need; @S PoCs surface at finalize. */
+/* with_sinks is a NO-OP retained only for the call-site signature: solve_all is a PURE COLLECTOR of already-
+   verified PoCs (g_verified, populated by candidate REPLAY flows in the scheduler — the solving is NOT here),
+   so it is side-effect-free and safe to run on EVERY snapshot, incremental or final. @S PoCs are part of the
+   ONE continuous frontier and MUST surface incrementally like @H endpoints — never gated behind a teardown a
+   live/unbounded engine may never reach (the exact reason a looping XSS page reported zero sinks). */
 static void emit_result_ex(JSContext *ctx, int with_sinks) {
+    (void)with_sinks;
     if (JS_IsUndefined(g_dedup_fn) || !JS_IsArray(g_endpoints)) return;
     JSValueConst args[1] = { g_endpoints };
     JSValue deduped = JS_Call(ctx, g_dedup_fn, JS_UNDEFINED, 1, args);
     if (JS_IsException(deduped)) { js_std_dump_error(ctx); deduped = JS_NewArray(ctx); }
     JSValue result = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, result, "fetchCallSites", deduped);                 /* consumes deduped */
-    JS_SetPropertyStr(ctx, result, "securitySinks", with_sinks ? solve_all(ctx) : JS_NewArray(ctx));   /* @S: forced-exec solve (teardown-only; skipped for a mid-run snapshot) */
+    JS_SetPropertyStr(ctx, result, "securitySinks", solve_all(ctx));   /* @S: COLLECT verified PoCs (pure read of g_verified) — surfaced incrementally, exactly like @H endpoints */
     JS_SetPropertyStr(ctx, result, "chunkUrls", JS_DupValue(ctx, g_chunkurls));
     JS_SetPropertyStr(ctx, result, "_park", JS_DupValue(ctx, g_park));
     JS_SetPropertyStr(ctx, result, "_orphans", JS_NewInt32(ctx, g_orphan_n));
@@ -3051,6 +3054,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     endpoint_init(ctx); g_chunkurls = JS_NewArray(ctx);
     g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
     g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
+    JS_CowExempt(g_verified); JS_CowExempt(g_enqueued);   /* host analysis LEDGERS: a candidate flow's verified PoC / dedup mark must SURVIVE the flow's COW delta unapply, not be captured+reverted as page state */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
     /* PLATFORM BUILTINS: everything compiled here (x9, dedup, the Array/String prelude) is engine-internal, not
        page code — mark it born-executed so orphan-collection NEVER force-invokes it. Without this, an uncalled
@@ -3613,7 +3617,7 @@ KEEP int qjs_step(void)
    teardown-free (dedup + collect verified @S + stringify, no state mutation); solve_all only COLLECTS verified
    PoCs (the solving is in replay flows), so this is repeat-safe. The host calls it on a coarse cadence for a
    hot engine and merges the snapshot (globalStore is cumulative + dedup-idempotent, so re-merge is sound). */
-KEEP void qjs_emit_partial(void) { if (g_ctx) emit_result_ex(g_ctx, 0); }   /* endpoints-only snapshot (no @S boot-replay mid-run) */
+KEEP void qjs_emit_partial(void) { if (g_ctx) emit_result_ex(g_ctx, 0); }   /* incremental snapshot: endpoints AND verified @S PoCs (solve_all is a pure collector) */
 
 KEEP void qjs_teardown(void)
 {

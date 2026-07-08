@@ -344,7 +344,10 @@ const _hostOps = {
       if (idx < 0) return;
       const partial = linesToAnalysis([eng.lines[idx]], eng.msg);   // parse only the snapshot line
       eng.lines.splice(idx, 1);                                     // consume it
-      if (partial.fetchCallSites.length && typeof self.onFrontierAdvance === "function") self.onFrontierAdvance(eng.msg.sourceUrl, partial);
+      // Merge on EITHER surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally
+      // too — gating the merge on fetchCallSites alone dropped every sink from a live/looping engine.
+      const hasWork = partial.fetchCallSites.length || (partial.securitySinks && partial.securitySinks.length);
+      if (hasWork && typeof self.onFrontierAdvance === "function") self.onFrontierAdvance(eng.msg.sourceUrl, partial);
     } catch (_) {}
   },
   step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { engineCrash(eng, "step", e); return 0; } },   // crashed instance -> finalize (loud), don't keep stepping a dead engine
