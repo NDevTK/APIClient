@@ -683,9 +683,27 @@ static void reply_fetch_register(const char *url, int is_json) {
    it — like the browser's async script load). The offscreen provides the body; qjs_provide evals it. */
 static char **g_chunk_pending = NULL;
 static int g_chunk_n = 0, g_chunk_cap = 0;
+/* Chunks already FETCHED + provided this session: a lazy chunk is a STATIC resource (its bytes never change),
+   so it is fetched ONCE — its content is boot_script_cache'd / module-linked and re-run on every boot re-run,
+   never re-fetched. Without this, a chunk removed from g_chunk_pending on provision is re-added by the next
+   boot re-run's re-injection -> the bridge re-fetches forever (a fetch/provide LIVELOCK). This is the
+   one-per-endpoint resource cache CLAUDE.md prescribes, NOT a flow seen-set (it dedups an identical STATIC
+   GET, never distinct exploration work). */
+static char **g_chunk_done = NULL;
+static int g_chunk_done_n = 0, g_chunk_done_cap = 0;
+static int chunk_is_done(const char *url) {
+    for (int i = 0; i < g_chunk_done_n; i++) if (strcmp(g_chunk_done[i], url) == 0) return 1;
+    return 0;
+}
+static void chunk_mark_done(const char *url) {
+    if (!url || chunk_is_done(url)) return;
+    if (g_chunk_done_n >= g_chunk_done_cap) { int nc = g_chunk_done_cap ? g_chunk_done_cap * 2 : 16; char **n = realloc(g_chunk_done, (size_t)nc * sizeof(char *)); if (!n) return; g_chunk_done = n; g_chunk_done_cap = nc; }
+    g_chunk_done[g_chunk_done_n++] = strdup(url);
+}
 static void chunk_pending_add(const char *url) {
     if (!url) return;
-    for (int i = 0; i < g_chunk_n; i++) if (strcmp(g_chunk_pending[i], url) == 0) return;   /* dedup */
+    if (chunk_is_done(url)) return;   /* already fetched this session -> re-run from cache, never re-fetch (kills the provide livelock) */
+    for (int i = 0; i < g_chunk_n; i++) if (strcmp(g_chunk_pending[i], url) == 0) return;   /* dedup pending */
     if (g_chunk_n >= g_chunk_cap) { int nc = g_chunk_cap ? g_chunk_cap * 2 : 16; char **n = realloc(g_chunk_pending, (size_t)nc * sizeof(char *)); if (!n) return; g_chunk_pending = n; g_chunk_cap = nc; }
     g_chunk_pending[g_chunk_n++] = strdup(url);
 }
@@ -2831,11 +2849,20 @@ static void script_maybe_load(lxb_dom_element_t *el) {
        chunk_pending_add'ing it is nonsensical and drives a fetch/provide feedback that livelocks a
        multi-sink handler. Chunk discovery is a NORMAL-flow concern; skip it under a candidate. */
     if (g_candidate) return;
-    size_t sl = 0; const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
-    if (src && sl) {
-        char *u = strndup((const char *)src, sl);
-        if (u) { arr_push_str(g_ctx, g_chunkurls, u); if (!has_hole(u)) chunk_pending_add(u); free(u); }   /* -> chunkUrls + fetch in place */
+    char *u = NULL;
+    /* Prefer the CONCOLIC EXAMPLE from the attribute shadow: a reply-field / computed src (`s.src = m.chunk`)
+       leaves only the holey SHAPE in the Lexbor attribute, so the real chunk URL lives in the shadow. */
+    int si = attr_shadow_find(el, "src");
+    if (si >= 0) {
+        JSValue ex = JS_OpaqueExample(g_ctx, g_attr_shadow[si].opaque);
+        if (!JS_IsUndefined(ex)) { const char *e = JS_ToCString(g_ctx, ex); if (e) { u = strdup(e); JS_FreeCString(g_ctx, e); } }
+        JS_FreeValue(g_ctx, ex);
     }
+    if (!u) {
+        size_t sl = 0; const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
+        if (src && sl) u = strndup((const char *)src, sl);
+    }
+    if (u) { arr_push_str(g_ctx, g_chunkurls, u); if (!has_hole(u)) chunk_pending_add(u); free(u); }   /* -> chunkUrls + fetch in place */
 }
 static void resolve_with(JSContext *ctx, JSValueConst resolve, JSValue val) {   /* resolve borrowed; val consumed */
     JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, (JSValueConst *)&val); JS_FreeValue(ctx, r); JS_FreeValue(ctx, val);
@@ -3102,8 +3129,16 @@ static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     const char *n = refl_name(magic);
     if (magic == 1 || magic == 2) solve_add(ctx, "href", "url", val);   /* @S: el.href/.action = external -> javascript:/redirect */
     else if (magic == 11) solve_add(ctx, "srcdoc", "htmls", val);        /* @S: iframe.srcdoc renders attacker HTML in the frame */
-    const char *v = JS_ToCString(ctx, val);
-    if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); JS_FreeCString(ctx, v); }
+    int is_opq = JS_IsOpaque(val);
+    /* A CONCOLIC value set via PROPERTY (`s.src = replyField` / `el.href = computedUrl`) must keep its real
+       value in the attribute shadow — EXACTLY like setAttribute — else the concrete example is lost to the
+       holey shape written into Lexbor: getAttribute would not round-trip the taint, and script_maybe_load
+       could not chunk-load a reply-driven <script src> by its example. The Lexbor attr stores the display
+       shape; the shadow carries the concolic (taint + example). */
+    if (!g_candidate) attr_shadow_set(ctx, el, n, is_opq ? val : JS_UNDEFINED);
+    const char *v = is_opq ? JS_OpaqueShapeC(val) : JS_ToCString(ctx, val);
+    if (v) { dom_attr_capture(el, n); lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v)); }
+    if (v && !is_opq) JS_FreeCString(ctx, v);   /* JS_OpaqueShapeC returns an internal pointer — don't free */
     return JS_UNDEFINED;
 }
 /* Common element APIs that real bundles call constantly — MISSING ones throw and kill the script (like
@@ -4233,6 +4268,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_park_requested = 0;
     arec_free();   /* fresh session: drop any async recipes a prior teardown missed (idempotent) */
     g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
+    for (int i = 0; i < g_chunk_done_n; i++) free(g_chunk_done[i]);
+    g_chunk_done_n = 0;   /* fresh session: the fetched-chunk cache is per-session (a new visit re-fetches the current bytes) */
     JS_OptaintReset(ctx);   /* clear cross-flow opaque-taint set from any prior page analysis */
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
@@ -4732,6 +4769,7 @@ KEEP void qjs_provide(const char *url, const char *body)
             }
             JS_CowSetActive(1); JS_SetFlowLocalMark(1); g_dom_capture = dsv;
         }
+        chunk_mark_done(url);   /* fetched once: its body is cached/linked + re-run on boot re-runs, never re-fetched (no provide livelock) */
         free(g_chunk_pending[i]);
         for (int j = i; j < g_chunk_n - 1; j++) g_chunk_pending[j] = g_chunk_pending[j + 1];
         g_chunk_n--;
