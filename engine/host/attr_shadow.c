@@ -1,6 +1,7 @@
 /* DOM attribute taint shadow — see attr_shadow.h. */
 #include <string.h>
 #include <stdlib.h>
+#include "check.h"        /* CHECK — dropping a taint shadow on OOM would silently corrupt @S isolation */
 #include "attr_shadow.h"
 
 typedef struct { lxb_dom_element_t *el; char *name; JSValue opaque; } AttrShadow;
@@ -18,7 +19,7 @@ void attr_shadow_set(JSContext *ctx, lxb_dom_element_t *el, const char *name, JS
     }
     if (i >= 0) { JS_FreeValue(ctx, g_attr_shadow[i].opaque); g_attr_shadow[i].opaque = JS_DupValue(ctx, opaque); return; }
     if (g_attr_shadow_n >= g_attr_shadow_cap) { int nc = g_attr_shadow_cap ? g_attr_shadow_cap * 2 : 16;
-        AttrShadow *n = realloc(g_attr_shadow, (size_t)nc * sizeof(AttrShadow)); if (!n) return; g_attr_shadow = n; g_attr_shadow_cap = nc; }
+        AttrShadow *n = realloc(g_attr_shadow, (size_t)nc * sizeof(AttrShadow)); CHECK(n, "attr-shadow-oom: realloc failed — silently dropping a taint shadow corrupts @S isolation"); g_attr_shadow = n; g_attr_shadow_cap = nc; }
     g_attr_shadow[g_attr_shadow_n].el = el; g_attr_shadow[g_attr_shadow_n].name = strdup(name);
     g_attr_shadow[g_attr_shadow_n].opaque = JS_DupValue(ctx, opaque); g_attr_shadow_n++;
 }

@@ -721,23 +721,23 @@ typedef struct { char *url; char *src; size_t len; JSValue ns; } ModSrc;   /* ns
 static ModSrc *g_modsrc = NULL; static int g_modsrc_n = 0, g_modsrc_cap = 0;
 static void modsrc_put(const char *url, const char *src, size_t len) {
     for (int i = 0; i < g_modsrc_n; i++) if (strcmp(g_modsrc[i].url, url) == 0) return;   /* first source wins */
-    if (g_modsrc_n >= g_modsrc_cap) { int nc = g_modsrc_cap ? g_modsrc_cap * 2 : 8; ModSrc *n = realloc(g_modsrc, (size_t)nc * sizeof(ModSrc)); if (!n) return; g_modsrc = n; g_modsrc_cap = nc; }
-    char *s = malloc(len + 1); if (!s) return; memcpy(s, src, len); s[len] = 0;
+    if (g_modsrc_n >= g_modsrc_cap) { int nc = g_modsrc_cap ? g_modsrc_cap * 2 : 8; ModSrc *n = realloc(g_modsrc, (size_t)nc * sizeof(ModSrc)); CHECK(n, "modsrc-oom: realloc failed — dropping a module source silently breaks its import graph"); g_modsrc = n; g_modsrc_cap = nc; }
+    char *s = malloc(len + 1); CHECK(s, "modsrc-oom: source copy alloc failed"); memcpy(s, src, len); s[len] = 0;
     g_modsrc[g_modsrc_n].url = strdup(url); g_modsrc[g_modsrc_n].src = s; g_modsrc[g_modsrc_n].len = len; g_modsrc[g_modsrc_n].ns = JS_UNDEFINED; g_modsrc_n++;
 }
 static ModSrc *modsrc_get(const char *url) { for (int i = 0; i < g_modsrc_n; i++) if (strcmp(g_modsrc[i].url, url) == 0) return &g_modsrc[i]; return NULL; }
 /* URLs discovered as STATIC-import deps: link them IN-GRAPH (loader compiles them), never eval standalone
    (that would double-run their side effects — the loader already links+runs them). */
 static char **g_moddep = NULL; static int g_moddep_n = 0, g_moddep_cap = 0;
-static void moddep_add(const char *u) { for (int i = 0; i < g_moddep_n; i++) if (strcmp(g_moddep[i], u) == 0) return; if (g_moddep_n >= g_moddep_cap) { int nc = g_moddep_cap ? g_moddep_cap * 2 : 8; char **n = realloc(g_moddep, (size_t)nc * sizeof(char *)); if (!n) return; g_moddep = n; g_moddep_cap = nc; } g_moddep[g_moddep_n++] = strdup(u); }
+static void moddep_add(const char *u) { for (int i = 0; i < g_moddep_n; i++) if (strcmp(g_moddep[i], u) == 0) return; if (g_moddep_n >= g_moddep_cap) { int nc = g_moddep_cap ? g_moddep_cap * 2 : 8; char **n = realloc(g_moddep, (size_t)nc * sizeof(char *)); CHECK(n, "moddep-oom: realloc failed — a dropped static-import dep would eval standalone + double-run side effects"); g_moddep = n; g_moddep_cap = nc; } g_moddep[g_moddep_n++] = strdup(u); }
 static int is_moddep(const char *u) { for (int i = 0; i < g_moddep_n; i++) if (strcmp(g_moddep[i], u) == 0) return 1; return 0; }
 /* Modules whose link is deferred until their imported chunks arrive (source copy, retried on each provide). */
 typedef struct { char *src; size_t len; } PendMod;
 static PendMod *g_pendmod = NULL; static int g_pendmod_n = 0, g_pendmod_cap = 0;
 static int g_modseq = 0;   /* unique module names so a retry never collides with a prior failed link */
 static void pendmod_add(const char *src, size_t len) {
-    if (g_pendmod_n >= g_pendmod_cap) { int nc = g_pendmod_cap ? g_pendmod_cap * 2 : 8; PendMod *n = realloc(g_pendmod, (size_t)nc * sizeof(PendMod)); if (!n) return; g_pendmod = n; g_pendmod_cap = nc; }
-    char *s = malloc(len + 1); if (!s) return; memcpy(s, src, len); s[len] = 0;
+    if (g_pendmod_n >= g_pendmod_cap) { int nc = g_pendmod_cap ? g_pendmod_cap * 2 : 8; PendMod *n = realloc(g_pendmod, (size_t)nc * sizeof(PendMod)); CHECK(n, "pendmod-oom: realloc failed — a dropped deferred module never links, silently losing its endpoints"); g_pendmod = n; g_pendmod_cap = nc; }
+    char *s = malloc(len + 1); CHECK(s, "pendmod-oom: source copy alloc failed"); memcpy(s, src, len); s[len] = 0;
     g_pendmod[g_pendmod_n].src = s; g_pendmod[g_pendmod_n].len = len; g_pendmod_n++;
 }
 
