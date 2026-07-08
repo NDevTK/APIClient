@@ -31,6 +31,7 @@
 #include "attr_shadow.h"  /* DOM attribute taint side-map ((el,name)->opaque), its own TU */
 #include "forms.h"        /* HTML form submission -> @H endpoint, its own TU */
 #include "classlist.h"    /* element.classList, its own TU */
+#include "docwrite.h"     /* document.write -> @S sink + script loader, its own TU */
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
@@ -701,7 +702,7 @@ static void chunk_mark_done(const char *url) {
     if (g_chunk_done_n >= g_chunk_done_cap) { int nc = g_chunk_done_cap ? g_chunk_done_cap * 2 : 16; char **n = realloc(g_chunk_done, (size_t)nc * sizeof(char *)); if (!n) return; g_chunk_done = n; g_chunk_done_cap = nc; }
     g_chunk_done[g_chunk_done_n++] = strdup(url);
 }
-static void chunk_pending_add(const char *url) {
+void chunk_pending_add(const char *url) {
     if (!url) return;
     if (chunk_is_done(url)) return;   /* already fetched this session -> re-run from cache, never re-fetch (kills the provide livelock) */
     for (int i = 0; i < g_chunk_n; i++) if (strcmp(g_chunk_pending[i], url) == 0) return;   /* dedup pending */
@@ -1025,9 +1026,9 @@ static JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueCons
    result as ONE `@RESULT <json>` line (JSON.stringify — correct escaping, single line). The host does
    ONE JSON.parse and relays it: no @H/@P/@HDR/@BODY text protocol, no host-side re-parse, no host
    identity. Sinks/chunks/errors/park are added to the same object by their accumulate sites. */
-static JSValue g_chunkurls = JS_UNDEFINED;    /* JS array of discovered external <script src> */
+JSValue g_chunkurls = JS_UNDEFINED;    /* JS array of discovered external <script src> */
 static JSValue g_park = JS_UNDEFINED;         /* JS array of "hash,decbits" frontier replay recipes */
-static void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
+void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
     if (!JS_IsArray(arr) || !s) return;
     uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, arr, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
     JS_SetPropertyUint32(ctx, arr, n, JS_NewString(ctx, s));
@@ -2693,64 +2694,7 @@ static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int a
     JS_FreeValue(ctx, ctor);
     return el_wrap(ctx, el);
 }
-/* document.write EXECUTES the script it injects — a real browser runs `document.write('<script>code</script>')`
-   as TOP-LEVEL code in GLOBAL scope, in document order. Parse the CONCRETE written HTML and run each inline
-   <script> exactly like an inline one (dom_run_scripts) — a plain top-level JS_Eval, NEVER wrapped in a function
-   (that makes top-level `var`s function-local: a wrong-scope workaround). Branches + computed URLs are then
-   explored, not merely URL-literals string-extracted. A written script that throws is caught; pathological
-   document.write-of-a-script recursion is a loud crash TODO, never a re-entrancy-guard workaround. */
-static lxb_status_t dw_script_run_cb(lxb_dom_node_t *node, void *vctx) {
-    JSContext *ctx = vctx;
-    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return LXB_STATUS_OK;
-    lxb_dom_element_t *el = lxb_dom_interface_element(node);
-    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
-    if (!(nl == 6 && nm && memcmp(nm, "script", 6) == 0)) return LXB_STATUS_OK;
-    size_t sl = 0;
-    const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
-    if (src && sl) {   /* external <script src>: a chunk LOAD (document.write('<script src=...>')) — fetch + run it, not just string-extract */
-        char *u = strndup((const char *)src, sl);
-        if (u) { arr_push_str(ctx, g_chunkurls, u); if (!has_hole(u)) chunk_pending_add(u); free(u); }
-        return LXB_STATUS_OK;
-    }
-    size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
-    if (!txt || tl == 0) return LXB_STATUS_OK;
-    char *code = strndup((const char *)txt, tl);   /* null-terminate for JS_Eval */
-    if (!code) return LXB_STATUS_OK;
-    JSValue r = JS_Eval(ctx, code, tl, "<docwrite>", JS_EVAL_TYPE_GLOBAL);   /* TOP-LEVEL, global scope */
-    if (JS_IsException(r)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
-    JS_FreeValue(ctx, r);
-    free(code);
-    return LXB_STATUS_OK;
-}
-static void doc_write_run_scripts(JSContext *ctx, const char *html) {
-    lxb_html_document_t *doc = lxb_html_document_create();
-    if (!doc) return;
-    if (lxb_html_document_parse(doc, (const lxb_char_t *)html, strlen(html)) == LXB_STATUS_OK) {
-        /* Walk the WHOLE document, not just <body>: a bare `<script src>` (the common document.write form)
-           parses into <head>, so a body-only walk never reached it — the external-script load silently no-op'd. */
-        lxb_dom_node_t *root = lxb_dom_interface_node(doc);
-        if (root) lxb_dom_node_simple_walk(root, dw_script_run_cb, ctx);
-    }
-    lxb_html_document_destroy(doc);
-}
-static JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    for (int i = 0; i < argc; i++) {
-        solve_add(ctx, "document.write", "htmls", argv[i]);   /* @S: written HTML is attacker-influenced -> XSS check */
-        /* CONCRETE or CONCOLIC written HTML: run its inline scripts + load its <script src> chunks. A concolic
-           value (a reply/computed HTML like '<script src="'+cfg.url+'">') is an opaque OBJECT, not a JS string,
-           so JS_IsString alone skipped it — dropping the real example. Prefer the concolic example (concrete
-           src), exactly like fetch/import/script.src. */
-        JSValue ex = JS_IsString(argv[i]) ? JS_UNDEFINED : JS_OpaqueExample(ctx, argv[i]);
-        JSValueConst hv = !JS_IsUndefined(ex) ? ex : argv[i];
-        if (JS_IsString(hv)) {
-            const char *html = JS_ToCString(ctx, hv);
-            if (html && strstr(html, "<script")) doc_write_run_scripts(ctx, html);
-            if (html) JS_FreeCString(ctx, html);
-        }
-        JS_FreeValue(ctx, ex);
-    }
-    return JS_UNDEFINED;
-}
+/* document.write (js_doc_write + script running) is in docwrite.c (included via docwrite.h). */
 /* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
 /* new Function(...args, BODY): the body is compiled as code -> an eval-class @S sink. Wrap the builtin:
    attacker/candidate body -> solve_add + a harmless callable (so `new Function(x)()` doesn't throw); anything
