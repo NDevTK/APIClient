@@ -29,6 +29,7 @@
 #include "dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
 #include "dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
 #include "attr_shadow.h"  /* DOM attribute taint side-map ((el,name)->opaque), its own TU */
+#include "forms.h"        /* HTML form submission -> @H endpoint, its own TU */
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
@@ -1443,7 +1444,7 @@ static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int ar
    hand-rolled string resolver). An OPAQUE input (external-input-tainted, or a shape with {} holes Lexbor
    can't parse) -> OPAQUE, so its shape flows through untouched (the endpoint is learned as its shape) and
    the tool never concretely decides external input. searchParams.get is OPAQUE (query values = external). */
-static const char *g_origin;   /* defined below; forward for the URL helpers */
+const char *g_origin;   /* defined below; forward for the URL helpers (non-static: forms.c borrows it) */
 /* Resolve a URL with the vendored LEXBOR URL module (the real WHATWG URL Standard parser) — never a
    hand-rolled string resolver. Returns the serialized absolute href (malloc'd; caller frees) or NULL on a
    parse failure (-> the caller yields opaque, never an invented value). */
@@ -1454,7 +1455,7 @@ static lxb_status_t url_ser_cb(const lxb_char_t *data, size_t len, void *cbctx) 
     memcpy(b->s + b->n, data, len); b->n += len; b->s[b->n] = 0;
     return LXB_STATUS_OK;
 }
-static char *url_resolve(const char *input, const char *base) {
+char *url_resolve(const char *input, const char *base) {
     lxb_url_parser_t *p = lxb_url_parser_create();
     if (!p || lxb_url_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_url_parser_destroy(p, true); return NULL; }
     lxb_url_t *bu = (base && base[0]) ? lxb_url_parse(p, NULL, (const lxb_char_t *)base, strlen(base)) : NULL;
@@ -1954,7 +1955,7 @@ static JSValue js_el_on_set(JSContext *ctx, JSValueConst this_val, JSValueConst 
    yield a "{}"-shaped garbage URL and lose the endpoint). Only the EXTERNAL-INPUT parts — search/hash —
    stay OPAQUE (must never force a branch), yet carry a concrete example when page state already has one.
    The host injects the real principal at wire time; g_origin is the node-harness placeholder. */
-static const char *g_origin   = "https://app.example.com";   /* host-injected real page principal (argv[3]); placeholder for node tests */
+const char *g_origin   = "https://app.example.com";   /* host-injected real page principal (argv[3]); placeholder for node tests */
 static const char *g_protocol = "https:";
 static const char *g_host     = "app.example.com";   /* host = hostname[:port] (location.host) */
 static const char *g_hostname = "app.example.com";   /* hostname WITHOUT port (location.hostname) */
@@ -2064,7 +2065,7 @@ static JSValue make_location(JSContext *ctx)
    the page HTML, NOT a bridge-side scrape — so it can carry real attribute values now, and become
    per-flow COW state + intercept dynamic script injection (steps C/D). */
 lxb_html_document_t *g_dom = NULL;   /* the live parsed document (non-static: dom_select.c reads it) */
-static JSClassID g_el_class_id;
+JSClassID g_el_class_id;   /* element class id (non-static: forms.c + future dom_element.c borrow it) */
 
 JSValue el_wrap(JSContext *ctx, lxb_dom_element_t *el) {   /* non-static: dom_select.c wraps its matches */
     if (!el) return JS_NULL;
@@ -2348,91 +2349,7 @@ static JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueCons
     return JS_UNDEFINED;
 }
 static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return JS_DupValue(ctx, g_opaque); }
-/* @H FORM SUBMISSION — a real browser, on form.submit()/requestSubmit() (or a non-prevented submit), fires a
-   REQUEST to the form's action with its named controls' values. We ARE that browser (lexbor DOM + quickjs), so
-   .submit() must EMIT that endpoint, never no-op. Learned by EXECUTION (the .submit() call) — never a static
-   <form> harvest. A field value is the CONCOLIC shadow example/shape when JS set it to an opaque (attacker/
-   computed), else the reflected `value` attribute (JS-set values are captured there). */
-static void form_enc(const char *s, char *out, size_t cap) {   /* application/x-www-form-urlencoded value */
-    static const char *hex = "0123456789ABCDEF"; size_t o = 0;
-    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p && o + 4 < cap; p++) {
-        unsigned char c = *p;
-        if ((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='-'||c=='_'||c=='.'||c=='~') out[o++]=(char)c;
-        else if (c==' ') out[o++]='+';
-        else { out[o++]='%'; out[o++]=hex[c>>4]; out[o++]=hex[c&15]; }
-    }
-    out[o] = 0;
-}
-static char *form_field_value(JSContext *ctx, lxb_dom_element_t *el) {   /* malloc'd; caller frees */
-    int si = attr_shadow_find(el, "value");
-    if (si >= 0 && JS_IsOpaque(attr_shadow_opaque(si))) {
-        JSValue ex = JS_OpaqueExample(ctx, attr_shadow_opaque(si)); char *r = NULL;
-        if (!JS_IsUndefined(ex)) { const char *s = JS_ToCString(ctx, ex); if (s) { r = strdup(s); JS_FreeCString(ctx, s); } }
-        JS_FreeValue(ctx, ex);
-        if (!r) { const char *sh = JS_OpaqueShapeC(attr_shadow_opaque(si)); r = strdup(sh ? sh : "{opaque}"); }
-        return r;
-    }
-    size_t vl = 0; const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"value", 5, &vl);
-    if (v) { char *r = malloc(vl + 1); if (r) { memcpy(r, v, vl); r[vl] = 0; } return r; }
-    return strdup("");
-}
-static void form_collect(JSContext *ctx, lxb_dom_node_t *node, JSValue params, uint32_t *idx,
-                         char *body, size_t bcap, const char *loc) {
-    for (lxb_dom_node_t *n = node->first_child; n; n = n->next) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            lxb_dom_element_t *el = lxb_dom_interface_element(n);
-            size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"name", 4, &nl);
-            if (nm && nl) {
-                char nbuf[256]; size_t nn = nl < 255 ? nl : 255; memcpy(nbuf, nm, nn); nbuf[nn] = 0;
-                char *val = form_field_value(ctx, el);
-                JSValue po = JS_NewObject(ctx);
-                JS_SetPropertyStr(ctx, po, "name", JS_NewString(ctx, nbuf));
-                JS_SetPropertyStr(ctx, po, "location", JS_NewString(ctx, loc));
-                JSValue vv = JS_NewArray(ctx);
-                if (val && val[0]) JS_SetPropertyUint32(ctx, vv, 0, JS_NewString(ctx, val));
-                JS_SetPropertyStr(ctx, po, "validValues", vv);
-                JS_SetPropertyUint32(ctx, params, (*idx)++, po);
-                char enc[512]; form_enc(val, enc, sizeof enc);
-                size_t bl = strlen(body);
-                snprintf(body + bl, bcap - bl, "%s%s=%s", bl ? "&" : "", nbuf, enc);
-                free(val);
-            }
-        }
-        form_collect(ctx, n, params, idx, body, bcap, loc);   /* nested controls (fields inside divs/fieldsets) */
-    }
-}
-static JSValue js_form_submit(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    lxb_dom_element_t *form = JS_GetOpaque(this_val, g_el_class_id);
-    if (!form) return JS_UNDEFINED;   /* not a real element (defensive) — nothing to submit */
-    size_t ml = 0; const lxb_char_t *mv = lxb_dom_element_get_attribute(form, (const lxb_char_t *)"method", 6, &ml);
-    char method[8] = "GET";
-    if (mv && ml) { size_t mn = ml < 7 ? ml : 7; for (size_t i = 0; i < mn; i++) { char c = (char)mv[i]; method[i] = (c>='a'&&c<='z')?(char)(c-32):c; } method[mn] = 0; }
-    int is_body = (strcmp(method,"POST")==0 || strcmp(method,"PUT")==0 || strcmp(method,"DELETE")==0 || strcmp(method,"PATCH")==0);
-    size_t al = 0; const lxb_char_t *av = lxb_dom_element_get_attribute(form, (const lxb_char_t *)"action", 6, &al);
-    char *action = NULL;
-    if (av && al) { action = malloc(al + 1); if (action) { memcpy(action, av, al); action[al] = 0; } }
-    char *url = url_resolve(action ? action : "", g_origin);
-    if (!url) url = strdup(g_origin ? g_origin : "");
-    free(action);
-    JSValue params = JS_NewArray(ctx); uint32_t pidx = 0;
-    char fbody[4096]; fbody[0] = 0;
-    form_collect(ctx, lxb_dom_interface_node(form), params, &pidx, fbody, sizeof fbody, is_body ? "body" : "query");
-    char *final_url = url;
-    if (!is_body && fbody[0]) {   /* GET: the controls ARE the query string */
-        size_t need = strlen(url) + 1 + strlen(fbody) + 1;
-        final_url = malloc(need); if (final_url) snprintf(final_url, need, "%s?%s", url, fbody); else final_url = url;
-    }
-    JSValue ep = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, ep, "method", JS_NewString(ctx, method));
-    JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, final_url ? final_url : ""));
-    JS_SetPropertyStr(ctx, ep, "source", JS_NewString(ctx, "ast_analysis"));
-    JS_SetPropertyStr(ctx, ep, "params", params);
-    if (is_body && fbody[0]) JS_SetPropertyStr(ctx, ep, "body", JS_NewString(ctx, fbody));
-    record_endpoint(ctx, ep);   /* emits @H unless a candidate flow (the sink respects g_candidate) */
-    if (final_url != url) free(final_url);
-    free(url);
-    return JS_UNDEFINED;
-}
+/* @H form submission (form_enc/form_collect/js_form_submit) is in forms.c (included via forms.h). */
 /* el.getAttributeNames(): the element's attribute names, in order — a real DOM API frameworks use to reflect
    attrs. Missing, it threw and killed the page. */
 static JSValue js_el_getattrnames(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
