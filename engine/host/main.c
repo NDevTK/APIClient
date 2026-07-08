@@ -803,7 +803,7 @@ static JSValue resp_consume(JSContext *ctx, JSValueConst this_val, int is_json) 
     if (url && url[0] && !has_hole(url)) reply_fetch_register(url, is_json);   /* concrete url -> fetch it; the boot re-run delivers it concolic */
     if (url) JS_FreeCString(ctx, url);
     JS_FreeValue(ctx, u);
-    return js_resolved(ctx, JS_DupValue(ctx, g_opaque));   /* opaque NOW; concrete via the provision-driven re-run */
+    return js_resolved(ctx, JS_NewOpaqueSourced(ctx, "{reply}", "reply"));   /* opaque NOW (source-tagged {reply}, not an untagged {} sentinel); concrete via the provision-driven re-run. A pre-reply field used as a URL/param reads {reply}, honest about its provenance, until the boot re-run delivers the concrete example. */
 }
 static JSValue js_resp_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 1); }
 static JSValue js_resp_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 0); }
