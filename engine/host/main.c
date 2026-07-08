@@ -1296,7 +1296,7 @@ static JSValue solve_all(JSContext *ctx) {
                     JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
                     if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE, PER SINK CLASS: the model broke out, but the page's CSP may block THIS vector on real Chrome */
                         int is_eval = sink && (strcmp(sink, "eval") == 0 || strcmp(sink, "Function") == 0 || strcmp(sink, "setTimeout") == 0);
-                        int blocked = csp_lacks(g_csp, is_eval ? "unsafe-eval" : "unsafe-inline");   /* eval-vector needs 'unsafe-eval'; inline/nav-vector needs 'unsafe-inline' */
+                        int blocked = csp_blocks(is_eval ? "unsafe-eval" : "unsafe-inline");   /* enforced across BOTH header AND meta policies (browser enforces each independently) */
                         JS_SetPropertyStr(ctx, rec, "csp", JS_NewString(ctx, g_csp));
                         JS_SetPropertyStr(ctx, rec, "cspBlocked", JS_NewBool(ctx, blocked));
                         if (blocked) JS_SetPropertyStr(ctx, rec, "cspReason", JS_NewString(ctx, is_eval ?

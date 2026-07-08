@@ -6,6 +6,7 @@
 
 char *g_csp = NULL;
 char *g_header_csp = NULL;
+char *g_meta_csp = NULL;   /* the <meta http-equiv> policy — a SEPARATE, independently-enforced policy (not a fallback) */
 
 /* Scan the parsed DOM for the FIRST <meta http-equiv="Content-Security-Policy" content="…">. The real Lexbor
    DOM (never a regex), like the bundle-id script scan. First policy wins (multiple metas -> browser enforces
@@ -49,16 +50,28 @@ void csp_set_header(const char *csp) {
     g_header_csp = (csp && csp[0]) ? strdup(csp) : NULL;
 }
 
+/* Is a vector requiring `tok` BLOCKED by the page's effective policy? The browser enforces EVERY delivered
+   policy INDEPENDENTLY — the HTTP header AND the <meta> policy are BOTH active, and a resource must satisfy
+   ALL of them — so the vector is blocked when ANY policy lacks `tok`. A permissive header does NOT rescue a
+   restrictive <meta> (the exact false-negative of the old header-OR-meta model). */
+int csp_blocks(const char *tok) {
+    return (g_header_csp && csp_lacks(g_header_csp, tok)) || (g_meta_csp && csp_lacks(g_meta_csp, tok));
+}
+
 void csp_derive(lxb_html_document_t *dom) {
     free(g_csp); g_csp = NULL;   /* fresh document: re-derive its EFFECTIVE policy (per-document) */
-    if (g_header_csp && g_header_csp[0]) {
-        g_csp = strdup(g_header_csp);   /* the REAL HTTP CSP header — the primary policy the browser enforces */
-    } else if (dom) {
-        lxb_dom_node_simple_walk(lxb_dom_interface_node(dom), csp_scan_cb, &g_csp);   /* no header CSP: fall back to <meta> (static hosting) */
-    }
+    free(g_meta_csp); g_meta_csp = NULL;
+    if (dom) lxb_dom_node_simple_walk(lxb_dom_interface_node(dom), csp_scan_cb, &g_meta_csp);   /* ALWAYS scan <meta> — it is a policy the browser enforces alongside the header, not a fallback */
+    /* g_csp is the DISPLAY of the effective enforced set (BOTH policies); the per-vector decision is csp_blocks,
+       which tests each policy separately (never this concatenation). */
+    const char *h = g_header_csp && g_header_csp[0] ? g_header_csp : NULL, *m = g_meta_csp;
+    if (h && m) { size_t n = strlen(h) + strlen(m) + 16; g_csp = malloc(n); if (g_csp) snprintf(g_csp, n, "%s [+meta: %s]", h, m); }
+    else if (h) g_csp = strdup(h);
+    else if (m) g_csp = strdup(m);
 }
 
 void csp_free(void) {
     free(g_csp); g_csp = NULL;
     free(g_header_csp); g_header_csp = NULL;
+    free(g_meta_csp); g_meta_csp = NULL;
 }

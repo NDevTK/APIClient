@@ -12,9 +12,13 @@
 extern char *g_csp;
 extern char *g_header_csp;
 
-/* Does the effective script directive (script-src, else default-src) LACK keyword `tok` — i.e. is a vector
-   that requires that keyword BLOCKED? An inline vector needs 'unsafe-inline'; an eval vector 'unsafe-eval'. */
+/* Does the effective script directive (script-src, else default-src) of ONE policy LACK keyword `tok`? */
 int csp_lacks(const char *csp, const char *tok);
+
+/* Is a vector requiring `tok` blocked by the page's EFFECTIVE policy set? The browser enforces the HTTP
+   header AND the <meta> policy independently, so the vector is blocked when EITHER lacks `tok`. Use this
+   (not csp_lacks on g_csp) for the per-sink verdict. An inline vector needs 'unsafe-inline'; eval 'unsafe-eval'. */
+int csp_blocks(const char *tok);
 
 /* Record the real HTTP Content-Security-Policy RESPONSE HEADER (from the same-origin fetch(location.href)). */
 void csp_set_header(const char *csp);
