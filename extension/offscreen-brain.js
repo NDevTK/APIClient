@@ -465,10 +465,14 @@ function _mergeFrontierResult(sourceUrl, result) {
 // The bridge's ONE host pool advances cold parked recipes itself (admit rehydrates the highest-value ones
 // when live work drains). A cold engine finalizing calls back here so its facts merge to the GLOBAL moat.
 self.onFrontierAdvance = function (sourceUrl, result) {
-  try { _mergeFrontierResult(sourceUrl, result); notifyPopup(null); } catch (_) {}
+  // Do NOT wrap in a swallowing catch — that would silence the _mergeFrontierResult DCHECK (a broken engine↔JS
+  // contract must crash LOUD in dev). notifyPopup is a UI side-effect whose own failure is non-fatal, isolated.
+  _mergeFrontierResult(sourceUrl, result);
+  try { notifyPopup(null); } catch (e) { if (self.APICLIENT_DEV) throw e; }
 };
 function _driveGlobalFrontierBurst() {   // idle nudge: kick the ONE pool to re-check the cold frontier
-  try { if (typeof self.kickHostPool === "function") self.kickHostPool(); } catch (_) {}
+  if (typeof self.kickHostPool !== "function") return;   // optional edge (bridge may not be up yet) — an ABSENCE, not an error
+  try { self.kickHostPool(); } catch (e) { if (self.APICLIENT_DEV) throw e; }   // a THROW from the pool is a real bug -> dev-loud
 }
 
 // The DocData a network-capture learner writes into. A live document -> its
