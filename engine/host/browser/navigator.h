@@ -6,4 +6,5 @@
 #include "quickjs.h"
 JSValue js_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);   /* navigator.serviceWorker.register(url) */
 JSValue js_send_beacon(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);   /* navigator.sendBeacon(url, data) */
+JSValue js_navigator_make(JSContext *ctx);   /* the window.navigator object: concrete standard properties, opaque prototype for unknowns */
 #endif

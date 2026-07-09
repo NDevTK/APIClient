@@ -2478,21 +2478,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
           JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_get, "get", 0, JS_CFUNC_getter, 0),
           JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_set, "set", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, la); JS_FreeValue(ctx, loc); }
-    {   /* navigator: a REAL object so sendBeacon(url) emits its endpoint, with the OPAQUE sentinel as its
-           PROTOTYPE so EVERY other member (userAgent/language/clipboard/…) still falls through to opaque —
-           no throw on an unstubbed method, no lost analytics endpoint. */
-        JSValue nav = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, nav, "sendBeacon", JS_NewCFunction(ctx, js_send_beacon, "sendBeacon", 2));
-        {   /* serviceWorker.register(url) -> analyze the SW script (its endpoints); other members -> opaque */
-            JSValue sw = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, sw, "register", JS_NewCFunction(ctx, js_sw_register, "register", 1));
-            JS_SetPropertyStr(ctx, sw, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));   /* onmessage handler driven */
-            JS_SetPropertyStr(ctx, sw, "ready", js_resolved(ctx, JS_DupValue(ctx, g_opaque)));
-            JS_SetPrototype(ctx, sw, g_opaque);
-            JS_SetPropertyStr(ctx, nav, "serviceWorker", sw);
-        }
-        JS_SetPrototype(ctx, nav, g_opaque);
-        JS_SetPropertyStr(ctx, g, "navigator", nav);
+    {   /* navigator -> browser/navigator.c: concrete-example CONCOLIC standard properties (fork + value),
+           sendBeacon/serviceWorker endpoints, opaque prototype for device-dependent members. */
+        JS_SetPropertyStr(ctx, g, "navigator", js_navigator_make(ctx));
     }
     JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
