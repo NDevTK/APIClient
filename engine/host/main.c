@@ -61,6 +61,7 @@
 #include "notification.h" /* Notification (IDL-defined) + requestPermission, its own TU */
 #include "media_element.h" /* Image/Audio/Option ctors + Audio media state machine, its own TU */
 #include "history.h"      /* window.history real state machine (pushState sets state), its own TU */
+#include "cookie.h"       /* document.cookie per-flow cookie jar (round-trips writes), its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -2486,7 +2487,13 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
     {
         JSValue doc = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, doc, "cookie", JS_DupValue(ctx, g_opaque));      /* external/auth input: opaque */
+        {   /* document.cookie: a per-CODE-FLOW cookie jar (browser/cookie.c) — writes round-trip concolic, not an opaque shrug */
+            JSAtom ca = JS_NewAtom(ctx, "cookie");
+            JS_DefinePropertyGetSet(ctx, doc, ca,
+                JS_NewCFunction2(ctx, (JSCFunction *)js_cookie_get, "get cookie", 0, JS_CFUNC_getter, 0),
+                JS_NewCFunction2(ctx, (JSCFunction *)js_cookie_set, "set cookie", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
+            JS_FreeAtom(ctx, ca);
+        }
         JS_SetPropertyStr(ctx, doc, "referrer", JS_DupValue(ctx, g_opaque));    /* external input: opaque */
         JS_SetPropertyStr(ctx, doc, "URL", JS_NewString(ctx, g_origin));        /* page identity: CONCRETE for URL building */
         JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, location_host()));   /* page identity: CONCRETE (location.c) */
@@ -2942,6 +2949,7 @@ KEEP void qjs_teardown(void)
     opaque_free(ctx);
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     storage_free(ctx);
+    cookie_free(ctx);
     idb_free(ctx);
     endpoint_free(ctx);
     JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
