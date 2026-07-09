@@ -1074,8 +1074,15 @@ static void gate_collect(const char *token, const char *src) {
        cons_fixed_value / the EQ pin, so they never reach a reported sink and are skipped here. */
     if (src && (strncmp(src, "{origin}", 8) == 0 || strncmp(src, "{source}", 8) == 0)) {
         const char *m = strrchr(src, '.');   /* the method: "{origin}.endsWith" -> "endsWith" */
-        if (m && m[1] && !(strcmp(m + 1, "endsWith") == 0 && token[0] == '.'))   /* skip the unforgeable dotted suffix */
-            snprintf(g_origin_req, sizeof g_origin_req, "origin must satisfy %s('%s') - bypassable by a registered domain", m + 1, token);
+        if (m && m[1] && !(strcmp(m + 1, "endsWith") == 0 && token[0] == '.')) {   /* skip the unforgeable dotted suffix */
+            /* SOLVE the origin: construct a concrete VALID origin the attacker registers that satisfies the
+               check (origin is always scheme://host, so the bypass must be a well-formed origin). */
+            const char *method = m + 1; char bypass[160];
+            if (strcmp(method, "startsWith") == 0)         snprintf(bypass, sizeof bypass, "%s.attacker.example", token);           /* startsWith('https://victim') -> https://victim.attacker.example */
+            else if (strcmp(method, "endsWith") == 0)      snprintf(bypass, sizeof bypass, "https://attacker%s", token);            /* endsWith('victim.com') -> https://attackervictim.com */
+            else                                           snprintf(bypass, sizeof bypass, "https://%s.attacker.example", token);   /* includes/indexOf('victim.com') -> https://victim.com.attacker.example */
+            snprintf(g_origin_req, sizeof g_origin_req, "%s (a registered attacker origin that passes %s('%s'))", bypass, method, token);
+        }
         return;
     }
     for (int i = 0; i < g_gate_n; i++) if (strcmp(g_gate_tokens[i], token) == 0) return;
