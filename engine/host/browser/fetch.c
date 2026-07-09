@@ -7,7 +7,6 @@
 
 /* Borrowed from main.c (the @H recording side): the URL hole-solver, request-header capture, the shared
    endpoint sink, and the resolved-promise helper. */
-extern char *url_solve_holes(JSContext *ctx, const char *url);
 extern void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs);
 extern JSValue js_resolved(JSContext *ctx, JSValue val);
 

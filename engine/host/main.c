@@ -172,32 +172,7 @@ static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisio
     g_dec = nd; g_dec_cap = nc; return 1;
 }
 /* Per-flow value-domain constraint tracker (Cons, g_cons, cons_reset-set-feasible-fixed_value, pair_contradicts; plus @S-delivery state g_origin_req, g_sink_jkey, g_sink_root) lives in solver-constraints.c. */
-/* Substitute each `{src}` hole the running flow FIXED (== gate) with its concrete value, so a URL built from
-   gated input surfaces the SOLVED key in BOTH path and query (/api/{hash} -> /api/admin). NULL if nothing
-   solved. The @H shape is re-derived downstream, so grouping is unaffected — only the example gains a value. */
-char *url_solve_holes(JSContext *ctx, const char *url) {
-    (void)ctx;
-    if (!url || !strchr(url, '{')) return NULL;
-    size_t cap = strlen(url) + 64, len = 0; char *out = malloc(cap); if (!out) return NULL;
-    int changed = 0;
-    for (const char *p = url; *p; ) {
-        if (*p == '{') {
-            const char *close = strchr(p, '}');
-            if (close && (size_t)(close - p + 1) < 64) {
-                char hole[64]; size_t hl = (size_t)(close - p + 1); memcpy(hole, p, hl); hole[hl] = 0;
-                const char *fixed = cons_fixed_value(hole);
-                if (fixed) { size_t fl = strlen(fixed);
-                    while (len + fl + 1 > cap) { cap *= 2; char *n = realloc(out, cap); if (!n) { free(out); return NULL; } out = n; }
-                    memcpy(out + len, fixed, fl); len += fl; p = close + 1; changed = 1; continue; }
-            }
-        }
-        if (len + 2 > cap) { cap *= 2; char *n = realloc(out, cap); if (!n) { free(out); return NULL; } out = n; }
-        out[len++] = *p++;
-    }
-    out[len] = 0;
-    if (!changed) { free(out); return NULL; }
-    return out;
-}
+/* url_solve_holes ({src}-hole value-solve) -> browser/url.c (URL construction module). */
 
 /* Per-flow DOM COW delta (dom_attr_capture/insert_capture + dom_apply/unapply/revert + dom_buf_*) is in
    dom_cow.c — included via dom_cow.h above; the buffer is an opaque void* on the Flow. */

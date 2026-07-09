@@ -8,7 +8,6 @@
 
 /* Borrowed from main.c (the @H recording side, scheduler-coupled): the shared endpoint sink, the URL
    hole-solver, the request-header capture, and the event-listener registrar (onload -> driven). */
-extern char *url_solve_holes(JSContext *ctx, const char *url);
 extern void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs);
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);
 
