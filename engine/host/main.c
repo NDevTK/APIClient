@@ -36,6 +36,7 @@
 #include "urlobj.h"       /* URL + URLSearchParams objects (endpoint URL construction), its own TU */
 #include "module_loader.h" /* ES-module loader: static+dynamic import graph (modsrc/moddep/pendmod + hooks), its own TU */
 #include "domparser.h"    /* DOMParser + Range HTML parsing -> {parsedhtml} taint, its own TU */
+#include "location.h"     /* the browser location object + external-input source getters + principal split, its own TU */
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
@@ -1560,108 +1561,12 @@ static JSValue js_el_on_set(JSContext *ctx, JSValueConst this_val, JSValueConst 
    stay OPAQUE (must never force a branch), yet carry a concrete example when page state already has one.
    The host injects the real principal at wire time; g_origin is the node-harness placeholder. */
 const char *g_origin   = "https://app.example.com";   /* host-injected real page principal (argv[3]); placeholder for node tests */
-static const char *g_protocol = "https:";
-static const char *g_host     = "app.example.com";   /* host = hostname[:port] (location.host) */
-static const char *g_hostname = "app.example.com";   /* hostname WITHOUT port (location.hostname) */
-static const char *g_port     = "";                  /* port only, "" for default (location.port) */
-/* Split a real origin ("https://localhost:8765") into protocol + host + hostname + port for the concrete
-   location.*. A bundle that builds a URL from location.hostname/port (`"https://api."+location.hostname`)
-   must see the port split out correctly, else the learned endpoint host is wrong. */
-static void set_origin(const char *origin) {
-    static char protobuf[64], hostbuf[256], hostnamebuf[256], portbuf[16];
-    const char *p;
-    if (!origin || !origin[0]) return;
-    g_origin = origin;
-    p = strstr(origin, "://");
-    if (!p) return;
-    { size_t plen = (size_t)(p - origin) + 1; if (plen < sizeof protobuf) { memcpy(protobuf, origin, plen); protobuf[plen] = 0; g_protocol = protobuf; } }
-    { const char *h = p + 3; size_t hlen = strlen(h); const char *slash = strchr(h, '/'); if (slash) hlen = (size_t)(slash - h);
-      if (hlen < sizeof hostbuf) { memcpy(hostbuf, h, hlen); hostbuf[hlen] = 0; g_host = hostbuf;
-        /* split host into hostname + port on the LAST ':' (an IPv6 literal is bracketed [::1]:port, so a ':'
-           after a ']' or with no '[' is the port separator). */
-        const char *colon = strrchr(hostbuf, ':');
-        const char *rbrack = strrchr(hostbuf, ']');
-        if (colon && colon > rbrack) {   /* has a port */
-          size_t nlen = (size_t)(colon - hostbuf);
-          if (nlen < sizeof hostnamebuf) { memcpy(hostnamebuf, hostbuf, nlen); hostnamebuf[nlen] = 0; g_hostname = hostnamebuf; }
-          size_t plen2 = strlen(colon + 1); if (plen2 < sizeof portbuf) { memcpy(portbuf, colon + 1, plen2 + 1); g_port = portbuf; }
-        } else { g_hostname = hostbuf; g_port = ""; }   /* default port */
-      } }
-}
-/* An external-input SOURCE getter (location.hash=magic 0, location.search=magic 1). Normal exploration:
-   returns the source-tagged OPAQUE (control-flow forks, @H/@S record the shape). @S REPLAY flow (g_candidate
-   set): returns the CONCRETE candidate string, so the real code runs the transforms concretely and the sink
-   sees a real value — reachability + breakout decided by the REAL code, in the ONE scheduler. */
-static const char *g_source_tag[] = { "{hash}", "{search}", "{pm}" };   /* 0=location.hash 1=location.search 2=postMessage e.data */
-static const char *g_source_pfx[] = { "#", "?", "" };                   /* realistic leading char so slice(1)/substring behave faithfully */
-static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
-    if (g_candidate) {   /* a replay flow injects the CONCRETE candidate — with the source's real prefix, so
-                            code that strips it (location.hash.slice(1), search.substring(1)) sees the true payload. */
-        const char *pfx = g_source_pfx[magic]; size_t lp = strlen(pfx), lc = strlen(g_candidate);
-        char *buf = malloc(lp + lc + 1); if (!buf) return JS_NewString(ctx, g_candidate);
-        memcpy(buf, pfx, lp); memcpy(buf + lp, g_candidate, lc + 1);
-        if (magic == 2) {   /* postMessage e.data can be an OBJECT: return a CANDIDATE-CARRIER opaque so a FIELD
-                               sink (`{html}=e.data; el.innerHTML=html`) delivers the candidate, while whole-value
-                               use (`el.innerHTML=e.data`) reads the same candidate as the example. */
-            JSValue c = JS_NewOpaqueSourced(ctx, g_source_tag[2], g_source_tag[2]);
-            JS_SetOpaqueExample(ctx, c, JS_NewString(ctx, buf)); JS_SetOpaqueCarrier(ctx, c);
-            free(buf); return c;
-        }
-        JSValue r = JS_NewString(ctx, buf); free(buf); return r;
-    }
-    return JS_NewOpaqueSourced(ctx, g_source_tag[magic], g_source_tag[magic]);   /* stamp root source identity for the per-flow value domain */
-}
-static void def_source(JSContext *ctx, JSValueConst loc, const char *name, int magic) {
-    JSAtom a = JS_NewAtom(ctx, name);
-    JS_DefinePropertyGetSet(ctx, loc, a,
-        JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_source_get, "get", 0, JS_CFUNC_getter_magic, magic),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-    JS_FreeAtom(ctx, a);
-}
-/* @S: a NAVIGATION (location.href=/.assign/.replace, or location=) is a sink — a javascript: URL runs,
-   an attacker-controlled URL is an open redirect. url context (solve_broke checks a javascript:X9 prefix). */
-static JSValue js_location_nav(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
-    if (argc >= 1) solve_add(ctx, "location.assign", "url", argv[0]);
-    return JS_UNDEFINED;
-}
-static JSValue js_location_href_get(JSContext *ctx, JSValueConst t) { return JS_NewString(ctx, g_origin); }  /* concrete base for new URL(path, location.href) */
-static JSValue js_location_href_set(JSContext *ctx, JSValueConst t, JSValueConst val) {
-    solve_add(ctx, "location.href", "url", val);   /* @S: location.href = javascript:/redirect */
-    return JS_UNDEFINED;
-}
-static JSValue g_location = JS_UNDEFINED;   /* the location object; window.location is a getset over it so `location = url` is a nav sink */
+/* location.* + external-input source getters + set_origin/make_location -> location.{c,h}. */
 /* document.currentScript: the executing <script> element during boot — the CONFIG-INJECTION source (an embed
    reads `document.currentScript.dataset.apiKey` / .getAttribute('data-endpoint')). Set per-script in
    dom_run_scripts, NULL otherwise. */
 static JSValue g_current_script = JS_NULL;
 static JSValue js_doc_currentscript(JSContext *ctx, JSValueConst t) { return JS_DupValue(ctx, g_current_script); }
-static JSValue js_window_location_get(JSContext *ctx, JSValueConst t) { return JS_DupValue(ctx, g_location); }
-static JSValue js_window_location_set(JSContext *ctx, JSValueConst t, JSValueConst val) {
-    solve_add(ctx, "location", "url", val);   /* @S: `location = url` / `window.location = url` navigation */
-    return JS_UNDEFINED;
-}
-static JSValue make_location(JSContext *ctx)
-{
-    JSValue loc = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, loc, "origin",   JS_NewString(ctx, g_origin));
-    JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, g_protocol));
-    JS_SetPropertyStr(ctx, loc, "host",     JS_NewString(ctx, g_host));       /* hostname[:port] */
-    JS_SetPropertyStr(ctx, loc, "hostname", JS_NewString(ctx, g_hostname));   /* WITHOUT port */
-    JS_SetPropertyStr(ctx, loc, "port",     JS_NewString(ctx, g_port));       /* port only ("" = default) */
-    JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, "/"));
-    JSAtom ha = JS_NewAtom(ctx, "href");   /* href: getter = concrete base; SETTER = @S navigation sink */
-    JS_DefinePropertyGetSet(ctx, loc, ha,
-        JS_NewCFunction2(ctx, (JSCFunction *)js_location_href_get, "get href", 0, JS_CFUNC_getter, 0),
-        JS_NewCFunction2(ctx, (JSCFunction *)js_location_href_set, "set href", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
-    JS_FreeAtom(ctx, ha);
-    JS_SetPropertyStr(ctx, loc, "assign",  JS_NewCFunction(ctx, js_location_nav, "assign", 1));   /* @S nav sinks */
-    JS_SetPropertyStr(ctx, loc, "replace", JS_NewCFunction(ctx, js_location_nav, "replace", 1));
-    JS_SetPropertyStr(ctx, loc, "reload",  JS_NewCFunction(ctx, js_noop, "reload", 0));
-    JS_SetPropertyStr(ctx, loc, "toString", JS_NewCFunction(ctx, (JSCFunction *)js_location_href_get, "toString", 0));
-    def_source(ctx, loc, "hash",   0);   /* external input: opaque (or candidate on @S replay) */
-    def_source(ctx, loc, "search", 1);
-    return loc;
-}
 
 /* ── Real DOM (Lexbor) ───────────────────────────────────────────────────────────
    The page's own structure/config is CONCRETE (a bundle reads `#cfg[data-api]` and builds a real
@@ -3060,7 +2965,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "globalThis", JS_DupValue(ctx, g));
     /* window.location: a getset over the location object so `location = 'javascript:..'` / `= url` (a common
        navigation shorthand) is an @S nav sink; reads return the object (location.href/.hash/.assign work). */
-    { JSValue loc = make_location(ctx); JS_FreeValue(ctx, g_location); g_location = JS_DupValue(ctx, loc);
+    { JSValue loc = make_location(ctx);   /* stores the window.location singleton internally (location.c) */
       JSAtom la = JS_NewAtom(ctx, "location");
       JS_DefinePropertyGetSet(ctx, g, la,
           JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_get, "get", 0, JS_CFUNC_getter, 0),
@@ -3089,7 +2994,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, doc, "cookie", JS_DupValue(ctx, g_opaque));      /* external/auth input: opaque */
         JS_SetPropertyStr(ctx, doc, "referrer", JS_DupValue(ctx, g_opaque));    /* external input: opaque */
         JS_SetPropertyStr(ctx, doc, "URL", JS_NewString(ctx, g_origin));        /* page identity: CONCRETE for URL building */
-        JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, g_host));       /* page identity: CONCRETE */
+        JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, location_host()));   /* page identity: CONCRETE (location.c) */
         JS_SetPropertyStr(ctx, doc, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
         JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));   /* real Lexbor DOM */
         JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
@@ -3559,7 +3464,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_verified); g_verified = JS_UNDEFINED;
     JS_FreeValue(ctx, g_enqueued); g_enqueued = JS_UNDEFINED;
     JS_FreeValue(ctx, g_dedup_fn); g_dedup_fn = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_location); g_location = JS_UNDEFINED;
+    location_free(ctx);   /* free the window.location singleton (location.c) */
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
