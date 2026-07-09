@@ -176,6 +176,10 @@ static Cons *g_cons = NULL; static int g_cons_cap = 0, g_cons_n = 0;
    control origin, so this is a solvable delivery constraint, surfaced on the finding so the PoC is complete
    (which origin to send from). The UNFORGEABLE === / endsWith('.subdomain') suppress the finding elsewhere. */
 static char g_origin_req[256] = "";
+/* The sink value's JSON FIELD PATH (jkey: ""=parsed root, ".html"=a field) when it flows from a JSON.parse of
+   an attacker string, so the candidate is delivered as the JSON ENVELOPE {"html":<breakout>} the parse yields —
+   the complex payload the BFS must construct. Clean of method transforms (unlike src), so sound. Set per solve_add. */
+static char g_sink_jkey[128] = "";
 static void cons_reset(void) { for (int i = 0; i < g_cons_n; i++) { free(g_cons[i].src); free(g_cons[i].tok); } g_cons_n = 0; g_origin_req[0] = 0; }
 static void cons_set(int i, const char *src, const char *tok, int op) {   /* record the constraint that holds at decision i */
     if (i >= g_cons_cap) { int nc = g_cons_cap ? g_cons_cap * 2 : 64; while (nc <= i) nc *= 2; Cons *n = realloc(g_cons, (size_t)nc * sizeof(Cons)); if (!n) return; g_cons = n; g_cons_cap = nc; }
@@ -1090,22 +1094,50 @@ static void gate_collect(const char *token, const char *src) {
         char **n = realloc(g_gate_tokens, (size_t)nc * sizeof(char *)); if (!n) return; g_gate_tokens = n; g_gate_cap = nc; }
     g_gate_tokens[g_gate_n++] = strdup(token);
 }
+/* @S COMPLEX-PAYLOAD CONSTRUCTION: a SCALAR source ({hash}/{search}) read at a FIELD path ({hash}.html) is only
+   reachable if the string was JSON.parse'd, so the breakout must ride a JSON ENVELOPE the parse yields — {"html":
+   <breakout>}. Build it from the source leaf path (g_sink_srcpath), JSON-escaping the breakout and nesting one
+   object per path segment. The real decode+parse+field chain then yields the breakout (re-execution verifies).
+   An OBJECT source ({pm}) is delivered by the candidate-carrier, not here; a whole-value scalar ({hash}, no
+   field) needs no envelope. Returns malloc'd JSON, or NULL when no wrapping applies (caller uses raw cand). */
+static char *json_envelope_cand(const char *cand) {
+    const char *jk = g_sink_jkey;
+    if (jk[0] != '.') return NULL;   /* need a real field path ".field"; ""=parsed root (an object, no envelope), NULL never set here */
+    size_t cl = strlen(cand); char *val = malloc(cl * 2 + 3); if (!val) return NULL;      /* "escaped-cand" */
+    size_t j = 0; val[j++] = '"';
+    for (size_t i = 0; i < cl; i++) { char c = cand[i]; if (c == '"' || c == '\\') val[j++] = '\\'; val[j++] = c; }
+    val[j++] = '"'; val[j] = 0;
+    char fbuf[128]; snprintf(fbuf, sizeof fbuf, "%s", jk + 1);   /* skip the leading '.'; the dotted field path a.b.c */
+    char *cur = val;                                             /* wrap right-to-left: {"a":{"b":val}} */
+    for (;;) {
+        char *dot = strrchr(fbuf, '.'); const char *seg = dot ? dot + 1 : fbuf;
+        size_t need = strlen(cur) + strlen(seg) + 8; char *w = malloc(need);
+        if (!w) { free(cur); return NULL; }
+        snprintf(w, need, "{\"%s\":%s}", seg, cur); free(cur); cur = w;
+        if (!dot) break; *dot = 0;
+    }
+    return cur;
+}
 /* enqueue an @S REPLAY flow: re-run the CURRENT orphan with `cand` as the concrete source, driven by the
    ONE scheduler (high initial value so the search runs soon; transient — never parked as a recipe). */
-static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand, const char *target) {
+static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, const char *target) {
+    char *env = json_envelope_cand(cand_in);   /* scalar-source field sink -> deliver the JSON envelope */
+    const char *cand = env ? env : cand_in;
     if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
         signed char *sdec = NULL;   /* inherit THIS session's decision vector so the candidate replays the SAME arms that reached the sink (an exploratory session now forks) */
         if (g_dec_n > 0) { sdec = (signed char *)malloc((size_t)g_dec_n); if (sdec) for (int i = 0; i < g_dec_n; i++) sdec[i] = g_dec[i]; }
         if (reg_add(ctx, JS_UNDEFINED, 2.0, sdec, sdec ? g_dec_n : 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
         else free(sdec);
+        free(env);
         return;   /* a session verifies MANY sinks -> not tagged with one vtarget */
     }
-    if (JS_IsUndefined(fn)) return;
+    if (JS_IsUndefined(fn)) { free(env); return; }
     if (reg_add(ctx, JS_DupValue(ctx, fn), 2.0, NULL, 0)) {
         g_reg[g_reg_n - 1].candidate = strdup(cand);
         g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;
         if (target) g_reg[g_reg_n - 1].vtarget = strdup(target);
     }
+    free(env);
 }
 /* @S STRUCTURED DELIVERY: every EQ gate the flow took on a SIBLING field of the same attacker object
    ({pm}.type=='render' while the sink reads {pm}.html) is a field the delivery object MUST set, or the real
@@ -1216,6 +1248,7 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
     JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
     JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, shape ? shape : "{}"));
     if (g_origin_req[0]) JS_SetPropertyStr(ctx, t, "requiredOrigin", JS_NewString(ctx, g_origin_req));   /* forgeable origin gate on this path -> the PoC's delivery origin */
+    { const char *jk = JS_OpaqueJKey(val); snprintf(g_sink_jkey, sizeof g_sink_jkey, "%s", jk ? jk : ""); }   /* JSON envelope field path for reg_add_cand */
     { const char *sp = JS_OpaqueSrcC(val);   /* @S structured delivery: the source LEAF path ("{pm}.html") -> post {html:payload}, not a bare string */
       if (sp && sp[0]) {
           JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp));
