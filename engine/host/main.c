@@ -53,6 +53,7 @@
 #include "websocket.h"    /* WebSocket + EventSource ctor -> WS/SSE handshake endpoint, its own TU */
 #include "worker.h"       /* Worker + SharedWorker ctor -> worker-script chunk, its own TU */
 #include "navigator.h"    /* navigator.sendBeacon + serviceWorker.register -> @H, its own TU */
+#include "cssom.h"        /* getComputedStyle + matchMedia -> opaque CSSOM environment reads, its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -700,9 +701,7 @@ static JSValue js_observer_ctor(JSContext *ctx, JSValueConst nt, int argc, JSVal
     JS_SetPropertyStr(ctx, o, "takeRecords", JS_NewCFunction(ctx, js_noop, "takeRecords", 0));
     return o;
 }
-static JSValue js_get_computed_style(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    JSValue o = JS_NewObject(ctx); JS_SetPropertyStr(ctx, o, "getPropertyValue", JS_NewCFunction(ctx, js_opaque_stub, "getPropertyValue", 1)); return o;
-}
+/* getComputedStyle + matchMedia (CSSOM environment reads, opaque -> browser/cssom.c). */
 /* Intl.NumberFormat/DateTimeFormat/etc.: `new Intl.X().format(v)` threw (not built into this quickjs). A
    constructor returning {format/…} whose results are opaque (locale-formatted external input). */
 static JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
@@ -734,17 +733,6 @@ static JSValue js_abortsignal_make(JSContext *ctx, JSValueConst t, int c, JSValu
     JS_SetPropertyStr(ctx, s, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
     JS_SetPropertyStr(ctx, s, "throwIfAborted", JS_NewCFunction(ctx, js_noop, "throwIfAborted", 0));
     return s;
-}
-/* indexedDB: the page's own DB (bundles cache tokens/state). A full async model is a separate task; this is a
-   NON-throwing object graph whose stored VALUES are opaque (external state -> an auth gate on them forks). */
-static JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "matches", JS_DupValue(ctx, g_opaque));   /* opaque -> a branch on it FORKS */
-    JS_SetPropertyStr(ctx, o, "media", JS_NewString(ctx, ""));
-    JS_SetPropertyStr(ctx, o, "addListener", JS_NewCFunction(ctx, js_add_listener, "addListener", 1));
-    JS_SetPropertyStr(ctx, o, "removeListener", JS_NewCFunction(ctx, js_noop, "removeListener", 1));
-    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    return o;
 }
 /* fetch(url): the moat's host edge. URL = whatever the bundle COMPUTED. ACCUMULATE the endpoint record
    (method/url/params/headers/body) into g_endpoints — identity/dedup runs in-engine at finalize — raise
