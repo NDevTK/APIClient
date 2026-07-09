@@ -64,6 +64,7 @@
 #include "cookie.h"       /* document.cookie per-flow cookie jar (round-trips writes), its own TU */
 #include "screen.h"       /* window.screen + innerWidth/... concolic viewport, its own TU */
 #include "event.h"       /* Event/CustomEvent ctor, its own TU */
+#include "crypto.h"      /* Web Crypto (window.crypto), its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -1177,13 +1178,7 @@ static int ctx_forks(void) {
     if (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow && !g_in_session) return 0;    /* monolithic boot -> drive-once */
     return 1;
 }
-/* crypto.getRandomValues(arr): the spec FILLS + RETURNS the same typed array. The bytes are external
-   randomness — nondeterministic, so filling them would (a) break replay soundness and (b) fabricate a
-   concrete value. We can't store an opaque in a numeric typed array, so we leave it unmodified (its
-   deterministic initial zeros) and return the SAME array, so `crypto.getRandomValues(new Uint8Array(n))`
-   and the fill-then-read idiom both work without throwing. randomUUID (the URL-relevant one) is opaque. */
-static JSValue js_crypto_getrandom(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{ return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_DupValue(ctx, g_opaque); }
+/* crypto (getRandomValues/randomUUID/subtle) -> browser/crypto.c. */
 /* setTimeout/setInterval/requestAnimationFrame(cb, ...): a deferred callback is NOT a wait on real time —
    it is just another BFS FLOW. Register cb in the ONE scheduler (reg_add) so it is driven, ordered, and
    starved by the same WFQ as every other flow (the whole point: bundles that defer init in a timer still
@@ -2622,15 +2617,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JSValue perf = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
         JS_SetPropertyStr(ctx, g, "performance", perf);
-        /* Web Crypto: a MISSING host edge (crypto was undefined -> ReferenceError killed EVERY bundle that
-           mints a token/UUID/id). randomUUID = external randomness -> OPAQUE (forks branches, shapes URLs,
-           replay-sound); getRandomValues fills a numeric array in place (see stub); subtle = opaque (its
-           digest/encrypt results are external-derived). */
-        JSValue cr = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, cr, "randomUUID", JS_NewCFunction(ctx, js_opaque, "randomUUID", 0));
-        JS_SetPropertyStr(ctx, cr, "getRandomValues", JS_NewCFunction(ctx, js_crypto_getrandom, "getRandomValues", 1));
-        JS_SetPropertyStr(ctx, cr, "subtle", JS_DupValue(ctx, g_opaque));
-        JS_SetPropertyStr(ctx, g, "crypto", cr);
+        JS_SetPropertyStr(ctx, g, "crypto", js_crypto_make(ctx));   /* Web Crypto (browser/crypto.c) */
         /* Timers: a deferred callback is a FLOW in the one scheduler (see js_set_timer), not a real wait.
            Missing these made every bundle that defers init in setTimeout learn nothing. */
         JS_SetPropertyStr(ctx, g, "setTimeout", JS_NewCFunction(ctx, js_set_timer, "setTimeout", 2));
