@@ -61,6 +61,30 @@ static const char *csp_directive(const char *csp, const char *name, size_t *len)
     return NULL;
 }
 
+/* Scan the served DOM's <script src> for a known CSP SCRIPT-GADGET library (Lekies/Kotowicz): a trusted
+   library whose own directive/template processing turns injected MARKUP into execution, bypassing CSP even
+   under script-src 'self' with no external host (the trusted library, not attacker script, does the eval).
+   AngularJS 1.x ({{}} / ng-app) is the canonical one. */
+static lxb_status_t csp_gadget_cb(lxb_dom_node_t *node, void *vctx) {
+    char *out = (char *)vctx;
+    if (out[0]) return LXB_STATUS_STOP;
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return LXB_STATUS_OK;
+    lxb_dom_element_t *el = lxb_dom_interface_element(node);
+    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
+    if (nl != 6 || !nm || memcmp(nm, "script", 6) != 0) return LXB_STATUS_OK;
+    size_t sl = 0; const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
+    if (!src || !sl) return LXB_STATUS_OK;
+    static const char *libs[] = { "angular", "polymer", "knockout", "ractive", "aurelia", "vue", "mavo", NULL };
+    for (int i = 0; libs[i]; i++) {
+        size_t ll = strlen(libs[i]);
+        for (size_t j = 0; j + ll <= sl; j++) {
+            size_t k = 0; for (; k < ll; k++) { char c = (char)src[j + k]; if (c >= 'A' && c <= 'Z') c += 32; if (c != libs[i][k]) break; }
+            if (k == ll) { snprintf(out, 32, "%s", libs[i]); return LXB_STATUS_STOP; }
+        }
+    }
+    return LXB_STATUS_OK;
+}
+
 /* Collect the FIRST script nonce value present in the served DOM (a reuse/leak candidate for the PoC). */
 static lxb_status_t csp_nonce_cb(lxb_dom_node_t *node, void *vctx) {
     char *out = (char *)vctx;
@@ -141,16 +165,22 @@ void csp_bypass(int is_eval, lxb_html_document_t *dom, CspBypass *out) {
             if (strstr(hm, t)) { size_t tl = strlen(t); if (o + tl + 2 < sizeof out->hosts) { if (o) out->hosts[o++] = ','; memcpy(out->hosts + o, t, tl); o += tl; out->hosts[o] = 0; } }
         }
     }
+    out->nonce_required = nreq;
+    if (dom) lxb_dom_node_simple_walk(lxb_dom_interface_node(dom), csp_gadget_cb, out->gadget_lib);   /* a loaded script-gadget library (bypasses even 'self') */
     if (nreq && dom) lxb_dom_node_simple_walk(lxb_dom_interface_node(dom), csp_nonce_cb, out->nonce);
 
-    if (out->hosts[0])          { out->via = "gadget-host";    snprintf(out->detail, sizeof out->detail, "script-src allows host(s) %s -> a JSONP/framework (AngularJS/etc.) gadget on one bypasses CSP: <script src=//HOST/...>", out->hosts); }
+    /* Order by strength/independence-of-host-policy: a JSONP host and a loaded script-gadget both give direct
+       execution; strict-dynamic needs a script-creating gadget; a bare nonce is PROTECTIVE (not a plain reuse). */
+    if (out->hosts[0])           { out->via = "gadget-host";    snprintf(out->detail, sizeof out->detail, "script-src allows host(s) %s -> a JSONP endpoint on one (…?callback=payload) returns attacker-controlled JS: <script src=//HOST/jsonp?callback=…>", out->hosts); }
+    else if (out->gadget_lib[0]) { out->via = "script-gadget";  snprintf(out->detail, sizeof out->detail, "the page loads '%s', a CSP script-gadget library -> injected MARKUP (e.g. AngularJS ng-app {{…}}) is executed by the TRUSTED library, bypassing CSP with NO attacker <script> — works even under script-src 'self'", out->gadget_lib); }
     else if (out->strict_dynamic){ out->via = "strict-dynamic"; snprintf(out->detail, sizeof out->detail, "'strict-dynamic' -> a script INJECTED by an already-trusted (nonced) script executes; needs a script-creating gadget in the trusted set (document.createElement('script') reached from trusted code)"); }
-    else if (out->nonce[0])     { out->via = "nonce-reuse";    snprintf(out->detail, sizeof out->detail, "nonce '%s' is present in the served response -> reuse it (<script nonce=%s>...) — sound when the nonce is static or the injection reads it at runtime", out->nonce, out->nonce); }
-    else if (nreq)              { out->via = "nonce-reuse";    snprintf(out->detail, sizeof out->detail, "a nonce is required but no reusable value was found in the served DOM -> needs a per-request nonce leak"); }
-    else                        { out->via = "none";          snprintf(out->detail, sizeof out->detail, "no bypass for the inline/eval vector under this policy%s -> escalation needs a same-origin script host ('self': open redirect / JSONP / uploaded .js)", out->dual_policy ? " (header AND meta both enforced)" : ""); }
+    else if (nreq)               { out->via = "nonce-protected"; snprintf(out->detail, sizeof out->detail,
+        "nonce-protected: inline injection is BLOCKED and a per-request nonce is NOT leakable via injection — the payload is fixed before the nonce is known; nonce-hiding empties the content attribute so getAttribute('nonce') AND the CSS [nonce^=…] attribute-selector side-channel are both neutralised; the element.nonce IDL property still exposes it but needs JS execution you don't yet have. Real bypasses: a STATIC-nonce misconfig (%s%s), 'strict-dynamic' + a script-creating gadget, or a loaded script-gadget library — none of which reuse the nonce",
+        out->nonce[0] ? "observed nonce " : "no nonce observed in this response", out->nonce); }
+    else                         { out->via = "none";          snprintf(out->detail, sizeof out->detail, "no bypass for the inline/eval vector under this policy%s -> escalation needs a same-origin script host ('self': open redirect / JSONP / uploaded .js)", out->dual_policy ? " (header AND meta both enforced)" : ""); }
     if (out->trusted_types && !is_eval) {
         size_t o = strlen(out->detail);
-        snprintf(out->detail + o, sizeof out->detail - o, " | Trusted Types enforced: the HTML sink THROWS unless a TT policy stringifies the payload (reuse a page policy or a 'default' policy)");
+        snprintf(out->detail + o, sizeof out->detail - o, " | Trusted Types enforced: the HTML sink THROWS unless the payload becomes TrustedHTML — abuse an existing permissive policy, especially a 'default' policy (auto-applies to every sink) or a named policy whose createHTML is identity/weak");
     }
 }
 

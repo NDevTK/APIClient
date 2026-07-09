@@ -30,12 +30,14 @@ int csp_blocks(const char *tok);
    'self'). Sound: a bypass is only asserted when the policy token that enables it is actually present. */
 typedef struct {
     int blocked;          /* the modeled inline (or eval) vector is blocked (no 'unsafe-inline'/'unsafe-eval') */
-    const char *via;      /* "unsafe-inline" | "unsafe-eval" | "gadget-host" | "strict-dynamic" | "nonce-reuse" | "none" */
+    const char *via;      /* "unsafe-inline"|"unsafe-eval"|"gadget-host"|"script-gadget"|"strict-dynamic"|"nonce-protected"|"none" */
     int strict_dynamic;   /* 'strict-dynamic' present (an injected script created by a trusted script executes) */
     int trusted_types;    /* require-trusted-types-for 'script' enforced (an HTML sink throws w/o a TT policy) */
     int dual_policy;      /* BOTH a header and a <meta> policy are enforced -> the bypass must satisfy both */
-    char hosts[256];      /* allowlisted external host/scheme sources — JSONP/framework gadget-host candidates */
-    char nonce[128];      /* a nonce VALUE leaked in the served DOM (a reuse candidate), or "" */
+    int nonce_required;   /* the policy requires a nonce (inline blocked; NOT trivially reusable — see below) */
+    char hosts[256];      /* allowlisted external host/scheme sources — JSONP gadget-host candidates */
+    char gadget_lib[32];  /* a CSP script-gadget library loaded on the page (AngularJS/etc.) — bypasses even 'self' */
+    char nonce[128];      /* a nonce VALUE observed in the served DOM (a STATIC-misconfig / CSS-side-channel hint, NOT a plain reuse) */
     char detail[512];     /* the concrete verdict sentence */
 } CspBypass;
 void csp_bypass(int is_eval, lxb_html_document_t *dom, CspBypass *out);

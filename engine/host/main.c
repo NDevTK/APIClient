@@ -853,9 +853,11 @@ static JSValue solve_all(JSContext *ctx) {
                         if (bp.blocked) {
                             JS_SetPropertyStr(ctx, rec, "cspBypass", JS_NewString(ctx, bp.via));      /* ...but HERE is the concrete bypass path the attacker uses */
                             JS_SetPropertyStr(ctx, rec, "cspReason", JS_NewString(ctx, bp.detail));
-                            if (bp.hosts[0]) JS_SetPropertyStr(ctx, rec, "cspGadgetHosts", JS_NewString(ctx, bp.hosts));   /* allowlisted hosts to look for a JSONP/framework gadget on */
-                            if (bp.nonce[0]) JS_SetPropertyStr(ctx, rec, "cspNonce", JS_NewString(ctx, bp.nonce));         /* the nonce leaked in the served DOM, to reuse */
+                            if (bp.hosts[0]) JS_SetPropertyStr(ctx, rec, "cspGadgetHosts", JS_NewString(ctx, bp.hosts));      /* allowlisted hosts to find a JSONP endpoint on */
+                            if (bp.gadget_lib[0]) JS_SetPropertyStr(ctx, rec, "cspScriptGadget", JS_NewString(ctx, bp.gadget_lib));  /* a loaded gadget library (bypasses even 'self') */
                             if (bp.strict_dynamic) JS_SetPropertyStr(ctx, rec, "cspStrictDynamic", JS_TRUE);
+                            if (bp.nonce_required) JS_SetPropertyStr(ctx, rec, "cspNonceRequired", JS_TRUE);                  /* inline blocked; nonce is protective, not trivially reusable */
+                            if (bp.nonce[0]) JS_SetPropertyStr(ctx, rec, "cspObservedNonce", JS_NewString(ctx, bp.nonce));    /* a nonce seen in THIS response — a static-misconfig / CSS-side-channel-leak hint, NOT a plain reuse */
                         }
                         if (bp.trusted_types) JS_SetPropertyStr(ctx, rec, "trustedTypes", JS_NewString(ctx, "enforced"));   /* an HTML sink THROWS unless a TT policy stringifies */
                     }
