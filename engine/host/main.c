@@ -548,8 +548,10 @@ JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval *
    observed sink structure by construct_ctx_breakout). x9_fires proves each actually executes. */
 static const char *CAND_URL[]  = { "javascript:X9", "javascript:X9//", NULL };
 static const char *CAND_JS[]   = { "1;X9();//", "';X9();//", "\";X9();//", ");X9();//", "\n;X9();//", NULL };
+static const char *CAND_SCRIPTURL[] = { "//X9/x.js", "https://X9/x.js", NULL };   /* <script src>: attacker-host origins */
 static const char **cand_set(const char *sc) {
     if (sc && strcmp(sc, "url") == 0) return CAND_URL;
+    if (sc && strcmp(sc, "scripturl") == 0) return CAND_SCRIPTURL;
     return CAND_JS;   /* only reached for non-HTML sinks (url handled above, js here); HTML goes to construct_ctx_breakout */
 }
 /* GATE TOKENS: concrete strings the REAL code tested tainted input against (startsWith('cmd:'), =='x'…).

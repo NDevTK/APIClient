@@ -145,6 +145,10 @@ JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, 
     const char *n = refl_name(magic);
     if (magic == 1 || magic == 2) solve_add(ctx, "href", "url", val);   /* @S: el.href/.action = external -> javascript:/redirect */
     else if (magic == 11) solve_add(ctx, "srcdoc", "htmls", val);        /* @S: iframe.srcdoc renders attacker HTML in the frame */
+    else if (magic == 0) {   /* @S: a <script>'s src loads+EXECUTES JS from its origin -> attacker-controlled origin is script injection (img/link src is not) */
+        size_t tl = 0; const lxb_char_t *tag = lxb_dom_element_qualified_name(el, &tl);
+        if (tl == 6 && tag && memcmp(tag, "script", 6) == 0) solve_add(ctx, "script.src", "scripturl", val);
+    }
     int is_opq = JS_IsOpaque(val);
     /* A CONCOLIC value set via PROPERTY (`s.src = replyField` / `el.href = computedUrl`) must keep its real
        value in the attribute shadow — EXACTLY like setAttribute — else the concrete example is lost to the

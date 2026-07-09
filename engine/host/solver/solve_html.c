@@ -83,6 +83,11 @@ static int solve_broke_html(const char *res, int script_exec) {
 int solve_broke(const char *sc, const char *res) {
     if (!res) return 0;
     if (sc && strcmp(sc, "url") == 0) { const char *p = res; while (*p == ' ' || *p == '\t') p++; return strncmp(p, "javascript:X9", 13) == 0; }
+    if (sc && strcmp(sc, "scripturl") == 0) {   /* <script src>: a javascript: URL does NOT run; the breakout is an
+        ATTACKER-CONTROLLED ORIGIN (the browser fetches+executes the script from there). X9 at the host = the
+        candidate reached the origin position (whole src attacker-controlled, or a `//`-prefixable hole). */
+        const char *p = res; while (*p == ' ' || *p == '\t') p++;
+        return strncmp(p, "//X9", 4) == 0 || strncmp(p, "https://X9", 10) == 0 || strncmp(p, "http://X9", 9) == 0; }
     if (!strstr(res, "X9")) return 0;   /* our nonce must survive */
     if (sc && strcmp(sc, "js") == 0) {
         /* eval sink: the sink VALUE is code — RUN it in the clean realm; X9() firing = real code injection
