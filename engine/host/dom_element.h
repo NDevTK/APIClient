@@ -17,4 +17,13 @@ JSValue js_el_children(JSContext *ctx, JSValueConst this_val);
 JSValue js_el_first_el_child(JSContext *ctx, JSValueConst this_val);
 JSValue js_el_next_el_sib(JSContext *ctx, JSValueConst this_val);
 
+/* Pure DOM query/predicate reads (matches/closest run the real CSS selector; has/contains walk Lexbor;
+   style is a plain object; <template>.content wraps the inert fragment). No scheduler coupling. */
+JSValue js_el_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_closest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_has_attr(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_contains(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_style_get(JSContext *ctx, JSValueConst this_val);
+JSValue js_el_content_get(JSContext *ctx, JSValueConst this_val);
+
 #endif
