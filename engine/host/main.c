@@ -961,6 +961,15 @@ static int ctx_forks(void) {
    never a real wait. A host-edge only FEEDS this; the scheduler DECIDES. */
 void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
     reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, NULL, 0);
+    /* CONTINUATION: a callback deferred from a running (revert-)flow inherits that flow's live PROPERTY delta,
+       so it sees state the flow wrote before deferring (obj.x = tainted; setTimeout(()=>use(obj.x))) — a
+       fresh-baseline flow reads it undefined. Closure-var state already rides the callback's own closure, so
+       only property writes need this snapshot. At the monolithic boot (g_running=0) nothing is snapshotted:
+       boot's writes commit to the baseline, which a boot-deferred flow already sees. */
+    if (g_running && g_cur_flow) {
+        int n = 0, cap = 0; void *snap = JS_CowBufSnapshot(ctx, &n, &cap);
+        if (snap) { g_reg[g_reg_n - 1].cow = snap; g_reg[g_reg_n - 1].cow_n = n; g_reg[g_reg_n - 1].cow_cap = cap; }
+    }
 }
 /* setTimeout/setInterval/requestAnimationFrame -> browser/timers.c (defers the callback as a flow). */
 /* JS_SetCbHook target: a callback passed to a method CALLED ON opaque input (items.forEach(cb) where items
@@ -1980,6 +1989,10 @@ static void scheduler_run(JSContext *ctx)
                pre-boot so a guarded init re-fires) then replays boot under the candidate — all in the flow's
                OWN delta, so a suspend/revert restores the post-boot baseline with no host-side bracket. */
             if (f.candidate) boot_replay_candidate(ctx);
+            /* CONTINUATION starter: a callback deferred from a handler carries an INHERITED property delta
+               (JS_CowBufSnapshot at defer time) — load+apply it so the callback sees the handler's writes.
+               Mutually exclusive with a candidate flow (which seeds its own boot-inverse delta). */
+            else if (f.cow) { JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
             /* CLOSURE cross-flow: for a candidate flow, drive the handler boot_replay RE-CREATED (candidate
                closure), located by source identity — else the ORIGINAL f.handle (baseline closure) is driven
                and the candidate never reaches a closure-captured source. Non-candidate flows drive f.handle. */
