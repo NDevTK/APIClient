@@ -14,12 +14,12 @@ JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *a
         JSValue b = JS_GetPropertyStr(ctx, argv[1], "bubbles"); bubbles = JS_ToBool(ctx, b); JS_FreeValue(ctx, b);
         JSValue c = JS_GetPropertyStr(ctx, argv[1], "cancelable"); cancelable = JS_ToBool(ctx, c); JS_FreeValue(ctx, c);
     }
-    JS_SetPropertyStr(ctx, o, "detail", JS_IsUndefined(detail) ? JS_DupValue(ctx, g_opaque) : detail);
+    JS_SetPropertyStr(ctx, o, "detail", JS_IsUndefined(detail) ? js_concolic(ctx, "{eventDetail}", JS_UNDEFINED) : detail);   /* external event data -> source-tagged, not bare {} */
     JS_SetPropertyStr(ctx, o, "bubbles", JS_NewBool(ctx, bubbles));
     JS_SetPropertyStr(ctx, o, "cancelable", JS_NewBool(ctx, cancelable));
     JS_SetPropertyStr(ctx, o, "defaultPrevented", JS_FALSE);
-    JS_SetPropertyStr(ctx, o, "target", JS_DupValue(ctx, g_opaque));
-    JS_SetPropertyStr(ctx, o, "currentTarget", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, o, "target", js_concolic(ctx, "{eventTarget}", JS_UNDEFINED));
+    JS_SetPropertyStr(ctx, o, "currentTarget", js_concolic(ctx, "{eventTarget}", JS_UNDEFINED));
     JS_SetPropertyStr(ctx, o, "preventDefault", JS_NewCFunction(ctx, js_noop, "preventDefault", 0));
     JS_SetPropertyStr(ctx, o, "stopPropagation", JS_NewCFunction(ctx, js_noop, "stopPropagation", 0));
     JS_SetPropertyStr(ctx, o, "stopImmediatePropagation", JS_NewCFunction(ctx, js_noop, "stopImmediatePropagation", 0));

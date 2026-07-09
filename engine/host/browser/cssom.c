@@ -149,7 +149,7 @@ static JSValue style_read(JSContext *ctx, StyleDecl *s, const char *key) {
     if (!strcmp(key, "cssText")) return JS_NewStringLen(ctx, style ? style : "", style ? vl : 0);
     char kebab[128], val[512]; css_kebab(key, kebab, sizeof kebab);
     if (style && css_get(style, kebab, val, sizeof val)) return JS_NewString(ctx, val);   /* inline-set: concrete, per-flow */
-    return (s && s->computed) ? JS_DupValue(ctx, g_opaque)                                /* computed + unset: cascade unknown -> forks */
+    return (s && s->computed) ? js_concolic(ctx, "{computedStyle}", JS_UNDEFINED)          /* computed + unset: cascade unknown -> source-tagged concolic (forks), not bare {} */
                               : JS_NewString(ctx, "");                                    /* el.style + unset: "" (spec) */
 }
 
@@ -234,12 +234,12 @@ static JSValue style_wrap(JSContext *ctx, lxb_dom_element_t *el, int computed) {
 /* el.style — a live, per-flow inline CSSStyleDeclaration (called from dom_element.c's style getter). */
 JSValue js_el_inline_style(JSContext *ctx, JSValueConst el_obj) {
     lxb_dom_element_t *el = JS_GetOpaque(el_obj, g_el_class_id);
-    return el ? style_wrap(ctx, el, 0) : JS_DupValue(ctx, g_opaque);
+    return el ? style_wrap(ctx, el, 0) : js_concolic(ctx, "{style}", JS_UNDEFINED);
 }
 JSValue js_get_computed_style(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     lxb_dom_element_t *el = (c >= 1) ? JS_GetOpaque(v[0], g_el_class_id) : NULL;
-    return el ? style_wrap(ctx, el, 1) : JS_DupValue(ctx, g_opaque);   /* reflects inline writes; unset -> opaque */
+    return el ? style_wrap(ctx, el, 1) : js_concolic(ctx, "{computedStyle}", JS_UNDEFINED);   /* reflects inline writes; unset -> source-tagged concolic */
 }
 /* matchMedia(query) -> a MediaQueryList whose .matches is CONCOLIC: opaque so a `if (mq.matches)` branch still
    FORKS (explore the alternate-viewport world — more logic, you don't know which arm ships an endpoint),
