@@ -226,7 +226,28 @@ JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, 
     solve_add(ctx, magic ? "outerHTML" : "innerHTML", "html", val);         /* @S */
     return JS_UNDEFINED;
 }
-JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return js_concolic(ctx, "{innerHTML}", JS_UNDEFINED); }
+/* el.innerHTML / outerHTML READ: serialize the REAL Lexbor subtree (model, not opaque) — a page that does
+   `JSON.parse(el.innerHTML)` on an inline SSR `<script type=json>` gets the actual config, so its concrete
+   values flow. innerHTML = the children's markup; outerHTML (magic) = the element + its markup. */
+typedef struct { char *buf; size_t len, cap; } HtmlBuf;
+static lxb_status_t html_ser_cb(const lxb_char_t *data, size_t len, void *cbctx) {
+    HtmlBuf *b = cbctx;
+    if (b->len + len + 1 > b->cap) { size_t nc = (b->cap ? b->cap * 2 : 256); while (nc < b->len + len + 1) nc *= 2;
+        char *n = realloc(b->buf, nc); if (!n) return LXB_STATUS_ERROR_MEMORY_ALLOCATION; b->buf = n; b->cap = nc; }
+    memcpy(b->buf + b->len, data, len); b->len += len;
+    return LXB_STATUS_OK;
+}
+JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    if (!el) return js_concolic(ctx, magic ? "{outerHTML}" : "{innerHTML}", JS_UNDEFINED);
+    HtmlBuf b = { NULL, 0, 0 };
+    lxb_dom_node_t *node = lxb_dom_interface_node(el);
+    if (magic) lxb_html_serialize_tree_cb(node, html_ser_cb, &b);                                   /* outerHTML: element + subtree */
+    else for (lxb_dom_node_t *c = node->first_child; c; c = c->next) lxb_html_serialize_tree_cb(c, html_ser_cb, &b);   /* innerHTML: children */
+    JSValue r = JS_NewStringLen(ctx, b.buf ? b.buf : "", b.len);
+    free(b.buf);
+    return r;
+}
 /* el.getAttributeNames(): the element's attribute names, in order — a real DOM API frameworks use to reflect
    attrs. Missing, it threw and killed the page. */
 JSValue js_el_getattrnames(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
