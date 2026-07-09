@@ -70,7 +70,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-
     BROWSER("csp.c"), BROWSER("dom_select.c"), BROWSER("storage.c"), BROWSER("indexeddb.c"), BROWSER("messaging.c"), BROWSER("url.c"), BROWSER("xhr.c"), BROWSER("fetch.c"),
     BROWSER("forms.c"), BROWSER("classlist.c"), BROWSER("docwrite.c"), BROWSER("urlobj.c"), BROWSER("module_loader.c"),
     BROWSER("domparser.c"), BROWSER("location.c"), BROWSER("dom_element.c"), BROWSER("document.c"), BROWSER("custom_elements.c"), BROWSER("formdata.c"),
-    BROWSER("websocket.c"), BROWSER("worker.c"), BROWSER("navigator.c"), BROWSER("cssom.c"),
+    BROWSER("websocket.c"), BROWSER("worker.c"), BROWSER("navigator.c"), BROWSER("cssom.c"), BROWSER("observer.c"),
     SOLVER("wfq.c")]);
 
 const args = [

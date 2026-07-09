@@ -54,6 +54,7 @@
 #include "worker.h"       /* Worker + SharedWorker ctor -> worker-script chunk, its own TU */
 #include "navigator.h"    /* navigator.sendBeacon + serviceWorker.register -> @H, its own TU */
 #include "cssom.h"        /* getComputedStyle + matchMedia -> opaque CSSOM environment reads, its own TU */
+#include "observer.h"     /* Intersection/Mutation/Resize/Performance observers -> callback flow + opaque, its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -693,14 +694,7 @@ void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) {
 /* Observers (Intersection/Mutation/Resize/Performance): missing constructors threw. A no-op object (observe/
    disconnect/etc.) prevents the throw; the callback passed to the constructor is an uncalled function the
    orphan driver reaches, so its endpoints/sinks are still learned. */
-static JSValue js_observer_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "observe", JS_NewCFunction(ctx, js_noop, "observe", 2));
-    JS_SetPropertyStr(ctx, o, "unobserve", JS_NewCFunction(ctx, js_noop, "unobserve", 1));
-    JS_SetPropertyStr(ctx, o, "disconnect", JS_NewCFunction(ctx, js_noop, "disconnect", 0));
-    JS_SetPropertyStr(ctx, o, "takeRecords", JS_NewCFunction(ctx, js_noop, "takeRecords", 0));
-    return o;
-}
+/* Observers (Intersection/Mutation/Resize/Performance) -> browser/observer.c (callback = scheduler flow, object opaque). */
 /* getComputedStyle + matchMedia (CSSOM environment reads, opaque -> browser/cssom.c). */
 /* Intl.NumberFormat/DateTimeFormat/etc.: `new Intl.X().format(v)` threw (not built into this quickjs). A
    constructor returning {format/…} whose results are opaque (locale-formatted external input). */
