@@ -35,7 +35,7 @@ JSValue js_storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
             { extern char *g_candidate; if (g_candidate && JS_IsOpaque(v)) { JS_FreeValue(ctx, v); return JS_NewString(ctx, g_candidate); } }
             if (JS_IsOpaque(v)) return v;                                  /* stored an opaque (e.g. setItem of location.hash): round-trip its taint */
             if (!JS_IsUndefined(v) && !JS_IsNull(v)) {                     /* stored a concrete value: opaque-for-control-flow carrying it as the example */
-                JSValue o = JS_NewOpaqueSourced(ctx, "{ls}", "ls");
+                JSValue o = JS_NewOpaqueSourced(ctx, "{ls}", "{ls}");
                 if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, v); return o; }   /* consumes v */
                 JS_FreeValue(ctx, o); return v;
             }

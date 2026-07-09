@@ -46,7 +46,7 @@ static JSValue js_idb_get(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
             if (g_candidate && JS_IsOpaque(val)) { JS_FreeValue(ctx, val); return js_idb_request(ctx, JS_NewString(ctx, g_candidate)); }
             if (JS_IsOpaque(val)) return js_idb_request(ctx, val);                       /* stored an opaque: round-trip its taint */
             if (!JS_IsUndefined(val) && !JS_IsNull(val)) {                               /* stored a concrete value: opaque carrying it as the example */
-                JSValue o = JS_NewOpaqueSourced(ctx, "{idb}", "idb");
+                JSValue o = JS_NewOpaqueSourced(ctx, "{idb}", "{idb}");
                 if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, val); return js_idb_request(ctx, o); }
                 JS_FreeValue(ctx, o); return js_idb_request(ctx, val);
             }

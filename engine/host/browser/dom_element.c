@@ -269,7 +269,7 @@ JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val) {   /* .textCon
         int is_json = 0;
         for (size_t i = 0; ty && i + 4 <= tl; i++) if (!memcmp(ty + i, "json", 4)) { is_json = 1; break; }
         if (is_json) {
-            JSValue o = JS_NewOpaqueSourced(ctx, "{ssr}", "ssr");
+            JSValue o = JS_NewOpaqueSourced(ctx, "{ssr}", "{ssr}");
             if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, r); return o; }   /* consumes r */
             JS_FreeValue(ctx, o);
         }

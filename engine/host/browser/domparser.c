@@ -9,7 +9,7 @@ extern char *g_candidate;
 /* Parse an HTML string into a {parsedhtml} OPAQUE carrying the input's concolic example — the taint a later
    appendChild/innerHTML of the node detects as an @S sink. */
 static JSValue js_parse_html_tainted(JSContext *ctx, JSValueConst input) {
-    JSValue r = JS_NewOpaqueSourced(ctx, "{parsedhtml}", "parsedhtml");
+    JSValue r = JS_NewOpaqueSourced(ctx, "{parsedhtml}", "{parsedhtml}");
     if (JS_IsOpaque(r)) {
         JSValue ex = JS_UNDEFINED;
         if (JS_IsOpaque(input)) ex = JS_OpaqueExample(ctx, input);                    /* concolic input keeps its example */
