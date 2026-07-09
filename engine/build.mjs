@@ -71,6 +71,10 @@ const args = [
   // aborts LOUD at its origin; a `release` arg compiles them out (the release exemption — the user is not
   // crashed on an unsupportable state). CHECK (OOM/security) stays fatal in both.
   "-DAPICLIENT_DEV=" + (process.argv.includes("release") ? "0" : "1"),
+  // Opt-in `assert` build: emscripten ASSERTIONS=2 turns a bare terse `Aborted()` into an INFORMATIVE crash
+  // (the failing C assert + file:line — e.g. a refcount/gc_obj_list leak), the offensive-programming ideal of a
+  // LOUD *and* diagnosable dev failure. Off by default so normal dev builds stay fast; enable when debugging.
+  ...(process.argv.includes("assert") ? ["-sASSERTIONS=2"] : []),
   "-sALLOW_MEMORY_GROWTH=1",
   "-sSTACK_SIZE=8388608",
   "-sEXIT_RUNTIME=0",
