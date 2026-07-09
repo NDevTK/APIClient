@@ -18,8 +18,13 @@ JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *a
     JS_SetPropertyStr(ctx, o, "bubbles", JS_NewBool(ctx, bubbles));
     JS_SetPropertyStr(ctx, o, "cancelable", JS_NewBool(ctx, cancelable));
     JS_SetPropertyStr(ctx, o, "defaultPrevented", JS_FALSE);
-    JS_SetPropertyStr(ctx, o, "target", js_concolic(ctx, "{eventTarget}", JS_UNDEFINED));
-    JS_SetPropertyStr(ctx, o, "currentTarget", js_concolic(ctx, "{eventTarget}", JS_UNDEFINED));
+    /* target/currentTarget are the PER-CODE-FLOW document (the real Lexbor DOM) so a handler's
+       e.target.querySelector/closest/id traverses the actual per-flow document, not an opaque. */
+    JSValue gg = JS_GetGlobalObject(ctx);
+    JSValue doc = JS_GetPropertyStr(ctx, gg, "document");
+    JS_FreeValue(ctx, gg);
+    if (JS_IsObject(doc)) { JS_SetPropertyStr(ctx, o, "target", JS_DupValue(ctx, doc)); JS_SetPropertyStr(ctx, o, "currentTarget", doc); }
+    else { JS_FreeValue(ctx, doc); JS_SetPropertyStr(ctx, o, "target", js_concolic(ctx, "{eventTarget}", JS_UNDEFINED)); JS_SetPropertyStr(ctx, o, "currentTarget", js_concolic(ctx, "{eventTarget}", JS_UNDEFINED)); }
     JS_SetPropertyStr(ctx, o, "preventDefault", JS_NewCFunction(ctx, js_noop, "preventDefault", 0));
     JS_SetPropertyStr(ctx, o, "stopPropagation", JS_NewCFunction(ctx, js_noop, "stopPropagation", 0));
     JS_SetPropertyStr(ctx, o, "stopImmediatePropagation", JS_NewCFunction(ctx, js_noop, "stopImmediatePropagation", 0));
