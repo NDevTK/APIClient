@@ -68,6 +68,7 @@
 #include "crypto.h"      /* Web Crypto (window.crypto), its own TU */
 #include "performance.h" /* Performance API, its own TU */
 #include "timers.h"      /* setTimeout/rAF/queueMicrotask -> BFS flows, its own TU */
+#include "encoding.h"    /* TextEncoder/TextDecoder (real UTF-8), its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -2416,8 +2417,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, g, "FormData", JS_NewCFunction2(ctx, js_formdata_ctor, "FormData", 0, JS_CFUNC_constructor, 0));   /* real: records fields -> POST body params */
         JS_SetPropertyStr(ctx, g, "Headers", JS_NewCFunction2(ctx, js_headers_ctor, "Headers", 1, JS_CFUNC_constructor, 0));   /* real: records header fields -> required headers */
         JS_SetPropertyStr(ctx, g, "AbortController", JS_NewCFunction2(ctx, js_abortcontroller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0));   /* real AbortSignal (abort.c), not the generic stub */
-        const char *webctors[] = { "Response", "Blob", "File",
-                                   "TextEncoder", "TextDecoder", "FileReader" };   /* EventSource -> js_ws_ctor; FormData -> js_formdata_ctor; BroadcastChannel -> js_broadcast_ctor */
+        JS_SetPropertyStr(ctx, g, "TextEncoder", JS_NewCFunction2(ctx, js_textencoder_ctor, "TextEncoder", 0, JS_CFUNC_constructor, 0));   /* real UTF-8 (browser/encoding.c), IDL-faithful */
+        JS_SetPropertyStr(ctx, g, "TextDecoder", JS_NewCFunction2(ctx, js_textdecoder_ctor, "TextDecoder", 0, JS_CFUNC_constructor, 0));
+        const char *webctors[] = { "Response", "Blob", "File", "FileReader" };   /* EventSource -> js_ws_ctor; FormData -> js_formdata_ctor; BroadcastChannel -> js_broadcast_ctor */
         for (size_t wi = 0; wi < sizeof webctors / sizeof webctors[0]; wi++)
             JS_SetPropertyStr(ctx, g, webctors[wi], JS_NewCFunction2(ctx, js_webobj_ctor, webctors[wi], 1, JS_CFUNC_constructor, 0));
     }
