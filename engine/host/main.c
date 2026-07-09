@@ -2647,6 +2647,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JSRuntime *rt = JS_NewRuntime();
     if (!rt) { fprintf(stderr, "@E {\"phase\":\"newruntime\"}\n"); return 1; }
     g_rt = rt;
+#if APICLIENT_DEV
+    JS_SetDumpFlags(rt, JS_DUMP_LEAKS);   /* dev: a refcount/GC leak dumps the surviving objects (with concolic triples) at teardown before the abort — offensive-programming LOUD+informative, only fires on an actual leak */
+#endif
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);
     JS_UpdateStackTop(rt);
     js_std_init_handlers(rt);
