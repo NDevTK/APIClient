@@ -1829,6 +1829,38 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
         JS_SetPropertyUint32(ctx, pair, 2, JS_FindReceiver(ctx, fn));   /* real receiver (upgraded custom-element instance) so this.attachShadow/getAttribute work when the session fires connectedCallback */
         JS_SetPropertyUint32(ctx, arr, n++, pair);
     }
+    /* THEN re-fire boot-EXECUTED page functions (globalThis own bytecode fns) over the SAME accumulating delta:
+       a boot-time reader like `loadDashboard()` ran ONCE at boot with logged-out state, but firing it here —
+       AFTER the login handler wrote `state.user=admin` — reaches its gated arm (the admin endpoint) with the
+       handler's own concrete values. Orphan-collection excludes executed fns (they ran at boot); the SESSION
+       wants them precisely because the accumulated handler state is NEW. C host-edges (fetch/WebSocket) are
+       non-bytecode (OrphanHash 0) -> skipped; handlers/orphans already in the list -> deduped. The WFQ starves
+       any that emit nothing new — this only ADDS the boot-reader dimension the handler→handler session misses. */
+    JSValue g = JS_GetGlobalObject(ctx);
+    JSPropertyEnum *gt = NULL; uint32_t gn = 0;
+    if (JS_GetOwnPropertyNames(ctx, &gt, &gn, g, JS_GPN_STRING_MASK) == 0) {
+        for (uint32_t i = 0; i < gn; i++) {
+            const char *nm = JS_AtomToCString(ctx, gt[i].atom);
+            int internal = (nm && nm[0] == '_' && nm[1] == '_');   /* OUR injected machinery (__driveSession/__sessionFns/...) — firing it re-enters the session; skip by our OWN naming, not a page heuristic */
+            if (nm) JS_FreeCString(ctx, nm);
+            JSValue fn = internal ? JS_UNDEFINED : JS_GetProperty(ctx, g, gt[i].atom);
+            if (!internal && JS_IsFunction(ctx, fn) && JS_OrphanHash(ctx, fn) != 0) {   /* page-defined bytecode fn, not a C host-edge or our machinery */
+                int dup = 0;
+                for (int oi = 0; oi < g_orphan_n && !dup; oi++) if (JS_VALUE_GET_PTR(g_orphan_buf[oi]) == JS_VALUE_GET_PTR(fn)) dup = 1;
+                for (uint32_t hi = 0; hi < hn && !dup; hi++) { JSValue h = JS_GetPropertyUint32(ctx, g_handlers, hi); if (JS_VALUE_GET_PTR(h) == JS_VALUE_GET_PTR(fn)) dup = 1; JS_FreeValue(ctx, h); }
+                if (!dup) {
+                    JSValue pair = JS_NewArray(ctx);
+                    JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, fn));
+                    JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, g_opaque));
+                    JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);
+                    JS_SetPropertyUint32(ctx, arr, n++, pair);
+                }
+            }
+            JS_FreeValue(ctx, fn);
+        }
+        JS_FreePropertyEnum(ctx, gt, gn);
+    }
+    JS_FreeValue(ctx, g);
     return arr;
 }
 static JSValue js_session_drain(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
