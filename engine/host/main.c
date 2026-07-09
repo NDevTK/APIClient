@@ -1584,13 +1584,7 @@ static JSValue js_media_el_ctor(JSContext *ctx, JSValueConst nt, int argc, JSVal
     lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)"img", 3, NULL);
     return el ? el_wrap(ctx, el) : JS_NewObject(ctx);
 }
-static JSValue js_el_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc < 1) return JS_NewArray(ctx);
-    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NewArray(ctx);
-    lxb_dom_element_t *self_el = JS_GetOpaque(this_val, g_el_class_id);
-    JSValue r = dom_select_all(ctx, self_el ? lxb_dom_interface_node(self_el) : NULL, s, strlen(s));
-    JS_FreeCString(ctx, s); return r;
-}
+/* js_el_querySelectorAll -> dom_element.c. */
 static JSValue js_doc_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_NewArray(ctx);
     const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NewArray(ctx);
@@ -1602,12 +1596,7 @@ static JSValue js_doc_getByClass(JSContext *ctx, JSValueConst this_val, int argc
     char sel[256]; snprintf(sel, sizeof sel, ".%s", s); JS_FreeCString(ctx, s);
     return dom_select_all(ctx, NULL, sel, strlen(sel));   /* getElementsByClassName -> .cls */
 }
-static JSValue js_el_rect(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {   /* getBoundingClientRect stub */
-    JSValue o = JS_NewObject(ctx);
-    const char *k[] = { "top", "left", "right", "bottom", "width", "height", "x", "y" };
-    for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, o, k[i], JS_NewInt32(ctx, 0));
-    return o;
-}
+/* js_el_rect (getBoundingClientRect) -> dom_element.c. */
 /* Event / CustomEvent constructors: `new CustomEvent('x',{detail})` threw when missing. An object carrying
    type + detail (attacker-influenceable in a dispatched event -> detail opaque unless the init provided it). */
 static JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
@@ -1633,32 +1622,7 @@ static JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueC
    boot (baseline); candidate flows never write it (they set the real attr, isolated by the DOM COW delta). */
 /* AttrShadow (the DOM attribute taint side-map) is in attr_shadow.c — accessed via attr_shadow_find/set/opaque. */
 /* getAttribute (attr-shadow taint round-trip) + querySelector -> dom_element.c. */
-static JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val) {   /* .textContent / .innerText getter */
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
-    if (!el) return JS_NULL;
-    size_t len = 0;
-    lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &len);
-    if (!txt) return JS_NewString(ctx, "");
-    JSValue r = JS_NewStringLen(ctx, (const char *)txt, len);
-    lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
-    /* SSR DATA: a <script type=...json...> blob is server-injected app data (the TRUST boundary, like a
-       reply) — declared DATA, not executable code (real <script> code already ran as boot). Return it
-       CONCOLIC so JSON.parse of it FORKS gates on loaded values (`if(data.user.role==='admin')` -> the
-       logged-in/admin surface) while fields keep real examples. Matched by the server-DECLARED MIME type
-       (structural), never a bundle name. */
-    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
-    if (nm && nl == 6 && !memcmp(nm, "script", 6)) {
-        size_t tl = 0; const lxb_char_t *ty = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tl);
-        int is_json = 0;
-        for (size_t i = 0; ty && i + 4 <= tl; i++) if (!memcmp(ty + i, "json", 4)) { is_json = 1; break; }
-        if (is_json) {
-            JSValue o = JS_NewOpaqueSourced(ctx, "{ssr}", "ssr");
-            if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, r); return o; }   /* consumes r */
-            JS_FreeValue(ctx, o);
-        }
-    }
-    return r;
-}
+/* js_el_textContent (+ SSR-json concolic) -> dom_element.c. */
 /* ── Per-flow DOM COW isolation ──────────────────────────────────────────────────
    DOM mutations (attribute set, node insert) by a FORCED flow must not leak to sibling flows — the
    same invariant as the JS-heap COW. A host-side undo log records the inverse of each mutation while
@@ -1737,24 +1701,7 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
     JS_SetPropertyStr(ctx, (JSValue)this_val, "shadowRoot", JS_DupValue(ctx, rv));   /* host.shadowRoot (open) */
     return rv;
 }
-static JSValue js_el_dataset_get(JSContext *ctx, JSValueConst this_val) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
-    JSValue o = JS_NewObject(ctx);
-    if (!el) return o;
-    for (lxb_dom_attr_t *a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
-        size_t nlen; const lxb_char_t *nm = lxb_dom_attr_qualified_name(a, &nlen);
-        if (!nm || nlen <= 5 || memcmp(nm, "data-", 5) != 0) continue;
-        char key[128]; int ki = 0;                                   /* data-foo-bar -> fooBar */
-        for (size_t i = 5; i < nlen && ki < 126; i++) {
-            if (nm[i] == '-' && i + 1 < nlen) { i++; char c = (char)nm[i]; key[ki++] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c; }
-            else key[ki++] = (char)nm[i];
-        }
-        key[ki] = 0;
-        size_t vlen; const lxb_char_t *v = lxb_dom_attr_value(a, &vlen);
-        JS_SetPropertyStr(ctx, o, key, v ? JS_NewStringLen(ctx, (const char *)v, vlen) : JS_NewString(ctx, ""));
-    }
-    return o;
-}
+/* js_el_dataset_get (real data-* attrs camelCased) -> dom_element.c. */
 /* classList: real bundles branch on `el.classList.contains('active')` constantly; undefined THREW. contains
    checks the REAL class attribute (whitespace-separated tokens) — concrete page structure, like className.
    add/remove/toggle are UI no-ops (not endpoint-relevant). */

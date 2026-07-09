@@ -44,4 +44,11 @@ JSValue js_el_insertAdjacentHTML(JSContext *ctx, JSValueConst this_val, int argc
 JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic);
 JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic);
 
+/* Remaining pure reads: querySelectorAll (subtree), getBoundingClientRect stub, textContent (+ SSR-json
+   concolic), dataset (real data-* attrs camelCased). No scheduler coupling. */
+JSValue js_el_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_rect(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
+JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val);
+JSValue js_el_dataset_get(JSContext *ctx, JSValueConst this_val);
+
 #endif
