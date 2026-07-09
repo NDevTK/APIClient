@@ -26,3 +26,14 @@ JSValue js_abortsignal_make(JSContext *ctx, JSValueConst t, int c, JSValueConst 
     (void)t; (void)c; (void)v;
     return idl_instance(ctx, ABORTSIGNAL_IDL, sizeof ABORTSIGNAL_IDL / sizeof ABORTSIGNAL_IDL[0]);
 }
+
+/* interface AbortController { constructor(); readonly attribute AbortSignal signal; undefined abort(reason); }
+   .signal is a REAL AbortSignal (its aborted attr is concolic -> a gate forks both worlds), not the old
+   generic-webobj opaque signal; abort() is a no-op (the fork already explores the aborted arm). */
+JSValue js_abortcontroller_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    (void)nt; (void)argc; (void)argv;
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "signal", js_abortsignal_make(ctx, JS_UNDEFINED, 0, NULL));
+    JS_SetPropertyStr(ctx, o, "abort", JS_NewCFunction(ctx, js_noop, "abort", 1));
+    return o;
+}
