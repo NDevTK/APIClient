@@ -35,6 +35,7 @@
 #include "docwrite.h"     /* document.write -> @S sink + script loader, its own TU */
 #include "urlobj.h"       /* URL + URLSearchParams objects (endpoint URL construction), its own TU */
 #include "module_loader.h" /* ES-module loader: static+dynamic import graph (modsrc/moddep/pendmod + hooks), its own TU */
+#include "domparser.h"    /* DOMParser + Range HTML parsing -> {parsedhtml} taint, its own TU */
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
@@ -1725,35 +1726,7 @@ static JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueC
    {parsedhtml} TAINT, so a later appendChild of it into the LIVE DOM is the @S sink (js_el_appendChild). The
    example carries the input (the concrete candidate on a replay flow) so solve_broke_html verifies breakout.
    Non-throwing constructors (these were undefined -> `new DOMParser()` threw, losing all coverage after). */
-static JSValue js_parse_html_tainted(JSContext *ctx, JSValueConst input) {
-    JSValue r = JS_NewOpaqueSourced(ctx, "{parsedhtml}", "parsedhtml");
-    if (JS_IsOpaque(r)) {
-        JSValue ex = JS_UNDEFINED;
-        if (JS_IsOpaque(input)) ex = JS_OpaqueExample(ctx, input);                    /* concolic input keeps its example */
-        else if (g_candidate && JS_IsString(input)) ex = JS_DupValue(ctx, input);     /* replay: the concrete candidate */
-        if (!JS_IsUndefined(ex)) JS_SetOpaqueExample(ctx, r, ex); else JS_FreeValue(ctx, ex);
-    }
-    return r;
-}
-static JSValue js_domparser_parse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    return argc >= 1 ? js_parse_html_tainted(ctx, argv[0]) : JS_DupValue(ctx, g_opaque);
-}
-static JSValue js_domparser_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "parseFromString", JS_NewCFunction(ctx, js_domparser_parse, "parseFromString", 2));
-    return o;
-}
-static JSValue js_range_ccf(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    return argc >= 1 ? js_parse_html_tainted(ctx, argv[0]) : JS_DupValue(ctx, g_opaque);
-}
-static JSValue js_doc_createrange(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "createContextualFragment", JS_NewCFunction(ctx, js_range_ccf, "createContextualFragment", 1));
-    const char *noops[] = { "selectNode", "selectNodeContents", "setStart", "setEnd", "deleteContents", "insertNode", "surroundContents", "cloneContents" };
-    for (size_t i = 0; i < sizeof noops / sizeof noops[0]; i++)
-        JS_SetPropertyStr(ctx, o, noops[i], JS_NewCFunction(ctx, js_noop, noops[i], 1));
-    return o;
-}
+/* DOMParser.parseFromString + Range.createContextualFragment -> {parsedhtml} taint -> domparser.{c,h}. */
 /* DOM ATTRIBUTE SHADOW TAINT: Lexbor stores attribute values as bytes, so an OPAQUE external-input value set
    via setAttribute would be ToString'd -> taint LOST -> a source stashed in a data-attribute and read back
    (getAttribute) in a separate flow goes undetected. Keep a shadow map (element,name)->opaque so an
