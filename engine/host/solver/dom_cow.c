@@ -120,5 +120,37 @@ void dom_buf_free(void *buf, int n) {   /* free a parked DOM delta buffer (its n
     }
     free(b);
 }
+/* SNAPSHOT the applied DOM delta's ATTRIBUTE mutations into a detached buffer whose dom_apply (by a deferred
+   CONTINUATION flow) re-establishes the current live attribute values + taint — so a callback deferred from a
+   handler inherits the handler's attribute writes (el.dataset.x = tainted; setTimeout(()=>read el.dataset.x)).
+   Only kind-0 (attribute) entries are copied: they are (el,name) identity-based and pointer-safe. kind-1
+   (inserted node) entries are SKIPPED — sharing a node pointer between the scheduling flow's revert (which
+   detaches it) and the deferred flow's apply (which re-inserts it) is fragile, and a deferred query for a
+   handler-inserted node is the rarer case; leaving it means the deferred flow simply doesn't see the node
+   (no regression), never corruption. The scheduling flow is untouched. Mirrors JS_CowBufSnapshot. */
+void *dom_buf_snapshot(int *out_n, int *out_cap) {
+    *out_n = 0; *out_cap = 0;
+    if (g_dom_undo_n == 0) return NULL;
+    DomUndo *cp = malloc((size_t)g_dom_undo_n * sizeof(DomUndo));
+    CHECK(cp, "dom-cow-oom: snapshot buffer malloc failed");
+    int m = 0;
+    for (int i = 0; i < g_dom_undo_n; i++) {
+        DomUndo *u = &g_dom_undo[i];
+        if (u->kind != 0) continue;
+        DomUndo d; memset(&d, 0, sizeof d);
+        d.kind = 0; d.el = u->el; d.name = strdup(u->name); CHECK(d.name, "dom-cow-oom: snapshot attr name strdup");
+        d.had = u->had;                                          /* baseline value copied from the scheduling entry */
+        if (u->had && u->old) { d.old = malloc(u->old_len ? u->old_len : 1); CHECK(d.old, "dom-cow-oom: snapshot baseline attr malloc"); memcpy(d.old, u->old, u->old_len); d.old_len = u->old_len; }
+        d.sh_old = (g_cow_ctx && u->sh_had) ? JS_DupValue(g_cow_ctx, u->sh_old) : JS_UNDEFINED; d.sh_had = u->sh_had;
+        size_t vl = 0; const lxb_char_t *c = lxb_dom_element_get_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), &vl);
+        d.cur_had = c ? 1 : 0;                                   /* current live flow value -> what the deferred flow applies */
+        if (c) { d.cur = malloc(vl ? vl : 1); CHECK(d.cur, "dom-cow-oom: snapshot flow attr malloc"); memcpy(d.cur, c, vl); d.cur_len = vl; }
+        d.sh_cur = shadow_snapshot(u->el, u->name, &d.sh_cur_had);
+        cp[m++] = d;
+    }
+    if (m == 0) { free(cp); return NULL; }
+    *out_n = m; *out_cap = g_dom_undo_n;
+    return cp;
+}
 void *dom_buf_take(int *n, int *cap) { void *b = g_dom_undo; *n = g_dom_undo_n; *cap = g_dom_undo_cap; g_dom_undo = NULL; g_dom_undo_n = 0; g_dom_undo_cap = 0; return b; }
 void dom_buf_load(void *buf, int n, int cap) { g_dom_undo = (DomUndo *)buf; g_dom_undo_n = n; g_dom_undo_cap = cap; }

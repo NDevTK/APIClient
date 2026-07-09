@@ -33,6 +33,7 @@ void dom_apply(void);       /* parked -> flow: restore the flow's values over th
 /* Park/resume the delta buffer as an opaque handle (the scheduler stores it on the Flow as void*). */
 void *dom_buf_take(int *n, int *cap);          /* detach the current buffer (returns it; delta now empty) */
 void dom_buf_load(void *buf, int n, int cap);  /* attach a parked buffer as the current delta */
+void *dom_buf_snapshot(int *out_n, int *out_cap);  /* copy the applied ATTRIBUTE delta for a deferred continuation flow to inherit */
 void dom_buf_free(void *buf, int n);           /* free a parked buffer (its nodes stay owned by the doc) */
 
 #endif

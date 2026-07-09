@@ -969,6 +969,8 @@ void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
     if (g_running && g_cur_flow) {
         int n = 0, cap = 0; void *snap = JS_CowBufSnapshot(ctx, &n, &cap);
         if (snap) { g_reg[g_reg_n - 1].cow = snap; g_reg[g_reg_n - 1].cow_n = n; g_reg[g_reg_n - 1].cow_cap = cap; }
+        int dn = 0, dcap = 0; void *dsnap = dom_buf_snapshot(&dn, &dcap);   /* + attribute writes (el.dataset.x = tainted) */
+        if (dsnap) { g_reg[g_reg_n - 1].dom = dsnap; g_reg[g_reg_n - 1].dom_n = dn; g_reg[g_reg_n - 1].dom_cap = dcap; }
     }
 }
 /* setTimeout/setInterval/requestAnimationFrame -> browser/timers.c (defers the callback as a flow). */
@@ -1992,7 +1994,10 @@ static void scheduler_run(JSContext *ctx)
             /* CONTINUATION starter: a callback deferred from a handler carries an INHERITED property delta
                (JS_CowBufSnapshot at defer time) — load+apply it so the callback sees the handler's writes.
                Mutually exclusive with a candidate flow (which seeds its own boot-inverse delta). */
-            else if (f.cow) { JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
+            else if (f.cow || f.dom) {
+                if (f.cow) { JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
+                if (f.dom) { dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0; }
+            }
             /* CLOSURE cross-flow: for a candidate flow, drive the handler boot_replay RE-CREATED (candidate
                closure), located by source identity — else the ORIGINAL f.handle (baseline closure) is driven
                and the candidate never reaches a closure-captured source. Non-candidate flows drive f.handle. */
