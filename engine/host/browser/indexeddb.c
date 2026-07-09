@@ -24,7 +24,7 @@ static JSValue js_idb_request(JSContext *ctx, JSValue result) {
     return r;
 }
 static JSValue js_idb_opaque_req(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)   /* getAll/count/... -> request, result opaque */
-{ return js_idb_request(ctx, JS_DupValue(ctx, g_opaque)); }
+{ return js_idb_request(ctx, js_concolic(ctx, "{idb}", JS_UNDEFINED)); }
 /* put(value,key) / add(value,key): RECORD value keyed by the explicit key so a later get(key) recovers it. The
  * request result is the key (real IDB returns the stored key). No explicit key (in-line keyPath) -> opaque. */
 static JSValue js_idb_put(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -34,7 +34,7 @@ static JSValue js_idb_put(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
         if (k) { JS_SetPropertyStr(ctx, g_idb, k, JS_DupValue(ctx, v[0])); JS_FreeCString(ctx, k); }
         return js_idb_request(ctx, JS_DupValue(ctx, v[1]));
     }
-    return js_idb_request(ctx, JS_DupValue(ctx, g_opaque));
+    return js_idb_request(ctx, js_concolic(ctx, "{idb}", JS_UNDEFINED));
 }
 /* get(key): recover the value put() this run as the @H EXAMPLE (opaque-for-control-flow so a gate still forks,
  * @S taint holds), deliver the @S candidate for a tainted stored value, or bare opaque when nothing was stored. */
@@ -53,7 +53,7 @@ static JSValue js_idb_get(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
             JS_FreeValue(ctx, val);
         }
     }
-    return js_idb_request(ctx, JS_DupValue(ctx, g_opaque));
+    return js_idb_request(ctx, js_concolic(ctx, "{idb}", JS_UNDEFINED));
 }
 static JSValue js_idb_store(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
 static JSValue js_idb_store_self(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)   /* index()/objectStore() -> a store */

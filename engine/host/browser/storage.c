@@ -42,6 +42,6 @@ JSValue js_storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
             JS_FreeValue(ctx, v);
         }
     }
-    return JS_DupValue(ctx, g_opaque);
+    return js_concolic(ctx, "{ls}", JS_UNDEFINED);
 }
 void storage_free(JSContext *ctx) { JS_FreeValue(ctx, g_storage); g_storage = JS_UNDEFINED; }

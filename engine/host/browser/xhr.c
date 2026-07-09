@@ -66,8 +66,8 @@ JSValue js_xhr_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueCo
     JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
     JS_SetPropertyStr(ctx, o, "getResponseHeader", JS_NewCFunction(ctx, js_opaque_stub, "getResponseHeader", 1));
     JS_SetPropertyStr(ctx, o, "getAllResponseHeaders", JS_NewCFunction(ctx, js_opaque_stub, "getAllResponseHeaders", 0));
-    JS_SetPropertyStr(ctx, o, "responseText", JS_DupValue(ctx, g_opaque));   /* response = external input */
-    JS_SetPropertyStr(ctx, o, "response", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, o, "responseText", js_concolic(ctx, "{xhrResponse}", JS_UNDEFINED));   /* response = external input */
+    JS_SetPropertyStr(ctx, o, "response", js_concolic(ctx, "{xhrResponse}", JS_UNDEFINED));
     JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, 200));
     JS_SetPropertyStr(ctx, o, "readyState", JS_NewInt32(ctx, 4));
     return o;

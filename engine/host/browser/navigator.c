@@ -17,7 +17,7 @@ JSValue js_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
         char *url = url_from_arg(ctx, argv[0]);
         if (url) { if (!has_hole(url)) chunk_pending_add(url); free(url); }   /* -> host fetch + engine analyze */
     }
-    return js_resolved(ctx, JS_DupValue(ctx, g_opaque));   /* Promise<ServiceWorkerRegistration> */
+    return js_resolved(ctx, js_concolic(ctx, "{swRegistration}", JS_UNDEFINED));   /* Promise<ServiceWorkerRegistration> */
 }
 
 /* window.navigator — the standard properties as CONCOLIC values (a real desktop Chrome as the example), the
@@ -50,7 +50,7 @@ JSValue js_navigator_make(JSContext *ctx) {
         JSValue sw = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, sw, "register", JS_NewCFunction(ctx, js_sw_register, "register", 1));
         JS_SetPropertyStr(ctx, sw, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-        JS_SetPropertyStr(ctx, sw, "ready", js_resolved(ctx, JS_DupValue(ctx, g_opaque)));
+        JS_SetPropertyStr(ctx, sw, "ready", js_resolved(ctx, js_concolic(ctx, "{swRegistration}", JS_UNDEFINED)));
         JS_SetPrototype(ctx, sw, g_opaque);
         JS_SetPropertyStr(ctx, nav, "serviceWorker", sw);
     }

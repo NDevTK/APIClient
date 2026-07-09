@@ -19,7 +19,7 @@ static JSValue js_parse_html_tainted(JSContext *ctx, JSValueConst input) {
     return r;
 }
 static JSValue js_domparser_parse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    return argc >= 1 ? js_parse_html_tainted(ctx, argv[0]) : JS_DupValue(ctx, g_opaque);
+    return argc >= 1 ? js_parse_html_tainted(ctx, argv[0]) : js_concolic(ctx, "{parsedhtml}", JS_UNDEFINED);
 }
 JSValue js_domparser_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
@@ -27,7 +27,7 @@ JSValue js_domparser_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueCons
     return o;
 }
 static JSValue js_range_ccf(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    return argc >= 1 ? js_parse_html_tainted(ctx, argv[0]) : JS_DupValue(ctx, g_opaque);
+    return argc >= 1 ? js_parse_html_tainted(ctx, argv[0]) : js_concolic(ctx, "{parsedhtml}", JS_UNDEFINED);
 }
 JSValue js_doc_createrange(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
