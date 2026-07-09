@@ -11,6 +11,7 @@
 #include "blob.h"
 #include <stdlib.h>
 #include <string.h>
+#include "idl.h"      /* the Blob interface is GENERATED from its IDL member table, not hand-assembled */
 #include "opaque.h"   /* js_concolic, js_noop */
 #include "check.h"    /* CHECK (OOM), DCHECK */
 
@@ -68,17 +69,18 @@ static JSValue m_slice(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     return js_blob_make(ctx, JS_DupValue(ctx, b->content), JS_UNDEFINED);   /* sub-Blob shares content (taint kept) */
 }
 
+/* interface Blob { Promise<USVString> text(); Promise<ArrayBuffer> arrayBuffer(); Blob slice(...);
+   ReadableStream stream(); readonly attribute unsigned long long size; readonly attribute DOMString type; }
+   — the operations are the generated prototype; size/type are per-instance readonly attributes set by make(). */
+static const IDLMember BLOB_MEMBERS[] = {
+    { "text",        IDL_METHOD, m_text,  0 },
+    { "arrayBuffer", IDL_METHOD, m_text,  0 },
+    { "slice",       IDL_METHOD, m_slice, 3 },
+    { "stream",      IDL_METHOD, js_noop, 0 },
+};
 void blob_init(JSContext *ctx) {
-    JSRuntime *rt = JS_GetRuntime(ctx);
-    JS_NewClassID(rt, &g_blob_class_id);
-    JSClassDef def = { "Blob", .finalizer = blob_finalizer };
-    JS_NewClass(rt, g_blob_class_id, &def);
-    JSValue proto = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, proto, "text", JS_NewCFunction(ctx, m_text, "text", 0));
-    JS_SetPropertyStr(ctx, proto, "arrayBuffer", JS_NewCFunction(ctx, m_text, "arrayBuffer", 0));
-    JS_SetPropertyStr(ctx, proto, "slice", JS_NewCFunction(ctx, m_slice, "slice", 3));
-    JS_SetPropertyStr(ctx, proto, "stream", JS_NewCFunction(ctx, js_noop, "stream", 0));
-    JS_SetClassProto(ctx, g_blob_class_id, proto);
+    static const IDLInterface iface = { "Blob", BLOB_MEMBERS, (int)(sizeof BLOB_MEMBERS / sizeof BLOB_MEMBERS[0]), blob_finalizer };
+    g_blob_class_id = idl_define_class(ctx, &iface);
 }
 
 static JSValue blob_type_opt(JSContext *ctx, JSValueConst opts) {   /* options.type or "" */

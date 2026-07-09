@@ -6,17 +6,32 @@
 #include "idl.h"
 #include "opaque.h"   /* js_concolic — an opaque attribute reads as a name-tagged concolic (forks + provenance) */
 
+/* Install an IDL member onto `target` (a plain instance or a class prototype): a method is a native function,
+   an opaque attribute is a concolic tagged by the ATTRIBUTE NAME (aborted -> {aborted}) so it forks AND names
+   its provenance, never a generic {} or {idlAttr}. */
+static void idl_put_member(JSContext *ctx, JSValueConst target, const IDLMember *m) {
+    if (m->kind == IDL_METHOD) {
+        JS_SetPropertyStr(ctx, target, m->name, JS_NewCFunction(ctx, m->fn, m->name, m->length));
+    } else {
+        char shape[80]; snprintf(shape, sizeof shape, "{%s}", m->name);
+        JS_SetPropertyStr(ctx, target, m->name, js_concolic(ctx, shape, JS_UNDEFINED));
+    }
+}
+
 JSValue idl_instance(JSContext *ctx, const IDLMember *members, int n) {
     JSValue o = JS_NewObject(ctx);
-    for (int i = 0; i < n; i++) {
-        const IDLMember *m = &members[i];
-        if (m->kind == IDL_METHOD) {
-            JS_SetPropertyStr(ctx, o, m->name, JS_NewCFunction(ctx, m->fn, m->name, m->length));
-        } else {   /* IDL_ATTR_OPAQUE — value unknown headless: a concolic tagged by the ATTRIBUTE NAME (aborted
-                      -> {aborted}), so it forks AND names its provenance, never a generic {} or {idlAttr}. */
-            char shape[80]; snprintf(shape, sizeof shape, "{%s}", m->name);
-            JS_SetPropertyStr(ctx, o, m->name, js_concolic(ctx, shape, JS_UNDEFINED));
-        }
-    }
+    for (int i = 0; i < n; i++) idl_put_member(ctx, o, &members[i]);
     return o;
+}
+
+JSClassID idl_define_class(JSContext *ctx, const IDLInterface *iface) {
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JSClassID id = 0;
+    JS_NewClassID(rt, &id);
+    JSClassDef def = { iface->name, .finalizer = iface->finalizer };
+    JS_NewClass(rt, id, &def);
+    JSValue proto = JS_NewObject(ctx);                      /* the member table IS the prototype */
+    for (int i = 0; i < iface->n; i++) idl_put_member(ctx, proto, &iface->members[i]);
+    JS_SetClassProto(ctx, id, proto);
+    return id;
 }

@@ -13,4 +13,13 @@ typedef struct { const char *name; IDLMemberKind kind; JSCFunction *fn; int leng
 
 JSValue idl_instance(JSContext *ctx, const IDLMember *members, int n);   /* build a native instance from an IDL table */
 
+/* An interface backed by a NATIVE EXOTIC CLASS (an internal [[slot]] the page cannot see): the member table
+   becomes the shared PROTOTYPE (methods; opaque attrs become concolic prototype props) and the finalizer frees
+   the slot. This is how a spec interface with private state (Blob's [[bytes]], a FileReader's stream) is
+   GENERATED from its IDL instead of hand-assembled per instance — the class id is returned so the interface's
+   own make() sets the slot via JS_SetOpaque and its per-instance readonly attributes. */
+typedef void JSClassFinalizerFn(JSRuntime *rt, JSValue val);
+typedef struct { const char *name; const IDLMember *members; int n; JSClassFinalizerFn *finalizer; } IDLInterface;
+JSClassID idl_define_class(JSContext *ctx, const IDLInterface *iface);
+
 #endif
