@@ -435,19 +435,27 @@ function _emptyDocView() {
    page may not be open), the same gone-doc path _mergeDeepResult uses. This is how the host-level WFQ
    arbiter's cross-site/cross-session learning reaches the real netdiff --unused surface. */
 function _mergeFrontierResult(sourceUrl, result) {
+  // The engine↔JS contract guarantees a result OBJECT (never null) — a null here is a should-never-happen
+  // in the engine's own output, not a case to `if(!result)return`-past.
+  DCHECK(result && typeof result === "object", "_mergeFrontierResult: engine produced a non-object frontier result");
+  if (!result) return;   // release: the DCHECK is stripped, tolerate the impossible-in-dev case (don't crash the user)
   try {
     // Merge on EITHER surface: an XSS-only page carries verified @S PoCs with no endpoints. Gating on
     // fetchCallSites alone dropped every incremental sink (they only surface here now, not just at teardown).
-    if (!result) return;
     var hasEps = result.fetchCallSites && result.fetchCallSites.length;
     var hasSinks = result.securitySinks && result.securitySinks.length;
-    if (!hasEps && !hasSinks) return;
+    if (!hasEps && !hasSinks) return;   // legitimately empty (a page with nothing learned yet) — not an invariant break
     var view = _emptyDocView();
     view.url = sourceUrl || ""; view.tabUrl = sourceUrl || "";
     result.sourceUrl = sourceUrl || result.sourceUrl || "";
     mergeASTResultsIntoVDD(view, [result], null, true);
     mergeToGlobal(view);
-  } catch (e) { console.debug("[frontier] merge error: %s", e && e.message); }
+  } catch (e) {
+    // A merge THROW is a real bug (malformed engine output / a broken merge invariant). DEV: surface it LOUD
+    // at the origin, never log-and-continue — that swallow is the exact defensive robustness this forbids.
+    if (self.APICLIENT_DEV) throw e;
+    console.debug("[frontier] merge error: %s", e && e.message);   // release: don't block the user on an unbuildable case
+  }
 }
 
 /* Opportunistic idle burst of the ONE host-level attention: advance the globally-highest-value parked

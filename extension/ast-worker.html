@@ -5,6 +5,9 @@
      dependencies load first, then the brain — which now ALSO contains the v2 host
      bridge (merged from the deleted ast-worker.js): it dynamic-import()s the engine
      WASM and installs self.astDispatch. One trusted file, no split. -->
+<!-- DCHECK/CHECK: the JS mirror of engine/host/check.h, loaded FIRST so every component can fail hard on a
+     violated invariant (dev) exactly like the C engine — the confidence + isolation-testability substrate. -->
+<script src="check.js"></script>
 <script src="lib/protobuf.js"></script>
 <script src="lib/discovery.js"></script>
 <script src="lib/req2proto.js"></script>
