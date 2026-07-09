@@ -71,7 +71,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-
     BROWSER("forms.c"), BROWSER("classlist.c"), BROWSER("docwrite.c"), BROWSER("urlobj.c"), BROWSER("module_loader.c"),
     BROWSER("domparser.c"), BROWSER("location.c"), BROWSER("dom_element.c"), BROWSER("document.c"), BROWSER("custom_elements.c"), BROWSER("formdata.c"),
     BROWSER("websocket.c"), BROWSER("worker.c"), BROWSER("navigator.c"), BROWSER("cssom.c"), BROWSER("observer.c"),
-    BROWSER("idl.c"), BROWSER("abort.c"), BROWSER("intl.c"), BROWSER("notification.c"), BROWSER("media_element.c"), BROWSER("history.c"), BROWSER("cookie.c"), BROWSER("screen.c"), BROWSER("event.c"), BROWSER("crypto.c"), BROWSER("performance.c"), BROWSER("timers.c"), BROWSER("encoding.c"), BROWSER("fsa.c"), BROWSER("filereader.c"), BROWSER("blob.c"), BROWSER("response.c"),
+    BROWSER("idl.c"), BROWSER("abort.c"), BROWSER("intl.c"), BROWSER("notification.c"), BROWSER("media_element.c"), BROWSER("history.c"), BROWSER("cookie.c"), BROWSER("screen.c"), BROWSER("event.c"), BROWSER("crypto.c"), BROWSER("performance.c"), BROWSER("timers.c"), BROWSER("encoding.c"), BROWSER("fsa.c"), BROWSER("filereader.c"), BROWSER("blob.c"), BROWSER("response.c"), BROWSER("trusted_types.c"),
     SOLVER("wfq.c")]);
 
 const args = [

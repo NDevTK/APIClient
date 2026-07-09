@@ -72,6 +72,7 @@
 #include "fsa.h"         /* File System Access (mock FS, attacker file content), its own TU */
 #include "filereader.h"  /* FileReader (real readAsText -> onload), its own TU */
 #include "blob.h"        /* Blob/File (real content taint) */
+#include "trusted_types.h"  /* Trusted Types (runs createPolicy) */
 #include "response.h"    /* Response (real body taint) */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
@@ -859,7 +860,12 @@ static JSValue solve_all(JSContext *ctx) {
                             if (bp.nonce_required) JS_SetPropertyStr(ctx, rec, "cspNonceRequired", JS_TRUE);                  /* inline blocked; nonce is protective, not trivially reusable */
                             if (bp.nonce[0]) JS_SetPropertyStr(ctx, rec, "cspObservedNonce", JS_NewString(ctx, bp.nonce));    /* a nonce seen in THIS response — a static-misconfig / CSS-side-channel-leak hint, NOT a plain reuse */
                         }
-                        if (bp.trusted_types) JS_SetPropertyStr(ctx, rec, "trustedTypes", JS_NewString(ctx, "enforced"));   /* an HTML sink THROWS unless a TT policy stringifies */
+                        if (bp.trusted_types) {   /* TT enforced: the HTML sink throws unless a policy stringifies — report the REAL policy state OBSERVED by running the bundle's createPolicy calls */
+                            JS_SetPropertyStr(ctx, rec, "trustedTypes",
+                                JS_NewString(ctx, tt_default_exists() ? "enforced; a 'default' policy IS defined (auto-applies to every sink) — the payload routes through its createHTML: a weak/identity policy lets it through, decided by re-execution"
+                                                : tt_any_policy() ? "enforced; named policy(ies) defined but no 'default' — the sink needs the payload wrapped by a reachable policy's createHTML"
+                                                : "enforced; NO policy defined in the bundle — every string sink assignment throws (no TT-abuse surface unless a gadget creates a policy)"));
+                        }
                     }
                     { char eb[900]; snprintf(eb, sizeof eb, "sink %s <- input %s (forced-exec: this exact input, driven through the real code, breaks out at the sink)", sink ? sink : "?", rpoc);
                       JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
@@ -2165,6 +2171,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     for (int i = 0; i < g_chunk_done_n; i++) free(g_chunk_done[i]);
     g_chunk_done_n = 0;   /* fresh session: the fetched-chunk cache is per-session (a new visit re-fetches the current bytes) */
     JS_OptaintReset(ctx);   /* clear cross-flow opaque-taint set from any prior page analysis */
+    tt_reset();             /* clear observed Trusted-Types policy state from the prior document */
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
     endpoint_init(ctx); g_chunkurls = JS_NewArray(ctx);
@@ -2272,6 +2279,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetReceiverClass(rt, g_el_class_id);   /* JS_FindReceiver drives connectedCallback with the el-backed instance as `this` */
         cssom_init(ctx);   /* native CSSStyleDeclaration class (el.style / getComputedStyle), backed by the per-flow style attribute */
         blob_init(ctx);    /* native Blob class (internal content slot) — Blob/File .text() carries the content taint */
+        trusted_types_init(ctx);  /* TrustedTypePolicy class */
         response_init(ctx); /* native Response class (internal body slot) */
     }
 
@@ -2443,6 +2451,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_FreeValue(ctx, dt);
         JS_SetPropertyStr(ctx, g, "performance", js_performance_make(ctx));   /* Performance API (browser/performance.c) */
         JS_SetPropertyStr(ctx, g, "crypto", js_crypto_make(ctx));   /* Web Crypto (browser/crypto.c) */
+        JS_SetPropertyStr(ctx, g, "trustedTypes", js_trusted_types_make(ctx));   /* Trusted Types API (browser/trusted_types.c) */
         /* Timers: a deferred callback is a FLOW in the one scheduler (see js_set_timer), not a real wait.
            Missing these made every bundle that defers init in setTimeout learn nothing. */
         JS_SetPropertyStr(ctx, g, "setTimeout", JS_NewCFunction(ctx, js_set_timer, "setTimeout", 2));
