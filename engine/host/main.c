@@ -25,6 +25,7 @@
 #include <lexbor/url/url.h>
 #include "check.h"        /* CHECK (always fatal: OOM/security) / DCHECK (dev-only fatal: should-never-happen), its own TU */
 #include "constraints.h"  /* per-flow value-domain constraint tracker (concolic path constraint), its own TU */
+#include "wfq.h"          /* the ONE WFQ priority policy (order key), its own TU */
 #include "opaque.h"       /* the OPAQUE sentinel g_opaque + js_noop/js_opaque/js_opaque_stub, its own TU */
 #include "solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
@@ -197,7 +198,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec,
     g_reg[g_reg_n].aresolve = JS_UNDEFINED; g_reg[g_reg_n].areject = JS_UNDEFINED; g_reg[g_reg_n].await_promise = JS_UNDEFINED;
     g_reg[g_reg_n].rthis = JS_UNDEFINED; g_reg[g_reg_n].rargs = NULL; g_reg[g_reg_n].rargc = 0; g_reg[g_reg_n].is_async = 0;
     g_reg_n++;
-    { double w = 1.5 + val; if (w > g_max_parked) g_max_parked = w; }   /* fresh flow: visits=0,cpu=0 -> weight=1.5+val (keeps g_max_parked current for wfq_yield) */
+    { double w = wfq_weight(val, 0, 0); if (w > g_max_parked) g_max_parked = w; }   /* fresh flow (visits=cpu=0): same ONE policy, no duplicated formula — keeps g_max_parked current for wfq_yield */
     return 1;
 }
 /* Release an async-call flow's owned refs (result-promise resolve fn + a parked await promise). No-op for a
@@ -1969,13 +1970,11 @@ static int seed_orphans(JSContext *ctx)
    reverted to the post-boot BASELINE before the next STARTER runs — so an independent flow never sees
    another's writes, yet a flow sees its OWN writes within its run. */
 
-/* WFQ order key (ORDER-only, never drops a work item): base + accumulated value-of-information
-   (emits raise val) + an explore/fairness floor for rarely-scheduled flows - a CPU-since-emit decay
-   so a monopolizer (burns CPU, emits nothing) SINKS below productive/unrun flows and gets starved.
-   This is the ONE policy the host-level priority.js uses too; same formula, two levels. */
+/* Thin Flow->scalars adapter over the ONE WFQ policy (solver/wfq.c); the order-key formula lives THERE
+   (auditable + isolation-testable), this only projects a Flow's accounting into it. */
 static double flow_weight(const Flow *f)
 {
-    return 1.0 + f->val + 0.5 / (double)(f->visits + 1) - 0.01 * f->cpu;
+    return wfq_weight(f->val, f->visits, f->cpu);
 }
 
 /* The value-driven yield decision, called by the engine at each loop back-edge of the running TOP flow
