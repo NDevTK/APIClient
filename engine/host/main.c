@@ -43,6 +43,7 @@
 #include "indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
 #include "document.h"     /* document.querySelector/getElementById/... (Blink core/dom/Document), its own TU */
+#include "formdata.h"      /* FormData -> POST body params (Blink core/html/forms), its own TU */
 #include "custom_elements.h" /* customElements registry + createElement upgrade (Blink core/html/custom), its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
@@ -736,33 +737,7 @@ static JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueCo
 /* FormData: a real object recording append()/set() fields, so a `fetch(url,{body:fd})` POST surfaces the
    real request params (name=value&…) instead of an opaque body. Opaque (external-input) field values keep
    their shape. js_fetch's JS_ToCString(body) invokes toString -> the serialization. */
-static JSValue js_formdata_append(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 2) {
-        JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
-        if (!JS_IsObject(f)) { JS_FreeValue(ctx, f); f = JS_NewObject(ctx); JS_SetPropertyStr(ctx, this_val, "__fields", JS_DupValue(ctx, f)); }
-        const char *k = JS_ToCString(ctx, argv[0]);
-        if (k) { JS_SetPropertyStr(ctx, f, k, JS_DupValue(ctx, argv[1])); JS_FreeCString(ctx, k); }
-        JS_FreeValue(ctx, f);
-    }
-    return JS_UNDEFINED;
-}
-/* FormData shares the CONCOLIC serializer with URLSearchParams (js_sp_tostring, defined below): both store
-   __fields and serialize to "k=v&…" carrying the concrete example when known, the shape otherwise. So a
-   `fetch(url,{body:fd})` POST body surfaces REAL field values (the moat wants request-body examples, and a
-   POST is never fired to learn -> the example can only come from this forced-exec serialization). */
-static JSValue js_formdata_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "__fields", JS_NewObject(ctx));
-    JS_SetPropertyStr(ctx, o, "append", JS_NewCFunction(ctx, js_formdata_append, "append", 2));
-    JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_formdata_append, "set", 2));
-    JS_SetPropertyStr(ctx, o, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
-    JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_opaque_stub, "has", 1));
-    JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_noop, "delete", 1));
-    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
-    return o;
-}
-/* navigator.serviceWorker.register(url): the SW SCRIPT is code with its OWN endpoints (fetch/message/push
-   handlers make requests) — fetch + analyze it like a <script src>/Worker chunk. Returns a Promise. */
+/* FormData (append/set -> __fields, toString via js_sp_tostring) -> browser/formdata.c (Blink core/html/forms/FormData). */
 static JSValue js_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc >= 1) {
         char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
