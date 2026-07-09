@@ -48,7 +48,7 @@ function buildLexbor(force) {
   console.log("[build] lexbor: compiling " + srcs.length + " sources -> liblexbor.a (once, ~minutes)");
   const rsp = join(WORK, "lexbor.rsp");
   const fwd = (s) => s.replace(/\\/g, "/");   // response-file backslashes are clang escapes -> forward-slash paths
-  writeFileSync(rsp, [...srcs.map(fwd), "-I", fwd(LEXBOR_INC), "-O2", "-w", "-D_GNU_SOURCE", "-r", "-o", fwd(LEXBOR_LIB)].join("\n"));
+  writeFileSync(rsp, [...srcs.map(fwd), "-I", fwd(LEXBOR_INC), "-O2", "-w", "-D_GNU_SOURCE", "-DENABLE_DUMPS", "-r", "-o", fwd(LEXBOR_LIB)].join("\n"));
   const r = spawnSync(EMCC, ["@" + rsp], { stdio: "inherit", shell: true, cwd: ENGINE });
   if (r.status !== 0) { console.error("[build] lexbor FAILED rc=" + r.status); process.exit(r.status || 1); }
   console.log("[build] lexbor OK -> " + LEXBOR_LIB);
@@ -56,17 +56,29 @@ function buildLexbor(force) {
 buildLexbor(process.argv[2] === "lexbor");
 if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
+// The host mirrors the PROJECT IDENTITY "a browser with a BFS Time-Travel Solver": the BROWSER half is
+// organized like a real browser (browser/, each file a web-platform component mapping to a Blink module —
+// location=core/frame/Location, dom_element=core/dom/Element, forms=core/html/forms, …), the novel SOLVER half
+// (concolic value, time-travel COW, @S/@H) lives in solver/, and main.c (the scheduler entry) + check.h (the
+// DCHECK/CHECK infra) stay at the host root. Flat includes resolve via the -I flags below.
+const BROWSER = (f) => join(HOST, "browser", f);   // spec-faithful web-platform components (Blink-mirroring)
+const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (the novel half)
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c"]
   .map((f) => join(QJS, f))
-  .concat([join(HOST, "main.c"), join(HOST, "solve_html.c"), join(HOST, "csp.c"), join(HOST, "dom_select.c"), join(HOST, "dom_cow.c"), join(HOST, "storage.c"), join(HOST, "url.c"), join(HOST, "opaque.c"), join(HOST, "reply.c"), join(HOST, "xhr.c"), join(HOST, "fetch.c"), join(HOST, "endpoint.c"), join(HOST, "attr_shadow.c"), join(HOST, "forms.c"), join(HOST, "classlist.c"), join(HOST, "docwrite.c"), join(HOST, "urlobj.c"), join(HOST, "module_loader.c"), join(HOST, "domparser.c"), join(HOST, "location.c"), join(HOST, "dom_element.c")]);
+  .concat([join(HOST, "main.c"),
+    SOLVER("solve_html.c"), SOLVER("dom_cow.c"), SOLVER("opaque.c"), SOLVER("reply.c"), SOLVER("endpoint.c"), SOLVER("attr_shadow.c"),
+    BROWSER("csp.c"), BROWSER("dom_select.c"), BROWSER("storage.c"), BROWSER("url.c"), BROWSER("xhr.c"), BROWSER("fetch.c"),
+    BROWSER("forms.c"), BROWSER("classlist.c"), BROWSER("docwrite.c"), BROWSER("urlobj.c"), BROWSER("module_loader.c"),
+    BROWSER("domparser.c"), BROWSER("location.c"), BROWSER("dom_element.c")]);
 
 const args = [
   ...sources,
   LEXBOR_LIB,                 // link the cached Lexbor DOM archive
   "-I", QJS,
+  "-I", HOST, "-I", join(HOST, "browser"), "-I", join(HOST, "solver"),   // flat #include "x.h" resolves across the browser/ + solver/ split
   "-I", LEXBOR_INC,           // <lexbor/html/html.h> etc for main.c's DOM host-edges
   "-O1", "-w",
-  "-D_GNU_SOURCE",
+  "-D_GNU_SOURCE", "-DENABLE_DUMPS",
   // Offensive-programming build mode (check.h): DEV (default) keeps every DCHECK live so a should-never-happen
   // aborts LOUD at its origin; a `release` arg compiles them out (the release exemption — the user is not
   // crashed on an unsupportable state). CHECK (OOM/security) stays fatal in both.
