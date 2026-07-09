@@ -241,13 +241,16 @@ JSValue js_get_computed_style(JSContext *ctx, JSValueConst t, int c, JSValueCons
     lxb_dom_element_t *el = (c >= 1) ? JS_GetOpaque(v[0], g_el_class_id) : NULL;
     return el ? style_wrap(ctx, el, 1) : JS_DupValue(ctx, g_opaque);   /* reflects inline writes; unset -> opaque */
 }
-/* matchMedia(query) -> a MediaQueryList evaluated against the DEFINED default viewport: a CONCRETE .matches
-   (model the state, don't shrug to opaque), the query string, and the change-listener EventTarget methods. */
+/* matchMedia(query) -> a MediaQueryList whose .matches is CONCOLIC: opaque so a `if (mq.matches)` branch still
+   FORKS (explore the alternate-viewport world — more logic, you don't know which arm ships an endpoint),
+   carrying the DEFAULT-viewport answer as its concrete EXAMPLE. Plus the query string + change-listener methods. */
 JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     const char *q = (c >= 1) ? JS_ToCString(ctx, v[0]) : NULL;
     JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "matches", JS_NewBool(ctx, media_matches(q)));   /* concrete, against the default viewport */
+    JSValue m = JS_NewOpaqueSourced(ctx, "{matches}", "{matches}");   /* forkable */
+    if (JS_IsOpaque(m)) JS_SetOpaqueExample(ctx, m, JS_NewBool(ctx, media_matches(q)));   /* default-viewport example */
+    JS_SetPropertyStr(ctx, o, "matches", m);
     JS_SetPropertyStr(ctx, o, "media", JS_NewString(ctx, q ? q : ""));
     JS_SetPropertyStr(ctx, o, "onchange", JS_NULL);
     JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
