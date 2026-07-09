@@ -754,6 +754,11 @@ function _mergeDocInto(existingDoc, newDoc) {
   return existingDoc;
 }
 function mergeToGlobal(tab) {
+  // Central merge — EVERY analysis result (hot tab + cold frontier) funnels here, so guard the DocView contract
+  // once: a malformed tab is a should-never-happen the callers must not construct, not a shape to defend against.
+  DCHECK(tab && typeof tab === "object", "mergeToGlobal: tab (DocView) must be an object");
+  DCHECK(tab.apiKeys && typeof tab.apiKeys[Symbol.iterator] === "function", "mergeToGlobal: tab.apiKeys must be an iterable Map");
+  DCHECK(globalStore && globalStore.apiKeys, "mergeToGlobal: globalStore must be initialized before a merge");
   for (const [k, v] of tab.apiKeys) {
     const existing = globalStore.apiKeys.get(k);
     if (existing) {
