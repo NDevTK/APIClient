@@ -72,6 +72,7 @@
 #include "fsa.h"         /* File System Access (mock FS, attacker file content), its own TU */
 #include "filereader.h"  /* FileReader (real readAsText -> onload), its own TU */
 #include "blob.h"        /* Blob/File (real content taint) */
+#include "response.h"    /* Response (real body taint) */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -2245,6 +2246,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetReceiverClass(rt, g_el_class_id);   /* JS_FindReceiver drives connectedCallback with the el-backed instance as `this` */
         cssom_init(ctx);   /* native CSSStyleDeclaration class (el.style / getComputedStyle), backed by the per-flow style attribute */
         blob_init(ctx);    /* native Blob class (internal content slot) — Blob/File .text() carries the content taint */
+        response_init(ctx); /* native Response class (internal body slot) */
     }
 
     g_handlers = JS_NewArray(ctx);
@@ -2452,9 +2454,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, g, "FileReader", JS_NewCFunction2(ctx, js_filereader_ctor, "FileReader", 0, JS_CFUNC_constructor, 0));   /* real: readAsText -> attacker content + onload flow (browser/filereader.c) */
         JS_SetPropertyStr(ctx, g, "Blob", JS_NewCFunction2(ctx, js_blob_ctor, "Blob", 2, JS_CFUNC_constructor, 0));   /* real: content taint through .text() (browser/blob.c) */
         JS_SetPropertyStr(ctx, g, "File", JS_NewCFunction2(ctx, js_file_ctor, "File", 3, JS_CFUNC_constructor, 0));
-        const char *webctors[] = { "Response" };   /* EventSource -> js_ws_ctor; FormData -> js_formdata_ctor; BroadcastChannel -> js_broadcast_ctor */
-        for (size_t wi = 0; wi < sizeof webctors / sizeof webctors[0]; wi++)
-            JS_SetPropertyStr(ctx, g, webctors[wi], JS_NewCFunction2(ctx, js_webobj_ctor, webctors[wi], 1, JS_CFUNC_constructor, 0));
+        JS_SetPropertyStr(ctx, g, "Response", JS_NewCFunction2(ctx, js_response_ctor, "Response", 2, JS_CFUNC_constructor, 0));   /* real: body taint through .json()/.text() (browser/response.c) */
     }
     JS_FreeValue(ctx, g);
 

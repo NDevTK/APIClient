@@ -130,22 +130,9 @@ JSValue js_request_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSVal
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_url_tostring, "toString", 0));
     return o;
 }
-/* A generic Web object whose reads are opaque (external input) and whose writes are no-ops: Headers,
-   FormData, Blob, Response body, AbortController.signal, TextEncoder/Decoder. Prevents the ReferenceError
-   that would kill the flow, and keeps any value read out of it OPAQUE (never a fabricated concrete). */
-JSValue js_webobj_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    const char *op[] = { "get", "getAll", "has", "keys", "values", "entries", "forEach", "encode", "decode",
-                         "text", "json", "arrayBuffer", "blob", "formData", "clone", "slice", "getReader" };
-    for (size_t i = 0; i < sizeof op / sizeof op[0]; i++)
-        JS_SetPropertyStr(ctx, o, op[i], JS_NewCFunction(ctx, js_opaque, op[i], 1));
-    const char *np[] = { "set", "append", "delete", "abort", "add", "addEventListener" };
-    for (size_t i = 0; i < sizeof np / sizeof np[0]; i++)
-        JS_SetPropertyStr(ctx, o, np[i], JS_NewCFunction(ctx, js_noop, np[i], 2));
-    JS_SetPropertyStr(ctx, o, "signal", js_concolic(ctx, "{abortSignal}", JS_UNDEFINED));   /* AbortController.signal */
-    JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_opaque, "toString", 0));
-    return o;
-}
+/* (The generic js_webobj_ctor opaque-stub constructor was DELETED: every interface it once served — Headers,
+   FormData, Blob, File, Response, AbortController, TextEncoder/Decoder, FileReader — now has a real
+   spec-shaped component, so the shape-drifting bag that read every unlisted member as undefined is gone.) */
 /* URLSearchParams: a REAL object recording init + append()/set() fields (like FormData), so
    `new URLSearchParams({team:cfg.team,r:cfg.region}).toString()` -> a CONCOLIC query string carrying both the
    SHAPE ("team={team}&r={region}") and, when every value has a concrete example, the encoded EXAMPLE

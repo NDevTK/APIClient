@@ -12,6 +12,5 @@ JSValue js_sp_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
 /* The fetch request-building objects that share this TU (contiguous with URL/URLSearchParams). */
 JSValue js_request_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv);   /* new Request(url, init) */
 JSValue js_headers_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv);   /* new Headers(init) */
-JSValue js_webobj_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv);    /* misc web-object stubs */
 
 #endif
