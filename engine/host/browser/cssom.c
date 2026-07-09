@@ -26,6 +26,34 @@
 #include <lexbor/dom/dom.h>
 
 extern char *g_candidate;   /* a candidate replay flow writes the concrete payload, not the shadow taint */
+extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* MediaQueryList change listener -> driven flow */
+
+/* The DEFINED default viewport the headless engine models (a real browser has one even with no window): a
+   1280x720 landscape desktop, light theme, fine pointer, no reduced motion. matchMedia evaluates against THIS
+   so `.matches` is a CONCRETE answer, never an opaque shrug — the browser's behavior without a device is
+   spec-defined. (A minimal evaluator over the common media features; an unrecognized feature is conservatively
+   non-matching. Alternate-viewport exploration is a separate solver concern, never a fake-opaque fork here.) */
+#define VIEWPORT_W 1280
+#define VIEWPORT_H 720
+static int media_matches(const char *q) {
+    if (!q) return 0;
+    const char *p;
+    if (strstr(q, "prefers-color-scheme: dark")) return 0;
+    if (strstr(q, "prefers-color-scheme: light")) return 1;
+    if (strstr(q, "prefers-reduced-motion: reduce")) return 0;
+    if (strstr(q, "prefers-reduced-motion")) return 1;                 /* no-preference query */
+    if (strstr(q, "pointer: coarse")) return 0;
+    if (strstr(q, "pointer: fine") || strstr(q, "any-pointer: fine")) return 1;
+    if (strstr(q, "hover: none")) return 0;
+    if (strstr(q, "hover: hover") || strstr(q, "any-hover: hover")) return 1;
+    if (strstr(q, "orientation: portrait")) return 0;
+    if (strstr(q, "orientation: landscape")) return 1;
+    if ((p = strstr(q, "max-width:")))  return VIEWPORT_W <= atoi(p + 10);
+    if ((p = strstr(q, "min-width:")))  return VIEWPORT_W >= atoi(p + 10);
+    if ((p = strstr(q, "max-height:"))) return VIEWPORT_H <= atoi(p + 11);
+    if ((p = strstr(q, "min-height:"))) return VIEWPORT_H >= atoi(p + 11);
+    return 0;   /* unrecognized feature: conservatively non-matching (concrete, never opaque) */
+}
 
 typedef struct { lxb_dom_element_t *el; int computed; } StyleDecl;
 static JSClassID g_style_class_id;
@@ -213,7 +241,19 @@ JSValue js_get_computed_style(JSContext *ctx, JSValueConst t, int c, JSValueCons
     lxb_dom_element_t *el = (c >= 1) ? JS_GetOpaque(v[0], g_el_class_id) : NULL;
     return el ? style_wrap(ctx, el, 1) : JS_DupValue(ctx, g_opaque);   /* reflects inline writes; unset -> opaque */
 }
+/* matchMedia(query) -> a MediaQueryList evaluated against the DEFINED default viewport: a CONCRETE .matches
+   (model the state, don't shrug to opaque), the query string, and the change-listener EventTarget methods. */
 JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    (void)t; (void)c; (void)v;
-    return JS_DupValue(ctx, g_opaque);   /* MediaQueryList: no viewport headless -> .matches forks, .addEventListener drives its cb */
+    (void)t;
+    const char *q = (c >= 1) ? JS_ToCString(ctx, v[0]) : NULL;
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "matches", JS_NewBool(ctx, media_matches(q)));   /* concrete, against the default viewport */
+    JS_SetPropertyStr(ctx, o, "media", JS_NewString(ctx, q ? q : ""));
+    JS_SetPropertyStr(ctx, o, "onchange", JS_NULL);
+    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    JS_SetPropertyStr(ctx, o, "addListener", JS_NewCFunction(ctx, js_add_listener, "addListener", 1));
+    JS_SetPropertyStr(ctx, o, "removeListener", JS_NewCFunction(ctx, js_noop, "removeListener", 1));
+    if (q) JS_FreeCString(ctx, q);
+    return o;
 }
