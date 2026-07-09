@@ -107,6 +107,11 @@ typedef struct {
                             attacker firing a sequence of events — the sound way to reach cross-handler sinks. */
     char *vtarget;       /* @S candidate flow: the "sink|ctx" it verifies. Once that's in g_verified, this flow is
                             REDUNDANT (another candidate already broke out) -> skip it, saving a full bundle re-run. */
+    char *drive_src;     /* OPAQUE-COLLECTION callback flow (items.forEach(cb), items = a reply/injected opaque): the
+                            element the callback is driven with must carry the COLLECTION's provenance, not a bare
+                            {} — this is the collection's shape so the starter drives arg0 as {reply} (f.key reads
+                            {reply}, keeping the reply taint) instead of losing it to g_opaque. NULL = default
+                            g_opaque args (a genuine orphan handler whose args are external input). */
     int is_boot;         /* BOOT FLOW: re-run the page's boot (inline scripts) from the PRISTINE pre-boot baseline as a
                             FORKING starter, so an async reply (now cached, resolves synchronously on re-run) drives its
                             continuation's gated branches WITH the concolic example — the faithful boot-as-flow. */
@@ -214,6 +219,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec,
     g_reg[g_reg_n].cow = NULL; g_reg[g_reg_n].cow_n = 0; g_reg[g_reg_n].cow_cap = 0;
     g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
     g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
+    g_reg[g_reg_n].drive_src = NULL;
     g_reg[g_reg_n].is_boot = 0;
     g_reg[g_reg_n].aresolve = JS_UNDEFINED; g_reg[g_reg_n].areject = JS_UNDEFINED; g_reg[g_reg_n].await_promise = JS_UNDEFINED;
     g_reg[g_reg_n].rthis = JS_UNDEFINED; g_reg[g_reg_n].rargs = NULL; g_reg[g_reg_n].rargc = 0; g_reg[g_reg_n].is_async = 0;
@@ -979,7 +985,7 @@ void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
    is a reply/injected-state array) — the method-on-opaque returns opaque without invoking cb, so register cb
    as a starter FLOW (exactly like a deferred timer). The scheduler force-invokes it with opaque args so its
    per-element endpoints/sinks are reached; transient (no orphan_idx), WFQ-ordered/starved like any flow. */
-static void drive_opaque_cb(JSContext *ctx, JSValueConst cb) {
+static void drive_opaque_cb(JSContext *ctx, JSValueConst cb, JSValueConst coll) {
     /* Register cb as a starter FLOW. NO seen-set: an unbounded recursion that calls `x.forEach(cb)` per level
        registers cb per level, but every level past the first drives cb with the SAME opaque args -> emits
        nothing new -> the WFQ STARVES those flows to ~0 CPU and RAM-pressure PARKS the tail to the IDB cold
@@ -987,6 +993,12 @@ static void drive_opaque_cb(JSContext *ctx, JSValueConst cb) {
        seen-set (§NO BOUNDS: "only emitted output — never identity — proves a flow is done") masking the
        recursion as a hang; the cooperative quantum keeps the worker responsive while it starves + parks. */
     flow_defer_callback(ctx, cb);
+    /* PROVENANCE: the element `cb` receives is an element OF `coll` (the reply/injected opaque the method was
+       called on), so tag it with coll's shape — the starter drives arg0 as {reply} (not a bare {}), keeping
+       the collection's taint through f.key etc. A non-opaque/untagged receiver leaves drive_src NULL (default
+       g_opaque args). Registered flow is the last one appended by flow_defer_callback. */
+    const char *cs = JS_IsOpaque(coll) ? JS_OpaqueShapeC(coll) : NULL;
+    if (cs && cs[0] && strcmp(cs, "{}") != 0 && g_reg_n > 0) g_reg[g_reg_n - 1].drive_src = strdup(cs);
 }
 /* structuredClone(x): deep-clone is identity for forced-exec purposes (shape/opacity carry through). */
 static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -1816,7 +1828,7 @@ static void park_frontier(JSContext *ctx)
         if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
         if (f->dom) dom_buf_free(f->dom, f->dom_n);   /* and its DOM delta */
         JS_FreeValue(ctx, f->handle);
-        free(f->dec); free(f->candidate); free(f->vtarget); flow_free_async_refs(ctx, f);    }
+        free(f->dec); free(f->candidate); free(f->vtarget); free(f->drive_src); flow_free_async_refs(ctx, f);    }
     g_reg_n = 0;
     printf("@PARKED %d\n", parked); fflush(stdout);   /* cold-tier park count (observability, symmetric with @RESUMED) — never a silent drop */
 }
@@ -1877,7 +1889,7 @@ static void scheduler_run(JSContext *ctx)
            saving a full boot-replay/bundle re-run. Not a bound: the sink IS solved; the work is duplicate. */
         if (f.vtarget && JS_IsObject(g_verified)) {
             JSValue vv = JS_GetPropertyStr(ctx, g_verified, f.vtarget); int solved = JS_IsString(vv); JS_FreeValue(ctx, vv);
-            if (solved) { JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); continue; }
+            if (solved) { JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); free(f.drive_src); continue; }
         }
         f.visits++;
         g_work++;                                   /* one flow got CPU (starter OR resume) — diagnostic tally */
@@ -1947,7 +1959,7 @@ static void scheduler_run(JSContext *ctx)
                 if (JS_IsException(out)) js_std_dump_error(ctx);
                 JS_FreeValue(ctx, out);
                 g_cur_flow = NULL;
-                JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);            }
+                JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); free(f.drive_src);            }
             g_candidate = NULL;
             continue;
         }
@@ -1972,7 +1984,7 @@ static void scheduler_run(JSContext *ctx)
             JS_CowRevert(ctx); { int cn, cc; void *cb = JS_CowBufTake(&cn, &cc); JS_CowBufFree(ctx, cb, cn); }   /* revert boot-inverse + re-run writes -> post-boot baseline */
             dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free(db, dn); }
             g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
-            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);            continue;
+            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); free(f.drive_src);            continue;
         }
 
         /* SYNC flow: load its per-flow scheduler state (decision vector + branch cursor). __branch
@@ -2005,6 +2017,11 @@ static void scheduler_run(JSContext *ctx)
             JSValue drive = f.handle, resolved = JS_UNDEFINED;
             if (f.candidate) { resolved = resolve_replayed_handler(ctx, f.handle); if (!JS_IsUndefined(resolved)) drive = resolved; }
             JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
+            /* OPAQUE-COLLECTION element: an items.forEach(cb) callback's element carries the collection's
+               provenance ({reply}), not a bare g_opaque — so f.key keeps the reply taint. Freed after
+               JS_FlowNew dups it into the frame. */
+            JSValue elem = JS_UNDEFINED;
+            if (f.drive_src) { elem = JS_NewOpaqueSourced(ctx, f.drive_src, f.drive_src); oargs[0] = elem; }
             /* A 'message' listener's first arg is a MessageEvent whose .data is attacker-controlled
                (postMessage): drive it with the {pm} source-tagged event so a sink reaching e.data reports
                {pm} and the PoC assembler builds a postMessage-delivered PoC. */
@@ -2015,6 +2032,7 @@ static void scheduler_run(JSContext *ctx)
             JSValue this_val = JS_IsUndefined(recv) ? g_opaque : recv;
             f.fs = JS_FlowNew(ctx, drive, this_val, 8, oargs);   /* async funcs included now — JS_FlowNew accepts them */
             JS_FreeValue(ctx, recv);
+            JS_FreeValue(ctx, elem);   /* JS_FlowNew dup'd the collection-tagged element into the frame (UNDEFINED if unused) */
             JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);   /* JS_FlowNew dup'd the drive handle; drop our resolved ref + transient replay handlers */
         }
         /* RESUME: swap in the parked flow's OWN heap COW delta (unapplied while it slept) so it sees its own
@@ -2098,7 +2116,7 @@ static void scheduler_run(JSContext *ctx)
             }
             JS_FreeValue(ctx, out);
             g_cur_flow = NULL;
-            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget);   /* candidate owned by a completed replay flow */
+            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); free(f.drive_src);   /* candidate owned by a completed replay flow */
             flow_free_async_refs(ctx, &f);
         }
         g_candidate = NULL;   /* clear the replay candidate; a suspended flow re-sets it from f.candidate on resume */
