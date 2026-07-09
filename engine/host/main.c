@@ -1531,10 +1531,12 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
     for (uint32_t i = 0; i < hn; i++) {
         JSValue h = JS_GetPropertyUint32(ctx, g_handlers, i);
         if (JS_IsFunction(ctx, h)) {
-            JSValueConst ev = (is_msg_handler(h) && !JS_IsUndefined(g_msg_event)) ? g_msg_event : g_opaque;
+            /* a 'message' handler gets the {pm} MessageEvent; every other handler gets a real DOM Event whose
+               target is the PER-CODE-FLOW document (js_event_ctor), so e.target.querySelector/closest work. */
+            JSValue ev = (is_msg_handler(h) && !JS_IsUndefined(g_msg_event)) ? JS_DupValue(ctx, g_msg_event) : js_event_ctor(ctx, JS_UNDEFINED, 0, NULL);
             JSValue pair = JS_NewArray(ctx);
             JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, h));
-            JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, ev));
+            JS_SetPropertyUint32(ctx, pair, 1, ev);   /* consumes ev */
             JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);   /* handlers fire with this=undefined */
             JS_SetPropertyUint32(ctx, arr, n++, pair);
         }
@@ -1548,7 +1550,7 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
         if (is_h) continue;
         JSValue pair = JS_NewArray(ctx);
         JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, fn));
-        JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, g_opaque));
+        JS_SetPropertyUint32(ctx, pair, 1, js_event_ctor(ctx, JS_UNDEFINED, 0, NULL));   /* driven fn gets a real DOM Event (target = per-flow document) */
         JS_SetPropertyUint32(ctx, pair, 2, JS_FindReceiver(ctx, fn));   /* real receiver (upgraded custom-element instance) so this.attachShadow/getAttribute work when the session fires connectedCallback */
         JS_SetPropertyUint32(ctx, arr, n++, pair);
     }
@@ -1574,7 +1576,7 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
                 if (!dup) {
                     JSValue pair = JS_NewArray(ctx);
                     JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, fn));
-                    JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, g_opaque));
+                    JS_SetPropertyUint32(ctx, pair, 1, js_event_ctor(ctx, JS_UNDEFINED, 0, NULL));   /* driven fn gets a real DOM Event (target = per-flow document) */
                     JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);
                     JS_SetPropertyUint32(ctx, arr, n++, pair);
                 }
