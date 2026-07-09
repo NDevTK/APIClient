@@ -248,9 +248,7 @@ JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     const char *q = (c >= 1) ? JS_ToCString(ctx, v[0]) : NULL;
     JSValue o = JS_NewObject(ctx);
-    JSValue m = JS_NewOpaqueSourced(ctx, "{matches}", "{matches}");   /* forkable */
-    if (JS_IsOpaque(m)) JS_SetOpaqueExample(ctx, m, JS_NewBool(ctx, media_matches(q)));   /* default-viewport example */
-    JS_SetPropertyStr(ctx, o, "matches", m);
+    JS_SetPropertyStr(ctx, o, "matches", js_concolic(ctx, "{matches}", JS_NewBool(ctx, media_matches(q))));   /* fork + default-viewport example */
     JS_SetPropertyStr(ctx, o, "media", JS_NewString(ctx, q ? q : ""));
     JS_SetPropertyStr(ctx, o, "onchange", JS_NULL);
     JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
