@@ -12,4 +12,5 @@ JSValue js_trusted_types_make(JSContext *ctx);      /* window.trustedTypes = the
 void tt_reset(void);                                /* per-document: clear observed-policy state */
 int tt_default_exists(void);                        /* @S: a 'default' policy was created (auto-applies to every sink) */
 int tt_any_policy(void);                            /* @S: any policy was created (a reachable createHTML exists) */
+int tt_default_weak(void);                          /* @S: 1 = default createHTML lets an XSS payload through (RUN-verified), 0 = sanitizes, -1 = none */
 #endif

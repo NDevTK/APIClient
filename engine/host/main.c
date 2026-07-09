@@ -864,7 +864,10 @@ static JSValue solve_all(JSContext *ctx) {
                         }
                         if (bp.trusted_types) {   /* TT enforced: the HTML sink throws unless a policy stringifies — report the REAL policy state OBSERVED by running the bundle's createPolicy calls */
                             JS_SetPropertyStr(ctx, rec, "trustedTypes",
-                                JS_NewString(ctx, tt_default_exists() ? "enforced; a 'default' policy IS defined (auto-applies to every sink) — the payload routes through its createHTML: a weak/identity policy lets it through, decided by re-execution"
+                                JS_NewString(ctx, tt_default_exists()
+                                                ? (tt_default_weak() == 1 ? "enforced; a 'default' policy is defined AND its createHTML was RUN on an XSS probe — the payload SURVIVED (weak/identity policy), so TT does not stop this sink: confirmed exploitable"
+                                                 : tt_default_weak() == 0 ? "enforced; a 'default' policy is defined and its createHTML SANITIZED the probe (run-verified) — TT neutralises this sink unless the sanitizer itself has a bypass"
+                                                 : "enforced; a 'default' policy is defined (auto-applies to every sink) — createHTML not probed")
                                                 : tt_any_policy() ? "enforced; named policy(ies) defined but no 'default' — the sink needs the payload wrapped by a reachable policy's createHTML"
                                                 : "enforced; NO policy defined in the bundle — every string sink assignment throws (no TT-abuse surface unless a gadget creates a policy)"));
                         }

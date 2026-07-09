@@ -11,13 +11,31 @@
 #include "idl.h"
 #include "opaque.h"   /* js_noop */
 
+extern int solve_broke(const char *sc, const char *res);   /* the real breakout detector — parse the createHTML OUTPUT */
+
 static JSClassID g_ttpolicy_class_id;
 typedef struct { JSValue rules; } TTPolicy;   /* internal slot: the page's {createHTML,createScript,…} options */
 
-static int g_tt_default = 0, g_tt_any = 0;    /* observed by RUNNING createPolicy (per document) */
-void tt_reset(void) { g_tt_default = 0; g_tt_any = 0; }
+static int g_tt_default = 0, g_tt_any = 0, g_tt_default_weak = -1;   /* observed by RUNNING createPolicy (per document) */
+void tt_reset(void) { g_tt_default = 0; g_tt_any = 0; g_tt_default_weak = -1; }
 int tt_default_exists(void) { return g_tt_default; }
 int tt_any_policy(void) { return g_tt_any; }
+int tt_default_weak(void) { return g_tt_default_weak; }   /* 1 = createHTML lets an XSS payload through (RUN-verified), 0 = sanitizes, -1 = no default/unprobed */
+
+/* RUN the default policy's createHTML on an XSS probe and PARSE the output with the real breakout detector:
+   a weak/identity policy leaves the marker executable; a real sanitizer strips it. Run-verified, never matched. */
+static void tt_probe_default(JSContext *ctx, JSValueConst rules) {
+    JSValue ch = JS_GetPropertyStr(ctx, rules, "createHTML");
+    if (JS_IsFunction(ctx, ch)) {
+        JSValue probe = JS_NewString(ctx, "<img src=x onerror=X9>");
+        JSValue out = JS_Call(ctx, ch, JS_UNDEFINED, 1, (JSValueConst *)&probe);
+        JS_FreeValue(ctx, probe);
+        if (JS_IsException(out)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); g_tt_default_weak = 0; }
+        else { const char *s = JS_ToCString(ctx, out); if (s) { g_tt_default_weak = solve_broke("html", s); JS_FreeCString(ctx, s); } }
+        JS_FreeValue(ctx, out);
+    }
+    JS_FreeValue(ctx, ch);
+}
 
 static void ttpolicy_finalizer(JSRuntime *rt, JSValue val) {
     TTPolicy *p = JS_GetOpaque(val, g_ttpolicy_class_id);
@@ -75,7 +93,7 @@ static JSValue f_createPolicy(JSContext *ctx, JSValueConst this_val, int argc, J
     JS_SetOpaque(o, p);
     JS_SetPropertyStr(ctx, o, "name", name ? JS_NewString(ctx, name) : JS_NewString(ctx, ""));
     g_tt_any = 1;
-    if (name && strcmp(name, "default") == 0) g_tt_default = 1;   /* auto-applies to every sink — the strongest surface */
+    if (name && strcmp(name, "default") == 0) { g_tt_default = 1; tt_probe_default(ctx, p->rules); }   /* auto-applies to every sink — RUN its createHTML to see if it actually sanitizes */
     if (name) JS_FreeCString(ctx, name);
     return o;
 }
