@@ -44,12 +44,30 @@ void set_origin(const char *origin) {
    sees a real value — reachability + breakout decided by the REAL code, in the ONE scheduler. */
 static const char *g_source_tag[] = { "{hash}", "{search}", "{pm}" };   /* 0=location.hash 1=location.search 2=postMessage e.data */
 static const char *g_source_pfx[] = { "#", "?", "" };                   /* realistic leading char so slice(1)/substring behave faithfully */
+/* Chrome PERCENT-ENCODES these in location.search (the query): space " < > ` — so a RAW read of the query is
+   ENCODED text, and an HTML breakout via raw location.search is only valid if the app DECODES it. Deliver the
+   search candidate encoded so re-execution decides faithfully: a raw read -> no breakout (kills the false PoC);
+   decodeURIComponent / URLSearchParams -> decoded -> the real breakout. (location.hash is mostly raw in Chrome;
+   postMessage data is structured, not URL-encoded.) The attacker crafts the URL, so this is the browser's own
+   transform, not a filter we invent. */
+static char *pct_encode_query(const char *s) {
+    size_t n = strlen(s); char *o = malloc(n * 3 + 1); if (!o) return NULL; size_t j = 0;
+    static const char hex[] = "0123456789ABCDEF";
+    for (size_t i = 0; i < n; i++) { unsigned char c = (unsigned char)s[i];
+        if (c == ' ' || c == '"' || c == '<' || c == '>' || c == '`') { o[j++] = '%'; o[j++] = hex[c >> 4]; o[j++] = hex[c & 15]; }
+        else o[j++] = (char)c; }
+    o[j] = 0; return o;
+}
 static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
     if (g_candidate) {   /* a replay flow injects the CONCRETE candidate — with the source's real prefix, so
                             code that strips it (location.hash.slice(1), search.substring(1)) sees the true payload. */
-        const char *pfx = g_source_pfx[magic]; size_t lp = strlen(pfx), lc = strlen(g_candidate);
-        char *buf = malloc(lp + lc + 1); if (!buf) return JS_NewString(ctx, g_candidate);
-        memcpy(buf, pfx, lp); memcpy(buf + lp, g_candidate, lc + 1);
+        const char *pfx = g_source_pfx[magic];
+        char *enc = (magic == 1) ? pct_encode_query(g_candidate) : NULL;   /* location.search is browser-percent-encoded */
+        const char *payload = enc ? enc : g_candidate;
+        size_t lp = strlen(pfx), lc = strlen(payload);
+        char *buf = malloc(lp + lc + 1); if (!buf) { free(enc); return JS_NewString(ctx, g_candidate); }
+        memcpy(buf, pfx, lp); memcpy(buf + lp, payload, lc + 1);
+        free(enc);
         if (magic == 2) {   /* postMessage e.data can be an OBJECT: return a CANDIDATE-CARRIER opaque so a FIELD
                                sink (`{html}=e.data; el.innerHTML=html`) delivers the candidate, while whole-value
                                use (`el.innerHTML=e.data`) reads the same candidate as the example. */
