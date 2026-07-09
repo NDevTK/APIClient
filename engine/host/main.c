@@ -1632,28 +1632,7 @@ static JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueC
    while a CANDIDATE flow reads the REAL concrete attr so the payload flows through the real DOM. Populated at
    boot (baseline); candidate flows never write it (they set the real attr, isolated by the DOM COW delta). */
 /* AttrShadow (the DOM attribute taint side-map) is in attr_shadow.c — accessed via attr_shadow_find/set/opaque. */
-static JSValue js_el_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
-    if (!el || argc < 1) return JS_NULL;
-    const char *name = JS_ToCString(ctx, argv[0]);
-    if (!name) return JS_NULL;
-    if (!g_candidate) {   /* baseline/opaque flow: preserve taint stashed in this attr */
-        int i = attr_shadow_find(el, name);
-        if (i >= 0) { JS_FreeCString(ctx, name); return JS_DupValue(ctx, attr_shadow_opaque(i)); }
-    }
-    size_t vlen = 0;
-    const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vlen);
-    JS_FreeCString(ctx, name);
-    return v ? JS_NewStringLen(ctx, (const char *)v, vlen) : JS_NULL;   /* REAL attribute value (concrete, incl candidate) */
-}
-static JSValue js_el_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc < 1) return JS_NULL;
-    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
-    lxb_dom_element_t *self_el = JS_GetOpaque(this_val, g_el_class_id);   /* SUBTREE-scope to the receiver element */
-    lxb_dom_element_t *el = dom_select_first(self_el ? lxb_dom_interface_node(self_el) : NULL, s, strlen(s));
-    JS_FreeCString(ctx, s);
-    return el_wrap(ctx, el);
-}
+/* getAttribute (attr-shadow taint round-trip) + querySelector -> dom_element.c. */
 static JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val) {   /* .textContent / .innerText getter */
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
     if (!el) return JS_NULL;
@@ -1718,65 +1697,7 @@ static void script_maybe_load(lxb_dom_element_t *el) {
 }
 /* resolve_with + dynimport_link + host_dyn_import/host_module_normalize/host_module_loader + pendmod_retry
    -> module_loader.c (the whole ESM subsystem). */
-static JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
-    if (!el || argc < 2) return JS_UNDEFINED;
-    const char *name = JS_ToCString(ctx, argv[0]);
-    if (!name) return JS_UNDEFINED;
-    int is_opq = JS_IsOpaque(argv[1]);
-    /* Capture the TRUE pre-write baseline (attr value AND taint shadow) into the per-flow COW delta BEFORE
-       mutating either — else dom_attr_capture snapshots this flow's OWN shadow write as the baseline, so a
-       context-switch's unapply can't restore the real (empty) baseline and the stashed taint is lost the
-       instant a switch lands between setAttribute and a later getAttribute (the DOM-stash round-trip bug). */
-    dom_attr_capture(el, name);
-    /* baseline/opaque flow storing OPAQUE external input -> record the taint in the shadow (concrete value ->
-       clear any stale taint). A candidate flow (concrete source) writes only the real attr, not the shadow. */
-    if (!g_candidate) attr_shadow_set(ctx, el, name, is_opq ? argv[1] : JS_UNDEFINED);
-    /* @S: a tainted value written into an EXECUTABLE attribute. on* handler => the value IS js code (js
-       context); href/src/action => a javascript: URL (url context). Called unconditionally like the other
-       sinks so solve_add both DETECTS (opaque flow) and VERIFIES the breakout (candidate flow). */
-    if (name[0] == 'o' && name[1] == 'n') solve_add(ctx, "setAttribute", "js", argv[1]);
-    else if (!strcmp(name, "href") || !strcmp(name, "src") || !strcmp(name, "action") || !strcmp(name, "formaction"))
-        solve_add(ctx, "setAttribute", "url", argv[1]);
-    /* CONCOLIC EXAMPLE to Lexbor: a candidate flow's concrete payload (or a computed/reply value) must round-trip
-       through getAttribute, which — in a candidate flow — bypasses the taint shadow and reads the REAL Lexbor
-       attr. Writing only the display shape degraded a DOM-stashed candidate to its shape, so it never broke out
-       at the downstream sink (the cross-handler / stash-and-read @S round-trip). Prefer the example; fall back to
-       the shape for a pure symbol (attacker input with no example). */
-    JSValue exv = is_opq ? JS_OpaqueExample(ctx, argv[1]) : JS_UNDEFINED;
-    int ex_str = is_opq && !JS_IsUndefined(exv);
-    const char *val = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_OpaqueShapeC(argv[1]) : JS_ToCString(ctx, argv[1]));
-    if (val) lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val));   /* baseline captured above (before the shadow write) */
-    if (val && (ex_str || !is_opq)) JS_FreeCString(ctx, val);   /* ToString'd (example/concrete) frees; JS_OpaqueShapeC internal pointer does not */
-    JS_FreeValue(ctx, exv);
-    JS_FreeCString(ctx, name);
-    return JS_UNDEFINED;
-}
-/* el.insertAdjacentHTML(pos, html): DOM edge (no-op for content; the security view is forced-exec, not
-   a taint check on the argument). */
-static JSValue js_el_insertAdjacentHTML(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 2) solve_add(ctx, "insertAdjacentHTML", "html", argv[1]);   /* @S */
-    return JS_UNDEFINED;
-}
-static JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
-    solve_add(ctx, magic ? "outerHTML" : "innerHTML", "html", val);         /* @S */
-    return JS_UNDEFINED;
-}
-static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return JS_DupValue(ctx, g_opaque); }
-/* @H form submission (form_enc/form_collect/js_form_submit) is in forms.c (included via forms.h). */
-/* el.getAttributeNames(): the element's attribute names, in order — a real DOM API frameworks use to reflect
-   attrs. Missing, it threw and killed the page. */
-static JSValue js_el_getattrnames(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSValue arr = JS_NewArray(ctx);
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
-    if (!el) return arr;
-    uint32_t i = 0;
-    for (lxb_dom_attr_t *a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
-        size_t nl = 0; const lxb_char_t *nm = lxb_dom_attr_qualified_name(a, &nl);
-        if (nm) JS_SetPropertyUint32(ctx, arr, i++, JS_NewStringLen(ctx, (const char *)nm, nl));
-    }
-    return arr;
-}
+/* setAttribute + insertAdjacentHTML + inner/outerHTML get/set + getAttributeNames -> dom_element.c. */
 static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *parent = JS_GetOpaque(this_val, g_el_class_id);
     /* @S: inserting a {parsedhtml}-TAINTED node (from DOMParser.parseFromString / Range.createContextual-

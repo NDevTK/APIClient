@@ -34,4 +34,14 @@ JSValue js_el_tagname(JSContext *ctx, JSValueConst this_val);
 JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic);
 JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic);
 
+/* Attribute + HTML-sink edges: get/setAttribute (attr-shadow taint round-trip; on-handler/href/src -> @S),
+   getAttributeNames, querySelector (subtree CSS), and the innerHTML/outerHTML/insertAdjacentHTML @S sinks. */
+JSValue js_el_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_getattrnames(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_insertAdjacentHTML(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic);
+JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic);
+
 #endif
