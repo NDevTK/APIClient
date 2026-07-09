@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "url.h"
 #include "constraints.h"   /* cons_fixed_value — an == gate PINS a {src} hole to its concrete value */
+#include "check.h"         /* CHECK — OOM must crash LOUD, never silently degrade a solved URL back to its shape */
 
 /* Substitute each `{src}` hole the running flow FIXED (== gate) with its concrete value, so a URL built from
    gated input surfaces the SOLVED key in BOTH path and query (/api/{hash} -> /api/admin). NULL if nothing
@@ -10,7 +11,7 @@
 char *url_solve_holes(JSContext *ctx, const char *url) {
     (void)ctx;
     if (!url || !strchr(url, '{')) return NULL;
-    size_t cap = strlen(url) + 64, len = 0; char *out = malloc(cap); if (!out) return NULL;
+    size_t cap = strlen(url) + 64, len = 0; char *out = malloc(cap); CHECK(out, "url-solve-oom: malloc failed -> a solved URL would silently degrade to its unconcretized shape");
     int changed = 0;
     for (const char *p = url; *p; ) {
         if (*p == '{') {
@@ -19,11 +20,11 @@ char *url_solve_holes(JSContext *ctx, const char *url) {
                 char hole[64]; size_t hl = (size_t)(close - p + 1); memcpy(hole, p, hl); hole[hl] = 0;
                 const char *fixed = cons_fixed_value(hole);
                 if (fixed) { size_t fl = strlen(fixed);
-                    while (len + fl + 1 > cap) { cap *= 2; char *n = realloc(out, cap); if (!n) { free(out); return NULL; } out = n; }
+                    while (len + fl + 1 > cap) { cap *= 2; char *n = realloc(out, cap); CHECK(n, "url-solve-oom: realloc failed"); out = n; }
                     memcpy(out + len, fixed, fl); len += fl; p = close + 1; changed = 1; continue; }
             }
         }
-        if (len + 2 > cap) { cap *= 2; char *n = realloc(out, cap); if (!n) { free(out); return NULL; } out = n; }
+        if (len + 2 > cap) { cap *= 2; char *n = realloc(out, cap); CHECK(n, "url-solve-oom: realloc failed"); out = n; }
         out[len++] = *p++;
     }
     out[len] = 0;

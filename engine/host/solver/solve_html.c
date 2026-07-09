@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "solve_html.h"
+#include "check.h"   /* CHECK — OOM must crash, never return 0 (a dropped @S PoC masquerading as "no breakout") */
 #include <lexbor/dom/dom.h>
 
 static int mem_has_x9(const lxb_char_t *s, size_t n) {   /* the X9 fire-marker survives, as raw bytes (values aren't null-terminated) */
@@ -20,7 +21,7 @@ static int mem_has_x9(const lxb_char_t *s, size_t n) {   /* the X9 fire-marker s
    the DOM EVENT itself fires (empty-src onerror, interaction-only) — that stays ground truth, never softened. */
 static int x9_fires(const lxb_char_t *code, size_t len) {
     if (!g_solve_ctx || !code || !len) return 0;
-    char *m = malloc(len * 2 + 1); if (!m) return 0;   /* X9 -> X9() grows +2 per marker */
+    char *m = malloc(len * 2 + 1); CHECK(m, "x9fires-oom: malloc failed -> a dropped @S PoC would masquerade as no-breakout");   /* X9 -> X9() grows +2 per marker */
     size_t o = 0;
     for (size_t i = 0; i < len; ) {
         if (i + 1 < len && code[i] == 'X' && code[i + 1] == '9') {
@@ -31,11 +32,11 @@ static int x9_fires(const lxb_char_t *code, size_t len) {
     }
     m[o] = 0;
     size_t cap = o + 64; char *buf = malloc(cap);
-    if (!buf) { free(m); return 0; }
+    CHECK(buf, "x9fires-oom: malloc failed");
     /* `\n;` closes any trailing `//` line-comment so a `…;X9();//'` handler still runs X9() */
     int n = snprintf(buf, cap, "globalThis.__f9=0;with(globalThis.__u){%s\n;}", m);
     free(m);
-    if (n < 0 || (size_t)n >= cap) { free(buf); return 0; }
+    DCHECK(n >= 0 && (size_t)n < cap, "x9fires-fmt: snprintf truncated/errored -> the fixed ~42-char wrapper always fits o+64");
     JSValue cr = JS_Eval(g_solve_ctx, buf, (size_t)n, "<handler>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(cr)) { JSValue e = JS_GetException(g_solve_ctx); JS_FreeValue(g_solve_ctx, e); }
     JS_FreeValue(g_solve_ctx, cr);
@@ -147,7 +148,7 @@ const char *elem_fire_event(const char *tag) {
 void solve_ctx_detect(const char *shape, struct ctx_probe *out) {
     if (!shape || !out) return;
     size_t sl = strlen(shape);
-    char *wl = (char *)malloc(sl + 16); if (!wl) return;   /* the shape with each {..} hole replaced by the locator */
+    char *wl = (char *)malloc(sl + 16); CHECK(wl, "ctx-detect-oom: malloc failed -> a half-filled ctx_probe yields the wrong breakout");   /* the shape with each {..} hole replaced by the locator */
     size_t o = 0;
     for (size_t i = 0; i < sl; ) {
         if (shape[i] == '{') { const char *e = strchr(shape + i, '}'); if (e) { size_t Ln = strlen(CTX_LOC); if (o + Ln < sl + 15) { memcpy(wl + o, CTX_LOC, Ln); o += Ln; } i = (size_t)(e - shape) + 1; continue; } }

@@ -4,6 +4,7 @@
 #include "location.h"
 #include "solve.h"    /* solve_add — location.href/.assign/`location=` are @S navigation sinks */
 #include "opaque.h"   /* g_opaque, js_noop */
+#include "check.h"    /* CHECK — OOM must crash, never emit a prefix-less/unencoded candidate (a false PoC) */
 
 /* Borrowed from main.c: the page principal (this TU WRITES it in set_origin + reads it for location.*), and
    the @S replay candidate (a replay flow's source getters return it instead of the opaque). */
@@ -55,7 +56,7 @@ static const char *g_source_pfx[] = { "#", "?", "" };                   /* reali
    this deeper still: the parser can MUTATE inert-looking encoded input into executable on re-serialization —
    handled where the sink output is re-parsed, not here.) postMessage data is structured, not URL-encoded. */
 static char *pct_encode_url(const char *s, int enc_backtick, int enc_squote) {
-    size_t n = strlen(s); char *o = malloc(n * 3 + 1); if (!o) return NULL; size_t j = 0;
+    size_t n = strlen(s); char *o = malloc(n * 3 + 1); CHECK(o, "loc-encode-oom: malloc failed -> an unencoded candidate is a FALSE PoC"); size_t j = 0;
     static const char hex[] = "0123456789ABCDEF";
     for (size_t i = 0; i < n; i++) { unsigned char c = (unsigned char)s[i];
         if (c == ' ' || c == '"' || c == '<' || c == '>' || (enc_backtick && c == '`') || (enc_squote && c == '\'')) { o[j++] = '%'; o[j++] = hex[c >> 4]; o[j++] = hex[c & 15]; }
@@ -71,7 +72,7 @@ static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
                   : NULL;                                                                     /* pm: structured, not URL-encoded */
         const char *payload = enc ? enc : g_candidate;
         size_t lp = strlen(pfx), lc = strlen(payload);
-        char *buf = malloc(lp + lc + 1); if (!buf) { free(enc); return JS_NewString(ctx, g_candidate); }
+        char *buf = malloc(lp + lc + 1); CHECK(buf, "loc-source-oom: malloc failed -> a prefix-less candidate would corrupt slice(1)/substring(1) payloads");
         memcpy(buf, pfx, lp); memcpy(buf + lp, payload, lc + 1);
         free(enc);
         if (magic == 2) {   /* postMessage e.data can be an OBJECT: return a CANDIDATE-CARRIER opaque so a FIELD

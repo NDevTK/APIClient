@@ -1,5 +1,6 @@
 /* Per-flow value-domain constraint tracker — see constraints.h. Extracted from main.c. */
 #include "constraints.h"
+#include "check.h"   /* CHECK — allocation failure is a UNIVERSAL invariant: a dropped constraint corrupts feasibility */
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,11 +11,12 @@ char g_sink_root[64] = "";
 
 void cons_reset(void) { for (int i = 0; i < g_cons_n; i++) { free(g_cons[i].src); free(g_cons[i].tok); free(g_cons[i].jkey); } g_cons_n = 0; g_origin_req[0] = 0; }
 void cons_set(int i, const char *src, const char *tok, int op, const char *jkey) {   /* record the constraint that holds at decision i */
-    if (i >= g_cons_cap) { int nc = g_cons_cap ? g_cons_cap * 2 : 64; while (nc <= i) nc *= 2; Cons *n = realloc(g_cons, (size_t)nc * sizeof(Cons)); if (!n) return; g_cons = n; g_cons_cap = nc; }
+    if (i >= g_cons_cap) { int nc = g_cons_cap ? g_cons_cap * 2 : 64; while (nc <= i) nc *= 2; Cons *n = realloc(g_cons, (size_t)nc * sizeof(Cons)); CHECK(n, "cons-oom: a dropped constraint corrupts flow feasibility -> phantom or dropped endpoint"); g_cons = n; g_cons_cap = nc; }
     for (int j = g_cons_n; j <= i; j++) { g_cons[j].src = NULL; g_cons[j].tok = NULL; g_cons[j].op = OPCMP_NONE; g_cons[j].jkey = NULL; }   /* fill gaps */
     if (i >= g_cons_n) g_cons_n = i + 1;
     free(g_cons[i].src); free(g_cons[i].tok); free(g_cons[i].jkey);
     g_cons[i].src = src ? strdup(src) : NULL; g_cons[i].tok = tok ? strdup(tok) : NULL; g_cons[i].op = op; g_cons[i].jkey = jkey ? strdup(jkey) : NULL;
+    CHECK((!src || g_cons[i].src) && (!tok || g_cons[i].tok) && (!jkey || g_cons[i].jkey), "cons-oom: strdup failed -> a lost constraint string corrupts feasibility");
 }
 int opcmp_neg(int op) { switch (op) { case OPCMP_EQ: return OPCMP_NE; case OPCMP_NE: return OPCMP_EQ; case OPCMP_LT: return OPCMP_GE; case OPCMP_GE: return OPCMP_LT; case OPCMP_GT: return OPCMP_LE; case OPCMP_LE: return OPCMP_GT; } return OPCMP_NONE; }
 static int tok_num(const char *t, double *o) { if (!t || !*t) return 0; char *e; double d = strtod(t, &e); if (e == t || *e) return 0; *o = d; return 1; }
