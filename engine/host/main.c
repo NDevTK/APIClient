@@ -1919,6 +1919,7 @@ static lxb_status_t scr_collect_cb(lxb_dom_node_t *node, lxb_css_selector_specif
    captured CREATION, so no re-declaration clash. Remaining limit (full boot-as-flow): external <script src>
    chunks aren't re-run — a source stored in a fetched chunk isn't re-established under the candidate. */
 static char **g_boot_scripts = NULL; static int g_boot_n = 0, g_boot_cap = 0;
+static JSValue *g_boot_compiled = NULL;   /* compiled boot programs (COMPILE-ONCE): a real browser parses a script ONCE and re-runs the bytecode; re-`JS_Eval`ing the source string per candidate replay was a re-parse SHORTCUT (and leaked the per-parse function/scope objects across the ~N candidate replays). */
 static void boot_script_cache(const char *txt, size_t len) {
     if (g_boot_n >= g_boot_cap) { int nc = g_boot_cap ? g_boot_cap * 2 : 8;
         char **n = realloc(g_boot_scripts, (size_t)nc * sizeof(char *)); if (!n) return; g_boot_scripts = n; g_boot_cap = nc; }
@@ -1931,8 +1932,19 @@ static void boot_script_cache(const char *txt, size_t len) {
    a FATAL bug: crash with the real exception, never swallow it. Branch behaviour is the caller's
    (g_boot_replay=1 fixed-arm for @S candidates; g_in_boot_flow=1 FORKING for a boot flow). */
 static void boot_scripts_run(JSContext *ctx) {
+    if (!g_boot_compiled && g_boot_n > 0) {   /* COMPILE ONCE (lazily, on the first replay): parse each boot program to bytecode and keep it */
+        g_boot_compiled = malloc((size_t)g_boot_n * sizeof(JSValue));
+        if (g_boot_compiled) for (int i = 0; i < g_boot_n; i++)
+            g_boot_compiled[i] = JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    }
     for (int i = 0; i < g_boot_n; i++) {
-        JSValue v = JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL);
+        /* RE-RUN the cached bytecode (dup — JS_EvalFunction consumes its arg); no re-parse. Fall back to a
+           fresh compile only if caching failed. Re-run is clean because the caller unapplied g_boot_delta, so
+           the program re-declares its top-level var/let/const/function into an empty baseline. */
+        JSValue prog = (g_boot_compiled && !JS_IsException(g_boot_compiled[i]))
+            ? JS_DupValue(ctx, g_boot_compiled[i])
+            : JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+        JSValue v = JS_IsException(prog) ? prog : JS_EvalFunction(ctx, prog);   /* runs + consumes prog */
         if (JS_IsException(v)) {   /* boot re-run must be faithful — a throw is a COW/host gap or not-yet-built capability */
             JSValue e = JS_GetException(ctx); const char *em = JS_ToCString(ctx, e);
             char rz[300]; snprintf(rz, sizeof rz, "boot script threw on re-run: %s", em ? em : "?");
@@ -3169,6 +3181,7 @@ KEEP void qjs_teardown(void)
     JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
     for (int i = 0; i < g_gate_n; i++) free(g_gate_tokens[i]);
     free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
+    if (g_boot_compiled) { for (int i = 0; i < g_boot_n; i++) JS_FreeValue(ctx, g_boot_compiled[i]); free(g_boot_compiled); g_boot_compiled = NULL; }
     for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
     free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
     csp_free();
