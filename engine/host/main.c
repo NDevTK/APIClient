@@ -2485,6 +2485,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         g_el_proto = JS_DupValue(ctx, el_proto);   /* custom-element bases (def_ctor) inherit these methods; freed in qjs_teardown */
         JS_SetClassProto(ctx, g_el_class_id, el_proto);
         JS_SetReceiverClass(rt, g_el_class_id);   /* JS_FindReceiver drives connectedCallback with the el-backed instance as `this` */
+        cssom_init(ctx);   /* native CSSStyleDeclaration class (el.style / getComputedStyle), backed by the per-flow style attribute */
     }
 
     g_handlers = JS_NewArray(ctx);

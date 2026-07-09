@@ -8,4 +8,6 @@
 #include "quickjs.h"
 JSValue js_get_computed_style(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);   /* getComputedStyle(el) */
 JSValue js_match_media(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);          /* matchMedia(query) */
+JSValue js_el_inline_style(JSContext *ctx, JSValueConst el_obj);                         /* el.style — per-flow inline CSSStyleDeclaration */
+void cssom_init(JSContext *ctx);   /* register the native CSSStyleDeclaration class + prototype (call once at setup) */
 #endif

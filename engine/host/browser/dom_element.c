@@ -11,6 +11,7 @@
 #include "dom_cow.h"      /* dom_attr_capture — an attribute write joins the per-flow COW delta */
 #include "attr_shadow.h"  /* attr_shadow_find/set/opaque — a value set via attr keeps its taint+example */
 #include "opaque.h"       /* g_opaque — el.innerHTML read is opaque external input */
+#include "cssom.h"        /* js_el_inline_style — el.style is a per-flow inline CSSStyleDeclaration */
 
 /* Borrowed from main.c: an @S replay flow pins the concrete candidate here (a reflected-property write in a
    replay writes the candidate, not the shadow taint). */
@@ -88,7 +89,7 @@ JSValue js_el_contains(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
         if (n == lxb_dom_interface_node(self)) return JS_TRUE;
     return JS_FALSE;
 }
-JSValue js_el_style_get(JSContext *ctx, JSValueConst this_val) { return JS_NewObject(ctx); }
+JSValue js_el_style_get(JSContext *ctx, JSValueConst this_val) { return js_el_inline_style(ctx, this_val); }   /* per-flow inline style (browser/cssom.c), backed by the COW-captured `style` attribute */
 /* template.content: the inert DocumentFragment holding the <template>'s parsed children. Apps instantiate a
    template via template.content.cloneNode(true) / .querySelector(...) (the core <template> / lit-html / web-
    component idiom); undefined here made that a fatal TypeError. Wrap the Lexbor content fragment (a node) so
