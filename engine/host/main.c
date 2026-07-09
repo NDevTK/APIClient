@@ -49,6 +49,9 @@
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
 #include "xhr.h"          /* XMLHttpRequest emulation -> the @H recorder, its own TU */
 #include "fetch.h"        /* the fetch() host edge -> the @H recorder, its own TU */
+#include "websocket.h"    /* WebSocket + EventSource ctor -> WS/SSE handshake endpoint, its own TU */
+#include "worker.h"       /* Worker + SharedWorker ctor -> worker-script chunk, its own TU */
+#include "navigator.h"    /* navigator.sendBeacon + serviceWorker.register -> @H, its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -707,98 +710,12 @@ static JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueCo
     for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, o, m[i], JS_NewCFunction(ctx, js_opaque_stub, m[i], 1));
     return o;
 }
-/* WebSocket / EventSource: `new X(url)` — the url IS an endpoint (WS/SSE handshake is a GET), emit it. The
-   object has send/close/addEventListener (onmessage handler -> driven) so real usage never throws. */
-/* FormData: a real object recording append()/set() fields, so a `fetch(url,{body:fd})` POST surfaces the
-   real request params (name=value&…) instead of an opaque body. Opaque (external-input) field values keep
-   their shape. js_fetch's JS_ToCString(body) invokes toString -> the serialization. */
-/* FormData (append/set -> __fields, toString via js_sp_tostring) -> browser/formdata.c (Blink core/html/forms/FormData). */
-static JSValue js_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 1) {
-        char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
-        if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
-        if (!u) u = JS_ToCString(ctx, argv[0]);
-        if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
-        JS_FreeValue(ctx, ex);
-        if (url) { if (!has_hole(url)) chunk_pending_add(url); free(url); }   /* -> host fetch + engine analyze */
-    }
-    return js_resolved(ctx, JS_DupValue(ctx, g_opaque));   /* Promise<ServiceWorkerRegistration> */
-}
-/* navigator.sendBeacon(url, data): a real REQUEST (analytics/telemetry endpoint) — emit @H like fetch. */
-static JSValue js_send_beacon(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 1) {
-        char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
-        if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
-        if (!u) u = JS_ToCString(ctx, argv[0]);
-        if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
-        JS_FreeValue(ctx, ex);
-        if (url) {
-            char *usolved = url_solve_holes(ctx, url); const char *eurl = usolved ? usolved : url;
-            JSValue ep = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, ep, "method", JS_NewString(ctx, "POST"));
-            JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, eurl));
-            JS_SetPropertyStr(ctx, ep, "source", JS_NewString(ctx, "ast_analysis"));
-            JSValue params = JS_NewArray(ctx); build_query_params(ctx, eurl, params); JS_SetPropertyStr(ctx, ep, "params", params);
-            if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
-                const char *bs = JS_ToCString(ctx, argv[1]);
-                if (bs && bs[0]) { char *bsolved = url_solve_holes(ctx, bs); JS_SetPropertyStr(ctx, ep, "body", JS_NewString(ctx, bsolved ? bsolved : bs)); free(bsolved); }
-                if (bs) JS_FreeCString(ctx, bs);
-            }
-            record_endpoint(ctx, ep); free(usolved); free(url);
-        }
-    }
-    return JS_TRUE;
-}
-static JSValue js_ws_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    if (argc >= 1) {
-        char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
-        if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
-        if (!u) u = JS_ToCString(ctx, argv[0]);
-        if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
-        JS_FreeValue(ctx, ex);
-        if (url) {
-            char *usolved = url_solve_holes(ctx, url); const char *eurl = usolved ? usolved : url;
-            JSValue ep = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, ep, "method", JS_NewString(ctx, "GET"));
-            JS_SetPropertyStr(ctx, ep, "url", JS_NewString(ctx, eurl));
-            JS_SetPropertyStr(ctx, ep, "source", JS_NewString(ctx, "ast_analysis"));
-            JSValue params = JS_NewArray(ctx); build_query_params(ctx, eurl, params); JS_SetPropertyStr(ctx, ep, "params", params);
-            record_endpoint(ctx, ep); free(usolved); free(url);
-        }
-    }
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "send", JS_NewCFunction(ctx, js_noop, "send", 1));
-    JS_SetPropertyStr(ctx, o, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
-    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    JS_SetPropertyStr(ctx, o, "readyState", JS_NewInt32(ctx, 1));
-    return o;
-}
-/* Worker / SharedWorker(url): the worker SCRIPT is code with its OWN endpoints -> fetch + analyze it like a
-   <script src> chunk (chunk_pending_add). The object exposes postMessage/terminate + addEventListener (the
-   onmessage handler is driven) and a .port (SharedWorker). */
-static JSValue js_worker_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    if (argc >= 1) {
-        char *url = NULL; JSValue ex = JS_OpaqueExample(ctx, argv[0]); const char *u = NULL;
-        if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
-        if (!u) u = JS_ToCString(ctx, argv[0]);
-        if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
-        JS_FreeValue(ctx, ex);
-        if (url) { if (!has_hole(url)) chunk_pending_add(url); free(url); }   /* -> host fetch + engine analyze */
-    }
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "postMessage", JS_NewCFunction(ctx, js_noop, "postMessage", 1));
-    JS_SetPropertyStr(ctx, o, "terminate", JS_NewCFunction(ctx, js_noop, "terminate", 0));
-    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    JSValue port = JS_NewObject(ctx);   /* SharedWorker.port (MessagePort) */
-    JS_SetPropertyStr(ctx, port, "postMessage", JS_NewCFunction(ctx, js_noop, "postMessage", 1));
-    JS_SetPropertyStr(ctx, port, "start", JS_NewCFunction(ctx, js_noop, "start", 0));
-    JS_SetPropertyStr(ctx, port, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
-    JS_SetPropertyStr(ctx, port, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, o, "port", port);
-    return o;
-}
+/* Network-initiating web APIs extracted to Blink-named components (each FEEDS record_endpoint/chunk_pending_add,
+   holds no scheduler logic, uses the shared url_from_arg idiom):
+     WebSocket + EventSource -> browser/websocket.c   (modules/websockets, modules/eventsource)
+     Worker + SharedWorker   -> browser/worker.c      (core/workers)
+     navigator.sendBeacon + serviceWorker.register -> browser/navigator.c (core/frame/navigator, modules/service_worker)
+     FormData                -> browser/formdata.c    (core/html/forms/FormData) */
 static JSValue js_notification_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "close", JS_NewCFunction(ctx, js_noop, "close", 0));

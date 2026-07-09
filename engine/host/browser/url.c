@@ -32,6 +32,18 @@ char *url_solve_holes(JSContext *ctx, const char *url) {
     return out;
 }
 
+/* Read a network web API's URL argument (see url.h): the opaque EXAMPLE (a computed/config URL the flow
+   pinned) takes precedence over a raw ToString, so `new WebSocket(cfg.wsUrl)` records the concrete endpoint. */
+char *url_from_arg(JSContext *ctx, JSValueConst arg) {
+    JSValue ex = JS_OpaqueExample(ctx, arg); const char *u = NULL;
+    if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
+    if (!u) u = JS_ToCString(ctx, arg);
+    char *r = (u && u[0]) ? strdup(u) : NULL;
+    if (u) JS_FreeCString(ctx, u);
+    JS_FreeValue(ctx, ex);
+    return r;
+}
+
 /* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
    has a '{' followed by only lowercase letters then '}'. Such a URL is not concretely fetchable. Generalizes
    the old literal strstr("{}") checks so source-tagged holes are still recognized as opaque. */
