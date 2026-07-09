@@ -11,10 +11,13 @@ static JSValue js_crypto_getrandom(JSContext *ctx, JSValueConst this_val, int ar
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_DupValue(ctx, g_opaque);
 }
 
+static JSValue js_crypto_uuid(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v; return js_concolic(ctx, "{uuid}", JS_UNDEFINED);   /* external randomness -> source-tagged, not bare {} */
+}
 JSValue js_crypto_make(JSContext *ctx) {
     JSValue cr = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, cr, "randomUUID", JS_NewCFunction(ctx, js_opaque, "randomUUID", 0));
+    JS_SetPropertyStr(ctx, cr, "randomUUID", JS_NewCFunction(ctx, js_crypto_uuid, "randomUUID", 0));
     JS_SetPropertyStr(ctx, cr, "getRandomValues", JS_NewCFunction(ctx, js_crypto_getrandom, "getRandomValues", 1));
-    JS_SetPropertyStr(ctx, cr, "subtle", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, cr, "subtle", js_concolic(ctx, "{cryptoSubtle}", JS_UNDEFINED));   /* SubtleCrypto: digest/encrypt externally-derived -> source-tagged */
     return cr;
 }

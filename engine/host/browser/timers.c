@@ -15,5 +15,5 @@ JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueCon
         flow_defer_callback(ctx, argv[0]);
     else if (argc >= 1 && (JS_IsString(argv[0]) || JS_IsOpaque(argv[0])))
         solve_add(ctx, "setTimeout", "js", argv[0]);   /* setTimeout(STRING) evals -> js sink (candidate breakout + opaque detect) */
-    return JS_DupValue(ctx, g_opaque);
+    return js_concolic(ctx, "{timerId}", JS_UNDEFINED);
 }

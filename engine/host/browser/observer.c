@@ -10,5 +10,5 @@ extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValue
 JSValue js_observer_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
     (void)nt;
     if (argc >= 1 && JS_IsFunction(ctx, argv[0])) { JSValue r = js_add_listener(ctx, JS_UNDEFINED, 1, argv); JS_FreeValue(ctx, r); }
-    return JS_DupValue(ctx, g_opaque);   /* .observe/.disconnect/.takeRecords + any read -> opaque (no fixed-shape stub) */
+    return js_concolic(ctx, "{observer}", JS_UNDEFINED);   /* .observe/.disconnect/.takeRecords + any read -> opaque (no fixed-shape stub) */
 }

@@ -22,5 +22,5 @@ JSValue js_notification_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueC
 }
 JSValue js_notif_request_perm(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
-    return JS_DupValue(ctx, g_opaque);   /* Promise-awaited permission is unknown -> forks the granted/denied gate */
+    return js_concolic(ctx, "{notificationPermission}", JS_UNDEFINED);   /* Promise-awaited permission is unknown -> forks the granted/denied gate */
 }
