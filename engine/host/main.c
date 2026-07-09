@@ -2277,6 +2277,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
            snapshots of the shipped structure. */
         JS_SetPropertyStr(ctx, doc, "documentElement", el_wrap(ctx, dom_select_first(NULL, "html", 4)));
         JS_SetPropertyStr(ctx, doc, "readyState", JS_NewString(ctx, "complete"));
+        { lxb_dom_element_t *tt = dom_select_first(NULL, "title", 5);   /* document.title = the REAL <title> text (identity/config read), not undefined */
+          size_t tl = 0; lxb_char_t *txt = tt ? lxb_dom_node_text_content(lxb_dom_interface_node(tt), &tl) : NULL;
+          JS_SetPropertyStr(ctx, doc, "title", JS_NewStringLen(ctx, txt ? (const char *)txt : "", txt ? tl : 0)); }
         { JSAtom a = JS_NewAtom(ctx, "location");
           JS_DefinePropertyGetSet(ctx, doc, a, JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_get, "get", 0, JS_CFUNC_getter, 0),
               JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_set, "set", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
