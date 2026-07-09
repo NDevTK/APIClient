@@ -60,6 +60,7 @@
 #include "intl.h"         /* Intl formatters (IDL-defined, opaque results), its own TU */
 #include "notification.h" /* Notification (IDL-defined) + requestPermission, its own TU */
 #include "media_element.h" /* Image/Audio/Option ctors + Audio media state machine, its own TU */
+#include "history.h"      /* window.history real state machine (pushState sets state), its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -2609,16 +2610,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, intl, cn[i], JS_NewCFunction2(ctx, js_intl_ctor, cn[i], 0, JS_CFUNC_constructor, 0));
         JS_SetPropertyStr(ctx, g, "Intl", intl);
     }
-    {   /* history: pushState/replaceState/back/forward/go are no-ops (SPA routing side effects); state opaque */
-        JSValue h = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, h, "pushState", JS_NewCFunction(ctx, js_noop, "pushState", 3));
-        JS_SetPropertyStr(ctx, h, "replaceState", JS_NewCFunction(ctx, js_noop, "replaceState", 3));
-        JS_SetPropertyStr(ctx, h, "back", JS_NewCFunction(ctx, js_noop, "back", 0));
-        JS_SetPropertyStr(ctx, h, "forward", JS_NewCFunction(ctx, js_noop, "forward", 0));
-        JS_SetPropertyStr(ctx, h, "go", JS_NewCFunction(ctx, js_noop, "go", 1));
-        JS_SetPropertyStr(ctx, h, "state", JS_DupValue(ctx, g_opaque));
-        JS_SetPropertyStr(ctx, g, "history", h);
-    }
+    JS_SetPropertyStr(ctx, g, "history", js_history_make(ctx));   /* real History state machine (browser/history.c): pushState sets history.state */
     /* Time/random are EXTERNAL INPUT -> OPAQUE: a branch on Math.random()/Date.now() must FORK both arms
        (not take a random one), and their VALUES are shapes not fabricated concretes. This is also a REPLAY
        SOUNDNESS requirement -- non-deterministic values would shift orphan-collection order between
