@@ -55,6 +55,10 @@
 #include "navigator.h"    /* navigator.sendBeacon + serviceWorker.register -> @H, its own TU */
 #include "cssom.h"        /* getComputedStyle + matchMedia -> opaque CSSOM environment reads, its own TU */
 #include "observer.h"     /* Intersection/Mutation/Resize/Performance observers -> callback flow + opaque, its own TU */
+#include "idl.h"          /* Web IDL binding driver — declarative interface tables -> native objects */
+#include "abort.h"        /* AbortSignal (IDL-defined), its own TU */
+#include "intl.h"         /* Intl formatters (IDL-defined, opaque results), its own TU */
+#include "notification.h" /* Notification (IDL-defined) + requestPermission, its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -698,36 +702,16 @@ void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) {
 /* getComputedStyle + matchMedia (CSSOM environment reads, opaque -> browser/cssom.c). */
 /* Intl.NumberFormat/DateTimeFormat/etc.: `new Intl.X().format(v)` threw (not built into this quickjs). A
    constructor returning {format/…} whose results are opaque (locale-formatted external input). */
-static JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    const char *m[] = { "format", "formatToParts", "formatRange", "formatRangeToParts", "resolvedOptions", "select", "compare", "of" };  /* .of = Intl.DisplayNames */
-    for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, o, m[i], JS_NewCFunction(ctx, js_opaque_stub, m[i], 1));
-    return o;
-}
 /* Network-initiating web APIs extracted to Blink-named components (each FEEDS record_endpoint/chunk_pending_add,
    holds no scheduler logic, uses the shared url_from_arg idiom):
      WebSocket + EventSource -> browser/websocket.c   (modules/websockets, modules/eventsource)
      Worker + SharedWorker   -> browser/worker.c      (core/workers)
      navigator.sendBeacon + serviceWorker.register -> browser/navigator.c (core/frame/navigator, modules/service_worker)
      FormData                -> browser/formdata.c    (core/html/forms/FormData) */
-static JSValue js_notification_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
-    JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    return o;
-}
-static JSValue js_notif_request_perm(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)
-{ return js_resolved(ctx, JS_NewString(ctx, "default")); }   /* Notification.requestPermission() -> Promise<"default"> */
-/* AbortSignal.timeout(ms) / .any([...]) / .abort(): a live-signal object (aborted=false so a branch on it forks). */
-static JSValue js_abortsignal_make(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    JSValue s = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, s, "aborted", JS_FALSE);
-    JS_SetPropertyStr(ctx, s, "reason", JS_UNDEFINED);
-    JS_SetPropertyStr(ctx, s, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, s, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    JS_SetPropertyStr(ctx, s, "throwIfAborted", JS_NewCFunction(ctx, js_noop, "throwIfAborted", 0));
-    return s;
-}
+/* Intl.* / Notification / Notification.requestPermission / AbortSignal.timeout|any|abort: results genuinely
+   unknown headless (locale / OS permission / timer-signal), so they install the shared OPAQUE concolic value
+   (opaque.h's js_opaque_stub) directly — any read/method is the honest unknown, .aborted/permission FORK, a
+   handler arg is driven. No fixed-shape stub object, no per-one-liner component. */
 /* fetch(url): the moat's host edge. URL = whatever the bundle COMPUTED. ACCUMULATE the endpoint record
    (method/url/params/headers/body) into g_endpoints — identity/dedup runs in-engine at finalize — raise
    the flow's value (the WFQ progress signal), and return a resolved promise wrapping the Response. */
