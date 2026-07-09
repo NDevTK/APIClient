@@ -108,6 +108,7 @@ static const char *refl_name(int magic) {   /* property magic -> the ATTRIBUTE i
         case 0: return "src"; case 1: return "href"; case 2: return "action"; case 3: return "id";
         case 4: return "value"; case 5: return "name"; case 6: return "type"; case 7: return "class";
         case 8: return "alt"; case 9: return "title"; case 10: return "placeholder"; case 11: return "srcdoc";
+        case 12: return "nonce";   /* HTMLElement.nonce IDL attr — returns the real value (unlike getAttribute, which nonce-hiding empties); a gadget reusing script.nonce is a real XSS path the solver follows */
         default: return "";
     }
 }
@@ -165,6 +166,12 @@ JSValue js_el_getAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     if (!el || argc < 1) return JS_NULL;
     const char *name = JS_ToCString(ctx, argv[0]);
     if (!name) return JS_NULL;
+    /* Nonce-hiding (CSP3): getAttribute('nonce') is emptied so it can't leak the nonce (via reflection or a CSS
+       attribute-selector) — the value survives ONLY on the .nonce IDL property. Faithful to real Chrome. */
+    if ((name[0]=='n'||name[0]=='N') && strlen(name)==5 && (name[1]=='o'||name[1]=='O')) {
+        char lc[6]; for (int k=0;k<5;k++){ char c=name[k]; lc[k]=(c>='A'&&c<='Z')?c+32:c; } lc[5]=0;
+        if (strcmp(lc,"nonce")==0) { JS_FreeCString(ctx, name); return JS_NewString(ctx, ""); }
+    }
     if (!g_candidate) {   /* baseline/opaque flow: preserve taint stashed in this attr */
         int i = attr_shadow_find(el, name);
         if (i >= 0) { JS_FreeCString(ctx, name); return JS_DupValue(ctx, attr_shadow_opaque(i)); }

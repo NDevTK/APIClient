@@ -1348,7 +1348,7 @@ static void el_install_methods(JSContext *ctx, JSValue proto) {
     /* Attribute-REFLECTED properties real bundles read constantly (undefined broke every read + branch). The
        PROPERTY name may differ from the attribute (className -> class); refl_name maps it. value/name/type are
        an input's shipped defaults (concrete page config). */
-    static const char *refl[] = { "src", "href", "action", "id", "value", "name", "type", "className", "alt", "title", "placeholder", "srcdoc" };
+    static const char *refl[] = { "src", "href", "action", "id", "value", "name", "type", "className", "alt", "title", "placeholder", "srcdoc", "nonce" };
     for (int i = 0; i < (int)(sizeof refl / sizeof refl[0]); i++) {
         JSAtom a = JS_NewAtom(ctx, refl[i]);
         JS_DefinePropertyGetSet(ctx, proto, a,
