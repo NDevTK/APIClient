@@ -9,4 +9,12 @@
 extern JSClassID g_el_class_id;                              /* the "Element" JSClass id (lexbor owns the nodes) */
 JSValue el_wrap(JSContext *ctx, lxb_dom_element_t *el);      /* wrap a real Lexbor element as a JS Element (NULL -> null) */
 
+/* DOM TRAVERSAL getters — real el_wrap'd ELEMENT nodes from Lexbor (parentNode/children/firstElementChild/
+   nextElementSibling), so a tree walk that reaches a fetch/sink is explored. Registered by main.c's proto
+   builder; a pure Lexbor read, no scheduler coupling. */
+JSValue js_el_parent(JSContext *ctx, JSValueConst this_val);
+JSValue js_el_children(JSContext *ctx, JSValueConst this_val);
+JSValue js_el_first_el_child(JSContext *ctx, JSValueConst this_val);
+JSValue js_el_next_el_sib(JSContext *ctx, JSValueConst this_val);
+
 #endif

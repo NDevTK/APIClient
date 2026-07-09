@@ -1943,32 +1943,7 @@ static JSValue js_el_dataset_get(JSContext *ctx, JSValueConst this_val) {
    .length` / `el.parentNode.x` THREW, killing DOM-walking bundles. Return REAL el_wrap'd element nodes from
    Lexbor so a tree walk that reaches a fetch/sink is explored. children is a REAL array (.length/.forEach/[i]
    all work). Only ELEMENT nodes (text nodes aren't wrapped — a walker keying on .children matches the browser). */
-static int node_is_element(lxb_dom_node_t *n) { return n && n->type == LXB_DOM_NODE_TYPE_ELEMENT; }
-static JSValue js_el_parent(JSContext *ctx, JSValueConst this_val) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_NULL;
-    lxb_dom_node_t *p = lxb_dom_interface_node(el)->parent;
-    return node_is_element(p) ? el_wrap(ctx, lxb_dom_interface_element(p)) : JS_NULL;
-}
-static JSValue js_el_children(JSContext *ctx, JSValueConst this_val) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
-    JSValue arr = JS_NewArray(ctx); if (!el) return arr;
-    uint32_t idx = 0;
-    for (lxb_dom_node_t *n = lxb_dom_interface_node(el)->first_child; n; n = n->next)
-        if (node_is_element(n)) JS_SetPropertyUint32(ctx, arr, idx++, el_wrap(ctx, lxb_dom_interface_element(n)));
-    return arr;
-}
-static JSValue js_el_first_el_child(JSContext *ctx, JSValueConst this_val) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_NULL;
-    for (lxb_dom_node_t *n = lxb_dom_interface_node(el)->first_child; n; n = n->next)
-        if (node_is_element(n)) return el_wrap(ctx, lxb_dom_interface_element(n));
-    return JS_NULL;
-}
-static JSValue js_el_next_el_sib(JSContext *ctx, JSValueConst this_val) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_NULL;
-    for (lxb_dom_node_t *n = lxb_dom_interface_node(el)->next; n; n = n->next)
-        if (node_is_element(n)) return el_wrap(ctx, lxb_dom_interface_element(n));
-    return JS_NULL;
-}
+/* DOM traversal getters (parentNode/children/firstElementChild/nextElementSibling) -> dom_element.c. */
 static void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_el_getAttribute, "getAttribute", 1));
     JS_SetPropertyStr(ctx, proto, "setAttribute", JS_NewCFunction(ctx, js_el_setAttribute, "setAttribute", 2));
