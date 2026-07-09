@@ -171,7 +171,12 @@ static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisio
    constraint is checked against these; a provably-contradicted branch arm is PRUNED (no phantom @H). */
 typedef struct { char *src; char *tok; int op; } Cons;   /* op = the HOLDING comparison (OPCMP_*) of src vs tok on this flow's path */
 static Cons *g_cons = NULL; static int g_cons_cap = 0, g_cons_n = 0;
-static void cons_reset(void) { for (int i = 0; i < g_cons_n; i++) { free(g_cons[i].src); free(g_cons[i].tok); } g_cons_n = 0; }
+/* PER-FLOW REQUIRED-ORIGIN: a FORGEABLE origin string-check the flow took to reach a sink (endsWith
+   'victim.com' / includes / startsWith — bypassable by a registered attacker domain). The attacker DOES
+   control origin, so this is a solvable delivery constraint, surfaced on the finding so the PoC is complete
+   (which origin to send from). The UNFORGEABLE === / endsWith('.subdomain') suppress the finding elsewhere. */
+static char g_origin_req[256] = "";
+static void cons_reset(void) { for (int i = 0; i < g_cons_n; i++) { free(g_cons[i].src); free(g_cons[i].tok); } g_cons_n = 0; g_origin_req[0] = 0; }
 static void cons_set(int i, const char *src, const char *tok, int op) {   /* record the constraint that holds at decision i */
     if (i >= g_cons_cap) { int nc = g_cons_cap ? g_cons_cap * 2 : 64; while (nc <= i) nc *= 2; Cons *n = realloc(g_cons, (size_t)nc * sizeof(Cons)); if (!n) return; g_cons = n; g_cons_cap = nc; }
     for (int j = g_cons_n; j <= i; j++) { g_cons[j].src = NULL; g_cons[j].tok = NULL; g_cons[j].op = OPCMP_NONE; }   /* fill gaps */
@@ -1061,11 +1066,18 @@ static void gate_collect(const char *token, const char *src) {
        'trusted<img..>'. Drop it here (the data search is unaffected; the same string, if ALSO a real data gate
        elsewhere, is collected there with a data src). Per-flow origin-constraint SURFACING for delivery is a
        separate concern needing per-flow attribution. */
-    /* origin/source constraints never feed the DATA-payload candidate search. Their @S suppression is unified in
-       the constraint tracker: `===`/membership record {origin}==tok directly, and e.origin.endsWith('.host')
-       gets EQ provenance at the opaque method-call site (quickjs.c) — all caught by cons_fixed_value("{origin}"),
-       so no separate per-flow flag here. */
-    if (src && (strncmp(src, "{origin}", 8) == 0 || strncmp(src, "{source}", 8) == 0)) return;
+    /* origin/source constraints never feed the DATA-payload candidate search (that would build nonsense like
+       'trusted<img..>'). But the attacker DOES control origin (by registering a domain), so a FORGEABLE origin
+       string-check — endsWith('victim.com') (NON-dotted: https://attackervictim.com passes), includes,
+       startsWith, indexOf — is a solvable DELIVERY constraint: record it as the required-origin so the reported
+       PoC is COMPLETE. The UNFORGEABLE gates (=== exact, endsWith('.subdomain')) suppress the whole finding via
+       cons_fixed_value / the EQ pin, so they never reach a reported sink and are skipped here. */
+    if (src && (strncmp(src, "{origin}", 8) == 0 || strncmp(src, "{source}", 8) == 0)) {
+        const char *m = strrchr(src, '.');   /* the method: "{origin}.endsWith" -> "endsWith" */
+        if (m && m[1] && !(strcmp(m + 1, "endsWith") == 0 && token[0] == '.'))   /* skip the unforgeable dotted suffix */
+            snprintf(g_origin_req, sizeof g_origin_req, "origin must satisfy %s('%s') - bypassable by a registered domain", m + 1, token);
+        return;
+    }
     for (int i = 0; i < g_gate_n; i++) if (strcmp(g_gate_tokens[i], token) == 0) return;
     if (g_gate_n >= g_gate_cap) { int nc = g_gate_cap ? g_gate_cap * 2 : 32;
         char **n = realloc(g_gate_tokens, (size_t)nc * sizeof(char *)); if (!n) return; g_gate_tokens = n; g_gate_cap = nc; }
@@ -1196,6 +1208,7 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
     JS_SetPropertyStr(ctx, t, "sink", JS_NewString(ctx, sink));
     JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
     JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, shape ? shape : "{}"));
+    if (g_origin_req[0]) JS_SetPropertyStr(ctx, t, "requiredOrigin", JS_NewString(ctx, g_origin_req));   /* forgeable origin gate on this path -> the PoC's delivery origin */
     { const char *sp = JS_OpaqueSrcC(val);   /* @S structured delivery: the source LEAF path ("{pm}.html") -> post {html:payload}, not a bare string */
       if (sp && sp[0]) {
           JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp));
@@ -1274,6 +1287,8 @@ static JSValue solve_all(JSContext *ctx) {
                     JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
                     if (srcpath && srcpath[0]) JS_SetPropertyStr(ctx, rec, "srcpath", JS_NewString(ctx, srcpath));   /* structured delivery hint */
                     if (JS_IsObject(gfv)) JS_SetPropertyStr(ctx, rec, "gatefields", JS_DupValue(ctx, gfv));   /* sibling gate fields the delivery object must set */
+                    { JSValue rov = JS_GetPropertyStr(ctx, t, "requiredOrigin");   /* forgeable origin gate -> the PoC's delivery origin (part of the reproduction envelope) */
+                      if (JS_IsString(rov)) JS_SetPropertyStr(ctx, rec, "requiredOrigin", rov); else JS_FreeValue(ctx, rov); }
                     JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
                     JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
                     if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE, PER SINK CLASS: the model broke out, but the page's CSP may block THIS vector on real Chrome */
