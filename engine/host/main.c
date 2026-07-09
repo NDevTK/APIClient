@@ -62,6 +62,7 @@
 #include "media_element.h" /* Image/Audio/Option ctors + Audio media state machine, its own TU */
 #include "history.h"      /* window.history real state machine (pushState sets state), its own TU */
 #include "cookie.h"       /* document.cookie per-flow cookie jar (round-trips writes), its own TU */
+#include "screen.h"       /* window.screen + innerWidth/... concolic viewport, its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -2591,6 +2592,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     }
     JS_SetPropertyStr(ctx, g, "getComputedStyle", JS_NewCFunction(ctx, js_get_computed_style, "getComputedStyle", 1));
     JS_SetPropertyStr(ctx, g, "matchMedia", JS_NewCFunction(ctx, js_match_media, "matchMedia", 1));
+    screen_install_viewport(ctx, g);   /* window.screen + innerWidth/innerHeight/devicePixelRatio (concolic viewport, browser/screen.c) — also fixes `screen.width` on undefined */
     JS_SetPropertyStr(ctx, g, "Image", JS_NewCFunction2(ctx, js_image_ctor, "Image", 2, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "Audio", JS_NewCFunction2(ctx, js_audio_ctor, "Audio", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "Option", JS_NewCFunction2(ctx, js_option_ctor, "Option", 4, JS_CFUNC_constructor, 0));

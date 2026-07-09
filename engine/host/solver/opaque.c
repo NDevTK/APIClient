@@ -9,3 +9,10 @@ void opaque_free(JSContext *ctx) { JS_FreeValue(ctx, g_opaque); g_opaque = JS_UN
 JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_UNDEFINED; }
 JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_DupValue(ctx, g_opaque); }
 JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_DupValue(ctx, g_opaque); }
+
+JSValue js_concolic(JSContext *ctx, const char *shape, JSValue example) {
+    JSValue o = JS_NewOpaqueSourced(ctx, shape, shape);         /* forkable, source-tagged */
+    if (JS_IsOpaque(o)) JS_SetOpaqueExample(ctx, o, example);   /* concrete example (consumes it) */
+    else JS_FreeValue(ctx, example);
+    return o;
+}

@@ -20,4 +20,10 @@ JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
 JSValue js_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
 
+/* A CONCOLIC CONSTANT: an opaque tagged `shape` so a branch on it still FORKS (explore both worlds — more
+   logic, you don't know which arm ships an endpoint), carrying `example` as its concrete value (model, never
+   lost). The shared primitive for a modelable-but-branch-relevant environment value (navigator/screen/media).
+   CONSUMES `example`. Bare-concrete would delete the fork; bare-opaque would drop the value; this is both. */
+JSValue js_concolic(JSContext *ctx, const char *shape, JSValue example);
+
 #endif
