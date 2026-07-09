@@ -65,7 +65,7 @@ const BROWSER = (f) => join(HOST, "browser", f);   // spec-faithful web-platform
 const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (the novel half)
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c"]
   .map((f) => join(QJS, f))
-  .concat([join(HOST, "main.c"),
+  .concat([join(HOST, "main.c"), join(HOST, "prelude.c"),
     SOLVER("solve_html.c"), SOLVER("dom_cow.c"), SOLVER("opaque.c"), SOLVER("reply.c"), SOLVER("endpoint.c"), SOLVER("attr_shadow.c"), SOLVER("constraints.c"),
     BROWSER("csp.c"), BROWSER("dom_select.c"), BROWSER("storage.c"), BROWSER("indexeddb.c"), BROWSER("messaging.c"), BROWSER("url.c"), BROWSER("xhr.c"), BROWSER("fetch.c"),
     BROWSER("forms.c"), BROWSER("classlist.c"), BROWSER("docwrite.c"), BROWSER("urlobj.c"), BROWSER("module_loader.c"),
