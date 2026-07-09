@@ -44,17 +44,21 @@ void set_origin(const char *origin) {
    sees a real value — reachability + breakout decided by the REAL code, in the ONE scheduler. */
 static const char *g_source_tag[] = { "{hash}", "{search}", "{pm}" };   /* 0=location.hash 1=location.search 2=postMessage e.data */
 static const char *g_source_pfx[] = { "#", "?", "" };                   /* realistic leading char so slice(1)/substring behave faithfully */
-/* Chrome PERCENT-ENCODES these in location.search (the query): space " < > ` — so a RAW read of the query is
-   ENCODED text, and an HTML breakout via raw location.search is only valid if the app DECODES it. Deliver the
-   search candidate encoded so re-execution decides faithfully: a raw read -> no breakout (kills the false PoC);
-   decodeURIComponent / URLSearchParams -> decoded -> the real breakout. (location.hash is mostly raw in Chrome;
-   postMessage data is structured, not URL-encoded.) The attacker crafts the URL, so this is the browser's own
-   transform, not a filter we invent. */
-static char *pct_encode_query(const char *s) {
+/* The browser PERCENT-ENCODES the URL per the WHATWG percent-encode SETS, which DIFFER by component (VERIFIED
+   on real Chrome). Both encode `< > " space` (-> %3C %3E %22 %20), but the tail differs and it MATTERS for XSS:
+   the FRAGMENT set (location.hash) encodes backtick `` ` `` but NOT `'` — so a SINGLE-QUOTE-context breakout via
+   raw hash WORKS; the SPECIAL-QUERY set (http/https location.search) encodes `'` but NOT backtick — so `'` is
+   dead in raw search but a backtick vector lives. So a RAW read of either is encoded text and an HTML breakout
+   there is a FALSE PoC unless the app DECODES it (decodeURIComponent / URLSearchParams), and the LIVE, working
+   breakout char-set is source-specific. Deliver each candidate through the source's REAL browser transform so
+   re-execution decides breakout faithfully — the browser's own encoding, never an invented filter. (mXSS makes
+   this deeper still: the parser can MUTATE inert-looking encoded input into executable on re-serialization —
+   handled where the sink output is re-parsed, not here.) postMessage data is structured, not URL-encoded. */
+static char *pct_encode_url(const char *s, int enc_backtick, int enc_squote) {
     size_t n = strlen(s); char *o = malloc(n * 3 + 1); if (!o) return NULL; size_t j = 0;
     static const char hex[] = "0123456789ABCDEF";
     for (size_t i = 0; i < n; i++) { unsigned char c = (unsigned char)s[i];
-        if (c == ' ' || c == '"' || c == '<' || c == '>' || c == '`') { o[j++] = '%'; o[j++] = hex[c >> 4]; o[j++] = hex[c & 15]; }
+        if (c == ' ' || c == '"' || c == '<' || c == '>' || (enc_backtick && c == '`') || (enc_squote && c == '\'')) { o[j++] = '%'; o[j++] = hex[c >> 4]; o[j++] = hex[c & 15]; }
         else o[j++] = (char)c; }
     o[j] = 0; return o;
 }
@@ -62,7 +66,9 @@ static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
     if (g_candidate) {   /* a replay flow injects the CONCRETE candidate — with the source's real prefix, so
                             code that strips it (location.hash.slice(1), search.substring(1)) sees the true payload. */
         const char *pfx = g_source_pfx[magic];
-        char *enc = (magic == 1) ? pct_encode_query(g_candidate) : NULL;   /* location.search is browser-percent-encoded */
+        char *enc = (magic == 0) ? pct_encode_url(g_candidate, /*backtick*/1, /*squote*/0)   /* hash = FRAGMENT set: ` encoded, ' RAW */
+                  : (magic == 1) ? pct_encode_url(g_candidate, /*backtick*/0, /*squote*/1)   /* search = SPECIAL-QUERY set: ' encoded, ` RAW */
+                  : NULL;                                                                     /* pm: structured, not URL-encoded */
         const char *payload = enc ? enc : g_candidate;
         size_t lp = strlen(pfx), lc = strlen(payload);
         char *buf = malloc(lp + lc + 1); if (!buf) { free(enc); return JS_NewString(ctx, g_candidate); }
