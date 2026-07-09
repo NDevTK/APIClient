@@ -2241,16 +2241,6 @@ static JSValue js_opaque_example(JSContext *ctx, JSValueConst this_val, int argc
 {
     return argc > 0 ? JS_OpaqueExample(ctx, argv[0]) : JS_UNDEFINED;
 }
-/* __opqInfo(v): NON-DESTRUCTIVE observability — the concolic triple "shape|src|jkey" as a CONCRETE string (or
-   "notopaque"), so a fixture can OBSERVE what taint/structure a value carries via a normal endpoint, instead of
-   the destructive DFAIL/crash probing. Dev tooling for solver work; a leaf, never forks. */
-static JSValue js_opq_info(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    if (argc < 1 || !JS_IsOpaque(argv[0])) return JS_NewString(ctx, "notopaque");
-    const char *sh = JS_OpaqueShapeC(argv[0]), *sr = JS_OpaqueSrcC(argv[0]), *jk = JS_OpaqueJKey(argv[0]);
-    char b[400]; snprintf(b, sizeof b, "%s|%s|%s", sh ? sh : "-", sr ? sr : "-", jk ? jk : "NULL");
-    return JS_NewString(ctx, b);
-}
 
 /* orphan flow source — CONTINUOUS discovery, NOT a one-shot phase. Called every scheduler iteration so
    functions defined DYNAMICALLY during a forced flow (a login-gated lazy CHUNK: eval/import of fetched
@@ -2717,7 +2707,6 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_opaque, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
     JS_SetPropertyStr(ctx, g, "__opaqueExample", JS_NewCFunction(ctx, js_opaque_example, "__opaqueExample", 1));   /* self-hosted stringify: a config opaque's concrete example (else undefined) */
-    JS_SetPropertyStr(ctx, g, "__opqInfo", JS_NewCFunction(ctx, js_opq_info, "__opqInfo", 1));   /* dev observability: "shape|src|jkey" of a value */
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval, "eval", 1));   /* eval(concrete) -> forced-execute */
     /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both
