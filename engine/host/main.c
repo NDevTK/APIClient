@@ -3209,6 +3209,7 @@ KEEP void qjs_teardown(void)
     opaque_free(ctx);
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     storage_free(ctx);
+    idb_free(ctx);
     endpoint_free(ctx);
     JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
