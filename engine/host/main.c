@@ -37,6 +37,7 @@
 #include "module_loader.h" /* ES-module loader: static+dynamic import graph (modsrc/moddep/pendmod + hooks), its own TU */
 #include "domparser.h"    /* DOMParser + Range HTML parsing -> {parsedhtml} taint, its own TU */
 #include "location.h"     /* the browser location object + external-input source getters + principal split, its own TU */
+#include "dom_element.h"  /* the DOM Element JSClass + el_wrap (methods migrate here incrementally), its own TU */
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
@@ -1574,15 +1575,7 @@ static JSValue js_doc_currentscript(JSContext *ctx, JSValueConst t) { return JS_
    the page HTML, NOT a bridge-side scrape — so it can carry real attribute values now, and become
    per-flow COW state + intercept dynamic script injection (steps C/D). */
 lxb_html_document_t *g_dom = NULL;   /* the live parsed document (non-static: dom_select.c reads it) */
-JSClassID g_el_class_id;   /* element class id (non-static: forms.c + future dom_element.c borrow it) */
-
-JSValue el_wrap(JSContext *ctx, lxb_dom_element_t *el) {   /* non-static: dom_select.c wraps its matches */
-    if (!el) return JS_NULL;
-    JSValue o = JS_NewObjectClass(ctx, g_el_class_id);
-    if (JS_IsException(o)) return o;
-    JS_SetOpaque(o, el);
-    return o;
-}
+/* g_el_class_id + el_wrap -> dom_element.{c,h} (the element JSClass foundation; methods migrate there). */
 /* new Image()/Audio()/Option(): missing constructors threw (killing the script). Return a REAL wrapped
    element (its methods/attrs work); .src is stored via the element's src setter — NOT emitted as @H, since
    an image/media load is a STATIC ASSET (magic-byte, not URL), so emitting would pollute with asset noise. */
