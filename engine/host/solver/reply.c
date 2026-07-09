@@ -10,7 +10,7 @@ extern JSValue js_resolved(JSContext *ctx, JSValue val);
 extern void reply_fetch_register(const char *url, int is_json);
 
 static JSValue js_resp_body(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{ return js_resolved(ctx, JS_DupValue(ctx, g_opaque)); }
+{ return js_resolved(ctx, js_concolic(ctx, "{reply}", JS_UNDEFINED)); }
 /* the concrete reply body injected onto this Response (fromReply), or JS_UNDEFINED */
 static JSValue resp_body_str(JSContext *ctx, JSValueConst this_val) {
     JSValue b = JS_GetPropertyStr(ctx, this_val, "__body");
@@ -29,7 +29,7 @@ static JSValue reply_value(JSContext *ctx, JSValueConst body_str, int is_json) {
     size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, body_str);
     JSValue parsed = s ? JS_ParseJSON(ctx, s, len, "<reply>") : JS_EXCEPTION;
     if (s) JS_FreeCString(ctx, s);
-    if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return JS_DupValue(ctx, g_opaque); }
+    if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return js_concolic(ctx, "{reply}", JS_UNDEFINED); }
     return JS_ConcolicWrap(ctx, parsed, "reply");   /* structure real; string/bool leaves concolic (fork + real example) */
 }
 /* r.json()/r.text(): a CACHED body resolves CONCOLIC (the boot re-run's path, make_response injected __body);

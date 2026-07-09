@@ -8,7 +8,7 @@
 
 static JSValue js_crypto_getrandom(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
-    return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_DupValue(ctx, g_opaque);
+    return argc >= 1 ? JS_DupValue(ctx, argv[0]) : js_concolic(ctx, "{randomBytes}", JS_UNDEFINED);
 }
 
 static JSValue js_crypto_uuid(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {

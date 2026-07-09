@@ -226,7 +226,7 @@ JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, 
     solve_add(ctx, magic ? "outerHTML" : "innerHTML", "html", val);         /* @S */
     return JS_UNDEFINED;
 }
-JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return JS_DupValue(ctx, g_opaque); }
+JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic) { return js_concolic(ctx, "{innerHTML}", JS_UNDEFINED); }
 /* el.getAttributeNames(): the element's attribute names, in order — a real DOM API frameworks use to reflect
    attrs. Missing, it threw and killed the page. */
 JSValue js_el_getattrnames(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {

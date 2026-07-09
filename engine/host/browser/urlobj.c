@@ -40,7 +40,7 @@ JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueCo
     JSValue shaped = (input && has_hole(input)) ? JS_NewOpaqueShaped(ctx, input) : JS_UNDEFINED;  /* {}-shape string -> keep shape */
     if (input) JS_FreeCString(ctx, input);
     if (base) JS_FreeCString(ctx, base);
-    if (!resolved) return JS_IsUndefined(shaped) ? JS_DupValue(ctx, g_opaque) : shaped;   /* shape/parse-fail -> opaque, never invent */
+    if (!resolved) return JS_IsUndefined(shaped) ? js_concolic(ctx, "{url}", JS_UNDEFINED) : shaped;   /* shape/parse-fail -> opaque, never invent */
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "href", JS_NewString(ctx, resolved));
     /* Extract components from Lexbor's CANONICAL output (scheme://host/path?query#frag) — trivial split of a
@@ -106,7 +106,7 @@ JSValue js_request_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSVal
     char *resolved = (input && !has_hole(input)) ? url_resolve(input, g_origin) : NULL;
     JSValue rshaped = (input && has_hole(input)) ? JS_NewOpaqueShaped(ctx, input) : JS_UNDEFINED;
     if (input) JS_FreeCString(ctx, input);
-    if (!resolved) return JS_IsUndefined(rshaped) ? JS_DupValue(ctx, g_opaque) : rshaped;
+    if (!resolved) return JS_IsUndefined(rshaped) ? js_concolic(ctx, "{url}", JS_UNDEFINED) : rshaped;
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "url", JS_NewString(ctx, resolved));
     JS_SetPropertyStr(ctx, o, "href", JS_NewString(ctx, resolved));   /* toString reads href -> fetch(req) sees the url */
@@ -142,7 +142,7 @@ JSValue js_webobj_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValu
     const char *np[] = { "set", "append", "delete", "abort", "add", "addEventListener" };
     for (size_t i = 0; i < sizeof np / sizeof np[0]; i++)
         JS_SetPropertyStr(ctx, o, np[i], JS_NewCFunction(ctx, js_noop, np[i], 2));
-    JS_SetPropertyStr(ctx, o, "signal", JS_DupValue(ctx, g_opaque));   /* AbortController.signal */
+    JS_SetPropertyStr(ctx, o, "signal", js_concolic(ctx, "{abortSignal}", JS_UNDEFINED));   /* AbortController.signal */
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_opaque, "toString", 0));
     return o;
 }
@@ -189,7 +189,7 @@ static JSValue js_sp_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
         if (k) { char shp[80]; snprintf(shp, sizeof shp, "{%s}", k);
                  JSValue o = JS_NewOpaqueSourced(ctx, shp, k); JS_FreeCString(ctx, k); return o; }
     }
-    return JS_DupValue(ctx, g_opaque);   /* no key -> generic external input */
+    return js_concolic(ctx, "{searchParam}", JS_UNDEFINED);   /* no key -> generic external input */
 }
 JSValue js_sp_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");

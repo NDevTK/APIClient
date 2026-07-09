@@ -1371,12 +1371,12 @@ static JSValue js_function_ctor(JSContext *ctx, JSValueConst new_target, int arg
 }
 static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_UNDEFINED;
-    if (JS_IsOpaque(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return JS_DupValue(ctx, g_opaque); }   /* @S: opaque reaches eval -> detect + spawn candidate replays */
+    if (JS_IsOpaque(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return js_concolic(ctx, "{evalResult}", JS_UNDEFINED); }   /* @S: opaque reaches eval -> detect + spawn candidate replays */
     /* @S SOLVE: on a candidate-REPLAY flow the payload arrives here as a CONCRETE string (the real code
        transformed it). eval's arg IS the sink code, so RECORD it for the breakout check — do NOT JS_Eval it in
        the engine (that would run the X9 payload against an undefined X9 and never verify the sink). Without
        this, `eval(location.hash)` was never solved (the replay executed the payload instead of checking it). */
-    if (g_candidate && JS_IsString(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return JS_DupValue(ctx, g_opaque); }
+    if (g_candidate && JS_IsString(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return js_concolic(ctx, "{evalResult}", JS_UNDEFINED); }
     if (JS_IsString(argv[0])) {
         size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
         JSValue r = s ? JS_Eval(ctx, s, len, "<eval>", JS_EVAL_TYPE_GLOBAL) : JS_UNDEFINED;
@@ -2186,8 +2186,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        as a real, un-forgeable check: a sink reached ONLY by force-passing it is NOT cross-origin exploitable
        and must not emit a PoC (solve_add suppresses on cons_fixed_value("{origin}")). */
     JS_SetPropertyStr(ctx, g_msg_event, "origin", JS_NewOpaqueSourced(ctx, "{origin}", "{origin}"));
-    JS_SetPropertyStr(ctx, g_msg_event, "source", JS_DupValue(ctx, g_opaque));
-    JS_SetPropertyStr(ctx, g_msg_event, "ports", JS_DupValue(ctx, g_opaque));
+    JS_SetPropertyStr(ctx, g_msg_event, "source", js_concolic(ctx, "{messageSource}", JS_UNDEFINED));
+    JS_SetPropertyStr(ctx, g_msg_event, "ports", js_concolic(ctx, "{messagePorts}", JS_UNDEFINED));
     JS_SetPropertyStr(ctx, g, "__sessionFns", JS_NewCFunction(ctx, js_session_fns, "__sessionFns", 0));
     JS_SetPropertyStr(ctx, g, "__sessionDrain", JS_NewCFunction(ctx, js_session_drain, "__sessionDrain", 0));
     {   /* SELF-HOSTED attacker-session loop (bytecode) — fire each [fn,event] pair over the accumulating COW
@@ -2253,7 +2253,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
                 JS_NewCFunction2(ctx, (JSCFunction *)js_cookie_set, "set cookie", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
             JS_FreeAtom(ctx, ca);
         }
-        JS_SetPropertyStr(ctx, doc, "referrer", JS_DupValue(ctx, g_opaque));    /* external input: opaque */
+        JS_SetPropertyStr(ctx, doc, "referrer", js_concolic(ctx, "{referrer}", JS_UNDEFINED));    /* external input: opaque */
         JS_SetPropertyStr(ctx, doc, "URL", JS_NewString(ctx, g_origin));        /* page identity: CONCRETE for URL building */
         JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, location_host()));   /* page identity: CONCRETE (location.c) */
         JS_SetPropertyStr(ctx, doc, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));

@@ -8,7 +8,7 @@
 /* A getter's calling convention is (ctx, this_val) — NOT the 4-arg JSCFunction shape; on wasm a mismatched
    call_indirect signature traps, so this MUST be the true getter signature (cast to JSCFunction at install). */
 static JSValue idl_opaque_getter(JSContext *ctx, JSValueConst this_val) {
-    (void)this_val; return JS_DupValue(ctx, g_opaque);
+    (void)this_val; return js_concolic(ctx, "{idlAttr}", JS_UNDEFINED);
 }
 
 JSValue idl_instance(JSContext *ctx, const IDLMember *members, int n) {

@@ -67,12 +67,12 @@ int dynimport_link(JSContext *ctx, const char *spec, JSValue *out_ns) {
    all — provision-driven re-runs replace it. */
 void host_dyn_import(JSContext *ctx, const char *specifier, JSValueConst resolve, JSValueConst reject) {
     (void)reject;
-    if (!specifier || !specifier[0] || has_hole(specifier)) { resolve_with(ctx, resolve, JS_DupValue(ctx, g_opaque)); return; }
+    if (!specifier || !specifier[0] || has_hole(specifier)) { resolve_with(ctx, resolve, js_concolic(ctx, "{module}", JS_UNDEFINED)); return; }
     arr_push_str(ctx, g_chunkurls, specifier);   /* -> @RESULT.chunkUrls */
     JSValue ns;
     if (dynimport_link(ctx, specifier, &ns)) { resolve_with(ctx, resolve, ns); return; }   /* linked singleton -> real namespace */
     chunk_pending_add(specifier); moddep_add(specifier);   /* register the fetch; the chunk-link re-run drives the real resolution */
-    resolve_with(ctx, resolve, JS_DupValue(ctx, g_opaque));   /* not linked yet: opaque NOW, no persistent park in a revertible flow */
+    resolve_with(ctx, resolve, js_concolic(ctx, "{module}", JS_UNDEFINED));   /* not linked yet: opaque NOW, no persistent park in a revertible flow */
 }
 /* Identity normalize: keep the specifier VERBATIM (matches the host fetch contract — chunk URLs are passed
    to qjs_provide exactly as written; the offscreen resolves relative/root-relative against the doc URL). */

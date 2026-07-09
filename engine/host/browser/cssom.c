@@ -223,9 +223,9 @@ void cssom_init(JSContext *ctx) {
 
 static JSValue style_wrap(JSContext *ctx, lxb_dom_element_t *el, int computed) {
     JSValue o = JS_NewObjectClass(ctx, g_style_class_id);
-    if (JS_IsException(o)) return JS_DupValue(ctx, g_opaque);
+    if (JS_IsException(o)) return js_concolic(ctx, "{style}", JS_UNDEFINED);
     StyleDecl *s = malloc(sizeof *s);
-    if (!s) { JS_FreeValue(ctx, o); return JS_DupValue(ctx, g_opaque); }
+    if (!s) { JS_FreeValue(ctx, o); return js_concolic(ctx, "{style}", JS_UNDEFINED); }
     s->el = el; s->computed = computed;
     JS_SetOpaque(o, s);
     return o;
