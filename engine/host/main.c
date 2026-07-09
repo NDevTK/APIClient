@@ -63,6 +63,7 @@
 #include "history.h"      /* window.history real state machine (pushState sets state), its own TU */
 #include "cookie.h"       /* document.cookie per-flow cookie jar (round-trips writes), its own TU */
 #include "screen.h"       /* window.screen + innerWidth/... concolic viewport, its own TU */
+#include "event.h"       /* Event/CustomEvent ctor, its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -1364,16 +1365,7 @@ lxb_html_document_t *g_dom = NULL;   /* the live parsed document (non-static: do
 /* js_el_rect (getBoundingClientRect) -> dom_element.c. */
 /* Event / CustomEvent constructors: `new CustomEvent('x',{detail})` threw when missing. An object carrying
    type + detail (attacker-influenceable in a dispatched event -> detail opaque unless the init provided it). */
-static JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    if (argc >= 1) JS_SetPropertyStr(ctx, o, "type", JS_DupValue(ctx, argv[0]));
-    if (argc >= 2 && JS_IsObject(argv[1])) { JSValue d = JS_GetPropertyStr(ctx, argv[1], "detail"); JS_SetPropertyStr(ctx, o, "detail", JS_IsUndefined(d) ? JS_DupValue(ctx, g_opaque) : d); }
-    else JS_SetPropertyStr(ctx, o, "detail", JS_DupValue(ctx, g_opaque));
-    JS_SetPropertyStr(ctx, o, "preventDefault", JS_NewCFunction(ctx, js_noop, "preventDefault", 0));
-    JS_SetPropertyStr(ctx, o, "stopPropagation", JS_NewCFunction(ctx, js_noop, "stopPropagation", 0));
-    JS_SetPropertyStr(ctx, o, "target", JS_DupValue(ctx, g_opaque));
-    return o;
-}
+/* Event / CustomEvent ctor -> browser/event.c. */
 /* DOMParser.parseFromString / Range.createContextualFragment: parse attacker HTML into a subtree that carries
    {parsedhtml} TAINT, so a later appendChild of it into the LIVE DOM is the @S sink (js_el_appendChild). The
    example carries the input (the concrete candidate on a replay flow) so solve_broke_html verifies breakout.
