@@ -65,6 +65,7 @@
 #include "screen.h"       /* window.screen + innerWidth/... concolic viewport, its own TU */
 #include "event.h"       /* Event/CustomEvent ctor, its own TU */
 #include "crypto.h"      /* Web Crypto (window.crypto), its own TU */
+#include "performance.h" /* Performance API, its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -2614,9 +2615,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
             JS_FreeValue(ctx, dp);
         }
         JS_FreeValue(ctx, dt);
-        JSValue perf = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
-        JS_SetPropertyStr(ctx, g, "performance", perf);
+        JS_SetPropertyStr(ctx, g, "performance", js_performance_make(ctx));   /* Performance API (browser/performance.c) */
         JS_SetPropertyStr(ctx, g, "crypto", js_crypto_make(ctx));   /* Web Crypto (browser/crypto.c) */
         /* Timers: a deferred callback is a FLOW in the one scheduler (see js_set_timer), not a real wait.
            Missing these made every bundle that defers init in setTimeout learn nothing. */
