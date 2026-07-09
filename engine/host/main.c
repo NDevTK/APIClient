@@ -169,7 +169,7 @@ static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisio
    (src NULL = the branch carried no value-domain provenance). Normalized to "src IS / ISN'T tok". Rebuilt as
    the flow runs (branch_decide re-sees each cond), so it needs no per-flow persistence. Feasibility of a new
    constraint is checked against these; a provably-contradicted branch arm is PRUNED (no phantom @H). */
-typedef struct { char *src; char *tok; int op; } Cons;   /* op = the HOLDING comparison (OPCMP_*) of src vs tok on this flow's path */
+typedef struct { char *src; char *tok; int op; char *jkey; } Cons;   /* op = HOLDING comparison of src vs tok; jkey = method-CLEAN JSON field path (for the @S envelope gate-merge) */
 static Cons *g_cons = NULL; static int g_cons_cap = 0, g_cons_n = 0;
 /* PER-FLOW REQUIRED-ORIGIN: a FORGEABLE origin string-check the flow took to reach a sink (endsWith
    'victim.com' / includes / startsWith — bypassable by a registered attacker domain). The attacker DOES
@@ -181,13 +181,13 @@ static char g_origin_req[256] = "";
    the complex payload the BFS must construct. Clean of method transforms (unlike src), so sound. Set per solve_add. */
 static char g_sink_jkey[128] = "";
 static char g_sink_root[64] = "";   /* the sink source root token ("{hash}") so the JSON envelope can merge sibling gate fields */
-static void cons_reset(void) { for (int i = 0; i < g_cons_n; i++) { free(g_cons[i].src); free(g_cons[i].tok); } g_cons_n = 0; g_origin_req[0] = 0; }
-static void cons_set(int i, const char *src, const char *tok, int op) {   /* record the constraint that holds at decision i */
+static void cons_reset(void) { for (int i = 0; i < g_cons_n; i++) { free(g_cons[i].src); free(g_cons[i].tok); free(g_cons[i].jkey); } g_cons_n = 0; g_origin_req[0] = 0; }
+static void cons_set(int i, const char *src, const char *tok, int op, const char *jkey) {   /* record the constraint that holds at decision i */
     if (i >= g_cons_cap) { int nc = g_cons_cap ? g_cons_cap * 2 : 64; while (nc <= i) nc *= 2; Cons *n = realloc(g_cons, (size_t)nc * sizeof(Cons)); if (!n) return; g_cons = n; g_cons_cap = nc; }
-    for (int j = g_cons_n; j <= i; j++) { g_cons[j].src = NULL; g_cons[j].tok = NULL; g_cons[j].op = OPCMP_NONE; }   /* fill gaps */
+    for (int j = g_cons_n; j <= i; j++) { g_cons[j].src = NULL; g_cons[j].tok = NULL; g_cons[j].op = OPCMP_NONE; g_cons[j].jkey = NULL; }   /* fill gaps */
     if (i >= g_cons_n) g_cons_n = i + 1;
-    free(g_cons[i].src); free(g_cons[i].tok);
-    g_cons[i].src = src ? strdup(src) : NULL; g_cons[i].tok = tok ? strdup(tok) : NULL; g_cons[i].op = op;
+    free(g_cons[i].src); free(g_cons[i].tok); free(g_cons[i].jkey);
+    g_cons[i].src = src ? strdup(src) : NULL; g_cons[i].tok = tok ? strdup(tok) : NULL; g_cons[i].op = op; g_cons[i].jkey = jkey ? strdup(jkey) : NULL;
 }
 static int opcmp_neg(int op) { switch (op) { case OPCMP_EQ: return OPCMP_NE; case OPCMP_NE: return OPCMP_EQ; case OPCMP_LT: return OPCMP_GE; case OPCMP_GE: return OPCMP_LT; case OPCMP_GT: return OPCMP_LE; case OPCMP_LE: return OPCMP_GT; } return OPCMP_NONE; }
 static int tok_num(const char *t, double *o) { if (!t || !*t) return 0; char *e; double d = strtod(t, &e); if (e == t || *e) return 0; *o = d; return 1; }
@@ -1124,8 +1124,11 @@ static char *json_envelope_cand(JSContext *ctx, const char *cand) {
     if (g_sink_root[0]) {   /* merge sibling EQ gates on the SAME parsed object so the handler's guard passes */
         size_t rl = strlen(g_sink_root);
         for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];
-            if (c->src && c->op == OPCMP_EQ && c->tok && !strncmp(c->src, g_sink_root, rl) && c->src[rl] == '.')
-                obj_set_path(ctx, obj, c->src + rl + 1, JS_NewString(ctx, c->tok)); }
+            /* same parsed source (src-root match) AND a method-CLEAN JSON field path (jkey): the constraint's
+               src is `.slice`-polluted ({hash}.slice.mode), so place the gate token by jkey (".mode"), not src. */
+            if (c->src && c->op == OPCMP_EQ && c->tok && c->jkey && c->jkey[0] == '.'
+                && !strncmp(c->src, g_sink_root, rl) && c->src[rl] == '.')
+                obj_set_path(ctx, obj, c->jkey + 1, JS_NewString(ctx, c->tok)); }
     }
     JSValue s = JS_JSONStringify(ctx, obj, JS_UNDEFINED, JS_UNDEFINED);
     JS_FreeValue(ctx, obj);
@@ -1416,25 +1419,26 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
     if (!g_running || (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow && !g_in_session)) return 0;   /* meaningful inside a starter flow, a boot flow, OR a session flow (all re-run without a single fn handle) */
     /* value-domain provenance of the condition: cond TRUE means `src <op> tok`; false arm holds the negation. */
     const char *src = NULL, *tok = NULL; int op = JS_OpaqueCmp(cond, &src, &tok);
+    const char *jk = JS_OpaqueJKey(cond);   /* method-clean JSON field path of the compared value (for the @S envelope gate-merge) */
     int has = (op != OPCMP_NONE) && src;
     int true_op = op, false_op = opcmp_neg(op);
 
     if (g_c < g_dec_n) {                                    /* forced replay: take the recorded arm; RE-RECORD its constraint */
         int arm = g_dec[g_c] ? 1 : 0;
-        cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? (arm ? true_op : false_op) : OPCMP_NONE);
+        cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? (arm ? true_op : false_op) : OPCMP_NONE, has ? jk : NULL);
         g_c++; return arm;
     }
     if (!g_dec_ensure(g_c + 1)) return 1;                    /* only RAM/disk (the platform floor) bounds depth — not a cap */
 
     /* A CANDIDATE session (verifying an @S breakout) takes a fixed arm for a NEW branch — it replays the
        detecting session's vector (above) then follows through with the candidate, it does not re-explore. */
-    if (g_in_session && g_candidate) { cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE); g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }
+    if (g_in_session && g_candidate) { cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE, has ? jk : NULL); g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }
 
     /* NEW decision: PRUNE a provably-infeasible arm given the accumulated domain (no phantom @H); else fork. */
     int tf = !has || cons_feasible(src, tok, true_op, g_c);
     int ff = !has || cons_feasible(src, tok, false_op, g_c);
-    if (has && !tf && ff) { cons_set(g_c, src, tok, false_op); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }   /* TRUE arm impossible */
-    if (has && !ff && tf) { cons_set(g_c, src, tok, true_op);  g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }   /* FALSE arm impossible */
+    if (has && !tf && ff) { cons_set(g_c, src, tok, false_op, jk); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }   /* TRUE arm impossible */
+    if (has && !ff && tf) { cons_set(g_c, src, tok, true_op, jk);  g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }   /* FALSE arm impossible */
 
     signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* both arms feasible: fork FALSE sibling, take TRUE */
     if (sib) {
@@ -1447,7 +1451,7 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
         else { reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1);
                g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx; }   /* sibling = same function (same locator), different decisions */
     }
-    cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE);
+    cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE, has ? jk : NULL);
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
     return 1;
 }
