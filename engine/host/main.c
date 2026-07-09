@@ -59,6 +59,7 @@
 #include "abort.h"        /* AbortSignal (IDL-defined), its own TU */
 #include "intl.h"         /* Intl formatters (IDL-defined, opaque results), its own TU */
 #include "notification.h" /* Notification (IDL-defined) + requestPermission, its own TU */
+#include "media_element.h" /* Image/Audio/Option ctors + Audio media state machine, its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -1354,11 +1355,8 @@ lxb_html_document_t *g_dom = NULL;   /* the live parsed document (non-static: do
 /* new Image()/Audio()/Option(): missing constructors threw (killing the script). Return a REAL wrapped
    element (its methods/attrs work); .src is stored via the element's src setter — NOT emitted as @H, since
    an image/media load is a STATIC ASSET (magic-byte, not URL), so emitting would pollute with asset noise. */
-static JSValue js_media_el_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    if (!g_dom) return JS_NewObject(ctx);
-    lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)"img", 3, NULL);
-    return el ? el_wrap(ctx, el) : JS_NewObject(ctx);
-}
+/* Image/Audio/Option constructors -> browser/media_element.c (correct element per ctor + a real HTMLMediaElement
+   state machine for Audio, replacing a shared ctor that wrongly made an <img> for all three). */
 /* js_el_querySelectorAll -> dom_element.c. */
 /* js_el_rect (getBoundingClientRect) -> dom_element.c. */
 /* Event / CustomEvent constructors: `new CustomEvent('x',{detail})` threw when missing. An object carrying
@@ -2597,9 +2595,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     }
     JS_SetPropertyStr(ctx, g, "getComputedStyle", JS_NewCFunction(ctx, js_get_computed_style, "getComputedStyle", 1));
     JS_SetPropertyStr(ctx, g, "matchMedia", JS_NewCFunction(ctx, js_match_media, "matchMedia", 1));
-    JS_SetPropertyStr(ctx, g, "Image", JS_NewCFunction2(ctx, js_media_el_ctor, "Image", 2, JS_CFUNC_constructor, 0));
-    JS_SetPropertyStr(ctx, g, "Audio", JS_NewCFunction2(ctx, js_media_el_ctor, "Audio", 1, JS_CFUNC_constructor, 0));
-    JS_SetPropertyStr(ctx, g, "Option", JS_NewCFunction2(ctx, js_media_el_ctor, "Option", 4, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "Image", JS_NewCFunction2(ctx, js_image_ctor, "Image", 2, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "Audio", JS_NewCFunction2(ctx, js_audio_ctor, "Audio", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "Option", JS_NewCFunction2(ctx, js_option_ctor, "Option", 4, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "CustomEvent", JS_NewCFunction2(ctx, js_event_ctor, "CustomEvent", 2, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "Event", JS_NewCFunction2(ctx, js_event_ctor, "Event", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "scrollTo", JS_NewCFunction(ctx, js_noop, "scrollTo", 2));
