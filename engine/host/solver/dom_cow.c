@@ -51,7 +51,8 @@ void dom_attr_capture(lxb_dom_element_t *el, const char *name) {
     size_t vl = 0; const lxb_char_t *cur = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vl);
     DomUndo u; memset(&u, 0, sizeof u);
     u.kind = 0; u.el = el; u.name = strdup(name); u.had = cur ? 1 : 0;
-    if (cur) { u.old = malloc(vl ? vl : 1); if (u.old) { memcpy(u.old, cur, vl); u.old_len = vl; } }
+    CHECK(u.name, "dom-cow-oom: attr name strdup failed");
+    if (cur) { u.old = malloc(vl ? vl : 1); CHECK(u.old, "dom-cow-oom: baseline attr snapshot malloc failed — the delta could not restore its baseline"); memcpy(u.old, cur, vl); u.old_len = vl; }
     u.sh_old = shadow_snapshot(el, name, &u.sh_had);   /* snapshot the baseline TAINT so it reverts with the value */
     u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
@@ -83,7 +84,7 @@ void dom_unapply(void) {
         if (u->kind == 0) {
             size_t vl = 0; const lxb_char_t *c = lxb_dom_element_get_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), &vl);
             free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = c ? 1 : 0;   /* stash the flow's attr value */
-            if (c) { u->cur = malloc(vl ? vl : 1); if (u->cur) { memcpy(u->cur, c, vl); u->cur_len = vl; } }
+            if (c) { u->cur = malloc(vl ? vl : 1); CHECK(u->cur, "dom-cow-oom: parked flow attr snapshot malloc failed — apply would lose the flow's DOM write"); memcpy(u->cur, c, vl); u->cur_len = vl; }
             if (g_cow_ctx) JS_FreeValue(g_cow_ctx, u->sh_cur);
             u->sh_cur = shadow_snapshot(u->el, u->name, &u->sh_cur_had);   /* stash the flow's taint shadow */
             if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
