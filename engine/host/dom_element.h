@@ -26,4 +26,12 @@ JSValue js_el_contains(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
 JSValue js_el_style_get(JSContext *ctx, JSValueConst this_val);
 JSValue js_el_content_get(JSContext *ctx, JSValueConst this_val);
 
+/* Reflected element props: tagName; boolean attrs (checked/disabled/...); reflected string attrs
+   (src/href/action/id/... , magic-indexed) whose SET is an @S sink (href/action -> javascript:, srcdoc ->
+   attacker HTML) and keeps its concolic taint+example in the attribute shadow. */
+JSValue js_el_bool_get(JSContext *ctx, JSValueConst this_val, int magic);
+JSValue js_el_tagname(JSContext *ctx, JSValueConst this_val);
+JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic);
+JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic);
+
 #endif

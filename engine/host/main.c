@@ -1796,63 +1796,7 @@ static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc
 }
 /* reflected URL/identity properties (el.src = computedUrl / el.href / el.id) map to Lexbor attributes,
    so a bundle setting .src via PROPERTY (the common script-injection form) is captured + intercepted. */
-static const char *refl_name(int magic) {   /* property magic -> the ATTRIBUTE it reflects (className -> class) */
-    switch (magic) {
-        case 0: return "src"; case 1: return "href"; case 2: return "action"; case 3: return "id";
-        case 4: return "value"; case 5: return "name"; case 6: return "type"; case 7: return "class";
-        case 8: return "alt"; case 9: return "title"; case 10: return "placeholder"; case 11: return "srcdoc";
-        default: return "";
-    }
-}
-/* BOOLEAN reflected props (checked/disabled/hidden/...): the PROPERTY is true iff the attribute is present.
-   undefined was falsy (no throw) but wrong — `el.checked===true` / faithful form state needs the real bool. */
-static const char *bool_name(int magic) {
-    switch (magic) { case 0: return "checked"; case 1: return "disabled"; case 2: return "hidden";
-        case 3: return "selected"; case 4: return "required"; case 5: return "readonly"; case 6: return "multiple"; default: return ""; }
-}
-static JSValue js_el_bool_get(JSContext *ctx, JSValueConst this_val, int magic) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_FALSE;
-    const char *n = bool_name(magic);
-    return lxb_dom_element_has_attribute(el, (const lxb_char_t *)n, strlen(n)) ? JS_TRUE : JS_FALSE;
-}
-/* tagName / nodeName: the element's tag, UPPERCASE for HTML (spec) — Lexbor lowercases. Real bundles branch
-   on el.tagName constantly (`if(el.tagName==='A')`); undefined broke that. */
-static JSValue js_el_tagname(JSContext *ctx, JSValueConst this_val) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
-    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
-    if (!nm) return JS_NewString(ctx, "");
-    char buf[64]; size_t n = nl < 63 ? nl : 63;
-    for (size_t i = 0; i < n; i++) { char c = (char)nm[i]; buf[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c; }
-    buf[n] = 0;
-    return JS_NewString(ctx, buf);
-}
-static JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
-    const char *n = refl_name(magic); size_t vl = 0;
-    const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)n, strlen(n), &vl);
-    return v ? JS_NewStringLen(ctx, (const char *)v, vl) : JS_NewString(ctx, "");
-}
-static JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
-    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
-    const char *n = refl_name(magic);
-    if (magic == 1 || magic == 2) solve_add(ctx, "href", "url", val);   /* @S: el.href/.action = external -> javascript:/redirect */
-    else if (magic == 11) solve_add(ctx, "srcdoc", "htmls", val);        /* @S: iframe.srcdoc renders attacker HTML in the frame */
-    int is_opq = JS_IsOpaque(val);
-    /* A CONCOLIC value set via PROPERTY (`s.src = replyField` / `el.href = computedUrl`) must keep its real
-       value in the attribute shadow — EXACTLY like setAttribute — else the concrete example is lost to the
-       holey shape written into Lexbor: getAttribute would not round-trip the taint, and script_maybe_load
-       could not chunk-load a reply-driven <script src> by its example. The Lexbor attr stores the display
-       shape; the shadow carries the concolic (taint + example). */
-    dom_attr_capture(el, n);   /* capture pre-write baseline (attr + taint shadow) BEFORE mutating either — see js_el_setAttribute */
-    if (!g_candidate) attr_shadow_set(ctx, el, n, is_opq ? val : JS_UNDEFINED);
-    JSValue exv = is_opq ? JS_OpaqueExample(ctx, val) : JS_UNDEFINED;   /* write the concolic EXAMPLE to Lexbor so it round-trips through getAttribute (see js_el_setAttribute) */
-    int ex_str = is_opq && !JS_IsUndefined(exv);
-    const char *v = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_OpaqueShapeC(val) : JS_ToCString(ctx, val));
-    if (v) lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v));
-    if (v && (ex_str || !is_opq)) JS_FreeCString(ctx, v);   /* ToString'd frees; JS_OpaqueShapeC internal pointer does not */
-    JS_FreeValue(ctx, exv);
-    return JS_UNDEFINED;
-}
+/* tagName + boolean/reflected-string props (refl_get/refl_set, the href/src/srcdoc @S sinks) -> dom_element.c. */
 /* Common element APIs that real bundles call constantly — MISSING ones throw and kill the script (like
    addEventListener did), losing all coverage after. matches -> opaque bool (a branch FORKS, exploring both);
    closest -> the element itself (a real node whose methods/attrs work — never throw/null); style -> a plain
