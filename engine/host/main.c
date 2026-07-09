@@ -40,6 +40,7 @@
 #include "dom_element.h"  /* the DOM Element JSClass + el_wrap (methods migrate here incrementally), its own TU */
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
+#include "messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
 #include "xhr.h"          /* XMLHttpRequest emulation -> the @H recorder, its own TU */
@@ -911,27 +912,6 @@ static JSValue js_worker_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValue
     JS_SetPropertyStr(ctx, port, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
     JS_SetPropertyStr(ctx, port, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, o, "port", port);
-    return o;
-}
-/* MessagePort / MessageChannel / BroadcastChannel: postMessage-style objects whose message handler is driven. */
-static JSValue js_msgport_new(JSContext *ctx) {
-    JSValue p = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, p, "postMessage", JS_NewCFunction(ctx, js_noop, "postMessage", 1));
-    JS_SetPropertyStr(ctx, p, "start", JS_NewCFunction(ctx, js_noop, "start", 0));
-    JS_SetPropertyStr(ctx, p, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
-    JS_SetPropertyStr(ctx, p, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, p, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    return p;
-}
-static JSValue js_msg_channel_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "port1", js_msgport_new(ctx));
-    JS_SetPropertyStr(ctx, o, "port2", js_msgport_new(ctx));
-    return o;
-}
-static JSValue js_broadcast_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
-    JSValue o = js_msgport_new(ctx);   /* same shape (postMessage/close/addEventListener) */
-    JS_SetPropertyStr(ctx, o, "name", (argc >= 1) ? JS_ToString(ctx, argv[0]) : JS_NewString(ctx, ""));
     return o;
 }
 static JSValue js_notification_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
