@@ -66,6 +66,7 @@
 #include "event.h"       /* Event/CustomEvent ctor, its own TU */
 #include "crypto.h"      /* Web Crypto (window.crypto), its own TU */
 #include "performance.h" /* Performance API, its own TU */
+#include "timers.h"      /* setTimeout/rAF/queueMicrotask -> BFS flows, its own TU */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -1183,15 +1184,14 @@ static int ctx_forks(void) {
 /* setTimeout/setInterval/requestAnimationFrame(cb, ...): a deferred callback is NOT a wait on real time —
    it is just another BFS FLOW. Register cb in the ONE scheduler (reg_add) so it is driven, ordered, and
    starved by the same WFQ as every other flow (the whole point: bundles that defer init in a timer still
-   get explored). Return an opaque timer id; the clear/cancel variants are no-ops (the WFQ starves it anyway). */
-static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    if (argc >= 1 && JS_IsFunction(ctx, argv[0]))
-        reg_add(ctx, JS_DupValue(ctx, argv[0]), g_running ? g_cur_val : 1.0, NULL, 0);
-    else if (argc >= 1 && (JS_IsString(argv[0]) || JS_IsOpaque(argv[0])))
-        solve_add(ctx, "setTimeout", "js", argv[0]);   /* @S: setTimeout(STRING) EVALs the string -> js-context sink (like eval); string(candidate)+opaque(detect) both, like the other sinks */
-    return JS_DupValue(ctx, g_opaque);
+   get explored). */
+/* THE scheduler edge every deferred callback uses: register cb as a first-class BFS FLOW (setTimeout/rAF/
+   queueMicrotask/observer/opaque-method-cb) at the running flow's value, ordered + starved by the one WFQ,
+   never a real wait. A host-edge only FEEDS this; the scheduler DECIDES. */
+void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
+    reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, NULL, 0);
 }
+/* setTimeout/setInterval/requestAnimationFrame -> browser/timers.c (defers the callback as a flow). */
 /* JS_SetCbHook target: a callback passed to a method CALLED ON opaque input (items.forEach(cb) where items
    is a reply/injected-state array) — the method-on-opaque returns opaque without invoking cb, so register cb
    as a starter FLOW (exactly like a deferred timer). The scheduler force-invokes it with opaque args so its
@@ -1203,7 +1203,7 @@ static void drive_opaque_cb(JSContext *ctx, JSValueConst cb) {
        tier (unbounded-until-disk, the intended design). A dedup keyed by function identity was a BANNED
        seen-set (§NO BOUNDS: "only emitted output — never identity — proves a flow is done") masking the
        recursion as a hang; the cooperative quantum keeps the worker responsive while it starves + parks. */
-    reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, NULL, 0);
+    flow_defer_callback(ctx, cb);
 }
 /* structuredClone(x): deep-clone is identity for forced-exec purposes (shape/opacity carry through). */
 static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
