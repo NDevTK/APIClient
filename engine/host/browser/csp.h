@@ -20,6 +20,26 @@ int csp_lacks(const char *csp, const char *tok);
    (not csp_lacks on g_csp) for the per-sink verdict. An inline vector needs 'unsafe-inline'; eval 'unsafe-eval'. */
 int csp_blocks(const char *tok);
 
+/* CONCRETE per-vector BYPASS ANALYSIS — not a boolean "blocked". For the modeled inline/eval @S vector under
+   the page's effective policy, this names the ACTUAL path an attacker would take, the way a browser-security
+   engineer reasons about a CSP: an allowlisted HOST hosting a JSONP/framework gadget, `'strict-dynamic'` (an
+   injected script CREATED by an already-trusted script runs), a `'nonce-…'` whose VALUE is leaked in the
+   served DOM to reuse, or `'unsafe-inline'` (the vector just runs). Trusted-Types enforcement is reported
+   separately (an HTML sink THROWS unless a policy stringifies). `via = "none"` means genuinely blocked for
+   every modeled vector (escalation needs a same-origin script host — open redirect / JSONP / upload on
+   'self'). Sound: a bypass is only asserted when the policy token that enables it is actually present. */
+typedef struct {
+    int blocked;          /* the modeled inline (or eval) vector is blocked (no 'unsafe-inline'/'unsafe-eval') */
+    const char *via;      /* "unsafe-inline" | "unsafe-eval" | "gadget-host" | "strict-dynamic" | "nonce-reuse" | "none" */
+    int strict_dynamic;   /* 'strict-dynamic' present (an injected script created by a trusted script executes) */
+    int trusted_types;    /* require-trusted-types-for 'script' enforced (an HTML sink throws w/o a TT policy) */
+    int dual_policy;      /* BOTH a header and a <meta> policy are enforced -> the bypass must satisfy both */
+    char hosts[256];      /* allowlisted external host/scheme sources — JSONP/framework gadget-host candidates */
+    char nonce[128];      /* a nonce VALUE leaked in the served DOM (a reuse candidate), or "" */
+    char detail[512];     /* the concrete verdict sentence */
+} CspBypass;
+void csp_bypass(int is_eval, lxb_html_document_t *dom, CspBypass *out);
+
 /* Record the real HTTP Content-Security-Policy RESPONSE HEADER (from the same-origin fetch(location.href)). */
 void csp_set_header(const char *csp);
 

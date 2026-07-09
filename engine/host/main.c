@@ -181,6 +181,7 @@ static double  g_max_parked = -1e300;
 static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 /* CSP (g_csp/g_header_csp + csp_lacks/csp_derive/csp_set_header/csp_free) lives in csp.c — included below. */
+extern lxb_html_document_t *g_dom;   /* the live parsed document (defined below); the @S emitter needs it for the CSP nonce scan */
 /* g_opaque + js_noop/js_opaque/js_opaque_stub + opaque_init/free live in opaque.c (included via opaque.h). */
 char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
@@ -844,14 +845,19 @@ static JSValue solve_all(JSContext *ctx) {
                       if (JS_IsString(rov)) JS_SetPropertyStr(ctx, rec, "requiredOrigin", rov); else JS_FreeValue(ctx, rov); }
                     JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
                     JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
-                    if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE, PER SINK CLASS: the model broke out, but the page's CSP may block THIS vector on real Chrome */
+                    if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE, PER SINK CLASS: the model broke out; SOLVE the page's CSP for the concrete bypass path (not a dumbed-down boolean) */
                         int is_eval = sink && (strcmp(sink, "eval") == 0 || strcmp(sink, "Function") == 0 || strcmp(sink, "setTimeout") == 0);
-                        int blocked = csp_blocks(is_eval ? "unsafe-eval" : "unsafe-inline");   /* enforced across BOTH header AND meta policies (browser enforces each independently) */
+                        CspBypass bp; csp_bypass(is_eval, g_dom, &bp);
                         JS_SetPropertyStr(ctx, rec, "csp", JS_NewString(ctx, g_csp));
-                        JS_SetPropertyStr(ctx, rec, "cspBlocked", JS_NewBool(ctx, blocked));
-                        if (blocked) JS_SetPropertyStr(ctx, rec, "cspReason", JS_NewString(ctx, is_eval ?
-                            "CSP script-src lacks 'unsafe-eval' -> the eval/Function/setTimeout(string) vector is blocked on real Chrome (needs a permitted vector)" :
-                            "CSP script-src lacks 'unsafe-inline' -> the inline handler/script/javascript: vector is blocked on real Chrome (needs a permitted vector)"));
+                        JS_SetPropertyStr(ctx, rec, "cspBlocked", JS_NewBool(ctx, bp.blocked));       /* the inline/eval vector is blocked... */
+                        if (bp.blocked) {
+                            JS_SetPropertyStr(ctx, rec, "cspBypass", JS_NewString(ctx, bp.via));      /* ...but HERE is the concrete bypass path the attacker uses */
+                            JS_SetPropertyStr(ctx, rec, "cspReason", JS_NewString(ctx, bp.detail));
+                            if (bp.hosts[0]) JS_SetPropertyStr(ctx, rec, "cspGadgetHosts", JS_NewString(ctx, bp.hosts));   /* allowlisted hosts to look for a JSONP/framework gadget on */
+                            if (bp.nonce[0]) JS_SetPropertyStr(ctx, rec, "cspNonce", JS_NewString(ctx, bp.nonce));         /* the nonce leaked in the served DOM, to reuse */
+                            if (bp.strict_dynamic) JS_SetPropertyStr(ctx, rec, "cspStrictDynamic", JS_TRUE);
+                        }
+                        if (bp.trusted_types) JS_SetPropertyStr(ctx, rec, "trustedTypes", JS_NewString(ctx, "enforced"));   /* an HTML sink THROWS unless a TT policy stringifies */
                     }
                     { char eb[900]; snprintf(eb, sizeof eb, "sink %s <- input %s (forced-exec: this exact input, driven through the real code, breaks out at the sink)", sink ? sink : "?", rpoc);
                       JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
