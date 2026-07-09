@@ -1,0 +1,11 @@
+/* Document query methods — Blink core/dom/Document. Real DOM lookups over the live Lexbor tree via the CSS
+ * selector engine (dom_select.c); a found node is wrapped as a JS Element (el_wrap, dom_element.c). No
+ * scheduler coupling — a pure read the orphan driver / boot flow reaches. See document.c. */
+#ifndef ENGINE_HOST_BROWSER_DOCUMENT_H
+#define ENGINE_HOST_BROWSER_DOCUMENT_H
+#include "quickjs.h"
+JSValue js_doc_getElementById(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_doc_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_doc_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_doc_getByClass(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);   /* getElementsByClassName */
+#endif

@@ -41,6 +41,7 @@
 #include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
+#include "document.h"     /* document.querySelector/getElementById/... (Blink core/dom/Document), its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
 #include "xhr.h"          /* XMLHttpRequest emulation -> the @H recorder, its own TU */
@@ -1599,17 +1600,6 @@ static JSValue js_media_el_ctor(JSContext *ctx, JSValueConst nt, int argc, JSVal
     return el ? el_wrap(ctx, el) : JS_NewObject(ctx);
 }
 /* js_el_querySelectorAll -> dom_element.c. */
-static JSValue js_doc_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc < 1) return JS_NewArray(ctx);
-    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NewArray(ctx);
-    JSValue r = dom_select_all(ctx, NULL, s, strlen(s)); JS_FreeCString(ctx, s); return r;
-}
-static JSValue js_doc_getByClass(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc < 1) return JS_NewArray(ctx);
-    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NewArray(ctx);
-    char sel[256]; snprintf(sel, sizeof sel, ".%s", s); JS_FreeCString(ctx, s);
-    return dom_select_all(ctx, NULL, sel, strlen(sel));   /* getElementsByClassName -> .cls */
-}
 /* js_el_rect (getBoundingClientRect) -> dom_element.c. */
 /* Event / CustomEvent constructors: `new CustomEvent('x',{detail})` threw when missing. An object carrying
    type + detail (attacker-influenceable in a dispatched event -> detail opaque unless the init provided it). */
@@ -1899,21 +1889,6 @@ static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
         return r;
     }
     return JS_DupValue(ctx, argv[0]);   /* non-string: spec returns the arg unchanged */
-}
-static JSValue js_doc_getElementById(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc < 1) return JS_NULL;
-    const char *id = JS_ToCString(ctx, argv[0]); if (!id) return JS_NULL;
-    char sel[512]; snprintf(sel, sizeof sel, "#%s", id);
-    lxb_dom_element_t *el = dom_select_first(NULL, sel, strlen(sel));
-    JS_FreeCString(ctx, id);
-    return el_wrap(ctx, el);
-}
-static JSValue js_doc_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc < 1) return JS_NULL;
-    const char *s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
-    lxb_dom_element_t *el = dom_select_first(NULL, s, strlen(s));
-    JS_FreeCString(ctx, s);
-    return el_wrap(ctx, el);
 }
 /* Parse page HTML into the live DOM + init the CSS-selector engine. Returns 0 on success. */
 static int dom_init(const char *html, size_t len) {
