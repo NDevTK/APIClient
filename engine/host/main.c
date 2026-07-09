@@ -42,6 +42,7 @@
 #include "indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
 #include "document.h"     /* document.querySelector/getElementById/... (Blink core/dom/Document), its own TU */
+#include "custom_elements.h" /* customElements registry + createElement upgrade (Blink core/html/custom), its own TU */
 #include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
 #include "xhr.h"          /* XMLHttpRequest emulation -> the @H recorder, its own TU */
@@ -1476,18 +1477,10 @@ char *url_resolve(const char *input, const char *base) {
    `this`; connectedCallback then becomes an uncalled method the orphan driver reaches like any other. */
 static JSValue js_ctor_stub(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) { return JS_UNDEFINED; }
 static JSValue g_el_proto = JS_UNDEFINED;   /* the element-method proto; custom-element bases chain to it (def_ctor), freed in qjs_teardown */
-static JSValue g_ce_registry = JS_UNDEFINED; /* customElements.define registry: {tagName -> ctor}; createElement upgrades a defined tag to a real ctor-proto instance so connectedCallback drives with `this`=the element */
-static JSValue g_ce_instances = JS_UNDEFINED; /* RETAIN upgraded custom-element instances: the real browser keeps them alive via the DOM, but our Lexbor DOM holds only the node, so the JS wrapper would be GC'd before its connectedCallback is driven -> JS_FindReceiver (scans live objects) must still find it. Freed in qjs_teardown. */
+/* g_ce_registry/g_ce_instances + js_ce_define + ce_upgrade live in browser/custom_elements.c (Blink core/html/custom). */
 /* customElements.define(name, ctor): record the class so createElement(name) UPGRADES to a real instance
    (ctor.prototype chain + el-backed) — the browser's upgrade, which is what makes `this.attachShadow`/
    `this.getAttribute` work inside a lifecycle callback. */
-static JSValue js_ce_define(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc >= 2 && JS_IsString(argv[0]) && JS_IsFunction(ctx, argv[1]) && JS_IsObject(g_ce_registry)) {
-        const char *nm = JS_ToCString(ctx, argv[0]);
-        if (nm) { JS_SetPropertyStr(ctx, g_ce_registry, nm, JS_DupValue(ctx, argv[1])); JS_FreeCString(ctx, nm); }
-    }
-    return JS_UNDEFINED;
-}
 static void def_ctor(JSContext *ctx, JSValueConst g, const char *name) {
     JSValue c = JS_NewCFunction2(ctx, js_ctor_stub, name, 0, JS_CFUNC_constructor, 0);
     JSValue proto = JS_NewObject(ctx);
@@ -1830,31 +1823,9 @@ static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int a
     if (!g_dom || argc < 1) return JS_NULL;
     const char *tag = JS_ToCString(ctx, argv[0]); if (!tag) return JS_NULL;
     lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)tag, strlen(tag), NULL);
-    /* UPGRADE a DEFINED custom element (the browser's upgrade): the instance's proto = ctor.prototype (so its
-       connectedCallback etc. are reached with this=the element) AND it is el-backed (g_el_class_id + opaque el,
-       so this.getAttribute/attachShadow work against the real element). ctor.prototype chains to el_proto via
-       def_ctor, so the element DOM methods resolve too. */
-    JSValue ctor = JS_IsObject(g_ce_registry) ? JS_GetPropertyStr(ctx, g_ce_registry, tag) : JS_UNDEFINED;
+    JSValue r = ce_upgrade(ctx, el, tag);   /* Blink custom-element upgrade (browser/custom_elements.c), else el_wrap */
     JS_FreeCString(ctx, tag);
-    if (el && JS_IsFunction(ctx, ctor)) {
-        JSValue cproto = JS_GetPropertyStr(ctx, ctor, "prototype");
-        if (JS_IsObject(cproto)) {
-            JSValue o = JS_NewObjectProtoClass(ctx, cproto, g_el_class_id);
-            JS_FreeValue(ctx, cproto); JS_FreeValue(ctx, ctor);
-            if (JS_IsObject(o)) {
-                JS_SetOpaque(o, el);
-                if (JS_IsArray(g_ce_instances)) {   /* retain so JS_FindReceiver drives connectedCallback with THIS instance */
-                    uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_ce_instances, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
-                    JS_SetPropertyUint32(ctx, g_ce_instances, n, JS_DupValue(ctx, o));
-                }
-                return o;
-            }
-            JS_FreeValue(ctx, o); return el_wrap(ctx, el);
-        }
-        JS_FreeValue(ctx, cproto);
-    }
-    JS_FreeValue(ctx, ctor);
-    return el_wrap(ctx, el);
+    return r;
 }
 /* document.write (js_doc_write + script running) is in docwrite.c (included via docwrite.h). */
 /* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
@@ -2775,8 +2746,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     def_ctor(ctx, g, "HTMLButtonElement"); def_ctor(ctx, g, "HTMLFormElement"); def_ctor(ctx, g, "HTMLAnchorElement");
     def_ctor(ctx, g, "HTMLSpanElement"); def_ctor(ctx, g, "HTMLImageElement"); def_ctor(ctx, g, "SVGElement");
     {
-        g_ce_registry = JS_NewObject(ctx);   /* {tagName -> ctor}; createElement upgrades a defined tag */
-        g_ce_instances = JS_NewArray(ctx);   /* retained upgraded instances (findable receivers) */
+        ce_init(ctx);   /* customElements registry + retained instances (browser/custom_elements.c) */
         JSValue ce = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, ce, "define", JS_NewCFunction(ctx, js_ce_define, "define", 2));
         JS_SetPropertyStr(ctx, ce, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
@@ -3192,8 +3162,7 @@ KEEP void qjs_teardown(void)
     attr_shadow_free(ctx);
     replay_handlers_clear(ctx); free(g_replay_handlers); g_replay_handlers = NULL; g_replay_handler_cap = 0;
     JS_FreeValue(ctx, g_el_proto); g_el_proto = JS_UNDEFINED;   /* the element-method proto ref (custom-element base chain) */
-    JS_FreeValue(ctx, g_ce_registry); g_ce_registry = JS_UNDEFINED;   /* customElements.define registry */
-    JS_FreeValue(ctx, g_ce_instances); g_ce_instances = JS_UNDEFINED;   /* retained upgraded instances */
+    ce_free(ctx);   /* customElements registry + instances */
     opaque_free(ctx);
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     storage_free(ctx);
