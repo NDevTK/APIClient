@@ -11,4 +11,5 @@ JSValue js_doc_getByClass(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);   /* real Lexbor element + custom-element upgrade */
 JSValue js_doc_currentscript(JSContext *ctx, JSValueConst t);            /* getter: the executing script this inline block */
 void doc_set_current_script(JSContext *ctx, JSValue v);                  /* scheduler boot loop feeds currentScript (consumes v) */
+JSValue js_document_make(JSContext *ctx);   /* assemble the window.document object (Blink Document interface members) */
 #endif

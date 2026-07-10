@@ -2113,53 +2113,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     }
     JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    {
-        JSValue doc = JS_NewObject(ctx);
-        {   /* document.cookie: a per-CODE-FLOW cookie jar (browser/cookie.c) — writes round-trip concolic, not an opaque shrug */
-            JSAtom ca = JS_NewAtom(ctx, "cookie");
-            JS_DefinePropertyGetSet(ctx, doc, ca,
-                JS_NewCFunction2(ctx, (JSCFunction *)js_cookie_get, "get cookie", 0, JS_CFUNC_getter, 0),
-                JS_NewCFunction2(ctx, (JSCFunction *)js_cookie_set, "set cookie", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
-            JS_FreeAtom(ctx, ca);
-        }
-        def_source(ctx, doc, "referrer", 3);   /* external input SOURCE getter (read-only): attacker-influenced referring URL — forks control flow AND delivers the @S replay candidate (URL-query-encoded), so a referrer sink yields a PoC, not just a fork */
-        JS_SetPropertyStr(ctx, doc, "URL", JS_NewString(ctx, g_origin));        /* page identity: CONCRETE for URL building */
-        JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, location_host()));   /* page identity: CONCRETE (location.c) */
-        JS_SetPropertyStr(ctx, doc, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-        JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));   /* real Lexbor DOM */
-        JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
-        JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));   /* real element; appendChild intercepts <script src> */
-        JS_SetPropertyStr(ctx, doc, "createRange", JS_NewCFunction(ctx, js_doc_createrange, "createRange", 0));   /* createContextualFragment -> {parsedhtml} taint */
-        JS_SetPropertyStr(ctx, doc, "createTextNode", JS_NewCFunction(ctx, js_opaque_stub, "createTextNode", 1));       /* text-node stub (opaque) — non-throwing */
-        JS_SetPropertyStr(ctx, doc, "querySelectorAll", JS_NewCFunction(ctx, js_doc_querySelectorAll, "querySelectorAll", 1));
-        JS_SetPropertyStr(ctx, doc, "getElementsByTagName", JS_NewCFunction(ctx, js_doc_querySelectorAll, "getElementsByTagName", 1));   /* tag IS a selector */
-        JS_SetPropertyStr(ctx, doc, "getElementsByClassName", JS_NewCFunction(ctx, js_doc_getByClass, "getElementsByClassName", 1));
-        JS_SetPropertyStr(ctx, doc, "createDocumentFragment", JS_NewCFunction(ctx, js_opaque_stub, "createDocumentFragment", 0));   /* opaque container — non-throwing (methods -> opaque) */
-        JS_SetPropertyStr(ctx, doc, "write", JS_NewCFunction(ctx, js_doc_write, "write", 1));       /* DOM edge (no-op) */
-        JS_SetPropertyStr(ctx, doc, "writeln", JS_NewCFunction(ctx, js_doc_write, "writeln", 1));
-        JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
-        JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
-        /* Common document members real bundles read (undefined broke `documentElement.x`, a readyState gate,
-           document.location.href, `for(form of document.forms)`). documentElement = <html>; readyState is
-           COMPLETE (boot ran -> a ready gate takes the ready arm / init() runs); location aliases
-           window.location (getset -> `document.location = url` is still a nav @S sink); forms/scripts are
-           snapshots of the shipped structure. */
-        JS_SetPropertyStr(ctx, doc, "documentElement", el_wrap(ctx, dom_select_first(NULL, "html", 4)));
-        JS_SetPropertyStr(ctx, doc, "readyState", JS_NewString(ctx, "complete"));
-        { lxb_dom_element_t *tt = dom_select_first(NULL, "title", 5);   /* document.title = the REAL <title> text (identity/config read), not undefined */
-          size_t tl = 0; lxb_char_t *txt = tt ? lxb_dom_node_text_content(lxb_dom_interface_node(tt), &tl) : NULL;
-          JS_SetPropertyStr(ctx, doc, "title", JS_NewStringLen(ctx, txt ? (const char *)txt : "", txt ? tl : 0)); }
-        { JSAtom a = JS_NewAtom(ctx, "location");
-          JS_DefinePropertyGetSet(ctx, doc, a, JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_get, "get", 0, JS_CFUNC_getter, 0),
-              JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_set, "set", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
-          JS_FreeAtom(ctx, a); }
-        JS_SetPropertyStr(ctx, doc, "forms", dom_select_all(ctx, NULL, "form", 4));
-        JS_SetPropertyStr(ctx, doc, "scripts", dom_select_all(ctx, NULL, "script", 6));
-        { JSAtom a = JS_NewAtom(ctx, "currentScript");   /* getter: the executing script, changes per inline script */
-          JS_DefinePropertyGetSet(ctx, doc, a, JS_NewCFunction2(ctx, (JSCFunction *)js_doc_currentscript, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-          JS_FreeAtom(ctx, a); }
-        JS_SetPropertyStr(ctx, g, "document", doc);
-    }
+    JS_SetPropertyStr(ctx, g, "document", js_document_make(ctx));   /* the Document interface object (core/dom/document.c) */
     /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
        methods (connectedCallback etc.) become uncalled methods the orphan driver reaches -> the element's
        endpoints/sinks are learned by EXECUTION (spec), not by reading a DOM attribute. customElements.define
