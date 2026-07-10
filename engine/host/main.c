@@ -1819,7 +1819,7 @@ static int wfq_yield(void)
    serializing a live continuation. The host persists these lines to IDB; @PARK/@PARKED are read back. */
 static void park_frontier(JSContext *ctx)
 {
-    int parked = 0;
+    int parked = 0, unrecipe = 0;
     for (int i = 0; i < g_reg_n; i++) {
         Flow *f = &g_reg[i];
         /* A flow is COLD-PARKABLE iff it self-relocates by FUNCTION SOURCE on the next session. TWO kinds:
@@ -1836,6 +1836,14 @@ static void park_frontier(JSContext *ctx)
         } else if (!f->candidate && f->is_async && JS_IsFunction(ctx, f->handle)) {
             oh = JS_OrphanHash(ctx, f->handle);   /* async flow: locate by its OWN function's source */
             async_rec = 1;
+        } else if (!f->candidate && JS_IsFunction(ctx, f->handle)) {
+            /* CONTINUATION flow (a deferred timer/promise-reaction/forEach-element callback registered with
+               orphan_idx=-1): it still has a FUNCTION HANDLE, so locate it by SOURCE next session and drive it
+               with its decision vector — never a silent drop. HONEST LIMIT: its inherited COW delta (the handler
+               writes JS_CowBufSnapshot captured) is NOT in the recipe, so a cold resume RE-DERIVES the flow from
+               scratch (re-run boot + replay decisions) rather than restoring the inherited state — sound (the
+               decisions replay over a re-established baseline), only the hot inherited delta is not persisted. */
+            oh = JS_OrphanHash(ctx, f->handle);
         }
         if (oh) {
             /* recipe = "[a]hash,decbits,valcenti,visits" in a DYNAMIC buffer. The decision vector is UNBOUNDED:
@@ -1858,6 +1866,11 @@ static void park_frontier(JSContext *ctx)
                 free(rec);
                 parked++;
             }
+        } else if (!f->candidate && !f->vtarget) {
+            /* No source recipe (a session flow drives __driveSession, not a locatable page function; it re-explores
+               when its handlers re-fire next session — never SKIPPED-to, but not resumed either). Count it so
+               @PARKED is HONEST rather than claiming a clean park while this tail is re-derived from scratch. */
+            unrecipe++;
         }
         if (f->fs) JS_FlowFree(g_rt, f->fs);
         if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
@@ -1865,7 +1878,10 @@ static void park_frontier(JSContext *ctx)
         JS_FreeValue(ctx, f->handle);
         free(f->dec); free(f->candidate); free(f->vtarget); free(f->drive_src); flow_free_async_refs(ctx, f);    }
     g_reg_n = 0;
-    printf("@PARKED %d\n", parked); fflush(stdout);   /* cold-tier park count (observability, symmetric with @RESUMED) — never a silent drop */
+    /* HONEST observability: `parked` = flows with a source-identity replay recipe (resumed next session);
+       `unrecipe` = the recipe-less tail (session flows) that re-explore from scratch when their handlers re-fire.
+       Reporting both is the truth — the old comment claimed "never a silent drop" while dropping this tail. */
+    printf("@PARKED %d %d\n", parked, unrecipe); fflush(stdout);
 }
 
 /* A BOOT FLOW is pending (reply-triggered forking re-run or a boot-fork sibling) — a RAM-pressure park must
