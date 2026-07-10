@@ -1,9 +1,32 @@
-/* URL query-parameter extraction + {src}-hole value-solve — see url.h. */
+/* URL query-parameter extraction + {src}-hole value-solve + WHATWG url_resolve — see url.h. */
 #include <string.h>
 #include <stdlib.h>
 #include "url.h"
 #include "constraints.h"   /* cons_fixed_value — an == gate PINS a {src} hole to its concrete value */
 #include "check.h"         /* CHECK — OOM must crash LOUD, never silently degrade a solved URL back to its shape */
+#include <lexbor/url/url.h>   /* the real WHATWG URL Standard parser — url_resolve canonicalizes here, not a hand-rolled resolver */
+
+/* Resolve a URL with the vendored LEXBOR URL module (the real WHATWG URL Standard parser) — never a
+   hand-rolled string resolver. Returns the serialized absolute href (malloc'd; caller frees) or NULL on a
+   parse failure (-> the caller yields opaque, never an invented value). Browser URL canonicalization owns no
+   scheduler/flow state, so it lives with the other URL components, not in the scheduler (main.c). */
+struct url_ser_buf { char *s; size_t n, cap; };
+static lxb_status_t url_ser_cb(const lxb_char_t *data, size_t len, void *cbctx) {
+    struct url_ser_buf *b = cbctx;
+    if (b->n + len + 1 > b->cap) { size_t nc = (b->n + len + 1) * 2 + 64; char *ns = realloc(b->s, nc); if (!ns) return LXB_STATUS_ERROR_MEMORY_ALLOCATION; b->s = ns; b->cap = nc; }
+    memcpy(b->s + b->n, data, len); b->n += len; b->s[b->n] = 0;
+    return LXB_STATUS_OK;
+}
+char *url_resolve(const char *input, const char *base) {
+    lxb_url_parser_t *p = lxb_url_parser_create();
+    if (!p || lxb_url_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_url_parser_destroy(p, true); return NULL; }
+    lxb_url_t *bu = (base && base[0]) ? lxb_url_parse(p, NULL, (const lxb_char_t *)base, strlen(base)) : NULL;
+    lxb_url_t *u = lxb_url_parse(p, bu, (const lxb_char_t *)(input ? input : ""), input ? strlen(input) : 0);
+    char *out = NULL;
+    if (u) { struct url_ser_buf b = {0}; if (lxb_url_serialize(u, url_ser_cb, &b, false) == LXB_STATUS_OK) out = b.s; else free(b.s); }
+    lxb_url_parser_destroy(p, true);   /* frees bu, u, and internal buffers */
+    return out;
+}
 
 /* Substitute each `{src}` hole the running flow FIXED (== gate) with its concrete value, so a URL built from
    gated input surfaces the SOLVED key in BOTH path and query (/api/{hash} -> /api/admin). NULL if nothing

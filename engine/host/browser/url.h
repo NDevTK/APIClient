@@ -1,10 +1,13 @@
-/* URL query-parameter extraction — parse a COMPUTED url's query string into endpoint param objects.
- * Pure: string parsing + percent-decoding + the JS API, no engine state. The engine owns URL canonicalization
- * (Lexbor); this only splits the already-computed query into the shape the @H recorder attaches. */
+/* URL query-parameter extraction + WHATWG URL canonicalization (url_resolve). Browser URL semantics with no
+ * scheduler/flow state; the query splitter just shapes an already-computed query for the @H recorder. */
 #ifndef ENGINE_HOST_URL_H
 #define ENGINE_HOST_URL_H
 
 #include "quickjs.h"
+
+/* Resolve `input` against `base` with the vendored Lexbor WHATWG URL parser -> serialized absolute href
+   (malloc'd; caller frees), or NULL on parse failure (the caller then yields opaque, never an invented value). */
+char *url_resolve(const char *input, const char *base);
 
 /* A URL/shape carries an opaque HOLE — "{}" (generic) or "{tag}" (source-tagged: {hash}/{search}) — iff it
    has a '{' followed by only lowercase letters then '}'. Such a URL is not concretely fetchable. */

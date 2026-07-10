@@ -22,7 +22,6 @@
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
 #include <lexbor/dom/dom.h>
-#include <lexbor/url/url.h>
 #include "check.h"        /* CHECK (always fatal: OOM/security) / DCHECK (dev-only fatal: should-never-happen), its own TU */
 #include "prelude.h"     /* self-hosted JS prelude strings (ARRAY_PRELUDE_JS, DEDUP_JS) */
 #include "constraints.h"  /* per-flow value-domain constraint tracker (concolic path constraint), its own TU */
@@ -1102,26 +1101,7 @@ static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int ar
    can't parse) -> OPAQUE, so its shape flows through untouched (the endpoint is learned as its shape) and
    the tool never concretely decides external input. searchParams.get is OPAQUE (query values = external). */
 const char *g_origin;   /* defined below; forward for the URL helpers (non-static: forms.c borrows it) */
-/* Resolve a URL with the vendored LEXBOR URL module (the real WHATWG URL Standard parser) — never a
-   hand-rolled string resolver. Returns the serialized absolute href (malloc'd; caller frees) or NULL on a
-   parse failure (-> the caller yields opaque, never an invented value). */
-struct url_ser_buf { char *s; size_t n, cap; };
-static lxb_status_t url_ser_cb(const lxb_char_t *data, size_t len, void *cbctx) {
-    struct url_ser_buf *b = cbctx;
-    if (b->n + len + 1 > b->cap) { size_t nc = (b->n + len + 1) * 2 + 64; char *ns = realloc(b->s, nc); if (!ns) return LXB_STATUS_ERROR_MEMORY_ALLOCATION; b->s = ns; b->cap = nc; }
-    memcpy(b->s + b->n, data, len); b->n += len; b->s[b->n] = 0;
-    return LXB_STATUS_OK;
-}
-char *url_resolve(const char *input, const char *base) {
-    lxb_url_parser_t *p = lxb_url_parser_create();
-    if (!p || lxb_url_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_url_parser_destroy(p, true); return NULL; }
-    lxb_url_t *bu = (base && base[0]) ? lxb_url_parse(p, NULL, (const lxb_char_t *)base, strlen(base)) : NULL;
-    lxb_url_t *u = lxb_url_parse(p, bu, (const lxb_char_t *)(input ? input : ""), input ? strlen(input) : 0);
-    char *out = NULL;
-    if (u) { struct url_ser_buf b = {0}; if (lxb_url_serialize(u, url_ser_cb, &b, false) == LXB_STATUS_OK) out = b.s; else free(b.s); }
-    lxb_url_parser_destroy(p, true);   /* frees bu, u, and internal buffers */
-    return out;
-}
+/* url_resolve (WHATWG Lexbor URL canonicalization) now lives in browser/url.c — it owns no scheduler state. */
 /* Return the OPAQUE sentinel — external input the tool must not concretely decide. The shared handler for
    every "unknown/non-deterministic value" host edge (Math.random, Date.now, crypto.randomUUID, performance.now,
    …); a branch on its result auto-forks BOTH arms via the engine OP_if hook (branch_decide). */

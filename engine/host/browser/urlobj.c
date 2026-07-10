@@ -8,7 +8,6 @@
 #include "url.h"      /* has_hole */
 #include "opaque.h"   /* g_opaque, js_noop */
 
-extern char *url_resolve(const char *input, const char *base);   /* Lexbor-canonical resolve (main.c) */
 extern const char *g_origin;                                     /* the page principal (main.c) */
 
 static void url_set(JSContext *ctx, JSValue o, const char *k, const char *s, size_t n) {

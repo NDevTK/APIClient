@@ -5,11 +5,11 @@
 #include "forms.h"
 #include "attr_shadow.h"   /* attr_shadow_find/opaque — a JS-set control value's taint */
 #include "endpoint.h"      /* record_endpoint */
+#include "url.h"           /* url_resolve — WHATWG canonicalization (browser/url.c) */
 #include <lexbor/dom/dom.h>
 
-/* Borrowed from main.c: the element class id (unwrap the form element), the URL resolver, and the page origin. */
+/* Borrowed from main.c: the element class id (unwrap the form element) and the page origin. */
 extern JSClassID g_el_class_id;
-extern char *url_resolve(const char *input, const char *base);
 extern const char *g_origin;
 
 static void form_enc(const char *s, char *out, size_t cap) {   /* application/x-www-form-urlencoded value */
