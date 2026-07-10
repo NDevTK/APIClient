@@ -345,3 +345,175 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
 // ─── Message Handling ────────────────────────────────────────────────────────
 
 // ─── Form Metadata Processing ─────────────────────────────────────────────
+
+// ── Cross-tab / global aggregation (host-level per SECURITY.md: the brain aggregates results from the
+//    per-page engines into the ONE global moat) ──
+function _mergeDocInto(existingDoc, newDoc) {
+  if (!existingDoc || !existingDoc.resources) return newDoc || existingDoc || null;
+  if (!newDoc || !newDoc.resources) return existingDoc;
+  for (const bk in newDoc.resources) {
+    const nb = newDoc.resources[bk];
+    if (!nb || !nb.methods) continue;
+    let eb = existingDoc.resources[bk];
+    if (!eb) { existingDoc.resources[bk] = nb; continue; }
+    if (!eb.methods) eb.methods = {};
+    for (const mk in nb.methods) {
+      const nm = nb.methods[mk], em = eb.methods[mk];
+      if (!em) { eb.methods[mk] = nm; continue; }   // distinct endpoint from another page -> keep both
+      if (nm.parameters) {                          // same method key: union each param's example values
+        em.parameters = em.parameters || {};
+        for (const pn in nm.parameters) {
+          const np = nm.parameters[pn], ep = em.parameters[pn];
+          if (!ep) { em.parameters[pn] = np; continue; }
+          const ev = Array.isArray(ep._astValidValues) ? ep._astValidValues : [];
+          const nv = Array.isArray(np._astValidValues) ? np._astValidValues : [];
+          for (const x of nv) if (ev.indexOf(x) < 0) ev.push(x);
+          if (ev.length) ep._astValidValues = ev;
+        }
+      }
+    }
+  }
+  if (newDoc.schemas) { existingDoc.schemas = existingDoc.schemas || {}; for (const sk in newDoc.schemas) if (!existingDoc.schemas[sk]) existingDoc.schemas[sk] = newDoc.schemas[sk]; }
+  return existingDoc;
+}
+function mergeToGlobal(tab) {
+  // Central merge — EVERY analysis result (hot tab + cold frontier) funnels here, so guard the DocView contract
+  // once: a malformed tab is a should-never-happen the callers must not construct, not a shape to defend against.
+  DCHECK(tab && typeof tab === "object", "mergeToGlobal: tab (DocView) must be an object");
+  DCHECK(tab.apiKeys && typeof tab.apiKeys[Symbol.iterator] === "function", "mergeToGlobal: tab.apiKeys must be an iterable Map");
+  DCHECK(globalStore && globalStore.apiKeys, "mergeToGlobal: globalStore must be initialized before a merge");
+  for (const [k, v] of tab.apiKeys) {
+    const existing = globalStore.apiKeys.get(k);
+    if (existing) {
+      existing.lastSeen = v.lastSeen;
+      // Take the higher count — tab count is a running total, not a delta
+      existing.requestCount = Math.max(
+        existing.requestCount || 0,
+        v.requestCount || 0,
+      );
+      const mergeSet = (target, source) => {
+        if (source instanceof Set)
+          source.forEach((s) => (target instanceof Set ? target.add(s) : null));
+        else if (Array.isArray(source))
+          source.forEach((s) => (target instanceof Set ? target.add(s) : null));
+      };
+      if (existing.services instanceof Set)
+        mergeSet(existing.services, v.services);
+      if (existing.hosts instanceof Set) mergeSet(existing.hosts, v.hosts);
+      if (existing.endpoints instanceof Set)
+        mergeSet(existing.endpoints, v.endpoints);
+      if (!existing.pageUrls) existing.pageUrls = new Set();
+      if (existing.pageUrls instanceof Set)
+        mergeSet(existing.pageUrls, v.pageUrls);
+    } else {
+      globalStore.apiKeys.set(k, {
+        origin: v.origin,
+        referer: v.referer,
+        source: v.source,
+        firstSeen: v.firstSeen,
+        lastSeen: v.lastSeen,
+        requestCount: v.requestCount || 0,
+        services: new Set(v.services || []),
+        hosts: new Set(v.hosts || []),
+        endpoints: new Set(v.endpoints || []),
+        pageUrls: new Set(v.pageUrls || []),
+      });
+    }
+  }
+  for (const [k, v] of tab.endpoints) {
+    if (!globalStore.endpoints.has(k)) {
+      v._isNew = true;
+      v._firstSeenGlobal = Date.now();
+    } else {
+      var ge = globalStore.endpoints.get(k);
+      if (ge.lastSeen) v.lastSeen = Date.now();
+      if (ge._firstSeenGlobal) v._firstSeenGlobal = ge._firstSeenGlobal;
+      v._isNew = false;
+      // UNION path-param examples so a later paramless re-emit (e.g. a re-visit before the concolic reply
+      // re-run landed) never DROPS values a prior emit learned — the moat is monotonic.
+      if (ge.pathParams || v.pathParams) {
+        var _mp = new Map();
+        for (var _s of [ge.pathParams || [], v.pathParams || []]) for (var _pp of _s) {
+          var _cur = _mp.get(_pp.name) || new Set();
+          for (var _val of (_pp.values || [])) _cur.add(_val);
+          _mp.set(_pp.name, _cur);
+        }
+        v.pathParams = Array.from(_mp, function (e) { return { name: e[0], values: Array.from(e[1]).slice(0, 20) }; });
+      }
+    }
+    globalStore.endpoints.set(k, v);
+  }
+  for (const [k, v] of tab.discoveryDocs) {
+    if (v.status === "found") {
+      // Merge pageUrls and frameOrigins Sets with existing global entry
+      var _existingGDoc = globalStore.discoveryDocs.get(k);
+      var _mergedPageUrls = new Set(_existingGDoc?.pageUrls || []);
+      if (v.pageUrls) for (var _pu of v.pageUrls) _mergedPageUrls.add(_pu);
+      var _mergedFrameOrigins = new Set(_existingGDoc?.frameOrigins || []);
+      if (v.frameOrigins) for (var _fo of v.frameOrigins) _mergedFrameOrigins.add(_fo);
+      globalStore.discoveryDocs.set(k, {
+        status: v.status,
+        url: v.url,
+        method: v.method,
+        apiKey: v.apiKey,
+        fetchedAt: v.fetchedAt,
+        doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc) || null,   // UNION, not replace: keep every page's methods
+        grouping: v.grouping || null,
+        pageUrls: _mergedPageUrls,
+        frameOrigins: _mergedFrameOrigins,
+        isVirtual: !!v.isVirtual,
+      });
+    } else if (!globalStore.discoveryDocs.has(k)) {
+      globalStore.discoveryDocs.set(k, { status: v.status });
+    }
+  }
+  for (const [k, v] of tab.probeResults) {
+    globalStore.probeResults.set(k, v);
+  }
+  for (const [k, v] of tab.scopes) {
+    globalStore.scopes.set(k, v);
+  }
+  if (tab._securityFindings) {
+    // Evict prior findings whose URL has the same origin+pathname as a
+    // script in this round but a different query/hash. Versioned asset
+    // URLs (`index.js?v=14` vs `?v=15`) otherwise accumulate forever
+    // because each version is keyed separately even though only the
+    // latest bundle is live.
+    var newBasePaths = new Set();
+    for (var _spi = 0; _spi < tab._securityFindings.length; _spi++) {
+      try {
+        var _u = new URL(tab._securityFindings[_spi].sourceUrl);
+        newBasePaths.add(_u.origin + _u.pathname);
+      } catch (_) { /* non-URL source (e.g. "unknown_N") — no base path to match */ }
+    }
+    var staleKeys = [];
+    for (var _key of globalStore.securityFindings.keys()) {
+      try {
+        var _ku = new URL(_key);
+        var _kbase = _ku.origin + _ku.pathname;
+        if (newBasePaths.has(_kbase)) {
+          // Same base path AND full URL changed → new version replaces old.
+          var sameUrl = tab._securityFindings.some(function(_f) { return _f.sourceUrl === _key; });
+          if (!sameUrl) staleKeys.push(_key);
+        }
+      } catch (_) { /* skip non-URL keys */ }
+    }
+    for (var _ski = 0; _ski < staleKeys.length; _ski++) {
+      globalStore.securityFindings.delete(staleKeys[_ski]);
+    }
+
+    for (var sf = 0; sf < tab._securityFindings.length; sf++) {
+      var finding = tab._securityFindings[sf];
+      globalStore.securityFindings.set(finding.sourceUrl || ("unknown_" + sf), finding);
+    }
+  }
+  scheduleSave();
+}
+
+// Incremented every time the store is wiped (the bin/Clear reset). An analysis
+// or its async continuation (the worker round-trip, a source-map re-merge, a
+// resume merge) captures the epoch when it starts and bails before writing to
+// the store if the epoch has moved — so work already in flight when Clear ran
+// can't repopulate the just-wiped store. Eviction-agnostic (unlike a buffer
+// check), so it never suppresses a legitimate post-eviction resume merge.
+var _dataEpoch = 0;
