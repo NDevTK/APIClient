@@ -18,6 +18,8 @@
 #include "platform/url.h"          /* (via html_script_element) */
 #include "core/dom/classlist.h"    /* js_el_classlist_get — el.classList (a real class-attr token check) */
 #include "check.h"                 /* DCHECK — the live document is an engine invariant (created at boot) */
+#include "bindings/idl.h"          /* idl_bind — the Element OPERATION list is generated from canonical Element IDL */
+#include "bindings/idl_generated.h"   /* Element_IDL — the spec-exact member shape */
 
 /* Borrowed from main.c: an @S replay flow pins the concrete candidate here (a reflected-property write in a
    replay writes the candidate, not the shadow taint). */
@@ -399,44 +401,52 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
 /* The Element interface binding install (Blink generates this from Element.idl): wire every method + reflected
    property + on<event> setter onto the element prototype. Pure-read methods live above in this file; the
    scheduler-coupled edges (appendChild/@S, addEventListener/orphan, submit/@H) are wired here by call. */
+/* BEHAVIOR for the generated Element OPERATION shape (idl_bind matches by name; every other spec operation —
+   scroll/requestFullscreen/getAttributeNode/... — installs as a present noop, never an undefined that throws).
+   appendChild/insertBefore/replaceChild/before/after all route to the one tree-mutation + <script src> edge. */
+static const IdlImpl ELEMENT_IMPLS[] = {
+    { "getAttribute", NULL, NULL, js_el_getAttribute, -1 },
+    { "setAttribute", NULL, NULL, js_el_setAttribute, -1 },
+    { "getAttributeNames", NULL, NULL, js_el_getattrnames, -1 },
+    { "hasAttribute", NULL, NULL, js_el_has_attr, -1 },
+    { "toggleAttribute", NULL, NULL, js_el_has_attr, -1 },
+    { "matches", NULL, NULL, js_el_matches, -1 },
+    { "webkitMatchesSelector", NULL, NULL, js_el_matches, -1 },
+    { "closest", NULL, NULL, js_el_closest, -1 },
+    { "querySelector", NULL, NULL, js_el_querySelector, -1 },
+    { "querySelectorAll", NULL, NULL, js_el_querySelectorAll, -1 },
+    { "getElementsByTagName", NULL, NULL, js_el_querySelectorAll, -1 },
+    { "insertAdjacentHTML", NULL, NULL, js_el_insertAdjacentHTML, -1 },
+    { "attachShadow", NULL, NULL, js_el_attach_shadow, -1 },
+    { "getBoundingClientRect", NULL, NULL, js_el_rect, -1 },
+    { "appendChild", NULL, NULL, js_el_appendChild, -1 },
+    { "insertBefore", NULL, NULL, js_el_appendChild, -1 },
+    { "replaceChild", NULL, NULL, js_el_appendChild, -1 },
+    { "before", NULL, NULL, js_el_appendChild, -1 },
+    { "after", NULL, NULL, js_el_appendChild, -1 },
+    { "append", NULL, NULL, js_el_appendChild, -1 },
+    { "prepend", NULL, NULL, js_el_appendChild, -1 },
+    { "cloneNode", NULL, NULL, js_el_self, -1 },
+    { "contains", NULL, NULL, js_el_contains, -1 },
+    { "addEventListener", NULL, NULL, js_add_listener, -1 },
+};
+
 void el_install_methods(JSContext *ctx, JSValue proto) {
-    JS_SetPropertyStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_el_getAttribute, "getAttribute", 1));
-    JS_SetPropertyStr(ctx, proto, "setAttribute", JS_NewCFunction(ctx, js_el_setAttribute, "setAttribute", 2));
-    JS_SetPropertyStr(ctx, proto, "appendChild", JS_NewCFunction(ctx, js_el_appendChild, "appendChild", 1));
-    JS_SetPropertyStr(ctx, proto, "insertAdjacentHTML", JS_NewCFunction(ctx, js_el_insertAdjacentHTML, "insertAdjacentHTML", 2));
-    JS_SetPropertyStr(ctx, proto, "querySelector", JS_NewCFunction(ctx, js_el_querySelector, "querySelector", 1));
+    /* OPERATIONS: the member list comes from canonical Element IDL (Node + EventTarget + mixins, generated) —
+       modelled ops get our impl, every other spec op is a present noop. Drift-free and complete. */
+    idl_bind(ctx, proto, Element_IDL, Element_IDL_N, ELEMENT_IMPLS, (int)(sizeof ELEMENT_IMPLS / sizeof ELEMENT_IMPLS[0]), /*install_attrs*/0);
+    /* Methods NOT on Element (HTMLElement.click/focus/blur, HTMLFormElement.submit) — kept until those interfaces
+       are generated too; submit/requestSubmit fire the form's @H action request. */
+    JS_SetPropertyStr(ctx, proto, "submit", JS_NewCFunction(ctx, js_form_submit, "submit", 0));
+    JS_SetPropertyStr(ctx, proto, "requestSubmit", JS_NewCFunction(ctx, js_form_submit, "requestSubmit", 1));
+    JS_SetPropertyStr(ctx, proto, "click", JS_NewCFunction(ctx, js_noop, "click", 0));
+    JS_SetPropertyStr(ctx, proto, "focus", JS_NewCFunction(ctx, js_noop, "focus", 0));
+    JS_SetPropertyStr(ctx, proto, "blur", JS_NewCFunction(ctx, js_noop, "blur", 0));
     for (int i = 0; i < 2; i++) {   /* textContent / innerText getters (SSR data: JSON.parse(script.textContent)) */
         JSAtom a = JS_NewAtom(ctx, i ? "innerText" : "textContent");
         JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_textContent, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
         JS_FreeAtom(ctx, a);
     }
-    JS_SetPropertyStr(ctx, proto, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, proto, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    JS_SetPropertyStr(ctx, proto, "dispatchEvent", JS_NewCFunction(ctx, js_noop, "dispatchEvent", 1));
-    JS_SetPropertyStr(ctx, proto, "click", JS_NewCFunction(ctx, js_noop, "click", 0));
-    JS_SetPropertyStr(ctx, proto, "submit", JS_NewCFunction(ctx, js_form_submit, "submit", 0));         /* @H: fires the form's action request, like a real browser */
-    JS_SetPropertyStr(ctx, proto, "requestSubmit", JS_NewCFunction(ctx, js_form_submit, "requestSubmit", 1));
-    JS_SetPropertyStr(ctx, proto, "focus", JS_NewCFunction(ctx, js_noop, "focus", 0));
-    JS_SetPropertyStr(ctx, proto, "blur", JS_NewCFunction(ctx, js_noop, "blur", 0));
-    JS_SetPropertyStr(ctx, proto, "remove", JS_NewCFunction(ctx, js_noop, "remove", 0));
-    JS_SetPropertyStr(ctx, proto, "matches", JS_NewCFunction(ctx, js_el_matches, "matches", 1));
-    JS_SetPropertyStr(ctx, proto, "closest", JS_NewCFunction(ctx, js_el_closest, "closest", 1));
-    JS_SetPropertyStr(ctx, proto, "cloneNode", JS_NewCFunction(ctx, js_el_self, "cloneNode", 1));
-    JS_SetPropertyStr(ctx, proto, "contains", JS_NewCFunction(ctx, js_el_contains, "contains", 1));
-    JS_SetPropertyStr(ctx, proto, "hasAttribute", JS_NewCFunction(ctx, js_el_has_attr, "hasAttribute", 1));
-    JS_SetPropertyStr(ctx, proto, "getAttributeNames", JS_NewCFunction(ctx, js_el_getattrnames, "getAttributeNames", 0));
-    JS_SetPropertyStr(ctx, proto, "attachShadow", JS_NewCFunction(ctx, js_el_attach_shadow, "attachShadow", 1));
-    JS_SetPropertyStr(ctx, proto, "toggleAttribute", JS_NewCFunction(ctx, js_el_has_attr, "toggleAttribute", 1));
-    JS_SetPropertyStr(ctx, proto, "querySelectorAll", JS_NewCFunction(ctx, js_el_querySelectorAll, "querySelectorAll", 1));
-    JS_SetPropertyStr(ctx, proto, "insertBefore", JS_NewCFunction(ctx, js_el_appendChild, "insertBefore", 2));   /* intercepts <script src> like appendChild */
-    JS_SetPropertyStr(ctx, proto, "replaceChild", JS_NewCFunction(ctx, js_el_appendChild, "replaceChild", 2));
-    JS_SetPropertyStr(ctx, proto, "before", JS_NewCFunction(ctx, js_el_appendChild, "before", 1));
-    JS_SetPropertyStr(ctx, proto, "after", JS_NewCFunction(ctx, js_el_appendChild, "after", 1));
-    JS_SetPropertyStr(ctx, proto, "setAttributeNS", JS_NewCFunction(ctx, js_noop, "setAttributeNS", 3));
-    JS_SetPropertyStr(ctx, proto, "removeAttribute", JS_NewCFunction(ctx, js_noop, "removeAttribute", 1));
-    JS_SetPropertyStr(ctx, proto, "replaceChildren", JS_NewCFunction(ctx, js_noop, "replaceChildren", 0));
-    JS_SetPropertyStr(ctx, proto, "scrollIntoView", JS_NewCFunction(ctx, js_noop, "scrollIntoView", 0));
-    JS_SetPropertyStr(ctx, proto, "getBoundingClientRect", JS_NewCFunction(ctx, js_el_rect, "getBoundingClientRect", 0));
     { JSAtom a = JS_NewAtom(ctx, "style");
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_style_get, "get style", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, a); }

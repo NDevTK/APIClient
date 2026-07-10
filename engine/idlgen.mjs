@@ -15,17 +15,19 @@ const OUT = join(HERE, "host", "browser", "bindings", "idl_generated.h");
 
 // The interfaces our engine implements a binding for. Add an interface here and its real member list is
 // generated; the component then resolves impls by member name. (Start small; grow as components convert.)
-const INTERFACES = ["AbortSignal", "AbortController"];
+const INTERFACES = ["AbortSignal", "AbortController", "Element"];
 
 const all = await listAll();
 // Build a name -> interface/mixin AST node index across ALL specs (so inheritance + includes resolve).
 const byName = new Map();
+const inheritanceOf = new Map();   // name -> base interface (webidl2's node.inheritance is a getter, tracked separately so partials/order don't lose the base clause)
 const includes = [];   // { target, includes }
 for (const spec of Object.values(all)) {
   let ast;
   try { ast = parse(await spec.text()); } catch { continue; }
   for (const n of ast) {
     if ((n.type === "interface" || n.type === "interface mixin") && n.name) {
+      if (n.inheritance) inheritanceOf.set(n.name, n.inheritance);   // captured from whichever definition declares `: Base`
       const prev = byName.get(n.name);
       if (prev) prev.members.push(...n.members);   // merge partials
       else byName.set(n.name, n);
@@ -43,7 +45,8 @@ function flatten(name, seen = new Set()) {
   const node = byName.get(name);
   if (!node || seen.has(name)) return [];
   seen.add(name);
-  const inherited = node.inheritance ? flatten(node.inheritance, seen) : [];
+  const base = inheritanceOf.get(name);
+  const inherited = base ? flatten(base, seen) : [];
   return [...inherited, ...node.members];
 }
 

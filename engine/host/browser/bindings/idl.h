@@ -32,6 +32,8 @@ typedef enum { IDL_GEN_OP, IDL_GEN_ATTR } IdlGenKind;
 typedef struct { const char *name; IdlGenKind kind; int readonly; int arg; } IdlGenMember;   /* the SHAPE (from IDL) */
 /* the BEHAVIOR (from the C component); magic>=0 -> magic-dispatched get/set (one fn serving many by index). */
 typedef struct { const char *name; JSCFunction *get; JSCFunction *set; JSCFunction *op; int magic; } IdlImpl;
-void idl_bind(JSContext *ctx, JSValueConst target, const IdlGenMember *shape, int shape_n, const IdlImpl *impls, int impl_n);
+/* install_attrs: 1 = install operations AND attributes (a small interface fully IDL-driven); 0 = operations
+   ONLY (for a big interface like Element whose reflected/magic attributes are still installed separately). */
+void idl_bind(JSContext *ctx, JSValueConst target, const IdlGenMember *shape, int shape_n, const IdlImpl *impls, int impl_n, int install_attrs);
 
 #endif

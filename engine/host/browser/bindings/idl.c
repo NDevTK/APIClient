@@ -35,9 +35,10 @@ static const IdlImpl *idl_find_impl(const IdlImpl *impls, int n, const char *nam
     for (int i = 0; i < n; i++) if (strcmp(impls[i].name, name) == 0) return &impls[i];
     return NULL;
 }
-void idl_bind(JSContext *ctx, JSValueConst target, const IdlGenMember *shape, int shape_n, const IdlImpl *impls, int impl_n) {
+void idl_bind(JSContext *ctx, JSValueConst target, const IdlGenMember *shape, int shape_n, const IdlImpl *impls, int impl_n, int install_attrs) {
     for (int i = 0; i < shape_n; i++) {
         const IdlGenMember *m = &shape[i];
+        if (m->kind == IDL_GEN_ATTR && !install_attrs) continue;   /* ops-only pass (attrs installed separately) */
         const IdlImpl *im = idl_find_impl(impls, impl_n, m->name);
         JSAtom a = JS_NewAtom(ctx, m->name);
         if (m->kind == IDL_GEN_OP) {
