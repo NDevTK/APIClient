@@ -6,7 +6,9 @@
  * REAL same-origin cookies via cookie_seed (the page's own cookies, same principal — no privilege gained). */
 #include "cookie.h"
 #include "opaque.h"   /* g_opaque */
+#include "check.h"    /* CHECK — an OOM must crash, never silently truncate the cookie join */
 #include <string.h>
+#include <stdlib.h>
 
 static JSValue g_cookies = JS_UNDEFINED;   /* name -> the "name=value" pair (concrete string, or a concolic opaque) */
 
@@ -59,17 +61,25 @@ JSValue js_cookie_get(JSContext *ctx, JSValueConst this_val) {
     if (JS_GetOwnPropertyNames(ctx, &tab, &n, g_cookies, JS_GPN_STRING_MASK) != 0) return ambient(ctx);
     if (n == 0) { JS_FreePropertyEnum(ctx, tab, n); return ambient(ctx); }
     if (n == 1) { JSValue p = JS_GetProperty(ctx, g_cookies, tab[0].atom); JS_FreePropertyEnum(ctx, tab, n); return p; }   /* one cookie: return it whole (concolic taint intact) */
-    /* multiple cookies: join "pair; pair; …" (a concolic pair degrades to its example text here — rare multi-cookie taint) */
-    char buf[4096]; size_t off = 0;
-    for (uint32_t i = 0; i < n && off + 2 < sizeof buf; i++) {
+    /* multiple cookies: join "pair; pair; …" — GROW the buffer (no fixed cap; a truncation is a bound-in-disguise
+       that would silently drop cookies past 4 KB). (A concolic pair still degrades to its example text here — the
+       rare multi-cookie taint case; the truncation bound is the concrete fix.) */
+    size_t cap = 256, off = 0; char *buf = malloc(cap); CHECK(buf, "cookie join alloc");
+    for (uint32_t i = 0; i < n; i++) {
         JSValue p = JS_GetProperty(ctx, g_cookies, tab[i].atom);
         const char *ps = JS_ToCString(ctx, p);
-        if (ps) { if (off) { buf[off++] = ';'; buf[off++] = ' '; } size_t l = strlen(ps); if (off + l < sizeof buf) { memcpy(buf + off, ps, l); off += l; } JS_FreeCString(ctx, ps); }
+        if (ps) {
+            size_t l = strlen(ps), need = off + (off ? 2 : 0) + l + 1;
+            if (need > cap) { while (need > cap) cap *= 2; buf = realloc(buf, cap); CHECK(buf, "cookie join grow"); }
+            if (off) { buf[off++] = ';'; buf[off++] = ' '; }
+            memcpy(buf + off, ps, l); off += l; JS_FreeCString(ctx, ps);
+        }
         JS_FreeValue(ctx, p);
     }
     buf[off] = 0;
     JS_FreePropertyEnum(ctx, tab, n);
-    return JS_NewString(ctx, buf);
+    JSValue r = JS_NewString(ctx, buf); free(buf);
+    return r;
 }
 
 void cookie_free(JSContext *ctx) {
