@@ -10,6 +10,7 @@
 #include "media_element.h"
 #include "dom_element.h"   /* el_wrap — the element JS wrapper */
 #include "check.h"         /* DCHECK — the document exists before any constructor runs */
+#include "opaque.h"        /* js_concolic — currentTime/ended after play() are unknowable headless -> fork */
 #include <string.h>
 #include <lexbor/html/html.h>
 
@@ -23,10 +24,15 @@ static JSValue make_el(JSContext *ctx, const char *tag, size_t tl) {
     return el_wrap(ctx, el);
 }
 
-/* HTMLMediaElement.play(): begin playback with no device -> paused=false, resolve Promise<undefined> (spec). */
+/* HTMLMediaElement.play(): begin playback with no device -> paused=false, resolve Promise<undefined> (spec).
+   Playing with no clock/device advances currentTime by an UNKNOWABLE amount and playback MAY reach the end, so
+   currentTime + ended become CONCOLIC — a gate `if (el.ended)` / `if (el.currentTime > 5)` then FORKS both
+   worlds (reaching the on-ended / seek-gated shipped arm), never a bare-concrete 0/false that buries it. */
 static JSValue media_play(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)argc; (void)argv;
     JS_SetPropertyStr(ctx, this_val, "paused", JS_FALSE);
+    JS_SetPropertyStr(ctx, this_val, "currentTime", js_concolic(ctx, "{currentTime}", JS_UNDEFINED));
+    JS_SetPropertyStr(ctx, this_val, "ended", js_concolic(ctx, "{mediaEnded}", JS_UNDEFINED));
     return js_resolved(ctx, JS_UNDEFINED);
 }
 /* HTMLMediaElement.pause(): -> paused=true. */
