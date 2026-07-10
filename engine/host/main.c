@@ -1689,10 +1689,13 @@ static void scheduler_run(JSContext *ctx)
             if (!JS_IsUndefined(g_msg_event) && is_msg_handler(drive)) { JS_FreeValue(ctx, oargs[0]); oargs[0] = g_msg_event; }
             else if (!f.drive_src && is_handler(ctx, drive)) { ev = js_event_ctor(ctx, JS_UNDEFINED, 0, NULL); JS_FreeValue(ctx, oargs[0]); oargs[0] = ev; }   /* a non-message handler gets a REAL Event (type/target/preventDefault…), not opaque -> no phantom shape-check arm */
             /* Drive an orphan METHOD with its REAL receiver instance if one exists (this.field -> concrete
-               boot value, a real example) else opaque this. Args stay opaque (external input). */
+               boot value, a real example) else a SOURCED {this} — external input, NOT the shared source-less
+               g_opaque, so a `this=='x'` gate token is attributed + reversible (source-at-creation, like args). */
             JSValue recv = JS_FindReceiver(ctx, drive);
-            JSValue this_val = JS_IsUndefined(recv) ? g_opaque : recv;
+            JSValue this_own = JS_IsUndefined(recv) ? JS_NewOpaqueSourced(ctx, "{this}", "{this}") : JS_UNDEFINED;
+            JSValue this_val = JS_IsUndefined(recv) ? this_own : recv;
             f.fs = JS_FlowNew(ctx, drive, this_val, 8, oargs);   /* async funcs included now — JS_FlowNew accepts them */
+            JS_FreeValue(ctx, this_own);   /* JS_FlowNew dup'd it; UNDEFINED (a real receiver) frees to noop */
             JS_FreeValue(ctx, recv);
             for (int i = 0; i < 8; i++) if (JS_VALUE_GET_PTR(oargs[i]) != JS_VALUE_GET_PTR(g_msg_event)) JS_FreeValue(ctx, oargs[i]);   /* free the owned {argN}/elem/ev; skip the borrowed shared g_msg_event */
             JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);   /* JS_FlowNew dup'd the drive handle; drop our resolved ref + transient replay handlers */
