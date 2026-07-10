@@ -739,6 +739,20 @@ static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, c
         free(env);
         return;   /* a session verifies MANY sinks -> not tagged with one vtarget */
     }
+    if (g_cur_flow && g_cur_flow->is_async) {   /* ASYNC-FLOW sink: the source was read BEFORE an await and
+        delivered to this continuation via the promise, so re-driving the continuation never re-reads it. Re-run
+        the async RECIPE (func+args) with the candidate + this flow's decision vector (branch+await outcomes) so
+        the source getter returns the candidate and it flows THROUGH the await to the sink, VERIFIED — the
+        boot-time/handler-time async XSS (getFile().text()->innerHTML). Mirrors the sibling-fork taxonomy (~1134):
+        an async sink forks the async recipe, never a bare fn re-drive. */
+        signed char *adec = NULL;
+        if (g_dec_n > 0) { adec = (signed char *)malloc((size_t)g_dec_n); if (adec) for (int i = 0; i < g_dec_n; i++) adec[i] = g_dec[i]; }
+        int before = g_reg_n;
+        spawn_async_sibling(ctx, g_cur_flow, adec, adec ? g_dec_n : 0);   /* transfers adec ownership */
+        if (g_reg_n > before) g_reg[g_reg_n - 1].candidate = strdup(cand);
+        free(env);
+        return;
+    }
     if (JS_IsUndefined(fn)) { free(env); return; }
     if (reg_add(ctx, JS_DupValue(ctx, fn), w, NULL, 0)) {
         g_reg[g_reg_n - 1].candidate = strdup(cand);
@@ -954,8 +968,15 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
        (startsWith/indexOf/==) the candidate must satisfy gets fresh candidates carrying it, instead of being
        truncated out. Re-emitted duplicates emit nothing new and are WFQ-starved, so this never truncates work. */
     JSValueConst hitfn = JS_CurrentScriptFn(ctx);
-    if (JS_IsObject(g_enqueued) && !JS_IsUndefined(hitfn)) {
-        char ek[320]; snprintf(ek, sizeof ek, "%u|%s|%s", JS_OrphanHash(ctx, hitfn), sink, sctx);
+    /* An ASYNC continuation is RESUMED from a suspended frame, so there is no current script fn on the C stack
+       (hitfn is undefined) — yet it is exactly the case that needs candidates. Key + drive off the async flow's
+       RECIPE handle instead; reg_add_cand's is_async branch re-runs that recipe (ignoring hitfn) so the source
+       re-reads through the await. Without this, every boot-time/handler-time async sink silently spawned ZERO
+       candidates and could never verify. */
+    int async_sink = (g_cur_flow && g_cur_flow->is_async);
+    JSValueConst keyfn = !JS_IsUndefined(hitfn) ? hitfn : (async_sink ? (JSValueConst)g_cur_flow->handle : JS_UNDEFINED);
+    if (JS_IsObject(g_enqueued) && !JS_IsUndefined(keyfn)) {
+        char ek[320]; snprintf(ek, sizeof ek, "%u|%s|%s", JS_OrphanHash(ctx, keyfn), sink, sctx);
         JSValue e = JS_GetPropertyStr(ctx, g_enqueued, ek);
         int32_t prev_gate = -1; if (JS_IsNumber(e)) JS_ToInt32(ctx, &prev_gate, e);   /* token count at last emit, or -1 = never */
         JS_FreeValue(ctx, e);
