@@ -1,109 +1,74 @@
-/* Web IDL binding generator — the Blink model: bindings' SHAPE is GENERATED from canonical Web IDL, never
- * hand-assembled. Reads the real .idl for each interface we implement (@webref/idl, the W3C-curated source),
- * parses it (webidl2), flattens inherited + mixin members, and emits a C shape table per interface into
- * engine/host/browser/bindings/idl_generated.h. The C components supply only the BEHAVIOR (impl functions,
- * resolved by name in idl_bind); the member LIST, readonly-ness, and operation arity come from the spec, so a
- * member we forgot is an honest opaque/noop and a member we invent that the spec lacks simply never installs. */
+/* Web IDL gap AUDITOR — the IDL's real job: tell us what browser logic is MISSING, not generate stub bindings.
+ * For each interface we implement, it reads the canonical .idl (@webref/idl, the W3C-curated corpus browsers
+ * use), parses it (webidl2), flattens inherited + mixin members, and DIFFS the spec member list against the
+ * members the component actually installs (a scan of the component .c for the property names it wires). It
+ * prints the missing members so we implement them at the root — never a generated noop/DCHECK stub. Runs at
+ * build time (best-effort: skipped if the idl toolchain isn't installed). */
 import { listAll } from "@webref/idl";
 import { parse } from "webidl2";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BROWSER = join(HERE, "host", "browser");
 
-// Each interface -> its Blink component DIRECTORY (Chromium layout). The generated SHAPE is emitted into that
-// folder's idl.gen.h, next to the component's hand-written BEHAVIOR (idl_bind merges behavior over the shape).
-// Add an interface here and its real member list is generated in the right place; grouping by folder keeps the
-// file tree spec-faithful to a browser dev.
+// interface -> the component .c that implements it. Add an interface here to audit its coverage against the spec.
 const INTERFACES = {
-  "AbortSignal": "core/dom", "AbortController": "core/dom", "Element": "core/dom",
-  "MutationObserver": "core/dom",
-  "IntersectionObserver": "core/intersection_observer",
-  "ResizeObserver": "core/resize_observer",
-  "PerformanceObserver": "core/timing",
+  AbortSignal:          "core/dom/abort.c",
+  AbortController:      "core/dom/abort.c",
+  IntersectionObserver: "core/intersection_observer/intersection_observer.c",
+  MutationObserver:     "core/dom/mutation_observer.c",
+  ResizeObserver:       "core/resize_observer/resize_observer.c",
+  PerformanceObserver:  "core/timing/performance_observer.c",
 };
 
 const all = await listAll();
-// Build a name -> interface/mixin AST node index across ALL specs (so inheritance + includes resolve).
 const byName = new Map();
-const inheritanceOf = new Map();   // name -> base interface (webidl2's node.inheritance is a getter, tracked separately so partials/order don't lose the base clause)
-const includes = [];   // { target, includes }
+const inheritanceOf = new Map();
+const includes = [];
 for (const spec of Object.values(all)) {
   let ast;
   try { ast = parse(await spec.text()); } catch { continue; }
   for (const n of ast) {
     if ((n.type === "interface" || n.type === "interface mixin") && n.name) {
-      if (n.inheritance) inheritanceOf.set(n.name, n.inheritance);   // captured from whichever definition declares `: Base`
+      if (n.inheritance) inheritanceOf.set(n.name, n.inheritance);
       const prev = byName.get(n.name);
-      if (prev) prev.members.push(...n.members);   // merge partials
+      if (prev) prev.members.push(...n.members);
       else byName.set(n.name, n);
     } else if (n.type === "includes") includes.push(n);
   }
 }
-// Attach mixin members to their host interfaces (interface X includes GlobalEventHandlers).
 for (const inc of includes) {
   const host = byName.get(inc.target), mixin = byName.get(inc.includes);
   if (host && mixin) host.members.push(...mixin.members);
 }
-
-// Flatten an interface's own + inherited members (walk `inheritance`).
 function flatten(name, seen = new Set()) {
   const node = byName.get(name);
   if (!node || seen.has(name)) return [];
   seen.add(name);
   const base = inheritanceOf.get(name);
-  const inherited = base ? flatten(base, seen) : [];
-  return [...inherited, ...node.members];
+  return [...(base ? flatten(base, seen) : []), ...node.members];
 }
-
-function emit(name) {
-  const members = flatten(name);
-  const seen = new Set();
-  const rows = [];
-  for (const m of members) {
-    if (m.special === "static") continue;   // static members live on the constructor, not the instance/prototype
-    if (m.type === "attribute") {
-      if (seen.has(m.name)) continue; seen.add(m.name);
-      const ro = m.readonly ? 1 : 0;
-      rows.push(`  { "${m.name}", IDL_GEN_ATTR, ${ro}, 0 },`);
-    } else if (m.type === "operation" && m.name) {   // named operations only (skip stringifiers/getters)
-      const key = "op:" + m.name;
-      if (seen.has(key)) continue; seen.add(key);
-      const argc = m.arguments.filter((a) => !a.optional && !a.variadic).length;
-      rows.push(`  { "${m.name}", IDL_GEN_OP, 0, ${argc} },`);
-    }
+function members(name) {
+  const out = [], seen = new Set();
+  for (const m of flatten(name)) {
+    if (m.special === "static") continue;
+    if (m.type === "attribute" && !seen.has(m.name)) { seen.add(m.name); out.push(m.name); }
+    else if (m.type === "operation" && m.name && !seen.has(m.name)) { seen.add(m.name); out.push(m.name); }
   }
-  return { cname: name.replace(/[^A-Za-z0-9]/g, "_"), rows, count: rows.length };
+  return out;
 }
 
-// Group interfaces by their Blink folder and emit one idl.gen.h per folder, beside the component's behavior.
-const byDir = new Map();
-for (const [name, dir] of Object.entries(INTERFACES)) {
-  if (!byDir.has(dir)) byDir.set(dir, []);
-  byDir.get(dir).push(emit(name));
+let totalMissing = 0;
+for (const [iface, file] of Object.entries(INTERFACES)) {
+  let src;
+  try { src = readFileSync(join(BROWSER, file), "utf8"); } catch { console.warn(`[idl-audit] ${iface}: component ${file} not found`); continue; }
+  // The property names the component actually installs appear as string literals (JS_SetPropertyStr / JS_NewAtom
+  // / def_getset(..., "name", ...)). A member absent from every literal is unimplemented.
+  const installed = new Set([...src.matchAll(/"([A-Za-z_$][\w$]*)"/g)].map((m) => m[1]));
+  const missing = members(iface).filter((n) => !installed.has(n));
+  if (missing.length) { totalMissing += missing.length; console.log(`[idl-audit] ${iface} (${file}): MISSING ${missing.length} — ${missing.join(", ")}`); }
+  else console.log(`[idl-audit] ${iface}: complete`);
 }
-const summary = [];
-for (const [dir, blocks] of byDir) {
-  const guard = "IDL_GEN_" + dir.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
-  let out = `/* GENERATED by engine/idlgen.mjs from canonical Web IDL (@webref/idl) — DO NOT EDIT.
- * The member SHAPE (name, kind, readonly, operation arity) of this Blink folder's interfaces, straight from
- * the spec. The component's hand-written BEHAVIOR is merged over this by idl_bind (impl-by-name); an unmodelled
- * operation DCHECKs "unsupported" when actually called (loud in dev, a compiled-out noop in release). */
-#ifndef ${guard}
-#define ${guard}
-#include "bindings/idl.h"
-
-`;
-  for (const b of blocks) {
-    out += `static const IdlGenMember ${b.cname}_IDL[] = {\n${b.rows.join("\n")}\n};\n`;
-    out += `#define ${b.cname}_IDL_N ${b.count}\n\n`;
-  }
-  out += `#endif\n`;
-  mkdirSync(join(BROWSER, dir), { recursive: true });   // a stub interface's Blink folder may not exist yet
-  const path = join(BROWSER, dir, "idl.gen.h");
-  writeFileSync(path, out);
-  summary.push(`${dir}/idl.gen.h [${blocks.map((b) => `${b.cname}(${b.count})`).join(",")}]`);
-}
-console.log(`[idlgen] wrote ${summary.join("  ")}`);
+if (totalMissing) console.log(`[idl-audit] ${totalMissing} spec members not yet implemented — implement each at the root (never a stub).`);

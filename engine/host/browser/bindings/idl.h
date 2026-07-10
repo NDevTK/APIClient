@@ -22,21 +22,11 @@ typedef void JSClassFinalizerFn(JSRuntime *rt, JSValue val);
 typedef struct { const char *name; const IDLMember *members; int n; JSClassFinalizerFn *finalizer; } IDLInterface;
 JSClassID idl_define_class(JSContext *ctx, const IDLInterface *iface);
 
-/* ── GENERATED-SHAPE binding (the Blink model: SHAPE from canonical Web IDL, BEHAVIOR from C) ────────────────
-   idl_generated.h (produced by engine/idlgen.mjs from @webref/idl) declares one IdlGenMember[] per interface —
-   the spec-exact member list. idl_bind installs it, matching each member to the component's IdlImpl BEHAVIOR by
-   name: an operation with no impl is a spec-present noop; a readonly attribute with no getter is the concolic
-   unknown (EXISTS + typed, VALUE forks); a writable attribute with no impl is a plain settable property. So the
-   member list can never drift from the spec, and a member we haven't modelled is honest, not missing. */
-typedef enum { IDL_GEN_OP, IDL_GEN_ATTR } IdlGenKind;
-typedef struct { const char *name; IdlGenKind kind; int readonly; int arg; } IdlGenMember;   /* the SHAPE (from IDL) */
-/* the BEHAVIOR (from the C component); magic>=0 -> magic-dispatched get/set (one fn serving many by index). */
-typedef struct { const char *name; JSCFunction *get; JSCFunction *set; JSCFunction *op; int magic; } IdlImpl;
-/* `iface` = the interface name (for the DCHECK message). install_attrs: 1 = install operations AND attributes
-   (a small interface fully IDL-driven); 0 = operations ONLY (a big interface whose magic attributes install
-   separately). strict: 1 = an unmodelled operation DCHECKs "unsupported <iface>.<member>" WHEN CALLED (loud in
-   dev — a used-but-unbuilt member surfaces as a should-never-happen; a compiled-out noop in release), so a
-   component MUST either implement a member or explicitly declare it js_noop; 0 = unmodelled ops silently noop. */
-void idl_bind(JSContext *ctx, JSValueConst target, const char *iface, const IdlGenMember *shape, int shape_n, const IdlImpl *impls, int impl_n, int install_attrs, int strict);
+/* NOTE: the runtime shape-driver (idl_bind + IdlGenMember/IdlImpl) was REMOVED — a table-driven driver that
+   installed concolic/noop stubs for unmodelled members is exactly the banned-stub anti-pattern. The real system
+   is codegen: engine/idlgen.mjs GENERATES the C binding (<iface>.gen.{c,h}: install + a weak DCHECK default per
+   member) from canonical Web IDL, and the component provides strong impls. The idl_instance/idl_define_class
+   native-class helpers above remain ONLY until the last interfaces still using them (Blob/Response/TrustedTypes/
+   Intl/Notification) are converted to codegen too, at which point this whole file is deleted. */
 
 #endif

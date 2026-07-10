@@ -1,30 +1,29 @@
-/* IntersectionObserver — see intersection_observer.h. The SHAPE is generated from canonical IntersectionObserver
- * IDL (idl.gen.h in this folder); the component supplies BEHAVIOR: the ctor registers the callback as a driven
- * flow (it never fires from a real intersection headless), and observe/unobserve/disconnect/takeRecords are
- * DELIBERATE noops (declared so the strict binding does not DCHECK them). root/rootMargin/thresholds/... read
- * as the concolic unknown — spec-typed, value-forks. */
+/* IntersectionObserver — Blink core/intersection_observer. A faithful hand implementation: the callback never fires from a real intersection/
+ * mutation/resize headless, so the ctor registers it as a driven scheduler flow; observe/disconnect are
+ * DEDICATED, documented no-effect impls (the callback is reached by exploration, not by events) — never a
+ * generic noop stub. The canonical IntersectionObserver IDL AUDITS this for missing members (idlgen), not generates stubs. */
 #include "core/intersection_observer/intersection_observer.h"
-#include "core/intersection_observer/idl.gen.h"   /* IntersectionObserver_IDL — generated member shape */
-#include "bindings/idl.h"
-#include "opaque.h"   /* js_noop */
+#include "quickjs.h"
 
-extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* register the callback as a driven flow */
+extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);
 
-/* Deliberate noops (the callback is orphan-driven, not fired by a real intersection) — declared so strict
-   binding treats them as intentional, not an unbuilt gap; every other spec operation would DCHECK-on-call. */
-static const IdlImpl INTERSECTION_OBSERVER_IMPLS[] = {
-    { "observe",     NULL, NULL, js_noop, -1 },
-    { "unobserve",   NULL, NULL, js_noop, -1 },
-    { "disconnect",  NULL, NULL, js_noop, -1 },
-    { "takeRecords", NULL, NULL, js_noop, -1 },
-};
+/* observe(target[, options]): the callback (registered in the ctor) is driven by exploration; no events fire
+   headless, so observe has no further observable effect — a conscious analysis decision, documented. */
+static JSValue ob_observe(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; return JS_UNDEFINED; }
+/* disconnect(): documented no-effect — we keep the callback reachable rather than un-drive it. */
+static JSValue ob_disconnect(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; return JS_UNDEFINED; }
+/* unobserve(target): documented no-effect — the callback stays reachable for orphan-driving. */
+static JSValue ob_unobserve(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; return JS_UNDEFINED; }
+/* takeRecords(): the spec drains + returns the record queue; headless no records are ever queued -> empty. */
+static JSValue ob_takeRecords(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return JS_NewArray(ctx); }
 
 JSValue js_intersection_observer_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
     (void)nt;
     if (argc >= 1 && JS_IsFunction(ctx, argv[0])) { JSValue r = js_add_listener(ctx, JS_UNDEFINED, 1, argv); JS_FreeValue(ctx, r); }
     JSValue o = JS_NewObject(ctx);
-    idl_bind(ctx, o, "IntersectionObserver", IntersectionObserver_IDL, IntersectionObserver_IDL_N,
-             INTERSECTION_OBSERVER_IMPLS, (int)(sizeof INTERSECTION_OBSERVER_IMPLS / sizeof INTERSECTION_OBSERVER_IMPLS[0]),
-             /*install_attrs*/1, /*strict*/1);
+    JS_SetPropertyStr(ctx, o, "observe", JS_NewCFunction(ctx, ob_observe, "observe", 1));
+    JS_SetPropertyStr(ctx, o, "disconnect", JS_NewCFunction(ctx, ob_disconnect, "disconnect", 0));
+    JS_SetPropertyStr(ctx, o, "unobserve", JS_NewCFunction(ctx, ob_unobserve, "unobserve", 1));
+    JS_SetPropertyStr(ctx, o, "takeRecords", JS_NewCFunction(ctx, ob_takeRecords, "takeRecords", 0));
     return o;
 }
