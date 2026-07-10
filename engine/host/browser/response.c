@@ -9,6 +9,8 @@
 #include "check.h"    /* CHECK (OOM) */
 
 extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */
+extern JSValue js_rejected(JSContext *ctx, JSValue err);   /* scheduler-side: a rejected promise (re-throws into the await) */
+extern JSValue js_headers_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv);   /* real Headers (urlobj.c) */
 
 static JSClassID g_resp_class_id;
 typedef struct { JSValue body; } RespData;   /* the internal [[body]] slot */
@@ -33,7 +35,8 @@ static JSValue m_json(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
         size_t len; const char *s = JS_ToCStringLen(ctx, &len, r->body);
         JSValue parsed = s ? JS_ParseJSON(ctx, s, len, "<response>") : JS_UNDEFINED;
         if (s) JS_FreeCString(ctx, s);
-        return js_resolved(ctx, JS_IsException(parsed) ? (JS_FreeValue(ctx, JS_GetException(ctx)), js_concolic(ctx, "{responseBody}", JS_UNDEFINED)) : parsed);
+        if (JS_IsException(parsed)) return js_rejected(ctx, JS_GetException(ctx));   /* malformed body -> REJECT (spec), not a fake concolic that hides the .catch path */
+        return js_resolved(ctx, parsed);
     }
     return js_resolved(ctx, JS_DupValue(ctx, r->body));   /* opaque/tainted body: keep it */
 }
@@ -74,6 +77,10 @@ JSValue js_response_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst
     JS_SetPropertyStr(ctx, o, "ok", JS_NewBool(ctx, status >= 200 && status < 300));
     JS_SetPropertyStr(ctx, o, "statusText", JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, o, "bodyUsed", JS_FALSE);
-    JS_SetPropertyStr(ctx, o, "headers", js_concolic(ctx, "{responseHeaders}", JS_UNDEFINED));
+    /* headers: a page-constructed Response's headers are KNOWN app data (init.headers), not unknowable input —
+       build a real Headers so `new Response(b,{headers:{...}}).headers.get(k)` returns the set value. */
+    JSValue ih = JS_IsObject(init) ? JS_GetPropertyStr(ctx, init, "headers") : JS_UNDEFINED;
+    JS_SetPropertyStr(ctx, o, "headers", js_headers_ctor(ctx, JS_UNDEFINED, JS_IsObject(ih) ? 1 : 0, (JSValueConst *)&ih));
+    JS_FreeValue(ctx, ih);
     return o;
 }

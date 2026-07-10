@@ -450,6 +450,18 @@ JSValue js_resolved(JSContext *ctx, JSValue val)
     JS_FreeValue(ctx, val);
     return promise;
 }
+/* A REJECTED promise (CONSUMES err): the await re-throws err into the continuation so try/catch/.catch runs —
+   e.g. Response.json() on a malformed body rejects, never resolves to a fake concolic that hides the throw path. */
+JSValue js_rejected(JSContext *ctx, JSValue err)
+{
+    JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
+    if (!JS_IsException(promise)) {
+        JSValue rr = JS_Call(ctx, rf[1], JS_UNDEFINED, 1, &err); JS_FreeValue(ctx, rr);
+        JS_FreeValue(ctx, rf[0]); JS_FreeValue(ctx, rf[1]);
+    }
+    JS_FreeValue(ctx, err);
+    return promise;
+}
 /* make_response + the Response json()/text()/body accessors + reply-body concolic-wrap are in reply.c. */
 /* URL query-parameter extraction (hexval + url_pct_decode + build_query_params) is in url.c (pure). */
 JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* fwd (non-static: xhr.c borrows it) */
