@@ -42,6 +42,7 @@
 #include "core/dom/dom_element.h"  /* the DOM Element JSClass + el_wrap (methods migrate here incrementally), its own TU */
 #include "core/loader/document_scripts.h"  /* scr_ctx + dom_collect_scripts + script_is_exec + document_bundle_id (identity component) */
 #include "boot_scripts.h"  /* boot_script_cache/boot_scripts_run/boot_script_count/boot_scripts_free (boot-replay substrate) */
+#include "why.h"  /* why_add — runtime-reasoned @WHY */
 #include "modules/storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "core/frame/messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
@@ -538,17 +539,7 @@ void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
    the gap behind a logged reason the reviewer ignores — the exact "0 endpoints + 0 errors is the worst output"
    trap, one level up. So every @WHY CRASHES the review WITHOUT continuing: the fix is to eliminate the ROOT so
    it never fires — never log-and-continue, never skip, never delete the check. The design goal is ZERO @WHY. */
-static void why_add(JSContext *ctx, const char *phase, const char *reason) {
-    (void)ctx;
-    fflush(stdout);
-    fprintf(stderr, "@WHY {\"phase\":\"%s\",\"reason\":\"%s\"}\n", phase ? phase : "why", reason ? reason : "");
-    fflush(stderr);
-#if APICLIENT_DEV
-    abort();   /* DEV: a @WHY is a SHOULD-NEVER-HAPPEN forcing function — crash at the origin, never log-and-continue (design goal: ZERO @WHY). This is a runtime-reasoned DFAIL. */
-#endif
-    /* RELEASE: the gap is genuinely unsupportable outside development (features can't be built there), so the
-       @WHY is surfaced but the USER is not crashed — the release exemption, never a dev-mode fallback. */
-}
+/* why_add -> solver/why.{c,h} (the runtime-reasoned @WHY emitter — a tiny component so any subsystem raises it). */
 /* ── @S SOLVER (forced execution, not taint tracing) ─────────────────────────────
    Each SINK reached by external input is collected as a task {sink, ctx, expr} — expr is the evaluable
    transform chain with a {source} hole. At finalize the solver substitutes candidate breakout payloads
