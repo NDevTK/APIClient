@@ -65,48 +65,70 @@ JSValue js_doc_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JS
     return el_wrap(ctx, el);
 }
 
-/* Build the window.document object — the Document interface's members (Blink Document.idl): identity (URL/domain
-   /title/readyState), the per-flow cookie jar + attacker referrer source, the live DOM query methods, document.
-   write, forms/scripts snapshots, and document.location aliasing window.location (so `document.location = url`
-   stays a nav @S sink). Members implemented across sub-files (cookie.c/docwrite.c/domparser.c) but ASSEMBLED here
-   because they are all Document members — where a Blink engineer expects the Document interface to own them. */
+/* The Document INTERFACE — a real prototype-based class (Blink Document.idl), not a per-instance bag: the
+   methods + computed getters live on Document.prototype (shared, so `document.querySelector ===
+   Document.prototype.querySelector` and `document instanceof Document` hold), and window.Document is the
+   interface object. Members implemented across sub-files (cookie.c/docwrite.c/domparser.c) but the INTERFACE is
+   Document's — where a Blink engineer expects it. This is the faithful binding SHAPE the IDL audit drives toward,
+   like cssom.c's CSSStyleDeclaration. Per-document snapshot VALUES (URL/body/title/forms/…) go on the instance. */
+static JSClassID g_document_class_id;
+static JSValue doc_illegal_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
+    (void)nt; (void)argc; (void)argv;
+    return JS_ThrowTypeError(ctx, "Illegal constructor");   /* Blink: `new Document()` from script throws */
+}
+static void doc_def_getset(JSContext *ctx, JSValue proto, const char *name, JSCFunction *get, JSCFunction *set) {
+    JSAtom a = JS_NewAtom(ctx, name);
+    JS_DefinePropertyGetSet(ctx, proto, a,
+        JS_NewCFunction2(ctx, get, name, 0, JS_CFUNC_getter, 0),
+        set ? JS_NewCFunction2(ctx, set, name, 1, JS_CFUNC_setter, 0) : JS_UNDEFINED,
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, a);
+}
+void document_init(JSContext *ctx, JSValue global) {
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JS_NewClassID(rt, &g_document_class_id);
+    JSClassDef def = { "Document" };
+    JS_NewClass(rt, g_document_class_id, &def);
+    JSValue proto = JS_NewObject(ctx);
+    /* METHODS on the shared prototype (Document.prototype). */
+    JS_SetPropertyStr(ctx, proto, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, proto, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));
+    JS_SetPropertyStr(ctx, proto, "querySelectorAll", JS_NewCFunction(ctx, js_doc_querySelectorAll, "querySelectorAll", 1));
+    JS_SetPropertyStr(ctx, proto, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
+    JS_SetPropertyStr(ctx, proto, "getElementsByTagName", JS_NewCFunction(ctx, js_doc_querySelectorAll, "getElementsByTagName", 1));
+    JS_SetPropertyStr(ctx, proto, "getElementsByClassName", JS_NewCFunction(ctx, js_doc_getByClass, "getElementsByClassName", 1));
+    JS_SetPropertyStr(ctx, proto, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));
+    JS_SetPropertyStr(ctx, proto, "createRange", JS_NewCFunction(ctx, js_doc_createrange, "createRange", 0));   /* createContextualFragment -> {parsedhtml} taint */
+    JS_SetPropertyStr(ctx, proto, "createTextNode", JS_NewCFunction(ctx, js_opaque_stub, "createTextNode", 1));
+    JS_SetPropertyStr(ctx, proto, "createDocumentFragment", JS_NewCFunction(ctx, js_opaque_stub, "createDocumentFragment", 0));
+    JS_SetPropertyStr(ctx, proto, "write", JS_NewCFunction(ctx, js_doc_write, "write", 1));
+    JS_SetPropertyStr(ctx, proto, "writeln", JS_NewCFunction(ctx, js_doc_write, "writeln", 1));
+    /* COMPUTED getters on the prototype (global-backed, correct for the singleton document). */
+    doc_def_getset(ctx, proto, "cookie", (JSCFunction *)js_cookie_get, (JSCFunction *)js_cookie_set);   /* per-flow cookie jar (cookie.c) */
+    doc_def_getset(ctx, proto, "location", (JSCFunction *)js_window_location_get, (JSCFunction *)js_window_location_set);   /* aliases window.location -> nav @S sink */
+    doc_def_getset(ctx, proto, "currentScript", (JSCFunction *)js_doc_currentscript, NULL);   /* the executing inline script */
+    def_source(ctx, proto, "referrer", 3);   /* attacker-influenced referring URL: forks + delivers the @S replay candidate */
+    JS_SetClassProto(ctx, g_document_class_id, JS_DupValue(ctx, proto));   /* class instances inherit the prototype */
+    /* window.Document — the interface object; Document.prototype = proto, so `document instanceof Document`. */
+    JSValue ctor = JS_NewCFunction2(ctx, doc_illegal_ctor, "Document", 0, JS_CFUNC_constructor, 0);
+    JS_SetConstructor(ctx, ctor, proto);   /* ctor.prototype = proto, proto.constructor = ctor */
+    JS_SetPropertyStr(ctx, global, "Document", ctor);
+    JS_FreeValue(ctx, proto);
+}
+/* The window.document INSTANCE: shares Document.prototype (methods/getters) and carries this document's snapshot
+   VALUES (identity, title, the shipped body/head/forms/scripts). */
 JSValue js_document_make(JSContext *ctx) {
-    JSValue doc = JS_NewObject(ctx);
-    { JSAtom ca = JS_NewAtom(ctx, "cookie");   /* document.cookie: a per-CODE-FLOW cookie jar (cookie.c) — round-trips concolic, not an opaque shrug */
-      JS_DefinePropertyGetSet(ctx, doc, ca,
-          JS_NewCFunction2(ctx, (JSCFunction *)js_cookie_get, "get cookie", 0, JS_CFUNC_getter, 0),
-          JS_NewCFunction2(ctx, (JSCFunction *)js_cookie_set, "set cookie", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
-      JS_FreeAtom(ctx, ca); }
-    def_source(ctx, doc, "referrer", 3);   /* attacker-influenced referring URL: forks control flow + delivers the @S replay candidate */
+    JSValue doc = JS_NewObjectClass(ctx, g_document_class_id);
     JS_SetPropertyStr(ctx, doc, "URL", JS_NewString(ctx, g_origin));           /* page identity: CONCRETE for URL building */
     JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, location_host()));  /* page identity: CONCRETE (location.c) */
-    JS_SetPropertyStr(ctx, doc, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));
-    JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
-    JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));
-    JS_SetPropertyStr(ctx, doc, "createRange", JS_NewCFunction(ctx, js_doc_createrange, "createRange", 0));   /* createContextualFragment -> {parsedhtml} taint */
-    JS_SetPropertyStr(ctx, doc, "createTextNode", JS_NewCFunction(ctx, js_opaque_stub, "createTextNode", 1));
-    JS_SetPropertyStr(ctx, doc, "querySelectorAll", JS_NewCFunction(ctx, js_doc_querySelectorAll, "querySelectorAll", 1));
-    JS_SetPropertyStr(ctx, doc, "getElementsByTagName", JS_NewCFunction(ctx, js_doc_querySelectorAll, "getElementsByTagName", 1));
-    JS_SetPropertyStr(ctx, doc, "getElementsByClassName", JS_NewCFunction(ctx, js_doc_getByClass, "getElementsByClassName", 1));
-    JS_SetPropertyStr(ctx, doc, "createDocumentFragment", JS_NewCFunction(ctx, js_opaque_stub, "createDocumentFragment", 0));
-    JS_SetPropertyStr(ctx, doc, "write", JS_NewCFunction(ctx, js_doc_write, "write", 1));
-    JS_SetPropertyStr(ctx, doc, "writeln", JS_NewCFunction(ctx, js_doc_write, "writeln", 1));
-    JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
-    JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
     JS_SetPropertyStr(ctx, doc, "documentElement", el_wrap(ctx, dom_select_first(NULL, "html", 4)));
     JS_SetPropertyStr(ctx, doc, "readyState", JS_NewString(ctx, "complete"));   /* boot ran -> a ready gate takes the ready arm */
-    { lxb_dom_element_t *tt = dom_select_first(NULL, "title", 5);   /* document.title = the REAL <title> text (identity/config read) */
+    JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
+    JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
+    { lxb_dom_element_t *tt = dom_select_first(NULL, "title", 5);   /* document.title = the REAL <title> text */
       size_t tl = 0; lxb_char_t *txt = tt ? lxb_dom_node_text_content(lxb_dom_interface_node(tt), &tl) : NULL;
       JS_SetPropertyStr(ctx, doc, "title", JS_NewStringLen(ctx, txt ? (const char *)txt : "", txt ? tl : 0)); }
-    { JSAtom a = JS_NewAtom(ctx, "location");   /* document.location aliases window.location (getset -> nav @S sink) */
-      JS_DefinePropertyGetSet(ctx, doc, a, JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_get, "get", 0, JS_CFUNC_getter, 0),
-          JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_set, "set", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
-      JS_FreeAtom(ctx, a); }
     JS_SetPropertyStr(ctx, doc, "forms", dom_select_all(ctx, NULL, "form", 4));
     JS_SetPropertyStr(ctx, doc, "scripts", dom_select_all(ctx, NULL, "script", 6));
-    { JSAtom a = JS_NewAtom(ctx, "currentScript");   /* getter: the executing script, changes per inline script */
-      JS_DefinePropertyGetSet(ctx, doc, a, JS_NewCFunction2(ctx, (JSCFunction *)js_doc_currentscript, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-      JS_FreeAtom(ctx, a); }
     return doc;
 }

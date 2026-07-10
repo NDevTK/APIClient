@@ -2113,7 +2113,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     }
     JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    JS_SetPropertyStr(ctx, g, "document", js_document_make(ctx));   /* the Document interface object (core/dom/document.c) */
+    document_init(ctx, g);   /* register Document class + prototype + window.Document (core/dom/document.c) */
+    JS_SetPropertyStr(ctx, g, "document", js_document_make(ctx));   /* the window.document instance (shares the prototype) */
     /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
        methods (connectedCallback etc.) become uncalled methods the orphan driver reaches -> the element's
        endpoints/sinks are learned by EXECUTION (spec), not by reading a DOM attribute. customElements.define
