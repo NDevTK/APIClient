@@ -41,6 +41,7 @@
 #include "core/frame/location.h"     /* the browser location object + external-input source getters + principal split, its own TU */
 #include "core/dom/dom_element.h"  /* the DOM Element JSClass + el_wrap (methods migrate here incrementally), its own TU */
 #include "core/loader/document_scripts.h"  /* scr_ctx + dom_collect_scripts + script_is_exec + document_bundle_id (identity component) */
+#include "boot_scripts.h"  /* boot_script_cache/boot_scripts_run/boot_script_count/boot_scripts_free (boot-replay substrate) */
 #include "modules/storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "core/frame/messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
@@ -1376,50 +1377,11 @@ static int dom_init(const char *html, size_t len) {
 /* struct scr_ctx + dom_collect_scripts + script_is_exec + document_bundle_id -> browser/core/loader/
    document_scripts.{c,h} (the document's script inventory + bundle IDENTITY, a pure DOM scan — a COMPONENT, not
    scheduler-monolith state). */
-/* BOOT-REPLAY substrate: the page's inline <script> texts, cached at first boot. A cross-flow @S candidate
-   (source stored in shared state at boot, sunk in a SEPARATELY-driven handler) needs that shared state
-   re-established with the CONCRETE candidate — the handler reads the stored value, not the source directly.
-   So the candidate flow re-runs boot with g_candidate pinned (source getters return concrete), then drives
-   the handler; the re-run's writes are COW-captured + reverted like any flow, so isolation holds. A
-   top-level const/let re-declares CLEANLY because the pre-boot unapply (boot_replay_candidate) deletes its
-   captured CREATION, so no re-declaration clash. Remaining limit (full boot-as-flow): external <script src>
-   chunks aren't re-run — a source stored in a fetched chunk isn't re-established under the candidate. */
-static char **g_boot_scripts = NULL; static int g_boot_n = 0, g_boot_cap = 0;
-static JSValue *g_boot_compiled = NULL;   /* compiled boot programs (COMPILE-ONCE): a real browser parses a script ONCE and re-runs the bytecode; re-`JS_Eval`ing the source string per candidate replay was a re-parse SHORTCUT (and leaked the per-parse function/scope objects across the ~N candidate replays). */
-static void boot_script_cache(const char *txt, size_t len) {
-    if (g_boot_n >= g_boot_cap) { int nc = g_boot_cap ? g_boot_cap * 2 : 8;
-        char **n = realloc(g_boot_scripts, (size_t)nc * sizeof(char *)); if (!n) return; g_boot_scripts = n; g_boot_cap = nc; }
-    char *s = malloc(len + 1); if (!s) return; memcpy(s, txt, len); s[len] = 0; g_boot_scripts[g_boot_n++] = s;
-}
-/* Re-run the page's inline boot scripts per-script at GLOBAL scope (faithful — top-level var/let/const/function
-   land exactly where the browser puts them). The CALLER unapplies g_boot_delta first, so boot's globals —
-   including captured let/const CREATIONS — are ABSENT: re-declaration compiles cleanly, no block-wrap. A
-   residual throw means an UNCAPTURED creation (COW gap to close at the root) or a real host-edge divergence —
-   a FATAL bug: crash with the real exception, never swallow it. Branch behaviour is the caller's
-   (g_boot_replay=1 fixed-arm for @S candidates; g_in_boot_flow=1 FORKING for a boot flow). */
-static void boot_scripts_run(JSContext *ctx) {
-    if (!g_boot_compiled && g_boot_n > 0) {   /* COMPILE ONCE (lazily, on the first replay): parse each boot program to bytecode and keep it */
-        g_boot_compiled = malloc((size_t)g_boot_n * sizeof(JSValue));
-        if (g_boot_compiled) for (int i = 0; i < g_boot_n; i++)
-            g_boot_compiled[i] = JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-    }
-    for (int i = 0; i < g_boot_n; i++) {
-        /* RE-RUN the cached bytecode (dup — JS_EvalFunction consumes its arg); no re-parse. Fall back to a
-           fresh compile only if caching failed. Re-run is clean because the caller unapplied g_boot_delta, so
-           the program re-declares its top-level var/let/const/function into an empty baseline. */
-        JSValue prog = (g_boot_compiled && !JS_IsException(g_boot_compiled[i]))
-            ? JS_DupValue(ctx, g_boot_compiled[i])
-            : JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-        JSValue v = JS_IsException(prog) ? prog : JS_EvalFunction(ctx, prog);   /* runs + consumes prog */
-        if (JS_IsException(v)) {   /* boot re-run must be faithful — a throw is a COW/host gap or not-yet-built capability */
-            JSValue e = JS_GetException(ctx); const char *em = JS_ToCString(ctx, e);
-            char rz[300]; snprintf(rz, sizeof rz, "boot script threw on re-run: %s", em ? em : "?");
-            if (em) JS_FreeCString(ctx, em); JS_FreeValue(ctx, e);
-            DFAIL(rz);   /* DEV: crash at the origin (build the faithful-replay capability). RELEASE: surfaced, not user-crashed (exemption). */
-        }
-        JS_FreeValue(ctx, v);
-    }
-}
+/* boot_script_cache/boot_scripts_run/boot_script_count/boot_scripts_free -> solver/boot_scripts.{c,h} (the
+   boot-replay substrate: cached inline <script> texts re-run so a cross-flow @S candidate or a forking boot flow
+   re-establishes shared state under a concrete input — a COMPONENT that owns its state, no scheduler globals).
+   boot_replay stays here: it only wraps boot_scripts_run with the g_boot_replay branch-mode flag (a scheduler
+   concern). Remaining limit (full boot-as-flow): external <script src> chunks aren't re-run. */
 static void boot_replay(JSContext *ctx) { g_boot_replay = 1; boot_scripts_run(ctx); g_boot_replay = 0; }
 /* Enqueue a BOOT FLOW: re-run boot as a FORKING starter (decision vector), so cached async replies resolve
    synchronously and their continuations' gated branches fork with the concolic example. */
@@ -2498,7 +2460,7 @@ KEEP void qjs_begin(const char *recipes)
        `if(localStorage.getItem('token'))` / cookie / `if(window.__FLAGS.admin)` gate with NO fetch would NEVER
        be surfaced. A reply also enqueues one (qjs_provide, to re-run boot with the reply synchronous); this
        covers the no-reply case. The WFQ starves it if boot has no forkable gate. */
-    if (!g_resume_mode && g_boot_n > 0) reg_add_boot(ctx, NULL, 0);
+    if (!g_resume_mode && boot_script_count() > 0) reg_add_boot(ctx, NULL, 0);
 }
 
 /* The distinct pending fetch urls (newline-joined) the offscreen must safe-fetch. Static buffer. */
@@ -2554,7 +2516,7 @@ KEEP void qjs_provide(const char *url, const char *body)
                    provision-driven re-run that REPLACES the deleted async-park — the same rule a new reply
                    uses. */
                 JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
-                if (!g_resume_mode && g_boot_n > 0) reg_add_boot(ctx, NULL, 0);
+                if (!g_resume_mode && boot_script_count() > 0) reg_add_boot(ctx, NULL, 0);
             } else {
                 /* CLASSIC chunk: cache so boot-replay re-runs it (a source stored / handler registered in an
                    external classic script is re-established under a candidate). A module is NOT cached — it is
@@ -2578,7 +2540,7 @@ KEEP void qjs_provide(const char *url, const char *body)
         if (!JS_IsObject(g_reply_table)) { JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_NewObject(ctx); }
         JSValue prev = JS_GetPropertyStr(ctx, g_reply_table, url); int is_new = !JS_IsString(prev); JS_FreeValue(ctx, prev);
         JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));
-        if (is_new && g_boot_n > 0) reg_add_boot(ctx, NULL, 0);
+        if (is_new && boot_script_count() > 0) reg_add_boot(ctx, NULL, 0);
     }
     for (int i = 0; i < g_pending_n; i++) {   /* the reply is CACHED + a boot re-run enqueued above; just drop the fetch registration (no promise to resolve) */
         if (g_pending[i].url && strcmp(g_pending[i].url, url) == 0) { free(g_pending[i].url); g_pending[i].url = NULL; }
@@ -2655,9 +2617,7 @@ KEEP void qjs_teardown(void)
     JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
     for (int i = 0; i < g_gate_n; i++) free(g_gate_tokens[i]);
     free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
-    if (g_boot_compiled) { for (int i = 0; i < g_boot_n; i++) JS_FreeValue(ctx, g_boot_compiled[i]); free(g_boot_compiled); g_boot_compiled = NULL; }
-    for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
-    free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
+    boot_scripts_free(ctx);
     csp_free();
     cons_free();   /* free the per-flow value-domain constraint set (solver/constraints.c) */
     module_loader_free(ctx);   /* free the modsrc/moddep/pendmod tables (module_loader.c) */
