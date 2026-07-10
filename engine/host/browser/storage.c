@@ -6,6 +6,7 @@
    FORKS and @S taint holds) — recovers values the bundle round-trips through localStorage/sessionStorage
    instead of degrading them to a {} shape. */
 static JSValue g_storage = JS_UNDEFINED;
+extern char *g_candidate;   /* @S replay: the concrete candidate a source getter returns */
 
 /* setItem(k,v): record v keyed by k so a later getItem(k) recovers it as the @H example. NOT a discovery
    driver itself, but the value it stores is (a URL/id round-tripped through storage). */
@@ -32,7 +33,7 @@ JSValue js_storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
                (handler A plants localStorage, handler B reads+sinks) breaks out WITHOUT needing to re-run the
                planter — the sink handler alone reads the candidate. Only tainted keys (stored opaque): a
                concrete app value is not made attacker-controlled. */
-            { extern char *g_candidate; if (g_candidate && JS_IsOpaque(v)) { JS_FreeValue(ctx, v); return JS_NewString(ctx, g_candidate); } }
+            if (g_candidate && JS_IsOpaque(v)) { JS_FreeValue(ctx, v); return JS_NewString(ctx, g_candidate); }
             if (JS_IsOpaque(v)) return v;                                  /* stored an opaque (e.g. setItem of location.hash): round-trip its taint */
             if (!JS_IsUndefined(v) && !JS_IsNull(v)) {                     /* stored a concrete value: opaque-for-control-flow carrying it as the example */
                 JSValue o = JS_NewOpaqueSourced(ctx, "{ls}", "{ls}");
@@ -42,6 +43,11 @@ JSValue js_storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
             JS_FreeValue(ctx, v);
         }
     }
+    /* AMBIENT key (never set this run): the PURE SECOND-ORDER surface — an attacker who can write this origin's
+       storage (a prior XSS, a sibling app on the origin) plants the value, and a later load reads+sinks it. It
+       is genuinely attacker-plantable, so deliver the @S replay candidate here too (the sink handler alone reads
+       it — no planter re-run needed); the finding is tagged second-order (needs a plant) at the report. */
+    if (g_candidate) return JS_NewString(ctx, g_candidate);
     return js_concolic(ctx, "{ls}", JS_UNDEFINED);
 }
 void storage_free(JSContext *ctx) { JS_FreeValue(ctx, g_storage); g_storage = JS_UNDEFINED; }

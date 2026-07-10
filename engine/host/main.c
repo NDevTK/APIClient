@@ -976,6 +976,8 @@ static JSValue solve_all(JSContext *ctx) {
                       if (JS_IsString(rov)) JS_SetPropertyStr(ctx, rec, "requiredOrigin", rov); else JS_FreeValue(ctx, rov); }
                     JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
                     JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
+                    if ((ex && strstr(ex, "{ls}")) || (srcpath && strstr(srcpath, "{ls}")))   /* stored/second-order: the sink reads attacker-PLANTED web storage, so the PoC is a TWO-STAGE artifact (plant then fire), not a reflected URL */
+                        JS_SetPropertyStr(ctx, rec, "secondOrder", JS_NewString(ctx, "requires an attacker-planted localStorage/sessionStorage value: two-stage PoC (plant the key, then a later load reads+sinks it)"));
                     if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE, PER SINK CLASS: the model broke out; SOLVE the page's CSP for the concrete bypass path (not a dumbed-down boolean) */
                         int is_eval = sink && (strcmp(sink, "eval") == 0 || strcmp(sink, "Function") == 0 || strcmp(sink, "setTimeout") == 0);
                         CspBypass bp; csp_bypass(is_eval, g_dom, &bp);
