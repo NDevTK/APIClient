@@ -44,6 +44,7 @@
 #include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "core/frame/messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
 #include "core/dom/document.h"     /* document.querySelector/getElementById/... (Blink core/dom/Document), its own TU */
+#include "bindings/global_functions.h"   /* eval / new Function (@S code sinks) + structuredClone (Blink bindings/core/v8) */
 #include "core/html/forms/formdata.h"      /* FormData -> POST body params (Blink core/html/forms), its own TU */
 #include "core/dom/custom_elements.h" /* customElements registry + createElement upgrade (Blink core/html/custom), its own TU */
 #include "platform/url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
@@ -1189,9 +1190,7 @@ static void drive_opaque_cb(JSContext *ctx, JSValueConst cb, JSValueConst coll) 
     const char *cs = JS_IsOpaque(coll) ? JS_OpaqueShapeC(coll) : NULL;
     if (cs && cs[0] && strcmp(cs, "{}") != 0 && g_reg_n > 0) g_reg[g_reg_n - 1].drive_src = strdup(cs);
 }
-/* structuredClone(x): deep-clone is identity for forced-exec purposes (shape/opacity carry through). */
-static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{ return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED; }
+/* eval / new Function (code-execution @S sinks) + structuredClone -> browser/bindings/global_functions.c. */
 
 /* URL / URLSearchParams: endpoint construction. `new URL(path, base).href|pathname` is how a huge share of
    bundles build request URLs — undefined `URL` = ReferenceError = the endpoint is lost. A CONCRETE input is
@@ -1350,38 +1349,7 @@ lxb_html_document_t *g_dom = NULL;   /* the live parsed document (non-static: do
 /* document.createElement -> browser/document.c (Blink core/dom/Document). */
 /* document.write (js_doc_write + script running) is in docwrite.c (included via docwrite.h). */
 /* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
-/* new Function(...args, BODY): the body is compiled as code -> an eval-class @S sink. Wrap the builtin:
-   attacker/candidate body -> solve_add + a harmless callable (so `new Function(x)()` doesn't throw); anything
-   else DELEGATES to the real Function (saved), so identity behaviour is preserved. wrap.prototype is set to
-   the real Function.prototype so `x instanceof Function` still holds. */
-static JSValue g_real_function = JS_UNDEFINED;
-static JSValue js_function_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
-    if (argc >= 1) {
-        JSValueConst body = argv[argc - 1];
-        if (JS_IsOpaque(body) || (g_candidate && JS_IsString(body))) {
-            solve_add(ctx, "Function", "js", body);   /* @S: body is code */
-            return JS_NewCFunction(ctx, js_noop, "", 0);   /* callable no-op so new Function(x)() is safe */
-        }
-    }
-    return JS_IsUndefined(g_real_function) ? JS_NewCFunction(ctx, js_noop, "", 0)
-                                           : JS_CallConstructor(ctx, g_real_function, argc, argv);   /* real compile */
-}
-static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc < 1) return JS_UNDEFINED;
-    if (JS_IsOpaque(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return js_concolic(ctx, "{evalResult}", JS_UNDEFINED); }   /* @S: opaque reaches eval -> detect + spawn candidate replays */
-    /* @S SOLVE: on a candidate-REPLAY flow the payload arrives here as a CONCRETE string (the real code
-       transformed it). eval's arg IS the sink code, so RECORD it for the breakout check — do NOT JS_Eval it in
-       the engine (that would run the X9 payload against an undefined X9 and never verify the sink). Without
-       this, `eval(location.hash)` was never solved (the replay executed the payload instead of checking it). */
-    if (g_candidate && JS_IsString(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return js_concolic(ctx, "{evalResult}", JS_UNDEFINED); }
-    if (JS_IsString(argv[0])) {
-        size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
-        JSValue r = s ? JS_Eval(ctx, s, len, "<eval>", JS_EVAL_TYPE_GLOBAL) : JS_UNDEFINED;
-        if (s) JS_FreeCString(ctx, s);
-        return r;
-    }
-    return JS_DupValue(ctx, argv[0]);   /* non-string: spec returns the arg unchanged */
-}
+/* eval + new Function (code-execution @S sink bindings) -> browser/bindings/global_functions.c. */
 /* Parse page HTML into the live DOM + init the CSS-selector engine. Returns 0 on success. */
 static int dom_init(const char *html, size_t len) {
     g_dom = lxb_html_document_create();
@@ -2190,7 +2158,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_opaque, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
     JS_SetPropertyStr(ctx, g, "__opaqueExample", JS_NewCFunction(ctx, js_opaque_example, "__opaqueExample", 1));   /* self-hosted stringify: a config opaque's concrete example (else undefined) */
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
-    JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval, "eval", 1));   /* eval(concrete) -> forced-execute */
+    install_js_global_functions(ctx, g);   /* eval / new Function (@S code sinks) + structuredClone (bindings/global_functions.c) */
     /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both
        arms via the decision-vector logic (real bundles: external input reaches OP_if as opaque). */
     JS_InitOpaqueClass(ctx);             /* register the shape-carrying opaque class */
@@ -2350,15 +2318,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     /* COMMON BROWSER APIs real bundles call constantly — a MISSING one threw and killed the script. */
     JS_SetPropertyStr(ctx, g, "XMLHttpRequest", JS_NewCFunction2(ctx, js_xhr_ctor, "XMLHttpRequest", 0, JS_CFUNC_constructor, 0));   /* primary request mechanism -> emits @H */
     JS_SetPropertyStr(ctx, g, "DOMParser", JS_NewCFunction2(ctx, js_domparser_ctor, "DOMParser", 0, JS_CFUNC_constructor, 0));   /* parseFromString -> {parsedhtml} taint -> appendChild @S */
-    { JSValue realFn = JS_GetPropertyStr(ctx, g, "Function");   /* wrap Function: new Function(attacker) is an eval-class @S sink */
-      if (JS_IsFunction(ctx, realFn)) {
-          JS_FreeValue(ctx, g_real_function); g_real_function = JS_DupValue(ctx, realFn);
-          JSValue wrap = JS_NewCFunction2(ctx, js_function_ctor, "Function", 1, JS_CFUNC_constructor, 0);
-          JSValue proto = JS_GetPropertyStr(ctx, realFn, "prototype");   /* preserve so `x instanceof Function` holds */
-          if (!JS_IsUndefined(proto)) JS_SetPropertyStr(ctx, wrap, "prototype", proto); else JS_FreeValue(ctx, proto);
-          JS_SetPropertyStr(ctx, g, "Function", wrap);
-      }
-      JS_FreeValue(ctx, realFn); }
+    /* Function wrap (new Function(attacker) is an eval-class @S sink) is installed by install_js_global_functions. */
     JS_SetPropertyStr(ctx, g, "IntersectionObserver", JS_NewCFunction2(ctx, js_observer_ctor, "IntersectionObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "MutationObserver", JS_NewCFunction2(ctx, js_observer_ctor, "MutationObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "ResizeObserver", JS_NewCFunction2(ctx, js_observer_ctor, "ResizeObserver", 1, JS_CFUNC_constructor, 0));
@@ -2443,7 +2403,6 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         JS_SetPropertyStr(ctx, g, "clearTimeout", JS_NewCFunction(ctx, js_noop, "clearTimeout", 1));
         JS_SetPropertyStr(ctx, g, "clearInterval", JS_NewCFunction(ctx, js_noop, "clearInterval", 1));
         JS_SetPropertyStr(ctx, g, "cancelAnimationFrame", JS_NewCFunction(ctx, js_noop, "cancelAnimationFrame", 1));
-        JS_SetPropertyStr(ctx, g, "structuredClone", JS_NewCFunction(ctx, js_structured_clone, "structuredClone", 1));
         /* Web storage: values are external input -> opaque getItem; writes no-op. */
         for (int si = 0; si < 2; si++) {
             JSValue st = JS_NewObject(ctx);
@@ -2765,7 +2724,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
     JS_FreeValue(ctx, g_msg_event); g_msg_event = JS_UNDEFINED; g_msg_handler_n = 0;
     js_std_free_handlers(g_rt);
-    JS_FreeValue(ctx, g_real_function); g_real_function = JS_UNDEFINED;
+    js_global_functions_free(ctx);   /* eval/Function/structuredClone bindings (bindings/global_functions.c) */
     if (g_solve_ctx) { JS_FreeContext(g_solve_ctx); g_solve_ctx = NULL; }   /* free the solver realm before its runtime */
     JS_RunGC(g_rt);   /* CYCLE-collect now the global roots are dropped: an unreachable promise<->reaction cycle (e.g. a discarded import() chain) is benign garbage refcounting can't reclaim; the gc_obj_list assert then fires ONLY for a genuinely ROOTED leak (a real bug), not for collectible cycles */
     JS_FreeContext(ctx);
