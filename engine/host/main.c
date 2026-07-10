@@ -647,19 +647,24 @@ static char *json_envelope_cand(JSContext *ctx, const char *cand) {
 }
 /* enqueue an @S REPLAY flow: re-run the CURRENT orphan with `cand` as the concrete source, driven by the
    ONE scheduler (high initial value so the search runs soon; transient — never parked as a recipe). */
-static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, const char *target) {
+/* fitness = how many OBSERVED gate tokens this candidate already embeds (a distance-to-firing estimate the WFQ
+   reads): a candidate carrying the concrete strings the real code tested tainted input against is CLOSER to
+   surviving the gates en route to the sink, so it runs sooner. ORDER-only (never drops a candidate) — the seed
+   of the distance-directed search CLAUDE.md mandates over flat enumerate-and-verify. */
+static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, const char *target, double fitness) {
+    double w = 2.0 + fitness;
     char *env = json_envelope_cand(ctx, cand_in);   /* scalar-source field sink -> deliver the JSON envelope */
     const char *cand = env ? env : cand_in;
     if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
         signed char *sdec = NULL;   /* inherit THIS session's decision vector so the candidate replays the SAME arms that reached the sink (an exploratory session now forks) */
         if (g_dec_n > 0) { sdec = (signed char *)malloc((size_t)g_dec_n); if (sdec) for (int i = 0; i < g_dec_n; i++) sdec[i] = g_dec[i]; }
-        if (reg_add(ctx, JS_UNDEFINED, 2.0, sdec, sdec ? g_dec_n : 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
+        if (reg_add(ctx, JS_UNDEFINED, w, sdec, sdec ? g_dec_n : 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
         else free(sdec);
         free(env);
         return;   /* a session verifies MANY sinks -> not tagged with one vtarget */
     }
     if (JS_IsUndefined(fn)) { free(env); return; }
-    if (reg_add(ctx, JS_DupValue(ctx, fn), 2.0, NULL, 0)) {
+    if (reg_add(ctx, JS_DupValue(ctx, fn), w, NULL, 0)) {
         g_reg[g_reg_n - 1].candidate = strdup(cand);
         g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;
         if (target) g_reg[g_reg_n - 1].vtarget = strdup(target);
@@ -693,18 +698,18 @@ static JSValue collect_gate_fields(JSContext *ctx, const char *root) {
    demanded, so a gated sink is reached. ONE home for both the constructed HTML-context candidates and the
    url/js base candidates; x9_fires proves each actually executes. */
 static void emit_cand(JSContext *ctx, JSValueConst hitfn, const char *cand, const char *vt) {
-    reg_add_cand(ctx, hitfn, cand, vt);
+    reg_add_cand(ctx, hitfn, cand, vt, 0.0);   /* bare base: satisfies no observed gate -> lowest fitness */
     size_t lc = strlen(cand);
     for (int g = 0; g < g_gate_n; g++) {
         size_t lt = strlen(g_gate_tokens[g]);
         char *pre = malloc(lt + lc + 1), *suf = malloc(lt + lc + 1);
-        if (pre) { memcpy(pre, g_gate_tokens[g], lt); memcpy(pre + lt, cand, lc + 1); reg_add_cand(ctx, hitfn, pre, vt); free(pre); }
-        if (suf) { memcpy(suf, cand, lc); memcpy(suf + lc, g_gate_tokens[g], lt + 1); reg_add_cand(ctx, hitfn, suf, vt); free(suf); }
+        if (pre) { memcpy(pre, g_gate_tokens[g], lt); memcpy(pre + lt, cand, lc + 1); reg_add_cand(ctx, hitfn, pre, vt, 1.0); free(pre); }   /* embeds 1 gate token -> closer */
+        if (suf) { memcpy(suf, cand, lc); memcpy(suf + lc, g_gate_tokens[g], lt + 1); reg_add_cand(ctx, hitfn, suf, vt, 1.0); free(suf); }
     }
     for (int g = 0; g + 1 < g_gate_n; g++) {
         size_t l0 = strlen(g_gate_tokens[g]), l1 = strlen(g_gate_tokens[g + 1]), lc2 = strlen(cand);
         char *comb = malloc(l0 + lc2 + l1 + 1);
-        if (comb) { memcpy(comb, g_gate_tokens[g], l0); memcpy(comb + l0, cand, lc2); memcpy(comb + l0 + lc2, g_gate_tokens[g + 1], l1 + 1); reg_add_cand(ctx, hitfn, comb, vt); free(comb); }
+        if (comb) { memcpy(comb, g_gate_tokens[g], l0); memcpy(comb + l0, cand, lc2); memcpy(comb + l0 + lc2, g_gate_tokens[g + 1], l1 + 1); reg_add_cand(ctx, hitfn, comb, vt, 2.0); free(comb); }   /* embeds 2 correlated tokens -> closest */
     }
 }
 /* CONSTRUCT the @S breakout for an HTML-context sink FROM THE OBSERVED SINK STRUCTURE — never a fixed list.
