@@ -82,12 +82,17 @@ for (const [iface, file] of Object.entries(INTERFACES)) {
     ...src.matchAll(/"([A-Za-z_$][\w$]*)"\s*,\s*JS_NewCFunction\w*\(\s*ctx\s*,\s*js_noop\b/g),
     ...src.matchAll(/"([A-Za-z_$][\w$]*)"\s*,\s*IDL_(?:METHOD|ATTRIBUTE)\s*,\s*js_noop\b/g),
   ].map((m) => m[1]));
+  // The g_opaque-as-prototype fallback is a BANNED shrug: it silently serves EVERY unbuilt member as an opaque
+  // value, hiding a missing browser feature (it is not our choice which features to omit — a browser has them
+  // all). A component must implement its real surface and DFAIL loud on an unbuilt member, never opaque-shrug it.
+  const bannedShrug = /JS_SetPrototype\s*\([^)]*\bg_opaque\b/.test(src);
   const absent = members(iface).filter((n) => !installed.has(n));
   const noop = members(iface).filter((n) => stubbed.has(n));
   totalMissing += absent.length + noop.length;
   const parts = [];
   if (absent.length) parts.push(`ABSENT ${absent.length} — ${absent.join(", ")}`);
   if (noop.length) parts.push(`js_noop-STUB ${noop.length} — ${noop.join(", ")}`);
+  if (bannedShrug) parts.push(`BANNED g_opaque-prototype shrug (silently serves unbuilt members as opaque — remove it, build the features or DFAIL)`);
   if (parts.length) console.log(`[idl-audit] ${iface} (${file}): ${parts.join(" | ")}`);
   else console.log(`[idl-audit] ${iface}: complete`);
 }

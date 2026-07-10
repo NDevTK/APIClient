@@ -3,10 +3,58 @@
  * the SW script as a chunk. A state-mutating POST is never fired to learn — the beacon body's example comes
  * ONLY from this forced-exec serialize (url_solve_holes fills == gate-pinned holes). */
 #include <stdlib.h>
+#include <stdio.h>
 #include "core/frame/navigator.h"
+#include "modules/permissions/permissions.h"   /* navigator.permissions — a modeled virtual permission system */
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
 #include "endpoint.h"   /* record_endpoint — the shared @H sink */
-#include "opaque.h"     /* g_opaque */
+#include "opaque.h"     /* g_opaque, js_concolic */
+#include "check.h"      /* DFAIL — an unbuilt navigator feature crashes LOUD, never an opaque shrug */
+
+/* Proxy get-trap for the still-unbuilt navigator surface: a read of a member NOT yet implemented DFAILs in dev,
+   naming the exact feature to BUILD — the forcing function that replaces the banned g_opaque shrug (which
+   silently served every unbuilt member as opaque, hiding a missing browser feature; omitting features is not our
+   choice — a browser has them all). Implemented members (own or inherited) delegate to the target; a symbol/
+   internal probe returns undefined (not a named feature). In release DFAIL is compiled out and it degrades to
+   the concolic opaque (the exemption: no feature is buildable outside dev). */
+static JSValue nav_unbuilt_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc;
+    JSValueConst target = argv[0], key = argv[1];
+    JSAtom atom = JS_ValueToAtom(ctx, key);
+    if (atom == JS_ATOM_NULL) return JS_EXCEPTION;
+    int has = JS_HasProperty(ctx, target, atom);
+    if (has) { JSValue v = JS_GetProperty(ctx, target, atom); JS_FreeAtom(ctx, atom); return v; }
+    JS_FreeAtom(ctx, atom);
+    if (JS_IsSymbol(key)) return JS_UNDEFINED;   /* well-known/internal symbol probe: not a named browser feature */
+    const char *k = JS_ToCString(ctx, key);
+    char m[192]; snprintf(m, sizeof m, "navigator.%s — unbuilt browser feature; implement it at the root, never an opaque/undefined shrug", k ? k : "?");
+    if (k) JS_FreeCString(ctx, k);
+    DFAIL(m);                             /* dev: abort loud naming the feature to build */
+    return JS_DupValue(ctx, g_opaque);    /* release only */
+}
+/* Wrap an object so its unbuilt members DFAIL instead of opaque-shrugging (the target holds the built members). */
+static JSValue wrap_unbuilt(JSContext *ctx, JSValue obj) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue proxy_ctor = JS_GetPropertyStr(ctx, global, "Proxy");
+    JS_FreeValue(ctx, global);
+    JSValue handler = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, handler, "get", JS_NewCFunction(ctx, nav_unbuilt_get, "get", 3));
+    JSValueConst pargs[2] = { obj, handler };
+    JSValue proxy = JS_CallConstructor(ctx, proxy_ctor, 2, pargs);
+    JS_FreeValue(ctx, proxy_ctor); JS_FreeValue(ctx, handler); JS_FreeValue(ctx, obj);
+    return proxy;
+}
+
+/* taintEnabled()/javaEnabled(): legacy methods Chrome still exposes, both return false headless (real values). */
+static JSValue nav_false(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return JS_FALSE; }
+/* vibrate(pattern): no vibration device, but the spec returns a bool success — true (a real value, not a noop). */
+static JSValue nav_vibrate(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return JS_TRUE; }
+/* canShare(data): whether the data is shareable — genuinely unknown headless, concolic bool (forks the feature gate). */
+static JSValue nav_canshare(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return js_concolic(ctx, "{canShare}", JS_TRUE); }
+/* getAutoplayPolicy(): the autoplay policy for the given type — "allowed" is the desktop default (concolic, forks). */
+static JSValue nav_autoplay(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return js_concolic(ctx, "{autoplayPolicy}", JS_NewString(ctx, "allowed")); }
+/* registerProtocolHandler/unregisterProtocolHandler: no real handler registry headless — dedicated documented no-effect. */
+static JSValue nav_reg_proto(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; return JS_UNDEFINED; }
 
 extern void chunk_pending_add(const char *url);              /* scheduler-side (main.c): queue a script chunk for host fetch + analyze */
 extern JSValue js_resolved(JSContext *ctx, JSValue val);     /* scheduler-side: wrap a value in a resolved promise */
@@ -20,9 +68,12 @@ JSValue js_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return js_resolved(ctx, js_concolic(ctx, "{swRegistration}", JS_UNDEFINED));   /* Promise<ServiceWorkerRegistration> */
 }
 
-/* window.navigator — the standard properties as CONCOLIC values (a real desktop Chrome as the example), the
-   network-initiating methods (sendBeacon/serviceWorker), and the opaque sentinel as prototype so a genuinely
-   device-dependent member (clipboard/geolocation/getBattery) still falls through to opaque. */
+/* share()/setAppBadge()/clearAppBadge(): resolve to undefined (Promise<undefined>) — no share sheet / app badge
+   headless, a dedicated documented no-effect that keeps the await chain flowing. */
+static JSValue nav_promise_undef(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return js_resolved(ctx, JS_UNDEFINED); }
+
+/* window.navigator — the standard properties as CONCOLIC values (a real desktop Chrome as the example) plus the
+   built methods/sub-interfaces. UNBUILT members DFAIL via the wrap_unbuilt trap (never an opaque shrug). */
 JSValue js_navigator_make(JSContext *ctx) {
     JSValue nav = JS_NewObject(ctx);
     const char *UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -46,16 +97,37 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "maxTouchPoints", js_concolic(ctx, "{touch}", JS_NewInt32(ctx, 0)));
     JS_SetPropertyStr(ctx, nav, "pdfViewerEnabled", JS_TRUE);
     JS_SetPropertyStr(ctx, nav, "sendBeacon", JS_NewCFunction(ctx, js_send_beacon, "sendBeacon", 2));
-    {   /* serviceWorker.register(url) -> analyze the SW script (its endpoints); other members -> opaque */
+    {   /* serviceWorker.register(url) -> analyze the SW script (its endpoints); wrapped so unbuilt sw members DFAIL */
         JSValue sw = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, sw, "register", JS_NewCFunction(ctx, js_sw_register, "register", 1));
         JS_SetPropertyStr(ctx, sw, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
         JS_SetPropertyStr(ctx, sw, "ready", js_resolved(ctx, js_concolic(ctx, "{swRegistration}", JS_UNDEFINED)));
-        JS_SetPrototype(ctx, sw, g_opaque);
-        JS_SetPropertyStr(ctx, nav, "serviceWorker", sw);
+        JS_SetPropertyStr(ctx, nav, "serviceWorker", wrap_unbuilt(ctx, sw));
     }
-    JS_SetPrototype(ctx, nav, g_opaque);   /* genuinely device-dependent members (clipboard/geolocation/getBattery) -> opaque */
-    return nav;
+    /* permissions: a MODELED virtual permission system (real PermissionStatus, 'prompt' default that forks). */
+    JS_SetPropertyStr(ctx, nav, "permissions", js_permissions_make(ctx));
+    /* userActivation: whether the frame has ever had / currently has a user gesture — genuinely unknown headless,
+       concolic bools (example true) so `if (navigator.userActivation.isActive)` gesture gates explore both arms. */
+    { JSValue ua = JS_NewObject(ctx);
+      JS_SetPropertyStr(ctx, ua, "hasBeenActive", js_concolic(ctx, "{hasBeenActive}", JS_TRUE));
+      JS_SetPropertyStr(ctx, ua, "isActive", js_concolic(ctx, "{isActive}", JS_TRUE));
+      JS_SetPropertyStr(ctx, nav, "userActivation", ua); }
+    JS_SetPropertyStr(ctx, nav, "globalPrivacyControl", js_concolic(ctx, "{gpc}", JS_FALSE));   /* GPC signal: forks the honor-GPC gate */
+    JS_SetPropertyStr(ctx, nav, "taintEnabled", JS_NewCFunction(ctx, nav_false, "taintEnabled", 0));
+    JS_SetPropertyStr(ctx, nav, "javaEnabled", JS_NewCFunction(ctx, nav_false, "javaEnabled", 0));
+    JS_SetPropertyStr(ctx, nav, "vibrate", JS_NewCFunction(ctx, nav_vibrate, "vibrate", 1));
+    JS_SetPropertyStr(ctx, nav, "canShare", JS_NewCFunction(ctx, nav_canshare, "canShare", 1));
+    JS_SetPropertyStr(ctx, nav, "share", JS_NewCFunction(ctx, nav_promise_undef, "share", 1));
+    JS_SetPropertyStr(ctx, nav, "getAutoplayPolicy", JS_NewCFunction(ctx, nav_autoplay, "getAutoplayPolicy", 1));
+    JS_SetPropertyStr(ctx, nav, "setAppBadge", JS_NewCFunction(ctx, nav_promise_undef, "setAppBadge", 1));
+    JS_SetPropertyStr(ctx, nav, "clearAppBadge", JS_NewCFunction(ctx, nav_promise_undef, "clearAppBadge", 0));
+    JS_SetPropertyStr(ctx, nav, "registerProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "registerProtocolHandler", 3));
+    JS_SetPropertyStr(ctx, nav, "unregisterProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "unregisterProtocolHandler", 2));
+    JS_SetPropertyStr(ctx, nav, "oscpu", JS_UNDEFINED);   /* Chrome does not expose oscpu (Firefox-only) — genuinely undefined, not unbuilt */
+    /* Every remaining IDL member (clipboard/geolocation/mediaDevices/storage/connection/userAgentData/bluetooth/
+       usb/... ) is an UNBUILT browser feature: the trap DFAILs loud naming it, so it is BUILT at the root — never
+       an opaque/undefined shrug. Each becomes a real modeled component (permissions.c is the first). */
+    return wrap_unbuilt(ctx, nav);
 }
 
 JSValue js_send_beacon(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
