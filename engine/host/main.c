@@ -552,6 +552,7 @@ static void why_add(JSContext *ctx, const char *phase, const char *reason) {
    none survives, the flow is PROVEN safe for the tried payloads. No taint label, no chain inversion. */
 static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (the finalize expr-eval pre-filter) */
 static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow drove through the real code+branches to the sink where it broke out. The ONLY @S output: a working PoC is self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
+static JSValue g_reached = JS_UNDEFINED;      /* "sink|ctx" -> 1: a concrete candidate REACHED this sink but did not break out — OBSERVED fitness (feasible path, breakout unsolved), a near-miss stronger than never-reached */
 static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
 static char g_sink_qkey[64] = "";             /* @S query envelope: the URLSearchParams.get param KEY the sink reads (empty = not a query-source sink); set per-sink in solve_add */
 static char g_sink_delim[16] = "";            /* @S positional envelope: the .split() delimiter of a split-sourced sink (empty = not split-sourced) */
@@ -850,9 +851,32 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
         JSValue exv = JS_IsOpaque(val) ? JS_OpaqueExample(ctx, val) : JS_UNDEFINED;
         const char *cv = !JS_IsUndefined(exv) ? JS_ToCString(ctx, exv) : JS_ToCString(ctx, val);
         JS_FreeValue(ctx, exv);
+        char key[300]; snprintf(key, sizeof key, "%s|%s", sink, sctx);
         if (cv && solve_broke(sctx, cv) && JS_IsObject(g_verified)) {
-            char key[300]; snprintf(key, sizeof key, "%s|%s", sink, sctx);
             JS_SetPropertyStr(ctx, g_verified, key, JS_NewString(ctx, g_candidate));
+        } else if (JS_IsObject(g_reached)) {
+            /* OBSERVED FITNESS + MUTATION: a CONCRETE candidate drove the real code+branches to this sink but did
+               NOT break out — the PATH is concretely feasible (gates solved, sink reached), so a FILTER defeated
+               the breakout, not the reachability. That measured near-miss (distinct from the opaque flow forking
+               here) DIRECTS the search: mutate the INPUT with filter-evasion OPERATORS (case-flip, space->slash)
+               and re-drive — a sanitizer matching only lowercase tags / spaced attributes is broken by the
+               variant. ONCE per sink (dedup on g_reached), and only for a non-enveloped sink where g_candidate is
+               the pure breakout (an envelope's gate parts must not be case-mutated or the gate stops passing). */
+            JSValue prev = JS_GetPropertyStr(ctx, g_reached, key);
+            int first = JS_IsUndefined(prev); JS_FreeValue(ctx, prev);
+            JS_SetPropertyStr(ctx, g_reached, key, JS_NewInt32(ctx, 1));
+            if (first && g_env_kind == ENV_NONE && g_candidate
+                && (strcmp(sctx, "html") == 0 || strcmp(sctx, "htmls") == 0)) {
+                JSValueConst hitfn = JS_CurrentScriptFn(ctx);
+                if (!JS_IsUndefined(hitfn)) {
+                    size_t n = strlen(g_candidate);
+                    char *up = malloc(n + 1), *sl = malloc(n + 1);
+                    if (up) { for (size_t i = 0; i < n; i++) { char c = g_candidate[i]; up[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c; } up[n] = 0;
+                              if (strcmp(up, g_candidate)) reg_add_cand(ctx, hitfn, up, key, 1.0); free(up); }
+                    if (sl) { for (size_t i = 0; i < n; i++) sl[i] = g_candidate[i] == ' ' ? '/' : g_candidate[i]; sl[n] = 0;
+                              if (strcmp(sl, g_candidate)) reg_add_cand(ctx, hitfn, sl, key, 1.0); free(sl); }
+                }
+            }
         }
         if (cv) JS_FreeCString(ctx, cv);
         return;
@@ -2309,6 +2333,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     endpoint_init(ctx); g_chunkurls = JS_NewArray(ctx);
     g_park = JS_NewArray(ctx); g_solvetasks = JS_NewArray(ctx);
     g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);   /* @S replay: working PoCs + enqueue dedup */
+    g_reached = JS_NewObject(ctx);   /* @S observed fitness: candidate-reached-but-unbroken sinks (near-miss distance) */
     JS_CowExempt(g_verified); JS_CowExempt(g_enqueued);   /* host analysis LEDGERS: a candidate flow's verified PoC / dedup mark must SURVIVE the flow's COW delta unapply, not be captured+reverted as page state */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
     /* PLATFORM BUILTINS: everything compiled here (x9, dedup, the Array/String prelude) is engine-internal, not
@@ -2915,6 +2940,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
     JS_FreeValue(ctx, g_solvetasks); g_solvetasks = JS_UNDEFINED;
     JS_FreeValue(ctx, g_verified); g_verified = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_reached); g_reached = JS_UNDEFINED;
     JS_FreeValue(ctx, g_enqueued); g_enqueued = JS_UNDEFINED;
     JS_FreeValue(ctx, g_dedup_fn); g_dedup_fn = JS_UNDEFINED;
     location_free(ctx);   /* free the window.location singleton (location.c) */
