@@ -48,6 +48,7 @@
 #include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "core/frame/messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
 #include "core/dom/document.h"     /* document.querySelector/getElementById/... (Blink core/dom/Document), its own TU */
+#include "core/dom/event_target.h" /* EventTarget.prototype — DOM inheritance spine root */
 #include "bindings/global_functions.h"   /* eval / new Function (@S code sinks) + structuredClone (Blink bindings/core/v8) */
 #include "core/html/forms/formdata.h"      /* FormData -> POST body params (Blink core/html/forms), its own TU */
 #include "core/dom/custom_elements.h" /* customElements registry + createElement upgrade (Blink core/html/custom), its own TU */
@@ -2113,7 +2114,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     }
     JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    document_init(ctx, g);   /* register Document class + prototype + window.Document (core/dom/document.c) */
+    event_target_init(ctx, g);   /* EventTarget.prototype — the DOM inheritance spine root (core/dom/event_target.c) */
+    document_init(ctx, g);   /* register Document class + prototype (chains to EventTarget) + window.Document */
     JS_SetPropertyStr(ctx, g, "document", js_document_make(ctx));   /* the window.document instance (shares the prototype) */
     /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
        methods (connectedCallback etc.) become uncalled methods the orphan driver reaches -> the element's
@@ -2508,6 +2510,7 @@ KEEP void qjs_teardown(void)
     replay_handlers_clear(ctx); free(g_replay_handlers); g_replay_handlers = NULL; g_replay_handler_cap = 0;
     JS_FreeValue(ctx, g_el_proto); g_el_proto = JS_UNDEFINED;   /* the element-method proto ref (custom-element base chain) */
     ce_free(ctx);   /* customElements registry + instances */
+    event_target_free(ctx);
     opaque_free(ctx);
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     storage_free(ctx);
