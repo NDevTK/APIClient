@@ -442,9 +442,9 @@ void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "getAttributeNames", JS_NewCFunction(ctx, js_el_getattrnames, "getAttributeNames", 0));
     JS_SetPropertyStr(ctx, proto, "attachShadow", JS_NewCFunction(ctx, js_el_attach_shadow, "attachShadow", 1));
     JS_SetPropertyStr(ctx, proto, "getBoundingClientRect", JS_NewCFunction(ctx, js_el_rect, "getBoundingClientRect", 0));
-    JS_SetPropertyStr(ctx, proto, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, proto, "removeEventListener", JS_NewCFunction(ctx, js_el_evt_noeffect, "removeEventListener", 2));
-    JS_SetPropertyStr(ctx, proto, "dispatchEvent", JS_NewCFunction(ctx, js_el_evt_noeffect, "dispatchEvent", 1));
+    /* addEventListener/removeEventListener/dispatchEvent are INHERITED from EventTarget.prototype — el_proto is
+       chained to the spine root after event_target_init (an Element IS an EventTarget), so they are NOT installed
+       here (they'd shadow the shared method and break `element.addEventListener === EventTarget.prototype.…`). */
     JS_SetPropertyStr(ctx, proto, "submit", JS_NewCFunction(ctx, js_form_submit, "submit", 0));
     JS_SetPropertyStr(ctx, proto, "requestSubmit", JS_NewCFunction(ctx, js_form_submit, "requestSubmit", 1));
     JS_SetPropertyStr(ctx, proto, "click", JS_NewCFunction(ctx, js_el_ui_noeffect, "click", 0));

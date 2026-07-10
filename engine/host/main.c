@@ -2115,6 +2115,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
     event_target_init(ctx, g);   /* EventTarget.prototype — the DOM inheritance spine root (core/dom/event_target.c) */
+    if (!JS_IsUndefined(g_el_proto)) JS_SetPrototype(ctx, g_el_proto, event_target_proto(ctx));   /* an Element IS an EventTarget: inherit addEventListener/dispatchEvent from the spine root */
     document_init(ctx, g);   /* register Document class + prototype (chains to EventTarget) + window.Document */
     JS_SetPropertyStr(ctx, g, "document", js_document_make(ctx));   /* the window.document instance (shares the prototype) */
     /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
