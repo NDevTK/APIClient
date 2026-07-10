@@ -138,6 +138,13 @@ typedef struct {
                                                    reject-replay sibling can JS_FlowNew the same call from scratch. */
     int is_async;   /* async-call flow (or a sibling of one): forks/replays await outcomes into the ONE decision vector
                        (g_dec), and re-runs via the recipe (func+args) so the await sequence is reproduced. */
+    int sess_ctx;   /* the sink-CONTEXT is a session, DECOUPLED from the session RUN-MODE (`session`). A .then/await
+                       continuation spawned while a session fired a handler inherits this: it RESUMES its own frame
+                       (not the re-fire-all-handlers run-mode), yet a sink it reaches is treated as in-session so the
+                       @S candidate replay spawns a candidate SESSION (re-fires the handler WITH the candidate,
+                       delivering it through the .then chain the async source rode). Without it a handler-time async
+                       sink (addEventListener('message', e=>P.resolve(e.data).then(t=>innerHTML=t))) never verifies —
+                       the reaction runs OUTSIDE the session that fired it. */
 } Flow;
 static JSContext *g_ctx;       /* fwd: the MAIN analysis context (defined near the persistent-instance protocol) — the
                                   async/reaction hooks claim a call as a flow ONLY for this ctx, never the @S solve realm */
@@ -235,6 +242,7 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec,
     g_reg[g_reg_n].is_boot = 0;
     g_reg[g_reg_n].aresolve = JS_UNDEFINED; g_reg[g_reg_n].areject = JS_UNDEFINED; g_reg[g_reg_n].await_promise = JS_UNDEFINED;
     g_reg[g_reg_n].rthis = JS_UNDEFINED; g_reg[g_reg_n].rargs = NULL; g_reg[g_reg_n].rargc = 0; g_reg[g_reg_n].is_async = 0;
+    g_reg[g_reg_n].sess_ctx = 0;
     g_reg_n++;
     { double w = wfq_weight(val, 0, 0); if (w > g_max_parked) g_max_parked = w; }   /* fresh flow (visits=cpu=0): same ONE policy, no duplicated formula — keeps g_max_parked current for wfq_yield */
     return 1;
@@ -349,6 +357,12 @@ static int reaction_flow(JSContext *ctx, JSValueConst handler, JSValueConst valu
     reg_add(ctx, JS_DupValue(ctx, handler), g_running ? g_cur_val : 1.0, NULL, 0);
     Flow *f = &g_reg[g_reg_n - 1];
     f->fs = fs;
+    /* HANDLER-TIME ASYNC @S: a reaction spawned while a session fired the handler inherits the session sink-CONTEXT
+       (so a sink it reaches enqueues a candidate SESSION) and, if the parent is a candidate replay, the candidate
+       (so when it resumes g_candidate is pinned and the sink takes solve_add's VERIFY branch — the awaited value
+       IS the candidate). This is what makes addEventListener('message', e=>P.resolve(e.data).then(t=>sink)) solve. */
+    f->sess_ctx = g_in_session || (g_cur_flow && g_cur_flow->sess_ctx);
+    if (g_cur_flow && g_cur_flow->candidate) f->candidate = strdup(g_cur_flow->candidate);
     f->aresolve = JS_DupValue(ctx, resolve);
     f->areject = JS_DupValue(ctx, reject);
     return 1;
@@ -1720,7 +1734,7 @@ static void scheduler_run(JSContext *ctx)
         g_max_parked = -1e300;
         for (int i = 0; i < g_reg_n; i++) { double w = flow_weight(&g_reg[i]); if (w > g_max_parked) g_max_parked = w; }
         g_candidate = f.candidate;   /* @S replay flow: source getters return this concrete candidate (else NULL=opaque) */
-        g_in_session = f.session;    /* a session flow: sinks reached inside enqueue candidate sessions; cleared for every other flow */
+        g_in_session = f.session || f.sess_ctx;   /* session RUN-MODE, or an inherited session sink-CONTEXT (a reaction spawned mid-session): either way a sink here enqueues a candidate SESSION */
 
         if (f.session) {
             /* ATTACKER SESSION as a PREEMPTIBLE FLOW: __driveSession (bytecode) fires all handlers in seed
