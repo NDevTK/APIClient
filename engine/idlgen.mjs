@@ -21,6 +21,13 @@ const INTERFACES = {
   MutationObserver:     "core/dom/mutation_observer.c",
   ResizeObserver:       "core/resize_observer/resize_observer.c",
   PerformanceObserver:  "core/timing/performance_observer.c",
+  Blob:                 "core/fileapi/blob.c",
+  Response:             "core/loader/response.c",
+  Notification:         "modules/notification.c",
+  Navigator:            "core/frame/navigator.c",
+  History:              "core/frame/history.c",
+  Screen:               "core/frame/screen.c",
+  URLSearchParams:      "platform/urlobj.c",
 };
 
 const all = await listAll();
@@ -65,10 +72,17 @@ for (const [iface, file] of Object.entries(INTERFACES)) {
   let src;
   try { src = readFileSync(join(BROWSER, file), "utf8"); } catch { console.warn(`[idl-audit] ${iface}: component ${file} not found`); continue; }
   // The property names the component actually installs appear as string literals (JS_SetPropertyStr / JS_NewAtom
-  // / def_getset(..., "name", ...)). A member absent from every literal is unimplemented.
+  // / def_getset(..., "name", ...)). A member absent from every literal is unimplemented; a member wired to
+  // js_noop is STUBBED (present but does nothing — the banned lazy stub the audit exists to expose).
   const installed = new Set([...src.matchAll(/"([A-Za-z_$][\w$]*)"/g)].map((m) => m[1]));
-  const missing = members(iface).filter((n) => !installed.has(n));
-  if (missing.length) { totalMissing += missing.length; console.log(`[idl-audit] ${iface} (${file}): MISSING ${missing.length} — ${missing.join(", ")}`); }
+  const stubbed = new Set([...src.matchAll(/"([A-Za-z_$][\w$]*)"\s*,\s*JS_NewCFunction\w*\(\s*ctx\s*,\s*js_noop\b/g)].map((m) => m[1]));
+  const absent = members(iface).filter((n) => !installed.has(n));
+  const noop = members(iface).filter((n) => stubbed.has(n));
+  totalMissing += absent.length + noop.length;
+  const parts = [];
+  if (absent.length) parts.push(`ABSENT ${absent.length} — ${absent.join(", ")}`);
+  if (noop.length) parts.push(`js_noop-STUB ${noop.length} — ${noop.join(", ")}`);
+  if (parts.length) console.log(`[idl-audit] ${iface} (${file}): ${parts.join(" | ")}`);
   else console.log(`[idl-audit] ${iface}: complete`);
 }
 if (totalMissing) console.log(`[idl-audit] ${totalMissing} spec members not yet implemented — implement each at the root (never a stub).`);

@@ -29,6 +29,8 @@ static JSValue js_sp_forEach(JSContext *ctx, JSValueConst this_val, int argc, JS
 static JSValue js_sp_keys(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_sp_values(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_sp_entries(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static JSValue js_sp_sort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static void sp_def_size(JSContext *ctx, JSValue o);
 JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     /* opaque (external-input-tainted) URL -> return the INPUT opaque so its SHAPE flows through unchanged
        (never concretely resolved — RUN-DON'T-MATCH). A concrete input is resolved by the REAL Lexbor parser. */
@@ -69,12 +71,13 @@ JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueCo
     JS_SetPropertyStr(ctx, sp, "set", JS_NewCFunction(ctx, js_url_sp_set, "set", 2));
     JS_SetPropertyStr(ctx, sp, "append", JS_NewCFunction(ctx, js_url_sp_set, "append", 2));
     JS_SetPropertyStr(ctx, sp, "delete", JS_NewCFunction(ctx, js_url_sp_delete, "delete", 1));
-    JS_SetPropertyStr(ctx, sp, "sort", JS_NewCFunction(ctx, js_noop, "sort", 0));
+    JS_SetPropertyStr(ctx, sp, "sort", JS_NewCFunction(ctx, js_sp_sort, "sort", 0));
     JS_SetPropertyStr(ctx, sp, "forEach", JS_NewCFunction(ctx, js_sp_forEach, "forEach", 1));
     JS_SetPropertyStr(ctx, sp, "keys", JS_NewCFunction(ctx, js_sp_keys, "keys", 0));
     JS_SetPropertyStr(ctx, sp, "values", JS_NewCFunction(ctx, js_sp_values, "values", 0));
     JS_SetPropertyStr(ctx, sp, "entries", JS_NewCFunction(ctx, js_sp_entries, "entries", 0));
     JS_SetPropertyStr(ctx, sp, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
+    sp_def_size(ctx, sp);
     JS_SetPropertyStr(ctx, o, "searchParams", sp);
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_url_tostring, "toString", 0));
     JS_SetPropertyStr(ctx, o, "toJSON", JS_NewCFunction(ctx, js_url_tostring, "toJSON", 0));
@@ -383,6 +386,22 @@ static JSValue js_url_sp_delete(JSContext *ctx, JSValueConst this_val, int argc,
     url_sp_writeback(ctx, this_val);
     return JS_UNDEFINED;
 }
+/* URLSearchParams.size: the number of parameters (own __fields entries) — a REAL getter, reflecting set/delete. */
+static JSValue js_sp_size(JSContext *ctx, JSValueConst this_val) {
+    JSValue f = JS_GetPropertyStr(ctx, this_val, "__fields");
+    uint32_t n = 0;
+    if (JS_IsObject(f)) { JSPropertyEnum *tab = NULL; if (JS_GetOwnPropertyNames(ctx, &tab, &n, f, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) JS_FreePropertyEnum(ctx, tab, n); }
+    JS_FreeValue(ctx, f);
+    return JS_NewInt32(ctx, (int)n);
+}
+/* URLSearchParams.sort(): the spec sorts params by name; param ORDER is not analysis-relevant (values unchanged,
+   __fields is name-keyed), so this is a DEDICATED, documented no-effect — never the generic js_noop stub. */
+static JSValue js_sp_sort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { (void)ctx; (void)this_val; (void)argc; (void)argv; return JS_UNDEFINED; }
+static void sp_def_size(JSContext *ctx, JSValue o) {   /* install the `size` getter on a searchParams object */
+    JSAtom a = JS_NewAtom(ctx, "size");
+    JS_DefinePropertyGetSet(ctx, o, a, JS_NewCFunction2(ctx, (JSCFunction *)js_sp_size, "get size", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, a);
+}
 JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "__fields", JS_NewObject(ctx));
@@ -398,12 +417,13 @@ JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int argc, 
     JS_SetPropertyStr(ctx, o, "append", JS_NewCFunction(ctx, js_sp_append, "append", 2));
     JS_SetPropertyStr(ctx, o, "set", JS_NewCFunction(ctx, js_sp_append, "set", 2));
     JS_SetPropertyStr(ctx, o, "delete", JS_NewCFunction(ctx, js_url_sp_delete, "delete", 1));   /* real: removes from __fields (no __owner -> writeback no-ops) */
-    JS_SetPropertyStr(ctx, o, "sort", JS_NewCFunction(ctx, js_noop, "sort", 0));
+    JS_SetPropertyStr(ctx, o, "sort", JS_NewCFunction(ctx, js_sp_sort, "sort", 0));
     JS_SetPropertyStr(ctx, o, "forEach", JS_NewCFunction(ctx, js_sp_forEach, "forEach", 1));
     JS_SetPropertyStr(ctx, o, "keys", JS_NewCFunction(ctx, js_sp_keys, "keys", 0));
     JS_SetPropertyStr(ctx, o, "values", JS_NewCFunction(ctx, js_sp_values, "values", 0));
     JS_SetPropertyStr(ctx, o, "entries", JS_NewCFunction(ctx, js_sp_entries, "entries", 0));
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_sp_tostring, "toString", 0));
+    sp_def_size(ctx, o);
     return o;
 }
 /* Headers: a REAL object storing append()/set() header fields (__fields), so `fetch(url,{headers:h})` with a
