@@ -553,6 +553,9 @@ static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (
 static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow drove through the real code+branches to the sink where it broke out. The ONLY @S output: a working PoC is self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
 static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
 static char g_sink_qkey[64] = "";             /* @S query envelope: the URLSearchParams.get param KEY the sink reads (empty = not a query-source sink); set per-sink in solve_add */
+static char g_sink_delim[16] = "";            /* @S positional envelope: the .split() delimiter of a split-sourced sink (empty = not split-sourced) */
+static char g_sink_sprefix[128] = "";         /* the src prefix up to ".split" that split siblings share */
+static int  g_sink_sidx = -1;                 /* the sink part's index within the split */
 JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
 /* url/js sinks: the breakout VECTOR is fixed by the context itself — a URL sink executes a `javascript:`
    scheme, an eval/Function/setTimeout sink executes a JS-string/expression escape — so these are the
@@ -645,6 +648,33 @@ static char *json_envelope_cand(JSContext *ctx, const char *cand) {
     JS_FreeValue(ctx, s);
     return out;
 }
+/* @S POSITIONAL (DELIMITER) ENVELOPE: a str.split(D)[i] sink is reached only after the source string is SPLIT,
+   so the breakout must ride a delimited string the split yields — the sink part = the breakout, every sibling
+   EQ gate part (parts[0]==='preview') = its token, joined by D ("preview|<breakout>"). Delivered at the source
+   getter (encoded) then split by the real code, so the parse yields the gate-satisfying parts AND the breakout.
+   The positional analog of query_envelope_cand. Returns malloc'd string, or NULL when not a split-source sink. */
+static char *delim_envelope_cand(const char *cand) {
+    if (!g_sink_delim[0] || g_sink_sidx < 0 || !g_sink_sprefix[0]) return NULL;
+    const char *parts[32]; for (int i = 0; i < 32; i++) parts[i] = NULL;
+    int maxidx = g_sink_sidx < 32 ? g_sink_sidx : 31;
+    size_t pl = strlen(g_sink_sprefix);
+    for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];   /* sibling EQ gates at their part index -> required parts */
+        if (c->src && c->op == OPCMP_EQ && c->tok && !strncmp(c->src, g_sink_sprefix, pl) && c->src[pl] == '.') {
+            char *end; long n = strtol(c->src + pl + 1, &end, 10);
+            if (*end == 0 && n >= 0 && n < 32) { parts[n] = c->tok; if ((int)n > maxidx) maxidx = (int)n; }
+        }
+    }
+    if (g_sink_sidx < 32) parts[g_sink_sidx] = cand;   /* sink part = the breakout (overrides a self-gate token at that index) */
+    char buf[1600]; int o = 0; buf[0] = 0; size_t dl = strlen(g_sink_delim);
+    for (int i = 0; i <= maxidx; i++) {
+        if (i && o + (int)dl < (int)sizeof buf - 1) { memcpy(buf + o, g_sink_delim, dl); o += (int)dl; buf[o] = 0; }
+        o += snprintf(buf + o, sizeof buf - o, "%s", parts[i] ? parts[i] : "");
+    }
+    /* Trim trailing empty parts (a phantom high index): "a|X|" and "a|X" both split to parts[1]==='X', so the
+       shorter is the equivalent minimal PoC. Never trims into the sink's content (that isn't a trailing delim). */
+    while (o >= (int)dl && strcmp(buf + o - (int)dl, g_sink_delim) == 0) { o -= (int)dl; buf[o] = 0; }
+    return strdup(buf);
+}
 /* @S QUERY ENVELOPE: a URLSearchParams.get(key) sink is reached only after location.search/hash is PARSED, so
    the breakout must ride a query string the parse yields — `key=<breakout>` — AND satisfy every sibling EQ gate
    the handler checks on ANOTHER param (`mode==='preview'`), or the sink is never reached. Build
@@ -672,7 +702,8 @@ static char *query_envelope_cand(const char *cand) {
    of the distance-directed search CLAUDE.md mandates over flat enumerate-and-verify. */
 static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, const char *target, double fitness) {
     double w = 2.0 + fitness;
-    char *env = query_envelope_cand(cand_in);       /* URLSearchParams.get sink -> deliver a query envelope */
+    char *env = delim_envelope_cand(cand_in);        /* split(D)[i] sink -> deliver a delimited positional envelope */
+    if (!env) env = query_envelope_cand(cand_in);    /* else URLSearchParams.get sink -> query envelope */
     if (!env) env = json_envelope_cand(ctx, cand_in);   /* else scalar-source JSON.parse field sink -> JSON envelope */
     const char *cand = env ? env : cand_in;
     if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
@@ -719,6 +750,15 @@ static JSValue collect_gate_fields(JSContext *ctx, const char *root) {
    itself) still needs prefixing and is kept. Covers both delivery forms this engine builds:
    query  ("{search}?mode", sibling param != the sink's qkey) and JSON ("{hash}.mode", sibling jkey != sink jkey). */
 static int envelope_handles_token(const char *tok) {
+    /* split (positional) envelope: a token gating a part OTHER than the sink's index is placed structurally. */
+    if (g_sink_delim[0] && g_sink_sprefix[0]) { size_t pl = strlen(g_sink_sprefix);
+        for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];
+            if (c->src && c->op == OPCMP_EQ && c->tok && !strcmp(c->tok, tok) && !strncmp(c->src, g_sink_sprefix, pl) && c->src[pl] == '.') {
+                char *end; long n = strtol(c->src + pl + 1, &end, 10);
+                if (*end == 0 && n >= 0 && (int)n != g_sink_sidx) return 1;
+            }
+        }
+    }
     if (!g_sink_root[0]) return 0;
     size_t rl = strlen(g_sink_root);
     for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];
@@ -834,6 +874,16 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
           if (qm && qm[1]) { const char *e = qm + 1; while (*e && *e != '.') e++;
               size_t kl = (size_t)(e - (qm + 1));
               if (kl && kl < sizeof g_sink_qkey) { memcpy(g_sink_qkey, qm + 1, kl); g_sink_qkey[kl] = 0; } } }
+      /* @S split-source sink: parts[i] from str.split(D) carries the delimiter (JS_OpaqueSplitDelim) and a src
+         ending ".<index>". Record the delimiter, the shared prefix, and the index so reg_add_cand delivers a
+         delimited positional envelope. */
+      g_sink_delim[0] = 0; g_sink_sprefix[0] = 0; g_sink_sidx = -1;
+      { const char *dl = JS_OpaqueSplitDelim(val);
+        if (dl && dl[0] && sp) { const char *ld = strrchr(sp, '.');
+            if (ld && ld[1]) { char *end; long idx = strtol(ld + 1, &end, 10);
+                if (*end == 0 && idx >= 0) { g_sink_sidx = (int)idx;
+                    snprintf(g_sink_delim, sizeof g_sink_delim, "%s", dl);
+                    size_t pl = (size_t)(ld - sp); if (pl < sizeof g_sink_sprefix) { memcpy(g_sink_sprefix, sp, pl); g_sink_sprefix[pl] = 0; } } } } }
       if (sp && sp[0]) {
           JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp));
           char root[64]; const char *rb = strchr(sp, '}');   /* source token "{pm}" -> collect sibling gate fields the handler requires */
