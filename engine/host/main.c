@@ -40,6 +40,7 @@
 #include "core/dom/domparser.h"    /* DOMParser + Range HTML parsing -> {parsedhtml} taint, its own TU */
 #include "core/frame/location.h"     /* the browser location object + external-input source getters + principal split, its own TU */
 #include "core/dom/dom_element.h"  /* the DOM Element JSClass + el_wrap (methods migrate here incrementally), its own TU */
+#include "core/loader/document_scripts.h"  /* scr_ctx + dom_collect_scripts + script_is_exec + document_bundle_id (identity component) */
 #include "modules/storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "core/frame/messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
@@ -1372,14 +1373,9 @@ static int dom_init(const char *html, size_t len) {
    UNMODIFIED bundle, so the ENGINE extracts + executes them, not a bridge-side scrape. Inline <script>
    is eval'd in the global scope; external <script src> is surfaced as @CHUNK for safe-fetch + forced-
    execute (step C — computed/injected src is the same edge). */
-struct scr_ctx { lxb_dom_element_t **els; int n, cap; };
-static lxb_status_t scr_collect_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t s, void *vp) {
-    struct scr_ctx *c = vp; (void)s;
-    if (c->n >= c->cap) { int nc = c->cap ? c->cap * 2 : 16;
-        lxb_dom_element_t **ne = realloc(c->els, (size_t)nc * sizeof(*ne)); if (!ne) return LXB_STATUS_OK; c->els = ne; c->cap = nc; }
-    c->els[c->n++] = lxb_dom_interface_element(node);
-    return LXB_STATUS_OK;   /* collect all in document order; eval AFTER traversal (eval may mutate the DOM) */
-}
+/* struct scr_ctx + dom_collect_scripts + script_is_exec + document_bundle_id -> browser/core/loader/
+   document_scripts.{c,h} (the document's script inventory + bundle IDENTITY, a pure DOM scan — a COMPONENT, not
+   scheduler-monolith state). */
 /* BOOT-REPLAY substrate: the page's inline <script> texts, cached at first boot. A cross-flow @S candidate
    (source stored in shared state at boot, sunk in a SEPARATELY-driven handler) needs that shared state
    re-established with the CONCRETE candidate — the handler reads the stored value, not the source directly.
@@ -1589,63 +1585,10 @@ static void eval_page_script(JSContext *ctx, const char *code, size_t len, const
     }
     JS_FreeValue(ctx, v);
 }
-/* Return the page's <script> elements (Lexbor scan, caller frees `out->els`); NULL selectors -> empty. The DOM
-   scan that BOTH identity (dom_scan_identity) and execution (dom_run_scripts) use — one place, no drift. */
-static void dom_collect_scripts(struct scr_ctx *out) {
-    out->els = NULL; out->n = 0; out->cap = 0;
-    lxb_css_parser_t *p = lxb_css_parser_create();
-    if (!p || lxb_css_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_css_parser_destroy(p, true); return; }
-    lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)"script", 6);
-    if (!list) { lxb_css_parser_destroy(p, true); return; }
-    lxb_selectors_t *sel = lxb_selectors_create();
-    if (!sel || lxb_selectors_init(sel) != LXB_STATUS_OK) { if (sel) lxb_selectors_destroy(sel, true); lxb_css_parser_destroy(p, true); return; }
-    lxb_selectors_find(sel, lxb_dom_interface_node(g_dom), list, scr_collect_cb, out);
-    lxb_selectors_destroy(sel, true); lxb_css_parser_destroy(p, true);
-}
-/* Is this <script> EXECUTABLE JS (empty/js-MIME/module type), and is it a module? A DATA block (json/ld+json/
-   importmap/template) is parsed-but-not-run — never executed, never part of the JS bundle identity. */
-static int script_is_exec(lxb_dom_element_t *el, int *is_mod) {
-    *is_mod = 0;
-    size_t tyl = 0; const lxb_char_t *ty = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tyl);
-    if (!ty || !tyl) return 1;   /* no type -> classic executable script */
-    char tb[64]; size_t tn = tyl < 63 ? tyl : 63;
-    for (size_t k = 0; k < tn; k++) { char ch = (char)ty[k]; tb[k] = (ch >= 'A' && ch <= 'Z') ? (char)(ch + 32) : ch; }
-    tb[tn] = 0;
-    if (strcmp(tb, "module") == 0) { *is_mod = 1; return 1; }
-    return (strstr(tb, "javascript") || strstr(tb, "ecmascript")) ? 1 : 0;   /* JS MIME -> exec; else data */
-}
-
-/* IDENTITY, decoupled from execution: the document's stable bundle id = FNV-1a over its OWN executable scripts
-   (external src URLs + inline JS bodies), a PURE Lexbor DOM scan that runs NO script. This is the first step of
-   boot-as-one-flow: the host reads the bundle id (frontier key) synchronously from `qjs_init` WITHOUT the boot
-   scripts having executed, so execution can move to the scheduler's first boot flow. */
-static void dom_scan_identity(JSContext *ctx) {
-    (void)ctx;
-    if (!g_dom) return;
-    struct scr_ctx c; dom_collect_scripts(&c);
-    uint32_t bh = 2166136261u;
-    for (int i = 0; i < c.n; i++) {
-        lxb_dom_element_t *el = c.els[i];
-        size_t sl = 0;
-        const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
-        if (src && sl) {
-            for (size_t k = 0; k < sl; k++) { bh ^= src[k]; bh *= 16777619u; }   /* external src URL -> bundle id */
-            bh ^= '|'; bh *= 16777619u;
-            continue;
-        }
-        int is_mod; if (!script_is_exec(el, &is_mod)) continue;   /* data block: not part of JS identity */
-        size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
-        if (txt && tl) { for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; } bh ^= '|'; bh *= 16777619u; }
-        if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
-    }
-    g_bundle_id = bh ? bh : 1;
-    free(c.els);
-}
-
 static void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
     csp_derive(g_dom);   /* per-document effective CSP: real HTTP header (primary) else <meta> scan (csp.c) */
-    struct scr_ctx c; dom_collect_scripts(&c);
+    struct scr_ctx c; dom_collect_scripts(g_dom, &c);
     for (int i = 0; i < c.n; i++) {
         lxb_dom_element_t *el = c.els[i];
         size_t sl = 0;
@@ -2463,7 +2406,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
             if (JS_IsException(v)) { js_std_dump_error(ctx); g_rc = 1; }
             JS_FreeValue(ctx, v);
         }
-        dom_scan_identity(ctx);   /* IDENTITY first, from a PURE DOM scan (no execution): g_bundle_id is set before boot runs */
+        g_bundle_id = document_bundle_id(g_dom);   /* IDENTITY first, from a PURE DOM scan (no execution): frontier key set before boot runs */
         dom_run_scripts(ctx);     /* then run inline scripts + REQUEST external <script src> loads (fetched in qjs_step) */
         JS_CowSetActive(0);
         g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);

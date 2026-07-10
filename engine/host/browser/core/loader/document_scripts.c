@@ -1,0 +1,59 @@
+/* Document script inventory + bundle identity — see document_scripts.h. */
+#include "core/loader/document_scripts.h"
+#include <string.h>
+#include <stdlib.h>
+#include <lexbor/css/css.h>
+#include <lexbor/selectors/selectors.h>
+
+static lxb_status_t scr_collect_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t s, void *vp) {
+    struct scr_ctx *c = vp; (void)s;
+    if (c->n >= c->cap) { int nc = c->cap ? c->cap * 2 : 8;
+        lxb_dom_element_t **n = realloc(c->els, (size_t)nc * sizeof(lxb_dom_element_t *)); if (!n) return LXB_STATUS_OK; c->els = n; c->cap = nc; }
+    c->els[c->n++] = lxb_dom_interface_element(node);
+    return LXB_STATUS_OK;
+}
+
+void dom_collect_scripts(lxb_html_document_t *dom, struct scr_ctx *out) {
+    out->els = NULL; out->n = 0; out->cap = 0;
+    if (!dom) return;
+    lxb_css_parser_t *p = lxb_css_parser_create();
+    if (!p || lxb_css_parser_init(p, NULL) != LXB_STATUS_OK) { if (p) lxb_css_parser_destroy(p, true); return; }
+    lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)"script", 6);
+    if (!list) { lxb_css_parser_destroy(p, true); return; }
+    lxb_selectors_t *sel = lxb_selectors_create();
+    if (!sel || lxb_selectors_init(sel) != LXB_STATUS_OK) { if (sel) lxb_selectors_destroy(sel, true); lxb_css_parser_destroy(p, true); return; }
+    lxb_selectors_find(sel, lxb_dom_interface_node(dom), list, scr_collect_cb, out);
+    lxb_selectors_destroy(sel, true); lxb_css_parser_destroy(p, true);
+}
+
+int script_is_exec(lxb_dom_element_t *el, int *is_mod) {
+    *is_mod = 0;
+    size_t tyl = 0; const lxb_char_t *ty = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tyl);
+    if (!ty || !tyl) return 1;   /* no type -> classic executable script */
+    char tb[64]; size_t tn = tyl < 63 ? tyl : 63;
+    for (size_t k = 0; k < tn; k++) { char ch = (char)ty[k]; tb[k] = (ch >= 'A' && ch <= 'Z') ? (char)(ch + 32) : ch; }
+    tb[tn] = 0;
+    if (strcmp(tb, "module") == 0) { *is_mod = 1; return 1; }
+    return (strstr(tb, "javascript") || strstr(tb, "ecmascript")) ? 1 : 0;   /* JS MIME -> exec; else data */
+}
+
+unsigned document_bundle_id(lxb_html_document_t *dom) {
+    struct scr_ctx c; dom_collect_scripts(dom, &c);
+    uint32_t bh = 2166136261u;
+    for (int i = 0; i < c.n; i++) {
+        lxb_dom_element_t *el = c.els[i];
+        size_t sl = 0;
+        const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
+        if (src && sl) {
+            for (size_t k = 0; k < sl; k++) { bh ^= src[k]; bh *= 16777619u; }   /* external src URL -> bundle id */
+            bh ^= '|'; bh *= 16777619u;
+            continue;
+        }
+        int is_mod; if (!script_is_exec(el, &is_mod)) continue;   /* data block: not part of JS identity */
+        size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
+        if (txt && tl) { for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; } bh ^= '|'; bh *= 16777619u; }
+        if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
+    }
+    free(c.els);
+    return bh ? bh : 1;
+}
