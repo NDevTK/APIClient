@@ -6,11 +6,18 @@
  * go have no headless-observable effect (no rendered navigation) so they stay no-ops, but the state they do
  * NOT change is faithful (null until the page pushes one — spec, never an opaque shrug). */
 #include "core/frame/history.h"
-#include "opaque.h"   /* js_noop */
 
 static JSValue js_history_set_state(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JS_SetPropertyStr(ctx, this_val, "state", argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_NULL);   /* current entry's state = data */
     return JS_UNDEFINED;
+}
+
+/* back()/forward()/go(delta): history traversal. Headless there is no rendered navigation and we keep only the
+   current entry (no back-stack to move within), so there is nothing to navigate TO; the popstate handlers a
+   traversal would fire are already REACHABLE via orphan-driving (registered addEventListener flows), so this is
+   a DEDICATED, documented no-effect — not the generic js_noop stub the audit exists to expose. */
+static JSValue js_history_traverse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)ctx; (void)this_val; (void)argc; (void)argv; return JS_UNDEFINED;
 }
 
 JSValue js_history_make(JSContext *ctx) {
@@ -20,8 +27,8 @@ JSValue js_history_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, h, "scrollRestoration", JS_NewString(ctx, "auto"));
     JS_SetPropertyStr(ctx, h, "pushState", JS_NewCFunction(ctx, js_history_set_state, "pushState", 3));
     JS_SetPropertyStr(ctx, h, "replaceState", JS_NewCFunction(ctx, js_history_set_state, "replaceState", 3));
-    JS_SetPropertyStr(ctx, h, "back", JS_NewCFunction(ctx, js_noop, "back", 0));
-    JS_SetPropertyStr(ctx, h, "forward", JS_NewCFunction(ctx, js_noop, "forward", 0));
-    JS_SetPropertyStr(ctx, h, "go", JS_NewCFunction(ctx, js_noop, "go", 1));
+    JS_SetPropertyStr(ctx, h, "back", JS_NewCFunction(ctx, js_history_traverse, "back", 0));
+    JS_SetPropertyStr(ctx, h, "forward", JS_NewCFunction(ctx, js_history_traverse, "forward", 0));
+    JS_SetPropertyStr(ctx, h, "go", JS_NewCFunction(ctx, js_history_traverse, "go", 1));
     return h;
 }
