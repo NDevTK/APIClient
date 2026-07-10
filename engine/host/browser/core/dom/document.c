@@ -5,6 +5,7 @@
 #include "core/dom/dom_select.h"    /* dom_select_first / dom_select_all over the live Lexbor tree */
 #include "core/dom/dom_element.h"   /* el_wrap: real Lexbor element -> JS Element */
 #include "core/dom/custom_elements.h"   /* ce_upgrade — createElement upgrades a defined custom-element tag, else el_wrap */
+#include "check.h"             /* DCHECK — the live document is an engine invariant (created at boot) */
 #include <lexbor/html/html.h>  /* lxb_dom_document_create_element */
 #include <string.h>
 
@@ -14,7 +15,8 @@ extern lxb_html_document_t *g_dom;   /* the live parsed document (main.c) */
    upgraded (connectedCallback driven). appendChild of a returned <script src> is intercepted downstream. */
 JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
-    if (!g_dom || argc < 1) return JS_NULL;
+    DCHECK(g_dom, "createElement: g_dom NULL — the live document is created at boot before any script runs, so this is impossible");
+    if (argc < 1) return JS_NULL;   /* createElement() with no arg: lenient null (a real browser throws TypeError; the page's bug, not ours) */
     const char *tag = JS_ToCString(ctx, argv[0]); if (!tag) return JS_NULL;
     lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)tag, strlen(tag), NULL);
     JSValue r = ce_upgrade(ctx, el, tag);   /* Blink custom-element upgrade (custom_elements.c), else el_wrap */

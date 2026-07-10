@@ -4,6 +4,7 @@
 #include "core/html/html_script_element.h"
 #include "attr_shadow.h"   /* attr_shadow_find/opaque — a computed src leaves the real URL in the taint shadow */
 #include "platform/url.h"           /* has_hole — a still-holey (computed) src is not concretely fetchable */
+#include "check.h"                  /* DCHECK — the node is a real inserted element (appendChild guarantees non-NULL) */
 #include <string.h>
 #include <stdlib.h>
 
@@ -18,6 +19,7 @@ static int el_is_script(lxb_dom_element_t *el) {
 }
 
 void script_maybe_load(JSContext *ctx, lxb_dom_element_t *el) {
+    DCHECK(el, "script_maybe_load: NULL node — only ever called on a real appended child element, impossible");
     if (!el_is_script(el)) return;
     /* A candidate-REPLAY flow's <script src> is derived from the injected candidate PAYLOAD, not a real chunk
        URL — discovering it drives a nonsensical fetch that livelocks a multi-sink handler. Skip under a candidate. */

@@ -17,6 +17,7 @@
 #include "opaque.h"       /* js_noop — UI no-op element methods (click/focus/removeAttribute...) */
 #include "platform/url.h"          /* (via html_script_element) */
 #include "core/dom/classlist.h"    /* js_el_classlist_get — el.classList (a real class-attr token check) */
+#include "check.h"                 /* DCHECK — the live document is an engine invariant (created at boot) */
 
 /* Borrowed from main.c: an @S replay flow pins the concrete candidate here (a reflected-property write in a
    replay writes the candidate, not the shadow taint). */
@@ -387,7 +388,7 @@ JSValue js_el_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst
    container so root.appendChild/querySelector/addEventListener register handlers driven like any other. */
 static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)argc; (void)argv;
-    if (!g_dom) return JS_UNDEFINED;
+    DCHECK(g_dom, "attachShadow: g_dom NULL — the live document is created at boot before any script, impossible");
     lxb_dom_element_t *root = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)"shadow-root", 11, NULL);
     if (!root) return JS_UNDEFINED;
     JSValue rv = el_wrap(ctx, root);
