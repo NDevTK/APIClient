@@ -865,16 +865,32 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
             JSValue prev = JS_GetPropertyStr(ctx, g_reached, key);
             int first = JS_IsUndefined(prev); JS_FreeValue(ctx, prev);
             JS_SetPropertyStr(ctx, g_reached, key, JS_NewInt32(ctx, 1));
-            if (first && g_env_kind == ENV_NONE && g_candidate
+            /* Mutate ONLY the breakout — the chars inside a <...> tag span — with filter-evasion operators
+               (case-flip, space->slash). An envelope's gate parts (query "mode=preview", JSON field names, split
+               parts) contain no '<', so they stay intact and the gate still passes; only the payload tag mutates.
+               The result is already delivery-shaped (a mutated envelope), so enqueue it DIRECT (reg_add, not
+               reg_add_cand — no re-envelope). Once per sink; HTML context; outside a session. */
+            if (first && !g_in_session && g_candidate
                 && (strcmp(sctx, "html") == 0 || strcmp(sctx, "htmls") == 0)) {
                 JSValueConst hitfn = JS_CurrentScriptFn(ctx);
                 if (!JS_IsUndefined(hitfn)) {
                     size_t n = strlen(g_candidate);
-                    char *up = malloc(n + 1), *sl = malloc(n + 1);
-                    if (up) { for (size_t i = 0; i < n; i++) { char c = g_candidate[i]; up[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c; } up[n] = 0;
-                              if (strcmp(up, g_candidate)) reg_add_cand(ctx, hitfn, up, key, 1.0); free(up); }
-                    if (sl) { for (size_t i = 0; i < n; i++) sl[i] = g_candidate[i] == ' ' ? '/' : g_candidate[i]; sl[n] = 0;
-                              if (strcmp(sl, g_candidate)) reg_add_cand(ctx, hitfn, sl, key, 1.0); free(sl); }
+                    for (int pass = 0; pass < 2; pass++) {   /* 0 = case-flip, 1 = space->slash (both WITHIN tag spans only) */
+                        char *m = malloc(n + 1); if (!m) continue;
+                        int intag = 0;
+                        for (size_t i = 0; i < n; i++) { char c = g_candidate[i], o = c;
+                            if (c == '<') intag = 1;
+                            if (intag) { if (pass == 0 && c >= 'a' && c <= 'z') o = (char)(c - 32); else if (pass == 1 && c == ' ') o = '/'; }
+                            if (c == '>') intag = 0;
+                            m[i] = o; }
+                        m[n] = 0;
+                        if (strcmp(m, g_candidate) && reg_add(ctx, JS_DupValue(ctx, hitfn), 3.0, NULL, 0)) {
+                            g_reg[g_reg_n - 1].candidate = strdup(m);   /* already delivery-shaped: enqueue DIRECT (no re-envelope) */
+                            g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;
+                            g_reg[g_reg_n - 1].vtarget = strdup(key);
+                        }
+                        free(m);
+                    }
                 }
             }
         }
