@@ -638,7 +638,9 @@ static void obj_set_path(JSContext *ctx, JSValue obj, const char *path, JSValue 
    this ONE place, so the three reconstruction schemes share a single addressing model instead of duplicating
    the g_cons scan five ways; a new destructuring API is a new CASE here, not a new function. */
 static const char *env_sibling_addr(const Cons *c, char *buf, size_t bufn) {
-    if (!(c->src && c->op == OPCMP_EQ && c->tok)) return NULL;
+    /* EQ pins the exact value; PREFIX(startsWith)/SUB(includes) are satisfied by the token itself placed at the
+       address (a value starting-with/containing tok), so all three place tok at the sibling's address. */
+    if (!(c->src && c->tok && (c->op == OPCMP_EQ || c->op == OPCMP_PREFIX || c->op == OPCMP_SUB))) return NULL;
     switch (g_env_kind) {
     case ENV_JSON: {   /* {root}.field gate, keyed by the method-CLEAN jkey (src is .slice-polluted) */
         size_t rl = strlen(g_sink_root);
@@ -654,11 +656,11 @@ static const char *env_sibling_addr(const Cons *c, char *buf, size_t bufn) {
         if (gl == strlen(g_sink_qkey) && !strncmp(gk, g_sink_qkey, gl)) return NULL;   /* the sink param itself */
         snprintf(buf, bufn, "%.*s", (int)gl, gk); return buf;
     }
-    case ENV_DELIM: {   /* prefix.<index> gate */
+    case ENV_DELIM: {   /* prefix.<index> gate (a trailing ".startsWith"/".includes" method segment is tolerated) */
         size_t pl = strlen(g_sink_sprefix);
         if (strncmp(c->src, g_sink_sprefix, pl) || c->src[pl] != '.') return NULL;
-        char *end; long n = strtol(c->src + pl + 1, &end, 10);
-        if (*end != 0 || n < 0 || (int)n == g_sink_sidx) return NULL;
+        const char *ip = c->src + pl + 1; char *end; long n = strtol(ip, &end, 10);
+        if (end == ip || (*end != 0 && *end != '.') || n < 0 || (int)n == g_sink_sidx) return NULL;
         snprintf(buf, bufn, "%ld", n); return buf;
     }
     default: return NULL;
