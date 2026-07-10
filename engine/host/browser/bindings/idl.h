@@ -22,4 +22,16 @@ typedef void JSClassFinalizerFn(JSRuntime *rt, JSValue val);
 typedef struct { const char *name; const IDLMember *members; int n; JSClassFinalizerFn *finalizer; } IDLInterface;
 JSClassID idl_define_class(JSContext *ctx, const IDLInterface *iface);
 
+/* ── GENERATED-SHAPE binding (the Blink model: SHAPE from canonical Web IDL, BEHAVIOR from C) ────────────────
+   idl_generated.h (produced by engine/idlgen.mjs from @webref/idl) declares one IdlGenMember[] per interface —
+   the spec-exact member list. idl_bind installs it, matching each member to the component's IdlImpl BEHAVIOR by
+   name: an operation with no impl is a spec-present noop; a readonly attribute with no getter is the concolic
+   unknown (EXISTS + typed, VALUE forks); a writable attribute with no impl is a plain settable property. So the
+   member list can never drift from the spec, and a member we haven't modelled is honest, not missing. */
+typedef enum { IDL_GEN_OP, IDL_GEN_ATTR } IdlGenKind;
+typedef struct { const char *name; IdlGenKind kind; int readonly; int arg; } IdlGenMember;   /* the SHAPE (from IDL) */
+/* the BEHAVIOR (from the C component); magic>=0 -> magic-dispatched get/set (one fn serving many by index). */
+typedef struct { const char *name; JSCFunction *get; JSCFunction *set; JSCFunction *op; int magic; } IdlImpl;
+void idl_bind(JSContext *ctx, JSValueConst target, const IdlGenMember *shape, int shape_n, const IdlImpl *impls, int impl_n);
+
 #endif

@@ -56,6 +56,15 @@ function buildLexbor(force) {
 buildLexbor(process.argv[2] === "lexbor");
 if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
+// Generate the Web IDL binding SHAPES from canonical IDL (@webref/idl) before compiling — the Blink model
+// (bindings generated from .idl). Emits browser/bindings/idl_generated.h, consumed by idl_bind. Best-effort:
+// if the idl toolchain isn't installed the existing generated header is reused (kept in-tree), so builds
+// without npm still work.
+{
+  const g = spawnSync(process.execPath, [join(ENGINE, "idlgen.mjs")], { stdio: "inherit", shell: false, cwd: ENGINE });
+  if (g.status !== 0) console.warn("[build] idlgen skipped (idl toolchain unavailable) — reusing the committed idl_generated.h");
+}
+
 // The host mirrors the PROJECT IDENTITY "a browser with a BFS Time-Travel Solver": the BROWSER half is
 // organized like a real browser (browser/, each file a web-platform component mapping to a Blink module —
 // location=core/frame/Location, dom_element=core/dom/Element, forms=core/html/forms, …), the novel SOLVER half

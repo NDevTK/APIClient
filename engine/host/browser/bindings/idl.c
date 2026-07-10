@@ -3,8 +3,9 @@
  * attribute still EXISTS and has its type (the IDL declares it), but its VALUE forks — spec-locked shape,
  * honest-unknown value. The interface reads as its IDL, never hand-assembled property-by-property. */
 #include <stdio.h>
+#include <string.h>
 #include "bindings/idl.h"
-#include "opaque.h"   /* js_concolic — an opaque attribute reads as a name-tagged concolic (forks + provenance) */
+#include "opaque.h"   /* js_concolic (opaque attr value) + js_noop (a spec-present, unmodelled operation) */
 #include "check.h"    /* DCHECK — this narrow driver is where EVERY interface is born; a silent failure here corrupts all */
 
 /* Install an IDL member onto `target` (a plain instance or a class prototype): a method is a native function,
@@ -27,6 +28,39 @@ JSValue idl_instance(JSContext *ctx, const IDLMember *members, int n) {
     DCHECK(!JS_IsException(o), "idl_instance: object alloc failed");
     for (int i = 0; i < n; i++) idl_put_member(ctx, o, &members[i]);
     return o;
+}
+
+/* ── GENERATED-SHAPE binding: install a spec member list, wiring each member's behavior from the component ── */
+static const IdlImpl *idl_find_impl(const IdlImpl *impls, int n, const char *name) {
+    for (int i = 0; i < n; i++) if (strcmp(impls[i].name, name) == 0) return &impls[i];
+    return NULL;
+}
+void idl_bind(JSContext *ctx, JSValueConst target, const IdlGenMember *shape, int shape_n, const IdlImpl *impls, int impl_n) {
+    for (int i = 0; i < shape_n; i++) {
+        const IdlGenMember *m = &shape[i];
+        const IdlImpl *im = idl_find_impl(impls, impl_n, m->name);
+        JSAtom a = JS_NewAtom(ctx, m->name);
+        if (m->kind == IDL_GEN_OP) {
+            JSCFunction *fn = (im && im->op) ? im->op : js_noop;   /* a spec operation we haven't modelled is a present noop, never missing */
+            JS_DefinePropertyValue(ctx, (JSValue)target, a, JS_NewCFunction(ctx, fn, m->name, m->arg), JS_PROP_C_W_E);
+        } else if (im && (im->get || im->set)) {   /* modelled attribute: a real getter and/or setter */
+            JSValue getter = JS_UNDEFINED, setter = JS_UNDEFINED;
+            if (im->magic >= 0) {
+                if (im->get) getter = JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)im->get, m->name, 0, JS_CFUNC_getter_magic, im->magic);
+                if (im->set) setter = JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)im->set, m->name, 1, JS_CFUNC_setter_magic, im->magic);
+            } else {
+                if (im->get) getter = JS_NewCFunction2(ctx, im->get, m->name, 0, JS_CFUNC_getter, 0);
+                if (im->set) setter = JS_NewCFunction2(ctx, im->set, m->name, 1, JS_CFUNC_setter, 0);
+            }
+            JS_DefinePropertyGetSet(ctx, (JSValue)target, a, getter, setter, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        } else if (m->readonly) {   /* unmodelled READONLY attribute: the concolic unknown (EXISTS + typed, VALUE forks) */
+            char shp[80]; snprintf(shp, sizeof shp, "{%s}", m->name);
+            JS_DefinePropertyValue(ctx, (JSValue)target, a, js_concolic(ctx, shp, JS_UNDEFINED), JS_PROP_ENUMERABLE);
+        } else {   /* unmodelled WRITABLE attribute: a plain settable property (the page may assign; not an attacker source) */
+            JS_DefinePropertyValue(ctx, (JSValue)target, a, JS_UNDEFINED, JS_PROP_C_W_E);
+        }
+        JS_FreeAtom(ctx, a);
+    }
 }
 
 JSClassID idl_define_class(JSContext *ctx, const IDLInterface *iface) {

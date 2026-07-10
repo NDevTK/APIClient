@@ -10,21 +10,23 @@
  * The static factories AbortSignal.timeout/any/abort all yield an instance of this interface. */
 #include "core/dom/abort.h"
 #include "bindings/idl.h"
+#include "bindings/idl_generated.h"   /* AbortSignal_IDL — the member SHAPE generated from canonical Web IDL */
 #include "check.h"    /* DCHECK — throwIfAborted's self-hosted bytecode is guaranteed-valid; a compile failure is a should-never-happen */
 #include "opaque.h"   /* js_noop */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* EventTarget.addEventListener -> driven flow */
 
-static const IDLMember ABORTSIGNAL_IDL[] = {
-    { "aborted",             IDL_ATTR_OPAQUE, NULL,            0 },
-    { "reason",              IDL_ATTR_OPAQUE, NULL,            0 },
-    { "addEventListener",    IDL_METHOD,      js_add_listener, 2 },
-    { "removeEventListener", IDL_METHOD,      js_noop,         2 },
+/* BEHAVIOR for the generated AbortSignal shape (idl_bind matches by name): addEventListener drives a handler
+   flow; aborted/reason have no impl -> the concolic unknown (readonly, forks); removeEventListener/dispatchEvent
+   -> spec-present noops; onabort -> a settable property; throwIfAborted is self-hosted below. */
+static const IdlImpl ABORTSIGNAL_IMPLS[] = {
+    { "addEventListener", NULL, NULL, js_add_listener, -1 },
 };
 
 JSValue js_abortsignal_make(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
-    JSValue o = idl_instance(ctx, ABORTSIGNAL_IDL, sizeof ABORTSIGNAL_IDL / sizeof ABORTSIGNAL_IDL[0]);
+    JSValue o = JS_NewObject(ctx);
+    idl_bind(ctx, o, AbortSignal_IDL, AbortSignal_IDL_N, ABORTSIGNAL_IMPLS, sizeof ABORTSIGNAL_IMPLS / sizeof ABORTSIGNAL_IMPLS[0]);
     /* throwIfAborted() is SELF-HOSTED as bytecode (not a C no-op) so the `if (this.aborted)` branches on the
        concolic `aborted` at the OPCODE level — forking throw-vs-continue (a C `if` on JS_ToBool can't fork).
        On the aborted arm it throws the concolic `reason`, so a try/catch/.catch path (which can itself reach a
