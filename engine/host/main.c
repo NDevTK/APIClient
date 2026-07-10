@@ -1520,24 +1520,7 @@ static JSValue js_session_drain(JSContext *ctx, JSValueConst this_val, int argc,
 /* eval_page_script + dom_run_scripts -> browser/core/html/html_script_runner.{c,h} (Blink HTMLScriptRunner):
    running the document's <script> elements is a BROWSER component, not scheduler state. */
 
-
-/* __isOpaque(v): CONCRETE bool (never forks), the ONE primitive the self-hosted Array.sort needs. A branch on an
-   OPAQUE value forks; sort must NOT fork on the meaningless ORDER of opaque elements (O(n log n) forks explode).
-   So the sort's comparators call __isOpaque to collapse an opaque compare to 0 WITHOUT an OP_if fork — the
-   comparator itself still RUNS (via the trampolined OP_call, so deep comparator recursion stays unbounded and its
-   emits happen); only the order bit concretizes. A leaf (holds no continuation), so it never adds C recursion. */
-static JSValue js_is_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    return JS_NewBool(ctx, argc > 0 && JS_IsOpaque(argv[0]));
-}
-/* __opaqueExample(v): the CONCRETE example an opaque carries (config/reply loaded data), or undefined for a
-   pure attacker symbol (location.hash / cross-origin postMessage — no example). Self-hosted JSON.stringify
-   uses this so a CONFIG value serializes to its real value (`{"orgId":"acme-42"}`, the concolic example
-   propagating through an op) while ATTACKER input stays the taint-preserving opaque. A leaf. */
-static JSValue js_opaque_example(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    return argc > 0 ? JS_OpaqueExample(ctx, argv[0]) : JS_UNDEFINED;
-}
+/* js_is_opaque/js_opaque_example (__isOpaque/__opaqueExample leaf intrinsics) -> solver/opaque.{c,h}. */
 
 /* orphan flow source — CONTINUOUS discovery, NOT a one-shot phase. Called every scheduler iteration so
    functions defined DYNAMICALLY during a forced flow (a login-gated lazy CHUNK: eval/import of fetched

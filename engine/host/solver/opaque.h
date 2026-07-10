@@ -26,4 +26,10 @@ JSValue js_opaque_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
    CONSUMES `example`. Bare-concrete would delete the fork; bare-opaque would drop the value; this is both. */
 JSValue js_concolic(JSContext *ctx, const char *shape, JSValue example);
 
+/* Leaf intrinsics the self-hosted builtins need (__isOpaque / __opaqueExample): a CONCRETE bool "is this value
+   opaque?" (sort collapses a meaningless opaque order without forking) and the concrete EXAMPLE an opaque carries
+   (stringify serializes a config opaque to its real value, else undefined). Leaves — hold no continuation. */
+JSValue js_is_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_opaque_example(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+
 #endif

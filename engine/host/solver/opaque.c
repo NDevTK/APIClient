@@ -16,3 +16,18 @@ JSValue js_concolic(JSContext *ctx, const char *shape, JSValue example) {
     else JS_FreeValue(ctx, example);
     return o;
 }
+
+/* __isOpaque(v): CONCRETE bool (never forks), the ONE primitive the self-hosted Array.sort needs — a branch on an
+   OPAQUE value forks, but sort must NOT fork on the meaningless ORDER of opaque elements (O(n log n) fork
+   explosion). The comparator still RUNS (trampolined); only the order bit concretizes. A leaf. */
+JSValue js_is_opaque(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    return JS_NewBool(ctx, argc > 0 && JS_IsOpaque(argv[0]));
+}
+/* __opaqueExample(v): the CONCRETE example an opaque carries (config/reply loaded data), or undefined for a pure
+   attacker symbol (location.hash / cross-origin postMessage — no example). Self-hosted JSON.stringify uses it so a
+   CONFIG value serializes to its real value while ATTACKER input stays the taint-preserving opaque. A leaf. */
+JSValue js_opaque_example(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    return argc > 0 ? JS_OpaqueExample(ctx, argv[0]) : JS_UNDEFINED;
+}
