@@ -714,6 +714,22 @@ static JSValue collect_gate_fields(JSContext *ctx, const char *root) {
    RAWTEXT (<textarea>/<title>/<style>/<xmp>/<iframe>/<noembed>/<noframes>) and COMMENT contexts a flat
    candidate list can NEVER reach, because their breakout is the CLOSING token (</textarea>, -->) which is
    knowable ONLY from the surrounding structure. */
+/* In query-envelope mode a SIBLING EQ gate token is placed STRUCTURALLY (mode=preview), so ALSO prefixing it
+   onto the sink payload is redundant noise (data=preview<svg..> vs the minimal data=<svg..>). Skip those; a
+   non-EQ self-gate token (startsWith('cmd:') on the sink param) still needs prefixing and is kept. */
+static int qenv_handles_token(const char *tok) {
+    if (!g_sink_qkey[0] || !g_sink_root[0]) return 0;
+    size_t rl = strlen(g_sink_root);
+    for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];
+        if (c->src && c->op == OPCMP_EQ && c->tok && !strcmp(c->tok, tok)
+            && !strncmp(c->src, g_sink_root, rl) && c->src[rl] == '?') {
+            const char *gk = c->src + rl + 1; const char *ge = gk; while (*ge && *ge != '.') ge++;   /* sibling param name */
+            size_t gl = (size_t)(ge - gk);
+            if (!(gl == strlen(g_sink_qkey) && !strncmp(gk, g_sink_qkey, gl))) return 1;   /* a param OTHER than the sink -> envelope covers it */
+        }
+    }
+    return 0;
+}
 /* Emit ONE candidate + its GATE-satisfying variants: each observed gate token as a PREFIX and a SUFFIX, and
    an adjacent-pair for correlated gates (startsWith('a')&&endsWith('b')) — the concrete input the REAL code
    demanded, so a gated sink is reached. ONE home for both the constructed HTML-context candidates and the
@@ -722,12 +738,14 @@ static void emit_cand(JSContext *ctx, JSValueConst hitfn, const char *cand, cons
     reg_add_cand(ctx, hitfn, cand, vt, 0.0);   /* bare base: satisfies no observed gate -> lowest fitness */
     size_t lc = strlen(cand);
     for (int g = 0; g < g_gate_n; g++) {
+        if (qenv_handles_token(g_gate_tokens[g])) continue;   /* sibling EQ gate already in the query envelope -> don't double-place */
         size_t lt = strlen(g_gate_tokens[g]);
         char *pre = malloc(lt + lc + 1), *suf = malloc(lt + lc + 1);
         if (pre) { memcpy(pre, g_gate_tokens[g], lt); memcpy(pre + lt, cand, lc + 1); reg_add_cand(ctx, hitfn, pre, vt, 1.0); free(pre); }   /* embeds 1 gate token -> closer */
         if (suf) { memcpy(suf, cand, lc); memcpy(suf + lc, g_gate_tokens[g], lt + 1); reg_add_cand(ctx, hitfn, suf, vt, 1.0); free(suf); }
     }
     for (int g = 0; g + 1 < g_gate_n; g++) {
+        if (qenv_handles_token(g_gate_tokens[g]) || qenv_handles_token(g_gate_tokens[g + 1])) continue;
         size_t l0 = strlen(g_gate_tokens[g]), l1 = strlen(g_gate_tokens[g + 1]), lc2 = strlen(cand);
         char *comb = malloc(l0 + lc2 + l1 + 1);
         if (comb) { memcpy(comb, g_gate_tokens[g], l0); memcpy(comb + l0, cand, lc2); memcpy(comb + l0 + lc2, g_gate_tokens[g + 1], l1 + 1); reg_add_cand(ctx, hitfn, comb, vt, 2.0); free(comb); }   /* embeds 2 correlated tokens -> closest */
