@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "bindings/idl.h"      /* the Blob interface is GENERATED from its IDL member table, not hand-assembled */
-#include "opaque.h"   /* js_concolic, js_noop */
+#include "opaque.h"   /* js_concolic (size/name/mtime are genuinely unknown headless) */
 #include "check.h"    /* CHECK (OOM), DCHECK */
 
 extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */
@@ -75,8 +75,10 @@ static JSValue m_slice(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
 static const IDLMember BLOB_MEMBERS[] = {
     { "text",        IDL_METHOD, m_text,  0 },
     { "arrayBuffer", IDL_METHOD, m_text,  0 },
+    { "bytes",       IDL_METHOD, m_text,  0 },   /* Promise<Uint8Array>: body bytes, taint-equivalent to text */
     { "slice",       IDL_METHOD, m_slice, 3 },
-    { "stream",      IDL_METHOD, js_noop, 0 },
+    /* stream()/textStream return a ReadableStream — a real capability not yet modeled; left ABSENT (flagged by
+       the audit) rather than a js_noop that pretends `.stream().getReader()` works. Build streams.c to fill it. */
 };
 void blob_init(JSContext *ctx) {
     static const IDLInterface iface = { "Blob", BLOB_MEMBERS, (int)(sizeof BLOB_MEMBERS / sizeof BLOB_MEMBERS[0]), blob_finalizer };

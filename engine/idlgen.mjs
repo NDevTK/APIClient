@@ -75,7 +75,13 @@ for (const [iface, file] of Object.entries(INTERFACES)) {
   // / def_getset(..., "name", ...)). A member absent from every literal is unimplemented; a member wired to
   // js_noop is STUBBED (present but does nothing — the banned lazy stub the audit exists to expose).
   const installed = new Set([...src.matchAll(/"([A-Za-z_$][\w$]*)"/g)].map((m) => m[1]));
-  const stubbed = new Set([...src.matchAll(/"([A-Za-z_$][\w$]*)"\s*,\s*JS_NewCFunction\w*\(\s*ctx\s*,\s*js_noop\b/g)].map((m) => m[1]));
+  // js_noop reaches a member two ways: the JS_SetPropertyStr form (`"name", JS_NewCFunction(ctx, js_noop`) and
+  // the IDL member-TABLE form (`{ "name", IDL_METHOD, js_noop, ... }`). Catch BOTH — a table-form stub is just
+  // as banned and was previously invisible to the name-scan.
+  const stubbed = new Set([
+    ...src.matchAll(/"([A-Za-z_$][\w$]*)"\s*,\s*JS_NewCFunction\w*\(\s*ctx\s*,\s*js_noop\b/g),
+    ...src.matchAll(/"([A-Za-z_$][\w$]*)"\s*,\s*IDL_(?:METHOD|ATTRIBUTE)\s*,\s*js_noop\b/g),
+  ].map((m) => m[1]));
   const absent = members(iface).filter((n) => !installed.has(n));
   const noop = members(iface).filter((n) => stubbed.has(n));
   totalMissing += absent.length + noop.length;
