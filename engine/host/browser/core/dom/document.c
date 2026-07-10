@@ -120,6 +120,8 @@ void document_init(JSContext *ctx, JSValue global) {
    VALUES (identity, title, the shipped body/head/forms/scripts). */
 JSValue js_document_make(JSContext *ctx) {
     JSValue doc = JS_NewObjectClass(ctx, g_document_class_id);
+    JS_SetPropertyStr(ctx, doc, "nodeType", JS_NewInt32(ctx, 9));   /* Node.DOCUMENT_NODE */
+    JS_SetPropertyStr(ctx, doc, "nodeName", JS_NewString(ctx, "#document"));
     JS_SetPropertyStr(ctx, doc, "URL", JS_NewString(ctx, g_origin));           /* page identity: CONCRETE for URL building */
     JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, location_host()));  /* page identity: CONCRETE (location.c) */
     JS_SetPropertyStr(ctx, doc, "documentElement", el_wrap(ctx, dom_select_first(NULL, "html", 4)));

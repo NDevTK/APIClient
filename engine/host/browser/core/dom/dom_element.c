@@ -495,6 +495,7 @@ void el_install_methods(JSContext *ctx, JSValue proto) {
         JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_tagname, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
         JS_FreeAtom(ctx, a);
     }
+    JS_SetPropertyStr(ctx, proto, "nodeType", JS_NewInt32(ctx, 1));   /* Node.ELEMENT_NODE — real bundles branch on `n.nodeType === 1` constantly (undefined skipped that code) */
     { JSAtom a = JS_NewAtom(ctx, "classList");
       JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_classlist_get, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
       JS_FreeAtom(ctx, a); }
