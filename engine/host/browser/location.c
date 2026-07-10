@@ -43,8 +43,8 @@ void set_origin(const char *origin) {
    returns the source-tagged OPAQUE (control-flow forks, @H/@S record the shape). @S REPLAY flow (g_candidate
    set): returns the CONCRETE candidate string, so the real code runs the transforms concretely and the sink
    sees a real value — reachability + breakout decided by the REAL code, in the ONE scheduler. */
-static const char *g_source_tag[] = { "{hash}", "{search}", "{pm}" };   /* 0=location.hash 1=location.search 2=postMessage e.data */
-static const char *g_source_pfx[] = { "#", "?", "" };                   /* realistic leading char so slice(1)/substring behave faithfully */
+static const char *g_source_tag[] = { "{hash}", "{search}", "{pm}", "{referrer}" };   /* 0=location.hash 1=location.search 2=postMessage e.data 3=document.referrer */
+static const char *g_source_pfx[] = { "#", "?", "", "" };                             /* realistic leading char so slice(1)/substring behave faithfully */
 /* The browser PERCENT-ENCODES the URL per the WHATWG percent-encode SETS, which DIFFER by component (VERIFIED
    on real Chrome). Both encode `< > " space` (-> %3C %3E %22 %20), but the tail differs and it MATTERS for XSS:
    the FRAGMENT set (location.hash) encodes backtick `` ` `` but NOT `'` — so a SINGLE-QUOTE-context breakout via
@@ -69,6 +69,7 @@ static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
         const char *pfx = g_source_pfx[magic];
         char *enc = (magic == 0) ? pct_encode_url(g_candidate, /*backtick*/1, /*squote*/0)   /* hash = FRAGMENT set: ` encoded, ' RAW */
                   : (magic == 1) ? pct_encode_url(g_candidate, /*backtick*/0, /*squote*/1)   /* search = SPECIAL-QUERY set: ' encoded, ` RAW */
+                  : (magic == 3) ? pct_encode_url(g_candidate, /*backtick*/0, /*squote*/1)   /* referrer: the referring URL's query, SPECIAL-QUERY set like search */
                   : NULL;                                                                     /* pm: structured, not URL-encoded */
         const char *payload = enc ? enc : g_candidate;
         size_t lp = strlen(pfx), lc = strlen(payload);

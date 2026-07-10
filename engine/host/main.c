@@ -2449,7 +2449,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
                 JS_NewCFunction2(ctx, (JSCFunction *)js_cookie_set, "set cookie", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
             JS_FreeAtom(ctx, ca);
         }
-        JS_SetPropertyStr(ctx, doc, "referrer", js_concolic(ctx, "{referrer}", JS_UNDEFINED));    /* external input: opaque */
+        def_source(ctx, doc, "referrer", 3);   /* external input SOURCE getter (read-only): attacker-influenced referring URL — forks control flow AND delivers the @S replay candidate (URL-query-encoded), so a referrer sink yields a PoC, not just a fork */
         JS_SetPropertyStr(ctx, doc, "URL", JS_NewString(ctx, g_origin));        /* page identity: CONCRETE for URL building */
         JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, location_host()));   /* page identity: CONCRETE (location.c) */
         JS_SetPropertyStr(ctx, doc, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
