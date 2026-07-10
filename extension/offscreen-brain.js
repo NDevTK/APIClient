@@ -1003,121 +1003,13 @@ function stripJsonp(text) {
 // is right. `extractInterfaceName` remains a string-returning wrapper
 // for back-compat with existing callers.
 function classifyInterface(urlObj) {
-  const hostname = urlObj.hostname;
-  const segments = urlObj.pathname.split("/").filter(Boolean);
-
-  // batchexecute handling: /_/PlayStoreUi/data/batchexecute -> PlayStoreUi
-  if (urlObj.pathname.includes("batchexecute")) {
-    const dataIdx = segments.indexOf("data");
-    if (dataIdx > 0) {
-      return { name: hostname + "/" + segments[dataIdx - 1], rule: "google-batchexecute-data", matched: segments[dataIdx - 1] };
-    }
-    const underscoreIdx = segments.indexOf("_");
-    if (underscoreIdx !== -1 && segments.length > underscoreIdx + 1) {
-      return { name: hostname + "/" + segments[underscoreIdx + 1], rule: "google-batchexecute-underscore", matched: segments[underscoreIdx + 1] };
-    }
-  }
-
-  // Google Boq pattern: /_/<ServiceName>/<method>... where <ServiceName> is
-  // an UpperCamelCase identifier. Covers ConsentUi, OneGoogleBar, etc., even
-  // when the URL does not mention batchexecute. Restricted to Google-ish
-  // hosts to avoid matching unrelated `_` path segments elsewhere.
-  if (
-    segments.length >= 2 &&
-    segments[0] === "_" &&
-    /^[A-Z][A-Za-z0-9]{2,}$/.test(segments[1]) &&
-    (hostname.endsWith(".google.com") || hostname.endsWith(".googleapis.com"))
-  ) {
-    return { name: hostname + "/" + segments[1], rule: "google-boq", matched: "/_/" + segments[1] };
-  }
-
-  // gRPC-over-HTTP $rpc/ paths: the package+service identifies the gRPC
-  // service and must not collapse to bare hostname, which would fold every
-  // method across every gRPC service on that host into one bucket.
-  // Matched before the googleapis short-name so each gRPC service on a
-  // `*-pa.clients6.google.com` host gets its own bucket.
-  const rpcInfo = parseRpcPath(urlObj.pathname);
-  if (rpcInfo) {
-    return { name: hostname + "/$rpc/" + rpcInfo.grpcFullService, rule: "grpc-over-http", matched: "/$rpc/" + rpcInfo.grpcFullService };
-  }
-
-  // Special handling for Google API hosts
-  if (
-    hostname.endsWith(".googleapis.com") ||
-    hostname.endsWith(".clients6.google.com")
-  ) {
-    const m = hostname.match(/^(?:staging-)?([^.]+)\./);
-    return { name: m ? m[1] : hostname, rule: m ? "googleapis-host-prefix" : "googleapis-host-fallback", matched: m ? m[1] : hostname };
-  }
-
-  // Google-specific: /async/ is an API root on Google properties only
-  const isGoogleHost =
-    hostname.endsWith(".google.com") || hostname.includes("google");
-
-  // API root keywords — segments that mark where the API namespace begins
-  const apiRootKeywords = [
-    "api",
-    "_api",
-    "__api",
-    "rest",
-    "graphql",
-    "gql",
-    "grpc",
-    "rpc",
-    "wp-json",
-    "services",
-    "gateway",
-  ];
-  if (isGoogleHost) apiRootKeywords.push("async");
-
-  const isVersionSeg = (s) => /^v\d+\w*$/i.test(s);
-
-  // Find where the API "root" starts — match keyword roots first
-  let rootIdx = -1;
-  let keywordMatched = null;
-  let versionAppended = null;
-  for (let i = 0; i < segments.length; i++) {
-    if (apiRootKeywords.includes(segments[i].toLowerCase())) {
-      rootIdx = i;
-      keywordMatched = segments[i];
-      // Also include a following version segment (e.g. api/v2 → rootIdx covers both)
-      if (i + 1 < segments.length && isVersionSeg(segments[i + 1])) {
-        rootIdx = i + 1;
-        versionAppended = segments[i + 1];
-      }
-      break;
-    }
-  }
-
-  // If no keyword root, find the first version segment anywhere in the path
-  let versionOnly = null;
-  if (rootIdx === -1) {
-    for (let i = 0; i < segments.length; i++) {
-      if (isVersionSeg(segments[i])) {
-        rootIdx = i;
-        versionOnly = segments[i];
-        break;
-      }
-    }
-  }
-
-  if (rootIdx !== -1) {
-    const name = hostname + "/" + segments.slice(0, rootIdx + 1).join("/");
-    if (keywordMatched) {
-      return {
-        name,
-        rule: versionAppended ? "path-keyword+version" : "path-keyword",
-        matched: versionAppended ? keywordMatched + "/" + versionAppended : keywordMatched,
-        keyword: keywordMatched,
-        version: versionAppended || null,
-      };
-    }
-    return { name, rule: "path-version-only", matched: versionOnly, version: versionOnly };
-  }
-
-  // Fallback: group under hostname alone — most sites have one API,
-  // and the first path segment is typically a resource, not a service boundary
-  return { name: hostname, rule: "hostname-fallback", matched: hostname };
+  // Endpoint grouping is the REAL ORIGIN, never a name-regex / URL-pattern GUESS. Inferring an "interface
+  // name" from path structure (batchexecute / googleapis short-names / $rpc / api-root keywords / version
+  // segments) is the banned bundler-recognition heuristic: minified names are meaningless and the guess
+  // silently drifts. The ENGINE owns endpoint identity from RUNNING the code; the popup groups endpoints by
+  // the deterministic origin the browser actually saw. Finer grouping, if ever needed, comes from the engine,
+  // never a JS regex.
+  return { name: urlObj.hostname, rule: "origin", matched: urlObj.hostname };
 }
 
 function extractInterfaceName(urlObj) {
@@ -1265,26 +1157,8 @@ function migrateToCommonPrefixBucket(tab, oldName, refinement, urlObj) {
   if (remainingMethods === 0) tab.discoveryDocs.delete(oldName);
 }
 
-// Parse $rpc/ paths: "/$rpc/google.internal.people.v2.InternalPeopleService/GetPeople"
-// → { grpcPackage, grpcService, grpcMethod }
-const RPC_PATH_RE = /^\/\$rpc\/(.+)\/([^/]+)$/;
-
-function parseRpcPath(path) {
-  const m = RPC_PATH_RE.exec(path);
-  if (!m) return null;
-  const fullService = m[1]; // "google.internal.people.v2.InternalPeopleService"
-  const method = m[2]; // "GetPeople"
-  // Split into package + service name
-  const lastDot = fullService.lastIndexOf(".");
-  return {
-    grpcFullService: fullService,
-    grpcPackage: lastDot > -1 ? fullService.slice(0, lastDot) : "",
-    grpcService: lastDot > -1 ? fullService.slice(lastDot + 1) : fullService,
-    grpcMethod: method,
-  };
-}
-
-
+// (parseRpcPath + RPC_PATH_RE were DELETED with classifyInterface: they parsed a gRPC $rpc/ path into a guessed
+//  service name — the same banned name-regex bundler-recognition heuristic. Endpoints group by real origin now.)
 
 
 /** Detect path segments that look like dynamic IDs rather than resource names. */
