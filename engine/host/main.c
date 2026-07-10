@@ -2111,25 +2111,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     /* window.name: a raw ATTACKER source (opener-set, survives navigation, NOT percent-encoded) — a getset so a
        page WRITE (`window.name = x`) overrides it concretely (blocking the attacker path, no false PoC) while a
        bare read is attacker input (or the @S replay candidate, raw). */
-    { JSAtom na = JS_NewAtom(ctx, "name");
-      JS_DefinePropertyGetSet(ctx, g, na,
-          JS_NewCFunction2(ctx, (JSCFunction *)js_winname_get, "get name", 0, JS_CFUNC_getter, 0),
-          JS_NewCFunction2(ctx, (JSCFunction *)js_winname_set, "set name", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
-      JS_FreeAtom(ctx, na); }
-    /* window.location: a getset over the location object so `location = 'javascript:..'` / `= url` (a common
-       navigation shorthand) is an @S nav sink; reads return the object (location.href/.hash/.assign work). */
-    { JSValue loc = make_location(ctx);   /* stores the window.location singleton internally (location.c) */
-      JSAtom la = JS_NewAtom(ctx, "location");
-      JS_DefinePropertyGetSet(ctx, g, la,
-          JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_get, "get", 0, JS_CFUNC_getter, 0),
-          JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_set, "set", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
-      JS_FreeAtom(ctx, la); JS_FreeValue(ctx, loc); }
-    {   /* navigator -> browser/navigator.c: concrete-example CONCOLIC standard properties (fork + value),
-           sendBeacon/serviceWorker endpoints, opaque prototype for device-dependent members. */
-        JS_SetPropertyStr(ctx, g, "navigator", js_navigator_make(ctx));
-    }
-    JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    install_window_props(ctx, g);   /* window.name/location/navigator/addEventListener (core/frame/local_dom_window.c) */
     event_target_init(ctx, g);   /* EventTarget.prototype — the DOM inheritance spine root (core/dom/event_target.c) */
     node_init(ctx, g);           /* Node.prototype (EventTarget <- Node) — the spine middle (core/dom/node.c) */
     if (!JS_IsUndefined(g_el_proto)) JS_SetPrototype(ctx, g_el_proto, node_proto(ctx));   /* an Element IS a Node IS an EventTarget: inherit through the spine */

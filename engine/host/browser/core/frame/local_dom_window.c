@@ -149,3 +149,28 @@ void install_window_objects(JSContext *ctx, JSValue g) {
     JS_SetPropertyStr(ctx, g, "File", JS_NewCFunction2(ctx, js_file_ctor, "File", 3, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "Response", JS_NewCFunction2(ctx, js_response_ctor, "Response", 2, JS_CFUNC_constructor, 0));   /* body taint through .json()/.text() */
 }
+
+#include "core/frame/winname.h"    /* js_winname_get/set — window.name attacker source */
+#include "core/frame/location.h"   /* make_location + window.location getset (nav @S sink) */
+#include "core/frame/navigator.h"  /* js_navigator_make */
+extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* scheduler edge: register a handler flow */
+
+/* window.name (attacker source, page-write overrides), window.location (getset -> `location = url` is a nav @S
+   sink), navigator, and window.addEventListener. The window's own properties (Blink LocalDOMWindow attributes),
+   installed before the DOM-spine init so boot sees them. */
+void install_window_props(JSContext *ctx, JSValue g) {
+    { JSAtom na = JS_NewAtom(ctx, "name");
+      JS_DefinePropertyGetSet(ctx, g, na,
+          JS_NewCFunction2(ctx, (JSCFunction *)js_winname_get, "get name", 0, JS_CFUNC_getter, 0),
+          JS_NewCFunction2(ctx, (JSCFunction *)js_winname_set, "set name", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
+      JS_FreeAtom(ctx, na); }
+    { JSValue loc = make_location(ctx);   /* stores the window.location singleton internally (location.c) */
+      JSAtom la = JS_NewAtom(ctx, "location");
+      JS_DefinePropertyGetSet(ctx, g, la,
+          JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_get, "get", 0, JS_CFUNC_getter, 0),
+          JS_NewCFunction2(ctx, (JSCFunction *)js_window_location_set, "set", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
+      JS_FreeAtom(ctx, la); JS_FreeValue(ctx, loc); }
+    JS_SetPropertyStr(ctx, g, "navigator", js_navigator_make(ctx));   /* concolic standard props + sendBeacon/serviceWorker + permissions */
+    JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+}

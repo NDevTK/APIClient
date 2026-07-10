@@ -7,4 +7,5 @@
 #include "quickjs.h"
 void install_window_apis(JSContext *ctx, JSValue g, JSValueConst el_proto);   /* interface constructors (observers/XHR/WebSocket/...) */
 void install_window_objects(JSContext *ctx, JSValue g);   /* Math/Date opaque + timers/storage/URL/fetch-objects */
+void install_window_props(JSContext *ctx, JSValue g);   /* window.name/location/navigator/addEventListener */
 #endif
