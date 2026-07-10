@@ -71,7 +71,15 @@ void install_dom_interface_ctors(JSContext *ctx, JSValueConst g, JSValueConst el
     /* EventTarget + Node are owned by event_target.c / node.c (the DOM inheritance spine), installed before this
        — do NOT redefine them here or the flat el_proto-based ctor overwrites the real window.EventTarget/Node and
        breaks `x instanceof EventTarget/Node` for everything that chains to the real spine prototypes. */
-    static const char *N[] = { "Element", "HTMLElement", "HTMLDivElement",
+    /* Element/HTMLElement ARE the interface every el_wrap'd node uses (all our elements share el_proto), so their
+       ctor.prototype IS el_proto — then `node instanceof Element` / `instanceof HTMLElement` hold (the common DOM
+       feature-detection). The specific tags (HTMLDivElement..) keep a fresh proto inheriting el_proto: our engine
+       has one shared element proto, not per-tag prototypes, so per-tag instanceof is a known simplification. */
+    { JSValue ec = JS_NewCFunction2(ctx, js_ctor_stub, "Element", 0, JS_CFUNC_constructor, 0);
+      JS_SetConstructor(ctx, ec, el_proto); JS_SetPropertyStr(ctx, (JSValue)g, "Element", ec); }
+    { JSValue hc = JS_NewCFunction2(ctx, js_ctor_stub, "HTMLElement", 0, JS_CFUNC_constructor, 0);
+      JS_SetConstructor(ctx, hc, el_proto); JS_SetPropertyStr(ctx, (JSValue)g, "HTMLElement", hc); }
+    static const char *N[] = { "HTMLDivElement",
         "HTMLInputElement", "HTMLButtonElement", "HTMLFormElement", "HTMLAnchorElement", "HTMLSpanElement",
         "HTMLImageElement", "SVGElement" };
     for (int i = 0; i < (int)(sizeof N / sizeof N[0]); i++) def_ctor(ctx, g, N[i], el_proto);
