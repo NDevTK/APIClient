@@ -154,10 +154,20 @@ void install_window_objects(JSContext *ctx, JSValue g) {
 #include "core/frame/location.h"   /* make_location + window.location getset (nav @S sink) */
 #include "core/frame/navigator.h"  /* js_navigator_make */
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* scheduler edge: register a handler flow */
+extern void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst val);   /* @S sink recorder (solver/solve.h) */
+extern JSValue g_opaque;   /* opaque sentinel (opaque.h) — the opened Window is a cross-context frame */
+
+/* window.open(url): opens a browsing context at `url` — a NAV sink like location.assign. A `javascript:` URL
+   EXECUTES (XSS); an attacker-controlled url is open-redirect / tabnabbing. Returns the opened Window (opaque). */
+static JSValue js_window_open(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+    (void)t;
+    if (argc >= 1) solve_add(ctx, "window.open", "url", argv[0]);   /* @S: javascript: XSS / open-redirect */
+    return JS_DupValue(ctx, g_opaque);
+}
 
 /* window.name (attacker source, page-write overrides), window.location (getset -> `location = url` is a nav @S
-   sink), navigator, and window.addEventListener. The window's own properties (Blink LocalDOMWindow attributes),
-   installed before the DOM-spine init so boot sees them. */
+   sink), navigator, window.open (nav sink), and window.addEventListener. The window's own properties (Blink
+   LocalDOMWindow attributes), installed before the DOM-spine init so boot sees them. */
 void install_window_props(JSContext *ctx, JSValue g) {
     { JSAtom na = JS_NewAtom(ctx, "name");
       JS_DefinePropertyGetSet(ctx, g, na,
@@ -173,4 +183,5 @@ void install_window_props(JSContext *ctx, JSValue g) {
     JS_SetPropertyStr(ctx, g, "navigator", js_navigator_make(ctx));   /* concolic standard props + sendBeacon/serviceWorker + permissions */
     JS_SetPropertyStr(ctx, g, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, g, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    JS_SetPropertyStr(ctx, g, "open", JS_NewCFunction(ctx, js_window_open, "open", 3));   /* window.open(url) -> nav @S sink */
 }
