@@ -1264,6 +1264,18 @@ static void replay_handlers_clear(JSContext *ctx) {
     for (int i = 0; i < g_replay_handler_n; i++) JS_FreeValue(ctx, g_replay_handlers[i]);
     g_replay_handler_n = 0; g_replay_msg_n = 0;
 }
+/* Is `fn` a registered event handler (addEventListener)? Then orphan-driving it must pass a real Event (not a
+   bare opaque), else `if(e.preventDefault)`-style shape checks FORK an impossible arm -> a phantom endpoint. */
+static int is_handler(JSContext *ctx, JSValueConst fn) {
+    if (JS_IsUndefined(g_handlers) || !JS_IsFunction(ctx, fn)) return 0;
+    void *p = JS_VALUE_GET_PTR(fn);
+    for (int i = 0; i < g_handler_n; i++) {
+        JSValue h = JS_GetPropertyUint32(ctx, g_handlers, (uint32_t)i);
+        int m = (JS_VALUE_GET_PTR(h) == p); JS_FreeValue(ctx, h);
+        if (m) return 1;
+    }
+    return 0;
+}
 JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
     JSValueConst h0 = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
     if (g_in_boot_flow) return JS_UNDEFINED;   /* boot flow re-run: handlers already registered by the initial boot — don't duplicate g_handlers */
@@ -1853,12 +1865,13 @@ static void scheduler_run(JSContext *ctx)
             /* OPAQUE-COLLECTION element: an items.forEach(cb) callback's element carries the collection's
                provenance ({reply}), not a bare g_opaque — so f.key keeps the reply taint. Freed after
                JS_FlowNew dups it into the frame. */
-            JSValue elem = JS_UNDEFINED;
+            JSValue elem = JS_UNDEFINED, ev = JS_UNDEFINED;
             if (f.drive_src) { elem = JS_NewOpaqueSourced(ctx, f.drive_src, f.drive_src); oargs[0] = elem; }
             /* A 'message' listener's first arg is a MessageEvent whose .data is attacker-controlled
                (postMessage): drive it with the {pm} source-tagged event so a sink reaching e.data reports
                {pm} and the PoC assembler builds a postMessage-delivered PoC. */
             if (!JS_IsUndefined(g_msg_event) && is_msg_handler(drive)) oargs[0] = g_msg_event;
+            else if (!f.drive_src && is_handler(ctx, drive)) { ev = js_event_ctor(ctx, JS_UNDEFINED, 0, NULL); oargs[0] = ev; }   /* a non-message handler gets a REAL Event (type/target/preventDefault…), not opaque -> no phantom shape-check arm */
             /* Drive an orphan METHOD with its REAL receiver instance if one exists (this.field -> concrete
                boot value, a real example) else opaque this. Args stay opaque (external input). */
             JSValue recv = JS_FindReceiver(ctx, drive);
@@ -1866,6 +1879,7 @@ static void scheduler_run(JSContext *ctx)
             f.fs = JS_FlowNew(ctx, drive, this_val, 8, oargs);   /* async funcs included now — JS_FlowNew accepts them */
             JS_FreeValue(ctx, recv);
             JS_FreeValue(ctx, elem);   /* JS_FlowNew dup'd the collection-tagged element into the frame (UNDEFINED if unused) */
+            JS_FreeValue(ctx, ev);     /* JS_FlowNew dup'd the synthetic Event (UNDEFINED if the drive isn't a handler) */
             JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);   /* JS_FlowNew dup'd the drive handle; drop our resolved ref + transient replay handlers */
         }
         /* RESUME: swap in the parked flow's OWN heap COW delta (unapplied while it slept) so it sees its own
