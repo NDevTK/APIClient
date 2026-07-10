@@ -27,6 +27,7 @@
 #include "solver/constraints.h"  /* per-flow value-domain constraint tracker (concolic path constraint), its own TU */
 #include "solver/wfq.h"          /* the ONE WFQ priority policy (order key), its own TU */
 #include "solver/opaque.h"       /* the OPAQUE sentinel g_opaque + js_noop/js_opaque/js_opaque_stub, its own TU */
+#include "solver/scheduler.h"    /* Flow (per-flow scheduler state) + AsyncRecipe (replay recipe) — the registry's record types */
 #include "solver/solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "solver/envelope.h"     /* @S structured-source delivery envelope (JSON/query/delim addressing), its own TU */
 #include "core/frame/csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
@@ -96,58 +97,10 @@
 
 /* ---- the ONE flow registry (scheduler-owned memory) --------------------------------
    A flow is a STARTER (a function to force-invoke, with a decision vector for its branch choices); it may be
-   SUSPENDED mid-run (fs = live heap frame, JS_FlowResume) and re-queued. All carry value-of-information. */
-/* NO BOUNDS: the registry and the decision vector grow dynamically (until RAM/disk, the platform floor
-   — the design's UNBOUNDED). No FLOW_MAX / DEC_MAX cap that would truncate distinct work the scheduler
-   would otherwise reach. (Eviction of the cold/low-value tail to IDB is the further step; growth removes
-   the artificial ceiling first.) */
-typedef struct {
-    JSValue handle;      /* the function (starter/suspended) */
-    double val;          /* accumulated value-of-information (emits raise it) */
-    signed char *dec; int dec_n;  /* per-flow decision vector (branch-arm BFS) */
-    void *fs;            /* live heap frame if SUSPENDED mid-run (JS_FlowResume), else NULL */
-    void *cow; int cow_n, cow_cap;  /* this flow's HEAP COW DELTA, stashed while parked (unapplied); swapped in on resume */
-    void *dom; int dom_n, dom_cap;  /* this flow's DOM COW DELTA, same swap discipline */
-    int saved_c;         /* per-flow branch cursor (g_c) snapshot, restored on resume */
-    double cpu;          /* back-edge CPU ticks since last emit (WFQ decay; reset to 0 on emit) */
-    int visits;          /* times scheduled (UCB/fairness explore term) */
-    int orphan_idx;      /* cross-session locator: index in deterministic orphan collection (-1 = boot/yield, not park-replayable) */
-    char *candidate;     /* @S REPLAY flow: a concrete breakout payload the source getters return (instead of opaque),
-                            so this flow re-runs the orphan through the REAL code+branches with the candidate; the sink
-                            then sees a CONCRETE value and checks breakout. NULL = a normal opaque exploration flow. */
-    int session;         /* ATTACKER SESSION flow: fire ALL registered handlers in seed order over ONE accumulating
-                            COW delta (handler A's tainted write to shared state is visible to handler B), modeling an
-                            attacker firing a sequence of events — the sound way to reach cross-handler sinks. */
-    char *vtarget;       /* @S candidate flow: the "sink|ctx" it verifies. Once that's in g_verified, this flow is
-                            REDUNDANT (another candidate already broke out) -> skip it, saving a full bundle re-run. */
-    char *drive_src;     /* OPAQUE-COLLECTION callback flow (items.forEach(cb), items = a reply/injected opaque): the
-                            element the callback is driven with must carry the COLLECTION's provenance, not a bare
-                            {} — this is the collection's shape so the starter drives arg0 as {reply} (f.key reads
-                            {reply}, keeping the reply taint) instead of losing it to g_opaque. NULL = default
-                            g_opaque args (a genuine orphan handler whose args are external input). */
-    int is_boot;         /* BOOT FLOW: re-run the page's boot (inline scripts) from the PRISTINE pre-boot baseline as a
-                            FORKING starter, so an async reply (now cached, resolves synchronously on re-run) drives its
-                            continuation's gated branches WITH the concolic example — the faithful boot-as-flow. */
-    JSValue aresolve;    /* ASYNC-CALL flow: resolve fn of the invocation's result promise. On COMPLETION the scheduler
-                            calls it with the return value, so an `await asyncFn()` caller-flow's promise settles and it
-                            resumes. JS_UNDEFINED for a non-async-call flow. f.fs holds the pre-created async state. */
-    JSValue areject;     /* ASYNC-CALL flow: reject fn of the result promise. On a THROWN completion the scheduler calls
-                            it with the exception, so the awaiting caller's await re-throws (try/catch/.catch runs — a
-                            throw path can itself reach a sink), never a silent resolve-with-undefined. */
-    JSValue await_promise;   /* ASYNC-CALL flow PARKED on a still-pending await promise (JS_FlowResume returned 2): the
-                                scheduler polls its state + resumes (JS_FlowResumeInject) once it settles. UNDEFINED = runnable. */
-    JSValue rthis; JSValue *rargs; int rargc;   /* async-call RE-RUN RECIPE (func = handle) captured pristine at claim, so a
-                                                   reject-replay sibling can JS_FlowNew the same call from scratch. */
-    int is_async;   /* async-call flow (or a sibling of one): forks/replays await outcomes into the ONE decision vector
-                       (g_dec), and re-runs via the recipe (func+args) so the await sequence is reproduced. */
-    int sess_ctx;   /* the sink-CONTEXT is a session, DECOUPLED from the session RUN-MODE (`session`). A .then/await
-                       continuation spawned while a session fired a handler inherits this: it RESUMES its own frame
-                       (not the re-fire-all-handlers run-mode), yet a sink it reaches is treated as in-session so the
-                       @S candidate replay spawns a candidate SESSION (re-fires the handler WITH the candidate,
-                       delivering it through the .then chain the async source rode). Without it a handler-time async
-                       sink (addEventListener('message', e=>P.resolve(e.data).then(t=>innerHTML=t))) never verifies —
-                       the reaction runs OUTSIDE the session that fired it. */
-} Flow;
+   SUSPENDED mid-run (fs = live heap frame, JS_FlowResume) and re-queued. All carry value-of-information. The
+   per-flow record `Flow` + async replay recipe `AsyncRecipe` are defined in solver/scheduler.h (so a
+   scheduler-coupled solver TU can name them); the registry array + WFQ + dispatch stay here. NO BOUNDS: the
+   registry + decision vector grow until the RAM/disk floor; no FLOW_MAX/DEC_MAX cap that truncates work. */
 static JSContext *g_ctx;       /* fwd: the MAIN analysis context (defined near the persistent-instance protocol) — the
                                   async/reaction hooks claim a call as a flow ONLY for this ctx, never the @S solve realm */
 static int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
@@ -266,7 +219,6 @@ static void flow_free_async_refs(JSContext *ctx, Flow *f) {
    is live. Both replay the flow's parked await/branch path instead of re-forking from scratch. Unconsumed
    entries (a handler that never re-fires this session) are freed at teardown — never a leak, never lost
    (a never-fired handler's recipe simply waits for the session where it does fire). */
-typedef struct { uint32_t hash; signed char *dec; int dec_n; double val; int visits; int used; } AsyncRecipe;
 static AsyncRecipe *g_arec = NULL; static int g_arec_n = 0, g_arec_cap = 0;
 /* Attach the first UNUSED recipe whose source hash matches this fresh async flow's function. Ownership of
    `dec` transfers to the flow (freed at flow teardown); the map slot is marked used. Returns 1 if attached. */
