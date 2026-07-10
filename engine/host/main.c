@@ -2142,66 +2142,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        endpoints/sinks are learned by EXECUTION (spec), not by reading a DOM attribute. customElements.define
        is a no-op: the ctor's methods are already reachable + orphan-driven. */
     install_window_apis(ctx, g, g_el_proto);   /* web-platform interface constructors onto the window (core/frame/local_dom_window.c) */
-    /* Time/random are EXTERNAL INPUT -> OPAQUE: a branch on Math.random()/Date.now() must FORK both arms
-       (not take a random one), and their VALUES are shapes not fabricated concretes. This is also a REPLAY
-       SOUNDNESS requirement -- non-deterministic values would shift orphan-collection order between
-       sessions and make a parked flow's (orphan_idx) recipe reconstruct the wrong flow. */
-    {
-        JSValue mo = JS_GetPropertyStr(ctx, g, "Math");
-        if (JS_IsObject(mo)) JS_SetPropertyStr(ctx, mo, "random", JS_NewCFunction(ctx, js_opaque, "random", 0));
-        JS_FreeValue(ctx, mo);
-        JSValue dt = JS_GetPropertyStr(ctx, g, "Date");
-        if (JS_IsObject(dt)) {
-            JS_SetPropertyStr(ctx, dt, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
-            JSValue dp = JS_GetPropertyStr(ctx, dt, "prototype");   /* new Date().getTime()/valueOf() -> opaque too */
-            if (JS_IsObject(dp)) {
-                JS_SetPropertyStr(ctx, dp, "getTime", JS_NewCFunction(ctx, js_opaque, "getTime", 0));
-                JS_SetPropertyStr(ctx, dp, "valueOf", JS_NewCFunction(ctx, js_opaque, "valueOf", 0));
-            }
-            JS_FreeValue(ctx, dp);
-        }
-        JS_FreeValue(ctx, dt);
-        JS_SetPropertyStr(ctx, g, "performance", js_performance_make(ctx));   /* Performance API (browser/performance.c) */
-        JS_SetPropertyStr(ctx, g, "crypto", js_crypto_make(ctx));   /* Web Crypto (browser/crypto.c) */
-        JS_SetPropertyStr(ctx, g, "trustedTypes", js_trusted_types_make(ctx));   /* Trusted Types API (browser/trusted_types.c) */
-        /* Timers: a deferred callback is a FLOW in the one scheduler (see js_set_timer), not a real wait.
-           Missing these made every bundle that defers init in setTimeout learn nothing. */
-        JS_SetPropertyStr(ctx, g, "setTimeout", JS_NewCFunction(ctx, js_set_timer, "setTimeout", 2));
-        JS_SetPropertyStr(ctx, g, "setInterval", JS_NewCFunction(ctx, js_set_timer, "setInterval", 2));
-        JS_SetPropertyStr(ctx, g, "requestAnimationFrame", JS_NewCFunction(ctx, js_set_timer, "requestAnimationFrame", 1));
-        JS_SetPropertyStr(ctx, g, "requestIdleCallback", JS_NewCFunction(ctx, js_set_timer, "requestIdleCallback", 1));
-        JS_SetPropertyStr(ctx, g, "queueMicrotask", JS_NewCFunction(ctx, js_set_timer, "queueMicrotask", 1));   /* a queued microtask is a FLOW (invariant: EVERY enqueued job is a first-class flow), not a native job the drains pump */
-        JS_SetPropertyStr(ctx, g, "clearTimeout", JS_NewCFunction(ctx, js_noop, "clearTimeout", 1));
-        JS_SetPropertyStr(ctx, g, "clearInterval", JS_NewCFunction(ctx, js_noop, "clearInterval", 1));
-        JS_SetPropertyStr(ctx, g, "cancelAnimationFrame", JS_NewCFunction(ctx, js_noop, "cancelAnimationFrame", 1));
-        /* Web storage: values are external input -> opaque getItem; writes no-op. */
-        for (int si = 0; si < 2; si++) {
-            JSValue st = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, st, "getItem", JS_NewCFunction(ctx, js_storage_get, "getItem", 1));
-            JS_SetPropertyStr(ctx, st, "setItem", JS_NewCFunction(ctx, js_storage_set, "setItem", 2));
-            JS_SetPropertyStr(ctx, st, "removeItem", JS_NewCFunction(ctx, js_noop, "removeItem", 1));
-            JS_SetPropertyStr(ctx, st, "clear", JS_NewCFunction(ctx, js_noop, "clear", 0));
-            JS_SetPropertyStr(ctx, st, "key", JS_NewCFunction(ctx, js_storage_get, "key", 1));
-            JS_SetPropertyStr(ctx, g, si ? "sessionStorage" : "localStorage", st);
-        }
-        /* URL / URLSearchParams: endpoint construction (see js_url_ctor). */
-        { JSValue urlctor = JS_NewCFunction2(ctx, js_url_ctor, "URL", 2, JS_CFUNC_constructor, 0);
-          JS_SetPropertyStr(ctx, urlctor, "canParse", JS_NewCFunction(ctx, js_url_canparse, "canParse", 2));   /* static URL.canParse */
-          JS_SetPropertyStr(ctx, g, "URL", urlctor); }
-        JS_SetPropertyStr(ctx, g, "URLSearchParams", JS_NewCFunction2(ctx, js_searchparams_ctor, "URLSearchParams", 1, JS_CFUNC_constructor, 0));
-        JS_SetPropertyStr(ctx, g, "Request", JS_NewCFunction2(ctx, js_request_ctor, "Request", 2, JS_CFUNC_constructor, 0));
-        /* fetch-API + encoding + misc Web objects: opaque-read / no-op-write, so a bundle that constructs
-           them doesn't ReferenceError and any value read out stays opaque. */
-        JS_SetPropertyStr(ctx, g, "FormData", JS_NewCFunction2(ctx, js_formdata_ctor, "FormData", 0, JS_CFUNC_constructor, 0));   /* real: records fields -> POST body params */
-        JS_SetPropertyStr(ctx, g, "Headers", JS_NewCFunction2(ctx, js_headers_ctor, "Headers", 1, JS_CFUNC_constructor, 0));   /* real: records header fields -> required headers */
-        JS_SetPropertyStr(ctx, g, "AbortController", JS_NewCFunction2(ctx, js_abortcontroller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0));   /* real AbortSignal (abort.c), not the generic stub */
-        JS_SetPropertyStr(ctx, g, "TextEncoder", JS_NewCFunction2(ctx, js_textencoder_ctor, "TextEncoder", 0, JS_CFUNC_constructor, 0));   /* real UTF-8 (browser/encoding.c), IDL-faithful */
-        JS_SetPropertyStr(ctx, g, "TextDecoder", JS_NewCFunction2(ctx, js_textdecoder_ctor, "TextDecoder", 0, JS_CFUNC_constructor, 0));
-        JS_SetPropertyStr(ctx, g, "FileReader", JS_NewCFunction2(ctx, js_filereader_ctor, "FileReader", 0, JS_CFUNC_constructor, 0));   /* real: readAsText -> attacker content + onload flow (browser/filereader.c) */
-        JS_SetPropertyStr(ctx, g, "Blob", JS_NewCFunction2(ctx, js_blob_ctor, "Blob", 2, JS_CFUNC_constructor, 0));   /* real: content taint through .text() (browser/blob.c) */
-        JS_SetPropertyStr(ctx, g, "File", JS_NewCFunction2(ctx, js_file_ctor, "File", 3, JS_CFUNC_constructor, 0));
-        JS_SetPropertyStr(ctx, g, "Response", JS_NewCFunction2(ctx, js_response_ctor, "Response", 2, JS_CFUNC_constructor, 0));   /* real: body taint through .json()/.text() (browser/response.c) */
-    }
+    install_window_objects(ctx, g);   /* Math/Date opaque + timers/storage/URL/fetch-objects (local_dom_window.c) */
     JS_FreeValue(ctx, g);
 
     if (boot) {

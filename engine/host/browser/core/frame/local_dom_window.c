@@ -82,3 +82,70 @@ void install_window_apis(JSContext *ctx, JSValue g, JSValueConst el_proto) {
     }
     JS_SetPropertyStr(ctx, g, "history", js_history_make(ctx));   /* real History state machine (history.c): pushState sets history.state */
 }
+
+#include "core/timing/performance.h"        /* js_performance_make */
+#include "modules/crypto.h"                 /* js_crypto_make */
+#include "core/trustedtypes/trusted_types.h"/* js_trusted_types_make */
+#include "core/timing/timers.h"             /* js_set_timer (setTimeout/rAF/queueMicrotask -> scheduler flows) */
+#include "modules/storage.h"                /* js_storage_get/set (local/sessionStorage) */
+#include "platform/urlobj.h"                /* js_url_ctor/js_url_canparse/js_searchparams_ctor/js_request_ctor/js_headers_ctor */
+#include "core/html/forms/formdata.h"       /* js_formdata_ctor */
+#include "modules/encoding.h"               /* js_textencoder_ctor/js_textdecoder_ctor */
+#include "core/fileapi/filereader.h"        /* js_filereader_ctor */
+#include "core/fileapi/blob.h"              /* js_blob_ctor/js_file_ctor */
+#include "core/loader/response.h"           /* js_response_ctor */
+
+/* Time/random are EXTERNAL INPUT -> OPAQUE (a branch on Math.random()/Date.now() must FORK, values are shapes;
+   a REPLAY-SOUNDNESS requirement too), plus the timer/storage/URL/fetch-object web globals. Second half of the
+   window-globals install (js_opaque/js_noop from opaque.h, included above). */
+void install_window_objects(JSContext *ctx, JSValue g) {
+    JSValue mo = JS_GetPropertyStr(ctx, g, "Math");
+    if (JS_IsObject(mo)) JS_SetPropertyStr(ctx, mo, "random", JS_NewCFunction(ctx, js_opaque, "random", 0));
+    JS_FreeValue(ctx, mo);
+    JSValue dt = JS_GetPropertyStr(ctx, g, "Date");
+    if (JS_IsObject(dt)) {
+        JS_SetPropertyStr(ctx, dt, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
+        JSValue dp = JS_GetPropertyStr(ctx, dt, "prototype");   /* new Date().getTime()/valueOf() -> opaque too */
+        if (JS_IsObject(dp)) {
+            JS_SetPropertyStr(ctx, dp, "getTime", JS_NewCFunction(ctx, js_opaque, "getTime", 0));
+            JS_SetPropertyStr(ctx, dp, "valueOf", JS_NewCFunction(ctx, js_opaque, "valueOf", 0));
+        }
+        JS_FreeValue(ctx, dp);
+    }
+    JS_FreeValue(ctx, dt);
+    JS_SetPropertyStr(ctx, g, "performance", js_performance_make(ctx));
+    JS_SetPropertyStr(ctx, g, "crypto", js_crypto_make(ctx));
+    JS_SetPropertyStr(ctx, g, "trustedTypes", js_trusted_types_make(ctx));
+    /* Timers: a deferred callback is a FLOW in the one scheduler (js_set_timer), not a real wait. */
+    JS_SetPropertyStr(ctx, g, "setTimeout", JS_NewCFunction(ctx, js_set_timer, "setTimeout", 2));
+    JS_SetPropertyStr(ctx, g, "setInterval", JS_NewCFunction(ctx, js_set_timer, "setInterval", 2));
+    JS_SetPropertyStr(ctx, g, "requestAnimationFrame", JS_NewCFunction(ctx, js_set_timer, "requestAnimationFrame", 1));
+    JS_SetPropertyStr(ctx, g, "requestIdleCallback", JS_NewCFunction(ctx, js_set_timer, "requestIdleCallback", 1));
+    JS_SetPropertyStr(ctx, g, "queueMicrotask", JS_NewCFunction(ctx, js_set_timer, "queueMicrotask", 1));   /* a queued microtask is a FLOW (invariant), not a native-drained job */
+    JS_SetPropertyStr(ctx, g, "clearTimeout", JS_NewCFunction(ctx, js_noop, "clearTimeout", 1));
+    JS_SetPropertyStr(ctx, g, "clearInterval", JS_NewCFunction(ctx, js_noop, "clearInterval", 1));
+    JS_SetPropertyStr(ctx, g, "cancelAnimationFrame", JS_NewCFunction(ctx, js_noop, "cancelAnimationFrame", 1));
+    for (int si = 0; si < 2; si++) {   /* Web storage: values are external input -> opaque getItem; writes no-op */
+        JSValue st = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, st, "getItem", JS_NewCFunction(ctx, js_storage_get, "getItem", 1));
+        JS_SetPropertyStr(ctx, st, "setItem", JS_NewCFunction(ctx, js_storage_set, "setItem", 2));
+        JS_SetPropertyStr(ctx, st, "removeItem", JS_NewCFunction(ctx, js_noop, "removeItem", 1));
+        JS_SetPropertyStr(ctx, st, "clear", JS_NewCFunction(ctx, js_noop, "clear", 0));
+        JS_SetPropertyStr(ctx, st, "key", JS_NewCFunction(ctx, js_storage_get, "key", 1));
+        JS_SetPropertyStr(ctx, g, si ? "sessionStorage" : "localStorage", st);
+    }
+    { JSValue urlctor = JS_NewCFunction2(ctx, js_url_ctor, "URL", 2, JS_CFUNC_constructor, 0);   /* URL / URLSearchParams: endpoint construction */
+      JS_SetPropertyStr(ctx, urlctor, "canParse", JS_NewCFunction(ctx, js_url_canparse, "canParse", 2));
+      JS_SetPropertyStr(ctx, g, "URL", urlctor); }
+    JS_SetPropertyStr(ctx, g, "URLSearchParams", JS_NewCFunction2(ctx, js_searchparams_ctor, "URLSearchParams", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "Request", JS_NewCFunction2(ctx, js_request_ctor, "Request", 2, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "FormData", JS_NewCFunction2(ctx, js_formdata_ctor, "FormData", 0, JS_CFUNC_constructor, 0));   /* records fields -> POST body params */
+    JS_SetPropertyStr(ctx, g, "Headers", JS_NewCFunction2(ctx, js_headers_ctor, "Headers", 1, JS_CFUNC_constructor, 0));      /* records header fields -> required headers */
+    JS_SetPropertyStr(ctx, g, "AbortController", JS_NewCFunction2(ctx, js_abortcontroller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "TextEncoder", JS_NewCFunction2(ctx, js_textencoder_ctor, "TextEncoder", 0, JS_CFUNC_constructor, 0));   /* real UTF-8 (encoding.c) */
+    JS_SetPropertyStr(ctx, g, "TextDecoder", JS_NewCFunction2(ctx, js_textdecoder_ctor, "TextDecoder", 0, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "FileReader", JS_NewCFunction2(ctx, js_filereader_ctor, "FileReader", 0, JS_CFUNC_constructor, 0));   /* readAsText -> attacker content + onload flow */
+    JS_SetPropertyStr(ctx, g, "Blob", JS_NewCFunction2(ctx, js_blob_ctor, "Blob", 2, JS_CFUNC_constructor, 0));   /* content taint through .text() */
+    JS_SetPropertyStr(ctx, g, "File", JS_NewCFunction2(ctx, js_file_ctor, "File", 3, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "Response", JS_NewCFunction2(ctx, js_response_ctor, "Response", 2, JS_CFUNC_constructor, 0));   /* body taint through .json()/.text() */
+}

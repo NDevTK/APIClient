@@ -5,5 +5,6 @@
 #ifndef ENGINE_HOST_BROWSER_LOCAL_DOM_WINDOW_H
 #define ENGINE_HOST_BROWSER_LOCAL_DOM_WINDOW_H
 #include "quickjs.h"
-void install_window_apis(JSContext *ctx, JSValue g, JSValueConst el_proto);   /* install the web-platform interface constructors onto the window global */
+void install_window_apis(JSContext *ctx, JSValue g, JSValueConst el_proto);   /* interface constructors (observers/XHR/WebSocket/...) */
+void install_window_objects(JSContext *ctx, JSValue g);   /* Math/Date opaque + timers/storage/URL/fetch-objects */
 #endif
