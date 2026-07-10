@@ -781,14 +781,18 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
     if (g_running && g_cur_flow) { g_cur_flow->val += 1.0; g_cur_flow->cpu = 0; }
     /* SPAWN candidate-replay flows in the ONE scheduler. Re-drive the FUNCTION that reached this sink (the
        nearest bytecode fn on the stack — works even at BOOT, where there is no orphan flow context) with each
-       concrete candidate. Dedup by fn-SOURCE-IDENTITY (position-independent) + sink + ctx — avoids re-enqueue,
-       not work-truncation: each candidate still runs once and the WFQ orders/starves them. */
+       concrete candidate. NOT a seen-set: the enqueue ledger stores the GATE-TOKEN COUNT at emit time and
+       RE-ENQUEUES when it has GROWN — a later path through the SAME sink that discovers a new filter token
+       (startsWith/indexOf/==) the candidate must satisfy gets fresh candidates carrying it, instead of being
+       truncated out. Re-emitted duplicates emit nothing new and are WFQ-starved, so this never truncates work. */
     JSValueConst hitfn = JS_CurrentScriptFn(ctx);
     if (JS_IsObject(g_enqueued) && !JS_IsUndefined(hitfn)) {
         char ek[320]; snprintf(ek, sizeof ek, "%u|%s|%s", JS_OrphanHash(ctx, hitfn), sink, sctx);
-        JSValue e = JS_GetPropertyStr(ctx, g_enqueued, ek); int done = !JS_IsUndefined(e); JS_FreeValue(ctx, e);
-        if (!done) {
-            JS_SetPropertyStr(ctx, g_enqueued, ek, JS_NewBool(ctx, 1));
+        JSValue e = JS_GetPropertyStr(ctx, g_enqueued, ek);
+        int32_t prev_gate = -1; if (JS_IsNumber(e)) JS_ToInt32(ctx, &prev_gate, e);   /* token count at last emit, or -1 = never */
+        JS_FreeValue(ctx, e);
+        if (prev_gate < g_gate_n) {   /* never enqueued, OR new gate tokens learned since -> (re)enqueue with them */
+            JS_SetPropertyStr(ctx, g_enqueued, ek, JS_NewInt32(ctx, g_gate_n));
             char vt[300]; snprintf(vt, sizeof vt, "%s|%s", sink, sctx);   /* the sink|ctx these candidates verify -> skip once one breaks out */
             /* HTML-context sinks: CONSTRUCT the breakout from the observed sink STRUCTURE (parse context +
                quoting), never a fixed HTML payload list. url/js sinks: the vector is itself context-fixed
