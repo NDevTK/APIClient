@@ -49,6 +49,7 @@ static const IDLMember RESP_MEMBERS[] = {
     { "text",        IDL_METHOD, m_text, 0 },
     { "blob",        IDL_METHOD, m_text, 0 },   /* body-as-Blob: taint-equivalent to text for solver purposes */
     { "arrayBuffer", IDL_METHOD, m_text, 0 },
+    { "bytes",       IDL_METHOD, m_text, 0 },   /* Promise<Uint8Array>: body bytes, taint-equivalent to text */
     { "formData",    IDL_METHOD, m_text, 0 },
     { "clone",       IDL_METHOD, m_self, 0 },
 };
@@ -77,6 +78,11 @@ JSValue js_response_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst
     JS_SetPropertyStr(ctx, o, "ok", JS_NewBool(ctx, status >= 200 && status < 300));
     JS_SetPropertyStr(ctx, o, "statusText", JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, o, "bodyUsed", JS_FALSE);
+    /* A constructor-built (synthetic) Response has, per the Fetch spec, an EMPTY url, type "default", and is not
+       redirected — real spec-defined scalars (a fetch response overrides these in reply.c), never a stub. */
+    JS_SetPropertyStr(ctx, o, "url", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, o, "type", JS_NewString(ctx, "default"));
+    JS_SetPropertyStr(ctx, o, "redirected", JS_FALSE);
     /* headers: a page-constructed Response's headers are KNOWN app data (init.headers), not unknowable input —
        build a real Headers so `new Response(b,{headers:{...}}).headers.get(k)` returns the set value. */
     JSValue ih = JS_IsObject(init) ? JS_GetPropertyStr(ctx, init, "headers") : JS_UNDEFINED;
