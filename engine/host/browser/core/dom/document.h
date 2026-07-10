@@ -13,4 +13,5 @@ JSValue js_doc_currentscript(JSContext *ctx, JSValueConst t);            /* gett
 void doc_set_current_script(JSContext *ctx, JSValue v);                  /* scheduler boot loop feeds currentScript (consumes v) */
 void document_init(JSContext *ctx, JSValue global);   /* register the Document class + prototype + window.Document (call before js_document_make) */
 JSValue js_document_make(JSContext *ctx);   /* the window.document instance (shares Document.prototype) */
+void install_named_properties(JSContext *ctx, JSValue global, JSValue document);   /* window[id]/document[id] = the real element (named access) */
 #endif

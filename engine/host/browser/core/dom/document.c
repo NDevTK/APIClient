@@ -85,6 +85,32 @@ static void doc_def_getset(JSContext *ctx, JSValue proto, const char *name, JSCF
         JS_PROP_CONFIGURABLE);
     JS_FreeAtom(ctx, a);
 }
+/* NAMED PROPERTIES (Blink WindowProperties / document named getter): a shipped element with an id is exposed as
+   window[id] and document[id] — the REAL element, not an opaque {state} shrug (a named element is modelable, not
+   injected app-state). So `window.myMount.appendChild(...)` / `if (window.cfg)` see the actual node. Installed as
+   own props only where no real global/document member already exists (a real browser gives globals priority over
+   named access). This is also the base for DOM-clobbering @S: an id-bearing element flips a global the app reads. */
+void install_named_properties(JSContext *ctx, JSValue global, JSValue document) {
+    JSValue els = dom_select_all(ctx, NULL, "[id]", 4);
+    if (!JS_IsArray(els)) { JS_FreeValue(ctx, els); return; }
+    uint32_t n = 0; { JSValue lv = JS_GetPropertyStr(ctx, els, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv); }
+    for (uint32_t i = 0; i < n; i++) {
+        JSValue el = JS_GetPropertyUint32(ctx, els, i);
+        JSValue idv = JS_GetPropertyStr(ctx, el, "id");
+        const char *id = JS_IsString(idv) ? JS_ToCString(ctx, idv) : NULL;
+        if (id && id[0]) {
+            JSAtom a = JS_NewAtom(ctx, id);
+            if (!JS_HasProperty(ctx, global, a))   /* globals win over named access (spec) */
+                JS_DefinePropertyValue(ctx, global, a, JS_DupValue(ctx, el), JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+            if (!JS_HasProperty(ctx, document, a))
+                JS_DefinePropertyValue(ctx, document, a, JS_DupValue(ctx, el), JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+            JS_FreeAtom(ctx, a);
+        }
+        if (id) JS_FreeCString(ctx, id);
+        JS_FreeValue(ctx, idv); JS_FreeValue(ctx, el);
+    }
+    JS_FreeValue(ctx, els);
+}
 void document_init(JSContext *ctx, JSValue global) {
     JSRuntime *rt = JS_GetRuntime(ctx);
     JS_NewClassID(rt, &g_document_class_id);

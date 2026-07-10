@@ -2133,7 +2133,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     node_init(ctx, g);           /* Node.prototype (EventTarget <- Node) — the spine middle (core/dom/node.c) */
     if (!JS_IsUndefined(g_el_proto)) JS_SetPrototype(ctx, g_el_proto, node_proto(ctx));   /* an Element IS a Node IS an EventTarget: inherit through the spine */
     document_init(ctx, g);   /* register Document class + prototype (chains to Node) + window.Document */
-    JS_SetPropertyStr(ctx, g, "document", js_document_make(ctx));   /* the window.document instance (shares the prototype) */
+    { JSValue doc = js_document_make(ctx);   /* the window.document instance (shares the prototype) */
+      install_named_properties(ctx, g, doc);   /* window[id]/document[id] = the real element (named access, not an opaque {state} shrug) */
+      JS_SetPropertyStr(ctx, g, "document", doc); }
     /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
        methods (connectedCallback etc.) become uncalled methods the orphan driver reaches -> the element's
        endpoints/sinks are learned by EXECUTION (spec), not by reading a DOM attribute. customElements.define
