@@ -11,8 +11,8 @@
 #include "core/dom/document.h"              /* doc_set_current_script — document.currentScript */
 #include "core/dom/dom_element.h"           /* el_wrap — the running <script> element */
 #include "platform/url.h"                   /* has_hole — an opaque-hole src isn't a concrete fetch */
-#include "boot_scripts.h"                    /* boot_script_cache — inline scripts cached for boot-replay */
-#include "why.h"                             /* why_add — a script runtime throw surfaces as @WHY */
+#include "solver/boot_scripts.h"             /* boot_script_cache — inline scripts cached for boot-replay */
+#include "solver/why.h"                      /* why_add — a script runtime throw surfaces as @WHY */
 
 /* main.c host edges (the scheduler's resource loader + the live document) — externed until the loader itself is
    a component; a browser component uses them by interface, not by owning the state. */

@@ -7,14 +7,14 @@
 #include <lexbor/html/html.h>   /* lxb_html_template_element_t for <template>.content */
 #include "core/dom/dom_element.h"
 #include "core/dom/dom_select.h"   /* dom_node_matches — matches()/closest() run the real CSS selector */
-#include "solve.h"        /* solve_add — setAttribute(on*/href/src) + innerHTML/insertAdjacentHTML are @S sinks */
-#include "dom_cow.h"      /* dom_attr_capture — an attribute write joins the per-flow COW delta */
-#include "attr_shadow.h"  /* attr_shadow_find/set/opaque — a value set via attr keeps its taint+example */
-#include "opaque.h"       /* g_opaque — el.innerHTML read is opaque external input */
+#include "solver/solve.h"        /* solve_add — setAttribute(on*/href/src) + innerHTML/insertAdjacentHTML are @S sinks */
+#include "solver/dom_cow.h"      /* dom_attr_capture — an attribute write joins the per-flow COW delta */
+#include "solver/attr_shadow.h"  /* attr_shadow_find/set/opaque — a value set via attr keeps its taint+example */
+#include "solver/opaque.h"       /* g_opaque — el.innerHTML read is opaque external input */
 #include "core/css/cssom.h"        /* js_el_inline_style — el.style is a per-flow inline CSSStyleDeclaration */
 #include "core/html/html_script_element.h"   /* script_maybe_load — an appended <script src> is a discovered chunk */
 #include "core/html/forms/forms.h"        /* js_form_submit — el.submit()/requestSubmit() fires the form's @H action request */
-#include "opaque.h"       /* js_noop — UI no-op element methods (click/focus/removeAttribute...) */
+#include "solver/opaque.h"       /* js_noop — UI no-op element methods (click/focus/removeAttribute...) */
 #include "platform/url.h"          /* (via html_script_element) */
 #include "core/dom/classlist.h"    /* js_el_classlist_get — el.classList (a real class-attr token check) */
 #include "check.h"                 /* DCHECK — the live document is an engine invariant (created at boot) */

@@ -3,7 +3,7 @@
  * used to AUDIT this for missing members (engine/idlgen.mjs), not to generate stub scaffolding. */
 #include "core/dom/abort.h"
 #include "check.h"    /* DCHECK — throwIfAborted's self-hosted bytecode is guaranteed-valid */
-#include "opaque.h"   /* js_concolic — aborted/reason are genuinely unknown headless (concolic: forks, provenance) */
+#include "solver/opaque.h"   /* js_concolic — aborted/reason are genuinely unknown headless (concolic: forks, provenance) */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* register a handler -> driven flow */
 

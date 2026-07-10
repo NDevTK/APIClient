@@ -5,7 +5,7 @@
  * example). The AMBIENT cookies (none set this flow) read concolic-empty until the content script seeds the
  * REAL same-origin cookies via cookie_seed (the page's own cookies, same principal — no privilege gained). */
 #include "core/frame/cookie.h"
-#include "opaque.h"   /* g_opaque */
+#include "solver/opaque.h"   /* g_opaque */
 #include "check.h"    /* CHECK — an OOM must crash, never silently truncate the cookie join */
 #include <string.h>
 #include <stdlib.h>

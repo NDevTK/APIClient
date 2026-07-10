@@ -1,7 +1,7 @@
 /* Custom elements — see custom_elements.h. Extracted from main.c (Blink core/html/custom). */
 #include "core/dom/custom_elements.h"
 #include "core/dom/dom_element.h"   /* g_el_class_id, el_wrap */
-#include "opaque.h"   /* js_opaque_stub / js_noop — customElements.get/whenDefined/upgrade */
+#include "solver/opaque.h"   /* js_opaque_stub / js_noop — customElements.get/whenDefined/upgrade */
 
 JSValue g_ce_registry = JS_UNDEFINED;   /* {tagName -> ctor}; createElement upgrades a defined tag */
 JSValue g_ce_instances = JS_UNDEFINED;  /* retained upgraded instances (findable receivers) */

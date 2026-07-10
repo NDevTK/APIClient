@@ -1,6 +1,6 @@
 /* DOMParser + Range HTML parsing — see domparser.h. */
 #include "core/dom/domparser.h"
-#include "opaque.h"   /* g_opaque, js_noop */
+#include "solver/opaque.h"   /* g_opaque, js_noop */
 
 /* Borrowed from main.c (the @S candidate side): a replay flow pins the concrete candidate here, so a parsed
    string carries it as the example (else the parsed node is a bare {parsedhtml} shape). */

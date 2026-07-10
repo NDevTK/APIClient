@@ -1,9 +1,9 @@
 /* The fetch() host edge — see fetch.h. */
 #include <stdlib.h>
 #include "core/loader/fetch.h"
-#include "reply.h"   /* make_response */
+#include "solver/reply.h"   /* make_response */
 #include "platform/url.h"     /* build_query_params */
-#include "endpoint.h"   /* record_endpoint */
+#include "solver/endpoint.h"   /* record_endpoint */
 
 /* Borrowed from main.c (the @H recording side): the URL hole-solver, request-header capture, the shared
    endpoint sink, and the resolved-promise helper. */

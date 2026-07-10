@@ -1,5 +1,5 @@
 /* Runtime-reasoned @WHY — see why.h. */
-#include "why.h"
+#include "solver/why.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "check.h"   /* APICLIENT_DEV */

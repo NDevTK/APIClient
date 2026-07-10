@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/loader/xhr.h"
-#include "opaque.h"   /* g_opaque, js_noop, js_opaque_stub */
+#include "solver/opaque.h"   /* g_opaque, js_noop, js_opaque_stub */
 #include "platform/url.h"      /* build_query_params */
-#include "endpoint.h"   /* record_endpoint */
+#include "solver/endpoint.h"   /* record_endpoint */
 
 /* Borrowed from main.c (the @H recording side, scheduler-coupled): the shared endpoint sink, the URL
    hole-solver, the request-header capture, and the event-listener registrar (onload -> driven). */

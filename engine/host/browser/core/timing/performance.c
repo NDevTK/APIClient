@@ -4,7 +4,7 @@
  * `performance.getEntriesByType('resource').forEach(...)` must not throw); timeOrigin is concrete. The old
  * `{now}`-only stub threw on mark/measure, killing perf-instrumented bundles. */
 #include "core/timing/performance.h"
-#include "opaque.h"   /* g_opaque, js_noop, js_opaque */
+#include "solver/opaque.h"   /* g_opaque, js_noop, js_opaque */
 
 static JSValue js_perf_empty(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v; return JS_NewArray(ctx);   /* PerformanceEntryList -> empty (no timeline headless) */

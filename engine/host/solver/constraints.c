@@ -1,5 +1,5 @@
 /* Per-flow value-domain constraint tracker — see constraints.h. Extracted from main.c. */
-#include "constraints.h"
+#include "solver/constraints.h"
 #include "check.h"   /* CHECK — allocation failure is a UNIVERSAL invariant: a dropped constraint corrupts feasibility */
 #include <stdlib.h>
 #include <string.h>

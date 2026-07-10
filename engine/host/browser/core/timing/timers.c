@@ -4,8 +4,8 @@
  * argument (setTimeout('code')) is an eval-class @S sink (solve_add). Returns an opaque timer id; clear/cancel
  * are no-ops (the WFQ starves an unproductive flow anyway). */
 #include "core/timing/timers.h"
-#include "solve.h"    /* solve_add — setTimeout(string) EVALs -> js-context @S sink */
-#include "opaque.h"   /* g_opaque */
+#include "solver/solve.h"    /* solve_add — setTimeout(string) EVALs -> js-context @S sink */
+#include "solver/opaque.h"   /* g_opaque */
 
 extern void flow_defer_callback(JSContext *ctx, JSValueConst cb);   /* scheduler-side: register a callback as a BFS flow */
 

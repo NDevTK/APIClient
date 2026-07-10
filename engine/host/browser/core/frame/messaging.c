@@ -2,7 +2,7 @@
  * object (postMessage/close/addEventListener); the onmessage handler registered via addEventListener becomes a
  * driven scheduler flow (js_add_listener), so a page's channel message handler is explored. */
 #include "core/frame/messaging.h"
-#include "opaque.h"   /* js_noop */
+#include "solver/opaque.h"   /* js_noop */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* onmessage handler -> driven flow */
 

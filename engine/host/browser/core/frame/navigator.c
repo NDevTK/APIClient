@@ -7,8 +7,8 @@
 #include "core/frame/navigator.h"
 #include "modules/permissions/permissions.h"   /* navigator.permissions — a modeled virtual permission system */
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
-#include "endpoint.h"   /* record_endpoint — the shared @H sink */
-#include "opaque.h"     /* g_opaque, js_concolic */
+#include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
+#include "solver/opaque.h"     /* g_opaque, js_concolic */
 #include "check.h"      /* DFAIL — an unbuilt navigator feature crashes LOUD, never an opaque shrug */
 
 /* Proxy get-trap for the still-unbuilt navigator surface: a read of a member NOT yet implemented DFAILs in dev,

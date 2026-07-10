@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "bindings/idl.h"
-#include "opaque.h"   /* js_concolic (opaque attr value) + js_noop (a spec-present, unmodelled operation) */
+#include "solver/opaque.h"   /* js_concolic (opaque attr value) + js_noop (a spec-present, unmodelled operation) */
 #include "check.h"    /* DCHECK — this narrow driver is where EVERY interface is born; a silent failure here corrupts all */
 
 /* Install an IDL member onto `target` (a plain instance or a class prototype): a method is a native function,

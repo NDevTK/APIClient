@@ -2,7 +2,7 @@
  * inserted <script src> is discovered as a lazy chunk and its URL queued for fetch. It FEEDS the ONE scheduler
  * via extern edges (chunk_pending_add / g_chunkurls); the scheduler decides when to fetch + execute. */
 #include "core/html/html_script_element.h"
-#include "attr_shadow.h"   /* attr_shadow_find/opaque — a computed src leaves the real URL in the taint shadow */
+#include "solver/attr_shadow.h"   /* attr_shadow_find/opaque — a computed src leaves the real URL in the taint shadow */
 #include "platform/url.h"           /* has_hole — a still-holey (computed) src is not concretely fetchable */
 #include "check.h"                  /* DCHECK — the node is a real inserted element (appendChild guarantees non-NULL) */
 #include <string.h>

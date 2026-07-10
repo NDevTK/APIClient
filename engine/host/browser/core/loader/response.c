@@ -5,7 +5,7 @@
  * come from the init dict. (A FETCH response is different — its body is the server reply, built by reply.c.) */
 #include "core/loader/response.h"
 #include "bindings/idl.h"      /* generated from the IDL member table */
-#include "opaque.h"   /* js_concolic, js_noop */
+#include "solver/opaque.h"   /* js_concolic, js_noop */
 #include "check.h"    /* CHECK (OOM) */
 
 extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */

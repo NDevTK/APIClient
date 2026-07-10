@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "core/html/forms/forms.h"
-#include "attr_shadow.h"   /* attr_shadow_find/opaque — a JS-set control value's taint */
-#include "endpoint.h"      /* record_endpoint */
+#include "solver/attr_shadow.h"   /* attr_shadow_find/opaque — a JS-set control value's taint */
+#include "solver/endpoint.h"      /* record_endpoint */
 #include "platform/url.h"           /* url_resolve — WHATWG canonicalization (browser/url.c) */
 #include <lexbor/dom/dom.h>
 

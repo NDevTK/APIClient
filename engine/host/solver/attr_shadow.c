@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "check.h"        /* CHECK — dropping a taint shadow on OOM would silently corrupt @S isolation */
-#include "attr_shadow.h"
+#include "solver/attr_shadow.h"
 
 typedef struct { lxb_dom_element_t *el; char *name; JSValue opaque; } AttrShadow;
 static AttrShadow *g_attr_shadow = NULL; static int g_attr_shadow_n = 0, g_attr_shadow_cap = 0;

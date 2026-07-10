@@ -2,8 +2,8 @@
  * Function / structuredClone are JS-global bindings, not scheduler logic. eval + Function FEED the solver
  * (solve_add records the code body as an @S sink); the scheduler decides the candidate replays. */
 #include "bindings/global_functions.h"
-#include "solve.h"     /* solve_add — an eval/Function code body is an @S sink */
-#include "opaque.h"    /* js_concolic (the eval result), js_noop (a safe callable so new Function(x)() is safe) */
+#include "solver/solve.h"     /* solve_add — an eval/Function code body is an @S sink */
+#include "solver/opaque.h"    /* js_concolic (the eval result), js_noop (a safe callable so new Function(x)() is safe) */
 
 extern char *g_candidate;   /* @S replay: a concrete candidate body IS the sink code — record it, do not run it */
 

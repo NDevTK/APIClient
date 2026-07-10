@@ -3,7 +3,7 @@
  * MISSING LOGIC; a bundle that stashes a token/URL in IDB and reads it back now recovers it as the @H example.
  * addEventListener on the request/db/tx registers the handler as a scheduler FLOW (js_add_listener). */
 #include "modules/indexeddb.h"
-#include "opaque.h"   /* g_opaque, js_noop, js_opaque_stub */
+#include "solver/opaque.h"   /* g_opaque, js_noop, js_opaque_stub */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* onsuccess/onerror handler -> driven flow */
 extern char *g_candidate;   /* @S replay: a tainted stored value is attacker-tamperable -> deliver the candidate on read */

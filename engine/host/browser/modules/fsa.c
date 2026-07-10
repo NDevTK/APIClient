@@ -5,7 +5,7 @@
  * .then(f=>f.text()).then(t=>el.innerHTML=t)` file-upload XSS is a solvable @S chain. createWritable() records
  * writes (a mock file the solver could round-trip). */
 #include "modules/fsa.h"
-#include "opaque.h"   /* g_opaque, js_concolic, js_noop */
+#include "solver/opaque.h"   /* g_opaque, js_concolic, js_noop */
 
 extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */
 extern char *g_candidate;                                  /* @S replay: file content is attacker-controlled -> deliver the candidate */

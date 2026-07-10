@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "core/dom/classlist.h"
-#include "dom_cow.h"   /* dom_attr_capture — the class-attr write is COW-captured for per-flow isolation */
+#include "solver/dom_cow.h"   /* dom_attr_capture — the class-attr write is COW-captured for per-flow isolation */
 #include <lexbor/dom/dom.h>
 
 extern JSClassID g_el_class_id;   /* borrowed from main.c: unwrap the element behind the classList object */

@@ -24,14 +24,14 @@
 #include <lexbor/dom/dom.h>
 #include "check.h"        /* CHECK (always fatal: OOM/security) / DCHECK (dev-only fatal: should-never-happen), its own TU */
 #include "prelude.h"     /* self-hosted JS prelude strings (ARRAY_PRELUDE_JS, DEDUP_JS) */
-#include "constraints.h"  /* per-flow value-domain constraint tracker (concolic path constraint), its own TU */
-#include "wfq.h"          /* the ONE WFQ priority policy (order key), its own TU */
-#include "opaque.h"       /* the OPAQUE sentinel g_opaque + js_noop/js_opaque/js_opaque_stub, its own TU */
-#include "solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
+#include "solver/constraints.h"  /* per-flow value-domain constraint tracker (concolic path constraint), its own TU */
+#include "solver/wfq.h"          /* the ONE WFQ priority policy (order key), its own TU */
+#include "solver/opaque.h"       /* the OPAQUE sentinel g_opaque + js_noop/js_opaque/js_opaque_stub, its own TU */
+#include "solver/solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "core/frame/csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
 #include "core/dom/dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
-#include "dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
-#include "attr_shadow.h"  /* DOM attribute taint side-map ((el,name)->opaque), its own TU */
+#include "solver/dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
+#include "solver/attr_shadow.h"  /* DOM attribute taint side-map ((el,name)->opaque), its own TU */
 #include "core/html/forms/forms.h"        /* HTML form submission -> @H endpoint, its own TU */
 #include "core/dom/classlist.h"    /* element.classList, its own TU */
 #include "core/html/docwrite.h"     /* document.write -> @S sink + script loader, its own TU */
@@ -41,8 +41,8 @@
 #include "core/frame/location.h"     /* the browser location object + external-input source getters + principal split, its own TU */
 #include "core/dom/dom_element.h"  /* the DOM Element JSClass + el_wrap (methods migrate here incrementally), its own TU */
 #include "core/loader/document_scripts.h"  /* scr_ctx + dom_collect_scripts + script_is_exec + document_bundle_id (identity component) */
-#include "boot_scripts.h"  /* boot_script_cache/boot_scripts_run/boot_script_count/boot_scripts_free (boot-replay substrate) */
-#include "why.h"  /* why_add — runtime-reasoned @WHY */
+#include "solver/boot_scripts.h"  /* boot_script_cache/boot_scripts_run/boot_script_count/boot_scripts_free (boot-replay substrate) */
+#include "solver/why.h"  /* why_add — runtime-reasoned @WHY */
 #include "core/html/html_script_runner.h"  /* eval_page_script + dom_run_scripts (HTMLScriptRunner) */
 #include "modules/storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
@@ -52,7 +52,7 @@
 #include "core/html/forms/formdata.h"      /* FormData -> POST body params (Blink core/html/forms), its own TU */
 #include "core/dom/custom_elements.h" /* customElements registry + createElement upgrade (Blink core/html/custom), its own TU */
 #include "platform/url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
-#include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
+#include "solver/reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
 #include "core/loader/xhr.h"          /* XMLHttpRequest emulation -> the @H recorder, its own TU */
 #include "core/loader/fetch.h"        /* the fetch() host edge -> the @H recorder, its own TU */
 #include "modules/websocket.h"    /* WebSocket + EventSource ctor -> WS/SSE handshake endpoint, its own TU */
@@ -82,7 +82,7 @@
 #include "core/fileapi/blob.h"        /* Blob/File (real content taint) */
 #include "core/trustedtypes/trusted_types.h"  /* Trusted Types (runs createPolicy) */
 #include "core/loader/response.h"    /* Response (real body taint) */
-#include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
+#include "solver/endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #define KEEP EMSCRIPTEN_KEEPALIVE   /* export qjs_init/step/teardown for the persistent-instance protocol */

@@ -6,7 +6,7 @@
  * permission the user grants — genuinely unknown headless, so it reads as the opaque concolic value (a gate
  * `if (perm === 'granted')` FORKS, reaching the permission-gated code). */
 #include "modules/notification.h"
-#include "opaque.h"   /* js_concolic — permission/timestamp are genuinely unknown headless */
+#include "solver/opaque.h"   /* js_concolic — permission/timestamp are genuinely unknown headless */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);
 

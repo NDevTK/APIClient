@@ -1,6 +1,6 @@
 /* The ONE WFQ priority policy — see wfq.h. Extracted from main.c so the solver's core order key is one
  * auditable, isolation-testable formula rather than an inline expression duplicated at the fresh-flow seed. */
-#include "wfq.h"
+#include "solver/wfq.h"
 #include "check.h"   /* DCHECK — the policy REFUSES to rank on corrupt (negative) flow accounting */
 
 double wfq_weight(double val, int visits, double cpu) {

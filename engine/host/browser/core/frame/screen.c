@@ -3,7 +3,7 @@
  * `if (screen.width < 768) …` / `if (innerWidth < 768) …` explores BOTH the mobile and desktop shipped code —
  * more logic, you don't know which arm ships an endpoint). colorDepth/pixelDepth are concrete 24. */
 #include "core/frame/screen.h"
-#include "opaque.h"   /* js_concolic — concolic constant (fork + example) */
+#include "solver/opaque.h"   /* js_concolic — concolic constant (fork + example) */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);
 

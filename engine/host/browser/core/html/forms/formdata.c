@@ -2,7 +2,7 @@
  * (shared js_sp_tostring) serializes them to "k=v&…" carrying concrete examples, so a POST body surfaces real
  * request params (a POST is never fired to learn -> the example can only come from this forced-exec serialize). */
 #include "core/html/forms/formdata.h"
-#include "opaque.h"   /* js_noop, js_opaque_stub */
+#include "solver/opaque.h"   /* js_noop, js_opaque_stub */
 #include "platform/urlobj.h"   /* js_sp_tostring — the concolic query serializer, shared with URLSearchParams */
 
 static JSValue js_formdata_append(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {

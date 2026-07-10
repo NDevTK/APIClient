@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "check.h"        /* CHECK — a dropped module source/dep silently breaks the import graph */
-#include "opaque.h"       /* g_opaque — dyn import() of an unresolved chunk resolves opaque now */
+#include "solver/opaque.h"       /* g_opaque — dyn import() of an unresolved chunk resolves opaque now */
 #include "platform/url.h"          /* has_hole — a holey specifier isn't a fetchable URL */
 #include "core/loader/module_loader.h"
 

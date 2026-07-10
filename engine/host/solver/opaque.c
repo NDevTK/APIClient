@@ -1,5 +1,5 @@
 /* The OPAQUE sentinel + minimal host-edge stubs — see opaque.h. */
-#include "opaque.h"
+#include "solver/opaque.h"
 
 JSValue g_opaque = JS_UNDEFINED;
 

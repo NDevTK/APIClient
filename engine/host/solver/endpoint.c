@@ -1,5 +1,5 @@
 /* The @H endpoint sink — see endpoint.h. */
-#include "endpoint.h"
+#include "solver/endpoint.h"
 
 /* Borrowed from main.c (the scheduler side): the @S candidate flag (a candidate flow's requests are @S
    artifacts, not real @H), the emit counter, and the flow value-emit signal. */

@@ -18,11 +18,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "core/css/cssom.h"
-#include "opaque.h"      /* g_opaque, JS_IsOpaque/Example/ShapeC */
+#include "solver/opaque.h"      /* g_opaque, JS_IsOpaque/Example/ShapeC */
 #include "core/dom/dom_element.h" /* g_el_class_id — unwrap the element argument */
-#include "dom_cow.h"     /* dom_attr_capture — a style write joins the per-flow COW delta */
-#include "attr_shadow.h" /* attr_shadow_set — an opaque CSS value keeps its taint on the style attr */
-#include "solve.h"       /* solve_add — el.style.x = tainted is a CSS-context @S sink */
+#include "solver/dom_cow.h"     /* dom_attr_capture — a style write joins the per-flow COW delta */
+#include "solver/attr_shadow.h" /* attr_shadow_set — an opaque CSS value keeps its taint on the style attr */
+#include "solver/solve.h"       /* solve_add — el.style.x = tainted is a CSS-context @S sink */
 #include "check.h"       /* CHECK — an OOM must crash at the origin, never degrade el.style to a fake opaque */
 #include <lexbor/dom/dom.h>
 

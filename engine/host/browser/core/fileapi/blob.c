@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "bindings/idl.h"      /* the Blob interface is GENERATED from its IDL member table, not hand-assembled */
-#include "opaque.h"   /* js_concolic (size/name/mtime are genuinely unknown headless) */
+#include "solver/opaque.h"   /* js_concolic (size/name/mtime are genuinely unknown headless) */
 #include "check.h"    /* CHECK (OOM), DCHECK */
 
 extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */

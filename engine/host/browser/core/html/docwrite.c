@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "core/html/docwrite.h"
-#include "solve.h"   /* solve_add — the written HTML is an XSS sink */
+#include "solver/solve.h"   /* solve_add — the written HTML is an XSS sink */
 #include "platform/url.h"     /* has_hole — a concrete (non-hole) chunk src is fetchable */
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>

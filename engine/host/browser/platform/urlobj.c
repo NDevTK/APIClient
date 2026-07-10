@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include "platform/urlobj.h"
 #include "platform/url.h"      /* has_hole */
-#include "opaque.h"   /* g_opaque, js_noop */
+#include "solver/opaque.h"   /* g_opaque, js_noop */
 
 extern const char *g_origin;                                     /* the page principal (main.c) */
 

@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "check.h"        /* CHECK — an OOM here corrupts DOM isolation, fatal in every build */
-#include "dom_cow.h"
-#include "attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
+#include "solver/dom_cow.h"
+#include "solver/attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
 #include <lexbor/dom/dom.h>
 
 typedef struct DomUndo {

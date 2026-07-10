@@ -4,7 +4,7 @@
  * (NumberFormat/DateTimeFormat/RelativeTimeFormat/Collator/ListFormat/DisplayNames/PluralRules/Segmenter). */
 #include "core/frame/intl.h"
 #include "bindings/idl.h"
-#include "opaque.h"   /* js_opaque_stub — an operation whose result is unknown headless */
+#include "solver/opaque.h"   /* js_opaque_stub — an operation whose result is unknown headless */
 
 static const IDLMember INTL_IDL[] = {
     { "format",              IDL_METHOD, js_opaque_stub, 1 },

@@ -1,5 +1,5 @@
 /* Boot-script cache + replay — see boot_scripts.h. */
-#include "boot_scripts.h"
+#include "solver/boot_scripts.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>

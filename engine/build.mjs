@@ -82,7 +82,7 @@ const args = [
   ...sources,
   LEXBOR_LIB,                 // link the cached Lexbor DOM archive
   "-I", QJS,
-  "-I", HOST, "-I", join(HOST, "solver"), "-I", join(HOST, "browser"),   // browser root only: components include by their Blink path, e.g. #include "core/dom/dom_element.h"
+  "-I", HOST, "-I", join(HOST, "browser"),   // include by FULL path from the host root: a browser component is "core/dom/dom_element.h", a solver component "solver/opaque.h" — the layer is always explicit (no bare-name -I solver shortcut, so a cross-layer include names its layer)
   "-I", LEXBOR_INC,           // <lexbor/html/html.h> etc for main.c's DOM host-edges
   "-O1", "-w",
   "-D_GNU_SOURCE", "-DENABLE_DUMPS",

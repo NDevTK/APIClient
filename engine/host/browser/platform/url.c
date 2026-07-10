@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "platform/url.h"
-#include "constraints.h"   /* cons_fixed_value — an == gate PINS a {src} hole to its concrete value */
+#include "solver/constraints.h"   /* cons_fixed_value — an == gate PINS a {src} hole to its concrete value */
 #include "check.h"         /* CHECK — OOM must crash LOUD, never silently degrade a solved URL back to its shape */
 #include <lexbor/url/url.h>   /* the real WHATWG URL Standard parser — url_resolve canonicalizes here, not a hand-rolled resolver */
 

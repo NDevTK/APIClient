@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "solve_html.h"
+#include "solver/solve_html.h"
 #include "check.h"   /* CHECK — OOM must crash, never return 0 (a dropped @S PoC masquerading as "no breakout") */
 #include <lexbor/dom/dom.h>
 
