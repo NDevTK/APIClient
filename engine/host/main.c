@@ -556,6 +556,11 @@ static char g_sink_qkey[64] = "";             /* @S query envelope: the URLSearc
 static char g_sink_delim[16] = "";            /* @S positional envelope: the .split() delimiter of a split-sourced sink (empty = not split-sourced) */
 static char g_sink_sprefix[128] = "";         /* the src prefix up to ".split" that split siblings share */
 static int  g_sink_sidx = -1;                 /* the sink part's index within the split */
+/* A structured source decomposes into addressable children reconstructed one of three ways; ONE descriptor
+   (kind + the fields above) drives ONE addressing function, so a new destructuring API is a new CASE, never a
+   fourth bespoke reconstructor. Set per-sink in solve_add; read by env_sibling_addr + the envelope builders. */
+typedef enum { ENV_NONE = 0, ENV_JSON, ENV_QUERY, ENV_DELIM } EnvKind;
+static EnvKind g_env_kind = ENV_NONE;
 JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
 /* url/js sinks: the breakout VECTOR is fixed by the context itself — a URL sink executes a `javascript:`
    scheme, an eval/Function/setTimeout sink executes a JS-string/expression escape — so these are the
@@ -627,20 +632,47 @@ static void obj_set_path(JSContext *ctx, JSValue obj, const char *path, JSValue 
    "body":<breakout>}. The real decode+parse+gate+field chain then yields the breakout (re-execution verifies).
    An OBJECT source ({pm}) is delivered by the candidate-carrier, not here; a whole-value scalar needs no envelope.
    Returns malloc'd JSON, or NULL when no wrapping applies (caller uses raw cand). */
-static char *json_envelope_cand(JSContext *ctx, const char *cand) {
-    const char *jk = g_sink_jkey;
-    if (jk[0] != '.') return NULL;   /* need a real field path ".field"; ""=parsed root (an object, no envelope), NULL never set here */
-    JSValue obj = JS_NewObject(ctx);
-    obj_set_path(ctx, obj, jk + 1, JS_NewString(ctx, cand));   /* sink field = the context breakout */
-    if (g_sink_root[0]) {   /* merge sibling EQ gates on the SAME parsed object so the handler's guard passes */
+/* THE structured-source addressing function: if Cons c is a SIBLING EQ gate of the active envelope — same
+   structured source, an address OTHER than the sink's own — write its ADDRESS (JSON field / query param /
+   part index) into buf and return it; else NULL. Every envelope builder AND the minimality skip route through
+   this ONE place, so the three reconstruction schemes share a single addressing model instead of duplicating
+   the g_cons scan five ways; a new destructuring API is a new CASE here, not a new function. */
+static const char *env_sibling_addr(const Cons *c, char *buf, size_t bufn) {
+    if (!(c->src && c->op == OPCMP_EQ && c->tok)) return NULL;
+    switch (g_env_kind) {
+    case ENV_JSON: {   /* {root}.field gate, keyed by the method-CLEAN jkey (src is .slice-polluted) */
         size_t rl = strlen(g_sink_root);
-        for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];
-            /* same parsed source (src-root match) AND a method-CLEAN JSON field path (jkey): the constraint's
-               src is `.slice`-polluted ({hash}.slice.mode), so place the gate token by jkey (".mode"), not src. */
-            if (c->src && c->op == OPCMP_EQ && c->tok && c->jkey && c->jkey[0] == '.'
-                && !strncmp(c->src, g_sink_root, rl) && c->src[rl] == '.')
-                obj_set_path(ctx, obj, c->jkey + 1, JS_NewString(ctx, c->tok)); }
+        if (g_sink_jkey[0] != '.' || strncmp(c->src, g_sink_root, rl) || c->src[rl] != '.'
+            || !c->jkey || c->jkey[0] != '.' || strcmp(c->jkey, g_sink_jkey) == 0) return NULL;
+        snprintf(buf, bufn, "%s", c->jkey + 1); return buf;   /* dotted field path */
     }
+    case ENV_QUERY: {   /* {root}?param gate */
+        size_t rl = strlen(g_sink_root);
+        if (strncmp(c->src, g_sink_root, rl) || c->src[rl] != '?') return NULL;
+        const char *gk = c->src + rl + 1, *ge = gk; while (*ge && *ge != '.') ge++;   /* param name, up to a transform '.' */
+        size_t gl = (size_t)(ge - gk);
+        if (gl == strlen(g_sink_qkey) && !strncmp(gk, g_sink_qkey, gl)) return NULL;   /* the sink param itself */
+        snprintf(buf, bufn, "%.*s", (int)gl, gk); return buf;
+    }
+    case ENV_DELIM: {   /* prefix.<index> gate */
+        size_t pl = strlen(g_sink_sprefix);
+        if (strncmp(c->src, g_sink_sprefix, pl) || c->src[pl] != '.') return NULL;
+        char *end; long n = strtol(c->src + pl + 1, &end, 10);
+        if (*end != 0 || n < 0 || (int)n == g_sink_sidx) return NULL;
+        snprintf(buf, bufn, "%ld", n); return buf;
+    }
+    default: return NULL;
+    }
+}
+/* @S JSON ENVELOPE: a JSON.parse(src).field sink rides a JSON object the parse yields — sink field = the
+   breakout, each sibling EQ gate field = its token — JSON.stringify'd for correct nesting+escaping. */
+static char *json_envelope_cand(JSContext *ctx, const char *cand) {
+    if (g_env_kind != ENV_JSON) return NULL;
+    JSValue obj = JS_NewObject(ctx);
+    obj_set_path(ctx, obj, g_sink_jkey + 1, JS_NewString(ctx, cand));   /* sink field = the context breakout */
+    char addr[128];
+    for (int i = 0; i < g_cons_n; i++) { const char *a = env_sibling_addr(&g_cons[i], addr, sizeof addr);
+        if (a) obj_set_path(ctx, obj, a, JS_NewString(ctx, g_cons[i].tok)); }   /* sibling gate field = its token */
     JSValue s = JS_JSONStringify(ctx, obj, JS_UNDEFINED, JS_UNDEFINED);
     JS_FreeValue(ctx, obj);
     char *out = NULL; const char *cs = JS_ToCString(ctx, s);
@@ -648,49 +680,34 @@ static char *json_envelope_cand(JSContext *ctx, const char *cand) {
     JS_FreeValue(ctx, s);
     return out;
 }
-/* @S POSITIONAL (DELIMITER) ENVELOPE: a str.split(D)[i] sink is reached only after the source string is SPLIT,
-   so the breakout must ride a delimited string the split yields — the sink part = the breakout, every sibling
-   EQ gate part (parts[0]==='preview') = its token, joined by D ("preview|<breakout>"). Delivered at the source
-   getter (encoded) then split by the real code, so the parse yields the gate-satisfying parts AND the breakout.
-   The positional analog of query_envelope_cand. Returns malloc'd string, or NULL when not a split-source sink. */
+/* @S POSITIONAL ENVELOPE: a str.split(D)[i] sink rides a delimited string the split yields — sink part = the
+   breakout, each sibling EQ gate part = its token, joined by D ("preview|<breakout>"). */
 static char *delim_envelope_cand(const char *cand) {
-    if (!g_sink_delim[0] || g_sink_sidx < 0 || !g_sink_sprefix[0]) return NULL;
+    if (g_env_kind != ENV_DELIM) return NULL;
     const char *parts[32]; for (int i = 0; i < 32; i++) parts[i] = NULL;
     int maxidx = g_sink_sidx < 32 ? g_sink_sidx : 31;
-    size_t pl = strlen(g_sink_sprefix);
-    for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];   /* sibling EQ gates at their part index -> required parts */
-        if (c->src && c->op == OPCMP_EQ && c->tok && !strncmp(c->src, g_sink_sprefix, pl) && c->src[pl] == '.') {
-            char *end; long n = strtol(c->src + pl + 1, &end, 10);
-            if (*end == 0 && n >= 0 && n < 32) { parts[n] = c->tok; if ((int)n > maxidx) maxidx = (int)n; }
-        }
-    }
-    if (g_sink_sidx < 32) parts[g_sink_sidx] = cand;   /* sink part = the breakout (overrides a self-gate token at that index) */
+    char addr[128];
+    for (int i = 0; i < g_cons_n; i++) { const char *a = env_sibling_addr(&g_cons[i], addr, sizeof addr);
+        if (a) { int n = atoi(a); if (n >= 0 && n < 32) { parts[n] = g_cons[i].tok; if (n > maxidx) maxidx = n; } } }
+    if (g_sink_sidx < 32) parts[g_sink_sidx] = cand;   /* sink part = the breakout */
     char buf[1600]; int o = 0; buf[0] = 0; size_t dl = strlen(g_sink_delim);
     for (int i = 0; i <= maxidx; i++) {
         if (i && o + (int)dl < (int)sizeof buf - 1) { memcpy(buf + o, g_sink_delim, dl); o += (int)dl; buf[o] = 0; }
         o += snprintf(buf + o, sizeof buf - o, "%s", parts[i] ? parts[i] : "");
     }
-    /* Trim trailing empty parts (a phantom high index): "a|X|" and "a|X" both split to parts[1]==='X', so the
-       shorter is the equivalent minimal PoC. Never trims into the sink's content (that isn't a trailing delim). */
+    /* Trim trailing empty parts: "a|X|" and "a|X" both split to parts[1]==='X', the shorter is the equivalent
+       minimal PoC. Never trims into the sink's content (that isn't a trailing delim). */
     while (o >= (int)dl && strcmp(buf + o - (int)dl, g_sink_delim) == 0) { o -= (int)dl; buf[o] = 0; }
     return strdup(buf);
 }
-/* @S QUERY ENVELOPE: a URLSearchParams.get(key) sink is reached only after location.search/hash is PARSED, so
-   the breakout must ride a query string the parse yields — `key=<breakout>` — AND satisfy every sibling EQ gate
-   the handler checks on ANOTHER param (`mode==='preview'`), or the sink is never reached. Build
-   "mode=preview&data=<breakout>"; delivered at the source getter it is percent-encoded, then FORM-DECODED by the
-   real get(), so the breakout arrives intact. Mirrors json_envelope_cand for the JSON.parse case. Returns
-   malloc'd query string, or NULL when this is not a query-source sink. */
+/* @S QUERY ENVELOPE: a URLSearchParams.get(key) sink rides a query string the parse yields — sink param = the
+   breakout, each sibling EQ gate param = its token ("mode=preview&data=<breakout>"); location.search encodes it
+   and the real get() form-decodes, so the breakout arrives intact. */
 static char *query_envelope_cand(const char *cand) {
-    if (!g_sink_qkey[0]) return NULL;
-    char buf[1600]; int o = 0; buf[0] = 0;
-    if (g_sink_root[0]) { size_t rl = strlen(g_sink_root);
-        for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];   /* sibling EQ gates on the SAME query root ("{search}?mode") -> required params */
-            if (c->src && c->op == OPCMP_EQ && c->tok && !strncmp(c->src, g_sink_root, rl) && c->src[rl] == '?') {
-                const char *gk = c->src + rl + 1; const char *ge = gk; while (*ge && *ge != '.') ge++;   /* param name = after '?', up to a transform '.' */
-                size_t gl = (size_t)(ge - gk);
-                if (gl == strlen(g_sink_qkey) && !strncmp(gk, g_sink_qkey, gl)) continue;   /* the sink param itself is placed below, not as a gate */
-                o += snprintf(buf + o, sizeof buf - o, "%s%.*s=%s", o ? "&" : "", (int)gl, gk, c->tok); } } }
+    if (g_env_kind != ENV_QUERY) return NULL;
+    char buf[1600]; int o = 0; buf[0] = 0; char addr[128];
+    for (int i = 0; i < g_cons_n; i++) { const char *a = env_sibling_addr(&g_cons[i], addr, sizeof addr);
+        if (a) o += snprintf(buf + o, sizeof buf - o, "%s%s=%s", o ? "&" : "", a, g_cons[i].tok); }   /* sibling gate param = its token */
     o += snprintf(buf + o, sizeof buf - o, "%s%s=%s", o ? "&" : "", g_sink_qkey, cand);   /* sink param = the breakout */
     return strdup(buf);
 }
@@ -744,33 +761,15 @@ static JSValue collect_gate_fields(JSContext *ctx, const char *root) {
    RAWTEXT (<textarea>/<title>/<style>/<xmp>/<iframe>/<noembed>/<noframes>) and COMMENT contexts a flat
    candidate list can NEVER reach, because their breakout is the CLOSING token (</textarea>, -->) which is
    knowable ONLY from the surrounding structure. */
-/* A structured envelope (query OR JSON) places a SIBLING EQ gate token STRUCTURALLY (mode=preview), so ALSO
-   prefixing it onto the sink payload is redundant noise (data=preview<svg..> vs the minimal data=<svg..>). Skip
-   any token a sibling envelope field already covers; a non-EQ self-gate token (startsWith('cmd:') on the sink
-   itself) still needs prefixing and is kept. Covers both delivery forms this engine builds:
-   query  ("{search}?mode", sibling param != the sink's qkey) and JSON ("{hash}.mode", sibling jkey != sink jkey). */
+/* An envelope places a SIBLING EQ gate token STRUCTURALLY (mode=preview), so ALSO prefixing it onto the sink
+   payload is redundant noise (data=preview<svg..> vs the minimal data=<svg..>). Skip any token an envelope
+   sibling already covers — the SAME env_sibling_addr the builders use, so the skip can never drift from what
+   was actually placed; a non-EQ self-gate token (startsWith('cmd:') on the sink itself) is not a sibling and
+   is kept. */
 static int envelope_handles_token(const char *tok) {
-    /* split (positional) envelope: a token gating a part OTHER than the sink's index is placed structurally. */
-    if (g_sink_delim[0] && g_sink_sprefix[0]) { size_t pl = strlen(g_sink_sprefix);
-        for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];
-            if (c->src && c->op == OPCMP_EQ && c->tok && !strcmp(c->tok, tok) && !strncmp(c->src, g_sink_sprefix, pl) && c->src[pl] == '.') {
-                char *end; long n = strtol(c->src + pl + 1, &end, 10);
-                if (*end == 0 && n >= 0 && (int)n != g_sink_sidx) return 1;
-            }
-        }
-    }
-    if (!g_sink_root[0]) return 0;
-    size_t rl = strlen(g_sink_root);
-    for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];
-        if (!(c->src && c->op == OPCMP_EQ && c->tok && !strcmp(c->tok, tok) && !strncmp(c->src, g_sink_root, rl))) continue;
-        if (g_sink_qkey[0] && c->src[rl] == '?') {   /* query envelope */
-            const char *gk = c->src + rl + 1; const char *ge = gk; while (*ge && *ge != '.') ge++;
-            size_t gl = (size_t)(ge - gk);
-            if (!(gl == strlen(g_sink_qkey) && !strncmp(gk, g_sink_qkey, gl))) return 1;   /* a param OTHER than the sink */
-        }
-        if (g_sink_jkey[0] == '.' && c->src[rl] == '.' && c->jkey && c->jkey[0] == '.' && strcmp(c->jkey, g_sink_jkey) != 0)
-            return 1;   /* JSON envelope: a sibling field OTHER than the sink's */
-    }
+    char addr[128];
+    for (int i = 0; i < g_cons_n; i++)
+        if (g_cons[i].tok && !strcmp(g_cons[i].tok, tok) && env_sibling_addr(&g_cons[i], addr, sizeof addr)) return 1;
     return 0;
 }
 /* Emit ONE candidate + its GATE-satisfying variants: each observed gate token as a PREFIX and a SUFFIX, and
@@ -884,6 +883,11 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
                 if (*end == 0 && idx >= 0) { g_sink_sidx = (int)idx;
                     snprintf(g_sink_delim, sizeof g_sink_delim, "%s", dl);
                     size_t pl = (size_t)(ld - sp); if (pl < sizeof g_sink_sprefix) { memcpy(g_sink_sprefix, sp, pl); g_sink_sprefix[pl] = 0; } } } } }
+      /* Resolve the ONE envelope kind (dispatch order matches reg_add_cand: split -> query -> JSON): a source
+         destructured a specific way is reconstructed that way, and env_sibling_addr keys off this. */
+      g_env_kind = (g_sink_delim[0] && g_sink_sidx >= 0 && g_sink_sprefix[0]) ? ENV_DELIM
+                 : g_sink_qkey[0] ? ENV_QUERY
+                 : (g_sink_jkey[0] == '.') ? ENV_JSON : ENV_NONE;
       if (sp && sp[0]) {
           JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp));
           char root[64]; const char *rb = strchr(sp, '}');   /* source token "{pm}" -> collect sibling gate fields the handler requires */
