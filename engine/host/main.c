@@ -55,8 +55,10 @@
 #include "modules/worker.h"       /* Worker + SharedWorker ctor -> worker-script chunk, its own TU */
 #include "core/frame/navigator.h"    /* navigator.sendBeacon + serviceWorker.register -> @H, its own TU */
 #include "core/css/cssom.h"        /* getComputedStyle + matchMedia -> opaque CSSOM environment reads, its own TU */
-#include "modules/observer.h"     /* Mutation/Resize/Performance observers -> callback flow + opaque, its own TU */
-#include "core/intersection_observer/intersection_observer.h"   /* IntersectionObserver: real IDL shape (Blink core/intersection_observer) */
+#include "core/intersection_observer/intersection_observer.h"   /* IntersectionObserver (Blink core/intersection_observer) — real IDL shape */
+#include "core/dom/mutation_observer.h"            /* MutationObserver (Blink core/dom) */
+#include "core/resize_observer/resize_observer.h"  /* ResizeObserver (Blink core/resize_observer) */
+#include "core/timing/performance_observer.h"      /* PerformanceObserver (Blink core/timing) */
 #include "bindings/idl.h"          /* Web IDL binding driver — declarative interface tables -> native objects */
 #include "core/dom/abort.h"        /* AbortSignal (IDL-defined), its own TU */
 #include "core/frame/intl.h"         /* Intl formatters (IDL-defined, opaque results), its own TU */
@@ -2295,9 +2297,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "DOMParser", JS_NewCFunction2(ctx, js_domparser_ctor, "DOMParser", 0, JS_CFUNC_constructor, 0));   /* parseFromString -> {parsedhtml} taint -> appendChild @S */
     /* Function wrap (new Function(attacker) is an eval-class @S sink) is installed by install_js_global_functions. */
     JS_SetPropertyStr(ctx, g, "IntersectionObserver", JS_NewCFunction2(ctx, js_intersection_observer_ctor, "IntersectionObserver", 1, JS_CFUNC_constructor, 0));   /* real IDL shape (core/intersection_observer) */
-    JS_SetPropertyStr(ctx, g, "MutationObserver", JS_NewCFunction2(ctx, js_observer_ctor, "MutationObserver", 1, JS_CFUNC_constructor, 0));
-    JS_SetPropertyStr(ctx, g, "ResizeObserver", JS_NewCFunction2(ctx, js_observer_ctor, "ResizeObserver", 1, JS_CFUNC_constructor, 0));
-    JS_SetPropertyStr(ctx, g, "PerformanceObserver", JS_NewCFunction2(ctx, js_observer_ctor, "PerformanceObserver", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "MutationObserver", JS_NewCFunction2(ctx, js_mutation_observer_ctor, "MutationObserver", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "ResizeObserver", JS_NewCFunction2(ctx, js_resize_observer_ctor, "ResizeObserver", 1, JS_CFUNC_constructor, 0));
+    JS_SetPropertyStr(ctx, g, "PerformanceObserver", JS_NewCFunction2(ctx, js_performance_observer_ctor, "PerformanceObserver", 1, JS_CFUNC_constructor, 0));
     JS_SetPropertyStr(ctx, g, "WebSocket", JS_NewCFunction2(ctx, js_ws_ctor, "WebSocket", 1, JS_CFUNC_constructor, 0));         /* url endpoint emitted; send/close/addEventListener present */
     JS_SetPropertyStr(ctx, g, "EventSource", JS_NewCFunction2(ctx, js_ws_ctor, "EventSource", 1, JS_CFUNC_constructor, 0));     /* SSE: url is a GET endpoint; onmessage handler driven */
     JS_SetPropertyStr(ctx, g, "Worker", JS_NewCFunction2(ctx, js_worker_ctor, "Worker", 2, JS_CFUNC_constructor, 0));           /* worker script -> chunk (fetch+analyze); onmessage driven */

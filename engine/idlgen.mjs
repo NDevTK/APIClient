@@ -19,7 +19,10 @@ const BROWSER = join(HERE, "host", "browser");
 // file tree spec-faithful to a browser dev.
 const INTERFACES = {
   "AbortSignal": "core/dom", "AbortController": "core/dom", "Element": "core/dom",
+  "MutationObserver": "core/dom",
   "IntersectionObserver": "core/intersection_observer",
+  "ResizeObserver": "core/resize_observer",
+  "PerformanceObserver": "core/timing",
 };
 
 const all = await listAll();

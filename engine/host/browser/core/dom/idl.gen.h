@@ -215,4 +215,11 @@ static const IdlGenMember Element_IDL[] = {
 };
 #define Element_IDL_N 187
 
+static const IdlGenMember MutationObserver_IDL[] = {
+  { "observe", IDL_GEN_OP, 0, 1 },
+  { "disconnect", IDL_GEN_OP, 0, 0 },
+  { "takeRecords", IDL_GEN_OP, 0, 0 },
+};
+#define MutationObserver_IDL_N 3
+
 #endif
