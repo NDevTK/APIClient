@@ -45,7 +45,12 @@ static JSValue media_noop(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     (void)this_val; (void)argc; (void)argv; return JS_UNDEFINED;   /* load()/addTextTrack — no-op, no device */
 }
 static JSValue media_can_play(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val; (void)argc; (void)argv; return JS_NewString(ctx, "maybe");   /* canPlayType: a defined, plausible engine answer */
+    (void)this_val; (void)argc; (void)argv;
+    /* Codec support is genuinely unknowable headless, so canPlayType is CONCOLIC, not bare-concrete: a
+       feature-detection branch `if (v.canPlayType(t) === 'probably')` must FORK both worlds (supported +
+       unsupported, reaching the codec-gated shipped arm) while carrying "maybe" as the concrete example.
+       A fixed "maybe" would silently take only the truthy arm and bury the fallback path. */
+    return js_concolic(ctx, "{canPlayType}", JS_NewString(ctx, "maybe"));
 }
 
 JSValue js_image_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
