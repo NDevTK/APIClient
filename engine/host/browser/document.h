@@ -8,4 +8,7 @@ JSValue js_doc_getElementById(JSContext *ctx, JSValueConst this_val, int argc, J
 JSValue js_doc_querySelector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 JSValue js_doc_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 JSValue js_doc_getByClass(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);   /* getElementsByClassName */
+JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);   /* real Lexbor element + custom-element upgrade */
+JSValue js_doc_currentscript(JSContext *ctx, JSValueConst t);            /* getter: the executing script this inline block */
+void doc_set_current_script(JSContext *ctx, JSValue v);                  /* scheduler boot loop feeds currentScript (consumes v) */
 #endif

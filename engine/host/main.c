@@ -1286,8 +1286,8 @@ const char *g_origin   = "https://app.example.com";   /* host-injected real page
 /* document.currentScript: the executing <script> element during boot — the CONFIG-INJECTION source (an embed
    reads `document.currentScript.dataset.apiKey` / .getAttribute('data-endpoint')). Set per-script in
    dom_run_scripts, NULL otherwise. */
-static JSValue g_current_script = JS_NULL;
-static JSValue js_doc_currentscript(JSContext *ctx, JSValueConst t) { return JS_DupValue(ctx, g_current_script); }
+/* document.currentScript state + getter -> browser/document.c (Blink core/dom/Document); the scheduler boot
+   loop feeds it via doc_set_current_script. */
 
 /* ── Real DOM (Lexbor) ───────────────────────────────────────────────────────────
    The page's own structure/config is CONCRETE (a bundle reads `#cfg[data-api]` and builds a real
@@ -1347,14 +1347,7 @@ lxb_html_document_t *g_dom = NULL;   /* the live parsed document (non-static: do
    all work). Only ELEMENT nodes (text nodes aren't wrapped — a walker keying on .children matches the browser). */
 /* DOM traversal getters (parentNode/children/firstElementChild/nextElementSibling) -> dom_element.c. */
 /* el_install_methods (the Element interface binding install, Blink-generated from Element.idl) -> dom_element.c. */
-static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (!g_dom || argc < 1) return JS_NULL;
-    const char *tag = JS_ToCString(ctx, argv[0]); if (!tag) return JS_NULL;
-    lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)tag, strlen(tag), NULL);
-    JSValue r = ce_upgrade(ctx, el, tag);   /* Blink custom-element upgrade (browser/custom_elements.c), else el_wrap */
-    JS_FreeCString(ctx, tag);
-    return r;
-}
+/* document.createElement -> browser/document.c (Blink core/dom/Document). */
 /* document.write (js_doc_write + script running) is in docwrite.c (included via docwrite.h). */
 /* eval(concrete) -> forced-execute (dynamic code path, orphans); eval(external input) stays opaque. */
 /* new Function(...args, BODY): the body is compiled as code -> an eval-class @S sink. Wrap the builtin:
@@ -1669,9 +1662,9 @@ static void dom_run_scripts(JSContext *ctx) {
                 for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; }     /* inline JS body -> bundle id */
                 bh ^= '|'; bh *= 16777619u;
                 boot_script_cache((const char *)txt, tl);   /* cache for cross-flow @S candidate boot-replay */
-                g_current_script = el_wrap(ctx, el);   /* document.currentScript during this inline script */
+                doc_set_current_script(ctx, el_wrap(ctx, el));   /* document.currentScript during this inline script (document.c owns it) */
                 eval_page_script(ctx, (const char *)txt, tl, "<script>", is_mod);
-                JS_FreeValue(ctx, g_current_script); g_current_script = JS_NULL;
+                doc_set_current_script(ctx, JS_NULL);
             }
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
