@@ -173,8 +173,25 @@ static JSValue js_sp_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
            values: p.get('mode') and p.get('data') must not collapse to the SAME bare opaque, or a gate on one
            (`mode==='preview'`) is wrongly conflated with the sink on the other and the sibling-gated sink can't
            be solved. The key identity also gives the @H a real shape ({mode}) instead of a bare {}. */
-        if (k) { char shp[80]; snprintf(shp, sizeof shp, "{%s}", k);
-                 JSValue o = JS_NewOpaqueSourced(ctx, shp, k); JS_FreeCString(ctx, k); return o; }
+        if (k) {
+            char shp[80]; snprintf(shp, sizeof shp, "{%s}", k);
+            /* When this params object was built from an external source (__root, e.g. "{search}"), ROOT-LINK the
+               key: src "{search}.mode" / "{search}.data" so a sibling gate and the sink share a root — the @S
+               query envelope (main.c) then builds "mode=preview&data=<breakout>" delivered at location.search,
+               which the real parse decodes back. Standalone (record-built) params keep the bare-key identity. */
+            JSValue rootv = JS_GetPropertyStr(ctx, this_val, "__root");
+            if (JS_IsString(rootv)) {
+                const char *root = JS_ToCString(ctx, rootv);
+                /* '?' separates the query KEY from the root — a marker a transform chain (which appends ".slice"
+                   etc.) can never produce, so main.c distinguishes a real query param from a string transform. */
+                char srcp[160]; snprintf(srcp, sizeof srcp, "%s?%s", root ? root : "", k);
+                JSValue o = JS_NewOpaqueSourced(ctx, shp, srcp);
+                if (root) JS_FreeCString(ctx, root);
+                JS_FreeValue(ctx, rootv); JS_FreeCString(ctx, k); return o;
+            }
+            JS_FreeValue(ctx, rootv);
+            JSValue o = JS_NewOpaqueSourced(ctx, shp, k); JS_FreeCString(ctx, k); return o;
+        }
     }
     return js_concolic(ctx, "{searchParam}", JS_UNDEFINED);   /* no key -> generic external input */
 }
@@ -213,6 +230,25 @@ JSValue js_sp_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     if (all_examples && JS_IsOpaque(r)) JS_SetOpaqueExample(ctx, r, JS_NewStringLen(ctx, examp, eo));
     return r;
 }
+/* application/x-www-form-urlencoded DECODE (the spec parse: '+' -> space, %XX -> byte) into a JS string. Real
+   URLSearchParams.get returns the decoded value; without this a replay candidate delivered as an ENCODED query
+   (location.search percent-encodes it) would stay encoded and never break out at the sink. */
+static JSValue sp_decode(JSContext *ctx, const char *s, size_t n) {
+    char *out = malloc(n + 1); if (!out) return JS_NewStringLen(ctx, s, n);
+    size_t j = 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (c == '+') out[j++] = ' ';
+        else if (c == '%' && i + 2 < n) {
+            int hi = s[i+1], lo = s[i+2];
+            #define HEXV(x) ((x)>='0'&&(x)<='9'?(x)-'0':((x)|32)>='a'&&((x)|32)<='f'?((x)|32)-'a'+10:-1)
+            int h = HEXV(hi), l = HEXV(lo);
+            if (h >= 0 && l >= 0) { out[j++] = (char)((h << 4) | l); i += 2; } else out[j++] = c;
+            #undef HEXV
+        } else out[j++] = c;
+    }
+    JSValue r = JS_NewStringLen(ctx, out, j); free(out); return r;
+}
 static void sp_init(JSContext *ctx, JSValueConst o, JSValueConst init) {
     if (JS_IsString(init)) {                                    /* "a=1&b=2" (leading '?' tolerated) */
         const char *s = JS_ToCString(ctx, init); if (!s) return;
@@ -220,7 +256,7 @@ static void sp_init(JSContext *ctx, JSValueConst o, JSValueConst init) {
         while (*p) {
             const char *amp = strchr(p, '&'); const char *end = amp ? amp : p + strlen(p);
             const char *eq = memchr(p, '=', (size_t)(end - p));
-            if (eq) { JSValue k = JS_NewStringLen(ctx, p, (size_t)(eq - p)); JSValue v = JS_NewStringLen(ctx, eq + 1, (size_t)(end - eq - 1));
+            if (eq) { JSValue k = sp_decode(ctx, p, (size_t)(eq - p)); JSValue v = sp_decode(ctx, eq + 1, (size_t)(end - eq - 1));
                       sp_store(ctx, o, k, v); JS_FreeValue(ctx, k); JS_FreeValue(ctx, v); }
             if (!amp) break; p = amp + 1;
         }
@@ -351,7 +387,12 @@ static JSValue js_url_sp_delete(JSContext *ctx, JSValueConst this_val, int argc,
 JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "__fields", JS_NewObject(ctx));
-    if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) sp_init(ctx, o, argv[0]);
+    if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+        if (JS_IsOpaque(argv[0])) {   /* built from external input (location.search/hash): remember the ROOT source id so get(k) links siblings, letting the multi-hole @S query envelope co-solve a sibling gate + the sink */
+            const char *rs = JS_OpaqueSrcC(argv[0]);
+            if (rs && rs[0]) JS_SetPropertyStr(ctx, o, "__root", JS_NewString(ctx, rs));
+        } else sp_init(ctx, o, argv[0]);
+    }
     JS_SetPropertyStr(ctx, o, "get", JS_NewCFunction(ctx, js_sp_get, "get", 1));
     JS_SetPropertyStr(ctx, o, "getAll", JS_NewCFunction(ctx, js_sp_get, "getAll", 1));
     JS_SetPropertyStr(ctx, o, "has", JS_NewCFunction(ctx, js_sp_get, "has", 1));

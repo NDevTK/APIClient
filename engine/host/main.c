@@ -553,6 +553,7 @@ static void why_add(JSContext *ctx, const char *phase, const char *reason) {
 static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (the finalize expr-eval pre-filter) */
 static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow drove through the real code+branches to the sink where it broke out. The ONLY @S output: a working PoC is self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
 static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
+static char g_sink_qkey[64] = "";             /* @S query envelope: the URLSearchParams.get param KEY the sink reads (empty = not a query-source sink); set per-sink in solve_add */
 JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
 /* url/js sinks: the breakout VECTOR is fixed by the context itself — a URL sink executes a `javascript:`
    scheme, an eval/Function/setTimeout sink executes a JS-string/expression escape — so these are the
@@ -645,6 +646,25 @@ static char *json_envelope_cand(JSContext *ctx, const char *cand) {
     JS_FreeValue(ctx, s);
     return out;
 }
+/* @S QUERY ENVELOPE: a URLSearchParams.get(key) sink is reached only after location.search/hash is PARSED, so
+   the breakout must ride a query string the parse yields — `key=<breakout>` — AND satisfy every sibling EQ gate
+   the handler checks on ANOTHER param (`mode==='preview'`), or the sink is never reached. Build
+   "mode=preview&data=<breakout>"; delivered at the source getter it is percent-encoded, then FORM-DECODED by the
+   real get(), so the breakout arrives intact. Mirrors json_envelope_cand for the JSON.parse case. Returns
+   malloc'd query string, or NULL when this is not a query-source sink. */
+static char *query_envelope_cand(const char *cand) {
+    if (!g_sink_qkey[0]) return NULL;
+    char buf[1600]; int o = 0; buf[0] = 0;
+    if (g_sink_root[0]) { size_t rl = strlen(g_sink_root);
+        for (int i = 0; i < g_cons_n; i++) { Cons *c = &g_cons[i];   /* sibling EQ gates on the SAME query root ("{search}?mode") -> required params */
+            if (c->src && c->op == OPCMP_EQ && c->tok && !strncmp(c->src, g_sink_root, rl) && c->src[rl] == '?') {
+                const char *gk = c->src + rl + 1; const char *ge = gk; while (*ge && *ge != '.') ge++;   /* param name = after '?', up to a transform '.' */
+                size_t gl = (size_t)(ge - gk);
+                if (gl == strlen(g_sink_qkey) && !strncmp(gk, g_sink_qkey, gl)) continue;   /* the sink param itself is placed below, not as a gate */
+                o += snprintf(buf + o, sizeof buf - o, "%s%.*s=%s", o ? "&" : "", (int)gl, gk, c->tok); } } }
+    o += snprintf(buf + o, sizeof buf - o, "%s%s=%s", o ? "&" : "", g_sink_qkey, cand);   /* sink param = the breakout */
+    return strdup(buf);
+}
 /* enqueue an @S REPLAY flow: re-run the CURRENT orphan with `cand` as the concrete source, driven by the
    ONE scheduler (high initial value so the search runs soon; transient — never parked as a recipe). */
 /* fitness = how many OBSERVED gate tokens this candidate already embeds (a distance-to-firing estimate the WFQ
@@ -653,7 +673,8 @@ static char *json_envelope_cand(JSContext *ctx, const char *cand) {
    of the distance-directed search CLAUDE.md mandates over flat enumerate-and-verify. */
 static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, const char *target, double fitness) {
     double w = 2.0 + fitness;
-    char *env = json_envelope_cand(ctx, cand_in);   /* scalar-source field sink -> deliver the JSON envelope */
+    char *env = query_envelope_cand(cand_in);       /* URLSearchParams.get sink -> deliver a query envelope */
+    if (!env) env = json_envelope_cand(ctx, cand_in);   /* else scalar-source JSON.parse field sink -> JSON envelope */
     const char *cand = env ? env : cand_in;
     if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
         signed char *sdec = NULL;   /* inherit THIS session's decision vector so the candidate replays the SAME arms that reached the sink (an exploratory session now forks) */
@@ -784,6 +805,14 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
     { const char *sp = JS_OpaqueSrcC(val);   /* @S structured delivery: the source LEAF path ("{pm}.html") -> post {html:payload}, not a bare string */
       g_sink_root[0] = 0;   /* the root source token so the envelope can merge sibling gate fields */
       if (sp) { const char *rb = strchr(sp, '}'); if (rb) { size_t rl = (size_t)(rb - sp + 1); if (rl < sizeof g_sink_root) { memcpy(g_sink_root, sp, rl); g_sink_root[rl] = 0; } } }
+      /* @S query-source sink: a URLSearchParams.get(key) opaque has a src "{search}?data" — the '?' marker (set
+         only by js_sp_get) distinguishes a real query param from a string transform chain ("{hash}.slice"), so a
+         raw hash/search sink is NOT misread as query-sourced. Record the KEY (after '?', up to a transform '.'). */
+      g_sink_qkey[0] = 0;
+      if (sp) { const char *qm = strchr(sp, '?');
+          if (qm && qm[1]) { const char *e = qm + 1; while (*e && *e != '.') e++;
+              size_t kl = (size_t)(e - (qm + 1));
+              if (kl && kl < sizeof g_sink_qkey) { memcpy(g_sink_qkey, qm + 1, kl); g_sink_qkey[kl] = 0; } } }
       if (sp && sp[0]) {
           JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp));
           char root[64]; const char *rb = strchr(sp, '}');   /* source token "{pm}" -> collect sibling gate fields the handler requires */
