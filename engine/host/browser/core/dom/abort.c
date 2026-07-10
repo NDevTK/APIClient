@@ -10,7 +10,7 @@
  * The static factories AbortSignal.timeout/any/abort all yield an instance of this interface. */
 #include "core/dom/abort.h"
 #include "bindings/idl.h"
-#include "bindings/idl_generated.h"   /* AbortSignal_IDL — the member SHAPE generated from canonical Web IDL */
+#include "core/dom/idl.gen.h"   /* AbortSignal_IDL — the member SHAPE generated from canonical Web IDL (this folder) */
 #include "check.h"    /* DCHECK — throwIfAborted's self-hosted bytecode is guaranteed-valid; a compile failure is a should-never-happen */
 #include "opaque.h"   /* js_noop */
 
@@ -26,7 +26,7 @@ static const IdlImpl ABORTSIGNAL_IMPLS[] = {
 JSValue js_abortsignal_make(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     JSValue o = JS_NewObject(ctx);
-    idl_bind(ctx, o, AbortSignal_IDL, AbortSignal_IDL_N, ABORTSIGNAL_IMPLS, sizeof ABORTSIGNAL_IMPLS / sizeof ABORTSIGNAL_IMPLS[0], /*attrs*/1);
+    idl_bind(ctx, o, "AbortSignal", AbortSignal_IDL, AbortSignal_IDL_N, ABORTSIGNAL_IMPLS, sizeof ABORTSIGNAL_IMPLS / sizeof ABORTSIGNAL_IMPLS[0], /*attrs*/1, /*strict*/0);
     /* throwIfAborted() is SELF-HOSTED as bytecode (not a C no-op) so the `if (this.aborted)` branches on the
        concolic `aborted` at the OPCODE level — forking throw-vs-continue (a C `if` on JS_ToBool can't fork).
        On the aborted arm it throws the concolic `reason`, so a try/catch/.catch path (which can itself reach a

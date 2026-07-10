@@ -32,8 +32,11 @@ typedef enum { IDL_GEN_OP, IDL_GEN_ATTR } IdlGenKind;
 typedef struct { const char *name; IdlGenKind kind; int readonly; int arg; } IdlGenMember;   /* the SHAPE (from IDL) */
 /* the BEHAVIOR (from the C component); magic>=0 -> magic-dispatched get/set (one fn serving many by index). */
 typedef struct { const char *name; JSCFunction *get; JSCFunction *set; JSCFunction *op; int magic; } IdlImpl;
-/* install_attrs: 1 = install operations AND attributes (a small interface fully IDL-driven); 0 = operations
-   ONLY (for a big interface like Element whose reflected/magic attributes are still installed separately). */
-void idl_bind(JSContext *ctx, JSValueConst target, const IdlGenMember *shape, int shape_n, const IdlImpl *impls, int impl_n, int install_attrs);
+/* `iface` = the interface name (for the DCHECK message). install_attrs: 1 = install operations AND attributes
+   (a small interface fully IDL-driven); 0 = operations ONLY (a big interface whose magic attributes install
+   separately). strict: 1 = an unmodelled operation DCHECKs "unsupported <iface>.<member>" WHEN CALLED (loud in
+   dev — a used-but-unbuilt member surfaces as a should-never-happen; a compiled-out noop in release), so a
+   component MUST either implement a member or explicitly declare it js_noop; 0 = unmodelled ops silently noop. */
+void idl_bind(JSContext *ctx, JSValueConst target, const char *iface, const IdlGenMember *shape, int shape_n, const IdlImpl *impls, int impl_n, int install_attrs, int strict);
 
 #endif

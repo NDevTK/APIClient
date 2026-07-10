@@ -19,7 +19,7 @@
 #include "core/dom/classlist.h"    /* js_el_classlist_get — el.classList (a real class-attr token check) */
 #include "check.h"                 /* DCHECK — the live document is an engine invariant (created at boot) */
 #include "bindings/idl.h"          /* idl_bind — the Element OPERATION list is generated from canonical Element IDL */
-#include "bindings/idl_generated.h"   /* Element_IDL — the spec-exact member shape */
+#include "core/dom/idl.gen.h"   /* Element_IDL — the spec-exact member shape (generated into this folder) */
 
 /* Borrowed from main.c: an @S replay flow pins the concrete candidate here (a reflected-property write in a
    replay writes the candidate, not the shadow taint). */
@@ -434,7 +434,7 @@ static const IdlImpl ELEMENT_IMPLS[] = {
 void el_install_methods(JSContext *ctx, JSValue proto) {
     /* OPERATIONS: the member list comes from canonical Element IDL (Node + EventTarget + mixins, generated) —
        modelled ops get our impl, every other spec op is a present noop. Drift-free and complete. */
-    idl_bind(ctx, proto, Element_IDL, Element_IDL_N, ELEMENT_IMPLS, (int)(sizeof ELEMENT_IMPLS / sizeof ELEMENT_IMPLS[0]), /*install_attrs*/0);
+    idl_bind(ctx, proto, "Element", Element_IDL, Element_IDL_N, ELEMENT_IMPLS, (int)(sizeof ELEMENT_IMPLS / sizeof ELEMENT_IMPLS[0]), /*install_attrs*/0, /*strict*/0);   /* Element has many deliberate UI-noop ops; not strict */
     /* Methods NOT on Element (HTMLElement.click/focus/blur, HTMLFormElement.submit) — kept until those interfaces
        are generated too; submit/requestSubmit fire the form's @H action request. */
     JS_SetPropertyStr(ctx, proto, "submit", JS_NewCFunction(ctx, js_form_submit, "submit", 0));
