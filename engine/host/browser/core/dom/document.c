@@ -5,7 +5,7 @@
 #include "core/dom/dom_select.h"    /* dom_select_first / dom_select_all over the live Lexbor tree */
 #include "core/dom/dom_element.h"   /* el_wrap: real Lexbor element -> JS Element */
 #include "core/dom/custom_elements.h"   /* ce_upgrade — createElement upgrades a defined custom-element tag, else el_wrap */
-#include "core/dom/event_target.h"  /* Document.prototype inherits EventTarget.prototype (addEventListener/dispatchEvent) */
+#include "core/dom/node.h"           /* Document.prototype inherits Node.prototype (Document : Node : EventTarget) */
 #include "core/dom/domparser.h"     /* js_doc_createrange — document.createRange (contextual fragment taint) */
 #include "core/html/docwrite.h"     /* js_doc_write — document.write/writeln */
 #include "core/frame/cookie.h"      /* js_cookie_get/set — document.cookie per-flow jar */
@@ -91,7 +91,7 @@ void document_init(JSContext *ctx, JSValue global) {
     JSClassDef def = { "Document" };
     JS_NewClass(rt, g_document_class_id, &def);
     JSValue proto = JS_NewObject(ctx);
-    JS_SetPrototype(ctx, proto, event_target_proto(ctx));   /* Document IS an EventTarget: inherit addEventListener/removeEventListener/dispatchEvent from the shared spine root (Blink Document : Node : EventTarget) */
+    JS_SetPrototype(ctx, proto, node_proto(ctx));   /* Document IS a Node IS an EventTarget: inherit through the shared spine (Blink Document : Node : EventTarget) */
     /* METHODS on the shared prototype (Document.prototype). */
     JS_SetPropertyStr(ctx, proto, "querySelector", JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));
     JS_SetPropertyStr(ctx, proto, "querySelectorAll", JS_NewCFunction(ctx, js_doc_querySelectorAll, "querySelectorAll", 1));

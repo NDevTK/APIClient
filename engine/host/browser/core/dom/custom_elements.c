@@ -68,10 +68,10 @@ static void def_ctor(JSContext *ctx, JSValueConst g, const char *name, JSValueCo
    global. Called by main.c after the element proto exists. customElements.define is effectively a no-op — the
    ctor's methods are already reachable + orphan-driven; get/whenDefined are opaque, upgrade a no-op. */
 void install_dom_interface_ctors(JSContext *ctx, JSValueConst g, JSValueConst el_proto) {
-    /* EventTarget is owned by event_target.c (the DOM inheritance spine root), installed before this — do NOT
-       redefine it here or it overwrites window.EventTarget with an el_proto-based ctor, breaking `x instanceof
-       EventTarget` for Document/etc. that chain to the real EventTarget.prototype. */
-    static const char *N[] = { "Node", "Element", "HTMLElement", "HTMLDivElement",
+    /* EventTarget + Node are owned by event_target.c / node.c (the DOM inheritance spine), installed before this
+       — do NOT redefine them here or the flat el_proto-based ctor overwrites the real window.EventTarget/Node and
+       breaks `x instanceof EventTarget/Node` for everything that chains to the real spine prototypes. */
+    static const char *N[] = { "Element", "HTMLElement", "HTMLDivElement",
         "HTMLInputElement", "HTMLButtonElement", "HTMLFormElement", "HTMLAnchorElement", "HTMLSpanElement",
         "HTMLImageElement", "SVGElement" };
     for (int i = 0; i < (int)(sizeof N / sizeof N[0]); i++) def_ctor(ctx, g, N[i], el_proto);
