@@ -13,4 +13,7 @@ JSValue js_ce_define(JSContext *ctx, JSValueConst this_val, int argc, JSValueCon
 JSValue ce_upgrade(JSContext *ctx, lxb_dom_element_t *el, const char *tag);   /* upgrade a defined tag, else el_wrap(el) */
 void ce_init(JSContext *ctx);    /* create the registry + instance list */
 void ce_free(JSContext *ctx);    /* teardown */
+/* Install the DOM interface base constructors (EventTarget..SVGElement, for `class X extends HTMLElement`) +
+   the customElements registry onto the global; the bases chain to el_proto (the Element method prototype). */
+void install_dom_interface_ctors(JSContext *ctx, JSValueConst g, JSValueConst el_proto);
 #endif
