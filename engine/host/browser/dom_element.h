@@ -51,4 +51,10 @@ JSValue js_el_rect(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
 JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val);
 JSValue js_el_dataset_get(JSContext *ctx, JSValueConst this_val);
 
+/* cloneNode -> a real node (self); also the Request/Blob .clone() shim (urlobj.c). */
+JSValue js_el_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+/* Install the Element interface (methods + reflected props + on<event> setters) onto the element prototype —
+   the binding install Blink generates from Element.idl. Called by main.c at prototype setup. */
+void el_install_methods(JSContext *ctx, JSValue proto);
+
 #endif

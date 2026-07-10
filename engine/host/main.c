@@ -1274,28 +1274,7 @@ static int is_msg_handler(JSValueConst h) {
     for (int i = 0; i < g_replay_msg_n; i++) if (g_replay_msg[i] == p) return 1;   /* re-resolved candidate 'message' closure */
     return 0;
 }
-/* el.onclick/onsubmit/onmouseover/... = fn : an event handler PROPERTY. A real browser attaches it to the
-   (persistent) DOM element, so it fires regardless of whether the app retains the JS wrapper. Our orphan
-   driver only reaches handlers that are REACHABLE, so an onX set on a transient wrapper
-   (document.querySelector('.b').onclick = fn) was LOST. Register it in g_handlers (exactly like
-   addEventListener) so it is driven independent of wrapper reachability. */
-static const char *ON_EVENTS[] = {
-    "click","dblclick","mousedown","mouseup","mouseover","mouseout","mouseenter","mouseleave","mousemove",
-    "keydown","keyup","keypress","submit","change","input","focus","blur","load","error","message",
-    "scroll","resize","touchstart","touchend","touchmove","pointerdown","pointerup","pointermove",
-    "contextmenu","readystatechange","animationend","transitionend","dragstart","dragend","drop",
-    "paste","copy","cut","wheel","play","pause","ended","canplay","loadeddata"
-};
-#define N_ON_EVENTS ((int)(sizeof ON_EVENTS / sizeof ON_EVENTS[0]))
-static JSValue js_el_on_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic) {
-    if (JS_IsFunction(ctx, val) && magic >= 0 && magic < N_ON_EVENTS) {
-        JSValue tv = JS_NewString(ctx, ON_EVENTS[magic]);
-        JSValueConst a[2] = { tv, val };
-        js_add_listener(ctx, this_val, 2, a);   /* same registration path -> driven; 'message' tracking too */
-        JS_FreeValue(ctx, tv);
-    }
-    return JS_UNDEFINED;
-}
+/* on<event> content-attribute handlers (js_el_on_set + ON_EVENTS) -> dom_element.c (Element event handlers). */
 
 /* The page's OWN identity (principal) is CONCRETE for URL building — location.origin/protocol/host/
    hostname/port/pathname/href are REAL (a bundle does `location.origin + '/api/...'`; opaque here would
@@ -1350,75 +1329,13 @@ lxb_html_document_t *g_dom = NULL;   /* the live parsed document (non-static: do
    inserted node's detach position (kind 1); `cur` = the flow's value, held while parked. Swapped on
    context-switch so a DOM writer interleaves like a heap writer. */
 
-static int el_is_script(lxb_dom_element_t *el) {
-    size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
-    return nm && nl == 6 && memcmp(nm, "script", 6) == 0;
-}
-/* An inserted <script> with a src is a chunk LOAD (the URL may be JS-computed): surface it. */
-static void script_maybe_load(lxb_dom_element_t *el) {
-    if (!el_is_script(el)) return;
-    /* A candidate-REPLAY flow (g_candidate set) VERIFIES a known sink; it must not DISCOVER chunks. Here
-       `s.src` is derived from the injected candidate PAYLOAD (e.g. "javascript:X9"), NOT a real chunk URL —
-       chunk_pending_add'ing it is nonsensical and drives a fetch/provide feedback that livelocks a
-       multi-sink handler. Chunk discovery is a NORMAL-flow concern; skip it under a candidate. */
-    if (g_candidate) return;
-    char *u = NULL;
-    /* Prefer the CONCOLIC EXAMPLE from the attribute shadow: a reply-field / computed src (`s.src = m.chunk`)
-       leaves only the holey SHAPE in the Lexbor attribute, so the real chunk URL lives in the shadow. */
-    int si = attr_shadow_find(el, "src");
-    if (si >= 0) {
-        JSValue ex = JS_OpaqueExample(g_ctx, attr_shadow_opaque(si));
-        if (!JS_IsUndefined(ex)) { const char *e = JS_ToCString(g_ctx, ex); if (e) { u = strdup(e); JS_FreeCString(g_ctx, e); } }
-        JS_FreeValue(g_ctx, ex);
-    }
-    if (!u) {
-        size_t sl = 0; const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
-        if (src && sl) u = strndup((const char *)src, sl);
-    }
-    if (u) { arr_push_str(g_ctx, g_chunkurls, u); if (!has_hole(u)) chunk_pending_add(u); free(u); }   /* -> chunkUrls + fetch in place */
-}
+/* el_is_script + script_maybe_load (<script src> lazy-chunk discovery) -> browser/html_script_element.c
+   (HTMLScriptElement / ScriptLoader). It feeds the scheduler's chunk queue via extern edges. */
 /* resolve_with + dynimport_link + host_dyn_import/host_module_normalize/host_module_loader + pendmod_retry
    -> module_loader.c (the whole ESM subsystem). */
-/* setAttribute + insertAdjacentHTML + inner/outerHTML get/set + getAttributeNames -> dom_element.c. */
-static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    lxb_dom_element_t *parent = JS_GetOpaque(this_val, g_el_class_id);
-    /* @S: inserting a {parsedhtml}-TAINTED node (from DOMParser.parseFromString / Range.createContextual-
-       Fragment of attacker input) into the LIVE DOM is XSS. The distinct source avoids a false positive on a
-       safe text node (createTextNode is a plain opaque, not {parsedhtml}); replay verifies real breakout. */
-    if (argc > 0 && JS_IsOpaque(argv[0])) {
-        const char *sh = JS_OpaqueShapeC(argv[0]);
-        if (sh && strcmp(sh, "{parsedhtml}") == 0) solve_add(ctx, "appendChild", "html", argv[0]);
-    }
-    lxb_dom_element_t *child = (argc > 0) ? JS_GetOpaque(argv[0], g_el_class_id) : NULL;
-    if (parent && child) {
-        lxb_dom_node_insert_child(lxb_dom_interface_node(parent), lxb_dom_interface_node(child));
-        dom_insert_capture(lxb_dom_interface_node(child));
-        script_maybe_load(child);   /* injected <script src> (computed URL) -> discovered as a chunk */
-    }
-    return (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
-}
-/* reflected URL/identity properties (el.src = computedUrl / el.href / el.id) map to Lexbor attributes,
-   so a bundle setting .src via PROPERTY (the common script-injection form) is captured + intercepted. */
-/* tagName + boolean/reflected-string props (refl_get/refl_set, the href/src/srcdoc @S sinks) -> dom_element.c. */
-/* Common element APIs that real bundles call constantly — MISSING ones throw and kill the script (like
-   addEventListener did), losing all coverage after. matches -> opaque bool (a branch FORKS, exploring both);
-   closest -> the element itself (a real node whose methods/attrs work — never throw/null); style -> a plain
-   object so `el.style.x=v` never throws; dataset -> the element's REAL data-* attributes (an endpoint often
-   lives in data-url), camelCased, so `el.dataset.url` yields the concrete value, not undefined. */
-/* matches/closest/has_attr/contains + style/content getters -> dom_element.c (pure DOM reads). */
-JSValue js_el_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_DupValue(ctx, this_val); }   /* cloneNode -> a real node */
-/* el.attachShadow(init): Shadow DOM root — how nearly every custom element renders. Now REACHABLE (custom
-   element instances are el-backed with the element proto in their chain). Returns a real detached container so
-   root.appendChild/querySelector/addEventListener register handlers -> a handler wired into the shadow subtree
-   is driven like any other. */
-static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (!g_dom) return JS_UNDEFINED;
-    lxb_dom_element_t *root = lxb_dom_document_create_element(lxb_dom_interface_document(g_dom), (const lxb_char_t *)"shadow-root", 11, NULL);
-    if (!root) return JS_UNDEFINED;
-    JSValue rv = el_wrap(ctx, root);
-    JS_SetPropertyStr(ctx, (JSValue)this_val, "shadowRoot", JS_DupValue(ctx, rv));   /* host.shadowRoot (open) */
-    return rv;
-}
+/* appendChild/insertBefore (ContainerNode tree mutation + @S parsedhtml sink + <script src> discovery),
+   cloneNode (js_el_self), attachShadow, and el_install_methods (the Element binding install) -> dom_element.c.
+   They feed the scheduler via extern edges (solve_add / js_add_listener / script_maybe_load). */
 /* js_el_dataset_get (real data-* attrs camelCased) -> dom_element.c. */
 /* classList: real bundles branch on `el.classList.contains('active')` constantly; undefined THREW. contains
    checks the REAL class attribute (whitespace-separated tokens) — concrete page structure, like className.
@@ -1429,117 +1346,7 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
    Lexbor so a tree walk that reaches a fetch/sink is explored. children is a REAL array (.length/.forEach/[i]
    all work). Only ELEMENT nodes (text nodes aren't wrapped — a walker keying on .children matches the browser). */
 /* DOM traversal getters (parentNode/children/firstElementChild/nextElementSibling) -> dom_element.c. */
-static void el_install_methods(JSContext *ctx, JSValue proto) {
-    JS_SetPropertyStr(ctx, proto, "getAttribute", JS_NewCFunction(ctx, js_el_getAttribute, "getAttribute", 1));
-    JS_SetPropertyStr(ctx, proto, "setAttribute", JS_NewCFunction(ctx, js_el_setAttribute, "setAttribute", 2));
-    JS_SetPropertyStr(ctx, proto, "appendChild", JS_NewCFunction(ctx, js_el_appendChild, "appendChild", 1));
-    JS_SetPropertyStr(ctx, proto, "insertAdjacentHTML", JS_NewCFunction(ctx, js_el_insertAdjacentHTML, "insertAdjacentHTML", 2));
-    JS_SetPropertyStr(ctx, proto, "querySelector", JS_NewCFunction(ctx, js_el_querySelector, "querySelector", 1));
-    /* textContent / innerText are PROPERTIES in the real DOM (`el.textContent`), never methods — a
-       getTextContent METHOD left `.textContent` UNDEFINED, so the ubiquitous label-text read and the SSR
-       data pattern `JSON.parse(script.textContent)` silently returned undefined (and threw). Define the
-       standard getters; the non-standard method is deleted (nothing used it). */
-    for (int i = 0; i < 2; i++) {
-        JSAtom a = JS_NewAtom(ctx, i ? "innerText" : "textContent");
-        JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_textContent, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, a);
-    }
-    /* ELEMENT-LEVEL EVENT HANDLERS: most SPAs attach click/submit/change handlers to ELEMENTS (buttons, forms),
-       not window. addEventListener must REGISTER them (js_add_listener -> g_handlers -> orphan-driven) — else
-       the call throws (undefined method), killing the script and losing every element handler's endpoints/sinks.
-       remove/dispatch are no-ops; click/focus/blur are no-ops so a call doesn't throw (the handler is
-       reached by driving, not by a synthetic dispatch). submit/requestSubmit are NOT no-ops: a real browser
-       fires the form's action request, so js_form_submit EMITS that @H endpoint. */
-    JS_SetPropertyStr(ctx, proto, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, proto, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    JS_SetPropertyStr(ctx, proto, "dispatchEvent", JS_NewCFunction(ctx, js_noop, "dispatchEvent", 1));
-    JS_SetPropertyStr(ctx, proto, "click", JS_NewCFunction(ctx, js_noop, "click", 0));
-    JS_SetPropertyStr(ctx, proto, "submit", JS_NewCFunction(ctx, js_form_submit, "submit", 0));         /* @H: fires the form's action request, like a real browser */
-    JS_SetPropertyStr(ctx, proto, "requestSubmit", JS_NewCFunction(ctx, js_form_submit, "requestSubmit", 1));
-    JS_SetPropertyStr(ctx, proto, "focus", JS_NewCFunction(ctx, js_noop, "focus", 0));
-    JS_SetPropertyStr(ctx, proto, "blur", JS_NewCFunction(ctx, js_noop, "blur", 0));
-    JS_SetPropertyStr(ctx, proto, "remove", JS_NewCFunction(ctx, js_noop, "remove", 0));
-    JS_SetPropertyStr(ctx, proto, "matches", JS_NewCFunction(ctx, js_el_matches, "matches", 1));
-    JS_SetPropertyStr(ctx, proto, "closest", JS_NewCFunction(ctx, js_el_closest, "closest", 1));
-    JS_SetPropertyStr(ctx, proto, "cloneNode", JS_NewCFunction(ctx, js_el_self, "cloneNode", 1));       /* returns a real node (self) whose methods/attrs work */
-    JS_SetPropertyStr(ctx, proto, "contains", JS_NewCFunction(ctx, js_el_contains, "contains", 1));     /* REAL descendant check */
-    JS_SetPropertyStr(ctx, proto, "hasAttribute", JS_NewCFunction(ctx, js_el_has_attr, "hasAttribute", 1));   /* REAL */
-    JS_SetPropertyStr(ctx, proto, "getAttributeNames", JS_NewCFunction(ctx, js_el_getattrnames, "getAttributeNames", 0));   /* REAL */
-    JS_SetPropertyStr(ctx, proto, "attachShadow", JS_NewCFunction(ctx, js_el_attach_shadow, "attachShadow", 1));   /* Shadow DOM root -> handlers driven */
-    JS_SetPropertyStr(ctx, proto, "toggleAttribute", JS_NewCFunction(ctx, js_el_has_attr, "toggleAttribute", 1));
-    JS_SetPropertyStr(ctx, proto, "querySelectorAll", JS_NewCFunction(ctx, js_el_querySelectorAll, "querySelectorAll", 1));
-    JS_SetPropertyStr(ctx, proto, "insertBefore", JS_NewCFunction(ctx, js_el_appendChild, "insertBefore", 2));   /* intercepts <script src> like appendChild */
-    JS_SetPropertyStr(ctx, proto, "replaceChild", JS_NewCFunction(ctx, js_el_appendChild, "replaceChild", 2));
-    JS_SetPropertyStr(ctx, proto, "before", JS_NewCFunction(ctx, js_el_appendChild, "before", 1));
-    JS_SetPropertyStr(ctx, proto, "after", JS_NewCFunction(ctx, js_el_appendChild, "after", 1));
-    JS_SetPropertyStr(ctx, proto, "setAttributeNS", JS_NewCFunction(ctx, js_noop, "setAttributeNS", 3));
-    JS_SetPropertyStr(ctx, proto, "removeAttribute", JS_NewCFunction(ctx, js_noop, "removeAttribute", 1));
-    JS_SetPropertyStr(ctx, proto, "replaceChildren", JS_NewCFunction(ctx, js_noop, "replaceChildren", 0));
-    JS_SetPropertyStr(ctx, proto, "scrollIntoView", JS_NewCFunction(ctx, js_noop, "scrollIntoView", 0));
-    JS_SetPropertyStr(ctx, proto, "getBoundingClientRect", JS_NewCFunction(ctx, js_el_rect, "getBoundingClientRect", 0));
-    { JSAtom a = JS_NewAtom(ctx, "style");
-      JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_style_get, "get style", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-      JS_FreeAtom(ctx, a); }
-    { JSAtom a = JS_NewAtom(ctx, "content");   /* template.content -> inert fragment (queryable, cloneable) */
-      JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_content_get, "get content", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-      JS_FreeAtom(ctx, a); }
-    for (int i = 0; i < N_ON_EVENTS; i++) {   /* on<event> = fn -> register in g_handlers (driven regardless of wrapper reachability) */
-        char nm[40]; snprintf(nm, sizeof nm, "on%s", ON_EVENTS[i]);
-        JSAtom a = JS_NewAtom(ctx, nm);
-        JS_DefinePropertyGetSet(ctx, proto, a, JS_UNDEFINED,
-            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_on_set, "on-set", 1, JS_CFUNC_setter_magic, i), JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, a);
-    }
-    { JSAtom a = JS_NewAtom(ctx, "dataset");
-      JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_dataset_get, "get dataset", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-      JS_FreeAtom(ctx, a); }
-    for (int i = 0; i < 2; i++) {   /* innerHTML (magic 0) / outerHTML (magic 1) setter = XSS sink */
-        JSAtom a = JS_NewAtom(ctx, i ? "outerHTML" : "innerHTML");
-        JS_DefinePropertyGetSet(ctx, proto, a,
-            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_get_html, "get", 0, JS_CFUNC_getter_magic, i),
-            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_set_html, "set", 1, JS_CFUNC_setter_magic, i),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, a);
-    }
-    /* Attribute-REFLECTED properties real bundles read constantly (undefined broke every read + branch). The
-       PROPERTY name may differ from the attribute (className -> class); refl_name maps it. value/name/type are
-       an input's shipped defaults (concrete page config). */
-    static const char *refl[] = { "src", "href", "action", "id", "value", "name", "type", "className", "alt", "title", "placeholder", "srcdoc", "nonce" };
-    for (int i = 0; i < (int)(sizeof refl / sizeof refl[0]); i++) {
-        JSAtom a = JS_NewAtom(ctx, refl[i]);
-        JS_DefinePropertyGetSet(ctx, proto, a,
-            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_refl_get, "get", 0, JS_CFUNC_getter_magic, i),
-            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_refl_set, "set", 1, JS_CFUNC_setter_magic, i),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, a);
-    }
-    for (int i = 0; i < 2; i++) {   /* tagName / nodeName -> the uppercase tag */
-        JSAtom a = JS_NewAtom(ctx, i ? "nodeName" : "tagName");
-        JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_tagname, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, a);
-    }
-    { JSAtom a = JS_NewAtom(ctx, "classList");
-      JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, (JSCFunction *)js_el_classlist_get, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-      JS_FreeAtom(ctx, a); }
-    static const char *boolp[] = { "checked", "disabled", "hidden", "selected", "required", "readOnly", "multiple" };
-    for (int i = 0; i < (int)(sizeof boolp / sizeof boolp[0]); i++) {   /* boolean attribute-presence props */
-        JSAtom a = JS_NewAtom(ctx, boolp[i]);
-        JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_el_bool_get, "get", 0, JS_CFUNC_getter_magic, i), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, a);
-    }
-    /* traversal getters -> real el_wrap'd nodes (property name : backing getter) */
-    struct { const char *prop; JSCFunction *fn; } trav[] = {
-        { "parentNode", (JSCFunction *)js_el_parent }, { "parentElement", (JSCFunction *)js_el_parent },
-        { "children", (JSCFunction *)js_el_children }, { "childNodes", (JSCFunction *)js_el_children },
-        { "firstChild", (JSCFunction *)js_el_first_el_child }, { "firstElementChild", (JSCFunction *)js_el_first_el_child },
-        { "nextSibling", (JSCFunction *)js_el_next_el_sib }, { "nextElementSibling", (JSCFunction *)js_el_next_el_sib },
-    };
-    for (int i = 0; i < (int)(sizeof trav / sizeof trav[0]); i++) {
-        JSAtom a = JS_NewAtom(ctx, trav[i].prop);
-        JS_DefinePropertyGetSet(ctx, proto, a, JS_NewCFunction2(ctx, trav[i].fn, "get", 0, JS_CFUNC_getter, 0), JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, a);
-    }
-}
+/* el_install_methods (the Element interface binding install, Blink-generated from Element.idl) -> dom_element.c. */
 static JSValue js_doc_createElement(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (!g_dom || argc < 1) return JS_NULL;
     const char *tag = JS_ToCString(ctx, argv[0]); if (!tag) return JS_NULL;
