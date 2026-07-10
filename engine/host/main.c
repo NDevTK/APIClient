@@ -1308,7 +1308,11 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
         if (is_h) continue;
         JSValue pair = JS_NewArray(ctx);
         JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, fn));
-        JS_SetPropertyUint32(ctx, pair, 1, js_event_ctor(ctx, JS_UNDEFINED, 0, NULL));   /* driven fn gets a real DOM Event (target = per-flow document) */
+        /* a NON-handler orphan (is_h excluded above) is NOT an event listener: driving it with an Event as arg0
+           makes `fetch('/api/org/'+id)` learn a GARBAGE /api/org/[object Object] endpoint. Give it distinct
+           external-input source identity ({arg0}), like the main orphan drive — its arg is attacker input, not
+           an Event; the session only needs it to run over the accumulated handler state. */
+        JS_SetPropertyUint32(ctx, pair, 1, JS_NewOpaqueSourced(ctx, "{arg0}", "{arg0}"));
         JS_SetPropertyUint32(ctx, pair, 2, JS_FindReceiver(ctx, fn));   /* real receiver (upgraded custom-element instance) so this.attachShadow/getAttribute work when the session fires connectedCallback */
         JS_SetPropertyUint32(ctx, arr, n++, pair);
     }
@@ -1334,7 +1338,10 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
                 if (!dup) {
                     JSValue pair = JS_NewArray(ctx);
                     JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, fn));
-                    JS_SetPropertyUint32(ctx, pair, 1, js_event_ctor(ctx, JS_UNDEFINED, 0, NULL));   /* driven fn gets a real DOM Event (target = per-flow document) */
+                    /* a boot-EXECUTED reader (loadDashboard()) is a DATA function, not an event listener — an
+                       Event arg makes its `fetch('/api/'+arg)` learn a garbage [object Object] endpoint. Give it
+                       {arg0} external-input identity; the session re-fires it for the accumulated state, not an event. */
+                    JS_SetPropertyUint32(ctx, pair, 1, JS_NewOpaqueSourced(ctx, "{arg0}", "{arg0}"));
                     JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);
                     JS_SetPropertyUint32(ctx, arr, n++, pair);
                 }
@@ -1665,25 +1672,29 @@ static void scheduler_run(JSContext *ctx)
                and the candidate never reaches a closure-captured source. Non-candidate flows drive f.handle. */
             JSValue drive = f.handle, resolved = JS_UNDEFINED;
             if (f.candidate) { resolved = resolve_replayed_handler(ctx, f.handle); if (!JS_IsUndefined(resolved)) drive = resolved; }
-            JSValue oargs[8]; for (int i = 0; i < 8; i++) oargs[i] = g_opaque;
+            /* Each orphan ARGUMENT is DISTINCT external input, so it gets its OWN source identity ({arg0}..{arg7})
+               — NOT the shared source-less g_opaque. Sharing one source-less value across args aliased them in the
+               per-flow constraint tracker: `function(a,b){ if(a=='x' && b=='y') sink }` recorded ==x and ==y on the
+               SAME (empty) source, a false contradiction that PRUNED the sink arm. Distinct sources let each arg's
+               gate tokens accumulate + reverse independently (the per-flow constraints a PoC is built from). Owned
+               -> freed after JS_FlowNew dups them into the frame. */
+            JSValue oargs[8]; for (int i = 0; i < 8; i++) { char s[16]; snprintf(s, sizeof s, "{arg%d}", i); oargs[i] = JS_NewOpaqueSourced(ctx, s, s); }
             /* OPAQUE-COLLECTION element: an items.forEach(cb) callback's element carries the collection's
-               provenance ({reply}), not a bare g_opaque — so f.key keeps the reply taint. Freed after
-               JS_FlowNew dups it into the frame. */
+               provenance ({reply}), not a bare {arg0} — so f.key keeps the reply taint. */
             JSValue elem = JS_UNDEFINED, ev = JS_UNDEFINED;
-            if (f.drive_src) { elem = JS_NewOpaqueSourced(ctx, f.drive_src, f.drive_src); oargs[0] = elem; }
+            if (f.drive_src) { elem = JS_NewOpaqueSourced(ctx, f.drive_src, f.drive_src); JS_FreeValue(ctx, oargs[0]); oargs[0] = elem; }
             /* A 'message' listener's first arg is a MessageEvent whose .data is attacker-controlled
                (postMessage): drive it with the {pm} source-tagged event so a sink reaching e.data reports
-               {pm} and the PoC assembler builds a postMessage-delivered PoC. */
-            if (!JS_IsUndefined(g_msg_event) && is_msg_handler(drive)) oargs[0] = g_msg_event;
-            else if (!f.drive_src && is_handler(ctx, drive)) { ev = js_event_ctor(ctx, JS_UNDEFINED, 0, NULL); oargs[0] = ev; }   /* a non-message handler gets a REAL Event (type/target/preventDefault…), not opaque -> no phantom shape-check arm */
+               {pm} and the PoC assembler builds a postMessage-delivered PoC. (g_msg_event is BORROWED.) */
+            if (!JS_IsUndefined(g_msg_event) && is_msg_handler(drive)) { JS_FreeValue(ctx, oargs[0]); oargs[0] = g_msg_event; }
+            else if (!f.drive_src && is_handler(ctx, drive)) { ev = js_event_ctor(ctx, JS_UNDEFINED, 0, NULL); JS_FreeValue(ctx, oargs[0]); oargs[0] = ev; }   /* a non-message handler gets a REAL Event (type/target/preventDefault…), not opaque -> no phantom shape-check arm */
             /* Drive an orphan METHOD with its REAL receiver instance if one exists (this.field -> concrete
                boot value, a real example) else opaque this. Args stay opaque (external input). */
             JSValue recv = JS_FindReceiver(ctx, drive);
             JSValue this_val = JS_IsUndefined(recv) ? g_opaque : recv;
             f.fs = JS_FlowNew(ctx, drive, this_val, 8, oargs);   /* async funcs included now — JS_FlowNew accepts them */
             JS_FreeValue(ctx, recv);
-            JS_FreeValue(ctx, elem);   /* JS_FlowNew dup'd the collection-tagged element into the frame (UNDEFINED if unused) */
-            JS_FreeValue(ctx, ev);     /* JS_FlowNew dup'd the synthetic Event (UNDEFINED if the drive isn't a handler) */
+            for (int i = 0; i < 8; i++) if (JS_VALUE_GET_PTR(oargs[i]) != JS_VALUE_GET_PTR(g_msg_event)) JS_FreeValue(ctx, oargs[i]);   /* free the owned {argN}/elem/ev; skip the borrowed shared g_msg_event */
             JS_FreeValue(ctx, resolved); replay_handlers_clear(ctx);   /* JS_FlowNew dup'd the drive handle; drop our resolved ref + transient replay handlers */
         }
         /* RESUME: swap in the parked flow's OWN heap COW delta (unapplied while it slept) so it sees its own
