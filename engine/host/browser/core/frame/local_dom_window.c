@@ -157,11 +157,13 @@ extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValue
 extern void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst val);   /* @S sink recorder (solver/solve.h) */
 extern JSValue g_opaque;   /* opaque sentinel (opaque.h) — the opened Window is a cross-context frame */
 
-/* window.open(url): opens a browsing context at `url` — a NAV sink like location.assign. A `javascript:` URL
-   EXECUTES (XSS); an attacker-controlled url is open-redirect / tabnabbing. Returns the opened Window (opaque). */
+/* window.open(url): opens a browsing context at `url` — a NAV sink like location.assign, classified by the
+   "url" sink context (solve_html.c): a finding is emitted ONLY when the constructed URL is a `javascript:`
+   scheme that EXECUTES (X9 fires). A plain navigation to an attacker origin is an open-redirect, NOT an XSS —
+   it is deliberately NOT a finding (the "url" breakout predicate excludes it). Returns the opened Window. */
 static JSValue js_window_open(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
     (void)t;
-    if (argc >= 1) solve_add(ctx, "window.open", "url", argv[0]);   /* @S: javascript: XSS / open-redirect */
+    if (argc >= 1) solve_add(ctx, "window.open", "url", argv[0]);   /* @S: javascript:-URL XSS only */
     return JS_DupValue(ctx, g_opaque);
 }
 
