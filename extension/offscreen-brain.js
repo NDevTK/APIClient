@@ -1067,12 +1067,7 @@ function refineByObservedPrefix(tab, urlObj, initialName) {
   if (bestPrefixLen < 2) return null;
 
   const prefixSegs = newSegs.slice(0, bestPrefixLen);
-  // Don't promote prefixes whose last segment is a dynamic-looking ID
-  // (numeric, UUID, token) — those aren't service boundaries. Walk
-  // backward until we find a non-dynamic segment.
-  while (prefixSegs.length >= 2 && looksLikeDynamicSegment(prefixSegs[prefixSegs.length - 1])) {
-    prefixSegs.pop();
-  }
+  // (No regex dynamic-ID trim: the engine marks genuinely-dynamic segments as {shape} from data-flow.)
   if (prefixSegs.length < 2) return null;
 
   const prefix = "/" + prefixSegs.join("/");
@@ -1162,20 +1157,9 @@ function migrateToCommonPrefixBucket(tab, oldName, refinement, urlObj) {
 
 
 /** Detect path segments that look like dynamic IDs rather than resource names. */
-function looksLikeDynamicSegment(s) {
-  if (/^\d+$/.test(s)) return true; // Pure numeric
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(s)) return true; // UUID prefix
-  if (/^[0-9a-f]{24}$/i.test(s)) return true; // MongoDB ObjectId
-  // Base64-like tokens: 16+ chars, must contain a digit (avoids camelCase names)
-  if (
-    s.length >= 16 &&
-    /^[A-Za-z0-9_-]+$/.test(s) &&
-    /\d/.test(s) &&
-    !/^[a-z]+$/.test(s)
-  )
-    return true;
-  return false;
-}
+// (looksLikeDynamicSegment DELETED: it regex-GUESSED whether a path segment was a dynamic ID — the banned
+//  name-matching. The engine marks genuinely-dynamic segments as {shape} holes from real data-flow; a concrete
+//  segment stays concrete. RUN, DON'T MATCH.)
 
 function calculateMethodMetadata(urlObj, interfaceName, hint) {
   // Explicit hint (e.g. GraphQL operationName) takes precedence over URL.
@@ -1221,11 +1205,10 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
     return true;
   });
 
-  // Normalize dynamic segments (IDs, UUIDs, tokens) to prevent method proliferation
-  methodSegments = methodSegments.map((s) =>
-    looksLikeDynamicSegment(s) ? "_id" : s,
-  );
-
+  // No regex ID-normalization: a concrete path segment stays concrete. The engine already marks
+  // genuinely-dynamic segments as {shape} holes from real data-flow (they flow through here unchanged);
+  // guessing that a concrete segment "looks like an ID" and collapsing it to _id MERGES distinct real
+  // endpoints — the banned name-matching. RUN, DON'T MATCH.
   let methodName = methodSegments.join("_") || "root";
 
   // If it's a gRPC-style path, use the actual method name
@@ -1980,8 +1963,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
         for (const part of parts) {
           // Derive method name from part path
           const pathSegs = part.path.split("?")[0].split("/").filter(Boolean)
-            .filter((s) => s.length <= 32)
-            .map((s) => looksLikeDynamicSegment(s) ? "_id" : s);
+            .filter((s) => s.length <= 32);   // concrete segments as-is; the engine {shape}s dynamic ones
           const partMethodName = part.method.toLowerCase() + "_" +
             (pathSegs.join("_") || "batch_part");
           const partMethodId = `${interfaceName.replace(/\//g, ".")}.${partMethodName}`;
