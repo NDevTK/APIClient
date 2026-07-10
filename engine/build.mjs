@@ -61,24 +61,19 @@ if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt;
 // location=core/frame/Location, dom_element=core/dom/Element, forms=core/html/forms, …), the novel SOLVER half
 // (concolic value, time-travel COW, @S/@H) lives in solver/, and main.c (the scheduler entry) + check.h (the
 // DCHECK/CHECK infra) stay at the host root. Flat includes resolve via the -I flags below.
-const BROWSER = (f) => join(HOST, "browser", f);   // spec-faithful web-platform components (Blink-mirroring)
 const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (the novel half)
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c"]
   .map((f) => join(QJS, f))
   .concat([join(HOST, "main.c"), join(HOST, "prelude.c"),
     SOLVER("solve_html.c"), SOLVER("dom_cow.c"), SOLVER("opaque.c"), SOLVER("reply.c"), SOLVER("endpoint.c"), SOLVER("attr_shadow.c"), SOLVER("constraints.c"),
-    BROWSER("csp.c"), BROWSER("dom_select.c"), BROWSER("storage.c"), BROWSER("indexeddb.c"), BROWSER("messaging.c"), BROWSER("url.c"), BROWSER("xhr.c"), BROWSER("fetch.c"),
-    BROWSER("forms.c"), BROWSER("classlist.c"), BROWSER("docwrite.c"), BROWSER("urlobj.c"), BROWSER("module_loader.c"),
-    BROWSER("domparser.c"), BROWSER("location.c"), BROWSER("dom_element.c"), BROWSER("document.c"), BROWSER("custom_elements.c"), BROWSER("formdata.c"),
-    BROWSER("websocket.c"), BROWSER("worker.c"), BROWSER("navigator.c"), BROWSER("cssom.c"), BROWSER("observer.c"),
-    BROWSER("idl.c"), BROWSER("abort.c"), BROWSER("intl.c"), BROWSER("notification.c"), BROWSER("media_element.c"), BROWSER("history.c"), BROWSER("cookie.c"), BROWSER("screen.c"), BROWSER("event.c"), BROWSER("crypto.c"), BROWSER("performance.c"), BROWSER("timers.c"), BROWSER("encoding.c"), BROWSER("fsa.c"), BROWSER("filereader.c"), BROWSER("blob.c"), BROWSER("response.c"), BROWSER("trusted_types.c"), BROWSER("winname.c"), BROWSER("html_script_element.c"),
+    ...findC(join(HOST, "browser"), []),   // every Blink-mirroring web-platform component (core/dom, core/html, core/css, core/frame, core/loader, core/fileapi, modules, bindings, platform)
     SOLVER("wfq.c")]);
 
 const args = [
   ...sources,
   LEXBOR_LIB,                 // link the cached Lexbor DOM archive
   "-I", QJS,
-  "-I", HOST, "-I", join(HOST, "browser"), "-I", join(HOST, "solver"),   // flat #include "x.h" resolves across the browser/ + solver/ split
+  "-I", HOST, "-I", join(HOST, "solver"), "-I", join(HOST, "browser"),   // browser root only: components include by their Blink path, e.g. #include "core/dom/dom_element.h"
   "-I", LEXBOR_INC,           // <lexbor/html/html.h> etc for main.c's DOM host-edges
   "-O1", "-w",
   "-D_GNU_SOURCE", "-DENABLE_DUMPS",

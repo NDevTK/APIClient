@@ -1,7 +1,7 @@
 /* Fetch Response + reply-body learning — see reply.h. */
 #include "reply.h"
 #include "opaque.h"   /* g_opaque, js_opaque_stub */
-#include "url.h"      /* has_hole */
+#include "platform/url.h"      /* has_hole */
 
 /* Borrowed from main.c (the scheduler side): the reply-body table (host-seeded + written by the provision
    re-run), the resolved-promise helper, and the reply-fetch registrar (enqueues a bounded GET). */

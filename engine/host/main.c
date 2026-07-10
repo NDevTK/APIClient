@@ -28,52 +28,52 @@
 #include "wfq.h"          /* the ONE WFQ priority policy (order key), its own TU */
 #include "opaque.h"       /* the OPAQUE sentinel g_opaque + js_noop/js_opaque/js_opaque_stub, its own TU */
 #include "solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
-#include "csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
-#include "dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
+#include "core/frame/csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
+#include "core/dom/dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
 #include "dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
 #include "attr_shadow.h"  /* DOM attribute taint side-map ((el,name)->opaque), its own TU */
-#include "forms.h"        /* HTML form submission -> @H endpoint, its own TU */
-#include "classlist.h"    /* element.classList, its own TU */
-#include "docwrite.h"     /* document.write -> @S sink + script loader, its own TU */
-#include "urlobj.h"       /* URL + URLSearchParams objects (endpoint URL construction), its own TU */
-#include "module_loader.h" /* ES-module loader: static+dynamic import graph (modsrc/moddep/pendmod + hooks), its own TU */
-#include "domparser.h"    /* DOMParser + Range HTML parsing -> {parsedhtml} taint, its own TU */
-#include "location.h"     /* the browser location object + external-input source getters + principal split, its own TU */
-#include "dom_element.h"  /* the DOM Element JSClass + el_wrap (methods migrate here incrementally), its own TU */
-#include "storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
-#include "indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
-#include "messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
-#include "document.h"     /* document.querySelector/getElementById/... (Blink core/dom/Document), its own TU */
-#include "formdata.h"      /* FormData -> POST body params (Blink core/html/forms), its own TU */
-#include "custom_elements.h" /* customElements registry + createElement upgrade (Blink core/html/custom), its own TU */
-#include "url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
+#include "core/html/forms/forms.h"        /* HTML form submission -> @H endpoint, its own TU */
+#include "core/dom/classlist.h"    /* element.classList, its own TU */
+#include "core/html/docwrite.h"     /* document.write -> @S sink + script loader, its own TU */
+#include "platform/urlobj.h"       /* URL + URLSearchParams objects (endpoint URL construction), its own TU */
+#include "core/loader/module_loader.h" /* ES-module loader: static+dynamic import graph (modsrc/moddep/pendmod + hooks), its own TU */
+#include "core/dom/domparser.h"    /* DOMParser + Range HTML parsing -> {parsedhtml} taint, its own TU */
+#include "core/frame/location.h"     /* the browser location object + external-input source getters + principal split, its own TU */
+#include "core/dom/dom_element.h"  /* the DOM Element JSClass + el_wrap (methods migrate here incrementally), its own TU */
+#include "modules/storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
+#include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
+#include "core/frame/messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
+#include "core/dom/document.h"     /* document.querySelector/getElementById/... (Blink core/dom/Document), its own TU */
+#include "core/html/forms/formdata.h"      /* FormData -> POST body params (Blink core/html/forms), its own TU */
+#include "core/dom/custom_elements.h" /* customElements registry + createElement upgrade (Blink core/html/custom), its own TU */
+#include "platform/url.h"          /* URL query-parameter extraction (pure string + JS API), its own TU */
 #include "reply.h"        /* fetch Response + reply-body learning (make_response), its own TU */
-#include "xhr.h"          /* XMLHttpRequest emulation -> the @H recorder, its own TU */
-#include "fetch.h"        /* the fetch() host edge -> the @H recorder, its own TU */
-#include "websocket.h"    /* WebSocket + EventSource ctor -> WS/SSE handshake endpoint, its own TU */
-#include "worker.h"       /* Worker + SharedWorker ctor -> worker-script chunk, its own TU */
-#include "navigator.h"    /* navigator.sendBeacon + serviceWorker.register -> @H, its own TU */
-#include "cssom.h"        /* getComputedStyle + matchMedia -> opaque CSSOM environment reads, its own TU */
-#include "observer.h"     /* Intersection/Mutation/Resize/Performance observers -> callback flow + opaque, its own TU */
-#include "idl.h"          /* Web IDL binding driver — declarative interface tables -> native objects */
-#include "abort.h"        /* AbortSignal (IDL-defined), its own TU */
-#include "intl.h"         /* Intl formatters (IDL-defined, opaque results), its own TU */
-#include "notification.h" /* Notification (IDL-defined) + requestPermission, its own TU */
-#include "media_element.h" /* Image/Audio/Option ctors + Audio media state machine, its own TU */
-#include "history.h"      /* window.history real state machine (pushState sets state), its own TU */
-#include "cookie.h"       /* document.cookie per-flow cookie jar (round-trips writes), its own TU */
-#include "winname.h"      /* window.name — raw attacker-controlled source (opener-set, not URL-encoded) */
-#include "screen.h"       /* window.screen + innerWidth/... concolic viewport, its own TU */
-#include "event.h"       /* Event/CustomEvent ctor, its own TU */
-#include "crypto.h"      /* Web Crypto (window.crypto), its own TU */
-#include "performance.h" /* Performance API, its own TU */
-#include "timers.h"      /* setTimeout/rAF/queueMicrotask -> BFS flows, its own TU */
-#include "encoding.h"    /* TextEncoder/TextDecoder (real UTF-8), its own TU */
-#include "fsa.h"         /* File System Access (mock FS, attacker file content), its own TU */
-#include "filereader.h"  /* FileReader (real readAsText -> onload), its own TU */
-#include "blob.h"        /* Blob/File (real content taint) */
-#include "trusted_types.h"  /* Trusted Types (runs createPolicy) */
-#include "response.h"    /* Response (real body taint) */
+#include "core/loader/xhr.h"          /* XMLHttpRequest emulation -> the @H recorder, its own TU */
+#include "core/loader/fetch.h"        /* the fetch() host edge -> the @H recorder, its own TU */
+#include "modules/websocket.h"    /* WebSocket + EventSource ctor -> WS/SSE handshake endpoint, its own TU */
+#include "modules/worker.h"       /* Worker + SharedWorker ctor -> worker-script chunk, its own TU */
+#include "core/frame/navigator.h"    /* navigator.sendBeacon + serviceWorker.register -> @H, its own TU */
+#include "core/css/cssom.h"        /* getComputedStyle + matchMedia -> opaque CSSOM environment reads, its own TU */
+#include "modules/observer.h"     /* Intersection/Mutation/Resize/Performance observers -> callback flow + opaque, its own TU */
+#include "bindings/idl.h"          /* Web IDL binding driver — declarative interface tables -> native objects */
+#include "core/dom/abort.h"        /* AbortSignal (IDL-defined), its own TU */
+#include "core/frame/intl.h"         /* Intl formatters (IDL-defined, opaque results), its own TU */
+#include "modules/notification.h" /* Notification (IDL-defined) + requestPermission, its own TU */
+#include "core/html/media_element.h" /* Image/Audio/Option ctors + Audio media state machine, its own TU */
+#include "core/frame/history.h"      /* window.history real state machine (pushState sets state), its own TU */
+#include "core/frame/cookie.h"       /* document.cookie per-flow cookie jar (round-trips writes), its own TU */
+#include "core/frame/winname.h"      /* window.name — raw attacker-controlled source (opener-set, not URL-encoded) */
+#include "core/frame/screen.h"       /* window.screen + innerWidth/... concolic viewport, its own TU */
+#include "core/dom/events/event.h"       /* Event/CustomEvent ctor, its own TU */
+#include "modules/crypto.h"      /* Web Crypto (window.crypto), its own TU */
+#include "core/timing/performance.h" /* Performance API, its own TU */
+#include "core/timing/timers.h"      /* setTimeout/rAF/queueMicrotask -> BFS flows, its own TU */
+#include "modules/encoding.h"    /* TextEncoder/TextDecoder (real UTF-8), its own TU */
+#include "modules/fsa.h"         /* File System Access (mock FS, attacker file content), its own TU */
+#include "core/fileapi/filereader.h"  /* FileReader (real readAsText -> onload), its own TU */
+#include "core/fileapi/blob.h"        /* Blob/File (real content taint) */
+#include "core/trustedtypes/trusted_types.h"  /* Trusted Types (runs createPolicy) */
+#include "core/loader/response.h"    /* Response (real body taint) */
 #include "endpoint.h"     /* the shared @H endpoint sink (record_endpoint + g_endpoints), its own TU */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
