@@ -1924,19 +1924,11 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
             };
           }
           changed = true;
-        } else if (looksLikeDynamicSegment(segments[i])) {
-          // First observation but segment looks like an ID/UUID/token
-          const paramName = `path_param${i}`;
-          templateParts[i] = `{${paramName}}`;
-          if (!m.parameters[paramName]) {
-            m.parameters[paramName] = {
-              type: "string",
-              location: "path",
-              description: "Inferred path parameter (pattern-detected)",
-            };
-          }
-          changed = true;
         }
+        // (The `looksLikeDynamicSegment` regex-GUESS branch was deleted: a path segment becomes a {param}
+        //  ONLY when it is OBSERVED to vary across requests (data-driven, above), never because a regex thinks
+        //  it "looks like an ID". RUN, DON'T MATCH — the engine already marks genuinely-dynamic segments as
+        //  {shape} holes from data-flow; a regex guess on a concrete segment merges distinct real endpoints.)
       }
       if (changed) m.path = templateParts.join("/");
     }
