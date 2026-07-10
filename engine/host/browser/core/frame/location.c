@@ -85,7 +85,11 @@ static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
         }
         JSValue r = JS_NewString(ctx, buf); free(buf); return r;
     }
-    return JS_NewOpaqueSourced(ctx, g_source_tag[magic], g_source_tag[magic]);   /* stamp root source identity for the per-flow value domain */
+    {   /* stamp root source identity for the per-flow value domain */
+        JSValue o = JS_NewOpaqueSourced(ctx, g_source_tag[magic], g_source_tag[magic]);
+        if (g_source_pfx[magic][0]) JS_SetOpaquePrefix(ctx, o, g_source_pfx[magic]);   /* the URL leading char (#/?) — JSON.parse of the raw source THROWS faithfully (V8), only .slice(1) makes it parseable */
+        return o;
+    }
 }
 void def_source(JSContext *ctx, JSValueConst loc, const char *name, int magic) {
     JSAtom a = JS_NewAtom(ctx, name);
