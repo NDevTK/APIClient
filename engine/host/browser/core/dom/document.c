@@ -152,6 +152,8 @@ JSValue js_document_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, doc, "domain", JS_NewString(ctx, location_host()));  /* page identity: CONCRETE (location.c) */
     JS_SetPropertyStr(ctx, doc, "documentElement", el_wrap(ctx, dom_select_first(NULL, "html", 4)));
     JS_SetPropertyStr(ctx, doc, "readyState", JS_NewString(ctx, "complete"));   /* boot ran -> a ready gate takes the ready arm */
+    JS_SetPropertyStr(ctx, doc, "hidden", js_concolic(ctx, "{docHidden}", JS_FALSE));   /* page-visibility: concolic so `if(document.hidden)` forks (reaches the backgrounded-code arm), example false */
+    JS_SetPropertyStr(ctx, doc, "visibilityState", js_concolic(ctx, "{visibilityState}", JS_NewString(ctx, "visible")));
     JS_SetPropertyStr(ctx, doc, "head", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_head_element(g_dom)) : NULL));
     JS_SetPropertyStr(ctx, doc, "body", el_wrap(ctx, g_dom ? lxb_dom_interface_element(lxb_html_document_body_element(g_dom)) : NULL));
     { lxb_dom_element_t *tt = dom_select_first(NULL, "title", 5);   /* document.title = the REAL <title> text */
