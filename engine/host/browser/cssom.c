@@ -23,6 +23,7 @@
 #include "dom_cow.h"     /* dom_attr_capture — a style write joins the per-flow COW delta */
 #include "attr_shadow.h" /* attr_shadow_set — an opaque CSS value keeps its taint on the style attr */
 #include "solve.h"       /* solve_add — el.style.x = tainted is a CSS-context @S sink */
+#include "check.h"       /* CHECK — an OOM must crash at the origin, never degrade el.style to a fake opaque */
 #include <lexbor/dom/dom.h>
 
 extern char *g_candidate;   /* a candidate replay flow writes the concrete payload, not the shadow taint */
@@ -91,7 +92,7 @@ static int css_get(const char *style, const char *name, char *out, size_t cap) {
 /* Return a NEW style string (malloc) with `name`(kebab)=`val` upserted (existing occurrence dropped). */
 static char *css_upsert(const char *style, const char *name, const char *val) {
     size_t cap = (style ? strlen(style) : 0) + strlen(name) + strlen(val) + 8;
-    char *out = malloc(cap); if (!out) return NULL; size_t o = 0;
+    char *out = malloc(cap); CHECK(out, "css_upsert: style buffer alloc — a dropped style write corrupts the per-flow delta"); size_t o = 0;
     size_t nl = strlen(name);
     if (style) for (const char *p = style; *p; ) {
         while (*p == ' ' || *p == ';') p++;
@@ -223,9 +224,9 @@ void cssom_init(JSContext *ctx) {
 
 static JSValue style_wrap(JSContext *ctx, lxb_dom_element_t *el, int computed) {
     JSValue o = JS_NewObjectClass(ctx, g_style_class_id);
-    if (JS_IsException(o)) return js_concolic(ctx, "{style}", JS_UNDEFINED);
+    DCHECK(!JS_IsException(o), "CSSStyleDeclaration class not initialised (cssom_init must run in qjs_init)");
     StyleDecl *s = malloc(sizeof *s);
-    if (!s) { JS_FreeValue(ctx, o); return js_concolic(ctx, "{style}", JS_UNDEFINED); }
+    CHECK(s, "CSSStyleDeclaration slot alloc — a fake-opaque el.style would silently drop every per-flow style write");
     s->el = el; s->computed = computed;
     JS_SetOpaque(o, s);
     return o;

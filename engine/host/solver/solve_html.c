@@ -70,7 +70,7 @@ static lxb_status_t x9_walk_cb(lxb_dom_node_t *node, void *vctx) {
    strstr("<img") which false-positived whenever a raw tag survived ANYWHERE, incl. attribute-trapped. */
 static int solve_broke_html(const char *res, int script_exec) {
     lxb_html_document_t *doc = lxb_html_document_create();
-    if (!doc) return 0;
+    CHECK(doc, "solve_broke_html: document_create failed -> a dropped @S PoC would masquerade as no-breakout");
     struct x9_walk c = { 0, script_exec };
     if (lxb_html_document_parse(doc, (const lxb_char_t *)res, strlen(res)) == LXB_STATUS_OK) {
         lxb_dom_node_t *root = lxb_dom_interface_node(lxb_html_document_body_element(doc));

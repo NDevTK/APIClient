@@ -26,7 +26,8 @@ static int cmp_sat(double x, int op, double v) { switch (op) { case OPCMP_EQ: re
 static int pair_contradicts(int op1, const char *t1, int op2, const char *t2) {
     int e1 = (op1 == OPCMP_EQ || op1 == OPCMP_NE), e2 = (op2 == OPCMP_EQ || op2 == OPCMP_NE);
     int same = (t1 && t2 && strcmp(t1, t2) == 0);
-    if (e1 && e2) {   /* string equality/disequality */
+    if (!same) { double na, nb; if (tok_num(t1, &na) && tok_num(t2, &nb) && na == nb) same = 1; }   /* numeric-equal tokens ("5"=="5.0", "0x10"=="16") are the SAME value — never a false EQ/EQ contradiction */
+    if (e1 && e2) {   /* equality/disequality */
         if (op1 == OPCMP_EQ && op2 == OPCMP_EQ) return !same;                                   /* x==a & x==b (a!=b) */
         if ((op1 == OPCMP_EQ && op2 == OPCMP_NE) || (op1 == OPCMP_NE && op2 == OPCMP_EQ)) return same;   /* x==a & x!=a */
         return 0;
