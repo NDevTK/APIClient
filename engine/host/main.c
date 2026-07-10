@@ -62,6 +62,7 @@
 #include "media_element.h" /* Image/Audio/Option ctors + Audio media state machine, its own TU */
 #include "history.h"      /* window.history real state machine (pushState sets state), its own TU */
 #include "cookie.h"       /* document.cookie per-flow cookie jar (round-trips writes), its own TU */
+#include "winname.h"      /* window.name — raw attacker-controlled source (opener-set, not URL-encoded) */
 #include "screen.h"       /* window.screen + innerWidth/... concolic viewport, its own TU */
 #include "event.h"       /* Event/CustomEvent ctor, its own TU */
 #include "crypto.h"      /* Web Crypto (window.crypto), its own TU */
@@ -2417,6 +2418,14 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetPropertyStr(ctx, g, "window", JS_DupValue(ctx, g));
     JS_SetPropertyStr(ctx, g, "self",   JS_DupValue(ctx, g));
     JS_SetPropertyStr(ctx, g, "globalThis", JS_DupValue(ctx, g));
+    /* window.name: a raw ATTACKER source (opener-set, survives navigation, NOT percent-encoded) — a getset so a
+       page WRITE (`window.name = x`) overrides it concretely (blocking the attacker path, no false PoC) while a
+       bare read is attacker input (or the @S replay candidate, raw). */
+    { JSAtom na = JS_NewAtom(ctx, "name");
+      JS_DefinePropertyGetSet(ctx, g, na,
+          JS_NewCFunction2(ctx, (JSCFunction *)js_winname_get, "get name", 0, JS_CFUNC_getter, 0),
+          JS_NewCFunction2(ctx, (JSCFunction *)js_winname_set, "set name", 1, JS_CFUNC_setter, 0), JS_PROP_CONFIGURABLE);
+      JS_FreeAtom(ctx, na); }
     /* window.location: a getset over the location object so `location = 'javascript:..'` / `= url` (a common
        navigation shorthand) is an @S nav sink; reads return the object (location.href/.hash/.assign work). */
     { JSValue loc = make_location(ctx);   /* stores the window.location singleton internally (location.c) */
@@ -2897,6 +2906,7 @@ KEEP void qjs_teardown(void)
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     storage_free(ctx);
     cookie_free(ctx);
+    winname_free(ctx);
     idb_free(ctx);
     endpoint_free(ctx);
     JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
