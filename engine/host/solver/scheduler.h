@@ -81,5 +81,7 @@ extern int g_dec_n;             /* length of that vector */
 extern int g_c;                 /* branch cursor / count of decisions taken this flow (solve_add's `gated` flag) */
 extern char *g_candidate;       /* @S: the running REPLAY flow's concrete candidate (NULL in a normal flow) */
 extern int g_emit_total;        /* the shared emit counter (a reached sink is progress like an @H) */
+extern JSContext *g_ctx;        /* the MAIN analysis context — async hooks CLAIM a call only for it (never the @S solve realm) */
+int g_dec_ensure(int n);        /* grow the decision vector to hold >= n decisions (unbounded, RAM/disk floor) */
 
 #endif

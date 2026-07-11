@@ -29,6 +29,7 @@
 #include "solver/concolic.h"       /* the OPAQUE sentinel g_concolic + js_noop/js_concolic_read/js_concolic_stub, its own TU */
 #include "solver/scheduler.h"    /* Flow (per-flow scheduler state) + AsyncRecipe (replay recipe) — the registry's record types */
 #include "solver/solve.h"        /* the @S SOLVER component: solve_add sink entry + gate_collect/solve_all/solve_init/solve_free */
+#include "solver/async_flow.h"   /* ASYNC-AS-FLOW: the async-call/reaction/await hooks + the cross-session async-recipe map */
 #include "solver/solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "solver/envelope.h"     /* @S structured-source delivery envelope (JSON/query/delim addressing), its own TU */
 #include "core/frame/csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
@@ -102,7 +103,7 @@
    per-flow record `Flow` + async replay recipe `AsyncRecipe` are defined in solver/scheduler.h (so a
    scheduler-coupled solver TU can name them); the registry array + WFQ + dispatch stay here. NO BOUNDS: the
    registry + decision vector grow until the RAM/disk floor; no FLOW_MAX/DEC_MAX cap that truncates work. */
-static JSContext *g_ctx;       /* fwd: the MAIN analysis context (defined near the persistent-instance protocol) — the
+JSContext *g_ctx;       /* fwd: the MAIN analysis context (defined near the persistent-instance protocol) — the
                                   async/reaction hooks claim a call as a flow ONLY for this ctx, never the @S solve realm */
 int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
 static int g_in_boot_flow = 0; /* a BOOT flow is re-running boot: fork boot siblings; suppress handler re-registration */
@@ -168,7 +169,7 @@ static int          g_dec_cap = 0;
 int          g_dec_n = 0;               /* length of decisions made/forced so far */
 int          g_c = 0;                   /* cursor: next decision index branch_decide will consume */
 
-static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisions */
+int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisions */
     if (n <= g_dec_cap) return 1;
     int nc = g_dec_cap ? g_dec_cap * 2 : 64; while (nc < n) nc *= 2;
     signed char *nd = (signed char *)realloc(g_dec, (size_t)nc);
@@ -207,123 +208,6 @@ Flow *reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int 
     { double w = wfq_weight(val, 0, 0); if (w > g_max_parked) g_max_parked = w; }   /* fresh flow (visits=cpu=0): same ONE policy, no duplicated formula — keeps g_max_parked current for wfq_yield */
     return f;
 }
-/* Release an async-call flow's owned refs (result-promise resolve fn + a parked await promise). No-op for a
-   non-async-call flow (both UNDEFINED), so safe at every Flow free site. */
-static void flow_free_async_refs(JSContext *ctx, Flow *f) {
-    JS_FreeValue(ctx, f->aresolve); f->aresolve = JS_UNDEFINED;
-    JS_FreeValue(ctx, f->areject); f->areject = JS_UNDEFINED;
-    JS_FreeValue(ctx, f->await_promise); f->await_promise = JS_UNDEFINED;
-    JS_FreeValue(ctx, f->rthis); f->rthis = JS_UNDEFINED;
-    if (f->rargs) { for (int i = 0; i < f->rargc; i++) JS_FreeValue(ctx, f->rargs[i]); free(f->rargs); f->rargs = NULL; f->rargc = 0; }
-}
-/* PENDING ASYNC-RECIPE MAP — cross-session resume for async-call flows. A parked async flow persists as
-   ("a" + source-hash + decvec); on resume qjs_begin loads each into this map, and it is attached to the
-   re-fired async call by SOURCE HASH at TWO consult sites of ONE map: (1) a post-load SWEEP over flows the
-   phase-1 boot already re-created (those calls fired before this map existed, so they cannot consult it at
-   call time), and (2) reg_add_async_call for a HANDLER-triggered call that fires in phase 3, after the map
-   is live. Both replay the flow's parked await/branch path instead of re-forking from scratch. Unconsumed
-   entries (a handler that never re-fires this session) are freed at teardown — never a leak, never lost
-   (a never-fired handler's recipe simply waits for the session where it does fire). */
-static AsyncRecipe *g_arec = NULL; static int g_arec_n = 0, g_arec_cap = 0;
-/* Attach the first UNUSED recipe whose source hash matches this fresh async flow's function. Ownership of
-   `dec` transfers to the flow (freed at flow teardown); the map slot is marked used. Returns 1 if attached. */
-static int arec_attach(JSContext *ctx, Flow *f) {
-    if (!f->is_async || f->dec || !JS_IsFunction(ctx, f->handle)) return 0;
-    uint32_t h = JS_OrphanHash(ctx, f->handle);
-    for (int i = 0; i < g_arec_n; i++) {
-        if (!g_arec[i].used && g_arec[i].hash == h) {   /* an EMPTY decvec (dec=NULL) still attaches: it restores prior val/visits (UCB), exactly as an orphan recipe does */
-            f->dec = g_arec[i].dec; f->dec_n = g_arec[i].dec_n; f->val = g_arec[i].val; f->visits = g_arec[i].visits;
-            g_arec[i].dec = NULL; g_arec[i].used = 1;
-            return 1;
-        }
-    }
-    return 0;
-}
-static void arec_free(void) {
-    for (int i = 0; i < g_arec_n; i++) free(g_arec[i].dec);
-    free(g_arec); g_arec = NULL; g_arec_n = g_arec_cap = 0;
-}
-
-/* JSAsyncCallHook target: the bundle CALLED a native async function. `fs` is its pre-created live
-   JSAsyncFunctionState (real args captured); `resolve` is the result-promise's resolve fn (settled on
-   COMPLETION so an `await asyncFn()` caller-flow resumes). Register it as a flow driven from its START via
-   JS_FlowResume (f.fs pre-set => dispatched as a resume with an empty delta). So a fire-and-forget async
-   recursion (loadPage(d.next)) is a TREE of preemptible/parkable flows, each its own bounded COW delta —
-   NOT a non-preemptible promise-reaction drain whose single delta cow-oom-aborts. */
-static int reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, JSValueConst resolve, JSValueConst reject) {
-    if (ctx != g_ctx) return 0;                 /* CLAIM only for the MAIN analysis ctx; the @S solve realm (g_solve_ctx)
-                                                   runs async native — routing its call into the main g_reg is cross-ctx corruption */
-    Flow *f = reg_add(ctx, JS_DupValue(ctx, func_obj), g_running ? g_cur_val : 1.0, NULL, 0);
-    f->fs = fs;                                 /* the live async state — the flow owns + frees it (JS_FlowResume) */
-    f->is_async = 1;
-    f->aresolve = JS_DupValue(ctx, resolve);
-    f->areject = JS_DupValue(ctx, reject);
-    /* Capture the PRISTINE re-run recipe (this + args, before the call runs) so an await FORK can spawn a
-       reject-replay sibling (re-run the same call, forcing one await to reject -> the inline try/catch arm). */
-    JSValueConst rthis = JS_UNDEFINED, *rargs = NULL; int rargc = 0;
-    JS_FlowRecipe(fs, NULL, &rthis, &rargc, &rargs);
-    f->rthis = JS_DupValue(ctx, rthis);
-    if (rargc > 0 && rargs) {
-        f->rargs = (JSValue *)malloc((size_t)rargc * sizeof(JSValue));
-        if (f->rargs) { f->rargc = rargc; for (int i = 0; i < rargc; i++) f->rargs[i] = JS_DupValue(ctx, rargs[i]); }
-    }
-    arec_attach(ctx, f);   /* resume: a handler-triggered async call (fired after qjs_begin) replays its parked path */
-    return 1;
-}
-/* Spawn a re-run sibling of an async flow: a fresh call state from the RECIPE (func+args), the decision vector
-   `dec` (branch + await decisions, ownership transferred to reg_add), is_async set, recipe carried so it can
-   fork further. Used by BOTH await_decide (a new await -> reject sibling) and branch_decide (an async flow's
-   branch fork) — one recipe re-run path, so branch and await decisions replay together over ONE vector. */
-Flow *spawn_async_sibling(JSContext *ctx, Flow *pf, signed char *dec, int dec_n) {
-    void *sfs = JS_FlowNew(ctx, pf->handle, pf->rthis, pf->rargc, (JSValueConst *)pf->rargs);
-    if (!sfs) { free(dec); return NULL; }
-    Flow *sib = reg_add(ctx, JS_DupValue(ctx, pf->handle), g_cur_val, dec, dec_n);
-    sib->fs = sfs; sib->is_async = 1;
-    sib->rthis = JS_DupValue(ctx, pf->rthis);
-    if (pf->rargc > 0 && pf->rargs) {
-        sib->rargs = (JSValue *)malloc((size_t)pf->rargc * sizeof(JSValue));
-        if (sib->rargs) { sib->rargc = pf->rargc; for (int i = 0; i < pf->rargc; i++) sib->rargs[i] = JS_DupValue(ctx, pf->rargs[i]); }
-    }
-    return sib;
-}
-/* JSFlowAwaitHook: a fulfilled await is a GATE on the ONE decision vector (g_dec/g_c), exactly like branch_decide
-   at OP_if. Replay the recorded arm, or fork a REJECT sibling (re-run via recipe, this await -> reject = the inline
-   try/catch catch arm) and take FULFIL. Returns 1=reject, 0=fulfil. Non-async / non-forking context -> fulfil. */
-static int await_decide(JSContext *ctx) {
-    if (ctx != g_ctx || !g_running || !g_cur_flow || !g_cur_flow->is_async) return 0;
-    if (JS_IsUndefined(g_cur_flow->handle)) return 0;
-    if (g_c < g_dec_n) { int arm = g_dec[g_c] ? 1 : 0; g_c++; return arm; }   /* replay this flow's recorded await/branch decisions */
-    if (!g_dec_ensure(g_c + 1)) return 0;
-    signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* fork the REJECT sibling; this flow takes FULFIL */
-    if (sib) { for (int i = 0; i < g_c; i++) sib[i] = g_dec[i]; sib[g_c] = 1; spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1); }
-    g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++;
-    return 0;
-}
-/* JSReactionHook target: a settled promise's REACTION (.then/.catch/.finally handler). Run handler(value) as a
-   preemptible/parkable flow and SETTLE the chained promise on completion (resolve with the return value / reject
-   on throw) — so a .then-based recursion is a TREE of flows, not a non-preemptible drain. A pass-through reaction
-   (no handler) settles the chained promise directly. Non-bytecode handler / non-main-ctx -> native job (return 0). */
-static int reaction_flow(JSContext *ctx, JSValueConst handler, JSValueConst value, int is_reject, JSValueConst resolve, JSValueConst reject) {
-    if (ctx != g_ctx) return 0;                 /* main analysis ctx only, never the @S solve realm */
-    if (JS_IsUndefined(handler)) {              /* pass-through: fulfill->resolve, reject->reject the chained promise with value */
-        JSValueConst fn = is_reject ? reject : resolve;
-        if (!JS_IsUndefined(fn)) { JSValue r = JS_Call(ctx, fn, JS_UNDEFINED, 1, (JSValueConst *)&value); if (JS_IsException(r)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); } JS_FreeValue(ctx, r); }
-        return 1;
-    }
-    void *fs = JS_FlowNew(ctx, handler, JS_UNDEFINED, 1, (JSValueConst *)&value);
-    if (!fs) return 0;                          /* non-bytecode handler (C fn / bound) -> native job */
-    Flow *f = reg_add(ctx, JS_DupValue(ctx, handler), g_running ? g_cur_val : 1.0, NULL, 0);
-    f->fs = fs;
-    /* HANDLER-TIME ASYNC @S: a reaction spawned while a session fired the handler inherits the session sink-CONTEXT
-       (so a sink it reaches enqueues a candidate SESSION) and, if the parent is a candidate replay, the candidate
-       (so when it resumes g_candidate is pinned and the sink takes solve_add's VERIFY branch — the awaited value
-       IS the candidate). This is what makes addEventListener('message', e=>P.resolve(e.data).then(t=>sink)) solve. */
-    f->sess_ctx = g_in_session || (g_cur_flow && g_cur_flow->sess_ctx);
-    if (g_cur_flow && g_cur_flow->candidate) f->candidate = strdup(g_cur_flow->candidate);
-    f->aresolve = JS_DupValue(ctx, resolve);
-    f->areject = JS_DupValue(ctx, reject);
-    return 1;
-}
 
 /* Re-add a SUSPENDED flow (a full copy, fs retained) so it interleaves back into the ONE registry. */
 static int reg_readd(JSContext *ctx, Flow f)
@@ -344,7 +228,7 @@ static int reg_readd(JSContext *ctx, Flow f)
    REAL example value instead of {}. Absent url -> opaque (the honest shape). */
 JSValue g_reply_table = JS_UNDEFINED;
 /* g_storage + js_storage_get/set + storage_free live in storage.c (localStorage/sessionStorage concolic). */
-static JSContext *g_ctx;   /* the run's context (defined = NULL below); fwd-declared for Lexbor callbacks */
+JSContext *g_ctx;   /* the run's context (defined = NULL below); fwd-declared for Lexbor callbacks */
 /* ENDPOINT REGISTRY + IDENTITY: the engine ACCUMULATES every learned endpoint (method/url/params/
    headers/body) as a JS object here, and at finalize DEDUPS them (exact by method+hole-normalized url,
    then collapses a concrete instance into its shape with a path-param example) and emits the deduped
@@ -1405,7 +1289,7 @@ static void scheduler_run(JSContext *ctx)
    seed the frontier), qjs_step (advance the ONE scheduler), qjs_teardown. This replaces the old
    re-instantiate-and-re-run-per-pass model so chunks/fromReply/frontier become ONE continuous run
    (in-place suspend/resume) instead of re-running the whole page. */
-static JSContext *g_ctx = NULL;
+JSContext *g_ctx = NULL;
 static int g_rc = 0;
 
 KEEP int qjs_init(const char *boot, const char *html, const char *origin,
@@ -1635,9 +1519,7 @@ KEEP void qjs_begin(const char *recipes)
                    a boot-triggered call already re-created by phase-1 boot) or reg_add_async_call (for a
                    handler-triggered call that fires later in phase 3). Either way it REPLAYS its parked
                    await/branch path instead of re-forking from scratch. */
-                if (g_arec_n >= g_arec_cap) { int nc = g_arec_cap ? g_arec_cap * 2 : 8; AsyncRecipe *na = (AsyncRecipe *)realloc(g_arec, (size_t)nc * sizeof(AsyncRecipe)); if (na) { g_arec = na; g_arec_cap = nc; } }
-                if (g_arec_n < g_arec_cap) { g_arec[g_arec_n].hash = want; g_arec[g_arec_n].dec = dec; g_arec[g_arec_n].dec_n = dec_n; g_arec[g_arec_n].val = rval; g_arec[g_arec_n].visits = rvis; g_arec[g_arec_n].used = 0; g_arec_n++; }
-                else free(dec);
+                arec_park(want, dec, dec_n, rval, rvis);   /* park the async recipe -> async_flow.c (takes dec ownership, frees on overflow) */
                 if (!semi) break; p = semi + 1; continue;
             }
             int found = -1;
