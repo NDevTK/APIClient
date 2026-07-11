@@ -153,6 +153,27 @@ static JSValue make_storage(JSContext *ctx) {
     JS_SetPropertyStr(ctx, s, "persisted", JS_NewCFunction(ctx, nav_storage_persist, "persisted", 0));
     return wrap_unbuilt(ctx, s);
 }
+/* Clipboard (navigator.clipboard): readText()/read() return ATTACKER-CONTROLLED content — a real XSS SOURCE
+   ({clipboard}, paste-jacking: the attacker controls what the victim copies). So
+   `clipboard.readText().then(t => el.innerHTML = t)` is a clipboard-XSS the engine detects (the {clipboard}
+   source flows to the sink, replay-verified with a delivery precondition of a user paste). writeText/write are
+   Promise<undefined> (writing to the clipboard is not a scriptable sink). */
+extern char *g_candidate;   /* @S replay: the concrete candidate a source getter returns instead of the concolic (scheduler.h) */
+static JSValue nav_clip_read(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    if (g_candidate) return js_resolved(ctx, JS_NewString(ctx, g_candidate));   /* @S replay: deliver the candidate RAW (clipboard is not URL-encoded, unlike location.hash) -> breakout verified */
+    return js_resolved(ctx, JS_NewConcolicSourced(ctx, "{clipboard}", "{clipboard}"));   /* attacker-controlled paste content */
+}
+static JSValue make_clipboard(JSContext *ctx) {
+    JSValue cb = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, cb, "readText", JS_NewCFunction(ctx, nav_clip_read, "readText", 0));
+    JS_SetPropertyStr(ctx, cb, "read", JS_NewCFunction(ctx, nav_clip_read, "read", 0));
+    JS_SetPropertyStr(ctx, cb, "writeText", JS_NewCFunction(ctx, nav_promise_undef, "writeText", 1));
+    JS_SetPropertyStr(ctx, cb, "write", JS_NewCFunction(ctx, nav_promise_undef, "write", 1));
+    JS_SetPropertyStr(ctx, cb, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, cb, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    return wrap_unbuilt(ctx, cb);
+}
 JSValue js_navigator_make(JSContext *ctx) {
     JSValue nav = JS_NewObject(ctx);
     const char *UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -193,6 +214,8 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "credentials", make_credentials(ctx));
     /* storage: StorageManager — concolic quota/persisted that fork PWA offline/caching feature gates. */
     JS_SetPropertyStr(ctx, nav, "storage", make_storage(ctx));
+    /* clipboard: readText()/read() are an ATTACKER-CONTROLLED source ({clipboard}, paste-jacking XSS). */
+    JS_SetPropertyStr(ctx, nav, "clipboard", make_clipboard(ctx));
     /* userActivation: whether the frame has ever had / currently has a user gesture — genuinely unknown headless,
        concolic bools (example true) so `if (navigator.userActivation.isActive)` gesture gates explore both arms. */
     { JSValue ua = JS_NewObject(ctx);
@@ -211,7 +234,7 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "registerProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "registerProtocolHandler", 3));
     JS_SetPropertyStr(ctx, nav, "unregisterProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "unregisterProtocolHandler", 2));
     JS_SetPropertyStr(ctx, nav, "oscpu", JS_UNDEFINED);   /* Chrome does not expose oscpu (Firefox-only) — genuinely undefined, not unbuilt */
-    /* Every remaining IDL member (clipboard/geolocation/mediaDevices/bluetooth/usb/... ) is
+    /* Every remaining IDL member (geolocation/mediaDevices/bluetooth/usb/... ) is
        an UNBUILT browser feature: the trap DFAILs loud naming it, so it is BUILT at the root — never an
        opaque/undefined shrug. Each becomes a real modeled interface (permissions, connection are the first). */
     return wrap_unbuilt(ctx, nav);
