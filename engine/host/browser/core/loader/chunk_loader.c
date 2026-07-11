@@ -73,9 +73,10 @@ static void chunk_run_classic(JSContext *ctx, const char *url, const char *body)
    deliver its namespace to every parked import() of this URL. Runs COW-ACTIVE like any chunk: the module's global
    side-effects are captured into the baseline delta (open mid-boot / merged post-boot), never a COW-off raw write
    (the wrong pattern deleted from provide_baseline in the shape-desync fix). Shared by both provide paths. */
-static void chunk_link_module(JSContext *ctx, const char *url) {
-    JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
-    pendimport_resolve(ctx, url);
+static void chunk_link_module(JSContext *ctx, const char *url, const char *body) {
+    JSValue mns;
+    if (dynimport_link(ctx, url, &mns)) { JS_FreeValue(ctx, mns); pendimport_resolve(ctx, url); }
+    else pendmod_add(body, strlen(body));   /* dep not fetched: defer + retry when it arrives (instantiation failed pre-evaluation, so no top-level ran) */
 }
 
 /* Evaluate a chunk that arrives WHILE BOOT IS PARKED on a synchronous external: it joins the OPEN boot delta (COW
@@ -89,7 +90,7 @@ static void provide_boot_active(JSContext *ctx, const char *url, const char *bod
     } else if (dom_script_kind(url) == SK_ASYNC) {
         chunk_run_classic(ctx, url, body);               /* async external: run now, globals join the open boot delta */
     } else {
-        chunk_link_module(ctx, url);                     /* a module a boot script imported: link + deliver to its parked import() (COW-on, globals join the boot delta) */
+        chunk_link_module(ctx, url, body);               /* a module a boot script imported: evaluate once + deliver to its parked import() (COW-on, globals join the boot delta) */
     }
 }
 
@@ -110,8 +111,7 @@ static void provide_baseline(JSContext *ctx, const char *url, const char *body) 
     if (is_moddep(url)) {
         pendmod_retry(ctx);                              /* a static-import dep OR dyn-import chunk: link in-graph (no standalone eval -> no double side effects) */
     } else if (dom_script_kind(url) == SK_MODULE) {
-        eval_page_script(ctx, body, strlen(body), url, 1);   /* external MODULE: run-once (defers if a dep isn't fetched); singleton, global side-effects captured + merged */
-        chunk_link_module(ctx, url);                     /* link the SINGLETON now + deliver its namespace to every parked import() */
+        chunk_link_module(ctx, url, body);               /* external MODULE: evaluate the singleton ONCE (dynimport_link) + deliver to parked import()s + defer on a missing dep */
     } else {
         chunk_run_classic(ctx, url, body);               /* external CLASSIC: same executor as inline classics + every replay */
     }
