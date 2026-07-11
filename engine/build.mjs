@@ -74,7 +74,7 @@ const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (th
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c"]
   .map((f) => join(QJS, f))
   .concat([join(HOST, "main.c"), join(HOST, "prelude.c"),
-    SOLVER("solve_html.c"), SOLVER("dom_cow.c"), SOLVER("opaque.c"), SOLVER("reply.c"), SOLVER("endpoint.c"), SOLVER("attr_shadow.c"), SOLVER("constraints.c"), SOLVER("boot_scripts.c"), SOLVER("why.c"), SOLVER("envelope.c"),
+    SOLVER("solve_html.c"), SOLVER("dom_cow.c"), SOLVER("concolic.c"), SOLVER("reply.c"), SOLVER("endpoint.c"), SOLVER("attr_shadow.c"), SOLVER("constraints.c"), SOLVER("boot_scripts.c"), SOLVER("why.c"), SOLVER("envelope.c"),
     ...findC(join(HOST, "browser"), []),   // every Blink-mirroring web-platform component (core/dom, core/html, core/css, core/frame, core/loader, core/fileapi, modules, bindings, platform)
     SOLVER("wfq.c")]);
 
@@ -82,7 +82,7 @@ const args = [
   ...sources,
   LEXBOR_LIB,                 // link the cached Lexbor DOM archive
   "-I", QJS,
-  "-I", HOST, "-I", join(HOST, "browser"),   // include by FULL path from the host root: a browser component is "core/dom/dom_element.h", a solver component "solver/opaque.h" — the layer is always explicit (no bare-name -I solver shortcut, so a cross-layer include names its layer)
+  "-I", HOST, "-I", join(HOST, "browser"),   // include by FULL path from the host root: a browser component is "core/dom/dom_element.h", a solver component "solver/concolic.h" — the layer is always explicit (no bare-name -I solver shortcut, so a cross-layer include names its layer)
   "-I", LEXBOR_INC,           // <lexbor/html/html.h> etc for main.c's DOM host-edges
   "-O1", "-w",
   "-D_GNU_SOURCE", "-DENABLE_DUMPS",

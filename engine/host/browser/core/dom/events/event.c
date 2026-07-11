@@ -2,7 +2,7 @@
  * `cancelable` from the CustomEventInit dictionary (concrete — the dispatcher chose them); an absent detail and
  * the dispatch target are opaque (external). preventDefault/stopPropagation are no-ops. */
 #include "core/dom/events/event.h"
-#include "solver/opaque.h"   /* g_opaque, js_noop */
+#include "solver/concolic.h"   /* g_concolic, js_noop */
 
 JSValue js_event_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {
     (void)nt;

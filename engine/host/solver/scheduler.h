@@ -34,8 +34,8 @@ typedef struct {
     char *drive_src;     /* OPAQUE-COLLECTION callback flow (items.forEach(cb), items = a reply/injected opaque): the
                             element the callback is driven with must carry the COLLECTION's provenance, not a bare
                             {} — this is the collection's shape so the starter drives arg0 as {reply} (f.key reads
-                            {reply}, keeping the reply taint) instead of losing it to g_opaque. NULL = default
-                            g_opaque args (a genuine orphan handler whose args are external input). */
+                            {reply}, keeping the reply taint) instead of losing it to g_concolic. NULL = default
+                            g_concolic args (a genuine orphan handler whose args are external input). */
     int is_boot;         /* BOOT FLOW: re-run the page's boot (inline scripts) from the PRISTINE pre-boot baseline as a
                             FORKING starter, so an async reply (now cached, resolves synchronously on re-run) drives its
                             continuation's gated branches WITH the concolic example — the faithful boot-as-flow. */

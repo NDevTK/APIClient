@@ -6,7 +6,7 @@
  * register the change handler as a driven flow (a permission-change handler often ships an endpoint). Opaque is
  * RESERVED for genuinely-unknowable attacker input — a permission default is modelable virtual land, not opaque. */
 #include "modules/permissions/permissions.h"
-#include "solver/opaque.h"   /* js_concolic — the granted/denied outcome is genuinely unknown (forks), example 'prompt' */
+#include "solver/concolic.h"   /* js_concolic — the granted/denied outcome is genuinely unknown (forks), example 'prompt' */
 
 extern JSValue js_resolved(JSContext *ctx, JSValue val);                                        /* wrap in a resolved promise */
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* register handler -> driven flow */

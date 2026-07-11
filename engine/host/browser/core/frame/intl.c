@@ -4,17 +4,17 @@
  * (NumberFormat/DateTimeFormat/RelativeTimeFormat/Collator/ListFormat/DisplayNames/PluralRules/Segmenter). */
 #include "core/frame/intl.h"
 #include "bindings/idl.h"
-#include "solver/opaque.h"   /* js_opaque_stub — an operation whose result is unknown headless */
+#include "solver/concolic.h"   /* js_concolic_stub — an operation whose result is unknown headless */
 
 static const IDLMember INTL_IDL[] = {
-    { "format",              IDL_METHOD, js_opaque_stub, 1 },
-    { "formatToParts",       IDL_METHOD, js_opaque_stub, 1 },
-    { "formatRange",         IDL_METHOD, js_opaque_stub, 2 },
-    { "formatRangeToParts",  IDL_METHOD, js_opaque_stub, 2 },
-    { "resolvedOptions",     IDL_METHOD, js_opaque_stub, 0 },
-    { "select",              IDL_METHOD, js_opaque_stub, 1 },   /* PluralRules */
-    { "compare",             IDL_METHOD, js_opaque_stub, 2 },   /* Collator */
-    { "of",                  IDL_METHOD, js_opaque_stub, 1 },   /* DisplayNames */
+    { "format",              IDL_METHOD, js_concolic_stub, 1 },
+    { "formatToParts",       IDL_METHOD, js_concolic_stub, 1 },
+    { "formatRange",         IDL_METHOD, js_concolic_stub, 2 },
+    { "formatRangeToParts",  IDL_METHOD, js_concolic_stub, 2 },
+    { "resolvedOptions",     IDL_METHOD, js_concolic_stub, 0 },
+    { "select",              IDL_METHOD, js_concolic_stub, 1 },   /* PluralRules */
+    { "compare",             IDL_METHOD, js_concolic_stub, 2 },   /* Collator */
+    { "of",                  IDL_METHOD, js_concolic_stub, 1 },   /* DisplayNames */
 };
 
 JSValue js_intl_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv) {

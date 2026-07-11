@@ -1,6 +1,6 @@
 /* Fetch Response + reply-body learning — see reply.h. */
 #include "solver/reply.h"
-#include "solver/opaque.h"   /* g_opaque, js_opaque_stub */
+#include "solver/concolic.h"   /* g_concolic, js_concolic_stub */
 #include "platform/url.h"      /* has_hole */
 
 /* Borrowed from main.c (the scheduler side): the reply-body table (host-seeded + written by the provision
@@ -63,7 +63,7 @@ JSValue make_response(JSContext *ctx, const char *url) {
     JS_SetPropertyStr(ctx, resp, "formData", JS_NewCFunction(ctx, js_resp_body, "formData", 0));
     {   /* headers.get(name) -> opaque (a response header is external input) */
         JSValue h = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, h, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
+        JS_SetPropertyStr(ctx, h, "get", JS_NewCFunction(ctx, js_concolic_stub, "get", 1));
         JS_SetPropertyStr(ctx, resp, "headers", h);
     }
     /* fromReply: inject the concrete reply body for THIS url (r.json()/r.text() then return real data) */

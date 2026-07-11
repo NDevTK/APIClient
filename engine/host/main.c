@@ -26,7 +26,7 @@
 #include "prelude.h"     /* self-hosted JS prelude strings (ARRAY_PRELUDE_JS, DEDUP_JS) */
 #include "solver/constraints.h"  /* per-flow value-domain constraint tracker (concolic path constraint), its own TU */
 #include "solver/wfq.h"          /* the ONE WFQ priority policy (order key), its own TU */
-#include "solver/opaque.h"       /* the OPAQUE sentinel g_opaque + js_noop/js_opaque/js_opaque_stub, its own TU */
+#include "solver/concolic.h"       /* the OPAQUE sentinel g_concolic + js_noop/js_concolic_read/js_concolic_stub, its own TU */
 #include "solver/scheduler.h"    /* Flow (per-flow scheduler state) + AsyncRecipe (replay recipe) — the registry's record types */
 #include "solver/solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "solver/envelope.h"     /* @S structured-source delivery envelope (JSON/query/delim addressing), its own TU */
@@ -155,7 +155,7 @@ static int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 /* CSP (g_csp/g_header_csp + csp_lacks/csp_derive/csp_set_header/csp_free) lives in csp.c — included below. */
 extern lxb_html_document_t *g_dom;   /* the live parsed document (defined below); the @S emitter needs it for the CSP nonce scan */
-/* g_opaque + js_noop/js_opaque/js_opaque_stub + opaque_init/free live in opaque.c (included via opaque.h). */
+/* g_concolic + js_noop/js_concolic_read/js_concolic_stub + concolic_init/free live in opaque.c (included via opaque.h). */
 char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
 /* has_hole (opaque-hole URL test) is in url.c (included via url.h). */
@@ -488,7 +488,7 @@ void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) {
      FormData                -> browser/formdata.c    (core/html/forms/FormData) */
 /* Intl.* / Notification / Notification.requestPermission / AbortSignal.timeout|any|abort: results genuinely
    unknown headless (locale / OS permission / timer-signal), so they install the shared OPAQUE concolic value
-   (opaque.h's js_opaque_stub) directly — any read/method is the honest unknown, .aborted/permission FORK, a
+   (opaque.h's js_concolic_stub) directly — any read/method is the honest unknown, .aborted/permission FORK, a
    handler arg is driven. No fixed-shape stub object, no per-one-liner component. */
 /* fetch(url): the moat's host edge. URL = whatever the bundle COMPUTED. ACCUMULATE the endpoint record
    (method/url/params/headers/body) into g_endpoints — identity/dedup runs in-engine at finalize — raise
@@ -1025,7 +1025,7 @@ static void drive_opaque_cb(JSContext *ctx, JSValueConst cb, JSValueConst coll) 
     /* PROVENANCE: the element `cb` receives is an element OF `coll` (the reply/injected opaque the method was
        called on), so tag it with coll's shape — the starter drives arg0 as {reply} (not a bare {}), keeping
        the collection's taint through f.key etc. A non-opaque/untagged receiver leaves drive_src NULL (default
-       g_opaque args). Registered flow is the last one appended by flow_defer_callback. */
+       g_concolic args). Registered flow is the last one appended by flow_defer_callback. */
     const char *cs = JS_IsConcolic(coll) ? JS_ConcolicShapeC(coll) : NULL;
     if (cs && cs[0] && strcmp(cs, "{}") != 0 && g_reg_n > 0) g_reg[g_reg_n - 1].drive_src = strdup(cs);
 }
@@ -1042,7 +1042,7 @@ const char *g_origin;   /* defined below; forward for the URL helpers (non-stati
 /* Return the OPAQUE sentinel — external input the tool must not concretely decide. The shared handler for
    every "unknown/non-deterministic value" host edge (Math.random, Date.now, crypto.randomUUID, performance.now,
    …); a branch on its result auto-forks BOTH arms via the engine OP_if hook (branch_decide). */
-/* js_opaque/js_noop/js_opaque_stub are in opaque.c (included via opaque.h). */
+/* js_concolic_read/js_noop/js_concolic_stub are in opaque.c (included via opaque.h). */
 /* A CONSTRUCTABLE base class so `class X extends HTMLElement {…}` DEFINES (else it throws and the whole Web
    Component — with its connectedCallback endpoints/sinks — is LOST). super() returns the default derived
    `this`; connectedCallback then becomes an uncalled method the orphan driver reaches like any other. */
@@ -1360,7 +1360,7 @@ static JSValue js_session_drain(JSContext *ctx, JSValueConst this_val, int argc,
 /* eval_page_script + dom_run_scripts -> browser/core/html/html_script_runner.{c,h} (Blink HTMLScriptRunner):
    running the document's <script> elements is a BROWSER component, not scheduler state. */
 
-/* js_is_opaque/js_opaque_example (__isOpaque/__opaqueExample leaf intrinsics) -> solver/opaque.{c,h}. */
+/* js_is_concolic/js_concolic_example (__isOpaque/__opaqueExample leaf intrinsics) -> solver/opaque.{c,h}. */
 
 /* orphan flow source — CONTINUOUS discovery, NOT a one-shot phase. Called every scheduler iteration so
    functions defined DYNAMICALLY during a forced flow (a login-gated lazy CHUNK: eval/import of fetched
@@ -1673,7 +1673,7 @@ static void scheduler_run(JSContext *ctx)
             JSValue drive = f.handle, resolved = JS_UNDEFINED;
             if (f.candidate) { resolved = resolve_replayed_handler(ctx, f.handle); if (!JS_IsUndefined(resolved)) drive = resolved; }
             /* Each orphan ARGUMENT is DISTINCT external input, so it gets its OWN source identity ({arg0}..{arg7})
-               — NOT the shared source-less g_opaque. Sharing one source-less value across args aliased them in the
+               — NOT the shared source-less g_concolic. Sharing one source-less value across args aliased them in the
                per-flow constraint tracker: `function(a,b){ if(a=='x' && b=='y') sink }` recorded ==x and ==y on the
                SAME (empty) source, a false contradiction that PRUNED the sink arm. Distinct sources let each arg's
                gate tokens accumulate + reverse independently (the per-flow constraints a PoC is built from). Owned
@@ -1690,7 +1690,7 @@ static void scheduler_run(JSContext *ctx)
             else if (!f.drive_src && is_handler(ctx, drive)) { ev = js_event_ctor(ctx, JS_UNDEFINED, 0, NULL); JS_FreeValue(ctx, oargs[0]); oargs[0] = ev; }   /* a non-message handler gets a REAL Event (type/target/preventDefault…), not opaque -> no phantom shape-check arm */
             /* Drive an orphan METHOD with its REAL receiver instance if one exists (this.field -> concrete
                boot value, a real example) else a SOURCED {this} — external input, NOT the shared source-less
-               g_opaque, so a `this=='x'` gate token is attributed + reversible (source-at-creation, like args). */
+               g_concolic, so a `this=='x'` gate token is attributed + reversible (source-at-creation, like args). */
             JSValue recv = JS_FindReceiver(ctx, drive);
             JSValue this_own = JS_IsUndefined(recv) ? JS_NewConcolicSourced(ctx, "{this}", "{this}") : JS_UNDEFINED;
             JSValue this_val = JS_IsUndefined(recv) ? this_own : recv;
@@ -1866,15 +1866,15 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     csp_set_header(csp);   /* REAL HTTP CSP header (fetch(location.href)); dom_run_scripts makes it the effective g_csp, primary over meta. (recipes are seeded in phase-2 qjs_begin.) */
 
     JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_opaque, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
-    JS_SetPropertyStr(ctx, g, "__opaqueExample", JS_NewCFunction(ctx, js_opaque_example, "__opaqueExample", 1));   /* self-hosted stringify: a config opaque's concrete example (else undefined) */
+    JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_concolic, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
+    JS_SetPropertyStr(ctx, g, "__opaqueExample", JS_NewCFunction(ctx, js_concolic_example, "__opaqueExample", 1));   /* self-hosted stringify: a config opaque's concrete example (else undefined) */
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
     install_js_global_functions(ctx, g);   /* eval / new Function (@S code sinks) + structuredClone (bindings/global_functions.c) */
     /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both
        arms via the decision-vector logic (real bundles: external input reaches OP_if as opaque). */
     JS_InitOpaqueClass(ctx);             /* register the shape-carrying opaque class */
-    opaque_init(ctx);
-    JS_SetConcolicMarker(g_opaque);
+    concolic_init(ctx);
+    JS_SetConcolicMarker(g_concolic);
     JS_SetBranchHook(branch_decide);
     JS_SetForkableHook(ctx_forks);  /* an opaque-collection iterator forks (opaque done) only where branch_decide decides */
     JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
@@ -2231,7 +2231,7 @@ KEEP void qjs_teardown(void)
     ce_free(ctx);   /* customElements registry + instances */
     node_free(ctx);
     event_target_free(ctx);
-    opaque_free(ctx);
+    concolic_free(ctx);
     JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
     storage_free(ctx);
     cookie_free(ctx);

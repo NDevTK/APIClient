@@ -4,7 +4,7 @@
  * works without throwing); randomUUID() is external randomness -> opaque (forks branches, shapes token/id URLs,
  * replay-sound); subtle is opaque (SubtleCrypto digest/encrypt results are externally-derived). */
 #include "modules/crypto.h"
-#include "solver/opaque.h"   /* g_opaque, js_opaque */
+#include "solver/concolic.h"   /* g_concolic, js_concolic_read */
 
 static JSValue js_crypto_getrandom(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;

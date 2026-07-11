@@ -4,7 +4,7 @@
  * `performance.getEntriesByType('resource').forEach(...)` must not throw); timeOrigin is concrete. The old
  * `{now}`-only stub threw on mark/measure, killing perf-instrumented bundles. */
 #include "core/timing/performance.h"
-#include "solver/opaque.h"   /* g_opaque, js_noop, js_opaque */
+#include "solver/concolic.h"   /* g_concolic, js_noop, js_concolic_read */
 
 static JSValue js_perf_empty(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v; return JS_NewArray(ctx);   /* PerformanceEntryList -> empty (no timeline headless) */
@@ -12,7 +12,7 @@ static JSValue js_perf_empty(JSContext *ctx, JSValueConst t, int c, JSValueConst
 
 JSValue js_performance_make(JSContext *ctx) {
     JSValue perf = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));         /* elapsed ms -> opaque (nondeterministic) */
+    JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, js_concolic_read, "now", 0));         /* elapsed ms -> opaque (nondeterministic) */
     JS_SetPropertyStr(ctx, perf, "timeOrigin", JS_NewFloat64(ctx, 0));
     JS_SetPropertyStr(ctx, perf, "mark", JS_NewCFunction(ctx, js_noop, "mark", 1));
     JS_SetPropertyStr(ctx, perf, "measure", JS_NewCFunction(ctx, js_noop, "measure", 1));

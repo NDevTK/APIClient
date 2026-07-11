@@ -3,7 +3,7 @@
  * replay flow, the concrete candidate delivered RAW — window.name is not URL-encoded, so the payload survives
  * verbatim to the sink). */
 #include "core/frame/winname.h"
-#include "solver/opaque.h"   /* JS_NewConcolicSourced */
+#include "solver/concolic.h"   /* JS_NewConcolicSourced */
 #include <stddef.h>
 
 extern char *g_candidate;   /* @S replay: the concrete candidate (raw for window.name — no URL encode set) */

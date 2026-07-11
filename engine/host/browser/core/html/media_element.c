@@ -10,7 +10,7 @@
 #include "core/html/media_element.h"
 #include "core/dom/dom_element.h"   /* el_wrap — the element JS wrapper */
 #include "check.h"         /* DCHECK — the document exists before any constructor runs */
-#include "solver/opaque.h"        /* js_concolic — currentTime/ended after play() are unknowable headless -> fork */
+#include "solver/concolic.h"        /* js_concolic — currentTime/ended after play() are unknowable headless -> fork */
 #include <string.h>
 #include <lexbor/html/html.h>
 

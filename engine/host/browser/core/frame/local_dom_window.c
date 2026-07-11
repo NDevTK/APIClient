@@ -20,7 +20,7 @@
 #include "core/dom/events/event.h"      /* js_event_ctor (Event / CustomEvent) */
 #include "core/frame/intl.h"            /* js_intl_ctor */
 #include "core/frame/history.h"         /* js_history_make */
-#include "solver/opaque.h"              /* js_noop / js_opaque_stub */
+#include "solver/concolic.h"              /* js_noop / js_concolic_stub */
 
 void install_window_apis(JSContext *ctx, JSValue g, JSValueConst el_proto) {
     /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
@@ -56,8 +56,8 @@ void install_window_apis(JSContext *ctx, JSValue g, JSValueConst el_proto) {
         JSValue idb = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, idb, "open", JS_NewCFunction(ctx, js_idb_open, "open", 2));
         JS_SetPropertyStr(ctx, idb, "deleteDatabase", JS_NewCFunction(ctx, js_idb_open, "deleteDatabase", 1));
-        JS_SetPropertyStr(ctx, idb, "databases", JS_NewCFunction(ctx, js_opaque_stub, "databases", 0));
-        JS_SetPropertyStr(ctx, idb, "cmp", JS_NewCFunction(ctx, js_opaque_stub, "cmp", 2));
+        JS_SetPropertyStr(ctx, idb, "databases", JS_NewCFunction(ctx, js_concolic_stub, "databases", 0));
+        JS_SetPropertyStr(ctx, idb, "cmp", JS_NewCFunction(ctx, js_concolic_stub, "cmp", 2));
         JS_SetPropertyStr(ctx, g, "indexedDB", idb);
     }
     JS_SetPropertyStr(ctx, g, "getComputedStyle", JS_NewCFunction(ctx, js_get_computed_style, "getComputedStyle", 1));
@@ -97,18 +97,18 @@ void install_window_apis(JSContext *ctx, JSValue g, JSValueConst el_proto) {
 
 /* Time/random are EXTERNAL INPUT -> OPAQUE (a branch on Math.random()/Date.now() must FORK, values are shapes;
    a REPLAY-SOUNDNESS requirement too), plus the timer/storage/URL/fetch-object web globals. Second half of the
-   window-globals install (js_opaque/js_noop from opaque.h, included above). */
+   window-globals install (js_concolic_read/js_noop from opaque.h, included above). */
 void install_window_objects(JSContext *ctx, JSValue g) {
     JSValue mo = JS_GetPropertyStr(ctx, g, "Math");
-    if (JS_IsObject(mo)) JS_SetPropertyStr(ctx, mo, "random", JS_NewCFunction(ctx, js_opaque, "random", 0));
+    if (JS_IsObject(mo)) JS_SetPropertyStr(ctx, mo, "random", JS_NewCFunction(ctx, js_concolic_read, "random", 0));
     JS_FreeValue(ctx, mo);
     JSValue dt = JS_GetPropertyStr(ctx, g, "Date");
     if (JS_IsObject(dt)) {
-        JS_SetPropertyStr(ctx, dt, "now", JS_NewCFunction(ctx, js_opaque, "now", 0));
+        JS_SetPropertyStr(ctx, dt, "now", JS_NewCFunction(ctx, js_concolic_read, "now", 0));
         JSValue dp = JS_GetPropertyStr(ctx, dt, "prototype");   /* new Date().getTime()/valueOf() -> opaque too */
         if (JS_IsObject(dp)) {
-            JS_SetPropertyStr(ctx, dp, "getTime", JS_NewCFunction(ctx, js_opaque, "getTime", 0));
-            JS_SetPropertyStr(ctx, dp, "valueOf", JS_NewCFunction(ctx, js_opaque, "valueOf", 0));
+            JS_SetPropertyStr(ctx, dp, "getTime", JS_NewCFunction(ctx, js_concolic_read, "getTime", 0));
+            JS_SetPropertyStr(ctx, dp, "valueOf", JS_NewCFunction(ctx, js_concolic_read, "valueOf", 0));
         }
         JS_FreeValue(ctx, dp);
     }
@@ -155,7 +155,7 @@ void install_window_objects(JSContext *ctx, JSValue g) {
 #include "core/frame/navigator.h"  /* js_navigator_make */
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* scheduler edge: register a handler flow */
 extern void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst val);   /* @S sink recorder (solver/solve.h) */
-extern JSValue g_opaque;   /* opaque sentinel (opaque.h) — the opened Window is a cross-context frame */
+extern JSValue g_concolic;   /* opaque sentinel (opaque.h) — the opened Window is a cross-context frame */
 
 /* window.open(url): opens a browsing context at `url` — a NAV sink like location.assign, classified by the
    "url" sink context (solve_html.c): a finding is emitted ONLY when the constructed URL is a `javascript:`
@@ -164,7 +164,7 @@ extern JSValue g_opaque;   /* opaque sentinel (opaque.h) — the opened Window i
 static JSValue js_window_open(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
     (void)t;
     if (argc >= 1) solve_add(ctx, "window.open", "url", argv[0]);   /* @S: javascript:-URL XSS only */
-    return JS_DupValue(ctx, g_opaque);
+    return JS_DupValue(ctx, g_concolic);
 }
 
 /* window.name (attacker source, page-write overrides), window.location (getset -> `location = url` is a nav @S

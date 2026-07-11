@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include "platform/urlobj.h"
 #include "platform/url.h"      /* has_hole */
-#include "solver/opaque.h"   /* g_opaque, js_noop */
+#include "solver/concolic.h"   /* g_concolic, js_noop */
 
 extern const char *g_origin;                                     /* the page principal (main.c) */
 
@@ -125,10 +125,10 @@ JSValue js_request_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSVal
     if (!JS_IsString(method)) JS_FreeValue(ctx, method);
     /* body-reading methods a bundle may call on the Request (opaque = external body); clone -> self. */
     JS_SetPropertyStr(ctx, o, "clone", JS_NewCFunction(ctx, js_el_self, "clone", 0));
-    JS_SetPropertyStr(ctx, o, "json", JS_NewCFunction(ctx, js_opaque_stub, "json", 0));
-    JS_SetPropertyStr(ctx, o, "text", JS_NewCFunction(ctx, js_opaque_stub, "text", 0));
-    JS_SetPropertyStr(ctx, o, "arrayBuffer", JS_NewCFunction(ctx, js_opaque_stub, "arrayBuffer", 0));
-    JS_SetPropertyStr(ctx, o, "formData", JS_NewCFunction(ctx, js_opaque_stub, "formData", 0));
+    JS_SetPropertyStr(ctx, o, "json", JS_NewCFunction(ctx, js_concolic_stub, "json", 0));
+    JS_SetPropertyStr(ctx, o, "text", JS_NewCFunction(ctx, js_concolic_stub, "text", 0));
+    JS_SetPropertyStr(ctx, o, "arrayBuffer", JS_NewCFunction(ctx, js_concolic_stub, "arrayBuffer", 0));
+    JS_SetPropertyStr(ctx, o, "formData", JS_NewCFunction(ctx, js_concolic_stub, "formData", 0));
     JS_SetPropertyStr(ctx, o, "toString", JS_NewCFunction(ctx, js_url_tostring, "toString", 0));
     return o;
 }

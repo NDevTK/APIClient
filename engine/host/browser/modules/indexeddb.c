@@ -3,7 +3,7 @@
  * MISSING LOGIC; a bundle that stashes a token/URL in IDB and reads it back now recovers it as the @H example.
  * addEventListener on the request/db/tx registers the handler as a scheduler FLOW (js_add_listener). */
 #include "modules/indexeddb.h"
-#include "solver/opaque.h"   /* g_opaque, js_noop, js_opaque_stub */
+#include "solver/concolic.h"   /* g_concolic, js_noop, js_concolic_stub */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* onsuccess/onerror handler -> driven flow */
 extern char *g_candidate;   /* @S replay: a tainted stored value is attacker-tamperable -> deliver the candidate on read */
@@ -84,7 +84,7 @@ static JSValue js_idb_db(JSContext *ctx) {
     JS_SetPropertyStr(ctx, db, "close", JS_NewCFunction(ctx, js_noop, "close", 0));
     JS_SetPropertyStr(ctx, db, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
     JSValue names = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, names, "contains", JS_NewCFunction(ctx, js_opaque_stub, "contains", 1));
+    JS_SetPropertyStr(ctx, names, "contains", JS_NewCFunction(ctx, js_concolic_stub, "contains", 1));
     JS_SetPropertyStr(ctx, db, "objectStoreNames", names);
     return db;
 }

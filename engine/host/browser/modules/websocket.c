@@ -5,7 +5,7 @@
 #include "modules/websocket.h"
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
-#include "solver/opaque.h"     /* js_noop */
+#include "solver/concolic.h"     /* js_noop */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* scheduler-side (main.c): onmessage -> driven */
 

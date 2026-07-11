@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include "core/trustedtypes/trusted_types.h"
 #include "bindings/idl.h"
-#include "solver/opaque.h"   /* js_noop */
+#include "solver/concolic.h"   /* js_noop */
 
 extern int solve_broke(const char *sc, const char *res);   /* the real breakout detector — parse the createHTML OUTPUT */
 

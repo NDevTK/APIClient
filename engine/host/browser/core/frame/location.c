@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include "core/frame/location.h"
 #include "solver/solve.h"    /* solve_add — location.href/.assign/`location=` are @S navigation sinks */
-#include "solver/opaque.h"   /* g_opaque, js_noop */
+#include "solver/concolic.h"   /* g_concolic, js_noop */
 #include "check.h"    /* CHECK — OOM must crash, never emit a prefix-less/unencoded candidate (a false PoC) */
 
 /* Borrowed from main.c: the page principal (this TU WRITES it in set_origin + reads it for location.*), and

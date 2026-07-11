@@ -18,7 +18,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "core/css/cssom.h"
-#include "solver/opaque.h"      /* g_opaque, JS_IsConcolic/Example/ShapeC */
+#include "solver/concolic.h"      /* g_concolic, JS_IsConcolic/Example/ShapeC */
 #include "core/dom/dom_element.h" /* g_el_class_id — unwrap the element argument */
 #include "solver/dom_cow.h"     /* dom_attr_capture — a style write joins the per-flow COW delta */
 #include "solver/attr_shadow.h" /* attr_shadow_set — an opaque CSS value keeps its taint on the style attr */

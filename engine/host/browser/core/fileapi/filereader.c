@@ -4,7 +4,7 @@
  * XSS — `r.onload=function(){el.innerHTML=r.result}; r.readAsText(f)` — is a solvable @S chain: the onload
  * handler (driven as a flow) reads reader.result (via closure or e.target.result) and sinks the content. */
 #include "core/fileapi/filereader.h"
-#include "solver/opaque.h"   /* js_concolic, js_noop */
+#include "solver/concolic.h"   /* js_concolic, js_noop */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);
 extern char *g_candidate;   /* @S replay: the file content is attacker-controlled -> deliver the candidate */

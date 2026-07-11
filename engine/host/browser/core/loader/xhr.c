@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/loader/xhr.h"
-#include "solver/opaque.h"   /* g_opaque, js_noop, js_opaque_stub */
+#include "solver/concolic.h"   /* g_concolic, js_noop, js_concolic_stub */
 #include "platform/url.h"      /* build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint */
 
@@ -64,8 +64,8 @@ JSValue js_xhr_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueCo
     JS_SetPropertyStr(ctx, o, "abort", JS_NewCFunction(ctx, js_noop, "abort", 0));
     JS_SetPropertyStr(ctx, o, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));   /* onload handler -> driven */
     JS_SetPropertyStr(ctx, o, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    JS_SetPropertyStr(ctx, o, "getResponseHeader", JS_NewCFunction(ctx, js_opaque_stub, "getResponseHeader", 1));
-    JS_SetPropertyStr(ctx, o, "getAllResponseHeaders", JS_NewCFunction(ctx, js_opaque_stub, "getAllResponseHeaders", 0));
+    JS_SetPropertyStr(ctx, o, "getResponseHeader", JS_NewCFunction(ctx, js_concolic_stub, "getResponseHeader", 1));
+    JS_SetPropertyStr(ctx, o, "getAllResponseHeaders", JS_NewCFunction(ctx, js_concolic_stub, "getAllResponseHeaders", 0));
     JS_SetPropertyStr(ctx, o, "responseText", js_concolic(ctx, "{xhrResponse}", JS_UNDEFINED));   /* response = external input */
     JS_SetPropertyStr(ctx, o, "response", js_concolic(ctx, "{xhrResponse}", JS_UNDEFINED));
     JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, 200));

@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include "modules/worker.h"
 #include "platform/url.h"        /* url_from_arg, has_hole */
-#include "solver/opaque.h"     /* js_noop */
+#include "solver/concolic.h"     /* js_noop */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* scheduler-side (main.c) */
 extern void chunk_pending_add(const char *url);                                                 /* scheduler-side: queue a script chunk for host fetch + analyze */

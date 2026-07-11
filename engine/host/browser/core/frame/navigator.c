@@ -8,11 +8,11 @@
 #include "modules/permissions/permissions.h"   /* navigator.permissions — a modeled virtual permission system */
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
-#include "solver/opaque.h"     /* g_opaque, js_concolic */
+#include "solver/concolic.h"     /* g_concolic, js_concolic */
 #include "check.h"      /* DFAIL — an unbuilt navigator feature crashes LOUD, never an opaque shrug */
 
 /* Proxy get-trap for the still-unbuilt navigator surface: a read of a member NOT yet implemented DFAILs in dev,
-   naming the exact feature to BUILD — the forcing function that replaces the banned g_opaque shrug (which
+   naming the exact feature to BUILD — the forcing function that replaces the banned g_concolic shrug (which
    silently served every unbuilt member as opaque, hiding a missing browser feature; omitting features is not our
    choice — a browser has them all). Implemented members (own or inherited) delegate to the target; a symbol/
    internal probe returns undefined (not a named feature). In release DFAIL is compiled out and it degrades to
@@ -30,7 +30,7 @@ static JSValue nav_unbuilt_get(JSContext *ctx, JSValueConst this_val, int argc, 
     char m[192]; snprintf(m, sizeof m, "navigator.%s — unbuilt browser feature; implement it at the root, never an opaque/undefined shrug", k ? k : "?");
     if (k) JS_FreeCString(ctx, k);
     DFAIL(m);                             /* dev: abort loud naming the feature to build */
-    return JS_DupValue(ctx, g_opaque);    /* release only */
+    return JS_DupValue(ctx, g_concolic);    /* release only */
 }
 /* Wrap an object so its unbuilt members DFAIL instead of opaque-shrugging (the target holds the built members). */
 static JSValue wrap_unbuilt(JSContext *ctx, JSValue obj) {

@@ -4,7 +4,7 @@
  * `{bytes}` carrying the input as its example (the taint flows, @S sees it), never the bare `{}` sentinel.
  * decode(bytes): a concrete Uint8Array/ArrayBuffer -> its UTF-8 string; opaque -> `{text}` concolic. */
 #include "modules/encoding.h"
-#include "solver/opaque.h"   /* g_opaque, js_concolic */
+#include "solver/concolic.h"   /* g_concolic, js_concolic */
 
 static JSValue enc_encode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;

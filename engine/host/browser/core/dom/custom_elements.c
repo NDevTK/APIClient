@@ -1,7 +1,7 @@
 /* Custom elements — see custom_elements.h. Extracted from main.c (Blink core/html/custom). */
 #include "core/dom/custom_elements.h"
 #include "core/dom/dom_element.h"   /* g_el_class_id, el_wrap */
-#include "solver/opaque.h"   /* js_opaque_stub / js_noop — customElements.get/whenDefined/upgrade */
+#include "solver/concolic.h"   /* js_concolic_stub / js_noop — customElements.get/whenDefined/upgrade */
 
 JSValue g_ce_registry = JS_UNDEFINED;   /* {tagName -> ctor}; createElement upgrades a defined tag */
 JSValue g_ce_instances = JS_UNDEFINED;  /* retained upgraded instances (findable receivers) */
@@ -86,8 +86,8 @@ void install_dom_interface_ctors(JSContext *ctx, JSValueConst g, JSValueConst el
     ce_init(ctx);
     JSValue ce = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, ce, "define", JS_NewCFunction(ctx, js_ce_define, "define", 2));
-    JS_SetPropertyStr(ctx, ce, "get", JS_NewCFunction(ctx, js_opaque_stub, "get", 1));
-    JS_SetPropertyStr(ctx, ce, "whenDefined", JS_NewCFunction(ctx, js_opaque_stub, "whenDefined", 1));
+    JS_SetPropertyStr(ctx, ce, "get", JS_NewCFunction(ctx, js_concolic_stub, "get", 1));
+    JS_SetPropertyStr(ctx, ce, "whenDefined", JS_NewCFunction(ctx, js_concolic_stub, "whenDefined", 1));
     JS_SetPropertyStr(ctx, ce, "upgrade", JS_NewCFunction(ctx, js_noop, "upgrade", 1));
     JS_SetPropertyStr(ctx, (JSValue)g, "customElements", ce);
 }

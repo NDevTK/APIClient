@@ -10,7 +10,7 @@
 #include "core/html/docwrite.h"     /* js_doc_write — document.write/writeln */
 #include "core/frame/cookie.h"      /* js_cookie_get/set — document.cookie per-flow jar */
 #include "core/frame/location.h"    /* def_source (referrer), location_host (document.domain), window.location getset */
-#include "solver/opaque.h"          /* js_opaque_stub — non-throwing DOM stubs (createTextNode/Fragment) */
+#include "solver/concolic.h"          /* js_concolic_stub — non-throwing DOM stubs (createTextNode/Fragment) */
 #include "check.h"             /* DCHECK — the live document is an engine invariant (created at boot) */
 #include <lexbor/html/html.h>  /* lxb_dom_document_create_element */
 #include <string.h>
@@ -126,8 +126,8 @@ void document_init(JSContext *ctx, JSValue global) {
     JS_SetPropertyStr(ctx, proto, "getElementsByClassName", JS_NewCFunction(ctx, js_doc_getByClass, "getElementsByClassName", 1));
     JS_SetPropertyStr(ctx, proto, "createElement", JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));
     JS_SetPropertyStr(ctx, proto, "createRange", JS_NewCFunction(ctx, js_doc_createrange, "createRange", 0));   /* createContextualFragment -> {parsedhtml} taint */
-    JS_SetPropertyStr(ctx, proto, "createTextNode", JS_NewCFunction(ctx, js_opaque_stub, "createTextNode", 1));
-    JS_SetPropertyStr(ctx, proto, "createDocumentFragment", JS_NewCFunction(ctx, js_opaque_stub, "createDocumentFragment", 0));
+    JS_SetPropertyStr(ctx, proto, "createTextNode", JS_NewCFunction(ctx, js_concolic_stub, "createTextNode", 1));
+    JS_SetPropertyStr(ctx, proto, "createDocumentFragment", JS_NewCFunction(ctx, js_concolic_stub, "createDocumentFragment", 0));
     JS_SetPropertyStr(ctx, proto, "write", JS_NewCFunction(ctx, js_doc_write, "write", 1));
     JS_SetPropertyStr(ctx, proto, "writeln", JS_NewCFunction(ctx, js_doc_write, "writeln", 1));
     /* COMPUTED getters on the prototype (global-backed, correct for the singleton document). */

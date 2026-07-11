@@ -3,7 +3,7 @@
  * (solve_add records the code body as an @S sink); the scheduler decides the candidate replays. */
 #include "bindings/global_functions.h"
 #include "solver/solve.h"     /* solve_add — an eval/Function code body is an @S sink */
-#include "solver/opaque.h"    /* js_concolic (the eval result), js_noop (a safe callable so new Function(x)() is safe) */
+#include "solver/concolic.h"    /* js_concolic (the eval result), js_noop (a safe callable so new Function(x)() is safe) */
 
 extern char *g_candidate;   /* @S replay: a concrete candidate body IS the sink code — record it, do not run it */
 
