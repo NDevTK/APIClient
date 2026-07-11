@@ -2,7 +2,14 @@
 #include <string.h>
 #include <stdlib.h>
 #include "core/frame/csp.h"
+#include "check.h"   /* DCHECK — offensive asserts on this security component's invariants (a wrong CSP verdict gates @S PoC feasibility) */
 #include <lexbor/dom/dom.h>
+
+/* The DOM-walk callbacks write FIXED byte counts into CspBypass fields: csp_gadget_cb snprintf's 32 into
+   gadget_lib; csp_nonce_cb memcpy's up to 127 bytes + NUL into nonce. Enforce the buffer-size contract at
+   COMPILE time so a future field-shrink can never silently overflow a fixed buffer in this security path. */
+_Static_assert(sizeof(((CspBypass *)0)->gadget_lib) >= 32,  "csp_gadget_cb writes 32 bytes into gadget_lib");
+_Static_assert(sizeof(((CspBypass *)0)->nonce)      >= 128, "csp_nonce_cb writes up to 127 bytes + NUL into nonce");
 
 char *g_csp = NULL;
 char *g_header_csp = NULL;
@@ -133,6 +140,7 @@ static int host_has_star(const char *hosts) {
 }
 
 void csp_bypass(int is_eval, lxb_html_document_t *dom, CspBypass *out) {
+    DCHECK(out, "csp_bypass: NULL out — the @S emitter always passes a real CspBypass buffer; a NULL is a caller bug, not a state to tolerate");
     memset(out, 0, sizeof *out);
     out->via = "unsafe-inline";
     const char *tok = is_eval ? "unsafe-eval" : "unsafe-inline";
