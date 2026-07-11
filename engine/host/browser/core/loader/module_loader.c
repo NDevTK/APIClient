@@ -14,6 +14,7 @@ extern JSRuntime *g_rt;
 extern void chunk_pending_add(const char *url);
 extern JSValue g_chunkurls;
 extern void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s);
+extern const char *g_origin;   /* the page's base URL — relative module specifiers resolve against it */
 
 typedef struct { char *url; char *src; size_t len; JSValue ns; } ModSrc;   /* ns = cached module namespace once linked (a module is a SINGLETON — evaluated once, re-import returns this) */
 static ModSrc *g_modsrc = NULL; static int g_modsrc_n = 0, g_modsrc_cap = 0;
@@ -108,10 +109,27 @@ void host_dyn_import(JSContext *ctx, const char *specifier, JSValueConst resolve
     if (!g_import_park) g_import_park = park_new();
     park_add(ctx, g_import_park, specifier, resolve, 0);   /* PARK holding the resolve; qjs_provide resolves it with the real namespace when the chunk links (browser-faithful, no opaque settle, no boot re-run) */
 }
-/* Identity normalize: keep the specifier VERBATIM (matches the host fetch contract — chunk URLs are passed
-   to qjs_provide exactly as written; the offscreen resolves relative/root-relative against the doc URL). */
+/* Module specifier resolution (HTML "resolve a module specifier"): a RELATIVE specifier (./x, ../x) resolves
+   against the IMPORTING MODULE's base URL, not the document — else a module in a subdirectory misresolves its
+   siblings (./b from /sub/a.js must be /sub/b.js, not /b.js). Use the WHATWG URL parser (url_resolve). A
+   root-absolute (/x), bare (x — needs an import map, not yet supported), or full-URL specifier passes through
+   VERBATIM: the offscreen resolves /x against the document, which is correct. An INLINE module's base is a
+   synthetic <mod-N> (not a URL) -> pass through too (inline modules ARE at the document, so ./x resolves against
+   it via the offscreen). The result is returned root-relative to match the page's own specifier style (so the
+   same file is never keyed two ways -> no duplicate module instance). */
 char *host_module_normalize(JSContext *ctx, const char *base, const char *name, void *opaque) {
-    (void)base; (void)opaque; return js_strdup(ctx, name);
+    (void)opaque;
+    if (!name || name[0] != '.' || !base || base[0] == '<') return js_strdup(ctx, name);   /* not ./ or ../, or inline base -> verbatim */
+    char *full_base = url_resolve(base, g_origin);   /* the importing module's ABSOLUTE URL (base is stored root-relative or absolute) */
+    if (!full_base) return js_strdup(ctx, name);
+    char *resolved = url_resolve(name, full_base);   /* ./x / ../x against the module's URL, WHATWG-correct */
+    free(full_base);
+    if (!resolved) return js_strdup(ctx, name);
+    const char *sep = strstr(resolved, "://");       /* strip scheme://host -> a root-relative /path, the page's key style */
+    const char *path = sep ? strchr(sep + 3, '/') : NULL;
+    char *out = js_strdup(ctx, path ? path : resolved);
+    free(resolved);
+    return out;
 }
 /* Resolve a static import: compile the dep from its FETCHED source; if not fetched yet, request it like a
    browser and fail this link (the importer is retried when the chunk arrives). quickjs dedups by name, so a
