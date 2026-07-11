@@ -6,7 +6,7 @@
 #include "solver/concolic.h"   /* g_concolic, js_noop, js_concolic_stub */
 
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* onsuccess/onerror handler -> driven flow */
-extern char *g_candidate;   /* @S replay: a tainted stored value is attacker-tamperable -> deliver the candidate on read */
+#include "solver/source.h"   /* source_candidate — a tainted stored value is attacker-tamperable -> deliver the candidate on read (raw) */
 
 /* key -> value the bundle put() this run (attacker-tamperable across sessions, like web storage). Keyed by the
  * explicit key (put(value,key)/get(key)); in-line keyPath stores are not yet resolved (fall through to opaque). */
@@ -43,7 +43,7 @@ static JSValue js_idb_get(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
         const char *k = JS_ToCString(ctx, v[0]);
         if (k) {
             JSValue val = JS_GetPropertyStr(ctx, g_idb, k); JS_FreeCString(ctx, k);
-            if (g_candidate && JS_IsConcolic(val)) { JS_FreeValue(ctx, val); return js_idb_request(ctx, JS_NewString(ctx, g_candidate)); }
+            { JSValue cd = source_candidate(ctx, "", 0, 0, 0); if (!JS_IsUndefined(cd) && JS_IsConcolic(val)) { JS_FreeValue(ctx, val); return js_idb_request(ctx, cd); } JS_FreeValue(ctx, cd); }
             if (JS_IsConcolic(val)) return js_idb_request(ctx, val);                       /* stored an opaque: round-trip its taint */
             if (!JS_IsUndefined(val) && !JS_IsNull(val)) {                               /* stored a concrete value: opaque carrying it as the example */
                 JSValue o = JS_NewConcolicSourced(ctx, "{idb}", "{idb}");

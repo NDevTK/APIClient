@@ -6,11 +6,10 @@
  * REAL same-origin cookies via cookie_seed (the page's own cookies, same principal — no privilege gained). */
 #include "core/frame/cookie.h"
 #include "solver/concolic.h"   /* g_concolic */
+#include "solver/source.h"     /* source_candidate — @S replay delivery (a cookie is an attacker-settable source, delivered raw) */
 #include "check.h"    /* CHECK — an OOM must crash, never silently truncate the cookie join */
 #include <string.h>
 #include <stdlib.h>
-
-extern char *g_candidate;   /* @S replay: an attacker who can set a cookie controls document.cookie -> deliver the candidate on read (like storage/idb/clipboard) so a cookie->sink XSS is replay-VERIFIED, not just recorded */
 
 static JSValue g_cookies = JS_UNDEFINED;   /* name -> the "name=value" pair (concrete string, or a concolic opaque) */
 
@@ -19,7 +18,7 @@ static JSValue g_cookies = JS_UNDEFINED;   /* name -> the "name=value" pair (con
 static JSValue g_cookie_ambient = JS_UNDEFINED;
 
 static JSValue ambient(JSContext *ctx) {
-    if (g_candidate) return JS_NewString(ctx, g_candidate);   /* @S replay: the attacker-set cookie value (raw, not URL-encoded) -> breakout verified */
+    { JSValue c = source_candidate(ctx, "", 0, 0, 0); if (!JS_IsUndefined(c)) return c; }   /* @S replay: attacker-set cookie value, delivered raw */
     if (JS_IsString(g_cookie_ambient)) return JS_DupValue(ctx, g_cookie_ambient);   /* seeded real cookies */
     JSValue o = JS_NewConcolicSourced(ctx, "{cookie}", "{cookie}");
     if (JS_IsConcolic(o)) JS_SetConcolicExample(ctx, o, JS_NewString(ctx, ""));

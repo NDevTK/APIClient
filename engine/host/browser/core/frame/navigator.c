@@ -9,6 +9,7 @@
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
 #include "solver/concolic.h"     /* g_concolic, js_concolic */
+#include "solver/source.h"       /* source_candidate — clipboard is an attacker source, delivered raw */
 #include "check.h"      /* DFAIL — an unbuilt navigator feature crashes LOUD, never an opaque shrug */
 
 /* Proxy get-trap for the still-unbuilt navigator surface: a read of a member NOT yet implemented DFAILs in dev,
@@ -158,10 +159,9 @@ static JSValue make_storage(JSContext *ctx) {
    `clipboard.readText().then(t => el.innerHTML = t)` is a clipboard-XSS the engine detects (the {clipboard}
    source flows to the sink, replay-verified with a delivery precondition of a user paste). writeText/write are
    Promise<undefined> (writing to the clipboard is not a scriptable sink). */
-extern char *g_candidate;   /* @S replay: the concrete candidate a source getter returns instead of the concolic (scheduler.h) */
 static JSValue nav_clip_read(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
-    if (g_candidate) return js_resolved(ctx, JS_NewString(ctx, g_candidate));   /* @S replay: deliver the candidate RAW (clipboard is not URL-encoded, unlike location.hash) -> breakout verified */
+    { JSValue cd = source_candidate(ctx, "", 0, 0, 0); if (!JS_IsUndefined(cd)) return js_resolved(ctx, cd); }   /* @S replay: attacker paste content, raw */
     return js_resolved(ctx, JS_NewConcolicSourced(ctx, "{clipboard}", "{clipboard}"));   /* attacker-controlled paste content */
 }
 static JSValue make_clipboard(JSContext *ctx) {
