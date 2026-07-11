@@ -36,6 +36,13 @@ int script_is_exec(lxb_dom_element_t *el, int *is_mod) {
     if (strcmp(tb, "module") == 0) { *is_mod = 1; return 1; }
     return (strstr(tb, "javascript") || strstr(tb, "ecmascript")) ? 1 : 0;   /* JS MIME -> exec; else data */
 }
+/* A <script type="importmap"> data block — parsed (not executed) into the bare-specifier resolver. */
+int script_is_importmap(lxb_dom_element_t *el) {
+    size_t tyl = 0; const lxb_char_t *ty = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tyl);
+    if (!ty || tyl != 9) return 0;
+    char tb[10]; for (size_t k = 0; k < 9; k++) { char c = (char)ty[k]; tb[k] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; } tb[9] = 0;
+    return strcmp(tb, "importmap") == 0;
+}
 
 unsigned document_bundle_id(lxb_html_document_t *dom) {
     struct scr_ctx c; dom_collect_scripts(dom, &c);

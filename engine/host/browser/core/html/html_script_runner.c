@@ -80,7 +80,15 @@ static int boot_drive_scripts(JSContext *ctx) {
             arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu);
             return 1;   /* SYNC external not yet fetched: request + PARK (blocks document order like a real browser) */
         }
-        int is_mod; if (!script_is_exec(el, &is_mod)) continue;
+        int is_mod;
+        if (!script_is_exec(el, &is_mod)) {
+            if (script_is_importmap(el)) {   /* parse the import map (in document order, before any module import resolves) */
+                size_t il = 0; lxb_char_t *itxt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &il);
+                if (itxt && il) importmap_parse(ctx, (const char *)itxt, il);
+                if (itxt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, itxt);
+            }
+            continue;
+        }
         size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
         if (txt && tl) {
             if (is_mod) { doc_set_current_script(ctx, el_wrap(ctx, el)); link_inline_module(ctx, (const char *)txt, tl); doc_set_current_script(ctx, JS_NULL); }   /* inline module -> the ONE URL-keyed map + tree-linker retry (like an external module) */

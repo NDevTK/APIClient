@@ -109,6 +109,53 @@ void host_dyn_import(JSContext *ctx, const char *specifier, JSValueConst resolve
     if (!g_import_park) g_import_park = park_new();
     park_add(ctx, g_import_park, specifier, resolve, 0);   /* PARK holding the resolve; qjs_provide resolves it with the real namespace when the chunk links (browser-faithful, no opaque settle, no boot re-run) */
 }
+/* IMPORT MAP (HTML "resolve a module specifier" for BARE specifiers): { spec -> url }, parsed from a
+   <script type="importmap"> before any module runs. A bare `import 'foo'` maps to its URL — exact match, then
+   longest trailing-slash PREFIX ("util/" -> "/utils/"). A mapped value that is relative is resolved against the
+   document by the offscreen (the spec's base for import-map values), so we return it as written. */
+typedef struct { char *spec; char *url; } ImportMap;
+static ImportMap *g_importmap = NULL; static int g_importmap_n = 0, g_importmap_cap = 0;
+static void importmap_add(const char *spec, const char *url) {
+    if (!spec || !url) return;
+    if (g_importmap_n >= g_importmap_cap) { int nc = g_importmap_cap ? g_importmap_cap * 2 : 8; ImportMap *n = realloc(g_importmap, (size_t)nc * sizeof(ImportMap)); CHECK(n, "importmap-oom: realloc failed — a dropped mapping silently breaks bare-specifier resolution"); g_importmap = n; g_importmap_cap = nc; }
+    g_importmap[g_importmap_n].spec = strdup(spec); g_importmap[g_importmap_n].url = strdup(url); g_importmap_n++;
+}
+void importmap_parse(JSContext *ctx, const char *json, size_t len) {
+    JSValue o = JS_ParseJSON(ctx, json, len, "<importmap>");
+    if (JS_IsException(o)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return; }   /* a malformed import map is ignored (browser reports it; resolution just falls through) */
+    JSValue imports = JS_GetPropertyStr(ctx, o, "imports");
+    if (JS_IsObject(imports)) {
+        JSPropertyEnum *tab = NULL; uint32_t n = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &n, imports, JS_GPN_STRING_MASK) == 0) {
+            for (uint32_t i = 0; i < n; i++) {
+                const char *k = JS_AtomToCString(ctx, tab[i].atom);
+                JSValue v = JS_GetProperty(ctx, imports, tab[i].atom);
+                const char *vs = JS_IsString(v) ? JS_ToCString(ctx, v) : NULL;
+                if (k && vs) importmap_add(k, vs);
+                if (k) JS_FreeCString(ctx, k);
+                if (vs) JS_FreeCString(ctx, vs);
+                JS_FreeValue(ctx, v);
+            }
+            JS_FreePropertyEnum(ctx, tab, n);
+        }
+    }
+    JS_FreeValue(ctx, imports); JS_FreeValue(ctx, o);
+}
+/* Resolve a BARE specifier via the import map -> a js_strdup'd URL, or NULL if unmapped (caller keeps verbatim). */
+static char *importmap_resolve(JSContext *ctx, const char *name) {
+    for (int i = 0; i < g_importmap_n; i++) if (strcmp(g_importmap[i].spec, name) == 0) return js_strdup(ctx, g_importmap[i].url);   /* exact */
+    int best = -1; size_t bestlen = 0;
+    for (int i = 0; i < g_importmap_n; i++) {
+        size_t sl = strlen(g_importmap[i].spec);
+        if (sl > 0 && g_importmap[i].spec[sl - 1] == '/' && strncmp(name, g_importmap[i].spec, sl) == 0 && sl > bestlen) { best = i; bestlen = sl; }   /* longest trailing-slash prefix */
+    }
+    if (best < 0) return NULL;
+    const char *suffix = name + bestlen; size_t ul = strlen(g_importmap[best].url);
+    char *out = js_malloc(ctx, ul + strlen(suffix) + 1);
+    if (out) { memcpy(out, g_importmap[best].url, ul); strcpy(out + ul, suffix); }
+    return out;
+}
+
 /* Module specifier resolution (HTML "resolve a module specifier"): a RELATIVE specifier (./x, ../x) resolves
    against the IMPORTING MODULE's base URL, not the document — else a module in a subdirectory misresolves its
    siblings (./b from /sub/a.js must be /sub/b.js, not /b.js). Use the WHATWG URL parser (url_resolve). A
@@ -119,17 +166,25 @@ void host_dyn_import(JSContext *ctx, const char *specifier, JSValueConst resolve
    same file is never keyed two ways -> no duplicate module instance). */
 char *host_module_normalize(JSContext *ctx, const char *base, const char *name, void *opaque) {
     (void)opaque;
-    if (!name || name[0] != '.' || !base || base[0] == '<') return js_strdup(ctx, name);   /* not ./ or ../, or inline base -> verbatim */
-    char *full_base = url_resolve(base, g_origin);   /* the importing module's ABSOLUTE URL (base is stored root-relative or absolute) */
-    if (!full_base) return js_strdup(ctx, name);
-    char *resolved = url_resolve(name, full_base);   /* ./x / ../x against the module's URL, WHATWG-correct */
-    free(full_base);
-    if (!resolved) return js_strdup(ctx, name);
-    const char *sep = strstr(resolved, "://");       /* strip scheme://host -> a root-relative /path, the page's key style */
-    const char *path = sep ? strchr(sep + 3, '/') : NULL;
-    char *out = js_strdup(ctx, path ? path : resolved);
-    free(resolved);
-    return out;
+    if (!name) return js_strdup(ctx, name);
+    if (name[0] == '.') {   /* RELATIVE (./x, ../x) -> resolve against the importing module's URL */
+        if (!base || base[0] == '<') return js_strdup(ctx, name);   /* inline base (<mod-N>): offscreen resolves ./x against the document (correct) */
+        char *full_base = url_resolve(base, g_origin);   /* the importing module's ABSOLUTE URL (base is stored root-relative or absolute) */
+        if (!full_base) return js_strdup(ctx, name);
+        char *resolved = url_resolve(name, full_base);   /* ./x / ../x against the module's URL, WHATWG-correct */
+        free(full_base);
+        if (!resolved) return js_strdup(ctx, name);
+        const char *sep = strstr(resolved, "://");       /* strip scheme://host -> a root-relative /path, the page's key style */
+        const char *path = sep ? strchr(sep + 3, '/') : NULL;
+        char *out = js_strdup(ctx, path ? path : resolved);
+        free(resolved);
+        return out;
+    }
+    if (name[0] != '/' && !strstr(name, "://")) {   /* BARE specifier (foo, util/x) -> the import map */
+        char *mapped = importmap_resolve(ctx, name);
+        if (mapped) return mapped;
+    }
+    return js_strdup(ctx, name);   /* root-absolute (/x), full URL, or unmapped bare -> verbatim (offscreen resolves against the document) */
 }
 /* Resolve a static import: compile the dep from its FETCHED source; if not fetched yet, request it like a
    browser and fail this link (the importer is retried when the chunk arrives). quickjs dedups by name, so a
@@ -166,5 +221,7 @@ void module_loader_free(JSContext *ctx) {
     free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
     for (int i = 0; i < g_defermod_n; i++) free(g_defermod[i]);
     free(g_defermod); g_defermod = NULL; g_defermod_n = g_defermod_cap = 0; g_modseq = 0;
+    for (int i = 0; i < g_importmap_n; i++) { free(g_importmap[i].spec); free(g_importmap[i].url); }
+    free(g_importmap); g_importmap = NULL; g_importmap_n = g_importmap_cap = 0;
     park_free(ctx, g_import_park); g_import_park = NULL;   /* never-fired parked imports freed (a never-fetched chunk's continuation doesn't run) */
 }

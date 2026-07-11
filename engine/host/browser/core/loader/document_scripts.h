@@ -15,6 +15,7 @@ void dom_collect_scripts(lxb_html_document_t *dom, struct scr_ctx *out);
 /* Is this <script> EXECUTABLE JS (empty/js-MIME/"module" type)? A DATA block (json/ld+json/importmap/template)
    returns 0 — parsed-but-not-run, never part of the JS identity. Sets *is_mod for a module script. */
 int script_is_exec(lxb_dom_element_t *el, int *is_mod);
+int script_is_importmap(lxb_dom_element_t *el);   /* 1 if <script type="importmap"> (parsed, not executed) */
 /* The document's stable bundle id = FNV-1a over its OWN executable scripts (external src URLs + inline JS
    bodies), a pure DOM scan that runs NO script. The frontier key the host reads synchronously. */
 unsigned document_bundle_id(lxb_html_document_t *dom);
