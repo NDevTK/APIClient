@@ -90,6 +90,32 @@ static JSValue make_connection(JSContext *ctx) {
     JS_SetPropertyStr(ctx, c, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
     return wrap_unbuilt(ctx, c);   /* unbuilt NetworkInformation members DFAIL, never an opaque shrug */
 }
+/* NavigatorUAData (navigator.userAgentData): UA Client Hints. `mobile`/`platform` and the high-entropy fields
+   are CONCOLIC (desktop example, fork the branch) so `if (navigator.userAgentData.mobile)` explores BOTH the
+   mobile and desktop code paths (each ships its own bundle/endpoints — the classic responsive moat split).
+   getHighEntropyValues(hints) resolves to a concolic detail object; unbuilt members (toJSON, ...) DFAIL. */
+static JSValue js_ua_high_entropy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc; (void)argv;
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "platform", js_concolic(ctx, "{uaPlatform}", JS_NewString(ctx, "Windows")));
+    JS_SetPropertyStr(ctx, o, "platformVersion", js_concolic(ctx, "{uaPlatformVersion}", JS_NewString(ctx, "15.0.0")));
+    JS_SetPropertyStr(ctx, o, "architecture", js_concolic(ctx, "{uaArch}", JS_NewString(ctx, "x86")));
+    JS_SetPropertyStr(ctx, o, "bitness", js_concolic(ctx, "{uaBitness}", JS_NewString(ctx, "64")));
+    JS_SetPropertyStr(ctx, o, "model", js_concolic(ctx, "{uaModel}", JS_NewString(ctx, "")));
+    JS_SetPropertyStr(ctx, o, "uaFullVersion", js_concolic(ctx, "{uaFullVersion}", JS_NewString(ctx, "120.0.0.0")));
+    JS_SetPropertyStr(ctx, o, "mobile", js_concolic(ctx, "{uaMobile}", JS_FALSE));
+    return js_resolved(ctx, o);
+}
+static JSValue make_ua_data(JSContext *ctx) {
+    JSValue u = JS_NewObject(ctx);
+    { JSValue brands = JS_NewArray(ctx), b0 = JS_NewObject(ctx);
+      JS_SetPropertyStr(ctx, b0, "brand", JS_NewString(ctx, "Chromium")); JS_SetPropertyStr(ctx, b0, "version", JS_NewString(ctx, "120"));
+      JS_SetPropertyUint32(ctx, brands, 0, b0); JS_SetPropertyStr(ctx, u, "brands", brands); }
+    JS_SetPropertyStr(ctx, u, "mobile", js_concolic(ctx, "{uaMobile}", JS_FALSE));            /* forks mobile/desktop code paths */
+    JS_SetPropertyStr(ctx, u, "platform", js_concolic(ctx, "{uaPlatform}", JS_NewString(ctx, "Windows")));
+    JS_SetPropertyStr(ctx, u, "getHighEntropyValues", JS_NewCFunction(ctx, js_ua_high_entropy, "getHighEntropyValues", 1));
+    return wrap_unbuilt(ctx, u);
+}
 JSValue js_navigator_make(JSContext *ctx) {
     JSValue nav = JS_NewObject(ctx);
     const char *UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -124,6 +150,8 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "permissions", js_permissions_make(ctx));
     /* connection: NetworkInformation — concolic connection properties that fork adaptive-loading branches. */
     JS_SetPropertyStr(ctx, nav, "connection", make_connection(ctx));
+    /* userAgentData: UA Client Hints — concolic mobile/platform that fork the responsive mobile/desktop split. */
+    JS_SetPropertyStr(ctx, nav, "userAgentData", make_ua_data(ctx));
     /* userActivation: whether the frame has ever had / currently has a user gesture — genuinely unknown headless,
        concolic bools (example true) so `if (navigator.userActivation.isActive)` gesture gates explore both arms. */
     { JSValue ua = JS_NewObject(ctx);
@@ -142,7 +170,7 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "registerProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "registerProtocolHandler", 3));
     JS_SetPropertyStr(ctx, nav, "unregisterProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "unregisterProtocolHandler", 2));
     JS_SetPropertyStr(ctx, nav, "oscpu", JS_UNDEFINED);   /* Chrome does not expose oscpu (Firefox-only) — genuinely undefined, not unbuilt */
-    /* Every remaining IDL member (clipboard/geolocation/mediaDevices/storage/userAgentData/bluetooth/usb/... ) is
+    /* Every remaining IDL member (clipboard/geolocation/mediaDevices/storage/bluetooth/usb/... ) is
        an UNBUILT browser feature: the trap DFAILs loud naming it, so it is BUILT at the root — never an
        opaque/undefined shrug. Each becomes a real modeled interface (permissions, connection are the first). */
     return wrap_unbuilt(ctx, nav);
