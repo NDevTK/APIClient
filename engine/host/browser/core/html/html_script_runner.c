@@ -76,7 +76,10 @@ static int el_has_async(lxb_dom_element_t *el) {
 /* Script-kind registry: the load kind recorded when each external is requested, read by qjs_provide. */
 typedef struct { char *url; int kind; } SKind;
 static SKind *g_skinds = NULL; static int g_skinds_n = 0, g_skinds_cap = 0;
-static void skind_set(const char *url, int kind) {
+/* Record the load kind at REQUEST time (boot cursor, a dynamically-inserted <script>, a dyn-import chunk) so
+   qjs_provide routes module-vs-classic by the real script type — NOT by re-parsing the body (JS_DetectModule
+   mis-detects a plain classic script as a module: it defaults is_module=true and only flips on an import error). */
+void dom_script_kind_set(const char *url, int kind) {
     for (int i = 0; i < g_skinds_n; i++) if (strcmp(g_skinds[i].url, url) == 0) { g_skinds[i].kind = kind; return; }
     if (g_skinds_n >= g_skinds_cap) { int nc = g_skinds_cap ? g_skinds_cap * 2 : 8; SKind *n = realloc(g_skinds, (size_t)nc * sizeof(SKind)); if (!n) return; g_skinds = n; g_skinds_cap = nc; }
     g_skinds[g_skinds_n].url = strdup(url); g_skinds[g_skinds_n].kind = kind; g_skinds_n++;
@@ -93,7 +96,7 @@ static int boot_drive_scripts(JSContext *ctx) {
         if (src && sl) {
             char *cu = strndup((const char *)src, sl); if (!cu) continue;
             int kind = el_type_is_module(el) ? SK_MODULE : (el_has_async(el) ? SK_ASYNC : SK_SYNC);
-            skind_set(cu, kind);   /* record so qjs_provide routes it without re-parsing */
+            dom_script_kind_set(cu, kind);   /* record so qjs_provide routes it without re-parsing */
             if (kind != SK_SYNC) { arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu); continue; }   /* async / module: does NOT block document order */
             size_t blen = 0; const char *body = has_hole(cu) ? NULL : modsrc_body(cu, &blen);
             if (body) { JSValue elw = el_wrap(ctx, el); run_classic_body(ctx, elw, body, blen); JS_FreeValue(ctx, elw); free(cu); continue; }

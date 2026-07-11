@@ -2,6 +2,7 @@
  * inserted <script src> is discovered as a lazy chunk and its URL queued for fetch. It FEEDS the ONE scheduler
  * via extern edges (chunk_pending_add / g_chunkurls); the scheduler decides when to fetch + execute. */
 #include "core/html/html_script_element.h"
+#include "core/html/html_script_runner.h"  /* dom_script_kind_set / SK_MODULE — record the kind so provide routes it (no re-parse) */
 #include "solver/attr_shadow.h"   /* attr_shadow_find/opaque — a computed src leaves the real URL in the taint shadow */
 #include "platform/url.h"           /* has_hole — a still-holey (computed) src is not concretely fetchable */
 #include "check.h"                  /* DCHECK — the node is a real inserted element (appendChild guarantees non-NULL) */
@@ -16,6 +17,10 @@ extern JSValue g_chunkurls;                          /* JS array of discovered e
 static int el_is_script(lxb_dom_element_t *el) {
     size_t nl = 0; const lxb_char_t *nm = lxb_dom_element_qualified_name(el, &nl);
     return nm && nl == 6 && memcmp(nm, "script", 6) == 0;
+}
+static int el_is_module(lxb_dom_element_t *el) {
+    size_t tl = 0; const lxb_char_t *t = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tl);
+    return t && tl == 6 && memcmp(t, "module", 6) == 0;
 }
 
 void script_maybe_load(JSContext *ctx, lxb_dom_element_t *el) {
@@ -37,5 +42,12 @@ void script_maybe_load(JSContext *ctx, lxb_dom_element_t *el) {
         size_t sl = 0; const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
         if (src && sl) u = strndup((const char *)src, sl);
     }
-    if (u) { arr_push_str(ctx, g_chunkurls, u); if (!has_hole(u)) chunk_pending_add(u); free(u); }   /* -> chunkUrls + fetch in place */
+    if (u) {
+        arr_push_str(ctx, g_chunkurls, u);
+        if (!has_hole(u)) {
+            dom_script_kind_set(u, el_is_module(el) ? SK_MODULE : SK_SYNC);   /* route module-vs-classic by the ELEMENT type, not by re-parsing (JS_DetectModule mis-detects classic as module) */
+            chunk_pending_add(u);
+        }
+        free(u);
+    }
 }

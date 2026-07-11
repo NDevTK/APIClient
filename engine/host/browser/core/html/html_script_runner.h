@@ -16,6 +16,7 @@ int dom_boot_parked_is(const char *url);/* 1 if url is the sync classic external
    a JS parse with COW active aborts in the parked-boot state). SYNC blocks document order; ASYNC/MODULE do not. */
 typedef enum { SK_SYNC = 0, SK_ASYNC = 1, SK_MODULE = 2 } ScriptKind;
 int dom_script_kind(const char *url);   /* the recorded kind of a requested external (SK_SYNC if unknown) */
+void dom_script_kind_set(const char *url, int kind);   /* record a kind for a dynamically-inserted <script src> / dyn-import chunk */
 /* Execute ONE CLASSIC boot <script> from its parse-once bytecode (document.currentScript = el, then run) — the
    SINGLE execution path shared by the first boot (dom_run_scripts) and every replay (boot_scripts_run), so a
    replay is byte-identical to the first run. Returns 1 if it threw (exception left PENDING for the caller's throw

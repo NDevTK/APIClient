@@ -869,7 +869,11 @@ KEEP void qjs_provide(const char *url, const char *body)
             JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
             int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0); JS_SetFlowLocalMark(0);   /* a lazy CHUNK's globals are BASELINE (shared, re-run in boot-replay), not flow-local — mark 0 while it evals */
             modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
-            int is_module_chunk = JS_DetectModule(body, strlen(body));
+            /* Route by the kind RECORDED at request time (boot cursor / script_maybe_load / dyn-import), NOT
+               JS_DetectModule(body): that mis-classifies a plain classic script as a module (it defaults
+               is_module=true and only flips on an import error), so a dynamically-inserted classic <script>
+               would wrongly run in module scope and never fire its onload. Unknown kind = classic (SK_SYNC). */
+            int is_module_chunk = (dom_script_kind(url) == SK_MODULE);
             if (is_moddep(url)) {
                 pendmod_retry(ctx);                              /* a static-import dep OR dyn-import chunk: link in-graph (no standalone eval -> no double side effects) */
             } else if (is_module_chunk) {
