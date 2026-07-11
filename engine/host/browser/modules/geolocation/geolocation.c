@@ -8,19 +8,25 @@
    with a concolic GeolocationPosition. position.coords.* is concolic (permission-gated, unknowable) so a branch
    on it forks and its taint reaches an endpoint. The position is sourced {geolocation}; property reads
    (.coords.latitude) synthesize concolic children, exactly as for any opaque object. */
-static void drive_success(JSContext *ctx, int argc, JSValueConst *argv) {
+static void drive_callbacks(JSContext *ctx, int argc, JSValueConst *argv) {
     if (argc >= 1 && JS_IsFunction(ctx, argv[0])) {
         JSValue pos = js_concolic(ctx, "{geolocation}", JS_UNDEFINED);   /* GeolocationPosition — coords unknowable */
         drive_opaque_cb(ctx, argv[0], pos);
         JS_FreeValue(ctx, pos);
     }
+    if (argc >= 2 && JS_IsFunction(ctx, argv[1])) {   /* forced exec explores BOTH worlds: the error path too, so
+                                                          `err => fetch('/api/geoerr?c='+err.code)` is surfaced */
+        JSValue err = js_concolic(ctx, "{geolocationError}", JS_UNDEFINED);   /* GeolocationPositionError: code/message */
+        drive_opaque_cb(ctx, argv[1], err);
+        JS_FreeValue(ctx, err);
+    }
 }
 static JSValue geo_get_current(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
-    (void)t; drive_success(ctx, argc, argv);
+    (void)t; drive_callbacks(ctx, argc, argv);
     return JS_UNDEFINED;   /* getCurrentPosition returns void */
 }
 static JSValue geo_watch(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
-    (void)t; drive_success(ctx, argc, argv);
+    (void)t; drive_callbacks(ctx, argc, argv);
     return js_concolic(ctx, "{watchId}", JS_UNDEFINED);   /* watchPosition returns a long watch id */
 }
 
