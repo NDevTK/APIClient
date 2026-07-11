@@ -46,11 +46,13 @@ void set_origin(const char *origin) {
    sees a real value — reachability + breakout decided by the REAL code, in the ONE scheduler. */
 static const char *g_source_tag[] = { "{hash}", "{search}", "{pm}", "{referrer}" };   /* 0=location.hash 1=location.search 2=postMessage e.data 3=document.referrer */
 static const char *g_source_pfx[] = { "#", "?", "", "" };                             /* realistic leading char so slice(1)/substring behave faithfully */
+_Static_assert(sizeof g_source_tag == sizeof g_source_pfx, "g_source_tag and g_source_pfx are PARALLEL, indexed by the same source magic — a length mismatch reads one array out of bounds");
 /* location.hash/search/referrer deliver the @S candidate through the source's REAL browser transform — the
    WHATWG per-component percent-encode SET + the leading char — via solver/source.c (the ONE source-delivery
    path). postMessage e.data is STRUCTURED (not URL-encoded): a candidate-CARRIER concolic so a FIELD sink
    (`e.data.html`) delivers the candidate while a whole-value use reads it as the example. */
 static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
+    DCHECK(magic >= 0 && magic < (int)(sizeof g_source_tag / sizeof g_source_tag[0]), "js_source_get: source magic out of [0,4) — def_source registers exactly hash/search/pm/referrer; a stray magic indexes the arrays OOB");
     if (g_candidate) {
         if (magic == 2) {   /* pm: raw candidate as the carrier's example (delivered per read field-path) */
             JSValue c = JS_NewConcolicSourced(ctx, g_source_tag[2], g_source_tag[2]);
