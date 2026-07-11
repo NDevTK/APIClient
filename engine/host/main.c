@@ -50,6 +50,7 @@
 #include "solver/boot_scripts.h"  /* boot_script_cache/boot_scripts_run/boot_script_count/boot_scripts_free (boot-replay substrate) */
 #include "solver/why.h"  /* why_add — runtime-reasoned @WHY */
 #include "core/html/html_script_runner.h"  /* eval_page_script + dom_run_scripts (HTMLScriptRunner) */
+#include "core/loader/chunk_loader.h"       /* chunk_pending_add / chunk_provide / chunk_list — the lazy-chunk resource loader */
 #include "modules/storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "core/frame/messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
@@ -124,7 +125,7 @@ int     g_orphan_n = 0;
 /* The WFQ dispatch loop + its state (cooperative quantum, parked-weight cache, decision vector) -> scheduler.c. */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 static char *g_boot_preamble = NULL;    /* the offscreen combined-script preamble, stashed so run_initial_boot can run it when boot is dispatched as Flow #0 (de-entangled from qjs_init's synchronous return) */
-static int g_boot_active = 0;           /* boot's script phase is running or PARKED on a sync external (not complete) — the scheduler must not dispatch flows until boot completes */
+int g_boot_active = 0;                   /* boot's script phase is running or PARKED on a sync external (not complete) — the scheduler must not dispatch flows until boot completes; READ by the chunk loader (a chunk mid-boot joins the boot delta) */
 static char *g_pending_recipes = NULL;  /* resume recipes stashed by qjs_begin, consumed by seed_frontier at boot completion */
 static int g_need_initial_boot = 0;     /* the first qjs_step runs run_initial_boot */
 /* CSP (g_csp/g_header_csp + csp_lacks/csp_derive/csp_set_header/csp_free) lives in csp.c — included below. */
@@ -197,34 +198,8 @@ void reply_fetch_register(const char *url, int is_json) {
     g_pending[g_pending_n].url = strdup(url); g_pending[g_pending_n].is_json = is_json;
     g_pending_n++;
 }
-/* Chunk-load pending (M3): an injected <script src> to fetch + eval IN PLACE (no promise; nothing awaits
-   it — like the browser's async script load). The offscreen provides the body; qjs_provide evals it. */
-static char **g_chunk_pending = NULL;
-static int g_chunk_n = 0, g_chunk_cap = 0;
-/* Chunks already FETCHED + provided this session: a lazy chunk is a STATIC resource (its bytes never change),
-   so it is fetched ONCE — its content is boot_script_cache'd / module-linked and re-run on every boot re-run,
-   never re-fetched. Without this, a chunk removed from g_chunk_pending on provision is re-added by the next
-   boot re-run's re-injection -> the bridge re-fetches forever (a fetch/provide LIVELOCK). This is the
-   one-per-endpoint resource cache CLAUDE.md prescribes, NOT a flow seen-set (it dedups an identical STATIC
-   GET, never distinct exploration work). */
-static char **g_chunk_done = NULL;
-static int g_chunk_done_n = 0, g_chunk_done_cap = 0;
-static int chunk_is_done(const char *url) {
-    for (int i = 0; i < g_chunk_done_n; i++) if (strcmp(g_chunk_done[i], url) == 0) return 1;
-    return 0;
-}
-static void chunk_mark_done(const char *url) {
-    if (!url || chunk_is_done(url)) return;
-    if (g_chunk_done_n >= g_chunk_done_cap) { int nc = g_chunk_done_cap ? g_chunk_done_cap * 2 : 16; char **n = realloc(g_chunk_done, (size_t)nc * sizeof(char *)); if (!n) return; g_chunk_done = n; g_chunk_done_cap = nc; }
-    g_chunk_done[g_chunk_done_n++] = strdup(url);
-}
-void chunk_pending_add(const char *url) {
-    if (!url) return;
-    if (chunk_is_done(url)) return;   /* already fetched this session -> re-run from cache, never re-fetch (kills the provide livelock) */
-    for (int i = 0; i < g_chunk_n; i++) if (strcmp(g_chunk_pending[i], url) == 0) return;   /* dedup pending */
-    if (g_chunk_n >= g_chunk_cap) { int nc = g_chunk_cap ? g_chunk_cap * 2 : 16; char **n = realloc(g_chunk_pending, (size_t)nc * sizeof(char *)); if (!n) return; g_chunk_pending = n; g_chunk_cap = nc; }
-    g_chunk_pending[g_chunk_n++] = strdup(url);
-}
+/* Chunk-load pending/done registry + the fetch-and-evaluate of a lazy <script src>/dyn-import chunk ->
+   browser/core/loader/chunk_loader.{c,h} (Blink core/loader). qjs_provide asks chunk_provide first. */
 
 /* ---- ESM static+dynamic import graph -> module_loader.{c,h} (modsrc/moddep/pendmod + the quickjs hooks). */
 
@@ -526,7 +501,7 @@ static int g_rc = 0;
 static void seed_frontier(JSContext *ctx, const char *recipes);   /* fwd */
 /* Finish boot's script phase (cursor reached the last script — after every sync external ran in position): capture
    g_boot_delta, fix the COW baseline, then seed the frontier (its functions now exist). */
-static void boot_complete(JSContext *ctx) {
+void boot_complete(JSContext *ctx) {   /* non-static: the chunk loader completes a boot parked on a sync external */
     g_initial_boot = 0; g_in_boot_flow = 0; g_running = 0; g_cur_flow = NULL;
     JS_CowSetActive(0);
     g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);
@@ -567,9 +542,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_reg_n = 0; g_work = 0; g_switches = 0; g_yield_floor = -1e300; g_made_progress = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL; g_msg_handler_n = 0;
     g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_park_requested = 0;
     arec_free();   /* fresh session: drop any async recipes a prior teardown missed (idempotent) */
-    g_pending_n = 0; g_chunk_n = 0; g_orphan_n = 0; g_dom_capture = 0;
-    for (int i = 0; i < g_chunk_done_n; i++) free(g_chunk_done[i]);
-    g_chunk_done_n = 0;   /* fresh session: the fetched-chunk cache is per-session (a new visit re-fetches the current bytes) */
+    g_pending_n = 0; g_orphan_n = 0; g_dom_capture = 0;
+    chunk_loader_free();   /* fresh session: drop pending + the per-session fetched-chunk cache (a new visit re-fetches the current bytes) */
     JS_OptaintReset(ctx);   /* clear cross-flow opaque-taint set from any prior page analysis */
     tt_reset();             /* clear observed Trusted-Types policy state from the prior document */
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
@@ -823,18 +797,8 @@ KEEP const char *qjs_pending(void)
     buf[off] = 0;
     return buf;
 }
-/* Chunk urls to fetch (as JS) + eval in place (newline-joined). Static buffer. */
-KEEP const char *qjs_chunks(void)
-{
-    static char *buf = NULL; static size_t cap = 0;
-    size_t need = 1;
-    for (int i = 0; i < g_chunk_n; i++) need += strlen(g_chunk_pending[i]) + 1;
-    if (need > cap) { char *n = realloc(buf, need); if (!n) return ""; buf = n; cap = need; }
-    size_t off = 0;
-    for (int i = 0; i < g_chunk_n; i++) { size_t l = strlen(g_chunk_pending[i]); memcpy(buf + off, g_chunk_pending[i], l); off += l; buf[off++] = '\n'; }
-    buf[off] = 0;
-    return buf;
-}
+/* Chunk urls to fetch (as JS) + eval in place (newline-joined) -> the chunk loader owns the list. */
+KEEP const char *qjs_chunks(void) { return chunk_list(); }
 /* Resolve every pending consume of `url` with the concrete body (empty -> opaque); cache in the reply
    table so a later response of the same url is concrete too. If `url` is a pending CHUNK, eval its body
    in place — extending the page BASELINE (cow off during eval), so its defs are permanent (not a flow
@@ -842,67 +806,7 @@ KEEP const char *qjs_chunks(void)
 KEEP void qjs_provide(const char *url, const char *body)
 {
     JSContext *ctx = g_ctx; if (!ctx || !url) return;
-    for (int i = 0; i < g_chunk_n; i++) {
-        if (strcmp(g_chunk_pending[i], url) != 0) continue;
-        if (body && body[0] && g_boot_active) {
-            /* boot is PARKED on a synchronous external. COW stays active (boot's g_boot_delta is accumulating) — do
-               NOT run the baseline revert bracket (it would undo boot's writes). Route by URL, NOT JS_DetectModule
-               (a JS parse with COW active aborts in the parked-boot state). */
-            modsrc_put(url, body, strlen(body));
-            if (dom_boot_parked_is(url)) {
-                if (!dom_boot_resume(ctx)) boot_complete(ctx);   /* the sync CLASSIC external boot waited on ran in position; cursor reached the end -> g_boot_delta + seed */
-            } else if (dom_script_kind(url) == SK_ASYNC) {
-                /* an ASYNC classic external (does not block document order): run it as a classic script now (COW
-                   active — its globals join the boot delta; cached so boot-replay re-runs it). Boot stays parked. */
-                JSValueConst bc = boot_script_cache(ctx, JS_NULL, body, strlen(body));
-                if (boot_exec_one(ctx, JS_NULL, bc)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); why_add(ctx, "script-eval", "async external threw"); }
-            } else {
-                /* a MODULE chunk a boot script dynamically imported, arriving mid-park: link it as a baseline
-                   singleton (COW off around the eval — its effects are baseline, and it avoids COW-active parse),
-                   then deliver to the parked import(). Boot stays parked on its own external. */
-                JS_CowSetActive(0);
-                JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
-                pendimport_resolve(ctx, url);
-                JS_CowSetActive(1);
-            }
-        } else if (body && body[0]) {
-            JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
-            int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0); JS_SetFlowLocalMark(0);   /* a lazy CHUNK's globals are BASELINE (shared, re-run in boot-replay), not flow-local — mark 0 while it evals */
-            modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
-            /* Route by the kind RECORDED at request time (boot cursor / script_maybe_load / dyn-import), NOT
-               JS_DetectModule(body): that mis-classifies a plain classic script as a module (it defaults
-               is_module=true and only flips on an import error), so a dynamically-inserted classic <script>
-               would wrongly run in module scope and never fire its onload. Unknown kind = classic (SK_SYNC). */
-            int is_module_chunk = (dom_script_kind(url) == SK_MODULE);
-            if (is_moddep(url)) {
-                pendmod_retry(ctx);                              /* a static-import dep OR dyn-import chunk: link in-graph (no standalone eval -> no double side effects) */
-            } else if (is_module_chunk) {
-                eval_page_script(ctx, body, strlen(body), url, 1);   /* external MODULE: run-once (defers if a dep isn't fetched); not cached (singleton, effects in g_boot_delta) */
-            } else {
-                /* external CLASSIC: cache + run through boot_exec_one — the SAME executor as inline classics and
-                   every replay, so an external script's first fetch and its candidate re-runs are byte-identical. */
-                JSValueConst bc = boot_script_cache(ctx, JS_NULL, body, strlen(body));
-                if (boot_exec_one(ctx, JS_NULL, bc)) {   /* first-fetch page throw: surface, non-fatal */
-                    JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
-                    char rz[300]; snprintf(rz, sizeof rz, "%s: %s", url, m ? m : "throw");
-                    if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
-                    why_add(ctx, "script-eval", rz);
-                }
-            }
-            if (is_module_chunk) {
-                /* MODULE chunk: link the SINGLETON now (COW off here), caching its namespace; PARK-RESUME delivers
-                   it to every parked import() of this chunk — the continuation resumes with concrete exports. */
-                JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
-                pendimport_resolve(ctx, url);
-            }
-            JS_CowSetActive(1); JS_SetFlowLocalMark(1); g_dom_capture = dsv;
-        }
-        chunk_mark_done(url);   /* fetched once: its body is cached/linked + re-run on boot re-runs, never re-fetched (no provide livelock) */
-        free(g_chunk_pending[i]);
-        for (int j = i; j < g_chunk_n - 1; j++) g_chunk_pending[j] = g_chunk_pending[j + 1];
-        g_chunk_n--;
-        return;
-    }
+    if (chunk_provide(ctx, url, body)) return;   /* a pending lazy chunk: fetched + evaluated by the loader component */
     int has = body && body[0];
     if (has) {
         /* CACHE the reply so a re-run's make_response injects __body (r.json()/r.text() -> CONCOLIC synchronously),
@@ -928,8 +832,7 @@ KEEP void qjs_finalize(void)
     pendreply_drain_opaque(ctx);   /* resolve any never-delivered parked reply with {reply} (shape) */
     for (int i = 0; i < g_pending_n; i++) free(g_pending[i].url);
     g_pending_n = 0;
-    for (int i = 0; i < g_chunk_n; i++) free(g_chunk_pending[i]);   /* node CLI can't fetch chunks -> drop */
-    g_chunk_n = 0;
+    chunk_loader_free();   /* node CLI can't fetch chunks -> drop pending (+ the per-session done cache) */
 }
 /* Advance the ONE scheduler; drain microtasks. Return 1 = NEED_FETCH (flows parked awaiting a real
    reply the offscreen must provide via qjs_provide), else 0 = DONE. */
@@ -952,7 +855,7 @@ KEEP int qjs_step(void)
     g_made_progress = 0;                                 /* fresh progress guard each host visit */
     scheduler_run(g_ctx);
     js_std_loop(g_ctx);
-    if (g_pending_n > 0 || g_chunk_n > 0) return 1;      /* NEED_FETCH: replies and/or chunks */
+    if (g_pending_n > 0 || chunk_pending_count() > 0) return 1;      /* NEED_FETCH: replies and/or chunks */
     if (g_reg_n > 0) return 2;                           /* HOT work remains (value-yielded) — host re-ranks + resumes */
     return 0;                                            /* fully explored (or parked) — done */
 }
@@ -992,6 +895,7 @@ KEEP void qjs_teardown(void)
     cons_free();   /* free the per-flow value-domain constraint set (solver/constraints.c) */
     module_loader_free(ctx);   /* free the modsrc/moddep/pendmod tables + import delivery-park (module_loader.c) */
     pendreply_free(ctx);       /* free the reply delivery-park table (reply.c) */
+    chunk_loader_free();       /* free the chunk pending/done registries (chunk_loader.c) */
     if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
     g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
     attr_shadow_free(ctx);
