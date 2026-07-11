@@ -9,6 +9,7 @@
 #include "modules/clipboard/clipboard.h"        /* navigator.clipboard — the Async Clipboard module (attacker source) */
 #include "modules/credentialmanagement/credentials.h"   /* navigator.credentials — the auth-moat module */
 #include "modules/quota/storage_manager.h"       /* navigator.storage — the Storage API module */
+#include "modules/netinfo/network_information.h"  /* navigator.connection — the Network Information module */
 #include "bindings/idl.h"        /* idl_dfail_wrap — the shared unbuilt-member DFAIL audit trap */
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
@@ -56,22 +57,7 @@ static JSValue nav_promise_undef(JSContext *ctx, JSValueConst t, int c, JSValueC
 
 /* window.navigator — the standard properties as CONCOLIC values (a real desktop Chrome as the example) plus the
    built methods/sub-interfaces. UNBUILT members DFAIL via the wrap_unbuilt trap (never an opaque shrug). */
-/* NetworkInformation (navigator.connection): the connection's properties are genuinely unknown headless, so each
-   is a CONCOLIC value carrying a realistic desktop EXAMPLE and FORKING at a feature-detection branch — a page
-   that adapts on `if (navigator.connection.saveData)` or `connection.effectiveType==='slow-2g'` explores BOTH
-   the data-saver and full arms (each may ship a different resource/endpoint), never pinned to one world. */
-static JSValue make_connection(JSContext *ctx) {
-    JSValue c = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, c, "effectiveType", js_concolic(ctx, "{effectiveType}", JS_NewString(ctx, "4g")));   /* forks 4g/3g/2g/slow-2g adaptive arms */
-    JS_SetPropertyStr(ctx, c, "type", js_concolic(ctx, "{connectionType}", JS_NewString(ctx, "wifi")));
-    JS_SetPropertyStr(ctx, c, "downlink", js_concolic(ctx, "{downlink}", JS_NewFloat64(ctx, 10.0)));            /* Mbps */
-    JS_SetPropertyStr(ctx, c, "rtt", js_concolic(ctx, "{rtt}", JS_NewInt32(ctx, 50)));                          /* ms */
-    JS_SetPropertyStr(ctx, c, "saveData", js_concolic(ctx, "{saveData}", JS_FALSE));                            /* forks the data-saver code path */
-    JS_SetPropertyStr(ctx, c, "onchange", JS_NULL);
-    JS_SetPropertyStr(ctx, c, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));  /* the 'change' listener becomes an orphan flow */
-    JS_SetPropertyStr(ctx, c, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    return wrap_unbuilt(ctx, c);   /* unbuilt NetworkInformation members DFAIL, never an opaque shrug */
-}
+/* NetworkInformation (navigator.connection) — its own Blink module (modules/netinfo/). */
 /* NavigatorUAData (navigator.userAgentData): UA Client Hints. `mobile`/`platform` and the high-entropy fields
    are CONCOLIC (desktop example, fork the branch) so `if (navigator.userAgentData.mobile)` explores BOTH the
    mobile and desktop code paths (each ships its own bundle/endpoints — the classic responsive moat split).
@@ -134,7 +120,7 @@ JSValue js_navigator_make(JSContext *ctx) {
     /* permissions: a MODELED virtual permission system (real PermissionStatus, 'prompt' default that forks). */
     JS_SetPropertyStr(ctx, nav, "permissions", js_permissions_make(ctx));
     /* connection: NetworkInformation — concolic connection properties that fork adaptive-loading branches. */
-    JS_SetPropertyStr(ctx, nav, "connection", make_connection(ctx));
+    JS_SetPropertyStr(ctx, nav, "connection", network_information_make(ctx));
     /* userAgentData: UA Client Hints — concolic mobile/platform that fork the responsive mobile/desktop split. */
     JS_SetPropertyStr(ctx, nav, "userAgentData", make_ua_data(ctx));
     /* credentials: CredentialsContainer — get()/store() resolve to a concolic Credential that forks the auth gate. */
