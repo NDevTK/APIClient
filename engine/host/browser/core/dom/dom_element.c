@@ -142,8 +142,37 @@ JSValue js_el_tagname(JSContext *ctx, JSValueConst this_val) {
     buf[n] = 0;
     return JS_NewString(ctx, buf);
 }
+/* A FREE-TEXT editable form control whose `.value` the USER (attacker) types — <textarea>, or an <input> of a
+   free-text type (text/search/tel/url/email/password or no type). NOT readonly/disabled (page-fixed), NOT hidden
+   (page-controlled, e.g. a CSRF token — modelling it attacker would wrongly shape a real @H value), NOT
+   select/checkbox/radio (value constrained to page-defined options). So reading such a `.value` is attacker input
+   -> a DOM-XSS source (el.innerHTML = input.value). */
+static int el_is_freetext_control(lxb_dom_element_t *el) {
+    size_t tl = 0; const lxb_char_t *tag = lxb_dom_element_qualified_name(el, &tl);
+    if (!tag) return 0;
+    if (lxb_dom_element_has_attribute(el, (const lxb_char_t *)"readonly", 8) ||
+        lxb_dom_element_has_attribute(el, (const lxb_char_t *)"disabled", 8)) return 0;
+    if (tl == 8 && memcmp(tag, "textarea", 8) == 0) return 1;                 /* always free text */
+    if (!(tl == 5 && memcmp(tag, "input", 5) == 0)) return 0;
+    size_t yl = 0; const lxb_char_t *ty = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &yl);
+    if (!ty || !yl) return 1;                                                 /* no type -> defaults to text */
+    static const char *ft[] = { "text", "search", "tel", "url", "email", "password" };
+    for (int i = 0; i < (int)(sizeof ft / sizeof ft[0]); i++) {
+        size_t fl = strlen(ft[i]);
+        if (yl == fl) { size_t k = 0; for (; k < fl; k++) { char c = (char)ty[k]; if (c >= 'A' && c <= 'Z') c += 32; if (c != ft[i][k]) break; } if (k == fl) return 1; }
+    }
+    return 0;   /* hidden/button/submit/checkbox/radio/file/date/number/... : not free attacker text */
+}
 JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
+    if (magic == 4 && el_is_freetext_control(el)) {   /* value(4) of an editable free-text control = ATTACKER INPUT the user types */
+        int si = attr_shadow_find(el, "value");
+        if (si >= 0 && JS_IsConcolic(attr_shadow_opaque(si))) return JS_DupValue(ctx, attr_shadow_opaque(si));   /* the page SET a tainted value -> keep its real source (e.g. a reply field), not {formvalue} */
+        size_t dl = 0; const lxb_char_t *dv = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"value", 5, &dl);   /* the HTML default value = the example */
+        JSValue o = JS_NewConcolicSourced(ctx, "{formvalue}", "{formvalue}");
+        if (JS_IsConcolic(o)) JS_SetConcolicExample(ctx, o, dv ? JS_NewStringLen(ctx, (const char *)dv, dl) : JS_NewString(ctx, ""));
+        return o;
+    }
     const char *n = refl_name(magic); size_t vl = 0;
     const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)n, strlen(n), &vl);
     return v ? JS_NewStringLen(ctx, (const char *)v, vl) : JS_NewString(ctx, "");
