@@ -24,6 +24,7 @@ void modsrc_put(const char *url, const char *src, size_t len) {
     g_modsrc[g_modsrc_n].url = strdup(url); g_modsrc[g_modsrc_n].src = s; g_modsrc[g_modsrc_n].len = len; g_modsrc[g_modsrc_n].ns = JS_UNDEFINED; g_modsrc_n++;
 }
 static ModSrc *modsrc_get(const char *url) { for (int i = 0; i < g_modsrc_n; i++) if (strcmp(g_modsrc[i].url, url) == 0) return &g_modsrc[i]; return NULL; }
+const char *modsrc_body(const char *url, size_t *plen) { ModSrc *m = modsrc_get(url); if (m && m->src) { if (plen) *plen = m->len; return m->src; } return NULL; }
 /* URLs discovered as STATIC-import deps: link them IN-GRAPH (loader compiles them), never eval standalone
    (that would double-run their side effects — the loader already links+runs them). */
 static char **g_moddep = NULL; static int g_moddep_n = 0, g_moddep_cap = 0;

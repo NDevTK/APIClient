@@ -12,6 +12,7 @@
 
 /* A fetched chunk body, cached by URL so the loader / dyn-import can compile it (called from qjs_provide). */
 void modsrc_put(const char *url, const char *src, size_t len);
+const char *modsrc_body(const char *url, size_t *plen);   /* the fetched body for url, or NULL (boot cursor blocks on a sync <script src> until non-NULL) */
 
 /* Link a module chunk SINGLETON from its fetched source, handing back its real namespace (0 if not ready).
    Called from qjs_provide to link a provided module chunk in the base context. */

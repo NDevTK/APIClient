@@ -56,42 +56,52 @@ int boot_exec_one(JSContext *ctx, JSValueConst el, JSValueConst compiled) {
     return threw;
 }
 
-void dom_run_scripts(JSContext *ctx) {
-    if (!g_dom) return;
-    csp_derive(g_dom);   /* per-document effective CSP: real HTTP header (primary) else <meta> scan (csp.c) */
-    struct scr_ctx c; dom_collect_scripts(g_dom, &c);
-    for (int i = 0; i < c.n; i++) {
-        lxb_dom_element_t *el = c.els[i];
+#include "core/loader/module_loader.h"   /* modsrc_body — a fetched sync external's body */
+static void run_classic_body(JSContext *ctx, JSValueConst el, const char *txt, size_t len) {
+    JSValueConst compiled = boot_script_cache(ctx, el, txt, len);
+    if (boot_exec_one(ctx, el, compiled)) {
+        JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
+        char rz[300]; snprintf(rz, sizeof rz, "<script>: %s", m ? m : "throw");
+        if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
+        why_add(ctx, "script-eval", rz);
+    }
+}
+static int el_type_is_module(lxb_dom_element_t *el) {
+    size_t tl = 0; const lxb_char_t *t = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tl);
+    return t && tl == 6 && memcmp(t, "module", 6) == 0;
+}
+/* Document-order boot cursor: run <script>s in order, BLOCKING (park) on an unfetched synchronous external. */
+static struct scr_ctx g_boot_scr = {0};
+static int g_boot_cursor = 0;
+static int boot_drive_scripts(JSContext *ctx) {
+    for (; g_boot_cursor < g_boot_scr.n; g_boot_cursor++) {
+        lxb_dom_element_t *el = g_boot_scr.els[g_boot_cursor];
         size_t sl = 0;
         const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
         if (src && sl) {
-            char *cu = strndup((const char *)src, sl);
-            /* LOAD it like a real browser: an external <script src> is FETCHED (safe-fetch chokepoint,
-               cross-origin allowed) and RUN through the engine. chunk_pending_add -> host NEED_FETCH ->
-               qjs_provide evals + caches it, so the bundle's endpoints/handlers/cross-flow are analyzed. */
-            if (cu) { arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu); }
-            continue;
+            char *cu = strndup((const char *)src, sl); if (!cu) continue;
+            if (el_type_is_module(el)) { arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu); continue; }   /* external module: async */
+            size_t blen = 0; const char *body = has_hole(cu) ? NULL : modsrc_body(cu, &blen);
+            if (body) { JSValue elw = el_wrap(ctx, el); run_classic_body(ctx, elw, body, blen); JS_FreeValue(ctx, elw); free(cu); continue; }
+            arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu);
+            return 1;   /* request + PARK (blocks document order until this sync external is fetched) */
         }
-        int is_mod; if (!script_is_exec(el, &is_mod)) continue;   /* data block: parsed-but-not-run */
+        int is_mod; if (!script_is_exec(el, &is_mod)) continue;
         size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
         if (txt && tl) {
-            if (is_mod) {   /* MODULE: run-once singleton (defers if a dep isn't fetched); its effects live in g_boot_delta, so it is NOT cached for replay */
-                doc_set_current_script(ctx, el_wrap(ctx, el));
-                eval_page_script(ctx, (const char *)txt, tl, "<script>", 1);
-                doc_set_current_script(ctx, JS_NULL);
-            } else {        /* CLASSIC: compile-once + cache + run — the first run and every replay share boot_exec_one (ONE executor) */
-                JSValue elw = el_wrap(ctx, el);
-                JSValueConst compiled = boot_script_cache(ctx, elw, (const char *)txt, tl);
-                if (boot_exec_one(ctx, elw, compiled)) {   /* first-run compile/throw: surface, non-fatal (exploration surface) */
-                    JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
-                    char rz[300]; snprintf(rz, sizeof rz, "<script>: %s", m ? m : "throw");
-                    if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
-                    why_add(ctx, "script-eval", rz);
-                }
-                JS_FreeValue(ctx, elw);
-            }
+            if (is_mod) { doc_set_current_script(ctx, el_wrap(ctx, el)); eval_page_script(ctx, (const char *)txt, tl, "<script>", 1); doc_set_current_script(ctx, JS_NULL); }
+            else { JSValue elw = el_wrap(ctx, el); run_classic_body(ctx, elw, (const char *)txt, tl); JS_FreeValue(ctx, elw); }
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
-    free(c.els);
+    return 0;   /* all scripts ran — boot script phase complete */
 }
+int dom_run_scripts(JSContext *ctx) {
+    if (!g_dom) return 0;
+    csp_derive(g_dom);   /* per-document effective CSP: real HTTP header (primary) else <meta> scan (csp.c) */
+    free(g_boot_scr.els); g_boot_scr.els = NULL; g_boot_scr.n = 0;
+    dom_collect_scripts(g_dom, &g_boot_scr);
+    g_boot_cursor = 0;
+    return boot_drive_scripts(ctx);
+}
+int dom_boot_resume(JSContext *ctx) { return boot_drive_scripts(ctx); }

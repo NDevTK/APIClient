@@ -124,6 +124,9 @@ int     g_orphan_n = 0;
 /* The WFQ dispatch loop + its state (cooperative quantum, parked-weight cache, decision vector) -> scheduler.c. */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 static char *g_boot_preamble = NULL;    /* the offscreen combined-script preamble, stashed so run_initial_boot can run it when boot is dispatched as Flow #0 (de-entangled from qjs_init's synchronous return) */
+static int g_boot_active = 0;           /* boot's script phase is running or PARKED on a sync external (not complete) — the scheduler must not dispatch flows until boot completes */
+static char *g_pending_recipes = NULL;  /* resume recipes stashed by qjs_begin, consumed by seed_frontier at boot completion */
+static int g_need_initial_boot = 0;     /* the first qjs_step runs run_initial_boot */
 /* CSP (g_csp/g_header_csp + csp_lacks/csp_derive/csp_set_header/csp_free) lives in csp.c — included below. */
 extern lxb_html_document_t *g_dom;   /* the live parsed document (defined below); the @S emitter needs it for the CSP nonce scan */
 /* g_concolic + js_noop/js_concolic_read/js_concolic_stub + concolic_init/free live in opaque.c (included via opaque.h). */
@@ -520,6 +523,17 @@ static int g_rc = 0;
    -> the canonical logged-out g_boot_delta the whole frontier layers over; each opaque boot gate forks a TRUE
    sibling boot flow, dispatched later). Extracted from qjs_init so boot EXECUTION can be de-entangled from the
    host's synchronous return — the host only needs g_bundle_id (a pure DOM scan), never g_boot_delta, at return. */
+static void seed_frontier(JSContext *ctx, const char *recipes);   /* fwd */
+/* Finish boot's script phase (cursor reached the last script — after every sync external ran in position): capture
+   g_boot_delta, fix the COW baseline, then seed the frontier (its functions now exist). */
+static void boot_complete(JSContext *ctx) {
+    g_initial_boot = 0; g_in_boot_flow = 0; g_running = 0; g_cur_flow = NULL;
+    JS_CowSetActive(0);
+    g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);
+    JS_SetFlowLocalMark(1);
+    g_boot_active = 0;
+    seed_frontier(ctx, g_pending_recipes);
+}
 static void run_initial_boot(JSContext *ctx) {
     JS_CowSetActive(1);
     g_running = 1; g_in_boot_flow = 1; g_initial_boot = 1; g_c = 0; g_dec_n = 0; cons_reset();
@@ -527,11 +541,9 @@ static void run_initial_boot(JSContext *ctx) {
         JSValueConst bc = boot_script_cache(ctx, JS_NULL, g_boot_preamble, strlen(g_boot_preamble));
         if (boot_exec_one(ctx, JS_NULL, bc)) { js_std_dump_error(ctx); g_rc = 1; }   /* preamble runs through the SAME executor as replays */
     }
-    dom_run_scripts(ctx);     /* run inline scripts + REQUEST external <script src> loads (fetched in qjs_step) */
-    g_initial_boot = 0; g_in_boot_flow = 0; g_running = 0; g_cur_flow = NULL;
-    JS_CowSetActive(0);
-    g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);
-    JS_SetFlowLocalMark(1);   /* baseline fixed: every object a FLOW creates hereafter is flow-private (COW/taint skip it) */
+    g_boot_active = 1;
+    if (dom_run_scripts(ctx)) return;   /* PARKED on a synchronous external <script src>: wait for qjs_provide -> dom_boot_resume */
+    boot_complete(ctx);
 }
 
 KEEP int qjs_init(const char *boot, const char *html, const char *origin,
@@ -785,8 +797,6 @@ static void seed_frontier(JSContext *ctx, const char *recipes)
 /* Phase 2: the host has read g_bundle_id (identity) + looked up the parked frontier; it now hands over the resume
    recipes. Boot EXECUTION and frontier seeding are DEFERRED to the first qjs_step (run_initial_boot then
    seed_frontier) — so boot runs as a dispatched flow, NOT welded into qjs_init's synchronous return. */
-static char *g_pending_recipes = NULL;
-static int g_need_initial_boot = 0;
 KEEP void qjs_begin(const char *recipes)
 {
     if (!g_ctx) return;
@@ -834,7 +844,15 @@ KEEP void qjs_provide(const char *url, const char *body)
     JSContext *ctx = g_ctx; if (!ctx || !url) return;
     for (int i = 0; i < g_chunk_n; i++) {
         if (strcmp(g_chunk_pending[i], url) != 0) continue;
-        if (body && body[0]) {
+        if (body && body[0] && g_boot_active) {
+            /* boot is PARKED on a synchronous CLASSIC external <script src>: store its body + RESUME boot in
+               document position. COW stays active (boot's g_boot_delta is accumulating) — do NOT run the baseline
+               revert bracket (it would undo boot's writes), and do NOT call JS_DetectModule here (a JS parse with
+               COW active crashes in the parked-boot state — boot only ever parks on a classic external anyway, so
+               the cursor runs it directly). */
+            modsrc_put(url, body, strlen(body));
+            if (!dom_boot_resume(ctx)) boot_complete(ctx);   /* the sync external ran in position; cursor reached the end -> g_boot_delta + seed */
+        } else if (body && body[0]) {
             JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
             int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0); JS_SetFlowLocalMark(0);   /* a lazy CHUNK's globals are BASELINE (shared, re-run in boot-replay), not flow-local — mark 0 while it evals */
             modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
@@ -912,13 +930,8 @@ KEEP double qjs_top_weight(void) { return scheduler_top_weight(); }   /* this en
 KEEP int qjs_step(void)
 {
     if (!g_ctx) return 0;
-    if (g_need_initial_boot) {   /* FIRST step: run the initial boot as the first flow, THEN seed the frontier
-                                    (orphan/session/resume seeding needs boot-defined functions to exist) — boot
-                                    is dispatched here, de-entangled from qjs_init's synchronous return. */
-        run_initial_boot(g_ctx);
-        seed_frontier(g_ctx, g_pending_recipes);
-        g_need_initial_boot = 0;
-    }
+    if (g_need_initial_boot) { run_initial_boot(g_ctx); g_need_initial_boot = 0; }   /* FIRST step: run boot (document-order; may PARK on a sync external) */
+    if (g_boot_active) return 1;   /* boot PARKED on a sync external: NEED_FETCH; do NOT dispatch flows (seed runs in boot_complete) */
     g_made_progress = 0;                                 /* fresh progress guard each host visit */
     scheduler_run(g_ctx);
     js_std_loop(g_ctx);

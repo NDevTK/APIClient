@@ -9,7 +9,8 @@
 #include "quickjs.h"
 
 void eval_page_script(JSContext *ctx, const char *code, size_t len, const char *name, int is_module);
-void dom_run_scripts(JSContext *ctx);   /* execute the current document's <script> elements (document order) */
+int dom_run_scripts(JSContext *ctx);    /* run scripts in document order; 1 = PARKED on an unfetched sync external, 0 = all ran */
+int dom_boot_resume(JSContext *ctx);    /* resume the boot cursor after a parked external was provided */
 /* Execute ONE CLASSIC boot <script> from its parse-once bytecode (document.currentScript = el, then run) — the
    SINGLE execution path shared by the first boot (dom_run_scripts) and every replay (boot_scripts_run), so a
    replay is byte-identical to the first run. Returns 1 if it threw (exception left PENDING for the caller's throw
