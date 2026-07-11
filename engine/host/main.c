@@ -34,6 +34,7 @@
 #include "solver/envelope.h"     /* @S structured-source delivery envelope (JSON/query/delim addressing), its own TU */
 #include "core/frame/csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
 #include "core/dom/dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
+#include "core/dom/handler_registry.h"   /* registered event listeners (addEventListener) the orphan driver force-fires, its own TU */
 #include "solver/dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
 #include "solver/attr_shadow.h"  /* DOM attribute taint side-map ((el,name)->opaque), its own TU */
 #include "core/html/forms/forms.h"        /* HTML form submission -> @H endpoint, its own TU */
@@ -106,7 +107,7 @@
 JSContext *g_ctx;       /* fwd: the MAIN analysis context (defined near the persistent-instance protocol) — the
                                   async/reaction hooks claim a call as a flow ONLY for this ctx, never the @S solve realm */
 int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
-static int g_in_boot_flow = 0; /* a BOOT flow is re-running boot: fork boot siblings; suppress handler re-registration */
+int g_in_boot_flow = 0; /* a BOOT flow is re-running boot: fork boot siblings; suppress handler re-registration */
 static Flow   *g_reg = NULL;
 static int     g_reg_n = 0, g_reg_cap = 0;
 int     g_running = 0;
@@ -433,7 +434,7 @@ static void emit_result(JSContext *ctx) { emit_result_ex(ctx, 1); }   /* teardow
    flow that re-runs the SAME function, replaying this flow's decisions so far then taking FALSE here; this
    flow takes TRUE (recorded so deeper new branches fork correctly). BFS over the decision tree -> both arms
    of every gate are explored, surfacing the branch-gated (login/flag-gated) endpoints. */
-static int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a cross-flow @S candidate */
+int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a cross-flow @S candidate */
 static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n);   /* fwd: defined near boot_replay */
 static int reg_add_session(JSContext *ctx, signed char *dec, int dec_n); /* fwd: an exploratory session that FORKS */
 static int branch_decide(JSContext *ctx, JSValueConst cond)
@@ -550,67 +551,11 @@ const char *g_origin;   /* defined below; forward for the URL helpers (non-stati
 static JSValue g_el_proto = JS_UNDEFINED;   /* the element-method proto; custom-element bases chain to it (install_dom_interface_ctors), freed in qjs_teardown */
 /* DOM interface base constructors (def_ctor, EventTarget..SVGElement) + the customElements registry ->
    browser/core/dom/custom_elements.c (install_dom_interface_ctors). */
-/* addEventListener(type, handler): a registered handler that NEVER FIRES is exactly the unused surface —
-   keep it reachable (in g_handlers) so orphan-invoke drives it and surfaces its gated endpoints. */
-static JSValue g_handlers = JS_UNDEFINED;
-static int g_handler_n = 0;
-/* Handlers registered for 'message' (postMessage). Driven with a synthetic MessageEvent whose .data is
-   the source-tagged opaque {pm}, so a postMessage-XSS sink reports {pm} and the PoC assembler builds a
-   postMessage-delivered PoC. Borrowed refs (also held live in g_handlers). */
-static void *g_msg_handlers[128];
-static int g_msg_handler_n = 0;
-static JSValue g_msg_event = JS_UNDEFINED;   /* synthetic MessageEvent: { data: opaque("{pm}"), origin, source } */
-/* Handlers RE-REGISTERED during a candidate boot_replay (addEventListener) — captured so a closure handler
-   (which isn't on any global) can be re-resolved to its candidate-closure version. Transient per candidate
-   flow; cleared after the drive. */
-static JSValue *g_replay_handlers = NULL; static int g_replay_handler_n = 0, g_replay_handler_cap = 0;
-static void *g_replay_msg[128]; static int g_replay_msg_n = 0;   /* re-registered 'message' handler ptrs (candidate closure) */
-static void replay_handlers_clear(JSContext *ctx) {
-    for (int i = 0; i < g_replay_handler_n; i++) JS_FreeValue(ctx, g_replay_handlers[i]);
-    g_replay_handler_n = 0; g_replay_msg_n = 0;
-}
-/* Is `fn` a registered event handler (addEventListener)? Then orphan-driving it must pass a real Event (not a
-   bare opaque), else `if(e.preventDefault)`-style shape checks FORK an impossible arm -> a phantom endpoint. */
-static int is_handler(JSContext *ctx, JSValueConst fn) {
-    if (JS_IsUndefined(g_handlers) || !JS_IsFunction(ctx, fn)) return 0;
-    void *p = JS_VALUE_GET_PTR(fn);
-    for (int i = 0; i < g_handler_n; i++) {
-        JSValue h = JS_GetPropertyUint32(ctx, g_handlers, (uint32_t)i);
-        int m = (JS_VALUE_GET_PTR(h) == p); JS_FreeValue(ctx, h);
-        if (m) return 1;
-    }
-    return 0;
-}
-JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
-    JSValueConst h0 = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
-    if (g_in_boot_flow) return JS_UNDEFINED;   /* boot flow re-run: handlers already registered by the initial boot — don't duplicate g_handlers */
-    if (g_boot_replay) {   /* capture the re-registered handler (candidate closure) for re-resolution; don't grow g_handlers */
-        if (JS_IsFunction(ctx, h0)) {
-            if (g_replay_handler_n >= g_replay_handler_cap) { int nc = g_replay_handler_cap ? g_replay_handler_cap * 2 : 16;
-                JSValue *n = realloc(g_replay_handlers, (size_t)nc * sizeof(JSValue)); if (n) { g_replay_handlers = n; g_replay_handler_cap = nc; } }
-            if (g_replay_handler_n < g_replay_handler_cap) g_replay_handlers[g_replay_handler_n++] = JS_DupValue(ctx, h0);
-            const char *type = argc >= 2 ? JS_ToCString(ctx, argv[0]) : NULL;   /* a re-registered 'message' handler must still be driven with the {pm} event */
-            if (type && strcmp(type, "message") == 0 && g_replay_msg_n < 128) g_replay_msg[g_replay_msg_n++] = JS_VALUE_GET_PTR(h0);
-            if (type) JS_FreeCString(ctx, type);
-        }
-        return JS_UNDEFINED;
-    }
-    JSValueConst h = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
-    if (JS_IsFunction(ctx, h) && !JS_IsUndefined(g_handlers)) {
-        JS_SetPropertyUint32(ctx, g_handlers, (uint32_t)g_handler_n++, JS_DupValue(ctx, h));
-        const char *type = argc >= 2 ? JS_ToCString(ctx, argv[0]) : NULL;   /* addEventListener(type, handler) */
-        if (type && strcmp(type, "message") == 0 && g_msg_handler_n < 128)
-            g_msg_handlers[g_msg_handler_n++] = JS_VALUE_GET_PTR(h);
-        if (type) JS_FreeCString(ctx, type);
-    }
-    return JS_UNDEFINED;
-}
-static int is_msg_handler(JSValueConst h) {
-    void *p = JS_VALUE_GET_PTR(h);
-    for (int i = 0; i < g_msg_handler_n; i++) if (g_msg_handlers[i] == p) return 1;
-    for (int i = 0; i < g_replay_msg_n; i++) if (g_replay_msg[i] == p) return 1;   /* re-resolved candidate 'message' closure */
-    return 0;
-}
+/* The event-handler registry (g_handlers, is_handler, js_add_listener, ...) -> core/dom/handler_registry.c.
+   The synthetic {pm} attacker MessageEvent a 'message' listener is driven with stays here (the scheduler owns
+   the attacker source): its .data is the source-tagged concolic {pm}, so a postMessage-XSS sink reports {pm}
+   and the PoC assembler builds a postMessage-delivered PoC. Borrowed into the driven flow, not owned by it. */
+static JSValue g_msg_event = JS_UNDEFINED;
 /* on<event> content-attribute handlers (js_el_on_set + ON_EVENTS) -> dom_element.c (Element event handlers). */
 
 /* The page's OWN identity (principal) is CONCRETE for URL building — location.origin/protocol/host/
@@ -1428,7 +1373,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         response_init(ctx); /* native Response class (internal body slot) */
     }
 
-    g_handlers = JS_NewArray(ctx);
+    handlers_init(ctx);   /* create the event-handler registry (g_handlers) -> handler_registry.c */
     JS_SetPropertyStr(ctx, g, "__handlers", JS_DupValue(ctx, g_handlers));   /* reachable so handlers survive to orphan-collect */
     JS_SetPropertyStr(ctx, g, "window", JS_DupValue(ctx, g));
     JS_SetPropertyStr(ctx, g, "self",   JS_DupValue(ctx, g));
@@ -1716,7 +1661,7 @@ KEEP void qjs_teardown(void)
     if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
     g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
     attr_shadow_free(ctx);
-    replay_handlers_clear(ctx); free(g_replay_handlers); g_replay_handlers = NULL; g_replay_handler_cap = 0;
+    handlers_free(ctx);   /* g_handlers + candidate-closure replay handlers + counts -> handler_registry.c */
     JS_FreeValue(ctx, g_el_proto); g_el_proto = JS_UNDEFINED;   /* the element-method proto ref (custom-element base chain) */
     ce_free(ctx);   /* customElements registry + instances */
     node_free(ctx);
@@ -1734,8 +1679,7 @@ KEEP void qjs_teardown(void)
     location_free(ctx);   /* free the window.location singleton (location.c) */
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;
-    JS_FreeValue(ctx, g_handlers); g_handlers = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_msg_event); g_msg_event = JS_UNDEFINED; g_msg_handler_n = 0;
+    JS_FreeValue(ctx, g_msg_event); g_msg_event = JS_UNDEFINED;   /* g_handlers/g_msg_handler_n freed by handlers_free above */
     js_std_free_handlers(g_rt);
     js_global_functions_free(ctx);   /* eval/Function/structuredClone bindings (bindings/global_functions.c) */
     if (g_solve_ctx) { JS_FreeContext(g_solve_ctx); g_solve_ctx = NULL; }   /* free the solver realm before its runtime */
