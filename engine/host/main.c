@@ -825,21 +825,27 @@ KEEP void qjs_provide(const char *url, const char *body)
             JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
             int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0); JS_SetFlowLocalMark(0);   /* a lazy CHUNK's globals are BASELINE (shared, re-run in boot-replay), not flow-local — mark 0 while it evals */
             modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
-            if (is_moddep(url)) pendmod_retry(ctx);              /* a static-import dep OR dyn-import chunk: link in-graph (don't eval standalone -> no double side effects) */
-            else eval_page_script(ctx, body, strlen(body), url, JS_DetectModule(body, strlen(body))); /* classic external script: run standalone (module vs classic by the real detector) */
-            if (JS_DetectModule(body, strlen(body))) {
-                /* MODULE chunk: link the SINGLETON now, in the BASE context (COW off here), caching its
-                   namespace; then enqueue a forking boot re-run so a reply/chunk-gated import() resolves to
-                   the singleton SYNCHRONOUSLY in a LIVE flow (m.load runs + tears down cleanly). This is the
-                   provision-driven re-run that REPLACES the deleted async-park — the same rule a new reply
-                   uses. */
-                JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
-                pendimport_resolve(ctx, url);   /* PARK-RESUME: deliver the real namespace to every parked import() of this chunk — its continuation resumes with concrete exports (browser-faithful), no boot re-run */
+            int is_module_chunk = JS_DetectModule(body, strlen(body));
+            if (is_moddep(url)) {
+                pendmod_retry(ctx);                              /* a static-import dep OR dyn-import chunk: link in-graph (no standalone eval -> no double side effects) */
+            } else if (is_module_chunk) {
+                eval_page_script(ctx, body, strlen(body), url, 1);   /* external MODULE: run-once (defers if a dep isn't fetched); not cached (singleton, effects in g_boot_delta) */
             } else {
-                /* CLASSIC chunk: cache so boot-replay re-runs it (a source stored / handler registered in an
-                   external classic script is re-established under a candidate). A module is NOT cached — it is
-                   a singleton, and boot_scripts_run evals a cached script as a CLASSIC global (`export...` -> abort). */
+                /* external CLASSIC: cache + run through boot_exec_one — the SAME executor as inline classics and
+                   every replay, so an external script's first fetch and its candidate re-runs are byte-identical. */
                 boot_script_cache(ctx, JS_NULL, body, strlen(body));
+                if (boot_exec_one(ctx, JS_NULL, body, strlen(body))) {   /* first-fetch page throw: surface, non-fatal */
+                    JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
+                    char rz[300]; snprintf(rz, sizeof rz, "%s: %s", url, m ? m : "throw");
+                    if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
+                    why_add(ctx, "script-eval", rz);
+                }
+            }
+            if (is_module_chunk) {
+                /* MODULE chunk: link the SINGLETON now (COW off here), caching its namespace; PARK-RESUME delivers
+                   it to every parked import() of this chunk — the continuation resumes with concrete exports. */
+                JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
+                pendimport_resolve(ctx, url);
             }
             JS_CowSetActive(1); JS_SetFlowLocalMark(1); g_dom_capture = dsv;
         }
