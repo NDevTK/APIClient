@@ -107,6 +107,10 @@ extern unsigned g_quantum_sample;  /* back-edge counter for the sampled quantum 
 extern int g_resume_mode;          /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
 void scheduler_run(JSContext *ctx);   /* the ONE WFQ dispatch loop (qjs_step drives it) */
 int  seed_orphans(JSContext *ctx);    /* collect + enqueue never-executed functions as orphan flows */
+int  branch_decide(JSContext *ctx, JSValueConst cond);   /* JS_SetBranchHook: fork both arms of an opaque gate (decision-vector BFS) */
+int  ctx_forks(void);                                    /* JS_SetForkableHook: an opaque-collection iterator forks where branch_decide decides */
+void drive_opaque_cb(JSContext *ctx, JSValueConst cb, JSValueConst coll);   /* JS_SetCbHook: a callback on opaque input -> a scheduler flow */
+void flow_defer_callback(JSContext *ctx, JSValueConst cb);   /* a deferred callback (setTimeout/rAF) -> a scheduler flow (timers.c edge) */
 double scheduler_top_weight(void);   /* this engine's best-flow weight (host Level-1 ranking) */
 
 #endif

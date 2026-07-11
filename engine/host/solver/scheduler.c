@@ -462,3 +462,117 @@ double scheduler_top_weight(void) {
     for (int i = 0; i < g_reg_n; i++) { double w = flow_weight(&g_reg[i]); if (!seen || w > best) { best = w; seen = 1; } }
     return seen ? best : 0.0;
 }
+
+/* ── flow-creation edges (moved from the entry file) ─────────────────────────────── */
+int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisions */
+    if (n <= g_dec_cap) return 1;
+    int nc = g_dec_cap ? g_dec_cap * 2 : 64; while (nc < n) nc *= 2;
+    signed char *nd = (signed char *)realloc(g_dec, (size_t)nc);
+    if (!nd) return 0;
+    g_dec = nd; g_dec_cap = nc; return 1;
+}
+
+Flow *reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int dec_n)
+{
+    if (g_reg_n >= g_reg_cap) {
+        int nc = g_reg_cap ? g_reg_cap * 2 : 256;
+        Flow *nr = (Flow *)realloc(g_reg, (size_t)nc * sizeof(Flow));
+        CHECK(nr, "reg_oom: flow-registry realloc failed — OOM is a physical floor, never continue with a dropped flow");
+        g_reg = nr; g_reg_cap = nc;
+    }
+    Flow *f = &g_reg[g_reg_n];
+    f->handle = handle; f->val = val;
+    f->dec = dec; f->dec_n = dec_n;
+    f->fs = NULL; f->saved_c = 0; f->cpu = 0; f->visits = 0;
+    f->cow = NULL; f->cow_n = 0; f->cow_cap = 0;
+    f->dom = NULL; f->dom_n = 0; f->dom_cap = 0;
+    f->orphan_idx = -1; f->candidate = NULL; f->session = 0; f->vtarget = NULL;
+    f->drive_src = NULL;
+    f->is_boot = 0;
+    f->aresolve = JS_UNDEFINED; f->areject = JS_UNDEFINED; f->await_promise = JS_UNDEFINED;
+    f->rthis = JS_UNDEFINED; f->rargs = NULL; f->rargc = 0; f->is_async = 0;
+    f->sess_ctx = 0;
+    g_reg_n++;
+    { double w = wfq_weight(val, 0, 0); if (w > g_max_parked) g_max_parked = w; }   /* fresh flow (visits=cpu=0): same ONE policy, no duplicated formula — keeps g_max_parked current for wfq_yield */
+    return f;
+}
+
+int branch_decide(JSContext *ctx, JSValueConst cond)
+{
+    if (g_boot_replay) return 1;                            /* boot-replay: fixed arm (re-establishing shared state for an @S candidate, no vector to replay) */
+    if (!g_running || (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow && !g_in_session)) return 0;   /* meaningful inside a starter flow, a boot flow, OR a session flow (all re-run without a single fn handle) */
+    /* value-domain provenance of the condition: cond TRUE means `src <op> tok`; false arm holds the negation. */
+    const char *src = NULL, *tok = NULL; int op = JS_ConcolicCmp(cond, &src, &tok);
+    const char *jk = JS_ConcolicJKey(cond);   /* method-clean JSON field path of the compared value (for the @S envelope gate-merge) */
+    int has = (op != OPCMP_NONE) && src;
+    int true_op = op, false_op = opcmp_neg(op);
+
+    if (g_c < g_dec_n) {                                    /* forced replay: take the recorded arm; RE-RECORD its constraint */
+        int arm = g_dec[g_c] ? 1 : 0;
+        cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? (arm ? true_op : false_op) : OPCMP_NONE, has ? jk : NULL);
+        g_c++; return arm;
+    }
+    if (!g_dec_ensure(g_c + 1)) return 1;                    /* only RAM/disk (the platform floor) bounds depth — not a cap */
+
+    /* A CANDIDATE session (verifying an @S breakout) takes a fixed arm for a NEW branch — it replays the
+       detecting session's vector (above) then follows through with the candidate, it does not re-explore. */
+    if (g_in_session && g_candidate) { cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE, has ? jk : NULL); g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }
+
+    /* NEW decision: PRUNE a provably-infeasible arm given the accumulated domain (no phantom @H); else fork. */
+    int tf = !has || cons_feasible(src, tok, true_op, g_c);
+    int ff = !has || cons_feasible(src, tok, false_op, g_c);
+    if (has && !tf && ff) { cons_set(g_c, src, tok, false_op, jk); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }   /* TRUE arm impossible */
+    if (has && !ff && tf) { cons_set(g_c, src, tok, true_op, jk);  g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }   /* FALSE arm impossible */
+
+    signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* both arms feasible: fork FALSE sibling, take TRUE */
+    if (sib) {
+        for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
+        sib[g_c] = 0;
+        if (g_in_session) reg_add_session(ctx, sib, g_c + 1);      /* an exploratory session forks ANOTHER session (re-fire handlers with the sibling vector) */
+        else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);  /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
+        else if (g_cur_flow && g_cur_flow->is_async)               /* an ASYNC flow: re-run via the recipe (func+args) so the awaits — recorded in this SAME g_dec vector — replay too (re-enters catches) */
+            spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1);
+        else reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1)->orphan_idx = g_cur_orphan_idx;   /* sibling = same function (same locator), different decisions */
+    }
+    cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE, has ? jk : NULL);
+    g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
+    return 1;
+}
+
+int ctx_forks(void) {
+    if (g_boot_replay) return 1;                                                   /* fixed-arm replay (exit after 1) */
+    if (!g_running) return 0;
+    if (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow && !g_in_session) return 0;    /* monolithic boot -> drive-once */
+    return 1;
+}
+
+void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
+    Flow *f = reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, NULL, 0);
+    /* CONTINUATION: a callback deferred from a running (revert-)flow inherits that flow's live PROPERTY delta,
+       so it sees state the flow wrote before deferring (obj.x = tainted; setTimeout(()=>use(obj.x))) — a
+       fresh-baseline flow reads it undefined. Closure-var state already rides the callback's own closure, so
+       only property writes need this snapshot. At the monolithic boot (g_running=0) nothing is snapshotted:
+       boot's writes commit to the baseline, which a boot-deferred flow already sees. */
+    if (g_running && g_cur_flow) {
+        int n = 0, cap = 0; void *snap = JS_CowBufSnapshot(ctx, &n, &cap);
+        if (snap) { f->cow = snap; f->cow_n = n; f->cow_cap = cap; }
+        int dn = 0, dcap = 0; void *dsnap = dom_buf_snapshot(&dn, &dcap);   /* + attribute writes (el.dataset.x = tainted) */
+        if (dsnap) { f->dom = dsnap; f->dom_n = dn; f->dom_cap = dcap; }
+    }
+}
+
+void drive_opaque_cb(JSContext *ctx, JSValueConst cb, JSValueConst coll) {
+    /* Register cb as a starter FLOW. NO seen-set: an unbounded recursion that calls `x.forEach(cb)` per level
+       registers cb per level, but every level past the first drives cb with the SAME opaque args -> emits
+       nothing new -> the WFQ STARVES those flows to ~0 CPU and RAM-pressure PARKS the tail to the IDB cold
+       tier (unbounded-until-disk, the intended design). A dedup keyed by function identity was a BANNED
+       seen-set (§NO BOUNDS: "only emitted output — never identity — proves a flow is done") masking the
+       recursion as a hang; the cooperative quantum keeps the worker responsive while it starves + parks. */
+    flow_defer_callback(ctx, cb);
+    /* PROVENANCE: the element `cb` receives is an element OF `coll` (the reply/injected opaque the method was
+       called on), so tag it with coll's shape — the starter drives arg0 as {reply} (not a bare {}), keeping
+       the collection's taint through f.key etc. A non-opaque/untagged receiver leaves drive_src NULL (default
+       g_concolic args). Registered flow is the last one appended by flow_defer_callback. */
+    const char *cs = JS_IsConcolic(coll) ? JS_ConcolicShapeC(coll) : NULL;
+    if (cs && cs[0] && strcmp(cs, "{}") != 0 && g_reg_n > 0) g_reg[g_reg_n - 1].drive_src = strdup(cs);
+}
