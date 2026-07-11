@@ -53,6 +53,9 @@ static int el_has_async(lxb_dom_element_t *el) {   /* PRESENCE of the boolean at
 static int el_has_defer(lxb_dom_element_t *el) {
     return lxb_dom_element_has_attribute(el, (const lxb_char_t *)"defer", 5);   /* a defer external does NOT block parsing; it runs after the document is parsed */
 }
+static int el_has_nomodule(lxb_dom_element_t *el) {
+    return lxb_dom_element_has_attribute(el, (const lxb_char_t *)"nomodule", 8);   /* nomodule: a module-capable browser (we run modules) does NOT run this legacy-fallback classic */
+}
 /* Script-kind registry: the load kind recorded when each external is requested, read by qjs_provide. */
 typedef struct { char *url; int kind; } SKind;
 static SKind *g_skinds = NULL; static int g_skinds_n = 0, g_skinds_cap = 0;
@@ -71,6 +74,7 @@ static int g_boot_cursor = 0;
 static int boot_drive_scripts(JSContext *ctx) {
     for (; g_boot_cursor < g_boot_scr.n; g_boot_cursor++) {
         lxb_dom_element_t *el = g_boot_scr.els[g_boot_cursor];
+        if (!el_type_is_module(el) && el_has_nomodule(el)) continue;   /* a module-capable browser skips a nomodule classic (legacy fallback) — nomodule is ignored on a module script */
         size_t sl = 0;
         const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
         if (src && sl) {
