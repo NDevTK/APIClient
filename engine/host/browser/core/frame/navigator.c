@@ -7,6 +7,7 @@
 #include "core/frame/navigator.h"
 #include "modules/permissions/permissions.h"   /* navigator.permissions — a modeled virtual permission system */
 #include "modules/clipboard/clipboard.h"        /* navigator.clipboard — the Async Clipboard module (attacker source) */
+#include "modules/credentialmanagement/credentials.h"   /* navigator.credentials — the auth-moat module */
 #include "bindings/idl.h"        /* idl_dfail_wrap — the shared unbuilt-member DFAIL audit trap */
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
@@ -96,22 +97,7 @@ static JSValue make_ua_data(JSContext *ctx) {
     JS_SetPropertyStr(ctx, u, "getHighEntropyValues", JS_NewCFunction(ctx, js_ua_high_entropy, "getHighEntropyValues", 1));
     return wrap_unbuilt(ctx, u);
 }
-/* CredentialsContainer (navigator.credentials): the moat's headline auth gate. get()/store()/create() resolve to
-   a CONCOLIC Credential — TRUTHY example so `credentials.get().then(c => c && loginWith(c))` reaches the
-   LOGGED-IN arm (the auth/session code a logged-out visitor never runs), while the concolic still forks the null
-   (no-credential) arm. c.id / c.token are concolic (unknown attacker/user input). Never fires a real request. */
-static JSValue nav_cred_get(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    (void)t; (void)c; (void)v;
-    return js_resolved(ctx, js_concolic(ctx, "{credential}", JS_TRUE));   /* Promise<Credential|null> — forks logged-in vs logged-out */
-}
-static JSValue make_credentials(JSContext *ctx) {
-    JSValue cc = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, cc, "get", JS_NewCFunction(ctx, nav_cred_get, "get", 1));
-    JS_SetPropertyStr(ctx, cc, "store", JS_NewCFunction(ctx, nav_cred_get, "store", 1));
-    JS_SetPropertyStr(ctx, cc, "create", JS_NewCFunction(ctx, nav_cred_get, "create", 1));
-    JS_SetPropertyStr(ctx, cc, "preventSilentAccess", JS_NewCFunction(ctx, nav_promise_undef, "preventSilentAccess", 0));
-    return wrap_unbuilt(ctx, cc);
-}
+/* CredentialsContainer (navigator.credentials) — its own Blink module (modules/credentialmanagement/). */
 /* StorageManager (navigator.storage): estimate() resolves to concolic usage/quota numbers, persist()/persisted()
    to a concolic bool — so `storage.persisted().then(p => p ? offline : online)` and quota-gated feature checks
    explore BOTH arms (a PWA's offline/caching surface reached without the real grant). getDirectory (OPFS) DFAILs. */
@@ -171,7 +157,7 @@ JSValue js_navigator_make(JSContext *ctx) {
     /* userAgentData: UA Client Hints — concolic mobile/platform that fork the responsive mobile/desktop split. */
     JS_SetPropertyStr(ctx, nav, "userAgentData", make_ua_data(ctx));
     /* credentials: CredentialsContainer — get()/store() resolve to a concolic Credential that forks the auth gate. */
-    JS_SetPropertyStr(ctx, nav, "credentials", make_credentials(ctx));
+    JS_SetPropertyStr(ctx, nav, "credentials", credentials_make(ctx));
     /* storage: StorageManager — concolic quota/persisted that fork PWA offline/caching feature gates. */
     JS_SetPropertyStr(ctx, nav, "storage", make_storage(ctx));
     /* clipboard: readText()/read() are an ATTACKER-CONTROLLED source ({clipboard}, paste-jacking XSS). */
