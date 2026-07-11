@@ -13,5 +13,7 @@
 /* Build a fetch Response for `url`: concrete identity + opaque body, with fromReply injection of a cached
    concrete body (from the reply table) so r.json()/r.text() then resolve the reply's real data concolic. */
 JSValue make_response(JSContext *ctx, const char *url);
+void pendreply_resolve(JSContext *ctx, const char *url, const char *body);   /* resolve every parked r.json()/r.text() of url with the concrete reply (qjs_provide) */
+void pendreply_drain_opaque(JSContext *ctx);   /* finalize: resolve any never-delivered parked reply OPAQUE (shape) */
 
 #endif

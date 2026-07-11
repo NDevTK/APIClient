@@ -2,6 +2,9 @@
 #include "solver/reply.h"
 #include "solver/concolic.h"   /* g_concolic, js_concolic_stub */
 #include "platform/url.h"      /* has_hole */
+#include "check.h"             /* CHECK — a dropped parked reply never resolves, losing the endpoint */
+#include <string.h>
+#include <stdlib.h>
 
 /* Borrowed from main.c (the scheduler side): the reply-body table (host-seeded + written by the provision
    re-run), the resolved-promise helper, and the reply-fetch registrar (enqueues a bounded GET). */
@@ -32,6 +35,39 @@ static JSValue reply_value(JSContext *ctx, JSValueConst body_str, int is_json) {
     if (JS_IsException(parsed)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return js_concolic(ctx, "{reply}", JS_UNDEFINED); }
     return JS_ConcolicWrap(ctx, parsed, "reply");   /* structure real; string/bool leaves concolic (fork + real example) */
 }
+
+/* PARKED reply consumers: r.json()/r.text() of a not-yet-fetched body hold their promise's resolve here and
+   PARK — no opaque settle, no separate boot re-run. When qjs_provide caches the body, pendreply_resolve fires
+   the resolve with the CONCOLIC reply value (structure real, leaves fork + carry the concrete example), so the
+   continuation resumes with real data EXACTLY like a browser resolves fetch().then(r=>r.json()). A body that
+   never arrives (fetch failed / not fetched) is resolved OPAQUE {reply} at finalize, preserving shape coverage. */
+typedef struct { char *url; JSValue resolve; int is_json; } PendReply;
+static PendReply *g_pendreply = NULL; static int g_pendreply_n = 0, g_pendreply_cap = 0;
+static JSValue park_reply(JSContext *ctx, const char *url, int is_json) {
+    JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
+    if (g_pendreply_n >= g_pendreply_cap) { int nc = g_pendreply_cap ? g_pendreply_cap * 2 : 8; PendReply *n = realloc(g_pendreply, (size_t)nc * sizeof(PendReply)); CHECK(n, "pendreply-oom: a dropped parked reply never resolves, losing the endpoint's real values"); g_pendreply = n; g_pendreply_cap = nc; }
+    g_pendreply[g_pendreply_n].url = strdup(url); g_pendreply[g_pendreply_n].resolve = rf[0]; g_pendreply[g_pendreply_n].is_json = is_json; g_pendreply_n++;
+    JS_FreeValue(ctx, rf[1]);   /* reject unused: a missing body resolves OPAQUE (shape), never rejects */
+    return promise;
+}
+void pendreply_resolve(JSContext *ctx, const char *url, const char *body) {
+    for (int i = 0; i < g_pendreply_n; ) {
+        if (strcmp(g_pendreply[i].url, url) == 0) {
+            JSValue bs = JS_NewString(ctx, body); JSValue v = reply_value(ctx, bs, g_pendreply[i].is_json); JS_FreeValue(ctx, bs);
+            JSValue r = JS_Call(ctx, g_pendreply[i].resolve, JS_UNDEFINED, 1, (JSValueConst *)&v); JS_FreeValue(ctx, r); JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, g_pendreply[i].resolve); free(g_pendreply[i].url);
+            g_pendreply[i] = g_pendreply[--g_pendreply_n];
+        } else i++;
+    }
+}
+void pendreply_drain_opaque(JSContext *ctx) {   /* finalize: a body that never arrived resolves OPAQUE {reply} so its continuation still runs (shape) */
+    for (int i = 0; i < g_pendreply_n; i++) {
+        JSValue v = js_concolic(ctx, "{reply}", JS_UNDEFINED);
+        JSValue r = JS_Call(ctx, g_pendreply[i].resolve, JS_UNDEFINED, 1, (JSValueConst *)&v); JS_FreeValue(ctx, r); JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, g_pendreply[i].resolve); free(g_pendreply[i].url);
+    }
+    g_pendreply_n = 0;
+}
 /* r.json()/r.text(): a CACHED body resolves CONCOLIC (the boot re-run's path, make_response injected __body);
    else REGISTER the fetch (concrete url) and resolve OPAQUE in place. The reply's provision enqueues a forking
    boot re-run that re-runs boot with the reply now synchronously concolic — delivery is the re-run, never a
@@ -42,10 +78,15 @@ static JSValue resp_consume(JSContext *ctx, JSValueConst this_val, int is_json) 
     JS_FreeValue(ctx, body);
     JSValue u = JS_GetPropertyStr(ctx, this_val, "url");
     const char *url = JS_IsString(u) ? JS_ToCString(ctx, u) : NULL;
-    if (url && url[0] && !has_hole(url)) reply_fetch_register(url, is_json);   /* concrete url -> fetch it; the boot re-run delivers it concolic */
+    if (url && url[0] && !has_hole(url)) {
+        reply_fetch_register(url, is_json);                 /* concrete url -> fetch it */
+        JSValue p = park_reply(ctx, url, is_json);          /* PARK: the continuation resumes with the concrete concolic reply when qjs_provide delivers the body — browser-faithful fetch().then(r=>r.json()), no re-run, no opaque settle */
+        JS_FreeCString(ctx, url); JS_FreeValue(ctx, u);
+        return p;
+    }
     if (url) JS_FreeCString(ctx, url);
     JS_FreeValue(ctx, u);
-    return js_resolved(ctx, JS_NewConcolicSourced(ctx, "{reply}", "reply"));   /* opaque NOW (source-tagged {reply}, not an untagged {} sentinel); concrete via the provision-driven re-run. A pre-reply field used as a URL/param reads {reply}, honest about its provenance, until the boot re-run delivers the concrete example. */
+    return js_resolved(ctx, js_concolic(ctx, "{reply}", JS_UNDEFINED));   /* holey/unfetchable url: no concrete source, resolve opaque {reply} (shape) */
 }
 static JSValue js_resp_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 1); }
 static JSValue js_resp_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return resp_consume(ctx, this_val, 0); }

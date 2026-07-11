@@ -858,22 +858,22 @@ KEEP void qjs_provide(const char *url, const char *body)
            boot with this reply now synchronous, so a reply-GATED continuation forks WITH the concolic example
            (the value reaches gated fetches, not just ungated). */
         if (!JS_IsObject(g_reply_table)) { JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_NewObject(ctx); }
-        JSValue prev = JS_GetPropertyStr(ctx, g_reply_table, url); int is_new = !JS_IsString(prev); JS_FreeValue(ctx, prev);
-        JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));
-        if (is_new && boot_script_count() > 0) reg_add_boot(ctx, NULL, 0);
+        JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));   /* cache for a re-entrant/cached read (make_response __body) */
+        pendreply_resolve(ctx, url, body);   /* PARK-RESUME: deliver the concrete concolic reply to every parked r.json()/r.text() of this url — the continuation resumes in place, no boot re-run */
     }
-    for (int i = 0; i < g_pending_n; i++) {   /* the reply is CACHED + a boot re-run enqueued above; just drop the fetch registration (no promise to resolve) */
+    for (int i = 0; i < g_pending_n; i++) {   /* the reply is CACHED + its parked consumers resolved above; drop the fetch registration */
         if (g_pending[i].url && strcmp(g_pending[i].url, url) == 0) { free(g_pending[i].url); g_pending[i].url = NULL; }
     }
     int w = 0; for (int i = 0; i < g_pending_n; i++) if (g_pending[i].url) g_pending[w++] = g_pending[i];
     g_pending_n = w;
 }
-/* Drop all remaining fetch registrations (a reply/chunk never fetched): r.json() already resolved OPAQUE in
-   place, so there is nothing to settle — just free the url list. */
+/* Drop all remaining fetch registrations (a reply/chunk never fetched). A parked r.json()/r.text() whose body
+   never arrived is resolved OPAQUE {reply} here so its continuation still runs (shape coverage), never left
+   hanging — the park-and-resume model's honest fallback. */
 KEEP void qjs_finalize(void)
 {
     JSContext *ctx = g_ctx; if (!ctx) return;
-    (void)ctx;
+    pendreply_drain_opaque(ctx);   /* resolve any never-delivered parked reply with {reply} (shape) */
     for (int i = 0; i < g_pending_n; i++) free(g_pending[i].url);
     g_pending_n = 0;
     for (int i = 0; i < g_chunk_n; i++) free(g_chunk_pending[i]);   /* node CLI can't fetch chunks -> drop */
