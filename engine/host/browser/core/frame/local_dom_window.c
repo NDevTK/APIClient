@@ -21,8 +21,10 @@
 #include "core/frame/intl.h"            /* js_intl_ctor */
 #include "core/frame/history.h"         /* js_history_make */
 #include "solver/concolic.h"              /* js_noop / js_concolic_stub */
+#include "check.h"                        /* DCHECK — the global-scope install contract */
 
 void install_window_apis(JSContext *ctx, JSValue g, JSValueConst el_proto) {
+    DCHECK(JS_IsObject(g), "install_window_apis: global scope is not an object — the window globals install onto the real global, created at qjs_init before any script");
     /* WEB COMPONENTS: constructable DOM bases so `class X extends HTMLElement {…}` DEFINES -> its lifecycle
        methods become uncalled methods the orphan driver reaches (learned by EXECUTION, not by reading an attr). */
     install_dom_interface_ctors(ctx, g, el_proto);   /* Element..SVGElement base ctors + customElements (custom_elements.c) */
@@ -77,7 +79,7 @@ void install_window_apis(JSContext *ctx, JSValue g, JSValueConst el_proto) {
     {   /* Intl: locale formatters (constructors) — results opaque */
         JSValue intl = JS_NewObject(ctx);
         const char *cn[] = { "NumberFormat", "DateTimeFormat", "Collator", "RelativeTimeFormat", "ListFormat", "PluralRules", "Segmenter", "DisplayNames" };
-        for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, intl, cn[i], JS_NewCFunction2(ctx, js_intl_ctor, cn[i], 0, JS_CFUNC_constructor, 0));
+        for (int i = 0; i < (int)(sizeof cn / sizeof cn[0]); i++) JS_SetPropertyStr(ctx, intl, cn[i], JS_NewCFunction2(ctx, js_intl_ctor, cn[i], 0, JS_CFUNC_constructor, 0));   /* bound from the array, not a magic 8 that could drift */
         JS_SetPropertyStr(ctx, g, "Intl", intl);
     }
     JS_SetPropertyStr(ctx, g, "history", js_history_make(ctx));   /* real History state machine (history.c): pushState sets history.state */
