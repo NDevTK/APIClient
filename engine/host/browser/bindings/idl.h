@@ -28,11 +28,14 @@ JSClassID idl_define_class(JSContext *ctx, const IDLInterface *iface);
    so each module gets the audit trap without re-implementing it. CONSUMES `obj`. */
 JSValue idl_dfail_wrap(JSContext *ctx, JSValue obj, const char *iface);
 
-/* NOTE: the runtime shape-driver (idl_bind + IdlGenMember/IdlImpl) was REMOVED — a table-driven driver that
-   installed concolic/noop stubs for unmodelled members is exactly the banned-stub anti-pattern. The real system
-   is codegen: engine/idlgen.mjs GENERATES the C binding (<iface>.gen.{c,h}: install + a weak DCHECK default per
-   member) from canonical Web IDL, and the component provides strong impls. The idl_instance/idl_define_class
-   native-class helpers above remain ONLY until the last interfaces still using them (Blob/Response/TrustedTypes/
-   Intl/Notification) are converted to codegen too, at which point this whole file is deleted. */
+/* HISTORY + CORRECTED POLICY: the runtime shape-driver (idl_bind + IdlGenMember/IdlImpl) was REMOVED — a
+   table-driven driver that installed concolic/noop stubs for unmodelled members is exactly the banned-stub
+   anti-pattern. It is NOT replaced by codegen: GENERATING a C binding and filling unimplemented members with a
+   noop/DCHECK/concolic default is STILL a stub (CLAUDE.md's corrected policy). So `engine/idlgen.mjs` is a gap
+   AUDITOR, never a generator — it DIFFS each component's installed members against the canonical `.idl` and
+   prints what is MISSING, so we implement each at the root. idl_define_class / idl_instance are therefore
+   PERMANENT helpers (not transitional, not pending codegen, this file is not slated for deletion): they build a
+   native EXOTIC-CLASS interface with a private [[slot]] (Blob's [[bytes]], Response's [[body]]) whose members
+   are REAL per-member impls, the browser-engineer way to build an interface the spec gives private state. */
 
 #endif
