@@ -687,8 +687,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
            re-run: boot-gate exploration is now intrinsic to the first run. */
         g_running = 1; g_in_boot_flow = 1; g_initial_boot = 1; g_c = 0; g_dec_n = 0; cons_reset();
         if (boot[0]) {
-            boot_script_cache(ctx, JS_NULL, boot, strlen(boot));
-            if (boot_exec_one(ctx, JS_NULL, boot, strlen(boot))) { js_std_dump_error(ctx); g_rc = 1; }   /* preamble runs through the SAME executor as replays */
+            JSValueConst bc = boot_script_cache(ctx, JS_NULL, boot, strlen(boot));
+            if (boot_exec_one(ctx, JS_NULL, bc)) { js_std_dump_error(ctx); g_rc = 1; }   /* preamble runs through the SAME executor as replays */
         }
         g_bundle_id = document_bundle_id(g_dom);   /* IDENTITY first, from a PURE DOM scan (no execution): frontier key set before boot runs */
         dom_run_scripts(ctx);     /* then run inline scripts + REQUEST external <script src> loads (fetched in qjs_step) */
@@ -833,8 +833,8 @@ KEEP void qjs_provide(const char *url, const char *body)
             } else {
                 /* external CLASSIC: cache + run through boot_exec_one — the SAME executor as inline classics and
                    every replay, so an external script's first fetch and its candidate re-runs are byte-identical. */
-                boot_script_cache(ctx, JS_NULL, body, strlen(body));
-                if (boot_exec_one(ctx, JS_NULL, body, strlen(body))) {   /* first-fetch page throw: surface, non-fatal */
+                JSValueConst bc = boot_script_cache(ctx, JS_NULL, body, strlen(body));
+                if (boot_exec_one(ctx, JS_NULL, bc)) {   /* first-fetch page throw: surface, non-fatal */
                     JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
                     char rz[300]; snprintf(rz, sizeof rz, "%s: %s", url, m ? m : "throw");
                     if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);

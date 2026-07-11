@@ -44,12 +44,13 @@ void eval_page_script(JSContext *ctx, const char *code, size_t len, const char *
     JS_FreeValue(ctx, v);
 }
 
-/* The ONE classic-boot-script executor (see header): currentScript + global eval, shared by the first boot and
-   every replay. Returns 1 if it threw (exception left PENDING for the caller's throw policy). */
-int boot_exec_one(JSContext *ctx, JSValueConst el, const char *txt, size_t len) {
-    doc_set_current_script(ctx, JS_DupValue(ctx, el));            /* document.currentScript = the <script> element (or JS_NULL) */
-    JSValue v = JS_Eval(ctx, txt, len, "<script>", JS_EVAL_TYPE_GLOBAL);
-    int threw = JS_IsException(v);                               /* JS_Eval leaves the exception PENDING for JS_GetException */
+/* The ONE classic-boot-script executor (see header): currentScript + run the parse-once bytecode, shared by the
+   first boot and every replay. Returns 1 if it threw (exception left PENDING for the caller's throw policy). */
+int boot_exec_one(JSContext *ctx, JSValueConst el, JSValueConst compiled) {
+    if (JS_IsException(compiled)) return 1;                       /* a syntax error from boot_script_cache: exception already pending */
+    doc_set_current_script(ctx, JS_DupValue(ctx, el));           /* document.currentScript = the <script> element (or JS_NULL) */
+    JSValue v = JS_EvalFunction(ctx, JS_DupValue(ctx, compiled)); /* run the bytecode (dup: the cache keeps it for every replay) */
+    int threw = JS_IsException(v);                               /* leaves the exception PENDING for JS_GetException */
     doc_set_current_script(ctx, JS_NULL);
     JS_FreeValue(ctx, v);
     return threw;
@@ -78,10 +79,10 @@ void dom_run_scripts(JSContext *ctx) {
                 doc_set_current_script(ctx, el_wrap(ctx, el));
                 eval_page_script(ctx, (const char *)txt, tl, "<script>", 1);
                 doc_set_current_script(ctx, JS_NULL);
-            } else {        /* CLASSIC: run now AND cache — the first run and every replay share boot_exec_one (ONE executor) */
+            } else {        /* CLASSIC: compile-once + cache + run — the first run and every replay share boot_exec_one (ONE executor) */
                 JSValue elw = el_wrap(ctx, el);
-                boot_script_cache(ctx, elw, (const char *)txt, tl);
-                if (boot_exec_one(ctx, elw, (const char *)txt, tl)) {   /* first-run page throw: surface, non-fatal (exploration surface) */
+                JSValueConst compiled = boot_script_cache(ctx, elw, (const char *)txt, tl);
+                if (boot_exec_one(ctx, elw, compiled)) {   /* first-run compile/throw: surface, non-fatal (exploration surface) */
                     JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
                     char rz[300]; snprintf(rz, sizeof rz, "<script>: %s", m ? m : "throw");
                     if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);

@@ -8,8 +8,8 @@
 #include <stddef.h>
 #include "quickjs.h"
 
-void boot_script_cache(JSContext *ctx, JSValueConst el, const char *txt, size_t len);   /* cache one CLASSIC boot <script> (element for currentScript + body), document order; el = JS_NULL for the preamble/external */
-void boot_scripts_run(JSContext *ctx);                  /* re-run every cached CLASSIC boot script through boot_exec_one — the SAME executor the first boot uses */
+JSValueConst boot_script_cache(JSContext *ctx, JSValueConst el, const char *txt, size_t len);   /* compile ONE classic boot <script> once (el = currentScript, or JS_NULL for preamble/external), cache it, and RETURN the bytecode (borrowed) for the caller to run via boot_exec_one; JS_EXCEPTION on a syntax error */
+void boot_scripts_run(JSContext *ctx);                  /* re-run every cached CLASSIC boot script through boot_exec_one — the SAME executor the first boot uses, on the parse-once bytecode */
 int  boot_script_count(void);                           /* number cached; 0 -> there is no boot flow to enqueue */
 void boot_scripts_free(JSContext *ctx);                 /* free the cached texts + element refs (teardown) */
 
