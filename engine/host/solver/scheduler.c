@@ -529,16 +529,11 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
        detecting session's vector (above) then follows through with the candidate, it does not re-explore. */
     if (g_in_session && g_candidate) { cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE, has ? jk : NULL); g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }
 
-    /* PINNED value: the code EQ-fixed this src earlier, so it IS concrete on this flow — RUN the real predicate on
-       it (forced execution, not symbolic pruning) and take the ONE determined arm, no fork. Subsumes every
-       EQ-involving contradiction (x==='admin' then x.startsWith('xyz')/x==='root'/x<3) via one concrete eval. */
-    if (has) { int pv = cons_eval_pinned(src, tok, true_op);
-        if (pv == 0) { cons_set(g_c, src, tok, false_op, jk); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }
-        if (pv == 1) { cons_set(g_c, src, tok, true_op,  jk); g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; } }
-
-    /* NEW decision (UNPINNED): PRUNE a provably-infeasible arm given the accumulated open domain (no phantom @H); else fork. */
-    int tf = !has || cons_feasible(src, tok, true_op, g_c);
-    int ff = !has || cons_feasible(src, tok, false_op, g_c);
+    /* NEW decision: ask the substrate which arms the per-flow domain permits (pinned -> one arm via forced-exec
+       predicate eval; unpinned -> prune only a provably-contradicted arm). The scheduler holds ZERO constraint
+       logic — it only INTERPRETS the two booleans to take the one feasible arm, or fork when both are open. */
+    int tf = 1, ff = 1;
+    if (has) cons_arm_feasible(src, tok, true_op, false_op, g_c, &tf, &ff);
     if (has && !tf && ff) { cons_set(g_c, src, tok, false_op, jk); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }   /* TRUE arm impossible */
     if (has && !ff && tf) { cons_set(g_c, src, tok, true_op, jk);  g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }   /* FALSE arm impossible */
 

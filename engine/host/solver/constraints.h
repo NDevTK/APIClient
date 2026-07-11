@@ -17,9 +17,8 @@ extern char g_sink_root[64];     /* the sink source root token ("{hash}") for me
 int opcmp_neg(int op);
 void cons_reset(void);
 void cons_set(int i, const char *src, const char *tok, int op, const char *jkey);
-int cons_feasible(const char *src, const char *tok, int op, int upto);
+void cons_arm_feasible(const char *src, const char *tok, int true_op, int false_op, int upto, int *tf, int *ff);   /* the ONE feasibility seam the scheduler calls */
 const char *cons_fixed_value(const char *src);
-int cons_eval_pinned(const char *src, const char *tok, int op);   /* run the real predicate on an EQ-pinned value: 1/0/-1 */
 void cons_free(void);   /* teardown: reset + free the backing array */
 
 #endif

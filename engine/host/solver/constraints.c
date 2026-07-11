@@ -46,7 +46,7 @@ static int pair_contradicts(int op1, const char *t1, int op2, const char *t2) {
     return (lo == hi && (lo_strict || hi_strict));      /* (5,5] / [5,5) / (5,5) empty; [5,5]={5} not */
 }
 /* Is `src <op> tok` consistent with the constraints already holding on this flow (indices < upto)? */
-int cons_feasible(const char *src, const char *tok, int op, int upto) {
+static int cons_feasible(const char *src, const char *tok, int op, int upto) {
     if (!src) return 1;
     for (int i = 0; i < upto && i < g_cons_n; i++) {
         Cons *c = &g_cons[i];
@@ -69,7 +69,7 @@ static int str_starts(const char *s, const char *p) { return strncmp(s, p, strle
    then pruning: `x.startsWith('xyz')` after `x==='admin'` is really `'admin'.startsWith('xyz')` = false. Returns 1
    (predicate holds -> TRUE arm), 0 (fails -> FALSE arm), -1 (src not pinned, or op not decidable on V -> defer to
    the unpinned-domain feasibility check). This is the concretize-on-pin design: no separate solver, one arm. */
-int cons_eval_pinned(const char *src, const char *tok, int op) {
+static int cons_eval_pinned(const char *src, const char *tok, int op) {
     const char *v = cons_fixed_value(src);
     if (!v || !tok) return -1;
     switch (op) {
@@ -80,5 +80,16 @@ int cons_eval_pinned(const char *src, const char *tok, int op) {
         case OPCMP_LT: case OPCMP_GT: case OPCMP_LE: case OPCMP_GE: { double a, b; if (tok_num(v, &a) && tok_num(tok, &b)) return cmp_sat(a, op, b); return -1; }
     }
     return -1;
+}
+/* THE substrate seam the scheduler asks: given the accumulated per-flow domain, which arms of `src <op> tok` are
+   feasible? *tf/*ff <- 1 if the TRUE/FALSE arm can be taken. A PINNED value resolves to exactly one arm (forced
+   execution ran the real predicate); an unpinned value prunes only a PROVABLY-contradicted arm (sound), leaving
+   both otherwise. This is the ONLY constraint entry the scheduler calls — it holds zero string/numeric logic. */
+void cons_arm_feasible(const char *src, const char *tok, int true_op, int false_op, int upto, int *tf, int *ff) {
+    int pv = cons_eval_pinned(src, tok, true_op);
+    if (pv == 1) { *tf = 1; *ff = 0; return; }   /* pinned & predicate holds -> only the TRUE arm */
+    if (pv == 0) { *tf = 0; *ff = 1; return; }   /* pinned & predicate fails -> only the FALSE arm */
+    *tf = cons_feasible(src, tok, true_op, upto);
+    *ff = cons_feasible(src, tok, false_op, upto);
 }
 void cons_free(void) { cons_reset(); free(g_cons); g_cons = NULL; g_cons_cap = 0; }
