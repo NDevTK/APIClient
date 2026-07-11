@@ -166,6 +166,7 @@ static int el_is_freetext_control(lxb_dom_element_t *el) {
 JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) {
     lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id); if (!el) return JS_UNDEFINED;
     if (magic == 4 && el_is_freetext_control(el)) {   /* value(4) of an editable free-text control = ATTACKER INPUT the user types */
+        if (g_candidate) return JS_NewString(ctx, g_candidate);   /* @S replay: the user types the candidate RAW (a form value is not URL-encoded) — so the breakout reaches the sink + verifies */
         int si = attr_shadow_find(el, "value");
         if (si >= 0 && JS_IsConcolic(attr_shadow_opaque(si))) return JS_DupValue(ctx, attr_shadow_opaque(si));   /* the page SET a tainted value -> keep its real source (e.g. a reply field), not {formvalue} */
         size_t dl = 0; const lxb_char_t *dv = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"value", 5, &dl);   /* the HTML default value = the example */
