@@ -18,7 +18,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "core/css/cssom.h"
-#include "solver/opaque.h"      /* g_opaque, JS_IsOpaque/Example/ShapeC */
+#include "solver/opaque.h"      /* g_opaque, JS_IsConcolic/Example/ShapeC */
 #include "core/dom/dom_element.h" /* g_el_class_id — unwrap the element argument */
 #include "solver/dom_cow.h"     /* dom_attr_capture — a style write joins the per-flow COW delta */
 #include "solver/attr_shadow.h" /* attr_shadow_set — an opaque CSS value keeps its taint on the style attr */
@@ -125,13 +125,13 @@ static int style_is_member(const char *k) {
 static void style_write(JSContext *ctx, StyleDecl *s, const char *key, JSValueConst value) {
     if (!s || !s->el || s->computed) return;   /* getComputedStyle is read-only */
     int is_css_text = !strcmp(key, "cssText");
-    int is_opq = JS_IsOpaque(value);
+    int is_opq = JS_IsConcolic(value);
     dom_attr_capture(s->el, "style");                                       /* pre-write baseline -> per-flow COW delta */
     if (!g_candidate) attr_shadow_set(ctx, s->el, "style", is_opq ? value : JS_UNDEFINED);   /* opaque CSS value -> taint the style attr */
     solve_add(ctx, "style", "css", value);                                  /* el.style.x = tainted -> CSS-context @S sink */
-    JSValue exv = is_opq ? JS_OpaqueExample(ctx, value) : JS_UNDEFINED;
+    JSValue exv = is_opq ? JS_ConcolicExample(ctx, value) : JS_UNDEFINED;
     int ex_str = is_opq && !JS_IsUndefined(exv);
-    const char *v = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_OpaqueShapeC(value) : JS_ToCString(ctx, value));
+    const char *v = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_ConcolicShapeC(value) : JS_ToCString(ctx, value));
     if (is_css_text) {
         if (v) lxb_dom_element_set_attribute(s->el, (const lxb_char_t *)"style", 5, (const lxb_char_t *)v, strlen(v));
     } else {

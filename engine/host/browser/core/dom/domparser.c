@@ -9,12 +9,12 @@ extern char *g_candidate;
 /* Parse an HTML string into a {parsedhtml} OPAQUE carrying the input's concolic example — the taint a later
    appendChild/innerHTML of the node detects as an @S sink. */
 static JSValue js_parse_html_tainted(JSContext *ctx, JSValueConst input) {
-    JSValue r = JS_NewOpaqueSourced(ctx, "{parsedhtml}", "{parsedhtml}");
-    if (JS_IsOpaque(r)) {
+    JSValue r = JS_NewConcolicSourced(ctx, "{parsedhtml}", "{parsedhtml}");
+    if (JS_IsConcolic(r)) {
         JSValue ex = JS_UNDEFINED;
-        if (JS_IsOpaque(input)) ex = JS_OpaqueExample(ctx, input);                    /* concolic input keeps its example */
+        if (JS_IsConcolic(input)) ex = JS_ConcolicExample(ctx, input);                    /* concolic input keeps its example */
         else if (g_candidate && JS_IsString(input)) ex = JS_DupValue(ctx, input);     /* replay: the concrete candidate */
-        if (!JS_IsUndefined(ex)) JS_SetOpaqueExample(ctx, r, ex); else JS_FreeValue(ctx, ex);
+        if (!JS_IsUndefined(ex)) JS_SetConcolicExample(ctx, r, ex); else JS_FreeValue(ctx, ex);
     }
     return r;
 }

@@ -18,8 +18,8 @@ static JSValue g_cookie_ambient = JS_UNDEFINED;
 
 static JSValue ambient(JSContext *ctx) {
     if (JS_IsString(g_cookie_ambient)) return JS_DupValue(ctx, g_cookie_ambient);   /* seeded real cookies */
-    JSValue o = JS_NewOpaqueSourced(ctx, "{cookie}", "{cookie}");
-    if (JS_IsOpaque(o)) JS_SetOpaqueExample(ctx, o, JS_NewString(ctx, ""));
+    JSValue o = JS_NewConcolicSourced(ctx, "{cookie}", "{cookie}");
+    if (JS_IsConcolic(o)) JS_SetConcolicExample(ctx, o, JS_NewString(ctx, ""));
     return o;
 }
 
@@ -31,8 +31,8 @@ void cookie_seed(JSContext *ctx, const char *raw) {
 JSValue js_cookie_set(JSContext *ctx, JSValueConst this_val, JSValueConst val) {
     (void)this_val;
     if (!JS_IsObject(g_cookies)) { JS_FreeValue(ctx, g_cookies); g_cookies = JS_NewObject(ctx); }
-    int opq = JS_IsOpaque(val);
-    JSValue ex = opq ? JS_OpaqueExample(ctx, val) : JS_UNDEFINED;
+    int opq = JS_IsConcolic(val);
+    JSValue ex = opq ? JS_ConcolicExample(ctx, val) : JS_UNDEFINED;
     const char *s = (opq && !JS_IsUndefined(ex)) ? JS_ToCString(ctx, ex) : JS_ToCString(ctx, val);   /* the pair's TEXT (example if concolic) */
     if (s) {
         const char *ns = s; while (*ns == ' ') ns++;             /* trim leading space in the name */

@@ -9,7 +9,7 @@
 static JSValue enc_encode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 1) return JS_NewUint8ArrayCopy(ctx, (const uint8_t *)"", 0);
-    if (JS_IsOpaque(argv[0])) return js_concolic(ctx, "{bytes}", JS_OpaqueExample(ctx, argv[0]));   /* tainted -> concolic bytes, not bare opaque */
+    if (JS_IsConcolic(argv[0])) return js_concolic(ctx, "{bytes}", JS_ConcolicExample(ctx, argv[0]));   /* tainted -> concolic bytes, not bare opaque */
     size_t len = 0; const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
     JSValue r = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)(s ? s : ""), s ? len : 0);   /* real UTF-8 bytes */
     if (s) JS_FreeCString(ctx, s);
@@ -18,7 +18,7 @@ static JSValue enc_encode(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 static JSValue dec_decode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 1) return JS_NewString(ctx, "");
-    if (JS_IsOpaque(argv[0])) return js_concolic(ctx, "{text}", JS_OpaqueExample(ctx, argv[0]));   /* decoding unknown bytes -> concolic text */
+    if (JS_IsConcolic(argv[0])) return js_concolic(ctx, "{text}", JS_ConcolicExample(ctx, argv[0]));   /* decoding unknown bytes -> concolic text */
     size_t size = 0; uint8_t *buf = JS_GetUint8Array(ctx, &size, argv[0]);
     if (!buf) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); buf = JS_GetArrayBuffer(ctx, &size, argv[0]); }
     if (!buf) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); return js_concolic(ctx, "{text}", JS_UNDEFINED); }

@@ -451,7 +451,7 @@ JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *
    object OR a `new Headers()`'s __fields, and a concolic value's EXAMPLE (`'Bearer '+token` -> the real token).
    ONE home for fetch + XHR (no duplication). */
 void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) {
-    if (!JS_IsObject(hdrs) || JS_IsOpaque(hdrs)) return;
+    if (!JS_IsObject(hdrs) || JS_IsConcolic(hdrs)) return;
     JSValue hf = JS_GetPropertyStr(ctx, hdrs, "__fields");
     JSValueConst hsrc = JS_IsObject(hf) ? (JSValueConst)hf : hdrs;
     JSValue hobj = JS_NewObject(ctx); int any = 0;
@@ -460,7 +460,7 @@ void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs) {
         for (uint32_t hi = 0; hi < hn; hi++) {
             const char *hk = JS_AtomToCString(ctx, tab[hi].atom);
             JSValue hv = JS_GetProperty(ctx, hsrc, tab[hi].atom);
-            JSValue hex = JS_IsOpaque(hv) ? JS_OpaqueExample(ctx, hv) : JS_UNDEFINED;
+            JSValue hex = JS_IsConcolic(hv) ? JS_ConcolicExample(ctx, hv) : JS_UNDEFINED;
             const char *hvs = !JS_IsUndefined(hex) ? JS_ToCString(ctx, hex) : JS_ToCString(ctx, hv);
             JS_FreeValue(ctx, hex);
             if (hk && hvs) { JS_SetPropertyStr(ctx, hobj, hk, JS_NewString(ctx, hvs)); any = 1; }
@@ -706,7 +706,7 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
         /* For a {parsedhtml}-tainted node (DOMParser/Range), the sink value is an OPAQUE carrying the candidate
            as its EXAMPLE — ToString'ing it gives the shape, not the payload. Read the example so the real
            candidate HTML is breakout-checked; a plain-string sink value is used directly. */
-        JSValue exv = JS_IsOpaque(val) ? JS_OpaqueExample(ctx, val) : JS_UNDEFINED;
+        JSValue exv = JS_IsConcolic(val) ? JS_ConcolicExample(ctx, val) : JS_UNDEFINED;
         const char *cv = !JS_IsUndefined(exv) ? JS_ToCString(ctx, exv) : JS_ToCString(ctx, val);
         JS_FreeValue(ctx, exv);
         char key[300]; snprintf(key, sizeof key, "%s|%s", sink, sctx);
@@ -755,15 +755,15 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
         if (cv) JS_FreeCString(ctx, cv);
         return;
     }
-    if (!JS_IsOpaque(val) || !JS_IsArray(g_solvetasks)) return;
-    const char *shape = JS_OpaqueShapeC(val);   /* @H-style display: which source(s) reach this sink, transforms flattened */
+    if (!JS_IsConcolic(val) || !JS_IsArray(g_solvetasks)) return;
+    const char *shape = JS_ConcolicShapeC(val);   /* @H-style display: which source(s) reach this sink, transforms flattened */
     JSValue t = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, t, "sink", JS_NewString(ctx, sink));
     JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
     JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, shape ? shape : "{}"));
     if (g_origin_req[0]) JS_SetPropertyStr(ctx, t, "requiredOrigin", JS_NewString(ctx, g_origin_req));   /* forgeable origin gate on this path -> the PoC's delivery origin */
     envelope_detect(ctx, val);   /* fill the structured-source descriptor (JSON field / query param / split index) -> envelope.c */
-    { const char *sp = JS_OpaqueSrcC(val);   /* @S structured delivery: the source LEAF path ("{pm}.html"), for srcpath + gate-field merge */
+    { const char *sp = JS_ConcolicSrcC(val);   /* @S structured delivery: the source LEAF path ("{pm}.html"), for srcpath + gate-field merge */
       if (sp && sp[0]) {
           JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp));
           char root[64]; const char *rb = strchr(sp, '}');   /* source token "{pm}" -> collect sibling gate fields the handler requires */
@@ -939,8 +939,8 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
     if (g_boot_replay) return 1;                            /* boot-replay: fixed arm (re-establishing shared state for an @S candidate, no vector to replay) */
     if (!g_running || (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow && !g_in_session)) return 0;   /* meaningful inside a starter flow, a boot flow, OR a session flow (all re-run without a single fn handle) */
     /* value-domain provenance of the condition: cond TRUE means `src <op> tok`; false arm holds the negation. */
-    const char *src = NULL, *tok = NULL; int op = JS_OpaqueCmp(cond, &src, &tok);
-    const char *jk = JS_OpaqueJKey(cond);   /* method-clean JSON field path of the compared value (for the @S envelope gate-merge) */
+    const char *src = NULL, *tok = NULL; int op = JS_ConcolicCmp(cond, &src, &tok);
+    const char *jk = JS_ConcolicJKey(cond);   /* method-clean JSON field path of the compared value (for the @S envelope gate-merge) */
     int has = (op != OPCMP_NONE) && src;
     int true_op = op, false_op = opcmp_neg(op);
 
@@ -1026,7 +1026,7 @@ static void drive_opaque_cb(JSContext *ctx, JSValueConst cb, JSValueConst coll) 
        called on), so tag it with coll's shape — the starter drives arg0 as {reply} (not a bare {}), keeping
        the collection's taint through f.key etc. A non-opaque/untagged receiver leaves drive_src NULL (default
        g_opaque args). Registered flow is the last one appended by flow_defer_callback. */
-    const char *cs = JS_IsOpaque(coll) ? JS_OpaqueShapeC(coll) : NULL;
+    const char *cs = JS_IsConcolic(coll) ? JS_ConcolicShapeC(coll) : NULL;
     if (cs && cs[0] && strcmp(cs, "{}") != 0 && g_reg_n > 0) g_reg[g_reg_n - 1].drive_src = strdup(cs);
 }
 /* eval / new Function (code-execution @S sinks) + structuredClone -> browser/bindings/global_functions.c. */
@@ -1312,7 +1312,7 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
            makes `fetch('/api/org/'+id)` learn a GARBAGE /api/org/[object Object] endpoint. Give it distinct
            external-input source identity ({arg0}), like the main orphan drive — its arg is attacker input, not
            an Event; the session only needs it to run over the accumulated handler state. */
-        JS_SetPropertyUint32(ctx, pair, 1, JS_NewOpaqueSourced(ctx, "{arg0}", "{arg0}"));
+        JS_SetPropertyUint32(ctx, pair, 1, JS_NewConcolicSourced(ctx, "{arg0}", "{arg0}"));
         JS_SetPropertyUint32(ctx, pair, 2, JS_FindReceiver(ctx, fn));   /* real receiver (upgraded custom-element instance) so this.attachShadow/getAttribute work when the session fires connectedCallback */
         JS_SetPropertyUint32(ctx, arr, n++, pair);
     }
@@ -1341,7 +1341,7 @@ static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, J
                     /* a boot-EXECUTED reader (loadDashboard()) is a DATA function, not an event listener — an
                        Event arg makes its `fetch('/api/'+arg)` learn a garbage [object Object] endpoint. Give it
                        {arg0} external-input identity; the session re-fires it for the accumulated state, not an event. */
-                    JS_SetPropertyUint32(ctx, pair, 1, JS_NewOpaqueSourced(ctx, "{arg0}", "{arg0}"));
+                    JS_SetPropertyUint32(ctx, pair, 1, JS_NewConcolicSourced(ctx, "{arg0}", "{arg0}"));
                     JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);
                     JS_SetPropertyUint32(ctx, arr, n++, pair);
                 }
@@ -1678,11 +1678,11 @@ static void scheduler_run(JSContext *ctx)
                SAME (empty) source, a false contradiction that PRUNED the sink arm. Distinct sources let each arg's
                gate tokens accumulate + reverse independently (the per-flow constraints a PoC is built from). Owned
                -> freed after JS_FlowNew dups them into the frame. */
-            JSValue oargs[8]; for (int i = 0; i < 8; i++) { char s[16]; snprintf(s, sizeof s, "{arg%d}", i); oargs[i] = JS_NewOpaqueSourced(ctx, s, s); }
+            JSValue oargs[8]; for (int i = 0; i < 8; i++) { char s[16]; snprintf(s, sizeof s, "{arg%d}", i); oargs[i] = JS_NewConcolicSourced(ctx, s, s); }
             /* OPAQUE-COLLECTION element: an items.forEach(cb) callback's element carries the collection's
                provenance ({reply}), not a bare {arg0} — so f.key keeps the reply taint. */
             JSValue elem = JS_UNDEFINED, ev = JS_UNDEFINED;
-            if (f.drive_src) { elem = JS_NewOpaqueSourced(ctx, f.drive_src, f.drive_src); JS_FreeValue(ctx, oargs[0]); oargs[0] = elem; }
+            if (f.drive_src) { elem = JS_NewConcolicSourced(ctx, f.drive_src, f.drive_src); JS_FreeValue(ctx, oargs[0]); oargs[0] = elem; }
             /* A 'message' listener's first arg is a MessageEvent whose .data is attacker-controlled
                (postMessage): drive it with the {pm} source-tagged event so a sink reaching e.data reports
                {pm} and the PoC assembler builds a postMessage-delivered PoC. (g_msg_event is BORROWED.) */
@@ -1692,7 +1692,7 @@ static void scheduler_run(JSContext *ctx)
                boot value, a real example) else a SOURCED {this} — external input, NOT the shared source-less
                g_opaque, so a `this=='x'` gate token is attributed + reversible (source-at-creation, like args). */
             JSValue recv = JS_FindReceiver(ctx, drive);
-            JSValue this_own = JS_IsUndefined(recv) ? JS_NewOpaqueSourced(ctx, "{this}", "{this}") : JS_UNDEFINED;
+            JSValue this_own = JS_IsUndefined(recv) ? JS_NewConcolicSourced(ctx, "{this}", "{this}") : JS_UNDEFINED;
             JSValue this_val = JS_IsUndefined(recv) ? this_own : recv;
             f.fs = JS_FlowNew(ctx, drive, this_val, 8, oargs);   /* async funcs included now — JS_FlowNew accepts them */
             JS_FreeValue(ctx, this_own);   /* JS_FlowNew dup'd it; UNDEFINED (a real receiver) frees to noop */
@@ -1874,7 +1874,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        arms via the decision-vector logic (real bundles: external input reaches OP_if as opaque). */
     JS_InitOpaqueClass(ctx);             /* register the shape-carrying opaque class */
     opaque_init(ctx);
-    JS_SetOpaqueMarker(g_opaque);
+    JS_SetConcolicMarker(g_opaque);
     JS_SetBranchHook(branch_decide);
     JS_SetForkableHook(ctx_forks);  /* an opaque-collection iterator forks (opaque done) only where branch_decide decides */
     JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
@@ -1892,7 +1892,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
        origin as its own source "{origin}" so an EQ gate on it (`e.origin === 'https://trusted'`) is recognized
        as a real, un-forgeable check: a sink reached ONLY by force-passing it is NOT cross-origin exploitable
        and must not emit a PoC (solve_add suppresses on cons_fixed_value("{origin}")). */
-    JS_SetPropertyStr(ctx, g_msg_event, "origin", JS_NewOpaqueSourced(ctx, "{origin}", "{origin}"));
+    JS_SetPropertyStr(ctx, g_msg_event, "origin", JS_NewConcolicSourced(ctx, "{origin}", "{origin}"));
     JS_SetPropertyStr(ctx, g_msg_event, "source", js_concolic(ctx, "{messageSource}", JS_UNDEFINED));
     JS_SetPropertyStr(ctx, g_msg_event, "ports", js_concolic(ctx, "{messagePorts}", JS_UNDEFINED));
     JS_SetPropertyStr(ctx, g, "__sessionFns", JS_NewCFunction(ctx, js_session_fns, "__sessionFns", 0));
@@ -2216,7 +2216,7 @@ KEEP void qjs_teardown(void)
                                following analysis leaks every tainted object (the reply objects) and JS_FreeRuntime
                                asserts gc_obj_list non-empty. Reset here so the final run frees cleanly too. */
     g_dom_capture = 0; dom_revert();   /* drop DOM undo log (restore baseline) before teardown */
-    JS_SetOpaqueMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
+    JS_SetConcolicMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
     for (int i = 0; i < g_gate_n; i++) free(g_gate_tokens[i]);
     free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
     boot_scripts_free(ctx);

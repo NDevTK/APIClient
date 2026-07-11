@@ -31,9 +31,9 @@ static JSValue js_xhr_send(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     JSValue uv = JS_GetPropertyStr(ctx, this_val, "__url");
     const char *method = JS_IsString(mv) ? JS_ToCString(ctx, mv) : NULL;
     char *url = NULL;
-    { JSValue exurl = JS_OpaqueExample(ctx, uv); const char *u = NULL;   /* concolic URL -> real computed value */
+    { JSValue exurl = JS_ConcolicExample(ctx, uv); const char *u = NULL;   /* concolic URL -> real computed value */
       if (!JS_IsUndefined(exurl)) u = JS_ToCString(ctx, exurl);
-      if (!u && (JS_IsString(uv) || JS_IsOpaque(uv))) u = JS_ToCString(ctx, uv);
+      if (!u && (JS_IsString(uv) || JS_IsConcolic(uv))) u = JS_ToCString(ctx, uv);
       if (u) { url = strdup(u); JS_FreeCString(ctx, u); }
       JS_FreeValue(ctx, exurl); }
     if (url) {

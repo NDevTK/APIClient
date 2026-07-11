@@ -58,7 +58,7 @@ char *url_solve_holes(JSContext *ctx, const char *url) {
 /* Read a network web API's URL argument (see url.h): the opaque EXAMPLE (a computed/config URL the flow
    pinned) takes precedence over a raw ToString, so `new WebSocket(cfg.wsUrl)` records the concrete endpoint. */
 char *url_from_arg(JSContext *ctx, JSValueConst arg) {
-    JSValue ex = JS_OpaqueExample(ctx, arg); const char *u = NULL;
+    JSValue ex = JS_ConcolicExample(ctx, arg); const char *u = NULL;
     if (!JS_IsUndefined(ex)) u = JS_ToCString(ctx, ex);
     if (!u) u = JS_ToCString(ctx, arg);
     char *r = (u && u[0]) ? strdup(u) : NULL;

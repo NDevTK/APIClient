@@ -43,11 +43,11 @@ static JSValue js_idb_get(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
         const char *k = JS_ToCString(ctx, v[0]);
         if (k) {
             JSValue val = JS_GetPropertyStr(ctx, g_idb, k); JS_FreeCString(ctx, k);
-            if (g_candidate && JS_IsOpaque(val)) { JS_FreeValue(ctx, val); return js_idb_request(ctx, JS_NewString(ctx, g_candidate)); }
-            if (JS_IsOpaque(val)) return js_idb_request(ctx, val);                       /* stored an opaque: round-trip its taint */
+            if (g_candidate && JS_IsConcolic(val)) { JS_FreeValue(ctx, val); return js_idb_request(ctx, JS_NewString(ctx, g_candidate)); }
+            if (JS_IsConcolic(val)) return js_idb_request(ctx, val);                       /* stored an opaque: round-trip its taint */
             if (!JS_IsUndefined(val) && !JS_IsNull(val)) {                               /* stored a concrete value: opaque carrying it as the example */
-                JSValue o = JS_NewOpaqueSourced(ctx, "{idb}", "{idb}");
-                if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, val); return js_idb_request(ctx, o); }
+                JSValue o = JS_NewConcolicSourced(ctx, "{idb}", "{idb}");
+                if (JS_IsConcolic(o)) { JS_SetConcolicExample(ctx, o, val); return js_idb_request(ctx, o); }
                 JS_FreeValue(ctx, o); return js_idb_request(ctx, val);
             }
             JS_FreeValue(ctx, val);

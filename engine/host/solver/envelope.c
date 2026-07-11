@@ -137,13 +137,13 @@ int envelope_handles_token(const char *tok) {
     return 0;
 }
 
-/* Detect the descriptor from the sink's opaque VALUE: its JSON field path (JS_OpaqueJKey), its structured
-   source-leaf path (JS_OpaqueSrcC — the '?' marker distinguishes a real query param from a string transform,
+/* Detect the descriptor from the sink's opaque VALUE: its JSON field path (JS_ConcolicJKey), its structured
+   source-leaf path (JS_ConcolicSrcC — the '?' marker distinguishes a real query param from a string transform,
    and a trailing ".<index>" with a split delimiter marks a positional part), resolving the ONE envelope kind. */
 void envelope_detect(JSContext *ctx, JSValueConst val) {
     (void)ctx;
-    { const char *jk = JS_OpaqueJKey(val); snprintf(g_sink_jkey, sizeof g_sink_jkey, "%s", jk ? jk : ""); }   /* JSON envelope field path */
-    const char *sp = JS_OpaqueSrcC(val);   /* the source LEAF path ("{pm}.html") -> post {html:payload}, not a bare string */
+    { const char *jk = JS_ConcolicJKey(val); snprintf(g_sink_jkey, sizeof g_sink_jkey, "%s", jk ? jk : ""); }   /* JSON envelope field path */
+    const char *sp = JS_ConcolicSrcC(val);   /* the source LEAF path ("{pm}.html") -> post {html:payload}, not a bare string */
     g_sink_root[0] = 0;   /* the root source token so the envelope can merge sibling gate fields */
     if (sp) { const char *rb = strchr(sp, '}'); if (rb) { size_t rl = (size_t)(rb - sp + 1); if (rl < sizeof g_sink_root) { memcpy(g_sink_root, sp, rl); g_sink_root[rl] = 0; } } }
     /* query-source sink: a URLSearchParams.get(key) opaque has src "{search}?data" — the '?' marker (set only by
@@ -154,10 +154,10 @@ void envelope_detect(JSContext *ctx, JSValueConst val) {
         if (qm && qm[1]) { const char *e = qm + 1; while (*e && *e != '.') e++;
             size_t kl = (size_t)(e - (qm + 1));
             if (kl && kl < sizeof g_sink_qkey) { memcpy(g_sink_qkey, qm + 1, kl); g_sink_qkey[kl] = 0; } } }
-    /* split-source sink: parts[i] from str.split(D) carries the delimiter (JS_OpaqueSplitDelim) and a src ending
+    /* split-source sink: parts[i] from str.split(D) carries the delimiter (JS_ConcolicSplitDelim) and a src ending
        ".<index>". Record the delimiter, the shared prefix, and the index for a delimited positional envelope. */
     g_sink_delim[0] = 0; g_sink_sprefix[0] = 0; g_sink_sidx = -1;
-    { const char *dl = JS_OpaqueSplitDelim(val);
+    { const char *dl = JS_ConcolicSplitDelim(val);
       if (dl && dl[0] && sp) { const char *ld = strrchr(sp, '.');
           if (ld && ld[1]) { char *end; long idx = strtol(ld + 1, &end, 10);
               if (*end == 0 && idx >= 0) { g_sink_sidx = (int)idx;

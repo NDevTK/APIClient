@@ -79,15 +79,15 @@ static JSValue js_source_get(JSContext *ctx, JSValueConst this_val, int magic) {
         if (magic == 2) {   /* postMessage e.data can be an OBJECT: return a CANDIDATE-CARRIER opaque so a FIELD
                                sink (`{html}=e.data; el.innerHTML=html`) delivers the candidate, while whole-value
                                use (`el.innerHTML=e.data`) reads the same candidate as the example. */
-            JSValue c = JS_NewOpaqueSourced(ctx, g_source_tag[2], g_source_tag[2]);
-            JS_SetOpaqueExample(ctx, c, JS_NewString(ctx, buf)); JS_SetOpaqueCarrier(ctx, c);
+            JSValue c = JS_NewConcolicSourced(ctx, g_source_tag[2], g_source_tag[2]);
+            JS_SetConcolicExample(ctx, c, JS_NewString(ctx, buf)); JS_SetConcolicCarrier(ctx, c);
             free(buf); return c;
         }
         JSValue r = JS_NewString(ctx, buf); free(buf); return r;
     }
     {   /* stamp root source identity for the per-flow value domain */
-        JSValue o = JS_NewOpaqueSourced(ctx, g_source_tag[magic], g_source_tag[magic]);
-        if (g_source_pfx[magic][0]) JS_SetOpaquePrefix(ctx, o, g_source_pfx[magic]);   /* the URL leading char (#/?) — JSON.parse of the raw source THROWS faithfully (V8), only .slice(1) makes it parseable */
+        JSValue o = JS_NewConcolicSourced(ctx, g_source_tag[magic], g_source_tag[magic]);
+        if (g_source_pfx[magic][0]) JS_SetConcolicPrefix(ctx, o, g_source_pfx[magic]);   /* the URL leading char (#/?) — JSON.parse of the raw source THROWS faithfully (V8), only .slice(1) makes it parseable */
         return o;
     }
 }

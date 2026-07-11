@@ -30,12 +30,12 @@ static void blob_finalizer(JSRuntime *rt, JSValue val) {
 static JSValue blob_content_of(JSContext *ctx, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_NewString(ctx, "");
     JSValueConst parts = argv[0];
-    if (!JS_IsArray(parts)) return JS_IsOpaque(parts) ? JS_DupValue(ctx, parts) : JS_ToString(ctx, parts);
+    if (!JS_IsArray(parts)) return JS_IsConcolic(parts) ? JS_DupValue(ctx, parts) : JS_ToString(ctx, parts);
     uint32_t len = 0;
     JSValue lv = JS_GetPropertyStr(ctx, parts, "length"); JS_ToUint32(ctx, &len, lv); JS_FreeValue(ctx, lv);
     for (uint32_t i = 0; i < len; i++) {                 /* any opaque part -> taint dominates */
         JSValue el = JS_GetPropertyUint32(ctx, parts, i);
-        if (JS_IsOpaque(el)) return el;
+        if (JS_IsConcolic(el)) return el;
         JS_FreeValue(ctx, el);
     }
     if (len == 0) return JS_NewString(ctx, "");

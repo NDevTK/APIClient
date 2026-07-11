@@ -18,7 +18,7 @@ JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
        input has no example -> the shape, as before. */
     const char *url = NULL;
     if (argc > 0) {
-        JSValue exurl = JS_OpaqueExample(ctx, argv[0]);
+        JSValue exurl = JS_ConcolicExample(ctx, argv[0]);
         if (!JS_IsUndefined(exurl)) url = JS_ToCString(ctx, exurl);
         JS_FreeValue(ctx, exurl);
         if (!url) url = JS_ToCString(ctx, argv[0]);
@@ -31,7 +31,7 @@ JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
         if (JS_IsString(m)) method = JS_ToCString(ctx, m);   /* opaque options -> .method opaque (not a string) -> GET */
         JS_FreeValue(ctx, m);
     }
-    if (!method && argc > 0 && JS_IsObject(argv[0]) && !JS_IsOpaque(argv[0])) {   /* fetch(new Request(url,{method})); an opaque URL is not a Request */
+    if (!method && argc > 0 && JS_IsObject(argv[0]) && !JS_IsConcolic(argv[0])) {   /* fetch(new Request(url,{method})); an opaque URL is not a Request */
         JSValue m = JS_GetPropertyStr(ctx, argv[0], "method");
         if (JS_IsString(m)) method = JS_ToCString(ctx, m);
         JS_FreeValue(ctx, m);
@@ -54,7 +54,7 @@ JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
            (opaque values ARE objects), NOT an init — reading its phantom .body/.headers invented a spurious
            body param on a plain GET(opaqueUrl). Exclude opaque here. */
         JSValueConst init = (argc > 1 && JS_IsObject(argv[1])) ? argv[1]
-                          : ((argc > 0 && JS_IsObject(argv[0]) && !JS_IsOpaque(argv[0])) ? argv[0] : JS_UNDEFINED);
+                          : ((argc > 0 && JS_IsObject(argv[0]) && !JS_IsConcolic(argv[0])) ? argv[0] : JS_UNDEFINED);
         if (JS_IsObject(init)) {
             JSValue hdrs = JS_GetPropertyStr(ctx, init, "headers");
             capture_headers(ctx, ep, hdrs);   /* shared with XHR: plain object / Headers __fields, concolic value */
@@ -67,12 +67,12 @@ JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *
                    the concolic serialization, then read its concrete EXAMPLE (the JS ToString coercion would
                    otherwise flatten the opaque to its shape before we see the example). */
                 JSValue braw = JS_DupValue(ctx, body);
-                if (JS_IsObject(braw) && !JS_IsOpaque(braw)) {
+                if (JS_IsObject(braw) && !JS_IsConcolic(braw)) {
                     JSValue ts = JS_GetPropertyStr(ctx, braw, "toString");
                     if (JS_IsFunction(ctx, ts)) { JSValue r = JS_Call(ctx, ts, braw, 0, NULL); if (!JS_IsException(r)) { JS_FreeValue(ctx, braw); braw = r; } else { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); } }
                     JS_FreeValue(ctx, ts);
                 }
-                JSValue exbody = JS_OpaqueExample(ctx, braw);
+                JSValue exbody = JS_ConcolicExample(ctx, braw);
                 if (!JS_IsUndefined(exbody)) bs = JS_ToCString(ctx, exbody);
                 JS_FreeValue(ctx, exbody);
                 if (!bs) bs = JS_ToCString(ctx, braw);          /* else the shape (opaque) or a plain string */

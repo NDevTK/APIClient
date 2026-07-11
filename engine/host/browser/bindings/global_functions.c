@@ -15,7 +15,7 @@ static JSValue js_function_ctor(JSContext *ctx, JSValueConst new_target, int arg
     (void)new_target;
     if (argc >= 1) {
         JSValueConst body = argv[argc - 1];
-        if (JS_IsOpaque(body) || (g_candidate && JS_IsString(body))) {
+        if (JS_IsConcolic(body) || (g_candidate && JS_IsString(body))) {
             solve_add(ctx, "Function", "js", body);   /* @S: body is code */
             return JS_NewCFunction(ctx, js_noop, "", 0);   /* callable no-op so new Function(x)() is safe */
         }
@@ -27,7 +27,7 @@ static JSValue js_function_ctor(JSContext *ctx, JSValueConst new_target, int arg
 static JSValue js_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 1) return JS_UNDEFINED;
-    if (JS_IsOpaque(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return js_concolic(ctx, "{evalResult}", JS_UNDEFINED); }   /* @S: opaque reaches eval -> detect + spawn candidate replays */
+    if (JS_IsConcolic(argv[0])) { solve_add(ctx, "eval", "js", argv[0]); return js_concolic(ctx, "{evalResult}", JS_UNDEFINED); }   /* @S: opaque reaches eval -> detect + spawn candidate replays */
     /* On a candidate-REPLAY flow the payload arrives as a CONCRETE string (the real code transformed it). eval's
        arg IS the sink code, so RECORD it for the breakout check — do NOT JS_Eval it (that would run the X9
        payload against an undefined X9 and never verify the sink). */

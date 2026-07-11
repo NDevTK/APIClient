@@ -24,11 +24,11 @@ static void form_enc(const char *s, char *out, size_t cap) {   /* application/x-
 }
 static char *form_field_value(JSContext *ctx, lxb_dom_element_t *el) {   /* malloc'd; caller frees */
     int si = attr_shadow_find(el, "value");
-    if (si >= 0 && JS_IsOpaque(attr_shadow_opaque(si))) {
-        JSValue ex = JS_OpaqueExample(ctx, attr_shadow_opaque(si)); char *r = NULL;
+    if (si >= 0 && JS_IsConcolic(attr_shadow_opaque(si))) {
+        JSValue ex = JS_ConcolicExample(ctx, attr_shadow_opaque(si)); char *r = NULL;
         if (!JS_IsUndefined(ex)) { const char *s = JS_ToCString(ctx, ex); if (s) { r = strdup(s); JS_FreeCString(ctx, s); } }
         JS_FreeValue(ctx, ex);
-        if (!r) { const char *sh = JS_OpaqueShapeC(attr_shadow_opaque(si)); r = strdup(sh ? sh : "{opaque}"); }
+        if (!r) { const char *sh = JS_ConcolicShapeC(attr_shadow_opaque(si)); r = strdup(sh ? sh : "{opaque}"); }
         return r;
     }
     size_t vl = 0; const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"value", 5, &vl);

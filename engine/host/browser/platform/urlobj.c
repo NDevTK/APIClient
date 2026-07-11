@@ -34,11 +34,11 @@ static void sp_def_size(JSContext *ctx, JSValue o);
 JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     /* opaque (external-input-tainted) URL -> return the INPUT opaque so its SHAPE flows through unchanged
        (never concretely resolved — RUN-DON'T-MATCH). A concrete input is resolved by the REAL Lexbor parser. */
-    if (argc >= 1 && JS_IsOpaque(argv[0])) return JS_DupValue(ctx, argv[0]);
+    if (argc >= 1 && JS_IsConcolic(argv[0])) return JS_DupValue(ctx, argv[0]);
     const char *input = argc >= 1 ? JS_ToCString(ctx, argv[0]) : NULL;
     const char *base  = argc >= 2 && JS_IsString(argv[1]) ? JS_ToCString(ctx, argv[1]) : NULL;
     char *resolved = (input && !has_hole(input)) ? url_resolve(input, base ? base : g_origin) : NULL;
-    JSValue shaped = (input && has_hole(input)) ? JS_NewOpaqueShaped(ctx, input) : JS_UNDEFINED;  /* {}-shape string -> keep shape */
+    JSValue shaped = (input && has_hole(input)) ? JS_NewConcolicShaped(ctx, input) : JS_UNDEFINED;  /* {}-shape string -> keep shape */
     if (input) JS_FreeCString(ctx, input);
     if (base) JS_FreeCString(ctx, base);
     if (!resolved) return JS_IsUndefined(shaped) ? js_concolic(ctx, "{url}", JS_UNDEFINED) : shaped;   /* shape/parse-fail -> opaque, never invent */
@@ -87,7 +87,7 @@ JSValue js_url_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueCo
    collapse exploration on external input); concrete -> whether Lexbor actually parses it. */
 JSValue js_url_canparse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 1) return JS_FALSE;
-    if (JS_IsOpaque(argv[0])) return JS_TRUE;
+    if (JS_IsConcolic(argv[0])) return JS_TRUE;
     const char *input = JS_ToCString(ctx, argv[0]);
     const char *base = (argc >= 2 && JS_IsString(argv[1])) ? JS_ToCString(ctx, argv[1]) : NULL;
     int ok = 0;
@@ -103,10 +103,10 @@ extern JSValue js_el_self(JSContext *ctx, JSValueConst this_val, int argc, JSVal
    auth/CSRF headers, request body) — not just the url. Resolve the url shape-aware (like URL). */
 JSValue js_request_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     /* opaque input -> return the input opaque (url shape flows); concrete -> Lexbor-resolved url. */
-    if (argc >= 1 && JS_IsOpaque(argv[0])) return JS_DupValue(ctx, argv[0]);
+    if (argc >= 1 && JS_IsConcolic(argv[0])) return JS_DupValue(ctx, argv[0]);
     const char *input = argc >= 1 ? JS_ToCString(ctx, argv[0]) : NULL;
     char *resolved = (input && !has_hole(input)) ? url_resolve(input, g_origin) : NULL;
-    JSValue rshaped = (input && has_hole(input)) ? JS_NewOpaqueShaped(ctx, input) : JS_UNDEFINED;
+    JSValue rshaped = (input && has_hole(input)) ? JS_NewConcolicShaped(ctx, input) : JS_UNDEFINED;
     if (input) JS_FreeCString(ctx, input);
     if (!resolved) return JS_IsUndefined(rshaped) ? js_concolic(ctx, "{url}", JS_UNDEFINED) : rshaped;
     JSValue o = JS_NewObject(ctx);
@@ -187,12 +187,12 @@ static JSValue js_sp_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
                 /* '?' separates the query KEY from the root — a marker a transform chain (which appends ".slice"
                    etc.) can never produce, so main.c distinguishes a real query param from a string transform. */
                 char srcp[160]; snprintf(srcp, sizeof srcp, "%s?%s", root ? root : "", k);
-                JSValue o = JS_NewOpaqueSourced(ctx, shp, srcp);
+                JSValue o = JS_NewConcolicSourced(ctx, shp, srcp);
                 if (root) JS_FreeCString(ctx, root);
                 JS_FreeValue(ctx, rootv); JS_FreeCString(ctx, k); return o;
             }
             JS_FreeValue(ctx, rootv);
-            JSValue o = JS_NewOpaqueSourced(ctx, shp, k); JS_FreeCString(ctx, k); return o;
+            JSValue o = JS_NewConcolicSourced(ctx, shp, k); JS_FreeCString(ctx, k); return o;
         }
     }
     return js_concolic(ctx, "{searchParam}", JS_UNDEFINED);   /* no key -> generic external input */
@@ -208,11 +208,11 @@ JSValue js_sp_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
         for (uint32_t i = 0; i < n; i++) {
             const char *k = JS_AtomToCString(ctx, tab[i].atom);
             JSValue v = JS_GetProperty(ctx, f, tab[i].atom);
-            int op = JS_IsOpaque(v); if (op) any_opaque = 1;
+            int op = JS_IsConcolic(v); if (op) any_opaque = 1;
             const char *vsh; int free_vsh = 0;
-            if (op) vsh = JS_OpaqueShapeC(v); else { vsh = JS_ToCString(ctx, v); free_vsh = 1; }
+            if (op) vsh = JS_ConcolicShapeC(v); else { vsh = JS_ToCString(ctx, v); free_vsh = 1; }
             if (k && vsh && so < (int)sizeof(shape) - 2) so += snprintf(shape + so, sizeof(shape) - so, "%s%s=%s", so ? "&" : "", k, vsh);
-            JSValue vex = op ? JS_OpaqueExample(ctx, v) : JS_DupValue(ctx, v);
+            JSValue vex = op ? JS_ConcolicExample(ctx, v) : JS_DupValue(ctx, v);
             if (JS_IsUndefined(vex) || JS_IsNull(vex)) all_examples = 0;
             else if (k && eo < (int)sizeof(examp) - 2) {
                 const char *ve = JS_ToCString(ctx, vex);
@@ -228,8 +228,8 @@ JSValue js_sp_tostring(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     }
     JS_FreeValue(ctx, f);
     if (!any_opaque) return JS_NewStringLen(ctx, shape, so);   /* all-concrete params -> a plain string */
-    JSValue r = JS_NewOpaqueSourced(ctx, shape, "{}");         /* tainted query keeps its shape + @S taint */
-    if (all_examples && JS_IsOpaque(r)) JS_SetOpaqueExample(ctx, r, JS_NewStringLen(ctx, examp, eo));
+    JSValue r = JS_NewConcolicSourced(ctx, shape, "{}");         /* tainted query keeps its shape + @S taint */
+    if (all_examples && JS_IsConcolic(r)) JS_SetConcolicExample(ctx, r, JS_NewStringLen(ctx, examp, eo));
     return r;
 }
 /* application/x-www-form-urlencoded DECODE (the spec parse: '+' -> space, %XX -> byte) into a JS string. Real
@@ -333,11 +333,11 @@ static char *sp_serialize(JSContext *ctx, JSValueConst sp) {
                 const char *k = JS_AtomToCString(ctx, tab[i].atom);
                 JSValue v = JS_GetProperty(ctx, f, tab[i].atom);
                 char *valstr = NULL; int is_shape = 0;
-                if (JS_IsOpaque(v)) {
-                    JSValue ex = JS_OpaqueExample(ctx, v);
+                if (JS_IsConcolic(v)) {
+                    JSValue ex = JS_ConcolicExample(ctx, v);
                     if (!JS_IsUndefined(ex)) { const char *s = JS_ToCString(ctx, ex); if (s) { valstr = strdup(s); JS_FreeCString(ctx, s); } }
                     JS_FreeValue(ctx, ex);
-                    if (!valstr) { const char *sh = JS_OpaqueShapeC(v); valstr = strdup(sh ? sh : "{}"); is_shape = 1; }
+                    if (!valstr) { const char *sh = JS_ConcolicShapeC(v); valstr = strdup(sh ? sh : "{}"); is_shape = 1; }
                 } else { const char *s = JS_ToCString(ctx, v); if (s) { valstr = strdup(s); JS_FreeCString(ctx, s); } }
                 if (k && valstr && o < (int)sizeof(buf) - 2) {
                     o += snprintf(buf + o, sizeof(buf) - o, "%s%s=", o ? "&" : "", k);
@@ -406,8 +406,8 @@ JSValue js_searchparams_ctor(JSContext *ctx, JSValueConst new_target, int argc, 
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "__fields", JS_NewObject(ctx));
     if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
-        if (JS_IsOpaque(argv[0])) {   /* built from external input (location.search/hash): remember the ROOT source id so get(k) links siblings, letting the multi-hole @S query envelope co-solve a sibling gate + the sink */
-            const char *rs = JS_OpaqueSrcC(argv[0]);
+        if (JS_IsConcolic(argv[0])) {   /* built from external input (location.search/hash): remember the ROOT source id so get(k) links siblings, letting the multi-hole @S query envelope co-solve a sibling gate + the sink */
+            const char *rs = JS_ConcolicSrcC(argv[0]);
             if (rs && rs[0]) JS_SetPropertyStr(ctx, o, "__root", JS_NewString(ctx, rs));
         } else sp_init(ctx, o, argv[0]);
     }

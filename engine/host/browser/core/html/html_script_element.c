@@ -29,7 +29,7 @@ void script_maybe_load(JSContext *ctx, lxb_dom_element_t *el) {
        leaves only the holey SHAPE in the Lexbor attribute, so the real chunk URL lives in the shadow. */
     int si = attr_shadow_find(el, "src");
     if (si >= 0) {
-        JSValue ex = JS_OpaqueExample(ctx, attr_shadow_opaque(si));
+        JSValue ex = JS_ConcolicExample(ctx, attr_shadow_opaque(si));
         if (!JS_IsUndefined(ex)) { const char *e = JS_ToCString(ctx, ex); if (e) { u = strdup(e); JS_FreeCString(ctx, e); } }
         JS_FreeValue(ctx, ex);
     }

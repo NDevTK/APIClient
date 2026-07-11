@@ -57,7 +57,7 @@ JSValue js_doc_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueCon
            value (a reply/computed HTML like '<script src="'+cfg.url+'">') is an opaque OBJECT, not a JS string,
            so JS_IsString alone skipped it — dropping the real example. Prefer the concolic example (concrete
            src), exactly like fetch/import/script.src. */
-        JSValue ex = JS_IsString(argv[i]) ? JS_UNDEFINED : JS_OpaqueExample(ctx, argv[i]);
+        JSValue ex = JS_IsString(argv[i]) ? JS_UNDEFINED : JS_ConcolicExample(ctx, argv[i]);
         JSValueConst hv = !JS_IsUndefined(ex) ? ex : argv[i];
         if (JS_IsString(hv)) {
             const char *html = JS_ToCString(ctx, hv);

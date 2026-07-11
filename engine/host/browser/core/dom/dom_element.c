@@ -157,7 +157,7 @@ JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, 
         size_t tl = 0; const lxb_char_t *tag = lxb_dom_element_qualified_name(el, &tl);
         if (tl == 6 && tag && memcmp(tag, "script", 6) == 0) solve_add(ctx, "script.src", "scripturl", val);
     }
-    int is_opq = JS_IsOpaque(val);
+    int is_opq = JS_IsConcolic(val);
     /* A CONCOLIC value set via PROPERTY (`s.src = replyField` / `el.href = computedUrl`) must keep its real
        value in the attribute shadow — EXACTLY like setAttribute — else the concrete example is lost to the
        holey shape written into Lexbor: getAttribute would not round-trip the taint, and script_maybe_load
@@ -165,11 +165,11 @@ JSValue js_el_refl_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, 
        shape; the shadow carries the concolic (taint + example). */
     dom_attr_capture(el, n);   /* capture pre-write baseline (attr + taint shadow) BEFORE mutating either — see js_el_setAttribute */
     if (!g_candidate) attr_shadow_set(ctx, el, n, is_opq ? val : JS_UNDEFINED);
-    JSValue exv = is_opq ? JS_OpaqueExample(ctx, val) : JS_UNDEFINED;   /* write the concolic EXAMPLE to Lexbor so it round-trips through getAttribute (see js_el_setAttribute) */
+    JSValue exv = is_opq ? JS_ConcolicExample(ctx, val) : JS_UNDEFINED;   /* write the concolic EXAMPLE to Lexbor so it round-trips through getAttribute (see js_el_setAttribute) */
     int ex_str = is_opq && !JS_IsUndefined(exv);
-    const char *v = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_OpaqueShapeC(val) : JS_ToCString(ctx, val));
+    const char *v = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_ConcolicShapeC(val) : JS_ToCString(ctx, val));
     if (v) lxb_dom_element_set_attribute(el, (const lxb_char_t *)n, strlen(n), (const lxb_char_t *)v, strlen(v));
-    if (v && (ex_str || !is_opq)) JS_FreeCString(ctx, v);   /* ToString'd frees; JS_OpaqueShapeC internal pointer does not */
+    if (v && (ex_str || !is_opq)) JS_FreeCString(ctx, v);   /* ToString'd frees; JS_ConcolicShapeC internal pointer does not */
     JS_FreeValue(ctx, exv);
     return JS_UNDEFINED;
 }
@@ -206,7 +206,7 @@ JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     if (!el || argc < 2) return JS_UNDEFINED;
     const char *name = JS_ToCString(ctx, argv[0]);
     if (!name) return JS_UNDEFINED;
-    int is_opq = JS_IsOpaque(argv[1]);
+    int is_opq = JS_IsConcolic(argv[1]);
     /* Capture the TRUE pre-write baseline (attr value AND taint shadow) into the per-flow COW delta BEFORE
        mutating either — else dom_attr_capture snapshots this flow's OWN shadow write as the baseline, so a
        context-switch's unapply can't restore the real (empty) baseline and the stashed taint is lost the
@@ -226,11 +226,11 @@ JSValue js_el_setAttribute(JSContext *ctx, JSValueConst this_val, int argc, JSVa
        attr. Writing only the display shape degraded a DOM-stashed candidate to its shape, so it never broke out
        at the downstream sink (the cross-handler / stash-and-read @S round-trip). Prefer the example; fall back to
        the shape for a pure symbol (attacker input with no example). */
-    JSValue exv = is_opq ? JS_OpaqueExample(ctx, argv[1]) : JS_UNDEFINED;
+    JSValue exv = is_opq ? JS_ConcolicExample(ctx, argv[1]) : JS_UNDEFINED;
     int ex_str = is_opq && !JS_IsUndefined(exv);
-    const char *val = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_OpaqueShapeC(argv[1]) : JS_ToCString(ctx, argv[1]));
+    const char *val = ex_str ? JS_ToCString(ctx, exv) : (is_opq ? JS_ConcolicShapeC(argv[1]) : JS_ToCString(ctx, argv[1]));
     if (val) lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val));   /* baseline captured above (before the shadow write) */
-    if (val && (ex_str || !is_opq)) JS_FreeCString(ctx, val);   /* ToString'd (example/concrete) frees; JS_OpaqueShapeC internal pointer does not */
+    if (val && (ex_str || !is_opq)) JS_FreeCString(ctx, val);   /* ToString'd (example/concrete) frees; JS_ConcolicShapeC internal pointer does not */
     JS_FreeValue(ctx, exv);
     JS_FreeCString(ctx, name);
     return JS_UNDEFINED;
@@ -310,8 +310,8 @@ JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val) {   /* .textCon
         int is_json = 0;
         for (size_t i = 0; ty && i + 4 <= tl; i++) if (!memcmp(ty + i, "json", 4)) { is_json = 1; break; }
         if (is_json) {
-            JSValue o = JS_NewOpaqueSourced(ctx, "{ssr}", "{ssr}");
-            if (JS_IsOpaque(o)) { JS_SetOpaqueExample(ctx, o, r); return o; }   /* consumes r */
+            JSValue o = JS_NewConcolicSourced(ctx, "{ssr}", "{ssr}");
+            if (JS_IsConcolic(o)) { JS_SetConcolicExample(ctx, o, r); return o; }   /* consumes r */
             JS_FreeValue(ctx, o);
         }
     }
@@ -368,8 +368,8 @@ static JSValue js_el_on_set(JSContext *ctx, JSValueConst this_val, JSValueConst 
    {parsedhtml}-TAINTED node (DOMParser/Range of attacker input) into the live DOM is the @S sink. */
 static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     lxb_dom_element_t *parent = JS_GetOpaque(this_val, g_el_class_id);
-    if (argc > 0 && JS_IsOpaque(argv[0])) {
-        const char *sh = JS_OpaqueShapeC(argv[0]);
+    if (argc > 0 && JS_IsConcolic(argv[0])) {
+        const char *sh = JS_ConcolicShapeC(argv[0]);
         if (sh && strcmp(sh, "{parsedhtml}") == 0) solve_add(ctx, "appendChild", "html", argv[0]);
     }
     lxb_dom_element_t *child = (argc > 0) ? JS_GetOpaque(argv[0], g_el_class_id) : NULL;

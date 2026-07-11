@@ -3,7 +3,7 @@
  * replay flow, the concrete candidate delivered RAW — window.name is not URL-encoded, so the payload survives
  * verbatim to the sink). */
 #include "core/frame/winname.h"
-#include "solver/opaque.h"   /* JS_NewOpaqueSourced */
+#include "solver/opaque.h"   /* JS_NewConcolicSourced */
 #include <stddef.h>
 
 extern char *g_candidate;   /* @S replay: the concrete candidate (raw for window.name — no URL encode set) */
@@ -14,7 +14,7 @@ JSValue js_winname_get(JSContext *ctx, JSValueConst this_val) {
     (void)this_val;
     if (!JS_IsUndefined(g_winname)) return JS_DupValue(ctx, g_winname);   /* the page overwrote name -> its own value (blocks the attacker path) */
     if (g_candidate) return JS_NewString(ctx, g_candidate);              /* @S replay: raw attacker candidate (no percent-encoding) */
-    return JS_NewOpaqueSourced(ctx, "{name}", "{name}");                 /* attacker external input: control-flow forks, @S taint holds */
+    return JS_NewConcolicSourced(ctx, "{name}", "{name}");                 /* attacker external input: control-flow forks, @S taint holds */
 }
 
 JSValue js_winname_set(JSContext *ctx, JSValueConst this_val, JSValueConst val) {
