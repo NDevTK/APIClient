@@ -51,6 +51,7 @@
 #include "solver/why.h"  /* why_add — runtime-reasoned @WHY */
 #include "core/html/html_script_runner.h"  /* eval_page_script + dom_run_scripts (HTMLScriptRunner) */
 #include "core/loader/chunk_loader.h"       /* chunk_pending_add / chunk_provide / chunk_list — the lazy-chunk resource loader */
+#include "core/loader/reply_registry.h"     /* reply_fetch_register / reply_pending_list / drop — the reply fetch registry */
 #include "modules/storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
 #include "core/frame/messaging.h"    /* MessageChannel/BroadcastChannel (Blink core/messaging), its own TU */
@@ -177,27 +178,11 @@ static JSValue g_dedup_fn = JS_UNDEFINED;    /* (eps) => deduped array, evaluate
    early-exit for some/every, hole-preserving map. Deviation: map/filter build a plain Array (Symbol.
    species not honored) -- effectively never overridden in real bundles. */
 /* ARRAY_PRELUDE_JS (self-hosted Array/String iterators) -> prelude.c */
-/* Reply FETCH registration: a reply-consume (r.json()/r.text()) with no cached body registers its (concrete)
-   url so qjs_step returns NEED_FETCH; the offscreen safe-fetches + qjs_provide()s the body, which CACHES it and
-   enqueues a forking BOOT RE-RUN that re-runs boot with the reply now synchronously concolic (make_response
-   injects __body) — the reply is delivered CONCOLIC in a LIVE flow. NO promise is parked: a parked resolve fn
-   held across the fetch is persistent async state OUTSIDE the per-flow COW delta (it outlives the flow's revert
-   and resolves against torn-down heap). r.json() resolves OPAQUE in place; concrete comes from the re-run. */
-typedef struct { char *url; int is_json; } Pending;
-static Pending *g_pending = NULL;
-static int g_pending_n = 0, g_pending_cap = 0;
-void reply_fetch_register(const char *url, int is_json) {
-    if (!url) return;
-    for (int i = 0; i < g_pending_n; i++) if (g_pending[i].url && strcmp(g_pending[i].url, url) == 0) return;   /* dedup: one fetch per url */
-    if (g_pending_n >= g_pending_cap) {
-        int nc = g_pending_cap ? g_pending_cap * 2 : 32;
-        Pending *n = realloc(g_pending, (size_t)nc * sizeof(Pending));
-        if (!n) return;
-        g_pending = n; g_pending_cap = nc;
-    }
-    g_pending[g_pending_n].url = strdup(url); g_pending[g_pending_n].is_json = is_json;
-    g_pending_n++;
-}
+/* Reply FETCH registry (reply_fetch_register / reply_pending_list / drop) -> browser/core/loader/reply_registry.
+   A reply-consume (r.json()/r.text()) with no cached body registers its url so qjs_step returns NEED_FETCH; the
+   offscreen safe-fetches + qjs_provide()s the body, which CACHES it and delivers the concolic reply to the parked
+   consumer (solver/reply.c). NO promise resolve fn is held across the fetch (persistent async state outside the
+   per-flow COW delta): r.json() resolves OPAQUE in place; concrete comes from the delivery. */
 /* Chunk-load pending/done registry + the fetch-and-evaluate of a lazy <script src>/dyn-import chunk ->
    browser/core/loader/chunk_loader.{c,h} (Blink core/loader). qjs_provide asks chunk_provide first. */
 
@@ -542,8 +527,9 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_reg_n = 0; g_work = 0; g_switches = 0; g_yield_floor = -1e300; g_made_progress = 0; g_emit_total = 0; g_running = 0; g_cur_flow = NULL; g_msg_handler_n = 0;
     g_cur_orphan_idx = -1; g_dec_n = 0; g_c = 0; g_resume_mode = 0; g_park_requested = 0;
     arec_free();   /* fresh session: drop any async recipes a prior teardown missed (idempotent) */
-    g_pending_n = 0; g_orphan_n = 0; g_dom_capture = 0;
-    chunk_loader_free();   /* fresh session: drop pending + the per-session fetched-chunk cache (a new visit re-fetches the current bytes) */
+    g_orphan_n = 0; g_dom_capture = 0;
+    reply_registry_free();   /* fresh session: drop pending reply fetches */
+    chunk_loader_free();     /* + pending chunks and the per-session fetched-chunk cache (a new visit re-fetches the current bytes) */
     JS_OptaintReset(ctx);   /* clear cross-flow opaque-taint set from any prior page analysis */
     tt_reset();             /* clear observed Trusted-Types policy state from the prior document */
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
@@ -779,24 +765,7 @@ KEEP void qjs_begin(const char *recipes)
 }
 
 /* The distinct pending fetch urls (newline-joined) the offscreen must safe-fetch. Static buffer. */
-KEEP const char *qjs_pending(void)
-{
-    static char *buf = NULL; static size_t cap = 0;
-    size_t need = 1;
-    for (int i = 0; i < g_pending_n; i++) if (g_pending[i].url) need += strlen(g_pending[i].url) + 1;
-    if (need > cap) { char *n = realloc(buf, need); if (!n) return ""; buf = n; cap = need; }
-    size_t off = 0;
-    for (int i = 0; i < g_pending_n; i++) {
-        if (!g_pending[i].url) continue;
-        int dup = 0;
-        for (int j = 0; j < i; j++) if (g_pending[j].url && strcmp(g_pending[j].url, g_pending[i].url) == 0) { dup = 1; break; }
-        if (dup) continue;
-        size_t l = strlen(g_pending[i].url);
-        memcpy(buf + off, g_pending[i].url, l); off += l; buf[off++] = '\n';
-    }
-    buf[off] = 0;
-    return buf;
-}
+KEEP const char *qjs_pending(void) { return reply_pending_list(); }
 /* Chunk urls to fetch (as JS) + eval in place (newline-joined) -> the chunk loader owns the list. */
 KEEP const char *qjs_chunks(void) { return chunk_list(); }
 /* Resolve every pending consume of `url` with the concrete body (empty -> opaque); cache in the reply
@@ -817,11 +786,7 @@ KEEP void qjs_provide(const char *url, const char *body)
         JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));   /* cache for a re-entrant/cached read (make_response __body) */
         pendreply_resolve(ctx, url, body);   /* PARK-RESUME: deliver the concrete concolic reply to every parked r.json()/r.text() of this url — the continuation resumes in place, no boot re-run */
     }
-    for (int i = 0; i < g_pending_n; i++) {   /* the reply is CACHED + its parked consumers resolved above; drop the fetch registration */
-        if (g_pending[i].url && strcmp(g_pending[i].url, url) == 0) { free(g_pending[i].url); g_pending[i].url = NULL; }
-    }
-    int w = 0; for (int i = 0; i < g_pending_n; i++) if (g_pending[i].url) g_pending[w++] = g_pending[i];
-    g_pending_n = w;
+    reply_pending_drop(url);   /* the reply is CACHED + its parked consumers resolved above; drop the fetch registration */
 }
 /* Drop all remaining fetch registrations (a reply/chunk never fetched). A parked r.json()/r.text() whose body
    never arrived is resolved OPAQUE {reply} here so its continuation still runs (shape coverage), never left
@@ -830,8 +795,7 @@ KEEP void qjs_finalize(void)
 {
     JSContext *ctx = g_ctx; if (!ctx) return;
     pendreply_drain_opaque(ctx);   /* resolve any never-delivered parked reply with {reply} (shape) */
-    for (int i = 0; i < g_pending_n; i++) free(g_pending[i].url);
-    g_pending_n = 0;
+    reply_registry_free();         /* drop remaining reply fetch registrations */
     chunk_loader_free();   /* node CLI can't fetch chunks -> drop pending (+ the per-session done cache) */
 }
 /* Advance the ONE scheduler; drain microtasks. Return 1 = NEED_FETCH (flows parked awaiting a real
@@ -855,7 +819,7 @@ KEEP int qjs_step(void)
     g_made_progress = 0;                                 /* fresh progress guard each host visit */
     scheduler_run(g_ctx);
     js_std_loop(g_ctx);
-    if (g_pending_n > 0 || chunk_pending_count() > 0) return 1;      /* NEED_FETCH: replies and/or chunks */
+    if (reply_pending_count() > 0 || chunk_pending_count() > 0) return 1;      /* NEED_FETCH: replies and/or chunks */
     if (g_reg_n > 0) return 2;                           /* HOT work remains (value-yielded) — host re-ranks + resumes */
     return 0;                                            /* fully explored (or parked) — done */
 }
@@ -895,6 +859,7 @@ KEEP void qjs_teardown(void)
     cons_free();   /* free the per-flow value-domain constraint set (solver/constraints.c) */
     module_loader_free(ctx);   /* free the modsrc/moddep/pendmod tables + import delivery-park (module_loader.c) */
     pendreply_free(ctx);       /* free the reply delivery-park table (reply.c) */
+    reply_registry_free();     /* free the reply fetch registry (reply_registry.c) */
     chunk_loader_free();       /* free the chunk pending/done registries (chunk_loader.c) */
     if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
     g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
