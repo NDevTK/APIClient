@@ -47,11 +47,11 @@ static int el_type_is_module(lxb_dom_element_t *el) {
     size_t tl = 0; const lxb_char_t *t = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tl);
     return t && tl == 6 && memcmp(t, "module", 6) == 0;
 }
-static int el_has_async(lxb_dom_element_t *el) {
-    size_t vl = 0; return lxb_dom_element_get_attribute(el, (const lxb_char_t *)"async", 5, &vl) != NULL;   /* boolean attr (presence) — async external does NOT block document order */
+static int el_has_async(lxb_dom_element_t *el) {   /* PRESENCE of the boolean attr — get_attribute returns the VALUE, which is NULL for a valueless boolean, so it wrongly read absent */
+    return lxb_dom_element_has_attribute(el, (const lxb_char_t *)"async", 5);   /* async external does NOT block document order */
 }
 static int el_has_defer(lxb_dom_element_t *el) {
-    size_t vl = 0; return lxb_dom_element_get_attribute(el, (const lxb_char_t *)"defer", 5, &vl) != NULL;   /* boolean attr — a defer external does NOT block parsing; it runs after the document is parsed */
+    return lxb_dom_element_has_attribute(el, (const lxb_char_t *)"defer", 5);   /* a defer external does NOT block parsing; it runs after the document is parsed */
 }
 /* Script-kind registry: the load kind recorded when each external is requested, read by qjs_provide. */
 typedef struct { char *url; int kind; } SKind;
