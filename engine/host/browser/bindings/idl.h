@@ -22,6 +22,12 @@ typedef void JSClassFinalizerFn(JSRuntime *rt, JSValue val);
 typedef struct { const char *name; const IDLMember *members; int n; JSClassFinalizerFn *finalizer; } IDLInterface;
 JSClassID idl_define_class(JSContext *ctx, const IDLInterface *iface);
 
+/* Wrap a partially-modeled interface object so any member NOT installed on it DFAILs (dev) naming
+   <iface>.<member> as an unbuilt browser feature — the IDL-gap forcing function, never an opaque/undefined
+   shrug. Used by every split sub-interface (navigator.clipboard=Clipboard, .credentials=CredentialsContainer, …)
+   so each module gets the audit trap without re-implementing it. CONSUMES `obj`. */
+JSValue idl_dfail_wrap(JSContext *ctx, JSValue obj, const char *iface);
+
 /* NOTE: the runtime shape-driver (idl_bind + IdlGenMember/IdlImpl) was REMOVED — a table-driven driver that
    installed concolic/noop stubs for unmodelled members is exactly the banned-stub anti-pattern. The real system
    is codegen: engine/idlgen.mjs GENERATES the C binding (<iface>.gen.{c,h}: install + a weak DCHECK default per

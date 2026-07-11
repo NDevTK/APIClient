@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include "core/frame/navigator.h"
 #include "modules/permissions/permissions.h"   /* navigator.permissions — a modeled virtual permission system */
+#include "modules/clipboard/clipboard.h"        /* navigator.clipboard — the Async Clipboard module (attacker source) */
+#include "bindings/idl.h"        /* idl_dfail_wrap — the shared unbuilt-member DFAIL audit trap */
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
 #include "solver/concolic.h"     /* g_concolic, js_concolic */
@@ -18,33 +20,10 @@
    choice — a browser has them all). Implemented members (own or inherited) delegate to the target; a symbol/
    internal probe returns undefined (not a named feature). In release DFAIL is compiled out and it degrades to
    the concolic opaque (the exemption: no feature is buildable outside dev). */
-static JSValue nav_unbuilt_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val; (void)argc;
-    JSValueConst target = argv[0], key = argv[1];
-    JSAtom atom = JS_ValueToAtom(ctx, key);
-    if (atom == JS_ATOM_NULL) return JS_EXCEPTION;
-    int has = JS_HasProperty(ctx, target, atom);
-    if (has) { JSValue v = JS_GetProperty(ctx, target, atom); JS_FreeAtom(ctx, atom); return v; }
-    JS_FreeAtom(ctx, atom);
-    if (JS_IsSymbol(key)) return JS_UNDEFINED;   /* well-known/internal symbol probe: not a named browser feature */
-    const char *k = JS_ToCString(ctx, key);
-    char m[192]; snprintf(m, sizeof m, "navigator.%s — unbuilt browser feature; implement it at the root, never an opaque/undefined shrug", k ? k : "?");
-    if (k) JS_FreeCString(ctx, k);
-    DFAIL(m);                             /* dev: abort loud naming the feature to build */
-    return JS_DupValue(ctx, g_concolic);    /* release only */
-}
-/* Wrap an object so its unbuilt members DFAIL instead of opaque-shrugging (the target holds the built members). */
-static JSValue wrap_unbuilt(JSContext *ctx, JSValue obj) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue proxy_ctor = JS_GetPropertyStr(ctx, global, "Proxy");
-    JS_FreeValue(ctx, global);
-    JSValue handler = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, handler, "get", JS_NewCFunction(ctx, nav_unbuilt_get, "get", 3));
-    JSValueConst pargs[2] = { obj, handler };
-    JSValue proxy = JS_CallConstructor(ctx, proxy_ctor, 2, pargs);
-    JS_FreeValue(ctx, proxy_ctor); JS_FreeValue(ctx, handler); JS_FreeValue(ctx, obj);
-    return proxy;
-}
+/* Wrap an object so its unbuilt members DFAIL instead of opaque-shrugging — the shared idl_dfail_wrap audit trap
+   (bindings/idl.c). navigator's own sub-objects still carry the "navigator.*" naming; split sub-interfaces name
+   themselves (Clipboard, CredentialsContainer, …) at their own make(). */
+static JSValue wrap_unbuilt(JSContext *ctx, JSValue obj) { return idl_dfail_wrap(ctx, obj, "navigator"); }
 
 /* taintEnabled()/javaEnabled(): legacy methods Chrome still exposes, both return false headless (real values). */
 static JSValue nav_false(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return JS_FALSE; }
@@ -154,26 +133,7 @@ static JSValue make_storage(JSContext *ctx) {
     JS_SetPropertyStr(ctx, s, "persisted", JS_NewCFunction(ctx, nav_storage_persist, "persisted", 0));
     return wrap_unbuilt(ctx, s);
 }
-/* Clipboard (navigator.clipboard): readText()/read() return ATTACKER-CONTROLLED content — a real XSS SOURCE
-   ({clipboard}, paste-jacking: the attacker controls what the victim copies). So
-   `clipboard.readText().then(t => el.innerHTML = t)` is a clipboard-XSS the engine detects (the {clipboard}
-   source flows to the sink, replay-verified with a delivery precondition of a user paste). writeText/write are
-   Promise<undefined> (writing to the clipboard is not a scriptable sink). */
-static JSValue nav_clip_read(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    (void)t; (void)c; (void)v;
-    { JSValue cd = source_candidate(ctx, "", 0, 0, 0); if (!JS_IsUndefined(cd)) return js_resolved(ctx, cd); }   /* @S replay: attacker paste content, raw */
-    return js_resolved(ctx, JS_NewConcolicSourced(ctx, "{clipboard}", "{clipboard}"));   /* attacker-controlled paste content */
-}
-static JSValue make_clipboard(JSContext *ctx) {
-    JSValue cb = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, cb, "readText", JS_NewCFunction(ctx, nav_clip_read, "readText", 0));
-    JS_SetPropertyStr(ctx, cb, "read", JS_NewCFunction(ctx, nav_clip_read, "read", 0));
-    JS_SetPropertyStr(ctx, cb, "writeText", JS_NewCFunction(ctx, nav_promise_undef, "writeText", 1));
-    JS_SetPropertyStr(ctx, cb, "write", JS_NewCFunction(ctx, nav_promise_undef, "write", 1));
-    JS_SetPropertyStr(ctx, cb, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, cb, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
-    return wrap_unbuilt(ctx, cb);
-}
+/* Clipboard (navigator.clipboard) — its own Blink module (modules/clipboard/), an attacker source. */
 JSValue js_navigator_make(JSContext *ctx) {
     JSValue nav = JS_NewObject(ctx);
     const char *UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -215,7 +175,7 @@ JSValue js_navigator_make(JSContext *ctx) {
     /* storage: StorageManager — concolic quota/persisted that fork PWA offline/caching feature gates. */
     JS_SetPropertyStr(ctx, nav, "storage", make_storage(ctx));
     /* clipboard: readText()/read() are an ATTACKER-CONTROLLED source ({clipboard}, paste-jacking XSS). */
-    JS_SetPropertyStr(ctx, nav, "clipboard", make_clipboard(ctx));
+    JS_SetPropertyStr(ctx, nav, "clipboard", clipboard_make(ctx));
     /* userActivation: whether the frame has ever had / currently has a user gesture — genuinely unknown headless,
        concolic bools (example true) so `if (navigator.userActivation.isActive)` gesture gates explore both arms. */
     { JSValue ua = JS_NewObject(ctx);

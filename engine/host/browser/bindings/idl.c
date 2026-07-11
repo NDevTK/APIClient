@@ -34,6 +34,41 @@ JSValue idl_instance(JSContext *ctx, const IDLMember *members, int n) {
    banned-stub anti-pattern; bindings are now GENERATED as C by engine/idlgen.mjs. Only the native-class helper
    below remains, until Blob/Response/TrustedTypes/Intl/Notification are codegen'd and this file is deleted.) */
 
+/* The DFAIL-on-unbuilt trap: a member NOT present on the target aborts LOUD (dev) naming <iface>.<member> as the
+   feature to build — the IDL-gap forcing function for a partially-modeled interface, never an opaque/undefined
+   shrug. The interface NAME rides the handler (__iface) so one shared trap serves every sub-interface. */
+static JSValue dfail_unbuilt_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)argc;
+    JSValueConst target = argv[0], key = argv[1];
+    JSAtom atom = JS_ValueToAtom(ctx, key);
+    if (atom == JS_ATOM_NULL) return JS_EXCEPTION;
+    int has = JS_HasProperty(ctx, target, atom);
+    if (has) { JSValue v = JS_GetProperty(ctx, target, atom); JS_FreeAtom(ctx, atom); return v; }
+    JS_FreeAtom(ctx, atom);
+    if (JS_IsSymbol(key)) return JS_UNDEFINED;   /* well-known/internal symbol probe: not a named browser feature */
+    JSValue ifv = JS_GetPropertyStr(ctx, this_val, "__iface");   /* this = handler */
+    const char *iface = JS_ToCString(ctx, ifv);
+    const char *k = JS_ToCString(ctx, key);
+    char m[224]; snprintf(m, sizeof m, "%s.%s — unbuilt browser feature; implement it at the root, never an opaque/undefined shrug", iface ? iface : "?", k ? k : "?");
+    if (k) JS_FreeCString(ctx, k);
+    if (iface) JS_FreeCString(ctx, iface);
+    JS_FreeValue(ctx, ifv);
+    DFAIL(m);                        /* dev: abort loud naming the feature to build */
+    return JS_DupValue(ctx, g_concolic);   /* release only: unknown so a gate still forks */
+}
+JSValue idl_dfail_wrap(JSContext *ctx, JSValue obj, const char *iface) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue proxy_ctor = JS_GetPropertyStr(ctx, global, "Proxy");
+    JS_FreeValue(ctx, global);
+    JSValue handler = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, handler, "__iface", JS_NewString(ctx, iface));
+    JS_SetPropertyStr(ctx, handler, "get", JS_NewCFunction(ctx, dfail_unbuilt_get, "get", 3));
+    JSValueConst pargs[2] = { obj, handler };
+    JSValue proxy = JS_CallConstructor(ctx, proxy_ctor, 2, pargs);
+    JS_FreeValue(ctx, proxy_ctor); JS_FreeValue(ctx, handler); JS_FreeValue(ctx, obj);
+    return proxy;
+}
+
 JSClassID idl_define_class(JSContext *ctx, const IDLInterface *iface) {
     JSRuntime *rt = JS_GetRuntime(ctx);
     JSClassID id = 0;
