@@ -30,7 +30,9 @@ const char *modsrc_body(const char *url, size_t *plen) { ModSrc *m = modsrc_get(
 static char **g_moddep = NULL; static int g_moddep_n = 0, g_moddep_cap = 0;
 static void moddep_add(const char *u) { for (int i = 0; i < g_moddep_n; i++) if (strcmp(g_moddep[i], u) == 0) return; if (g_moddep_n >= g_moddep_cap) { int nc = g_moddep_cap ? g_moddep_cap * 2 : 8; char **n = realloc(g_moddep, (size_t)nc * sizeof(char *)); CHECK(n, "moddep-oom: realloc failed — a dropped static-import dep would eval standalone + double-run side effects"); g_moddep = n; g_moddep_cap = nc; } g_moddep[g_moddep_n++] = strdup(u); }
 int is_moddep(const char *u) { for (int i = 0; i < g_moddep_n; i++) if (strcmp(g_moddep[i], u) == 0) return 1; return 0; }
-/* Modules whose link is deferred until their imported chunks arrive (source copy, retried on each provide). */
+/* Modules whose link is deferred until their imported chunks arrive (source copy, retried on each provide).
+   Used for INLINE modules (no URL to key the module map by — eval_page_script defers by source). An external
+   module chunk (has a URL) defers via g_defermod (URL-keyed retry against the map), the Blink shape. */
 typedef struct { char *src; size_t len; } PendMod;
 static PendMod *g_pendmod = NULL; static int g_pendmod_n = 0, g_pendmod_cap = 0;
 static int g_modseq = 0;   /* unique module names so a retry never collides with a prior failed link */
@@ -38,6 +40,30 @@ void pendmod_add(const char *src, size_t len) {
     if (g_pendmod_n >= g_pendmod_cap) { int nc = g_pendmod_cap ? g_pendmod_cap * 2 : 8; PendMod *n = realloc(g_pendmod, (size_t)nc * sizeof(PendMod)); CHECK(n, "pendmod-oom: realloc failed — a dropped deferred module never links, silently losing its endpoints"); g_pendmod = n; g_pendmod_cap = nc; }
     char *s = malloc(len + 1); CHECK(s, "pendmod-oom: source copy alloc failed"); memcpy(s, src, len); s[len] = 0;
     g_pendmod[g_pendmod_n].src = s; g_pendmod[g_pendmod_n].len = len; g_pendmod_n++;
+}
+/* Blink ModuleTreeLinker retry — a URL'd module whose link deferred (a static-import dep not yet fetched) is
+   re-linked BY URL against the module map (modsrc) when any dep arrives, via dynimport_link (compile+link+eval,
+   idempotent on m->ns). No source re-eval under fresh names: the module is keyed by its URL, the Blink shape. */
+static char **g_defermod = NULL; static int g_defermod_n = 0, g_defermod_cap = 0;
+void defermod_add(const char *url) {
+    for (int i = 0; i < g_defermod_n; i++) if (strcmp(g_defermod[i], url) == 0) return;
+    if (g_defermod_n >= g_defermod_cap) { int nc = g_defermod_cap ? g_defermod_cap * 2 : 8; char **n = realloc(g_defermod, (size_t)nc * sizeof(char *)); CHECK(n, "defermod-oom: realloc failed — a dropped deferred module never links, silently losing its endpoints"); g_defermod = n; g_defermod_cap = nc; }
+    g_defermod[g_defermod_n++] = strdup(url);
+}
+void defermod_retry(JSContext *ctx) {
+    int progressed = 1;
+    while (progressed) {
+        progressed = 0;
+        for (int i = 0; i < g_defermod_n; i++) {
+            JSValue ns;
+            if (!dynimport_link(ctx, g_defermod[i], &ns)) continue;   /* still missing a dep -> retry on the next arrival */
+            JS_FreeValue(ctx, ns);
+            pendimport_resolve(ctx, g_defermod[i]);                    /* deliver the linked namespace to any parked import() of this URL */
+            free(g_defermod[i]);
+            for (int j = i; j < g_defermod_n - 1; j++) g_defermod[j] = g_defermod[j + 1];
+            g_defermod_n--; i--; progressed = 1;
+        }
+    }
 }
 
 static void resolve_with(JSContext *ctx, JSValueConst resolve, JSValue val) {   /* resolve borrowed; val consumed */

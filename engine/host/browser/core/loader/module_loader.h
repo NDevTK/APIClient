@@ -21,7 +21,9 @@ void pendimport_resolve(JSContext *ctx, const char *url);   /* resolve every par
 
 /* Defer a module whose static-import dep isn't fetched yet; retried on each provide. */
 void pendmod_add(const char *src, size_t len);
-void pendmod_retry(JSContext *ctx);      /* a chunk arrived: re-attempt every deferred link */
+void pendmod_retry(JSContext *ctx);      /* a chunk arrived: re-attempt every deferred INLINE-module link (by source) */
+void defermod_add(const char *url);      /* a URL'd module whose link deferred (dep not fetched) — retried by URL */
+void defermod_retry(JSContext *ctx);     /* a chunk arrived: re-link every deferred URL'd module against the map */
 int  is_moddep(const char *u);           /* was `u` a static-import dep (link in-graph, never eval standalone -> no double side effects)? */
 
 /* quickjs hooks, registered in qjs_init (JS_SetDynImportHook / JS_SetModuleLoaderFunc). */

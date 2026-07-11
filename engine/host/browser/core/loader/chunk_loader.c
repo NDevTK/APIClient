@@ -73,10 +73,10 @@ static void chunk_run_classic(JSContext *ctx, const char *url, const char *body)
    deliver its namespace to every parked import() of this URL. Runs COW-ACTIVE like any chunk: the module's global
    side-effects are captured into the baseline delta (open mid-boot / merged post-boot), never a COW-off raw write
    (the wrong pattern deleted from provide_baseline in the shape-desync fix). Shared by both provide paths. */
-static void chunk_link_module(JSContext *ctx, const char *url, const char *body) {
+static void chunk_link_module(JSContext *ctx, const char *url) {
     JSValue mns;
     if (dynimport_link(ctx, url, &mns)) { JS_FreeValue(ctx, mns); pendimport_resolve(ctx, url); }
-    else pendmod_add(body, strlen(body));   /* dep not fetched: defer + retry when it arrives (instantiation failed pre-evaluation, so no top-level ran) */
+    else defermod_add(url);   /* dep not fetched: defer by URL, re-linked against the module map when the dep arrives (Blink ModuleTreeLinker; no source re-eval) */
 }
 
 /* Evaluate a chunk that arrives WHILE BOOT IS PARKED on a synchronous external: it joins the OPEN boot delta (COW
@@ -90,7 +90,7 @@ static void provide_boot_active(JSContext *ctx, const char *url, const char *bod
     } else if (dom_script_kind(url) == SK_ASYNC) {
         chunk_run_classic(ctx, url, body);               /* async external: run now, globals join the open boot delta */
     } else {
-        chunk_link_module(ctx, url, body);               /* a module a boot script imported: evaluate once + deliver to its parked import() (COW-on, globals join the boot delta) */
+        chunk_link_module(ctx, url);               /* a module a boot script imported: evaluate once + deliver to its parked import() (COW-on, globals join the boot delta) */
     }
 }
 
@@ -109,9 +109,10 @@ static void provide_baseline(JSContext *ctx, const char *url, const char *body) 
     int dsv = g_dom_capture; g_dom_capture = 0; JS_SetFlowLocalMark(0);   /* chunk heap objects are BASELINE (shared); DOM writes baseline like boot */
     modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
     if (is_moddep(url)) {
-        pendmod_retry(ctx);                              /* a static-import dep OR dyn-import chunk: link in-graph (no standalone eval -> no double side effects) */
+        defermod_retry(ctx);                             /* a dep arrived: re-link every deferred URL'd module against the map (Blink ModuleTreeLinker) */
+        pendmod_retry(ctx);                              /* + inline modules deferred by source (no URL to key the map) */
     } else if (dom_script_kind(url) == SK_MODULE) {
-        chunk_link_module(ctx, url, body);               /* external MODULE: evaluate the singleton ONCE (dynimport_link) + deliver to parked import()s + defer on a missing dep */
+        chunk_link_module(ctx, url);               /* external MODULE: evaluate the singleton ONCE (dynimport_link) + deliver to parked import()s + defer on a missing dep */
     } else {
         chunk_run_classic(ctx, url, body);               /* external CLASSIC: same executor as inline classics + every replay */
     }
