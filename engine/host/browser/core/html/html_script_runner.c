@@ -44,6 +44,17 @@ void eval_page_script(JSContext *ctx, const char *code, size_t len, const char *
     JS_FreeValue(ctx, v);
 }
 
+/* The ONE classic-boot-script executor (see header): currentScript + global eval, shared by the first boot and
+   every replay. Returns 1 if it threw (exception left PENDING for the caller's throw policy). */
+int boot_exec_one(JSContext *ctx, JSValueConst el, const char *txt, size_t len) {
+    doc_set_current_script(ctx, JS_DupValue(ctx, el));            /* document.currentScript = the <script> element (or JS_NULL) */
+    JSValue v = JS_Eval(ctx, txt, len, "<script>", JS_EVAL_TYPE_GLOBAL);
+    int threw = JS_IsException(v);                               /* JS_Eval leaves the exception PENDING for JS_GetException */
+    doc_set_current_script(ctx, JS_NULL);
+    JS_FreeValue(ctx, v);
+    return threw;
+}
+
 void dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return;
     csp_derive(g_dom);   /* per-document effective CSP: real HTTP header (primary) else <meta> scan (csp.c) */
@@ -63,10 +74,21 @@ void dom_run_scripts(JSContext *ctx) {
         int is_mod; if (!script_is_exec(el, &is_mod)) continue;   /* data block: parsed-but-not-run */
         size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
         if (txt && tl) {
-            boot_script_cache((const char *)txt, tl);   /* cache for cross-flow @S candidate boot-replay */
-            doc_set_current_script(ctx, el_wrap(ctx, el));   /* document.currentScript during this inline script */
-            eval_page_script(ctx, (const char *)txt, tl, "<script>", is_mod);
-            doc_set_current_script(ctx, JS_NULL);
+            if (is_mod) {   /* MODULE: run-once singleton (defers if a dep isn't fetched); its effects live in g_boot_delta, so it is NOT cached for replay */
+                doc_set_current_script(ctx, el_wrap(ctx, el));
+                eval_page_script(ctx, (const char *)txt, tl, "<script>", 1);
+                doc_set_current_script(ctx, JS_NULL);
+            } else {        /* CLASSIC: run now AND cache — the first run and every replay share boot_exec_one (ONE executor) */
+                JSValue elw = el_wrap(ctx, el);
+                boot_script_cache(ctx, elw, (const char *)txt, tl);
+                if (boot_exec_one(ctx, elw, (const char *)txt, tl)) {   /* first-run page throw: surface, non-fatal (exploration surface) */
+                    JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
+                    char rz[300]; snprintf(rz, sizeof rz, "<script>: %s", m ? m : "throw");
+                    if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
+                    why_add(ctx, "script-eval", rz);
+                }
+                JS_FreeValue(ctx, elw);
+            }
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }

@@ -4,16 +4,19 @@
 #include <string.h>
 #include <stdio.h>
 #include "check.h"   /* DFAIL — a boot re-run throw is a COW/host gap, fatal in dev */
+#include "core/html/html_script_runner.h"   /* boot_exec_one — the ONE per-script executor, shared with the first boot */
 
-static char **g_boot_scripts = NULL; static int g_boot_n = 0, g_boot_cap = 0;
-/* compiled boot programs (COMPILE-ONCE): a real browser parses a script ONCE and re-runs the bytecode;
-   re-JS_Eval'ing the source string per candidate replay was a re-parse SHORTCUT (and leaked per-parse objects). */
-static JSValue *g_boot_compiled = NULL;
+/* A cached CLASSIC boot <script>: its element (for document.currentScript, faithful on replay) + its text. Only
+   CLASSIC scripts are cached — a module is a run-once singleton whose effects live in g_boot_delta, never
+   re-evaluated (caching one would throw on replay: `export`/`import` at global scope). */
+typedef struct { JSValue el; char *txt; size_t len; } BootScript;
+static BootScript *g_boot_scripts = NULL; static int g_boot_n = 0, g_boot_cap = 0;
 
-void boot_script_cache(const char *txt, size_t len) {
+void boot_script_cache(JSContext *ctx, JSValueConst el, const char *txt, size_t len) {
     if (g_boot_n >= g_boot_cap) { int nc = g_boot_cap ? g_boot_cap * 2 : 8;
-        char **n = realloc(g_boot_scripts, (size_t)nc * sizeof(char *)); if (!n) return; g_boot_scripts = n; g_boot_cap = nc; }
-    char *s = malloc(len + 1); if (!s) return; memcpy(s, txt, len); s[len] = 0; g_boot_scripts[g_boot_n++] = s;
+        BootScript *n = realloc(g_boot_scripts, (size_t)nc * sizeof(BootScript)); if (!n) return; g_boot_scripts = n; g_boot_cap = nc; }
+    char *s = malloc(len + 1); if (!s) return; memcpy(s, txt, len); s[len] = 0;
+    g_boot_scripts[g_boot_n].el = JS_DupValue(ctx, el); g_boot_scripts[g_boot_n].txt = s; g_boot_scripts[g_boot_n].len = len; g_boot_n++;
 }
 
 int boot_script_count(void) { return g_boot_n; }
@@ -24,28 +27,17 @@ int boot_script_count(void) { return g_boot_n; }
    UNCAPTURED creation (a COW gap to close at the root) or a host-edge divergence — FATAL: crash with the real
    exception, never swallow it. Branch behaviour is the caller's (g_boot_replay=1 fixed-arm; g_in_boot_flow=1 fork). */
 void boot_scripts_run(JSContext *ctx) {
-    if (!g_boot_compiled && g_boot_n > 0) {   /* COMPILE ONCE (lazily, on the first replay): parse each boot program to bytecode and keep it */
-        g_boot_compiled = malloc((size_t)g_boot_n * sizeof(JSValue));
-        if (g_boot_compiled) for (int i = 0; i < g_boot_n; i++)
-            g_boot_compiled[i] = JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-    }
     for (int i = 0; i < g_boot_n; i++) {
-        JSValue prog = (g_boot_compiled && !JS_IsException(g_boot_compiled[i]))
-            ? JS_DupValue(ctx, g_boot_compiled[i])
-            : JS_Eval(ctx, g_boot_scripts[i], strlen(g_boot_scripts[i]), "<boot-replay>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-        JSValue v = JS_IsException(prog) ? prog : JS_EvalFunction(ctx, prog);   /* runs + consumes prog */
-        if (JS_IsException(v)) {
+        if (boot_exec_one(ctx, g_boot_scripts[i].el, g_boot_scripts[i].txt, g_boot_scripts[i].len)) {   /* SAME executor as the first boot */
             JSValue e = JS_GetException(ctx); const char *em = JS_ToCString(ctx, e);
             char rz[300]; snprintf(rz, sizeof rz, "boot script threw on re-run: %s", em ? em : "?");
             if (em) JS_FreeCString(ctx, em); JS_FreeValue(ctx, e);
-            DFAIL(rz);   /* DEV: crash at the origin (build the faithful-replay capability). RELEASE: surfaced (exemption). */
+            DFAIL(rz);   /* a REPLAY throw (the first run did not) = an UNCAPTURED creation / COW re-establishment gap — fatal in dev, build the root fix. RELEASE: surfaced (exemption). */
         }
-        JS_FreeValue(ctx, v);
     }
 }
 
 void boot_scripts_free(JSContext *ctx) {
-    if (g_boot_compiled) { for (int i = 0; i < g_boot_n; i++) JS_FreeValue(ctx, g_boot_compiled[i]); free(g_boot_compiled); g_boot_compiled = NULL; }
-    for (int i = 0; i < g_boot_n; i++) free(g_boot_scripts[i]);
+    for (int i = 0; i < g_boot_n; i++) { free(g_boot_scripts[i].txt); JS_FreeValue(ctx, g_boot_scripts[i].el); }
     free(g_boot_scripts); g_boot_scripts = NULL; g_boot_n = g_boot_cap = 0;
 }

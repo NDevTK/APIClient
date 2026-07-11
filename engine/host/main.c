@@ -687,10 +687,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
            re-run: boot-gate exploration is now intrinsic to the first run. */
         g_running = 1; g_in_boot_flow = 1; g_initial_boot = 1; g_c = 0; g_dec_n = 0; cons_reset();
         if (boot[0]) {
-            boot_script_cache(boot, strlen(boot));
-            JSValue v = JS_Eval(ctx, boot, strlen(boot), "<boot>", JS_EVAL_TYPE_GLOBAL);
-            if (JS_IsException(v)) { js_std_dump_error(ctx); g_rc = 1; }
-            JS_FreeValue(ctx, v);
+            boot_script_cache(ctx, JS_NULL, boot, strlen(boot));
+            if (boot_exec_one(ctx, JS_NULL, boot, strlen(boot))) { js_std_dump_error(ctx); g_rc = 1; }   /* preamble runs through the SAME executor as replays */
         }
         g_bundle_id = document_bundle_id(g_dom);   /* IDENTITY first, from a PURE DOM scan (no execution): frontier key set before boot runs */
         dom_run_scripts(ctx);     /* then run inline scripts + REQUEST external <script src> loads (fetched in qjs_step) */
@@ -841,7 +839,7 @@ KEEP void qjs_provide(const char *url, const char *body)
                 /* CLASSIC chunk: cache so boot-replay re-runs it (a source stored / handler registered in an
                    external classic script is re-established under a candidate). A module is NOT cached — it is
                    a singleton, and boot_scripts_run evals a cached script as a CLASSIC global (`export...` -> abort). */
-                boot_script_cache(body, strlen(body));
+                boot_script_cache(ctx, JS_NULL, body, strlen(body));
             }
             JS_CowSetActive(1); JS_SetFlowLocalMark(1); g_dom_capture = dsv;
         }

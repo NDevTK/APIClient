@@ -8,9 +8,9 @@
 #include <stddef.h>
 #include "quickjs.h"
 
-void boot_script_cache(const char *txt, size_t len);   /* cache one inline boot <script> body (document order) */
-void boot_scripts_run(JSContext *ctx);                  /* re-run all cached boot scripts at global scope (compile-once) */
+void boot_script_cache(JSContext *ctx, JSValueConst el, const char *txt, size_t len);   /* cache one CLASSIC boot <script> (element for currentScript + body), document order; el = JS_NULL for the preamble/external */
+void boot_scripts_run(JSContext *ctx);                  /* re-run every cached CLASSIC boot script through boot_exec_one — the SAME executor the first boot uses */
 int  boot_script_count(void);                           /* number cached; 0 -> there is no boot flow to enqueue */
-void boot_scripts_free(JSContext *ctx);                 /* free the cached texts + compiled programs (teardown) */
+void boot_scripts_free(JSContext *ctx);                 /* free the cached texts + element refs (teardown) */
 
 #endif
