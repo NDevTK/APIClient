@@ -85,6 +85,34 @@ static void doc_def_getset(JSContext *ctx, JSValue proto, const char *name, JSCF
         JS_PROP_CONFIGURABLE);
     JS_FreeAtom(ctx, a);
 }
+extern JSClassID g_el_class_id;   /* unwrap a form element wrapper to its Lexbor node */
+/* FORM NAMED CONTROLS (HTMLFormElement's named getter): a form exposes each named control as an own property, so
+   `form.fieldName` reads the control (legit form access) AND `window.cfg.url` reads the named <input> when a
+   clobbered <form id=cfg> stands in for a config object — the classic NESTED DOM-clobbering gadget. Populate the
+   form WRAPPER (the same object exposed as window[id]) with its named descendants. */
+static void populate_form_named_controls(JSContext *ctx, JSValueConst form) {
+    lxb_dom_element_t *fe = JS_GetOpaque(form, g_el_class_id);
+    if (!fe) return;
+    size_t tl = 0; const lxb_char_t *tag = lxb_dom_element_qualified_name(fe, &tl);
+    if (!(tl == 4 && tag && memcmp(tag, "form", 4) == 0)) return;   /* only <form> has named-control access */
+    JSValue ctrls = dom_select_all(ctx, lxb_dom_interface_node(fe), "[name]", 6);
+    if (!JS_IsArray(ctrls)) { JS_FreeValue(ctx, ctrls); return; }
+    uint32_t cn = 0; { JSValue lv = JS_GetPropertyStr(ctx, ctrls, "length"); JS_ToUint32(ctx, &cn, lv); JS_FreeValue(ctx, lv); }
+    for (uint32_t j = 0; j < cn; j++) {
+        JSValue c = JS_GetPropertyUint32(ctx, ctrls, j);
+        JSValue nmv = JS_GetPropertyStr(ctx, c, "name");
+        const char *nm = JS_IsString(nmv) ? JS_ToCString(ctx, nmv) : NULL;
+        if (nm && nm[0]) {
+            JSAtom a = JS_NewAtom(ctx, nm);
+            if (!JS_HasProperty(ctx, form, a))   /* never shadow a real form method/property */
+                JS_DefinePropertyValue(ctx, (JSValue)form, a, JS_DupValue(ctx, c), JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+            JS_FreeAtom(ctx, a);
+        }
+        if (nm) JS_FreeCString(ctx, nm);
+        JS_FreeValue(ctx, nmv); JS_FreeValue(ctx, c);
+    }
+    JS_FreeValue(ctx, ctrls);
+}
 /* NAMED PROPERTIES (Blink WindowProperties / document named getter): a shipped element with an id is exposed as
    window[id] and document[id] — the REAL element, not an opaque {state} shrug (a named element is modelable, not
    injected app-state). So `window.myMount.appendChild(...)` / `if (window.cfg)` see the actual node. Installed as
@@ -106,6 +134,7 @@ void install_named_properties(JSContext *ctx, JSValue global, JSValue document) 
                 JS_DefinePropertyValue(ctx, document, a, JS_DupValue(ctx, el), JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
             JS_FreeAtom(ctx, a);
         }
+        populate_form_named_controls(ctx, el);   /* a <form id=X> exposes its named controls -> window.X.control (nested clobbering + form.<name>) */
         if (id) JS_FreeCString(ctx, id);
         JS_FreeValue(ctx, idv); JS_FreeValue(ctx, el);
     }
