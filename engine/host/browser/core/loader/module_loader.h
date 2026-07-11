@@ -16,6 +16,7 @@ void modsrc_put(const char *url, const char *src, size_t len);
 /* Link a module chunk SINGLETON from its fetched source, handing back its real namespace (0 if not ready).
    Called from qjs_provide to link a provided module chunk in the base context. */
 int dynimport_link(JSContext *ctx, const char *spec, JSValue *out_ns);
+void pendimport_resolve(JSContext *ctx, const char *url);   /* resolve every parked import() of url with the linked namespace (qjs_provide) */
 
 /* Defer a module whose static-import dep isn't fetched yet; retried on each provide. */
 void pendmod_add(const char *src, size_t len);

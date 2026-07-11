@@ -836,7 +836,7 @@ KEEP void qjs_provide(const char *url, const char *body)
                    provision-driven re-run that REPLACES the deleted async-park — the same rule a new reply
                    uses. */
                 JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
-                if (!g_resume_mode && boot_script_count() > 0) reg_add_boot(ctx, NULL, 0);
+                pendimport_resolve(ctx, url);   /* PARK-RESUME: deliver the real namespace to every parked import() of this chunk — its continuation resumes with concrete exports (browser-faithful), no boot re-run */
             } else {
                 /* CLASSIC chunk: cache so boot-replay re-runs it (a source stored / handler registered in an
                    external classic script is re-established under a candidate). A module is NOT cached — it is

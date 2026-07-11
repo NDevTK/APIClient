@@ -41,6 +41,31 @@ void pendmod_add(const char *src, size_t len) {
 static void resolve_with(JSContext *ctx, JSValueConst resolve, JSValue val) {   /* resolve borrowed; val consumed */
     JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, (JSValueConst *)&val); JS_FreeValue(ctx, r); JS_FreeValue(ctx, val);
 }
+
+/* PARKED dynamic imports: import() of a not-yet-fetched chunk holds its (resolve,reject) capability here and
+   PARKS — no opaque settle, no separate boot re-run. When qjs_provide links the chunk, pendimport_resolve fires
+   the resolve with the REAL namespace, so the importer's continuation resumes with concrete exports EXACTLY like
+   a browser resolves a dynamic import (the async-as-flow model: delivery is a promise RESOLUTION, not a re-run). */
+typedef struct { char *url; JSValue resolve; JSValue reject; } PendImport;
+static PendImport *g_pendimp = NULL; static int g_pendimp_n = 0, g_pendimp_cap = 0;
+static void pendimport_add(JSContext *ctx, const char *url, JSValueConst resolve, JSValueConst reject) {
+    if (g_pendimp_n >= g_pendimp_cap) { int nc = g_pendimp_cap ? g_pendimp_cap * 2 : 8; PendImport *n = realloc(g_pendimp, (size_t)nc * sizeof(PendImport)); CHECK(n, "pendimport-oom: a dropped parked import never resolves, losing the chunk's exports"); g_pendimp = n; g_pendimp_cap = nc; }
+    g_pendimp[g_pendimp_n].url = strdup(url);
+    g_pendimp[g_pendimp_n].resolve = JS_DupValue(ctx, resolve);   /* keep the capability alive across the async fetch */
+    g_pendimp[g_pendimp_n].reject = JS_DupValue(ctx, reject);
+    g_pendimp_n++;
+}
+/* qjs_provide calls this once the chunk is linked: resolve every parked import of this url with the real ns. */
+void pendimport_resolve(JSContext *ctx, const char *url) {
+    for (int i = 0; i < g_pendimp_n; ) {
+        if (strcmp(g_pendimp[i].url, url) == 0) {
+            JSValue ns;
+            if (dynimport_link(ctx, url, &ns)) resolve_with(ctx, g_pendimp[i].resolve, ns);   /* deliver the concrete namespace */
+            JS_FreeValue(ctx, g_pendimp[i].resolve); JS_FreeValue(ctx, g_pendimp[i].reject); free(g_pendimp[i].url);
+            g_pendimp[i] = g_pendimp[--g_pendimp_n];
+        } else i++;
+    }
+}
 /* Link a dynamic-import chunk from its FETCHED source and hand back its REAL namespace (concrete exports).
    Returns 0 if not fetched yet, or if a static dep in the chunk isn't ready (retried on the next provide). */
 int dynimport_link(JSContext *ctx, const char *spec, JSValue *out_ns) {
@@ -66,13 +91,12 @@ int dynimport_link(JSContext *ctx, const char *spec, JSValue *out_ns) {
    re-run's import resolves to the singleton synchronously in a LIVE flow. So there is no async-park state at
    all — provision-driven re-runs replace it. */
 void host_dyn_import(JSContext *ctx, const char *specifier, JSValueConst resolve, JSValueConst reject) {
-    (void)reject;
-    if (!specifier || !specifier[0] || has_hole(specifier)) { resolve_with(ctx, resolve, js_concolic(ctx, "{module}", JS_UNDEFINED)); return; }
+    if (!specifier || !specifier[0] || has_hole(specifier)) { (void)reject; resolve_with(ctx, resolve, js_concolic(ctx, "{module}", JS_UNDEFINED)); return; }
     arr_push_str(ctx, g_chunkurls, specifier);   /* -> @RESULT.chunkUrls */
     JSValue ns;
     if (dynimport_link(ctx, specifier, &ns)) { resolve_with(ctx, resolve, ns); return; }   /* linked singleton -> real namespace */
-    chunk_pending_add(specifier); moddep_add(specifier);   /* register the fetch; the chunk-link re-run drives the real resolution */
-    resolve_with(ctx, resolve, js_concolic(ctx, "{module}", JS_UNDEFINED));   /* not linked yet: opaque NOW, no persistent park in a revertible flow */
+    chunk_pending_add(specifier); moddep_add(specifier);   /* register the fetch */
+    pendimport_add(ctx, specifier, resolve, reject);   /* PARK holding the resolve; qjs_provide resolves it with the real namespace when the chunk links (browser-faithful dynamic-import resolution, no opaque settle, no boot re-run) */
 }
 /* Identity normalize: keep the specifier VERBATIM (matches the host fetch contract — chunk URLs are passed
    to qjs_provide exactly as written; the offscreen resolves relative/root-relative against the doc URL). */
@@ -122,4 +146,6 @@ void module_loader_free(JSContext *ctx) {
     free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
     for (int i = 0; i < g_pendmod_n; i++) free(g_pendmod[i].src);
     free(g_pendmod); g_pendmod = NULL; g_pendmod_n = g_pendmod_cap = 0; g_modseq = 0;
+    for (int i = 0; i < g_pendimp_n; i++) { free(g_pendimp[i].url); JS_FreeValue(ctx, g_pendimp[i].resolve); JS_FreeValue(ctx, g_pendimp[i].reject); }
+    free(g_pendimp); g_pendimp = NULL; g_pendimp_n = g_pendimp_cap = 0;
 }
