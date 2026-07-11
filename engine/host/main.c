@@ -938,7 +938,8 @@ KEEP void qjs_teardown(void)
     boot_scripts_free(ctx);
     csp_free();
     cons_free();   /* free the per-flow value-domain constraint set (solver/constraints.c) */
-    module_loader_free(ctx);   /* free the modsrc/moddep/pendmod tables (module_loader.c) */
+    module_loader_free(ctx);   /* free the modsrc/moddep/pendmod tables + import delivery-park (module_loader.c) */
+    pendreply_free(ctx);       /* free the reply delivery-park table (reply.c) */
     if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
     g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
     attr_shadow_free(ctx);

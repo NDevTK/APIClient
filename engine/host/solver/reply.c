@@ -1,6 +1,7 @@
 /* Fetch Response + reply-body learning — see reply.h. */
 #include "solver/reply.h"
 #include "solver/concolic.h"   /* g_concolic, js_concolic_stub */
+#include "solver/parked.h"     /* the ONE async delivery-park mechanism, shared with dynamic import */
 #include "platform/url.h"      /* has_hole */
 #include "check.h"             /* CHECK — a dropped parked reply never resolves, losing the endpoint */
 #include <string.h>
@@ -36,38 +37,30 @@ static JSValue reply_value(JSContext *ctx, JSValueConst body_str, int is_json) {
     return JS_ConcolicWrap(ctx, parsed, "reply");   /* structure real; string/bool leaves concolic (fork + real example) */
 }
 
-/* PARKED reply consumers: r.json()/r.text() of a not-yet-fetched body hold their promise's resolve here and
-   PARK — no opaque settle, no separate boot re-run. When qjs_provide caches the body, pendreply_resolve fires
-   the resolve with the CONCOLIC reply value (structure real, leaves fork + carry the concrete example), so the
-   continuation resumes with real data EXACTLY like a browser resolves fetch().then(r=>r.json()). A body that
-   never arrives (fetch failed / not fetched) is resolved OPAQUE {reply} at finalize, preserving shape coverage. */
-typedef struct { char *url; JSValue resolve; int is_json; } PendReply;
-static PendReply *g_pendreply = NULL; static int g_pendreply_n = 0, g_pendreply_cap = 0;
+/* PARKED reply consumers: r.json()/r.text() of a not-yet-fetched body PARKS its promise's resolve in the shared
+   delivery-park (solver/parked, ONE mechanism shared with dynamic import). When qjs_provide caches the body,
+   pendreply_resolve fires each parked reply with the CONCOLIC reply value (structure real, leaves fork + carry
+   the concrete example), so the continuation resumes with real data EXACTLY like a browser resolves
+   fetch().then(r=>r.json()). A body that never arrives resolves OPAQUE {reply} at finalize (shape coverage). The
+   per-entry `tag` carries is_json. */
+static ParkTable *g_reply_park = NULL;
 static JSValue park_reply(JSContext *ctx, const char *url, int is_json) {
     JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
-    if (g_pendreply_n >= g_pendreply_cap) { int nc = g_pendreply_cap ? g_pendreply_cap * 2 : 8; PendReply *n = realloc(g_pendreply, (size_t)nc * sizeof(PendReply)); CHECK(n, "pendreply-oom: a dropped parked reply never resolves, losing the endpoint's real values"); g_pendreply = n; g_pendreply_cap = nc; }
-    g_pendreply[g_pendreply_n].url = strdup(url); g_pendreply[g_pendreply_n].resolve = rf[0]; g_pendreply[g_pendreply_n].is_json = is_json; g_pendreply_n++;
-    JS_FreeValue(ctx, rf[1]);   /* reject unused: a missing body resolves OPAQUE (shape), never rejects */
+    if (!g_reply_park) g_reply_park = park_new();
+    park_add(ctx, g_reply_park, url, rf[0], is_json);
+    JS_FreeValue(ctx, rf[0]); JS_FreeValue(ctx, rf[1]);   /* park dups resolve; reject unused (a missing body resolves OPAQUE, never rejects) */
     return promise;
 }
-void pendreply_resolve(JSContext *ctx, const char *url, const char *body) {
-    for (int i = 0; i < g_pendreply_n; ) {
-        if (strcmp(g_pendreply[i].url, url) == 0) {
-            JSValue bs = JS_NewString(ctx, body); JSValue v = reply_value(ctx, bs, g_pendreply[i].is_json); JS_FreeValue(ctx, bs);
-            JSValue r = JS_Call(ctx, g_pendreply[i].resolve, JS_UNDEFINED, 1, (JSValueConst *)&v); JS_FreeValue(ctx, r); JS_FreeValue(ctx, v);
-            JS_FreeValue(ctx, g_pendreply[i].resolve); free(g_pendreply[i].url);
-            g_pendreply[i] = g_pendreply[--g_pendreply_n];
-        } else i++;
-    }
+static JSValue reply_val_compute(JSContext *ctx, const char *url, int tag, void *ud) {   /* value = the concolic reply parsed per is_json (tag) */
+    (void)url; const char *body = (const char *)ud;
+    JSValue bs = JS_NewString(ctx, body); JSValue v = reply_value(ctx, bs, tag); JS_FreeValue(ctx, bs); return v;
 }
-void pendreply_drain_opaque(JSContext *ctx) {   /* finalize: a body that never arrived resolves OPAQUE {reply} so its continuation still runs (shape) */
-    for (int i = 0; i < g_pendreply_n; i++) {
-        JSValue v = js_concolic(ctx, "{reply}", JS_UNDEFINED);
-        JSValue r = JS_Call(ctx, g_pendreply[i].resolve, JS_UNDEFINED, 1, (JSValueConst *)&v); JS_FreeValue(ctx, r); JS_FreeValue(ctx, v);
-        JS_FreeValue(ctx, g_pendreply[i].resolve); free(g_pendreply[i].url);
-    }
-    g_pendreply_n = 0;
+static JSValue reply_opaque_compute(JSContext *ctx, const char *url, int tag, void *ud) {   /* never-delivered: opaque {reply} */
+    (void)url; (void)tag; (void)ud; return js_concolic(ctx, "{reply}", JS_UNDEFINED);
 }
+void pendreply_resolve(JSContext *ctx, const char *url, const char *body) { park_resolve_url(ctx, g_reply_park, url, reply_val_compute, (void *)body); }
+void pendreply_drain_opaque(JSContext *ctx) { park_drain(ctx, g_reply_park, reply_opaque_compute, NULL); }
+void pendreply_free(JSContext *ctx) { park_free(ctx, g_reply_park); g_reply_park = NULL; }
 /* r.json()/r.text(): a CACHED body resolves CONCOLIC (the boot re-run's path, make_response injected __body);
    else REGISTER the fetch (concrete url) and resolve OPAQUE in place. The reply's provision enqueues a forking
    boot re-run that re-runs boot with the reply now synchronously concolic — delivery is the re-run, never a

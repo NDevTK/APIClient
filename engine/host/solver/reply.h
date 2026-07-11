@@ -15,5 +15,6 @@
 JSValue make_response(JSContext *ctx, const char *url);
 void pendreply_resolve(JSContext *ctx, const char *url, const char *body);   /* resolve every parked r.json()/r.text() of url with the concrete reply (qjs_provide) */
 void pendreply_drain_opaque(JSContext *ctx);   /* finalize: resolve any never-delivered parked reply OPAQUE (shape) */
+void pendreply_free(JSContext *ctx);   /* teardown: free the reply delivery-park table */
 
 #endif
