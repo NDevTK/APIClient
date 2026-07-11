@@ -132,6 +132,27 @@ static JSValue make_credentials(JSContext *ctx) {
     JS_SetPropertyStr(ctx, cc, "preventSilentAccess", JS_NewCFunction(ctx, nav_promise_undef, "preventSilentAccess", 0));
     return wrap_unbuilt(ctx, cc);
 }
+/* StorageManager (navigator.storage): estimate() resolves to concolic usage/quota numbers, persist()/persisted()
+   to a concolic bool — so `storage.persisted().then(p => p ? offline : online)` and quota-gated feature checks
+   explore BOTH arms (a PWA's offline/caching surface reached without the real grant). getDirectory (OPFS) DFAILs. */
+static JSValue nav_storage_estimate(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "usage", js_concolic(ctx, "{storageUsage}", JS_NewInt64(ctx, 1048576)));      /* ~1MB */
+    JS_SetPropertyStr(ctx, o, "quota", js_concolic(ctx, "{storageQuota}", JS_NewFloat64(ctx, 1073741824.0)));  /* ~1GB */
+    return js_resolved(ctx, o);
+}
+static JSValue nav_storage_persist(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return js_resolved(ctx, js_concolic(ctx, "{storagePersisted}", JS_TRUE));   /* forks persistent-storage gate */
+}
+static JSValue make_storage(JSContext *ctx) {
+    JSValue s = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, s, "estimate", JS_NewCFunction(ctx, nav_storage_estimate, "estimate", 0));
+    JS_SetPropertyStr(ctx, s, "persist", JS_NewCFunction(ctx, nav_storage_persist, "persist", 0));
+    JS_SetPropertyStr(ctx, s, "persisted", JS_NewCFunction(ctx, nav_storage_persist, "persisted", 0));
+    return wrap_unbuilt(ctx, s);
+}
 JSValue js_navigator_make(JSContext *ctx) {
     JSValue nav = JS_NewObject(ctx);
     const char *UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -170,6 +191,8 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "userAgentData", make_ua_data(ctx));
     /* credentials: CredentialsContainer — get()/store() resolve to a concolic Credential that forks the auth gate. */
     JS_SetPropertyStr(ctx, nav, "credentials", make_credentials(ctx));
+    /* storage: StorageManager — concolic quota/persisted that fork PWA offline/caching feature gates. */
+    JS_SetPropertyStr(ctx, nav, "storage", make_storage(ctx));
     /* userActivation: whether the frame has ever had / currently has a user gesture — genuinely unknown headless,
        concolic bools (example true) so `if (navigator.userActivation.isActive)` gesture gates explore both arms. */
     { JSValue ua = JS_NewObject(ctx);
@@ -188,7 +211,7 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "registerProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "registerProtocolHandler", 3));
     JS_SetPropertyStr(ctx, nav, "unregisterProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "unregisterProtocolHandler", 2));
     JS_SetPropertyStr(ctx, nav, "oscpu", JS_UNDEFINED);   /* Chrome does not expose oscpu (Firefox-only) — genuinely undefined, not unbuilt */
-    /* Every remaining IDL member (clipboard/geolocation/mediaDevices/storage/bluetooth/usb/... ) is
+    /* Every remaining IDL member (clipboard/geolocation/mediaDevices/bluetooth/usb/... ) is
        an UNBUILT browser feature: the trap DFAILs loud naming it, so it is BUILT at the root — never an
        opaque/undefined shrug. Each becomes a real modeled interface (permissions, connection are the first). */
     return wrap_unbuilt(ctx, nav);
