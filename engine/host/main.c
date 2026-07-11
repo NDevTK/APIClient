@@ -123,6 +123,7 @@ JSValue g_orphan_buf[4096];
 int     g_orphan_n = 0;
 /* The WFQ dispatch loop + its state (cooperative quantum, parked-weight cache, decision vector) -> scheduler.c. */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
+static char *g_boot_preamble = NULL;    /* the offscreen combined-script preamble, stashed so run_initial_boot can run it when boot is dispatched as Flow #0 (de-entangled from qjs_init's synchronous return) */
 /* CSP (g_csp/g_header_csp + csp_lacks/csp_derive/csp_set_header/csp_free) lives in csp.c — included below. */
 extern lxb_html_document_t *g_dom;   /* the live parsed document (defined below); the @S emitter needs it for the CSP nonce scan */
 /* g_concolic + js_noop/js_concolic_read/js_concolic_stub + concolic_init/free live in opaque.c (included via opaque.h). */
@@ -515,6 +516,24 @@ static int dom_init(const char *html, size_t len) {
 JSContext *g_ctx = NULL;
 static int g_rc = 0;
 
+/* Run the page's initial boot: the preamble + inline <script>s as the FIRST forking boot flow (all-false primary
+   -> the canonical logged-out g_boot_delta the whole frontier layers over; each opaque boot gate forks a TRUE
+   sibling boot flow, dispatched later). Extracted from qjs_init so boot EXECUTION can be de-entangled from the
+   host's synchronous return — the host only needs g_bundle_id (a pure DOM scan), never g_boot_delta, at return. */
+static void run_initial_boot(JSContext *ctx) {
+    JS_CowSetActive(1);
+    g_running = 1; g_in_boot_flow = 1; g_initial_boot = 1; g_c = 0; g_dec_n = 0; cons_reset();
+    if (g_boot_preamble && g_boot_preamble[0]) {
+        JSValueConst bc = boot_script_cache(ctx, JS_NULL, g_boot_preamble, strlen(g_boot_preamble));
+        if (boot_exec_one(ctx, JS_NULL, bc)) { js_std_dump_error(ctx); g_rc = 1; }   /* preamble runs through the SAME executor as replays */
+    }
+    dom_run_scripts(ctx);     /* run inline scripts + REQUEST external <script src> loads (fetched in qjs_step) */
+    g_initial_boot = 0; g_in_boot_flow = 0; g_running = 0; g_cur_flow = NULL;
+    JS_CowSetActive(0);
+    g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);
+    JS_SetFlowLocalMark(1);   /* baseline fixed: every object a FLOW creates hereafter is flow-private (COW/taint skip it) */
+}
+
 KEEP int qjs_init(const char *boot, const char *html, const char *origin,
                   const char *replies, const char *csp)
 {
@@ -676,29 +695,14 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_FreeValue(ctx, g);
 
     if (boot) {
-        /* `boot` (arg0) is the offscreen's combined-script preamble; capture+cache it in the boot delta with
-           the inline (dom_run_scripts) + fetched-external (qjs_provide) scripts so a candidate flow can
-           UNAPPLY to pre-boot and re-run the whole page boot under the concrete candidate. */
-        JS_CowSetActive(1);
-        /* THE ONE BOOT SYSTEM: the page's first boot IS a forking boot flow (no separate monolithic pass). Its
-           all-false PRIMARY arm runs synchronously here — producing the canonical logged-out g_boot_delta the
-           whole frontier layers over — while every opaque boot gate forks a TRUE sibling boot flow (dispatched
-           later by scheduler_run). This deletes the monolithic non-forking boot AND its redundant reg_add_boot
-           re-run: boot-gate exploration is now intrinsic to the first run. */
-        g_running = 1; g_in_boot_flow = 1; g_initial_boot = 1; g_c = 0; g_dec_n = 0; cons_reset();
-        if (boot[0]) {
-            JSValueConst bc = boot_script_cache(ctx, JS_NULL, boot, strlen(boot));
-            if (boot_exec_one(ctx, JS_NULL, bc)) { js_std_dump_error(ctx); g_rc = 1; }   /* preamble runs through the SAME executor as replays */
-        }
-        g_bundle_id = document_bundle_id(g_dom);   /* IDENTITY first, from a PURE DOM scan (no execution): frontier key set before boot runs */
-        dom_run_scripts(ctx);     /* then run inline scripts + REQUEST external <script src> loads (fetched in qjs_step) */
-        g_initial_boot = 0; g_in_boot_flow = 0; g_running = 0; g_cur_flow = NULL;
-        JS_CowSetActive(0);
-        g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);
-        JS_SetFlowLocalMark(1);   /* baseline is now fixed: every object a FLOW creates hereafter is flow-private (COW/taint skip it) */
+        /* `boot` (arg0) is the offscreen combined-script preamble; stash it so run_initial_boot can run it (with
+           the inline + fetched-external scripts) as the first boot flow, unapply-able to pre-boot for candidates. */
+        g_boot_preamble = boot[0] ? strdup(boot) : NULL;
+        g_bundle_id = document_bundle_id(g_dom);   /* IDENTITY: a PURE DOM <script> scan (no execution) — the ONLY thing the host needs at return, INDEPENDENT of boot execution */
+        run_initial_boot(ctx);   /* run boot now (Commit B: this moves to a dispatched Flow #0) */
     }
-    return 0;   /* boot done; g_bundle_id is now readable via qjs_bundle_id(). Host reads it, looks up the parked
-                   frontier by ORIGIN|bundle-id in IDB (its only job), then calls qjs_begin(recipes) to seed. */
+    return 0;   /* g_bundle_id is now readable via qjs_bundle_id(). Host reads it, looks up the parked frontier by
+                   ORIGIN|bundle-id in IDB (its only job), then calls qjs_begin(recipes) to seed. */
 }
 
 /* The document's stable bundle IDENTITY = FNV-1a over its OWN scripts, computed by the REAL Lexbor <script>
@@ -936,6 +940,7 @@ KEEP void qjs_teardown(void)
     JS_SetConcolicMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
     solve_free(ctx);   /* @S accumulators + gate tokens -> solve.c */
     boot_scripts_free(ctx);
+    free(g_boot_preamble); g_boot_preamble = NULL;   /* free the stashed preamble */
     csp_free();
     cons_free();   /* free the per-flow value-domain constraint set (solver/constraints.c) */
     module_loader_free(ctx);   /* free the modsrc/moddep/pendmod tables + import delivery-park (module_loader.c) */
