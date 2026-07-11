@@ -116,6 +116,22 @@ static JSValue make_ua_data(JSContext *ctx) {
     JS_SetPropertyStr(ctx, u, "getHighEntropyValues", JS_NewCFunction(ctx, js_ua_high_entropy, "getHighEntropyValues", 1));
     return wrap_unbuilt(ctx, u);
 }
+/* CredentialsContainer (navigator.credentials): the moat's headline auth gate. get()/store()/create() resolve to
+   a CONCOLIC Credential — TRUTHY example so `credentials.get().then(c => c && loginWith(c))` reaches the
+   LOGGED-IN arm (the auth/session code a logged-out visitor never runs), while the concolic still forks the null
+   (no-credential) arm. c.id / c.token are concolic (unknown attacker/user input). Never fires a real request. */
+static JSValue nav_cred_get(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return js_resolved(ctx, js_concolic(ctx, "{credential}", JS_TRUE));   /* Promise<Credential|null> — forks logged-in vs logged-out */
+}
+static JSValue make_credentials(JSContext *ctx) {
+    JSValue cc = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, cc, "get", JS_NewCFunction(ctx, nav_cred_get, "get", 1));
+    JS_SetPropertyStr(ctx, cc, "store", JS_NewCFunction(ctx, nav_cred_get, "store", 1));
+    JS_SetPropertyStr(ctx, cc, "create", JS_NewCFunction(ctx, nav_cred_get, "create", 1));
+    JS_SetPropertyStr(ctx, cc, "preventSilentAccess", JS_NewCFunction(ctx, nav_promise_undef, "preventSilentAccess", 0));
+    return wrap_unbuilt(ctx, cc);
+}
 JSValue js_navigator_make(JSContext *ctx) {
     JSValue nav = JS_NewObject(ctx);
     const char *UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -152,6 +168,8 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "connection", make_connection(ctx));
     /* userAgentData: UA Client Hints — concolic mobile/platform that fork the responsive mobile/desktop split. */
     JS_SetPropertyStr(ctx, nav, "userAgentData", make_ua_data(ctx));
+    /* credentials: CredentialsContainer — get()/store() resolve to a concolic Credential that forks the auth gate. */
+    JS_SetPropertyStr(ctx, nav, "credentials", make_credentials(ctx));
     /* userActivation: whether the frame has ever had / currently has a user gesture — genuinely unknown headless,
        concolic bools (example true) so `if (navigator.userActivation.isActive)` gesture gates explore both arms. */
     { JSValue ua = JS_NewObject(ctx);
