@@ -50,6 +50,9 @@ static int el_type_is_module(lxb_dom_element_t *el) {
 static int el_has_async(lxb_dom_element_t *el) {
     size_t vl = 0; return lxb_dom_element_get_attribute(el, (const lxb_char_t *)"async", 5, &vl) != NULL;   /* boolean attr (presence) — async external does NOT block document order */
 }
+static int el_has_defer(lxb_dom_element_t *el) {
+    size_t vl = 0; return lxb_dom_element_get_attribute(el, (const lxb_char_t *)"defer", 5, &vl) != NULL;   /* boolean attr — a defer external does NOT block parsing; it runs after the document is parsed */
+}
 /* Script-kind registry: the load kind recorded when each external is requested, read by qjs_provide. */
 typedef struct { char *url; int kind; } SKind;
 static SKind *g_skinds = NULL; static int g_skinds_n = 0, g_skinds_cap = 0;
@@ -72,7 +75,7 @@ static int boot_drive_scripts(JSContext *ctx) {
         const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
         if (src && sl) {
             char *cu = strndup((const char *)src, sl); if (!cu) continue;
-            int kind = el_type_is_module(el) ? SK_MODULE : (el_has_async(el) ? SK_ASYNC : SK_SYNC);
+            int kind = el_type_is_module(el) ? SK_MODULE : ((el_has_async(el) || el_has_defer(el)) ? SK_ASYNC : SK_SYNC);   /* async AND defer are non-blocking (defer runs after parse, approximated as async post-boot); only a plain classic blocks document order */
             dom_script_kind_set(cu, kind);   /* record so qjs_provide routes it without re-parsing */
             if (kind != SK_SYNC) { arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu); continue; }   /* async / module: does NOT block document order */
             size_t blen = 0; const char *body = has_hole(cu) ? NULL : modsrc_body(cu, &blen);
