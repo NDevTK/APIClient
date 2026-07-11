@@ -3,7 +3,7 @@
 #include "bindings/idl.h"        /* idl_dfail_wrap — unbuilt NavigatorUAData members DFAIL */
 #include "solver/concolic.h"     /* js_concolic */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side */
+#include "platform/promise.h"
 
 /* getHighEntropyValues(hints): resolves to a concolic detail object; each field forks its feature-detection. */
 static JSValue ua_high_entropy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {

@@ -4,7 +4,7 @@
 #include "solver/concolic.h"   /* js_noop */
 #include "check.h"             /* DCHECK — assert the component's own invariants */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */
+#include "platform/promise.h"
 
 static JSValue m_prom_undef(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return js_resolved(ctx, JS_UNDEFINED); }
 

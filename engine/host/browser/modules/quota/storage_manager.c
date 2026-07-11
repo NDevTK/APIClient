@@ -3,7 +3,7 @@
 #include "bindings/idl.h"        /* idl_dfail_wrap — unbuilt StorageManager members (getDirectory/OPFS) DFAIL */
 #include "solver/concolic.h"     /* js_concolic — quota numbers / persist bool fork their gates */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side */
+#include "platform/promise.h"
 
 /* estimate(): StorageEstimate { usage, quota } — concolic numbers so a quota-gated feature check forks. */
 static JSValue storage_estimate(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {

@@ -8,7 +8,7 @@
 #include "modules/permissions/permissions.h"
 #include "solver/concolic.h"   /* js_concolic — the granted/denied outcome is genuinely unknown (forks), example 'prompt' */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);                                        /* wrap in a resolved promise */
+#include "platform/promise.h"
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* register handler -> driven flow */
 
 typedef JSValue (*GetFn)(JSContext *, JSValueConst);

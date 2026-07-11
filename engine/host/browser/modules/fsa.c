@@ -7,7 +7,7 @@
 #include "modules/fsa.h"
 #include "solver/concolic.h"   /* g_concolic, js_concolic, js_noop */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */
+#include "platform/promise.h"
 extern char *g_candidate;                                  /* @S replay: file content is attacker-controlled -> deliver the candidate */
 
 /* A file's text/bytes: attacker-controlled -> the @S candidate on a replay flow, else a concolic source. */

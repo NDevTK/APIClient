@@ -15,7 +15,7 @@
 #include <lexbor/html/html.h>
 
 extern lxb_html_document_t *g_dom;                          /* the live parsed document (main.c) */
-extern JSValue js_resolved(JSContext *ctx, JSValue val);    /* scheduler-side: wrap in a resolved promise */
+#include "platform/promise.h"
 
 static JSValue make_el(JSContext *ctx, const char *tag, size_t tl) {
     DCHECK(g_dom, "media-el: g_dom NULL at construction — the document is created before boot, so this is impossible");

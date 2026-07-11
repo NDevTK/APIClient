@@ -12,7 +12,7 @@
    cached r.json()/r.text() returns the CONCRETE reply synchronously (not opaque). Owned here — the reply
    component owns the whole reply concern (cache + park-resume delivery + fetch registry edge). */
 JSValue g_reply_table = JS_UNDEFINED;
-extern JSValue js_resolved(JSContext *ctx, JSValue val);
+#include "platform/promise.h"
 extern void reply_fetch_register(const char *url, int is_json);
 
 /* Seed the cache from the host's fromReply JSON (a real GET already fetched these bodies). */

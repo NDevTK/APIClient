@@ -9,8 +9,7 @@
 #include "core/streams/readable_stream.h"   /* Response.body -> the shared ReadableStream component */
 #include "check.h"    /* CHECK (OOM) */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */
-extern JSValue js_rejected(JSContext *ctx, JSValue err);   /* scheduler-side: a rejected promise (re-throws into the await) */
+#include "platform/promise.h"
 extern JSValue js_headers_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv);   /* real Headers (urlobj.c) */
 
 static JSClassID g_resp_class_id;

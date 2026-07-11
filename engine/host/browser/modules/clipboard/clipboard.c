@@ -4,7 +4,7 @@
 #include "solver/concolic.h"     /* js_noop, JS_NewConcolicSourced */
 #include "solver/source.h"       /* source_candidate — clipboard is an attacker source, delivered raw */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);                                            /* scheduler-side */
+#include "platform/promise.h"
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);       /* 'clipboardchange' -> driven flow */
 
 static JSValue clip_promise_undef(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return js_resolved(ctx, JS_UNDEFINED); }

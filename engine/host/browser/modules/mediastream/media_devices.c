@@ -3,7 +3,7 @@
 #include "bindings/idl.h"          /* idl_dfail_wrap — unbuilt MediaDevices members DFAIL */
 #include "solver/concolic.h"       /* js_concolic, js_noop */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);                                            /* scheduler-side */
+#include "platform/promise.h"
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);       /* 'devicechange' -> driven flow */
 
 /* getUserMedia/getDisplayMedia: Promise<MediaStream> — the stream is a concolic (its track labels/settings are

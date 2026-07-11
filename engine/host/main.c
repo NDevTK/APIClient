@@ -51,6 +51,7 @@
 #include "solver/why.h"  /* why_add — runtime-reasoned @WHY */
 #include "core/html/html_script_runner.h"  /* eval_page_script + dom_run_scripts (HTMLScriptRunner) */
 #include "core/loader/chunk_loader.h"       /* chunk_pending_add / chunk_provide / chunk_list — the lazy-chunk resource loader */
+#include "platform/promise.h"
 #include "core/loader/reply_registry.h"     /* reply_fetch_register / reply_pending_list / drop — the reply fetch registry */
 #include "modules/storage.h"      /* localStorage/sessionStorage concolic round-trip, its own TU */
 #include "modules/indexeddb.h"    /* IndexedDB shape stub (Blink modules/indexeddb/), its own TU */
@@ -188,29 +189,7 @@ static JSValue g_dedup_fn = JS_UNDEFINED;    /* (eps) => deduped array, evaluate
 
 /* ---- ESM static+dynamic import graph -> module_loader.{c,h} (modsrc/moddep/pendmod + the quickjs hooks). */
 
-/* wrap val in an already-RESOLVED promise (consumes val) so `await`/`.then` chains continue synchronously. */
-JSValue js_resolved(JSContext *ctx, JSValue val)
-{
-    JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
-    if (!JS_IsException(promise)) {
-        JSValue rr = JS_Call(ctx, rf[0], JS_UNDEFINED, 1, &val); JS_FreeValue(ctx, rr);
-        JS_FreeValue(ctx, rf[0]); JS_FreeValue(ctx, rf[1]);
-    }
-    JS_FreeValue(ctx, val);
-    return promise;
-}
-/* A REJECTED promise (CONSUMES err): the await re-throws err into the continuation so try/catch/.catch runs —
-   e.g. Response.json() on a malformed body rejects, never resolves to a fake concolic that hides the throw path. */
-JSValue js_rejected(JSContext *ctx, JSValue err)
-{
-    JSValue rf[2]; JSValue promise = JS_NewPromiseCapability(ctx, rf);
-    if (!JS_IsException(promise)) {
-        JSValue rr = JS_Call(ctx, rf[1], JS_UNDEFINED, 1, &err); JS_FreeValue(ctx, rr);
-        JS_FreeValue(ctx, rf[0]); JS_FreeValue(ctx, rf[1]);
-    }
-    JS_FreeValue(ctx, err);
-    return promise;
-}
+/* js_resolved / js_rejected (promise construction) -> browser/platform/promise.{c,h}. */
 /* make_response + the Response json()/text()/body accessors + reply-body concolic-wrap are in reply.c. */
 /* URL query-parameter extraction (hexval + url_pct_decode + build_query_params) is in url.c (pure). */
 JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* fwd (non-static: xhr.c borrows it) */

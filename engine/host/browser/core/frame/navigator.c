@@ -43,7 +43,7 @@ static JSValue nav_autoplay(JSContext *ctx, JSValueConst t, int c, JSValueConst 
 static JSValue nav_reg_proto(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; return JS_UNDEFINED; }
 
 extern void chunk_pending_add(const char *url);              /* scheduler-side (main.c): queue a script chunk for host fetch + analyze */
-extern JSValue js_resolved(JSContext *ctx, JSValue val);     /* scheduler-side: wrap a value in a resolved promise */
+#include "platform/promise.h"
 extern JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv);   /* serviceWorker.onmessage -> driven flow */
 
 JSValue js_sw_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {

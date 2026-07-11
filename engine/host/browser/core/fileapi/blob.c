@@ -15,7 +15,7 @@
 #include "solver/concolic.h"   /* js_concolic (size/name/mtime are genuinely unknown headless) */
 #include "check.h"    /* CHECK (OOM), DCHECK */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */
+#include "platform/promise.h"
 
 static JSClassID g_blob_class_id;
 typedef struct { JSValue content; } BlobData;   /* the internal [[bytes]] slot */

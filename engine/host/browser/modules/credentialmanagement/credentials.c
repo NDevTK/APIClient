@@ -3,7 +3,7 @@
 #include "bindings/idl.h"        /* idl_dfail_wrap — unbuilt CredentialsContainer members DFAIL */
 #include "solver/concolic.h"     /* js_concolic — the concolic Credential */
 
-extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side */
+#include "platform/promise.h"
 
 static JSValue cred_promise_undef(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return js_resolved(ctx, JS_UNDEFINED); }
 
