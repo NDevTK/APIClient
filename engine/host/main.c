@@ -698,8 +698,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         /* `boot` (arg0) is the offscreen combined-script preamble; stash it so run_initial_boot can run it (with
            the inline + fetched-external scripts) as the first boot flow, unapply-able to pre-boot for candidates. */
         g_boot_preamble = boot[0] ? strdup(boot) : NULL;
-        g_bundle_id = document_bundle_id(g_dom);   /* IDENTITY: a PURE DOM <script> scan (no execution) — the ONLY thing the host needs at return, INDEPENDENT of boot execution */
-        run_initial_boot(ctx);   /* run boot now (Commit B: this moves to a dispatched Flow #0) */
+        g_bundle_id = document_bundle_id(g_dom);   /* IDENTITY: a PURE DOM <script> scan (no execution) — the ONLY thing the host needs at return, INDEPENDENT of boot execution. Boot EXECUTION is deferred to the first qjs_step (run_initial_boot), so it is not welded into this synchronous return. */
     }
     return 0;   /* g_bundle_id is now readable via qjs_bundle_id(). Host reads it, looks up the parked frontier by
                    ORIGIN|bundle-id in IDB (its only job), then calls qjs_begin(recipes) to seed. */
@@ -712,10 +711,10 @@ KEEP unsigned qjs_bundle_id(void) { return (unsigned)g_bundle_id; }
 /* Phase 2 (after qjs_init + the host's frontierGet by bundle-id): seed the frontier and fix the COW baseline.
    recipes NULL/"" -> a fresh visit (drive all orphans); non-empty -> RESUME by re-creating each parked flow,
    located by its function SOURCE hash (JS_OrphanHash), decisions replayed by the scheduler. */
-KEEP void qjs_begin(const char *recipes)
+/* Seed the frontier AFTER the initial boot has run (its functions must exist for orphan collection): fresh
+   orphan/session flows, or a resume from recipes. Called from the first qjs_step, right after run_initial_boot. */
+static void seed_frontier(JSContext *ctx, const char *recipes)
 {
-    JSContext *ctx = g_ctx;
-    if (!ctx) return;
     g_resume_mode = (recipes && recipes[0]) ? 1 : 0;
     seed_orphans(ctx);      /* normal: seed fresh orphan flows. resume: build g_orphan_buf locators only. */
     if (g_resume_mode) {
@@ -779,10 +778,20 @@ KEEP void qjs_begin(const char *recipes)
        nested-handler discovery on a single-component page; the WFQ starves a session with no real cross-flow
        state, so >=1 costs ~nothing when unproductive. */
     if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) reg_add(ctx, JS_UNDEFINED, 1.2, NULL, 0)->session = 1;
-    /* BOOT-GATE EXPLORATION is now INTRINSIC to the first boot (qjs_begin runs it as a forking boot flow:
-       all-false primary + TRUE-arm sibling forks), so the separate reg_add_boot re-run that used to exist here is
-       DELETED — one boot system, not two. A reply/chunk still enqueues a delivery boot flow (qjs_provide) to
-       re-run boot with the now-cached body synchronous. */
+    /* BOOT-GATE EXPLORATION is INTRINSIC to the initial boot (run_initial_boot forks TRUE-arm siblings), so no
+       separate boot re-run is enqueued here. A reply/chunk enqueues a delivery boot flow (qjs_provide). */
+}
+
+/* Phase 2: the host has read g_bundle_id (identity) + looked up the parked frontier; it now hands over the resume
+   recipes. Boot EXECUTION and frontier seeding are DEFERRED to the first qjs_step (run_initial_boot then
+   seed_frontier) — so boot runs as a dispatched flow, NOT welded into qjs_init's synchronous return. */
+static char *g_pending_recipes = NULL;
+static int g_need_initial_boot = 0;
+KEEP void qjs_begin(const char *recipes)
+{
+    if (!g_ctx) return;
+    free(g_pending_recipes); g_pending_recipes = (recipes && recipes[0]) ? strdup(recipes) : NULL;
+    g_need_initial_boot = 1;
 }
 
 /* The distinct pending fetch urls (newline-joined) the offscreen must safe-fetch. Static buffer. */
@@ -903,6 +912,13 @@ KEEP double qjs_top_weight(void) { return scheduler_top_weight(); }   /* this en
 KEEP int qjs_step(void)
 {
     if (!g_ctx) return 0;
+    if (g_need_initial_boot) {   /* FIRST step: run the initial boot as the first flow, THEN seed the frontier
+                                    (orphan/session/resume seeding needs boot-defined functions to exist) — boot
+                                    is dispatched here, de-entangled from qjs_init's synchronous return. */
+        run_initial_boot(g_ctx);
+        seed_frontier(g_ctx, g_pending_recipes);
+        g_need_initial_boot = 0;
+    }
     g_made_progress = 0;                                 /* fresh progress guard each host visit */
     scheduler_run(g_ctx);
     js_std_loop(g_ctx);
@@ -941,6 +957,7 @@ KEEP void qjs_teardown(void)
     solve_free(ctx);   /* @S accumulators + gate tokens -> solve.c */
     boot_scripts_free(ctx);
     free(g_boot_preamble); g_boot_preamble = NULL;   /* free the stashed preamble */
+    free(g_pending_recipes); g_pending_recipes = NULL;   /* free the stashed resume recipes */
     csp_free();
     cons_free();   /* free the per-flow value-domain constraint set (solver/constraints.c) */
     module_loader_free(ctx);   /* free the modsrc/moddep/pendmod tables + import delivery-park (module_loader.c) */
