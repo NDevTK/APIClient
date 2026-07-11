@@ -74,6 +74,22 @@ static JSValue nav_promise_undef(JSContext *ctx, JSValueConst t, int c, JSValueC
 
 /* window.navigator — the standard properties as CONCOLIC values (a real desktop Chrome as the example) plus the
    built methods/sub-interfaces. UNBUILT members DFAIL via the wrap_unbuilt trap (never an opaque shrug). */
+/* NetworkInformation (navigator.connection): the connection's properties are genuinely unknown headless, so each
+   is a CONCOLIC value carrying a realistic desktop EXAMPLE and FORKING at a feature-detection branch — a page
+   that adapts on `if (navigator.connection.saveData)` or `connection.effectiveType==='slow-2g'` explores BOTH
+   the data-saver and full arms (each may ship a different resource/endpoint), never pinned to one world. */
+static JSValue make_connection(JSContext *ctx) {
+    JSValue c = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, c, "effectiveType", js_concolic(ctx, "{effectiveType}", JS_NewString(ctx, "4g")));   /* forks 4g/3g/2g/slow-2g adaptive arms */
+    JS_SetPropertyStr(ctx, c, "type", js_concolic(ctx, "{connectionType}", JS_NewString(ctx, "wifi")));
+    JS_SetPropertyStr(ctx, c, "downlink", js_concolic(ctx, "{downlink}", JS_NewFloat64(ctx, 10.0)));            /* Mbps */
+    JS_SetPropertyStr(ctx, c, "rtt", js_concolic(ctx, "{rtt}", JS_NewInt32(ctx, 50)));                          /* ms */
+    JS_SetPropertyStr(ctx, c, "saveData", js_concolic(ctx, "{saveData}", JS_FALSE));                            /* forks the data-saver code path */
+    JS_SetPropertyStr(ctx, c, "onchange", JS_NULL);
+    JS_SetPropertyStr(ctx, c, "addEventListener", JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));  /* the 'change' listener becomes an orphan flow */
+    JS_SetPropertyStr(ctx, c, "removeEventListener", JS_NewCFunction(ctx, js_noop, "removeEventListener", 2));
+    return wrap_unbuilt(ctx, c);   /* unbuilt NetworkInformation members DFAIL, never an opaque shrug */
+}
 JSValue js_navigator_make(JSContext *ctx) {
     JSValue nav = JS_NewObject(ctx);
     const char *UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -106,6 +122,8 @@ JSValue js_navigator_make(JSContext *ctx) {
     }
     /* permissions: a MODELED virtual permission system (real PermissionStatus, 'prompt' default that forks). */
     JS_SetPropertyStr(ctx, nav, "permissions", js_permissions_make(ctx));
+    /* connection: NetworkInformation — concolic connection properties that fork adaptive-loading branches. */
+    JS_SetPropertyStr(ctx, nav, "connection", make_connection(ctx));
     /* userActivation: whether the frame has ever had / currently has a user gesture — genuinely unknown headless,
        concolic bools (example true) so `if (navigator.userActivation.isActive)` gesture gates explore both arms. */
     { JSValue ua = JS_NewObject(ctx);
@@ -124,9 +142,9 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "registerProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "registerProtocolHandler", 3));
     JS_SetPropertyStr(ctx, nav, "unregisterProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "unregisterProtocolHandler", 2));
     JS_SetPropertyStr(ctx, nav, "oscpu", JS_UNDEFINED);   /* Chrome does not expose oscpu (Firefox-only) — genuinely undefined, not unbuilt */
-    /* Every remaining IDL member (clipboard/geolocation/mediaDevices/storage/connection/userAgentData/bluetooth/
-       usb/... ) is an UNBUILT browser feature: the trap DFAILs loud naming it, so it is BUILT at the root — never
-       an opaque/undefined shrug. Each becomes a real modeled component (permissions.c is the first). */
+    /* Every remaining IDL member (clipboard/geolocation/mediaDevices/storage/userAgentData/bluetooth/usb/... ) is
+       an UNBUILT browser feature: the trap DFAILs loud naming it, so it is BUILT at the root — never an
+       opaque/undefined shrug. Each becomes a real modeled interface (permissions, connection are the first). */
     return wrap_unbuilt(ctx, nav);
 }
 
