@@ -55,21 +55,41 @@ const char *chunk_list(void) {
     return buf;
 }
 
-/* Evaluate a chunk that arrives WHILE BOOT IS PARKED on a synchronous external: it joins the boot delta (COW
+/* Run an external CLASSIC chunk (async <script src>, or a runtime-inserted classic) through the SAME executor
+   as inline classics + every boot replay: cache its bytecode (so boot-replay re-runs it) and exec. A first-fetch
+   page throw surfaces as @WHY, non-fatal. The chunk runs COW-ACTIVE (the caller sets the delta placement: mid-boot
+   the open boot delta, post-boot a captured delta merged into g_boot_delta) — its globals are captured either way,
+   never a raw baseline write. Shared by both provide paths. */
+static void chunk_run_classic(JSContext *ctx, const char *url, const char *body) {
+    JSValueConst bc = boot_script_cache(ctx, JS_NULL, body, strlen(body));
+    if (boot_exec_one(ctx, JS_NULL, bc)) {
+        JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
+        char rz[300]; snprintf(rz, sizeof rz, "%s: %s", url, m ? m : "throw");
+        if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
+        why_add(ctx, "script-eval", rz);
+    }
+}
+/* Link a MODULE chunk's singleton (evaluated once, exports cached — dynimport_link is idempotent) and PARK-RESUME
+   deliver its namespace to every parked import() of this URL. Runs COW-ACTIVE like any chunk: the module's global
+   side-effects are captured into the baseline delta (open mid-boot / merged post-boot), never a COW-off raw write
+   (the wrong pattern deleted from provide_baseline in the shape-desync fix). Shared by both provide paths. */
+static void chunk_link_module(JSContext *ctx, const char *url) {
+    JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
+    pendimport_resolve(ctx, url);
+}
+
+/* Evaluate a chunk that arrives WHILE BOOT IS PARKED on a synchronous external: it joins the OPEN boot delta (COW
    stays active), routed by the request-time kind — the parked-on external resumes the cursor, an async external
-   runs now (non-blocking), a module a boot script imported links + delivers to its parked import(). */
+   runs now (non-blocking), a module a boot script imported links + delivers to its parked import(). Same eval
+   helpers as post-boot provide_baseline; only the delta is already-open here vs merged there. */
 static void provide_boot_active(JSContext *ctx, const char *url, const char *body) {
     modsrc_put(url, body, strlen(body));
     if (dom_boot_parked_is(url)) {
         if (!dom_boot_resume(ctx)) boot_complete(ctx);   /* the sync CLASSIC external boot waited on ran in position; cursor reached the end -> g_boot_delta + seed */
     } else if (dom_script_kind(url) == SK_ASYNC) {
-        JSValueConst bc = boot_script_cache(ctx, JS_NULL, body, strlen(body));   /* async external: run now, globals join the boot delta (cached so boot-replay re-runs it) */
-        if (boot_exec_one(ctx, JS_NULL, bc)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); why_add(ctx, "script-eval", "async external threw"); }
+        chunk_run_classic(ctx, url, body);               /* async external: run now, globals join the open boot delta */
     } else {
-        JS_CowSetActive(0);   /* module singleton: COW off around the eval (effects are baseline; avoids a COW-active parse), then deliver to the parked import() */
-        JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
-        pendimport_resolve(ctx, url);
-        JS_CowSetActive(1);
+        chunk_link_module(ctx, url);                     /* a module a boot script imported: link + deliver to its parked import() (COW-on, globals join the boot delta) */
     }
 }
 
@@ -87,23 +107,13 @@ static void provide_baseline(JSContext *ctx, const char *url, const char *body) 
     JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta); g_cow_undo empty for the chunk's fresh captures */
     int dsv = g_dom_capture; g_dom_capture = 0; JS_SetFlowLocalMark(0);   /* chunk heap objects are BASELINE (shared); DOM writes baseline like boot */
     modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
-    int is_module_chunk = (dom_script_kind(url) == SK_MODULE);
     if (is_moddep(url)) {
         pendmod_retry(ctx);                              /* a static-import dep OR dyn-import chunk: link in-graph (no standalone eval -> no double side effects) */
-    } else if (is_module_chunk) {
+    } else if (dom_script_kind(url) == SK_MODULE) {
         eval_page_script(ctx, body, strlen(body), url, 1);   /* external MODULE: run-once (defers if a dep isn't fetched); singleton, global side-effects captured + merged */
+        chunk_link_module(ctx, url);                     /* link the SINGLETON now + deliver its namespace to every parked import() */
     } else {
-        JSValueConst bc = boot_script_cache(ctx, JS_NULL, body, strlen(body));   /* external CLASSIC: cache + run through the SAME executor as inline classics + every replay */
-        if (boot_exec_one(ctx, JS_NULL, bc)) {   /* first-fetch page throw: surface, non-fatal */
-            JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
-            char rz[300]; snprintf(rz, sizeof rz, "%s: %s", url, m ? m : "throw");
-            if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
-            why_add(ctx, "script-eval", rz);
-        }
-    }
-    if (is_module_chunk) {   /* link the SINGLETON now + PARK-RESUME deliver its namespace to every parked import() of this chunk */
-        JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
-        pendimport_resolve(ctx, url);
+        chunk_run_classic(ctx, url, body);               /* external CLASSIC: same executor as inline classics + every replay */
     }
     boot_delta_merge_active(ctx);                         /* MERGE the chunk's captured baseline delta into g_boot_delta (the ONE baseline) */
     JS_SetFlowLocalMark(1); g_dom_capture = dsv;
