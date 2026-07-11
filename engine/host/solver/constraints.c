@@ -62,4 +62,23 @@ const char *cons_fixed_value(const char *src) {
     for (int i = 0; i < g_cons_n; i++) if (g_cons[i].src && g_cons[i].op == OPCMP_EQ && !strcmp(g_cons[i].src, src)) return g_cons[i].tok;
     return NULL;
 }
+static int str_starts(const char *s, const char *p) { return strncmp(s, p, strlen(p)) == 0; }
+/* FORCED EXECUTION runs the constraint on a PINNED value. If `src` was EQ-pinned to a concrete V earlier on this
+   flow (`x==='admin'`), the value IS V for the rest of the flow (the code DETERMINED it) — so a later branch on
+   `src <op> tok` is decided by RUNNING THE REAL PREDICATE on V, not by symbolic token-algebra and not by forking
+   then pruning: `x.startsWith('xyz')` after `x==='admin'` is really `'admin'.startsWith('xyz')` = false. Returns 1
+   (predicate holds -> TRUE arm), 0 (fails -> FALSE arm), -1 (src not pinned, or op not decidable on V -> defer to
+   the unpinned-domain feasibility check). This is the concretize-on-pin design: no separate solver, one arm. */
+int cons_eval_pinned(const char *src, const char *tok, int op) {
+    const char *v = cons_fixed_value(src);
+    if (!v || !tok) return -1;
+    switch (op) {
+        case OPCMP_EQ: { if (!strcmp(v, tok)) return 1; double a, b; if (tok_num(v, &a) && tok_num(tok, &b)) return a == b; return 0; }
+        case OPCMP_NE: { int e = cons_eval_pinned(src, tok, OPCMP_EQ); return e < 0 ? -1 : !e; }
+        case OPCMP_PREFIX: return str_starts(v, tok) ? 1 : 0;
+        case OPCMP_SUB:    return strstr(v, tok) != NULL ? 1 : 0;
+        case OPCMP_LT: case OPCMP_GT: case OPCMP_LE: case OPCMP_GE: { double a, b; if (tok_num(v, &a) && tok_num(tok, &b)) return cmp_sat(a, op, b); return -1; }
+    }
+    return -1;
+}
 void cons_free(void) { cons_reset(); free(g_cons); g_cons = NULL; g_cons_cap = 0; }
