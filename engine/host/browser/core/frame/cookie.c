@@ -17,8 +17,22 @@ static JSValue g_cookies = JS_UNDEFINED;   /* name -> the "name=value" pair (con
    the logged-out empty string) — or the content-script-seeded real cookies once cookie_seed runs. */
 static JSValue g_cookie_ambient = JS_UNDEFINED;
 
+extern char *g_candidate;   /* @S replay candidate — a cookie value carries only RFC 6265 cookie-octets */
+/* RFC 6265 cookie-value = *cookie-octet, cookie-octet = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E — i.e.
+   EXCLUDES SP, " , ; \ DEL, control, and non-ASCII. So a candidate needing any of those cannot be carried RAW
+   in a cookie (`document.cookie='x=a;b'` stores only `x=a`; a space/quote/comma/backslash simply cannot appear).
+   Delivering it would be a FALSE PoC that never reproduces. (An app that decodeURIComponent()s the cookie is the
+   solver's encoder-inversion frontier — the ENCODED form, all cookie-octets, is a separate candidate.) */
+static int cookie_octet_ok(const char *s) {
+    for (; *s; s++) { unsigned char c = (unsigned char)*s;
+        if (c == 0x21 || (c >= 0x23 && c <= 0x2B) || (c >= 0x2D && c <= 0x3A) || (c >= 0x3C && c <= 0x5B) || (c >= 0x5D && c <= 0x7E)) continue;
+        return 0; }
+    return 1;
+}
 static JSValue ambient(JSContext *ctx) {
-    { JSValue c = source_candidate(ctx, "", 0, 0, 0); if (!JS_IsUndefined(c)) return c; }   /* @S replay: attacker-set cookie value, delivered raw */
+    if (!g_candidate || cookie_octet_ok(g_candidate)) {   /* @S replay: deliver the attacker-set cookie value raw — ONLY if it is a valid cookie-octet string (else a SOUND prune: infeasible via a cookie) */
+        JSValue c = source_candidate(ctx, "", 0, 0, 0); if (!JS_IsUndefined(c)) return c;
+    }
     if (JS_IsString(g_cookie_ambient)) return JS_DupValue(ctx, g_cookie_ambient);   /* seeded real cookies */
     JSValue o = JS_NewConcolicSourced(ctx, "{cookie}", "{cookie}");
     if (JS_IsConcolic(o)) JS_SetConcolicExample(ctx, o, JS_NewString(ctx, ""));
