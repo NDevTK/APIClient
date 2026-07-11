@@ -483,7 +483,6 @@ static int g_rc = 0;
    -> the canonical logged-out g_boot_delta the whole frontier layers over; each opaque boot gate forks a TRUE
    sibling boot flow, dispatched later). Extracted from qjs_init so boot EXECUTION can be de-entangled from the
    host's synchronous return — the host only needs g_bundle_id (a pure DOM scan), never g_boot_delta, at return. */
-static void seed_frontier(JSContext *ctx, const char *recipes);   /* fwd */
 /* Finish boot's script phase (cursor reached the last script — after every sync external ran in position): capture
    g_boot_delta, fix the COW baseline, then seed the frontier (its functions now exist). */
 void boot_complete(JSContext *ctx) {   /* non-static: the chunk loader completes a boot parked on a sync external */
@@ -680,79 +679,6 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
    scan in dom_run_scripts (never a host-side regex). The host uses origin|this as the frontier key. */
 KEEP unsigned qjs_bundle_id(void) { return (unsigned)g_bundle_id; }
 
-/* Phase 2 (after qjs_init + the host's frontierGet by bundle-id): seed the frontier and fix the COW baseline.
-   recipes NULL/"" -> a fresh visit (drive all orphans); non-empty -> RESUME by re-creating each parked flow,
-   located by its function SOURCE hash (JS_OrphanHash), decisions replayed by the scheduler. */
-/* Seed the frontier AFTER the initial boot has run (its functions must exist for orphan collection): fresh
-   orphan/session flows, or a resume from recipes. Called from the first qjs_step, right after run_initial_boot. */
-static void seed_frontier(JSContext *ctx, const char *recipes)
-{
-    g_resume_mode = (recipes && recipes[0]) ? 1 : 0;
-    seed_orphans(ctx);      /* normal: seed fresh orphan flows. resume: build g_orphan_buf locators only. */
-    if (g_resume_mode) {
-        /* RESUME: each recipe "hash,dec" re-creates a flow by LOCATING the orphan whose stable SOURCE identity
-           (JS_OrphanHash) matches — robust to collection order/context. A recipe whose function is absent in
-           THIS context simply doesn't match (skipped) — never drives the wrong one. */
-        const char *p = recipes; int resumed = 0;
-        while (*p) {
-            int async_rec = 0;
-            if (*p == 'a') { async_rec = 1; p++; }   /* async recipe: re-attach decvec to the re-fired async call, not drive an orphan */
-            uint32_t want = (uint32_t)strtoul(p, NULL, 10);
-            const char *comma = strchr(p, ','), *semi = strchr(p, ';');
-            signed char *dec = NULL; int dec_n = 0; double rval = 1.0; int rvis = 0;
-            if (comma && (!semi || comma < semi)) {
-                const char *d = comma + 1, *end = semi ? semi : d + strlen(d);
-                /* recipe = "hash,decbits[,valcenti[,visits]]": the decision vector ends at the SECOND comma
-                   (the accumulated-value field) when present, else at the recipe end; visits follows a THIRD
-                   comma. A legacy "hash,decbits" recipe (no value/visits) defaults rval=1.0/rvis=0 (unproven)
-                   — backward compatible. */
-                const char *comma2 = (const char *)memchr(d, ',', (size_t)(end - d));
-                const char *decend = comma2 ? comma2 : end;
-                dec_n = (int)(decend - d);
-                if (dec_n > 0) { dec = (signed char *)malloc((size_t)dec_n); for (int i = 0; i < dec_n; i++) dec[i] = (d[i] == '1') ? 1 : 0; }
-                if (comma2) {
-                    double v = strtol(comma2 + 1, NULL, 10) / 100.0; if (v > 0) rval = v;   /* prior accumulated value */
-                    const char *comma3 = (const char *)memchr(comma2 + 1, ',', (size_t)(end - (comma2 + 1)));
-                    if (comma3) { long vs = strtol(comma3 + 1, NULL, 10); if (vs > 0 && vs < (1L << 30)) rvis = (int)vs; }   /* prior visit count (UCB explore term) */
-                }
-            }
-            if (async_rec) {
-                /* ASYNC recipe: park it in the pending map (g_arec). It attaches to the re-fired async call
-                   by source hash at ONE of two consult sites of this one map — the post-loop SWEEP below (for
-                   a boot-triggered call already re-created by phase-1 boot) or reg_add_async_call (for a
-                   handler-triggered call that fires later in phase 3). Either way it REPLAYS its parked
-                   await/branch path instead of re-forking from scratch. */
-                arec_park(want, dec, dec_n, rval, rvis);   /* park the async recipe -> async_flow.c (takes dec ownership, frees on overflow) */
-                if (!semi) break; p = semi + 1; continue;
-            }
-            int found = -1;
-            for (int oi = 0; oi < g_orphan_n; oi++) { if (JS_OrphanHash(ctx, g_orphan_buf[oi]) == want) { found = oi; break; } }
-            if (found >= 0) {
-                { Flow *rf = reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), rval, dec, dec_n);   /* resume with the PRIOR accumulated value, not a flat 1.0 */
-                  rf->orphan_idx = found; rf->visits = rvis; }   /* restore visits so UCB reflects prior exploration */
-                resumed++;
-            } else free(dec);
-            if (!semi) break; p = semi + 1;
-        }
-        /* SWEEP: attach async recipes to the flows phase-1 boot already re-created (their calls fired before
-           the map existed). Handler-triggered recipes stay pending for reg_add_async_call in phase 3. */
-        for (int ri = 0; ri < g_reg_n; ri++) if (arec_attach(ctx, &g_reg[ri])) resumed++;
-        printf("@RESUMED %d\n", resumed); fflush(stdout);
-    }
-    JS_CowSetActive(1);   /* baseline = post-boot state; capture shared-state writes during flow exploration */
-    g_dom_capture = 1;    /* DOM baseline is now fixed too; capture flow DOM mutations for per-flow revert */
-    /* Seed ONE attacker-SESSION flow when the page has >=2 handlers — it fires them in sequence over
-       accumulating shared state, the sound way to reach cross-handler sinks (source stored by A, sunk by B). */
-    /* Seed ONE exploratory session for ANY entry point (handler OR orphan): it fires them in sequence over an
-       accumulating delta so a cross-handler/cross-action opaque write reaches a later gate (redux/vuex
-       login-action -> thunk, or handler A -> handler B) AND a handler wired MID-drive (connectedCallback ->
-       click) is fired over that delta with its producer's context. The old >=2 gate was a BOUND that truncated
-       nested-handler discovery on a single-component page; the WFQ starves a session with no real cross-flow
-       state, so >=1 costs ~nothing when unproductive. */
-    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) reg_add(ctx, JS_UNDEFINED, 1.2, NULL, 0)->session = 1;
-    /* BOOT-GATE EXPLORATION is INTRINSIC to the initial boot (run_initial_boot forks TRUE-arm siblings), so no
-       separate boot re-run is enqueued here. A reply/chunk enqueues a delivery boot flow (qjs_provide). */
-}
 
 /* Phase 2: the host has read g_bundle_id (identity) + looked up the parked frontier; it now hands over the resume
    recipes. Boot EXECUTION and frontier seeding are DEFERRED to the first qjs_step (run_initial_boot then
