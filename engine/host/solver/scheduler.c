@@ -24,6 +24,17 @@
 extern JSRuntime *g_rt;             /* the JS runtime (main.c) — per-fn microtask drain */
 extern void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s);   /* push a string into a JS array (main.c util) */
 
+/* ── the scheduler's OWN state: the registry + WFQ/dispatch bookkeeping + the running-flow decision vector.
+   Defined here (the entry reads some via scheduler.h extern); the flow components never touch g_reg. */
+int g_in_session = 0;
+Flow *g_reg = NULL; int g_reg_n = 0, g_reg_cap = 0;
+int g_running = 0; double g_cur_val = 0; Flow *g_cur_flow = NULL;
+int g_cur_orphan_idx = -1;
+int g_park_requested = 0; long g_work = 0; double g_yield_floor = -1e300; int g_made_progress = 0;
+double g_quantum_start = 0.0; unsigned g_quantum_sample = 0; long g_switches = 0;
+double g_max_parked = -1e300; int g_resume_mode = 0;
+JSValue g_cur_fn = JS_UNDEFINED; signed char *g_dec = NULL; int g_dec_cap = 0, g_dec_n = 0, g_c = 0;
+
 static int quantum_expired(void) { return g_made_progress && (emscripten_get_now() - g_quantum_start) > QUANTUM_MS; }
 
 static int reg_readd(JSContext *ctx, Flow f)

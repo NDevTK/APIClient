@@ -107,13 +107,7 @@
    registry + decision vector grow until the RAM/disk floor; no FLOW_MAX/DEC_MAX cap that truncates work. */
 JSContext *g_ctx;       /* fwd: the MAIN analysis context (defined near the persistent-instance protocol) — the
                                   async/reaction hooks claim a call as a flow ONLY for this ctx, never the @S solve realm */
-int g_in_session = 0;   /* a session flow is running -> solve_add enqueues candidate SESSION flows */
 int g_in_boot_flow = 0; /* a BOOT flow is re-running boot: fork boot siblings; suppress handler re-registration */
-Flow   *g_reg = NULL;
-int     g_reg_n = 0, g_reg_cap = 0;
-int     g_running = 0;
-double  g_cur_val = 0;
-Flow   *g_cur_flow = NULL;   /* running flow (a stable local copy; its weight is read by the yield hook) */
 int            g_emit_total = 0;    /* non-static: the emit counter (endpoint.c bumps it on a recorded @H) */
 JSRuntime *g_rt = NULL;   /* non-static: module_loader.c drives JS_ExecutePendingJob on it */
 /* Raise the running flow's emitted VALUE (the WFQ progress signal) by one emit. Encapsulates the g_cur_flow
@@ -127,29 +121,7 @@ void flow_emit_value(void) {
    (g_park_requested, host-set), never a dispatch/step count — with headroom the page runs to completion. */
 JSValue g_orphan_buf[4096];
 int     g_orphan_n = 0;
-int     g_cur_orphan_idx = -1;   /* running flow's orphan index (inherited by its branch siblings) */
-int     g_park_requested = 0;   /* host sets this under RAM pressure -> park the cold tail to IDB (NOT a dispatch count) */
-long    g_work = 0;              /* flow DISPATCHES this run (starter OR resume) — diagnostic only, never a park trigger */
-double  g_yield_floor = -1e300;  /* host cross-document WFQ: yield HOT to the host the moment this engine's best
-                                           flow no longer outranks the RUNNER-UP engine (whose weight the host sets here).
-                                           VALUE-driven, never a dispatch count — the WFQ, not a clock, decides the switch.
-                                           -1e300 = no runner-up (single engine): run to completion/park. */
-int     g_made_progress = 0;     /* dispatched >=1 flow this qjs_step? (guards zero-work ping-pong; NOT a cap) */
-/* COOPERATIVE QUANTUM (§NO BOUNDS: a thread-YIELD, never a cap). The ONE worker thread is shared across all
-   engines + the message pump + incremental merge; so the running flow hands the thread back to the host loop
-   after a bounded wall-clock slice and RESUMES the byte-identical frontier from g_reg. Wall-clock (the honest
-   measure of thread-hogging), not an opcode count. g_quantum_start is stamped at each scheduler_run entry; both
-   wfq_yield (per-opcode, so a long single flow yields mid-run) and scheduler_run's loop head (so it RETURNS to
-   qjs_step rather than re-dispatching the just-expired flow) consult it. Truncates no work, drops no flow. */
-double  g_quantum_start = 0.0;
-unsigned g_quantum_sample = 0;
-long    g_switches = 0;          /* flow SUSPEND/re-queue events (interleave) -> @RESULT._switches */
-/* Highest weight among the PARKED flows (g_reg, excluding the running one). A parked flow's weight is CONSTANT
-   while parked (val/visits/cpu don't change), so it changes only when a flow is ADDED (reg_add). Cache it:
-   recompute once per dispatch, update O(1) on reg_add. wfq_yield then decides preemption in O(1) instead of
-   scanning the whole registry EVERY opcode — same decision, no per-opcode O(N) on the productive flow. */
-double  g_max_parked = -1e300;
-int     g_resume_mode = 0;       /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
+/* The WFQ dispatch loop + its state (cooperative quantum, parked-weight cache, decision vector) -> scheduler.c. */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 /* CSP (g_csp/g_header_csp + csp_lacks/csp_derive/csp_set_header/csp_free) lives in csp.c — included below. */
 extern lxb_html_document_t *g_dom;   /* the live parsed document (defined below); the @S emitter needs it for the CSP nonce scan */
@@ -157,13 +129,6 @@ extern lxb_html_document_t *g_dom;   /* the live parsed document (defined below)
 char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete candidate (source getters return it); NULL in normal flows */
 
 /* has_hole (opaque-hole URL test) is in url.c (included via url.h). */
-
-/* decision-vector state for the RUNNING starter flow (branch-arm BFS) — grows unbounded */
-JSValue      g_cur_fn = JS_UNDEFINED;   /* the running starter's function (borrowed) so branch_decide can fork a sibling that re-runs it */
-signed char *g_dec = NULL;              /* working decision vector: forced prefix + this flow's chosen-true suffix */
-int          g_dec_cap = 0;
-int          g_dec_n = 0;               /* length of decisions made/forced so far */
-int          g_c = 0;                   /* cursor: next decision index branch_decide will consume */
 
 /* Per-flow value-domain constraint tracker (Cons, g_cons, cons_reset-set-feasible-fixed_value, pair_contradicts; plus @S-delivery state g_origin_req, g_sink_jkey, g_sink_root) lives in solver-constraints.c. */
 /* url_solve_holes ({src}-hole value-solve) -> browser/url.c (URL construction module). */
