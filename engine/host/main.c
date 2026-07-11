@@ -151,8 +151,8 @@ char *g_candidate = NULL;          /* @S: the running REPLAY flow's concrete can
 /* fromReply: a bridge-provided map { url -> concrete reply body text }. A real GET is fired by the
    TRUSTED offscreen (safeFetch, one-per-endpoint) and its body injected here so r.json()/r.text()
    return the CONCRETE server reply -> a reply field flowing into a downstream request param becomes a
-   REAL example value instead of {}. Absent url -> opaque (the honest shape). */
-JSValue g_reply_table = JS_UNDEFINED;
+   REAL example value instead of {}. Absent url -> opaque (the honest shape). The cache itself (seed/put/free)
+   is OWNED by solver/reply.c (the reply component); main.c only relays the host edges to it. */
 /* g_storage + js_storage_get/set + storage_free live in storage.c (localStorage/sessionStorage concolic). */
 JSContext *g_ctx;   /* the run's context (defined = NULL below); fwd-declared for Lexbor callbacks */
 /* ENDPOINT REGISTRY + IDENTITY: the engine ACCUMULATES every learned endpoint (method/url/params/
@@ -564,11 +564,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     js_init_module_os(ctx, "os");
 
     if (origin && origin[0]) set_origin(origin);   /* real page principal (location.origin/host) */
-    if (replies && replies[0]) {                   /* fromReply table: { url -> concrete reply body } */
-        JSValue t = JS_ParseJSON(ctx, replies, strlen(replies), "<replies>");
-        if (JS_IsException(t)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
-        else g_reply_table = t;
-    }
+    reply_cache_seed(ctx, replies);   /* fromReply table: { url -> concrete reply body } -> reply.c owns the cache */
     csp_set_header(csp);   /* REAL HTTP CSP header (fetch(location.href)); dom_run_scripts makes it the effective g_csp, primary over meta. (recipes are seeded in phase-2 qjs_begin.) */
 
     JSValue g = JS_GetGlobalObject(ctx);
@@ -705,12 +701,9 @@ KEEP void qjs_provide(const char *url, const char *body)
     int has = body && body[0];
     if (has) {
         /* CACHE the reply so a re-run's make_response injects __body (r.json()/r.text() -> CONCOLIC synchronously),
-           creating g_reply_table if the host seeded none. On a NEW url, enqueue a FORKING BOOT FLOW: it re-runs
-           boot with this reply now synchronous, so a reply-GATED continuation forks WITH the concolic example
-           (the value reaches gated fetches, not just ungated). */
-        if (!JS_IsObject(g_reply_table)) { JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_NewObject(ctx); }
-        JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));   /* cache for a re-entrant/cached read (make_response __body) */
-        pendreply_resolve(ctx, url, body);   /* PARK-RESUME: deliver the concrete concolic reply to every parked r.json()/r.text() of this url — the continuation resumes in place, no boot re-run */
+           then PARK-RESUME deliver it to every parked consumer of this url — the continuation resumes in place. */
+        reply_cache_put(ctx, url, body);
+        pendreply_resolve(ctx, url, body);   /* deliver the concrete concolic reply to every parked r.json()/r.text() of this url */
     }
     reply_pending_drop(url);   /* the reply is CACHED + its parked consumers resolved above; drop the fetch registration */
 }
@@ -796,7 +789,7 @@ KEEP void qjs_teardown(void)
     node_free(ctx);
     event_target_free(ctx);
     concolic_free(ctx);
-    JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED;
+    reply_cache_free(ctx);   /* free the reply-body cache (reply.c) */
     storage_free(ctx);
     cookie_free(ctx);
     winname_free(ctx);

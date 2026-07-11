@@ -13,6 +13,9 @@
 /* Build a fetch Response for `url`: concrete identity + opaque body, with fromReply injection of a cached
    concrete body (from the reply table) so r.json()/r.text() then resolve the reply's real data concolic. */
 JSValue make_response(JSContext *ctx, const char *url);
+void reply_cache_seed(JSContext *ctx, const char *replies_json);   /* seed the reply-body cache from the host fromReply JSON (qjs_init) */
+void reply_cache_put(JSContext *ctx, const char *url, const char *body);   /* cache a fetched body under its url (qjs_provide) */
+void reply_cache_free(JSContext *ctx);   /* teardown: free the reply-body cache */
 void pendreply_resolve(JSContext *ctx, const char *url, const char *body);   /* resolve every parked r.json()/r.text() of url with the concrete reply (qjs_provide) */
 void pendreply_drain_opaque(JSContext *ctx);   /* finalize: resolve any never-delivered parked reply OPAQUE (shape) */
 void pendreply_free(JSContext *ctx);   /* teardown: free the reply delivery-park table */

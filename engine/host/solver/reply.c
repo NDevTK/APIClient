@@ -7,11 +7,29 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Borrowed from main.c (the scheduler side): the reply-body table (host-seeded + written by the provision
-   re-run), the resolved-promise helper, and the reply-fetch registrar (enqueues a bounded GET). */
-extern JSValue g_reply_table;
+/* The reply-body CACHE: { url -> concrete reply body text }. Host-seeded at init (the fromReply table a real
+   GET already fetched) and extended by qjs_provide as bodies arrive; make_response reads it so a re-entrant /
+   cached r.json()/r.text() returns the CONCRETE reply synchronously (not opaque). Owned here — the reply
+   component owns the whole reply concern (cache + park-resume delivery + fetch registry edge). */
+JSValue g_reply_table = JS_UNDEFINED;
 extern JSValue js_resolved(JSContext *ctx, JSValue val);
 extern void reply_fetch_register(const char *url, int is_json);
+
+/* Seed the cache from the host's fromReply JSON (a real GET already fetched these bodies). */
+void reply_cache_seed(JSContext *ctx, const char *replies_json) {
+    if (!replies_json || !replies_json[0]) return;
+    JSValue t = JS_ParseJSON(ctx, replies_json, strlen(replies_json), "<replies>");
+    if (JS_IsException(t)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); }
+    else { JS_FreeValue(ctx, g_reply_table); g_reply_table = t; }
+}
+/* Cache a fetched body under its url (creating the table if the host seeded none) — a re-run's make_response
+   then injects __body so r.json()/r.text() are CONCOLIC synchronously. */
+void reply_cache_put(JSContext *ctx, const char *url, const char *body) {
+    if (!url || !body) return;
+    if (!JS_IsObject(g_reply_table)) { JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_NewObject(ctx); }
+    JS_SetPropertyStr(ctx, g_reply_table, url, JS_NewString(ctx, body));
+}
+void reply_cache_free(JSContext *ctx) { JS_FreeValue(ctx, g_reply_table); g_reply_table = JS_UNDEFINED; }
 
 static JSValue js_resp_body(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 { return js_resolved(ctx, js_concolic(ctx, "{reply}", JS_UNDEFINED)); }
