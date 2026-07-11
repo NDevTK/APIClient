@@ -13,6 +13,7 @@
 extern JSValue g_endpoints;
 
 void record_endpoint(JSContext *ctx, JSValue ep);   /* the shared @H sink (consumes `ep`) */
+void capture_headers(JSContext *ctx, JSValueConst ep, JSValueConst hdrs);   /* build ep.headers from a Headers/plain object (concolic EXAMPLE), shared by fetch + XHR */
 void endpoint_init(JSContext *ctx);                 /* fresh @H array (qjs_init) */
 void endpoint_free(JSContext *ctx);                 /* teardown */
 
