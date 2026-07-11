@@ -105,3 +105,11 @@ int dom_run_scripts(JSContext *ctx) {
     return boot_drive_scripts(ctx);
 }
 int dom_boot_resume(JSContext *ctx) { return boot_drive_scripts(ctx); }
+/* Is `url` the synchronous CLASSIC external the boot cursor is currently PARKED on? (Lets qjs_provide tell a
+   boot-blocking external — resume the cursor — from a module chunk a boot script dynamically imported.) */
+int dom_boot_parked_is(const char *url) {
+    if (g_boot_cursor >= g_boot_scr.n) return 0;
+    size_t sl = 0;
+    const lxb_char_t *src = lxb_dom_element_get_attribute(g_boot_scr.els[g_boot_cursor], (const lxb_char_t *)"src", 3, &sl);
+    return src && url && sl == strlen(url) && memcmp(src, url, sl) == 0;
+}

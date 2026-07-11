@@ -845,13 +845,21 @@ KEEP void qjs_provide(const char *url, const char *body)
     for (int i = 0; i < g_chunk_n; i++) {
         if (strcmp(g_chunk_pending[i], url) != 0) continue;
         if (body && body[0] && g_boot_active) {
-            /* boot is PARKED on a synchronous CLASSIC external <script src>: store its body + RESUME boot in
-               document position. COW stays active (boot's g_boot_delta is accumulating) — do NOT run the baseline
-               revert bracket (it would undo boot's writes), and do NOT call JS_DetectModule here (a JS parse with
-               COW active crashes in the parked-boot state — boot only ever parks on a classic external anyway, so
-               the cursor runs it directly). */
+            /* boot is PARKED on a synchronous external. COW stays active (boot's g_boot_delta is accumulating) — do
+               NOT run the baseline revert bracket (it would undo boot's writes). Route by URL, NOT JS_DetectModule
+               (a JS parse with COW active aborts in the parked-boot state). */
             modsrc_put(url, body, strlen(body));
-            if (!dom_boot_resume(ctx)) boot_complete(ctx);   /* the sync external ran in position; cursor reached the end -> g_boot_delta + seed */
+            if (dom_boot_parked_is(url)) {
+                if (!dom_boot_resume(ctx)) boot_complete(ctx);   /* the sync CLASSIC external boot waited on ran in position; cursor reached the end -> g_boot_delta + seed */
+            } else {
+                /* a MODULE chunk a boot script dynamically imported, arriving mid-park: link it as a baseline
+                   singleton (COW off around the eval — its effects are baseline, and it avoids COW-active parse),
+                   then deliver to the parked import(). Boot stays parked on its own external. */
+                JS_CowSetActive(0);
+                JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
+                pendimport_resolve(ctx, url);
+                JS_CowSetActive(1);
+            }
         } else if (body && body[0]) {
             JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
             int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0); JS_SetFlowLocalMark(0);   /* a lazy CHUNK's globals are BASELINE (shared, re-run in boot-replay), not flow-local — mark 0 while it evals */
