@@ -169,9 +169,9 @@ JSValue js_el_refl_get(JSContext *ctx, JSValueConst this_val, int magic) {
         if (g_candidate) return JS_NewString(ctx, g_candidate);   /* @S replay: the user types the candidate RAW (a form value is not URL-encoded) — so the breakout reaches the sink + verifies */
         int si = attr_shadow_find(el, "value");
         if (si >= 0 && JS_IsConcolic(attr_shadow_opaque(si))) return JS_DupValue(ctx, attr_shadow_opaque(si));   /* the page SET a tainted value -> keep its real source (e.g. a reply field), not {formvalue} */
-        size_t dl = 0; const lxb_char_t *dv = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"value", 5, &dl);   /* the HTML default value = the example */
+        size_t dl = 0; const lxb_char_t *dv = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"value", 5, &dl);   /* the HTML default value = the example, IF present */
         JSValue o = JS_NewConcolicSourced(ctx, "{formvalue}", "{formvalue}");
-        if (JS_IsConcolic(o)) JS_SetConcolicExample(ctx, o, dv ? JS_NewStringLen(ctx, (const char *)dv, dl) : JS_NewString(ctx, ""));
+        if (JS_IsConcolic(o) && dv && dl) JS_SetConcolicExample(ctx, o, JS_NewStringLen(ctx, (const char *)dv, dl));   /* a real default -> example; NO default -> stay a {formvalue} SHAPE (attacker input, no learnable value), not an empty string */
         return o;
     }
     const char *n = refl_name(magic); size_t vl = 0;
