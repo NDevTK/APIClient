@@ -30,6 +30,7 @@
 #include "solver/scheduler.h"    /* Flow (per-flow scheduler state) + AsyncRecipe (replay recipe) — the registry's record types */
 #include "solver/solve.h"        /* the @S SOLVER component: solve_add sink entry + gate_collect/solve_all/solve_init/solve_free */
 #include "solver/async_flow.h"   /* ASYNC-AS-FLOW: the async-call/reaction/await hooks + the cross-session async-recipe map */
+#include "solver/boot_flow.h"    /* BOOT-AS-FLOW + candidate-replay + attacker session (the flow types beyond a plain orphan) */
 #include "solver/solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "solver/envelope.h"     /* @S structured-source delivery envelope (JSON/query/delim addressing), its own TU */
 #include "core/frame/csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
@@ -124,8 +125,8 @@ void flow_emit_value(void) {
 /* Cross-session frontier (park/resume by REPLAY): deterministic orphan collection gives each function a
    stable index; a parked flow's recipe = (orphan_idx, decision-vector). Parking is RAM-PRESSURE-driven
    (g_park_requested, host-set), never a dispatch/step count — with headroom the page runs to completion. */
-static JSValue g_orphan_buf[4096];
-static int     g_orphan_n = 0;
+JSValue g_orphan_buf[4096];
+int     g_orphan_n = 0;
 int     g_cur_orphan_idx = -1;   /* running flow's orphan index (inherited by its branch siblings) */
 static int     g_park_requested = 0;   /* host sets this under RAM pressure -> park the cold tail to IDB (NOT a dispatch count) */
 static long    g_work = 0;              /* flow DISPATCHES this run (starter OR resume) — diagnostic only, never a park trigger */
@@ -435,8 +436,8 @@ static void emit_result(JSContext *ctx) { emit_result_ex(ctx, 1); }   /* teardow
    flow takes TRUE (recorded so deeper new branches fork correctly). BFS over the decision tree -> both arms
    of every gate are explored, surfacing the branch-gated (login/flag-gated) endpoints. */
 int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a cross-flow @S candidate */
-static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n);   /* fwd: defined near boot_replay */
-static int reg_add_session(JSContext *ctx, signed char *dec, int dec_n); /* fwd: an exploratory session that FORKS */
+/* reg_add_boot / reg_add_session (+ boot_replay / boot_replay_candidate / resolve_replayed_handler / the
+   attacker session) -> solver/boot_flow.c, declared in boot_flow.h. */
 static int branch_decide(JSContext *ctx, JSValueConst cond)
 {
     if (g_boot_replay) return 1;                            /* boot-replay: fixed arm (re-establishing shared state for an @S candidate, no vector to replay) */
@@ -555,7 +556,7 @@ static JSValue g_el_proto = JS_UNDEFINED;   /* the element-method proto; custom-
    The synthetic {pm} attacker MessageEvent a 'message' listener is driven with stays here (the scheduler owns
    the attacker source): its .data is the source-tagged concolic {pm}, so a postMessage-XSS sink reports {pm}
    and the PoC assembler builds a postMessage-delivered PoC. Borrowed into the driven flow, not owned by it. */
-static JSValue g_msg_event = JS_UNDEFINED;
+JSValue g_msg_event = JS_UNDEFINED;
 /* on<event> content-attribute handlers (js_el_on_set + ON_EVENTS) -> dom_element.c (Element event handlers). */
 
 /* The page's OWN identity (principal) is CONCRETE for URL building — location.origin/protocol/host/
@@ -653,154 +654,6 @@ static int dom_init(const char *html, size_t len) {
    re-establishes shared state under a concrete input — a COMPONENT that owns its state, no scheduler globals).
    boot_replay stays here: it only wraps boot_scripts_run with the g_boot_replay branch-mode flag (a scheduler
    concern). Remaining limit (full boot-as-flow): external <script src> chunks aren't re-run. */
-static void boot_replay(JSContext *ctx) { g_boot_replay = 1; boot_scripts_run(ctx); g_boot_replay = 0; }
-/* Enqueue a BOOT FLOW: re-run boot as a FORKING starter (decision vector), so cached async replies resolve
-   synchronously and their continuations' gated branches fork with the concolic example. */
-static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n) {
-    reg_add(ctx, JS_UNDEFINED, 1.3, dec, dec_n)->is_boot = 1;   /* reg_add never fails (OOM aborts) */
-    return 1;
-}
-/* An EXPLORATORY attacker-session that FORKS: re-fire ALL handlers over one accumulating delta, replaying
-   `dec` then forking new opaque branches. This is how a gate in handler B on state that handler A wrote from
-   an OPAQUE source (the canonical "login handler sets auth flag; gated code reads it" SPA pattern) gets its
-   admin arm explored — a per-handler orphan flow can't (it's COW-isolated from A's write), and a fixed-arm
-   session can't (it never forks). A candidate session (verifying a breakout) stays fixed-arm; only this
-   exploratory kind forks. */
-static int reg_add_session(JSContext *ctx, signed char *dec, int dec_n) {
-    reg_add(ctx, JS_UNDEFINED, 1.2, dec, dec_n)->session = 1;   /* reg_add never fails (OOM aborts) */
-    return 1;
-}
-/* BOOT AS THE FIRST FLOW: the page's boot (its inline scripts) is captured as a COW DELTA — g_boot_delta —
-   exactly like any flow (mutations + global CREATIONS). It stays APPLIED between opaque flows (its effects
-   are the post-boot baseline). A candidate flow UNAPPLIES it to reach a TRUE pre-boot heap (boot's globals
-   deleted, so a guarded init `if(!window.d){window.d=src}` re-fires), re-runs boot under the concrete
-   candidate as its OWN delta, drives, then REAPPLIES g_boot_delta so the next opaque flow sees post-boot.
-   No host-side property save/delete/restore — the delta IS the mechanism (heap; DOM boot stays baseline). */
-static void *g_boot_delta = NULL; static int g_boot_delta_n = 0, g_boot_delta_cap = 0;
-static void boot_replay_candidate(JSContext *ctx) {
-    /* Seed the RUNNING candidate flow's OWN delta with the boot INVERSE (heap -> pre-boot, RECORDED so a
-       suspend/revert restores the post-boot baseline), then re-run boot under the concrete candidate as more
-       of the SAME delta. The whole boot-undo + candidate-replay is ONE preemptible flow delta — no host-side
-       bracket, so a candidate flow yields per-opcode like any other. g_boot_delta is only READ (canonical
-       post-boot baseline for non-candidate flows), never unapplied on the shared heap. */
-    if (g_boot_delta) JS_CowSeedBootInverse(ctx, g_boot_delta, g_boot_delta_n);
-    boot_replay(ctx);   /* re-run boot under the concrete candidate (guards re-fire), captured in the candidate's own delta */
-}
-/* CLOSURE cross-flow: an orphan handler captured at seed time (f.handle) closes over the BASELINE source;
-   boot_replay under the candidate re-created that handler with the CANDIDATE closure. Re-resolve to the
-   fresh one by SOURCE IDENTITY (same JS_OrphanHash) among the current global functions, so the candidate
-   actually flows through the closure the handler reads. Returns a NEW ref (caller frees), or JS_UNDEFINED
-   if none differs (then the original handle is correct — e.g. it reads a shared global boot_replay updated). */
-static JSValue resolve_replayed_handler(JSContext *ctx, JSValueConst orig) {
-    if (JS_IsUndefined(orig)) return JS_UNDEFINED;
-    uint32_t want = JS_OrphanHash(ctx, orig);
-    JSValue found = JS_UNDEFINED;
-    /* FIRST the handlers boot_replay re-registered via addEventListener (a closure handler isn't on any
-       global) — then the global functions (window.h = closure, module pattern). */
-    for (int i = 0; i < g_replay_handler_n && JS_IsUndefined(found); i++) {
-        JSValueConst v = g_replay_handlers[i];
-        if (JS_VALUE_GET_PTR(v) != JS_VALUE_GET_PTR(orig) && JS_OrphanHash(ctx, v) == want) found = JS_DupValue(ctx, v);
-    }
-    if (JS_IsUndefined(found)) {
-        JSValue g = JS_GetGlobalObject(ctx);
-        JSPropertyEnum *tab = NULL; uint32_t n = 0;
-        if (JS_GetOwnPropertyNames(ctx, &tab, &n, g, JS_GPN_STRING_MASK) == 0) {
-            for (uint32_t i = 0; i < n && JS_IsUndefined(found); i++) {
-                JSValue v = JS_GetProperty(ctx, g, tab[i].atom);
-                if (JS_IsFunction(ctx, v) && JS_VALUE_GET_PTR(v) != JS_VALUE_GET_PTR(orig) && JS_OrphanHash(ctx, v) == want)
-                    found = JS_DupValue(ctx, v);
-                JS_FreeValue(ctx, v);
-            }
-            JS_FreePropertyEnum(ctx, tab, n);
-        }
-        JS_FreeValue(ctx, g);
-    }
-    return found;   /* g_replay_handlers/msg stay valid until is_msg_handler(drive) has run; cleared after the drive */
-}
-/* ATTACKER SESSION: fire ALL registered handlers in seed order over the CURRENT (accumulating) COW delta,
-   modeling an attacker firing a sequence of events. Handler A's tainted write to shared state persists to
-   handler B (no revert between them), so a cross-handler sink — source stored by A, sunk by B — is reached:
-   opaque -> the sink is DETECTED (task recorded), candidate -> breakout is VERIFIED. Branches take a fixed
-   arm here (per-handler branch exploration is the individual orphan flows' job); the session adds only the
-   cross-handler STATE dimension. */
-/* __sessionFns(): the session fire list as [fn, event] pairs — event handlers (msg handlers get the synthetic
-   {pm} MessageEvent) then the collected ORPHANS (deduped vs handlers, opaque arg). Exposed so the session LOOP
-   is SELF-HOSTED bytecode (like the array methods) rather than a C loop that can't yield mid-iteration and so
-   runs to completion — a violation of the per-opcode-yield core. */
-static JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSValue arr = JS_NewArray(ctx); uint32_t n = 0, hn = 0;
-    if (!JS_IsUndefined(g_handlers)) { JSValue lv = JS_GetPropertyStr(ctx, g_handlers, "length"); JS_ToUint32(ctx, &hn, lv); JS_FreeValue(ctx, lv); }
-    for (uint32_t i = 0; i < hn; i++) {
-        JSValue h = JS_GetPropertyUint32(ctx, g_handlers, i);
-        if (JS_IsFunction(ctx, h)) {
-            /* a 'message' handler gets the {pm} MessageEvent; every other handler gets a real DOM Event whose
-               target is the PER-CODE-FLOW document (js_event_ctor), so e.target.querySelector/closest work. */
-            JSValue ev = (is_msg_handler(h) && !JS_IsUndefined(g_msg_event)) ? JS_DupValue(ctx, g_msg_event) : js_event_ctor(ctx, JS_UNDEFINED, 0, NULL);
-            JSValue pair = JS_NewArray(ctx);
-            JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, h));
-            JS_SetPropertyUint32(ctx, pair, 1, ev);   /* consumes ev */
-            JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);   /* handlers fire with this=undefined */
-            JS_SetPropertyUint32(ctx, arr, n++, pair);
-        }
-        JS_FreeValue(ctx, h);
-    }
-    for (int oi = 0; oi < g_orphan_n; oi++) {
-        JSValueConst fn = g_orphan_buf[oi];
-        if (!JS_IsFunction(ctx, fn)) continue;
-        int is_h = 0;
-        for (uint32_t i = 0; i < hn && !is_h; i++) { JSValue h = JS_GetPropertyUint32(ctx, g_handlers, i); if (JS_VALUE_GET_PTR(h) == JS_VALUE_GET_PTR(fn)) is_h = 1; JS_FreeValue(ctx, h); }
-        if (is_h) continue;
-        JSValue pair = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, fn));
-        /* a NON-handler orphan (is_h excluded above) is NOT an event listener: driving it with an Event as arg0
-           makes `fetch('/api/org/'+id)` learn a GARBAGE /api/org/[object Object] endpoint. Give it distinct
-           external-input source identity ({arg0}), like the main orphan drive — its arg is attacker input, not
-           an Event; the session only needs it to run over the accumulated handler state. */
-        JS_SetPropertyUint32(ctx, pair, 1, JS_NewConcolicSourced(ctx, "{arg0}", "{arg0}"));
-        JS_SetPropertyUint32(ctx, pair, 2, JS_FindReceiver(ctx, fn));   /* real receiver (upgraded custom-element instance) so this.attachShadow/getAttribute work when the session fires connectedCallback */
-        JS_SetPropertyUint32(ctx, arr, n++, pair);
-    }
-    /* THEN re-fire boot-EXECUTED page functions (globalThis own bytecode fns) over the SAME accumulating delta:
-       a boot-time reader like `loadDashboard()` ran ONCE at boot with logged-out state, but firing it here —
-       AFTER the login handler wrote `state.user=admin` — reaches its gated arm (the admin endpoint) with the
-       handler's own concrete values. Orphan-collection excludes executed fns (they ran at boot); the SESSION
-       wants them precisely because the accumulated handler state is NEW. C host-edges (fetch/WebSocket) are
-       non-bytecode (OrphanHash 0) -> skipped; handlers/orphans already in the list -> deduped. The WFQ starves
-       any that emit nothing new — this only ADDS the boot-reader dimension the handler→handler session misses. */
-    JSValue g = JS_GetGlobalObject(ctx);
-    JSPropertyEnum *gt = NULL; uint32_t gn = 0;
-    if (JS_GetOwnPropertyNames(ctx, &gt, &gn, g, JS_GPN_STRING_MASK) == 0) {
-        for (uint32_t i = 0; i < gn; i++) {
-            const char *nm = JS_AtomToCString(ctx, gt[i].atom);
-            int internal = (nm && nm[0] == '_' && nm[1] == '_');   /* OUR injected machinery (__driveSession/__sessionFns/...) — firing it re-enters the session; skip by our OWN naming, not a page heuristic */
-            if (nm) JS_FreeCString(ctx, nm);
-            JSValue fn = internal ? JS_UNDEFINED : JS_GetProperty(ctx, g, gt[i].atom);
-            if (!internal && JS_IsFunction(ctx, fn) && JS_OrphanHash(ctx, fn) != 0) {   /* page-defined bytecode fn, not a C host-edge or our machinery */
-                int dup = 0;
-                for (int oi = 0; oi < g_orphan_n && !dup; oi++) if (JS_VALUE_GET_PTR(g_orphan_buf[oi]) == JS_VALUE_GET_PTR(fn)) dup = 1;
-                for (uint32_t hi = 0; hi < hn && !dup; hi++) { JSValue h = JS_GetPropertyUint32(ctx, g_handlers, hi); if (JS_VALUE_GET_PTR(h) == JS_VALUE_GET_PTR(fn)) dup = 1; JS_FreeValue(ctx, h); }
-                if (!dup) {
-                    JSValue pair = JS_NewArray(ctx);
-                    JS_SetPropertyUint32(ctx, pair, 0, JS_DupValue(ctx, fn));
-                    /* a boot-EXECUTED reader (loadDashboard()) is a DATA function, not an event listener — an
-                       Event arg makes its `fetch('/api/'+arg)` learn a garbage [object Object] endpoint. Give it
-                       {arg0} external-input identity; the session re-fires it for the accumulated state, not an event. */
-                    JS_SetPropertyUint32(ctx, pair, 1, JS_NewConcolicSourced(ctx, "{arg0}", "{arg0}"));
-                    JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);
-                    JS_SetPropertyUint32(ctx, arr, n++, pair);
-                }
-            }
-            JS_FreeValue(ctx, fn);
-        }
-        JS_FreePropertyEnum(ctx, gt, gn);
-    }
-    JS_FreeValue(ctx, g);
-    return arr;
-}
-static JSValue js_session_drain(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {}   /* per-fn microtask drain, parity with the C loop */
-    return JS_UNDEFINED;
-}
 /* eval_page_script + dom_run_scripts -> browser/core/html/html_script_runner.{c,h} (Blink HTMLScriptRunner):
    running the document's <script> elements is a BROWSER component, not scheduler state. */
 

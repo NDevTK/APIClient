@@ -12,7 +12,6 @@ int g_handler_n = 0;
    postMessage-delivered PoC. Borrowed refs (also held live in g_handlers). */
 void *g_msg_handlers[128];
 int g_msg_handler_n = 0;
-static JSValue g_msg_event = JS_UNDEFINED;   /* synthetic MessageEvent: { data: opaque("{pm}"), origin, source } */
 /* Handlers RE-REGISTERED during a candidate boot_replay (addEventListener) — captured so a closure handler
    (which isn't on any global) can be re-resolved to its candidate-closure version. Transient per candidate
    flow; cleared after the drive. */
