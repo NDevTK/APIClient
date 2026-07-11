@@ -10,6 +10,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+extern char *g_candidate;   /* @S replay: an attacker who can set a cookie controls document.cookie -> deliver the candidate on read (like storage/idb/clipboard) so a cookie->sink XSS is replay-VERIFIED, not just recorded */
+
 static JSValue g_cookies = JS_UNDEFINED;   /* name -> the "name=value" pair (concrete string, or a concolic opaque) */
 
 /* The ambient cookie value when the flow has set none: concolic (opaque so a gate forks has/no-session, example
@@ -17,6 +19,7 @@ static JSValue g_cookies = JS_UNDEFINED;   /* name -> the "name=value" pair (con
 static JSValue g_cookie_ambient = JS_UNDEFINED;
 
 static JSValue ambient(JSContext *ctx) {
+    if (g_candidate) return JS_NewString(ctx, g_candidate);   /* @S replay: the attacker-set cookie value (raw, not URL-encoded) -> breakout verified */
     if (JS_IsString(g_cookie_ambient)) return JS_DupValue(ctx, g_cookie_ambient);   /* seeded real cookies */
     JSValue o = JS_NewConcolicSourced(ctx, "{cookie}", "{cookie}");
     if (JS_IsConcolic(o)) JS_SetConcolicExample(ctx, o, JS_NewString(ctx, ""));
