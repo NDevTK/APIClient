@@ -88,4 +88,25 @@ extern JSValue g_orphan_buf[4096]; extern int g_orphan_n;   /* the deterministic
 extern JSValue g_msg_event;     /* the synthetic {pm} attacker MessageEvent a 'message' listener is driven with */
 int g_dec_ensure(int n);        /* grow the decision vector to hold >= n decisions (unbounded, RAM/disk floor) */
 
+/* The registry array + WFQ/dispatch bookkeeping — the scheduler's own state (defined with the dispatch loop).
+   The engine entry (qjs_step/begin/teardown) reads/writes some; the flow components never touch g_reg. */
+extern Flow *g_reg; extern int g_reg_n, g_reg_cap;   /* the ONE flow registry */
+extern int g_park_requested;    /* host RAM pressure -> park the cold tail to IDB */
+extern long g_work;             /* flow dispatches this run (diagnostic) */
+extern double g_yield_floor;    /* host cross-document value yield-floor (yield HOT when best flow <= this) */
+extern int g_made_progress;     /* dispatched >=1 flow this qjs_step (zero-work ping-pong guard) */
+extern double g_quantum_start;  /* wall-clock start of this cooperative quantum */
+extern long g_switches;         /* flow suspend/re-queue events (interleave count) */
+extern double g_max_parked;     /* highest parked-flow weight (O(1) wfq_yield preemption test) */
+extern JSValue g_cur_fn;        /* the running starter's function (branch_decide forks a sibling that re-runs it) */
+extern int g_dec_cap;           /* capacity of the decision vector */
+extern JSValue g_park;          /* JS array of parked replay recipes (the IDB cold-tier frontier) */
+#define QUANTUM_MS 12.0          /* cooperative wall-clock slice before yielding the worker thread to the host */
+#define QUANTUM_SAMPLE 512u      /* read the wall clock once per this many back-edges (cheap quantum check) */
+extern unsigned g_quantum_sample;  /* back-edge counter for the sampled quantum clock */
+extern int g_resume_mode;          /* resuming a parked frontier: seed ONLY the recipes, not fresh orphans */
+void scheduler_run(JSContext *ctx);   /* the ONE WFQ dispatch loop (qjs_step drives it) */
+int  seed_orphans(JSContext *ctx);    /* collect + enqueue never-executed functions as orphan flows */
+double scheduler_top_weight(void);   /* this engine's best-flow weight (host Level-1 ranking) */
+
 #endif

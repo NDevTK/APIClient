@@ -74,7 +74,7 @@ const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (th
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c"]
   .map((f) => join(QJS, f))
   .concat([join(HOST, "main.c"), join(HOST, "prelude.c"),
-    SOLVER("solve_html.c"), SOLVER("dom_cow.c"), SOLVER("concolic.c"), SOLVER("reply.c"), SOLVER("endpoint.c"), SOLVER("attr_shadow.c"), SOLVER("constraints.c"), SOLVER("boot_scripts.c"), SOLVER("why.c"), SOLVER("envelope.c"), SOLVER("solve.c"), SOLVER("async_flow.c"), SOLVER("boot_flow.c"),
+    SOLVER("solve_html.c"), SOLVER("dom_cow.c"), SOLVER("concolic.c"), SOLVER("reply.c"), SOLVER("endpoint.c"), SOLVER("attr_shadow.c"), SOLVER("constraints.c"), SOLVER("boot_scripts.c"), SOLVER("why.c"), SOLVER("envelope.c"), SOLVER("solve.c"), SOLVER("async_flow.c"), SOLVER("boot_flow.c"), SOLVER("scheduler.c"),
     ...findC(join(HOST, "browser"), []),   // every Blink-mirroring web-platform component (core/dom, core/html, core/css, core/frame, core/loader, core/fileapi, modules, bindings, platform)
     SOLVER("wfq.c")]);
 
