@@ -64,4 +64,22 @@ typedef struct {
    state, so a rehydrated flow re-runs the same call and reproduces its await outcomes. */
 typedef struct { uint32_t hash; signed char *dec; int dec_n; double val; int visits; int used; } AsyncRecipe;
 
+/* ── SCHEDULER INTERFACE for the coupled @S solver TU (solver/solve.c) ──────────────────────────────────
+   The scheduler OWNS the registry, the per-flow decision context, and the dispatch state; solve.c is the one
+   solver component that must ENQUEUE candidate flows and read the running flow's context. It does so through
+   this narrow interface instead of reaching into g_reg — the registry array stays encapsulated. */
+Flow *reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int dec_n);   /* append + return the new flow (never NULL; OOM aborts) */
+Flow *spawn_async_sibling(JSContext *ctx, Flow *pf, signed char *dec, int dec_n);          /* re-run sibling of an async flow (NULL if JS_FlowNew fails) */
+
+extern int g_in_session;        /* a session flow is running -> solve_add enqueues candidate SESSION flows */
+extern int g_running;           /* a flow is currently dispatched (vs the monolithic boot) */
+extern double g_cur_val;        /* the running flow's accumulated value (inherited by enqueued siblings) */
+extern Flow *g_cur_flow;        /* the running flow (its is_async gates the async-sink candidate path) */
+extern int g_cur_orphan_idx;    /* the running flow's orphan locator (inherited by candidate siblings) */
+extern signed char *g_dec;      /* the running flow's decision vector (a candidate inherits it to replay the sink-reaching arms) */
+extern int g_dec_n;             /* length of that vector */
+extern int g_c;                 /* branch cursor / count of decisions taken this flow (solve_add's `gated` flag) */
+extern char *g_candidate;       /* @S: the running REPLAY flow's concrete candidate (NULL in a normal flow) */
+extern int g_emit_total;        /* the shared emit counter (a reached sink is progress like an @H) */
+
 #endif
