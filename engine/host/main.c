@@ -179,7 +179,10 @@ static int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisio
 
 /* Per-flow DOM COW delta (dom_attr_capture/insert_capture + dom_apply/unapply/revert + dom_buf_*) is in
    dom_cow.c — included via dom_cow.h above; the buffer is an opaque void* on the Flow. */
-static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int dec_n)
+/* Append a fresh flow to the ONE registry and RETURN it (never NULL — OOM is a physical floor that CHECK-aborts,
+   never a dropped flow). Callers configure the returned Flow directly (f->candidate/session/orphan_idx/...),
+   so no caller reaches into g_reg[g_reg_n-1] — the registry array stays encapsulated behind this one entry. */
+static Flow *reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int dec_n)
 {
     if (g_reg_n >= g_reg_cap) {
         int nc = g_reg_cap ? g_reg_cap * 2 : 256;
@@ -187,20 +190,21 @@ static int reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec,
         CHECK(nr, "reg_oom: flow-registry realloc failed — OOM is a physical floor, never continue with a dropped flow");
         g_reg = nr; g_reg_cap = nc;
     }
-    g_reg[g_reg_n].handle = handle; g_reg[g_reg_n].val = val;
-    g_reg[g_reg_n].dec = dec; g_reg[g_reg_n].dec_n = dec_n;
-    g_reg[g_reg_n].fs = NULL; g_reg[g_reg_n].saved_c = 0; g_reg[g_reg_n].cpu = 0; g_reg[g_reg_n].visits = 0;
-    g_reg[g_reg_n].cow = NULL; g_reg[g_reg_n].cow_n = 0; g_reg[g_reg_n].cow_cap = 0;
-    g_reg[g_reg_n].dom = NULL; g_reg[g_reg_n].dom_n = 0; g_reg[g_reg_n].dom_cap = 0;
-    g_reg[g_reg_n].orphan_idx = -1; g_reg[g_reg_n].candidate = NULL; g_reg[g_reg_n].session = 0; g_reg[g_reg_n].vtarget = NULL;
-    g_reg[g_reg_n].drive_src = NULL;
-    g_reg[g_reg_n].is_boot = 0;
-    g_reg[g_reg_n].aresolve = JS_UNDEFINED; g_reg[g_reg_n].areject = JS_UNDEFINED; g_reg[g_reg_n].await_promise = JS_UNDEFINED;
-    g_reg[g_reg_n].rthis = JS_UNDEFINED; g_reg[g_reg_n].rargs = NULL; g_reg[g_reg_n].rargc = 0; g_reg[g_reg_n].is_async = 0;
-    g_reg[g_reg_n].sess_ctx = 0;
+    Flow *f = &g_reg[g_reg_n];
+    f->handle = handle; f->val = val;
+    f->dec = dec; f->dec_n = dec_n;
+    f->fs = NULL; f->saved_c = 0; f->cpu = 0; f->visits = 0;
+    f->cow = NULL; f->cow_n = 0; f->cow_cap = 0;
+    f->dom = NULL; f->dom_n = 0; f->dom_cap = 0;
+    f->orphan_idx = -1; f->candidate = NULL; f->session = 0; f->vtarget = NULL;
+    f->drive_src = NULL;
+    f->is_boot = 0;
+    f->aresolve = JS_UNDEFINED; f->areject = JS_UNDEFINED; f->await_promise = JS_UNDEFINED;
+    f->rthis = JS_UNDEFINED; f->rargs = NULL; f->rargc = 0; f->is_async = 0;
+    f->sess_ctx = 0;
     g_reg_n++;
     { double w = wfq_weight(val, 0, 0); if (w > g_max_parked) g_max_parked = w; }   /* fresh flow (visits=cpu=0): same ONE policy, no duplicated formula — keeps g_max_parked current for wfq_yield */
-    return 1;
+    return f;
 }
 /* Release an async-call flow's owned refs (result-promise resolve fn + a parked await promise). No-op for a
    non-async-call flow (both UNDEFINED), so safe at every Flow free site. */
@@ -248,8 +252,7 @@ static void arec_free(void) {
 static int reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, JSValueConst resolve, JSValueConst reject) {
     if (ctx != g_ctx) return 0;                 /* CLAIM only for the MAIN analysis ctx; the @S solve realm (g_solve_ctx)
                                                    runs async native — routing its call into the main g_reg is cross-ctx corruption */
-    reg_add(ctx, JS_DupValue(ctx, func_obj), g_running ? g_cur_val : 1.0, NULL, 0);
-    Flow *f = &g_reg[g_reg_n - 1];
+    Flow *f = reg_add(ctx, JS_DupValue(ctx, func_obj), g_running ? g_cur_val : 1.0, NULL, 0);
     f->fs = fs;                                 /* the live async state — the flow owns + frees it (JS_FlowResume) */
     f->is_async = 1;
     f->aresolve = JS_DupValue(ctx, resolve);
@@ -270,17 +273,17 @@ static int reg_add_async_call(JSContext *ctx, void *fs, JSValueConst func_obj, J
    `dec` (branch + await decisions, ownership transferred to reg_add), is_async set, recipe carried so it can
    fork further. Used by BOTH await_decide (a new await -> reject sibling) and branch_decide (an async flow's
    branch fork) — one recipe re-run path, so branch and await decisions replay together over ONE vector. */
-static void spawn_async_sibling(JSContext *ctx, Flow *pf, signed char *dec, int dec_n) {
+static Flow *spawn_async_sibling(JSContext *ctx, Flow *pf, signed char *dec, int dec_n) {
     void *sfs = JS_FlowNew(ctx, pf->handle, pf->rthis, pf->rargc, (JSValueConst *)pf->rargs);
-    if (!sfs) { free(dec); return; }
-    reg_add(ctx, JS_DupValue(ctx, pf->handle), g_cur_val, dec, dec_n);
-    Flow *sib = &g_reg[g_reg_n - 1];
+    if (!sfs) { free(dec); return NULL; }
+    Flow *sib = reg_add(ctx, JS_DupValue(ctx, pf->handle), g_cur_val, dec, dec_n);
     sib->fs = sfs; sib->is_async = 1;
     sib->rthis = JS_DupValue(ctx, pf->rthis);
     if (pf->rargc > 0 && pf->rargs) {
         sib->rargs = (JSValue *)malloc((size_t)pf->rargc * sizeof(JSValue));
         if (sib->rargs) { sib->rargc = pf->rargc; for (int i = 0; i < pf->rargc; i++) sib->rargs[i] = JS_DupValue(ctx, pf->rargs[i]); }
     }
+    return sib;
 }
 /* JSFlowAwaitHook: a fulfilled await is a GATE on the ONE decision vector (g_dec/g_c), exactly like branch_decide
    at OP_if. Replay the recorded arm, or fork a REJECT sibling (re-run via recipe, this await -> reject = the inline
@@ -308,8 +311,7 @@ static int reaction_flow(JSContext *ctx, JSValueConst handler, JSValueConst valu
     }
     void *fs = JS_FlowNew(ctx, handler, JS_UNDEFINED, 1, (JSValueConst *)&value);
     if (!fs) return 0;                          /* non-bytecode handler (C fn / bound) -> native job */
-    reg_add(ctx, JS_DupValue(ctx, handler), g_running ? g_cur_val : 1.0, NULL, 0);
-    Flow *f = &g_reg[g_reg_n - 1];
+    Flow *f = reg_add(ctx, JS_DupValue(ctx, handler), g_running ? g_cur_val : 1.0, NULL, 0);
     f->fs = fs;
     /* HANDLER-TIME ASYNC @S: a reaction spawned while a session fired the handler inherits the session sink-CONTEXT
        (so a sink it reaches enqueues a candidate SESSION) and, if the parent is a candidate replay, the candidate
@@ -585,8 +587,8 @@ static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, c
     if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
         signed char *sdec = NULL;   /* inherit THIS session's decision vector so the candidate replays the SAME arms that reached the sink (an exploratory session now forks) */
         if (g_dec_n > 0) { sdec = (signed char *)malloc((size_t)g_dec_n); if (sdec) for (int i = 0; i < g_dec_n; i++) sdec[i] = g_dec[i]; }
-        if (reg_add(ctx, JS_UNDEFINED, w, sdec, sdec ? g_dec_n : 0)) { g_reg[g_reg_n - 1].candidate = strdup(cand); g_reg[g_reg_n - 1].session = 1; }
-        else free(sdec);
+        Flow *f = reg_add(ctx, JS_UNDEFINED, w, sdec, sdec ? g_dec_n : 0);   /* reg_add takes sdec ownership + never fails (OOM aborts) */
+        f->candidate = strdup(cand); f->session = 1;
         free(env);
         return;   /* a session verifies MANY sinks -> not tagged with one vtarget */
     }
@@ -598,18 +600,16 @@ static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, c
         an async sink forks the async recipe, never a bare fn re-drive. */
         signed char *adec = NULL;
         if (g_dec_n > 0) { adec = (signed char *)malloc((size_t)g_dec_n); if (adec) for (int i = 0; i < g_dec_n; i++) adec[i] = g_dec[i]; }
-        int before = g_reg_n;
-        spawn_async_sibling(ctx, g_cur_flow, adec, adec ? g_dec_n : 0);   /* transfers adec ownership */
-        if (g_reg_n > before) g_reg[g_reg_n - 1].candidate = strdup(cand);
+        Flow *sib = spawn_async_sibling(ctx, g_cur_flow, adec, adec ? g_dec_n : 0);   /* transfers adec ownership */
+        if (sib) sib->candidate = strdup(cand);
         free(env);
         return;
     }
     if (JS_IsUndefined(fn)) { free(env); return; }
-    if (reg_add(ctx, JS_DupValue(ctx, fn), w, NULL, 0)) {
-        g_reg[g_reg_n - 1].candidate = strdup(cand);
-        g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;
-        if (target) g_reg[g_reg_n - 1].vtarget = strdup(target);
-    }
+    { Flow *f = reg_add(ctx, JS_DupValue(ctx, fn), w, NULL, 0);
+      f->candidate = strdup(cand);
+      f->orphan_idx = g_cur_orphan_idx;
+      if (target) f->vtarget = strdup(target); }
     free(env);
 }
 /* @S STRUCTURED DELIVERY: every EQ gate the flow took on a SIBLING field of the same attacker object
@@ -742,10 +742,11 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
                             if (c == '>') intag = 0;
                             m[i] = o; }
                         m[n] = 0;
-                        if (strcmp(m, g_candidate) && reg_add(ctx, JS_DupValue(ctx, hitfn), 3.0, NULL, 0)) {
-                            g_reg[g_reg_n - 1].candidate = strdup(m);   /* already delivery-shaped: enqueue DIRECT (no re-envelope) */
-                            g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx;
-                            g_reg[g_reg_n - 1].vtarget = strdup(key);
+                        if (strcmp(m, g_candidate)) {
+                            Flow *f = reg_add(ctx, JS_DupValue(ctx, hitfn), 3.0, NULL, 0);
+                            f->candidate = strdup(m);   /* already delivery-shaped: enqueue DIRECT (no re-envelope) */
+                            f->orphan_idx = g_cur_orphan_idx;
+                            f->vtarget = strdup(key);
                         }
                         free(m);
                     }
@@ -969,8 +970,7 @@ static int branch_decide(JSContext *ctx, JSValueConst cond)
         else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);  /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
         else if (g_cur_flow && g_cur_flow->is_async)               /* an ASYNC flow: re-run via the recipe (func+args) so the awaits — recorded in this SAME g_dec vector — replay too (re-enters catches) */
             spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1);
-        else { reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1);
-               g_reg[g_reg_n - 1].orphan_idx = g_cur_orphan_idx; }   /* sibling = same function (same locator), different decisions */
+        else reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1)->orphan_idx = g_cur_orphan_idx;   /* sibling = same function (same locator), different decisions */
     }
     cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE, has ? jk : NULL);
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
@@ -996,7 +996,7 @@ static int ctx_forks(void) {
    queueMicrotask/observer/opaque-method-cb) at the running flow's value, ordered + starved by the one WFQ,
    never a real wait. A host-edge only FEEDS this; the scheduler DECIDES. */
 void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
-    reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, NULL, 0);
+    Flow *f = reg_add(ctx, JS_DupValue(ctx, cb), g_running ? g_cur_val : 1.0, NULL, 0);
     /* CONTINUATION: a callback deferred from a running (revert-)flow inherits that flow's live PROPERTY delta,
        so it sees state the flow wrote before deferring (obj.x = tainted; setTimeout(()=>use(obj.x))) — a
        fresh-baseline flow reads it undefined. Closure-var state already rides the callback's own closure, so
@@ -1004,9 +1004,9 @@ void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
        boot's writes commit to the baseline, which a boot-deferred flow already sees. */
     if (g_running && g_cur_flow) {
         int n = 0, cap = 0; void *snap = JS_CowBufSnapshot(ctx, &n, &cap);
-        if (snap) { g_reg[g_reg_n - 1].cow = snap; g_reg[g_reg_n - 1].cow_n = n; g_reg[g_reg_n - 1].cow_cap = cap; }
+        if (snap) { f->cow = snap; f->cow_n = n; f->cow_cap = cap; }
         int dn = 0, dcap = 0; void *dsnap = dom_buf_snapshot(&dn, &dcap);   /* + attribute writes (el.dataset.x = tainted) */
-        if (dsnap) { g_reg[g_reg_n - 1].dom = dsnap; g_reg[g_reg_n - 1].dom_n = dn; g_reg[g_reg_n - 1].dom_cap = dcap; }
+        if (dsnap) { f->dom = dsnap; f->dom_n = dn; f->dom_cap = dcap; }
     }
 }
 /* setTimeout/setInterval/requestAnimationFrame -> browser/timers.c (defers the callback as a flow). */
@@ -1211,8 +1211,7 @@ static void boot_replay(JSContext *ctx) { g_boot_replay = 1; boot_scripts_run(ct
 /* Enqueue a BOOT FLOW: re-run boot as a FORKING starter (decision vector), so cached async replies resolve
    synchronously and their continuations' gated branches fork with the concolic example. */
 static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n) {
-    if (!reg_add(ctx, JS_UNDEFINED, 1.3, dec, dec_n)) return 0;
-    g_reg[g_reg_n - 1].is_boot = 1;
+    reg_add(ctx, JS_UNDEFINED, 1.3, dec, dec_n)->is_boot = 1;   /* reg_add never fails (OOM aborts) */
     return 1;
 }
 /* An EXPLORATORY attacker-session that FORKS: re-fire ALL handlers over one accumulating delta, replaying
@@ -1222,8 +1221,7 @@ static int reg_add_boot(JSContext *ctx, signed char *dec, int dec_n) {
    session can't (it never forks). A candidate session (verifying a breakout) stays fixed-arm; only this
    exploratory kind forks. */
 static int reg_add_session(JSContext *ctx, signed char *dec, int dec_n) {
-    if (!reg_add(ctx, JS_UNDEFINED, 1.2, dec, dec_n)) return 0;
-    g_reg[g_reg_n - 1].session = 1;
+    reg_add(ctx, JS_UNDEFINED, 1.2, dec, dec_n)->session = 1;   /* reg_add never fails (OOM aborts) */
     return 1;
 }
 /* BOOT AS THE FIRST FLOW: the page's boot (its inline scripts) is captured as a COW DELTA — g_boot_delta —
@@ -1382,8 +1380,7 @@ static int seed_orphans(JSContext *ctx)
         int idx = -1;
         if (g_orphan_n < 4096) { idx = g_orphan_n; g_orphan_buf[g_orphan_n++] = JS_DupValue(ctx, buf[i]); }  /* buffer owns a ref (stable locator) */
         if (g_resume_mode) { JS_FreeValue(ctx, buf[i]); continue; }   /* resume: build locators only; recipes are seeded explicitly */
-        reg_add(ctx, buf[i], 1.0, NULL, 0);
-        g_reg[g_reg_n - 1].orphan_idx = idx;
+        reg_add(ctx, buf[i], 1.0, NULL, 0)->orphan_idx = idx;
         seeded++;
     }
     return seeded;   /* count surfaces in @RESULT._orphans (via g_orphan_n) — no dead @ORPHANS line */
@@ -2034,8 +2031,8 @@ KEEP void qjs_begin(const char *recipes)
             int found = -1;
             for (int oi = 0; oi < g_orphan_n; oi++) { if (JS_OrphanHash(ctx, g_orphan_buf[oi]) == want) { found = oi; break; } }
             if (found >= 0) {
-                reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), rval, dec, dec_n);   /* resume with the PRIOR accumulated value, not a flat 1.0 */
-                g_reg[g_reg_n - 1].orphan_idx = found; g_reg[g_reg_n - 1].visits = rvis;   /* restore visits so UCB reflects prior exploration */
+                { Flow *rf = reg_add(ctx, JS_DupValue(ctx, g_orphan_buf[found]), rval, dec, dec_n);   /* resume with the PRIOR accumulated value, not a flat 1.0 */
+                  rf->orphan_idx = found; rf->visits = rvis; }   /* restore visits so UCB reflects prior exploration */
                 resumed++;
             } else free(dec);
             if (!semi) break; p = semi + 1;
@@ -2055,7 +2052,7 @@ KEEP void qjs_begin(const char *recipes)
        click) is fired over that delta with its producer's context. The old >=2 gate was a BOUND that truncated
        nested-handler discovery on a single-component page; the WFQ starves a session with no real cross-flow
        state, so >=1 costs ~nothing when unproductive. */
-    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) { reg_add(ctx, JS_UNDEFINED, 1.2, NULL, 0); g_reg[g_reg_n - 1].session = 1; }
+    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) reg_add(ctx, JS_UNDEFINED, 1.2, NULL, 0)->session = 1;
     /* BOOT AS THE FIRST FLOW: enqueue a FORKING re-run of boot so its TOP-LEVEL opaque gates are EXPLORED. The
        initial boot (dom_run_scripts) ran MONOLITHICALLY before the scheduler (g_running=0 -> branch_decide took
        the false arm on every opaque gate), so a page whose auth-gated surface sits behind a boot-level
