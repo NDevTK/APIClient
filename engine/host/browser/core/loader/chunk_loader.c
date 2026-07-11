@@ -2,7 +2,7 @@
  * extracted from main.c's qjs_provide so the scheduler entry holds no loader control flow. */
 #include "core/loader/chunk_loader.h"
 #include "core/loader/module_loader.h"      /* modsrc_put / dynimport_link / pendimport_resolve / is_moddep */
-#include "core/html/html_script_runner.h"   /* eval_page_script / boot_exec_one / dom_script_kind (SK_*) / dom_boot_parked_is / dom_boot_resume */
+#include "core/html/html_script_runner.h"   /* boot_exec_one / dom_script_kind (SK_*) / dom_boot_parked_is / dom_boot_resume */
 #include "core/html/html_script_element.h"  /* script_load_release — a loaded chunk makes its <script> load handlers eligible */
 #include "solver/boot_scripts.h"            /* boot_script_cache — compile-once bytecode for the shared classic executor */
 #include "solver/boot_flow.h"               /* boot_delta_merge_active — a chunk's captured baseline globals extend the ONE g_boot_delta */
@@ -109,8 +109,7 @@ static void provide_baseline(JSContext *ctx, const char *url, const char *body) 
     int dsv = g_dom_capture; g_dom_capture = 0; JS_SetFlowLocalMark(0);   /* chunk heap objects are BASELINE (shared); DOM writes baseline like boot */
     modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
     if (is_moddep(url)) {
-        defermod_retry(ctx);                             /* a dep arrived: re-link every deferred URL'd module against the map (Blink ModuleTreeLinker) */
-        pendmod_retry(ctx);                              /* + inline modules deferred by source (no URL to key the map) */
+        defermod_retry(ctx);                             /* a dep arrived: re-link every deferred module against the map (Blink ModuleTreeLinker) */
     } else if (dom_script_kind(url) == SK_MODULE) {
         chunk_link_module(ctx, url);               /* external MODULE: evaluate the singleton ONCE (dynimport_link) + deliver to parked import()s + defer on a missing dep */
     } else {

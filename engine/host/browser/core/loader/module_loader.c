@@ -30,17 +30,7 @@ const char *modsrc_body(const char *url, size_t *plen) { ModSrc *m = modsrc_get(
 static char **g_moddep = NULL; static int g_moddep_n = 0, g_moddep_cap = 0;
 static void moddep_add(const char *u) { for (int i = 0; i < g_moddep_n; i++) if (strcmp(g_moddep[i], u) == 0) return; if (g_moddep_n >= g_moddep_cap) { int nc = g_moddep_cap ? g_moddep_cap * 2 : 8; char **n = realloc(g_moddep, (size_t)nc * sizeof(char *)); CHECK(n, "moddep-oom: realloc failed — a dropped static-import dep would eval standalone + double-run side effects"); g_moddep = n; g_moddep_cap = nc; } g_moddep[g_moddep_n++] = strdup(u); }
 int is_moddep(const char *u) { for (int i = 0; i < g_moddep_n; i++) if (strcmp(g_moddep[i], u) == 0) return 1; return 0; }
-/* Modules whose link is deferred until their imported chunks arrive (source copy, retried on each provide).
-   Used for INLINE modules (no URL to key the module map by — eval_page_script defers by source). An external
-   module chunk (has a URL) defers via g_defermod (URL-keyed retry against the map), the Blink shape. */
-typedef struct { char *src; size_t len; } PendMod;
-static PendMod *g_pendmod = NULL; static int g_pendmod_n = 0, g_pendmod_cap = 0;
-static int g_modseq = 0;   /* unique module names so a retry never collides with a prior failed link */
-void pendmod_add(const char *src, size_t len) {
-    if (g_pendmod_n >= g_pendmod_cap) { int nc = g_pendmod_cap ? g_pendmod_cap * 2 : 8; PendMod *n = realloc(g_pendmod, (size_t)nc * sizeof(PendMod)); CHECK(n, "pendmod-oom: realloc failed — a dropped deferred module never links, silently losing its endpoints"); g_pendmod = n; g_pendmod_cap = nc; }
-    char *s = malloc(len + 1); CHECK(s, "pendmod-oom: source copy alloc failed"); memcpy(s, src, len); s[len] = 0;
-    g_pendmod[g_pendmod_n].src = s; g_pendmod[g_pendmod_n].len = len; g_pendmod_n++;
-}
+static int g_modseq = 0;   /* unique synthetic module-map names (<mod-N>) for inline modules + link retries */
 /* Blink ModuleTreeLinker retry — a URL'd module whose link deferred (a static-import dep not yet fetched) is
    re-linked BY URL against the module map (modsrc) when any dep arrives, via dynimport_link (compile+link+eval,
    idempotent on m->ns). No source re-eval under fresh names: the module is keyed by its URL, the Blink shape. */
@@ -139,32 +129,24 @@ JSModuleDef *host_module_loader(JSContext *ctx, const char *name, void *opaque) 
     JS_ThrowReferenceError(ctx, "module not yet fetched: %s", name);
     return NULL;
 }
-/* Re-attempt every deferred module link (a chunk just arrived). A fresh unique name per try avoids colliding
-   with a prior failed link; deps are shared by URL, so this converges in graph-depth arrivals. */
-void pendmod_retry(JSContext *ctx) {
-    int progressed = 1;
-    while (progressed) {
-        progressed = 0;
-        for (int i = 0; i < g_pendmod_n; i++) {
-            char nm[32]; snprintf(nm, sizeof nm, "<mod-%d>", g_modseq++);
-            JSValue v = JS_Eval(ctx, g_pendmod[i].src, g_pendmod[i].len, nm, JS_EVAL_TYPE_MODULE);
-            if (JS_IsException(v)) { JS_FreeValue(ctx, JS_GetException(ctx)); JS_FreeValue(ctx, v); continue; }  /* still missing a dep */
-            { JSContext *c; while (JS_ExecutePendingJob(g_rt, &c) > 0) {} }
-            JS_FreeValue(ctx, v);
-            free(g_pendmod[i].src);
-            for (int j = i; j < g_pendmod_n - 1; j++) g_pendmod[j] = g_pendmod[j + 1];
-            g_pendmod_n--; i--; progressed = 1;
-        }
-    }
+/* Link an INLINE <script type=module>: mint a synthetic module-map URL, put its source in the map, and link it
+   BY URL exactly like an external module chunk (dynimport_link; defer via g_defermod if a static dep isn't
+   fetched). This unifies inline + external modules onto the ONE URL-keyed map + tree-linker retry — no separate
+   source-based defer (pendmod is gone). An inline module isn't imported by anyone, so its synthetic URL is
+   never resolved as a specifier; it only keys the map + the deferred-link retry. */
+void link_inline_module(JSContext *ctx, const char *src, size_t len) {
+    char synth[32]; snprintf(synth, sizeof synth, "<mod-%d>", g_modseq++);
+    modsrc_put(synth, src, len);
+    JSValue ns; if (dynimport_link(ctx, synth, &ns)) JS_FreeValue(ctx, ns); else defermod_add(synth);
 }
 void module_next_name(char *buf, size_t sz) { snprintf(buf, sz, "<mod-%d>", g_modseq++); }
-int module_pending_count(void) { return g_pendmod_n; }
+int module_pending_count(void) { return g_defermod_n; }   /* deferred modules that never linked (a dep never fetched) — the teardown @WHY */
 void module_loader_free(JSContext *ctx) {
     for (int i = 0; i < g_modsrc_n; i++) { free(g_modsrc[i].url); free(g_modsrc[i].src); JS_FreeValue(ctx, g_modsrc[i].ns); }
     free(g_modsrc); g_modsrc = NULL; g_modsrc_n = g_modsrc_cap = 0;
     for (int i = 0; i < g_moddep_n; i++) free(g_moddep[i]);
     free(g_moddep); g_moddep = NULL; g_moddep_n = g_moddep_cap = 0;
-    for (int i = 0; i < g_pendmod_n; i++) free(g_pendmod[i].src);
-    free(g_pendmod); g_pendmod = NULL; g_pendmod_n = g_pendmod_cap = 0; g_modseq = 0;
+    for (int i = 0; i < g_defermod_n; i++) free(g_defermod[i]);
+    free(g_defermod); g_defermod = NULL; g_defermod_n = g_defermod_cap = 0; g_modseq = 0;
     park_free(ctx, g_import_park); g_import_park = NULL;   /* never-fired parked imports freed (a never-fetched chunk's continuation doesn't run) */
 }

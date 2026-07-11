@@ -374,7 +374,7 @@ lxb_html_document_t *g_dom = NULL;   /* the live parsed document (non-static: do
 
 /* el_is_script + script_maybe_load (<script src> lazy-chunk discovery) -> browser/html_script_element.c
    (HTMLScriptElement / ScriptLoader). It feeds the scheduler's chunk queue via extern edges. */
-/* resolve_with + dynimport_link + host_dyn_import/host_module_normalize/host_module_loader + pendmod_retry
+/* resolve_with + dynimport_link + host_dyn_import/host_module_normalize/host_module_loader + defermod_retry
    -> module_loader.c (the whole ESM subsystem). */
 /* appendChild/insertBefore (ContainerNode tree mutation + @S parsedhtml sink + <script src> discovery),
    cloneNode (js_el_self), attachShadow, and el_install_methods (the Element binding install) -> dom_element.c.
