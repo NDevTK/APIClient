@@ -851,6 +851,11 @@ KEEP void qjs_provide(const char *url, const char *body)
             modsrc_put(url, body, strlen(body));
             if (dom_boot_parked_is(url)) {
                 if (!dom_boot_resume(ctx)) boot_complete(ctx);   /* the sync CLASSIC external boot waited on ran in position; cursor reached the end -> g_boot_delta + seed */
+            } else if (dom_script_kind(url) == SK_ASYNC) {
+                /* an ASYNC classic external (does not block document order): run it as a classic script now (COW
+                   active — its globals join the boot delta; cached so boot-replay re-runs it). Boot stays parked. */
+                JSValueConst bc = boot_script_cache(ctx, JS_NULL, body, strlen(body));
+                if (boot_exec_one(ctx, JS_NULL, bc)) { JSValue e = JS_GetException(ctx); JS_FreeValue(ctx, e); why_add(ctx, "script-eval", "async external threw"); }
             } else {
                 /* a MODULE chunk a boot script dynamically imported, arriving mid-park: link it as a baseline
                    singleton (COW off around the eval — its effects are baseline, and it avoids COW-active parse),

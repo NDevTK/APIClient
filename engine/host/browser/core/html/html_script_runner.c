@@ -70,6 +70,18 @@ static int el_type_is_module(lxb_dom_element_t *el) {
     size_t tl = 0; const lxb_char_t *t = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tl);
     return t && tl == 6 && memcmp(t, "module", 6) == 0;
 }
+static int el_has_async(lxb_dom_element_t *el) {
+    size_t vl = 0; return lxb_dom_element_get_attribute(el, (const lxb_char_t *)"async", 5, &vl) != NULL;   /* boolean attr (presence) — async external does NOT block document order */
+}
+/* Script-kind registry: the load kind recorded when each external is requested, read by qjs_provide. */
+typedef struct { char *url; int kind; } SKind;
+static SKind *g_skinds = NULL; static int g_skinds_n = 0, g_skinds_cap = 0;
+static void skind_set(const char *url, int kind) {
+    for (int i = 0; i < g_skinds_n; i++) if (strcmp(g_skinds[i].url, url) == 0) { g_skinds[i].kind = kind; return; }
+    if (g_skinds_n >= g_skinds_cap) { int nc = g_skinds_cap ? g_skinds_cap * 2 : 8; SKind *n = realloc(g_skinds, (size_t)nc * sizeof(SKind)); if (!n) return; g_skinds = n; g_skinds_cap = nc; }
+    g_skinds[g_skinds_n].url = strdup(url); g_skinds[g_skinds_n].kind = kind; g_skinds_n++;
+}
+int dom_script_kind(const char *url) { for (int i = 0; i < g_skinds_n; i++) if (strcmp(g_skinds[i].url, url) == 0) return g_skinds[i].kind; return SK_SYNC; }
 /* Document-order boot cursor: run <script>s in order, BLOCKING (park) on an unfetched synchronous external. */
 static struct scr_ctx g_boot_scr = {0};
 static int g_boot_cursor = 0;
@@ -80,11 +92,13 @@ static int boot_drive_scripts(JSContext *ctx) {
         const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
         if (src && sl) {
             char *cu = strndup((const char *)src, sl); if (!cu) continue;
-            if (el_type_is_module(el)) { arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu); continue; }   /* external module: async */
+            int kind = el_type_is_module(el) ? SK_MODULE : (el_has_async(el) ? SK_ASYNC : SK_SYNC);
+            skind_set(cu, kind);   /* record so qjs_provide routes it without re-parsing */
+            if (kind != SK_SYNC) { arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu); continue; }   /* async / module: does NOT block document order */
             size_t blen = 0; const char *body = has_hole(cu) ? NULL : modsrc_body(cu, &blen);
             if (body) { JSValue elw = el_wrap(ctx, el); run_classic_body(ctx, elw, body, blen); JS_FreeValue(ctx, elw); free(cu); continue; }
             arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu);
-            return 1;   /* request + PARK (blocks document order until this sync external is fetched) */
+            return 1;   /* SYNC external not yet fetched: request + PARK (blocks document order like a real browser) */
         }
         int is_mod; if (!script_is_exec(el, &is_mod)) continue;
         size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
@@ -99,6 +113,8 @@ static int boot_drive_scripts(JSContext *ctx) {
 int dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return 0;
     csp_derive(g_dom);   /* per-document effective CSP: real HTTP header (primary) else <meta> scan (csp.c) */
+    for (int i = 0; i < g_skinds_n; i++) free(g_skinds[i].url);
+    free(g_skinds); g_skinds = NULL; g_skinds_n = g_skinds_cap = 0;
     free(g_boot_scr.els); g_boot_scr.els = NULL; g_boot_scr.n = 0;
     dom_collect_scripts(g_dom, &g_boot_scr);
     g_boot_cursor = 0;
