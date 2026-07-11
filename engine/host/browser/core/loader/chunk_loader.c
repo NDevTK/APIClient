@@ -4,6 +4,7 @@
 #include "core/loader/module_loader.h"      /* modsrc_put / dynimport_link / pendimport_resolve / is_moddep */
 #include "core/html/html_script_runner.h"   /* eval_page_script / boot_exec_one / dom_script_kind (SK_*) / dom_boot_parked_is / dom_boot_resume */
 #include "solver/boot_scripts.h"            /* boot_script_cache — compile-once bytecode for the shared classic executor */
+#include "solver/boot_flow.h"               /* boot_delta_merge_active — a chunk's captured baseline globals extend the ONE g_boot_delta */
 #include "solver/dom_cow.h"                 /* g_dom_capture — suspended while a chunk's baseline DOM writes land */
 #include "solver/why.h"                     /* why_add — a chunk's runtime throw surfaces as @WHY */
 #include "check.h"                          /* DCHECK — the loader's own invariants crash LOUD at their origin */
@@ -71,18 +72,25 @@ static void provide_boot_active(JSContext *ctx, const char *url, const char *bod
     }
 }
 
-/* Evaluate a chunk POST-BOOT: extend the page BASELINE (COW off during the eval, so its defs are permanent —
-   NOT a flow write to be reverted — and re-run on every boot re-run). Route by the RECORDED kind, never by
-   JS_DetectModule (which mis-classifies a plain classic script as a module). */
+/* Evaluate a chunk POST-BOOT: extend the page BASELINE. The chunk runs COW-ACTIVE at baseline mark (mark 0),
+   EXACTLY like boot's own scripts — so its global CREATIONS/mutations are CAPTURED by (obj,atom) identity — then
+   its captured delta is MERGED into g_boot_delta, the ONE canonical baseline every flow reconstructs from. Every
+   boot-inverse / candidate / cross-session replay flow then handles a chunk's globals IDENTICALLY to boot's own
+   (pointer-safe via find_own_property). This is the SAME treatment as a chunk arriving mid-boot (provide_boot_
+   active); the only difference is the baseline is already TAKEN, so we merge instead of appending to the open
+   delta. (Deleted: the old COW-OFF raw write, whose uncaptured add_property grew global_obj's shape with no delta
+   entry, desyncing the shape pointer per-flow — the concrete-onload bug.) DOM writes stay baseline (g_dom_capture
+   0), matching how boot treats the DOM (heap in the delta; DOM boot stays baseline). Route by the RECORDED kind,
+   never by JS_DetectModule (which mis-classifies a plain classic script as a module). */
 static void provide_baseline(JSContext *ctx, const char *url, const char *body) {
-    JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta) */
-    int dsv = g_dom_capture; g_dom_capture = 0; JS_CowSetActive(0); JS_SetFlowLocalMark(0);   /* a lazy CHUNK's globals are BASELINE (shared), not flow-local — mark 0 while it evals */
+    JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta); g_cow_undo empty for the chunk's fresh captures */
+    int dsv = g_dom_capture; g_dom_capture = 0; JS_SetFlowLocalMark(0);   /* chunk heap objects are BASELINE (shared); DOM writes baseline like boot */
     modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
     int is_module_chunk = (dom_script_kind(url) == SK_MODULE);
     if (is_moddep(url)) {
         pendmod_retry(ctx);                              /* a static-import dep OR dyn-import chunk: link in-graph (no standalone eval -> no double side effects) */
     } else if (is_module_chunk) {
-        eval_page_script(ctx, body, strlen(body), url, 1);   /* external MODULE: run-once (defers if a dep isn't fetched); not cached (singleton, effects in g_boot_delta) */
+        eval_page_script(ctx, body, strlen(body), url, 1);   /* external MODULE: run-once (defers if a dep isn't fetched); singleton, global side-effects captured + merged */
     } else {
         JSValueConst bc = boot_script_cache(ctx, JS_NULL, body, strlen(body));   /* external CLASSIC: cache + run through the SAME executor as inline classics + every replay */
         if (boot_exec_one(ctx, JS_NULL, bc)) {   /* first-fetch page throw: surface, non-fatal */
@@ -92,11 +100,12 @@ static void provide_baseline(JSContext *ctx, const char *url, const char *body) 
             why_add(ctx, "script-eval", rz);
         }
     }
-    if (is_module_chunk) {   /* link the SINGLETON now (COW off) + PARK-RESUME deliver its namespace to every parked import() of this chunk */
+    if (is_module_chunk) {   /* link the SINGLETON now + PARK-RESUME deliver its namespace to every parked import() of this chunk */
         JSValue mns; if (dynimport_link(ctx, url, &mns)) JS_FreeValue(ctx, mns);
         pendimport_resolve(ctx, url);
     }
-    JS_CowSetActive(1); JS_SetFlowLocalMark(1); g_dom_capture = dsv;
+    boot_delta_merge_active(ctx);                         /* MERGE the chunk's captured baseline delta into g_boot_delta (the ONE baseline) */
+    JS_SetFlowLocalMark(1); g_dom_capture = dsv;
 }
 
 int chunk_provide(JSContext *ctx, const char *url, const char *body) {

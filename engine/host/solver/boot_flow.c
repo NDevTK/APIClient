@@ -38,6 +38,12 @@ int reg_add_session(JSContext *ctx, signed char *dec, int dec_n) {
    candidate as its OWN delta, drives, then REAPPLIES g_boot_delta so the next opaque flow sees post-boot.
    No host-side property save/delete/restore — the delta IS the mechanism (heap; DOM boot stays baseline). */
 void *g_boot_delta = NULL; int g_boot_delta_n = 0, g_boot_delta_cap = 0;
+/* Merge the RUNNING active delta (a post-boot lazy chunk's captured baseline globals) INTO g_boot_delta, so the
+   chunk's globals extend the ONE canonical baseline exactly like boot's own — the chunk loader calls this after
+   evaluating a post-boot chunk COW-active at mark 0 (see chunk_loader.c). Owned here because g_boot_delta is. */
+void boot_delta_merge_active(JSContext *ctx) {
+    g_boot_delta = JS_CowBootDeltaMerge(ctx, g_boot_delta, &g_boot_delta_n, &g_boot_delta_cap);
+}
 void boot_replay_candidate(JSContext *ctx) {
     /* Seed the RUNNING candidate flow's OWN delta with the boot INVERSE (heap -> pre-boot, RECORDED so a
        suspend/revert restores the post-boot baseline), then re-run boot under the concrete candidate as more
