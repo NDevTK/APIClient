@@ -6,6 +6,7 @@
 #include "core/loader/response.h"
 #include "bindings/idl.h"      /* generated from the IDL member table */
 #include "solver/concolic.h"   /* js_concolic, js_noop */
+#include "core/streams/readable_stream.h"   /* Response.body -> the shared ReadableStream component */
 #include "check.h"    /* CHECK (OOM) */
 
 extern JSValue js_resolved(JSContext *ctx, JSValue val);   /* scheduler-side: wrap in a resolved promise */
@@ -43,42 +44,12 @@ static JSValue m_json(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
 
 /* interface Response { Promise<any> json(); Promise<USVString> text(); Promise<Blob> blob();
    Promise<ArrayBuffer> arrayBuffer(); Response clone(); ... } — operations generated onto the prototype. */
-/* response.body — a ReadableStream over the [[body]]. A streaming reader (`for await (const chunk of ...)` /
-   `reader.read()`) delivers the body as ONE chunk carrying its taint/concolic value (a small body IS one
-   chunk), then done — so streaming-fetch code (`decode(value)` -> a sink, or a chunk field -> an endpoint) runs
-   with the real reply, and the `while(!done)` loop forks its continue/exit arms. bodyUsed is not tracked (the
-   solver re-runs; no double-read hazard). Not a stub: the stream really yields the body, then signals done. */
-static JSValue m_prom_undef(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)t; (void)c; (void)v; return js_resolved(ctx, JS_UNDEFINED); }
-static JSValue m_reader_read(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    (void)c; (void)v;
-    JSValue res = JS_NewObject(ctx);
-    JSValue df = JS_GetPropertyStr(ctx, t, "__done");
-    if (JS_ToBool(ctx, df)) { JS_SetPropertyStr(ctx, res, "value", JS_UNDEFINED); JS_SetPropertyStr(ctx, res, "done", JS_TRUE); }
-    else { JS_SetPropertyStr(ctx, res, "value", JS_GetPropertyStr(ctx, t, "__body"));   /* one chunk = the whole taint-carrying body */
-           JS_SetPropertyStr(ctx, res, "done", JS_FALSE); JS_SetPropertyStr(ctx, t, "__done", JS_TRUE); }
-    JS_FreeValue(ctx, df);
-    return js_resolved(ctx, res);
-}
-static JSValue m_get_reader(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    (void)c; (void)v;
-    JSValue rd = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, rd, "__body", JS_GetPropertyStr(ctx, t, "__body"));   /* the stream's [[body]] */
-    JS_SetPropertyStr(ctx, rd, "__done", JS_FALSE);
-    JS_SetPropertyStr(ctx, rd, "read", JS_NewCFunction(ctx, m_reader_read, "read", 0));
-    JS_SetPropertyStr(ctx, rd, "cancel", JS_NewCFunction(ctx, m_prom_undef, "cancel", 0));
-    JS_SetPropertyStr(ctx, rd, "releaseLock", JS_NewCFunction(ctx, js_noop, "releaseLock", 0));
-    JS_SetPropertyStr(ctx, rd, "closed", js_resolved(ctx, JS_UNDEFINED));
-    return rd;
-}
+/* response.body — a ReadableStream over the [[body]], built by the shared core/streams component (a streaming
+   reader delivers the body as one taint-carrying chunk then done; the while(!done) loop forks). */
 static JSValue m_body_get(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)c; (void)v; RespData *r = resp_this(ctx, t);
     if (!r) return JS_NULL;
-    JSValue s = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, s, "__body", JS_DupValue(ctx, r->body));
-    JS_SetPropertyStr(ctx, s, "getReader", JS_NewCFunction(ctx, m_get_reader, "getReader", 0));
-    JS_SetPropertyStr(ctx, s, "cancel", JS_NewCFunction(ctx, m_prom_undef, "cancel", 0));
-    JS_SetPropertyStr(ctx, s, "locked", JS_FALSE);
-    return s;   /* ReadableStream (unbuilt tee/pipeTo/pipeThrough left for on-demand build) */
+    return readable_stream_new(ctx, JS_DupValue(ctx, r->body));   /* -> core/streams/readable_stream.c */
 }
 static JSValue m_self(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)c; (void)v; return JS_DupValue(ctx, t); }
 static const IDLMember RESP_MEMBERS[] = {
