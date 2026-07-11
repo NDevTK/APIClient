@@ -14,6 +14,7 @@
 #include "solver/boot_scripts.h"
 #include "core/dom/handler_registry.h"   /* is_msg_handler — drive a 'message' listener with the {pm} event */
 #include "core/dom/events/event.h"       /* js_event_ctor — a driven non-message handler gets a real DOM Event */
+#include "core/html/html_script_element.h"   /* script_load_gated — a <script> load handler is not eligible until its chunk provides */
 #include <emscripten.h>              /* emscripten_get_now — the cooperative-quantum wall clock */
 #include "solver/wfq.h"             /* wfq_weight — the ONE WFQ priority policy */
 #include "solver/dom_cow.h"         /* dom_buf_load/free — per-flow DOM COW delta swap on context switch */
@@ -54,6 +55,10 @@ int seed_orphans(JSContext *ctx)
     static JSValue buf[4096];
     int n = JS_CollectOrphans(ctx, buf, 4096), seeded = 0;
     for (int i = 0; i < n; i++) {
+        /* A <script>'s 'load' handler is a LOAD-GATED continuation: skip it until its chunk provides (else it
+           drives on the pre-load baseline where the chunk's globals are absent -> a phantom endpoint). Released
+           by script_load_release on chunk-provide, then this continuous collection picks it up. */
+        if (script_load_gated(JS_VALUE_GET_PTR(buf[i]))) { JS_FreeValue(ctx, buf[i]); continue; }
         int dup = 0;
         for (int j = 0; j < g_reg_n; j++)
             if (JS_VALUE_GET_PTR(g_reg[j].handle) == JS_VALUE_GET_PTR(buf[i])) { dup = 1; break; }

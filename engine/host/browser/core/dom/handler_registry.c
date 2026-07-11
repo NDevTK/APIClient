@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/dom/handler_registry.h"
+#include "core/html/html_script_element.h"   /* script_load_bind_if — a <script>'s 'load' handler is load-gated (fires on chunk-provide, not seed) */
 #include "solver/scheduler.h"   /* g_in_boot_flow / g_boot_replay: when a boot flow / candidate replay is running, don't grow the registry */
 
 JSValue g_handlers = JS_UNDEFINED;
@@ -53,6 +54,7 @@ JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *
         const char *type = argc >= 2 ? JS_ToCString(ctx, argv[0]) : NULL;   /* addEventListener(type, handler) */
         if (type && strcmp(type, "message") == 0 && g_msg_handler_n < 128)
             g_msg_handlers[g_msg_handler_n++] = JS_VALUE_GET_PTR(h);
+        script_load_bind_if(ctx, t, type, h);   /* a <script>'s 'load' handler is load-gated: drive it on chunk-provide, not boot seed */
         if (type) JS_FreeCString(ctx, type);
     }
     return JS_UNDEFINED;

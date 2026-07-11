@@ -3,6 +3,7 @@
 #include "core/loader/chunk_loader.h"
 #include "core/loader/module_loader.h"      /* modsrc_put / dynimport_link / pendimport_resolve / is_moddep */
 #include "core/html/html_script_runner.h"   /* eval_page_script / boot_exec_one / dom_script_kind (SK_*) / dom_boot_parked_is / dom_boot_resume */
+#include "core/html/html_script_element.h"  /* script_load_release — a loaded chunk makes its <script> load handlers eligible */
 #include "solver/boot_scripts.h"            /* boot_script_cache — compile-once bytecode for the shared classic executor */
 #include "solver/boot_flow.h"               /* boot_delta_merge_active — a chunk's captured baseline globals extend the ONE g_boot_delta */
 #include "solver/dom_cow.h"                 /* g_dom_capture — suspended while a chunk's baseline DOM writes land */
@@ -115,6 +116,7 @@ int chunk_provide(JSContext *ctx, const char *url, const char *body) {
         if (body && body[0]) {
             if (g_boot_active) provide_boot_active(ctx, url, body);
             else               provide_baseline(ctx, url, body);
+            script_load_release(url);   /* the chunk LOADED: its 'load' handlers are now eligible (drive on the post-provide baseline, not seed) */
         }
         chunk_mark_done(url);   /* fetched once: body cached/linked + re-run on boot re-runs, never re-fetched */
         free(g_pending[i]);
@@ -130,4 +132,5 @@ void chunk_loader_free(void) {
     free(g_pending); g_pending = NULL; g_pending_n = g_pending_cap = 0;
     for (int i = 0; i < g_done_n; i++) free(g_done[i]);
     free(g_done); g_done = NULL; g_done_n = g_done_cap = 0;
+    script_load_free();   /* the <script> load-eligibility registry (html_script_element) — same loader lifecycle */
 }

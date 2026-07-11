@@ -11,6 +11,7 @@
 #include "solver/boot_scripts.h"    /* boot_scripts_run — re-run the page's inline scripts */
 #include "core/dom/handler_registry.h"   /* g_handlers/is_msg_handler/g_replay_handlers/replay_handlers_clear */
 #include "core/dom/events/event.h"  /* js_event_ctor — a driven non-message handler gets a real DOM Event */
+#include "core/html/html_script_element.h"   /* script_load_gated — a <script> load handler isn't session-eligible until its chunk provides */
 
 extern JSRuntime *g_rt;   /* the JS runtime (main.c) — js_session_drain drains microtasks per fired handler */
 
@@ -99,6 +100,7 @@ JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     if (!JS_IsUndefined(g_handlers)) { JSValue lv = JS_GetPropertyStr(ctx, g_handlers, "length"); JS_ToUint32(ctx, &hn, lv); JS_FreeValue(ctx, lv); }
     for (uint32_t i = 0; i < hn; i++) {
         JSValue h = JS_GetPropertyUint32(ctx, g_handlers, i);
+        if (JS_IsFunction(ctx, h) && script_load_gated(JS_VALUE_GET_PTR(h))) { JS_FreeValue(ctx, h); continue; }   /* a <script> load handler whose chunk hasn't provided: not eligible in the session either */
         if (JS_IsFunction(ctx, h)) {
             /* a 'message' handler gets the {pm} MessageEvent; every other handler gets a real DOM Event whose
                target is the PER-CODE-FLOW document (js_event_ctor), so e.target.querySelector/closest work. */
