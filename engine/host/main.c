@@ -680,6 +680,12 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
            the inline (dom_run_scripts) + fetched-external (qjs_provide) scripts so a candidate flow can
            UNAPPLY to pre-boot and re-run the whole page boot under the concrete candidate. */
         JS_CowSetActive(1);
+        /* THE ONE BOOT SYSTEM: the page's first boot IS a forking boot flow (no separate monolithic pass). Its
+           all-false PRIMARY arm runs synchronously here — producing the canonical logged-out g_boot_delta the
+           whole frontier layers over — while every opaque boot gate forks a TRUE sibling boot flow (dispatched
+           later by scheduler_run). This deletes the monolithic non-forking boot AND its redundant reg_add_boot
+           re-run: boot-gate exploration is now intrinsic to the first run. */
+        g_running = 1; g_in_boot_flow = 1; g_initial_boot = 1; g_c = 0; g_dec_n = 0; cons_reset();
         if (boot[0]) {
             boot_script_cache(boot, strlen(boot));
             JSValue v = JS_Eval(ctx, boot, strlen(boot), "<boot>", JS_EVAL_TYPE_GLOBAL);
@@ -688,6 +694,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
         }
         g_bundle_id = document_bundle_id(g_dom);   /* IDENTITY first, from a PURE DOM scan (no execution): frontier key set before boot runs */
         dom_run_scripts(ctx);     /* then run inline scripts + REQUEST external <script src> loads (fetched in qjs_step) */
+        g_initial_boot = 0; g_in_boot_flow = 0; g_running = 0; g_cur_flow = NULL;
         JS_CowSetActive(0);
         g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);
         JS_SetFlowLocalMark(1);   /* baseline is now fixed: every object a FLOW creates hereafter is flow-private (COW/taint skip it) */
@@ -770,13 +777,10 @@ KEEP void qjs_begin(const char *recipes)
        nested-handler discovery on a single-component page; the WFQ starves a session with no real cross-flow
        state, so >=1 costs ~nothing when unproductive. */
     if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) reg_add(ctx, JS_UNDEFINED, 1.2, NULL, 0)->session = 1;
-    /* BOOT AS THE FIRST FLOW: enqueue a FORKING re-run of boot so its TOP-LEVEL opaque gates are EXPLORED. The
-       initial boot (dom_run_scripts) ran MONOLITHICALLY before the scheduler (g_running=0 -> branch_decide took
-       the false arm on every opaque gate), so a page whose auth-gated surface sits behind a boot-level
-       `if(localStorage.getItem('token'))` / cookie / `if(window.__FLAGS.admin)` gate with NO fetch would NEVER
-       be surfaced. A reply also enqueues one (qjs_provide, to re-run boot with the reply synchronous); this
-       covers the no-reply case. The WFQ starves it if boot has no forkable gate. */
-    if (!g_resume_mode && boot_script_count() > 0) reg_add_boot(ctx, NULL, 0);
+    /* BOOT-GATE EXPLORATION is now INTRINSIC to the first boot (qjs_begin runs it as a forking boot flow:
+       all-false primary + TRUE-arm sibling forks), so the separate reg_add_boot re-run that used to exist here is
+       DELETED — one boot system, not two. A reply/chunk still enqueues a delivery boot flow (qjs_provide) to
+       re-run boot with the now-cached body synchronous. */
 }
 
 /* The distinct pending fetch urls (newline-joined) the offscreen must safe-fetch. Static buffer. */

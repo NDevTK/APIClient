@@ -33,6 +33,7 @@ int g_cur_orphan_idx = -1;
 int g_park_requested = 0; long g_work = 0; double g_yield_floor = -1e300; int g_made_progress = 0;
 double g_quantum_start = 0.0; unsigned g_quantum_sample = 0; long g_switches = 0;
 double g_max_parked = -1e300; int g_resume_mode = 0;
+int g_initial_boot = 0;   /* the page's FIRST boot runs as a forking boot flow (all-false PRIMARY -> the canonical logged-out g_boot_delta; each opaque gate forks a TRUE sibling boot flow) — the ONE boot system, replacing the deleted monolithic non-forking pass + its separate reg_add_boot re-run. */
 JSValue g_cur_fn = JS_UNDEFINED; signed char *g_dec = NULL; int g_dec_cap = 0, g_dec_n = 0, g_c = 0;
 
 static int quantum_expired(void) { return g_made_progress && (emscripten_get_now() - g_quantum_start) > QUANTUM_MS; }
@@ -537,6 +538,16 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
     if (has && !tf && ff) { cons_set(g_c, src, tok, false_op, jk); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }   /* TRUE arm impossible */
     if (has && !ff && tf) { cons_set(g_c, src, tok, true_op, jk);  g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }   /* FALSE arm impossible */
 
+    if (g_initial_boot) {
+        /* INITIAL boot flow: KEEP the all-false PRIMARY (so g_boot_delta stays the logged-out baseline the whole
+           frontier layers over) but FORK the TRUE arm as a sibling boot flow — one run explores boot's gates,
+           replacing the monolithic (false-only, no exploration) pass AND its separate reg_add_boot re-run. */
+        signed char *bsib = (signed char *)malloc((size_t)(g_c + 1));
+        if (bsib) { for (int i = 0; i < g_c; i++) bsib[i] = g_dec[i]; bsib[g_c] = 1; reg_add_boot(ctx, bsib, g_c + 1); }
+        cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? false_op : OPCMP_NONE, has ? jk : NULL);
+        g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++;
+        return 0;
+    }
     signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* both arms feasible: fork FALSE sibling, take TRUE */
     if (sib) {
         for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
