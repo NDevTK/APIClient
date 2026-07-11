@@ -12,6 +12,7 @@
 #include "modules/netinfo/network_information.h"  /* navigator.connection — the Network Information module */
 #include "core/frame/navigator_ua_data.h"         /* navigator.userAgentData — UA Client Hints (core/frame) */
 #include "modules/geolocation/geolocation.h"      /* navigator.geolocation — the Geolocation module (concolic-coords source) */
+#include "modules/mediastream/media_devices.h"    /* navigator.mediaDevices — the Media Capture module (device-label source) */
 #include "bindings/idl.h"        /* idl_dfail_wrap — the shared unbuilt-member DFAIL audit trap */
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
@@ -125,6 +126,7 @@ JSValue js_navigator_make(JSContext *ctx) {
     JS_SetPropertyStr(ctx, nav, "unregisterProtocolHandler", JS_NewCFunction(ctx, nav_reg_proto, "unregisterProtocolHandler", 2));
     JS_SetPropertyStr(ctx, nav, "oscpu", JS_UNDEFINED);   /* Chrome does not expose oscpu (Firefox-only) — genuinely undefined, not unbuilt */
     JS_SetPropertyStr(ctx, nav, "geolocation", geolocation_make(ctx));   /* the Geolocation module (a concolic-coords source) */
+    JS_SetPropertyStr(ctx, nav, "mediaDevices", media_devices_make(ctx));   /* the Media Capture module (a device-label source) */
     /* Every remaining IDL member (mediaDevices/bluetooth/usb/... ) is
        an UNBUILT browser feature: the trap DFAILs loud naming it, so it is BUILT at the root — never an
        opaque/undefined shrug. Each becomes a real modeled interface (permissions, connection, geolocation first). */
