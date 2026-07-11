@@ -35,7 +35,7 @@ int is_handler(JSContext *ctx, JSValueConst fn) {
 }
 JSValue js_add_listener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
     JSValueConst h0 = (argc >= 2) ? argv[1] : (argc >= 1 ? argv[0] : JS_UNDEFINED);
-    if (g_in_boot_flow) return JS_UNDEFINED;   /* boot flow re-run: handlers already registered by the initial boot — don't duplicate g_handlers */
+    if (g_in_boot_flow && !g_initial_boot) return JS_UNDEFINED;   /* a boot flow RE-RUN re-encounters the same listeners -> don't duplicate; the INITIAL boot (g_initial_boot=1) is where the page's listeners FIRST register (run_initial_boot marks the first boot a boot flow, so the bare g_in_boot_flow guard wrongly dropped ALL of them -> g_handlers empty, breaking the @S session flow / message-driving / is_handler) */
     if (g_boot_replay) {   /* capture the re-registered handler (candidate closure) for re-resolution; don't grow g_handlers */
         if (JS_IsFunction(ctx, h0)) {
             if (g_replay_handler_n >= g_replay_handler_cap) { int nc = g_replay_handler_cap ? g_replay_handler_cap * 2 : 16;
