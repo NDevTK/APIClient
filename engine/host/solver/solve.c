@@ -14,6 +14,7 @@
 #include "solver/scheduler.h"    /* Flow + reg_add/spawn_async_sibling + the running-flow decision context */
 #include "solver/constraints.h"  /* Cons/g_cons + cons_fixed_value + g_origin_req (per-flow value domain) */
 #include "solver/solve_html.h"   /* solve_ctx_detect/is_rawtext_tag/elem_fire_event/x9_fires (HTML breakout + firing) */
+#include "solver/solve_js.h"     /* solve_js_ctx_detect — the JS lexical-context detector (derived JS breakout) */
 #include "solver/envelope.h"     /* envelope_build/detect/handles_token (structured-source delivery) */
 #include "core/frame/csp.h"      /* effective CSP -> a PoC's cspBlocked/cspBypass reproduction envelope */
 #include "core/dom/dom_select.h" /* the per-flow Lexbor document the PoC's context is re-checked against */
@@ -37,19 +38,11 @@ JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval *
    scheme, an eval/Function/setTimeout sink executes a JS-string/expression escape — so these are the
    context-determined bases (not an HTML-payload guess-list; the HTML-context breakout is CONSTRUCTED from the
    observed sink structure by construct_ctx_breakout). x9_fires proves each actually executes. */
-static const char *CAND_URL[]  = { "javascript:X9", "javascript:X9//", NULL };
-static const char *CAND_JS[]   = { "1;X9();//", "';X9();//", "\";X9();//", ");X9();//", "\n;X9();//",
-    "${X9()}",      /* TEMPLATE-LITERAL context (`var t=`{}``): expression interpolation fires X9 with NO delimiter
-                       char — $ { } survive BOTH the fragment and special-query encode sets, so it works from hash
-                       AND search. Inert (never fires) outside a template literal, so solve_broke's eval rejects it
-                       there -> no false positive. */
-    "`;X9();//",    /* close the template literal directly (backtick survives the special-query set -> search) */
-    NULL };
-static const char *CAND_SCRIPTURL[] = { "//X9/x.js", "https://X9/x.js", NULL };   /* <script src>: attacker-host origins */
-static const char **cand_set(const char *sc) {
-    if (sc && strcmp(sc, "url") == 0) return CAND_URL;
+static const char *CAND_URL[]  = { "javascript:X9", "javascript:X9//", NULL };   /* URL sink: the vector IS javascript: — one fixed context, nothing to derive */
+static const char *CAND_SCRIPTURL[] = { "//X9/x.js", "https://X9/x.js", NULL };   /* <script src>: attacker-host origins — one fixed context */
+static const char **cand_set(const char *sc) {   /* only url/scripturl have a single fixed context; js is DERIVED via construct_js_breakout */
     if (sc && strcmp(sc, "scripturl") == 0) return CAND_SCRIPTURL;
-    return CAND_JS;   /* only reached for non-HTML sinks (url handled above, js here); HTML goes to construct_ctx_breakout */
+    return CAND_URL;
 }
 /* GATE TOKENS: concrete strings the REAL code tested tainted input against (startsWith('cmd:'), =='x'…).
    The forced-exec search prefixes/suffixes each base payload with them so a gated sink is solved by the
@@ -201,6 +194,24 @@ static void construct_ctx_breakout(JSContext *ctx, const char *shape, JSValueCon
     emit_cand(ctx, hitfn, "<svg onload=X9>", vt);
     emit_cand(ctx, hitfn, "<img src=x onerror=X9>", vt);
 }
+/* CONSTRUCT the @S breakout for a JS-context sink (eval/Function/setTimeout(string)) FROM THE DERIVED LEXICAL
+   CONTEXT — the JS-side analogue of construct_ctx_breakout. solve_js_ctx_detect (solve_js.c) locates whether the
+   hole sits in an expression, a '/"/`-string, or a comment, and the MINIMAL escape is DERIVED from that context
+   (close the exact delimiter + run), not tried from a fixed all-contexts list. Every candidate still funnels
+   through emit_cand -> gate-token variants + solve_broke's eval-firing verify, so a mis-detection is a miss, never
+   a false positive. */
+static void construct_js_breakout(JSContext *ctx, const char *shape, JSValueConst hitfn, const char *vt) {
+    switch (solve_js_ctx_detect(shape)) {
+    case JHC_SQ:            emit_cand(ctx, hitfn, "';X9();//", vt); break;
+    case JHC_DQ:            emit_cand(ctx, hitfn, "\";X9();//", vt); break;
+    case JHC_TEMPLATE:      emit_cand(ctx, hitfn, "${X9()}", vt);      /* interpolation fires with no delimiter char */
+                            emit_cand(ctx, hitfn, "`;X9();//", vt); break;   /* or close the template literal */
+    case JHC_LINE_COMMENT:  emit_cand(ctx, hitfn, "\n;X9();//", vt); break;   /* newline ends the // comment */
+    case JHC_BLOCK_COMMENT: emit_cand(ctx, hitfn, "*/;X9();//", vt); break;   /* close the block comment first */
+    case JHC_EXPR: default: emit_cand(ctx, hitfn, "1;X9();//", vt);           /* statement position */
+                            emit_cand(ctx, hitfn, ");X9();//", vt); break;    /* or close an enclosing call: f(<hole>) */
+    }
+}
 /* Sink reached. DUAL-MODE:
    - REPLAY flow (g_candidate set): `val` is the CONCRETE transformed candidate that ran through the REAL
      code+branches to get here. If it breaks out, this PoC is PATH+BREAKOUT verified (reachability proven by
@@ -318,9 +329,11 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
                (javascript: scheme for a URL sink, a JS-string/expression escape for eval/Function/setTimeout),
                so drive those bases. Both funnel through emit_cand -> gate-token variants + firing verify. */
             if (sctx && (strcmp(sctx, "html") == 0 || strcmp(sctx, "htmls") == 0)) {
-                construct_ctx_breakout(ctx, shape, hitfn, vt);
+                construct_ctx_breakout(ctx, shape, hitfn, vt);            /* HTML: derived from the Lexbor parse context */
+            } else if (sctx && strcmp(sctx, "js") == 0) {
+                construct_js_breakout(ctx, shape, hitfn, vt);            /* JS: derived from the lexical context (solve_js.c) */
             } else {
-                const char **cands = cand_set(sctx);
+                const char **cands = cand_set(sctx);                    /* url/scripturl: one fixed context each */
                 for (int i = 0; cands[i]; i++) emit_cand(ctx, hitfn, cands[i], vt);
             }
         }
