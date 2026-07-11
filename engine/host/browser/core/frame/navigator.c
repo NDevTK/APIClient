@@ -8,6 +8,7 @@
 #include "modules/permissions/permissions.h"   /* navigator.permissions — a modeled virtual permission system */
 #include "modules/clipboard/clipboard.h"        /* navigator.clipboard — the Async Clipboard module (attacker source) */
 #include "modules/credentialmanagement/credentials.h"   /* navigator.credentials — the auth-moat module */
+#include "modules/quota/storage_manager.h"       /* navigator.storage — the Storage API module */
 #include "bindings/idl.h"        /* idl_dfail_wrap — the shared unbuilt-member DFAIL audit trap */
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
@@ -98,27 +99,7 @@ static JSValue make_ua_data(JSContext *ctx) {
     return wrap_unbuilt(ctx, u);
 }
 /* CredentialsContainer (navigator.credentials) — its own Blink module (modules/credentialmanagement/). */
-/* StorageManager (navigator.storage): estimate() resolves to concolic usage/quota numbers, persist()/persisted()
-   to a concolic bool — so `storage.persisted().then(p => p ? offline : online)` and quota-gated feature checks
-   explore BOTH arms (a PWA's offline/caching surface reached without the real grant). getDirectory (OPFS) DFAILs. */
-static JSValue nav_storage_estimate(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    (void)t; (void)c; (void)v;
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "usage", js_concolic(ctx, "{storageUsage}", JS_NewInt64(ctx, 1048576)));      /* ~1MB */
-    JS_SetPropertyStr(ctx, o, "quota", js_concolic(ctx, "{storageQuota}", JS_NewFloat64(ctx, 1073741824.0)));  /* ~1GB */
-    return js_resolved(ctx, o);
-}
-static JSValue nav_storage_persist(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    (void)t; (void)c; (void)v;
-    return js_resolved(ctx, js_concolic(ctx, "{storagePersisted}", JS_TRUE));   /* forks persistent-storage gate */
-}
-static JSValue make_storage(JSContext *ctx) {
-    JSValue s = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, s, "estimate", JS_NewCFunction(ctx, nav_storage_estimate, "estimate", 0));
-    JS_SetPropertyStr(ctx, s, "persist", JS_NewCFunction(ctx, nav_storage_persist, "persist", 0));
-    JS_SetPropertyStr(ctx, s, "persisted", JS_NewCFunction(ctx, nav_storage_persist, "persisted", 0));
-    return wrap_unbuilt(ctx, s);
-}
+/* StorageManager (navigator.storage) — its own Blink module (modules/quota/). */
 /* Clipboard (navigator.clipboard) — its own Blink module (modules/clipboard/), an attacker source. */
 JSValue js_navigator_make(JSContext *ctx) {
     JSValue nav = JS_NewObject(ctx);
@@ -159,7 +140,7 @@ JSValue js_navigator_make(JSContext *ctx) {
     /* credentials: CredentialsContainer — get()/store() resolve to a concolic Credential that forks the auth gate. */
     JS_SetPropertyStr(ctx, nav, "credentials", credentials_make(ctx));
     /* storage: StorageManager — concolic quota/persisted that fork PWA offline/caching feature gates. */
-    JS_SetPropertyStr(ctx, nav, "storage", make_storage(ctx));
+    JS_SetPropertyStr(ctx, nav, "storage", storage_manager_make(ctx));
     /* clipboard: readText()/read() are an ATTACKER-CONTROLLED source ({clipboard}, paste-jacking XSS). */
     JS_SetPropertyStr(ctx, nav, "clipboard", clipboard_make(ctx));
     /* userActivation: whether the frame has ever had / currently has a user gesture — genuinely unknown headless,
