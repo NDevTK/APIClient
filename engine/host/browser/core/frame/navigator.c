@@ -10,6 +10,7 @@
 #include "modules/credentialmanagement/credentials.h"   /* navigator.credentials — the auth-moat module */
 #include "modules/quota/storage_manager.h"       /* navigator.storage — the Storage API module */
 #include "modules/netinfo/network_information.h"  /* navigator.connection — the Network Information module */
+#include "core/frame/navigator_ua_data.h"         /* navigator.userAgentData — UA Client Hints (core/frame) */
 #include "bindings/idl.h"        /* idl_dfail_wrap — the shared unbuilt-member DFAIL audit trap */
 #include "platform/url.h"        /* url_from_arg, url_solve_holes, has_hole, build_query_params */
 #include "solver/endpoint.h"   /* record_endpoint — the shared @H sink */
@@ -58,32 +59,7 @@ static JSValue nav_promise_undef(JSContext *ctx, JSValueConst t, int c, JSValueC
 /* window.navigator — the standard properties as CONCOLIC values (a real desktop Chrome as the example) plus the
    built methods/sub-interfaces. UNBUILT members DFAIL via the wrap_unbuilt trap (never an opaque shrug). */
 /* NetworkInformation (navigator.connection) — its own Blink module (modules/netinfo/). */
-/* NavigatorUAData (navigator.userAgentData): UA Client Hints. `mobile`/`platform` and the high-entropy fields
-   are CONCOLIC (desktop example, fork the branch) so `if (navigator.userAgentData.mobile)` explores BOTH the
-   mobile and desktop code paths (each ships its own bundle/endpoints — the classic responsive moat split).
-   getHighEntropyValues(hints) resolves to a concolic detail object; unbuilt members (toJSON, ...) DFAIL. */
-static JSValue js_ua_high_entropy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val; (void)argc; (void)argv;
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "platform", js_concolic(ctx, "{uaPlatform}", JS_NewString(ctx, "Windows")));
-    JS_SetPropertyStr(ctx, o, "platformVersion", js_concolic(ctx, "{uaPlatformVersion}", JS_NewString(ctx, "15.0.0")));
-    JS_SetPropertyStr(ctx, o, "architecture", js_concolic(ctx, "{uaArch}", JS_NewString(ctx, "x86")));
-    JS_SetPropertyStr(ctx, o, "bitness", js_concolic(ctx, "{uaBitness}", JS_NewString(ctx, "64")));
-    JS_SetPropertyStr(ctx, o, "model", js_concolic(ctx, "{uaModel}", JS_NewString(ctx, "")));
-    JS_SetPropertyStr(ctx, o, "uaFullVersion", js_concolic(ctx, "{uaFullVersion}", JS_NewString(ctx, "120.0.0.0")));
-    JS_SetPropertyStr(ctx, o, "mobile", js_concolic(ctx, "{uaMobile}", JS_FALSE));
-    return js_resolved(ctx, o);
-}
-static JSValue make_ua_data(JSContext *ctx) {
-    JSValue u = JS_NewObject(ctx);
-    { JSValue brands = JS_NewArray(ctx), b0 = JS_NewObject(ctx);
-      JS_SetPropertyStr(ctx, b0, "brand", JS_NewString(ctx, "Chromium")); JS_SetPropertyStr(ctx, b0, "version", JS_NewString(ctx, "120"));
-      JS_SetPropertyUint32(ctx, brands, 0, b0); JS_SetPropertyStr(ctx, u, "brands", brands); }
-    JS_SetPropertyStr(ctx, u, "mobile", js_concolic(ctx, "{uaMobile}", JS_FALSE));            /* forks mobile/desktop code paths */
-    JS_SetPropertyStr(ctx, u, "platform", js_concolic(ctx, "{uaPlatform}", JS_NewString(ctx, "Windows")));
-    JS_SetPropertyStr(ctx, u, "getHighEntropyValues", JS_NewCFunction(ctx, js_ua_high_entropy, "getHighEntropyValues", 1));
-    return wrap_unbuilt(ctx, u);
-}
+/* NavigatorUAData (navigator.userAgentData) — its own core/frame file (navigator_ua_data.c). */
 /* CredentialsContainer (navigator.credentials) — its own Blink module (modules/credentialmanagement/). */
 /* StorageManager (navigator.storage) — its own Blink module (modules/quota/). */
 /* Clipboard (navigator.clipboard) — its own Blink module (modules/clipboard/), an attacker source. */
@@ -122,7 +98,7 @@ JSValue js_navigator_make(JSContext *ctx) {
     /* connection: NetworkInformation — concolic connection properties that fork adaptive-loading branches. */
     JS_SetPropertyStr(ctx, nav, "connection", network_information_make(ctx));
     /* userAgentData: UA Client Hints — concolic mobile/platform that fork the responsive mobile/desktop split. */
-    JS_SetPropertyStr(ctx, nav, "userAgentData", make_ua_data(ctx));
+    JS_SetPropertyStr(ctx, nav, "userAgentData", navigator_ua_data_make(ctx));
     /* credentials: CredentialsContainer — get()/store() resolve to a concolic Credential that forks the auth gate. */
     JS_SetPropertyStr(ctx, nav, "credentials", credentials_make(ctx));
     /* storage: StorageManager — concolic quota/persisted that fork PWA offline/caching feature gates. */
