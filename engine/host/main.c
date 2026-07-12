@@ -27,6 +27,7 @@
 #include "solver/constraints.h"  /* per-flow value-domain constraint tracker (concolic path constraint), its own TU */
 #include "solver/wfq.h"          /* the ONE WFQ priority policy (order key), its own TU */
 #include "solver/concolic.h"       /* the OPAQUE sentinel g_concolic + js_noop/js_concolic_read/js_concolic_stub, its own TU */
+#include "solver/concolic_array.h"  /* the Array interface a concolic presents (iteration-routing policy) */
 #include "solver/scheduler.h"    /* Flow (per-flow scheduler state) + AsyncRecipe (replay recipe) — the registry's record types */
 #include "solver/solve.h"        /* the @S SOLVER component: solve_add sink entry + gate_collect/solve_all/solve_init/solve_free */
 #include "solver/async_flow.h"   /* ASYNC-AS-FLOW: the async-call/reaction/await hooks + the cross-session async-recipe map */
@@ -535,6 +536,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JS_SetConcolicMarker(g_concolic);
     JS_SetBranchHook(branch_decide);
     JS_SetForkableHook(ctx_forks);  /* an opaque-collection iterator forks (opaque done) only where branch_decide decides */
+    JS_SetArrayIterHook(concolic_array_iter_method);  /* which Array.prototype iterators a concolic array routes to their self-hosted (parking) impl */
     JS_SetGateHook(gate_collect);   /* collect strings the code tests tainted input against -> search candidates */
     JS_SetCbHook(drive_opaque_cb);  /* a callback passed to a method on OPAQUE input (forEach/map/then/…) -> drive it as a flow */
     JS_SetAsyncCallHook(reg_add_async_call);  /* a native async CALL -> a preemptible/parkable scheduler flow (async-as-flow) */
