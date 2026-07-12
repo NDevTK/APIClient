@@ -525,6 +525,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "__isOpaque", JS_NewCFunction(ctx, js_is_concolic, "__isOpaque", 1));   /* self-hosted sort: concretize a meaningless opaque order without forking */
     JS_SetPropertyStr(ctx, g, "__opaqueExample", JS_NewCFunction(ctx, js_concolic_example, "__opaqueExample", 1));   /* self-hosted stringify: a config opaque's concrete example (else undefined) */
+    JS_SetPropertyStr(ctx, g, "__iterdone_mint", JS_NewCFunction(ctx, js_iterdone, "__iterdone_mint", 0));   /* self-hosted Array iterators: mint the {@iterdone} loop-back so a concolic collection iterates as per-iteration parkable flows (unified with for-of) */
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 2));
     install_js_global_functions(ctx, g);   /* eval / new Function (@S code sinks) + structuredClone (bindings/global_functions.c) */
     /* Register the OPAQUE sentinel + the branch hook: a branch whose condition IS this object forks both

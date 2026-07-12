@@ -33,5 +33,6 @@ JSValue js_concolic(JSContext *ctx, const char *shape, JSValue example);
    else undefined). Leaves — hold no continuation. */
 JSValue js_is_concolic(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 JSValue js_concolic_example(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+JSValue js_iterdone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 
 #endif

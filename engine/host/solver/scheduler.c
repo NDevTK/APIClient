@@ -560,7 +560,8 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
         const char *cs = JS_ConcolicSrcC(cond);
         if (cs && !strcmp(cs, "{@iterdone}")) {
             signed char *sib = (signed char *)malloc((size_t)(g_c + 1));
-            if (sib) {
+            CHECK(sib, "iterdone: cannot park the CONTINUE arm — dropping it truncates iteration (loses every deeper element/endpoint); OOM is a physical floor, never a silent drop");
+            {
                 for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
                 sib[g_c] = 0;   /* CONTINUE (done=false): the parked per-iteration sibling does one more iteration */
                 if (g_in_session) reg_add_session(ctx, sib, g_c + 1);
