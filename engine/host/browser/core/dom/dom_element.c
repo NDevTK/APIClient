@@ -411,8 +411,22 @@ static JSValue js_el_appendChild(JSContext *ctx, JSValueConst this_val, int argc
     return (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
 
-/* Node::cloneNode -> a real node (self); its methods/attrs work. */
+/* Generic identity (returns `this`). NOT for DOM cloneNode (see js_el_clone) — only for Request.clone in
+   urlobj.c, a plain non-el object whose self-return is a documented shallow-clone stub tracked separately. */
 JSValue js_el_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { (void)argc; (void)argv; return JS_DupValue(ctx, this_val); }
+/* Node.cloneNode(deep): a REAL Lexbor clone (independent subtree), NEVER the same node. The old js_el_self
+   returned JS_DupValue(this_val) — the SAME node — so template.content.cloneNode(true) ALIASED the template
+   and a clone-then-mutate (web components / lit-html, the core <template> idiom) corrupted the live template.
+   The clone is DETACHED (import_node does not insert), so no COW capture here; its later appendChild IS
+   captured, so it time-travels correctly once in the tree. */
+JSValue js_el_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    lxb_dom_element_t *el = JS_GetOpaque(this_val, g_el_class_id);
+    DCHECK(el, "cloneNode: receiver has no el-backed node — cloneNode lives on the Element proto, so this_val is always el_wrap'd");
+    int deep = argc >= 1 ? JS_ToBool(ctx, argv[0]) : 0;   /* cloneNode() defaults deep=false (spec) */
+    lxb_dom_node_t *clone = lxb_dom_node_clone(lxb_dom_interface_node(el), deep > 0);
+    CHECK(clone, "cloneNode: lxb_dom_node_clone allocation failed — OOM is a physical floor");
+    return el_wrap(ctx, lxb_dom_interface_element(clone));
+}
 
 /* Element::attachShadow(init): the Shadow DOM root nearly every custom element renders into. A real detached
    container so root.appendChild/querySelector/addEventListener register handlers driven like any other. */
@@ -465,7 +479,7 @@ void el_install_methods(JSContext *ctx, JSValue proto) {
     JS_SetPropertyStr(ctx, proto, "matches", JS_NewCFunction(ctx, js_el_matches, "matches", 1));
     JS_SetPropertyStr(ctx, proto, "webkitMatchesSelector", JS_NewCFunction(ctx, js_el_matches, "webkitMatchesSelector", 1));
     JS_SetPropertyStr(ctx, proto, "closest", JS_NewCFunction(ctx, js_el_closest, "closest", 1));
-    JS_SetPropertyStr(ctx, proto, "cloneNode", JS_NewCFunction(ctx, js_el_self, "cloneNode", 1));
+    JS_SetPropertyStr(ctx, proto, "cloneNode", JS_NewCFunction(ctx, js_el_clone, "cloneNode", 1));
     JS_SetPropertyStr(ctx, proto, "contains", JS_NewCFunction(ctx, js_el_contains, "contains", 1));
     JS_SetPropertyStr(ctx, proto, "hasAttribute", JS_NewCFunction(ctx, js_el_has_attr, "hasAttribute", 1));
     JS_SetPropertyStr(ctx, proto, "toggleAttribute", JS_NewCFunction(ctx, js_el_has_attr, "toggleAttribute", 1));
