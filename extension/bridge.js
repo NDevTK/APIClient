@@ -237,8 +237,18 @@ function crashBanner(stage, m) {   // LOUD + a persistent batch flag; EVERY abor
 function engineCrash(eng, stage, e) {
   const m = String((e && e.message) || e);
   eng._crashed = true;
-  eng.lines.push('@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}");
-  crashBanner(stage, m);
+  // The C-side CHECK/DCHECK emits its @WHY/@E ROOT line (phase/cond/at/reason) to stderr -> sink -> eng.lines
+  // IMMEDIATELY before abort(). A bare emscripten Aborted() message ("native code called abort()") is terse and
+  // useless on its own, so surface that root line IN the loud banner — a crash must POINT AT ITS CAUSE, not just
+  // announce itself (this is what forced grepping the reason out of the result during debugging).
+  let root = "";
+  for (let i = eng.lines.length - 1; i >= 0; i--) {
+    const ln = String(eng.lines[i]);
+    if (ln.startsWith("@WHY ") || (ln.startsWith("@E ") && /"(reason|cond|phase)"/.test(ln))) { root = ln; break; }
+  }
+  const err = root ? (m + " | ROOT: " + root) : m;   // the crash RECORD carries its cause (netdiff/result-visible), not only the console banner
+  eng.lines.push('@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(err) + "}");
+  crashBanner(stage, err);
 }
 // A crash BEFORE the engine object exists (creation/boot abort). Same rule: LOUD, findings discarded,
 // marked _engineCrashed — never a quiet "degenerate result" the reviewer reads as a boring empty page.
