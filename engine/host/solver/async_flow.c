@@ -91,7 +91,7 @@ int await_decide(JSContext *ctx) {
     if (ctx != g_ctx || !g_running || !g_cur_flow || !g_cur_flow->is_async) return 0;
     if (JS_IsUndefined(g_cur_flow->handle)) return 0;
     if (g_c < g_dec_n) { int arm = g_dec[g_c] ? 1 : 0; g_c++; return arm; }   /* replay this flow's recorded await/branch decisions */
-    if (!g_dec_ensure(g_c + 1)) return 0;
+    g_dec_ensure(g_c + 1);   /* CHECK-crashes at the hard OOM wall, never fabricates a fulfil arm */
     signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* fork the REJECT sibling; this flow takes FULFIL */
     if (sib) { for (int i = 0; i < g_c; i++) sib[i] = g_dec[i]; sib[g_c] = 1; spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1); }
     g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++;

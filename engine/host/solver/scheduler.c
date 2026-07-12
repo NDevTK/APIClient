@@ -494,7 +494,11 @@ int g_dec_ensure(int n) {              /* grow g_dec to hold >= n decisions */
     if (n <= g_dec_cap) return 1;
     int nc = g_dec_cap ? g_dec_cap * 2 : 64; while (nc < n) nc *= 2;
     signed char *nd = (signed char *)realloc(g_dec, (size_t)nc);
-    if (!nd) return 0;
+    /* OOM here is the PHYSICAL floor, always fatal (CHECK, not a swallowed 0): a flow whose decision can't be
+       recorded runs with an unrecorded arm -> its decision vector diverges from its execution and replay is
+       corrupt; the unchecked callers (dispatch's g_dec_ensure(g_dec_n)) would instead overflow g_dec on the
+       following writes. RAM PRESSURE is handled earlier by park-to-disk; this is the hard realloc wall. */
+    CHECK(nd, "dec_oom: decision-vector realloc failed — the physical floor; a flow whose decision can't be recorded corrupts its replay");
     g_dec = nd; g_dec_cap = nc; return 1;
 }
 
@@ -538,7 +542,7 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
         cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? (arm ? true_op : false_op) : OPCMP_NONE, has ? jk : NULL);
         g_c++; return arm;
     }
-    if (!g_dec_ensure(g_c + 1)) return 1;                    /* only RAM/disk (the platform floor) bounds depth — not a cap */
+    g_dec_ensure(g_c + 1);                                   /* only RAM/disk (the platform floor) bounds depth — g_dec_ensure CHECK-crashes at the hard wall, never fabricates an arm */
 
     /* A CANDIDATE session (verifying an @S breakout) takes a fixed arm for a NEW branch — it replays the
        detecting session's vector (above) then follows through with the candidate, it does not re-explore. */
