@@ -68,7 +68,12 @@ JSValue js_xhr_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueCo
     JS_SetPropertyStr(ctx, o, "getAllResponseHeaders", JS_NewCFunction(ctx, js_concolic_stub, "getAllResponseHeaders", 0));
     JS_SetPropertyStr(ctx, o, "responseText", js_concolic(ctx, "{xhrResponse}", JS_UNDEFINED));   /* response = external input */
     JS_SetPropertyStr(ctx, o, "response", js_concolic(ctx, "{xhrResponse}", JS_UNDEFINED));
-    JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, 200));
+    /* status is UNKNOWABLE without firing (the server returns 200/404/500/…) — like responseText, external
+       input. CONCOLIC carrying 200 as the example: `if(xhr.status===200){…}else{errHandler}` FORKS both arms
+       (the error-handler endpoints the moat wants), while `'/t/'+xhr.status` still yields `/t/200`. Bare-concrete
+       200 would delete the error arm. readyState=4 is DIFFERENT — the synchronous model DID complete, so DONE is
+       a COMPUTED terminal value, not an unknown; concrete-4 is honest. */
+    JS_SetPropertyStr(ctx, o, "status", js_concolic(ctx, "{xhrStatus}", JS_NewInt32(ctx, 200)));
     JS_SetPropertyStr(ctx, o, "readyState", JS_NewInt32(ctx, 4));
     return o;
 }
