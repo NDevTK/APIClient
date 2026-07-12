@@ -94,7 +94,13 @@ const args = [
   // (the failing C assert + file:line — e.g. a refcount/gc_obj_list leak), the offensive-programming ideal of a
   // LOUD *and* diagnosable dev failure. Off by default so normal dev builds stay fast; enable when debugging.
   ...(process.argv.includes("assert") ? ["-sASSERTIONS=2"] : []),
-  "-sALLOW_MEMORY_GROWTH=1",
+  // AddressSanitizer build (`asan` arg) — the FIRST-CLASS memory-debugging tool a browser engineer expects:
+  // intercepts malloc/free (quickjs's js_free routes to system free), so a double-free / use-after-free is
+  // reported DETERMINISTICALLY with the alloc stack + BOTH free stacks (function names via --profiling-funcs).
+  // ASan's shadow memory is incompatible with memory GROWTH, so it pins a fixed 1 GiB heap instead.
+  ...(process.argv.includes("asan")
+      ? ["-fsanitize=address", "--profiling-funcs", "-sINITIAL_MEMORY=1073741824"]
+      : ["-sALLOW_MEMORY_GROWTH=1"]),
   "-sSTACK_SIZE=8388608",
   "-sEXIT_RUNTIME=0",
   "-sINVOKE_RUN=0",

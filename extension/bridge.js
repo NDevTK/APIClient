@@ -152,7 +152,12 @@ async function engineCreate(code, html, msg, persist) {
   // as @E/@RESULT and never pollutes resolverErrors. @E/@WHY stays STRICTLY for fatal should-never-happen
   // states (they abort); a diagnostic must never masquerade as one. (CLAUDE.md: @WHY is fatal, not a log.)
   const sink = (s) => { if (typeof s === "string" && s.startsWith("@DBG ")) { try { console.debug(s); } catch (_) {} return; } lines.push(s); };
-  const M = await createQJS({ print: sink, printErr: sink, noInitialRun: true });
+  // Engine STDERR (printErr) — @E/@WHY aborts, AddressSanitizer reports, native diagnostics — is TEE'd to
+  // console.debug so it is CAPTURABLE live (harness `diag`) and never silently lost when the crashed engine's
+  // `lines` are discarded; it still lands in `lines` for the crash record. This is what makes the `asan` build
+  // usable: ASan prints its UAF/double-free report (alloc + free stacks) to stderr, which surfaces here.
+  const errsink = (s) => { try { console.debug(s); } catch (_) {} lines.push(s); };
+  const M = await createQJS({ print: sink, printErr: errsink, noInitialRun: true });
   const ptrs = [];
   const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
   const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
