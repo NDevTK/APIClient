@@ -99,7 +99,8 @@ const args = [
   // reported DETERMINISTICALLY with the alloc stack + BOTH free stacks (function names via --profiling-funcs).
   // ASan's shadow memory is incompatible with memory GROWTH, so it pins a fixed 1 GiB heap instead.
   ...(process.argv.includes("asan")
-      ? ["-fsanitize=address", "--profiling-funcs", "-sINITIAL_MEMORY=1073741824"]
+      ? ["-fsanitize=address", "--profiling-funcs", "-sINITIAL_MEMORY=1073741824",
+         ...(process.argv.includes("dwarf") ? ["-g"] : [])]
       : ["-sALLOW_MEMORY_GROWTH=1"]),
   "-sSTACK_SIZE=8388608",
   "-sEXIT_RUNTIME=0",
