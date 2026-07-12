@@ -72,7 +72,7 @@ Flow *reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int 
 Flow *spawn_async_sibling(JSContext *ctx, Flow *pf, signed char *dec, int dec_n);          /* re-run sibling of an async flow (NULL if JS_FlowNew fails) */
 
 extern int g_in_session;        /* a session flow is running -> solve_add enqueues candidate SESSION flows */
-extern int g_running;           /* a flow is currently dispatched (vs the monolithic boot) */
+extern int g_running;           /* a flow is currently dispatched (a boot/session/orphan flow — incl. the initial forking boot) */
 extern double g_cur_val;        /* the running flow's accumulated value (inherited by enqueued siblings) */
 extern Flow *g_cur_flow;        /* the running flow (its is_async gates the async-sink candidate path) */
 extern int g_cur_orphan_idx;    /* the running flow's orphan locator (inherited by candidate siblings) */

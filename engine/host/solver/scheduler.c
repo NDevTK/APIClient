@@ -571,7 +571,12 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
 int ctx_forks(void) {
     if (g_boot_replay) return 1;                                                   /* fixed-arm replay (exit after 1) */
     if (!g_running) return 0;
-    if (JS_IsUndefined(g_cur_fn) && !g_in_boot_flow && !g_in_session) return 0;    /* monolithic boot -> drive-once */
+    /* A running flow ALWAYS carries a fork context: g_cur_fn is a real fn (sync/async/orphan dispatch), or it
+       is a boot flow (g_in_boot_flow — incl. the initial forking boot), or a session (g_in_session). The old
+       "monolithic boot -> drive-once" state (running, no fn, not boot, not session) is GONE — boot is now the
+       initial FORKING boot flow — so assert the invariant instead of silently returning drive-once past it. */
+    DCHECK(!JS_IsUndefined(g_cur_fn) || g_in_boot_flow || g_in_session,
+           "ctx_forks: running flow has no fn handle and is neither boot nor session — the deleted monolithic-boot state should be unreachable");
     return 1;
 }
 
@@ -580,8 +585,9 @@ void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
     /* CONTINUATION: a callback deferred from a running (revert-)flow inherits that flow's live PROPERTY delta,
        so it sees state the flow wrote before deferring (obj.x = tainted; setTimeout(()=>use(obj.x))) — a
        fresh-baseline flow reads it undefined. Closure-var state already rides the callback's own closure, so
-       only property writes need this snapshot. At the monolithic boot (g_running=0) nothing is snapshotted:
-       boot's writes commit to the baseline, which a boot-deferred flow already sees. */
+       only property writes need this snapshot. During the INITIAL boot g_cur_flow is NULL (the forking boot
+       flow has no reg-entry), so nothing is snapshotted here: boot's writes commit to the post-boot baseline,
+       which a boot-deferred flow already sees. */
     if (g_running && g_cur_flow) {
         int n = 0, cap = 0; void *snap = JS_CowBufSnapshot(ctx, &n, &cap);
         if (snap) { f->cow = snap; f->cow_n = n; f->cow_cap = cap; }
