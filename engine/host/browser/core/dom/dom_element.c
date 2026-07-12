@@ -323,8 +323,13 @@ JSValue js_el_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, 
    yields `/t/0`. Bare-concrete 0 collapsed every geometry branch to one arm. */
 JSValue js_el_rect(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     JSValue o = JS_NewObject(ctx);
-    const char *k[] = { "top", "left", "right", "bottom", "width", "height", "x", "y" };
-    for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, o, k[i], js_concolic(ctx, "{rect}", JS_NewInt32(ctx, 0)));
+    const char *k[]  = { "top", "left", "right", "bottom", "width", "height", "x", "y" };
+    /* DISTINCT source identity PER FIELD (not a shared "{rect}") — width and height are INDEPENDENT quantities,
+       so a shared src would wrongly PIN height when a gate pins width (cons_eval_pinned keys on src). Static
+       literals keep the src DETERMINISTIC (a per-call counter would be non-deterministic across replays -> the
+       recorded constraint would not map back, breaking replay). */
+    const char *sh[] = { "{rect.top}", "{rect.left}", "{rect.right}", "{rect.bottom}", "{rect.width}", "{rect.height}", "{rect.x}", "{rect.y}" };
+    for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, o, k[i], js_concolic(ctx, sh[i], JS_NewInt32(ctx, 0)));
     return o;
 }
 JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val) {   /* .textContent / .innerText getter */
