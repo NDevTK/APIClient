@@ -43,7 +43,7 @@ JSValue js_concolic_example(JSContext *ctx, JSValueConst this_val, int argc, JSV
    helper returns THIS for a concolic collection and the real `k>=length` boolean for a concrete one. A leaf. */
 JSValue js_iterdone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val; (void)argc; (void)argv;
-    JSValue r = JS_NewConcolicSourced(ctx, "{@iterdone}", "{@iterdone}");
+    JSValue r = JS_MintIterDone(ctx);
     DCHECK(JS_IsConcolic(r), "js_iterdone: the loop-back parking primitive must be concolic — else every self-hosted iterator silently concretizes its loop-back (no-op or hang)");
     return r;
 }
