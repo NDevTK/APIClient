@@ -548,6 +548,32 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
        detecting session's vector (above) then follows through with the candidate, it does not re-explore. */
     if (g_in_session && g_candidate) { cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE, has ? jk : NULL); g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }
 
+    /* LOOP-BACK over an OPAQUE COLLECTION (for-of/for-in `done`, tagged "{@iterdone}"): iteration is
+       UNBOUNDED-PARKABLE-PAGED, never run-to-completion in one flow. Take the EXIT arm (done=true) as the
+       PRIMARY — this flow STOPS iterating (breadth first) — and PARK the CONTINUE arm (done=false) as its OWN
+       sibling flow, so every additional iteration is a separate preemptible/pageable flow. A parked continue
+       sibling runs at mark=1, so its per-iteration transients (Request/Promise/…) are flow_local-skipped and
+       no single flow accumulates an unbounded delta. This is the ONE design replacing BOTH the drive-once
+       terminating iterator (a banned bound that dropped shared-state-gated deep endpoints) and the
+       loop-forever-in-one-flow cow-oom. The WFQ starves the identical-input continue tail (paged, resumable). */
+    if (JS_IsConcolic(cond)) {
+        const char *cs = JS_ConcolicSrcC(cond);
+        if (cs && !strcmp(cs, "{@iterdone}")) {
+            signed char *sib = (signed char *)malloc((size_t)(g_c + 1));
+            if (sib) {
+                for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
+                sib[g_c] = 0;   /* CONTINUE (done=false): the parked per-iteration sibling does one more iteration */
+                if (g_in_session) reg_add_session(ctx, sib, g_c + 1);
+                else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);
+                else if (g_cur_flow && g_cur_flow->is_async) spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1);
+                else reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1)->orphan_idx = g_cur_orphan_idx;
+            }
+            cons_set(g_c, NULL, NULL, OPCMP_NONE, NULL);
+            g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;   /* EXIT (done=true): this flow stops iterating here */
+            return 1;
+        }
+    }
+
     /* NEW decision: ask the substrate which arms the per-flow domain permits (pinned -> one arm via forced-exec
        predicate eval; unpinned -> prune only a provably-contradicted arm). The scheduler holds ZERO constraint
        logic — it only INTERPRETS the two booleans to take the one feasible arm, or fork when both are open. */
