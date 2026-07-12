@@ -276,10 +276,10 @@ int g_boot_replay = 0;   /* re-running boot to re-establish shared state for a c
 /* reg_add_boot / reg_add_session (+ boot_replay / boot_replay_candidate / resolve_replayed_handler / the
    attacker session) -> solver/boot_flow.c, declared in boot_flow.h. */
 /* Does the CURRENT context fork/decide opaque branches (so an opaque-collection iterator can yield an opaque
-   `done` and let the loop-back branch fork/terminate), or is it the MONOLITHIC initial boot where branch_decide
-   returns 0 unconditionally (an opaque loop-back cond would resolve 'continue' forever)? Mirrors branch_decide's
-   non-zero condition EXACTLY — the single source of truth for "will the branch do something other than fall
-   through". */
+   `done` and let the loop-back branch fork/terminate)? A running flow ALWAYS forks — MONOLITHIC (non-forking)
+   boot is banned, so the only non-forking context is "not running" (between/after flows, where no page
+   bytecode executes). Mirrors branch_decide's non-zero condition EXACTLY — the single source of truth for
+   "will the branch do something other than fall through". */
 /* crypto (getRandomValues/randomUUID/subtle) -> browser/crypto.c. */
 /* setTimeout/setInterval/requestAnimationFrame(cb, ...): a deferred callback is NOT a wait on real time —
    it is just another BFS FLOW. Register cb in the ONE scheduler (reg_add) so it is driven, ordered, and
