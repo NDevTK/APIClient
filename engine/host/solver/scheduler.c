@@ -52,8 +52,11 @@ static int reg_readd(JSContext *ctx, Flow f)
 
 int seed_orphans(JSContext *ctx)
 {
-    static JSValue buf[4096];
-    int n = JS_CollectOrphans(ctx, buf, 4096), seeded = 0;
+    int cnt = JS_CountOrphans(ctx);   /* EXACT uncalled-function count -> size the staging buffer to it (no fixed cap) */
+    if (cnt == 0) return 0;
+    JSValue *buf = (JSValue *)malloc((size_t)cnt * sizeof(JSValue));
+    CHECK(buf, "orphan_oom: orphan-collection staging alloc failed — OOM is a physical floor, never truncate the frontier");
+    int n = JS_CollectOrphans(ctx, buf, cnt), seeded = 0;
     for (int i = 0; i < n; i++) {
         /* A <script>'s 'load' handler is a LOAD-GATED continuation: skip it until its chunk provides (else it
            drives on the pre-load baseline where the chunk's globals are absent -> a phantom endpoint). Released
@@ -66,12 +69,18 @@ int seed_orphans(JSContext *ctx)
         if (!dup) for (int j = 0; j < g_orphan_n; j++)
             if (JS_VALUE_GET_PTR(g_orphan_buf[j]) == JS_VALUE_GET_PTR(buf[i])) { dup = 1; break; }
         if (dup) { JS_FreeValue(ctx, buf[i]); continue; }
-        int idx = -1;
-        if (g_orphan_n < 4096) { idx = g_orphan_n; g_orphan_buf[g_orphan_n++] = JS_DupValue(ctx, buf[i]); }  /* buffer owns a ref (stable locator) */
+        if (g_orphan_n >= g_orphan_cap) {   /* grow the locator set — every orphan gets a stable index (parkable/resumable), no 4096 cutoff */
+            int nc = g_orphan_cap ? g_orphan_cap * 2 : 256;
+            JSValue *nb = (JSValue *)realloc(g_orphan_buf, (size_t)nc * sizeof(JSValue));
+            CHECK(nb, "orphan_oom: locator-buffer realloc failed — OOM is a physical floor, never drop a locator");
+            g_orphan_buf = nb; g_orphan_cap = nc;
+        }
+        int idx = g_orphan_n; g_orphan_buf[g_orphan_n++] = JS_DupValue(ctx, buf[i]);   /* buffer owns a ref (stable locator) */
         if (g_resume_mode) { JS_FreeValue(ctx, buf[i]); continue; }   /* resume: build locators only; recipes are seeded explicitly */
         reg_add(ctx, buf[i], 1.0, NULL, 0)->orphan_idx = idx;
         seeded++;
     }
+    free(buf);
     return seeded;   /* count surfaces in @RESULT._orphans (via g_orphan_n) — no dead @ORPHANS line */
 }
 

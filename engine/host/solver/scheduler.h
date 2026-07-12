@@ -85,7 +85,7 @@ extern JSContext *g_ctx;        /* the MAIN analysis context — async hooks CLA
 extern int g_in_boot_flow;      /* a BOOT flow is re-running boot -> suppress handler re-registration */
 extern int g_initial_boot;      /* the page's FIRST boot is a forking boot flow (all-false primary + TRUE-arm sibling forks) */
 extern int g_boot_replay;       /* re-running boot for a candidate -> capture re-registered (closure) handlers, don't grow g_handlers */
-extern JSValue g_orphan_buf[4096]; extern int g_orphan_n;   /* the deterministic orphan collection (functions to force-fire), a cross-session locator */
+extern JSValue *g_orphan_buf; extern int g_orphan_n, g_orphan_cap;   /* the deterministic orphan collection (functions to force-fire), a cross-session locator — dynamic, uncapped */
 extern JSValue g_msg_event;     /* the synthetic {pm} attacker MessageEvent a 'message' listener is driven with */
 int g_dec_ensure(int n);        /* grow the decision vector to hold >= n decisions (unbounded, RAM/disk floor) */
 

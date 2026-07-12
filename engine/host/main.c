@@ -122,8 +122,9 @@ void flow_emit_value(void) {
 /* Cross-session frontier (park/resume by REPLAY): deterministic orphan collection gives each function a
    stable index; a parked flow's recipe = (orphan_idx, decision-vector). Parking is RAM-PRESSURE-driven
    (g_park_requested, host-set), never a dispatch/step count — with headroom the page runs to completion. */
-JSValue g_orphan_buf[4096];
-int     g_orphan_n = 0;
+JSValue *g_orphan_buf = NULL;   /* dynamic (grows in seed_orphans) — NO fixed cap that truncates a large bundle's orphan frontier */
+int      g_orphan_n = 0;
+int      g_orphan_cap = 0;
 /* The WFQ dispatch loop + its state (cooperative quantum, parked-weight cache, decision vector) -> scheduler.c. */
 static uint32_t g_bundle_id = 0;        /* stable id of THIS document's own scripts (Lexbor DOM scan, not regex) — the frontier key */
 static char *g_boot_preamble = NULL;    /* the offscreen combined-script preamble, stashed so run_initial_boot can run it when boot is dispatched as Flow #0 (de-entangled from qjs_init's synchronous return) */
@@ -756,6 +757,7 @@ KEEP void qjs_teardown(void)
     location_free(ctx);   /* free the window.location singleton (location.c) */
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;
+    free(g_orphan_buf); g_orphan_buf = NULL; g_orphan_cap = 0;   /* free the dynamic locator buffer itself */
     JS_FreeValue(ctx, g_msg_event); g_msg_event = JS_UNDEFINED;   /* g_handlers/g_msg_handler_n freed by handlers_free above */
     js_std_free_handlers(g_rt);
     js_global_functions_free(ctx);   /* eval/Function/structuredClone bindings (bindings/global_functions.c) */
