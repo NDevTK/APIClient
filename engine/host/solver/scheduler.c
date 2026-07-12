@@ -108,7 +108,7 @@ static int wfq_yield(void)
 /* Emit the remaining frontier as compact REPLAY recipes (orphan_idx + decision-vector) and clear it.
    A parked flow is reconstructed next session by re-running boot + replaying its decisions — never by
    serializing a live continuation. The host persists these lines to IDB; @PARK/@PARKED are read back. */
-static void park_frontier(JSContext *ctx)
+void park_frontier(JSContext *ctx)
 {
     int parked = 0, unrecipe = 0;
     for (int i = 0; i < g_reg_n; i++) {

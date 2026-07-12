@@ -713,6 +713,7 @@ KEEP void qjs_teardown(void)
     qjs_finalize();   /* resolve any stragglers opaque so no promise leaks */
     /* Unresolved module graph residue -> @WHY BEFORE emit_result (so it lands in resolverErrors). */
     { int pm = module_pending_count(); if (pm) { char rz[64]; snprintf(rz, sizeof rz, "unresolved module graph x%d (dep never fetched)", pm); why_add(ctx, "module-link", rz); } }
+    park_frontier(ctx);   /* PARK the residual frontier: any flow still queued/suspended when the doc tears down gets its cross-session replay recipe emitted (-> _park -> IDB, so the ONE global frontier resumes it next session) AND its handle/COW/DOM/async refs freed — else those rooted objects leak and JS_FreeRuntime asserts gc_obj_list non-empty. Must precede emit_result (the recipes ride g_park into @RESULT). */
     emit_result(ctx);   /* dedup in-engine + emit the ONE @RESULT json (endpoints/sinks/chunks/errors/park/_emit) */
     /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
        its held baseline values return to their slots, and drop the opaque marker. */
