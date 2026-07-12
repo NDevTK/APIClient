@@ -317,10 +317,14 @@ JSValue js_el_querySelectorAll(JSContext *ctx, JSValueConst this_val, int argc, 
     JSValue r = dom_select_all(ctx, self_el ? lxb_dom_interface_node(self_el) : NULL, s, strlen(s));
     JS_FreeCString(ctx, s); return r;
 }
-JSValue js_el_rect(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {   /* getBoundingClientRect stub */
+/* getBoundingClientRect: with no layout engine the box is UNKNOWABLE (a real headless computes it; we can't),
+   so each field is CONCOLIC carrying 0 as the example — a visibility/geometry gate `if(rect.width>0)` FORKS
+   both the visible AND hidden worlds (the branch a bare-concrete 0 would delete), while `'/t/'+rect.top` still
+   yields `/t/0`. Bare-concrete 0 collapsed every geometry branch to one arm. */
+JSValue js_el_rect(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     JSValue o = JS_NewObject(ctx);
     const char *k[] = { "top", "left", "right", "bottom", "width", "height", "x", "y" };
-    for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, o, k[i], JS_NewInt32(ctx, 0));
+    for (int i = 0; i < 8; i++) JS_SetPropertyStr(ctx, o, k[i], js_concolic(ctx, "{rect}", JS_NewInt32(ctx, 0)));
     return o;
 }
 JSValue js_el_textContent(JSContext *ctx, JSValueConst this_val) {   /* .textContent / .innerText getter */
