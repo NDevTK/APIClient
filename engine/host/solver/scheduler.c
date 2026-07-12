@@ -174,6 +174,7 @@ void park_frontier(JSContext *ctx)
         }
         if (f->fs) JS_FlowFree(g_rt, f->fs);
         if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
+        JS_CowBaseFree(ctx, f->cow_base);   /* drop this flow's reference to the shared base chain */
         if (f->dom) dom_buf_free(f->dom, f->dom_n);   /* and its DOM delta */
         JS_FreeValue(ctx, f->handle);
         free(f->dec); free(f->candidate); free(f->vtarget); free(f->drive_src); flow_free_async_refs(ctx, f);    }
@@ -277,7 +278,7 @@ void scheduler_run(JSContext *ctx)
                 g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);
                 for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
                 g_c = f.saved_c; cons_reset();
-                JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
+                JS_CowBaseLoad(f.cow_base); f.cow_base = NULL; JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
                 dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
             }
             JS_SetFlowYieldHook(wfq_yield);
@@ -289,7 +290,7 @@ void scheduler_run(JSContext *ctx)
             g_running = 0; g_cur_fn = JS_UNDEFINED;
             if (st == 1) {                                               /* SUSPENDED: stash accumulated delta + re-queue (interleave with other flows) */
                 g_switches++;
-                JS_CowUnapply(ctx); f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap);
+                JS_CowUnapply(ctx); f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap); f.cow_base = JS_CowBaseTake();
                 dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
                 f.saved_c = g_c; f.val = g_cur_val;
                 if (g_dec_n > f.dec_n) {
@@ -356,7 +357,7 @@ void scheduler_run(JSContext *ctx)
                (JS_CowBufSnapshot at defer time) — load+apply it so the callback sees the handler's writes.
                Mutually exclusive with a candidate flow (which seeds its own boot-inverse delta). */
             else if (f.cow || f.dom) {
-                if (f.cow) { JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
+                if (f.cow || f.cow_base) { JS_CowBaseLoad(f.cow_base); f.cow_base = NULL; JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
                 if (f.dom) { dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0; }
             }
             /* CLOSURE cross-flow: for a candidate flow, drive the handler boot_replay RE-CREATED (candidate
@@ -395,7 +396,7 @@ void scheduler_run(JSContext *ctx)
         /* RESUME: swap in the parked flow's OWN heap COW delta (unapplied while it slept) so it sees its own
            shared-state writes again, not another flow's. Starters begin with an empty delta (globals NULL). */
         if (!is_starter) {
-            JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
+            JS_CowBaseLoad(f.cow_base); f.cow_base = NULL; JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
             dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
         }
 
@@ -428,7 +429,7 @@ void scheduler_run(JSContext *ctx)
                delta buffer; re-queue. On resume it re-applies. Interleaving of heap-writers is now sound. */
             g_switches++;   /* one flow was preempted mid-run -> a real context switch (interleave), MEASURED */
             JS_CowUnapply(ctx);
-            f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap);
+            f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap); f.cow_base = JS_CowBaseTake();
             dom_unapply();
             f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
             f.saved_c = g_c;
@@ -447,7 +448,7 @@ void scheduler_run(JSContext *ctx)
                suspend + record the promise; the pick loop deprioritizes it until settled, then it resumes via
                JS_FlowResumeInject. (An unawaited or already-resolved await never parks — settled inline.) */
             g_switches++;
-            JS_CowUnapply(ctx); f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap);
+            JS_CowUnapply(ctx); f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap); f.cow_base = JS_CowBaseTake();
             dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
             f.saved_c = g_c; f.val = g_cur_val;
             if (g_dec_n > f.dec_n) { signed char *nd = (signed char *)malloc((size_t)(g_dec_n > 0 ? g_dec_n : 1)); if (nd) { for (int i = 0; i < g_dec_n; i++) nd[i] = g_dec[i]; free(f.dec); f.dec = nd; } }
@@ -514,7 +515,7 @@ Flow *reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int 
     f->handle = handle; f->val = val;
     f->dec = dec; f->dec_n = dec_n;
     f->fs = NULL; f->saved_c = 0; f->cpu = 0; f->visits = 0;
-    f->cow = NULL; f->cow_n = 0; f->cow_cap = 0;
+    f->cow = NULL; f->cow_n = 0; f->cow_cap = 0; f->cow_base = NULL;
     f->dom = NULL; f->dom_n = 0; f->dom_cap = 0;
     f->orphan_idx = -1; f->candidate = NULL; f->session = 0; f->vtarget = NULL;
     f->drive_src = NULL;

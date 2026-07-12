@@ -17,7 +17,8 @@ typedef struct {
     double val;          /* accumulated value-of-information (emits raise it) */
     signed char *dec; int dec_n;  /* per-flow decision vector (branch-arm BFS) */
     void *fs;            /* live heap frame if SUSPENDED mid-run (JS_FlowResume), else NULL */
-    void *cow; int cow_n, cow_cap;  /* this flow's HEAP COW DELTA, stashed while parked (unapplied); swapped in on resume */
+    void *cow; int cow_n, cow_cap;  /* this flow's HEAP COW DELTA (mutable HEAD), stashed while parked (unapplied); swapped in on resume */
+    void *cow_base;      /* shared IMMUTABLE base chain below the head (universal heap-switch: a snapshot-forked sibling shares its parent's O(N) delta via this refcounted chain, not a rebuild) */
     void *dom; int dom_n, dom_cap;  /* this flow's DOM COW DELTA, same swap discipline */
     int saved_c;         /* per-flow branch cursor (g_c) snapshot, restored on resume */
     double cpu;          /* back-edge CPU ticks since last emit (WFQ decay; reset to 0 on emit) */
