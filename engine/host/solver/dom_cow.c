@@ -22,6 +22,16 @@ static int g_dom_undo_n = 0, g_dom_undo_cap = 0;
 int g_dom_capture = 0;
 static JSContext *g_cow_ctx = NULL;   /* for the shadow's JSValue dup/free (set at init) */
 
+/* The DOM half of the persistent-versioned-heap: a mutable HEAD (g_dom_undo) layered over a chain of IMMUTABLE,
+   refcounted, structurally-shared base segments (DomSeg), exactly mirroring the JS heap's CowSeg chain. A fork
+   (dom_cow_fork) freezes the head into a segment BOTH the running flow and a snapshot-forked sibling reference
+   (refcount 2), so a continuation/sibling SHARES the parent's O(N) DOM delta in O(1) instead of copying it. NULL
+   until the first fork -> the base-chain walks are no-ops and behaviour is byte-identical to the flat buffer. */
+typedef struct DomSeg { DomUndo *e; int n; struct DomSeg *base; int refcount; } DomSeg;
+static DomSeg *g_dom_base = NULL;
+static void dom_unapply_seg(DomSeg *s);   /* fwd: dom_revert (defined earlier) walks the base chain */
+static void dom_seg_unref(DomSeg *s);
+
 void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
 /* the current taint shadow for (el,name), dup'd (JS_UNDEFINED + *had=0 if none) */
@@ -75,43 +85,83 @@ void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (
         }
     }
     g_dom_undo_n = 0;
+    dom_unapply_seg(g_dom_base);   /* restore baseline through the (now head-reverted) base chain */
+    dom_seg_unref(g_dom_base); g_dom_base = NULL;   /* drop this flow's reference; base freed iff no sibling holds it */
 }
-/* UNAPPLY (flow -> parked): save the flow's DOM value + taint shadow, restore the baseline, so the next flow
-   sees the baseline DOM AND baseline taint. Reverse order. */
+/* per-entry UNAPPLY (flow -> parked): stash the flow's value/taint into cur, restore the baseline. */
+static void dom_unapply_entry(DomUndo *u) {
+    if (u->kind == 0) {
+        size_t vl = 0; const lxb_char_t *c = lxb_dom_element_get_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), &vl);
+        free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = c ? 1 : 0;   /* stash the flow's attr value */
+        if (c) { u->cur = malloc(vl ? vl : 1); CHECK(u->cur, "dom-cow-oom: parked flow attr snapshot malloc failed — apply would lose the flow's DOM write"); memcpy(u->cur, c, vl); u->cur_len = vl; }
+        if (g_cow_ctx) JS_FreeValue(g_cow_ctx, u->sh_cur);
+        u->sh_cur = shadow_snapshot(u->el, u->name, &u->sh_cur_had);   /* stash the flow's taint shadow */
+        if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
+        else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
+        shadow_restore(u->el, u->name, u->sh_old, u->sh_had);   /* restore the baseline taint */
+    } else if (u->kind == 1 && !u->detached) {
+        u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
+        u->next = lxb_dom_interface_node(u->node)->next;
+        lxb_dom_node_remove(u->node); u->detached = 1;
+    }
+}
+/* per-entry APPLY (parked -> flow): restore the flow's value/taint over the baseline. */
+static void dom_apply_entry(DomUndo *u) {
+    if (u->kind == 0) {
+        if (u->cur_had && u->cur) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->cur, u->cur_len);
+        else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
+        shadow_restore(u->el, u->name, u->sh_cur, u->sh_cur_had);   /* restore the flow's taint */
+    } else if (u->kind == 1 && u->detached) {
+        if (u->next) lxb_dom_node_insert_before(u->next, u->node);
+        else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
+        u->detached = 0;
+    }
+}
+/* apply a base chain FORWARD (deepest ancestor first, then up); unapply is the mirror. NULL-safe (flat delta). */
+static void dom_apply_seg(DomSeg *s) { if (!s) return; dom_apply_seg(s->base); for (int i = 0; i < s->n; i++) dom_apply_entry(&s->e[i]); }
+static void dom_unapply_seg(DomSeg *s) { if (!s) return; for (int i = s->n - 1; i >= 0; i--) dom_unapply_entry(&s->e[i]); dom_unapply_seg(s->base); }
+/* drop a chain reference: refcount--, free the segment's entries (parked: old/cur held) when it hits 0, recurse. */
+static void dom_seg_unref(DomSeg *s) {
+    while (s && --s->refcount <= 0) {
+        DomSeg *base = s->base;
+        for (int i = 0; i < s->n; i++) { DomUndo *u = &s->e[i]; free(u->name); free(u->old); free(u->cur);
+            if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); } }
+        free(s->e); free(s);
+        s = base;
+    }
+}
+/* UNAPPLY (flow -> parked): head reverse, then the shared base chain. Restores the baseline DOM+taint. */
 void dom_unapply(void) {
-    for (int i = g_dom_undo_n - 1; i >= 0; i--) {
-        DomUndo *u = &g_dom_undo[i];
-        if (u->kind == 0) {
-            size_t vl = 0; const lxb_char_t *c = lxb_dom_element_get_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), &vl);
-            free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = c ? 1 : 0;   /* stash the flow's attr value */
-            if (c) { u->cur = malloc(vl ? vl : 1); CHECK(u->cur, "dom-cow-oom: parked flow attr snapshot malloc failed — apply would lose the flow's DOM write"); memcpy(u->cur, c, vl); u->cur_len = vl; }
-            if (g_cow_ctx) JS_FreeValue(g_cow_ctx, u->sh_cur);
-            u->sh_cur = shadow_snapshot(u->el, u->name, &u->sh_cur_had);   /* stash the flow's taint shadow */
-            if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
-            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
-            shadow_restore(u->el, u->name, u->sh_old, u->sh_had);   /* restore the baseline taint */
-        } else if (u->kind == 1 && !u->detached) {
-            u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
-            u->next = lxb_dom_interface_node(u->node)->next;
-            lxb_dom_node_remove(u->node); u->detached = 1;
-        }
-    }
+    for (int i = g_dom_undo_n - 1; i >= 0; i--) dom_unapply_entry(&g_dom_undo[i]);
+    dom_unapply_seg(g_dom_base);   /* NULL until a fork shares a base -> no-op (flat behavior) */
 }
-/* APPLY (parked -> flow): restore the flow's DOM value + taint shadow over the baseline. Forward order. */
+/* APPLY (parked -> flow): base chain forward (deepest first), then the head on top. */
 void dom_apply(void) {
-    for (int i = 0; i < g_dom_undo_n; i++) {
-        DomUndo *u = &g_dom_undo[i];
-        if (u->kind == 0) {
-            if (u->cur_had && u->cur) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->cur, u->cur_len);
-            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
-            shadow_restore(u->el, u->name, u->sh_cur, u->sh_cur_had);   /* restore the flow's taint */
-        } else if (u->kind == 1 && u->detached) {
-            if (u->next) lxb_dom_node_insert_before(u->next, u->node);
-            else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
-            u->detached = 0;
-        }
-    }
+    dom_apply_seg(g_dom_base);
+    for (int i = 0; i < g_dom_undo_n; i++) dom_apply_entry(&g_dom_undo[i]);
 }
+/* FORK the DOM delta: freeze the running flow's HEAD into a shared immutable base segment that BOTH the running
+   flow and a snapshot-forked sibling reference (refcount 2) — the sibling SHARES the parent's O(N) DOM delta
+   instead of copying it. Head is applied, so UNAPPLY it to parked state (values -> cur, DOM -> baseline), freeze
+   that, then RE-APPLY so the running flow continues byte-identically. Capture is suspended across the round-trip
+   (defensive symmetry with the heap fork — the internal set/remove goes straight to Lexbor, not the capturing
+   host-edge, so no re-capture, but the guard documents+enforces the invariant). Returns the shared base. */
+void *dom_cow_fork(void) {
+    int sv = g_dom_capture; g_dom_capture = 0;
+    for (int i = g_dom_undo_n - 1; i >= 0; i--) dom_unapply_entry(&g_dom_undo[i]);
+    DomSeg *seg = malloc(sizeof(DomSeg));
+    CHECK(seg, "dom-cow-oom: fork segment alloc failed — a shared DOM delta would be corrupted");
+    seg->e = g_dom_undo; seg->n = g_dom_undo_n; seg->base = g_dom_base; seg->refcount = 2;   /* running flow + sibling */
+    g_dom_undo = NULL; g_dom_undo_n = 0; g_dom_undo_cap = 0;   /* fresh empty head for the running flow */
+    g_dom_base = seg;
+    for (int i = 0; i < seg->n; i++) dom_apply_entry(&seg->e[i]);   /* re-apply head -> running flow continues */
+    g_dom_capture = sv;
+    return seg;
+}
+/* Take / install the shared BASE chain alongside the head (a flow's full DOM delta is head + base chain). */
+void *dom_base_take(void) { void *b = g_dom_base; g_dom_base = NULL; return b; }
+void dom_base_load(void *base) { g_dom_base = (DomSeg *)base; }
+void dom_base_free(void *base) { if (base) dom_seg_unref((DomSeg *)base); }
 void dom_buf_free(void *buf, int n) {   /* free a parked DOM delta buffer (its nodes stay detached, owned by the doc) */
     DomUndo *b = (DomUndo *)buf;
     for (int i = 0; i < n; i++) {

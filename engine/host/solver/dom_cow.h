@@ -36,4 +36,12 @@ void dom_buf_load(void *buf, int n, int cap);  /* attach a parked buffer as the 
 void *dom_buf_snapshot(int *out_n, int *out_cap);  /* copy the applied ATTRIBUTE delta for a deferred continuation flow to inherit */
 void dom_buf_free(void *buf, int n);           /* free a parked buffer (its nodes stay owned by the doc) */
 
+/* Persistent-versioned-DOM fork (mirrors the heap's JS_CowFork): freeze the running flow's DOM head into a
+   shared immutable base segment (refcount 2) a snapshot-forked sibling references in O(1). The base chain rides
+   alongside the head exactly like the heap's cow_base; the scheduler stores it on the Flow as void*. */
+void *dom_cow_fork(void);       /* freeze head -> shared base; returns it (the sibling stores the 2nd reference) */
+void *dom_base_take(void);      /* detach the shared base chain (park it on the flow) */
+void dom_base_load(void *base); /* install a parked flow's base chain (before dom_apply) */
+void dom_base_free(void *base); /* drop a flow's reference to a base chain (free iff last) */
+
 #endif
