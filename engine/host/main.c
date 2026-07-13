@@ -39,6 +39,7 @@
 #include "core/dom/handler_registry.h"   /* registered event listeners (addEventListener) the orphan driver force-fires, its own TU */
 #include "solver/dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
 #include "solver/attr_shadow.h"  /* DOM attribute taint side-map ((el,name)->opaque), its own TU */
+#include "solver/concolic_taint.h"  /* cross-flow CONCOLIC-taint set (the HEAP taint-shadow, twin of attr_shadow), its own TU */
 #include "core/html/forms/forms.h"        /* HTML form submission -> @H endpoint, its own TU */
 #include "core/dom/classlist.h"    /* element.classList, its own TU */
 #include "core/html/docwrite.h"     /* document.write -> @S sink + script loader, its own TU */
@@ -485,7 +486,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_orphan_n = 0; g_dom_capture = 0;
     reply_registry_free();   /* fresh session: drop pending reply fetches */
     chunk_loader_free();     /* + pending chunks and the per-session fetched-chunk cache (a new visit re-fetches the current bytes) */
-    JS_OptaintReset(ctx);   /* clear cross-flow opaque-taint set from any prior page analysis */
+    concolic_taint_init(ctx);   /* install the cross-flow concolic-taint record hook (idempotent) */
+    concolic_taint_reset(ctx);  /* clear the set from any prior page analysis */
     tt_reset();             /* clear observed Trusted-Types policy state from the prior document */
     /* ENDPOINT/@S/etc. accumulators + the in-engine dedup fn — the engine builds the whole structured
        result and emits ONE @RESULT json at finalize (the host JSON.parses it; no host-side parse/identity). */
@@ -723,7 +725,7 @@ KEEP void qjs_teardown(void)
        its held baseline values return to their slots, and drop the opaque marker. */
     JS_CowSetActive(0);
     JS_CowRevert(ctx);
-    JS_OptaintReset(ctx);   /* release the cross-flow opaque-taint set: it js_dup()s every tainted object and is
+    concolic_taint_reset(ctx);   /* release the cross-flow concolic-taint set: it dups every tainted object and is
                                GLOBAL (only reset at the NEXT qjs_begin), so a run that ends in teardown without a
                                following analysis leaks every tainted object (the reply objects) and JS_FreeRuntime
                                asserts gc_obj_list non-empty. Reset here so the final run frees cleanly too. */
