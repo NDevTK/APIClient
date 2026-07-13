@@ -1,6 +1,7 @@
 /* CHUNK LOADER — see chunk_loader.h. The pending/done registries + the fetch-and-evaluate of a lazy chunk,
  * extracted from main.c's qjs_provide so the scheduler entry holds no loader control flow. */
 #include "core/loader/chunk_loader.h"
+#include "solver/heap_cow.h"
 #include "core/loader/module_loader.h"      /* modsrc_put / dynimport_link / pendimport_resolve / is_moddep */
 #include "core/html/html_script_runner.h"   /* boot_exec_one / dom_script_kind (SK_*) / dom_boot_parked_is / dom_boot_resume */
 #include "core/html/html_script_element.h"  /* script_load_release — a loaded chunk makes its <script> load handlers eligible */
@@ -105,7 +106,7 @@ static void provide_boot_active(JSContext *ctx, const char *url, const char *bod
    0), matching how boot treats the DOM (heap in the delta; DOM boot stays baseline). Route by the RECORDED kind,
    never by JS_DetectModule (which mis-classifies a plain classic script as a module). */
 static void provide_baseline(JSContext *ctx, const char *url, const char *body) {
-    JS_CowRevert(ctx);                                   /* to baseline (parked flows have empty delta); g_cow_undo empty for the chunk's fresh captures */
+    heap_cow_revert(ctx);                                   /* to baseline (parked flows have empty delta); g_cow_undo empty for the chunk's fresh captures */
     int dsv = g_dom_capture; g_dom_capture = 0; JS_SetFlowLocalMark(0);   /* chunk heap objects are BASELINE (shared); DOM writes baseline like boot */
     modsrc_put(url, body, strlen(body));                 /* available to the module loader by URL */
     if (is_moddep(url)) {

@@ -38,6 +38,7 @@
 #include "core/dom/dom_select.h"   /* CSS selector engine (querySelector/All, matches) over the Lexbor DOM, its own TU */
 #include "core/dom/handler_registry.h"   /* registered event listeners (addEventListener) the orphan driver force-fires, its own TU */
 #include "solver/dom_cow.h"      /* per-flow DOM COW delta (record + apply/unapply/revert + park buffer), its own TU */
+#include "solver/heap_cow.h"      /* per-flow HEAP COW delta (verb-API + heap_cow_init) */
 #include "solver/attr_shadow.h"  /* DOM attribute taint side-map ((el,name)->opaque), its own TU */
 #include "solver/concolic_taint.h"  /* cross-flow CONCOLIC-taint set (the HEAP taint-shadow, twin of attr_shadow), its own TU */
 #include "core/html/forms/forms.h"        /* HTML form submission -> @H endpoint, its own TU */
@@ -370,7 +371,7 @@ lxb_html_document_t *g_dom = NULL;   /* the live parsed document (non-static: do
    DOM mutations (attribute set, node insert) by a FORCED flow must not leak to sibling flows — the
    same invariant as the JS-heap COW. A host-side undo log records the inverse of each mutation while
    capture is active (during flow exploration, NOT boot which builds the baseline); dom_revert replays
-   it to restore the post-boot DOM baseline, called alongside JS_CowRevert before each starter. */
+   it to restore the post-boot DOM baseline, called alongside heap_cow_revert before each starter. */
 /* PER-FLOW DOM COW DELTA (mirrors the JS heap delta): `old` = baseline value/absence (kind 0 attr) or the
    inserted node's detach position (kind 1); `cur` = the flow's value, held while parked. Swapped on
    context-switch so a DOM writer interleaves like a heap writer. */
@@ -445,7 +446,7 @@ static int g_rc = 0;
 void boot_complete(JSContext *ctx) {   /* non-static: the chunk loader completes a boot parked on a sync external */
     g_initial_boot = 0; g_in_boot_flow = 0; g_running = 0; g_cur_flow = NULL;
     JS_CowSetActive(0);
-    g_boot_delta = JS_CowBufTake(&g_boot_delta_n, &g_boot_delta_cap);
+    g_boot_delta = heap_cow_buf_take(&g_boot_delta_n, &g_boot_delta_cap);
     JS_SetFlowLocalMark(1);
     g_boot_active = 0;
     seed_frontier(ctx, g_pending_recipes);
@@ -486,6 +487,7 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_orphan_n = 0; g_dom_capture = 0;
     reply_registry_free();   /* fresh session: drop pending reply fetches */
     chunk_loader_free();     /* + pending chunks and the per-session fetched-chunk cache (a new visit re-fetches the current bytes) */
+    heap_cow_init(ctx);         /* install the HEAP COW capture hooks (component owns the delta; idempotent) */
     concolic_taint_init(ctx);   /* install the cross-flow concolic-taint record hook (idempotent) */
     concolic_taint_reset(ctx);  /* clear the set from any prior page analysis */
     tt_reset();             /* clear observed Trusted-Types policy state from the prior document */
@@ -724,7 +726,7 @@ KEEP void qjs_teardown(void)
     /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
        its held baseline values return to their slots, and drop the opaque marker. */
     JS_CowSetActive(0);
-    JS_CowRevert(ctx);
+    heap_cow_revert(ctx);
     concolic_taint_reset(ctx);   /* release the cross-flow concolic-taint set: it dups every tainted object and is
                                GLOBAL (only reset at the NEXT qjs_begin), so a run that ends in teardown without a
                                following analysis leaks every tainted object (the reply objects) and JS_FreeRuntime
@@ -741,7 +743,7 @@ KEEP void qjs_teardown(void)
     pendreply_free(ctx);       /* free the reply delivery-park table (reply.c) */
     reply_registry_free();     /* free the reply fetch registry (reply_registry.c) */
     chunk_loader_free();       /* free the chunk pending/done registries (chunk_loader.c) */
-    if (g_boot_delta) JS_CowBufFree(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
+    if (g_boot_delta) heap_cow_buf_free(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
     g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
     attr_shadow_free(ctx);
     handlers_free(ctx);   /* g_handlers + candidate-closure replay handlers + counts -> handler_registry.c */

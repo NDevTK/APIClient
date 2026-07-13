@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "solver/scheduler.h"       /* reg_add + Flow + g_dec/g_c/g_candidate/g_in_session/g_boot_replay/g_in_boot_flow + g_orphan_buf/g_msg_event */
+#include "solver/heap_cow.h"        /* per-flow HEAP COW verb-API: heap_cow_seed_boot_inverse / heap_cow_revert etc. */
 #include "solver/boot_scripts.h"    /* boot_scripts_run — re-run the page's inline scripts */
 #include "core/dom/handler_registry.h"   /* g_handlers/is_msg_handler/g_replay_handlers/replay_handlers_clear */
 #include "core/dom/events/event.h"  /* js_event_ctor — a driven non-message handler gets a real DOM Event */
@@ -43,7 +44,7 @@ void *g_boot_delta = NULL; int g_boot_delta_n = 0, g_boot_delta_cap = 0;
    chunk's globals extend the ONE canonical baseline exactly like boot's own — the chunk loader calls this after
    evaluating a post-boot chunk COW-active at mark 0 (see chunk_loader.c). Owned here because g_boot_delta is. */
 void boot_delta_merge_active(JSContext *ctx) {
-    g_boot_delta = JS_CowBootDeltaMerge(ctx, g_boot_delta, &g_boot_delta_n, &g_boot_delta_cap);
+    g_boot_delta = heap_cow_boot_delta_merge(ctx, g_boot_delta, &g_boot_delta_n, &g_boot_delta_cap);
 }
 void boot_replay_candidate(JSContext *ctx) {
     /* Seed the RUNNING candidate flow's OWN delta with the boot INVERSE (heap -> pre-boot, RECORDED so a
@@ -51,7 +52,7 @@ void boot_replay_candidate(JSContext *ctx) {
        of the SAME delta. The whole boot-undo + candidate-replay is ONE preemptible flow delta — no host-side
        bracket, so a candidate flow yields per-opcode like any other. g_boot_delta is only READ (canonical
        post-boot baseline for non-candidate flows), never unapplied on the shared heap. */
-    if (g_boot_delta) JS_CowSeedBootInverse(ctx, g_boot_delta, g_boot_delta_n);
+    if (g_boot_delta) heap_cow_seed_boot_inverse(ctx, g_boot_delta, g_boot_delta_n);
     boot_replay(ctx);   /* re-run boot under the concrete candidate (guards re-fire), captured in the candidate's own delta */
 }
 /* CLOSURE cross-flow: an orphan handler captured at seed time (f.handle) closes over the BASELINE source;
