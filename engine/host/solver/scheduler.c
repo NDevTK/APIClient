@@ -37,6 +37,10 @@ double g_quantum_start = 0.0; unsigned g_quantum_sample = 0; long g_switches = 0
 double g_max_parked = -1e300; int g_resume_mode = 0;
 int g_initial_boot = 0;   /* the page's FIRST boot runs as a forking boot flow (all-false PRIMARY -> the canonical logged-out g_boot_delta; each opaque gate forks a TRUE sibling boot flow) — the ONE boot system, replacing the deleted monolithic non-forking pass + its separate reg_add_boot re-run. */
 JSValue g_cur_fn = JS_UNDEFINED; signed char *g_dec = NULL; int g_dec_cap = 0, g_dec_n = 0, g_c = 0;
+/* SNAPSHOT-FORK hand-off: branch_decide stashes the FALSE sibling's decision vector here + sets JS_SetForkPending;
+   the st==1 suspend handler consumes it — snapshots the just-suspended frame for the sibling, which CONTINUES
+   from the snapshot with this vector (the opposite arm). Replaces the orphan replay re-run. */
+static signed char *g_fork_sib_dec = NULL; static int g_fork_sib_dec_n = 0;
 
 static int quantum_expired(void) { return g_made_progress && (emscripten_get_now() - g_quantum_start) > QUANTUM_MS; }
 
@@ -443,6 +447,27 @@ void scheduler_run(JSContext *ctx)
                 for (int i = 0; i < g_dec_n && f.dec; i++) f.dec[i] = g_dec[i];
             }
             f.dec_n = g_dec_n;
+            if (JS_ForkPending()) {
+                /* SNAPSHOT-FORK: this flow suspended AT an opaque gate (branch_decide froze its heap+DOM deltas
+                   into shared bases + set fork-pending). Build the FALSE sibling: it SHARES the frozen bases
+                   (refcount 2 from the fork) and CONTINUES from a SNAPSHOT of this frame — never a re-run from
+                   boot, so the cross-flow shared state its path depends on is preserved. Both resume at the gate
+                   and replay their recorded arm (primary TRUE via f.dec, sibling FALSE via g_fork_sib_dec). */
+                JS_SetForkPending(0);
+                DCHECK(JS_FlowSnapshottable(f.fs), "snapshot-fork: frame owns var_refs (inner closure) — deep-frame snapshot not built yet; must NOT silently fall back to replay");
+                Flow sib = f;                                  /* inherit scalars (val, saved_c, orphan_idx, visits, cpu) */
+                sib.fs = JS_FlowSnapshot(ctx, f.fs);           /* the sibling's OWN frame copy — continue from snapshot */
+                CHECK(sib.fs, "snapshot-fork: frame snapshot alloc failed — OOM is a physical floor");
+                sib.cow = NULL; sib.cow_n = sib.cow_cap = 0; sib.cow_base = f.cow_base;   /* SHARE the heap base (refcount 2) */
+                sib.dom = NULL; sib.dom_n = sib.dom_cap = 0; sib.dom_base = f.dom_base;   /* SHARE the DOM base */
+                sib.dec = g_fork_sib_dec; sib.dec_n = g_fork_sib_dec_n;   /* the FALSE arm at the fork point */
+                g_fork_sib_dec = NULL; g_fork_sib_dec_n = 0;
+                sib.handle = JS_DupValue(ctx, f.handle);
+                sib.candidate = NULL; sib.vtarget = NULL; sib.drive_src = NULL;   /* owned strings not shared with an orphan sibling */
+                sib.aresolve = JS_UNDEFINED; sib.areject = JS_UNDEFINED; sib.await_promise = JS_UNDEFINED;
+                sib.rthis = JS_UNDEFINED; sib.rargs = NULL; sib.rargc = 0;
+                reg_readd(ctx, sib);
+            }
             g_cur_flow = NULL;
             reg_readd(ctx, f);
         } else if (st == 2) {
@@ -596,16 +621,29 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
         g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++;
         return 0;
     }
-    signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* both arms feasible: fork FALSE sibling, take TRUE */
-    if (sib) {
-        for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
-        sib[g_c] = 0;
-        if (g_in_session) reg_add_session(ctx, sib, g_c + 1);      /* an exploratory session forks ANOTHER session (re-fire handlers with the sibling vector) */
-        else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);  /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
-        else if (g_cur_flow && g_cur_flow->is_async)               /* an ASYNC flow: re-run via the recipe (func+args) so the awaits — recorded in this SAME g_dec vector — replay too (re-enters catches) */
-            spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1);
-        else reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1)->orphan_idx = g_cur_orphan_idx;   /* sibling = same function (same locator), different decisions */
+    signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* both arms feasible: FALSE sibling, take TRUE */
+    CHECK(sib, "branch_fork_oom: cannot record the sibling arm — dropping it truncates BFS exploration; OOM is a physical floor");
+    for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
+    sib[g_c] = 0;
+    /* SNAPSHOT-FORK (replaces the orphan replay re-run): an ORPHAN flow at the flow-base activation freezes its
+       heap+DOM deltas into shared bases and SIGNALS a suspend — the scheduler snapshots the frame for the FALSE
+       sibling, which CONTINUES from the snapshot (never re-runs from boot, so the cross-flow shared state its
+       path depends on is preserved). Session/boot/async flows re-fork by RE-EXECUTION (they model a re-fired
+       handler sequence / a re-run boot / replayed awaits — not a single-function replay); an orphan gate in a
+       nested C-reentry (not the flow base, so the interpreter cannot unwind to suspend here) also re-runs. */
+    if (!g_in_session && !g_in_boot_flow && !(g_cur_flow && g_cur_flow->is_async) && JS_AtFlowBase()) {
+        heap_cow_fork(ctx); dom_cow_fork();            /* freeze this flow's heap+DOM deltas into shared bases (refcount 2: primary + sibling) */
+        g_fork_sib_dec = sib; g_fork_sib_dec_n = g_c + 1;   /* the scheduler builds the sibling from this vector + the frame snapshot */
+        JS_SetForkPending(1);                          /* OP_if rewinds to the gate opcode + suspends; the scheduler snapshots the frame */
+        cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE, has ? jk : NULL);
+        g_dec[g_c] = 1; g_dec_n = g_c + 1;             /* PRIMARY = TRUE; do NOT g_c++ — OP_if rewinds and re-runs the gate, replaying this recorded arm */
+        return 1;                                      /* return value is IGNORED (OP_if rewinds on fork-pending) */
     }
+    if (g_in_session) reg_add_session(ctx, sib, g_c + 1);      /* an exploratory session forks ANOTHER session (re-fire handlers with the sibling vector) */
+    else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);  /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
+    else if (g_cur_flow && g_cur_flow->is_async)               /* an ASYNC flow: re-run via the recipe (func+args) so the awaits — recorded in this SAME g_dec vector — replay too */
+        spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1);
+    else reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1)->orphan_idx = g_cur_orphan_idx;   /* C-reentry orphan: re-run fallback (cannot suspend to snapshot) */
     cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? true_op : OPCMP_NONE, has ? jk : NULL);
     g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;
     return 1;
