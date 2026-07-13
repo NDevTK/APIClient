@@ -353,10 +353,10 @@ void scheduler_run(JSContext *ctx)
                pre-boot so a guarded init re-fires) then replays boot under the candidate — all in the flow's
                OWN delta, so a suspend/revert restores the post-boot baseline with no host-side bracket. */
             if (f.candidate) boot_replay_candidate(ctx);
-            /* CONTINUATION starter: a callback deferred from a handler carries an INHERITED property delta
-               (JS_CowBufSnapshot at defer time) — load+apply it so the callback sees the handler's writes.
-               Mutually exclusive with a candidate flow (which seeds its own boot-inverse delta). */
-            else if (f.cow || f.dom) {
+            /* CONTINUATION starter: a callback deferred from a handler carries an INHERITED delta — a shared
+               immutable base SEGMENT (JS_CowFork at defer time) for the heap, plus a copied DOM buf — so it
+               sees the handler's writes. Load+apply it. Mutually exclusive with a candidate flow (own boot-inverse). */
+            else if (f.cow || f.cow_base || f.dom) {
                 if (f.cow || f.cow_base) { JS_CowBaseLoad(f.cow_base); f.cow_base = NULL; JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
                 if (f.dom) { dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0; }
             }
@@ -630,9 +630,16 @@ void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
        flow has no reg-entry), so nothing is snapshotted here: boot's writes commit to the post-boot baseline,
        which a boot-deferred flow already sees. */
     if (g_running && g_cur_flow) {
-        int n = 0, cap = 0; void *snap = JS_CowBufSnapshot(ctx, &n, &cap);
-        if (snap) { f->cow = snap; f->cow_n = n; f->cow_cap = cap; }
-        int dn = 0, dcap = 0; void *dsnap = dom_buf_snapshot(&dn, &dcap);   /* + attribute writes (el.dataset.x = tainted) */
+        /* SHARE the delta, don't COPY it — the persistent-versioned-heap BRANCH: JS_CowFork freezes the running
+           flow's current heap delta into an immutable, refcounted base SEGMENT that this continuation references
+           in O(1) (not the O(delta) JS_CowBufSnapshot copy it replaces). The parent continues over a fresh empty
+           head; the callback sees the defer-point state (the shared base) plus its own later writes. Superior to
+           the copy in two ways: O(1) instead of O(delta), and it carries the closure-var (slot) writes the copy
+           dropped as pointer-fragile — so a callback reading a closure var the handler wrote before deferring
+           now sees it. The parent keeps its own reference to the same segment (g_cow_base), released on its
+           suspend/complete; refcount 2 balances parent + this sibling. */
+        f->cow_base = JS_CowFork(ctx); f->cow = NULL; f->cow_n = f->cow_cap = 0;
+        int dn = 0, dcap = 0; void *dsnap = dom_buf_snapshot(&dn, &dcap);   /* DOM delta has no fork primitive yet — copy (+ attribute writes el.dataset.x = tainted) */
         if (dsnap) { f->dom = dsnap; f->dom_n = dn; f->dom_cap = dcap; }
     }
 }
