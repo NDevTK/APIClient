@@ -19,7 +19,8 @@ typedef struct {
     void *fs;            /* live heap frame if SUSPENDED mid-run (JS_FlowResume), else NULL */
     void *cow; int cow_n, cow_cap;  /* this flow's HEAP COW DELTA (mutable HEAD), stashed while parked (unapplied); swapped in on resume */
     void *cow_base;      /* shared IMMUTABLE base chain below the head (universal heap-switch: a snapshot-forked sibling shares its parent's O(N) delta via this refcounted chain, not a rebuild) */
-    void *dom; int dom_n, dom_cap;  /* this flow's DOM COW DELTA, same swap discipline */
+    void *dom; int dom_n, dom_cap;  /* this flow's DOM COW DELTA (mutable HEAD), same swap discipline */
+    void *dom_base;      /* shared IMMUTABLE DOM base chain below the head (dom_cow_fork: a snapshot-forked sibling shares its parent's O(N) DOM delta via this refcounted chain — the DOM twin of cow_base) */
     int saved_c;         /* per-flow branch cursor (g_c) snapshot, restored on resume */
     double cpu;          /* back-edge CPU ticks since last emit (WFQ decay; reset to 0 on emit) */
     int visits;          /* times scheduled (UCB/fairness explore term) */

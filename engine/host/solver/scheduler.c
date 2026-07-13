@@ -176,6 +176,7 @@ void park_frontier(JSContext *ctx)
         if (f->cow) JS_CowBufFree(ctx, f->cow, f->cow_n);   /* free the parked flow's stashed heap COW delta */
         JS_CowBaseFree(ctx, f->cow_base);   /* drop this flow's reference to the shared base chain */
         if (f->dom) dom_buf_free(f->dom, f->dom_n);   /* and its DOM delta */
+        dom_base_free(f->dom_base);                   /* drop this flow's reference to the shared DOM base chain */
         JS_FreeValue(ctx, f->handle);
         free(f->dec); free(f->candidate); free(f->vtarget); free(f->drive_src); flow_free_async_refs(ctx, f);    }
     g_reg_n = 0;
@@ -279,7 +280,7 @@ void scheduler_run(JSContext *ctx)
                 for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
                 g_c = f.saved_c; cons_reset();
                 JS_CowBaseLoad(f.cow_base); f.cow_base = NULL; JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
-                dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
+                dom_base_load(f.dom_base); f.dom_base = NULL; dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
             }
             JS_SetFlowYieldHook(wfq_yield);
             JSValue out = JS_UNDEFINED;
@@ -291,7 +292,7 @@ void scheduler_run(JSContext *ctx)
             if (st == 1) {                                               /* SUSPENDED: stash accumulated delta + re-queue (interleave with other flows) */
                 g_switches++;
                 JS_CowUnapply(ctx); f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap); f.cow_base = JS_CowBaseTake();
-                dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
+                dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap); f.dom_base = dom_base_take();
                 f.saved_c = g_c; f.val = g_cur_val;
                 if (g_dec_n > f.dec_n) {
                     signed char *nd = (signed char *)malloc((size_t)(g_dec_n > 0 ? g_dec_n : 1));
@@ -354,11 +355,11 @@ void scheduler_run(JSContext *ctx)
                OWN delta, so a suspend/revert restores the post-boot baseline with no host-side bracket. */
             if (f.candidate) boot_replay_candidate(ctx);
             /* CONTINUATION starter: a callback deferred from a handler carries an INHERITED delta — a shared
-               immutable base SEGMENT (JS_CowFork at defer time) for the heap, plus a copied DOM buf — so it
-               sees the handler's writes. Load+apply it. Mutually exclusive with a candidate flow (own boot-inverse). */
-            else if (f.cow || f.cow_base || f.dom) {
+               immutable base SEGMENT (JS_CowFork/dom_cow_fork at defer time) for BOTH heap and DOM — so it sees
+               the handler's writes. Load+apply it. Mutually exclusive with a candidate flow (own boot-inverse). */
+            else if (f.cow || f.cow_base || f.dom || f.dom_base) {
                 if (f.cow || f.cow_base) { JS_CowBaseLoad(f.cow_base); f.cow_base = NULL; JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
-                if (f.dom) { dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0; }
+                if (f.dom || f.dom_base) { dom_base_load(f.dom_base); f.dom_base = NULL; dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0; }
             }
             /* CLOSURE cross-flow: for a candidate flow, drive the handler boot_replay RE-CREATED (candidate
                closure), located by source identity — else the ORIGINAL f.handle (baseline closure) is driven
@@ -397,7 +398,7 @@ void scheduler_run(JSContext *ctx)
            shared-state writes again, not another flow's. Starters begin with an empty delta (globals NULL). */
         if (!is_starter) {
             JS_CowBaseLoad(f.cow_base); f.cow_base = NULL; JS_CowBufLoad(f.cow, f.cow_n, f.cow_cap); JS_CowApply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
-            dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
+            dom_base_load(f.dom_base); f.dom_base = NULL; dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
         }
 
         /* EVERY sync flow is preemptible mid heap-write (per-flow COW delta), CANDIDATE flows included: the
@@ -431,7 +432,7 @@ void scheduler_run(JSContext *ctx)
             JS_CowUnapply(ctx);
             f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap); f.cow_base = JS_CowBaseTake();
             dom_unapply();
-            f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
+            f.dom = dom_buf_take(&f.dom_n, &f.dom_cap); f.dom_base = dom_base_take();
             f.saved_c = g_c;
             f.val = g_cur_val;
             if (g_dec_n > f.dec_n) {                /* grew (new branch decisions taken this flow-run) */
@@ -449,7 +450,7 @@ void scheduler_run(JSContext *ctx)
                JS_FlowResumeInject. (An unawaited or already-resolved await never parks — settled inline.) */
             g_switches++;
             JS_CowUnapply(ctx); f.cow = JS_CowBufTake(&f.cow_n, &f.cow_cap); f.cow_base = JS_CowBaseTake();
-            dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap);
+            dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap); f.dom_base = dom_base_take();
             f.saved_c = g_c; f.val = g_cur_val;
             if (g_dec_n > f.dec_n) { signed char *nd = (signed char *)malloc((size_t)(g_dec_n > 0 ? g_dec_n : 1)); if (nd) { for (int i = 0; i < g_dec_n; i++) nd[i] = g_dec[i]; free(f.dec); f.dec = nd; } }
             else { for (int i = 0; i < g_dec_n && f.dec; i++) f.dec[i] = g_dec[i]; }
@@ -516,7 +517,7 @@ Flow *reg_add(JSContext *ctx, JSValue handle, double val, signed char *dec, int 
     f->dec = dec; f->dec_n = dec_n;
     f->fs = NULL; f->saved_c = 0; f->cpu = 0; f->visits = 0;
     f->cow = NULL; f->cow_n = 0; f->cow_cap = 0; f->cow_base = NULL;
-    f->dom = NULL; f->dom_n = 0; f->dom_cap = 0;
+    f->dom = NULL; f->dom_n = 0; f->dom_cap = 0; f->dom_base = NULL;
     f->orphan_idx = -1; f->candidate = NULL; f->session = 0; f->vtarget = NULL;
     f->drive_src = NULL;
     f->is_boot = 0;
@@ -639,8 +640,7 @@ void flow_defer_callback(JSContext *ctx, JSValueConst cb) {
            now sees it. The parent keeps its own reference to the same segment (g_cow_base), released on its
            suspend/complete; refcount 2 balances parent + this sibling. */
         f->cow_base = JS_CowFork(ctx); f->cow = NULL; f->cow_n = f->cow_cap = 0;
-        int dn = 0, dcap = 0; void *dsnap = dom_buf_snapshot(&dn, &dcap);   /* DOM delta has no fork primitive yet — copy (+ attribute writes el.dataset.x = tainted) */
-        if (dsnap) { f->dom = dsnap; f->dom_n = dn; f->dom_cap = dcap; }
+        f->dom_base = dom_cow_fork(); f->dom = NULL; f->dom_n = f->dom_cap = 0;   /* SHARE the DOM delta too (O(1) base segment), symmetric to the heap — replaces the O(delta) dom_buf_snapshot copy */
     }
 }
 
