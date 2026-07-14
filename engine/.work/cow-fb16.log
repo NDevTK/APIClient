@@ -1,0 +1,6 @@
+started. chrome pid=23136 port=9337 extId=pfncpmcmkgcohblmpllhofkdpjjbmngl
+navigated to http://localhost:8765/sdk_firebase.html
+webworker: ABORTDIAG: Aborted(Assertion failed: gc_decref_underflow child[gt=2 cid=-1 ln=-1 trk=1 @ca2be0] parent[gt=0 cid=1 trk=1 @f68e80] rc=0, at: quickjs.c,9430,gc_decref_child)
+=== ABORTDIAG (trk flags) ===
+      4 child[gt=2 cid=-1 ln=-1 trk=1 @ca2be0] parent[gt=0 cid=1 trk=1 @f68e80]
+endpoints: 

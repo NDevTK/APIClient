@@ -1,0 +1,10 @@
+[build] emcc 6 sources -> engine/host/out/qjs.mjs
+D:\APIClient\engine\qjs\quickjs.c:9099:38: error: call to undeclared function 'realloc_is_forbidden'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+ 9099 |         JSCowUndo *nu = (JSCowUndo *)realloc(g_cow_undo, (size_t)nc * sizeof(JSCowUndo));
+      |                                      ^
+D:\APIClient\engine\qjs\quickjs.c:2455:22: note: expanded from macro 'realloc'
+ 2455 | #define realloc(p,s) realloc_is_forbidden(p,s)
+      |                      ^
+1 error generated.
+emcc: error: ''D:/APIClient/engine/.work/emsdk/upstream/bin\clang.exe' -target wasm32-unknown-emscripten -fignore-exceptions -mllvm -combiner-global-alias-analysis=false -mllvm -enable-emscripten-sjlj -mllvm -disable-lsr '--sysroot=D:\APIClient\engine\.work\emsdk\upstream\emscripten\cache\sysroot' -Xclang '-iwithsysroot/include\fakesdl' -Xclang '-iwithsysroot/include\compat' '-ID:\APIClient\engine\qjs' -O1 -w -D_GNU_SOURCE -c 'D:\APIClient\engine\qjs\quickjs.c' -o 'C:\Users\lewis\AppData\Local\Temp\emscripten_temp_0v3f27yb\quickjs.o'' failed (returned 1)
+[build] FAILED rc=1

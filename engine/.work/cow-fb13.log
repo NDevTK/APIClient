@@ -1,0 +1,9 @@
+started. chrome pid=2080 port=9337 extId=ngeokdlcjlfpemhjhlchekpanlgejgje
+navigated to http://localhost:8765/sdk_firebase.html
+=== ABORT ASSERT ===
+(no analysis worker; no offscreen page)
+=== COW engaged? ===
+(no analysis worker; no offscreen page)
+(no console output captured)
+endpoints: 
+wasm aborted: 0

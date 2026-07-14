@@ -1,0 +1,7 @@
+[build] emcc 6 sources -> engine/host/out/qjs.mjs
+D:\APIClient\engine\host\main.c:119:44: error: use of undeclared identifier 'g_opaque'
+  119 | { return js_resolved(ctx, JS_DupValue(ctx, g_opaque)); }
+      |                                            ^~~~~~~~
+1 error generated.
+emcc: error: ''D:/APIClient/engine/.work/emsdk/upstream/bin\clang.exe' -target wasm32-unknown-emscripten -fignore-exceptions -mllvm -combiner-global-alias-analysis=false -mllvm -enable-emscripten-sjlj -mllvm -disable-lsr '--sysroot=D:\APIClient\engine\.work\emsdk\upstream\emscripten\cache\sysroot' -Xclang '-iwithsysroot/include\fakesdl' -Xclang '-iwithsysroot/include\compat' '-ID:\APIClient\engine\qjs' -O1 -w -D_GNU_SOURCE -c 'D:\APIClient\engine\host\main.c' -o 'C:\Users\lewis\AppData\Local\Temp\emscripten_temp_4agt0d5o\main.o'' failed (returned 1)
+[build] FAILED rc=1

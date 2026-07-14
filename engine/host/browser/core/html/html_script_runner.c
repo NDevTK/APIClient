@@ -13,6 +13,7 @@
 #include "platform/url.h"                   /* has_hole — an opaque-hole src isn't a concrete fetch */
 #include "solver/boot_scripts.h"             /* boot_script_cache — inline scripts cached for boot-replay */
 #include "solver/why.h"                      /* why_add — a script runtime throw surfaces as @WHY */
+#include "check.h"                           /* DCHECK — the script is driven as a heap-frame flow; a yield here is a should-never-happen */
 
 /* main.c host edges (the scheduler's resource loader + the live document) — externed until the loader itself is
    a component; a browser component uses them by interface, not by owning the state. */
@@ -26,7 +27,21 @@ extern void chunk_pending_add(const char *url);          /* queue an external sc
 int boot_exec_one(JSContext *ctx, JSValueConst el, JSValueConst compiled) {
     if (JS_IsException(compiled)) return 1;                       /* a syntax error from boot_script_cache: exception already pending */
     doc_set_current_script(ctx, JS_DupValue(ctx, el));           /* document.currentScript = the <script> element (or JS_NULL) */
-    JSValue v = JS_EvalFunction(ctx, JS_DupValue(ctx, compiled)); /* run the bytecode (dup: the cache keeps it for every replay) */
+    /* Run EVERY script — inline, quickjs-injected, or a solved-and-loaded lazy chunk — through this ONE
+       browser-like path, as a HEAP-FRAME FLOW (JS_FlowNew), so it is preemptible + snapshot-forkable like any
+       other flow. No separate boot/chunk system; boot is not special. Run to completion here (no yield hook);
+       the scheduler dispatches it preemptibly once the frontier drives script execution. A top-level program IS
+       a function object (JS_IsFunction), so JS_FlowNew accepts it and the frame runs at global scope as before;
+       JS_FlowResume frees the frame on completion. */
+    JSValue v = JS_UNDEFINED;
+    void *fs = JS_FlowNew(ctx, compiled, JS_UNDEFINED, 0, NULL);
+    if (fs) {
+        int st = JS_FlowResume(ctx, fs, &v);
+        DCHECK(st != 1, "boot_exec_one: a script YIELDED with no yield hook installed — unreachable (nothing to preempt to)");
+        (void)st;   /* st==0 completed, st==2 top-level await (module), st==3 threw -> v holds result/exception */
+    } else {
+        v = JS_EvalFunction(ctx, JS_DupValue(ctx, compiled));    /* not flow-able (should-never-happen for a compiled program) */
+    }
     int threw = JS_IsException(v);                               /* leaves the exception PENDING for JS_GetException */
     doc_set_current_script(ctx, JS_NULL);
     JS_FreeValue(ctx, v);

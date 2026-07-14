@@ -1,0 +1,20 @@
+[
+  {
+    "type": "browser",
+    "url": ""
+  },
+  {
+    "type": "background_page",
+    "url": "chrome-extension://pfncpmcmkgcohblmpllhofkdpjjbmngl/ast-worker.html"
+  },
+  {
+    "type": "page",
+    "url": "http://127.0.0.1:8765/stored_xss.html"
+  }
+]
+--- console (12s, 4 lines) ---
+(full 4 lines -> engine/.work/diag-full.log)
+background_page: [AST:combined] Findings for tab=%d: %d protoEnums, %d fieldMaps, %d fetchSites, %d secSinks, %d dangerousPatterns 653595487 0 0 0 1 0
+background_page: [AST:combined] Split security findings across %d scripts for tab=%d 1 653595487
+background_page: [AST:merge] No doc for host=%s â€” registering endpoints only (script: %s) 127.0.0.1 http://127.0.0.1:8765/stored_xss.html
+background_page: [evict] dropped %d reviewed document(s) from state.docs 1

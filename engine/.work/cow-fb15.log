@@ -1,0 +1,6 @@
+started. chrome pid=14816 port=9337 extId=pfncpmcmkgcohblmpllhofkdpjjbmngl
+navigated to http://localhost:8765/sdk_firebase.html
+background_page: [evict] dropped %d reviewed document(s) from state.docs 1
+=== ABORT REASON ===
+     16 Assertion failed: gc_decref_underflow child[gcType=2 classId=-1 line=-1] parent[gcType=0 classId=1] rc=0, at: quickjs.c,9429,gc_decref_child)
+endpoints: 1
