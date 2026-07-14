@@ -23,7 +23,7 @@
 #include <lexbor/selectors/selectors.h>
 #include <lexbor/dom/dom.h>
 #include "check.h"        /* CHECK (always fatal: OOM/security) / DCHECK (dev-only fatal: should-never-happen), its own TU */
-#include "prelude.h"     /* self-hosted JS prelude strings (ARRAY_PRELUDE_JS, DEDUP_JS) */
+#include "prelude.h"     /* self-hosted Array/String/JSON builtins (ARRAY_PRELUDE_JS) installed at init */
 #include "solver/constraints.h"  /* per-flow value-domain constraint tracker (concolic path constraint), its own TU */
 #include "solver/wfq.h"          /* the ONE WFQ priority policy (order key), its own TU */
 #include "solver/concolic.h"       /* the OPAQUE sentinel g_concolic + js_noop/js_concolic_read/js_concolic_stub, its own TU */
@@ -167,9 +167,7 @@ JSContext *g_ctx;   /* the run's context (defined = NULL below); fwd-declared fo
    set. Identity is the ENGINE's, not the host's (the JS mergeCallsites/dedupShapeConcrete were DELETED).
    The dedup runs on the engine's OWN quickjs (g_dedup_fn) — proven logic, executed in-engine, never a
    host context-switch. */
-/* g_endpoints (the @H array) is in endpoint.c — extern via endpoint.h; main.c's finalize reads it. */
-static JSValue g_dedup_fn = JS_UNDEFINED;    /* (eps) => deduped array, evaluated once at init */
-/* DEDUP_JS (in-engine endpoint dedup at finalize) -> prelude.c */
+/* @H endpoints are C findings in endpoint.c; endpoint_snapshot dedups+aggregates them in C at finalize. */
 /* SELF-HOSTED Array.prototype iterators (forEach/map/filter/some/every): the C js_array_every holds
    its loop counter/accumulator on the C STACK across each callback JS_Call, so a fn recursing THROUGH
    the callback (node.children.forEach(walk)) C-recurses and overflows -- the continuation-holding
@@ -248,12 +246,7 @@ void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
    live/unbounded engine may never reach (the exact reason a looping XSS page reported zero sinks). */
 static void emit_result_ex(JSContext *ctx, int with_sinks) {
     (void)with_sinks;
-    if (JS_IsUndefined(g_dedup_fn)) return;
-    JSValue eps = endpoint_snapshot(ctx);   /* rebuild the JS array from the C findings (transient) */
-    JSValueConst args[1] = { eps };
-    JSValue deduped = JS_Call(ctx, g_dedup_fn, JS_UNDEFINED, 1, args);
-    JS_FreeValue(ctx, eps);
-    if (JS_IsException(deduped)) { js_std_dump_error(ctx); deduped = JS_NewArray(ctx); }
+    JSValue deduped = endpoint_snapshot(ctx);   /* C findings, deduped+aggregated in C (endpoint.c) */
     JSValue result = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, result, "fetchCallSites", deduped);                 /* consumes deduped */
     JS_SetPropertyStr(ctx, result, "securitySinks", solve_all(ctx));   /* @S: COLLECT verified PoCs (pure read of g_verified) — surfaced incrementally, exactly like @H endpoints */
@@ -502,8 +495,8 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
     g_park = JS_NewArray(ctx);
     solve_init(ctx);   /* @S accumulators (tasks/verified/reached/enqueued + their CowExempt) -> solve.c */
     g_solve_ctx = JS_NewContext(rt);   /* fresh CLEAN realm for the @S solver's candidate eval (no forced-exec/opaque overrides) */
-    /* PLATFORM BUILTINS: everything compiled here (x9, dedup, the Array/String prelude) is engine-internal, not
-       page code — mark it born-executed so orphan-collection NEVER force-invokes it. Without this, an uncalled
+    /* PLATFORM BUILTINS: everything compiled here (x9, the Array/String prelude) is engine-internal, not page
+       code — mark it born-executed so orphan-collection NEVER force-invokes it. Without this, an uncalled
        prelude method (e.g. Array.sort, which unlike forEach permits an undefined comparator) is orphan-driven
        with OPAQUE args and its `k<L`/`cmp?` branches fork-explode. Page bundles compile with the flag OFF. */
     JS_SetBuiltinCompile(ctx, 1);
@@ -518,8 +511,6 @@ KEEP int qjs_init(const char *boot, const char *html, const char *origin,
             "globalThis.__u=new Proxy(function(){return globalThis.__u},"
             "{has:function(){return true},get:function(t,k){return k==='X9'?globalThis.X9:globalThis.__u}});";
         JSValue xr = JS_Eval(g_solve_ctx, x9, strlen(x9), "<x9>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(g_solve_ctx, xr); }   /* fire-tracker + universal stub for the handler-firing verify */
-    g_dedup_fn = JS_Eval(ctx, DEDUP_JS, strlen(DEDUP_JS), "<dedup>", JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(g_dedup_fn)) { js_std_dump_error(ctx); DFAIL("dedup fn failed to compile — engine self-host bug"); g_dedup_fn = JS_UNDEFINED; }
     { JSValue pv = JS_Eval(ctx, ARRAY_PRELUDE_JS, strlen(ARRAY_PRELUDE_JS), "<array-prelude>", JS_EVAL_TYPE_GLOBAL);
       if (JS_IsException(pv)) { js_std_dump_error(ctx); DFAIL("array prelude failed to compile — engine self-host bug"); }
       JS_FreeValue(ctx, pv); }
@@ -767,7 +758,6 @@ KEEP void qjs_teardown(void)
     endpoint_free(ctx);
     JS_FreeValue(ctx, g_chunkurls); g_chunkurls = JS_UNDEFINED;
     JS_FreeValue(ctx, g_park); g_park = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_dedup_fn); g_dedup_fn = JS_UNDEFINED;
     location_free(ctx);   /* free the window.location singleton (location.c) */
     for (int i = 0; i < g_orphan_n; i++) JS_FreeValue(ctx, g_orphan_buf[i]);
     g_orphan_n = 0;

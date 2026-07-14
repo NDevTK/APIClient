@@ -1,9 +1,11 @@
 /* Self-hosted JS prelude — the JavaScript the engine evaluates at init, like V8's builtins/*.js.
  * ARRAY_PRELUDE_JS: self-hosted Array/String iterators (forEach/map/reduce/...) as BYTECODE so recursion
- * through a callback is a heap frame (trampolined, unbounded) instead of a C-stack overflow. DEDUP_JS: the
- * in-engine endpoint identity/dedup run at finalize over the accumulated @H records (the cumulative moat
- * aggregation the engine owns). Both compiled under JS_SetBuiltinCompile (born executed=1, never orphan-
- * driven). Kept as their own TU so main.c is the SCHEDULER, not a wall of embedded JS. See prelude.h. */
+ * through a callback is a heap frame (trampolined, unbounded) instead of a C-stack overflow, and an opaque
+ * element/collection FORKS at a membership/predicate gate. Compiled under JS_SetBuiltinCompile (born
+ * executed=1, never orphan-driven). See prelude.h.
+ * MIGRATION (in progress): this self-hosted-JS mechanism is being REPLACED by opacity+trampoline HOOKS on
+ * quickjs's own C Array/String/JSON builtins (a C component — no embedded JavaScript, no reimplementation),
+ * after which this file is deleted. The endpoint dedup already moved to C (endpoint.c). */
 #include "prelude.h"
 
 const char *ARRAY_PRELUDE_JS =
@@ -187,74 +189,3 @@ const char *ARRAY_PRELUDE_JS =
 "      stack.pop();indent=stepback;return res;}"
 "    return undefined;}"
 "  var wrapper={};wrapper['']=value;return ser('',wrapper);};})();";
-
-const char *DEDUP_JS =
-"(function(eps){"
-"  var HOLE=/\\{[a-z]*\\}/,HOLE_G=/\\{[a-z]*\\}/g,SEG_HOLE=/^\\{[a-z]*\\}$/;"
-"  var hasHole=function(s){return HOLE.test(s||'');};"
-"  var normHoles=function(s){return (s||'').replace(HOLE_G,'{}');};"
-"  var pathSegs=function(u){var q=u.indexOf('?');var p=q>=0?u.slice(0,q):u;return {segs:p.split('/'),query:q>=0?u.slice(q):''};};"
-"  for(var bi=0;bi<eps.length;bi++){var e=eps[bi];"
-"    if(e.body){var bo=null;try{bo=JSON.parse(e.body);}catch(_e){bo=null;}"
-"      if(bo&&typeof bo==='object'&&!Array.isArray(bo)){e.params=e.params||[];"
-"        for(var bk in bo){var bv=bo[bk];"
-"          var op=bv===null||bv==='{}'||(typeof bv==='object'&&bv&&!Array.isArray(bv)&&Object.keys(bv).length===0);"
-"          var has=false;for(var qi=0;qi<e.params.length;qi++){if(e.params[qi].name===bk&&e.params[qi].location==='body'){has=true;break;}}"
-"          if(!has)e.params.push({name:bk,location:'body',validValues:op?[]:[(typeof bv==='object'&&bv)?JSON.stringify(bv):String(bv)]});"
-"        }"
-"      }else if(e.body.indexOf('=')>=0&&e.body.charAt(0)!=='{'&&e.body.charAt(0)!=='['){e.params=e.params||[];"
-"        var frms=e.body.split('&');for(var fpi=0;fpi<frms.length;fpi++){var feq=frms[fpi].indexOf('=');if(feq<0)continue;"
-"          var fk=frms[fpi].slice(0,feq),fv=frms[fpi].slice(feq+1),fop=hasHole(fv);"
-"          var fhas=false;for(var fqi=0;fqi<e.params.length;fqi++){if(e.params[fqi].name===fk&&e.params[fqi].location==='body'){fhas=true;break;}}"
-"          if(!fhas)e.params.push({name:fk,location:'body',validValues:fop?[]:[fv]});"
-"        }"
-"      }"
-"    }"
-"  }"
-"  var map=new Map();"
-"  var mergeInto=function(e,s){"                                                 /* UNION s into e (same identity) */
-"    var sp=s.params||[];e.params=e.params||[];"
-"    for(var pi=0;pi<sp.length;pi++){var np=sp[pi],f=null;"
-"      for(var ei=0;ei<e.params.length;ei++){if(e.params[ei].name===np.name&&e.params[ei].location===np.location){f=e.params[ei];break;}}"
-"      if(!f){e.params.push(np);}else{var nv=np.validValues||[];f.validValues=f.validValues||[];for(var vi=0;vi<nv.length;vi++){if(f.validValues.indexOf(nv[vi])<0)f.validValues.push(nv[vi]);}}"
-"    }"
-"    if(s.headers){e.headers=e.headers||{};var HH=/\\{[a-z]*\\}/;for(var hk in s.headers){var ov=e.headers[hk],nv=s.headers[hk];if(ov===undefined||(HH.test(ov)&&!HH.test(nv)))e.headers[hk]=nv;}}"
-"    if(s.body&&(!e.body||(/\\{[a-z]*\\}/.test(e.body)&&!/\\{[a-z]*\\}/.test(s.body))))e.body=s.body;"
-"  };"
-"  for(var i=0;i<eps.length;i++){var s=eps[i];var k=(s.method||'GET')+' '+normHoles(s.url);if(!map.has(k))map.set(k,s);else mergeInto(map.get(k),s);}"
-"  var arr=[];map.forEach(function(v){arr.push(v);});"
-"  var shapes=arr.filter(function(e){return hasHole(e.url);});"
-"  if(shapes.length){"
-"    for(var ci=0;ci<arr.length;ci++){var c=arr[ci];if(hasHole(c.url))continue;"
-"      for(var si=0;si<shapes.length;si++){var sh=shapes[si];"
-"        if((sh.method||'GET')!==(c.method||'GET'))continue;"
-"        var ss=pathSegs(sh.url),cs=pathSegs(c.url);"
-"        if(ss.segs.length!==cs.segs.length||ss.query!==cs.query)continue;"
-"        var ok=true,ex=[];"
-"        for(var j=0;j<ss.segs.length;j++){"
-"          if(SEG_HOLE.test(ss.segs[j])){if(cs.segs[j]&&!hasHole(cs.segs[j]))ex.push([j,cs.segs[j]]);else{ok=false;break;}}"
-"          else if(ss.segs[j]!==cs.segs[j]){ok=false;break;}"
-"        }"
-"        if(ok&&ex.length){"
-"          for(var e2=0;e2<ex.length;e2++){var idx=ex[e2][0],v=ex[e2][1];"
-"            var pp=null,pl=sh.params||[];for(var pi=0;pi<pl.length;pi++){if(pl[pi].location==='path'&&pl[pi].name==='arg'+idx){pp=pl[pi];break;}}"
-"            if(!pp){pp={name:'arg'+idx,location:'path',validValues:[]};(sh.params=sh.params||[]).push(pp);}"
-"            if(pp.validValues.indexOf(v)<0)pp.validValues.push(v);"
-"          }"
-"          map.delete((c.method||'GET')+' '+c.url);break;"
-"        }"
-"      }"
-"    }"
-"  }"
-"  var parseQ=function(q){var o={};if(!q)return o;var s=q.charAt(0)==='?'?q.slice(1):q;if(!s)return o;var ps=s.split('&');for(var i=0;i<ps.length;i++){var eq=ps[i].indexOf('=');o[eq>=0?ps[i].slice(0,eq):ps[i]]=eq>=0?ps[i].slice(eq+1):'';}return o;};"
-"  arr=[];map.forEach(function(v){arr.push(v);});"                                        /* QUERY-PHANTOM collapse: a bare {} query value (from an opaque-degraded run) is a PHANTOM of its concrete sibling (the boot re-run's concolic example) — delete it so the real value wins, not the {} */
-"  for(var qi=0;qi<arr.length;qi++){var ph0=arr[qi];var ps0=pathSegs(ph0.url);if(ps0.query.indexOf('{}')<0)continue;var pq=parseQ(ps0.query),pk=Object.keys(pq);"
-"    for(var cj=0;cj<arr.length;cj++){var cc=arr[cj];if(cc===ph0)continue;if((cc.method||'GET')!==(ph0.method||'GET'))continue;var cs0=pathSegs(cc.url);"
-"      if(ps0.segs.join('/')!==cs0.segs.join('/'))continue;var cq0=parseQ(cs0.query);if(Object.keys(cq0).length!==pk.length)continue;"
-"      var ok0=true,better=false;for(var ki=0;ki<pk.length;ki++){var kk=pk[ki];if(!(kk in cq0)){ok0=false;break;}"
-"        if(pq[kk]==='{}'){if(cq0[kk]!=='{}'&&!hasHole(cq0[kk]))better=true;}else if(pq[kk]!==cq0[kk]){ok0=false;break;}}"
-"      if(ok0&&better){map.delete((ph0.method||'GET')+' '+ph0.url);break;}"                /* concrete sibling dominates -> drop the {} phantom */
-"    }"
-"  }"
-"  var out=[];map.forEach(function(v){out.push(v);});return out;"
-"})";
