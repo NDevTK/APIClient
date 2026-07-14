@@ -89,6 +89,7 @@ void gate_collect(const char *token, const char *src) {
    of the distance-directed search CLAUDE.md mandates over flat enumerate-and-verify. */
 static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, const char *target, double fitness) {
     double w = 2.0 + fitness;
+
     char *env = envelope_build(ctx, cand_in);   /* structured-source sink -> deliver the destructuring envelope (JSON/query/delim) */
     const char *cand = env ? env : cand_in;
     if (g_in_session) {   /* sink reached inside a session -> a candidate SESSION flow re-fires ALL handlers with the candidate (cross-handler verify) */
