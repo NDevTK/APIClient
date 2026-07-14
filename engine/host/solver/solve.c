@@ -29,10 +29,42 @@ extern lxb_html_document_t *g_dom;   /* the live parsed document (main.c) — th
    eval/String methods, no forced-exec/opaque overrides). A candidate whose payload survives into an
    EXECUTABLE position after the real transforms IS the PoC (verified because the real filters ran); if
    none survives, the flow is PROVEN safe for the tried payloads. No taint label, no chain inversion. */
-static JSValue g_solvetasks = JS_UNDEFINED;   /* JS array of {sink, ctx, expr} (the finalize expr-eval pre-filter) */
-static JSValue g_verified = JS_UNDEFINED;     /* "sink|ctx" -> concrete PoC candidate that a REPLAY flow drove through the real code+branches to the sink where it broke out. The ONLY @S output: a working PoC is self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
-static JSValue g_reached = JS_UNDEFINED;      /* "sink|ctx" -> 1: a concrete candidate REACHED this sink but did not break out — OBSERVED fitness (feasible path, breakout unsolved), a near-miss stronger than never-reached */
-static JSValue g_enqueued = JS_UNDEFINED;     /* "orphanidx|sink|ctx" -> 1: candidate-replay flows already enqueued for this sink (dedup, not truncation) */
+/* @S ledgers/tasks as HOST C DATA — outside the JS heap, so COW-INVISIBLE BY CONSTRUCTION (the principled
+   replacement for the deleted per-object cow_exempt flag). A finding written during ANY flow (the document
+   flow, a session, a candidate flow) can never ride that flow's COW delta and vanish at emit, because a C
+   struct is not a capture candidate. Small per-document sets -> linear scan is right. */
+typedef struct { char *key; char *sval; int ival; } SMapEnt;   /* sval: verified PoC; ival: enqueue gate-count; presence: reached */
+typedef struct { SMapEnt *e; int n, cap; } SMap;
+static SMapEnt *smap_find(SMap *m, const char *k) {
+    for (int i = 0; i < m->n; i++) if (strcmp(m->e[i].key, k) == 0) return &m->e[i];
+    return NULL;
+}
+static SMapEnt *smap_put(SMap *m, const char *k) {   /* find-or-insert (sval=NULL, ival=0 on insert) */
+    SMapEnt *e = smap_find(m, k); if (e) return e;
+    if (m->n >= m->cap) { m->cap = m->cap ? m->cap * 2 : 16; m->e = realloc(m->e, (size_t)m->cap * sizeof(SMapEnt)); }
+    e = &m->e[m->n++]; e->key = strdup(k); e->sval = NULL; e->ival = 0; return e;
+}
+static void smap_free(SMap *m) { for (int i = 0; i < m->n; i++) { free(m->e[i].key); free(m->e[i].sval); } free(m->e); m->e = NULL; m->n = m->cap = 0; }
+
+typedef struct { char *field; char *token; } GateField;   /* a sibling EQ gate the delivery object must set */
+typedef struct {
+    char *sink, *ctx, *expr, *required_origin, *srcpath;
+    GateField *gatefields; int gatefields_n;
+    int gated;
+} SolveTask;                                               /* the @S finalize task {sink,ctx,expr,...} */
+typedef struct { SolveTask *t; int n, cap; } TaskVec;
+static void taskvec_free(TaskVec *v) {
+    for (int i = 0; i < v->n; i++) { SolveTask *tk = &v->t[i];
+        free(tk->sink); free(tk->ctx); free(tk->expr); free(tk->required_origin); free(tk->srcpath);
+        for (int j = 0; j < tk->gatefields_n; j++) { free(tk->gatefields[j].field); free(tk->gatefields[j].token); }
+        free(tk->gatefields); }
+    free(v->t); v->t = NULL; v->n = v->cap = 0;
+}
+
+static TaskVec g_solvetasks = { 0 };   /* the @S finalize tasks (the expr-eval pre-filter) */
+static SMap g_verified = { 0 };        /* "sink|ctx" -> concrete PoC (sval) a REPLAY flow drove to the sink where it broke out. The ONLY @S output: self-verifying; absence is NOT a safe verdict, only search-not-yet-solved. */
+static SMap g_reached  = { 0 };        /* "sink|ctx" present -> a concrete candidate REACHED this sink but did not break out (near-miss fitness stronger than never-reached) */
+static SMap g_enqueued = { 0 };        /* "orphanhash|sink|ctx" -> gate-token count at last enqueue (ival): re-enqueue when it GROWS (dedup, not truncation) */
 JSContext *g_solve_ctx = NULL;         /* fresh realm for clean candidate eval */
 /* url/js sinks: the breakout VECTOR is fixed by the context itself — a URL sink executes a `javascript:`
    scheme, an eval/Function/setTimeout sink executes a JS-string/expression escape — so these are the
@@ -124,17 +156,18 @@ static void reg_add_cand(JSContext *ctx, JSValueConst fn, const char *cand_in, c
    ({pm}.type=='render' while the sink reads {pm}.html) is a field the delivery object MUST set, or the real
    handler's gate blocks the sink. Collect those {root}.field==token pairs into {field:token}; the sink field
    carries the payload separately. NULL if none (whole-value or ungated). */
-static JSValue collect_gate_fields(JSContext *ctx, const char *root) {
-    if (!root || !root[0]) return JS_UNDEFINED;
-    size_t rl = strlen(root); JSValue o = JS_UNDEFINED;
+static void collect_gate_fields(const char *root, SolveTask *tk) {
+    if (!root || !root[0]) return;
+    size_t rl = strlen(root);
     for (int i = 0; i < g_cons_n; i++) {
         Cons *c = &g_cons[i];
         if (c->src && c->op == OPCMP_EQ && c->tok && !strncmp(c->src, root, rl) && c->src[rl] == '.') {
-            if (JS_IsUndefined(o)) o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, c->src + rl + 1, JS_NewString(ctx, c->tok));   /* field path after "{root}." -> required token */
+            tk->gatefields = realloc(tk->gatefields, (size_t)(tk->gatefields_n + 1) * sizeof(GateField));
+            tk->gatefields[tk->gatefields_n].field = strdup(c->src + rl + 1);   /* field path after "{root}." */
+            tk->gatefields[tk->gatefields_n].token = strdup(c->tok);            /* -> required token */
+            tk->gatefields_n++;
         }
     }
-    return o;
 }
 /* ── CONTEXT-AWARE @S CONSTRUCTION (the frontier: derive the breakout, don't pick from a fixed table) ──
    The sink SHAPE encodes the literal HTML around the {source} hole (`<textarea>{hash}</textarea>`). PARSE it
@@ -244,9 +277,9 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
         const char *cv = !JS_IsUndefined(exv) ? JS_ToCString(ctx, exv) : JS_ToCString(ctx, val);
         JS_FreeValue(ctx, exv);
         char key[300]; snprintf(key, sizeof key, "%s|%s", sink, sctx);
-        if (cv && solve_broke(sctx, cv) && JS_IsObject(g_verified)) {
-            JS_SetPropertyStr(ctx, g_verified, key, JS_NewString(ctx, g_candidate));
-        } else if (JS_IsObject(g_reached)) {
+        if (cv && solve_broke(sctx, cv)) {
+            SMapEnt *ve = smap_put(&g_verified, key); free(ve->sval); ve->sval = strdup(g_candidate);
+        } else {
             /* OBSERVED FITNESS + MUTATION: a CONCRETE candidate drove the real code+branches to this sink but did
                NOT break out — the PATH is concretely feasible (gates solved, sink reached), so a FILTER defeated
                the breakout, not the reachability. That measured near-miss (distinct from the opaque flow forking
@@ -254,9 +287,8 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
                and re-drive — a sanitizer matching only lowercase tags / spaced attributes is broken by the
                variant. ONCE per sink (dedup on g_reached), and only for a non-enveloped sink where g_candidate is
                the pure breakout (an envelope's gate parts must not be case-mutated or the gate stops passing). */
-            JSValue prev = JS_GetPropertyStr(ctx, g_reached, key);
-            int first = JS_IsUndefined(prev); JS_FreeValue(ctx, prev);
-            JS_SetPropertyStr(ctx, g_reached, key, JS_NewInt32(ctx, 1));
+            int first = (smap_find(&g_reached, key) == NULL);
+            smap_put(&g_reached, key);
             /* Mutate ONLY the breakout — the chars inside a <...> tag span — with filter-evasion operators
                (case-flip, space->slash). An envelope's gate parts (query "mode=preview", JSON field names, split
                parts) contain no '<', so they stay intact and the gate still passes; only the payload tag mutates.
@@ -290,28 +322,23 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
         if (cv) JS_FreeCString(ctx, cv);
         return;
     }
-    if (!JS_IsConcolic(val) || !JS_IsArray(g_solvetasks)) return;
+    if (!JS_IsConcolic(val)) return;
     const char *shape = JS_ConcolicShapeC(val);   /* @H-style display: which source(s) reach this sink, transforms flattened */
-    JSValue t = JS_NewObject(ctx);
-    JS_CowExempt(t);   /* the task is HOST analysis state written during a flow (often the document flow); its
-                          property writes must NOT ride that flow's COW delta, else they are PARKED with it and the
-                          task reads back undefined at the teardown emit — exempt it exactly like the ledgers. */
-    JS_SetPropertyStr(ctx, t, "sink", JS_NewString(ctx, sink));
-    JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
-    JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, shape ? shape : "{}"));
-    if (g_origin_req[0]) JS_SetPropertyStr(ctx, t, "requiredOrigin", JS_NewString(ctx, g_origin_req));   /* forgeable origin gate on this path -> the PoC's delivery origin */
+    if (g_solvetasks.n >= g_solvetasks.cap) { g_solvetasks.cap = g_solvetasks.cap ? g_solvetasks.cap * 2 : 16; g_solvetasks.t = realloc(g_solvetasks.t, (size_t)g_solvetasks.cap * sizeof(SolveTask)); }
+    SolveTask *tk = &g_solvetasks.t[g_solvetasks.n++]; memset(tk, 0, sizeof *tk);
+    tk->sink = strdup(sink);
+    tk->ctx = strdup(sctx);
+    tk->expr = strdup(shape ? shape : "{}");
+    if (g_origin_req[0]) tk->required_origin = strdup(g_origin_req);   /* forgeable origin gate on this path -> the PoC's delivery origin */
     envelope_detect(ctx, val);   /* fill the structured-source descriptor (JSON field / query param / split index) -> envelope.c */
     { const char *sp = JS_ConcolicSrcC(val);   /* @S structured delivery: the source LEAF path ("{pm}.html"), for srcpath + gate-field merge */
       if (sp && sp[0]) {
-          JS_SetPropertyStr(ctx, t, "srcpath", JS_NewString(ctx, sp));
+          tk->srcpath = strdup(sp);
           char root[64]; const char *rb = strchr(sp, '}');   /* source token "{pm}" -> collect sibling gate fields the handler requires */
           if (rb && (size_t)(rb - sp + 1) < sizeof root) { size_t rl = (size_t)(rb - sp + 1); memcpy(root, sp, rl); root[rl] = 0;
-              JSValue gf = collect_gate_fields(ctx, root);
-              if (!JS_IsUndefined(gf)) JS_SetPropertyStr(ctx, t, "gatefields", gf); }
+              collect_gate_fields(root, tk); }
       } }
-    JS_SetPropertyStr(ctx, t, "gated", JS_NewBool(ctx, g_c > 0));
-    uint32_t n = 0; JSValue lv = JS_GetPropertyStr(ctx, g_solvetasks, "length"); JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
-    JS_SetPropertyUint32(ctx, g_solvetasks, n, t);
+    tk->gated = (g_c > 0);
     g_emit_total++;   /* a reached sink is progress like @H */
     if (g_running && g_cur_flow) { g_cur_flow->val += 1.0; g_cur_flow->cpu = 0; }
     /* SPAWN candidate-replay flows in the ONE scheduler. Re-drive the FUNCTION that reached this sink (the
@@ -326,13 +353,12 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
        re-runs the async RECIPE so the source re-reads through the await. */
     JSValueConst hitfn = JS_CurrentScriptFn(ctx);
     JSValueConst keyfn = hitfn;
-    if (JS_IsObject(g_enqueued) && !JS_IsUndefined(keyfn)) {
+    if (!JS_IsUndefined(keyfn)) {
         char ek[320]; snprintf(ek, sizeof ek, "%u|%s|%s", JS_OrphanHash(ctx, keyfn), sink, sctx);
-        JSValue e = JS_GetPropertyStr(ctx, g_enqueued, ek);
-        int32_t prev_gate = -1; if (JS_IsNumber(e)) JS_ToInt32(ctx, &prev_gate, e);   /* token count at last emit, or -1 = never */
-        JS_FreeValue(ctx, e);
+        SMapEnt *ee = smap_find(&g_enqueued, ek);
+        int32_t prev_gate = ee ? ee->ival : -1;   /* token count at last emit, or -1 = never */
         if (prev_gate < g_gate_n) {   /* never enqueued, OR new gate tokens learned since -> (re)enqueue with them */
-            JS_SetPropertyStr(ctx, g_enqueued, ek, JS_NewInt32(ctx, g_gate_n));
+            smap_put(&g_enqueued, ek)->ival = g_gate_n;
             char vt[300]; snprintf(vt, sizeof vt, "%s|%s", sink, sctx);   /* the sink|ctx these candidates verify -> skip once one breaks out */
             /* HTML-context sinks: CONSTRUCT the breakout from the observed sink STRUCTURE (parse context +
                quoting), never a fixed HTML payload list. url/js sinks: the vector is itself context-fixed
@@ -352,117 +378,88 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
 /* build securitySinks[] by solving each collected task (dedup by sink+ctx+expr). */
 JSValue solve_all(JSContext *ctx) {
     JSValue out = JS_NewArray(ctx);
-    if (!JS_IsArray(g_solvetasks)) return out;
-    uint32_t tn = 0; { JSValue lv = JS_GetPropertyStr(ctx, g_solvetasks, "length"); JS_ToUint32(ctx, &tn, lv); JS_FreeValue(ctx, lv); }
-    JSValue seen = JS_NewObject(ctx); uint32_t oi = 0;
-    for (uint32_t i = 0; i < tn; i++) {
-        JSValue t = JS_GetPropertyUint32(ctx, g_solvetasks, i);
-        JSValue sv = JS_GetPropertyStr(ctx, t, "sink"), cv = JS_GetPropertyStr(ctx, t, "ctx"), ev = JS_GetPropertyStr(ctx, t, "expr");
-        JSValue spv = JS_GetPropertyStr(ctx, t, "srcpath");
-        JSValue gfv = JS_GetPropertyStr(ctx, t, "gatefields");
-        const char *sink = JS_ToCString(ctx, sv), *sc = JS_ToCString(ctx, cv), *ex = JS_ToCString(ctx, ev);
-        const char *srcpath = JS_IsString(spv) ? JS_ToCString(ctx, spv) : NULL;
-        if (ex) {
-            char keybuf[1200]; snprintf(keybuf, sizeof keybuf, "%s|%s|%s", sink ? sink : "", sc ? sc : "", ex);
-            JSValue dup = JS_GetPropertyStr(ctx, seen, keybuf);
-            int isdup = !JS_IsUndefined(dup); JS_FreeValue(ctx, dup);
-            if (!isdup) {
-                JS_SetPropertyStr(ctx, seen, keybuf, JS_NewBool(ctx, 1));
-                /* The ONLY @S finding is a WORKING PoC: a candidate a REPLAY flow drove through the real
-                   code+branches to this sink where it BROKE OUT. No PoC -> emit NOTHING here (a @WHY search
-                   signal, not a "safe"/"verified:false" verdict — absence of a PoC never proves safety; the
-                   forced-exec search may still solve a gate like startsWith('cmd:') with a better candidate). */
-                char vk[300]; snprintf(vk, sizeof vk, "%s|%s", sink ? sink : "", sc ? sc : "");
-                char *rpoc = NULL;
-                if (JS_IsObject(g_verified)) {
-                    JSValue vv = JS_GetPropertyStr(ctx, g_verified, vk);
-                    if (JS_IsString(vv)) { const char *s = JS_ToCString(ctx, vv); if (s) { rpoc = strdup(s); JS_FreeCString(ctx, s); } }
-                    JS_FreeValue(ctx, vv); }
-                /* No working PoC yet -> emit NOTHING: this is an IN-PROGRESS @S search still in the frontier
-                   (unbounded — a better candidate may break a gate like startsWith('cmd:') next burst/session),
-                   NOT a gap and NOT a "safe" verdict (absence of a PoC never proves safety). It is therefore
-                   NEVER a fatal @WHY — an unsolved sink is in-progress work, not a should-never-happen. */
-                if (rpoc) {
-                    JSValue rec = JS_NewObject(ctx);
-                    JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink ? sink : "?"));
-                    JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink ? sink : "?"));
-                    JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "forced-exec"));
-                    JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
-                    if (srcpath && srcpath[0]) JS_SetPropertyStr(ctx, rec, "srcpath", JS_NewString(ctx, srcpath));   /* structured delivery hint */
-                    if (JS_IsObject(gfv)) JS_SetPropertyStr(ctx, rec, "gatefields", JS_DupValue(ctx, gfv));   /* sibling gate fields the delivery object must set */
-                    { JSValue rov = JS_GetPropertyStr(ctx, t, "requiredOrigin");   /* forgeable origin gate -> the PoC's delivery origin (part of the reproduction envelope) */
-                      if (JS_IsString(rov)) JS_SetPropertyStr(ctx, rec, "requiredOrigin", rov); else JS_FreeValue(ctx, rov); }
-                    JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
-                    JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
-                    if ((ex && strstr(ex, "{ls}")) || (srcpath && strstr(srcpath, "{ls}")))   /* stored/second-order: the sink reads attacker-PLANTED web storage, so the PoC is a TWO-STAGE artifact (plant then fire), not a reflected URL */
-                        JS_SetPropertyStr(ctx, rec, "secondOrder", JS_NewString(ctx, "requires an attacker-planted localStorage/sessionStorage value: two-stage PoC (plant the key, then a later load reads+sinks it)"));
-                    if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE, PER SINK CLASS: the model broke out; SOLVE the page's CSP for the concrete bypass path (not a dumbed-down boolean) */
-                        int is_eval = sink && (strcmp(sink, "eval") == 0 || strcmp(sink, "Function") == 0 || strcmp(sink, "setTimeout") == 0);
-                        CspBypass bp; csp_bypass(is_eval, g_dom, &bp);
-                        JS_SetPropertyStr(ctx, rec, "csp", JS_NewString(ctx, g_csp));
-                        JS_SetPropertyStr(ctx, rec, "cspBlocked", JS_NewBool(ctx, bp.blocked));       /* the inline/eval vector is blocked... */
-                        if (bp.blocked) {
-                            JS_SetPropertyStr(ctx, rec, "cspBypass", JS_NewString(ctx, bp.via));      /* ...but HERE is the concrete bypass path the attacker uses */
-                            JS_SetPropertyStr(ctx, rec, "cspReason", JS_NewString(ctx, bp.detail));
-                            if (bp.hosts[0]) JS_SetPropertyStr(ctx, rec, "cspGadgetHosts", JS_NewString(ctx, bp.hosts));      /* allowlisted hosts to find a JSONP endpoint on */
-                            if (bp.gadget_lib[0]) JS_SetPropertyStr(ctx, rec, "cspScriptGadget", JS_NewString(ctx, bp.gadget_lib));  /* a loaded gadget library (bypasses even 'self') */
-                            if (bp.strict_dynamic) JS_SetPropertyStr(ctx, rec, "cspStrictDynamic", JS_TRUE);
-                            if (bp.nonce_required) JS_SetPropertyStr(ctx, rec, "cspNonceRequired", JS_TRUE);                  /* inline blocked; nonce is protective, not trivially reusable */
-                            if (bp.nonce[0]) JS_SetPropertyStr(ctx, rec, "cspObservedNonce", JS_NewString(ctx, bp.nonce));    /* a nonce seen in THIS response — a static-misconfig / CSS-side-channel-leak hint, NOT a plain reuse */
-                        }
-                        if (bp.trusted_types) {   /* TT enforced: the HTML sink throws unless a policy stringifies — report the REAL policy state OBSERVED by running the bundle's createPolicy calls */
-                            JS_SetPropertyStr(ctx, rec, "trustedTypes",
-                                JS_NewString(ctx, tt_default_exists()
-                                                ? (tt_default_weak() == 1 ? "enforced; a 'default' policy is defined AND its createHTML was RUN on an XSS probe — the payload SURVIVED (weak/identity policy), so TT does not stop this sink: confirmed exploitable"
-                                                 : tt_default_weak() == 0 ? "enforced; a 'default' policy is defined and its createHTML SANITIZED the probe (run-verified) — TT neutralises this sink unless the sanitizer itself has a bypass"
-                                                 : "enforced; a 'default' policy is defined (auto-applies to every sink) — createHTML not probed")
-                                                : tt_any_policy() ? "enforced; named policy(ies) defined but no 'default' — the sink needs the payload wrapped by a reachable policy's createHTML"
-                                                : "enforced; NO policy defined in the bundle — every string sink assignment throws (no TT-abuse surface unless a gadget creates a policy)"));
-                        }
-                    }
-                    { char eb[900]; snprintf(eb, sizeof eb, "sink %s <- input %s (forced-exec: this exact input, driven through the real code, breaks out at the sink)", sink ? sink : "?", rpoc);
-                      JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
-                    free(rpoc);
-                    JS_SetPropertyUint32(ctx, out, oi++, rec);
-                }
+    SMap seen = { 0 }; uint32_t oi = 0;
+    for (int i = 0; i < g_solvetasks.n; i++) {
+        SolveTask *tk = &g_solvetasks.t[i];
+        const char *sink = tk->sink, *sc = tk->ctx, *ex = tk->expr, *srcpath = tk->srcpath;
+        if (!ex) continue;
+        char keybuf[1200]; snprintf(keybuf, sizeof keybuf, "%s|%s|%s", sink ? sink : "", sc ? sc : "", ex);
+        if (smap_find(&seen, keybuf)) continue;   /* dedup by sink+ctx+expr */
+        smap_put(&seen, keybuf);
+        /* The ONLY @S finding is a WORKING PoC: a candidate a REPLAY flow drove through the real code+branches
+           to this sink where it BROKE OUT. No PoC -> emit NOTHING (an IN-PROGRESS search still in the frontier,
+           NOT a "safe"/"verified:false" verdict — absence of a PoC never proves safety; a better candidate may
+           break a gate like startsWith('cmd:') next burst/session; NEVER a fatal @WHY). */
+        char vk[300]; snprintf(vk, sizeof vk, "%s|%s", sink ? sink : "", sc ? sc : "");
+        SMapEnt *vent = smap_find(&g_verified, vk);
+        const char *rpoc = (vent && vent->sval) ? vent->sval : NULL;   /* borrowed from the ledger */
+        if (!rpoc) continue;
+        JSValue rec = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, rec, "type", JS_NewString(ctx, sink ? sink : "?"));
+        JS_SetPropertyStr(ctx, rec, "sink", JS_NewString(ctx, sink ? sink : "?"));
+        JS_SetPropertyStr(ctx, rec, "taint", JS_NewString(ctx, "forced-exec"));
+        JS_SetPropertyStr(ctx, rec, "shape", JS_NewString(ctx, ex));
+        if (srcpath && srcpath[0]) JS_SetPropertyStr(ctx, rec, "srcpath", JS_NewString(ctx, srcpath));   /* structured delivery hint */
+        if (tk->gatefields_n) {   /* sibling gate fields the delivery object must set */
+            JSValue gf = JS_NewObject(ctx);
+            for (int j = 0; j < tk->gatefields_n; j++) JS_SetPropertyStr(ctx, gf, tk->gatefields[j].field, JS_NewString(ctx, tk->gatefields[j].token));
+            JS_SetPropertyStr(ctx, rec, "gatefields", gf);
+        }
+        if (tk->required_origin) JS_SetPropertyStr(ctx, rec, "requiredOrigin", JS_NewString(ctx, tk->required_origin));   /* forgeable origin gate -> the PoC's delivery origin */
+        JS_SetPropertyStr(ctx, rec, "source", JS_NewString(ctx, "ast_analysis"));
+        JS_SetPropertyStr(ctx, rec, "poc", JS_NewString(ctx, rpoc));
+        if ((ex && strstr(ex, "{ls}")) || (srcpath && strstr(srcpath, "{ls}")))   /* stored/second-order: the sink reads attacker-PLANTED web storage, so the PoC is a TWO-STAGE artifact (plant then fire), not a reflected URL */
+            JS_SetPropertyStr(ctx, rec, "secondOrder", JS_NewString(ctx, "requires an attacker-planted localStorage/sessionStorage value: two-stage PoC (plant the key, then a later load reads+sinks it)"));
+        if (g_csp && g_csp[0]) {   /* POLICY-RELATIVE, PER SINK CLASS: the model broke out; SOLVE the page's CSP for the concrete bypass path (not a dumbed-down boolean) */
+            int is_eval = sink && (strcmp(sink, "eval") == 0 || strcmp(sink, "Function") == 0 || strcmp(sink, "setTimeout") == 0);
+            CspBypass bp; csp_bypass(is_eval, g_dom, &bp);
+            JS_SetPropertyStr(ctx, rec, "csp", JS_NewString(ctx, g_csp));
+            JS_SetPropertyStr(ctx, rec, "cspBlocked", JS_NewBool(ctx, bp.blocked));       /* the inline/eval vector is blocked... */
+            if (bp.blocked) {
+                JS_SetPropertyStr(ctx, rec, "cspBypass", JS_NewString(ctx, bp.via));      /* ...but HERE is the concrete bypass path the attacker uses */
+                JS_SetPropertyStr(ctx, rec, "cspReason", JS_NewString(ctx, bp.detail));
+                if (bp.hosts[0]) JS_SetPropertyStr(ctx, rec, "cspGadgetHosts", JS_NewString(ctx, bp.hosts));      /* allowlisted hosts to find a JSONP endpoint on */
+                if (bp.gadget_lib[0]) JS_SetPropertyStr(ctx, rec, "cspScriptGadget", JS_NewString(ctx, bp.gadget_lib));  /* a loaded gadget library (bypasses even 'self') */
+                if (bp.strict_dynamic) JS_SetPropertyStr(ctx, rec, "cspStrictDynamic", JS_TRUE);
+                if (bp.nonce_required) JS_SetPropertyStr(ctx, rec, "cspNonceRequired", JS_TRUE);                  /* inline blocked; nonce is protective, not trivially reusable */
+                if (bp.nonce[0]) JS_SetPropertyStr(ctx, rec, "cspObservedNonce", JS_NewString(ctx, bp.nonce));    /* a nonce seen in THIS response — a static-misconfig / CSS-side-channel-leak hint, NOT a plain reuse */
+            }
+            if (bp.trusted_types) {   /* TT enforced: the HTML sink throws unless a policy stringifies — report the REAL policy state OBSERVED by running the bundle's createPolicy calls */
+                JS_SetPropertyStr(ctx, rec, "trustedTypes",
+                    JS_NewString(ctx, tt_default_exists()
+                                    ? (tt_default_weak() == 1 ? "enforced; a 'default' policy is defined AND its createHTML was RUN on an XSS probe — the payload SURVIVED (weak/identity policy), so TT does not stop this sink: confirmed exploitable"
+                                     : tt_default_weak() == 0 ? "enforced; a 'default' policy is defined and its createHTML SANITIZED the probe (run-verified) — TT neutralises this sink unless the sanitizer itself has a bypass"
+                                     : "enforced; a 'default' policy is defined (auto-applies to every sink) — createHTML not probed")
+                                    : tt_any_policy() ? "enforced; named policy(ies) defined but no 'default' — the sink needs the payload wrapped by a reachable policy's createHTML"
+                                    : "enforced; NO policy defined in the bundle — every string sink assignment throws (no TT-abuse surface unless a gadget creates a policy)"));
             }
         }
-        if (sink) JS_FreeCString(ctx, sink); if (sc) JS_FreeCString(ctx, sc); if (ex) JS_FreeCString(ctx, ex);
-        if (srcpath) JS_FreeCString(ctx, srcpath);
-        JS_FreeValue(ctx, sv); JS_FreeValue(ctx, cv); JS_FreeValue(ctx, ev); JS_FreeValue(ctx, spv); JS_FreeValue(ctx, gfv); JS_FreeValue(ctx, t);
+        { char eb[900]; snprintf(eb, sizeof eb, "sink %s <- input %s (forced-exec: this exact input, driven through the real code, breaks out at the sink)", sink ? sink : "?", rpoc);
+          JS_SetPropertyStr(ctx, rec, "evidence", JS_NewString(ctx, eb)); }
+        JS_SetPropertyUint32(ctx, out, oi++, rec);
     }
-    JS_FreeValue(ctx, seen);
+    smap_free(&seen);
     return out;
 }
 
-/* The @S accumulators' lifecycle — called from the engine's qjs_init / qjs_teardown. The CowExempt marks make
-   the verified-PoC + enqueue-dedup ledgers SURVIVE a candidate flow's COW delta unapply (host analysis state,
-   not page state). g_solve_ctx (the clean candidate-eval realm) is created by the engine (it needs the runtime)
-   and only referenced here. */
+/* The @S accumulators' lifecycle — called from the engine's qjs_init / qjs_teardown. The ledgers/tasks are C
+   DATA (COW-invisible by construction), so a finding written during a flow that then parks/reverts SURVIVES to
+   the emit with no per-object opt-out. g_solve_ctx (the clean candidate-eval realm) is created by the engine
+   (it needs the runtime) and only referenced here. */
 /* Has a candidate already broken out this "sink|ctx" (in the verified ledger)? The scheduler asks before
    dispatching a candidate flow tagged with that vtarget — a redundant re-run to skip. Keeps g_verified private. */
 int solve_is_verified(JSContext *ctx, const char *vtarget) {
-    if (!vtarget || !JS_IsObject(g_verified)) return 0;
-    JSValue vv = JS_GetPropertyStr(ctx, g_verified, vtarget);
-    int solved = JS_IsString(vv); JS_FreeValue(ctx, vv);
-    return solved;
+    (void)ctx; if (!vtarget) return 0;
+    SMapEnt *e = smap_find(&g_verified, vtarget);
+    return e && e->sval;
 }
 void solve_init(JSContext *ctx) {
-    g_solvetasks = JS_NewArray(ctx);
-    g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);
-    g_reached = JS_NewObject(ctx);
-    /* ALL @S ledgers are HOST analysis state, not page state — writes to them (during the document flow, a
-       session, or a candidate flow) must NOT ride the flow's COW delta, else they are PARKED with that delta and
-       vanish at the teardown emit (the document flow's delta is now parked as g_doc_base, not left applied like
-       the old boot). g_solvetasks/g_reached were missing this and so the sink task written during the document
-       flow never reached solve_all. */
-    JS_CowExempt(g_verified); JS_CowExempt(g_enqueued); JS_CowExempt(g_solvetasks); JS_CowExempt(g_reached);
+    (void)ctx;
+    taskvec_free(&g_solvetasks); smap_free(&g_verified); smap_free(&g_enqueued); smap_free(&g_reached);
 }
 void solve_free(JSContext *ctx) {
+    (void)ctx;
     for (int i = 0; i < g_gate_n; i++) free(g_gate_tokens[i]);
     free(g_gate_tokens); g_gate_tokens = NULL; g_gate_n = g_gate_cap = 0;
-    JS_FreeValue(ctx, g_solvetasks); g_solvetasks = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_verified); g_verified = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_reached); g_reached = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_enqueued); g_enqueued = JS_UNDEFINED;
+    taskvec_free(&g_solvetasks); smap_free(&g_verified); smap_free(&g_enqueued); smap_free(&g_reached);
 }
