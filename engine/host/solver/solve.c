@@ -284,6 +284,9 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
     if (!JS_IsConcolic(val) || !JS_IsArray(g_solvetasks)) return;
     const char *shape = JS_ConcolicShapeC(val);   /* @H-style display: which source(s) reach this sink, transforms flattened */
     JSValue t = JS_NewObject(ctx);
+    JS_CowExempt(t);   /* the task is HOST analysis state written during a flow (often the document flow); its
+                          property writes must NOT ride that flow's COW delta, else they are PARKED with it and the
+                          task reads back undefined at the teardown emit — exempt it exactly like the ledgers. */
     JS_SetPropertyStr(ctx, t, "sink", JS_NewString(ctx, sink));
     JS_SetPropertyStr(ctx, t, "ctx", JS_NewString(ctx, sctx));
     JS_SetPropertyStr(ctx, t, "expr", JS_NewString(ctx, shape ? shape : "{}"));
@@ -439,7 +442,12 @@ void solve_init(JSContext *ctx) {
     g_solvetasks = JS_NewArray(ctx);
     g_verified = JS_NewObject(ctx); g_enqueued = JS_NewObject(ctx);
     g_reached = JS_NewObject(ctx);
-    JS_CowExempt(g_verified); JS_CowExempt(g_enqueued);
+    /* ALL @S ledgers are HOST analysis state, not page state — writes to them (during the document flow, a
+       session, or a candidate flow) must NOT ride the flow's COW delta, else they are PARKED with that delta and
+       vanish at the teardown emit (the document flow's delta is now parked as g_doc_base, not left applied like
+       the old boot). g_solvetasks/g_reached were missing this and so the sink task written during the document
+       flow never reached solve_all. */
+    JS_CowExempt(g_verified); JS_CowExempt(g_enqueued); JS_CowExempt(g_solvetasks); JS_CowExempt(g_reached);
 }
 void solve_free(JSContext *ctx) {
     for (int i = 0; i < g_gate_n; i++) free(g_gate_tokens[i]);

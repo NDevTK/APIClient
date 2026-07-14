@@ -130,3 +130,9 @@ fixtures server listening on http://127.0.0.1:8765/
 [2026-07-14T16:32:32.211Z] GET /authgate_h.html  referer=-
 [2026-07-14T16:32:32.242Z] GET /authgate_h.html  referer=http://127.0.0.1:8765/authgate_h.html
 [2026-07-14T16:32:32.253Z] GET /favicon.ico  referer=http://127.0.0.1:8765/authgate_h.html
+[2026-07-14T16:36:31.251Z] GET /fsa_xss.html  referer=-
+[2026-07-14T16:36:31.273Z] GET /fsa_xss.html  referer=http://127.0.0.1:8765/fsa_xss.html
+[2026-07-14T16:36:31.282Z] GET /favicon.ico  referer=http://127.0.0.1:8765/fsa_xss.html
+[2026-07-14T16:37:29.666Z] GET /authgate_h.html  referer=-
+[2026-07-14T16:37:29.717Z] GET /authgate_h.html  referer=http://127.0.0.1:8765/authgate_h.html
+[2026-07-14T16:37:29.719Z] GET /favicon.ico  referer=http://127.0.0.1:8765/authgate_h.html
