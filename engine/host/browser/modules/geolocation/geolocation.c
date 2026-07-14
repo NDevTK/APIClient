@@ -1,5 +1,6 @@
 /* Geolocation module — see geolocation.h. */
 #include "modules/geolocation/geolocation.h"
+#include "solver/defer.h"
 #include "bindings/idl.h"          /* idl_dfail_wrap — unbuilt Geolocation members DFAIL */
 #include "solver/concolic.h"       /* js_concolic, js_noop */
 #include "solver/scheduler.h"      /* drive_opaque_cb — success(position) becomes a driven flow */

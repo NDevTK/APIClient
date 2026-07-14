@@ -7,7 +7,7 @@
 #include "solver/solve.h"    /* solve_add — setTimeout(string) EVALs -> js-context @S sink */
 #include "solver/concolic.h"   /* g_concolic */
 
-extern void flow_defer_callback(JSContext *ctx, JSValueConst cb);   /* scheduler-side: register a callback as a BFS flow */
+#include "solver/defer.h"   /* flow_defer_callback: a setTimeout/rAF FUNCTION callback becomes a BFS flow */
 
 JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;

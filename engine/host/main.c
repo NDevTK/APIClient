@@ -30,6 +30,7 @@
 #include "solver/concolic_array.h"  /* the Array interface a concolic presents (iteration-routing policy) */
 #include "solver/scheduler.h"    /* Flow (per-flow scheduler state) + AsyncRecipe (replay recipe) — the registry's record types */
 #include "solver/fork.h"        /* branch_decide / ctx_forks — the fork/exploration policy (registered as the engine branch hooks) */
+#include "solver/defer.h"       /* flow_defer_callback / drive_opaque_cb — deferred/callback flows */
 #include "solver/solve.h"        /* the @S SOLVER component: solve_add sink entry + gate_collect/solve_all/solve_init/solve_free */
 #include "solver/async_flow.h"   /* ASYNC-AS-FLOW: the async-call/reaction/await hooks + the cross-session async-recipe map */
 #include "solver/boot_flow.h"    /* BOOT-AS-FLOW + candidate-replay + attacker session (the flow types beyond a plain orphan) */

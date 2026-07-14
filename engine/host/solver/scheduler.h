@@ -114,8 +114,7 @@ void seed_frontier(JSContext *ctx, const char *recipes);   /* seed the frontier 
 void park_frontier(JSContext *ctx);   /* park the ENTIRE residual frontier: emit each flow's cross-session replay recipe (-> g_park -> IDB) and free its handle/COW/DOM/async refs. Called under RAM pressure AND at teardown (else residual flows leak -> JS_FreeRuntime asserts, and the frontier is lost). */
 int  reg_readd(JSContext *ctx, Flow f);   /* re-queue an existing Flow (fork.c re-queues the snapshot sibling) */
 /* branch_decide / ctx_forks live in solver/fork.c now (the fork/exploration policy) — see fork.h. */
-void drive_opaque_cb(JSContext *ctx, JSValueConst cb, JSValueConst coll);   /* JS_SetCbHook: a callback on opaque input -> a scheduler flow */
-void flow_defer_callback(JSContext *ctx, JSValueConst cb);   /* a deferred callback (setTimeout/rAF) -> a scheduler flow (timers.c edge) */
+/* flow_defer_callback / drive_opaque_cb live in solver/defer.h (deferred/callback flows). */
 double scheduler_top_weight(void);   /* this engine's best-flow weight (host Level-1 ranking) */
 
 #endif
