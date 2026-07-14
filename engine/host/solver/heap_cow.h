@@ -34,6 +34,7 @@ void heap_cow_buf_free(JSContext *ctx, void *buf, int n);   /* free an EVICTED p
 void *heap_cow_base_take(void);                     /* detach the shared base chain (park it on the flow) */
 void heap_cow_base_load(void *base);                /* install a parked flow's base chain */
 void heap_cow_base_free(JSContext *ctx, void *base);/* drop a flow's reference to a base chain (free iff last) */
+void heap_cow_base_ref(void *base);                 /* add ONE ref to a base chain (each orphan forks the document flow's shared delta) */
 
 /* Boot-delta helpers (boot-as-flow / candidate isolation). */
 void *heap_cow_boot_delta_merge(JSContext *ctx, void *dst, int *pn, int *pcap);   /* append the active head into a host boot-delta buffer */

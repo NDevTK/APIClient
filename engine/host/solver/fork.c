@@ -4,7 +4,6 @@
 #include "check.h"
 #include "solver/fork.h"
 #include "solver/scheduler.h"      /* the scheduler state branch_decide reads (g_dec/g_c/g_cur_fn/…) + reg_add/reg_readd/spawn_async_sibling */
-#include "solver/boot_flow.h"      /* reg_add_boot — a boot flow forks its own kind */
 #include "solver/session.h"        /* reg_add_session — a session flow forks another session */
 #include "solver/constraints.h"    /* cons_set / cons_arm_feasible / opcmp_neg / OPCMP_NONE — the per-flow value-domain */
 #include "solver/heap_cow.h"       /* heap_cow_fork — freeze the heap delta into a shared base for the snapshot sibling */
@@ -64,7 +63,6 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
                 return 1;
             }
             if (g_in_session) reg_add_session(ctx, sib, g_c + 1);
-            else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);
             else if (g_cur_flow && g_cur_flow->is_async) spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1);
             else reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1)->orphan_idx = g_cur_orphan_idx;   /* C-reentry: re-run the per-iteration sibling */
             cons_set(g_c, NULL, NULL, OPCMP_NONE, NULL);
@@ -81,16 +79,6 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
     if (has && !tf && ff) { cons_set(g_c, src, tok, false_op, jk); g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++; return 0; }   /* TRUE arm impossible */
     if (has && !ff && tf) { cons_set(g_c, src, tok, true_op, jk);  g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++; return 1; }   /* FALSE arm impossible */
 
-    if (g_initial_boot) {
-        /* INITIAL boot flow: KEEP the all-false PRIMARY (so g_boot_delta stays the logged-out baseline the whole
-           frontier layers over) but FORK the TRUE arm as a sibling boot flow — one run explores boot's gates,
-           replacing the monolithic (false-only, no exploration) pass AND its separate reg_add_boot re-run. */
-        signed char *bsib = (signed char *)malloc((size_t)(g_c + 1));
-        if (bsib) { for (int i = 0; i < g_c; i++) bsib[i] = g_dec[i]; bsib[g_c] = 1; reg_add_boot(ctx, bsib, g_c + 1); }
-        cons_set(g_c, has ? src : NULL, has ? tok : NULL, has ? false_op : OPCMP_NONE, has ? jk : NULL);
-        g_dec[g_c] = 0; g_dec_n = g_c + 1; g_c++;
-        return 0;
-    }
     signed char *sib = (signed char *)malloc((size_t)(g_c + 1));   /* both arms feasible: FALSE sibling, take TRUE */
     CHECK(sib, "branch_fork_oom: cannot record the sibling arm — dropping it truncates BFS exploration; OOM is a physical floor");
     for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
@@ -110,7 +98,6 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
         return 1;                                      /* return value is IGNORED (OP_if rewinds on fork-pending) */
     }
     if (g_in_session) reg_add_session(ctx, sib, g_c + 1);      /* an exploratory session forks ANOTHER session (re-fire handlers with the sibling vector) */
-    else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);  /* a boot flow forks ANOTHER boot flow (re-run boot with the sibling vector) */
     else if (g_cur_flow && g_cur_flow->is_async)               /* an ASYNC flow: re-run via the recipe (func+args) so the awaits — recorded in this SAME g_dec vector — replay too */
         spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1);
     else reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1)->orphan_idx = g_cur_orphan_idx;   /* C-reentry orphan: re-run fallback (cannot suspend to snapshot) */
@@ -150,6 +137,10 @@ void fork_spawn_sibling(JSContext *ctx, Flow *f)
     sib.dec = g_fork_sib_dec; sib.dec_n = g_fork_sib_dec_n;   /* the FALSE arm at the fork point */
     g_fork_sib_dec = NULL; g_fork_sib_dec_n = 0;
     sib.handle = JS_DupValue(ctx, f->handle);
+    sib.is_boot = 0;   /* a forked continuation is NOT the document-script cursor-driver: it drives its OWN snapshot
+                          frame to completion as a plain flow. Keeping is_boot would re-enter document_script_next
+                          (the shared cursor is already drained) -> a second document_scripts_complete that
+                          overwrites g_doc_base (leaking it) and re-seeds. Session forks keep session (unchanged). */
     sib.candidate = NULL; sib.vtarget = NULL; sib.drive_src = NULL;   /* owned strings not shared with an orphan sibling */
     sib.aresolve = JS_UNDEFINED; sib.areject = JS_UNDEFINED; sib.await_promise = JS_UNDEFINED;
     sib.rthis = JS_UNDEFINED; sib.rargs = NULL; sib.rargc = 0;

@@ -162,6 +162,7 @@ void *dom_cow_fork(void) {
 void *dom_base_take(void) { void *b = g_dom_base; g_dom_base = NULL; return b; }
 void dom_base_load(void *base) { g_dom_base = (DomSeg *)base; }
 void dom_base_free(void *base) { if (base) dom_seg_unref((DomSeg *)base); }
+void dom_base_ref(void *base) { if (base) ((DomSeg *)base)->refcount++; }   /* each orphan forks the document flow's shared DOM delta */
 void dom_buf_free(void *buf, int n) {   /* free a parked DOM delta buffer (its nodes stay detached, owned by the doc) */
     DomUndo *b = (DomUndo *)buf;
     for (int i = 0; i < n; i++) {

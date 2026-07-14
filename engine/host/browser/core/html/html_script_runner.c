@@ -11,7 +11,6 @@
 #include "core/dom/document.h"              /* doc_set_current_script — document.currentScript */
 #include "core/dom/dom_element.h"           /* el_wrap — the running <script> element */
 #include "platform/url.h"                   /* has_hole — an opaque-hole src isn't a concrete fetch */
-#include "solver/boot_scripts.h"             /* boot_script_cache — inline scripts cached for boot-replay */
 #include "solver/why.h"                      /* why_add — a script runtime throw surfaces as @WHY */
 #include "check.h"                           /* DCHECK — the script is driven as a heap-frame flow; a yield here is a should-never-happen */
 
@@ -49,15 +48,6 @@ int boot_exec_one(JSContext *ctx, JSValueConst el, JSValueConst compiled) {
 }
 
 #include "core/loader/module_loader.h"   /* modsrc_body — a fetched sync external's body */
-static void run_classic_body(JSContext *ctx, JSValueConst el, const char *txt, size_t len) {
-    JSValueConst compiled = boot_script_cache(ctx, el, txt, len);
-    if (boot_exec_one(ctx, el, compiled)) {
-        JSValue e = JS_GetException(ctx); const char *m = JS_ToCString(ctx, e);
-        char rz[300]; snprintf(rz, sizeof rz, "<script>: %s", m ? m : "throw");
-        if (m) JS_FreeCString(ctx, m); JS_FreeValue(ctx, e);
-        why_add(ctx, "script-eval", rz);
-    }
-}
 static int el_type_is_module(lxb_dom_element_t *el) {
     size_t tl = 0; const lxb_char_t *t = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &tl);
     return t && tl == 6 && memcmp(t, "module", 6) == 0;
@@ -83,28 +73,40 @@ void dom_script_kind_set(const char *url, int kind) {
     g_skinds[g_skinds_n].url = strdup(url); g_skinds[g_skinds_n].kind = kind; g_skinds_n++;
 }
 int dom_script_kind(const char *url) { for (int i = 0; i < g_skinds_n; i++) if (strcmp(g_skinds[i].url, url) == 0) return g_skinds[i].kind; return SK_SYNC; }
-/* Document-order boot cursor: run <script>s in order, BLOCKING (park) on an unfetched synchronous external. */
-static struct scr_ctx g_boot_scr = {0};
-static int g_boot_cursor = 0;
-static int boot_drive_scripts(JSContext *ctx) {
-    for (; g_boot_cursor < g_boot_scr.n; g_boot_cursor++) {
-        lxb_dom_element_t *el = g_boot_scr.els[g_boot_cursor];
-        if (!el_type_is_module(el) && el_has_nomodule(el)) continue;   /* a module-capable browser skips a nomodule classic (legacy fallback) — nomodule is ignored on a module script */
+/* Document-order script cursor. Scripts are NOT run in a synchronous "boot" phase — each classic <script>'s
+   program is YIELDED to the scheduler, which dispatches it as a time-travelled FLOW like the rest of the
+   document (snapshot-forking its gates, never re-run). This cursor only sequences document order + handles the
+   non-executable elements (module link, importmap, async register) inline as it advances. */
+static struct scr_ctx g_doc_scr = {0};
+static int g_doc_cursor = 0;
+/* Yield the NEXT classic <script>'s compiled program for the scheduler to drive as a flow. Returns an OWNED
+   program (a plain function object; cursor advanced past it), JS_NULL when every script has been yielded, or
+   JS_UNINITIALIZED when PARKED on an unfetched sync external (the scheduler waits for qjs_provide then calls
+   again — document order blocks on a sync external exactly like a real browser). */
+JSValue document_script_next(JSContext *ctx) {
+    for (; g_doc_cursor < g_doc_scr.n; g_doc_cursor++) {
+        lxb_dom_element_t *el = g_doc_scr.els[g_doc_cursor];
+        if (!el_type_is_module(el) && el_has_nomodule(el)) continue;   /* module-capable: nomodule classic is a legacy fallback, skipped */
         size_t sl = 0;
         const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
         if (src && sl) {
             char *cu = strndup((const char *)src, sl); if (!cu) continue;
-            int kind = el_type_is_module(el) ? SK_MODULE : ((el_has_async(el) || el_has_defer(el)) ? SK_ASYNC : SK_SYNC);   /* async AND defer are non-blocking (defer runs after parse, approximated as async post-boot); only a plain classic blocks document order */
+            int kind = el_type_is_module(el) ? SK_MODULE : ((el_has_async(el) || el_has_defer(el)) ? SK_ASYNC : SK_SYNC);
             dom_script_kind_set(cu, kind);   /* record so qjs_provide routes it without re-parsing */
-            if (kind != SK_SYNC) { arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu); continue; }   /* async / module: does NOT block document order */
+            if (kind != SK_SYNC) { arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu); continue; }   /* async/module: non-blocking */
             size_t blen = 0; const char *body = has_hole(cu) ? NULL : modsrc_body(cu, &blen);
-            if (body) { JSValue elw = el_wrap(ctx, el); run_classic_body(ctx, elw, body, blen); JS_FreeValue(ctx, elw); free(cu); continue; }
+            if (body) {   /* fetched sync external classic: compile + yield its program (advance past it) */
+                JSValue prog = JS_Eval(ctx, body, blen, cu, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+                free(cu); g_doc_cursor++;
+                if (JS_IsException(prog)) return prog;
+                JSValue clo = JS_CompiledScriptClosure(ctx, prog); JS_FreeValue(ctx, prog); return clo;   /* flow-drivable closure */
+            }
             arr_push_str(ctx, g_chunkurls, cu); if (!has_hole(cu)) chunk_pending_add(cu); free(cu);
-            return 1;   /* SYNC external not yet fetched: request + PARK (blocks document order like a real browser) */
+            return JS_UNINITIALIZED;   /* SYNC external not yet fetched: PARK (do NOT advance; retried after provide) */
         }
         int is_mod;
         if (!script_is_exec(el, &is_mod)) {
-            if (script_is_importmap(el)) {   /* parse the import map (in document order, before any module import resolves) */
+            if (script_is_importmap(el)) {   /* parse the import map in document order, before any module import resolves */
                 size_t il = 0; lxb_char_t *itxt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &il);
                 if (itxt && il) importmap_parse(ctx, (const char *)itxt, il);
                 if (itxt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, itxt);
@@ -113,29 +115,35 @@ static int boot_drive_scripts(JSContext *ctx) {
         }
         size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
         if (txt && tl) {
-            if (is_mod) { doc_set_current_script(ctx, el_wrap(ctx, el)); link_inline_module(ctx, (const char *)txt, tl); doc_set_current_script(ctx, JS_NULL); }   /* inline module -> the ONE URL-keyed map + tree-linker retry (like an external module) */
-            else { JSValue elw = el_wrap(ctx, el); run_classic_body(ctx, elw, (const char *)txt, tl); JS_FreeValue(ctx, elw); }
+            if (is_mod) { doc_set_current_script(ctx, el_wrap(ctx, el)); link_inline_module(ctx, (const char *)txt, tl); doc_set_current_script(ctx, JS_NULL); if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt); continue; }   /* inline module -> the URL-keyed map + tree-linker */
+            /* inline classic: compile + yield its program as a flow-drivable closure */
+            JSValue prog = JS_Eval(ctx, (const char *)txt, tl, "<script>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+            lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
+            g_doc_cursor++;
+            if (JS_IsException(prog)) return prog;
+            JSValue clo = JS_CompiledScriptClosure(ctx, prog); JS_FreeValue(ctx, prog); return clo;
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
-    return 0;   /* all scripts ran — boot script phase complete */
+    return JS_NULL;   /* every script yielded */
 }
 int dom_run_scripts(JSContext *ctx) {
     if (!g_dom) return 0;
     csp_derive(g_dom);   /* per-document effective CSP: real HTTP header (primary) else <meta> scan (csp.c) */
     for (int i = 0; i < g_skinds_n; i++) free(g_skinds[i].url);
     free(g_skinds); g_skinds = NULL; g_skinds_n = g_skinds_cap = 0;
-    free(g_boot_scr.els); g_boot_scr.els = NULL; g_boot_scr.n = 0;
-    dom_collect_scripts(g_dom, &g_boot_scr);
-    g_boot_cursor = 0;
-    return boot_drive_scripts(ctx);
+    free(g_doc_scr.els); g_doc_scr.els = NULL; g_doc_scr.n = 0;
+    dom_collect_scripts(g_dom, &g_doc_scr);
+    g_doc_cursor = 0;
+    return 0;   /* collected; the scheduler drives each script's program as a flow via document_script_next */
 }
-int dom_boot_resume(JSContext *ctx) { return boot_drive_scripts(ctx); }
-/* Is `url` the synchronous CLASSIC external the boot cursor is currently PARKED on? (Lets qjs_provide tell a
-   boot-blocking external — resume the cursor — from a module chunk a boot script dynamically imported.) */
-int dom_boot_parked_is(const char *url) {
-    if (g_boot_cursor >= g_boot_scr.n) return 0;
+/* More document scripts remain to be driven (the scheduler's document-script flow calls document_script_next). */
+int dom_script_has_more(void) { return g_doc_cursor < g_doc_scr.n; }
+/* Is `url` the synchronous CLASSIC external the document cursor is currently PARKED on? (Lets qjs_provide tell a
+   document-order-blocking external — un-park the document-script flow — from a module chunk a script imported.) */
+int dom_script_parked_is(const char *url) {
+    if (g_doc_cursor >= g_doc_scr.n) return 0;
     size_t sl = 0;
-    const lxb_char_t *src = lxb_dom_element_get_attribute(g_boot_scr.els[g_boot_cursor], (const lxb_char_t *)"src", 3, &sl);
+    const lxb_char_t *src = lxb_dom_element_get_attribute(g_doc_scr.els[g_doc_cursor], (const lxb_char_t *)"src", 3, &sl);
     return src && url && sl == strlen(url) && memcmp(src, url, sl) == 0;
 }

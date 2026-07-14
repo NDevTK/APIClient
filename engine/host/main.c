@@ -33,8 +33,7 @@
 #include "solver/defer.h"       /* flow_defer_callback / drive_opaque_cb — deferred/callback flows */
 #include "solver/solve.h"        /* the @S SOLVER component: solve_add sink entry + gate_collect/solve_all/solve_init/solve_free */
 #include "solver/async_flow.h"   /* ASYNC-AS-FLOW: the async-call/reaction/await hooks + the cross-session async-recipe map */
-#include "solver/boot_flow.h"    /* BOOT-AS-FLOW + candidate-replay (the flow types beyond a plain orphan) */
-#include "solver/session.h"      /* attacker SESSION flow: reg_add_session + js_session_fns/drain (relocated out of boot_flow) */
+#include "solver/session.h"      /* attacker SESSION flow: reg_add_session + js_session_fns/drain */
 #include "solver/solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "solver/envelope.h"     /* @S structured-source delivery envelope (JSON/query/delim addressing), its own TU */
 #include "core/frame/csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
@@ -53,7 +52,6 @@
 #include "core/frame/location.h"     /* the browser location object + external-input source getters + principal split, its own TU */
 #include "core/dom/dom_element.h"  /* the DOM Element JSClass + el_wrap (methods migrate here incrementally), its own TU */
 #include "core/loader/document_scripts.h"  /* scr_ctx + dom_collect_scripts + script_is_exec + document_bundle_id (identity component) */
-#include "solver/boot_scripts.h"  /* boot_script_cache/boot_scripts_run/boot_script_count/boot_scripts_free (boot-replay substrate) */
 #include "solver/why.h"  /* why_add — runtime-reasoned @WHY */
 #include "core/html/html_script_runner.h"  /* eval_page_script + dom_run_scripts (HTMLScriptRunner) */
 #include "core/loader/chunk_loader.h"       /* chunk_pending_add / chunk_provide / chunk_list — the lazy-chunk resource loader */
@@ -444,26 +442,28 @@ static int g_rc = 0;
    -> the canonical logged-out g_boot_delta the whole frontier layers over; each opaque boot gate forks a TRUE
    sibling boot flow, dispatched later). Extracted from qjs_init so boot EXECUTION can be de-entangled from the
    host's synchronous return — the host only needs g_bundle_id (a pure DOM scan), never g_boot_delta, at return. */
-/* Finish boot's script phase (cursor reached the last script — after every sync external ran in position): capture
-   g_boot_delta, fix the COW baseline, then seed the frontier (its functions now exist). */
-void boot_complete(JSContext *ctx) {   /* non-static: the chunk loader completes a boot parked on a sync external */
-    g_initial_boot = 0; g_in_boot_flow = 0; g_running = 0; g_cur_flow = NULL;
-    JS_CowSetActive(0);
-    g_boot_delta = heap_cow_buf_take(&g_boot_delta_n, &g_boot_delta_cap);
-    JS_SetFlowLocalMark(1);
+/* Every document script has run (the document-script flow drained document_script_next, after every sync external
+   ran in position): the flow's accumulated heap+DOM delta is now the shared baseline every orphan/session forks
+   from. Seed the frontier (the page's functions now exist). Called from the scheduler when the document-script
+   flow finishes, or from the chunk loader when a parked sync external completes the last script. */
+void document_scripts_complete(JSContext *ctx) {
+    JS_SetFlowLocalMark(1);   /* post-script created objects are flow-local (not shared baseline) */
     g_boot_active = 0;
     seed_frontier(ctx, g_pending_recipes);
 }
 static void run_initial_boot(JSContext *ctx) {
-    JS_CowSetActive(1);
-    g_running = 1; g_in_boot_flow = 1; g_initial_boot = 1; g_c = 0; g_dec_n = 0; cons_reset();
+    /* Preamble = pre-script BASELINE: our trusted, gateless host globals (__driveSession etc.), run raw (not a
+       flow, not captured) so they are the shared starting state every document-script flow layers over. */
     if (g_boot_preamble && g_boot_preamble[0]) {
-        JSValueConst bc = boot_script_cache(ctx, JS_NULL, g_boot_preamble, strlen(g_boot_preamble));
-        if (boot_exec_one(ctx, JS_NULL, bc)) { js_std_dump_error(ctx); g_rc = 1; }   /* preamble runs through the SAME executor as replays */
+        JSValue pc = JS_Eval(ctx, g_boot_preamble, strlen(g_boot_preamble), "<preamble>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(pc)) { js_std_dump_error(ctx); g_rc = 1; }
+        JS_FreeValue(ctx, pc);
     }
-    g_boot_active = 1;
-    if (dom_run_scripts(ctx)) return;   /* PARKED on a synchronous external <script src>: wait for qjs_provide -> dom_boot_resume */
-    boot_complete(ctx);
+    dom_run_scripts(ctx);       /* COLLECT the document's scripts (CSP, kinds); the scheduler drives each as a flow */
+    g_boot_active = 1;          /* document scripts pending -> seed the frontier only after the document-script flow drains them */
+    JS_SetFlowLocalMark(0);     /* the document-script flow's creations are SHARED baseline (globals/functions orphans fork), not flow-local transients — like the old boot; document_scripts_complete flips it to 1 afterwards */
+    JS_CowSetActive(1);         /* from here every write is captured into a flow delta (pre-script state = baseline) */
+    reg_add(ctx, JS_UNDEFINED, 2.0, NULL, 0)->is_boot = 1;   /* the ONE document-script flow (highest value -> runs first) */
 }
 
 KEEP int qjs_init(const char *boot, const char *html, const char *origin,
@@ -698,8 +698,7 @@ KEEP double qjs_top_weight(void) { return scheduler_top_weight(); }   /* this en
 KEEP int qjs_step(void)
 {
     if (!g_ctx) return 0;
-    if (g_need_initial_boot) { run_initial_boot(g_ctx); g_need_initial_boot = 0; }   /* FIRST step: run boot (document-order; may PARK on a sync external) */
-    if (g_boot_active) return 1;   /* boot PARKED on a sync external: NEED_FETCH; do NOT dispatch flows (seed runs in boot_complete) */
+    if (g_need_initial_boot) { run_initial_boot(g_ctx); g_need_initial_boot = 0; }   /* FIRST step: seed the document-script flow (the scheduler drives the scripts) */
     g_made_progress = 0;                                 /* fresh progress guard each host visit */
     scheduler_run(g_ctx);
     js_std_loop(g_ctx);
@@ -725,6 +724,12 @@ KEEP void qjs_teardown(void)
     /* Unresolved module graph residue -> @WHY BEFORE emit_result (so it lands in resolverErrors). */
     { int pm = module_pending_count(); if (pm) { char rz[64]; snprintf(rz, sizeof rz, "unresolved module graph x%d (dep never fetched)", pm); why_add(ctx, "module-link", rz); } }
     park_frontier(ctx);   /* PARK the residual frontier: any flow still queued/suspended when the doc tears down gets its cross-session replay recipe emitted (-> _park -> IDB, so the ONE global frontier resumes it next session) AND its handle/COW/DOM/async refs freed — else those rooted objects leak and JS_FreeRuntime asserts gc_obj_list non-empty. Must precede emit_result (the recipes ride g_park into @RESULT). */
+    /* Free the document-script flow's shared base (globals + its pending async), kept alive all analysis so orphans
+       could fork it and qjs_finalize could resolve its promises. Orphans dropped their forks in park_frontier; this
+       drops the document's own ref (the last one) — else its captured globals leak the gc_obj_list assert. */
+    { extern void *g_doc_base, *g_doc_dom_base;
+      if (g_doc_base) heap_cow_base_free(ctx, g_doc_base); g_doc_base = NULL;
+      if (g_doc_dom_base) dom_base_free(g_doc_dom_base); g_doc_dom_base = NULL; }
     emit_result(ctx);   /* dedup in-engine + emit the ONE @RESULT json (endpoints/sinks/chunks/errors/park/_emit) */
     /* Clean teardown (else JS_FreeRuntime asserts gc_obj_list non-empty): stop + revert the COW log so
        its held baseline values return to their slots, and drop the opaque marker. */
@@ -737,7 +742,6 @@ KEEP void qjs_teardown(void)
     g_dom_capture = 0; dom_revert();   /* drop DOM undo log (restore baseline) before teardown */
     JS_SetConcolicMarker(JS_UNDEFINED); JS_SetBranchHook(NULL); JS_SetGateHook(NULL);
     solve_free(ctx);   /* @S accumulators + gate tokens -> solve.c */
-    boot_scripts_free(ctx);
     free(g_boot_preamble); g_boot_preamble = NULL;   /* free the stashed preamble */
     free(g_pending_recipes); g_pending_recipes = NULL;   /* free the stashed resume recipes */
     csp_free();
@@ -746,8 +750,6 @@ KEEP void qjs_teardown(void)
     pendreply_free(ctx);       /* free the reply delivery-park table (reply.c) */
     reply_registry_free();     /* free the reply fetch registry (reply_registry.c) */
     chunk_loader_free();       /* free the chunk pending/done registries (chunk_loader.c) */
-    if (g_boot_delta) heap_cow_buf_free(ctx, g_boot_delta, g_boot_delta_n);   /* free the stashed boot delta */
-    g_boot_delta = NULL; g_boot_delta_n = g_boot_delta_cap = 0;
     attr_shadow_free(ctx);
     handlers_free(ctx);   /* g_handlers + candidate-closure replay handlers + counts -> handler_registry.c */
     JS_FreeValue(ctx, g_el_proto); g_el_proto = JS_UNDEFINED;   /* the element-method proto ref (custom-element base chain) */

@@ -141,6 +141,10 @@ void *heap_cow_buf_take(int *n, int *cap) { void *b = g_head; *n = g_head_n; *ca
 void heap_cow_buf_load(void *buf, int n, int cap) { g_head = (CowEntry *)buf; g_head_n = n; g_head_cap = cap; }
 void *heap_cow_base_take(void) { void *b = g_base; g_base = NULL; return b; }
 void heap_cow_base_load(void *base) { g_base = (CowSeg *)base; }
+/* Add ONE reference to a base chain's top segment (the whole document-script flow's delta becomes a shared base
+   that every seeded orphan forks from — each orphan calls this so the chain outlives all of them; released by
+   heap_cow_base_free per flow). No-op on a NULL (flat) base. */
+void heap_cow_base_ref(void *base) { if (base) ((CowSeg *)base)->refcount++; }
 void heap_cow_base_free(JSContext *ctx, void *base) { if (base) seg_unref(ctx, (CowSeg *)base); }
 /* free an EVICTED parked head buffer: one of base/cur is held (applied/parked); create entries hold obj+atom. */
 void heap_cow_buf_free(JSContext *ctx, void *buf, int n) {

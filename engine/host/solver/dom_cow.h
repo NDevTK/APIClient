@@ -42,5 +42,6 @@ void *dom_cow_fork(void);       /* freeze head -> shared base; returns it (the s
 void *dom_base_take(void);      /* detach the shared base chain (park it on the flow) */
 void dom_base_load(void *base); /* install a parked flow's base chain (before dom_apply) */
 void dom_base_free(void *base); /* drop a flow's reference to a base chain (free iff last) */
+void dom_base_ref(void *base);  /* add ONE ref (each orphan forks the document flow's shared DOM delta) */
 
 #endif

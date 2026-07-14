@@ -9,9 +9,9 @@
 #include "check.h"
 #include "solver/scheduler.h"
 #include "solver/solve.h"           /* solve_is_verified — skip a redundant candidate flow */
-#include "solver/boot_flow.h"       /* boot_replay/_candidate + resolve_replayed_handler + reg_add_boot + g_boot_delta */
+#include "solver/session.h"         /* reg_add_session — an exploratory session forks another */
 #include "solver/async_flow.h"      /* flow_free_async_refs at flow teardown */
-#include "solver/boot_scripts.h"
+#include "core/html/html_script_runner.h"   /* document_script_next — the document-script flow pulls each program */
 #include "core/dom/handler_registry.h"   /* is_msg_handler — drive a 'message' listener with the {pm} event */
 #include "core/dom/events/event.h"       /* js_event_ctor — a driven non-message handler gets a real DOM Event */
 #include "core/html/html_script_element.h"   /* script_load_gated — a <script> load handler is not eligible until its chunk provides */
@@ -36,7 +36,10 @@ int g_cur_orphan_idx = -1;
 int g_park_requested = 0; long g_work = 0; double g_yield_floor = -1e300; int g_made_progress = 0;
 double g_quantum_start = 0.0; unsigned g_quantum_sample = 0; long g_switches = 0;
 double g_max_parked = -1e300; int g_resume_mode = 0;
-int g_initial_boot = 0;   /* the page's FIRST boot runs as a forking boot flow (all-false PRIMARY -> the canonical logged-out g_boot_delta; each opaque gate forks a TRUE sibling boot flow) — the ONE boot system, replacing the deleted monolithic non-forking pass + its separate reg_add_boot re-run. */
+int g_initial_boot = 0;   /* (legacy flag, always 0 now — the document-script flow uses the general snapshot-fork) */
+void *g_doc_base = NULL;       /* the completed document-script flow's shared HEAP delta; every seeded orphan forks it (heap_cow_base_ref) so it sees the document's globals */
+void *g_doc_dom_base = NULL;   /* its DOM twin (dom_base_ref) */
+void document_scripts_complete(JSContext *ctx);   /* main.c: seed the frontier once every document script has run */
 JSValue g_cur_fn = JS_UNDEFINED; signed char *g_dec = NULL; int g_dec_cap = 0, g_dec_n = 0, g_c = 0;
 
 static int quantum_expired(void) { return g_made_progress && (emscripten_get_now() - g_quantum_start) > QUANTUM_MS; }
@@ -79,7 +82,11 @@ int seed_orphans(JSContext *ctx)
         }
         int idx = g_orphan_n; g_orphan_buf[g_orphan_n++] = JS_DupValue(ctx, buf[i]);   /* buffer owns a ref (stable locator) */
         if (g_resume_mode) { JS_FreeValue(ctx, buf[i]); continue; }   /* resume: build locators only; recipes are seeded explicitly */
-        reg_add(ctx, buf[i], 1.0, NULL, 0)->orphan_idx = idx;
+        Flow *of = reg_add(ctx, buf[i], 1.0, NULL, 0); of->orphan_idx = idx;
+        /* SHARE the document-script flow's delta: the orphan FORKS it (refcounted base), so it sees the page's
+           globals/functions — the per-flow replacement for the deleted privileged g_boot_delta baseline. */
+        if (g_doc_base) { of->cow_base = g_doc_base; heap_cow_base_ref(g_doc_base); }
+        if (g_doc_dom_base) { of->dom_base = g_doc_dom_base; dom_base_ref(g_doc_dom_base); }
         seeded++;
     }
     free(buf);
@@ -270,7 +277,10 @@ void scheduler_run(JSContext *ctx)
                 g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);                 /* replay this session's decisions; new opaque branches fork siblings */
                 for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
                 g_c = 0; cons_reset();
-                if (f.candidate) boot_replay_candidate(ctx);
+                if (f.cow || f.cow_base || f.dom || f.dom_base) {         /* FORK the document delta so the fired handlers see the page's globals (state, config, …) */
+                    heap_cow_base_load(f.cow_base); f.cow_base = NULL; heap_cow_buf_load(f.cow, f.cow_n, f.cow_cap); heap_cow_apply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
+                    dom_base_load(f.dom_base); f.dom_base = NULL; dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
+                }
                 JSValue gg = JS_GetGlobalObject(ctx);
                 JSValue ds = JS_GetPropertyStr(ctx, gg, "__driveSession");
                 f.fs = JS_FlowNew(ctx, ds, JS_UNDEFINED, 0, NULL);        /* preemptible frame for the self-hosted session loop */
@@ -319,26 +329,71 @@ void scheduler_run(JSContext *ctx)
         }
 
         if (f.is_boot) {
-            /* BOOT FLOW: re-run boot from the PRISTINE pre-boot baseline as a FORKING starter. Cached replies
-               resolve synchronously (make_response injects __body), so a reply-consuming continuation runs
-               IN-LINE and its gated branches FORK with the concolic example (unreachable via the non-forking
-               promise-resume). The boot-undo lives IN the flow delta (heap_cow_seed_boot_inverse — the SAME primitive
-               candidate flows use), so heap_cow_revert restores the post-boot baseline with NO host-side bracket:
-               one uniform COW-delta mechanism, and g_boot_delta stays the canonical baseline (only READ). */
-            g_cur_fn = JS_UNDEFINED;
-            g_dec_n = f.dec_n; g_dec_ensure(g_dec_n);
-            for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
-            g_c = 0; cons_reset();
+            /* DOCUMENT-SCRIPT FLOW: run each initial <script>'s program (document_script_next, document order) as a
+               heap-frame flow, snapshot-forking its gates via the general path. It ACCUMULATES its heap+DOM delta
+               across scripts (they share globals), parking between scripts and on a sync external; when every
+               script has drained, its delta becomes the shared base every orphan forks from. Dynamically inserted
+               and lazy-fetched scripts are seeded event-driven elsewhere, sharing the inserting flow's context. */
+            g_cur_flow = &f; g_running = 1; g_cur_val = f.val; g_cur_fn = f.handle;
+            heap_cow_base_load(f.cow_base); f.cow_base = NULL; heap_cow_buf_load(f.cow, f.cow_n, f.cow_cap); heap_cow_apply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0;
+            dom_base_load(f.dom_base); f.dom_base = NULL; dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0;
+            g_dec_n = f.dec_n; g_dec_ensure(g_dec_n); for (int i = 0; i < g_dec_n; i++) g_dec[i] = f.dec ? f.dec[i] : 0;
+            g_c = f.saved_c; cons_reset();
+            if (f.fs == NULL) {                                          /* between scripts: pull the next one */
+                JSValue prog = document_script_next(ctx);
+                if (JS_IsNull(prog)) {                                   /* every script drained -> hand the delta to the frontier */
+                    void *hseg = heap_cow_fork(ctx); heap_cow_base_free(ctx, hseg);   /* freeze the last head into the base chain; fork gives refcount 2 (parent+phantom sibling) — drop the phantom so it is 1 */
+                    void *dseg = dom_cow_fork(); dom_base_free(dseg);
+                    heap_cow_unapply(ctx); dom_unapply();                /* restore the empty baseline; the chain is parked, not applied */
+                    g_doc_base = heap_cow_base_take();                   /* the shared document delta every orphan forks from (refcount 1) */
+                    g_doc_dom_base = dom_base_take();
+                    g_running = 0; g_cur_flow = NULL; g_cur_fn = JS_UNDEFINED;
+                    document_scripts_complete(ctx);                      /* seed orphans (each forks g_doc_base); JS_SetFlowLocalMark(1) */
+                    /* KEEP the document base alive (1 ref) for the whole analysis — orphans fork it, and its
+                       pending async state (fire-and-forget fetch promises) survives to qjs_teardown where
+                       qjs_finalize resolves them. Freeing it here (a page with no orphans) would drop promises
+                       the reply machinery still references -> the gc_obj_list teardown assert. Freed at teardown. */
+                    JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); free(f.drive_src);
+                    continue;
+                }
+                if (JS_VALUE_GET_TAG(prog) == JS_TAG_UNINITIALIZED) {    /* PARKED on an unfetched sync external: stash + re-queue (qjs_step returns NEED_FETCH) */
+                    heap_cow_unapply(ctx); f.cow = heap_cow_buf_take(&f.cow_n, &f.cow_cap); f.cow_base = heap_cow_base_take();
+                    dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap); f.dom_base = dom_base_take();
+                    f.saved_c = g_c; g_running = 0; g_cur_flow = NULL; g_cur_fn = JS_UNDEFINED; reg_readd(ctx, f); continue;
+                }
+                JS_FreeValue(ctx, f.handle); f.handle = prog; g_cur_fn = f.handle;   /* the current script's program (its own ref) */
+                f.fs = JS_FlowNew(ctx, f.handle, JS_UNDEFINED, 0, NULL);
+            }
+            JS_SetFlowYieldHook(wfq_yield);
+            JSValue out = JS_UNDEFINED;
+            int st = JS_FlowResume(ctx, f.fs, &out);
             JS_SetFlowYieldHook(NULL);
-            if (g_boot_delta) heap_cow_seed_boot_inverse(ctx, g_boot_delta, g_boot_delta_n);   /* seed flow delta with boot-inverse; heap -> pre-boot (globals incl let/const deleted), RECORDED */
-            g_in_boot_flow = 1;
-            boot_scripts_run(ctx);                                        /* re-run boot, FORKING; cached replies resolve sync */
-            { JSContext *cb; int jr; while ((jr = JS_ExecutePendingJob(g_rt, &cb)) > 0) { } if (jr < 0) js_std_dump_error(cb ? cb : ctx); }   /* drain continuations (they fork too) */
-            g_in_boot_flow = 0;
-            heap_cow_revert(ctx); { int cn, cc; void *cb = heap_cow_buf_take(&cn, &cc); heap_cow_buf_free(ctx, cb, cn); }   /* revert boot-inverse + re-run writes -> post-boot baseline */
-            dom_revert(); { int dn, dc; void *db = dom_buf_take(&dn, &dc); dom_buf_free(db, dn); }
-            g_running = 0; g_cur_fn = JS_UNDEFINED; g_cur_flow = NULL;
-            JS_FreeValue(ctx, f.handle); free(f.dec); free(f.candidate); free(f.vtarget); free(f.drive_src);            continue;
+            { JSContext *cb; int jr; while ((jr = JS_ExecutePendingJob(g_rt, &cb)) > 0) { } if (jr < 0) js_std_dump_error(cb ? cb : ctx); }
+            g_running = 0; g_cur_fn = JS_UNDEFINED; JS_FreeValue(ctx, out);   /* the script's completion value / exception (unused) */
+            if (st == 1) {                                              /* gate suspend: snapshot-fork the sibling, keep driving this script */
+                g_switches++;
+                if (JS_ForkPending()) JS_FlowCloseVarRefs(ctx, f.fs);
+                /* TAKE the frozen base into f.cow_base BEFORE fork_spawn_sibling — it reads f->cow_base to give the
+                   sibling its share of the base heap_cow_fork just froze (refcount 2 = primary + sibling). Forking
+                   first (when f.cow_base is still NULL from dispatch) left the sibling with NO base ref, so the
+                   base's refcount-2 had ONE holder and leaked its captured globals. Order matches the sync path. */
+                heap_cow_unapply(ctx); f.cow = heap_cow_buf_take(&f.cow_n, &f.cow_cap); f.cow_base = heap_cow_base_take();
+                dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap); f.dom_base = dom_base_take();
+                fork_spawn_sibling(ctx, &f);
+                f.saved_c = g_c; f.val = g_cur_val;
+                if (g_dec_n > f.dec_n) { signed char *nd = (signed char *)malloc((size_t)(g_dec_n > 0 ? g_dec_n : 1)); if (nd) { for (int i = 0; i < g_dec_n; i++) nd[i] = g_dec[i]; free(f.dec); f.dec = nd; } }
+                else { for (int i = 0; i < g_dec_n && f.dec; i++) f.dec[i] = g_dec[i]; }
+                f.dec_n = g_dec_n;
+                g_cur_flow = NULL; reg_readd(ctx, f); continue;
+            }
+            /* COMPLETED this script (st==0/2/3): the frame is freed; KEEP the accumulated delta, park it, and
+               re-queue with fs=NULL to pull the next script (or finish). No revert — document scripts accumulate. */
+            heap_cow_unapply(ctx); f.cow = heap_cow_buf_take(&f.cow_n, &f.cow_cap); f.cow_base = heap_cow_base_take();
+            dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap); f.dom_base = dom_base_take();
+            f.fs = NULL; f.saved_c = g_c; f.val = g_cur_val;
+            if (g_dec_n > f.dec_n) { signed char *nd = (signed char *)malloc((size_t)(g_dec_n > 0 ? g_dec_n : 1)); if (nd) { for (int i = 0; i < g_dec_n; i++) nd[i] = g_dec[i]; free(f.dec); f.dec = nd; } }
+            f.dec_n = g_dec_n;
+            g_cur_flow = NULL; reg_readd(ctx, f); continue;
         }
 
         /* SYNC flow: load its per-flow scheduler state (decision vector + branch cursor). __branch
@@ -351,25 +406,17 @@ void scheduler_run(JSContext *ctx)
         cons_reset();   /* rebuild the value domain as this flow re-sees its branch conditions (starter = full; resume = from saved_c) */
 
         int is_starter = (f.fs == NULL);
-        if (is_starter) {                           /* STARTER: fresh heap frame + empty heap/DOM deltas (both left NULL by the previous flow's exit) */
-            /* @S CROSS-FLOW: a candidate flow re-runs boot with the concrete candidate pinned, so shared
-               state a handler reads (window.x = location.hash set at boot) holds the candidate, not the
-               baseline opaque. boot_replay_candidate SEEDS this flow's delta with the boot-inverse (heap ->
-               pre-boot so a guarded init re-fires) then replays boot under the candidate — all in the flow's
-               OWN delta, so a suspend/revert restores the post-boot baseline with no host-side bracket. */
-            if (f.candidate) boot_replay_candidate(ctx);
-            /* CONTINUATION starter: a callback deferred from a handler carries an INHERITED delta — a shared
-               immutable base SEGMENT (heap_cow_fork/dom_cow_fork at defer time) for BOTH heap and DOM — so it sees
-               the handler's writes. Load+apply it. Mutually exclusive with a candidate flow (own boot-inverse). */
-            else if (f.cow || f.cow_base || f.dom || f.dom_base) {
+        if (is_starter) {                           /* STARTER: fresh heap frame; a candidate/continuation carries an INHERITED delta */
+            /* INHERITED delta: a continuation deferred from a flow — AND an @S candidate — carries a shared
+               immutable base SEGMENT (heap_cow_fork/dom_cow_fork) for BOTH heap and DOM, so it sees the writes of
+               the flow it forked from (the document flow's globals, a handler's tainted write). A candidate no
+               longer re-runs boot: it SNAPSHOT-forks the reaching flow's delta and injects its payload at the
+               source getter, re-running the REAL code over the SAME cross-flow state — never a replay. */
+            if (f.cow || f.cow_base || f.dom || f.dom_base) {
                 if (f.cow || f.cow_base) { heap_cow_base_load(f.cow_base); f.cow_base = NULL; heap_cow_buf_load(f.cow, f.cow_n, f.cow_cap); heap_cow_apply(ctx); f.cow = NULL; f.cow_n = f.cow_cap = 0; }
                 if (f.dom || f.dom_base) { dom_base_load(f.dom_base); f.dom_base = NULL; dom_buf_load(f.dom, f.dom_n, f.dom_cap); dom_apply(); f.dom = NULL; f.dom_n = f.dom_cap = 0; }
             }
-            /* CLOSURE cross-flow: for a candidate flow, drive the handler boot_replay RE-CREATED (candidate
-               closure), located by source identity — else the ORIGINAL f.handle (baseline closure) is driven
-               and the candidate never reaches a closure-captured source. Non-candidate flows drive f.handle. */
             JSValue drive = f.handle, resolved = JS_UNDEFINED;
-            if (f.candidate) { resolved = resolve_replayed_handler(ctx, f.handle); if (!JS_IsUndefined(resolved)) drive = resolved; }
             /* Each orphan ARGUMENT is DISTINCT external input, so it gets its OWN source identity ({arg0}..{arg7})
                — NOT the shared source-less g_concolic. Sharing one source-less value across args aliased them in the
                per-flow constraint tracker: `function(a,b){ if(a=='x' && b=='y') sink }` recorded ==x and ==y on the
@@ -607,7 +654,13 @@ void seed_frontier(JSContext *ctx, const char *recipes)
        click) is fired over that delta with its producer's context. The old >=2 gate was a BOUND that truncated
        nested-handler discovery on a single-component page; the WFQ starves a session with no real cross-flow
        state, so >=1 costs ~nothing when unproductive. */
-    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) reg_add(ctx, JS_UNDEFINED, 1.2, NULL, 0)->session = 1;
+    if (!g_resume_mode && (g_handler_n + g_orphan_n) >= 1) {
+        Flow *sf = reg_add(ctx, JS_UNDEFINED, 1.2, NULL, 0); sf->session = 1;
+        /* the session fires the document's handlers -> it must FORK the document delta (registered handlers,
+           globals), same as an orphan. */
+        if (g_doc_base) { sf->cow_base = g_doc_base; heap_cow_base_ref(g_doc_base); }
+        if (g_doc_dom_base) { sf->dom_base = g_doc_dom_base; dom_base_ref(g_doc_dom_base); }
+    }
     /* BOOT-GATE EXPLORATION is INTRINSIC to the initial boot (run_initial_boot forks TRUE-arm siblings), so no
        separate boot re-run is enqueued here. A reply/chunk enqueues a delivery boot flow (qjs_provide). */
 }
