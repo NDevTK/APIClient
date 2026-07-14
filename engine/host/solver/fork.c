@@ -48,14 +48,24 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
         if (cs && !strcmp(cs, "{@iterdone}")) {
             signed char *sib = (signed char *)malloc((size_t)(g_c + 1));
             CHECK(sib, "iterdone: cannot park the CONTINUE arm — dropping it truncates iteration (loses every deeper element/endpoint); OOM is a physical floor, never a silent drop");
-            {
-                for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
-                sib[g_c] = 0;   /* CONTINUE (done=false): the parked per-iteration sibling does one more iteration */
-                if (g_in_session) reg_add_session(ctx, sib, g_c + 1);
-                else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);
-                else if (g_cur_flow && g_cur_flow->is_async) spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1);
-                else reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1)->orphan_idx = g_cur_orphan_idx;
+            for (int i = 0; i < g_c; i++) sib[i] = g_dec[i];
+            sib[g_c] = 0;   /* CONTINUE (done=false): the per-iteration sibling does one more iteration */
+            /* SNAPSHOT-FORK the loop (same mechanism as the branch fork — the {@iterdone} done-check IS an OP_if):
+               the CONTINUE sibling CONTINUES from a snapshot of the loop-back state (advances one more element)
+               instead of RE-RUNNING the whole flow. So a loop that mutates SHARED state per iteration
+               (state.items.push, an accumulator) is preserved across iterations, not replayed from boot. */
+            if (!g_in_session && !g_in_boot_flow && !(g_cur_flow && g_cur_flow->is_async) && JS_AtFlowBase()) {
+                heap_cow_fork(ctx); dom_cow_fork();
+                g_fork_sib_dec = sib; g_fork_sib_dec_n = g_c + 1;
+                JS_SetForkPending(1);
+                cons_set(g_c, NULL, NULL, OPCMP_NONE, NULL);
+                g_dec[g_c] = 1; g_dec_n = g_c + 1;   /* EXIT primary; no g_c++ — OP_if rewinds and replays this arm */
+                return 1;
             }
+            if (g_in_session) reg_add_session(ctx, sib, g_c + 1);
+            else if (g_in_boot_flow) reg_add_boot(ctx, sib, g_c + 1);
+            else if (g_cur_flow && g_cur_flow->is_async) spawn_async_sibling(ctx, g_cur_flow, sib, g_c + 1);
+            else reg_add(ctx, JS_DupValue(ctx, g_cur_fn), g_cur_val, sib, g_c + 1)->orphan_idx = g_cur_orphan_idx;   /* C-reentry: re-run the per-iteration sibling */
             cons_set(g_c, NULL, NULL, OPCMP_NONE, NULL);
             g_dec[g_c] = 1; g_dec_n = g_c + 1; g_c++;   /* EXIT (done=true): this flow stops iterating here */
             return 1;
