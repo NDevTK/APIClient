@@ -54,7 +54,7 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
                the CONTINUE sibling CONTINUES from a snapshot of the loop-back state (advances one more element)
                instead of RE-RUNNING the whole flow. So a loop that mutates SHARED state per iteration
                (state.items.push, an accumulator) is preserved across iterations, not replayed from boot. */
-            if (!g_in_boot_flow && !(g_cur_flow && g_cur_flow->is_async) && JS_AtFlowBase()) {   /* sessions included: snapshot-continue avoids re-firing side-effecting handlers */
+            if (!g_in_boot_flow && JS_AtFlowBase()) {   /* sessions included: snapshot-continue avoids re-firing side-effecting handlers */
                 heap_cow_fork(ctx); dom_cow_fork();
                 g_fork_sib_dec = sib; g_fork_sib_dec_n = g_c + 1;
                 JS_SetForkPending(1);
@@ -100,7 +100,7 @@ int branch_decide(JSContext *ctx, JSValueConst cond)
        path depends on is preserved). Session/boot/async flows re-fork by RE-EXECUTION (they model a re-fired
        handler sequence / a re-run boot / replayed awaits — not a single-function replay); an orphan gate in a
        nested C-reentry (not the flow base, so the interpreter cannot unwind to suspend here) also re-runs. */
-    if (!g_in_boot_flow && !(g_cur_flow && g_cur_flow->is_async) && JS_AtFlowBase()) {   /* sessions included: snapshot-continue avoids re-firing side-effecting handlers */
+    if (!g_in_boot_flow && JS_AtFlowBase()) {   /* sessions included: snapshot-continue avoids re-firing side-effecting handlers */
         heap_cow_fork(ctx); dom_cow_fork();            /* freeze this flow's heap+DOM deltas into shared bases (refcount 2: primary + sibling) */
         g_fork_sib_dec = sib; g_fork_sib_dec_n = g_c + 1;   /* the scheduler builds the sibling from this vector + the frame snapshot */
         JS_SetForkPending(1);                          /* OP_if rewinds to the gate opcode + suspends; the scheduler snapshots the frame */
