@@ -172,7 +172,6 @@ static void construct_ctx_breakout(JSContext *ctx, const char *shape, JSValueCon
     if (!shape || !strchr(shape, '{')) { emit_cand(ctx, hitfn, "<svg onload=X9>", vt); return; }   /* whole output IS the input -> HTML-text context */
     struct ctx_probe cp = { 0 };
     solve_ctx_detect(shape, &cp);   /* the REAL Lexbor parse locates the hole's context (solve_html.c) */
-    if (strstr(shape, "title") || strstr(shape, "{")) printf("@DBG CTXB shape=[%.70s] is_attr=%d found=%d tag=[%s]\n", shape, cp.is_attr, cp.found, cp.tag?cp.tag:"?");
     if (cp.is_comment) { emit_cand(ctx, hitfn, "--><svg onload=X9>", vt); return; }   /* inside <!-- --> : close the comment first */
     if (cp.found && is_rawtext_tag(cp.tag)) { char c[48]; snprintf(c, sizeof c, "</%s><svg onload=X9>", cp.tag); emit_cand(ctx, hitfn, c, vt); return; }   /* rawtext element: close it */
     /* Derive the breakout from the REAL parse FACTS, not a per-context payload guess. The quote to close comes
