@@ -4,7 +4,8 @@
 #include "check.h"
 #include "solver/fork.h"
 #include "solver/scheduler.h"      /* the scheduler state branch_decide reads (g_dec/g_c/g_cur_fn/…) + reg_add/reg_readd/spawn_async_sibling */
-#include "solver/boot_flow.h"      /* reg_add_boot / reg_add_session — a boot/session flow forks its own kind */
+#include "solver/boot_flow.h"      /* reg_add_boot — a boot flow forks its own kind */
+#include "solver/session.h"        /* reg_add_session — a session flow forks another session */
 #include "solver/constraints.h"    /* cons_set / cons_arm_feasible / opcmp_neg / OPCMP_NONE — the per-flow value-domain */
 #include "solver/heap_cow.h"       /* heap_cow_fork — freeze the heap delta into a shared base for the snapshot sibling */
 #include "solver/dom_cow.h"        /* dom_cow_fork — freeze the DOM delta likewise */

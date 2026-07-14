@@ -14,10 +14,7 @@ extern void *g_boot_delta; extern int g_boot_delta_n, g_boot_delta_cap;
 void boot_replay(JSContext *ctx);                       /* re-run the page's inline scripts (candidate boot replay) */
 void boot_delta_merge_active(JSContext *ctx);           /* merge a post-boot chunk's captured baseline globals into g_boot_delta */
 int  reg_add_boot(JSContext *ctx, signed char *dec, int dec_n);      /* enqueue a forking BOOT flow */
-int  reg_add_session(JSContext *ctx, signed char *dec, int dec_n);   /* enqueue an exploratory attacker SESSION that forks */
 void boot_replay_candidate(JSContext *ctx);             /* re-run boot under the running flow's candidate */
 JSValue resolve_replayed_handler(JSContext *ctx, JSValueConst orig); /* re-resolve a candidate-closure handler by source identity */
-JSValue js_session_fns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);    /* the session fire-list [fn,event,this] */
-JSValue js_session_drain(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);  /* drive the fire-list as a flow */
 
 #endif

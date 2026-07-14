@@ -33,7 +33,8 @@
 #include "solver/defer.h"       /* flow_defer_callback / drive_opaque_cb — deferred/callback flows */
 #include "solver/solve.h"        /* the @S SOLVER component: solve_add sink entry + gate_collect/solve_all/solve_init/solve_free */
 #include "solver/async_flow.h"   /* ASYNC-AS-FLOW: the async-call/reaction/await hooks + the cross-session async-recipe map */
-#include "solver/boot_flow.h"    /* BOOT-AS-FLOW + candidate-replay + attacker session (the flow types beyond a plain orphan) */
+#include "solver/boot_flow.h"    /* BOOT-AS-FLOW + candidate-replay (the flow types beyond a plain orphan) */
+#include "solver/session.h"      /* attacker SESSION flow: reg_add_session + js_session_fns/drain (relocated out of boot_flow) */
 #include "solver/solve_html.h"   /* @S HTML breakout analysis (context-detect + firing-verify), split into its own TU */
 #include "solver/envelope.h"     /* @S structured-source delivery envelope (JSON/query/delim addressing), its own TU */
 #include "core/frame/csp.h"          /* Content-Security-Policy: effective policy + per-sink-class relevance, its own TU */
