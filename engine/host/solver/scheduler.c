@@ -293,6 +293,7 @@ void scheduler_run(JSContext *ctx)
             g_running = 0; g_cur_fn = JS_UNDEFINED;
             if (st == 1) {                                               /* SUSPENDED: stash accumulated delta + re-queue (interleave with other flows) */
                 g_switches++;
+                if (JS_ForkPending()) JS_FlowCloseVarRefs(ctx, f.fs);   /* SNAPSHOT-FORK a session gate: detach var_refs WHILE APPLIED (before unapply) so the sibling can share them */
                 heap_cow_unapply(ctx); f.cow = heap_cow_buf_take(&f.cow_n, &f.cow_cap); f.cow_base = heap_cow_base_take();
                 dom_unapply(); f.dom = dom_buf_take(&f.dom_n, &f.dom_cap); f.dom_base = dom_base_take();
                 f.saved_c = g_c; f.val = g_cur_val;
@@ -303,6 +304,7 @@ void scheduler_run(JSContext *ctx)
                     for (int i = 0; i < g_dec_n && f.dec; i++) f.dec[i] = g_dec[i];
                 }
                 f.dec_n = g_dec_n;
+                fork_spawn_sibling(ctx, &f);   /* SNAPSHOT-FORK: a gate in a session handler continues the sibling from the frame snapshot + shared accumulated delta, instead of RE-FIRING all handlers (which double-fires side-effecting ones) */
                 g_cur_flow = NULL;
                 reg_readd(ctx, f);
             } else {                                                     /* COMPLETED: revert this session's delta (boot-inverse included -> post-boot baseline) */
