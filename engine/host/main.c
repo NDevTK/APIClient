@@ -248,9 +248,11 @@ void arr_push_str(JSContext *ctx, JSValueConst arr, const char *s) {
    live/unbounded engine may never reach (the exact reason a looping XSS page reported zero sinks). */
 static void emit_result_ex(JSContext *ctx, int with_sinks) {
     (void)with_sinks;
-    if (JS_IsUndefined(g_dedup_fn) || !JS_IsArray(g_endpoints)) return;
-    JSValueConst args[1] = { g_endpoints };
+    if (JS_IsUndefined(g_dedup_fn)) return;
+    JSValue eps = endpoint_snapshot(ctx);   /* rebuild the JS array from the C findings (transient) */
+    JSValueConst args[1] = { eps };
     JSValue deduped = JS_Call(ctx, g_dedup_fn, JS_UNDEFINED, 1, args);
+    JS_FreeValue(ctx, eps);
     if (JS_IsException(deduped)) { js_std_dump_error(ctx); deduped = JS_NewArray(ctx); }
     JSValue result = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, result, "fetchCallSites", deduped);                 /* consumes deduped */
