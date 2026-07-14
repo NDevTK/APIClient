@@ -308,14 +308,12 @@ void solve_add(JSContext *ctx, const char *sink, const char *sctx, JSValueConst 
        RE-ENQUEUES when it has GROWN — a later path through the SAME sink that discovers a new filter token
        (startsWith/indexOf/==) the candidate must satisfy gets fresh candidates carrying it, instead of being
        truncated out. Re-emitted duplicates emit nothing new and are WFQ-starved, so this never truncates work. */
+    /* The function that reached this sink. JS_CurrentScriptFn is now authoritative for EVERY flow — including an
+       async continuation resumed from a heap frame off the C stack (it consults the flow's tracked top frame) —
+       so there is no longer a fallback to the scheduler's flow handle here. reg_add_cand's is_async branch still
+       re-runs the async RECIPE so the source re-reads through the await. */
     JSValueConst hitfn = JS_CurrentScriptFn(ctx);
-    /* An ASYNC continuation is RESUMED from a suspended frame, so there is no current script fn on the C stack
-       (hitfn is undefined) — yet it is exactly the case that needs candidates. Key + drive off the async flow's
-       RECIPE handle instead; reg_add_cand's is_async branch re-runs that recipe (ignoring hitfn) so the source
-       re-reads through the await. Without this, every boot-time/handler-time async sink silently spawned ZERO
-       candidates and could never verify. */
-    int async_sink = (g_cur_flow && g_cur_flow->is_async);
-    JSValueConst keyfn = !JS_IsUndefined(hitfn) ? hitfn : (async_sink ? (JSValueConst)g_cur_flow->handle : JS_UNDEFINED);
+    JSValueConst keyfn = hitfn;
     if (JS_IsObject(g_enqueued) && !JS_IsUndefined(keyfn)) {
         char ek[320]; snprintf(ek, sizeof ek, "%u|%s|%s", JS_OrphanHash(ctx, keyfn), sink, sctx);
         JSValue e = JS_GetPropertyStr(ctx, g_enqueued, ek);
