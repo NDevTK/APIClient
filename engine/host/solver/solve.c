@@ -172,6 +172,7 @@ static void construct_ctx_breakout(JSContext *ctx, const char *shape, JSValueCon
     if (!shape || !strchr(shape, '{')) { emit_cand(ctx, hitfn, "<svg onload=X9>", vt); return; }   /* whole output IS the input -> HTML-text context */
     struct ctx_probe cp = { 0 };
     solve_ctx_detect(shape, &cp);   /* the REAL Lexbor parse locates the hole's context (solve_html.c) */
+    if (strstr(shape, "title") || strstr(shape, "{")) printf("@DBG CTXB shape=[%.70s] is_attr=%d found=%d tag=[%s]\n", shape, cp.is_attr, cp.found, cp.tag?cp.tag:"?");
     if (cp.is_comment) { emit_cand(ctx, hitfn, "--><svg onload=X9>", vt); return; }   /* inside <!-- --> : close the comment first */
     if (cp.found && is_rawtext_tag(cp.tag)) { char c[48]; snprintf(c, sizeof c, "</%s><svg onload=X9>", cp.tag); emit_cand(ctx, hitfn, c, vt); return; }   /* rawtext element: close it */
     /* Derive the breakout from the REAL parse FACTS, not a per-context payload guess. The quote to close comes
@@ -188,6 +189,14 @@ static void construct_ctx_breakout(JSContext *ctx, const char *shape, JSValueCon
             else       snprintf(b, sizeof b, "x %s=X9 ", ev);   /* unquoted attribute */
             emit_cand(ctx, hitfn, b, vt);
         }
+        /* UNIVERSAL `<`-free vector: an INTERACTION handler (onmouseover) fires on ANY element — no auto-firing
+           event required — so it covers a hole in a NON-resource element (`<b title="…">`, where ev is NULL). The
+           canonical bypass of a filter that entity-encodes `<` but leaves `"`: break the quoted attribute and
+           inject a handler with no `<`. Interaction-required, tried AFTER auto-firing vectors (verified-dedup
+           prefers an auto-firing one when it fires). */
+        if (qs[0]) snprintf(b, sizeof b, "x%s onmouseover=X9 y=%s", qs, qs);
+        else       snprintf(b, sizeof b, "x onmouseover=X9 ");
+        emit_cand(ctx, hitfn, b, vt);
         return;
     }
     /* HTML-text context (or the probe couldn't place it): a firing element IS the breakout. */

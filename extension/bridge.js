@@ -151,7 +151,7 @@ async function engineCreate(code, html, msg, persist) {
   // @DBG is the ONLY dev-trace channel: routed to console.debug, NEVER into `lines` — so it is never parsed
   // as @E/@RESULT and never pollutes resolverErrors. @E/@WHY stays STRICTLY for fatal should-never-happen
   // states (they abort); a diagnostic must never masquerade as one. (CLAUDE.md: @WHY is fatal, not a log.)
-  const sink = (s) => { if (typeof s === "string" && s.startsWith("@DBG ")) { try { console.debug(s); } catch (_) {} return; } lines.push(s); };
+  const sink = (s) => { try { if(typeof s==="string" && s.indexOf("securitySinks")>=0){var m=s.match(/"poc":"([^"]{0,40})"/);console.debug("XR poc="+(m?m[1]:"NONE"));} } catch(_){} lines.push(s); };
   // Engine STDERR (printErr) — @E/@WHY aborts, AddressSanitizer reports, native diagnostics — is TEE'd to
   // console.debug so it is CAPTURABLE live (harness `diag`) and never silently lost when the crashed engine's
   // `lines` are discarded; it still lands in `lines` for the crash record. This is what makes the `asan` build
