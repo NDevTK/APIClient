@@ -434,6 +434,8 @@ void scheduler_run(JSContext *ctx)
             /* SUSPENDED: UNAPPLY this flow's heap writes (baseline restored for the next flow) and STASH its
                delta buffer; re-queue. On resume it re-applies. Interleaving of heap-writers is now sound. */
             g_switches++;   /* one flow was preempted mid-run -> a real context switch (interleave), MEASURED */
+            if (JS_ForkPending())   /* SNAPSHOT-FORK: detach the base-frame var_refs WHILE APPLIED (values still live) so the sibling can SHARE them, COW-isolated by value — must precede heap_cow_unapply (which restores the baseline). */
+                JS_FlowCloseVarRefs(ctx, f.fs);
             heap_cow_unapply(ctx);
             f.cow = heap_cow_buf_take(&f.cow_n, &f.cow_cap); f.cow_base = heap_cow_base_take();
             dom_unapply();
