@@ -42,6 +42,27 @@ void decide_leave(JSContext *ctx) {
 
 int decide_cursor(void) { return g_c; }
 
+/* Swap the running decision state when the scheduler interleaves flows. A flow paused mid-execution keeps its
+   evolving vector (forks may have extended g_dec past f->dec) + its cursor, so on resume it consumes the SAME
+   decisions from where it left off. decide_suspend snapshots; decide_resume restores + re-binds cur_fn. */
+typedef struct { signed char *dec; int dec_n, c; } DecideBlob;
+void *decide_suspend(void) {
+    DecideBlob *b = malloc(sizeof *b); CHECK(b, "decide: OOM suspend blob");
+    b->dec = malloc(g_dec_n ? (size_t)g_dec_n : 1); CHECK(b->dec, "decide: OOM suspend vector");
+    if (g_dec_n) memcpy(b->dec, g_dec, (size_t)g_dec_n);
+    b->dec_n = g_dec_n; b->c = g_c;
+    return b;
+}
+void decide_resume(void *blob, JSValueConst fn) {
+    DecideBlob *b = blob;
+    dec_ensure(b->dec_n);
+    if (b->dec_n) memcpy(g_dec, b->dec, (size_t)b->dec_n);
+    g_dec_n = b->dec_n; g_c = b->c;
+    g_cur_fn = fn;   /* borrowed from the resuming Flow */
+    g_running = 1;
+}
+void decide_blob_free(void *blob) { DecideBlob *b = blob; if (b) { free(b->dec); free(b); } }
+
 int solver_decide(JSContext *ctx, JSValueConst cond) {
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 

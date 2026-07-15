@@ -45,5 +45,9 @@ int         concolic_cmp(JSValueConst v, const char **psrc, const char **ptok); 
 int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);                   /* == / === propagation (JSConcolicCmpHook) */
 void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
 void        concolic_clear_pins(void);                        /* per-flow: clear all pins */
+/* Swap the per-flow pin map when the scheduler interleaves flows: suspend snapshots it, resume restores it. */
+void       *concolic_pins_suspend(void);
+void        concolic_pins_resume(void *blob);
+void        concolic_pins_blob_free(void *blob);
 
 #endif

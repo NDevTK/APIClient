@@ -2,55 +2,111 @@
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/decide.h"
+#include "solver/concolic.h"
 #include "solver/cow.h"
 #include "check.h"
+#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
-/* Per-run queue of dynamically-loaded script bodies (owned). Rebuilt every replay: a flow that re-takes the
-   branch that loads a chunk re-loads it, so the queue is a deterministic function of the flow's decisions. */
-static char **g_dyn = NULL; static int g_dyn_n = 0, g_dyn_cap = 0;
+/* The flow currently holding the worker (engine_queue_script appends a lazy chunk to ITS queue). */
+static Flow *g_cur_flow = NULL;
 
 void engine_queue_script(const char *body) {
-    if (!body) return;
-    if (g_dyn_n >= g_dyn_cap) { g_dyn_cap = g_dyn_cap ? g_dyn_cap * 2 : 8; g_dyn = realloc(g_dyn, (size_t)g_dyn_cap * sizeof(char *)); CHECK(g_dyn, "engine: OOM dynamic-script queue"); }
-    g_dyn[g_dyn_n] = strdup(body); CHECK(g_dyn[g_dyn_n], "engine: OOM dynamic-script body"); g_dyn_n++;
+    if (!body || !g_cur_flow) return;
+    Flow *f = g_cur_flow;
+    if (f->dyn_n >= f->dyn_cap) { f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8; f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(char *)); CHECK(f->dyn, "engine: OOM dynamic-script queue"); }
+    f->dyn[f->dyn_n] = strdup(body); CHECK(f->dyn[f->dyn_n], "engine: OOM dynamic-script body"); f->dyn_n++;
 }
 
-static void run_one(JSContext *ctx, const char *body) {
-    JSValue *frame = JS_FlowNew(ctx, body, strlen(body));
-    DCHECK(frame != NULL, "flow_exec_once: a script did not compile");
-    while (JS_FlowResume(ctx, frame)) { }   /* resume to completion (preemption yields interleaving — later) */
-    JS_FlowFree(ctx, frame);
+/* Cooperative-quantum preempt hook: yield the worker every Q back-edges so the scheduler can re-rank + swap
+   flows. This is the thread-sharing yield (NOT a step cap — it never drops a flow; the flow resumes byte-
+   identically). Small Q => fine-grained interleaving. */
+static unsigned g_qtick = 0;
+#define FLOW_QUANTUM 6
+static int quantum_hook(void) { return (++g_qtick % FLOW_QUANTUM) == 0; }
+
+/* Advance flow `f` by up to one quantum. Returns 1 when the flow has FINISHED all its scripts + lazy chunks,
+   0 when it yielded mid-execution (resume it later). Each <script>/chunk is its OWN program (JS_FlowNew) run
+   in document order in the shared context, under f's COW delta (set by the caller). */
+static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
+    for (;;) {
+        if (!f->frame) {
+            const char *body;
+            if (f->script_i < n) body = bodies[f->script_i];
+            else if (f->script_i - n < f->dyn_n) body = f->dyn[f->script_i - n];
+            else return 1;   /* all static scripts + lazily-loaded chunks done */
+            f->frame = JS_FlowNew(ctx, body, strlen(body));
+            DCHECK(f->frame != NULL, "flow_step: a page <script>/chunk did not compile");
+        }
+        if (JS_FlowResume(ctx, (JSValue *)f->frame)) return 0;   /* quantum yield — more work, resume later */
+        JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; f->script_i++;   /* this script done -> next */
+    }
 }
 
+static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot its solver state, restore baseline */
+    f->dec_blob = decide_suspend();
+    f->pin_blob = concolic_pins_suspend();
+    cow_unapply(ctx, (CowDelta *)f->delta);
+    cow_set_current(NULL);
+    g_cur_flow = NULL;
+}
+
+static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply its delta + solver state */
+    if (!f->delta) f->delta = cow_delta_new();
+    cow_set_current((CowDelta *)f->delta);
+    cow_apply(ctx, (CowDelta *)f->delta);
+    if (!f->started) { f->started = 1; decide_enter(ctx, f); }   /* fresh flow: replay from cursor 0 */
+    else {                                                        /* paused flow: restore where it left off */
+        decide_resume(f->dec_blob, f->fn);   decide_blob_free(f->dec_blob); f->dec_blob = NULL;
+        concolic_pins_resume(f->pin_blob);   concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
+    }
+    g_cur_flow = f;
+}
+
+static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */
+    decide_leave(ctx);
+    cow_unapply(ctx, (CowDelta *)f->delta); cow_set_current(NULL);
+    cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;
+    for (int i = 0; i < f->dyn_n; i++) free(f->dyn[i]);
+    free(f->dyn); f->dyn = NULL; f->dyn_n = f->dyn_cap = 0;
+    g_cur_flow = NULL;
+    flow_remove(ctx, f);
+}
+
+/* Run ONE flow start-to-finish (no interleaving) — the @S candidate re-run path, where a single candidate must
+   execute fully to observe whether it fires. Uses the flow machinery + a transient COW delta. */
 void flow_exec_once(JSContext *ctx, char *const *bodies, int n) {
-    /* Each <script> is its OWN program (separate JS_FlowNew), run in document order in the SAME context — so
-       globals (var/function) are shared exactly as in a browser while each script's top-level let/const stays
-       scoped to itself. All run under the caller's one COW delta (this code flow's isolated state). */
-    for (int i = 0; i < g_dyn_n; i++) free(g_dyn[i]);
-    g_dyn_n = 0;   /* fresh per run — this flow re-loads its own lazy chunks */
-    for (int i = 0; i < n; i++) run_one(ctx, bodies[i]);
-    /* Drain dynamically-loaded scripts (lazy chunks). Index-based: a chunk may load MORE chunks (transitive),
-       appended past g_dyn_n and picked up here. Each runs in THIS flow's globals + COW delta and forks like
-       any code, so the lazy surface is explored by the same BFS that explored the static scripts. */
-    for (int i = 0; i < g_dyn_n; i++) run_one(ctx, g_dyn[i]);
+    CowDelta *d = cow_delta_new(); cow_set_current(d);
+    for (int i = 0; i < n; i++) {
+        JSValue *frame = JS_FlowNew(ctx, bodies[i], strlen(bodies[i]));
+        DCHECK(frame != NULL, "flow_exec_once: a page <script> did not compile");
+        while (JS_FlowResume(ctx, frame)) { }
+        JS_FlowFree(ctx, frame);
+    }
+    cow_set_current(NULL); cow_unapply(ctx, d); cow_delta_free(ctx, d);
 }
 
 void engine_run(JSContext *ctx, char *const *bodies, int n) {
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
-    Flow *f;
-    while ((f = flow_best()) != NULL) {     /* WFQ: highest value-of-information first (all equal at seed -> UCB) */
-        f->visits++;
-        CowDelta *d = cow_delta_new();       /* this code flow's isolated per-flow COW delta */
-        cow_set_current(d);
-        decide_enter(ctx, f);
-        flow_exec_once(ctx, bodies, n);     /* run each script as its own program; a concolic branch forks siblings */
-        decide_leave(ctx);
-        cow_set_current(NULL);
-        cow_unapply(ctx, d);                 /* restore the baseline this run mutated -> the next flow is isolated */
-        cow_delta_free(ctx, d);
-        flow_remove(ctx, f);                /* this flow took its arms; the forked siblings carry the rest */
+    JS_SetPreemptHook(quantum_hook);        /* flows never run to completion in one go: they yield + interleave */
+    Flow *cur = NULL;
+    int switches = 0, yields = 0, finishes = 0;
+    for (;;) {
+        Flow *best = flow_best();           /* WFQ: highest value-of-information — a fresh fork (UCB) can preempt */
+        if (!best) break;
+        if (best != cur) {                  /* context switch: swap COW delta + decision + pins */
+            if (cur) flow_switch_out(ctx, cur);
+            flow_switch_in(ctx, best);
+            best->visits++;
+            cur = best;
+            switches++;
+        }
+        if (flow_step(ctx, cur, bodies, n)) { flow_finish(ctx, cur); cur = NULL; finishes++; }
+        else yields++;
     }
+    fprintf(stderr, "[scheduler] switches=%d yields=%d flows_finished=%d\n", switches, yields, finishes);
+    JS_SetPreemptHook(NULL);
     JS_SetFlowLocalMark(0);
 }

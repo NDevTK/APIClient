@@ -25,4 +25,10 @@ void decide_leave(JSContext *ctx);
    re-run got before forking. */
 int  decide_cursor(void);
 
+/* Swap the running decision state when the scheduler interleaves flows: suspend snapshots the evolving vector
+   + cursor of the paused flow; resume restores them + re-binds the flow's fn. */
+void *decide_suspend(void);
+void  decide_resume(void *blob, JSValueConst fn);
+void  decide_blob_free(void *blob);
+
 #endif

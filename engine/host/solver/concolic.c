@@ -25,6 +25,29 @@ void concolic_pin(const char *src, const char *val) {
     g_pins[g_pins_n].src = strdup(src); g_pins[g_pins_n].val = strdup(val); g_pins_n++;
 }
 void concolic_clear_pins(void) { for (int i = 0; i < g_pins_n; i++) { free(g_pins[i].src); free(g_pins[i].val); } g_pins_n = 0; }
+
+/* Per-flow pin state is swappable so interleaved flows keep their OWN concretizations: suspend snapshots the
+   live map (deep copy), resume replaces the live map with a snapshot. A blob is one flow's pins parked while
+   another runs. */
+typedef struct { Pin *pins; int n; } PinBlob;
+void *concolic_pins_suspend(void) {
+    PinBlob *b = malloc(sizeof *b); CHECK(b, "concolic: OOM pin blob");
+    b->n = g_pins_n;
+    b->pins = g_pins_n ? malloc((size_t)g_pins_n * sizeof(Pin)) : NULL;
+    if (g_pins_n) CHECK(b->pins, "concolic: OOM pin blob copy");
+    for (int i = 0; i < g_pins_n; i++) { b->pins[i].src = strdup(g_pins[i].src); b->pins[i].val = strdup(g_pins[i].val); }
+    return b;
+}
+void concolic_pins_resume(void *blob) {
+    concolic_clear_pins();                 /* free the live map before overwriting it */
+    PinBlob *b = blob;
+    for (int i = 0; i < b->n; i++) concolic_pin(b->pins[i].src, b->pins[i].val);   /* re-add (dedups + strdups) */
+}
+void concolic_pins_blob_free(void *blob) {
+    PinBlob *b = blob; if (!b) return;
+    for (int i = 0; i < b->n; i++) { free(b->pins[i].src); free(b->pins[i].val); }
+    free(b->pins); free(b);
+}
 static const char *pin_of(const char *src) { for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].src, src)) return g_pins[i].val; return NULL; }
 
 static JSClassID g_concolic_class = 0;   /* runtime-allocated; 0 until concolic_init */

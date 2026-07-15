@@ -22,6 +22,17 @@ typedef struct Flow {
     double val;            /* accumulated emitted VALUE (new @H + @S) — the WFQ's reward term */
     long cpu;              /* CPU units consumed since last emit — the WFQ's aging term */
     int visits;            /* dispatch count — the WFQ's UCB optimism denominator */
+
+    /* INTERLEAVING STATE — persisted while this flow is PAUSED so the scheduler can run another flow and come
+       back. A flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW
+       delta, decision cursor, and pins all swap with it (see engine.c). Zero-initialized by flow_add. */
+    int   started;         /* decide_enter has run (fresh) — else resume from the blobs below */
+    void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */
+    int   script_i;        /* position in the script sequence: static [0,n), then this flow's dyn chunks [n, n+dyn_n) */
+    char **dyn; int dyn_n, dyn_cap;   /* this flow's OWN lazily-loaded chunk bodies (per-flow, not global) */
+    void *delta;           /* this flow's isolated COW delta (CowDelta*), applied while running */
+    void *dec_blob;        /* suspended decision state while paused (decide_suspend) */
+    void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
 } Flow;
 
 void  flow_registry_init(void);
