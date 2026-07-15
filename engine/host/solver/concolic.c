@@ -29,9 +29,19 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
     if (c && !JS_IsUndefined(c->example)) JS_MarkValue(rt, c->example, mark_func);
 }
 
+/* @S CANDIDATE injection: during a verification re-run, the attacker source identified by g_cand_src returns
+   the concrete breakout payload instead of a concolic, so the REAL code builds the exploit and it fires. */
+static char *g_cand_src = NULL, *g_cand_payload = NULL;
+void concolic_set_candidate(const char *src, const char *payload) {
+    free(g_cand_src); free(g_cand_payload);
+    g_cand_src = src ? strdup(src) : NULL;
+    g_cand_payload = payload ? strdup(payload) : NULL;
+}
+
 /* Exotic [[Get]]: reading ANY field of a concolic value yields a DERIVED concolic — unknown injected/attacker
-   state is unknown per-field, carrying the parent's provenance ("{state}.admin"). This is what lets a gated
-   `if (state.admin)` fork and surface the logged-in endpoint while logged out. */
+   state is unknown per-field, carrying the FIELD-PATH identity ("{state}.admin"), which doubles as the source
+   identity for @S injection. This is what lets a gated `if (state.admin)` fork AND lets an @S candidate inject
+   at a precise source. */
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -39,9 +49,10 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     const char *field = JS_AtomToCString(ctx, atom);
     char shape[192];
     snprintf(shape, sizeof shape, "%s.%s", c->shape ? c->shape : "{}", field ? field : "?");
-    JSValue r = concolic_new(ctx, shape, c->src, JS_UNDEFINED);   /* derived value, same source root */
     if (field) JS_FreeCString(ctx, field);
-    return r;
+    if (g_cand_src && !strcmp(shape, g_cand_src))            /* candidate run: this source -> the concrete breakout */
+        return JS_NewString(ctx, g_cand_payload ? g_cand_payload : "");
+    return concolic_new(ctx, shape, shape, JS_UNDEFINED);    /* src = the field path (precise @S identity) */
 }
 /* `x in concolic` / property existence: a concolic collection "has" any key (so a membership gate still runs). */
 static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {

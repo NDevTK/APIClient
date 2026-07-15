@@ -33,4 +33,8 @@ void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example
 /* Propagation through `+` — install with JS_SetConcolicAddHook. */
 int         concolic_add_hook(JSContext *ctx, JSValue *sp);
 
+/* @S candidate injection: during a verification re-run, the source identified by `src` (a field path like
+   "{state}.code") returns the concrete `payload` instead of a concolic. NULL/NULL clears it. */
+void        concolic_set_candidate(const char *src, const char *payload);
+
 #endif

@@ -47,7 +47,7 @@ static const char *HTML =
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
     "if (cfg.admin) { fetch('/api/data?role=admin'); } else { fetch('/api/data?role=public'); }"   /* same endpoint, values MERGE across flows */
-    "eval(state.code);"   /* @S: a concolic attacker source reaches a code-execution sink */
+    "eval(\"'\" + state.code + \"'\");"   /* @S: source lands INSIDE a single-quoted string -> breakout must be ';X9();// */
     "</script>"
     "</body></html>";
 
@@ -73,7 +73,8 @@ int main(void) {
     JS_SetConcolicAddHook(concolic_add_hook);   /* concolic propagation through `+` (URL building) */
 
     BootProgram *bp = boot_parse(HTML, strlen(HTML));   /* real Lexbor parse + <script> extraction */
-    engine_run(ctx, boot_run, bp);
+    engine_run(ctx, boot_run, bp);                      /* @H + @S detection */
+    solve_verify(ctx, boot_run, bp);                    /* @S: fire-verify the breakout by re-running the real code */
     boot_free(bp);
 
     /* emit the deduped @H surface — serialized DIRECTLY from the C findings (no JS-object round-trip) */
@@ -92,10 +93,11 @@ int main(void) {
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified */
     char *ss = solve_json();
     printf("@SEC %s\n", ss);
-    int s_ok = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "\"poc\":\"X9()\"");
+    /* the search must have found the SINGLE-QUOTE-context breakout (not the bare X9()) and fire-verified it */
+    int s_ok = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "';X9();//");
 
     printf("%s\n", (h_ok && s_ok)
-        ? "PASS: @H params+merge (C emit, no leak) AND @S eval sink fire-verified (source {state}.code -> PoC X9())"
+        ? "PASS: @H params+merge AND @S eval sink — breakout SEARCHED + fire-verified (string ctx -> ';X9();//')"
         : "FAIL: @H or @S incorrect");
 
     free(ss);
