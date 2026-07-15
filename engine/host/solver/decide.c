@@ -2,9 +2,12 @@
 #include "solver/decide.h"
 #include "solver/concolic.h"
 #include "solver/flow.h"
+#include "solver/engine.h"
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
+
+static void *decide_fork_blob(int cursor, int arm);   /* the sibling's hot decision state (defined below) */
 
 /* The RUNNING flow's decision state. g_dec is the vector being replayed/extended; g_c is the cursor (decisions
    consumed this run); g_cur_fn is the function a sibling fork re-drives. The scheduler owns the lifecycle via
@@ -63,6 +66,19 @@ void decide_resume(void *blob, JSValueConst fn) {
 }
 void decide_blob_free(void *blob) { DecideBlob *b = blob; if (b) { free(b->dec); free(b); } }
 
+/* The sibling's hot decision state at a fork: replay the parent's path so far, then take `arm` at this branch
+   (cursor). c = cursor so on resume the sibling re-executes the OP_if and replays exactly this arm — never
+   re-forks, never re-runs the prefix. */
+static void *decide_fork_blob(int cursor, int arm) {
+    DecideBlob *b = malloc(sizeof *b); CHECK(b, "decide: OOM fork blob");
+    b->dec_n = cursor + 1;
+    b->dec = malloc((size_t)b->dec_n); CHECK(b->dec, "decide: OOM fork vector");
+    if (cursor) memcpy(b->dec, g_dec, (size_t)cursor);
+    b->dec[cursor] = (signed char)arm;
+    b->c = cursor;
+    return b;
+}
+
 int solver_decide(JSContext *ctx, JSValueConst cond) {
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
@@ -71,27 +87,26 @@ int solver_decide(JSContext *ctx, JSValueConst cond) {
     const char *src = NULL, *tok = NULL;
     int op = concolic_cmp(cond, &src, &tok);
 
-    int arm;
+    int arm, forked = 0;
     if (g_c < g_dec_n) {                 /* REPLAY: this run is re-reaching a recorded decision — take that arm */
         arm = g_dec[g_c] ? 1 : 0;
         g_c++;
     } else {
-        /* NEW decision. Both arms open -> FORK the FALSE sibling (path so far ++ FALSE), this flow takes TRUE.
-           The sibling re-runs g_cur_fn replaying (path ++ FALSE). No OP_if rewind (frame-agnostic). */
-        signed char *sib = malloc((size_t)(g_c + 1));
-        CHECK(sib, "decide: OOM forking the sibling arm — dropping it truncates BFS exploration (loses gated code)");
-        if (g_c) memcpy(sib, g_dec, (size_t)g_c);
-        sib[g_c] = 0;                    /* sibling: FALSE arm */
-        flow_add(ctx, g_cur_fn, sib, g_c + 1);
+        /* NEW decision -> FRAME-SNAPSHOT FORK: prepare the FALSE sibling's hot state (its decision vector +
+           the current pins), and signal the interpreter (0x100 bit) to CLONE this frame at the branch. The
+           sibling resumes AT the branch and replays FALSE — it does NOT re-run from the start. This flow takes
+           TRUE. No re-run vector, no fallback. */
+        engine_prepare_fork(decide_fork_blob(g_c, 0), concolic_pins_suspend());
         dec_ensure(g_c + 1);
         g_dec[g_c] = 1;                  /* this flow: TRUE arm */
         g_dec_n = g_c + 1;
         g_c++;
         arm = 1;
+        forked = 1;
     }
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
         concolic_pin(src, tok);
-    return arm;
+    return forked ? (arm | 0x100) : arm;   /* 0x100 tells the interpreter to snapshot-fork this frame */
 }

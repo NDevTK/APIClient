@@ -9,6 +9,28 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Snapshot-fork handoff: solver_decide stashes the sibling's hot decision + pins here at a forking branch;
+   the interpreter then clones the frame and calls engine_fork_finalize, which assembles the sibling flow. */
+static void *g_fork_dec = NULL, *g_fork_pins = NULL;
+void engine_prepare_fork(void *dec_blob, void *pin_blob) { g_fork_dec = dec_blob; g_fork_pins = pin_blob; }
+
+static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
+    Flow *parent = flow_running();
+    DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
+    Flow *sib = flow_add(ctx, parent->fn, NULL, 0);
+    sib->started = 1;                 /* HOT: resume from the cloned frame + blobs, never a fresh re-run */
+    sib->frame = clone;               /* the frame snapshot taken AT the branch */
+    sib->script_i = parent->script_i; /* same position in the script sequence */
+    sib->delta = cow_delta_clone(ctx, (CowDelta *)parent->delta);   /* branch-point globals, then diverges */
+    sib->dec_blob = g_fork_dec; g_fork_dec = NULL;
+    sib->pin_blob = g_fork_pins; g_fork_pins = NULL;
+    if (parent->dyn_n) {              /* inherit the lazy chunks loaded up to the branch */
+        sib->dyn = malloc((size_t)parent->dyn_n * sizeof(char *)); CHECK(sib->dyn, "engine: OOM fork dyn");
+        for (int i = 0; i < parent->dyn_n; i++) { sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body"); }
+        sib->dyn_n = sib->dyn_cap = parent->dyn_n;
+    }
+}
+
 void engine_queue_script(const char *body) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
     if (!body || !f) return;
@@ -103,6 +125,7 @@ void engine_run(JSContext *ctx, char *const *bodies, int n) {
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     JS_SetPreemptHook(preempt_hook);        /* flows never run to completion in one go: they yield + interleave */
+    JS_SetForkHook(engine_fork_finalize);   /* a concolic branch snapshot-forks the frame (no re-run sibling) */
     Flow *cur = NULL;
     int switches = 0, yields = 0, finishes = 0;
     for (;;) {
@@ -121,5 +144,6 @@ void engine_run(JSContext *ctx, char *const *bodies, int n) {
     }
     fprintf(stderr, "[scheduler] switches=%d yields=%d flows_finished=%d\n", switches, yields, finishes);
     JS_SetPreemptHook(NULL);
+    JS_SetForkHook(NULL);
     JS_SetFlowLocalMark(0);
 }

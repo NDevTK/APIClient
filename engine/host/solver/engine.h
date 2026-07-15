@@ -21,6 +21,10 @@ void flow_exec_once(JSContext *ctx, char *const *bodies, int n);
    through. The body is copied; the queue is per-run (rebuilt each replay) and drained by flow_exec_once. */
 void engine_queue_script(const char *body);
 
+/* solver_decide calls this at a forking branch to stash the sibling's hot decision + pins; the interpreter's
+   fork hook (engine_fork_finalize) assembles the sibling from the frame clone + these. */
+void engine_prepare_fork(void *dec_blob, void *pin_blob);
+
 /* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
    per-flow COW delta, and drain the frontier by WFQ order. */
 void engine_run(JSContext *ctx, char *const *bodies, int n);
