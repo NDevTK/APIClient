@@ -30,6 +30,10 @@ void      cow_set_current(CowDelta *d);
 /* Install with JS_SetCowHook: called before a write to a baseline object; appends to the current delta. */
 void      cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom prop);
 
+/* Install with JS_SetCowVarRefHook: called before a write to a shared CLOSURE CELL; captures it into the
+   current delta so a snapshot-forked sibling that shares the cell stays isolated on write. */
+void      cow_capture_varref(JSContext *ctx, void *vref);
+
 /* Context-switch AWAY from `d`: save each slot's current (flow) value, then restore the baseline value. After
    this the shared baseline is pristine for the next flow. */
 void      cow_unapply(JSContext *ctx, CowDelta *d);

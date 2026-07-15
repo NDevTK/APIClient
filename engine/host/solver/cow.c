@@ -6,7 +6,10 @@
 /* One captured baseline slot: base = the value the shared baseline holds (restored on unapply); cur = the
    running flow's latest value for it (saved on unapply, replayed on apply). existed = did the baseline own the
    slot (else the flow CREATED it, so unapply deletes and apply re-creates). */
-typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; } CowEntry;
+/* A delta entry is EITHER a property slot (vref==NULL: obj/atom/existed) OR a closure cell (vref!=NULL: the
+   shared JSVarRef, whose value is read/written via JS_VarRefGet/SetValue; obj/atom/existed unused). base/cur
+   hold the baseline/flow values either way. */
+typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; void *vref; } CowEntry;
 
 struct CowDelta { CowEntry *e; int n, cap; };
 
@@ -45,6 +48,27 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->base = base;
     e->cur = JS_UNDEFINED;
     e->cur_valid = 0;
+    e->vref = NULL;
+    g_capturing = 0;
+}
+
+/* Record a CLOSURE CELL's pre-write value (JSCowVarRefHook) into the running flow's delta, so a snapshot-forked
+   sibling that shares the cell is isolated on write. Captured once per cell (first write is the baseline). */
+void cow_capture_varref(JSContext *ctx, void *vref) {
+    if (g_capturing || !g_current || !vref) return;
+    CowDelta *d = g_current;
+    for (int i = 0; i < d->n; i++) if (d->e[i].vref == vref) return;
+    g_capturing = 1;
+    if (d->n >= d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 32;
+        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
+        CHECK(d->e, "cow: OOM growing delta (var_ref)");
+    }
+    CowEntry *e = &d->e[d->n++];
+    e->obj = JS_UNDEFINED; e->atom = JS_ATOM_NULL; e->existed = 0;
+    e->base = JS_VarRefGetValue(vref);   /* owned dup of the cell's current (baseline) value */
+    e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->vref = vref;                      /* the cell is kept alive by the shared function object */
     g_capturing = 0;
 }
 
@@ -53,6 +77,12 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
     g_capturing = 1;
     for (int i = d->n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
         CowEntry *e = &d->e[i];
+        if (e->vref) {                        /* closure cell: save its current value, restore the baseline */
+            if (e->cur_valid) JS_FreeValue(ctx, e->cur);
+            e->cur = JS_VarRefGetValue(e->vref); e->cur_valid = 1;
+            JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->base));
+            continue;
+        }
         JSPropertyDescriptor pd;              /* save the flow's CURRENT value so apply can restore it */
         int has = JS_GetOwnProperty(ctx, &pd, e->obj, e->atom);
         if (e->cur_valid) JS_FreeValue(ctx, e->cur);
@@ -70,7 +100,9 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
     g_capturing = 1;
     for (int i = 0; i < d->n; i++) {   /* forward: replay the flow's writes over the pristine baseline */
         CowEntry *e = &d->e[i];
-        if (e->cur_valid) JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
+        if (!e->cur_valid) continue;
+        if (e->vref) JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->cur));   /* closure cell */
+        else JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
     }
     g_capturing = 0;
 }
@@ -87,10 +119,11 @@ CowDelta *cow_delta_clone(JSContext *ctx, CowDelta *src) {
         de->atom = JS_DupAtom(ctx, se->atom);
         de->existed = se->existed;
         de->base = JS_DupValue(ctx, se->base);
+        de->vref = se->vref;
         /* Snapshot the CURRENT live value as the clone's restore point: at a branch the src flow's delta is
-           APPLIED, so the heap holds its branch-point value. Applying the clone later reproduces exactly that
-           state for the forked sibling; the two then diverge, each capturing its own further writes over its
-           own base. */
+           APPLIED, so the heap/cell holds its branch-point value. Applying the clone later reproduces exactly
+           that state for the forked sibling; the two then diverge, each capturing its own further writes. */
+        if (se->vref) { de->cur = JS_VarRefGetValue(se->vref); de->cur_valid = 1; continue; }
         JSPropertyDescriptor pd;
         int has = JS_GetOwnProperty(ctx, &pd, se->obj, se->atom);
         if (has > 0) { de->cur = pd.value; JS_FreeValue(ctx, pd.getter); JS_FreeValue(ctx, pd.setter); }

@@ -105,6 +105,7 @@ int main(void) {
     JS_FreeValue(ctx, g);
 
     JS_SetCowHook(cow_capture_hook);   /* per-flow isolation: revert baseline writes made DURING flows */
+    JS_SetCowVarRefHook(cow_capture_varref);   /* per-flow isolation of shared CLOSURE CELL writes */
     JS_SetConcolicAddHook(concolic_add_hook);   /* concolic propagation through `+` (URL building) */
     JS_SetConcolicCmpHook(concolic_cmp_hook);   /* concolic == / === -> fork on equality gates + concretize-on-pin */
 
