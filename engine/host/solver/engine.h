@@ -14,6 +14,13 @@
    per-<script> scope, NEVER concatenated), run in document order, sharing globals + the flow's COW delta. */
 void flow_exec_once(JSContext *ctx, char *const *bodies, int n);
 
+/* Queue a DYNAMICALLY-LOADED script body (a lazy chunk / injected <script> / import()) to run in the CURRENT
+   flow after the current script, sharing its globals + COW delta. Called from the script-load host-edge when
+   forced execution reaches a load. Because a load sits behind a branch, the ONE BFS discovers different lazy
+   scripts on different arms — lazy loading is not a separate system, just more code the flow runs and forks
+   through. The body is copied; the queue is per-run (rebuilt each replay) and drained by flow_exec_once. */
+void engine_queue_script(const char *body);
+
 /* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
    per-flow COW delta, and drain the frontier by WFQ order. */
 void engine_run(JSContext *ctx, char *const *bodies, int n);

@@ -34,6 +34,21 @@ static JSValue js_url_sink(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return JS_UNDEFINED;
 }
 
+/* the script-load host-edge: a lazy chunk / injected <script> / import(). Forced exec reaches it behind a
+   branch; the loaded JS becomes more code in THIS flow (engine_queue_script), forking through the one BFS. In
+   reality safeFetch fetches the body; here a mock chunk server returns it by URL. */
+static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc > 0) {
+        const char *url = JS_ToCString(ctx, argv[0]);
+        if (url) {
+            if (strstr(url, "admin")) engine_queue_script("fetch('/api/admin/audit-log');");   /* chunk-only endpoint */
+            JS_FreeCString(ctx, url);
+        }
+    }
+    return JS_UNDEFINED;
+}
+
 /* the fetch host-edge: funnel into the real @H endpoint surface (dedup + shape happen there). */
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
@@ -59,7 +74,7 @@ static const char *HTML =
     "<script>var cfg = { admin: state.admin };</script>"
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
-    "if (cfg.admin) { fetch('/api/data?role=admin'); } else { fetch('/api/data?role=public'); }"   /* same endpoint, values MERGE across flows */
+    "if (cfg.admin) { fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads */
     "if (state.region === 'us-east-1') { fetch('/api/region/' + state.region); }"   /* EQ gate: true arm PINS region -> real @H value /api/region/us-east-1 */
     "eval(\"'\" + state.code + \"'\");"   /* @S JS: source lands INSIDE a single-quoted string -> breakout ';X9();// */
     "setInnerHTML('<div>' + state.html + '</div>');"   /* @S HTML: source in HTML text -> breakout an auto-firing element */
@@ -81,6 +96,7 @@ int main(void) {
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 1));
+    JS_SetPropertyStr(ctx, g, "loadScript", JS_NewCFunction(ctx, js_load_script, "loadScript", 1));   /* lazy-chunk load */
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
     JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
     JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
@@ -112,8 +128,9 @@ int main(void) {
     int merged = (data_count == 1);   /* /api/data appears ONCE with role=[admin,public] merged across flows */
 
     int pinned = strstr(js, "/api/region/us-east-1") != NULL;   /* EQ gate concretized region to the REAL value */
-    int h_ok = (has_uid_param && role_admin && role_public && merged && pinned);
-    printf("@H %s (pinned-value=%d)\n", h_ok ? "OK" : "FAIL", pinned);
+    int lazy = strstr(js, "/api/admin/audit-log") != NULL;   /* endpoint reachable ONLY via the admin-arm lazy chunk */
+    int h_ok = (has_uid_param && role_admin && role_public && merged && pinned && lazy);
+    printf("@H %s (pinned-value=%d lazy-chunk=%d)\n", h_ok ? "OK" : "FAIL", pinned, lazy);
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified */
     char *ss = solve_json();
