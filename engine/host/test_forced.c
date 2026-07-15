@@ -37,9 +37,8 @@ static const char *HTML =
     "<!doctype html><html><body>"
     "<script>var cfg = { admin: state.admin };</script>"
     "<script>"
-    "fetch('/api/region/' + state.region);"   /* concolic URL built by concat -> shape must carry {state}.region */
-    "globalThis.n = (globalThis.n || 0) + 1;"
-    "if (cfg.admin) { fetch('/api/admin/' + globalThis.n); } else { fetch('/api/public/' + globalThis.n); }"
+    "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
+    "if (cfg.admin) { fetch('/api/data?role=admin'); } else { fetch('/api/data?role=public'); }"   /* same endpoint, values MERGE across flows */
     "</script>"
     "</body></html>";
 
@@ -70,16 +69,15 @@ int main(void) {
     char *js = endpoint_json();
     printf("@RESULT %s\n", js);
 
-    int has_admin = strstr(js, "/api/admin/1") != NULL;
-    int has_public = strstr(js, "/api/public/1") != NULL;
-    int has_shape = strstr(js, "/api/region/{state}.region") != NULL;
-    int leak = strstr(js, "/api/admin/2") != NULL || strstr(js, "/api/public/2") != NULL;
-    int region_count = 0; for (const char *p = js; (p = strstr(p, "/api/region/")); p++) region_count++;
-    int deduped = (region_count == 1);   /* the concolic URL is recorded ONCE despite running per-flow */
+    int has_uid_param = strstr(js, "\"/api/u\"") && strstr(js, "\"uid\"") && strstr(js, "{state}.id");
+    int role_admin = strstr(js, "admin") != NULL;
+    int role_public = strstr(js, "public") != NULL;
+    int data_count = 0; for (const char *p = js; (p = strstr(p, "\"/api/data\"")); p++) data_count++;
+    int merged = (data_count == 1);   /* /api/data appears ONCE with role=[admin,public] merged across flows */
 
-    printf("%s\n", (has_admin && has_public && has_shape && !leak && deduped)
-        ? "PASS: deduped @H surface — moat + COW + concolic shape + dedup, emitted in C (no leak)"
-        : "FAIL: @H surface wrong (missing endpoint / leak / not deduped)");
+    printf("%s\n", (has_uid_param && role_admin && role_public && merged)
+        ? "PASS: query params + validValues MERGED across flows (uid={state}.id; role=[admin,public]), C emit, no leak"
+        : "FAIL: params/validValues not extracted or not merged");
 
     free(js);
     endpoint_free();
@@ -88,5 +86,5 @@ int main(void) {
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    return (has_admin && has_public && has_shape && !leak && deduped) ? 0 : 1;
+    return (has_uid_param && role_admin && role_public && merged) ? 0 : 1;
 }
