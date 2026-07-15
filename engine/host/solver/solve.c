@@ -3,14 +3,18 @@
 #include "solver/solve.h"
 #include "solver/concolic.h"
 #include "check.h"
+#include <lexbor/html/html.h>
+#include <lexbor/dom/dom.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
-static int g_fired = 0;      /* set by the X9 marker when a constructed PoC executes */
-static int g_verifying = 0;  /* 1 during a candidate re-run: the eval sink executes the (now concrete) arg */
+enum { SINK_EVAL = 0, SINK_HTML = 1 };   /* JS-context vs HTML-context sink -> different candidate set + fire oracle */
 
-typedef struct { char *src; char *breakout; } Cand;     /* a detected sink awaiting fire-verification */
+static int g_fired = 0;      /* set by the X9 marker when a constructed PoC executes */
+static int g_verifying = 0;  /* 1 during a candidate re-run: the sink executes/re-parses the (now concrete) arg */
+
+typedef struct { char *src; int sink; } Cand;   /* a detected sink awaiting fire-verification */
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 
 typedef struct { char *sink; char *source; char *poc; } Finding;   /* verified PoCs only */
@@ -31,7 +35,7 @@ void solve_init(JSContext *ctx) {
    needs a JS lexer + loses to filters/encoders the code may apply); instead we try each through the REAL code
    and the one that FIRES is the verified PoC. Re-execution is the oracle, so this survives any quoting/filter
    the code imposes and needs no lexer. */
-static const char *CANDS[] = {
+static const char *CANDS_JS[] = {
     "X9()",           /* statement / expression position — the input runs directly */
     "';X9();//",      /* single-quoted string context */
     "\";X9();//",     /* double-quoted string context */
@@ -39,11 +43,20 @@ static const char *CANDS[] = {
     "${X9()}",        /* template interpolation */
     NULL
 };
+static const char *CANDS_HTML[] = {
+    "<svg onload=X9()>",           /* HTML-text context: an auto-firing element */
+    "<img src=x onerror=X9()>",    /* HTML-text: img onerror fires on the bad src */
+    "\"><svg onload=X9()>",        /* break out of a double-quoted attribute, then a firing element */
+    "'><svg onload=X9()>",         /* single-quoted attribute */
+    "></textarea><svg onload=X9()>", /* rawtext element (textarea/title/...) — close it first */
+    NULL
+};
+static const char **cand_set(int sink) { return sink == SINK_HTML ? CANDS_HTML : CANDS_JS; }
 
-static void add_pending(const char *src) {
-    for (int i = 0; i < g_pending_n; i++) if (!strcmp(g_pending[i].src, src)) return;   /* dedup by source */
+static void add_pending(const char *src, int sink) {
+    for (int i = 0; i < g_pending_n; i++) if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return;   /* dedup */
     if (g_pending_n >= g_pending_cap) { g_pending_cap = g_pending_cap ? g_pending_cap * 2 : 8; g_pending = realloc(g_pending, (size_t)g_pending_cap * sizeof(Cand)); CHECK(g_pending, "solve: OOM pending"); }
-    g_pending[g_pending_n].src = strdup(src); g_pending[g_pending_n].breakout = NULL; g_pending_n++;
+    g_pending[g_pending_n].src = strdup(src); g_pending[g_pending_n].sink = sink; g_pending_n++;
 }
 
 static void record_sink(const char *sink, const char *source, const char *poc) {
@@ -63,7 +76,49 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
     if (!concolic_is(arg)) return;              /* detection: not an attacker source -> not a sink */
     const char *shape = concolic_shape_c(arg);
     const char *src = concolic_src_c(arg);
-    add_pending(src ? src : (shape ? shape : "?"));   /* record the source; the breakout is SEARCHED at verify */
+    add_pending(src ? src : (shape ? shape : "?"), SINK_EVAL);   /* record the source; breakout SEARCHED at verify */
+}
+
+/* HTML firing oracle: re-parse the sink output with the REAL Lexbor parser and FIRE the auto-firing event
+   handlers (svg/body onload, img/script onerror) by eval'ing their JS — X9 fires iff a breakout placed
+   executable JS in an auto-firing position. innerHTML does NOT run <script>, so those never fire (correct). */
+static void html_fire_walk(JSContext *ctx, lxb_dom_node_t *node) {
+    for (lxb_dom_node_t *n = node; n; n = n->next) {
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            lxb_dom_element_t *el = lxb_dom_interface_element(n);
+            static const char *H[] = { "onload", "onerror", NULL };   /* AUTO-firing only (onmouseover needs interaction) */
+            for (int h = 0; H[h]; h++) {
+                size_t vl = 0;
+                const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)H[h], strlen(H[h]), &vl);
+                if (v && vl) { JSValue r = JS_Eval(ctx, (const char *)v, vl, "<handler>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(ctx, r); }
+            }
+        }
+        if (n->first_child) html_fire_walk(ctx, n->first_child);
+    }
+}
+static void html_fire(JSContext *ctx, const char *html) {
+    lxb_html_document_t *doc = lxb_html_document_create();
+    if (!doc) return;
+    if (lxb_html_document_parse(doc, (const lxb_char_t *)html, strlen(html)) == LXB_STATUS_OK) {
+        lxb_dom_element_t *root = lxb_dom_document_element(&doc->dom_document);
+        if (root) html_fire_walk(ctx, lxb_dom_interface_node(root));
+    }
+    lxb_html_document_destroy(doc);
+}
+
+/* innerHTML = arg: an HTML-context sink. Detection records the source; the candidate run re-parses the injected
+   HTML and fires its handlers. */
+void solve_html_sink(JSContext *ctx, JSValueConst arg) {
+    if (g_verifying) {
+        if (concolic_is(arg)) return;   /* injection didn't reach this write */
+        const char *html = JS_ToCString(ctx, arg);
+        if (html) { html_fire(ctx, html); JS_FreeCString(ctx, html); }
+        return;
+    }
+    if (!concolic_is(arg)) return;
+    const char *shape = concolic_shape_c(arg);
+    const char *src = concolic_src_c(arg);
+    add_pending(src ? src : (shape ? shape : "?"), SINK_HTML);
 }
 
 /* Fire-verify every pending source: SEARCH the candidate breakouts — inject each at the source, re-run the
@@ -71,13 +126,15 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
    static context detection is needed). `rerun(ctx, ud)` re-executes the page (boot). */
 void solve_verify(JSContext *ctx, void (*rerun)(JSContext *ctx, void *ud), void *ud) {
     for (int i = 0; i < g_pending_n; i++) {
-        for (int c = 0; CANDS[c]; c++) {
-            concolic_set_candidate(g_pending[i].src, CANDS[c]);
+        const char **cands = cand_set(g_pending[i].sink);
+        const char *sink_name = g_pending[i].sink == SINK_HTML ? "innerHTML" : "eval";
+        for (int c = 0; cands[c]; c++) {
+            concolic_set_candidate(g_pending[i].src, cands[c]);
             g_fired = 0; g_verifying = 1;
             rerun(ctx, ud);
             g_verifying = 0;
             concolic_set_candidate(NULL, NULL);
-            if (g_fired) { record_sink("eval", g_pending[i].src, CANDS[c]); break; }   /* this breakout fired -> the PoC */
+            if (g_fired) { record_sink(sink_name, g_pending[i].src, cands[c]); break; }   /* this breakout fired -> the PoC */
         }
     }
 }
@@ -113,7 +170,7 @@ char *solve_json(void) {
 int solve_count(void) { return g_sinks_n; }
 
 void solve_free(void) {
-    for (int i = 0; i < g_pending_n; i++) { free(g_pending[i].src); free(g_pending[i].breakout); }
+    for (int i = 0; i < g_pending_n; i++) free(g_pending[i].src);
     free(g_pending); g_pending = NULL; g_pending_n = g_pending_cap = 0;
     for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].sink); free(g_sinks[i].source); free(g_sinks[i].poc); }
     free(g_sinks); g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;

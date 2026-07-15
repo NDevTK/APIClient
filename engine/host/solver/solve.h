@@ -12,9 +12,10 @@
 void solve_init(JSContext *ctx);
 void solve_free(void);
 
-/* eval(arg): if arg is a concolic attacker source, this is a code-execution sink — record the source (during
-   detection) or, during a candidate re-run, execute the injected arg so firing can be observed. */
+/* eval(arg): a JS-context code-execution sink. innerHTML=arg: an HTML-context sink. Detection records the
+   source; a candidate re-run executes/re-parses the injected value so firing can be observed. */
 void solve_eval_sink(JSContext *ctx, JSValueConst arg);
+void solve_html_sink(JSContext *ctx, JSValueConst arg);
 
 /* After detection, SEARCH breakout candidates for every recorded source: inject each at the source, re-run the
    REAL program (`rerun`), and record the first that FIRES as the replay-verified PoC. */
