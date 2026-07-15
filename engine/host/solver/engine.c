@@ -19,12 +19,26 @@ void engine_queue_script(const char *body) {
     f->dyn[f->dyn_n] = strdup(body); CHECK(f->dyn[f->dyn_n], "engine: OOM dynamic-script body"); f->dyn_n++;
 }
 
-/* Cooperative-quantum preempt hook: yield the worker every Q back-edges so the scheduler can re-rank + swap
-   flows. This is the thread-sharing yield (NOT a step cap — it never drops a flow; the flow resumes byte-
-   identically). Small Q => fine-grained interleaving. */
+/* Preempt hook, two orthogonal yield decisions at the one per-back-edge check:
+   (1) VALUE yield — suspend the running flow the MOMENT a parked flow outranks it (the WFQ, not a clock,
+       decides which flow runs). The rival is recomputed only when the frontier membership changes (a fork
+       adds a flow) or the running flow switches — cached by (gen, cur) so this is O(1) per back-edge, never
+       an O(flows) scan per opcode.
+   (2) COOPERATIVE-QUANTUM yield — a thread-sharing floor: even a top-ranked flow breathes every Q back-edges
+       so the host loop can interleave / pump / snapshot. NOT a step cap: it drops/reorders no flow and the
+       flow resumes byte-identically. */
 static unsigned g_qtick = 0;
-#define FLOW_QUANTUM 6
-static int quantum_hook(void) { return (++g_qtick % FLOW_QUANTUM) == 0; }
+#define FLOW_QUANTUM 64
+static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static int g_outranked = 0;
+static int preempt_hook(void) {
+    if (flow_frontier_gen() != g_seen_gen || g_cur_flow != g_seen_cur) {   /* (1) recompute rival only on change */
+        g_seen_gen = flow_frontier_gen(); g_seen_cur = g_cur_flow;
+        Flow *rival = g_cur_flow ? flow_best_other(g_cur_flow) : NULL;
+        g_outranked = (rival && g_cur_flow && flow_weight(rival) > flow_weight(g_cur_flow));
+    }
+    if (g_outranked) return 1;                        /* value yield */
+    return (++g_qtick % FLOW_QUANTUM) == 0;           /* (2) quantum floor */
+}
 
 /* Advance flow `f` by up to one quantum. Returns 1 when the flow has FINISHED all its scripts + lazy chunks,
    0 when it yielded mid-execution (resume it later). Each <script>/chunk is its OWN program (JS_FlowNew) run
@@ -90,7 +104,7 @@ void flow_exec_once(JSContext *ctx, char *const *bodies, int n) {
 void engine_run(JSContext *ctx, char *const *bodies, int n) {
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
-    JS_SetPreemptHook(quantum_hook);        /* flows never run to completion in one go: they yield + interleave */
+    JS_SetPreemptHook(preempt_hook);        /* flows never run to completion in one go: they yield + interleave */
     Flow *cur = NULL;
     int switches = 0, yields = 0, finishes = 0;
     for (;;) {

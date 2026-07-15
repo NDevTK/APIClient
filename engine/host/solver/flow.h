@@ -49,6 +49,13 @@ double flow_weight(const Flow *f);
 /* The highest-priority flow in the frontier, or NULL if empty. Does not remove it. */
 Flow *flow_best(void);
 
+/* The highest-priority flow OTHER than `exclude` — the running flow's rival for the value-driven yield. */
+Flow *flow_best_other(const Flow *exclude);
+
+/* A counter bumped on every frontier membership change (add/remove). The value-yield recomputes its rival
+   only when this changes (or the running flow switches), never per-opcode. */
+unsigned flow_frontier_gen(void);
+
 /* Remove + free a flow (its emitted work is done, or it was evicted). */
 void  flow_remove(JSContext *ctx, Flow *f);
 

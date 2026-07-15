@@ -5,8 +5,12 @@
 
 static Flow **g_flows = NULL;
 static int g_flows_n = 0, g_flows_cap = 0;
+static unsigned g_gen = 0;   /* bumped whenever the frontier's membership changes (add/remove) — lets the
+                                value-yield recompute the rival only on a change, never per-opcode */
 
-void flow_registry_init(void) { g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; }
+void flow_registry_init(void) { g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; }
+
+unsigned flow_frontier_gen(void) { return g_gen; }
 
 void flow_registry_free(JSContext *ctx) {
     for (int i = 0; i < g_flows_n; i++) {
@@ -29,6 +33,7 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n) {
     f->dec = dec; f->dec_n = dec_n;
     f->val = 0.0; f->cpu = 0; f->visits = 0;
     g_flows[g_flows_n++] = f;
+    g_gen++;   /* frontier changed */
     return f;
 }
 
@@ -50,6 +55,17 @@ Flow *flow_best(void) {
     return best;
 }
 
+/* The highest-weight flow OTHER than `exclude` — the running flow's rival for the value-driven yield. */
+Flow *flow_best_other(const Flow *exclude) {
+    Flow *best = NULL; double bw = 0.0;
+    for (int i = 0; i < g_flows_n; i++) {
+        if (g_flows[i] == exclude) continue;
+        double w = flow_weight(g_flows[i]);
+        if (!best || w > bw) { best = g_flows[i]; bw = w; }
+    }
+    return best;
+}
+
 void flow_remove(JSContext *ctx, Flow *f) {
     for (int i = 0; i < g_flows_n; i++) {
         if (g_flows[i] == f) {
@@ -57,6 +73,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
             free(f->dec);
             free(f);
             g_flows[i] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
+            g_gen++;   /* frontier changed */
             return;
         }
     }
