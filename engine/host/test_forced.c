@@ -8,22 +8,23 @@
 #include "solver/engine.h"
 #include "solver/cow.h"
 #include "solver/boot.h"
+#include "solver/endpoint.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
-static char g_eps[64][128];
-static int  g_eps_n = 0;
-
+/* the fetch host-edge: funnel into the real @H endpoint surface (dedup + shape happen there). */
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
-    if (argc > 0 && g_eps_n < 64) {
-        if (concolic_is(argv[0])) {   /* a concolic URL -> record its SHAPE (e.g. built by '/api/'+id) */
-            const char *sh = concolic_shape_c(argv[0]);
-            snprintf(g_eps[g_eps_n++], 128, "%s", sh ? sh : "{}");
-        } else {
-            const char *u = JS_ToCString(ctx, argv[0]);
-            if (u) { snprintf(g_eps[g_eps_n++], 128, "%s", u); JS_FreeCString(ctx, u); }
+    if (argc > 0) {
+        const char *method = "GET", *mc = NULL;
+        if (argc > 1 && JS_IsObject(argv[1])) {
+            JSValue m = JS_GetPropertyStr(ctx, argv[1], "method");
+            if (JS_IsString(m)) { mc = JS_ToCString(ctx, m); if (mc) method = mc; }
+            JS_FreeValue(ctx, m);
         }
+        endpoint_record(ctx, method, argv[0]);
+        if (mc) JS_FreeCString(ctx, mc);
     }
     return JS_UNDEFINED;
 }
@@ -49,6 +50,7 @@ int main(void) {
 
     concolic_init(ctx);
     flow_registry_init();
+    endpoint_init();
     JS_SetBranchHook(solver_decide);
 
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
@@ -64,23 +66,27 @@ int main(void) {
     engine_run(ctx, boot_run, bp);
     boot_free(bp);
 
-    printf("endpoints reached (%d):\n", g_eps_n);
-    for (int i = 0; i < g_eps_n; i++) printf("  %s\n", g_eps[i]);
+    /* emit the deduped @H surface — serialized DIRECTLY from the C findings (no JS-object round-trip) */
+    char *js = endpoint_json();
+    printf("@RESULT %s\n", js);
 
-    /* isolation: both arms must see n==1 (COW reverted); + the concolic URL carries its shape */
-    int has_admin = 0, has_public = 0, leak = 0, has_shape = 0;
-    for (int i = 0; i < g_eps_n; i++) {
-        if (!strcmp(g_eps[i], "/api/admin/1")) has_admin = 1;
-        if (!strcmp(g_eps[i], "/api/public/1")) has_public = 1;
-        if (!strcmp(g_eps[i], "/api/admin/2") || !strcmp(g_eps[i], "/api/public/2")) leak = 1;   /* baseline write leaked across flows */
-        if (strstr(g_eps[i], "/api/region/") && strstr(g_eps[i], "region")) has_shape = 1;   /* concat carried the concolic shape */
-    }
-    printf("%s\n", (has_admin && has_public && !leak && has_shape)
-        ? "PASS: moat + per-flow COW + concolic URL shape via `+` propagation all correct"
-        : "FAIL: gated endpoint / isolation / concolic-shape issue");
+    int has_admin = strstr(js, "/api/admin/1") != NULL;
+    int has_public = strstr(js, "/api/public/1") != NULL;
+    int has_shape = strstr(js, "/api/region/{state}.region") != NULL;
+    int leak = strstr(js, "/api/admin/2") != NULL || strstr(js, "/api/public/2") != NULL;
+    int region_count = 0; for (const char *p = js; (p = strstr(p, "/api/region/")); p++) region_count++;
+    int deduped = (region_count == 1);   /* the concolic URL is recorded ONCE despite running per-flow */
+
+    printf("%s\n", (has_admin && has_public && has_shape && !leak && deduped)
+        ? "PASS: deduped @H surface — moat + COW + concolic shape + dedup, emitted in C (no leak)"
+        : "FAIL: @H surface wrong (missing endpoint / leak / not deduped)");
+
+    free(js);
+    endpoint_free();
 
     flow_registry_free(ctx);
+    JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    return (has_admin && has_public && !leak && has_shape) ? 0 : 1;
+    return (has_admin && has_public && has_shape && !leak && deduped) ? 0 : 1;
 }
