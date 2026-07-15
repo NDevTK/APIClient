@@ -7,7 +7,6 @@
 #define ENGINE_HOST_SOLVER_SOLVE_H
 
 #include "quickjs.h"
-#include <stddef.h>
 
 /* Install the X9 fire-marker + init the @S store. Call once at engine init (after the global exists). */
 void solve_init(JSContext *ctx);
@@ -21,7 +20,7 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg);
 
 /* After detection, SEARCH breakout candidates for every recorded source: inject each at the source, re-run the
    REAL program (`rerun`), and record the first that FIRES as the replay-verified PoC. */
-void solve_verify(JSContext *ctx, const char *src, size_t len);
+void solve_verify(JSContext *ctx, char *const *bodies, int n);
 
 /* @S findings as JSON: { "securitySinks":[ {"sink":..,"source":..,"poc":..}, ... ] } (caller frees). */
 char *solve_json(void);

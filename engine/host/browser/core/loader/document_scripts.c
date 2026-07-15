@@ -64,3 +64,33 @@ unsigned document_bundle_id(lxb_html_document_t *dom) {
     free(c.els);
     return bh ? bh : 1;
 }
+
+DocScripts document_exec_scripts(lxb_html_document_t *dom) {
+    struct scr_ctx c; dom_collect_scripts(dom, &c);
+    DocScripts ds = { NULL, 0 };
+    if (c.n) { ds.bodies = calloc((size_t)c.n, sizeof(char *)); if (!ds.bodies) { free(c.els); return ds; } }
+    /* Each OWN inline executable script becomes its OWN body (document order) — never concatenated, so its
+       top-level let/const stays script-scoped. An external `src` script is a fetch-then-run flow (later); a
+       data block (json/importmap) is parsed, never run. */
+    for (int i = 0; i < c.n; i++) {
+        lxb_dom_element_t *el = c.els[i];
+        size_t sl = 0;
+        const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
+        if (src && sl) continue;
+        int is_mod; if (!script_is_exec(el, &is_mod)) continue;
+        size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
+        if (txt && tl) {
+            char *b = malloc(tl + 1);
+            if (b) { memcpy(b, txt, tl); b[tl] = 0; ds.bodies[ds.n++] = b; }
+        }
+        if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
+    }
+    free(c.els);
+    return ds;
+}
+
+void doc_scripts_free(DocScripts *ds) {
+    if (!ds || !ds->bodies) return;
+    for (int i = 0; i < ds->n; i++) free(ds->bodies[i]);
+    free(ds->bodies); ds->bodies = NULL; ds->n = 0;
+}

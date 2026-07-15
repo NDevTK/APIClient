@@ -7,10 +7,10 @@
 #include "solver/flow.h"
 #include "solver/engine.h"
 #include "solver/cow.h"
-#include "solver/boot.h"
+#include "core/loader/document_scripts.h"
 #include "solver/endpoint.h"
 #include "solver/solve.h"
-#include "browser/array_iteration.h"
+#include <lexbor/html/html.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -79,7 +79,6 @@ int main(void) {
     JS_SetBranchHook(solver_decide);
 
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
-    array_iteration_install(ctx);   /* self-hosted forEach/map/filter/reduce -> preemptible iteration */
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 1));
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
@@ -92,11 +91,15 @@ int main(void) {
     JS_SetConcolicAddHook(concolic_add_hook);   /* concolic propagation through `+` (URL building) */
     JS_SetConcolicCmpHook(concolic_cmp_hook);   /* concolic == / === -> fork on equality gates + concretize-on-pin */
 
-    BootProgram *bp = boot_parse(HTML, strlen(HTML));   /* real Lexbor parse + <script> extraction */
-    const char *src = boot_source(bp); size_t slen = strlen(src);   /* the scripts, run as the first flow */
-    engine_run(ctx, src, slen);                         /* @H + @S detection */
-    solve_verify(ctx, src, slen);                       /* @S: fire-verify the breakout by re-running the real code */
-    boot_free(bp);
+    /* Browser layer: parse the document with the real Lexbor HTML parser, then extract its executable inline
+       scripts as ONE flow program (document_scripts, Blink core/loader). No boot — the scripts ARE the first flow. */
+    lxb_html_document_t *dom = lxb_html_document_create();
+    lxb_html_document_parse(dom, (const lxb_char_t *)HTML, strlen(HTML));
+    DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
+    engine_run(ctx, scripts.bodies, scripts.n);         /* @H + @S detection */
+    solve_verify(ctx, scripts.bodies, scripts.n);       /* @S: fire-verify the breakout by re-running the real code */
+    doc_scripts_free(&scripts);
+    lxb_html_document_destroy(dom);
 
     /* emit the deduped @H surface — serialized DIRECTLY from the C findings (no JS-object round-trip) */
     char *js = endpoint_json();

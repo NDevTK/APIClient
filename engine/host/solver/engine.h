@@ -9,13 +9,13 @@
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
 #include "quickjs.h"
-#include <stddef.h>
 
-/* Run the page's scripts ONCE as a flow (global program, resumed to completion). The single executor. */
-void flow_exec_once(JSContext *ctx, const char *src, size_t len);
+/* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
+   per-<script> scope, NEVER concatenated), run in document order, sharing globals + the flow's COW delta. */
+void flow_exec_once(JSContext *ctx, char *const *bodies, int n);
 
 /* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
    per-flow COW delta, and drain the frontier by WFQ order. */
-void engine_run(JSContext *ctx, const char *src, size_t len);
+void engine_run(JSContext *ctx, char *const *bodies, int n);
 
 #endif

@@ -157,7 +157,7 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
    REAL program as a flow, and the FIRST that makes X9 fire is the replay-verified PoC (re-execution is the
    oracle, so no static context detection is needed). The re-run uses the ONE flow executor (flow_exec_once),
    the same path the scheduler uses — there is no separate boot re-runner. */
-void solve_verify(JSContext *ctx, const char *src, size_t len) {
+void solve_verify(JSContext *ctx, char *const *bodies, int n) {
     endpoint_suppress(1);   /* candidate re-runs fire requests that are @S artifacts, not @H endpoints */
     for (int i = 0; i < g_pending_n; i++) {
         const char **cands = cand_set(g_pending[i].sink);
@@ -165,7 +165,7 @@ void solve_verify(JSContext *ctx, const char *src, size_t len) {
         for (int c = 0; cands[c]; c++) {
             concolic_set_candidate(g_pending[i].src, cands[c]);
             g_fired = 0; g_verifying = 1;
-            flow_exec_once(ctx, src, len);
+            flow_exec_once(ctx, bodies, n);
             g_verifying = 0;
             concolic_set_candidate(NULL, NULL);
             if (g_fired) { record_sink(sink_name, g_pending[i].src, cands[c]); break; }   /* this breakout fired -> the PoC */
