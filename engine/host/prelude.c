@@ -22,10 +22,9 @@ const char *ARRAY_PRELUDE_JS =
 "var __alen=function(O){return O.length>>>0;};"
 "var __ain=function(O,k){return __isOpaque(O)||(k in O);};"
 "var __iterdone=function(O,k){return __isOpaque(O)?__iterdone_mint():(k>=__alen(O));};"   /* the shared loop-back: {@iterdone} for a concolic collection, real k>=length for a concrete one */
-"Object.defineProperty(Array.prototype,'forEach',{writable:true,enumerable:false,configurable:true,value:function forEach(cb,thisArg){"
-"  if(typeof cb!=='function')throw new TypeError('Array.prototype.forEach: callback is not a function');"
-"  var O=Object(this);"
-"  for(var k=0;;k++){if(__iterdone(O,k))break;if(__ain(O,k)){cb.call(thisArg,O[k],k,O);}}return undefined;}});"
+/* forEach is NOT self-hosted here: it is a NATIVE-CONTINUATION builtin (quickjs.c js_array_every +
+   nc_step) — the C builtin trampolines its callback via a heap frame. Opaque-collection {@iterdone} forking
+   for the native path is handled in nc_step. */
 "Object.defineProperty(Array.prototype,'map',{writable:true,enumerable:false,configurable:true,value:function map(cb,thisArg){"  /* holes preserved; species not honored (plain Array) */
 "  if(typeof cb!=='function')throw new TypeError('Array.prototype.map: callback is not a function');"
 "  var O=Object(this),A=__isOpaque(O)?[]:new Array(__alen(O));"
