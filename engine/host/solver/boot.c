@@ -11,6 +11,7 @@ struct BootProgram {
     lxb_html_document_t *doc;
     char **scripts;   /* inline <script> sources, document order (owned) */
     int n;
+    char *source;     /* the scripts concatenated into one flow program (lazily built, owned) */
 };
 
 BootProgram *boot_parse(const char *html, size_t len) {
@@ -46,25 +47,32 @@ BootProgram *boot_parse(const char *html, size_t len) {
     return bp;
 }
 
-void boot_run(JSContext *ctx, void *ud) {
-    BootProgram *bp = (BootProgram *)ud;
+const char *boot_source(BootProgram *bp) {
+    if (bp->source) return bp->source;
+    if (bp->n == 0) { bp->source = strdup(""); CHECK(bp->source, "boot: OOM source"); return bp->source; }
+    /* Concatenate the inline scripts into ONE program: the scheduler runs them as the FIRST FLOW through the
+       one JS_FlowNew path (no separate boot executor). A '\n' between scripts prevents a trailing line comment
+       in one from swallowing the next. Scripts share the global scope (var/function -> global), faithful for
+       the common case; per-<script> top-level let/const isolation is a documented refinement. */
+    size_t total = 0;
+    for (int i = 0; i < bp->n; i++) total += strlen(bp->scripts[i]) + 1;   /* +1 for the '\n' */
+    char *s = malloc(total + 1); CHECK(s, "boot: OOM source");
+    size_t off = 0;
     for (int i = 0; i < bp->n; i++) {
-        JSValue r = JS_Eval(ctx, bp->scripts[i], strlen(bp->scripts[i]), "<script>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(r)) {   /* a page's own throw is the intentional forcing function; surface it */
-            JSValue e = JS_GetException(ctx);
-            const char *m = JS_ToCString(ctx, e);
-            fprintf(stderr, "script %d exception: %s\n", i, m ? m : "?");
-            if (m) JS_FreeCString(ctx, m);
-            JS_FreeValue(ctx, e);
-        }
-        JS_FreeValue(ctx, r);
+        size_t l = strlen(bp->scripts[i]);
+        memcpy(s + off, bp->scripts[i], l); off += l;
+        s[off++] = '\n';
     }
+    s[off] = 0;
+    bp->source = s;
+    return bp->source;
 }
 
 void boot_free(BootProgram *bp) {
     if (!bp) return;
     for (int i = 0; i < bp->n; i++) free(bp->scripts[i]);
     free(bp->scripts);
+    free(bp->source);
     if (bp->doc) lxb_html_document_destroy(bp->doc);
     free(bp);
 }

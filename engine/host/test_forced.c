@@ -93,8 +93,9 @@ int main(void) {
     JS_SetConcolicCmpHook(concolic_cmp_hook);   /* concolic == / === -> fork on equality gates + concretize-on-pin */
 
     BootProgram *bp = boot_parse(HTML, strlen(HTML));   /* real Lexbor parse + <script> extraction */
-    engine_run(ctx, boot_run, bp);                      /* @H + @S detection */
-    solve_verify(ctx, boot_run, bp);                    /* @S: fire-verify the breakout by re-running the real code */
+    const char *src = boot_source(bp); size_t slen = strlen(src);   /* the scripts, run as the first flow */
+    engine_run(ctx, src, slen);                         /* @H + @S detection */
+    solve_verify(ctx, src, slen);                       /* @S: fire-verify the breakout by re-running the real code */
     boot_free(bp);
 
     /* emit the deduped @H surface — serialized DIRECTLY from the C findings (no JS-object round-trip) */

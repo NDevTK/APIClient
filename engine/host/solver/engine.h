@@ -1,17 +1,21 @@
-/* The DISPATCH LOOP — drains the WFQ frontier, running each flow by re-executing the program while replaying
- * the flow's decision vector. Boot is the first flow (empty vector). A concolic branch inside a run forks a
- * sibling flow (decide.c); the loop keeps running the highest-value flow until the frontier is empty.
+/* The DISPATCH LOOP — drains the WFQ frontier. Each flow is the page's scripts run as ONE preemptible program
+ * (JS_FlowNew), replaying the flow's decision vector; the first flow is the empty vector. A concolic branch
+ * inside a run forks a sibling flow (decide.c); the loop keeps running the highest-value flow until the
+ * frontier is empty. There is NO separate boot executor — the scripts ARE the first flow.
  *
- * The executor is injected: `run_program` executes the program ONCE (evals the page's scripts / drives boot).
- * The engine only owns SCHEDULING — decide_enter/leave brackets + WFQ order — so the same loop drives a
- * bytecode program and a native-builtin-heavy one identically (frame-agnostic all the way up). */
+ * `src`/`len` is the page's script source (boot_source). flow_exec_once compiles+runs it as a global-program
+ * flow; the same primitive drives the scheduler AND @S candidate re-runs, so there is ONE executor. */
 #ifndef ENGINE_HOST_SOLVER_ENGINE_H
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
 #include "quickjs.h"
+#include <stddef.h>
 
-/* Run the program to frontier exhaustion. `run_program(ctx, ud)` executes it once (the caller supplies the
-   real executor); the engine seeds boot, brackets each run with the decision state, and drains the frontier. */
-void engine_run(JSContext *ctx, void (*run_program)(JSContext *ctx, void *ud), void *ud);
+/* Run the page's scripts ONCE as a flow (global program, resumed to completion). The single executor. */
+void flow_exec_once(JSContext *ctx, const char *src, size_t len);
+
+/* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
+   per-flow COW delta, and drain the frontier by WFQ order. */
+void engine_run(JSContext *ctx, const char *src, size_t len);
 
 #endif
