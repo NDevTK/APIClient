@@ -16,6 +16,7 @@ void solve_free(void);
    source; a candidate re-run executes/re-parses the injected value so firing can be observed. */
 void solve_eval_sink(JSContext *ctx, JSValueConst arg);
 void solve_html_sink(JSContext *ctx, JSValueConst arg);
+void solve_url_sink(JSContext *ctx, JSValueConst arg);
 
 /* After detection, SEARCH breakout candidates for every recorded source: inject each at the source, re-run the
    REAL program (`rerun`), and record the first that FIRES as the replay-verified PoC. */

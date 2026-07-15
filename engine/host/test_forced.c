@@ -26,6 +26,12 @@ static JSValue js_html_sink(JSContext *ctx, JSValueConst this_val, int argc, JSV
     if (argc > 0) solve_html_sink(ctx, argv[0]);
     return JS_UNDEFINED;
 }
+/* the location host-edge: a URL-context sink (setLocation(x) stands in for location = x / el.href = x). */
+static JSValue js_url_sink(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc > 0) solve_url_sink(ctx, argv[0]);
+    return JS_UNDEFINED;
+}
 
 /* the fetch host-edge: funnel into the real @H endpoint surface (dedup + shape happen there). */
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -55,6 +61,7 @@ static const char *HTML =
     "if (cfg.admin) { fetch('/api/data?role=admin'); } else { fetch('/api/data?role=public'); }"   /* same endpoint, values MERGE across flows */
     "eval(\"'\" + state.code + \"'\");"   /* @S JS: source lands INSIDE a single-quoted string -> breakout ';X9();// */
     "setInnerHTML('<div>' + state.html + '</div>');"   /* @S HTML: source in HTML text -> breakout an auto-firing element */
+    "setLocation(state.next);"   /* @S URL: attacker controls the whole URL -> breakout javascript:X9() */
     "</script>"
     "</body></html>";
 
@@ -74,6 +81,7 @@ int main(void) {
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 1));
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
     JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
+    JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
     JS_FreeValue(ctx, g);
 
@@ -104,10 +112,11 @@ int main(void) {
     /* @S JS: single-quote-context breakout fire-verified. @S HTML: innerHTML sink fire-verified via Lexbor re-parse. */
     int s_eval = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "';X9();//");
     int s_html = strstr(ss, "\"sink\":\"innerHTML\"") && strstr(ss, "{state}.html") && strstr(ss, "<svg onload=X9()>");
-    int s_ok = s_eval && s_html;
+    int s_url = strstr(ss, "\"sink\":\"location\"") && strstr(ss, "{state}.next") && strstr(ss, "javascript:X9()");
+    int s_ok = s_eval && s_html && s_url;
 
     printf("%s\n", (h_ok && s_ok)
-        ? "PASS: @H params+merge AND @S eval(';X9();//) + innerHTML(<svg onload=X9()>) — both SEARCHED + fire-verified"
+        ? "PASS: @H merge AND @S eval + innerHTML + location — 3 sink contexts, all SEARCHED + fire-verified"
         : "FAIL: @H or @S incorrect");
 
     free(ss);

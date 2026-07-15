@@ -9,7 +9,7 @@
 #include <string.h>
 #include <stdio.h>
 
-enum { SINK_EVAL = 0, SINK_HTML = 1 };   /* JS-context vs HTML-context sink -> different candidate set + fire oracle */
+enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2 };   /* JS / HTML / URL context -> different candidate set + fire oracle */
 
 static int g_fired = 0;      /* set by the X9 marker when a constructed PoC executes */
 static int g_verifying = 0;  /* 1 during a candidate re-run: the sink executes/re-parses the (now concrete) arg */
@@ -51,7 +51,14 @@ static const char *CANDS_HTML[] = {
     "></textarea><svg onload=X9()>", /* rawtext element (textarea/title/...) — close it first */
     NULL
 };
-static const char **cand_set(int sink) { return sink == SINK_HTML ? CANDS_HTML : CANDS_JS; }
+static const char *CANDS_URL[] = {
+    "javascript:X9()",     /* URL context: the vector IS the javascript: scheme (one fixed context) */
+    "javascript:X9()//",
+    NULL
+};
+static const char **cand_set(int sink) {
+    return sink == SINK_HTML ? CANDS_HTML : sink == SINK_URL ? CANDS_URL : CANDS_JS;
+}
 
 static void add_pending(const char *src, int sink) {
     for (int i = 0; i < g_pending_n; i++) if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return;   /* dedup */
@@ -106,6 +113,29 @@ static void html_fire(JSContext *ctx, const char *html) {
     lxb_html_document_destroy(doc);
 }
 
+/* URL firing oracle: navigating to a `javascript:` URL executes its JS. So the "fire" is: if the URL scheme is
+   javascript:, eval the part after the colon — X9 fires iff the breakout made the URL a javascript: one. */
+static void url_fire(JSContext *ctx, const char *url) {
+    while (*url == ' ' || *url == '\t' || *url == '\n') url++;   /* leading whitespace is ignored by the URL parser */
+    if (!strncasecmp(url, "javascript:", 11)) {
+        const char *js = url + 11;
+        JSValue r = JS_Eval(ctx, js, strlen(js), "<js-url>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(ctx, r);
+    }
+}
+/* location = arg (or el.href = arg): a URL-context sink. */
+void solve_url_sink(JSContext *ctx, JSValueConst arg) {
+    if (g_verifying) {
+        if (concolic_is(arg)) return;
+        const char *url = JS_ToCString(ctx, arg);
+        if (url) { url_fire(ctx, url); JS_FreeCString(ctx, url); }
+        return;
+    }
+    if (!concolic_is(arg)) return;
+    const char *shape = concolic_shape_c(arg);
+    const char *src = concolic_src_c(arg);
+    add_pending(src ? src : (shape ? shape : "?"), SINK_URL);
+}
+
 /* innerHTML = arg: an HTML-context sink. Detection records the source; the candidate run re-parses the injected
    HTML and fires its handlers. */
 void solve_html_sink(JSContext *ctx, JSValueConst arg) {
@@ -127,7 +157,7 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
 void solve_verify(JSContext *ctx, void (*rerun)(JSContext *ctx, void *ud), void *ud) {
     for (int i = 0; i < g_pending_n; i++) {
         const char **cands = cand_set(g_pending[i].sink);
-        const char *sink_name = g_pending[i].sink == SINK_HTML ? "innerHTML" : "eval";
+        const char *sink_name = g_pending[i].sink == SINK_HTML ? "innerHTML" : g_pending[i].sink == SINK_URL ? "location" : "eval";
         for (int c = 0; cands[c]; c++) {
             concolic_set_candidate(g_pending[i].src, cands[c]);
             g_fired = 0; g_verifying = 1;
