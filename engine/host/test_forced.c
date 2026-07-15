@@ -9,9 +9,17 @@
 #include "solver/cow.h"
 #include "solver/boot.h"
 #include "solver/endpoint.h"
+#include "solver/solve.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
+/* the eval host-edge: a code-execution sink — funnel into the @S solver. */
+static JSValue js_eval_sink(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc > 0) solve_eval_sink(ctx, argv[0]);
+    return JS_UNDEFINED;
+}
 
 /* the fetch host-edge: funnel into the real @H endpoint surface (dedup + shape happen there). */
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -39,6 +47,7 @@ static const char *HTML =
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
     "if (cfg.admin) { fetch('/api/data?role=admin'); } else { fetch('/api/data?role=public'); }"   /* same endpoint, values MERGE across flows */
+    "eval(state.code);"   /* @S: a concolic attacker source reaches a code-execution sink */
     "</script>"
     "</body></html>";
 
@@ -50,11 +59,13 @@ int main(void) {
     concolic_init(ctx);
     flow_registry_init();
     endpoint_init();
+    solve_init(ctx);
     JS_SetBranchHook(solver_decide);
 
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 1));
+    JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
     JS_FreeValue(ctx, g);
 
@@ -75,16 +86,26 @@ int main(void) {
     int data_count = 0; for (const char *p = js; (p = strstr(p, "\"/api/data\"")); p++) data_count++;
     int merged = (data_count == 1);   /* /api/data appears ONCE with role=[admin,public] merged across flows */
 
-    printf("%s\n", (has_uid_param && role_admin && role_public && merged)
-        ? "PASS: query params + validValues MERGED across flows (uid={state}.id; role=[admin,public]), C emit, no leak"
-        : "FAIL: params/validValues not extracted or not merged");
+    int h_ok = (has_uid_param && role_admin && role_public && merged);
+    printf("@H %s\n", h_ok ? "OK" : "FAIL");
 
+    /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified */
+    char *ss = solve_json();
+    printf("@SEC %s\n", ss);
+    int s_ok = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "\"poc\":\"X9()\"");
+
+    printf("%s\n", (h_ok && s_ok)
+        ? "PASS: @H params+merge (C emit, no leak) AND @S eval sink fire-verified (source {state}.code -> PoC X9())"
+        : "FAIL: @H or @S incorrect");
+
+    free(ss);
     free(js);
+    solve_free();
     endpoint_free();
 
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    return (has_uid_param && role_admin && role_public && merged) ? 0 : 1;
+    return (h_ok && s_ok) ? 0 : 1;
 }
