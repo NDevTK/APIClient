@@ -30,4 +30,7 @@ const char *concolic_src_c(JSValueConst v);           /* source identity (NULL i
 JSValue     concolic_example(JSContext *ctx, JSValueConst v);   /* the concrete example (dup'd) or JS_UNDEFINED */
 void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example);   /* attach/replace (consumes example) */
 
+/* Propagation through `+` — install with JS_SetConcolicAddHook. */
+int         concolic_add_hook(JSContext *ctx, JSValue *sp);
+
 #endif

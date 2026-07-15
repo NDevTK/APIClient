@@ -16,9 +16,14 @@ static int  g_eps_n = 0;
 
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
-    if (argc > 0) {
-        const char *u = JS_ToCString(ctx, argv[0]);
-        if (u) { if (g_eps_n < 64) snprintf(g_eps[g_eps_n++], 128, "%s", u); JS_FreeCString(ctx, u); }
+    if (argc > 0 && g_eps_n < 64) {
+        if (concolic_is(argv[0])) {   /* a concolic URL -> record its SHAPE (e.g. built by '/api/'+id) */
+            const char *sh = concolic_shape_c(argv[0]);
+            snprintf(g_eps[g_eps_n++], 128, "%s", sh ? sh : "{}");
+        } else {
+            const char *u = JS_ToCString(ctx, argv[0]);
+            if (u) { snprintf(g_eps[g_eps_n++], 128, "%s", u); JS_FreeCString(ctx, u); }
+        }
     }
     return JS_UNDEFINED;
 }
@@ -31,6 +36,7 @@ static const char *HTML =
     "<!doctype html><html><body>"
     "<script>var cfg = { admin: state.admin };</script>"
     "<script>"
+    "fetch('/api/region/' + state.region);"   /* concolic URL built by concat -> shape must carry {state}.region */
     "globalThis.n = (globalThis.n || 0) + 1;"
     "if (cfg.admin) { fetch('/api/admin/' + globalThis.n); } else { fetch('/api/public/' + globalThis.n); }"
     "</script>"
@@ -52,6 +58,7 @@ int main(void) {
     JS_FreeValue(ctx, g);
 
     JS_SetCowHook(cow_capture_hook);   /* per-flow isolation: revert baseline writes made DURING flows */
+    JS_SetConcolicAddHook(concolic_add_hook);   /* concolic propagation through `+` (URL building) */
 
     BootProgram *bp = boot_parse(HTML, strlen(HTML));   /* real Lexbor parse + <script> extraction */
     engine_run(ctx, boot_run, bp);
@@ -60,19 +67,20 @@ int main(void) {
     printf("endpoints reached (%d):\n", g_eps_n);
     for (int i = 0; i < g_eps_n; i++) printf("  %s\n", g_eps[i]);
 
-    /* isolation: both arms must see n==1 (COW reverted the other run's mutation) */
-    int has_admin = 0, has_public = 0, leak = 0;
+    /* isolation: both arms must see n==1 (COW reverted); + the concolic URL carries its shape */
+    int has_admin = 0, has_public = 0, leak = 0, has_shape = 0;
     for (int i = 0; i < g_eps_n; i++) {
         if (!strcmp(g_eps[i], "/api/admin/1")) has_admin = 1;
         if (!strcmp(g_eps[i], "/api/public/1")) has_public = 1;
         if (!strcmp(g_eps[i], "/api/admin/2") || !strcmp(g_eps[i], "/api/public/2")) leak = 1;   /* baseline write leaked across flows */
+        if (strstr(g_eps[i], "/api/region/") && strstr(g_eps[i], "region")) has_shape = 1;   /* concat carried the concolic shape */
     }
-    printf("%s\n", (has_admin && has_public && !leak)
-        ? "PASS: gated /api/admin/1 + /api/public/1 — moat works AND baseline write isolated per-flow (COW)"
-        : "FAIL: gated endpoint missing or baseline state leaked across flows");
+    printf("%s\n", (has_admin && has_public && !leak && has_shape)
+        ? "PASS: moat + per-flow COW + concolic URL shape via `+` propagation all correct"
+        : "FAIL: gated endpoint / isolation / concolic-shape issue");
 
     flow_registry_free(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    return (has_admin && has_public && !leak) ? 0 : 1;
+    return (has_admin && has_public && !leak && has_shape) ? 0 : 1;
 }
