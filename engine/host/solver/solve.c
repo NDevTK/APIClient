@@ -4,6 +4,7 @@
 #include "solver/concolic.h"
 #include "solver/endpoint.h"
 #include "solver/engine.h"
+#include "solver/flow.h"
 #include "check.h"
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
@@ -66,6 +67,7 @@ static void add_pending(const char *src, int sink) {
     for (int i = 0; i < g_pending_n; i++) if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return;   /* dedup */
     if (g_pending_n >= g_pending_cap) { g_pending_cap = g_pending_cap ? g_pending_cap * 2 : 8; g_pending = realloc(g_pending, (size_t)g_pending_cap * sizeof(Cand)); CHECK(g_pending, "solve: OOM pending"); }
     g_pending[g_pending_n].src = strdup(src); g_pending[g_pending_n].sink = sink; g_pending_n++;
+    flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
 }
 
 static void record_sink(const char *sink, const char *source, const char *poc) {

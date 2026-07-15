@@ -7,10 +7,29 @@ static Flow **g_flows = NULL;
 static int g_flows_n = 0, g_flows_cap = 0;
 static unsigned g_gen = 0;   /* bumped whenever the frontier's membership changes (add/remove) — lets the
                                 value-yield recompute the rival only on a change, never per-opcode */
+static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
 
-void flow_registry_init(void) { g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; }
+void flow_registry_init(void) { g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; g_running = NULL; }
 
 unsigned flow_frontier_gen(void) { return g_gen; }
+
+void  flow_set_running(Flow *f) { g_running = f; }
+Flow *flow_running(void) { return g_running; }
+
+/* Credit the running flow with newly EMITTED value (a new @H endpoint / @S PoC): its WFQ reward rises and its
+   CPU-since-emit aging resets, so a productive flow outranks fresh + starved flows. Called by the detectors
+   (endpoint.c / solve.c) when they record something NEW — this is what makes the WFQ value-of-information
+   ordered rather than merely breadth-first by visit count. The frontier gen bumps so the value-yield re-ranks. */
+void flow_credit_emit(double v) {
+    if (!g_running) return;
+    g_running->val += v;
+    g_running->cpu = 0;   /* emitted -> no longer a CPU-burning monopolizer */
+    g_gen++;              /* rank changed: let the value-yield recompute */
+}
+
+/* Age the running flow: CPU burned since its last emit. A monopolizer that runs without emitting sinks below
+   productive + unrun flows. Called once per scheduler step. */
+void flow_age_running(long units) { if (g_running) g_running->cpu += units; }
 
 void flow_registry_free(JSContext *ctx) {
     for (int i = 0; i < g_flows_n; i++) {

@@ -56,6 +56,12 @@ Flow *flow_best_other(const Flow *exclude);
    only when this changes (or the running flow switches), never per-opcode. */
 unsigned flow_frontier_gen(void);
 
+/* The running flow (scheduler-set). Detectors credit emitted value to it; the scheduler ages it. */
+void  flow_set_running(Flow *f);
+Flow *flow_running(void);
+void  flow_credit_emit(double v);   /* a NEW @H/@S from the running flow: raise reward, reset aging */
+void  flow_age_running(long units); /* CPU burned this step without emitting */
+
 /* Remove + free a flow (its emitted work is done, or it was evicted). */
 void  flow_remove(JSContext *ctx, Flow *f);
 

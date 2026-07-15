@@ -1,6 +1,7 @@
 /* @H endpoint surface — see endpoint.h. Findings are C data; params + values merge in C; emit is C. */
 #include "solver/endpoint.h"
 #include "solver/concolic.h"
+#include "solver/flow.h"
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -78,6 +79,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url) {
     e->method = strdup(method); e->path = strdup(path);
     if (n) { e->params = calloc(n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
     for (int j = 0; j < n; j++) { e->params[e->np].name = strdup(kv[j].name); param_add_val(&e->params[e->np], kv[j].val); e->np++; }
+    flow_credit_emit(1.0);   /* a NEW endpoint: this flow just emitted value-of-information -> WFQ reward */
 done:
     free(path);
     for (int j = 0; j < n; j++) { free(kv[j].name); free(kv[j].val); }

@@ -9,12 +9,9 @@
 #include <stdio.h>
 #include <string.h>
 
-/* The flow currently holding the worker (engine_queue_script appends a lazy chunk to ITS queue). */
-static Flow *g_cur_flow = NULL;
-
 void engine_queue_script(const char *body) {
-    if (!body || !g_cur_flow) return;
-    Flow *f = g_cur_flow;
+    Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
+    if (!body || !f) return;
     if (f->dyn_n >= f->dyn_cap) { f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8; f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(char *)); CHECK(f->dyn, "engine: OOM dynamic-script queue"); }
     f->dyn[f->dyn_n] = strdup(body); CHECK(f->dyn[f->dyn_n], "engine: OOM dynamic-script body"); f->dyn_n++;
 }
@@ -31,10 +28,11 @@ static unsigned g_qtick = 0;
 #define FLOW_QUANTUM 64
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static int g_outranked = 0;
 static int preempt_hook(void) {
-    if (flow_frontier_gen() != g_seen_gen || g_cur_flow != g_seen_cur) {   /* (1) recompute rival only on change */
-        g_seen_gen = flow_frontier_gen(); g_seen_cur = g_cur_flow;
-        Flow *rival = g_cur_flow ? flow_best_other(g_cur_flow) : NULL;
-        g_outranked = (rival && g_cur_flow && flow_weight(rival) > flow_weight(g_cur_flow));
+    Flow *cur = flow_running();
+    if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) recompute rival only on change */
+        g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
+        Flow *rival = cur ? flow_best_other(cur) : NULL;
+        g_outranked = (rival && cur && flow_weight(rival) > flow_weight(cur));
     }
     if (g_outranked) return 1;                        /* value yield */
     return (++g_qtick % FLOW_QUANTUM) == 0;           /* (2) quantum floor */
@@ -63,7 +61,7 @@ static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot it
     f->pin_blob = concolic_pins_suspend();
     cow_unapply(ctx, (CowDelta *)f->delta);
     cow_set_current(NULL);
-    g_cur_flow = NULL;
+    flow_set_running(NULL);
 }
 
 static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply its delta + solver state */
@@ -75,7 +73,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
         decide_resume(f->dec_blob, f->fn);   decide_blob_free(f->dec_blob); f->dec_blob = NULL;
         concolic_pins_resume(f->pin_blob);   concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
     }
-    g_cur_flow = f;
+    flow_set_running(f);
 }
 
 static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */
@@ -84,7 +82,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;
     for (int i = 0; i < f->dyn_n; i++) free(f->dyn[i]);
     free(f->dyn); f->dyn = NULL; f->dyn_n = f->dyn_cap = 0;
-    g_cur_flow = NULL;
+    flow_set_running(NULL);
     flow_remove(ctx, f);
 }
 
@@ -117,6 +115,7 @@ void engine_run(JSContext *ctx, char *const *bodies, int n) {
             cur = best;
             switches++;
         }
+        flow_age_running(1);   /* this step burned CPU; flow_credit_emit resets it when the flow emits value */
         if (flow_step(ctx, cur, bodies, n)) { flow_finish(ctx, cur); cur = NULL; finishes++; }
         else yields++;
     }
