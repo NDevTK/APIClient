@@ -10,6 +10,7 @@
 #include "solver/boot.h"
 #include "solver/endpoint.h"
 #include "solver/solve.h"
+#include "browser/array_iteration.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -78,6 +79,7 @@ int main(void) {
     JS_SetBranchHook(solver_decide);
 
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
+    array_iteration_install(ctx);   /* self-hosted forEach/map/filter/reduce -> preemptible iteration */
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 1));
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
