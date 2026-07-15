@@ -75,6 +75,32 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
     g_capturing = 0;
 }
 
+CowDelta *cow_delta_clone(JSContext *ctx, CowDelta *src) {
+    CowDelta *d = cow_delta_new();
+    if (src->n == 0) return d;
+    d->e = malloc((size_t)src->n * sizeof(CowEntry)); CHECK(d->e, "cow: OOM clone");
+    d->cap = src->n; d->n = src->n;
+    g_capturing = 1;
+    for (int i = 0; i < src->n; i++) {
+        CowEntry *se = &src->e[i], *de = &d->e[i];
+        de->obj = JS_DupValue(ctx, se->obj);
+        de->atom = JS_DupAtom(ctx, se->atom);
+        de->existed = se->existed;
+        de->base = JS_DupValue(ctx, se->base);
+        /* Snapshot the CURRENT live value as the clone's restore point: at a branch the src flow's delta is
+           APPLIED, so the heap holds its branch-point value. Applying the clone later reproduces exactly that
+           state for the forked sibling; the two then diverge, each capturing its own further writes over its
+           own base. */
+        JSPropertyDescriptor pd;
+        int has = JS_GetOwnProperty(ctx, &pd, se->obj, se->atom);
+        if (has > 0) { de->cur = pd.value; JS_FreeValue(ctx, pd.getter); JS_FreeValue(ctx, pd.setter); }
+        else de->cur = JS_UNDEFINED;
+        de->cur_valid = 1;
+    }
+    g_capturing = 0;
+    return d;
+}
+
 void cow_delta_free(JSContext *ctx, CowDelta *d) {
     if (!d) return;
     for (int i = 0; i < d->n; i++) {

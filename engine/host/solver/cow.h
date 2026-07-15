@@ -20,6 +20,10 @@ typedef struct CowDelta CowDelta;
 CowDelta *cow_delta_new(void);
 void      cow_delta_free(JSContext *ctx, CowDelta *d);
 
+/* Fork a delta at a branch: an INDEPENDENT copy whose restore point is src's CURRENT (branch-point) heap
+   values, so a snapshot-forked sibling inherits that state then diverges. Pairs with JS_FlowClone. */
+CowDelta *cow_delta_clone(JSContext *ctx, CowDelta *src);
+
 /* Route captures to `d` (the flow about to run). NULL = captures are dropped (baseline setup). */
 void      cow_set_current(CowDelta *d);
 
