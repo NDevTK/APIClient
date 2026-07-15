@@ -1,38 +1,33 @@
-/* The maximally-unknown CONCOLIC value + the minimal host-edge stubs — the shared concolic-value foundation.
+/* The CONCOLIC VALUE — the atom of the forced-execution solver (rebuilt clean on upstream quickjs).
  *
- * g_concolic is "external input the tool must not concretely decide": the most-general concolic value (shape
- * "{}", no source, no example yet) that generic propagation dups. Nearly every component returns it for a read
- * it can't concretize, so it (and the trivial stubs that return it) live in one place every TU includes rather
- * than re-externing piecemeal. (It is the concolic-spectrum's unknown end, not a "know-nothing" sentinel.) */
-#ifndef ENGINE_HOST_CONCOLIC_H
-#define ENGINE_HOST_CONCOLIC_H
+ * A concolic value is NOT a binary "opaque" sentinel. It is a triple:
+ *   - SOURCE identity   : where the value came from (an attacker source "{hash}", a reply field, injected state)
+ *   - CONSTRAINT domain : what the value can be, narrowed by every predicate the flow took (accumulated elsewhere)
+ *   - EXAMPLE           : a concrete value when the code pins/computes/learns one (else absent)
+ *
+ * It is a real JSObject of a host-registered class (JS_NewClassID/JS_NewClass — upstream public API, so the qjs
+ * fork carries NO value-type delta). The interpreter learns to BRANCH and PROPAGATE on it through a minimal set
+ * of hooks, keeping the fork a thin edge. Every semantic — provenance, example propagation, display shape —
+ * lives here in the host: the SOLVER owns its value type as a C component, not a fork mutation. */
+#ifndef ENGINE_HOST_SOLVER_CONCOLIC_H
+#define ENGINE_HOST_SOLVER_CONCOLIC_H
 
 #include "quickjs.h"
 
-extern JSValue g_concolic;            /* the maximally-unknown concolic value (created by concolic_init) */
-void concolic_init(JSContext *ctx);   /* create g_concolic (qjs_init) */
-void concolic_free(JSContext *ctx);   /* free g_concolic (teardown) */
+/* Register the Concolic class in ctx's runtime (once, at engine init). */
+void concolic_init(JSContext *ctx);
+void concolic_free(JSContext *ctx);
 
-/* Minimal host-edge stubs for a browser bundle: a no-op (addEventListener etc — the handler stays a
-   never-fired function, so orphan-invoke drives it), and concolic-returning reads (DOM/response reads that are
-   external input the tool must not concretely decide). A missing capability is a missing stub, never a
-   parallel resolver — the real Lexbor DOM replaces these when the host is wired. */
-JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
-JSValue js_concolic_read(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue js_concolic_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v);
+/* Mint a concolic value. `shape` is the @H/@S display form ("{hash}", "/api/{region}"); `src` is the source
+   identity used to correlate constraints across a flow (may equal shape); `example` (consumed) is the concrete
+   example or JS_UNDEFINED when none is known yet. Returns a new owned JSValue. */
+JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example);
 
-/* A CONCOLIC CONSTANT: a value tagged `shape` so a branch on it still FORKS (explore both worlds — more
-   logic, you don't know which arm ships an endpoint), carrying `example` as its concrete value (model, never
-   lost). The shared primitive for a modelable-but-branch-relevant environment value (navigator/screen/media).
-   CONSUMES `example`. Bare-concrete would delete the fork; a bare unknown would drop the value; this is both. */
-JSValue js_concolic(JSContext *ctx, const char *shape, JSValue example);
-
-/* Leaf intrinsics the self-hosted builtins need (the JS-visible __isOpaque / __opaqueExample names): a CONCRETE
-   bool "is this value still symbolic (unresolved concolic)?" (sort collapses a meaningless symbolic order
-   without forking) and the concrete EXAMPLE it carries (stringify serializes a config value to its real value,
-   else undefined). Leaves — hold no continuation. */
-JSValue js_is_concolic(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue js_concolic_example(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue js_iterdone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+/* Predicates + accessors — the ONLY concolic test is this domain-carrying one (never a binary know-nothing). */
+int         concolic_is(JSValueConst v);              /* 1 iff v is a concolic value */
+const char *concolic_shape_c(JSValueConst v);         /* display shape (NULL if not concolic) */
+const char *concolic_src_c(JSValueConst v);           /* source identity (NULL if not concolic) */
+JSValue     concolic_example(JSContext *ctx, JSValueConst v);   /* the concrete example (dup'd) or JS_UNDEFINED */
+void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example);   /* attach/replace (consumes example) */
 
 #endif

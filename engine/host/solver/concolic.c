@@ -1,49 +1,84 @@
-/* The maximally-unknown concolic value + minimal host-edge stubs — see concolic.h. */
+/* The concolic value type — see concolic.h. A host component built on upstream quickjs's PUBLIC class API, so
+   the qjs fork carries no value-type delta. */
 #include "solver/concolic.h"
 #include "check.h"
+#include <stdlib.h>
+#include <string.h>
 
-JSValue g_concolic = JS_UNDEFINED;
+/* The per-value state hung off the JSObject via JS_SetOpaque. */
+typedef struct {
+    char *shape;        /* @H/@S display form */
+    char *src;          /* source identity (constraint correlation key) */
+    JSValue example;    /* concrete example, or JS_UNDEFINED */
+} Concolic;
 
-void concolic_init(JSContext *ctx) { g_concolic = JS_NewConcolicShaped(ctx, "{}"); }   /* the most-general concolic (shape "{}"); generic propagation dups it */
-void concolic_free(JSContext *ctx) { JS_FreeValue(ctx, g_concolic); g_concolic = JS_UNDEFINED; }
+static JSClassID g_concolic_class = 0;   /* runtime-allocated; 0 until concolic_init */
 
-JSValue js_noop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_UNDEFINED; }
-JSValue js_concolic_read(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_DupValue(ctx, g_concolic); }
-JSValue js_concolic_stub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { return JS_DupValue(ctx, g_concolic); }
-
-JSValue js_concolic(JSContext *ctx, const char *shape, JSValue example) {
-    JSValue o = JS_NewConcolicSourced(ctx, shape, shape);         /* forkable, source-tagged */
-    if (JS_IsConcolic(o)) JS_SetConcolicExample(ctx, o, example);   /* concrete example (consumes it) */
-    else JS_FreeValue(ctx, example);
-    return o;
+static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
+    Concolic *c = JS_GetOpaque(val, g_concolic_class);
+    if (!c) return;
+    free(c->shape);
+    free(c->src);
+    JS_FreeValueRT(rt, c->example);
+    free(c);
 }
 
-/* __isOpaque(v): CONCRETE bool (never forks), the ONE primitive the self-hosted Array.sort needs — a branch on an
-   OPAQUE value forks, but sort must NOT fork on the meaningless ORDER of opaque elements (O(n log n) fork
-   explosion). The comparator still RUNS (trampolined); only the order bit concretizes. A leaf. */
-JSValue js_is_concolic(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val;
-    return JS_NewBool(ctx, argc > 0 && JS_IsConcolic(argv[0]));
-}
-/* __opaqueExample(v): the CONCRETE example an opaque carries (config/reply loaded data), or undefined for a pure
-   attacker symbol (location.hash / cross-origin postMessage — no example). Self-hosted JSON.stringify uses it so a
-   CONFIG value serializes to its real value while ATTACKER input stays the taint-preserving opaque. A leaf. */
-JSValue js_concolic_example(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val;
-    return argc > 0 ? JS_ConcolicExample(ctx, argv[0]) : JS_UNDEFINED;
+static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func) {
+    Concolic *c = JS_GetOpaque(val, g_concolic_class);
+    if (c && !JS_IsUndefined(c->example)) JS_MarkValue(rt, c->example, mark_func);
 }
 
-/* __iterdone(): mint the "{@iterdone}" loop-back control value — the ONE per-iteration parking primitive, shared by
-   BOTH the interpreter's for-of/for-in `done` (js_for_of_next) AND the self-hosted Array iterators (prelude forEach/
-   map/…). A self-hosted loop over a CONCOLIC collection has an UNKNOWN length, so its loop-back test is not `k<L`
-   (which collapses to one concrete trip count and never explores) but this tagged value: branch_decide takes EXIT
-   as PRIMARY (this flow stops iterating — breadth first) and PARKS the CONTINUE arm as its own per-iteration flow
-   (mark=1 -> transients flow_local-skipped, no single-flow delta blow-up). Unbounded, parkable, paged — never
-   run-to-completion in one flow (the general-arm continue-primary that loops forever). The prelude's `__iterdone`
-   helper returns THIS for a concolic collection and the real `k>=length` boolean for a concrete one. A leaf. */
-JSValue js_iterdone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val; (void)argc; (void)argv;
-    JSValue r = JS_MintIterDone(ctx);
-    DCHECK(JS_IsConcolic(r), "js_iterdone: the loop-back parking primitive must be concolic — else every self-hosted iterator silently concretizes its loop-back (no-op or hang)");
-    return r;
+void concolic_init(JSContext *ctx) {
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    if (g_concolic_class == 0) {
+        JS_NewClassID(rt, &g_concolic_class);
+        DCHECK(g_concolic_class != 0, "concolic: class id allocation returned 0 — runtime class table exhausted");
+    }
+    if (!JS_IsRegisteredClass(rt, g_concolic_class)) {
+        JSClassDef def = { "Concolic", .finalizer = concolic_finalizer, .gc_mark = concolic_gc_mark };
+        int r = JS_NewClass(rt, g_concolic_class, &def);
+        CHECK(r == 0, "concolic: JS_NewClass failed — cannot register the solver's value type");
+    }
+}
+
+void concolic_free(JSContext *ctx) { (void)ctx; /* class lives with the runtime; per-value state freed by the finalizer */ }
+
+JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example) {
+    DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
+    JSValue obj = JS_NewObjectClass(ctx, g_concolic_class);
+    if (JS_IsException(obj)) { JS_FreeValue(ctx, example); return obj; }
+    Concolic *c = calloc(1, sizeof *c);
+    CHECK(c, "concolic_new: OOM allocating value state — a dropped concolic corrupts the flow's domain");
+    c->shape = strdup(shape ? shape : "{}");
+    c->src = src ? strdup(src) : NULL;
+    c->example = example;   /* consume */
+    JS_SetOpaque(obj, c);
+    return obj;
+}
+
+int concolic_is(JSValueConst v) {
+    return g_concolic_class != 0 && JS_GetOpaque(v, g_concolic_class) != NULL;
+}
+
+const char *concolic_shape_c(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    return c ? c->shape : NULL;
+}
+
+const char *concolic_src_c(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    return c ? c->src : NULL;
+}
+
+JSValue concolic_example(JSContext *ctx, JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    if (!c || JS_IsUndefined(c->example)) return JS_UNDEFINED;
+    return JS_DupValue(ctx, c->example);
+}
+
+void concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    if (!c) { JS_FreeValue(ctx, example); return; }
+    JS_FreeValue(ctx, c->example);
+    c->example = example;   /* consume */
 }
