@@ -4,6 +4,7 @@
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /* The per-value state hung off the JSObject via JS_SetOpaque. */
 typedef struct {
@@ -28,6 +29,30 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
     if (c && !JS_IsUndefined(c->example)) JS_MarkValue(rt, c->example, mark_func);
 }
 
+/* Exotic [[Get]]: reading ANY field of a concolic value yields a DERIVED concolic — unknown injected/attacker
+   state is unknown per-field, carrying the parent's provenance ("{state}.admin"). This is what lets a gated
+   `if (state.admin)` fork and surface the logged-in endpoint while logged out. */
+static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
+    (void)receiver;
+    Concolic *c = JS_GetOpaque(obj, g_concolic_class);
+    if (!c) return JS_UNDEFINED;
+    const char *field = JS_AtomToCString(ctx, atom);
+    char shape[192];
+    snprintf(shape, sizeof shape, "%s.%s", c->shape ? c->shape : "{}", field ? field : "?");
+    JSValue r = concolic_new(ctx, shape, c->src, JS_UNDEFINED);   /* derived value, same source root */
+    if (field) JS_FreeCString(ctx, field);
+    return r;
+}
+/* `x in concolic` / property existence: a concolic collection "has" any key (so a membership gate still runs). */
+static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {
+    (void)ctx; (void)atom;
+    return JS_GetOpaque(obj, g_concolic_class) != NULL;
+}
+static JSClassExoticMethods g_concolic_exotic = {
+    .get_property = concolic_exotic_get,
+    .has_property = concolic_exotic_has,
+};
+
 void concolic_init(JSContext *ctx) {
     JSRuntime *rt = JS_GetRuntime(ctx);
     if (g_concolic_class == 0) {
@@ -35,7 +60,7 @@ void concolic_init(JSContext *ctx) {
         DCHECK(g_concolic_class != 0, "concolic: class id allocation returned 0 — runtime class table exhausted");
     }
     if (!JS_IsRegisteredClass(rt, g_concolic_class)) {
-        JSClassDef def = { "Concolic", .finalizer = concolic_finalizer, .gc_mark = concolic_gc_mark };
+        JSClassDef def = { "Concolic", .finalizer = concolic_finalizer, .gc_mark = concolic_gc_mark, .exotic = &g_concolic_exotic };
         int r = JS_NewClass(rt, g_concolic_class, &def);
         CHECK(r == 0, "concolic: JS_NewClass failed — cannot register the solver's value type");
     }

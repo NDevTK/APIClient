@@ -21,8 +21,9 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return JS_UNDEFINED;
 }
 
-/* the "page": one concolic branch, a distinct endpoint per arm */
-static const char *SCRIPT = "if (x) { fetch('/a'); } else { fetch('/b'); }";
+/* the "page": a real MOAT case — `state` is injected/unknown, so state.admin forks and the gated admin
+   endpoint surfaces even though the page (logged out) would only ever take the public arm. */
+static const char *SCRIPT = "if (state.admin) { fetch('/api/admin'); } else { fetch('/api/public'); }";
 
 static void run_program(JSContext *ctx, void *ud) {
     (void)ud;
@@ -48,7 +49,7 @@ int main(void) {
 
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 1));
-    JS_SetPropertyStr(ctx, g, "x", concolic_new(ctx, "{x}", "{x}", JS_UNDEFINED));   /* the attacker/unknown input */
+    JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
     JS_FreeValue(ctx, g);
 
     engine_run(ctx, run_program, NULL);
@@ -56,13 +57,14 @@ int main(void) {
     printf("endpoints reached (%d):\n", g_eps_n);
     for (int i = 0; i < g_eps_n; i++) printf("  %s\n", g_eps[i]);
 
-    int has_a = 0, has_b = 0;
-    for (int i = 0; i < g_eps_n; i++) { if (!strcmp(g_eps[i], "/a")) has_a = 1; if (!strcmp(g_eps[i], "/b")) has_b = 1; }
-    printf("%s\n", (has_a && has_b) ? "PASS: both arms explored via decision-vector fork (frame-agnostic core works)"
-                                    : "FAIL: an arm was not reached");
+    int has_admin = 0, has_public = 0;
+    for (int i = 0; i < g_eps_n; i++) { if (!strcmp(g_eps[i], "/api/admin")) has_admin = 1; if (!strcmp(g_eps[i], "/api/public")) has_public = 1; }
+    printf("%s\n", (has_admin && has_public)
+        ? "PASS: gated /api/admin surfaced alongside /api/public — the moat works (concolic source -> fork)"
+        : "FAIL: the gated endpoint was not reached");
 
     flow_registry_free(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    return (has_a && has_b) ? 0 : 1;
+    return (has_admin && has_public) ? 0 : 1;
 }
