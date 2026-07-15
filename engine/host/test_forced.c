@@ -7,6 +7,7 @@
 #include "solver/flow.h"
 #include "solver/engine.h"
 #include "solver/cow.h"
+#include "solver/boot.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -22,25 +23,18 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return JS_UNDEFINED;
 }
 
-/* the "page": moat + SHARED-STATE ISOLATION test. `window.n` is a BASELINE mutation each run does before the
-   concolic branch. Without per-flow COW the FALSE sibling's re-run would see n=2 (the TRUE run's leak); with
-   COW each run reverts n, so BOTH arms see n=1 -> /api/admin/1 AND /api/public/1. */
-static const char *SCRIPT =
+/* the "page": a real 2-<script> HTML document. Script 1 reads injected `state` into a config; script 2 (sharing
+   globals) branches on it + does a baseline mutation (globalThis.n) first. Exercises: real Lexbor boot,
+   cross-script concolic flow (fork on cfg.admin set by script 1), the moat (gated /api/admin), AND per-flow COW
+   (both arms see n==1). */
+static const char *HTML =
+    "<!doctype html><html><body>"
+    "<script>var cfg = { admin: state.admin };</script>"
+    "<script>"
     "globalThis.n = (globalThis.n || 0) + 1;"
-    "if (state.admin) { fetch('/api/admin/' + globalThis.n); } else { fetch('/api/public/' + globalThis.n); }";
-
-static void run_program(JSContext *ctx, void *ud) {
-    (void)ud;
-    JSValue r = JS_Eval(ctx, SCRIPT, strlen(SCRIPT), "<page>", JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(r)) {
-        JSValue e = JS_GetException(ctx);
-        const char *m = JS_ToCString(ctx, e);
-        fprintf(stderr, "eval exception: %s\n", m ? m : "?");
-        if (m) JS_FreeCString(ctx, m);
-        JS_FreeValue(ctx, e);
-    }
-    JS_FreeValue(ctx, r);
-}
+    "if (cfg.admin) { fetch('/api/admin/' + globalThis.n); } else { fetch('/api/public/' + globalThis.n); }"
+    "</script>"
+    "</body></html>";
 
 int main(void) {
     JSRuntime *rt = JS_NewRuntime();
@@ -58,7 +52,10 @@ int main(void) {
     JS_FreeValue(ctx, g);
 
     JS_SetCowHook(cow_capture_hook);   /* per-flow isolation: revert baseline writes made DURING flows */
-    engine_run(ctx, run_program, NULL);
+
+    BootProgram *bp = boot_parse(HTML, strlen(HTML));   /* real Lexbor parse + <script> extraction */
+    engine_run(ctx, boot_run, bp);
+    boot_free(bp);
 
     printf("endpoints reached (%d):\n", g_eps_n);
     for (int i = 0; i < g_eps_n; i++) printf("  %s\n", g_eps[i]);
