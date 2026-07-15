@@ -2,6 +2,7 @@
    it at the source, re-run the REAL code, and verify it FIRES. */
 #include "solver/solve.h"
 #include "solver/concolic.h"
+#include "solver/endpoint.h"
 #include "check.h"
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
@@ -155,6 +156,7 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
    REAL program, and the FIRST that makes X9 fire is the replay-verified PoC (re-execution is the oracle, so no
    static context detection is needed). `rerun(ctx, ud)` re-executes the page (boot). */
 void solve_verify(JSContext *ctx, void (*rerun)(JSContext *ctx, void *ud), void *ud) {
+    endpoint_suppress(1);   /* candidate re-runs fire requests that are @S artifacts, not @H endpoints */
     for (int i = 0; i < g_pending_n; i++) {
         const char **cands = cand_set(g_pending[i].sink);
         const char *sink_name = g_pending[i].sink == SINK_HTML ? "innerHTML" : g_pending[i].sink == SINK_URL ? "location" : "eval";
@@ -167,6 +169,7 @@ void solve_verify(JSContext *ctx, void (*rerun)(JSContext *ctx, void *ud), void 
             if (g_fired) { record_sink(sink_name, g_pending[i].src, cands[c]); break; }   /* this breakout fired -> the PoC */
         }
     }
+    endpoint_suppress(0);
 }
 
 /* ── @S JSON emit (C-native) ── */

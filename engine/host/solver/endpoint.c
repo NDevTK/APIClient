@@ -11,8 +11,10 @@ typedef struct { char *method; char *path; Param *params; int np, pcap; } Endpoi
 
 static Endpoint *g_eps = NULL;
 static int g_eps_n = 0, g_eps_cap = 0;
+static int g_suppress = 0;   /* a candidate/verify re-run's requests are @S artifacts, NOT real @H */
 
-void endpoint_init(void) { g_eps = NULL; g_eps_n = 0; g_eps_cap = 0; }
+void endpoint_init(void) { g_eps = NULL; g_eps_n = 0; g_eps_cap = 0; g_suppress = 0; }
+void endpoint_suppress(int on) { g_suppress = on ? 1 : 0; }
 
 static char *url_display(JSContext *ctx, JSValueConst url) {
     if (concolic_is(url)) { const char *s = concolic_shape_c(url); return strdup(s ? s : "{}"); }
@@ -58,6 +60,7 @@ static int same_identity(Endpoint *e, const char *method, const char *path, KV *
 }
 
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url) {
+    if (g_suppress) return;   /* candidate/verify run -> not a real @H endpoint */
     char *disp = url_display(ctx, url);
     char *path; KV *kv; int n;
     parse_url(disp, &path, &kv, &n);

@@ -37,4 +37,13 @@ int         concolic_add_hook(JSContext *ctx, JSValue *sp);
    "{state}.code") returns the concrete `payload` instead of a concolic. NULL/NULL clears it. */
 void        concolic_set_candidate(const char *src, const char *payload);
 
+/* Comparison constraint domain: `x === 'admin'` on a concolic must FORK (not collapse to concrete false), and
+   the taken arm pins/negates. */
+enum { OPCMP_NONE = 0, OPCMP_EQ = 1, OPCMP_NE = 2 };
+JSValue     concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok);  /* a comparison-result bool */
+int         concolic_cmp(JSValueConst v, const char **psrc, const char **ptok);          /* OPCMP_* of a cmp result */
+int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);                   /* == / === propagation (JSConcolicCmpHook) */
+void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
+void        concolic_clear_pins(void);                        /* per-flow: clear all pins */
+
 #endif

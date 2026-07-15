@@ -59,6 +59,7 @@ static const char *HTML =
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
     "if (cfg.admin) { fetch('/api/data?role=admin'); } else { fetch('/api/data?role=public'); }"   /* same endpoint, values MERGE across flows */
+    "if (state.region === 'us-east-1') { fetch('/api/region/' + state.region); }"   /* EQ gate: true arm PINS region -> real @H value /api/region/us-east-1 */
     "eval(\"'\" + state.code + \"'\");"   /* @S JS: source lands INSIDE a single-quoted string -> breakout ';X9();// */
     "setInnerHTML('<div>' + state.html + '</div>');"   /* @S HTML: source in HTML text -> breakout an auto-firing element */
     "setLocation(state.next);"   /* @S URL: attacker controls the whole URL -> breakout javascript:X9() */
@@ -87,6 +88,7 @@ int main(void) {
 
     JS_SetCowHook(cow_capture_hook);   /* per-flow isolation: revert baseline writes made DURING flows */
     JS_SetConcolicAddHook(concolic_add_hook);   /* concolic propagation through `+` (URL building) */
+    JS_SetConcolicCmpHook(concolic_cmp_hook);   /* concolic == / === -> fork on equality gates + concretize-on-pin */
 
     BootProgram *bp = boot_parse(HTML, strlen(HTML));   /* real Lexbor parse + <script> extraction */
     engine_run(ctx, boot_run, bp);                      /* @H + @S detection */
@@ -103,8 +105,9 @@ int main(void) {
     int data_count = 0; for (const char *p = js; (p = strstr(p, "\"/api/data\"")); p++) data_count++;
     int merged = (data_count == 1);   /* /api/data appears ONCE with role=[admin,public] merged across flows */
 
-    int h_ok = (has_uid_param && role_admin && role_public && merged);
-    printf("@H %s\n", h_ok ? "OK" : "FAIL");
+    int pinned = strstr(js, "/api/region/us-east-1") != NULL;   /* EQ gate concretized region to the REAL value */
+    int h_ok = (has_uid_param && role_admin && role_public && merged && pinned);
+    printf("@H %s (pinned-value=%d)\n", h_ok ? "OK" : "FAIL", pinned);
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified */
     char *ss = solve_json();

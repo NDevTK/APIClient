@@ -11,7 +11,21 @@ typedef struct {
     char *shape;        /* @H/@S display form */
     char *src;          /* source identity (constraint correlation key) */
     JSValue example;    /* concrete example, or JS_UNDEFINED */
+    int cmp_op;         /* for a COMPARISON RESULT: OPCMP_EQ/NE — `src <op> cmp_tok` (else OPCMP_NONE) */
+    char *cmp_tok;      /* the concrete side of the comparison */
 } Concolic;
+
+/* per-flow PIN map: an EQ gate pins a source to a concrete value on its true arm, so later reads compute the
+   REAL @H value (`/api/admin`, not `/api/{state}.role`). Cleared per flow by the scheduler. */
+typedef struct { char *src; char *val; } Pin;
+static Pin *g_pins = NULL; static int g_pins_n = 0, g_pins_cap = 0;
+void concolic_pin(const char *src, const char *val) {
+    for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].src, src)) { free(g_pins[i].val); g_pins[i].val = strdup(val); return; }
+    if (g_pins_n >= g_pins_cap) { g_pins_cap = g_pins_cap ? g_pins_cap * 2 : 8; g_pins = realloc(g_pins, (size_t)g_pins_cap * sizeof(Pin)); CHECK(g_pins, "concolic: OOM pins"); }
+    g_pins[g_pins_n].src = strdup(src); g_pins[g_pins_n].val = strdup(val); g_pins_n++;
+}
+void concolic_clear_pins(void) { for (int i = 0; i < g_pins_n; i++) { free(g_pins[i].src); free(g_pins[i].val); } g_pins_n = 0; }
+static const char *pin_of(const char *src) { for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].src, src)) return g_pins[i].val; return NULL; }
 
 static JSClassID g_concolic_class = 0;   /* runtime-allocated; 0 until concolic_init */
 
@@ -20,6 +34,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     if (!c) return;
     free(c->shape);
     free(c->src);
+    free(c->cmp_tok);
     JS_FreeValueRT(rt, c->example);
     free(c);
 }
@@ -52,7 +67,41 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     if (field) JS_FreeCString(ctx, field);
     if (g_cand_src && !strcmp(shape, g_cand_src))            /* candidate run: this source -> the concrete breakout */
         return JS_NewString(ctx, g_cand_payload ? g_cand_payload : "");
+    const char *pv = pin_of(shape);                          /* an EQ gate pinned this source -> the real value */
+    if (pv) return JS_NewString(ctx, pv);
     return concolic_new(ctx, shape, shape, JS_UNDEFINED);    /* src = the field path (precise @S identity) */
+}
+
+/* Mint a COMPARISON-RESULT concolic bool carrying `src <op> tok`, so `if (x === 'admin')` forks (instead of a
+   concrete false) and the taken arm can pin/negate. */
+JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok) {
+    JSValue r = concolic_new(ctx, "{cmp}", src, JS_UNDEFINED);
+    Concolic *c = JS_GetOpaque(r, g_concolic_class);
+    if (c) { c->cmp_op = op; c->cmp_tok = tok ? strdup(tok) : NULL; }
+    return r;
+}
+int concolic_cmp(JSValueConst v, const char **psrc, const char **ptok) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    if (!c || c->cmp_op == OPCMP_NONE) return OPCMP_NONE;
+    if (psrc) *psrc = c->src; if (ptok) *ptok = c->cmp_tok;
+    return c->cmp_op;
+}
+
+/* JSConcolicCmpHook for == / === : a concolic operand -> a concolic bool carrying {src, op, tok}. Matches the
+   slow-eq stack effect (both operands freed, result in sp[-2]). is_neq flips EQ->NE. */
+int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq) {
+    JSValue a = sp[-2], b = sp[-1];
+    int ca = concolic_is(a), cb = concolic_is(b);
+    if (!ca && !cb) return 0;
+    JSValueConst opq = ca ? a : b, other = ca ? b : a;
+    const char *src = concolic_src_c(opq);
+    char *tok = NULL;
+    if (!concolic_is(other)) { const char *s = JS_ToCString(ctx, other); if (s) { tok = strdup(s); JS_FreeCString(ctx, s); } }
+    JSValue res = concolic_new_cmp(ctx, src, is_neq ? OPCMP_NE : OPCMP_EQ, tok);
+    free(tok);
+    JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
+    sp[-2] = res;
+    return 1;
 }
 /* `x in concolic` / property existence: a concolic collection "has" any key (so a membership gate still runs). */
 static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {

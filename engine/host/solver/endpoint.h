@@ -10,6 +10,7 @@
 
 void    endpoint_init(void);
 void    endpoint_free(void);
+void    endpoint_suppress(int on);   /* 1 during a candidate/verify re-run: its requests are @S artifacts, not @H */
 
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. */
 void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url);
