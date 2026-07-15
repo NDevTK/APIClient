@@ -6,6 +6,7 @@
 #include "solver/decide.h"
 #include "solver/flow.h"
 #include "solver/engine.h"
+#include "solver/cow.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -21,9 +22,12 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return JS_UNDEFINED;
 }
 
-/* the "page": a real MOAT case — `state` is injected/unknown, so state.admin forks and the gated admin
-   endpoint surfaces even though the page (logged out) would only ever take the public arm. */
-static const char *SCRIPT = "if (state.admin) { fetch('/api/admin'); } else { fetch('/api/public'); }";
+/* the "page": moat + SHARED-STATE ISOLATION test. `window.n` is a BASELINE mutation each run does before the
+   concolic branch. Without per-flow COW the FALSE sibling's re-run would see n=2 (the TRUE run's leak); with
+   COW each run reverts n, so BOTH arms see n=1 -> /api/admin/1 AND /api/public/1. */
+static const char *SCRIPT =
+    "globalThis.n = (globalThis.n || 0) + 1;"
+    "if (state.admin) { fetch('/api/admin/' + globalThis.n); } else { fetch('/api/public/' + globalThis.n); }";
 
 static void run_program(JSContext *ctx, void *ud) {
     (void)ud;
@@ -47,24 +51,31 @@ int main(void) {
     flow_registry_init();
     JS_SetBranchHook(solver_decide);
 
+    /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "fetch", JS_NewCFunction(ctx, js_fetch, "fetch", 1));
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
     JS_FreeValue(ctx, g);
 
+    JS_SetCowHook(cow_capture_hook);   /* per-flow isolation: revert baseline writes made DURING flows */
     engine_run(ctx, run_program, NULL);
 
     printf("endpoints reached (%d):\n", g_eps_n);
     for (int i = 0; i < g_eps_n; i++) printf("  %s\n", g_eps[i]);
 
-    int has_admin = 0, has_public = 0;
-    for (int i = 0; i < g_eps_n; i++) { if (!strcmp(g_eps[i], "/api/admin")) has_admin = 1; if (!strcmp(g_eps[i], "/api/public")) has_public = 1; }
-    printf("%s\n", (has_admin && has_public)
-        ? "PASS: gated /api/admin surfaced alongside /api/public — the moat works (concolic source -> fork)"
-        : "FAIL: the gated endpoint was not reached");
+    /* isolation: both arms must see n==1 (COW reverted the other run's mutation) */
+    int has_admin = 0, has_public = 0, leak = 0;
+    for (int i = 0; i < g_eps_n; i++) {
+        if (!strcmp(g_eps[i], "/api/admin/1")) has_admin = 1;
+        if (!strcmp(g_eps[i], "/api/public/1")) has_public = 1;
+        if (!strcmp(g_eps[i], "/api/admin/2") || !strcmp(g_eps[i], "/api/public/2")) leak = 1;   /* baseline write leaked across flows */
+    }
+    printf("%s\n", (has_admin && has_public && !leak)
+        ? "PASS: gated /api/admin/1 + /api/public/1 — moat works AND baseline write isolated per-flow (COW)"
+        : "FAIL: gated endpoint missing or baseline state leaked across flows");
 
     flow_registry_free(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    return (has_admin && has_public) ? 0 : 1;
+    return (has_admin && has_public && !leak) ? 0 : 1;
 }
