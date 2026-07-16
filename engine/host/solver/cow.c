@@ -11,7 +11,11 @@
    hold the baseline/flow values either way. */
 typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; void *vref; } CowEntry;
 
-struct CowDelta { CowEntry *e; int n, cap; };
+/* forked = has this flow snapshot-forked a sibling yet? Until it has, every object it CREATED (flow_local) is
+   truly private — no other flow can observe it — so capturing its mutations is pure waste (keeps the delta
+   O(shared baseline touched), not O(the run's transients). Once forked, the snapshot shares the frame's
+   flow_local objects with the sibling, so their mutations become cross-flow state and MUST be captured. */
+struct CowDelta { CowEntry *e; int n, cap; int forked; };
 
 static CowDelta *g_current = NULL;   /* the flow whose writes are captured right now (scheduler-owned) */
 static int g_capturing = 0;          /* re-entrancy guard: our own reads/restores must not re-capture */
@@ -27,6 +31,11 @@ void cow_set_current(CowDelta *d) { g_current = d; }
 void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (g_capturing || !g_current) return;
     CowDelta *d = g_current;
+    /* FLOW-LOCAL skip — the O(shared-state) optimization. Sound because a not-yet-forked flow's flow_local
+       object is never observed elsewhere; a forked flow shares it, so d->forked forces capture. (The global
+       let/const/class DEFINE leak that this once appeared to cause was really an uncaptured JS_DefineGlobalVar,
+       fixed at the root — the skip itself is correct.) */
+    if (!d->forked && JS_IsFlowLocal(obj)) return;
     for (int i = 0; i < d->n; i++)   /* capture each slot ONCE — first write is the true baseline */
         if (JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj) && d->e[i].atom == atom) return;
 
@@ -113,6 +122,9 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
    the two deltas share NO mutable state, so a sibling's later capture/apply can never corrupt the other. */
 CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     CowDelta *d = cow_delta_new();
+    /* both now SHARE the parent's pre-fork flow_local objects (the frame snapshot dup'd their heap refs), so
+       neither may skip flow_local capture any longer — else a post-fork mutation leaks between the two. */
+    src->forked = 1; d->forked = 1;
     if (src->n == 0) return d;
     d->e = malloc((size_t)src->n * sizeof(CowEntry)); CHECK(d->e, "cow: OOM fork");
     d->cap = src->n; d->n = src->n;
