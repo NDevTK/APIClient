@@ -107,10 +107,14 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
     g_capturing = 0;
 }
 
-CowDelta *cow_delta_clone(JSContext *ctx, CowDelta *src) {
+/* Fork a delta at a branch (cow.h contract): an INDEPENDENT copy of src's captured slots whose restore point
+   is src's CURRENT (branch-point) heap/cell values, so the snapshot-forked sibling inherits src's branch-point
+   state then each diverges on its own writes. A full copy (not an O(1) shared base segment) — sound and simple;
+   the two deltas share NO mutable state, so a sibling's later capture/apply can never corrupt the other. */
+CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     CowDelta *d = cow_delta_new();
     if (src->n == 0) return d;
-    d->e = malloc((size_t)src->n * sizeof(CowEntry)); CHECK(d->e, "cow: OOM clone");
+    d->e = malloc((size_t)src->n * sizeof(CowEntry)); CHECK(d->e, "cow: OOM fork");
     d->cap = src->n; d->n = src->n;
     g_capturing = 1;
     for (int i = 0; i < src->n; i++) {
