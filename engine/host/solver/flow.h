@@ -15,6 +15,10 @@
 
 #include "quickjs.h"
 
+/* One queued microtask/reaction job owned by a flow (routed here by the job-enqueue hook, not a global list):
+   the quickjs job function + its dup'd arguments, run under the flow's COW after its scripts. */
+typedef struct { JSJobFunc *fn; int argc; JSValue *argv; } FlowJob;
+
 typedef struct Flow {
     JSValue fn;            /* the function this flow re-drives (JS_UNDEFINED for a boot/session flow) */
     signed char *dec;      /* the DECISION VECTOR — the arm (0/1) this flow takes at each branch, in order */
@@ -30,9 +34,17 @@ typedef struct Flow {
     void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */
     int   script_i;        /* position in the script sequence: static [0,n), then this flow's dyn chunks [n, n+dyn_n) */
     char **dyn; int dyn_n, dyn_cap;   /* this flow's OWN lazily-loaded chunk bodies (per-flow, not global) */
-    void *delta;           /* this flow's isolated COW delta (CowDelta*), applied while running */
+    void *delta;           /* this flow's isolated HEAP COW delta (CowDelta*), applied while running */
+    void *dom; int dom_n, dom_cap;   /* this flow's isolated DOM COW delta HEAD buffer (dom_cow), swapped with the
+                                        heap delta on every context-switch so the DOCUMENT is a per-flow time-travel
+                                        entity: two flows see different trees/attributes, a rewind restores the
+                                        exact document the flow saw. Detached via dom_buf_take while parked. */
+    void *dom_base;        /* the shared IMMUTABLE base-segment chain below the head (dom_cow_fork): a snapshot-
+                              forked sibling references the parent's O(N) DOM delta in O(1). NULL until a fork. */
     void *dec_blob;        /* suspended decision state while paused (decide_suspend) */
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
+    FlowJob *jobs; int njob, jobcap;   /* ASYNC-AS-FLOW: this flow's OWN queued microtask/reaction jobs, drained
+                                          after its scripts under its live COW (correct ordering, per-flow isolated) */
 } Flow;
 
 void  flow_registry_init(void);

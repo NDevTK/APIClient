@@ -21,7 +21,19 @@ extern int g_dom_capture;
    dup/free the shadow's opaque JSValues without threading a context through every host-edge/scheduler call. */
 void dom_cow_set_ctx(JSContext *ctx);
 
-/* Host-edge hooks — record a mutation BEFORE it happens so it can be reverted. */
+/* The DOM-mutation CHOKEPOINT — capture-then-mutate ATOMICALLY, in ONE call. A browser component mutates the
+   tree ONLY through these, never through raw lxb_dom_* mutators + a separate capture, so a DOM write cannot
+   bypass time-travel capture (the browser engineer's "one place to reason about"). This is the fork-free answer
+   to unbypassable capture: rather than fork Lexbor to hook its internal write primitives, we OWN the mutation
+   API on top of Lexbor and funnel every write through here — enforced structurally by poisoning the raw
+   lxb_dom_* mutators in the component build. */
+void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *val, size_t val_len);
+/* node-insert chokepoint — the tree-structure twin of dom_cow_set_attribute: capture the insertion THEN attach
+   the child, so a subtree a flow appends reverts per-flow (detached on context-switch, re-attached on resume). */
+void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child);
+
+/* Lower-level capture primitives the chokepoint is built on (record a mutation BEFORE it happens). Direct use is
+   reserved for the mutation ops that compose them (the chokepoint above, and node-insert once it lands). */
 void dom_attr_capture(lxb_dom_element_t *el, const char *name);   /* pre-write attribute baseline */
 void dom_insert_capture(lxb_dom_node_t *node);                    /* an inserted node */
 

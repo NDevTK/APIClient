@@ -56,27 +56,28 @@ function buildLexbor(force) {
 buildLexbor(process.argv[2] === "lexbor");
 if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
-// Generate the Web IDL binding SHAPES from canonical IDL (@webref/idl) before compiling — the Blink model
-// (bindings generated from .idl). Emits browser/bindings/idl_generated.h, consumed by idl_bind. Best-effort:
-// if the idl toolchain isn't installed the existing generated header is reused (kept in-tree), so builds
-// without npm still work.
-{
-  const g = spawnSync(process.execPath, [join(ENGINE, "idlgen.mjs")], { stdio: "inherit", shell: false, cwd: ENGINE });
-  if (g.status !== 0) console.warn("[build] idlgen skipped (idl toolchain unavailable) — reusing the committed idl_generated.h");
-}
+// (The old browser IDL codegen — idlgen.mjs -> idl_generated.h — drove the deleted Blink-mirroring browser
+// components. With the browser half removed pending re-build against the rewritten fork, there is nothing to
+// generate; re-add the idlgen step when those components are rebuilt.)
 
-// The host mirrors the PROJECT IDENTITY "a browser with a BFS Time-Travel Solver": the BROWSER half is
-// organized like a real browser (browser/, each file a web-platform component mapping to a Blink module —
-// location=core/frame/Location, dom_element=core/dom/Element, forms=core/html/forms, …), the novel SOLVER half
-// (concolic value, time-travel COW, @S/@H) lives in solver/, and main.c (the scheduler entry) + check.h (the
-// DCHECK/CHECK infra) stay at the host root. Flat includes resolve via the -I flags below.
+// THE NEW-WORLD SOLVER CORE. The OLD main.c scheduler + heap_cow + the entire browser half were deleted as
+// legacy: they were built on the fork's PREVIOUS hook API (JS_SetCowCaptureHooks / JS_SetFlowYieldHook /
+// JS_SetArrayIterHook / …), which the rewritten fork replaced with the time-travel hook system
+// (JS_SetTimeTravelHooks + JS_FlowNew/Resume/Clone + JS_SetBranchHook/ForkHook/PreemptHook). These are the
+// files that actually link against the current fork. There is no qjs_* extension ABI entry yet — test_forced.c
+// is the node smoke-test main (build.mjs's milestone signal: does the new world compile + link + run + PASS its
+// @H/@S fixture). Rebuilding the production ABI entry that wraps engine.c's scheduler for the offscreen
+// document — and re-growing the browser components against the new fork — is the next keystone.
 const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (the novel half)
-const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c"]
+const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
-  .concat([join(HOST, "main.c"), join(HOST, "prelude.c"),
-    SOLVER("solve_html.c"), SOLVER("solve_js.c"), SOLVER("dom_cow.c"), SOLVER("heap_cow.c"), SOLVER("concolic.c"), SOLVER("concolic_array.c"), SOLVER("reply.c"), SOLVER("endpoint.c"), SOLVER("attr_shadow.c"), SOLVER("concolic_taint.c"), SOLVER("constraints.c"), SOLVER("parked.c"), SOLVER("why.c"), SOLVER("envelope.c"), SOLVER("solve.c"), SOLVER("source.c"), SOLVER("async_flow.c"), SOLVER("session.c"), SOLVER("scheduler.c"), SOLVER("fork.c"), SOLVER("defer.c"),
-    ...findC(join(HOST, "browser"), []),   // every Blink-mirroring web-platform component (core/dom, core/html, core/css, core/frame, core/loader, core/fileapi, modules, bindings, platform)
-    SOLVER("wfq.c")]);
+  .concat([
+    SOLVER("cow.c"), SOLVER("engine.c"), SOLVER("flow.c"), SOLVER("decide.c"),   // per-flow COW + interleaving scheduler + weight + fork
+    SOLVER("concolic.c"), SOLVER("endpoint.c"), SOLVER("solve.c"),               // concolic value + @H surface + @S solver
+    SOLVER("dom_cow.c"), SOLVER("attr_shadow.c"),                                // DOM time-travel delta + DOM-attribute taint shadow
+    join(HOST, "browser", "core", "loader", "document_scripts.c"),               // the one live browser piece: Lexbor <script> inventory
+    join(HOST, "test_forced.c"),                                                 // the node smoke-test entry (@H merge + @S sink fire-verify)
+  ]);
 
 const args = [
   ...sources,
@@ -103,25 +104,19 @@ const args = [
          ...(process.argv.includes("dwarf") ? ["-g"] : [])]
       : ["-sALLOW_MEMORY_GROWTH=1"]),
   "-sSTACK_SIZE=8388608",
-  "-sEXIT_RUNTIME=0",
-  "-sINVOKE_RUN=0",
-  "-sMODULARIZE=1",
-  "-sEXPORT_ES6=1",
-  "-sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,cwrap,stringToUTF8,lengthBytesUTF8,UTF8ToString,HEAPU8",
-  "-sEXPORTED_FUNCTIONS=_main,_qjs_init,_qjs_bundle_id,_qjs_begin,_qjs_step,_qjs_emit_partial,_qjs_set_yield_floor,_qjs_request_park,_qjs_top_weight,_qjs_pending,_qjs_chunks,_qjs_provide,_qjs_finalize,_qjs_teardown,_malloc,_free",
-  "-sNODERAWFS=0",
-  "-o", join(OUT, "qjs.mjs"),
+  "-sEXIT_RUNTIME=1",         // test_forced.c's main() runs on load and exits with the @H/@S pass code
+  "-o", join(OUT, "qjs.js"),
 ];
 
-console.log("[build] emcc " + sources.length + " sources -> engine/host/out/qjs.mjs");
+console.log("[build] emcc " + sources.length + " sources -> engine/host/out/qjs.js (new-world smoke test)");
 const r = spawnSync(EMCC, args, { stdio: "inherit", shell: true, cwd: QJS });
 if (r.status !== 0) { console.error("[build] FAILED rc=" + r.status); process.exit(r.status || 1); }
-console.log("[build] OK -> " + resolve(join(OUT, "qjs.mjs")));
+console.log("[build] OK -> " + resolve(join(OUT, "qjs.js")));
 
-/* Stage the ES6 module + wasm into the extension so the offscreen document (ast-worker.js) can
-   import them at chrome-extension://<id>/lib/qjs/qjs.mjs (which fetches qjs.wasm alongside). This
-   replaces the old sync.mjs staging of qjs_worker.js/hostedge.gen.js (dead with the fresh fork). */
-const STAGE = join(ENGINE, "..", "extension", "lib", "qjs");
-mkdirSync(STAGE, { recursive: true });
-for (const f of ["qjs.mjs", "qjs.wasm"]) copyFileSync(join(OUT, f), join(STAGE, f));
-console.log("[build] staged -> " + resolve(join(STAGE, "qjs.mjs")) + " (+ qjs.wasm)");
+// Milestone smoke test: run test_forced.c's main (the @H merge + @S sink fire-verification on a fixture doc) —
+// the design-correctness signal until the live-Chrome harness is re-wired to a rebuilt production ABI entry.
+// (The old ES6-module + qjs.wasm staging into extension/lib/qjs served the deleted qjs_* entry; it returns when
+// that entry is rebuilt.)
+const t = spawnSync(process.execPath, [join(OUT, "qjs.js")], { stdio: "inherit", shell: false });
+if (t.status !== 0) { console.error("[build] smoke test FAILED rc=" + (t.status ?? "signal")); process.exit(t.status || 1); }
+console.log("[build] smoke test PASS (new-world @H + @S)");

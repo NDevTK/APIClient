@@ -21,9 +21,11 @@ void dom_collect_scripts(lxb_html_document_t *dom, struct scr_ctx *out) {
     lxb_css_selector_list_t *list = lxb_css_selectors_parse(p, (const lxb_char_t *)"script", 6);
     if (!list) { lxb_css_parser_destroy(p, true); return; }
     lxb_selectors_t *sel = lxb_selectors_create();
-    if (!sel || lxb_selectors_init(sel) != LXB_STATUS_OK) { if (sel) lxb_selectors_destroy(sel, true); lxb_css_parser_destroy(p, true); return; }
+    if (!sel || lxb_selectors_init(sel) != LXB_STATUS_OK) { if (sel) lxb_selectors_destroy(sel, true); lxb_css_selector_list_destroy_memory(list); lxb_css_parser_destroy(p, true); return; }
     lxb_selectors_find(sel, lxb_dom_interface_node(dom), list, scr_collect_cb, out);
-    lxb_selectors_destroy(sel, true); lxb_css_parser_destroy(p, true);
+    /* the selector list owns its OWN css memory arena (lxb_css_selectors_parse allocates it), separate from the
+       parser's — destroying the parser does NOT free it, so free it explicitly or it leaks per call. */
+    lxb_selectors_destroy(sel, true); lxb_css_selector_list_destroy_memory(list); lxb_css_parser_destroy(p, true);
 }
 
 int script_is_exec(lxb_dom_element_t *el, int *is_mod) {

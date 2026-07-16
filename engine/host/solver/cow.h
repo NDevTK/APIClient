@@ -8,8 +8,9 @@
  * mid-execution preemptions. A flow-local object (created during the run) is never captured, so a delta is
  * O(shared baseline state touched), never O(the run's transients).
  *
- * cow_capture_hook (the JSCowHook) records a baseline slot's pre-write value into the CURRENT flow's delta
- * (set by cow_set_current before each resume). unapply/apply are inverse and idempotent-in-pairs. */
+ * cow_capture_hook (installed as JSTimeTravelHooks.prop_write) records a baseline slot's pre-write value into
+ * the CURRENT flow's delta (set by cow_set_current before each resume). unapply/apply are inverse and
+ * idempotent-in-pairs. */
 #ifndef ENGINE_HOST_SOLVER_COW_H
 #define ENGINE_HOST_SOLVER_COW_H
 
@@ -20,17 +21,19 @@ typedef struct CowDelta CowDelta;
 CowDelta *cow_delta_new(void);
 void      cow_delta_free(JSContext *ctx, CowDelta *d);
 
-/* Fork a delta at a branch: an INDEPENDENT copy whose restore point is src's CURRENT (branch-point) heap
-   values, so a snapshot-forked sibling inherits that state then diverges. Pairs with JS_FlowClone. */
-CowDelta *cow_delta_clone(JSContext *ctx, CowDelta *src);
+/* Fork a delta at a branch: freeze src's HEAD into a shared immutable base segment (refcount 2) that both src
+   and the returned sibling reference, so the sibling inherits src's branch-point state in O(1) — NOT a copy —
+   then each diverges on its own head. The DOM twin is dom_cow_fork. Pairs with JS_FlowClone. */
+CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src);
 
 /* Route captures to `d` (the flow about to run). NULL = captures are dropped (baseline setup). */
 void      cow_set_current(CowDelta *d);
 
-/* Install with JS_SetCowHook: called before a write to a baseline object; appends to the current delta. */
+/* Install as JSTimeTravelHooks.prop_write: called before a write to a baseline object; appends to the current
+   delta. */
 void      cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom prop);
 
-/* Install with JS_SetCowVarRefHook: called before a write to a shared CLOSURE CELL; captures it into the
+/* Install as JSTimeTravelHooks.cell_write: called before a write to a shared CLOSURE CELL; captures it into the
    current delta so a snapshot-forked sibling that shares the cell stays isolated on write. */
 void      cow_capture_varref(JSContext *ctx, void *vref);
 

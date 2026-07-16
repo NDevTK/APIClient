@@ -71,6 +71,17 @@ void dom_insert_capture(lxb_dom_node_t *node) {
     if (!g_dom_capture) return;
     DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED; dom_undo_push(u);
 }
+/* THE DOM-mutation CHOKEPOINT (see dom_cow.h): capture the baseline THEN mutate, so a write cannot bypass the
+   per-flow delta. Every browser-component attribute write funnels through here — the capture-before-mutate order
+   is guaranteed in ONE place, not re-remembered at each call site. */
+void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *val, size_t val_len) {
+    dom_attr_capture(el, name);   /* record baseline into the running flow's delta FIRST (no-op if !g_dom_capture) */
+    lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, val_len);
+}
+void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
+    dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
+    lxb_dom_node_insert_child(parent, child);
+}
 void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (reverse order); empties the delta */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {
         DomUndo *u = &g_dom_undo[i];

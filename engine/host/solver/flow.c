@@ -35,6 +35,11 @@ void flow_registry_free(JSContext *ctx) {
     for (int i = 0; i < g_flows_n; i++) {
         JS_FreeValue(ctx, g_flows[i]->fn);
         free(g_flows[i]->dec);
+        for (int k = 0; k < g_flows[i]->njob; k++) {   /* free any undrained microtask jobs */
+            for (int a = 0; a < g_flows[i]->jobs[k].argc; a++) JS_FreeValue(ctx, g_flows[i]->jobs[k].argv[a]);
+            free(g_flows[i]->jobs[k].argv);
+        }
+        free(g_flows[i]->jobs);
         free(g_flows[i]);
     }
     free(g_flows); g_flows = NULL; g_flows_n = g_flows_cap = 0;

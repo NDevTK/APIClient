@@ -173,6 +173,7 @@ static const char *HTML =
     "setLocation(state.next);"   /* @S URL: attacker controls the whole URL -> breakout javascript:X9() */
     "Promise.resolve(cfg.admin ? 'thenADMIN' : 'thenPUBLIC').then(function(v){ fetch('/api/then?v=' + v); });"   /* ASYNC-AS-FLOW: a microtask reaction fires as part of THIS flow, under its COW -> admin flow reads thenADMIN, public thenPUBLIC (per-flow reaction isolation) */
     "(async function(){ var w = await Promise.resolve(cfg.admin ? 'awADMIN' : 'awPUBLIC'); fetch('/api/await?w=' + w); })();"   /* ASYNC FUNCTION + await: suspend at await, resume the continuation with the settled value under THIS flow's COW */
+    "(async function(){ function h(f){ return f ? 'acADMIN' : 'acPUBLIC'; } fetch('/api/asynccall?w=' + h(cfg.admin)); })();"   /* ASYNC body calls a HELPER whose concolic branch forks DEEP (chain base->async->helper): the async frame is a CALLER, not the deepest — exercises clone_deep_flow's async-as-caller buffer sourcing (tramp_buf_base/tramp_live_sf) -> both acADMIN and acPUBLIC */
     "(async function(){ throw 'asyncThrew'; })().catch(function(e){ fetch('/api/caught?e=' + e); });"   /* async THROW -> rejected promise -> .catch reaction fires */
     "(async function(){ var s=0; for(var i=0;i<2000;i++){ s=s+1; } fetch('/api/asyncloop?s='+s); })();"   /* async body with a LOOP -> preempt may fire inside the async tramp frame */
     "(async function(){ var c = await fetchJson('/api/config'); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, its JSON body's field flows into a later endpoint as a concrete example */
@@ -292,9 +293,14 @@ int main(void) {
        present ⇒ microtask reactions run as first-class per-flow flows (not a dropped/global-drained job). */
     int async_tt = (strstr(js, "\"/api/then\"") && strstr(js, "thenADMIN") && strstr(js, "thenPUBLIC"));
     /* AWAIT + FORK: the ternary (cfg.admin) is a concolic branch INSIDE the nested async function, so it forks
-       via decision-vector REPLAY (a frame snapshot of the nested activation is invalid). Both awADMIN and
-       awPUBLIC present ⇒ await suspend/resume works AND the nested-activation fork is correct per flow. */
+       via a deep SNAPSHOT fork of the async body's live tramp chain (clone_deep_flow: the async frame's state is
+       cloned from async_data->func_state.frame with a FRESH promise capability — never a re-run). Both awADMIN and
+       awPUBLIC present ⇒ await suspend/resume works AND the deep async-branch fork is correct per flow. */
     int await_tt = (strstr(js, "\"/api/await\"") && strstr(js, "awADMIN") && strstr(js, "awPUBLIC"));
+    /* ASYNC-AS-CALLER deep fork: the concolic branch is in a HELPER called by the async body (chain base->async->
+       helper), so the async frame is a mid-chain CALLER whose func_state.frame is the deeper frame's caller buffer.
+       Both acADMIN and acPUBLIC ⇒ clone_deep_flow sourced the async caller's stack correctly (tramp_buf_base). */
+    int asynccall_tt = (strstr(js, "\"/api/asynccall\"") && strstr(js, "acADMIN") && strstr(js, "acPUBLIC"));
     /* ASYNC THROW: a heap-resident async body that throws becomes a REJECTED promise; the .catch reaction fires
        and records /api/caught — proving the exception unwind of an async tramp frame (reject, not propagate). */
     int async_throw = (strstr(js, "\"/api/caught\"") && strstr(js, "asyncThrew"));
@@ -316,9 +322,9 @@ int main(void) {
        flow_local object across siblings) — a real unsoundness this asserts LOUD rather than leaving unchecked. */
     int delete_iso = (strstr(js, "\"/api/tok\"") && strstr(js, "wasDeleted") && strstr(js, "keepVAL"));
 
-    int h_ok = (has_uid_param && role_admin && role_public && merged && pinned && lazy && dom_tt && accessor_tt && async_tt && await_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso);
-    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d)\n",
-           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso);
+    int h_ok = (has_uid_param && role_admin && role_public && merged && pinned && lazy && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso);
+    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d)\n",
+           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso);
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified */
     char *ss = solve_json();
