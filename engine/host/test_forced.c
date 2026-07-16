@@ -180,6 +180,7 @@ static const char *HTML =
     "(async function(){ var p = new Promise(function(res){ Promise.resolve().then(function(){ res('lazyRegion'); }); }); var c = await p; fetch('/api/lazy?r=' + c); })();"   /* PENDING await: the promise resolves LATER via a microtask (stands in for the network) -> park + resume */
     "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "if (state.gamma) { delete delObj.k; } fetch('/api/tok?t=' + (delObj.k ? delObj.k : 'wasDeleted'));"   /* DELETE time-travel: the gamma-true flow deletes delObj.k; the gamma-false flow must STILL see keepVAL (the delete is per-flow) */
+    "function floc(){ var o = { x: 'base' }; if (cfg.admin) { o.x = 'flocADMIN'; } else { o.x = 'flocPUBLIC'; } fetch('/api/floc?x=' + o.x); } floc();"   /* FLOW-LOCAL post-fork isolation: o is created inside floc() BEFORE the concolic fork; the snapshot shares o across siblings, so each arm's o.x mutation must be captured per-flow (cow_delta_fork forked=1). Both flocADMIN and flocPUBLIC ⇒ no cross-flow leak — settles whether the 'snapshot shares flow_local' comment is real or stale. */
     "var acc = 0; for (var i = 0; i < 15; i++) { acc = acc + i; }"   /* a real LOOP (back-edges) so the quantum fires: a flow yields MID-LOOP and the scheduler interleaves parked sibling flows, exercising the COW+decide+pins swap */
     "function* gen(n){ var s=0; for(var i=0;i<n;i++){ s=s+i; } yield s; yield s*2; }"   /* GENERATOR body with a LOOP: .next() runs the body on the tramp chain, the loop preempts the base flow */
     "var git = gen(2000); fetch('/api/gen?a=' + git.next().value + '&b=' + git.next().value);"
@@ -321,10 +322,14 @@ int main(void) {
        still see keepVAL. Both present ⇒ the delete time-travels. FAILS under the snapshot fork (it shares the
        flow_local object across siblings) — a real unsoundness this asserts LOUD rather than leaving unchecked. */
     int delete_iso = (strstr(js, "\"/api/tok\"") && strstr(js, "wasDeleted") && strstr(js, "keepVAL"));
+    /* FLOW-LOCAL post-fork isolation: an object created before a concolic fork (flow_local at creation) is SHARED
+       by the snapshot; each arm's mutation must be per-flow. Both values present ⇒ cow_delta_fork's forked=1 keeps
+       post-fork flow_local mutations captured — no leak (the older 'snapshot shares flow_local (unsound)' claim). */
+    int floc_iso = (strstr(js, "\"/api/floc\"") && strstr(js, "flocADMIN") && strstr(js, "flocPUBLIC"));
 
-    int h_ok = (has_uid_param && role_admin && role_public && merged && pinned && lazy && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso);
-    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d)\n",
-           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso);
+    int h_ok = (has_uid_param && role_admin && role_public && merged && pinned && lazy && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso);
+    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d)\n",
+           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso);
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified */
     char *ss = solve_json();
