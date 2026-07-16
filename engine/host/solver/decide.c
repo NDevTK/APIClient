@@ -66,17 +66,6 @@ void decide_resume(void *blob, JSValueConst fn) {
 }
 void decide_blob_free(void *blob) { DecideBlob *b = blob; if (b) { free(b->dec); free(b); } }
 
-/* Take the decision VECTOR out of a fork blob (transfers ownership of the vector, frees the blob struct) — used
-   by the frame-agnostic REPLAY fork to seed a fresh (started=0) sibling that re-runs from the flow's fn. */
-signed char *decide_blob_take_vector(void *blob, int *n) {
-    DecideBlob *b = blob;
-    *n = b->dec_n;
-    signed char *v = b->dec;   /* transfer ownership to the caller (flow_add frees it with the flow) */
-    b->dec = NULL;
-    free(b);
-    return v;
-}
-
 /* The sibling's hot decision state at a fork: replay the parent's path so far, then take `arm` at this branch
    (cursor). c = cursor so on resume the sibling re-executes the OP_if and replays exactly this arm — never
    re-forks, never re-runs the prefix. */
