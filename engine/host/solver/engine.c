@@ -18,12 +18,9 @@
    another flow's fetch (which would route the reaction to the wrong flow's COW — a leak + contamination). */
 void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst value) {
     Flow *f = flow_running();
-    if (!f) {
-        /* No scheduled flow (the @S candidate VERIFY re-run, flow_exec_once, runs a single path to completion with
-           no scheduler to drain). Resolve synchronously so an awaited fetch still delivers during verify. */
-        JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, (JSValueConst *)&value); JS_FreeValue(ctx, r);
-        return;
-    }
+    /* A live fetch is ALWAYS issued from a running flow — both explore and @S verify are the ONE scheduler now
+       (run_scheduler), so flow_running() is set; the flow's stall drains it (flow_step). */
+    DCHECK(f != NULL, "engine_pending_fetch: a live fetch issued outside a running flow");
     if (f->npend >= f->pendcap) {
         f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
         f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
@@ -212,30 +209,21 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
 
 /* Run ONE flow start-to-finish (no interleaving) — the @S candidate re-run path, where a single candidate must
    execute fully to observe whether it fires. Uses the flow machinery + a transient COW delta. */
-void flow_exec_once(JSContext *ctx, char *const *bodies, int n) {
-    CowDelta *d = cow_delta_new(); cow_set_current(d);
-    for (int i = 0; i < n; i++) {
-        JSValue *frame = JS_FlowNew(ctx, bodies[i], strlen(bodies[i]), 0);   /* page <script>: classic non-strict global */
-        DCHECK(frame != NULL, "flow_exec_once: a page <script> did not compile");
-        while (JS_FlowResume(ctx, frame)) { }
-        JS_FlowFree(ctx, frame);
-    }
-    cow_set_current(NULL); cow_unapply(ctx, d); cow_delta_free(ctx, d);
-}
+/* THE ONE BFS SCHEDULER — explore and @S candidate-verify are the SAME loop, differing ONLY in whether a concolic
+   branch FORKS. A separate verify executor (a `while(JS_FlowResume){}` driving one candidate to completion with
+   preemption off) is the cardinal violation twice over — a second scheduler beside the BFS AND a drive-to-
+   completion (an unbounded candidate loop would hang, non-parkable). So verify is this same loop with forking off:
+   ONE concrete path (no branch/fork hook), yet every candidate flow is preemptible + parkable like any other. */
+static const JSFlowControlHooks FC_EXPLORE = { .branch = solver_decide, .fork = engine_fork_finalize, .preempt = preempt_hook };
+static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook };   /* candidate re-fire: no fork, still preemptible */
+static const JSFlowControlHooks FC_OFF     = { 0 };
 
-void engine_run(JSContext *ctx, char *const *bodies, int n) {
+static void run_scheduler(JSContext *ctx, char *const *bodies, int n, int forking) {
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
     g_dom_capture = 1;                       /* record DOM writes into the running flow's delta (twin of FlowLocalMark) */
-    /* The scheduler OWNS the flow-control interface — install all three exploration hooks together, scoped to
-       this scheduling run: branch decision (fork the sibling), frame-snapshot fork, and preemption yield. They
-       are torn down after the run so deterministic verification (solve_verify) replays ONE concrete path with no
-       forking/preemption; concolic VALUE propagation (JSConcolicHooks) stays on across both, so taint still
-       flows during verify. */
-    static const JSFlowControlHooks FLOW_CONTROL = {
-        .branch = solver_decide, .fork = engine_fork_finalize, .preempt = preempt_hook };
-    JS_SetFlowControlHooks(&FLOW_CONTROL);
+    JS_SetFlowControlHooks(forking ? &FC_EXPLORE : &FC_VERIFY);   /* preempt ALWAYS on; fork only when exploring */
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
     Flow *cur = NULL;
     for (;;) {
@@ -257,8 +245,14 @@ void engine_run(JSContext *ctx, char *const *bodies, int n) {
     DCHECK(!JS_IsJobPending(JS_GetRuntime(ctx)),
            "async: a job reached the global list (enqueued outside a flow) but was never drained");
     JS_SetJobEnqueueHook(NULL);
-    static const JSFlowControlHooks FLOW_CONTROL_OFF = { NULL, NULL, NULL, NULL };
-    JS_SetFlowControlHooks(&FLOW_CONTROL_OFF);   /* verification replays one concrete path: no fork/replay/preempt */
+    JS_SetFlowControlHooks(&FC_OFF);
     JS_SetFlowLocalMark(0);
     g_dom_capture = 0;
 }
+
+/* EXPLORE: seed boot + drain the frontier, forking at every concolic branch. */
+void engine_run(JSContext *ctx, char *const *bodies, int n) { run_scheduler(ctx, bodies, n, 1); }
+
+/* @S CANDIDATE RE-FIRE: the SAME BFS loop with forking off — one concrete path (the injected candidate), still
+   preemptible + parkable. No separate executor, no drive-to-completion. */
+void flow_exec_once(JSContext *ctx, char *const *bodies, int n) { run_scheduler(ctx, bodies, n, 0); }
