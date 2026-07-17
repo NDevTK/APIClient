@@ -63,6 +63,31 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
 
 /* Record a CLOSURE CELL's pre-write value (JSCowVarRefHook) into the running flow's delta, so a snapshot-forked
    sibling that shares the cell is isolated on write. Captured once per cell (first write is the baseline). */
+/* Record a KNOWN-NEW fast-array APPEND slot (JSTimeTravelHooks.arr_append): the index == the array's current
+   length, so it cannot already be in the delta (dedup unneeded) and its baseline is ABSENT (existed=0, no
+   JS_GetOwnProperty). O(1) — this is the accumulator hot path (a shared array built one element at a time);
+   routing it through cow_capture_hook's O(n) dedup scan makes an N-element build O(N^2). The flow_local skip is
+   still applied (a freshly-built unshared array is not captured until the flow forks). */
+void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
+    if (g_capturing || !g_current) return;
+    CowDelta *d = g_current;
+    if (!d->forked && JS_IsFlowLocal(obj)) return;
+    g_capturing = 1;
+    if (d->n >= d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 32;
+        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
+        CHECK(d->e, "cow: OOM growing delta (arr_append)");
+    }
+    CowEntry *e = &d->e[d->n++];
+    e->obj = JS_DupValue(ctx, obj);
+    e->atom = JS_DupAtom(ctx, atom);   /* a tagged-int index atom: dup is a no-op, kept for uniform free */
+    e->existed = 0;                    /* an append creates the slot; unapply truncates it away */
+    e->base = JS_UNDEFINED;
+    e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->vref = NULL;
+    g_capturing = 0;
+}
+
 void cow_capture_varref(JSContext *ctx, void *vref) {
     if (g_capturing || !g_current || !vref) return;
     CowDelta *d = g_current;

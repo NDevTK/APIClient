@@ -246,7 +246,7 @@ int main(void) {
 
     /* per-flow isolation: the time-travel RECORD boundary — capture shared property writes AND shared closure
        CELL writes made DURING flows, so a flow can be rewound/replayed exactly (one structured registration). */
-    static const JSTimeTravelHooks TIME_TRAVEL = { .prop_write = cow_capture_hook, .cell_write = cow_capture_varref };
+    static const JSTimeTravelHooks TIME_TRAVEL = { .prop_write = cow_capture_hook, .cell_write = cow_capture_varref, .arr_append = cow_capture_arr_append };
     JS_SetTimeTravelHooks(&TIME_TRAVEL);
     /* concolic VALUE propagation stays installed across BOTH scheduling and verification (taint must flow during
        verify too): `+` builds URL shapes, == / === forks on equality gates + concretizes-on-pin. The exploration

@@ -37,6 +37,10 @@ void      cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom prop);
    current delta so a snapshot-forked sibling that shares the cell stays isolated on write. */
 void      cow_capture_varref(JSContext *ctx, void *vref);
 
+/* Install as JSTimeTravelHooks.arr_append: O(1) capture of a KNOWN-NEW fast-array append slot (no dedup scan, no
+   baseline lookup — an append is always a fresh existed=0 slot). The accumulator hot path. */
+void      cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom);
+
 /* Context-switch AWAY from `d`: save each slot's current (flow) value, then restore the baseline value. After
    this the shared baseline is pristine for the next flow. */
 void      cow_unapply(JSContext *ctx, CowDelta *d);
