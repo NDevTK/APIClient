@@ -53,6 +53,7 @@ const leaks = (out.match(/\[gcleak\]/g) || []).length;
    activation) and the run passed tests it silently SKIPPED — a fake green. A well-engineered test for all
    categories must FAIL on that, regardless of codebase state, not report a hollow 0/N. */
 const f = out.match(/Feature: (\d+) preempt-requested, (\d+) fired \(([\d.]+)% engaged\), (\d+) nested-gap/);
+const d2c = out.match(/DriveToCompletion: (\d+)/);   /* automatic drive-to-completion detector (structural, corpus-wide) */
 
 console.log("\n==================== test262 (feature) ====================");
 if (!m) console.log("  DID-NOT-COMPLETE (crash before the summary — a hard bug: see stderr)");
@@ -65,7 +66,10 @@ if (f) {
 } else if (m) {
   console.log("  feature: NO ENGAGEMENT LINE — harness did not report engagement (FORK_PREEMPT off or old engine)");
 }
+const driveN = d2c ? +d2c[1] : 0;
+if (d2c) console.log(`  drive-to-completion: ${driveN}` +
+  (driveN > 0 ? "  <-- some coroutine body ran to COMPLETION off-tramp (not suspend/resume) — route it onto the tramp chain" : "  (pure suspend/resume-at-any-depth)"));
 console.log("===========================================================");
-/* fail on: crash, spec errors, leaks, OR fake-green (feature gated -> engagement < 100%). */
+/* fail on: crash, spec errors, leaks, fake-green (engagement < 100%), OR any drive-to-completion. */
 const fakeGreen = f ? (+f[4] > 0) : true;
-process.exit((!m || +m[1] > 0 || leaks > 0 || fakeGreen) ? 1 : 0);
+process.exit((!m || +m[1] > 0 || leaks > 0 || fakeGreen || driveN > 0) ? 1 : 0);
