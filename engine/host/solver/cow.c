@@ -15,7 +15,12 @@ typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cu
    truly private — no other flow can observe it — so capturing its mutations is pure waste (keeps the delta
    O(shared baseline touched), not O(the run's transients). Once forked, the snapshot shares the frame's
    flow_local objects with the sibling, so their mutations become cross-flow state and MUST be captured. */
-struct CowDelta { CowEntry *e; int n, cap; int forked; };
+/* fork_gen = the fork GENERATION this flow last forked at (0 = never forked). An object is SHARED with a sibling
+   iff it existed at that fork (JS_ObjFlowGen(obj) <= fork_gen); an object created AFTER (flow_gen > fork_gen) is
+   flow-PRIVATE — never captured, keeping the delta O(shared-state-touched), not O(the run's transients). A single
+   "forked" bit could not distinguish a pre-fork shared object from a post-fork private one, so it over-captured
+   every post-fork transient (a delta bloat that violates the O(shared-state) invariant). */
+struct CowDelta { CowEntry *e; int n, cap; uint32_t fork_gen; };
 
 static CowDelta *g_current = NULL;   /* the flow whose writes are captured right now (scheduler-owned) */
 static int g_capturing = 0;          /* re-entrancy guard: our own reads/restores must not re-capture */
@@ -31,11 +36,10 @@ void cow_set_current(CowDelta *d) { g_current = d; }
 void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (g_capturing || !g_current) return;
     CowDelta *d = g_current;
-    /* FLOW-LOCAL skip — the O(shared-state) optimization. Sound because a not-yet-forked flow's flow_local
-       object is never observed elsewhere; a forked flow shares it, so d->forked forces capture. (The global
-       let/const/class DEFINE leak that this once appeared to cause was really an uncaptured JS_DefineGlobalVar,
-       fixed at the root — the skip itself is correct.) */
-    if (!d->forked && JS_IsFlowLocal(obj)) return;
+    /* FLOW-PRIVATE skip — the O(shared-state) invariant. An object created AFTER this flow's fork (flow_gen >
+       fork_gen) is private to the flow: no sibling can observe it, so its writes are never captured. A baseline
+       object (flow_gen 0) and any object that existed at the fork (flow_gen <= fork_gen) IS shared and captured. */
+    if (JS_ObjFlowGen(obj) > d->fork_gen) return;
     for (int i = 0; i < d->n; i++)   /* capture each slot ONCE — first write is the true baseline */
         if (JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj) && d->e[i].atom == atom) return;
 
@@ -66,12 +70,12 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
 /* Record a KNOWN-NEW fast-array APPEND slot (JSTimeTravelHooks.arr_append): the index == the array's current
    length, so it cannot already be in the delta (dedup unneeded) and its baseline is ABSENT (existed=0, no
    JS_GetOwnProperty). O(1) — this is the accumulator hot path (a shared array built one element at a time);
-   routing it through cow_capture_hook's O(n) dedup scan makes an N-element build O(N^2). The flow_local skip is
-   still applied (a freshly-built unshared array is not captured until the flow forks). */
+   routing it through cow_capture_hook's O(n) dedup scan makes an N-element build O(N^2). The flow-private skip is
+   still applied (a post-fork private array — e.g. a per-flow accumulator built after the fork — is not captured). */
 void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (g_capturing || !g_current) return;
     CowDelta *d = g_current;
-    if (!d->forked && JS_IsFlowLocal(obj)) return;
+    if (JS_ObjFlowGen(obj) > d->fork_gen) return;
     g_capturing = 1;
     if (d->n >= d->cap) {
         d->cap = d->cap ? d->cap * 2 : 32;
@@ -154,9 +158,13 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
    the two deltas share NO mutable state, so a sibling's later capture/apply can never corrupt the other. */
 CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     CowDelta *d = cow_delta_new();
-    /* both now SHARE the parent's pre-fork flow_local objects (the frame snapshot dup'd their heap refs), so
-       neither may skip flow_local capture any longer — else a post-fork mutation leaks between the two. */
-    src->forked = 1; d->forked = 1;
+    /* Both flows now SHARE every object that existed at THIS fork (the frame snapshot dup'd their heap refs), so
+       both must capture writes to any object with flow_gen <= this generation. Record the CURRENT generation as
+       both deltas' fork_gen, then BUMP it so objects created after the fork get a strictly-higher generation and
+       are correctly treated as flow-private. Updating the parent's fork_gen (it may be > its previous value) is
+       correct: the parent must isolate from its NEWEST sibling, which shares everything up to now. */
+    src->fork_gen = d->fork_gen = JS_FlowGen();
+    JS_FlowBumpGen();
     if (src->n == 0) return d;
     d->e = malloc((size_t)src->n * sizeof(CowEntry)); CHECK(d->e, "cow: OOM fork");
     d->cap = src->n; d->n = src->n;
