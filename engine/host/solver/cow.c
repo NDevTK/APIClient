@@ -98,7 +98,14 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
         if (has > 0) { e->cur = pd.value; JS_FreeValue(ctx, pd.getter); JS_FreeValue(ctx, pd.setter); }
         else e->cur = JS_UNDEFINED;
         e->cur_valid = 1;
+        uint32_t ai;
         if (e->existed) JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));   /* -> baseline */
+        else if (JS_IsArrayIndexSlot(e->obj, e->atom, &ai))
+            /* flow-CREATED array append: TRUNCATE the array to this index (frees the tail), removing it. Entries
+               are processed in reverse (highest index first), so a contiguous run of appends shrinks one-by-one
+               back to the baseline length. cur was saved above so apply re-appends it. A JS_DeleteProperty would
+               convert the fast array to slow and leave the element in place. */
+            JS_ArraySetLength(ctx, e->obj, ai);
         else JS_DeleteProperty(ctx, e->obj, e->atom, 0);
     }
     g_capturing = 0;
