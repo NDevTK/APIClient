@@ -41,6 +41,11 @@ void      cow_capture_varref(JSContext *ctx, void *vref);
    baseline lookup — an append is always a fresh existed=0 slot). The accumulator hot path. */
 void      cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom);
 
+/* Install as JSTimeTravelHooks.map_add: O(1) capture of a KNOWN-NEW Set/Map record (Set.add / Map.set of a fresh
+   key on a shared collection). unapply deletes the flow's added record (JS_MapDeleteRecord), apply re-adds it
+   (JS_MapAddRecord) — the Set/Map accumulator analogue of cow_capture_arr_append. */
+void      cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst val);
+
 /* Record a per-flow GENERATOR-STATE swap into delta `d` (JSTimeTravelHooks.gen_fork): the shared generator
    object `genobj` must resolve to `cur_gd` (a per-flow clone `d` OWNS) while `d` runs and to `base_gd` (its
    object-owned original) otherwise. Applied/unapplied like any other slot on context-switch. Dedup-REPLACES an
