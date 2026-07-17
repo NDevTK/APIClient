@@ -34,4 +34,9 @@ void engine_run(JSContext *ctx, char *const *bodies, int n);
    network completing). Called from a live-fetch host-edge that models an asynchronous GET. */
 void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst value);
 
+/* Install as JSTimeTravelHooks.gen_fork: a concolic branch inside a synchronously-driven generator body forked
+   the flow, and clone_deep_flow built a per-flow gen_data clone. Stash the swap; engine_fork_finalize drains it
+   onto the new sibling's COW delta (so the shared generator object resolves per-flow). */
+void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
+
 #endif

@@ -48,6 +48,22 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
 static void *g_fork_dec = NULL, *g_fork_pins = NULL;
 void engine_prepare_fork(void *dec_blob, void *pin_blob) { g_fork_dec = dec_blob; g_fork_pins = pin_blob; }
 
+/* GENERATOR-STATE fork stash: clone_deep_flow fires gen_fork for each generator body frame it clones (during
+   JS_FlowClone), BEFORE engine_fork_finalize exists to hold the sibling's delta. Append here; the finalize
+   drains all onto the just-created sibling delta and resets. Filled-then-fully-drained within one fork. */
+typedef struct { JSValueConst genobj; void *g0, *g1; } GenForkRec;
+static GenForkRec *g_genforks = NULL; static int g_genfork_n = 0, g_genfork_cap = 0;
+void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd) {
+    (void)ctx;
+    if (g_genfork_n >= g_genfork_cap) {
+        g_genfork_cap = g_genfork_cap ? g_genfork_cap * 2 : 8;
+        g_genforks = realloc(g_genforks, (size_t)g_genfork_cap * sizeof(GenForkRec));
+        CHECK(g_genforks, "engine: OOM generator-fork stash");
+    }
+    g_genforks[g_genfork_n].genobj = genobj; g_genforks[g_genfork_n].g0 = base_gd; g_genforks[g_genfork_n].g1 = cur_gd;
+    g_genfork_n++;
+}
+
 static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     Flow *parent = flow_running();
     DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
@@ -56,6 +72,11 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     sib->frame = clone;               /* the frame snapshot taken AT the branch */
     sib->script_i = parent->script_i; /* same position in the script sequence */
     sib->delta = cow_delta_fork(ctx, (CowDelta *)parent->delta);   /* O(1) shared base segment, then diverges */
+    /* GENERATOR-STATE swaps built by clone_deep_flow for this fork: record each on the sibling's delta so the
+       shared generator object resolves to the sibling's own cloned execution state while it runs. */
+    for (int i = 0; i < g_genfork_n; i++)
+        cow_delta_add_gendata(ctx, (CowDelta *)sib->delta, g_genforks[i].genobj, g_genforks[i].g0, g_genforks[i].g1);
+    g_genfork_n = 0;
     /* DOM analog of the heap clone: freeze the parent's live DOM head into a SHARED refcounted base segment
        (refcount 2 — parent keeps a fresh empty head over it, sibling references it too), so the sibling INHERITS
        the parent's PRE-FORK document writes in O(1) instead of a copy, then each diverges on its own head. */

@@ -41,6 +41,13 @@ void      cow_capture_varref(JSContext *ctx, void *vref);
    baseline lookup — an append is always a fresh existed=0 slot). The accumulator hot path. */
 void      cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom);
 
+/* Record a per-flow GENERATOR-STATE swap into delta `d` (JSTimeTravelHooks.gen_fork): the shared generator
+   object `genobj` must resolve to `cur_gd` (a per-flow clone `d` OWNS) while `d` runs and to `base_gd` (its
+   object-owned original) otherwise. Applied/unapplied like any other slot on context-switch. Dedup-REPLACES an
+   existing gendata entry for `genobj` (a re-fork of the same generator inside this flow), keeping the original
+   base. `d` takes ownership of one ref on `cur_gd` (freed via JS_GenDataUnref on delta free/replace). */
+void      cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, void *base_gd, void *cur_gd);
+
 /* Context-switch AWAY from `d`: save each slot's current (flow) value, then restore the baseline value. After
    this the shared baseline is pristine for the next flow. */
 void      cow_unapply(JSContext *ctx, CowDelta *d);

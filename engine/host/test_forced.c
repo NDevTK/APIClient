@@ -218,6 +218,30 @@ static const char *HTML =
     "var _jr = JSON.parse(String.fromCharCode(123,34,97,34,58,53,44,34,98,34,58,55,125), function(k,v){ if(typeof v===String.fromCharCode(110,117,109,98,101,114)){ var s=0; for(var i=0;i<v;i++) s+=i; return s; } return v; }); fetch('/api/jsonrevive?v=' + (_jr.a + _jr.b));"   /* JSON.parse reviver with a looping body -> CONT_JSON_REVIVE explicit-stack walk -> a:10 + b:21 = 31 */
     "var _jt=0; try { JSON.parse(String.fromCharCode(123,34,120,34,58,49,125), function(k,v){ if(k===String.fromCharCode(120)) throw 3; return v; }); } catch(e){ _jt=e; } fetch('/api/jsonthrow?v=' + _jt);"   /* reviver THROWS -> walk state freed on unwind -> 3 */
     "let _lex = 7; const _kex = 8; class _Cex { g(){ return _lex + _kex; } } fetch('/api/lexbind?v=' + new _Cex().g());"   /* TOP-LEVEL LEXICAL bindings (let/const/class) define into the SHARED global_var_obj; JS_DefineGlobalVar now COW-captures the creation so it is per-flow, not leaked into snapshot siblings (whose re-definition would else throw redeclaration and kill the sibling + its downstream forks � a silently dropped @H arm) -> 15 */
+    /* GENERATOR-BODY CONCOLIC FORK — placed LAST so its arms don't multiply the downstream fixture subtree (a
+       branch's cost is (upstream flows) × (downstream work); at the tail the downstream work is just the fetch). */
+    "function* ggf(){ if (cfg.admin) { yield 'ggADMIN'; } else { yield 'ggPUBLIC'; } } var ggi = ggf(); fetch('/api/genfork?v=' + ggi.next().value);"   /* CONCOLIC branch INSIDE a synchronously-driven generator body: the .next() drive runs the body on the tramp chain, so the branch snapshot-forks the tramp-driven generator activation (the named nested-activation hold-out) -> both ggADMIN and ggPUBLIC, never a DFAIL */
+    "function* g2f(){ var a = cfg.admin ? 'A' : 'P'; var b = state.beta ? 'X' : 'Y'; yield 'g2:'+a+b; } var g2i = g2f(); fetch('/api/gen2fork?v=' + g2i.next().value);"   /* TWO concolic branches in ONE generator body: the FIRST fork installs a per-flow gen_data clone on the sibling; when that sibling hits the SECOND branch it re-forks the SAME generator -> exercises cow_delta_add_gendata's dedup-REPLACE (keep the original base, swap the clone). All four combos g2:AX/AY/PX/PY ⇒ each fork advanced its own generator state */
+    "</script>"
+    "</body></html>";
+
+/* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
+   loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
+   memory gate (seconds under native ASan): forEach-callback deep clone (CONT_ARRAY_ITER), array-element COW
+   capture, the generator-body fork + its dedup-REPLACE re-fork, and the @S candidate re-fire flows. Correctness
+   /breadth is the emcc full smoke's job (node engine/build.mjs cow); this is purely "does the clone/free path
+   corrupt memory." Keep it SMALL — every added branch multiplies the flow count and the ASan wall-clock. */
+static const char *HTML_MIN =
+    "<!doctype html><html><body>"
+    "<script>var cfg = { admin: state.admin };</script>"
+    "<script>"
+    "[1,2].forEach(function(e){ var w = cfg.admin ? 'feADMIN' : 'fePUBLIC'; fetch('/api/fefork?e=' + e + w); });"   /* forEach callback deep clone */
+    "var owa = ['base']; if (cfg.admin) { owa[0] = 'owA'; } else { owa[0] = 'owB'; } fetch('/api/owfork?a=' + owa[0]);"   /* array-element COW */
+    "eval(\"'\" + state.code + \"'\");"                    /* @S eval re-fire flow */
+    "setInnerHTML('<div>' + state.html + '</div>');"       /* @S innerHTML re-fire flow */
+    "setLocation(state.next);"                              /* @S location re-fire flow */
+    "function* ggf(){ if (cfg.admin) { yield 'ggADMIN'; } else { yield 'ggPUBLIC'; } } var ggi = ggf(); fetch('/api/genfork?v=' + ggi.next().value);"   /* generator-body fork */
+    "function* g2f(){ var a = cfg.admin ? 'A' : 'P'; var b = state.beta ? 'X' : 'Y'; yield 'g2:'+a+b; } var g2i = g2f(); fetch('/api/gen2fork?v=' + g2i.next().value);"   /* gen dedup-REPLACE re-fork */
     "</script>"
     "</body></html>";
 
@@ -248,7 +272,7 @@ int main(void) {
 
     /* per-flow isolation: the time-travel RECORD boundary — capture shared property writes AND shared closure
        CELL writes made DURING flows, so a flow can be rewound/replayed exactly (one structured registration). */
-    static const JSTimeTravelHooks TIME_TRAVEL = { .prop_write = cow_capture_hook, .cell_write = cow_capture_varref, .arr_append = cow_capture_arr_append };
+    static const JSTimeTravelHooks TIME_TRAVEL = { .prop_write = cow_capture_hook, .cell_write = cow_capture_varref, .arr_append = cow_capture_arr_append, .gen_fork = engine_gen_fork };
     JS_SetTimeTravelHooks(&TIME_TRAVEL);
     /* concolic VALUE propagation stays installed across BOTH scheduling and verification (taint must flow during
        verify too): `+` builds URL shapes, == / === forks on equality gates + concretizes-on-pin. The exploration
@@ -258,8 +282,10 @@ int main(void) {
 
     /* Browser layer: parse the document with the real Lexbor HTML parser, then extract its executable inline
        scripts as ONE flow program (document_scripts, Blink core/loader). No boot — the scripts ARE the first flow. */
+    int asan_min = getenv("APICLIENT_ASAN_MIN") != NULL;   /* fast per-change memory gate: the minimal clone/COW doc */
+    const char *doc = asan_min ? HTML_MIN : HTML;
     lxb_html_document_t *dom = lxb_html_document_create();
-    lxb_html_document_parse(dom, (const lxb_char_t *)HTML, strlen(HTML));
+    lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
     engine_run(ctx, scripts.bodies, scripts.n);         /* @H + @S detection */
@@ -344,10 +370,19 @@ int main(void) {
     /* MAP fork: clean per-arm result arrays, no dropped element. Require the two canonical arms AND the absence
        of any leading-dash join (a dropped element0 like "-mA2"). */
     int mapfork_tt = (strstr(js, "\"/api/mapfork\"") && strstr(js, "mA1-mA2") && strstr(js, "mP1-mP2") && !strstr(js, "\"-m"));
+    /* CONCOLIC FORK inside a synchronously-driven GENERATOR body: the branch forks the tramp-driven generator
+       activation (the named nested-activation hold-out). Both ggADMIN and ggPUBLIC present ⇒ a branch inside a
+       generator body snapshot-forks per arm, never DFAILs / drives to completion. */
+    int genfork_tt = (strstr(js, "\"/api/genfork\"") && strstr(js, "ggADMIN") && strstr(js, "ggPUBLIC"));
+    /* TWO-BRANCH generator fork: the dedup-REPLACE path (a sibling with a gen_data swap re-forks the same
+       generator). All four gate combinations present ⇒ each fork advanced its own per-flow generator state. */
+    int gen2fork_tt = (strstr(js, "\"/api/gen2fork\"") && strstr(js, "g2:AX") && strstr(js, "g2:AY") && strstr(js, "g2:PX") && strstr(js, "g2:PY"));
 
-    int h_ok = (has_uid_param && role_admin && role_public && merged && pinned && lazy && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt);
-    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d)\n",
-           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt);
+    int h_ok = asan_min
+        ? (fefork_tt && owfork_tt && genfork_tt && gen2fork_tt)   /* MIN gate: just the clone/COW/generator paths */
+        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt);
+    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d)\n",
+           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt);
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified */
     char *ss = solve_json();

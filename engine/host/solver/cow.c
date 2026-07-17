@@ -10,7 +10,11 @@
 /* A delta entry is EITHER a property slot (vref==NULL: obj/atom/existed) OR a closure cell (vref!=NULL: the
    shared JSVarRef, whose value is read/written via JS_VarRefGet/SetValue; obj/atom/existed unused). base/cur
    hold the baseline/flow values either way. */
-typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; void *vref; } CowEntry;
+/* A THIRD entry kind (is_gendata=1) swaps a shared GENERATOR object's execution-state pointer per flow: obj is
+   the generator object, g0 its object-owned original state, g1 the per-flow clone (owned by this delta via
+   JS_GenDataRef/Unref). Apply installs g1, unapply restores g0 — a fixed toggle, no cur/base value tracking. */
+typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; void *vref;
+                 int is_gendata; void *g0; void *g1; } CowEntry;
 
 /* forked = has this flow snapshot-forked a sibling yet? Until it has, every object it CREATED (flow_local) is
    truly private — no other flow can observe it — so capturing its mutations is pure waste (keeps the delta
@@ -46,7 +50,7 @@ static void cow_hash_rebuild(CowDelta *d) {   /* size to >= 2*n (power of two), 
     d->hash = realloc(d->hash, (size_t)d->hash_cap * sizeof(int));
     CHECK(d->hash, "cow: OOM hash index");
     memset(d->hash, 0, (size_t)d->hash_cap * sizeof(int));
-    for (int i = 0; i < d->n; i++) cow_hash_put(d, i);
+    for (int i = 0; i < d->n; i++) if (!d->e[i].is_gendata) cow_hash_put(d, i);   /* gendata swaps aren't slot-keyed */
 }
 /* Record entry (d->n-1) in the hash, growing/rebuilding the table when it would exceed half-full. */
 static void cow_hash_add_last(CowDelta *d) {
@@ -106,6 +110,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->cur = JS_UNDEFINED;
     e->cur_valid = 0;
     e->vref = NULL;
+    e->is_gendata = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
 }
@@ -134,6 +139,7 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->base = JS_UNDEFINED;
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
     e->vref = NULL;
+    e->is_gendata = 0;
     cow_hash_add_last(d);   /* in the index so a later OVERWRITE of this index dedups to the append entry */
     g_capturing = 0;
 }
@@ -153,8 +159,34 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     e->base = JS_VarRefGetValue(vref);   /* owned dup of the cell's current (baseline) value */
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
     e->vref = vref;                      /* the cell is kept alive by the shared function object */
+    e->is_gendata = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
+}
+
+/* Record a per-flow generator-state swap (see cow.h). Dedup-REPLACES an existing entry for the same generator
+   (a re-fork inside this flow): release the previous clone, adopt the new one, keep the ORIGINAL base pointer. */
+void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, void *base_gd, void *cur_gd) {
+    void *gp = JS_VALUE_GET_PTR(genobj);
+    for (int i = 0; i < d->n; i++) {
+        CowEntry *e = &d->e[i];
+        if (e->is_gendata && JS_VALUE_GET_PTR(e->obj) == gp) {
+            JS_GenDataUnref(ctx, e->g1);   /* drop the previous clone; the new clone's creation ref transfers here */
+            e->g1 = cur_gd;
+            (void)base_gd;                 /* base stays e->g0 (the object-owned original), not the intermediate clone */
+            return;
+        }
+    }
+    if (d->n >= d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 32;
+        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
+        CHECK(d->e, "cow: OOM growing delta (gendata) — a lost generator swap corrupts per-flow state");
+    }
+    CowEntry *e = &d->e[d->n++];
+    e->obj = JS_DupValue(ctx, genobj);
+    e->atom = JS_ATOM_NULL; e->existed = 0; e->base = JS_UNDEFINED;
+    e->cur = JS_UNDEFINED; e->cur_valid = 0; e->vref = NULL;
+    e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;   /* adopts cur_gd's creation ref (freed on delta free) */
 }
 
 void cow_unapply(JSContext *ctx, CowDelta *d) {
@@ -162,6 +194,7 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
     g_capturing = 1;
     for (int i = d->n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
         CowEntry *e = &d->e[i];
+        if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g0); continue; }   /* restore the object-owned original */
         if (e->vref) {                        /* closure cell: save its current value, restore the baseline */
             if (e->cur_valid) JS_FreeValue(ctx, e->cur);
             e->cur = JS_VarRefGetValue(e->vref); e->cur_valid = 1;
@@ -192,6 +225,7 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
     g_capturing = 1;
     for (int i = 0; i < d->n; i++) {   /* forward: replay the flow's writes over the pristine baseline */
         CowEntry *e = &d->e[i];
+        if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g1); continue; }   /* install this flow's generator clone */
         if (!e->cur_valid) continue;
         if (e->vref) JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->cur));   /* closure cell */
         else JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
@@ -218,6 +252,15 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     g_capturing = 1;
     for (int i = 0; i < src->n; i++) {
         CowEntry *se = &src->e[i], *de = &d->e[i];
+        if (se->is_gendata) {   /* generator swap: the sibling shares the SAME per-flow clone (a ref), same toggle */
+            de->obj = JS_DupValue(ctx, se->obj);
+            de->atom = JS_ATOM_NULL; de->existed = 0; de->base = JS_UNDEFINED;
+            de->cur = JS_UNDEFINED; de->cur_valid = 0; de->vref = NULL;
+            de->is_gendata = 1; de->g0 = se->g0; de->g1 = se->g1;
+            JS_GenDataRef(se->g1);   /* the copy holds its own ownership ref on the clone */
+            continue;
+        }
+        de->is_gendata = 0;
         de->obj = JS_DupValue(ctx, se->obj);
         de->atom = JS_DupAtom(ctx, se->atom);
         de->existed = se->existed;
@@ -241,6 +284,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
 void cow_delta_free(JSContext *ctx, CowDelta *d) {
     if (!d) return;
     for (int i = 0; i < d->n; i++) {
+        if (d->e[i].is_gendata) { JS_FreeValue(ctx, d->e[i].obj); JS_GenDataUnref(ctx, d->e[i].g1); continue; }
         JS_FreeValue(ctx, d->e[i].obj);
         JS_FreeAtom(ctx, d->e[i].atom);
         JS_FreeValue(ctx, d->e[i].base);

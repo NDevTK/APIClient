@@ -107,9 +107,14 @@ const args = [
 console.log(`[asan] native clang build (${sources.length} sources + Lexbor)…`);
 if (spawnSync(clang, args, { stdio: "inherit" }).status !== 0) { console.error("[asan] build FAILED"); process.exit(1); }
 
-// The ASan runtime DLL lives in clang's bin dir — put it on PATH for the run.
+// The ASan runtime DLL lives in clang's bin dir — put it on PATH for the run. Default to the MINIMAL clone/COW
+// fixture (seconds) — the per-change memory gate; pass `full` for the whole suite (rare, minutes: the fork tree
+// is exponential, so it is a pre-land gate, never the inner loop). See CLAUDE.md §sanitizer.
+const full = process.argv.includes("full");
 const env = { ...process.env, PATH: dirname(clang) + ";" + process.env.PATH };
-console.log("[asan] running native ASan smoke (full 19-fixture set, ~110s)…");
+if (!full) env.APICLIENT_ASAN_MIN = "1";
+console.log(full ? "[asan] running FULL native ASan smoke (exponential fork tree, minutes)…"
+                 : "[asan] running MINIMAL native ASan gate (clone/COW/generator paths, ~seconds)…");
 const t = spawnSync(exe, [], { stdio: "inherit", env });
 if (t.status !== 0) { console.error("[asan] FAILED rc=" + (t.status ?? "signal") + " (ASan error or @H/@S fail above)"); process.exit(t.status || 1); }
-console.log("[asan] PASS — native ASan clean + @H/@S green");
+console.log("[asan] PASS — native ASan clean + @H/@S green" + (full ? " (full)" : " (minimal)"));
