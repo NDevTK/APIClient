@@ -13,12 +13,17 @@
 /* A THIRD entry kind (is_gendata=1) swaps a shared GENERATOR object's execution-state pointer per flow: obj is
    the generator object, g0 its object-owned original state, g1 the per-flow clone (owned by this delta via
    JS_GenDataRef/Unref). Apply installs g1, unapply restores g0 — a fixed toggle, no cur/base value tracking. */
-/* A FOURTH entry kind (is_map=1) captures a KNOWN-NEW Set/Map record added by this flow: obj is the Set/Map, base
-   holds the record's key (owned dup), cur holds its value (owned dup, UNDEFINED for a Set). Apply re-adds the
-   record (JS_MapAddRecord), unapply deletes it (JS_MapDeleteRecord) — the accumulator analogue of an array append,
-   not slot-keyed (never in the hash index). */
+/* A FOURTH entry kind (is_map=1) is a reversible Set/Map record mutation by this flow (an UNDO-LOG entry, not a
+   deduped slot): obj is the Set/Map, base holds the record's key, cur its new value, map_old its prior value.
+   map_op selects the inverse pair — ADD (apply re-adds, unapply deletes), OVERWRITE (apply sets cur, unapply
+   restores map_old), DELETE (apply deletes, unapply re-adds map_old). Entries replay forward on apply and invert
+   in reverse on unapply, so a sequence of mutations to the same key reconstructs correctly with NO dedup and no
+   SameValueZero key-hashing. Never slot-keyed (kept out of the hash index, like gendata). */
+#define COW_MAP_ADD       0
+#define COW_MAP_OVERWRITE 1
+#define COW_MAP_DELETE    2
 typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; void *vref;
-                 int is_gendata; void *g0; void *g1; int is_map; } CowEntry;
+                 int is_gendata; void *g0; void *g1; int is_map; int map_op; JSValue map_old; } CowEntry;
 
 /* forked = has this flow snapshot-forked a sibling yet? Until it has, every object it CREATED (flow_local) is
    truly private — no other flow can observe it — so capturing its mutations is pure waste (keeps the delta
@@ -173,6 +178,35 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
     e->vref = NULL;
     e->is_gendata = 0;
     e->is_map = 1;                     /* not slot-keyed — kept out of the hash index, like gendata */
+    e->map_op = COW_MAP_ADD; e->map_old = JS_UNDEFINED;
+    g_capturing = 0;
+}
+
+/* Capture a reversible OVERWRITE / DELETE of an existing Set/Map record (JSTimeTravelHooks.map_mutate) as an
+   undo-log entry — see the CowEntry comment. op is COW_MAP_OVERWRITE (base=key, cur=new, map_old=old) or
+   COW_MAP_DELETE (base=key, map_old=old). Flow-private collections are skipped. */
+void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op) {
+    if (g_capturing || !g_current) return;
+    CowDelta *d = g_current;
+    if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip */
+    g_capturing = 1;
+    if (d->n >= d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 32;
+        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
+        CHECK(d->e, "cow: OOM growing delta (map_mutate) — a lost Set/Map mutation leaks across flows");
+    }
+    CowEntry *e = &d->e[d->n++];
+    e->obj = JS_DupValue(ctx, obj);
+    e->atom = JS_ATOM_NULL;
+    e->existed = 0;
+    e->base = JS_DupValue(ctx, key);
+    e->cur = JS_DupValue(ctx, val);        /* the new value (OVERWRITE); UNDEFINED for DELETE */
+    e->cur_valid = 1;
+    e->vref = NULL;
+    e->is_gendata = 0;
+    e->is_map = 1;
+    e->map_op = (op == JS_MAP_MUTATE_DELETE) ? COW_MAP_DELETE : COW_MAP_OVERWRITE;
+    e->map_old = JS_DupValue(ctx, old_val);   /* the prior value, restored on unapply */
     g_capturing = 0;
 }
 
@@ -229,7 +263,11 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
     for (int i = d->n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
         CowEntry *e = &d->e[i];
         if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g0); continue; }   /* restore the object-owned original */
-        if (e->is_map) { JS_MapDeleteRecord(ctx, e->obj, e->base); continue; }   /* remove the flow's added record */
+        if (e->is_map) {   /* invert the flow's record mutation: ADD->delete, OVERWRITE/DELETE->restore old value */
+            if (e->map_op == COW_MAP_ADD) JS_MapDeleteRecord(ctx, e->obj, e->base);
+            else JS_MapAddRecord(ctx, e->obj, e->base, e->map_old);
+            continue;
+        }
         if (e->vref) {                        /* closure cell: save its current value, restore the baseline */
             if (e->cur_valid) JS_FreeValue(ctx, e->cur);
             e->cur = JS_VarRefGetValue(e->vref); e->cur_valid = 1;
@@ -261,7 +299,11 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
     for (int i = 0; i < d->n; i++) {   /* forward: replay the flow's writes over the pristine baseline */
         CowEntry *e = &d->e[i];
         if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g1); continue; }   /* install this flow's generator clone */
-        if (e->is_map) { JS_MapAddRecord(ctx, e->obj, e->base, e->cur); continue; }   /* re-add the flow's record */
+        if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
+            if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, e->base);
+            else JS_MapAddRecord(ctx, e->obj, e->base, e->cur);
+            continue;
+        }
         if (!e->cur_valid) continue;
         if (e->vref) JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->cur));   /* closure cell */
         else JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
@@ -296,13 +338,15 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
             JS_GenDataRef(se->g1);   /* the copy holds its own ownership ref on the clone */
             continue;
         }
-        if (se->is_map) {   /* Set/Map record: the sibling inherits the same added record (key,val); each diverges */
+        if (se->is_map) {   /* Set/Map record mutation: the sibling inherits the same reversible undo-log entry */
             de->is_gendata = 0; de->is_map = 1; de->vref = NULL;
             de->obj = JS_DupValue(ctx, se->obj);
             de->atom = JS_ATOM_NULL; de->existed = 0;
             de->base = JS_DupValue(ctx, se->base);   /* key */
-            de->cur = JS_DupValue(ctx, se->cur);     /* value */
+            de->cur = JS_DupValue(ctx, se->cur);     /* new value */
             de->cur_valid = 1;
+            de->map_op = se->map_op;
+            de->map_old = JS_DupValue(ctx, se->map_old);   /* prior value (OVERWRITE/DELETE) */
             continue;
         }
         de->is_gendata = 0;
@@ -331,6 +375,13 @@ void cow_delta_free(JSContext *ctx, CowDelta *d) {
     if (!d) return;
     for (int i = 0; i < d->n; i++) {
         if (d->e[i].is_gendata) { JS_FreeValue(ctx, d->e[i].obj); JS_GenDataUnref(ctx, d->e[i].g1); continue; }
+        if (d->e[i].is_map) {   /* obj + key(base) + new(cur) + old(map_old); atom is NULL */
+            JS_FreeValue(ctx, d->e[i].obj);
+            JS_FreeValue(ctx, d->e[i].base);
+            JS_FreeValue(ctx, d->e[i].cur);
+            JS_FreeValue(ctx, d->e[i].map_old);
+            continue;
+        }
         JS_FreeValue(ctx, d->e[i].obj);
         JS_FreeAtom(ctx, d->e[i].atom);
         JS_FreeValue(ctx, d->e[i].base);

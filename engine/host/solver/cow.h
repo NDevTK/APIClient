@@ -46,6 +46,11 @@ void      cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom);
    (JS_MapAddRecord) — the Set/Map accumulator analogue of cow_capture_arr_append. */
 void      cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst val);
 
+/* Install as JSTimeTravelHooks.map_mutate: capture a reversible OVERWRITE / DELETE of an existing Set/Map record
+   as an undo-log entry (apply replays it, unapply inverts it), completing cow_capture_map_add's add-only capture
+   so ALL shared Set/Map mutations are per-flow isolated. op is JS_MAP_MUTATE_OVERWRITE / _DELETE. */
+void      cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op);
+
 /* Record a per-flow GENERATOR-STATE swap into delta `d` (JSTimeTravelHooks.gen_fork): the shared generator
    object `genobj` must resolve to `cur_gd` (a per-flow clone `d` OWNS) while `d` runs and to `base_gd` (its
    object-owned original) otherwise. Applied/unapplied like any other slot on context-switch. Dedup-REPLACES an

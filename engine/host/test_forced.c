@@ -227,6 +227,7 @@ static const char *HTML =
     "function* spf(){ if (cfg.admin) { yield 'spA'; } else { yield 'spP'; } } fetch('/api/spreadfork?v=' + [...spf()][0]);"   /* [...GEN] spread consumer fork: same CONT_ITER_CONSUME machinery, SPREAD sink (append to the literal's array), forks mid-consume -> both spA and spP */
     "var _sad = new Set(); if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation: _sad is created before the concolic fork; each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply) -> EXACTLY 'sadA' and 'sadP', never a contaminated set holding both */
     "function* sef(){ if (cfg.admin) { yield 'seA'; } else { yield 'seP'; } } fetch('/api/setfork?v=' + [...new Set(sef())][0]);"   /* new Set(GEN) consumer fork: the Set consumer (CONT_ITER_CONSUME, SET sink) forks mid-consume; now fork-SAFE via the map_add COW capture -> both seA and seP */
+    "var _mm = new Map([['k','base']]); if (cfg.admin) { _mm.set('k','mmA'); } else { _mm.delete('k'); } fetch('/api/mapmutfork?v=' + (_mm.has('k') ? _mm.get('k') : 'gone'));"   /* SHARED-MAP overwrite/delete isolation: _mm is created before the fork; one arm OVERWRITES 'k', the other DELETES it. The map_mutate undo-log capture (unapply restores the old value / re-adds) keeps them per-flow -> EXACTLY 'mmA' and 'gone', never cross-contaminated */
     "</script>"
     "</body></html>";
 
@@ -252,6 +253,7 @@ static const char *HTML_MIN =
     "function* spf(){ if (cfg.admin) { yield 'spA'; } else { yield 'spP'; } } fetch('/api/spreadfork?v=' + [...spf()][0]);"   /* [...GEN] spread consumer fork: same CONT_ITER_CONSUME machinery, SPREAD sink (append to the literal's array), forks mid-consume -> both spA and spP */
     "var _sad = new Set(); if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation: _sad is created before the concolic fork; each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply) -> EXACTLY 'sadA' and 'sadP', never a contaminated set holding both */
     "function* sef(){ if (cfg.admin) { yield 'seA'; } else { yield 'seP'; } } fetch('/api/setfork?v=' + [...new Set(sef())][0]);"   /* new Set(GEN) consumer fork: the Set consumer (CONT_ITER_CONSUME, SET sink) forks mid-consume; now fork-SAFE via the map_add COW capture -> both seA and seP */
+    "var _mm = new Map([['k','base']]); if (cfg.admin) { _mm.set('k','mmA'); } else { _mm.delete('k'); } fetch('/api/mapmutfork?v=' + (_mm.has('k') ? _mm.get('k') : 'gone'));"   /* SHARED-MAP overwrite/delete isolation: _mm is created before the fork; one arm OVERWRITES 'k', the other DELETES it. The map_mutate undo-log capture (unapply restores the old value / re-adds) keeps them per-flow -> EXACTLY 'mmA' and 'gone', never cross-contaminated */
     "</script>"
     "</body></html>";
 
@@ -282,7 +284,7 @@ int main(void) {
 
     /* per-flow isolation: the time-travel RECORD boundary — capture shared property writes AND shared closure
        CELL writes made DURING flows, so a flow can be rewound/replayed exactly (one structured registration). */
-    static const JSTimeTravelHooks TIME_TRAVEL = { .prop_write = cow_capture_hook, .cell_write = cow_capture_varref, .arr_append = cow_capture_arr_append, .gen_fork = engine_gen_fork, .map_add = cow_capture_map_add };
+    static const JSTimeTravelHooks TIME_TRAVEL = { .prop_write = cow_capture_hook, .cell_write = cow_capture_varref, .arr_append = cow_capture_arr_append, .gen_fork = engine_gen_fork, .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate };
     JS_SetTimeTravelHooks(&TIME_TRAVEL);
     /* concolic VALUE propagation stays installed across BOTH scheduling and verification (taint must flow during
        verify too): `+` builds URL shapes, == / === forks on equality gates + concretizes-on-pin. The exploration
@@ -403,12 +405,15 @@ int main(void) {
     /* new Set(GEN) consumer fork: the Set iterator-consumer (SET sink) forks mid-consume — now fork-safe via the
        map_add COW capture. Both seA and seP present ⇒ each arm consumed into its own COW-isolated Set. */
     int setfork_tt = (strstr(js, "\"/api/setfork\"") && strstr(js, "seA") && strstr(js, "seP"));
+    /* SHARED-MAP overwrite/delete isolation: one arm overwrites a pre-fork Map key, the other deletes it. Both mmA
+       and gone present ⇒ the map_mutate undo-log capture isolated each arm's mutation (restored on unapply). */
+    int mapmutfork_tt = (strstr(js, "\"/api/mapmutfork\"") && strstr(js, "mmA") && strstr(js, "gone"));
 
     int h_ok = asan_min
-        ? (fefork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt)   /* MIN gate: just the clone/COW/generator paths */
-        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt);
-    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d)\n",
-           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt);
+        ? (fefork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt)   /* MIN gate: just the clone/COW/generator paths */
+        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt);
+    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d mapmutfork=%d)\n",
+           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt, mapmutfork_tt);
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified */
     char *ss = solve_json();
