@@ -19,6 +19,11 @@
    the quickjs job function + its dup'd arguments, run under the flow's COW after its scripts. */
 typedef struct { JSJobFunc *fn; int argc; JSValue *argv; } FlowJob;
 
+/* FETCH-AWAIT: a live (async) fetch this flow issued — a PENDING promise whose resolve capability + the value the
+   "network" will deliver are held until the flow stalls, then resolved (the fetch completing) so the awaiting
+   async body resumes. Per-flow (not global) so one flow's drain never resolves another flow's fetch. */
+typedef struct { JSValue resolve; JSValue value; } FlowPending;
+
 typedef struct Flow {
     JSValue fn;            /* the function this flow re-drives (JS_UNDEFINED for a boot/session flow) */
     signed char *dec;      /* the DECISION VECTOR — the arm (0/1) this flow takes at each branch, in order */
@@ -45,6 +50,8 @@ typedef struct Flow {
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
     FlowJob *jobs; int njob, jobcap;   /* ASYNC-AS-FLOW: this flow's OWN queued microtask/reaction jobs, drained
                                           after its scripts under its live COW (correct ordering, per-flow isolated) */
+    FlowPending *pending; int npend, pendcap;   /* FETCH-AWAIT: this flow's OWN live (pending) fetches, resolved when
+                                                   the flow's scripts+microtasks stall (the network completing). */
 } Flow;
 
 void  flow_registry_init(void);

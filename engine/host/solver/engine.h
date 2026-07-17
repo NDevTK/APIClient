@@ -29,4 +29,9 @@ void engine_prepare_fork(void *dec_blob, void *pin_blob);
    per-flow COW delta, and drain the frontier by WFQ order. */
 void engine_run(JSContext *ctx, char *const *bodies, int n);
 
+/* FETCH-AWAIT: a host fetch that returns a PENDING promise registers its resolve capability + the value it will
+   deliver. A flow that awaits it parks; when the frontier stalls, engine_run resolves these and un-parks (the
+   network completing). Called from a live-fetch host-edge that models an asynchronous GET. */
+void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst value);
+
 #endif

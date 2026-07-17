@@ -117,10 +117,12 @@ static JSValue js_last_child_mark(JSContext *ctx, JSValueConst this_val, int arg
     return v ? JS_NewStringLen(ctx, (const char *)v, vl) : JS_NULL;
 }
 
-/* the SAFE-GET fetch host-edge that RETURNS ITS RESULT: models `await fetch('/api/config').then(r=>r.json())`
-   for an idempotent GET the engine decided is safe to actually perform. Records the endpoint, then returns a
-   RESOLVED promise wrapping the fetched JSON body (concrete example values). Awaiting it delivers the body to the
-   continuation, so a field like body.region flows into a later endpoint as a CONCRETE example — API learning. */
+/* the SAFE-GET fetch host-edge that RETURNS ITS RESULT: models `await fetch('/api/config').then(r=>r.json())`.
+   A real network GET is ASYNCHRONOUS, so it returns a PENDING promise + registers its resolve capability and the
+   JSON body it will deliver. A flow that awaits it PARKS (its async body suspends on the promise); when the
+   frontier stalls, engine_run resolves every pending fetch (the network completing) and the awaiting continuation
+   resumes with the body — so body.region flows into a later endpoint as a CONCRETE example. This is the real
+   fetch-await path (no bespoke JS global — the page bundle's own `await fetch(...)` drives it). */
 static JSValue js_fetch_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc > 0) endpoint_record(ctx, "GET", argv[0]);
@@ -128,11 +130,10 @@ static JSValue js_fetch_json(JSContext *ctx, JSValueConst this_val, int argc, JS
     JS_SetPropertyStr(ctx, body, "region", JS_NewString(ctx, "us-west-2"));   /* the fetched config's field */
     JSValue resolving[2];
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
-    JSValue r = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, (JSValueConst *)&body);   /* resolve with the body */
-    JS_FreeValue(ctx, r);
+    engine_pending_fetch(ctx, resolving[0], body);   /* live GET: resolved when the frontier stalls (fetch-await park) */
     JS_FreeValue(ctx, resolving[0]); JS_FreeValue(ctx, resolving[1]);
     JS_FreeValue(ctx, body);
-    return promise;
+    return promise;   /* PENDING — awaiting it parks the flow until the scheduler drains the fetch */
 }
 
 /* the fetch host-edge: funnel into the real @H endpoint surface (dedup + shape happen there). */

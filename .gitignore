@@ -13,3 +13,11 @@ extension/lib/qjs/*.cow.gen.js
 # engine/host/main.c + the engine/qjs submodule). Regenerable; not committed to avoid binary churn.
 extension/lib/qjs/qjs.mjs
 extension/lib/qjs/qjs.wasm
+# native-ASan toolchain + build artifacts (node engine/asan.mjs) — large, regenerated/downloaded on demand
+engine/.work/llvm-mingw-extract/
+engine/.work/llvm-mingw.zip
+engine/.work/lxobj/
+engine/.work/lxobj_clang/
+engine/.work/liblexbor_asan.a
+engine/.work/liblexbor_clang.a
+engine/.work/test_asan.exe

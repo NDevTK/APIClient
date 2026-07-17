@@ -10,6 +10,42 @@
 #include <stdio.h>
 #include <string.h>
 
+/* FETCH-AWAIT parking: a host fetch that is not synchronously available (a live network GET) returns a PENDING
+   promise and registers its resolve capability + the value it will deliver on THE RUNNING FLOW. A flow that awaits
+   it suspends its async body; when the flow's scripts + microtasks are drained but a live fetch is still pending,
+   flow_step resolves the flow's OWN pending fetches (the network completing) — each awaiting async body's reaction
+   enqueues as a job in that flow's queue — and resumes. Per-flow (not global) so one flow's drain never resolves
+   another flow's fetch (which would route the reaction to the wrong flow's COW — a leak + contamination). */
+void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst value) {
+    Flow *f = flow_running();
+    if (!f) {
+        /* No scheduled flow (the @S candidate VERIFY re-run, flow_exec_once, runs a single path to completion with
+           no scheduler to drain). Resolve synchronously so an awaited fetch still delivers during verify. */
+        JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, (JSValueConst *)&value); JS_FreeValue(ctx, r);
+        return;
+    }
+    if (f->npend >= f->pendcap) {
+        f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
+        f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
+        CHECK(f->pending, "engine: OOM growing the flow's pending-fetch list");
+    }
+    f->pending[f->npend].resolve = JS_DupValue(ctx, resolve);
+    f->pending[f->npend].value = JS_DupValue(ctx, value);
+    f->npend++;
+}
+/* Resolve every pending fetch this flow issued (the network completed). Returns how many were drained. */
+static int flow_drain_pending(JSContext *ctx, Flow *f) {
+    int n = f->npend;
+    for (int i = 0; i < n; i++) {
+        JSValue r = JS_Call(ctx, f->pending[i].resolve, JS_UNDEFINED, 1, (JSValueConst *)&f->pending[i].value);
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, f->pending[i].resolve);
+        JS_FreeValue(ctx, f->pending[i].value);
+    }
+    f->npend = 0;
+    return n;
+}
+
 /* Snapshot-fork handoff: solver_decide stashes the sibling's hot decision + pins here at a forking branch;
    the interpreter then clones the frame and calls engine_fork_finalize, which assembles the sibling flow. */
 static void *g_fork_dec = NULL, *g_fork_pins = NULL;
@@ -108,7 +144,15 @@ static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
             if (f->script_i < n) body = bodies[f->script_i];
             else if (f->script_i - n < f->dyn_n) body = f->dyn[f->script_i - n];
             else if (f->njob > 0) { flow_run_one_job(ctx, f); return 0; }   /* scripts done -> drain a microtask, yield */
-            else return 1;   /* all scripts + chunks + microtask jobs done */
+            else if (f->npend > 0) {
+                /* FETCH-AWAIT: scripts + microtasks are drained, but a suspended async body is awaiting a LIVE
+                   fetch (a pending promise). The network completes now: resolve THIS flow's pending fetches — each
+                   awaiting async body's reaction is enqueued as a job in this flow's queue (we are switched in,
+                   flow_running == f) — then loop to run those jobs and resume the continuations. */
+                flow_drain_pending(ctx, f);
+                continue;
+            }
+            else return 1;   /* all scripts + chunks + microtask jobs + live fetches done */
             f->frame = JS_FlowNew(ctx, body, strlen(body), 0);   /* page <script>/chunk: classic non-strict global */
             DCHECK(f->frame != NULL, "flow_step: a page <script>/chunk did not compile");
         }
@@ -159,6 +203,9 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     /* flow_step returns 1 (finished) only with an empty job queue, but free any residual defensively. */
     for (int i = 0; i < f->njob; i++) { for (int k = 0; k < f->jobs[i].argc; k++) JS_FreeValue(ctx, f->jobs[i].argv[k]); free(f->jobs[i].argv); }
     free(f->jobs); f->jobs = NULL; f->njob = f->jobcap = 0;
+    /* FETCH-AWAIT: flow_step drains pending before finishing, but free any residual (resolve capabilities + values). */
+    for (int i = 0; i < f->npend; i++) { JS_FreeValue(ctx, f->pending[i].resolve); JS_FreeValue(ctx, f->pending[i].value); }
+    free(f->pending); f->pending = NULL; f->npend = f->pendcap = 0;
     flow_set_running(NULL);
     flow_remove(ctx, f);
 }
