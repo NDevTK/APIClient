@@ -2,6 +2,7 @@
 #include "solver/cow.h"
 #include "check.h"
 #include <stdlib.h>
+#include <string.h>
 
 /* One captured baseline slot: base = the value the shared baseline holds (restored on unapply); cur = the
    running flow's latest value for it (saved on unapply, replayed on apply). existed = did the baseline own the
@@ -20,7 +21,51 @@ typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cu
    flow-PRIVATE — never captured, keeping the delta O(shared-state-touched), not O(the run's transients). A single
    "forked" bit could not distinguish a pre-fork shared object from a post-fork private one, so it over-captured
    every post-fork transient (a delta bloat that violates the O(shared-state) invariant). */
-struct CowDelta { CowEntry *e; int n, cap; uint32_t fork_gen; };
+/* hash/hash_cap: an open-addressing index over the entries (slot key -> entry index +1; 0 = empty) so a capture
+   dedups in O(1). Without it the dedup was an O(n) linear scan — O(n^2) to build a delta that touches n distinct
+   shared slots (a flow mutating many shared globals/objects). Rebuilt on entry-array grow and on fork. */
+struct CowDelta { CowEntry *e; int n, cap; uint32_t fork_gen; int *hash; int hash_cap; };
+
+static uint32_t cow_slot_hash(void *p, uint32_t atom) {
+    uint64_t h = (uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull ^ ((uint64_t)atom * 0xC2B2AE3D27D4EB4Full);
+    return (uint32_t)(h ^ (h >> 32));
+}
+/* The slot key: a closure cell keys on its vref; a property slot on (obj pointer, atom). */
+static void cow_key(const CowEntry *e, void **key, uint32_t *atom) {
+    if (e->vref) { *key = e->vref; *atom = 0; }
+    else { *key = JS_VALUE_GET_PTR(e->obj); *atom = e->atom; }
+}
+static void cow_hash_put(CowDelta *d, int idx) {   /* insert entry idx; caller guarantees room */
+    void *key; uint32_t atom; cow_key(&d->e[idx], &key, &atom);
+    uint32_t m = (uint32_t)d->hash_cap - 1, h = cow_slot_hash(key, atom) & m;
+    while (d->hash[h]) h = (h + 1) & m;
+    d->hash[h] = idx + 1;
+}
+static void cow_hash_rebuild(CowDelta *d) {   /* size to >= 2*n (power of two), re-insert every entry */
+    d->hash_cap = 16; while (d->hash_cap < d->n * 2) d->hash_cap *= 2;
+    d->hash = realloc(d->hash, (size_t)d->hash_cap * sizeof(int));
+    CHECK(d->hash, "cow: OOM hash index");
+    memset(d->hash, 0, (size_t)d->hash_cap * sizeof(int));
+    for (int i = 0; i < d->n; i++) cow_hash_put(d, i);
+}
+/* Record entry (d->n-1) in the hash, growing/rebuilding the table when it would exceed half-full. */
+static void cow_hash_add_last(CowDelta *d) {
+    if (!d->hash || d->hash_cap < d->n * 2) cow_hash_rebuild(d);
+    else cow_hash_put(d, d->n - 1);
+}
+/* Find an existing entry for a slot: returns its index or -1. vref!=NULL keys on the cell; else on (objptr,atom). */
+static int cow_hash_find(CowDelta *d, void *objptr, uint32_t atom, void *vref) {
+    if (!d->hash) return -1;
+    uint32_t m = (uint32_t)d->hash_cap - 1, h = cow_slot_hash(vref ? vref : objptr, vref ? 0 : atom) & m;
+    while (d->hash[h]) {
+        CowEntry *e = &d->e[d->hash[h] - 1];
+        if (vref ? (e->vref == vref)
+                 : (e->vref == NULL && JS_VALUE_GET_PTR(e->obj) == objptr && e->atom == atom))
+            return d->hash[h] - 1;
+        h = (h + 1) & m;
+    }
+    return -1;
+}
 
 static CowDelta *g_current = NULL;   /* the flow whose writes are captured right now (scheduler-owned) */
 static int g_capturing = 0;          /* re-entrancy guard: our own reads/restores must not re-capture */
@@ -40,8 +85,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
        fork_gen) is private to the flow: no sibling can observe it, so its writes are never captured. A baseline
        object (flow_gen 0) and any object that existed at the fork (flow_gen <= fork_gen) IS shared and captured. */
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
-    for (int i = 0; i < d->n; i++)   /* capture each slot ONCE — first write is the true baseline */
-        if (JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj) && d->e[i].atom == atom) return;
+    if (cow_hash_find(d, JS_VALUE_GET_PTR(obj), atom, NULL) >= 0) return;   /* capture each slot ONCE (O(1)) */
 
     g_capturing = 1;
     JSPropertyDescriptor pd;
@@ -62,6 +106,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->cur = JS_UNDEFINED;
     e->cur_valid = 0;
     e->vref = NULL;
+    cow_hash_add_last(d);
     g_capturing = 0;
 }
 
@@ -89,13 +134,14 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->base = JS_UNDEFINED;
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
     e->vref = NULL;
+    cow_hash_add_last(d);   /* in the index so a later OVERWRITE of this index dedups to the append entry */
     g_capturing = 0;
 }
 
 void cow_capture_varref(JSContext *ctx, void *vref) {
     if (g_capturing || !g_current || !vref) return;
     CowDelta *d = g_current;
-    for (int i = 0; i < d->n; i++) if (d->e[i].vref == vref) return;
+    if (cow_hash_find(d, NULL, 0, vref) >= 0) return;   /* capture each cell ONCE (O(1)) */
     g_capturing = 1;
     if (d->n >= d->cap) {
         d->cap = d->cap ? d->cap * 2 : 32;
@@ -107,6 +153,7 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     e->base = JS_VarRefGetValue(vref);   /* owned dup of the cell's current (baseline) value */
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
     e->vref = vref;                      /* the cell is kept alive by the shared function object */
+    cow_hash_add_last(d);
     g_capturing = 0;
 }
 
@@ -186,6 +233,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
         else de->cur = JS_UNDEFINED;
         de->cur_valid = 1;
     }
+    cow_hash_rebuild(d);   /* build the clone's O(1) dedup index over the copied entries */
     g_capturing = 0;
     return d;
 }
@@ -199,6 +247,7 @@ void cow_delta_free(JSContext *ctx, CowDelta *d) {
         if (d->e[i].cur_valid) JS_FreeValue(ctx, d->e[i].cur);
     }
     free(d->e);
+    free(d->hash);
     free(d);
 }
 
