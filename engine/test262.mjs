@@ -56,7 +56,12 @@ const f = out.match(/Feature: (\d+) preempt-requested, (\d+) fired \(([\d.]+)% e
 const d2c = out.match(/DriveToCompletion: (\d+)/);   /* automatic drive-to-completion detector (structural, corpus-wide) */
 
 console.log("\n==================== test262 (feature) ====================");
-if (!m) console.log("  DID-NOT-COMPLETE (crash before the summary — a hard bug: see stderr)");
+if (!m) { console.log("  DID-NOT-COMPLETE — a HARD crash before the summary (segfault/abort/timeout). FAIL LOUD:");
+  /* Dump the captured tail + the child's exit signal/status so a corpus-wide crash names itself instead of hiding
+     behind a bare "DID-NOT-COMPLETE" — this is what surfaces the un-routed drive-to-completion / memory bugs. */
+  console.log("---- last 60 lines of captured output ----\n" + out.split(/\r?\n/).slice(-60).join("\n"));
+  console.log(`---- child signal=${r.signal} status=${r.status}` +
+    (r.status === 3221225477 ? " (0xC0000005 ACCESS_VIOLATION — memory bug: run under ASan)" : "") + " ----"); }
 else    console.log(`  ${m[1]}/${m[2]} errors, ${leaks} leaks   (errors = spec-wrong under time-travel; bisect vs d0c2272)`);
 if (f) {
   const [, req, fired, eng, gap] = f;
