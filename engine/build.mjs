@@ -18,6 +18,14 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
 const QJS = join(ENGINE, "qjs");
 const HOST = join(ENGINE, "host");
 const OUT = join(HOST, "out");
+
+/* The recognizer ratchet runs BEFORE anything is compiled (CLAUDE.md §C-stack). The ban was written down and then
+   violated four times in one session with the rule already in the file — so it is BUILT, not written. A detector
+   added back under any name fails the build here rather than needing to be caught in review. */
+{
+  const r = spawnSync(process.execPath, [join(ENGINE, "check_recognizers.mjs")], { stdio: "inherit" });
+  if (r.status !== 0) process.exit(r.status ?? 1);
+}
 const WORK = join(ENGINE, ".work");
 const EMSDK = join(WORK, "emsdk");
 const EMCC = join(EMSDK, "upstream", "emscripten", process.platform === "win32" ? "emcc.bat" : "emcc");
