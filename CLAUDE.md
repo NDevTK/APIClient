@@ -8,8 +8,7 @@ Properly means design based on best most advanced agreed by both engineers inste
 Don't add a shortcut to dodge plumbing.
 Use DCHECKS for assumptions.
 Comments are not valid for follow ups it must crash or be built.
-You don't need an allow list because your replacing code in place the legacy version must no longer exist. 
-Never 
+
 # Disposition
 - **Best long-term design over everything** — over speed, safety, passing tests, and existing code. The design is never perfect; never stop improving it, never paper over a problem. One concrete landed diff per turn minimum. The stop-hook is a "go", not "did I do enough?". Context length is not a stop signal. Keep going — no drift toward closure, no quick-fix exits.
 - **Biggest mechanism change comes FIRST.** Deferring progress to dodge risk is always wrong. A task's SIZE is never a licence to defer ("major undertaking", "own session", "fresh budget" are banned — there are no fresh sessions). The bigger the goal, the SMALLER the first concrete diff: decompose and land it THIS turn. A probe that localises the trap IS the diff; a verified narrowing IS the diff. A goal that stays a LABEL never progresses.

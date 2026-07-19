@@ -6,7 +6,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "echo '{\"decision\":\"block\",\"reason\":\"STOP-GATE: Would a Chromium/Blink browser engineer AND a solver engineer BOTH call this turn's change the BEST ADVANCED design - not merely working, not safe, best?\"}'"
+            "command": "echo '{\"decision\":\"block\",\"reason\":\"STOP-GATE: Would a Chromium/Blink browser engineer AND a solver engineer BOTH call this turn's change the BEST ADVANCED design - not merely working, not safe, best? Take the riskiest next steps\"}'"
           }
         ]
       }

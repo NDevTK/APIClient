@@ -53,6 +53,9 @@ const leaks = (out.match(/\[gcleak\]/g) || []).length;
    activation) and the run passed tests it silently SKIPPED — a fake green. A well-engineered test for all
    categories must FAIL on that, regardless of codebase state, not report a hollow 0/N. */
 const f = out.match(/Feature: (\d+) preempt-requested, (\d+) fired \(([\d.]+)% engaged\), (\d+) nested-gap/);
+/* An explicit NOT-ENGAGED line: the run reached ZERO back-edges, so it exercised no suspend/resume and proves
+   nothing about the feature. That is a FAILURE, never a hollow "100%". */
+const notEngaged = /Feature: NOT ENGAGED/.test(out);
 const d2c = out.match(/DriveToCompletion: (\d+)/);   /* automatic drive-to-completion detector (structural, corpus-wide) */
 
 console.log("\n==================== test262 (feature) ====================");
@@ -63,7 +66,9 @@ if (!m) { console.log("  DID-NOT-COMPLETE — a HARD crash before the summary (s
   console.log(`---- child signal=${r.signal} status=${r.status}` +
     (r.status === 3221225477 ? " (0xC0000005 ACCESS_VIOLATION — memory bug: run under ASan)" : "") + " ----"); }
 else    console.log(`  ${m[1]}/${m[2]} errors, ${leaks} leaks   (errors = spec-wrong under time-travel; bisect vs d0c2272)`);
-if (f) {
+if (notEngaged) {
+  console.log("  feature: NOT ENGAGED (0 back-edges)  <-- proves NOTHING: no loop ever suspended/resumed in this run");
+} else if (f) {
   const [, req, fired, eng, gap] = f;
   const fake = +gap > 0;
   console.log(`  feature: ${eng}% engaged (${fired}/${req} back-edges), ${gap} nested-gap` +
@@ -75,6 +80,7 @@ const driveN = d2c ? +d2c[1] : 0;
 if (d2c) console.log(`  drive-to-completion: ${driveN}` +
   (driveN > 0 ? "  <-- some coroutine body ran to COMPLETION off-tramp (not suspend/resume) — route it onto the tramp chain" : "  (pure suspend/resume-at-any-depth)"));
 console.log("===========================================================");
-/* fail on: crash, spec errors, leaks, fake-green (engagement < 100%), OR any drive-to-completion. */
-const fakeGreen = f ? (+f[4] > 0) : true;
+/* fail on: crash, spec errors, leaks, a NOT-ENGAGED run (0 back-edges proves nothing), fake-green (engagement
+   < 100%), OR any drive-to-completion. */
+const fakeGreen = notEngaged ? true : (f ? (+f[4] > 0) : true);
 process.exit((!m || +m[1] > 0 || leaks > 0 || fakeGreen || driveN > 0) ? 1 : 0);
