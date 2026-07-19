@@ -13,7 +13,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-const CEILING = 14;              // tramp_can_call_* — lower with each conversion, never raise
+const CEILING = 13;              // tramp_can_call_* — lower with each conversion, never raise
 const CONVERGENCE_POINTS = 1;    // the ONE do_generic_callee predicate the rule permits; more = per-site drift
 
 const src = readFileSync(new URL('./qjs/quickjs.c', import.meta.url), 'utf8');
