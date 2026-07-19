@@ -18,6 +18,28 @@ const CONVERGENCE_POINTS = 1;    // the ONE do_generic_callee predicate the rule
 
 const src = readFileSync(new URL('./qjs/quickjs.c', import.meta.url), 'utf8');
 
+/* STRUCTURAL INTEGRITY of the interpreter.
+ *
+ * Four separate times, a scripted deletion in quickjs.c (brace-walking to "the next line equal to `}`", or matching
+ * a two-line forward DECLARATION instead of the definition) swallowed a neighbouring region — once 31,000 lines.
+ * The compiler reports this as `label 'done' used but not defined` thousands of lines from the damage, which reads
+ * like a subtle C error rather than "your edit ate a function". Name it here instead: these labels and entry points
+ * are load-bearing, and if one vanishes the edit was destructive, not clever. Cheap, exact, and it fires before
+ * anything is compiled. */
+const REQUIRED = [
+  'done_generator:', 'exception:', 'do_generic_callee:', 'do_step_tramp:', 'do_step_step:',
+  'do_tramp_call:', 'do_apply_tramp:', 'do_construct_tramp:', 'do_return:',
+  'static JSValue JS_CallInternal(', 'static JSValue js_call_c_function(',
+];
+const missing = REQUIRED.filter(t => !src.includes(t));
+if (missing.length) {
+  console.error(`quickjs.c STRUCTURAL DAMAGE — these load-bearing anchors are gone:`);
+  for (const m of missing) console.error(`    ${m}`);
+  console.error(`An edit removed more than it named. Restore (git checkout -- quickjs.c) and redo the deletion`);
+  console.error(`with EXACT-TEXT edits, one site at a time — never a script that guesses where a block ends.`);
+  process.exit(1);
+}
+
 const names = new Set();
 for (const m of src.matchAll(/^static bool (tramp_can_call_[a-z_0-9]+)/gm)) names.add(m[1]);
 
