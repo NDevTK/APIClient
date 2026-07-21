@@ -13,7 +13,16 @@
  */
 import { readFileSync } from 'node:fs';
 
-const CEILING = 12;              // tramp_can_call_* — lower with each conversion, never raise
+/* The ceiling counts tramp_can_call_* recognizers. It goes DOWN whenever a conversion deletes a legacy JS_Call-LOOP
+ * body (the debt this ratchet exists to retire). It rises for EXACTLY ONE reason: a genuinely-new tramp-native
+ * builtin whose semantics REQUIRE a custom CONT kind — a promise-creating builtin that must reject-and-YIELD on an
+ * abrupt user callback (return a rejected promise, never raise). That reject-and-yield needs a dedicated
+ * exception arm (CONT_PROMISE_EXEC / _ALL / _TRY), which the generic CONT_STEP teardown cannot express, so it
+ * cannot route via the convergence point — the recognizer is inherent, not a drift-detector choosing against a
+ * deletable body. tramp_can_call_promise_try (Promise.try, ES2025) is the promise_exec pattern: bytecode fn ->
+ * tramp, C/bound fn -> the C path (correct, no loop). 12 -> 13 for that one builtin. A rise for any OTHER reason
+ * (a re-introduced drift-detector, a legacy twin) remains banned. */
+const CEILING = 13;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
 const CONVERGENCE_POINTS = 1;    // the ONE do_generic_callee predicate the rule permits; more = per-site drift
 
 const src = readFileSync(new URL('./qjs/quickjs.c', import.meta.url), 'utf8');
