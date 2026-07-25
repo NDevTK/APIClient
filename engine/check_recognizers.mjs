@@ -23,13 +23,15 @@ import { readFileSync } from 'node:fs';
  * tramp, C/bound fn -> the C path (correct, no loop). 12 -> 13 for that one builtin. A rise for any OTHER reason
  * (a re-introduced drift-detector, a legacy twin) remains banned. */
 const CEILING = 13;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
-/* 1 = do_generic_callee, the convergence point for every STACK-shaped call. The second is do_step_step's own
-   CALLBACK dispatch, whose operands live in the step state's buffer and never on the stack, so it cannot reach
-   that convergence — `arr.map(String)` is an ordinary program and the callback IS a step machine. Judge it by the
-   rule's own test: delete the thing the predicate selects against — the inline JS_Call for a bodyless C callback,
-   which `arr.map(Math.round)` still needs — and the question remains, so it is ROUTING, not a fallback selector.
-   A THIRD still fails here, and the right way to lower this back to 1 is one shared callback-dispatch path (the
-   consolidation TRAMP_DRIVE_ITER_NEXT already made for the iterator .next drives), not another exemption. */
+/* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
+     do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
+     do_cont_dispatch    every SEQUENCE-shaped call: the operands are in the sequence's own buffer (a step
+                         machine's cb_args, the ToPrimitive walk's cb) and the result goes back to that sequence.
+   The second used to be do_step_step's private copy, with the ToPrimitive walk keeping a second copy of the same
+   three-way question — and that copy had never learned to route a step machine, so `{valueOf: [].sort}` reached
+   js_call_c_function's DFAIL while `arr.map(String)` did not: one callee answering differently depending on which
+   sequence invoked it, which is the exact defect the ban exists for. They are one label now.
+   A THIRD still fails here. There is no third operand shape, so a third would be a copy. */
 const CONVERGENCE_POINTS = 2;
 
 const src = readFileSync(new URL('./qjs/quickjs.c', import.meta.url), 'utf8');
