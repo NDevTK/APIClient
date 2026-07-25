@@ -23,7 +23,14 @@ import { readFileSync } from 'node:fs';
  * tramp, C/bound fn -> the C path (correct, no loop). 12 -> 13 for that one builtin. A rise for any OTHER reason
  * (a re-introduced drift-detector, a legacy twin) remains banned. */
 const CEILING = 13;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
-const CONVERGENCE_POINTS = 1;    // the ONE do_generic_callee predicate the rule permits; more = per-site drift
+/* 1 = do_generic_callee, the convergence point for every STACK-shaped call. The second is do_step_step's own
+   CALLBACK dispatch, whose operands live in the step state's buffer and never on the stack, so it cannot reach
+   that convergence — `arr.map(String)` is an ordinary program and the callback IS a step machine. Judge it by the
+   rule's own test: delete the thing the predicate selects against — the inline JS_Call for a bodyless C callback,
+   which `arr.map(Math.round)` still needs — and the question remains, so it is ROUTING, not a fallback selector.
+   A THIRD still fails here, and the right way to lower this back to 1 is one shared callback-dispatch path (the
+   consolidation TRAMP_DRIVE_ITER_NEXT already made for the iterator .next drives), not another exemption. */
+const CONVERGENCE_POINTS = 2;
 
 const src = readFileSync(new URL('./qjs/quickjs.c', import.meta.url), 'utf8');
 
