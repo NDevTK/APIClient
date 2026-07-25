@@ -68,6 +68,26 @@ if (callSitePredicates !== CONVERGENCE_POINTS) {
       `  DFAIL is only a backstop.`);
   process.exit(1);
 }
+/* BODY-ENTRY convergence. A callee that HAS a bytecode body has exactly four ways in (plain / async / generator
+   create / async-generator create), and WHICH one is a property of the callee, never of the call spelling. That
+   list was written out per call shape and the copies drifted: OP_call and OP_call_method asked all four,
+   do_forward_dispatch asked three, and do_apply_tramp asked one — so an async generator reached on the tramp
+   through `ag()` but drove its coroutine to completion through `method.call(o)` (Array.fromAsync) and
+   `gen(...spread)` (the arguments-object spread tests). Same defect as the recognizer ban, different axis: one
+   callee answering differently depending on how the call was written. The four predicates now live in
+   tramp_body_entry and nowhere else; a re-appearing per-site copy fails here. */
+const bodyPreds = ['tramp_can_call_async', 'tramp_can_call_agen_create'];   /* used ONLY by tramp_body_entry */
+for (const p of bodyPreds) {
+  const uses = (src.match(new RegExp(`${p}\\(`, 'g')) || []).length;
+  if (uses !== 2) {   /* the definition + the single use inside tramp_body_entry */
+    console.error(`body-entry drift: ${p} appears ${uses} times, expected 2 (its definition + tramp_body_entry).`);
+    console.error(`  A call site is asking the body-entry question itself again. Route that shape through`);
+    console.error(`  TRAMP_BODY_DISPATCH (or, for an apply-shaped call, the apply-mode vector) instead — a site`);
+    console.error(`  declares its OPERAND SHAPE, never which bodies it happens to know about.`);
+    process.exit(1);
+  }
+}
+
 if (names.size > CEILING) {
   console.error(`recognizer ratchet FAILED: ${names.size} > ceiling ${CEILING}`);
   console.error(`  names: ${[...names].sort().join(' ')}`);
