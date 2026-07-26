@@ -102,6 +102,27 @@ if (constructSitePredicates !== CONSTRUCT_CONVERGENCE_POINTS) {
   process.exit(1);
 }
 
+/* Construct-side TARGET-KIND questions live only at the convergence point. Each of these spellings used to be a
+   copy — at OP_call_constructor for bound targets and for proxies, at Reflect.construct three times over — and
+   each copy knew a different subset of kinds, so one builtin answered differently depending on how the construct
+   was written. `new`, `super()`, the spread, a step machine's own Construct and Reflect.construct all reach
+   do_construct_dispatch now, and the arms there rewrite a bound or trapless-proxy target and re-enter. */
+const strayConstruct = [
+  ['tramp_bound_target(call_argv[-2]', 0, 'a bound construct target asked about at OP_call_constructor'],
+  ['js_tramp_proxy_construct(ctx, call_argv[-2]', 0, 'a proxy construct reshaped at OP_call_constructor'],
+  ['tramp_is_reflect_construct(', 2, 'Reflect.construct routed anywhere but its ONE call-site resolution ' +
+                                     '(the count is its definition plus that one route)'],
+];
+for (const [needle, want, what] of strayConstruct) {
+  const got = src.split(needle).length - 1;
+  if (got !== want) {
+    console.error(`construct-side probe \`${needle}\`: ${got}, expected ${want} — ${what}.`);
+    console.error(`  Every construct spelling must converge on do_construct_dispatch; a copy here is the`);
+    console.error(`  recognizer allowlist in its construct-side costume.`);
+    process.exit(1);
+  }
+}
+
 /* BODY-ENTRY convergence. A callee that HAS a bytecode body has exactly four ways in (plain / async / generator
    create / async-generator create), and WHICH one is a property of the callee, never of the call spelling. That
    list was written out per call shape and the copies drifted: OP_call and OP_call_method asked all four,
