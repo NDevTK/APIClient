@@ -46,7 +46,7 @@ const src = readFileSync(new URL('./qjs/quickjs.c', import.meta.url), 'utf8');
  * anything is compiled. */
 const REQUIRED = [
   'done_generator:', 'exception:', 'do_generic_callee:', 'do_step_tramp:', 'do_step_step:',
-  'do_tramp_call:', 'do_apply_tramp:', 'do_construct_tramp:', 'do_return:',
+  'do_tramp_call:', 'do_apply_tramp:', 'do_construct_tramp:', 'do_construct_dispatch:', 'do_return:',
   'static JSValue JS_CallInternal(', 'static JSValue js_call_c_function(',
 ];
 const missing = REQUIRED.filter(t => !src.includes(t));
@@ -77,6 +77,31 @@ if (callSitePredicates !== CONVERGENCE_POINTS) {
       `  DFAIL is only a backstop.`);
   process.exit(1);
 }
+/* The CONSTRUCT side has the identical shape and produced the identical defect. The step-ctor question was
+   written out THREE times — OP_call_constructor's operand reshape, OP_init_ctor's super(), and Reflect.construct's
+   list form — and a fourth construct shape, a step machine asking for a Construct of its own (ArrayBufferSpecies-
+   Create inside slice), never got a copy: it fell through to JS_CallConstructor and js_call_c_function's DFAIL.
+   One builtin answering differently depending on how the construct was spelled, exactly as on the call side.
+   It is ONE arm in do_construct_dispatch now, serving both construct operand SHAPES (-2 pops [func, new_target,
+   args] off the caller stack, 0 pops nothing). Reflect.construct is the one exception and for the same reason
+   Reflect.apply is: it is CALL-SITE-RESOLVED — its arguments come from a LIST that must never touch the operand
+   stack — so it builds the state at the operator site rather than asking this question. */
+const CONSTRUCT_CONVERGENCE_POINTS = 1;
+const constructSitePredicates =
+  (src.match(/tramp_step_ctor_def_of\(con_func\)/g) || []).length;
+if (constructSitePredicates !== CONSTRUCT_CONVERGENCE_POINTS) {
+  console.error(`construct-site step predicates: ${constructSitePredicates}, ` +
+                `expected exactly ${CONSTRUCT_CONVERGENCE_POINTS}.`);
+  console.error(constructSitePredicates > CONSTRUCT_CONVERGENCE_POINTS
+    ? `  MORE than one means the construct-side question is being asked per construct shape again. Every
+` +
+      `  construct spelling must converge on do_construct_dispatch.`
+    : `  FEWER means the construct convergence point was removed; a step-machine constructor now reaches
+` +
+      `  JS_CallConstructorInternal, whose js_call_c_function DFAIL is only a backstop.`);
+  process.exit(1);
+}
+
 /* BODY-ENTRY convergence. A callee that HAS a bytecode body has exactly four ways in (plain / async / generator
    create / async-generator create), and WHICH one is a property of the callee, never of the call spelling. That
    list was written out per call shape and the copies drifted: OP_call and OP_call_method asked all four,
@@ -109,4 +134,5 @@ if (names.size < CEILING) {
                 `engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
 }
-console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} convergence point`);
+console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} call + ` +
+            `${constructSitePredicates} construct convergence point`);
