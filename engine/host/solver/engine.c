@@ -171,7 +171,10 @@ static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
                 continue;
             }
             else return 1;   /* all scripts + chunks + microtask jobs + live fetches done */
-            f->frame = JS_FlowNew(ctx, body, strlen(body), 0);   /* page <script>/chunk: classic non-strict global */
+            /* NULL ScriptOrModule name: an inline page script's name is the DOCUMENT's URL, which this host does
+               not model yet — nothing here has one to give. It is what a relative `import('./chunk.js')` resolves
+               against, so the moat's lazy-chunk surface needs the document URL plumbed to this call. */
+            f->frame = JS_FlowNew(ctx, body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
             DCHECK(f->frame != NULL, "flow_step: a page <script>/chunk did not compile");
         }
         if (JS_FlowResume(ctx, (JSValue *)f->frame)) return 0;   /* quantum yield — more work, resume later */
