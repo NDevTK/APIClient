@@ -177,7 +177,14 @@ static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
             f->frame = JS_FlowNew(ctx, body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
             DCHECK(f->frame != NULL, "flow_step: a page <script>/chunk did not compile");
         }
-        if (JS_FlowResume(ctx, (JSValue *)f->frame)) return 0;   /* quantum yield — more work, resume later */
+        {
+            /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
+               taken and released here — never DISCARDED by the engine, which would hide a live value from the host. */
+            JSValue cv = JS_UNDEFINED;
+            int suspended = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
+            JS_FreeValue(ctx, cv);
+            if (suspended) return 0;   /* quantum yield — more work, resume later */
+        }
         JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; f->script_i++;   /* this script done -> next */
     }
 }
