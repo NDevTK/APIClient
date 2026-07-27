@@ -110,6 +110,13 @@ if (constructSitePredicates !== CONSTRUCT_CONVERGENCE_POINTS) {
 const strayCall = [
   ['js_tramp_proxy_apply(', 3, 'proxy [[Call]] reshaped anywhere but the ONE arm at do_generic_callee ' +
                                '(the count is its declaration, its definition and that arm)'],
+  /* The async-generator drive is asked ONCE PER OPERAND SHAPE and never once per call SPELLING: its definition,
+     the call convergence point (do_generic_callee — which `ag.next()`, `.call`, `.apply`, Reflect.apply, spread,
+     a bind and a proxy all reach), and the two iterator-protocol opcodes whose method comes off the stack rather
+     than through a call (OP_iterator_next and OP_iterator_call, yield* delegation). OP_iterator_close asks about
+     the RECEIVER's class instead — there is no method operand there to test. A fifth is a spelling copy. */
+  ['tramp_agen_method_magic(', 4, 'the async-generator drive question asked anywhere but its definition, ' +
+                                  'do_generic_callee and the two iterator-protocol opcodes'],
 ];
 for (const [needle, want, what] of strayCall) {
   const got = src.split(needle).length - 1;
