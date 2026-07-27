@@ -16,6 +16,12 @@
  * already had for step machines. Object.fromEntries was the first: its C body was ALREADY a DFAIL, which is the
  * tell that a recognizer has become pure residue — it was choosing against something that no longer exists.
  * Every other consume recognizer whose body is likewise a DFAIL can move the same way, one at a time.
+ *
+ * Array.from and Math.sumPrecise followed, and they show the general case: a recognizer whose body is NOT yet a
+ * bare DFAIL is still retirable when everything it declines is pure VALIDATION rather than iteration. Array.from
+ * declined argc 0 and a present-but-uncallable mapfn; both are spec steps with no user code in them, so they moved
+ * into the machine's prologue and the acquire, and the body became a DFAIL like the rest. What a recognizer may
+ * NOT do is decline a case whose ALGORITHM still lives in C — that is the legacy twin the ban is about.
  */
 import { readFileSync } from 'node:fs';
 
@@ -28,7 +34,7 @@ import { readFileSync } from 'node:fs';
  * deletable body. tramp_can_call_promise_try (Promise.try, ES2025) is the promise_exec pattern: bytecode fn ->
  * tramp, C/bound fn -> the C path (correct, no loop). 12 -> 13 for that one builtin. A rise for any OTHER reason
  * (a re-introduced drift-detector, a legacy twin) remains banned. */
-const CEILING = 12;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
+const CEILING = 11;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
      do_cont_dispatch    every SEQUENCE-shaped call: the operands are in the sequence's own buffer (a step
