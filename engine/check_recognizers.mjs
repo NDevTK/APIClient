@@ -10,6 +10,12 @@
  * definition -> DELETE the legacy body -> the detector has nothing to choose) removes exactly one and lowers the
  * ceiling here. Raising it is not allowed: that means a legacy twin was reintroduced or a detector came back under
  * a new name.
+ *
+ * The declaration for a CONSUMING builtin is JS_CFUNC_CONSUME_DEF(name, length, ITERCONS_*): cproto
+ * JS_CFUNC_consume with the sink in magic, read by tramp_consume_sink_of — the same shape JS_CFUNC_STEP_DEF
+ * already had for step machines. Object.fromEntries was the first: its C body was ALREADY a DFAIL, which is the
+ * tell that a recognizer has become pure residue — it was choosing against something that no longer exists.
+ * Every other consume recognizer whose body is likewise a DFAIL can move the same way, one at a time.
  */
 import { readFileSync } from 'node:fs';
 
@@ -22,7 +28,7 @@ import { readFileSync } from 'node:fs';
  * deletable body. tramp_can_call_promise_try (Promise.try, ES2025) is the promise_exec pattern: bytecode fn ->
  * tramp, C/bound fn -> the C path (correct, no loop). 12 -> 13 for that one builtin. A rise for any OTHER reason
  * (a re-introduced drift-detector, a legacy twin) remains banned. */
-const CEILING = 13;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
+const CEILING = 12;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
      do_cont_dispatch    every SEQUENCE-shaped call: the operands are in the sequence's own buffer (a step
