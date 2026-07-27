@@ -17,7 +17,10 @@
  * tell that a recognizer has become pure residue — it was choosing against something that no longer exists.
  * Every other consume recognizer whose body is likewise a DFAIL can move the same way, one at a time.
  *
- * 13 -> 9 so far: Object.fromEntries, Array.from + Math.sumPrecise, Iterator.from, and %TypedArray%.from + .of.
+ * 13 -> 7 so far: Object.fromEntries; Array.from + Math.sumPrecise; Iterator.from; %TypedArray%.from + .of;
+ * Iterator.prototype toArray/forEach/reduce/some/every/find; Set.prototype union/symmetricDifference/isSupersetOf.
+ * The last two show that a walk can take a PARAMETER — the tag is a base plus the kind, the way a STEPDEF id
+ * names one machine among many. That is a builtin declaring itself and its argument, not a table of who is special.
  * Array.from and Math.sumPrecise show the general case: a recognizer whose body is NOT yet a
  * bare DFAIL is still retirable when everything it declines is pure VALIDATION rather than iteration. Array.from
  * declined argc 0 and a present-but-uncallable mapfn; both are spec steps with no user code in them, so they moved
@@ -35,7 +38,7 @@ import { readFileSync } from 'node:fs';
  * deletable body. tramp_can_call_promise_try (Promise.try, ES2025) is the promise_exec pattern: bytecode fn ->
  * tramp, C/bound fn -> the C path (correct, no loop). 12 -> 13 for that one builtin. A rise for any OTHER reason
  * (a re-introduced drift-detector, a legacy twin) remains banned. */
-const CEILING = 9;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
+const CEILING = 7;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
      do_cont_dispatch    every SEQUENCE-shaped call: the operands are in the sequence's own buffer (a step
