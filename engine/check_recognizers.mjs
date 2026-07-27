@@ -107,6 +107,20 @@ if (constructSitePredicates !== CONSTRUCT_CONVERGENCE_POINTS) {
    each copy knew a different subset of kinds, so one builtin answered differently depending on how the construct
    was written. `new`, `super()`, the spread, a step machine's own Construct and Reflect.construct all reach
    do_construct_dispatch now, and the arms there rewrite a bound or trapless-proxy target and re-enter. */
+const strayCall = [
+  ['js_tramp_proxy_apply(', 3, 'proxy [[Call]] reshaped anywhere but the ONE arm at do_generic_callee ' +
+                               '(the count is its declaration, its definition and that arm)'],
+];
+for (const [needle, want, what] of strayCall) {
+  const got = src.split(needle).length - 1;
+  if (got !== want) {
+    console.error(`call-side probe \`${needle}\`: ${got}, expected ${want} — ${what}.`);
+    console.error(`  It was written out at OP_call AND at do_forward_dispatch, and neither copy was on the`);
+    console.error(`  .apply / spread route — so a trap with a loop in it ran to completion under p(...arr).`);
+    process.exit(1);
+  }
+}
+
 const strayConstruct = [
   ['tramp_bound_target(call_argv[-2]', 0, 'a bound construct target asked about at OP_call_constructor'],
   ['js_tramp_proxy_construct(ctx, call_argv[-2]', 0, 'a proxy construct reshaped at OP_call_constructor'],
