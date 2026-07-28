@@ -35,9 +35,16 @@ import { readFileSync } from 'node:fs';
  * abrupt user callback (return a rejected promise, never raise). That reject-and-yield needs a dedicated
  * exception arm (CONT_PROMISE_EXEC / _ALL / _TRY), which the generic CONT_STEP teardown cannot express, so it
  * cannot route via the convergence point — the recognizer is inherent, not a drift-detector choosing against a
- * deletable body. tramp_can_call_promise_try (Promise.try, ES2025) is the promise_exec pattern: bytecode fn ->
- * tramp, C/bound fn -> the C path (correct, no loop). 12 -> 13 for that one builtin. A rise for any OTHER reason
- * (a re-introduced drift-detector, a legacy twin) remains banned. */
+ * deletable body. 12 -> 13 for that one builtin (Promise.try, ES2025). A rise for any OTHER reason (a
+ * re-introduced drift-detector, a legacy twin) remains banned.
+ *
+ * WHAT THAT ENTRY USED TO CLAIM, and why it was wrong: "bytecode fn -> tramp, C/bound fn -> the C path (correct,
+ * no loop)". A BOUND function's target is bytecode and loops; a PROXY's apply trap is a function and loops; a
+ * GENERATOR fn creates a coroutine. All three reached js_promise_try's JS_Call and aborted (two @WHY
+ * preempt-in-a-non-coroutine, one drive-to-completion). "It has no preemptible body" is a claim about the CALLEE
+ * KIND, which is exactly the question a recognizer is banned from answering — the convergence point owns it. The
+ * receiver and arity conditions were pure validation and moved into the machine's prologue, js_promise_try is a
+ * DFAIL, and what is left asks only WHICH machine, at the one place that asks it. */
 const CEILING = 7;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
