@@ -147,8 +147,10 @@ for (const [needle, want, what] of strayCall) {
 const strayConstruct = [
   ['tramp_bound_target(call_argv[-2]', 0, 'a bound construct target asked about at OP_call_constructor'],
   ['js_tramp_proxy_construct(ctx, call_argv[-2]', 0, 'a proxy construct reshaped at OP_call_constructor'],
-  ['tramp_is_reflect_construct(', 2, 'Reflect.construct routed anywhere but its ONE call-site resolution ' +
-                                     '(the count is its definition plus that one route)'],
+  /* Reflect.construct has NO call-site resolution left: it is a step machine, and its operator-site reshape was
+     the redundant twin of the machine's own argument block. 2 -> 0 with that deletion, and the predicate went
+     with it — a recognizer with no call site is residue, which is what this line now pins. */
+  ['tramp_is_reflect_construct', 0, 'a Reflect.construct recognizer at all — the machine answers every spelling'],
 ];
 for (const [needle, want, what] of strayConstruct) {
   const got = src.split(needle).length - 1;
