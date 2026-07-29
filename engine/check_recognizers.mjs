@@ -394,11 +394,13 @@ if (enumOnlyCallers !== 2) {
  * accessor declaration that did not exist: JS_CGETSET_STEP_DEF, a SETTER that is a step machine. A setter is as
  * much the page's entry point as a method is, and until now no accessor could carry a machine at all.
  *
- * Between them the public JS_GetOwnProperty entry lost every caller inside the engine, and the count still does
- * not move, because it has one OUTSIDE it: engine/host/solver/cow.c, at three sites. That is a REAL DEFECT and
- * the next thing to fix, not an exemption — a COW capture runs during a context SWAP, so a Proxy in the delta
- * would fire the page's getOwnPropertyDescriptor trap from the scheduler. The capture wants an own-property
- * read that CANNOT reach a trap, and an assert that it never does.
+ * Between them the public JS_GetOwnProperty entry lost every caller inside the engine, and its three callers
+ * OUTSIDE it — engine/host/solver/cow.c — were a real defect rather than an exemption: a delta is captured
+ * inside a write hook and swapped between two flows, so a Proxy in it would have fired the page's
+ * getOwnPropertyDescriptor trap from the scheduler, and an accessor slot's restore would have run a setter.
+ * The entry is now JS_GetOwnSlot, which reads the SLOT and ASSERTS that neither shape is reachable — and
+ * because every entry is read there before it is written back, that assert also guards the restore. The count
+ * does not move (the slot read is still a JS_GetOwnPropertyInternal call) but the site stopped being a claim.
  *
  * What is left is the 10 CONSUMERS. Of those, SEVEN are not consumers at all and are why this number will not
  * reach zero: two are the routed request entry's OWN in-place answers (JS_CallInternal), where the proxy

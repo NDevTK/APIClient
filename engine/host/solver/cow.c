@@ -101,10 +101,10 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (cow_hash_find(d, JS_VALUE_GET_PTR(obj), atom, NULL) >= 0) return;   /* capture each slot ONCE (O(1)) */
 
     g_capturing = 1;
-    JSPropertyDescriptor pd;
-    int has = JS_GetOwnProperty(ctx, &pd, obj, atom);   /* 1 = own prop (pd filled), 0 = absent, -1 = exc */
-    int existed = 0; JSValue base = JS_UNDEFINED;
-    if (has > 0) { existed = 1; base = pd.value; JS_FreeValue(ctx, pd.getter); JS_FreeValue(ctx, pd.setter); }
+    JSValue base;
+    /* the SLOT, not [[GetOwnProperty]]: this runs inside a write hook, so a Proxy trap or an accessor's getter
+       here would be the page's code with no flow base. JS_GetOwnSlot asserts that neither is reachable. */
+    int existed = JS_GetOwnSlot(ctx, &base, obj, atom) > 0;
 
     if (d->n >= d->cap) {
         d->cap = d->cap ? d->cap * 2 : 32;
@@ -129,7 +129,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
    sibling that shares the cell is isolated on write. Captured once per cell (first write is the baseline). */
 /* Record a KNOWN-NEW fast-array APPEND slot (JSTimeTravelHooks.arr_append): the index == the array's current
    length, so it cannot already be in the delta (dedup unneeded) and its baseline is ABSENT (existed=0, no
-   JS_GetOwnProperty). O(1) — this is the accumulator hot path (a shared array built one element at a time);
+   JS_GetOwnSlot). O(1) — this is the accumulator hot path (a shared array built one element at a time);
    routing it through cow_capture_hook's O(n) dedup scan makes an N-element build O(N^2). The flow-private skip is
    still applied (a post-fork private array — e.g. a per-flow accumulator built after the fork — is not captured). */
 void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
@@ -274,11 +274,10 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
             JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->base));
             continue;
         }
-        JSPropertyDescriptor pd;              /* save the flow's CURRENT value so apply can restore it */
-        int has = JS_GetOwnProperty(ctx, &pd, e->obj, e->atom);
+        JSValue cur;                          /* save the flow's CURRENT value so apply can restore it */
+        JS_GetOwnSlot(ctx, &cur, e->obj, e->atom);
         if (e->cur_valid) JS_FreeValue(ctx, e->cur);
-        if (has > 0) { e->cur = pd.value; JS_FreeValue(ctx, pd.getter); JS_FreeValue(ctx, pd.setter); }
-        else e->cur = JS_UNDEFINED;
+        e->cur = cur;
         e->cur_valid = 1;
         uint32_t ai;
         if (e->existed) JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));   /* -> baseline */
@@ -360,10 +359,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
            APPLIED, so the heap/cell holds its branch-point value. Applying the clone later reproduces exactly
            that state for the forked sibling; the two then diverge, each capturing its own further writes. */
         if (se->vref) { de->cur = JS_VarRefGetValue(se->vref); de->cur_valid = 1; continue; }
-        JSPropertyDescriptor pd;
-        int has = JS_GetOwnProperty(ctx, &pd, se->obj, se->atom);
-        if (has > 0) { de->cur = pd.value; JS_FreeValue(ctx, pd.getter); JS_FreeValue(ctx, pd.setter); }
-        else de->cur = JS_UNDEFINED;
+        JS_GetOwnSlot(ctx, &de->cur, se->obj, se->atom);
         de->cur_valid = 1;
     }
     cow_hash_rebuild(d);   /* build the clone's O(1) dedup index over the copied entries */
