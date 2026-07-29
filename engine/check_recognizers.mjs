@@ -265,6 +265,33 @@ for (const [atom, want] of ITER_READS) {
   }
 }
 
+/* THE DESCRIPTOR family, the same shape one property-set over. ToPropertyDescriptor (6.2.6.5) performs TWELVE
+ * keyed operations on a descriptor object — HasProperty then, if present, Get, for each of six fields — and every
+ * one of them can be an accessor or a Proxy trap. Object.defineProperty and Object.defineProperties do them as
+ * phases through JSDescCursor; js_obj_to_desc is what remains, and it has exactly ONE live consumer:
+ * 10.5.5 step 12's ToPropertyDescriptor of a `getOwnPropertyDescriptor` TRAP's result. That one still runs from
+ * C, so
+ *     Object.getOwnPropertyDescriptor(new Proxy(t, {getOwnPropertyDescriptor(){ return new Proxy(d, {get(){…loop…}}) }}), "a")
+ * preempts in an activation with no flow base.
+ *
+ * Converting it needs a capability that does not exist yet and is named here rather than guessed at next time: a
+ * keyed request whose OUTER is another keyed request. The trap result is delivered inside the getprop machinery,
+ * and the cursor's reads would have to issue from there — gp_outer_kind has no JSGetProp case today, and adding
+ * one is a change to the re-entrancy contract of the core, not a call-site edit.
+ *
+ * 13 = js_obj_to_desc's twelve (six fields x HasProperty + Get) plus the property WALK's single `enumerable`
+ * read, which is safe by construction — every GP_GETOWNPROP delivery rebuilds the record through
+ * js_desc_to_object — and asserts that with js_read_is_page_code rather than claiming it in a comment. It may
+ * only go down. */
+const descReads = (src.match(/JS_(Get|Has)Property\(ctx, desc, /g) || []).length;
+if (descReads !== 13) {
+  console.error(`ToPropertyDescriptor C-side reads: ${descReads}, expected 13.`);
+  console.error(descReads > 13
+    ? `  A descriptor walk is reading fields from C again. It is the page's code — run it through JSDescCursor.`
+    : `  js_obj_to_desc shrank: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
+  process.exit(1);
+}
+
 if (names.size > CEILING) {
   console.error(`recognizer ratchet FAILED: ${names.size} > ceiling ${CEILING}`);
   console.error(`  names: ${[...names].sort().join(' ')}`);
@@ -279,4 +306,4 @@ if (names.size < CEILING) {
 }
 console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} call + ` +
             `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes, ` +
-            `iterator-protocol C reads done/value/next 0/0/0`);
+            `iterator-protocol C reads done/value/next 0/0/0, ToPropertyDescriptor C reads ${descReads}`);
