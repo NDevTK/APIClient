@@ -293,27 +293,26 @@ for (const [atom, want] of ITER_READS) {
  * and so only needed the walk to become resumable — that is JSEnumKeys, a shared cursor for
  * EnumerableOwnPropertyNames' key half, which the rest adopt the same way. The second was not a conversion at
  * all: internalize_json_property, the recursive C walker that machine had REPLACED, was still in the file with
- * only its own recursion calling it, so this count had been treating dead code as work to do. What is left:
- * for-in's iterator build (twice: the prototype-chain probe and the key collection), JSON.stringify's
- * SerializeJSONObject, and import attributes; for-in's is two walks, the ENUM_ONLY key collection and the
- * SET_ENUM prototype-chain walk under it. Five sites, of which four are live consumers: for-in's own
- * prototype-chain PROBE is the fifth and is already unobservable, because it is skipped for any object whose
- * class overrides [[OwnPropertyKeys]] or [[GetOwnProperty]] — it stays counted so that removing that guard fails
- * here rather than silently. It may only go down from here.
+ * only its own recursion calling it, so this count had been treating dead code as work to do. The third WAS the
+ * hard one: JSON.stringify's SerializeJSONObject could not adopt the cursor while js_json_to_str was a C
+ * recursion, because a resumable walk inside a non-resumable one suspends nothing — so stringify became a step
+ * machine in the same diff, and its six OTHER C-driven page-code points (the `toJSON` read and call, the
+ * replacer call, LengthOfArrayLike, every element and member read) became requests with it. What is left:
+ * for-in's iterator build — the ENUM_ONLY key collection and the SET_ENUM prototype-chain walk under it — and
+ * import attributes. Four sites, of which three are live consumers: for-in's own prototype-chain PROBE is the
+ * fourth and is already unobservable, because it is skipped for any object whose class overrides
+ * [[OwnPropertyKeys]] or [[GetOwnProperty]] — it stays counted so that removing that guard fails here rather
+ * than silently. It may only go down from here.
  *
- * NONE of them can be retired with an assertion instead — the cheap answer, checked rather than assumed. The
- * JSON.parse pair is the one that looks safe by construction, since it walks values the PARSER built; but the
- * reviver runs bottom-up with `this` bound to the holder, so it can plant a Proxy on a sibling key the walk has
- * not reached yet:
- *     JSON.parse('{"a":1,"b":2}', function (k, v) { if (k === "a") this.b = someProxy; return v })
- * enumerates that proxy from C. Import attributes take `options.with` straight from the caller. */
+ * NEITHER can be retired with an assertion instead — the cheap answer, checked rather than assumed. Import
+ * attributes take `options.with` straight from the caller, and for-in enumerates whatever the page hands it. */
 /* A CALL SITE is the flag word handed to a names walk: it always pairs with JS_GPN_STRING_MASK. Matching that
    pair is what separates the callers from the flag TESTS inside the walk itself. */
 const enumOnlyCallers =
   (src.match(/JS_GPN_STRING_MASK\s*\|\s*JS_GPN_(ENUM_ONLY|SET_ENUM)|JS_GPN_(ENUM_ONLY|SET_ENUM)\s*\|\s*JS_GPN_STRING_MASK/g) || []).length;
-if (enumOnlyCallers !== 5) {
-  console.error(`C own-keys walks asking for enumerability: ${enumOnlyCallers}, expected 5.`);
-  console.error(enumOnlyCallers > 5
+if (enumOnlyCallers !== 4) {
+  console.error(`C own-keys walks asking for enumerability: ${enumOnlyCallers}, expected 4.`);
+  console.error(enumOnlyCallers > 4
     ? `  A new C caller is asking a Proxy's getOwnPropertyDescriptor trap for enumerability from C.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
