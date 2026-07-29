@@ -281,6 +281,23 @@ for (const [atom, want] of ITER_READS) {
  * read, which is safe by construction — every GP_GETOWNPROP delivery rebuilds the record through
  * js_desc_to_object — and asserts that with js_read_is_page_code rather than claiming it in a comment. It may
  * only go down. */
+/* THE UNROUTED CONSUMERS behind those twelve, counted rather than described. An own-keys walk with
+ * JS_GPN_ENUM_ONLY has to ask each key's ENUMERABILITY, which on a Proxy is the `getOwnPropertyDescriptor`
+ * trap — so every C caller that passes that flag runs the trap from C and never reaches the routed walk. Six:
+ * for-in's iterator build (twice: the prototype-chain probe and the key collection), JSON.stringify's
+ * SerializeJSONObject, JSON.parse's two source-record walks, and import attributes. Each converts by becoming
+ * resumable, and the walk it would then reach already exists. It may only go down. */
+const enumOnlyCallers =
+  (src.match(/JS_GetOwnPropertyNames(Internal|2)\([^;]*[|,]\s*JS_GPN_ENUM_ONLY|JS_GPN_ENUM_ONLY\s*\|[^;]*\)\s*[;)]/g) || [])
+    .length;
+if (enumOnlyCallers !== 6) {
+  console.error(`C own-keys walks asking for enumerability: ${enumOnlyCallers}, expected 6.`);
+  console.error(enumOnlyCallers > 6
+    ? `  A new C caller is asking a Proxy's getOwnPropertyDescriptor trap for enumerability from C.`
+    : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
+  process.exit(1);
+}
+
 const descReads = (src.match(/JS_(Get|Has)Property\(ctx, desc, /g) || []).length;
 if (descReads !== 13) {
   console.error(`ToPropertyDescriptor C-side reads: ${descReads}, expected 13.`);
@@ -304,4 +321,5 @@ if (names.size < CEILING) {
 }
 console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} call + ` +
             `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes, ` +
-            `iterator-protocol C reads done/value/next 0/0/0, ToPropertyDescriptor C reads ${descReads}`);
+            `iterator-protocol C reads done/value/next 0/0/0, ToPropertyDescriptor C reads ${descReads}, ` +
+            `C enum-only key walks ${enumOnlyCallers}`);
