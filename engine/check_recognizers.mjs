@@ -640,6 +640,24 @@ if (extFromC !== 14) {
  *     Promise.prototype.then — so the DFAILs recording "hand its Invoke out" are discharged by there being no
  *     Invoke. The one genuine Invoke left is 27.2.5.3 step 6's, inside .finally's reaction closure.
  *
+ * A SECOND sweep, over surfaces the first did not touch, found three more. All three are fixed:
+ *
+ *   ToPrimitive's method READS — 7.1.1 step 2.a's GetMethod(input, @@toPrimitive) and 7.1.1.1 step 2's
+ *                                Get(O, "toString"/"valueOf"), all done with JS_GetProperty from C behind a
+ *                                comment asserting a coercion method "is a data property in every real case".
+ *                                The widest of the three, since every coercion in the engine passes through it.
+ *                                Now CONT_TOPRIM_GET.
+ *   Map.prototype.getOrInsertComputed — a continuation-holding builtin whose callbackfn ran through JS_Call.
+ *                                Now STEPDEF_MAP_UPSERT*, one machine for Map and WeakMap.
+ *   the Symbol constructor      — ToString(description) from C. Now the coerce-then-compute declaration, with
+ *                                20.4.1.1 step 1's NewTarget test as the leading validation.
+ *
+ * The pattern across both sweeps, worth stating because it recurred four times: the gap was never in the
+ * mechanism, it was in a NARROWING CLAIM written beside a C call — "a data property in every real case", "the
+ * looping traps abort only because the receiver check happens to run before them", "this cannot be a
+ * coerce-then-compute declaration" where it could, and "it IS one" where it could not. Each was checked by
+ * running it, and three of the four were false.
+ *
  * THE THIRD internal method of this family, and the last one still measured only in prose. Every JS_HasProperty
  * is a C-side [[HasProperty]]: a shape-and-prototype walk on an ordinary object, and the page's `has` trap the
  * moment anything on that chain is a Proxy.
