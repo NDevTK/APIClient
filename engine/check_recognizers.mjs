@@ -754,16 +754,22 @@ if (extFromC !== 14) {
  * global Environment Record's operations are the machine's now, and NONE of the global object's own reads is
  * a claim any more — each is an own-property answer on a receiver a DCHECK asserts is not a Proxy. 13 -> 11.
  *
- * The eleven that remain reach only ENGINE-BUILT objects: js_obj_to_desc's own six pairs (its last caller is
+ * 11 -> 10. JS_TryGetPropertyInt64 — the has-then-get pair every array builtin used to walk a sparse source —
+ * had lost its last caller when those builtins became step machines over step_hasidx_run and step_getidx_run, and
+ * the body kept compiling. A superseded body that still compiles is the fallback this file forbids whether or not
+ * anything reaches it, and while it stood the ratchet counted it as a consumer still to convert, which is a
+ * conversion that can never be made because there is nothing to convert. Deleted.
+ *
+ * The ten that remain reach only ENGINE-BUILT objects: js_obj_to_desc's own six pairs (its last caller is
  * the Proxy getOwnPropertyDescriptor trap-result read, so it is reached only from a C-side [[GetOwnProperty]]
  * and goes when those do), a regexp groups record, an import-attributes record. Saying a site is safe is
  * weaker than asserting it.
- * 11 = the call sites, excluding the definition. */
+ * 10 = the call sites, excluding the definition. */
 const hasFromC = (src.match(/JS_HasProperty\(/g) || []).length
   - (src.match(/^int JS_HasProperty\(/gm) || []).length;
-if (hasFromC !== 11) {
-  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 11.`);
-  console.error(hasFromC > 11
+if (hasFromC !== 10) {
+  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 10.`);
+  console.error(hasFromC > 10
     ? `  A new C caller can reach a Proxy's has trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
