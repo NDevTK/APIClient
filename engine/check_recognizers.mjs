@@ -297,22 +297,27 @@ for (const [atom, want] of ITER_READS) {
  * hard one: JSON.stringify's SerializeJSONObject could not adopt the cursor while js_json_to_str was a C
  * recursion, because a resumable walk inside a non-resumable one suspends nothing — so stringify became a step
  * machine in the same diff, and its six OTHER C-driven page-code points (the `toJSON` read and call, the
- * replacer call, LengthOfArrayLike, every element and member read) became requests with it. What is left:
- * for-in's iterator build — the ENUM_ONLY key collection and the SET_ENUM prototype-chain walk under it — and
- * import attributes. Four sites, of which three are live consumers: for-in's own prototype-chain PROBE is the
- * fourth and is already unobservable, because it is skipped for any object whose class overrides
- * [[OwnPropertyKeys]] or [[GetOwnProperty]] — it stays counted so that removing that guard fails here rather
- * than silently. It may only go down from here.
+ * replacer call, LengthOfArrayLike, every element and member read) became requests with it. The fourth was
+ * for-in: its SET_ENUM prototype-chain walk and its [[GetPrototypeOf]] per link are requests now, the whole
+ * collection driven from OP_for_in_start as a step machine.
  *
- * NEITHER can be retired with an assertion instead — the cheap answer, checked rather than assumed. Import
- * attributes take `options.with` straight from the caller, and for-in enumerates whatever the page hands it. */
+ * THREE LEFT, of which exactly ONE is a live consumer — import attributes, which takes `options.with` straight
+ * from the caller. The other two are for-in's FAST PATH, which is a different algorithm rather than a fallback:
+ * it computes the enumeration with no user code at all, and its precondition is that the receiver AND every
+ * link above it is an ordinary object — decided by for_in_is_ordinary before anything is read from any of them.
+ * (That guard used to be applied to each link's PROTOTYPE and never to the receiver, so a Proxy receiver ran
+ * three traps from C and two of them twice; the conversion fixed that at the root.) They stay counted so that
+ * weakening the guard fails here rather than silently. It may only go down from here.
+ *
+ * The live one cannot be retired with an assertion instead — the cheap answer, checked rather than assumed:
+ * import attributes take `options.with` straight from the caller, so it is whatever the page hands over. */
 /* A CALL SITE is the flag word handed to a names walk: it always pairs with JS_GPN_STRING_MASK. Matching that
    pair is what separates the callers from the flag TESTS inside the walk itself. */
 const enumOnlyCallers =
   (src.match(/JS_GPN_STRING_MASK\s*\|\s*JS_GPN_(ENUM_ONLY|SET_ENUM)|JS_GPN_(ENUM_ONLY|SET_ENUM)\s*\|\s*JS_GPN_STRING_MASK/g) || []).length;
-if (enumOnlyCallers !== 4) {
-  console.error(`C own-keys walks asking for enumerability: ${enumOnlyCallers}, expected 4.`);
-  console.error(enumOnlyCallers > 4
+if (enumOnlyCallers !== 3) {
+  console.error(`C own-keys walks asking for enumerability: ${enumOnlyCallers}, expected 3.`);
+  console.error(enumOnlyCallers > 3
     ? `  A new C caller is asking a Proxy's getOwnPropertyDescriptor trap for enumerability from C.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
