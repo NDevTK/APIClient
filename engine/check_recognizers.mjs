@@ -593,17 +593,34 @@ if (extFromC !== 14) {
  * requester that had named a record — latent until a requester asked for a record through a trapless proxy,
  * which this completion is the first to do.
  *
- * The sweep's last two are a DIFFERENT kind of gap, and bigger: the RegExp prototype methods are not GENERIC.
+ * RETRACTED — "the RegExp prototype methods are not GENERIC" was recorded here and is FALSE. The reduction it
+ * named does throw, and throwing is what the spec requires:
  *
- *     "aaa".replace(new Proxy(/a/g, {}), "b")     // TypeError: RegExp object expected
+ *     "aaa".replace(new Proxy(/a/g, {}), "b")     // TypeError, and CORRECTLY so
  *
- * and the same for .match, .search, .split, and for RegExp.prototype[@@replace].call directly. 22.2.6.8/.11/
- * .13/.14 all require only that `rx` be an OBJECT — every value they need comes from Get(rx, "flags"),
- * Get(rx, "lastIndex") and RegExpExec — so a Proxy over a RegExp is a valid receiver and each of these must
- * work. quickjs reads the internal slots instead and rejects anything that is not a real RegExp. Making them
- * generic is spec work rather than a routing conversion, and it is what the sweep's remaining aborts are: the
- * looping traps abort only because the receiver check happens to run before them. A TypedArray slice index
- * coercion is the last item.
+ * 22.2.6.11 step 7 is `ToString(? Get(rx, "flags"))`; 22.2.6.4 `get flags` is generic and its step 4 is
+ * `Get(R, "hasIndices")`; 22.2.6.6 `get hasIndices` throws when R has no [[OriginalFlags]] slot and is not
+ * %RegExp.prototype% — and a Proxy has no such slot. The engine performs exactly that sequence, measured on a
+ * logging trapless proxy: `Symbol(Symbol.replace), flags, hasIndices` and then the TypeError. The methods
+ * themselves are already generic, also measured: a Proxy whose handler answers `flags`/`exec`/`lastIndex` runs
+ * .replace, .match, .matchAll, .search and .split to completion, and `flags.call({})` returns "" after the
+ * eight [[Get]]s in spec order. The entry was written from the error message rather than from the spec, which
+ * is the one way a ledger can be worse than empty. The "TypedArray slice index coercion" item beside it is
+ * stale too: `new Int8Array(8).slice({valueOf(){for(;;){}}})` parks.
+ *
+ * A FRESH sweep over the builtin families found five live aborts, each localised by backtrace:
+ *
+ *   %TypedArray%.prototype.sort  — js_typed_array_sort drives cutils' rqsort with js_TA_cmp_generic calling
+ *                                  JS_Call. A DRIVE-TO-COMPLETION: the sort's state is the C stack, so the
+ *                                  comparator cannot suspend at any depth. Array.prototype.sort is already a
+ *                                  step machine; this is the same conversion, and it is the biggest of the five.
+ *   Date setters                 — set_date_field coerces through __JS_ToFloat64Free from C.
+ *   String.prototype.localeCompare — JS_ToString from C.
+ *   Atomics.store and friends    — JS_ToIntegerFree from C.
+ *   Promise species              — js_new_promise_capability calls JS_CallConstructor from C, so a subclass
+ *                                  constructor reached through Symbol.species runs off the chain.
+ *
+ * The middle three are one mechanism (a C builtin coercing its own argument) and PRIMARGS_DEF is what states it.
  *
  * THE THIRD internal method of this family, and the last one still measured only in prose. Every JS_HasProperty
  * is a C-side [[HasProperty]]: a shape-and-prototype walk on an ordinary object, and the page's `has` trap the
