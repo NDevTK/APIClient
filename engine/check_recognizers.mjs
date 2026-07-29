@@ -225,6 +225,46 @@ if (modeWrites < MODE_REGISTER_WRITES) {
   process.exit(1);
 }
 
+/* THE ITERATOR-PROTOCOL READS. 7.4.4 IteratorComplete and 7.4.5 IteratorValue read `done` and `value` off a
+ * result object a page's own iterator built, and GetIterator/GetIteratorDirect read `next` off the iterator
+ * itself. Every one of those is the page's code — an accessor, a Proxy `get` trap — and every one of them used to
+ * run from C, where a loop inside it preempts in an activation with no flow base.
+ *
+ * They are gone one consumer at a time: the consume machine, the async-from-sync wrapper, the iterator helpers,
+ * the Promise combinators, the for-of and async protocol tails, yield*'s delivery, the two for-of acquires, the
+ * consumer and combinator acquires, `for await`'s wrap, flatMap's inner, the eager terminals, and Iterator.from.
+ * `done` and `value` have reached ZERO C-side reads and must stay there; `next` has ONE — the iterator-helper
+ * FACTORY (`it.map(f)`'s own GetIteratorDirect), which is a C builtin entry rather than a tramp label, so it
+ * needs the factory itself to become a step machine. That is the number this pins, and it may only go down.
+ *
+ * Counted as JS_GetProperty/JS_HasProperty against the atom, which is the shape every one of them had —
+ * EXCLUDING js_obj_to_desc, whose `value` is a property DESCRIPTOR's, not an iterator result's. That one is a
+ * live C-side page-code read too (a Proxy getOwnPropertyDescriptor trap can return a descriptor with an accessor
+ * `value`), but it belongs to ToPropertyDescriptor and converts with that walk, not with this family. Excluding
+ * it by BODY rather than by raising the ceiling is what keeps a re-added iterator-result read visible. */
+const descStart = src.indexOf('static int js_obj_to_desc(');
+if (descStart < 0) {
+  console.error('js_obj_to_desc is gone — remove its exclusion from the iterator-read ratchet.');
+  process.exit(1);
+}
+const descEnd = src.indexOf('\n}\n', descStart);
+const iterSrc = src.slice(0, descStart) + src.slice(descEnd);
+const ITER_READS = [['JS_ATOM_done', 0], ['JS_ATOM_value', 0], ['JS_ATOM_next', 1]];
+for (const [atom, want] of ITER_READS) {
+  const got = (iterSrc.match(new RegExp(`JS_(Get|Has)Property\\(ctx, [A-Za-z_0-9>.\\-]+, ${atom}\\)`, 'g')) || []).length;
+  if (got > want) {
+    console.error(`C-side iterator-protocol reads of ${atom}: ${got} > ceiling ${want}.`);
+    console.error(`  A consumer is performing 7.4.4 / 7.4.5 / GetIterator's read from C again. It is the page's`);
+    console.error(`  code — issue it as a keyed-operation request whose outer continuation is that consumer.`);
+    process.exit(1);
+  }
+  if (got < want) {
+    console.error(`C-side iterator-protocol reads of ${atom}: ${got} < ceiling ${want} — LOWER it in ` +
+                  `engine/check_recognizers.mjs so the gain cannot be given back.`);
+    process.exit(1);
+  }
+}
+
 if (names.size > CEILING) {
   console.error(`recognizer ratchet FAILED: ${names.size} > ceiling ${CEILING}`);
   console.error(`  names: ${[...names].sort().join(' ')}`);
@@ -238,4 +278,5 @@ if (names.size < CEILING) {
   process.exit(1);
 }
 console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} call + ` +
-            `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes`);
+            `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes, ` +
+            `iterator-protocol C reads done/value/next 0/0/1`);
