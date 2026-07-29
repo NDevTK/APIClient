@@ -37,13 +37,15 @@ import { readFileSync } from 'node:fs';
  * requires the open paren, so a declaration cannot be counted in place of a definition.
  *
  * What the three newly-visible ones are, and they are not all alike:
- *   tramp_can_call_agen_create  ROUTING. With gen_create/async/plain it forms tramp_body_entry, the ONE
- *   tramp_can_call_gen_create   body-entry convergence point, whose four arms are four different entry
- *   tramp_can_call_async        ALGORITHMS (plain frame / async frame / generator create / async-generator
- *                               create). Deleting anything would not make TBE_GEN unnecessary, which is this
- *                               file's own test for routing. They belong out of this family by NAME; renaming
- *                               them is not the same as removing a recognizer, so it is not done here in the
- *                               same breath as discovering them.
+ *   the three body-entry ones  ROUTING. With plain they form tramp_body_entry, the ONE body-entry convergence
+ *                               point, whose four arms are four different entry ALGORITHMS (plain frame / async
+ *                               frame / generator create / async-generator create). Deleting anything would not
+ *                               make TBE_GEN unnecessary, which is this file's own test for routing. They are
+ *                               tramp_body_is_plain/_async/_gen/_agen now, out of this family by NAME — done as
+ *                               its own deliberate act, after the measurement, not in the same breath as
+ *                               discovering them. A rename that lowers a ratchet is exactly what this file
+ *                               distrusts, so the claim it rests on is PINNED below rather than asserted: the
+ *                               four are used at six sites and nowhere else. 9 -> 5.
  *   tramp_can_call              ROUTING now, and it was not when this entry was written. It was also a
  *                               recognizer at the TWO promise-job sites, measured rather than argued:
  *                               `Promise.resolve(1).then(loops.bind(null))` aborted with no flow base, because
@@ -111,7 +113,7 @@ import { readFileSync } from 'node:fs';
  * builtin identity in it. Its two declines are spec answers, given by js_call_c_function's iterdrive arm, and
  * a DCHECK there asserts that no THIRD reason can reach it. 7 -> 6.
  */
-const CEILING = 9;              // tramp_can_call* — down with each conversion; up only when the count was WRONG
+const CEILING = 5;              // tramp_can_call* — down with each conversion; up only when the count was WRONG
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
      do_cont_dispatch    every SEQUENCE-shaped call: the operands are in the sequence's own buffer (a step
@@ -243,12 +245,25 @@ for (const [needle, want, what] of strayConstruct) {
    through `ag()` but drove its coroutine to completion through `method.call(o)` (Array.fromAsync) and
    `gen(...spread)` (the arguments-object spread tests). Same defect as the recognizer ban, different axis: one
    callee answering differently depending on how the call was written. The four predicates now live in
-   tramp_body_entry and nowhere else; a re-appearing per-site copy fails here. */
-const bodyPreds = ['tramp_can_call_async', 'tramp_can_call_agen_create'];   /* used ONLY by tramp_body_entry */
-for (const p of bodyPreds) {
+   tramp_body_entry and nowhere else; a re-appearing per-site copy fails here.
+
+   ALL FOUR are pinned now, not two. They used to be spelled tramp_can_call_*, which put them in the recognizer
+   ratchet above — a claim the NAME made and the code did not, since each answers which of four different entry
+   ALGORITHMS a callee has rather than choosing against a legacy body. Renaming them to tramp_body_is_* lowered
+   that ceiling, and a rename that lowers a ratchet is the move this file distrusts most, so the claim it rests
+   on is enforced here: a fifth `if (tramp_body_is_*(x)) goto ...` at any call site — the shape the rename could
+   otherwise have laundered — raises a count and fails. The expected numbers differ per predicate only because
+   two of them carry a forward declaration and `plain` is also asserted on by two DCHECKs. */
+const bodyPreds = [
+  ['tramp_body_is_plain', 5],   /* fwd decl + definition + tramp_body_entry + two eval-closure DCHECKs */
+  ['tramp_body_is_async', 2],   /* definition + tramp_body_entry */
+  ['tramp_body_is_gen',   3],   /* fwd decl + definition + tramp_body_entry */
+  ['tramp_body_is_agen',  2],   /* definition + tramp_body_entry */
+];
+for (const [p, want] of bodyPreds) {
   const uses = (src.match(new RegExp(`${p}\\(`, 'g')) || []).length;
-  if (uses !== 2) {   /* the definition + the single use inside tramp_body_entry */
-    console.error(`body-entry drift: ${p} appears ${uses} times, expected 2 (its definition + tramp_body_entry).`);
+  if (uses !== want) {
+    console.error(`body-entry drift: ${p} appears ${uses} times, expected ${want}.`);
     console.error(`  A call site is asking the body-entry question itself again. Route that shape through`);
     console.error(`  TRAMP_BODY_DISPATCH (or, for an apply-shaped call, the apply-mode vector) instead — a site`);
     console.error(`  declares its OPERAND SHAPE, never which bodies it happens to know about.`);
