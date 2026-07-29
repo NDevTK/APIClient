@@ -363,7 +363,19 @@ if (enumOnlyCallers !== 2) {
  * result answers before IsExtensible is reached, and an extensible target settles the prototype pair without
  * [[GetPrototypeOf]], so neither may run the target's trap for a step the algorithm does not take.
  *
- * What is left is the 15 CONSUMERS. Each one that stops calling JS_GetOwnPropertyInternal (or
+ * The KEYED invariants split by what they need from the target. [[HasProperty]] (10.5.7 step 9) and [[Delete]]
+ * (10.5.10 steps 9-12) need only its attribute BITS and its extensibility, so they are one more machine on the
+ * primitives already here — and `has` was reading the target JSObject's storage bit where step 9.b.ii says
+ * IsExtensible, the SECOND time that exact deviation has turned up, fixed by asking for the internal method.
+ *
+ * [[Get]], [[Set]] and [[DefineOwnProperty]] are NOT done, and the blocker is named: their checks compare the
+ * target descriptor's [[Value]], [[Get]] and [[Set]], which want_flags does not carry. The answer shape that
+ * would carry them is the descriptor OBJECT, and reading three fields back off it would raise the count above.
+ * The way that does not: ONE shared safe-by-construction field read — what js_desc_object_is_enumerable
+ * already is, generalised to take the atom — so the three consumers share a single site and the number stays
+ * where it is. Build that, then the three follow.
+ *
+ * What is left after those is the 15 CONSUMERS. Each one that stops calling JS_GetOwnPropertyInternal (or
  * JS_GetOwnPropertyNamesInternal) on a possibly-Proxy receiver and asks for a request instead drops this count
  * by one, and when it reaches the C hooks' own sites those hooks — and js_obj_to_desc, and the C forms of every
  * invariant above — go with them. Every ROUTED path is done; what remains is reached only from C. */
