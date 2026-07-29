@@ -684,15 +684,21 @@ if (extFromC !== 14) {
  *     resume the request, so that arm needs a continuation of its own first. Until then all three abort by name
  *     at set_array_length, which is the state this file prefers to a quiet C coercion.
  *
- *   20.5.3.4 Error.prototype.toString, in js_error_toString: `Get(O, "name")` and `Get(O, "message")` and the
- *     ToString of each, all four from C.
+ *   FIXED — 20.5.3.4 Error.prototype.toString ran all four of its observable operations from C. Now
+ *     STEPDEF_ERROR_TOSTRING.
  *
- *       Error.prototype.toString.call(new Proxy({}, {get(t,k){ if (k === "name") for(;;){} }}))
+ *   FIXED, BY DELETING THE READ — 20.2.3.5 Function.prototype.toString read `name` off the function, and step 5
+ *     makes the representation of a function with no [[SourceText]] IMPLEMENTATION-DEFINED, so that read was
+ *     never required: the name in it is this engine's choice and JS_GetProperty made the choice the page's code.
+ *     The own data property is the same string for every function that reaches there. Not every C-side read is a
+ *     conversion waiting to be routed — some are gratuitous, and the spec is what says which.
  *
- *   20.2.3.5 Function.prototype.toString, in js_function_toString: it reads off the function object from C, so
- *     a proxied function aborts.
- *
- *       Function.prototype.toString.call(new Proxy(function(){}, {get(){ for(;;){} }}))
+ *   A CONSEQUENCE worth recording, because it will recur with every remaining conversion: making a builtin's
+ *     `toString` a machine turns each HOST-side JS_ToCString on an object into the backstop's abort — three of
+ *     them in run-test262.c alone. That is right rather than unfortunate. JS_ToCString invokes the page's
+ *     `toString`, a C entry has no flow to run it on, and a test runner reporting what went wrong must not
+ *     depend on the code that went wrong. All three build a diagnostic out of PROPERTIES instead. The same will
+ *     be true of any embedder, and the engine names it every time.
  *
  * What did NOT reproduce, recorded so it is not re-probed: RegExp.escape, Uint8Array.fromBase64 and
  * .setFromBase64 reject a non-String at step 1 with no coercion at all, so an object argument is a TypeError
