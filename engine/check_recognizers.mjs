@@ -29,7 +29,35 @@
  */
 import { readFileSync } from 'node:fs';
 
-/* The ceiling counts tramp_can_call_* recognizers. It goes DOWN whenever a conversion deletes a legacy JS_Call-LOOP
+/* 6 -> 9, and UP is right here, for the reason the [[IsExtensible]] count below went up: the number was WRONG.
+ * This matched `^static bool tramp_can_call_...`, so THREE predicates of exactly the shape it exists to count
+ * were invisible because they are spelled `static inline`, and a fourth (gen_create) was counted only because it
+ * happens to carry a non-inline forward declaration. A gate a storage class evades is a gate that flatters
+ * itself — the same sentence this file already had to write about a rename. It now matches either spelling and
+ * requires the open paren, so a declaration cannot be counted in place of a definition.
+ *
+ * What the three newly-visible ones are, and they are not all alike:
+ *   tramp_can_call_agen_create  ROUTING. With gen_create/async/plain it forms tramp_body_entry, the ONE
+ *   tramp_can_call_gen_create   body-entry convergence point, whose four arms are four different entry
+ *   tramp_can_call_async        ALGORITHMS (plain frame / async frame / generator create / async-generator
+ *                               create). Deleting anything would not make TBE_GEN unnecessary, which is this
+ *                               file's own test for routing. They belong out of this family by NAME; renaming
+ *                               them is not the same as removing a recognizer, so it is not done here in the
+ *                               same breath as discovering them.
+ *   tramp_can_call              BOTH. As tramp_body_entry's TBE_PLAIN arm it is routing. At two OTHER sites it
+ *                               is a recognizer with a live legacy fallback, and this is measured, not argued:
+ *
+ *                                   Promise.resolve(1).then(loops.bind(null))
+ *
+ *                               aborts (@WHY loop preempted, no flow base). js_promise_reaction_job asks
+ *                               `tramp_can_call(handler)` and runs a plain bytecode handler as a FLOW; a BOUND,
+ *                               PROXIED, C or step-machine handler falls to the JS_Call below it and drives to
+ *                               completion. PromiseResolveThenableJob asks the same of a thenable's `.then`.
+ *                               "It has no preemptible body" is a claim about the CALLEE KIND — the exact
+ *                               question this file bans a predicate from answering — and the convergence point
+ *                               already answers it for every other caller.
+ *
+ * The ceiling counts tramp_can_call* recognizers. It goes DOWN whenever a conversion deletes a legacy JS_Call-LOOP
  * body (the debt this ratchet exists to retire). It rises for EXACTLY ONE reason: a genuinely-new tramp-native
  * builtin whose semantics REQUIRE a custom CONT kind — a promise-creating builtin that must reject-and-YIELD on an
  * abrupt user callback (return a rejected promise, never raise). That reject-and-yield needs a dedicated
@@ -77,7 +105,7 @@ import { readFileSync } from 'node:fs';
  * builtin identity in it. Its two declines are spec answers, given by js_call_c_function's iterdrive arm, and
  * a DCHECK there asserts that no THIRD reason can reach it. 7 -> 6.
  */
-const CEILING = 6;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
+const CEILING = 9;              // tramp_can_call* — down with each conversion; up only when the count was WRONG
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
      do_cont_dispatch    every SEQUENCE-shaped call: the operands are in the sequence's own buffer (a step
@@ -114,7 +142,7 @@ if (missing.length) {
 }
 
 const names = new Set();
-for (const m of src.matchAll(/^static bool (tramp_can_call_[a-z_0-9]+)/gm)) names.add(m[1]);
+for (const m of src.matchAll(/^static (?:inline )?bool (tramp_can_call[a-z_0-9]*)\(/gm)) names.add(m[1]);
 
 /* The other spellings the ban covers — a uniform predicate asked at a CALL SITE is the same thing wearing a
    different name, so count those too rather than let the shape migrate. */
