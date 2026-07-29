@@ -462,17 +462,21 @@ if (extFromC !== 15) {
  * is what collapsed the reference branch and the OP_with_* branch of 9.1.1.2.6/9.1.1.2.5 into the one
  * algorithm they always were. 14 -> 13.
  *
- * The thirteen that remain are js_obj_to_desc's own six pairs and engine-built objects — a regexp groups
- * record, an import-attributes record — plus the global object's two REMAINING Environment Record operations
- * (JS_DeleteGlobalVar, JS_GetGlobalVarRef), which are the next conversion and are NOT safe by construction:
- * `Object.setPrototypeOf(globalThis, proxy)` puts the page's `has` trap on that walk. Saying a site is safe is
+ * 9.1.1.4.7 DeleteBinding and GetIdentifierReference finished the record: OP_delete_var and OP_make_var_ref
+ * route their HasBinding too, and JS_DeleteGlobalVar and JS_GetGlobalVarRef are deleted. All four of the
+ * global Environment Record's operations are the machine's now, and NONE of the global object's own reads is
+ * a claim any more — each is an own-property answer on a receiver a DCHECK asserts is not a Proxy. 13 -> 11.
+ *
+ * The eleven that remain reach only ENGINE-BUILT objects: js_obj_to_desc's own six pairs (its last caller is
+ * the Proxy getOwnPropertyDescriptor trap-result read, so it is reached only from a C-side [[GetOwnProperty]]
+ * and goes when those do), a regexp groups record, an import-attributes record. Saying a site is safe is
  * weaker than asserting it.
- * 13 = the call sites, excluding the definition. */
+ * 11 = the call sites, excluding the definition. */
 const hasFromC = (src.match(/JS_HasProperty\(/g) || []).length
   - (src.match(/^int JS_HasProperty\(/gm) || []).length;
-if (hasFromC !== 13) {
-  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 13.`);
-  console.error(hasFromC > 13
+if (hasFromC !== 11) {
+  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 11.`);
+  console.error(hasFromC > 11
     ? `  A new C caller can reach a Proxy's has trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
