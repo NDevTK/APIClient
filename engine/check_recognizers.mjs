@@ -56,14 +56,22 @@ import { readFileSync } from 'node:fs';
  *                               neither asks. What is left of tramp_can_call is tramp_body_entry's TBE_PLAIN arm
  *                               and two DCHECKs, which assert rather than select.
  *
- * MEASURED, so the next pass does not re-derive it: tramp_can_call_setmap_consume and tramp_can_call_ta_consume
- * hide no live abort. Every construction shape routes today — `new Map(it)`, `Reflect.construct(Map, [it])`,
- * `class M extends Map {}; new M(it)`, `new (Map.bind(null))(it)`, `new (new Proxy(Map, {}))(it)`, and the same
- * for Set, WeakMap and `new Uint8Array(it)`, each over an iterator whose .next() loops. So their conversion is
- * about the DECLARATION only — a consume cproto for a CONSTRUCTOR, read once at do_construct_dispatch the way
- * JS_CFUNC_ITERDRIVE_DEF is read at the call convergence point — and not about a defect to chase first. The
- * declines that would remain (argc 0, a nullish iterable) are 24.1.1.1 step 2, which yields the empty collection
- * before the adder is read: validation, not an algorithm.
+ * The two CONSUMING CONSTRUCTORS went next, and they were measured first: neither hid a live abort — every
+ * construction shape already routed — so this was a declaration exercise, not a bug hunt, and it is recorded
+ * that way rather than dressed up. They now declare their walk at their registration and the construct
+ * convergence point asks ONE question instead of comparing the callee against two C function addresses in a
+ * chain, where a new consuming constructor was a new LINK rather than a new declaration.
+ *
+ * The declaration is a FIELD on the function record (u.cfunc.consume_sink), not `magic`, and that is forced
+ * rather than chosen: a constructor's magic is already structural — js_map_constructor's carries
+ * MAGIC_SET/MAGIC_WEAK and doubles as a class offset, a TypedArray's IS the class id — and both bodies are also
+ * called straight from C with a raw kind, so a sink cannot ride there. It is not a pointer in JSCFunctionType
+ * either; that union holds function pointers, and data in it is the strict-aliasing violation that segfaults at
+ * -O1. The field costs nothing: the struct is 20 bytes inside a 24-byte union. Base-plus-kind carries the
+ * argument the walk needs, the way ITERCONS_SETOP_BASE and a STEPDEF id already do.
+ *
+ * What each arm still asks is about the ARGUMENT, never the callee: 24.1.1.1 step 2 and 23.2.5.1 step 6.a select
+ * a DIFFERENT algorithm for a nullish or non-object source, one that iterates nothing. 5 -> 3.
  *
  * The ceiling counts tramp_can_call* recognizers. It goes DOWN whenever a conversion deletes a legacy JS_Call-LOOP
  * body (the debt this ratchet exists to retire). It rises for EXACTLY ONE reason: a genuinely-new tramp-native
@@ -113,7 +121,7 @@ import { readFileSync } from 'node:fs';
  * builtin identity in it. Its two declines are spec answers, given by js_call_c_function's iterdrive arm, and
  * a DCHECK there asserts that no THIRD reason can reach it. 7 -> 6.
  */
-const CEILING = 5;              // tramp_can_call* — down with each conversion; up only when the count was WRONG
+const CEILING = 3;              // tramp_can_call* — down with each conversion; up only when the count was WRONG
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
      do_cont_dispatch    every SEQUENCE-shaped call: the operands are in the sequence's own buffer (a step
