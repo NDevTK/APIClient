@@ -45,31 +45,25 @@ import { readFileSync } from 'node:fs';
  * KIND, which is exactly the question a recognizer is banned from answering — the convergence point owns it. The
  * receiver and arity conditions were pure validation and moved into the machine's prologue, js_promise_try is a
  * DFAIL, and what is left asks only WHICH machine, at the one place that asks it. */
-/* NEXT, AND WHAT BLOCKS IT — tramp_can_call_iter_helper. Its legacy body (js_iterator_helper_next) is already a
- * DFAIL for the drive, which this file calls the tell of pure residue. What still lives in it is `.return()`,
- * under the written claim that closing "iterates nothing, so no drive-to-completion". That claim is FALSE and
- * the engine says so today, on ordinary code:
+/* tramp_can_call_iter_helper, and a claim in the entry above it that was WRONG. That entry said the capability
+ * this recognizer waits on — a close of the drive target that reaches the convergence point whatever KIND the
+ * target is — had to be built. It was already built: JSIterClose / CONT_ITER_CLOSE parks 7.4.9 with BOTH of its
+ * operations on the tramp and resumes whichever machine asked, dispatched by outer_kind. The helper simply was
+ * not one of the kinds it resumed. Naming a built mechanism as missing is the same defect as naming an unbuilt
+ * one as safe, so it is corrected here rather than left standing.
  *
- *     var src = { next: () => ({value:1, done:false}),
- *                 return: () => { for (var i=0;i<200;i++); return {done:true}; } };
- *     Iterator.prototype.take.call(src, 5).return(7);      // @WHY loop preempted, no flow base
- *     Iterator.from(src).take(5).return();                 // @WHY step builtin `return` outside dispatch
+ * Two closes moved onto it. do_iter_helper_step's take-limit close asked `is the source a GENERATOR?` and closed
+ * anything else inline with JS_IteratorClose — one more selector picking a C path, and its own comment admitted
+ * the C path crashed. %IteratorHelperPrototype%.return did the same from js_iterator_helper_next under the
+ * written claim that closing "iterates nothing, so no drive-to-completion"; it does, and it is a step machine
+ * now. Neither could land without the other: the helper's close reaches a helper source, whose `return` had to
+ * already be a machine, and that machine closes ITS source through the same parked 7.4.9. Landing them together
+ * also deleted OP_iterator_close's 50-line generator-source special-case, which a step def on `return` makes
+ * unreachable — the convergence point asks that question first.
  *
- * because 7.4.9 IteratorClose is TWO of the page's operations — GetMethod(iterator,"return") and the Call — and
- * JS_IteratorClose performs both from C. A step machine for %IteratorHelperPrototype%.return fixes exactly those
- * two lines (measured: both pass, 100% engaged, DriveToCompletion 0) and makes the 50-line generator-source
- * special-case at OP_iterator_close dead, because a step def on `return` is asked for at the convergence point
- * first. It is NOT landed, because widening that far turns the SAME crash up one level: `x.map(f).filter(g)`
- * gives a helper whose source is a helper, and do_iter_helper_step closes its source with an inline
- * JS_IteratorClose guarded by `tramp_gen_method_magic(it->next, it->obj) == GEN_MAGIC_NEXT` — another selector
- * choosing a C close for everything that is not a generator, whose own comment already admits it crashes.
- *
- * So the capability to build FIRST, by name: a close of the current drive target that goes through the
- * convergence point whatever KIND the target is. `drive_close` is that mechanism for a generator source only —
- * it hands the close to do_generator_tramp as a GEN_MAGIC_RETURN resume — and it needs the generic form: read
- * `return` and CALL it as an ordinary method drive. With that built, the selector at that site deletes, the
- * helper's own `.return()` machine lands, js_iterator_helper_next's last non-DFAIL arm goes, and
- * tramp_can_call_iter_helper has nothing left to choose. Build it in that order; do not narrow instead.
+ * What is left of js_iterator_helper_next is one answer that reaches no page code: an exhausted helper's
+ * {undefined, true}. Build that into do_iter_helper_step, widen the recognizer past `it->done`, and the body is
+ * a bare DFAIL — which this file already calls the state in which a recognizer is pure residue.
  */
 const CEILING = 7;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
