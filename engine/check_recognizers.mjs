@@ -389,12 +389,16 @@ if (enumOnlyCallers !== 2) {
  * header gained the field the DEFINE descriptor shape already models. 11 -> 10.
  *
  * Function.prototype.bind became a step machine (STEPDEF_FUNC_BIND): 20.2.3.2 step 5's HasOwnProperty and steps
- * 6.a and 8's Gets of `length` and `name` are requests, so a Proxy target's traps and an accessor `length` run
- * on the chain. That does not move the count, because the site it stopped reaching is the PUBLIC JS_GetOwnProperty
- * entry, which two callers still have: SetterThatIgnoresPrototypeProperties, spelled twice — once for
- * Iterator.prototype's `constructor` and once for its @@toStringTag. Those are the same three steps in the same
- * order, so they are ONE machine the way hasOwn/hasOwnProperty and lookupGetter/lookupSetter were, and when they
- * move the public entry has no callers at all and the count drops.
+ * 6.a and 8's Gets of `length` and `name` are requests. SetterThatIgnoresPrototypeProperties followed — ONE
+ * machine for both of %Iterator.prototype%'s accessors, the key being the arg — which needed the half of the
+ * accessor declaration that did not exist: JS_CGETSET_STEP_DEF, a SETTER that is a step machine. A setter is as
+ * much the page's entry point as a method is, and until now no accessor could carry a machine at all.
+ *
+ * Between them the public JS_GetOwnProperty entry lost every caller inside the engine, and the count still does
+ * not move, because it has one OUTSIDE it: engine/host/solver/cow.c, at three sites. That is a REAL DEFECT and
+ * the next thing to fix, not an exemption — a COW capture runs during a context SWAP, so a Proxy in the delta
+ * would fire the page's getOwnPropertyDescriptor trap from the scheduler. The capture wants an own-property
+ * read that CANNOT reach a trap, and an assert that it never does.
  *
  * What is left is the 10 CONSUMERS. Of those, SEVEN are not consumers at all and are why this number will not
  * reach zero: two are the routed request entry's OWN in-place answers (JS_CallInternal), where the proxy
