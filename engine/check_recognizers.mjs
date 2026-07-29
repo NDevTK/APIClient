@@ -654,35 +654,51 @@ if (extFromC !== 14) {
  *
  * A THIRD sweep, over OPERATOR and SYNTAX surfaces (destructuring, spread, optional chaining, `in`/`delete`
  * through a proxy chain, private brands, tagged templates, class heritage, labelled break with a proxied
- * `return`), found four. One is fixed and THREE ARE NAMED HERE, each localised by backtrace so the next attempt
- * starts from building rather than from finding:
+ * `return`), found four. All four are fixed — each was NAMED here first, with its backtrace, so the attempt
+ * started from building rather than from finding:
  *
  *   FIXED — `class C extends P` read P.prototype with JS_GetProperty from js_op_define_class. Now
  *           CONT_DEFINE_CLASS, and `prototype` is measurably the ONLY property a class definition reads off its
  *           heritage.
  *
- *   ArraySetLength's two coercions, in set_array_length via JS_ToInt32/JS_ToNumber:
+ *   FIXED — ArraySetLength's two coercions, in set_array_length via JS_ToInt32/JS_ToNumber:
  *
  *       var a = [1,2,3]; a.length = { valueOf() { for(;;){} } }
  *
- *     10.4.2.4 steps 3-4 are ToUint32(V) then ToNumber(V), and BOTH run before anything else — so this is the
- *     AND IT IS NOT the `value_tonum_toprim` shape, which is what an attempt at it established and is the whole
- *     value of writing this down. That idiom coerces V on the tramp and RE-EXECUTES the opcode, so the write
- *     sees a primitive and the C coercion inside it runs nothing. It is right for TypedArraySetElement, which
- *     coerces V ONCE. ArraySetLength coerces it TWICE — steps 3 and 4 are ToUint32(Desc.[[Value]]) and
- *     ToNumber(Desc.[[Value]]), both on the ORIGINAL object — so substituting a primitive collapses two
- *     observable valueOf calls into one:
+ *     10.4.2.4 steps 3-4 are ToUint32(V) then ToNumber(V), BOTH on the ORIGINAL V, which is why
+ *     JS_ToArrayLengthFree converts twice and compares. Now CONT_ARRAY_LEN. Four things this one taught, each
+ *     paid for by a measurement:
  *
- *         var n = 0; [].length = { valueOf() { n++; return 0 } };   // n must be 2
+ *     IT IS NOT the `value_tonum_toprim` shape. That idiom coerces V on the tramp and RE-EXECUTES the opcode, so
+ *     the write sees a primitive and the C coercion inside it runs nothing. It is right for
+ *     TypedArraySetElement, which coerces V ONCE. Substituting a primitive here collapses two observable valueOf
+ *     calls into one — `var n = 0; [].length = { valueOf() { n++; return 0 } }` must leave n === 2 — and a first
+ *     attempt made it 1 and was reverted rather than landed, because a wrong answer is worse than a missing
+ *     capability.
  *
- *     The attempt made it 1 and was reverted rather than landed; a wrong answer is worse than a missing
- *     capability. THE CAPABILITY TO BUILD is a two-step machine over (target, V) performing ToUint32 then
- *     ToNumber as two routed coercions, reached from all three spellings — `a.length = obj` (OP_put_field),
- *     `Reflect.set(a, "length", obj)` (the GP_SET completion) and
- *     `Object.defineProperty(a, "length", {value: obj})` (the GP_DEFINE completion). The last two sit in the
- *     keyed entry's "nothing user-written is involved" arm, which has no way to park across a coercion and
- *     resume the request, so that arm needs a continuation of its own first. Until then all three abort by name
- *     at set_array_length, which is the state this file prefers to a quiet C coercion.
+ *     WHAT THE SEQUENCE PRODUCES IS THE VALIDATED uint32, and the operation is then RE-ISSUED with that in place
+ *     of V — which is literally 10.4.2.4 step 6, so the re-run's own conversions are of a number and invoke
+ *     nothing. That is why the state is small: it is not a re-implementation of the write, it is two coercions
+ *     and a re-issue. The re-issued request BORROWS every operand and the state stays alive as their owner,
+ *     nesting one level exactly as a [[GetOwnProperty]] nests inside its descriptor walk; handing ownership to
+ *     the borrowed registers instead leaked the array and the atom on every length write.
+ *
+ *     THE DCHECK FOUND A FOURTH SPELLING. Three were predicted — `a.length = obj` (OP_put_field),
+ *     `Reflect.set(a, "length", obj)` and `Object.defineProperty(a, "length", {value: obj})` (the keyed entry's
+ *     GP_SET / GP_DEFINE arms). `a[k] = obj` with k === "length" (OP_put_array_el) was not, and only the
+ *     unconditional DCHECK at set_array_length named it, after the other three were routed. A predicted list of
+ *     spellings is not a route; an assert at the destination is.
+ *
+ *     AND THE TWO TEARDOWN WALKS ARE MUTUALLY RECURSIVE, which was only half built. getprop_throw and
+ *     do_getprop_abandon already hand a CONT_TOPRIM_GET link to js_toprim_abandon; a coercion requested BY a
+ *     keyed operation hands the link back, and the first version of the ARRAY_LEN arm freed the sequence and
+ *     dropped its waiter behind a comment claiming "its own waiter is released by whichever teardown owns it".
+ *     Nothing owned it — `[].length = {valueOf(){throw}}` leaked the write's JSOpKeyed, which is a fifth false
+ *     narrowing claim written beside a C call, this time by the same hand as the fix. The return direction has to
+ *     be deferred because only one of the two walks is a function, so it is parked in ctx->pending_gp_unwind and
+ *     drained at the exception label every caller reaches — the same shape as pending_import_cap and
+ *     pending_close_iter, and ONE drain rather than the seven abandon sites an inline unwrap would have needed.
+ *     The inline unwrap at toprim_throw that predated it is deleted.
  *
  *   FIXED — 20.5.3.4 Error.prototype.toString ran all four of its observable operations from C. Now
  *     STEPDEF_ERROR_TOSTRING.
