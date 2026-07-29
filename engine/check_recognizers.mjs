@@ -272,10 +272,17 @@ for (const [atom, want] of ITER_READS) {
  * which needed a capability that did not exist: a keyed request whose OUTER is another keyed OPERATION, so the
  * walk's twelve reads can issue from inside the delivery of the operation they belong to.
  *
- * js_obj_to_desc is what remains, and its only reachable caller is now the C [[GetOwnProperty]] HOOK — the path
- * taken when a consumer reaches a proxy through JS_GetOwnPropertyInternal instead of through a GP_GETOWNPROP
- * request, which JSON.stringify and for-in still do. That is an unrouted CONSUMER, not an unrouted read: routing
- * those two removes the last twelve, and the walk they would then reach already exists.
+ * js_obj_to_desc is what remains, reached through the C [[GetOwnProperty]] HOOK. THAT CLAIM USED TO SAY routing
+ * JSON.stringify and for-in would remove it. Both are routed now and it is still reachable, so the claim was
+ * WRONG and is corrected here rather than quietly left standing:
+ *
+ *     var inner = new Proxy({q:1}, {getOwnPropertyDescriptor(t,k){ <loop>; return Reflect.getOwnPropertyDescriptor(t,k) }});
+ *     Object.getOwnPropertyDescriptor(new Proxy(inner, {getOwnPropertyDescriptor(t,k){...}}), "q")
+ *
+ * aborts today. The consumer IS routed — the outer trap runs on the chain — but 10.5.5 steps 10 and 12 are
+ * `target.[[GetOwnProperty]](P)` and `IsExtensible(target)`, and js_proxy_gopd_pre performs BOTH from C. When
+ * the target is itself a Proxy those are its traps. Every other proxy invariant has the same shape, which is
+ * why the count below is over the whole family and not over this one function.
  *
  * 13 = js_obj_to_desc's twelve (six fields x HasProperty + Get) plus ONE `enumerable` read, shared by both
  * enumerable-key walks through js_desc_object_is_enumerable. That one is safe by construction — every
@@ -328,6 +335,27 @@ if (enumOnlyCallers !== 2) {
   process.exit(1);
 }
 
+/* THE PROXY-TARGET family, named by the finding above and counted so it can only shrink. Every call of
+ * JS_GetOwnPropertyInternal is a C-side [[GetOwnProperty]]: harmless on an ordinary object (a shape lookup),
+ * and the page's `getOwnPropertyDescriptor` trap the moment the receiver is a Proxy. Most of these sites are
+ * a proxy invariant reaching its own TARGET, which is exactly the nested case above.
+ *
+ * Routing one means giving its sequence a phase that ISSUES the read — the machinery exists (JSGopdDesc already
+ * parks an outer operation across twelve nested requests), and what does not exist yet is a request that
+ * answers with a descriptor's FLAGS rather than a descriptor OBJECT: an invariant wants the flags, and reading
+ * them back off a rebuilt object would add six reads to the count above, which may only go down. Build that
+ * first; the rest follow it. 15 = the call sites, excluding the two declarations of the function itself. */
+const gopdFromC =
+  (src.match(/JS_GetOwnPropertyInternal\(/g) || []).length
+  - (src.match(/static int JS_GetOwnPropertyInternal\(/g) || []).length;
+if (gopdFromC !== 15) {
+  console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 15.`);
+  console.error(gopdFromC > 15
+    ? `  A new C caller can reach a Proxy's getOwnPropertyDescriptor trap with no flow base.`
+    : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
+  process.exit(1);
+}
+
 const descReads = (src.match(/JS_(Get|Has)Property\(ctx, desc, /g) || []).length;
 if (descReads !== 13) {
   console.error(`ToPropertyDescriptor C-side reads: ${descReads}, expected 13.`);
@@ -352,4 +380,4 @@ if (names.size < CEILING) {
 console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} call + ` +
             `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes, ` +
             `iterator-protocol C reads done/value/next 0/0/0, ToPropertyDescriptor C reads ${descReads}, ` +
-            `C enum-only key walks ${enumOnlyCallers}`);
+            `C enum-only key walks ${enumOnlyCallers}, C-side [[GetOwnProperty]] ${gopdFromC}`);
