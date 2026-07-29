@@ -340,11 +340,21 @@ if (enumOnlyCallers !== 2) {
  * and the page's `getOwnPropertyDescriptor` trap the moment the receiver is a Proxy. Most of these sites are
  * a proxy invariant reaching its own TARGET, which is exactly the nested case above.
  *
- * Routing one means giving its sequence a phase that ISSUES the read — the machinery exists (JSGopdDesc already
- * parks an outer operation across twelve nested requests), and what does not exist yet is a request that
- * answers with a descriptor's FLAGS rather than a descriptor OBJECT: an invariant wants the flags, and reading
- * them back off a rebuilt object would add six reads to the count above, which may only go down. Build that
- * first; the rest follow it. 15 = the call sites, excluding the two declarations of the function itself. */
+ * The named blocker is BUILT: a GP_GETOWNPROP carries a `want_flags` modifier — the same shape no_throw takes,
+ * one operation with two answer shapes — so a request can be answered with the attribute BITS instead of a
+ * descriptor object, and no invariant has to read six fields back off a record the engine had just built. On
+ * top of it the ROUTED [[GetOwnProperty]] performs 10.5.5 steps 10 and 12 as requests on the target
+ * (JSGopdDesc's GD_TARGET / GD_EXT), so a proxy-of-a-proxy runs the inner trap on the chain.
+ *
+ * This count did not move, and that is honest rather than disappointing: the site it counts is inside
+ * js_proxy_gopd_pre, which the ROUTED path no longer uses at all — it survives for the C [[GetOwnProperty]]
+ * HOOK, which is the unrouted path the other 14 sites reach. The number falls when those consumers route.
+ *
+ * The SIBLING is next and needs no new primitive: 10.5.11 [[OwnPropertyKeys]] reads IsExtensible(target) and
+ * target.[[OwnPropertyKeys]]() from C in js_proxy_ownkeys_check, and GP_ISEXT and GP_OWNKEYS both already
+ * exist — it wants the same phased machine JSGopdDesc now is. Until then a proxy whose TARGET is a proxy with
+ * an `ownKeys` trap aborts, which is the work queue and not a regression. 15 = the call sites, excluding the
+ * two declarations of the function itself. */
 const gopdFromC =
   (src.match(/JS_GetOwnPropertyInternal\(/g) || []).length
   - (src.match(/static int JS_GetOwnPropertyInternal\(/g) || []).length;
@@ -352,6 +362,25 @@ if (gopdFromC !== 15) {
   console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 15.`);
   console.error(gopdFromC > 15
     ? `  A new C caller can reach a Proxy's getOwnPropertyDescriptor trap with no flow base.`
+    : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
+  process.exit(1);
+}
+
+/* The same family measured on the OTHER internal method the invariants reach from C. Every JS_IsExtensible is a
+ * C-side [[IsExtensible]]: a flag read on an ordinary object, and the page's `isExtensible` trap the moment the
+ * receiver is a Proxy — which for a proxy invariant's TARGET is exactly the nested case. The
+ * [[GetOwnProperty]] invariant's is a GP_ISEXT request now; the ones that remain belong to the C hook and to
+ * [[OwnPropertyKeys]]'s check, which is the next conversion.
+ *
+ * Counted over EVERY call rather than over `s->target` spelled that way: the first version of this matched the
+ * literal `ctx, s->target`, and a probe passing a context named anything else walked straight past it. A gate a
+ * rename evades is a gate that flatters itself. 13 = the call sites, excluding the definition. */
+const extFromC = (src.match(/JS_IsExtensible\(/g) || []).length
+  - (src.match(/^int JS_IsExtensible\(/gm) || []).length;
+if (extFromC !== 13) {
+  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 13.`);
+  console.error(extFromC > 13
+    ? `  A new C caller can reach a Proxy's isExtensible trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
 }
@@ -380,4 +409,5 @@ if (names.size < CEILING) {
 console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} call + ` +
             `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes, ` +
             `iterator-protocol C reads done/value/next 0/0/0, ToPropertyDescriptor C reads ${descReads}, ` +
-            `C enum-only key walks ${enumOnlyCallers}, C-side [[GetOwnProperty]] ${gopdFromC}`);
+            `C enum-only key walks ${enumOnlyCallers}, C-side [[GetOwnProperty]] ${gopdFromC}, ` +
+            `C-side [[IsExtensible]] ${extFromC}`);
