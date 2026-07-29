@@ -608,19 +608,37 @@ if (extFromC !== 14) {
  * is the one way a ledger can be worse than empty. The "TypedArray slice index coercion" item beside it is
  * stale too: `new Int8Array(8).slice({valueOf(){for(;;){}}})` parks.
  *
- * A FRESH sweep over the builtin families found five live aborts, each localised by backtrace:
+ * A FRESH sweep over the builtin families found five live aborts. ALL FIVE ARE FIXED:
  *
- *   %TypedArray%.prototype.sort  — js_typed_array_sort drives cutils' rqsort with js_TA_cmp_generic calling
- *                                  JS_Call. A DRIVE-TO-COMPLETION: the sort's state is the C stack, so the
- *                                  comparator cannot suspend at any depth. Array.prototype.sort is already a
- *                                  step machine; this is the same conversion, and it is the biggest of the five.
- *   Date setters                 — set_date_field coerces through __JS_ToFloat64Free from C.
- *   String.prototype.localeCompare — JS_ToString from C.
- *   Atomics.store and friends    — JS_ToIntegerFree from C.
- *   Promise species              — js_new_promise_capability calls JS_CallConstructor from C, so a subclass
- *                                  constructor reached through Symbol.species runs off the chain.
+ *   %TypedArray%.prototype.sort  — drove cutils' rqsort with js_TA_cmp_generic calling JS_Call, so the sort's
+ *                                  state was the C stack and the comparator could not suspend at any depth.
+ *                                  Now STEPDEF_TA_SORT / _TOSORTED, sharing the Array machine's merge — and
+ *                                  snapshot-first, which is what SortIndexedProperties actually says.
+ *   Date setters                 — coerced through __JS_ToFloat64Free from C. Now one machine, because step 2
+ *                                  reads [[DateValue]] BEFORE the coercions and step 7 tests THAT value.
+ *   String.prototype.localeCompare — ToString'd receiver and argument from C. Now STRRECV_LOCALECOMPARE.
+ *   Atomics                      — ToIndex and the value coercions from C. Now one machine, because
+ *                                  ValidateAtomicAccess step 1 reads the LENGTH before step 2's ToIndex.
+ *   Promise species              — js_promise_then ran SpeciesConstructor's two reads and NewPromiseCapability's
+ *                                  Construct from C, and .catch and .finally reached it because both are
+ *                                  spelled as an Invoke of `then`. Now STEPDEF_PROMISE_THEN.
  *
- * The middle three are one mechanism (a C builtin coercing its own argument) and PRIMARGS_DEF is what states it.
+ * What the conversions found that the sweep could not see, each measured rather than argued:
+ *
+ *   - test262.conf's only trailing comment was on the `Atomics` line and only a LINE-INITIAL '#' was treated as
+ *     one, so the feature was skipped for every compiler and 283 tests never ran. The corpus is 43222 now.
+ *   - `[1,2,3,4].sort(() => NaN)` came out REVERSED: SortCompare step 3.b makes a NaN v a +0 and the merge
+ *     asked `v <= 0`, which is false for NaN.
+ *   - `new Date(0).setUTCHours(Infinity)` returned NaN and left the Date VALID: one flag stood for both "the
+ *     stored time value is NaN" (return, write nothing) and "an argument is non-finite" (write NaN).
+ *   - `Set(O,P,V,true)` reported SUCCESS when a Proxy receiver's `defineProperty` refused.
+ *   - `Math.atan2(Symbol(), {valueOf(){throw x}})` ran that valueOf and reported ITS throw: splitting
+ *     ToPrimitive from the narrowing put every later argument's coercion before the Symbol's TypeError.
+ *   - Atomics was missing ValidateTypedArray step 4 (a ~write~ mode rejects an immutable buffer) and 25.4.15
+ *     step 5 (notify on a non-shared buffer returns +0).
+ *   - Four `JS_Invoke(promise, "then")` sites were AWAITs — PerformPromiseThen on an engine-built promise, never
+ *     Promise.prototype.then — so the DFAILs recording "hand its Invoke out" are discharged by there being no
+ *     Invoke. The one genuine Invoke left is 27.2.5.3 step 6's, inside .finally's reaction closure.
  *
  * THE THIRD internal method of this family, and the last one still measured only in prose. Every JS_HasProperty
  * is a C-side [[HasProperty]]: a shape-and-prototype walk on an ordinary object, and the page's `has` trap the
