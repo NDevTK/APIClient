@@ -652,7 +652,53 @@ if (extFromC !== 14) {
  *   the Symbol constructor      — ToString(description) from C. Now the coerce-then-compute declaration, with
  *                                20.4.1.1 step 1's NewTarget test as the leading validation.
  *
- * The pattern across both sweeps, worth stating because it recurred four times: the gap was never in the
+ * A THIRD sweep, over OPERATOR and SYNTAX surfaces (destructuring, spread, optional chaining, `in`/`delete`
+ * through a proxy chain, private brands, tagged templates, class heritage, labelled break with a proxied
+ * `return`), found four. One is fixed and THREE ARE NAMED HERE, each localised by backtrace so the next attempt
+ * starts from building rather than from finding:
+ *
+ *   FIXED — `class C extends P` read P.prototype with JS_GetProperty from js_op_define_class. Now
+ *           CONT_DEFINE_CLASS, and `prototype` is measurably the ONLY property a class definition reads off its
+ *           heritage.
+ *
+ *   ArraySetLength's two coercions, in set_array_length via JS_ToInt32/JS_ToNumber:
+ *
+ *       var a = [1,2,3]; a.length = { valueOf() { for(;;){} } }
+ *
+ *     10.4.2.4 steps 3-4 are ToUint32(V) then ToNumber(V), and BOTH run before anything else — so this is the
+ *     AND IT IS NOT the `value_tonum_toprim` shape, which is what an attempt at it established and is the whole
+ *     value of writing this down. That idiom coerces V on the tramp and RE-EXECUTES the opcode, so the write
+ *     sees a primitive and the C coercion inside it runs nothing. It is right for TypedArraySetElement, which
+ *     coerces V ONCE. ArraySetLength coerces it TWICE — steps 3 and 4 are ToUint32(Desc.[[Value]]) and
+ *     ToNumber(Desc.[[Value]]), both on the ORIGINAL object — so substituting a primitive collapses two
+ *     observable valueOf calls into one:
+ *
+ *         var n = 0; [].length = { valueOf() { n++; return 0 } };   // n must be 2
+ *
+ *     The attempt made it 1 and was reverted rather than landed; a wrong answer is worse than a missing
+ *     capability. THE CAPABILITY TO BUILD is a two-step machine over (target, V) performing ToUint32 then
+ *     ToNumber as two routed coercions, reached from all three spellings — `a.length = obj` (OP_put_field),
+ *     `Reflect.set(a, "length", obj)` (the GP_SET completion) and
+ *     `Object.defineProperty(a, "length", {value: obj})` (the GP_DEFINE completion). The last two sit in the
+ *     keyed entry's "nothing user-written is involved" arm, which has no way to park across a coercion and
+ *     resume the request, so that arm needs a continuation of its own first. Until then all three abort by name
+ *     at set_array_length, which is the state this file prefers to a quiet C coercion.
+ *
+ *   20.5.3.4 Error.prototype.toString, in js_error_toString: `Get(O, "name")` and `Get(O, "message")` and the
+ *     ToString of each, all four from C.
+ *
+ *       Error.prototype.toString.call(new Proxy({}, {get(t,k){ if (k === "name") for(;;){} }}))
+ *
+ *   20.2.3.5 Function.prototype.toString, in js_function_toString: it reads off the function object from C, so
+ *     a proxied function aborts.
+ *
+ *       Function.prototype.toString.call(new Proxy(function(){}, {get(){ for(;;){} }}))
+ *
+ * What did NOT reproduce, recorded so it is not re-probed: RegExp.escape, Uint8Array.fromBase64 and
+ * .setFromBase64 reject a non-String at step 1 with no coercion at all, so an object argument is a TypeError
+ * rather than a C-side ToString.
+ *
+ * The pattern across the sweeps, worth stating because it recurred four times: the gap was never in the
  * mechanism, it was in a NARROWING CLAIM written beside a C call — "a data property in every real case", "the
  * looping traps abort only because the receiver check happens to run before them", "this cannot be a
  * coerce-then-compute declaration" where it could, and "it IS one" where it could not. Each was checked by
