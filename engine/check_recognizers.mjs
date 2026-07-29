@@ -66,17 +66,18 @@ import { readFileSync } from 'node:fs';
  * to keep existing for, whether or not any page code is in it — that is why answering it in the drive is the
  * removal and declining it was not.
  *
- * What the recognizer still asks is the IDENTITY of the callee — the banned part — plus `it->executing`, which
- * is not: it is the one state in which a drive cannot BEGIN (27.1.4's GeneratorValidate), and the drive cannot
- * answer it because entry is what sets the flag. So the split is now clean, and the identity half goes the way
- * every other one has: `.next` DECLARES itself at its definition, the way JS_CFUNC_CONSUME_DEF and
- * JS_CFUNC_STEP_DEF do, and the convergence point reads the declaration instead of comparing a pointer. The
- * helper drive needs a cproto of its own for that (its delivery has modes — ITH_DIRECT / ITH_FOROF /
- * ITH_ITERNEXT / ITH_CONSUME — that a step machine's push-the-result does not express). With it declared,
- * tramp_can_call_iter_helper becomes a receiver precondition with no builtin identity in it and this ceiling
- * drops to 6.
+ * Then the identity half went the way every other one has. `.next` DECLARES itself — JS_CFUNC_ITERDRIVE_DEF,
+ * cproto JS_CFUNC_iterdrive, no function pointer — and the convergence point reads the declaration instead of
+ * comparing against js_iterator_helper_next's address. The drive needed a cproto of its own rather than
+ * JS_CFUNC_step because its DELIVERY has modes (ITH_DIRECT / ITH_FOROF / ITH_ITERNEXT / ITH_CONSUME) that a
+ * step machine's push-the-result cannot express.
+ *
+ * js_iterator_helper_next is DELETED, and what is left is not a recognizer: iter_helper_drive_ready asks only
+ * whether a drive can BEGIN on this RECEIVER — 27.1.4's internal slot, and not-already-driving — with no
+ * builtin identity in it. Its two declines are spec answers, given by js_call_c_function's iterdrive arm, and
+ * a DCHECK there asserts that no THIRD reason can reach it. 7 -> 6.
  */
-const CEILING = 7;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
+const CEILING = 6;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
      do_cont_dispatch    every SEQUENCE-shaped call: the operands are in the sequence's own buffer (a step
