@@ -189,6 +189,39 @@ for (const p of bodyPreds) {
   }
 }
 
+/* PER-CALL-SITE MODE REGISTERS — the same defect on a third axis, and the one this ratchet did NOT catch.
+ * A coroutine driver needs to know which DELIVERY it owes (for-of pair, iternext replace, direct push). That was
+ * carried by a register the CALL SITE wrote on its way to the driver — and a call site can only write it if it
+ * RECOGNIZED the callee itself, so every register write sits behind a per-site copy of the driver question.
+ * The consequence is not an abort: a spelling the copy misses (a bound `next`, a proxied one, a Proxy over the
+ * iterator) still reaches the driver through do_generic_callee, which resolves it correctly — but with the
+ * register unset, so the driver delivers in the WRONG MODE. `for (x of {next: g.next.bind(g), …})` produced an
+ * EMPTY loop, silently. A silent wrong answer is worse than the abort a missing route usually gives.
+ *
+ * The fix is uniform and removes the register with the copy: the mode is the CONTINUATION KIND the call already
+ * carries (CONT_FOROF_NEXT / CONT_ITER_NEXT_OP), read at the driver. tramp_gen_forof went that way first and its
+ * OP_for_of_next recognizer is deleted. The count is the number of NON-DEFAULT writes still standing; it may
+ * only go down.
+ *
+ * 5 remaining: tramp_ith_mode at OP_for_of_next and OP_iterator_next (the Iterator Helper drive — its missed
+ * spellings hit js_iterator_helper_next's DFAIL rather than emptying, but that is luck, not design), and
+ * tramp_agen_shape at OP_iterator_close, OP_iterator_next and do_itercall_have_method. */
+const MODE_REGISTER_WRITES = 5;
+const modeWrites =
+  (src.match(/tramp_ith_mode = ITH_(FOROF|ITERNEXT)/g) || []).length +
+  (src.match(/tramp_agen_shape = AGEN_SHAPE_(CLOSE|ITERNEXT|ITERCALL)/g) || []).length;
+if (modeWrites > MODE_REGISTER_WRITES) {
+  console.error(`per-call-site mode registers: ${modeWrites} > ceiling ${MODE_REGISTER_WRITES}.`);
+  console.error(`  A call site is telling a coroutine driver which delivery it owes again. Derive it from the`);
+  console.error(`  CONTINUATION KIND at the driver and delete the recognizer that made the write possible.`);
+  process.exit(1);
+}
+if (modeWrites < MODE_REGISTER_WRITES) {
+  console.error(`per-call-site mode registers: ${modeWrites} < ceiling ${MODE_REGISTER_WRITES} — LOWER it in ` +
+                `engine/check_recognizers.mjs so the gain cannot be given back.`);
+  process.exit(1);
+}
+
 if (names.size > CEILING) {
   console.error(`recognizer ratchet FAILED: ${names.size} > ceiling ${CEILING}`);
   console.error(`  names: ${[...names].sort().join(' ')}`);
@@ -202,4 +235,4 @@ if (names.size < CEILING) {
   process.exit(1);
 }
 console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} call + ` +
-            `${constructSitePredicates} construct convergence point`);
+            `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes`);
