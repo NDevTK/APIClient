@@ -368,23 +368,27 @@ if (enumOnlyCallers !== 2) {
  * primitives already here — and `has` was reading the target JSObject's storage bit where step 9.b.ii says
  * IsExtensible, the SECOND time that exact deviation has turned up, fixed by asking for the internal method.
  *
- * [[Get]], [[Set]] and [[DefineOwnProperty]] are NOT done, and the blocker is named: their checks compare the
- * target descriptor's [[Value]], [[Get]] and [[Set]], which want_flags does not carry. The answer shape that
- * would carry them is the descriptor OBJECT, and reading three fields back off it would raise the count above.
- * The way that does not: ONE shared safe-by-construction field read — what js_desc_object_is_enumerable
- * already is, generalised to take the atom — so the three consumers share a single site and the number stays
- * where it is. Build that, then the three follow.
+ * [[Get]], [[Set]] and [[DefineOwnProperty]] followed, and the blocker named for them was solved a BETTER way
+ * than the one named. Reading the fields back off a rebuilt descriptor OBJECT was the plan; what the file's own
+ * reasoning about the CAPABILITY request says instead is that a request may answer with a RECORD — "packing
+ * them into the step's single result would make every consumer unpack a tuple the engine had just built". So
+ * want_flags is DELETED and a [[GetOwnProperty]] request names a JSDescFacts to answer into, carrying the flags
+ * AND the [[Value]] and the accessors. No descriptor object is built for a consumer to take apart, and the
+ * ToPropertyDescriptor count above did not have to move at all.
  *
- * What is left after those is the 15 CONSUMERS. Each one that stops calling JS_GetOwnPropertyInternal (or
+ * That also collapsed three C-side reads into one: the three invariants share js_proxy_facts_from_c, the single
+ * unrouted read the C hooks reach. 15 -> 13.
+ *
+ * What is left is the 13 CONSUMERS. Each one that stops calling JS_GetOwnPropertyInternal (or
  * JS_GetOwnPropertyNamesInternal) on a possibly-Proxy receiver and asks for a request instead drops this count
  * by one, and when it reaches the C hooks' own sites those hooks — and js_obj_to_desc, and the C forms of every
  * invariant above — go with them. Every ROUTED path is done; what remains is reached only from C. */
 const gopdFromC =
   (src.match(/JS_GetOwnPropertyInternal\(/g) || []).length
   - (src.match(/static int JS_GetOwnPropertyInternal\(/g) || []).length;
-if (gopdFromC !== 15) {
-  console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 15.`);
-  console.error(gopdFromC > 15
+if (gopdFromC !== 13) {
+  console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 13.`);
+  console.error(gopdFromC > 13
     ? `  A new C caller can reach a Proxy's getOwnPropertyDescriptor trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
@@ -398,12 +402,20 @@ if (gopdFromC !== 15) {
  *
  * Counted over EVERY call rather than over `s->target` spelled that way: the first version of this matched the
  * literal `ctx, s->target`, and a probe passing a context named anything else walked straight past it. A gate a
- * rename evades is a gate that flatters itself. 13 = the call sites, excluding the definition. */
+ * rename evades is a gate that flatters itself.
+ *
+ * 13 -> 14, and UP is right here. [[DefineOwnProperty]]'s C invariant read `p->extensible` — the target
+ * JSObject's storage bit — where 10.5.6 step 16.a says IsExtensible, so for a Proxy target it consulted the
+ * proxy's own flag instead of its answer. Fixing that turns a read this gate could not see into a call it can.
+ * The number moved up because it was WRONG, not because ground was given, exactly as the enum-only count did.
+ * (Third instance of that deviation; 10.5.5 step 11.c and 10.5.7 step 9.b.ii were the first two. Every
+ * remaining `p->extensible` standing in for an internal method deserves the same suspicion.)
+ * 14 = the call sites, excluding the definition. */
 const extFromC = (src.match(/JS_IsExtensible\(/g) || []).length
   - (src.match(/^int JS_IsExtensible\(/gm) || []).length;
-if (extFromC !== 13) {
-  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 13.`);
-  console.error(extFromC > 13
+if (extFromC !== 14) {
+  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 14.`);
+  console.error(extFromC > 14
     ? `  A new C caller can reach a Proxy's isExtensible trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
