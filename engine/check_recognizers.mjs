@@ -61,9 +61,20 @@ import { readFileSync } from 'node:fs';
  * also deleted OP_iterator_close's 50-line generator-source special-case, which a step def on `return` makes
  * unreachable — the convergence point asks that question first.
  *
- * What is left of js_iterator_helper_next is one answer that reaches no page code: an exhausted helper's
- * {undefined, true}. Build that into do_iter_helper_step, widen the recognizer past `it->done`, and the body is
- * a bare DFAIL — which this file already calls the state in which a recognizer is pure residue.
+ * The exhausted helper's {undefined, true} moved into the drive next, so `it->done` and the KIND LIST are gone
+ * from the recognizer. A case a recognizer hands to the other implementation is a case that implementation has
+ * to keep existing for, whether or not any page code is in it — that is why answering it in the drive is the
+ * removal and declining it was not.
+ *
+ * What the recognizer still asks is the IDENTITY of the callee — the banned part — plus `it->executing`, which
+ * is not: it is the one state in which a drive cannot BEGIN (27.1.4's GeneratorValidate), and the drive cannot
+ * answer it because entry is what sets the flag. So the split is now clean, and the identity half goes the way
+ * every other one has: `.next` DECLARES itself at its definition, the way JS_CFUNC_CONSUME_DEF and
+ * JS_CFUNC_STEP_DEF do, and the convergence point reads the declaration instead of comparing a pointer. The
+ * helper drive needs a cproto of its own for that (its delivery has modes — ITH_DIRECT / ITH_FOROF /
+ * ITH_ITERNEXT / ITH_CONSUME — that a step machine's push-the-result does not express). With it declared,
+ * tramp_can_call_iter_helper becomes a receiver precondition with no builtin identity in it and this ceiling
+ * drops to 6.
  */
 const CEILING = 7;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
