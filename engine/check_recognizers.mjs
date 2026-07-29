@@ -550,12 +550,20 @@ if (gopdFromC !== 10) {
  * that suspicion found a FOURTH straight away, and it was the same bug half-fixed: 10.5.7 step 9.b.ii had been
  * corrected on the ROUTED path when it became a machine, and left standing in js_proxy_has_invariant, which is
  * the C hook's half. Routing one path is not fixing the check — both halves are the check.
- * 15 = the call sites, excluding the definition. */
+ * Object.seal / freeze / isSealed / isFrozen became ONE step machine next (7.3.15 SetIntegrityLevel and
+ * 7.3.16 TestIntegrityLevel are the same [[OwnPropertyKeys]] walk with a [[GetOwnProperty]] per key, differing
+ * in what they open with and do per key). They ran FOUR kinds of the page's operations from C, so
+ * `Object.freeze(new Proxy(o, {ownKeys(){for(;;){}}}))` aborted — as did all four spellings. TestIntegrityLevel
+ * also asks IsExtensible where the spec states it, step 1, so an extensible Proxy no longer sees an ownKeys
+ * trap and a gopd per key that 7.3.16 never performs. The superseded bodies are deleted, and with them the
+ * unused public JS_SealObject / JS_FreezeObject, which ran those same traps from C for any embedder that called
+ * them. 15 -> 14.
+ * 14 = the call sites, excluding the definition. */
 const extFromC = (src.match(/JS_IsExtensible\(/g) || []).length
   - (src.match(/^int JS_IsExtensible\(/gm) || []).length;
-if (extFromC !== 15) {
-  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 15.`);
-  console.error(extFromC > 15
+if (extFromC !== 14) {
+  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 14.`);
+  console.error(extFromC > 14
     ? `  A new C caller can reach a Proxy's isExtensible trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
