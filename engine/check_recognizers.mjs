@@ -439,6 +439,27 @@ if (extFromC !== 15) {
   process.exit(1);
 }
 
+/* THE THIRD internal method of this family, and the last one still measured only in prose. Every JS_HasProperty
+ * is a C-side [[HasProperty]]: a shape-and-prototype walk on an ordinary object, and the page's `has` trap the
+ * moment anything on that chain is a Proxy.
+ *
+ * The live consumer is the OBJECT ENVIRONMENT RECORD — `with`. 9.1.1.2.1 HasBinding step 2 is a request now, so
+ * an unresolved reference falls through on the chain; what remains inside the FOUND path is @@unscopables' two
+ * reads, GetBindingValue/SetMutableBinding's SECOND HasProperty, and the Get/Set/Delete itself, which is why
+ * `with (proxyThatHas) { x }` still aborts by name. Twelve of the nineteen are js_obj_to_desc's own six pairs
+ * and engine-built objects (a regexp groups record, an import-attributes record, the global object, which no
+ * page can replace with a Proxy); those are safe by construction and several already say so.
+ * 19 = the call sites, excluding the definition. */
+const hasFromC = (src.match(/JS_HasProperty\(/g) || []).length
+  - (src.match(/^int JS_HasProperty\(/gm) || []).length;
+if (hasFromC !== 19) {
+  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 19.`);
+  console.error(hasFromC > 19
+    ? `  A new C caller can reach a Proxy's has trap with no flow base.`
+    : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
+  process.exit(1);
+}
+
 const descReads = (src.match(/JS_(Get|Has)Property\(ctx, desc, /g) || []).length;
 if (descReads !== 13) {
   console.error(`ToPropertyDescriptor C-side reads: ${descReads}, expected 13.`);
@@ -464,4 +485,4 @@ console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${call
             `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes, ` +
             `iterator-protocol C reads done/value/next 0/0/0, ToPropertyDescriptor C reads ${descReads}, ` +
             `C enum-only key walks ${enumOnlyCallers}, C-side [[GetOwnProperty]] ${gopdFromC}, ` +
-            `C-side [[IsExtensible]] ${extFromC}`);
+            `C-side [[IsExtensible]] ${extFromC}, C-side [[HasProperty]] ${hasFromC}`);
