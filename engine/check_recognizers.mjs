@@ -569,7 +569,39 @@ if (extFromC !== 14) {
   process.exit(1);
 }
 
-/* THE THIRD internal method of this family, and the last one still measured only in prose. Every JS_HasProperty
+/* NEXT, MEASURED AND LOCALISED — the [[Set]] RECEIVER path. A sweep of 36 operations against looping Proxy
+ * traps found ten live aborts on ordinary code; six are fixed above and FOUR share one root:
+ *
+ *     Reflect.set({a: 1}, "a", 2, new Proxy({}, {getOwnPropertyDescriptor(){for(;;){}}}))
+ *
+ * OrdinarySetWithOwnDescriptor steps 3.b and 3.e are `Receiver.[[GetOwnProperty]]` and
+ * `Receiver.[[DefineOwnProperty]]`, and JS_SetPropertyInternal2 runs both from C at its tail (the
+ * JS_GetOwnPropertyFlagsInternal / JS_DefineProperty pair after `p != JS_VALUE_GET_OBJ(obj)`). The routed GP_SET
+ * request reaches that tail for the ORDINARY set, so the proxy `set` TRAP routes while the receiver completion
+ * does not.
+ *
+ * That single tail is why Array.prototype.reverse / push / splice / copyWithin abort on a Proxy: their Set goes
+ * through the proxy's default `set`, which forwards with the proxy as RECEIVER, and steps 3.b-3.e then run its
+ * traps from C. Measured on reverse: `get:length, has:0, get:0, has:2, get:2, set:0, getOwnPropertyDescriptor:0,
+ * defineProperty:0, ...` — the last two are the receiver completion, not reverse's own algorithm.
+ *
+ * The conversion is a continuation on the keyed entry: when the receiver differs from the object AND is exotic,
+ * the ordinary set issues GP_GETOWNPROP on the receiver and then GP_DEFINE, instead of finishing in C. It is
+ * localised but it is the hottest path in the interpreter, so it wants its own diff.
+ *
+ * The sweep's last two are a DIFFERENT kind of gap, and bigger: the RegExp prototype methods are not GENERIC.
+ *
+ *     "aaa".replace(new Proxy(/a/g, {}), "b")     // TypeError: RegExp object expected
+ *
+ * and the same for .match, .search, .split, and for RegExp.prototype[@@replace].call directly. 22.2.6.8/.11/
+ * .13/.14 all require only that `rx` be an OBJECT — every value they need comes from Get(rx, "flags"),
+ * Get(rx, "lastIndex") and RegExpExec — so a Proxy over a RegExp is a valid receiver and each of these must
+ * work. quickjs reads the internal slots instead and rejects anything that is not a real RegExp. Making them
+ * generic is spec work rather than a routing conversion, and it is what the sweep's remaining aborts are: the
+ * looping traps abort only because the receiver check happens to run before them. A TypedArray slice index
+ * coercion is the last item.
+ *
+ * THE THIRD internal method of this family, and the last one still measured only in prose. Every JS_HasProperty
  * is a C-side [[HasProperty]]: a shape-and-prototype walk on an ordinary object, and the page's `has` trap the
  * moment anything on that chain is a Proxy.
  *
