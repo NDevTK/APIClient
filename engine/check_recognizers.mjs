@@ -350,11 +350,16 @@ if (enumOnlyCallers !== 2) {
  * js_proxy_gopd_pre, which the ROUTED path no longer uses at all — it survives for the C [[GetOwnProperty]]
  * HOOK, which is the unrouted path the other 14 sites reach. The number falls when those consumers route.
  *
- * The SIBLING is next and needs no new primitive: 10.5.11 [[OwnPropertyKeys]] reads IsExtensible(target) and
- * target.[[OwnPropertyKeys]]() from C in js_proxy_ownkeys_check, and GP_ISEXT and GP_OWNKEYS both already
- * exist — it wants the same phased machine JSGopdDesc now is. Until then a proxy whose TARGET is a proxy with
- * an `ownKeys` trap aborts, which is the work queue and not a regression. 15 = the call sites, excluding the
- * two declarations of the function itself. */
+ * The SIBLING is DONE too, out of the same primitives: 10.5.11's check is JSOwnKeysChk, a phased machine that
+ * issues CreateListFromArrayLike's reads on the object the trap returned and then IsExtensible,
+ * [[OwnPropertyKeys]] and one want_flags [[GetOwnProperty]] per key on the TARGET — six C-driven operations
+ * that are six requests. js_proxy_ownkeys_result went with it; js_proxy_ownkeys_check survives ONLY for the C
+ * hook, which is why these numbers still do not move. 15 = the call sites, excluding the two declarations of
+ * the function itself.
+ *
+ * What is left is the 15 CONSUMERS. Each one that stops calling JS_GetOwnPropertyInternal (or
+ * JS_GetOwnPropertyNamesInternal) on a possibly-Proxy receiver and asks for a request instead drops this count
+ * by one, and when it reaches the C hook's own sites the hook and js_obj_to_desc go with them. */
 const gopdFromC =
   (src.match(/JS_GetOwnPropertyInternal\(/g) || []).length
   - (src.match(/static int JS_GetOwnPropertyInternal\(/g) || []).length;
