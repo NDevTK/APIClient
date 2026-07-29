@@ -443,18 +443,20 @@ if (extFromC !== 15) {
  * is a C-side [[HasProperty]]: a shape-and-prototype walk on an ordinary object, and the page's `has` trap the
  * moment anything on that chain is a Proxy.
  *
- * The live consumer is the OBJECT ENVIRONMENT RECORD — `with`. 9.1.1.2.1 HasBinding step 2 is a request now, so
- * an unresolved reference falls through on the chain; what remains inside the FOUND path is @@unscopables' two
- * reads, GetBindingValue/SetMutableBinding's SECOND HasProperty, and the Get/Set/Delete itself, which is why
- * `with (proxyThatHas) { x }` still aborts by name. Twelve of the nineteen are js_obj_to_desc's own six pairs
- * and engine-built objects (a regexp groups record, an import-attributes record, the global object, which no
- * page can replace with a Proxy); those are safe by construction and several already say so.
- * 19 = the call sites, excluding the definition. */
+ * The live consumer was the OBJECT ENVIRONMENT RECORD — `with` — and it is DONE. HasBinding step 2,
+ * @@unscopables' two reads, GetBindingValue/SetMutableBinding's SECOND HasProperty and the access itself are
+ * all requests, across three opcode groups that share one record: the OP_with_* family and the
+ * OP_get_ref_value / OP_put_ref_value pair a reference is finished by. 19 -> 15.
+ *
+ * The fifteen that remain are js_obj_to_desc's own six pairs and engine-built objects — a regexp groups record,
+ * an import-attributes record, the global object, which no page can replace with a Proxy. Those are safe by
+ * construction; several already say so, and saying it is weaker than asserting it.
+ * 15 = the call sites, excluding the definition. */
 const hasFromC = (src.match(/JS_HasProperty\(/g) || []).length
   - (src.match(/^int JS_HasProperty\(/gm) || []).length;
-if (hasFromC !== 19) {
-  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 19.`);
-  console.error(hasFromC > 19
+if (hasFromC !== 15) {
+  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 15.`);
+  console.error(hasFromC > 15
     ? `  A new C caller can reach a Proxy's has trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
