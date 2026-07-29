@@ -44,18 +44,15 @@ import { readFileSync } from 'node:fs';
  *                               file's own test for routing. They belong out of this family by NAME; renaming
  *                               them is not the same as removing a recognizer, so it is not done here in the
  *                               same breath as discovering them.
- *   tramp_can_call              BOTH. As tramp_body_entry's TBE_PLAIN arm it is routing. At two OTHER sites it
- *                               is a recognizer with a live legacy fallback, and this is measured, not argued:
- *
- *                                   Promise.resolve(1).then(loops.bind(null))
- *
- *                               aborts (@WHY loop preempted, no flow base). js_promise_reaction_job asks
- *                               `tramp_can_call(handler)` and runs a plain bytecode handler as a FLOW; a BOUND,
- *                               PROXIED, C or step-machine handler falls to the JS_Call below it and drives to
- *                               completion. PromiseResolveThenableJob asks the same of a thenable's `.then`.
- *                               "It has no preemptible body" is a claim about the CALLEE KIND — the exact
- *                               question this file bans a predicate from answering — and the convergence point
- *                               already answers it for every other caller.
+ *   tramp_can_call              ROUTING now, and it was not when this entry was written. It was also a
+ *                               recognizer at the TWO promise-job sites, measured rather than argued:
+ *                               `Promise.resolve(1).then(loops.bind(null))` aborted with no flow base, because
+ *                               js_promise_reaction_job ran a plain bytecode handler as a flow and dropped a
+ *                               BOUND, proxied, C or step-machine one into the JS_Call beneath it;
+ *                               PromiseResolveThenableJob asked the same of a thenable's `.then`. Both are one
+ *                               CALL-ROOT flow now, whose base dispatches through the convergence point, so
+ *                               neither asks. What is left of tramp_can_call is tramp_body_entry's TBE_PLAIN arm
+ *                               and two DCHECKs, which assert rather than select.
  *
  * The ceiling counts tramp_can_call* recognizers. It goes DOWN whenever a conversion deletes a legacy JS_Call-LOOP
  * body (the debt this ratchet exists to retire). It rises for EXACTLY ONE reason: a genuinely-new tramp-native
