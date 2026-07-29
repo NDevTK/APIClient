@@ -301,23 +301,28 @@ for (const [atom, want] of ITER_READS) {
  * for-in: its SET_ENUM prototype-chain walk and its [[GetPrototypeOf]] per link are requests now, the whole
  * collection driven from OP_for_in_start as a step machine.
  *
- * THREE LEFT, of which exactly ONE is a live consumer — import attributes, which takes `options.with` straight
- * from the caller. The other two are for-in's FAST PATH, which is a different algorithm rather than a fallback:
+ * The fifth was import attributes, whose walk was not only C-driven but in the WRONG ORDER: 7.3.23 with kind
+ * key+value reads each surviving key's value BETWEEN that key's descriptor and the next key's, and the C body
+ * collected every descriptor and then every value. The cursor performs the whole operation now, `kind` as an
+ * operand, so the sequence a Proxy sees is the algorithm's.
+ *
+ * TWO LEFT, and NEITHER is a live consumer. Both are for-in's FAST PATH, which is a different algorithm rather
+ * than a fallback:
  * it computes the enumeration with no user code at all, and its precondition is that the receiver AND every
  * link above it is an ordinary object — decided by for_in_is_ordinary before anything is read from any of them.
  * (That guard used to be applied to each link's PROTOTYPE and never to the receiver, so a Proxy receiver ran
  * three traps from C and two of them twice; the conversion fixed that at the root.) They stay counted so that
  * weakening the guard fails here rather than silently. It may only go down from here.
  *
- * The live one cannot be retired with an assertion instead — the cheap answer, checked rather than assumed:
- * import attributes take `options.with` straight from the caller, so it is whatever the page hands over. */
+ * Neither may be retired with an assertion instead of the guard — the cheap answer, checked rather than
+ * assumed: for_in_is_ordinary is what makes them unobservable, and it is a real test on a real receiver. */
 /* A CALL SITE is the flag word handed to a names walk: it always pairs with JS_GPN_STRING_MASK. Matching that
    pair is what separates the callers from the flag TESTS inside the walk itself. */
 const enumOnlyCallers =
   (src.match(/JS_GPN_STRING_MASK\s*\|\s*JS_GPN_(ENUM_ONLY|SET_ENUM)|JS_GPN_(ENUM_ONLY|SET_ENUM)\s*\|\s*JS_GPN_STRING_MASK/g) || []).length;
-if (enumOnlyCallers !== 3) {
-  console.error(`C own-keys walks asking for enumerability: ${enumOnlyCallers}, expected 3.`);
-  console.error(enumOnlyCallers > 3
+if (enumOnlyCallers !== 2) {
+  console.error(`C own-keys walks asking for enumerability: ${enumOnlyCallers}, expected 2.`);
+  console.error(enumOnlyCallers > 2
     ? `  A new C caller is asking a Proxy's getOwnPropertyDescriptor trap for enumerability from C.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
