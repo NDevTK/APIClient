@@ -383,21 +383,28 @@ if (enumOnlyCallers !== 2) {
  * ORDERS the spec states, since hasOwnProperty coerces the key first and hasOwn the object. Both also interned
  * the key with JS_ValueToAtom rather than ToPropertyKey, so a key object toString ran from C as well. 13 -> 11.
  *
- * What is left is the 11 CONSUMERS. Of those, FIVE are not consumers at all and are why this number will not
+ * __lookupGetter__ and __lookupSetter__ followed — one machine, the arg choosing which accessor, walking the
+ * prototype chain with a GETOWNPROP and a GETPROTO request per link. It is the first consumer to want the
+ * RECORD from a STEP machine rather than from a continuation, because its answer IS desc.[[Get]], so the
+ * header gained the field the DEFINE descriptor shape already models. 11 -> 10.
+ *
+ * What is left is the 10 CONSUMERS. Of those, SEVEN are not consumers at all and are why this number will not
  * reach zero: two are the routed request entry's OWN in-place answers (JS_CallInternal), where the proxy
  * branch is above and the receiver is provably ordinary; two are side-effect-free probes that read only own
  * DATA properties (tramp_walk_continues, data_method_at); and three are the C hooks' own reads. The genuinely
- * routable ones left are the public JS_GetOwnProperty / JS_HasProperty entries, __lookupGetter__ and
- * __lookupSetter__, and js_prop_walk_step's exclusion test. Each one that stops calling JS_GetOwnPropertyInternal (or
+ * routable ones left are the public JS_GetOwnProperty and JS_HasProperty entries. js_prop_walk_step's
+ * exclusion test is NOT one: its operand is a list the COMPILER built for a destructuring pattern, which no
+ * page can reach — it is a seventh safe-by-construction site, and the way to retire it from suspicion is to
+ * ASSERT that rather than to keep saying it. Each one that stops calling JS_GetOwnPropertyInternal (or
  * JS_GetOwnPropertyNamesInternal) on a possibly-Proxy receiver and asks for a request instead drops this count
  * by one, and when it reaches the C hooks' own sites those hooks — and js_obj_to_desc, and the C forms of every
  * invariant above — go with them. Every ROUTED path is done; what remains is reached only from C. */
 const gopdFromC =
   (src.match(/JS_GetOwnPropertyInternal\(/g) || []).length
   - (src.match(/static int JS_GetOwnPropertyInternal\(/g) || []).length;
-if (gopdFromC !== 11) {
-  console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 11.`);
-  console.error(gopdFromC > 11
+if (gopdFromC !== 10) {
+  console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 10.`);
+  console.error(gopdFromC > 10
     ? `  A new C caller can reach a Proxy's getOwnPropertyDescriptor trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
