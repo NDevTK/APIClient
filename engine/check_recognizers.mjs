@@ -285,8 +285,15 @@ for (const [atom, want] of ITER_READS) {
  * JS_GPN_ENUM_ONLY has to ask each key's ENUMERABILITY, which on a Proxy is the `getOwnPropertyDescriptor`
  * trap — so every C caller that passes that flag runs the trap from C and never reaches the routed walk. Six:
  * for-in's iterator build (twice: the prototype-chain probe and the key collection), JSON.stringify's
- * SerializeJSONObject, JSON.parse's two source-record walks, and import attributes. Each converts by becoming
- * resumable, and the walk it would then reach already exists. It may only go down. */
+ * SerializeJSONObject, JSON.parse's two reviver walks, and import attributes. Each converts by becoming
+ * resumable, and the walk it would then reach already exists. It may only go down.
+ *
+ * NONE of them can be retired with an assertion instead — the cheap answer, checked rather than assumed. The
+ * JSON.parse pair is the one that looks safe by construction, since it walks values the PARSER built; but the
+ * reviver runs bottom-up with `this` bound to the holder, so it can plant a Proxy on a sibling key the walk has
+ * not reached yet:
+ *     JSON.parse('{"a":1,"b":2}', function (k, v) { if (k === "a") this.b = someProxy; return v })
+ * enumerates that proxy from C. Import attributes take `options.with` straight from the caller. */
 const enumOnlyCallers =
   (src.match(/JS_GetOwnPropertyNames(Internal|2)\([^;]*[|,]\s*JS_GPN_ENUM_ONLY|JS_GPN_ENUM_ONLY\s*\|[^;]*\)\s*[;)]/g) || [])
     .length;
