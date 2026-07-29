@@ -203,10 +203,10 @@ for (const p of bodyPreds) {
  * OP_for_of_next recognizer is deleted. The count is the number of NON-DEFAULT writes still standing; it may
  * only go down.
  *
- * 5 remaining: tramp_ith_mode at OP_for_of_next and OP_iterator_next (the Iterator Helper drive — its missed
- * spellings hit js_iterator_helper_next's DFAIL rather than emptying, but that is luck, not design), and
- * tramp_agen_shape at OP_iterator_close, OP_iterator_next and do_itercall_have_method. */
-const MODE_REGISTER_WRITES = 5;
+ * 5 -> 3: tramp_ith_mode went the same way as tramp_gen_forof, and its recognizer went with it — including the
+ * OP_call_method copy that made `h.next.bind(h)()` reach js_iterator_helper_next's DFAIL while `h.next()` did
+ * not. 3 remaining, all tramp_agen_shape: OP_iterator_close, OP_iterator_next and do_itercall_have_method. */
+const MODE_REGISTER_WRITES = 3;
 const modeWrites =
   (src.match(/tramp_ith_mode = ITH_(FOROF|ITERNEXT)/g) || []).length +
   (src.match(/tramp_agen_shape = AGEN_SHAPE_(CLOSE|ITERNEXT|ITERCALL)/g) || []).length;
