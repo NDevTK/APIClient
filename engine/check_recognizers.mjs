@@ -268,16 +268,14 @@ for (const [atom, want] of ITER_READS) {
 /* THE DESCRIPTOR family, the same shape one property-set over. ToPropertyDescriptor (6.2.6.5) performs TWELVE
  * keyed operations on a descriptor object — HasProperty then, if present, Get, for each of six fields — and every
  * one of them can be an accessor or a Proxy trap. Object.defineProperty and Object.defineProperties do them as
- * phases through JSDescCursor; js_obj_to_desc is what remains, and it has exactly ONE live consumer:
- * 10.5.5 step 12's ToPropertyDescriptor of a `getOwnPropertyDescriptor` TRAP's result. That one still runs from
- * C, so
- *     Object.getOwnPropertyDescriptor(new Proxy(t, {getOwnPropertyDescriptor(){ return new Proxy(d, {get(){…loop…}}) }}), "a")
- * preempts in an activation with no flow base.
+ * phases through JSDescCursor, and so does 10.5.5 step 13's walk of a `getOwnPropertyDescriptor` TRAP's result —
+ * which needed a capability that did not exist: a keyed request whose OUTER is another keyed OPERATION, so the
+ * walk's twelve reads can issue from inside the delivery of the operation they belong to.
  *
- * Converting it needs a capability that does not exist yet and is named here rather than guessed at next time: a
- * keyed request whose OUTER is another keyed request. The trap result is delivered inside the getprop machinery,
- * and the cursor's reads would have to issue from there — gp_outer_kind has no JSGetProp case today, and adding
- * one is a change to the re-entrancy contract of the core, not a call-site edit.
+ * js_obj_to_desc is what remains, and its only reachable caller is now the C [[GetOwnProperty]] HOOK — the path
+ * taken when a consumer reaches a proxy through JS_GetOwnPropertyInternal instead of through a GP_GETOWNPROP
+ * request, which JSON.stringify and for-in still do. That is an unrouted CONSUMER, not an unrouted read: routing
+ * those two removes the last twelve, and the walk they would then reach already exists.
  *
  * 13 = js_obj_to_desc's twelve (six fields x HasProperty + Get) plus the property WALK's single `enumerable`
  * read, which is safe by construction — every GP_GETOWNPROP delivery rebuilds the record through
