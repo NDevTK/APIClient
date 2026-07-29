@@ -404,18 +404,20 @@ if (gopdFromC !== 13) {
  * literal `ctx, s->target`, and a probe passing a context named anything else walked straight past it. A gate a
  * rename evades is a gate that flatters itself.
  *
- * 13 -> 14, and UP is right here. [[DefineOwnProperty]]'s C invariant read `p->extensible` — the target
+ * 13 -> 14 -> 15, and UP is right here. [[DefineOwnProperty]]'s C invariant read `p->extensible` — the target
  * JSObject's storage bit — where 10.5.6 step 16.a says IsExtensible, so for a Proxy target it consulted the
  * proxy's own flag instead of its answer. Fixing that turns a read this gate could not see into a call it can.
  * The number moved up because it was WRONG, not because ground was given, exactly as the enum-only count did.
- * (Third instance of that deviation; 10.5.5 step 11.c and 10.5.7 step 9.b.ii were the first two. Every
- * remaining `p->extensible` standing in for an internal method deserves the same suspicion.)
- * 14 = the call sites, excluding the definition. */
+ * (Third instance of that deviation; 10.5.5 step 11.c and 10.5.7 step 9.b.ii were the first two.) Acting on
+ * that suspicion found a FOURTH straight away, and it was the same bug half-fixed: 10.5.7 step 9.b.ii had been
+ * corrected on the ROUTED path when it became a machine, and left standing in js_proxy_has_invariant, which is
+ * the C hook's half. Routing one path is not fixing the check — both halves are the check.
+ * 15 = the call sites, excluding the definition. */
 const extFromC = (src.match(/JS_IsExtensible\(/g) || []).length
   - (src.match(/^int JS_IsExtensible\(/gm) || []).length;
-if (extFromC !== 14) {
-  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 14.`);
-  console.error(extFromC > 14
+if (extFromC !== 15) {
+  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 15.`);
+  console.error(extFromC > 15
     ? `  A new C caller can reach a Proxy's isExtensible trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
