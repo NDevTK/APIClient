@@ -285,6 +285,9 @@ for (const [atom, want] of ITER_READS) {
 /* THE UNROUTED CONSUMERS behind those twelve, counted rather than described. An own-keys walk with
  * JS_GPN_ENUM_ONLY has to ask each key's ENUMERABILITY, which on a Proxy is the `getOwnPropertyDescriptor`
  * trap — so every C caller that passes that flag runs the trap from C and never reaches the routed walk.
+ * JS_GPN_SET_ENUM takes the SAME per-key path (JS_GetOwnPropertyFlagsInternal, one call per key); this counted
+ * only ENUM_ONLY at first and so UNDERCOUNTED by one — for-in's slow path, which uses SET_ENUM. The number moved
+ * up because it was wrong, not because ground was given: a count that flatters itself is worse than no count.
  *
  * 6 -> 5 -> 4. The first to convert was JSON.parse's reviver, which was already an explicit-stack DFS machine
  * and so only needed the walk to become resumable — that is JSEnumKeys, a shared cursor for
@@ -292,7 +295,11 @@ for (const [atom, want] of ITER_READS) {
  * all: internalize_json_property, the recursive C walker that machine had REPLACED, was still in the file with
  * only its own recursion calling it, so this count had been treating dead code as work to do. What is left:
  * for-in's iterator build (twice: the prototype-chain probe and the key collection), JSON.stringify's
- * SerializeJSONObject, and import attributes. It may only go down.
+ * SerializeJSONObject, and import attributes; for-in's is two walks, the ENUM_ONLY key collection and the
+ * SET_ENUM prototype-chain walk under it. Five sites, of which four are live consumers: for-in's own
+ * prototype-chain PROBE is the fifth and is already unobservable, because it is skipped for any object whose
+ * class overrides [[OwnPropertyKeys]] or [[GetOwnProperty]] — it stays counted so that removing that guard fails
+ * here rather than silently. It may only go down from here.
  *
  * NONE of them can be retired with an assertion instead — the cheap answer, checked rather than assumed. The
  * JSON.parse pair is the one that looks safe by construction, since it walks values the PARSER built; but the
@@ -300,12 +307,13 @@ for (const [atom, want] of ITER_READS) {
  * not reached yet:
  *     JSON.parse('{"a":1,"b":2}', function (k, v) { if (k === "a") this.b = someProxy; return v })
  * enumerates that proxy from C. Import attributes take `options.with` straight from the caller. */
+/* A CALL SITE is the flag word handed to a names walk: it always pairs with JS_GPN_STRING_MASK. Matching that
+   pair is what separates the callers from the flag TESTS inside the walk itself. */
 const enumOnlyCallers =
-  (src.match(/JS_GetOwnPropertyNames(Internal|2)\([^;]*[|,]\s*JS_GPN_ENUM_ONLY|JS_GPN_ENUM_ONLY\s*\|[^;]*\)\s*[;)]/g) || [])
-    .length;
-if (enumOnlyCallers !== 4) {
-  console.error(`C own-keys walks asking for enumerability: ${enumOnlyCallers}, expected 4.`);
-  console.error(enumOnlyCallers > 4
+  (src.match(/JS_GPN_STRING_MASK\s*\|\s*JS_GPN_(ENUM_ONLY|SET_ENUM)|JS_GPN_(ENUM_ONLY|SET_ENUM)\s*\|\s*JS_GPN_STRING_MASK/g) || []).length;
+if (enumOnlyCallers !== 5) {
+  console.error(`C own-keys walks asking for enumerability: ${enumOnlyCallers}, expected 5.`);
+  console.error(enumOnlyCallers > 5
     ? `  A new C caller is asking a Proxy's getOwnPropertyDescriptor trap for enumerability from C.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
