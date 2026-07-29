@@ -448,15 +448,25 @@ if (extFromC !== 15) {
  * all requests, across three opcode groups that share one record: the OP_with_* family and the
  * OP_get_ref_value / OP_put_ref_value pair a reference is finished by. 19 -> 15.
  *
- * The fifteen that remain are js_obj_to_desc's own six pairs and engine-built objects — a regexp groups record,
- * an import-attributes record, the global object, which no page can replace with a Proxy. Those are safe by
- * construction; several already say so, and saying it is weaker than asserting it.
- * 15 = the call sites, excluding the definition. */
+ * The GLOBAL Environment Record followed, and it is the same record one link along: 9.1.1.4's ObjectRecord half
+ * IS an object Environment Record over `global_obj` with withEnvironment false, so it shares the machine with
+ * @@unscopables switched off rather than owning a second copy. Routing OP_get_var/OP_get_var_undef retired
+ * JS_GetGlobalVar, whose tail ran a global ACCESSOR's getter and any Proxy on the global object's prototype
+ * chain from C. Two more bodies went with it, both left standing when their last caller was routed: js_operator_in
+ * (OP_in has been the keyed entry's GP_HAS for some time) and js_has_unscopable. A superseded body that keeps
+ * compiling is the fallback this file exists to forbid, whether or not anything still reaches it. 15 -> 14.
+ *
+ * The fourteen that remain are js_obj_to_desc's own six pairs and engine-built objects — a regexp groups record,
+ * an import-attributes record — plus the global object's three OTHER Environment Record operations
+ * (JS_SetGlobalVar, JS_DeleteGlobalVar, JS_GetGlobalVarRef), which are the next conversion and are NOT safe by
+ * construction: `Object.setPrototypeOf(globalThis, proxy)` puts the page's `has` trap on that walk. Saying a
+ * site is safe is weaker than asserting it.
+ * 14 = the call sites, excluding the definition. */
 const hasFromC = (src.match(/JS_HasProperty\(/g) || []).length
   - (src.match(/^int JS_HasProperty\(/gm) || []).length;
-if (hasFromC !== 15) {
-  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 15.`);
-  console.error(hasFromC > 15
+if (hasFromC !== 14) {
+  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 14.`);
+  console.error(hasFromC > 14
     ? `  A new C caller can reach a Proxy's has trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
