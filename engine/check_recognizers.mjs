@@ -233,9 +233,9 @@ if (modeWrites < MODE_REGISTER_WRITES) {
  * They are gone one consumer at a time: the consume machine, the async-from-sync wrapper, the iterator helpers,
  * the Promise combinators, the for-of and async protocol tails, yield*'s delivery, the two for-of acquires, the
  * consumer and combinator acquires, `for await`'s wrap, flatMap's inner, the eager terminals, and Iterator.from.
- * `done` and `value` have reached ZERO C-side reads and must stay there; `next` has ONE — the iterator-helper
- * FACTORY (`it.map(f)`'s own GetIteratorDirect), which is a C builtin entry rather than a tramp label, so it
- * needs the factory itself to become a step machine. That is the number this pins, and it may only go down.
+ * ALL THREE have reached ZERO C-side reads and must stay there. `next` was the last, held by the iterator-helper
+ * FACTORY, whose body was shared by two different declarations — take/drop a coerce-then-compute machine,
+ * map/filter/flatMap plain C functions — so neither shape could route it; all five are one step machine now.
  *
  * Counted as JS_GetProperty/JS_HasProperty against the atom, which is the shape every one of them had —
  * EXCLUDING js_obj_to_desc, whose `value` is a property DESCRIPTOR's, not an iterator result's. That one is a
@@ -249,7 +249,7 @@ if (descStart < 0) {
 }
 const descEnd = src.indexOf('\n}\n', descStart);
 const iterSrc = src.slice(0, descStart) + src.slice(descEnd);
-const ITER_READS = [['JS_ATOM_done', 0], ['JS_ATOM_value', 0], ['JS_ATOM_next', 1]];
+const ITER_READS = [['JS_ATOM_done', 0], ['JS_ATOM_value', 0], ['JS_ATOM_next', 0]];
 for (const [atom, want] of ITER_READS) {
   const got = (iterSrc.match(new RegExp(`JS_(Get|Has)Property\\(ctx, [A-Za-z_0-9>.\\-]+, ${atom}\\)`, 'g')) || []).length;
   if (got > want) {
@@ -279,4 +279,4 @@ if (names.size < CEILING) {
 }
 console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} call + ` +
             `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes, ` +
-            `iterator-protocol C reads done/value/next 0/0/1`);
+            `iterator-protocol C reads done/value/next 0/0/0`);
