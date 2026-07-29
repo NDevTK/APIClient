@@ -379,16 +379,25 @@ if (enumOnlyCallers !== 2) {
  * That also collapsed three C-side reads into one: the three invariants share js_proxy_facts_from_c, the single
  * unrouted read the C hooks reach. 15 -> 13.
  *
- * What is left is the 13 CONSUMERS. Each one that stops calling JS_GetOwnPropertyInternal (or
+ * Object.hasOwn and Object.prototype.hasOwnProperty followed — ONE machine, the arg choosing which of the two
+ * ORDERS the spec states, since hasOwnProperty coerces the key first and hasOwn the object. Both also interned
+ * the key with JS_ValueToAtom rather than ToPropertyKey, so a key object toString ran from C as well. 13 -> 11.
+ *
+ * What is left is the 11 CONSUMERS. Of those, FIVE are not consumers at all and are why this number will not
+ * reach zero: two are the routed request entry's OWN in-place answers (JS_CallInternal), where the proxy
+ * branch is above and the receiver is provably ordinary; two are side-effect-free probes that read only own
+ * DATA properties (tramp_walk_continues, data_method_at); and three are the C hooks' own reads. The genuinely
+ * routable ones left are the public JS_GetOwnProperty / JS_HasProperty entries, __lookupGetter__ and
+ * __lookupSetter__, and js_prop_walk_step's exclusion test. Each one that stops calling JS_GetOwnPropertyInternal (or
  * JS_GetOwnPropertyNamesInternal) on a possibly-Proxy receiver and asks for a request instead drops this count
  * by one, and when it reaches the C hooks' own sites those hooks — and js_obj_to_desc, and the C forms of every
  * invariant above — go with them. Every ROUTED path is done; what remains is reached only from C. */
 const gopdFromC =
   (src.match(/JS_GetOwnPropertyInternal\(/g) || []).length
   - (src.match(/static int JS_GetOwnPropertyInternal\(/g) || []).length;
-if (gopdFromC !== 13) {
-  console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 13.`);
-  console.error(gopdFromC > 13
+if (gopdFromC !== 11) {
+  console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 11.`);
+  console.error(gopdFromC > 11
     ? `  A new C caller can reach a Proxy's getOwnPropertyDescriptor trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
