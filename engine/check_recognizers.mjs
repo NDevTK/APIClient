@@ -73,6 +73,25 @@ import { readFileSync } from 'node:fs';
  * What each arm still asks is about the ARGUMENT, never the callee: 24.1.1.1 step 2 and 23.2.5.1 step 6.a select
  * a DIFFERENT algorithm for a nullish or non-object source, one that iterates nothing. 5 -> 3.
  *
+ * ZERO. The three promise ones went last, and the entry above claiming they were INHERENT was wrong.
+ *
+ * That entry said a promise-creating builtin which must reject-and-yield on an abrupt callback needs a dedicated
+ * exception arm (CONT_PROMISE_EXEC / _ALL / _TRY) the generic CONT_STEP teardown cannot express, "so it cannot
+ * route via the convergence point — the recognizer is inherent". The first half is true and the conclusion does
+ * not follow: a bespoke CONT kind is a fact about the MACHINE, and a recognizer is about how the machine is
+ * FOUND. The two are independent, which JS_CFUNC_ITERDRIVE_DEF had already shown — that cproto exists precisely
+ * because the iterator drive's delivery has modes no step machine can express, and it is still a declaration.
+ *
+ * All three C bodies were residue: js_promise_try a bare DFAIL, the other two with no algorithm left. So the
+ * address comparisons were choosing against nothing, which this file calls the state in which a recognizer is
+ * pure residue — and says to delete. They declare themselves now (NATIVE_PROMISE_TRY / _EXEC / _ALL_BASE+magic)
+ * on the u.cfunc field the consuming constructors added, whose meaning widened with them: it says WHICH MACHINE
+ * drives this builtin, and a walk was only the first kind of answer it had to give.
+ *
+ * What each arm still asks is about the RECEIVER or the ARGUMENT, never the callee: 27.2.3.1 step 2's
+ * non-callable executor and NewPromiseCapability's non-object constructor are different algorithms that iterate
+ * nothing. 3 -> 0.
+ *
  * The ceiling counts tramp_can_call* recognizers. It goes DOWN whenever a conversion deletes a legacy JS_Call-LOOP
  * body (the debt this ratchet exists to retire). It rises for EXACTLY ONE reason: a genuinely-new tramp-native
  * builtin whose semantics REQUIRE a custom CONT kind — a promise-creating builtin that must reject-and-YIELD on an
@@ -121,7 +140,7 @@ import { readFileSync } from 'node:fs';
  * builtin identity in it. Its two declines are spec answers, given by js_call_c_function's iterdrive arm, and
  * a DCHECK there asserts that no THIRD reason can reach it. 7 -> 6.
  */
-const CEILING = 3;              // tramp_can_call* — down with each conversion; up only when the count was WRONG
+const CEILING = 0;              // tramp_can_call* — ZERO. Any rise is a recognizer coming back.
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
      do_cont_dispatch    every SEQUENCE-shaped call: the operands are in the sequence's own buffer (a step
