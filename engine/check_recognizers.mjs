@@ -569,25 +569,29 @@ if (extFromC !== 14) {
   process.exit(1);
 }
 
-/* NEXT, MEASURED AND LOCALISED — the [[Set]] RECEIVER path. A sweep of 36 operations against looping Proxy
- * traps found ten live aborts on ordinary code; six are fixed above and FOUR share one root:
+/* DONE — the [[Set]] RECEIVER path, CONT_SET_RECV. A sweep of 36 operations against looping Proxy traps found
+ * ten live aborts on ordinary code; eight are now fixed and the four that shared this root are among them:
  *
  *     Reflect.set({a: 1}, "a", 2, new Proxy({}, {getOwnPropertyDescriptor(){for(;;){}}}))
  *
- * OrdinarySetWithOwnDescriptor steps 3.b and 3.e are `Receiver.[[GetOwnProperty]]` and
- * `Receiver.[[DefineOwnProperty]]`, and JS_SetPropertyInternal2 runs both from C at its tail (the
- * JS_GetOwnPropertyFlagsInternal / JS_DefineProperty pair after `p != JS_VALUE_GET_OBJ(obj)`). The routed GP_SET
- * request reaches that tail for the ORDINARY set, so the proxy `set` TRAP routes while the receiver completion
- * does not.
+ * OrdinarySetWithOwnDescriptor step 3 is `Receiver.[[GetOwnProperty]]` and `Receiver.[[DefineOwnProperty]]`, and
+ * JS_SetPropertyInternal2 ran both from C at its tail. What made it look like a tail is that it is written as
+ * one; what it actually is, is a SEPARATE operation over (Receiver, P, V) that consults nothing the walk built —
+ * which is why it could become a machine parked on the keyed entry with no state carried across from the walk.
+ * JS_SetPropertyInternal2 now takes `recv_pending` and hands the completion back rather than performing it, and
+ * the DCHECK on a NULL `recv_pending` holds every other caller to "my receiver cannot be a Proxy".
  *
- * That single tail is why Array.prototype.reverse / push / splice / copyWithin abort on a Proxy: their Set goes
- * through the proxy's default `set`, which forwards with the proxy as RECEIVER, and steps 3.b-3.e then run its
- * traps from C. Measured on reverse: `get:length, has:0, get:0, has:2, get:2, set:0, getOwnPropertyDescriptor:0,
- * defineProperty:0, ...` — the last two are the receiver completion, not reverse's own algorithm.
+ * That single tail was why Array.prototype.reverse / push / splice / copyWithin aborted on a Proxy: their Set
+ * goes through the proxy's default `set`, which forwards with the proxy as RECEIVER, and step 3 then ran its
+ * traps from C. It was also why `super.x = v` with a Proxy `this` aborted, which is why that opcode routes on a
+ * RECEIVER test the other write opcodes have no need for.
  *
- * The conversion is a continuation on the keyed entry: when the receiver differs from the object AND is exotic,
- * the ordinary set issues GP_GETOWNPROP on the receiver and then GP_DEFINE, instead of finishing in C. It is
- * localised but it is the hottest path in the interpreter, so it wants its own diff.
+ * Two things fell out of building it, neither visible from the outside beforehand. The C tail had no half of
+ * 7.3.4: 3.e's JS_DefineProperty was called with no throw flag, so a receiver whose `defineProperty` trap
+ * returned false reported SUCCESS to strict code. And the trapless-proxy forward loop restored every operand of
+ * the parked request except the ANSWER SHAPE, so a forwarded [[GetOwnProperty]] built a descriptor object for a
+ * requester that had named a record — latent until a requester asked for a record through a trapless proxy,
+ * which this completion is the first to do.
  *
  * The sweep's last two are a DIFFERENT kind of gap, and bigger: the RegExp prototype methods are not GENERIC.
  *
