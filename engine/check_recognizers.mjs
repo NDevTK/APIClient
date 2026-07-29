@@ -133,13 +133,14 @@ if (constructSitePredicates !== CONSTRUCT_CONVERGENCE_POINTS) {
 const strayCall = [
   ['js_tramp_proxy_apply(', 3, 'proxy [[Call]] reshaped anywhere but the ONE arm at do_generic_callee ' +
                                '(the count is its declaration, its definition and that arm)'],
-  /* The async-generator drive is asked ONCE PER OPERAND SHAPE and never once per call SPELLING: its definition,
-     the call convergence point (do_generic_callee — which `ag.next()`, `.call`, `.apply`, Reflect.apply, spread,
-     a bind and a proxy all reach), and the two iterator-protocol opcodes whose method comes off the stack rather
-     than through a call (OP_iterator_next and OP_iterator_call, yield* delegation). OP_iterator_close asks about
-     the RECEIVER's class instead — there is no method operand there to test. A fifth is a spelling copy. */
-  ['tramp_agen_method_magic(', 4, 'the async-generator drive question asked anywhere but its definition, ' +
-                                  'do_generic_callee and the two iterator-protocol opcodes'],
+  /* The async-generator drive is asked in exactly TWO places: its definition and the call convergence point.
+     4 -> 2. The two extra were the iterator-protocol opcodes (OP_iterator_next and OP_iterator_call), which
+     recognized the receiver themselves so they could hand the drive an OPERAND SHAPE — and a shape enum is a
+     per-call-site mode register, the thing that made `for (x of {next: g.next.bind(g)})` deliver into the wrong
+     protocol slot. Both push a real call now and let the continuation say where the promise goes; OP_iterator_
+     close's receiver-class arm went the same way, into 7.4.9's generic path that was already sitting under it. */
+  ['tramp_agen_method_magic(', 2, 'the async-generator drive question asked anywhere but its definition ' +
+                                  'and do_generic_callee'],
 ];
 for (const [needle, want, what] of strayCall) {
   const got = src.split(needle).length - 1;
@@ -203,10 +204,12 @@ for (const p of bodyPreds) {
  * OP_for_of_next recognizer is deleted. The count is the number of NON-DEFAULT writes still standing; it may
  * only go down.
  *
- * 5 -> 3: tramp_ith_mode went the same way as tramp_gen_forof, and its recognizer went with it — including the
- * OP_call_method copy that made `h.next.bind(h)()` reach js_iterator_helper_next's DFAIL while `h.next()` did
- * not. 3 remaining, all tramp_agen_shape: OP_iterator_close, OP_iterator_next and do_itercall_have_method. */
-const MODE_REGISTER_WRITES = 3;
+ * 5 -> 3 -> 0. tramp_ith_mode went the same way as tramp_gen_forof, and its recognizer went with it — including
+ * the OP_call_method copy that made `h.next.bind(h)()` reach js_iterator_helper_next's DFAIL while `h.next()` did
+ * not. tramp_agen_shape was the last, and it took the AGEN_FIN_* enum with it: an async-generator drive is an
+ * ordinary call whose promise goes wherever the CONTINUATION says. Zero is the resting state; any rise means a
+ * call site is telling a driver what to do again. */
+const MODE_REGISTER_WRITES = 0;
 const modeWrites =
   (src.match(/tramp_ith_mode = ITH_(FOROF|ITERNEXT)/g) || []).length +
   (src.match(/tramp_agen_shape = AGEN_SHAPE_(CLOSE|ITERNEXT|ITERCALL)/g) || []).length;
