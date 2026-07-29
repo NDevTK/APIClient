@@ -45,6 +45,32 @@ import { readFileSync } from 'node:fs';
  * KIND, which is exactly the question a recognizer is banned from answering — the convergence point owns it. The
  * receiver and arity conditions were pure validation and moved into the machine's prologue, js_promise_try is a
  * DFAIL, and what is left asks only WHICH machine, at the one place that asks it. */
+/* NEXT, AND WHAT BLOCKS IT — tramp_can_call_iter_helper. Its legacy body (js_iterator_helper_next) is already a
+ * DFAIL for the drive, which this file calls the tell of pure residue. What still lives in it is `.return()`,
+ * under the written claim that closing "iterates nothing, so no drive-to-completion". That claim is FALSE and
+ * the engine says so today, on ordinary code:
+ *
+ *     var src = { next: () => ({value:1, done:false}),
+ *                 return: () => { for (var i=0;i<200;i++); return {done:true}; } };
+ *     Iterator.prototype.take.call(src, 5).return(7);      // @WHY loop preempted, no flow base
+ *     Iterator.from(src).take(5).return();                 // @WHY step builtin `return` outside dispatch
+ *
+ * because 7.4.9 IteratorClose is TWO of the page's operations — GetMethod(iterator,"return") and the Call — and
+ * JS_IteratorClose performs both from C. A step machine for %IteratorHelperPrototype%.return fixes exactly those
+ * two lines (measured: both pass, 100% engaged, DriveToCompletion 0) and makes the 50-line generator-source
+ * special-case at OP_iterator_close dead, because a step def on `return` is asked for at the convergence point
+ * first. It is NOT landed, because widening that far turns the SAME crash up one level: `x.map(f).filter(g)`
+ * gives a helper whose source is a helper, and do_iter_helper_step closes its source with an inline
+ * JS_IteratorClose guarded by `tramp_gen_method_magic(it->next, it->obj) == GEN_MAGIC_NEXT` — another selector
+ * choosing a C close for everything that is not a generator, whose own comment already admits it crashes.
+ *
+ * So the capability to build FIRST, by name: a close of the current drive target that goes through the
+ * convergence point whatever KIND the target is. `drive_close` is that mechanism for a generator source only —
+ * it hands the close to do_generator_tramp as a GEN_MAGIC_RETURN resume — and it needs the generic form: read
+ * `return` and CALL it as an ordinary method drive. With that built, the selector at that site deletes, the
+ * helper's own `.return()` machine lands, js_iterator_helper_next's last non-DFAIL arm goes, and
+ * tramp_can_call_iter_helper has nothing left to choose. Build it in that order; do not narrow instead.
+ */
 const CEILING = 7;              // tramp_can_call_* — down with each conversion; up only for a new reject-and-yield builtin
 /* TWO, and they are the two OPERAND SHAPES a call can have — not one convergence point plus an exemption.
      do_generic_callee   every STACK-shaped call: the operands are the caller's, and the result is pushed.
