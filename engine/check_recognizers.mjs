@@ -357,9 +357,16 @@ if (enumOnlyCallers !== 2) {
  * hook, which is why these numbers still do not move. 15 = the call sites, excluding the two declarations of
  * the function itself.
  *
+ * The four OBJECT-LEVEL invariants (10.5.1-10.5.4) followed, as ONE machine rather than four: they differ only
+ * in which target facts they need — IsExtensible(target), and the target's own prototype for the pair that
+ * compares one — and in what they conclude. Its skips are part of the spec, not an optimisation: a false trap
+ * result answers before IsExtensible is reached, and an extensible target settles the prototype pair without
+ * [[GetPrototypeOf]], so neither may run the target's trap for a step the algorithm does not take.
+ *
  * What is left is the 15 CONSUMERS. Each one that stops calling JS_GetOwnPropertyInternal (or
  * JS_GetOwnPropertyNamesInternal) on a possibly-Proxy receiver and asks for a request instead drops this count
- * by one, and when it reaches the C hook's own sites the hook and js_obj_to_desc go with them. */
+ * by one, and when it reaches the C hooks' own sites those hooks — and js_obj_to_desc, and the C forms of every
+ * invariant above — go with them. Every ROUTED path is done; what remains is reached only from C. */
 const gopdFromC =
   (src.match(/JS_GetOwnPropertyInternal\(/g) || []).length
   - (src.match(/static int JS_GetOwnPropertyInternal\(/g) || []).length;
