@@ -1749,6 +1749,26 @@ if (extFromC !== 7) {
  *      RegExpStringIteratorPrototype 16 already on this list, so the two are one job and not two.
  *      Reverted rather than landed half-built: with the C body gone the two callers do not compile, and with it
  *      kept they are the dual system. There is no intermediate state worth pushing.
+ *
+ *   3d. AND THE OTHER BIG BLOCK IS ONE ROOT TOO, measured the same way: language/expressions 28 (async-generator
+ *      8 + class 16 + object 4), AsyncFromSyncIteratorPrototype 7 and AsyncGeneratorPrototype 3 are all
+ *      `yield*` over a SYNC iterator from an async generator, and every one of them lands on the same line.
+ *      27.1.4.4/.5 say `.return(v)` and `.throw(v)` do NOT reuse [[NextMethod]] — they GetMethod the sync
+ *      iterator's OWN `return`/`throw` first — and do_async_from_sync_tramp's itercall entry does that read with
+ *      JS_GetProperty from C. An accessor `return` on the sync iterator is the page's code with no flow base.
+ *      Every test that drives here is named yield-star-sync-return / yield-star-sync-throw.
+ *      THE CONVERSION IS BOUNDED AND THE MACHINE ALREADY HAS THE CONTINUATION: CONT_AFS_GET is the wrapper's
+ *      own getprop kind, already used for the result's `done` and `value` reads, delivered at
+ *      do_async_from_sync_step and selected there by JSAsyncFromSync::res_ph. So the method read becomes a
+ *      THIRD res_ph, and the whole itercall block moves out of the entry into that phase — it must move,
+ *      because a delivery lands at do_async_from_sync_step and not at the entry.
+ *      ONE C LOCAL BLOCKS THAT MOVE and is the thing to build first: afs_iter_magic (RETURN vs THROW) does not
+ *      survive the suspension and the state has no field for it. It is currently recoverable only by inverting
+ *      close_on_rejection, which is a coincidence of that flag's definition and not a contract — add an explicit
+ *      `iter_magic` field rather than re-deriving it, which is the same lesson tp_op_byte taught. Everything
+ *      else the block needs (sync_iter, drive_arg, deliver, close_on_rejection) is already on the state, and
+ *      `sp` is live at do_async_from_sync_step exactly as it is at the entry, so the drive's operand pushes move
+ *      unchanged.
  *      THE OBSTACLE THE NEXT ATTEMPT STARTS FROM, found by reading do_array_len_start rather than assuming:
  *      JSArrayLen does not carry gp_recv, and a TypedArray element write NEEDS it — 10.4.5.5 step 1 applies
  *      TypedArraySetElement only when SameValue(O, Receiver), so the receiver decides whether V is coerced at
