@@ -1147,10 +1147,19 @@ if (extFromC !== 7) {
  *   locals (cmach, and whatever the surrounding dispatch had established) are indeterminate on that path — the
  *   same class of mistake as reading `s` after jumping into do_promise_all_finalize, which was caught there only
  *   by re-deriving it from cont_st.
- *   SO THE NEXT ATTEMPT MOVES THE LABEL OUT OF THAT BLOCK rather than jumping into it, and re-derives every
- *   register the arm's body reads from the parked JSCtorProto — pe_* are already derived from con_*, so the
- *   question is only which con_* the delivery restores and whether tramp_first / con_pop are among them.
- *   Bisect from the shapes that PASS: the failure is not the plain, subclass, or custom-proto construct.
+ *   THE HOIST JUST SETTLED WHAT SHAPE IT SHOULD TAKE. do_construct_tramp now reads BEFORE its block and resumes
+ *   at do_construct_have_proto past it; the promise arm copies exactly that, with its resume label OUTSIDE the
+ *   `if (cmach == NATIVE_PROMISE_EXEC && …)` block rather than inside it:
+ *       if (cmach == NATIVE_PROMISE_EXEC && promise_exec_ready(…)) {
+ *           if (JS_IsUninitialized(con_proto)) { ...park, resume_arm = PROMISE_EXEC...; goto do_getprop_tramp; }
+ *           goto do_promise_exec_arm;
+ *       }
+ *       ...
+ *     do_promise_exec_arm: { ...the arm's body, taking con_proto... }
+ *   at the same nesting as do_construct_tramp. The failed attempt put that label INSIDE the if-block, so the
+ *   delivery jumped into a block whose other locals were indeterminate — which is what the step-builtin DFAIL
+ *   was reporting. Bisect from the shapes that PASS: not the plain construct, not a subclass, not a
+ *   custom-prototype new.target.
  *
  *   AND THE ASSERT THAT NAMES THE GAP WAS WRITTEN, FIRED, AND HELD BACK ON PURPOSE. `DCHECK(new_target is
  *   undefined or the Promise constructor)` in js_promise_new fires immediately: do_promise_exec_tramp is the one
