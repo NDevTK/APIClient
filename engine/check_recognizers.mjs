@@ -1101,6 +1101,24 @@ if (extFromC !== 7) {
  *   would otherwise leave a record pinned forever. The fixture that pins this deletes the current entry, deletes
  *   a later one, adds during the walk, delete-then-re-adds, and calls clear() from inside the callback.
  *
+ *   STRING 34 IS LOCALISED and it is INSIDE the machine the last conversion touched, one stage further on.
+ *   Backtrace (String/prototype/replaceAll/replaceValue-call-tostring-abrupt.js): js_str_replace_step ->
+ *   JS_ToString -> JS_ToPrimitiveFree -> JS_CallFree. 22.1.3.19 is
+ *   `? ToString(? Call(replaceValue, undefined, «searched, position, string»))` — the CALL became a request when
+ *   the walk became a machine, but the ToString on ITS RESULT stayed a C call, so a replacer returning an object
+ *   with a toString still runs that toString off the tramp. It needs a stage per iteration (step_tostring_run on
+ *   the callback's result), which is a change to js_str_replace_step's return protocol, not to the prologue.
+ *   THE LESSON IS THE ONE THE SYNC-DISPOSE WRAPPER TAUGHT, in a second shape: converting a call exposes what it
+ *   was feeding. The prologue conversion took String 46 -> 34 and the residual is the very next line of the same
+ *   algorithm.
+ *
+ *   TYPEDARRAYCONSTRUCTORS 49 IS THE PROTOTYPE READ IN THE THIRD BRANCH. js_typed_array_constructor_ta ->
+ *   js_create_from_ctor: 23.2.5.1 step 6.b's TYPED-ARRAY source arm. The view arm was routed (the split into
+ *   js_ta_view_plan / js_ta_view_finish) and the CONSUME arm before it; this is the copy-from-another-typed-array
+ *   branch, which has its own js_create_from_ctor and was never in either. Three branches, three separate reads —
+ *   which is what "route the branch, not the builtin" costs, and it is still the right shape (a machine wrapped
+ *   around the whole constructor cannot see which branch applies).
+ *
  *   REGEXP 33 IS LOCALISED, and every directory in the histogram now is. The probe's chain is
  *   JS_ToLengthFree -> JS_ToNumberFree -> JS_ToPrimitiveFree -> JS_CallFree -> JS_CallInternal: an argument
  *   coercion run from C, so a `lastIndex` whose valueOf contains a loop has no flow base. 22.2.7.2 step 4 is
