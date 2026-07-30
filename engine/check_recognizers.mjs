@@ -828,6 +828,55 @@ if (extFromC !== 7) {
  * removes is six identical assertions of an unbuilt capability. A fixture for the multi-entry path arrives with the
  * IteratorCloseAll that needs it.
  *
+ * ITERATOR.ZIP IS AN ENGINE COMPONENT. builtin-iterator-zip.js, its qjsc blob, its autoinit case and its Makefile
+ * rule are DELETED; 27.1.3.3 is three step machines over a JS_CLASS_ITERATOR_ZIP record, and every page-visible
+ * step is a request: the `mode` and `padding` reads, GetIterator on `iterables`, GetIteratorFlattenable on each
+ * element, the padding walk, and — in the zipper's own next/return — each input's `.next()`, its result's `done`
+ * and `value`, and each IteratorClose. All 38 tests pass; the corpus stayed at 0/43222 and SyncDriveToCompletion
+ * fell 2128 -> 2050.
+ *
+ * FOUR SHARED SUB-SEQUENCES rather than per-site copies, and the reason is ORDER in every case. GetIterator (7.4.2)
+ * and GetIteratorFlattenable (7.4.3) differ only in what an absent @@iterator means, so one walk takes that as a
+ * parameter. IteratorStepValue (7.4.8) is performed in three places and the padding walk reads `value` even on a
+ * done result while the other two do not — a parameter, not a difference each copy would get to make. IteratorClose
+ * under a NORMAL completion is one walk. Under an ABRUPT completion it is not a walk at all: it is the DEFERRAL,
+ * because there every close discards its own throw, which is exactly what the queue's drain does.
+ *
+ * FOUR BUGS, each named by one test, and three of them are the same mistake in different clothes — STATE THAT MUST
+ * SURVIVE A SUSPENSION CANNOT LIVE WHERE THE SUSPENSION DESTROYS IT:
+ *   `done` lived in the CALLER's `bool done` local, which is re-initialised on every re-entry, so a `value` read
+ *   that suspended came back reporting not-done. It lives in the PHASE now (IS_VALUE vs IS_VALUE_DONE), which is
+ *   what makes the two reads one resumable operation. padding-iteration.js found it.
+ *   WHICH input's step is in flight is known only to the machine that asked, and the teardown needs it: 7.4.8
+ *   leaves an abrupt source [[Done]] and UN-CLOSED, so closing it anyway called `return` on an iterator whose
+ *   `next` had just thrown. Four tests name that one by one as "unexpected call ... return". The same shape as
+ *   JSIteratorHelperData's drive_pending, for the same reason.
+ *   The padding iterator had to leave `pad_iter` BEFORE its close ran, or a throwing `return` was called a second
+ *   time by the teardown (padding-iteration-iterator-close-abrupt-completion.js: two `padding return`s).
+ * The fourth is a spec-reading error, not an ownership one: `strict`'s length mismatch is
+ * IfAbruptCloseIterators(throw TypeError, iters) — the completion is ABRUPT before the closes run, so each close
+ * discards its own throw and the TypeError propagates. Running the closes first and throwing after let a throwing
+ * `return` win, which two tests report as "Expected a TypeError but got a Test262Error".
+ *
+ * AND THE CALL BUFFER IS BORROWED. cb[0]/cb[1] are a receiver and a method something else already owns, which is
+ * step_getprop_run's cb_coerce convention, and do_cont_dispatch only READS the slots. Freeing them in the teardown
+ * was a use-after-free that ASan caught on the first abrupt GetIteratorFlattenable. Two conventions exist for that
+ * buffer — Iterator.concat OWNS its copy — and a machine has to say which it is using.
+ *
+ * THE OLD SELF-HOSTED ZIP HAD A REAL FIDELITY BUG the conversion removed: after an abrupt next() it left the
+ * generator in `executing`, so the NEXT next() threw "running zipper" instead of answering {undefined, true}. The
+ * teeth check found it — the fixture runs green on the new build and fails on the old one with that TypeError.
+ * A generator's own abrupt completion makes it `completed`, and the teardown is what owes that.
+ *
+ * KNOWN FIDELITY GAP, carried forward deliberately and NOT introduced here: the zipper's `next` and `return` are
+ * OWN, enumerable properties of the instance, which is what the object-literal the self-hosted version returned
+ * produced. The spec's CreateIteratorFromClosure result takes them from %IteratorHelperPrototype% (which IS the
+ * zipper's [[Prototype]] — result-is-iterator.js pins that and passes). Closing it means teaching the iterdrive
+ * machinery about an N-source generator, which is a fidelity change with its own tests and must not be bundled
+ * into a JS->C conversion. NEXT: Iterator.zipKeyed over the same record (Iterator 90 of the residual 2050), then
+ * Array.fromAsync, which is the hardest — an await inside a loop — and takes js_bytecode_eval,
+ * js_bytecode_autoinit and JS_AUTOINIT_ID_BYTECODE with it.
+ *
  * THERE IS NO C-DRIVEN PROXY TRAP LEFT IN THE ENGINE. Every one of the thirteen internal methods is a DFAIL plus a
  * visible release failure, and the only implementation is the routed one.
  *
