@@ -1221,6 +1221,18 @@ if (extFromC !== 7) {
  *   does not is `length`, which is why arr_len_write_needs_toprim takes the other route).
  *   One predicate, two spellings, and only one of them consults it — the same shape as every "a call site was
  *   not routed" finding in this file.
+ *   AND THE ARM IT GOES BESIDE IS ALREADY THERE: the keyed entry has an `arr_len_write_needs_toprim(...) &&
+ *   (gp_op == GP_SET || (gp_op == GP_DEFINE && (gp_dflags_r & JS_PROP_HAS_VALUE)))` arm immediately above the
+ *   define, whose comment says both spellings hand their coercion to the same sequence. The typed-array arm is
+ *   its sibling, on the same operands, with the same GP_SET/GP_DEFINE condition.
+ *   TWO THINGS IT STILL NEEDS, so the next attempt does not discover them mid-edit. (1) ta_write_needs_toprim
+ *   takes the key as a JSValue; the keyed entry has an ATOM, so it wants the atom form —
+ *   is_typed_array(target) && JS_AtomIsNumericIndex(ctx, gp_atom) > 0 && val is an object — which is the same
+ *   test the [[HasProperty]] arm twenty lines up already performs on gp_atom. (2) the destination differs:
+ *   OP_put_array_el's value_tonum_toprim is OPERAND-STACK based (tp_slot / tp_retry_pc re-execute the opcode)
+ *   and cannot be reused from a request, so the TA arm needs a TOPRIM whose delivery RE-ISSUES the define with
+ *   the primitive — which is exactly what do_array_len_start does for `length`, one arm above. Read that
+ *   sequence's re-issue rather than inventing a second one.
  *   Both are named with their line numbers because both are one site, not a directory.
  *
  *   THE HONEST HISTOGRAM at 725 (built-ins, then language): Array 204, Promise 65, TypedArrayConstructors 49,
