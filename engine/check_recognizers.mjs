@@ -1524,6 +1524,19 @@ if (extFromC !== 7) {
  *      That is the retracted argument verbatim.
  *   2. tp_retry_pc / value_tonum_toprim (19718, 23416) — the OPERAND-mode half of the same thing: the opcode
  *      byte is stored so the interpreter can run it again once the slot holds a primitive.
+ *      SCOPE, counted rather than guessed: 29 references, of which FOURTEEN are opcode sites doing
+ *      `tp_retry_pc = pc - 1` — the property opcodes (OP_get_array_el, OP_put_array_el and their variants, the
+ *      `in` and delete spellings), the arithmetic and comparison opcodes, and the key/value coercions at 32686,
+ *      34414, 34569, 34653, 34755, 34852, 34855, 34976, 35146, 35343, 35355. Every one re-runs its whole opcode
+ *      once the slot holds a primitive.
+ *      THIS IS NOT ONE EDIT. Each opcode needs a resume point past its own coercion, and they do not share one:
+ *      an arithmetic opcode resumes at the operation, a keyed one resumes at the walk it had not started, and
+ *      OP_put_array_el has TWO coercions (key then value) whose order is observable. Do them a family at a time,
+ *      arithmetic first — it is the one where "everything before the coercion is a tag test" is actually true, so
+ *      it is the smallest correct conversion and establishes the shape for the keyed ones, where it is not true
+ *      at all (the walk is not a tag test).
+ *      THE COUNT IS THE POINT: this was one line in a comment defending itself as free, and it is fourteen
+ *      opcodes deep.
  *   3. CONT_ARRAY_LEN / AL_REISSUED — REMOVED. It coerced V and re-issued the whole keyed write, re-entering
  *      do_getprop_tramp and re-walking the prototype chain, the proxy checks and the accessor checks that had
  *      already resolved the arm. The sequence PERFORMS step 6 itself now: the walk resolved the target once, and
