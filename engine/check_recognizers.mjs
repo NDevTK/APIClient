@@ -345,18 +345,11 @@ if (modeWrites < MODE_REGISTER_WRITES) {
  * FACTORY, whose body was shared by two different declarations — take/drop a coerce-then-compute machine,
  * map/filter/flatMap plain C functions — so neither shape could route it; all five are one step machine now.
  *
- * Counted as JS_GetProperty/JS_HasProperty against the atom, which is the shape every one of them had —
- * EXCLUDING js_obj_to_desc, whose `value` is a property DESCRIPTOR's, not an iterator result's. That one is a
- * live C-side page-code read too (a Proxy getOwnPropertyDescriptor trap can return a descriptor with an accessor
- * `value`), but it belongs to ToPropertyDescriptor and converts with that walk, not with this family. Excluding
- * it by BODY rather than by raising the ceiling is what keeps a re-added iterator-result read visible. */
-const descStart = src.indexOf('static int js_obj_to_desc(');
-if (descStart < 0) {
-  console.error('js_obj_to_desc is gone — remove its exclusion from the iterator-read ratchet.');
-  process.exit(1);
-}
-const descEnd = src.indexOf('\n}\n', descStart);
-const iterSrc = src.slice(0, descStart) + src.slice(descEnd);
+ * Counted as JS_GetProperty/JS_HasProperty against the atom, which is the shape every one of them had. This used
+ * to EXCLUDE js_obj_to_desc by body, because that function's `value` is a property DESCRIPTOR's rather than an
+ * iterator result's — a live C-side page-code read, but one belonging to ToPropertyDescriptor. js_obj_to_desc is
+ * DELETED, so the exclusion is gone and the count is over the whole file again, which is strictly stronger. */
+const iterSrc = src;
 const ITER_READS = [['JS_ATOM_done', 0], ['JS_ATOM_value', 0], ['JS_ATOM_next', 0]];
 for (const [atom, want] of ITER_READS) {
   const got = (iterSrc.match(new RegExp(`JS_(Get|Has)Property\\(ctx, [A-Za-z_0-9>.\\-]+, ${atom}\\)`, 'g')) || []).length;
@@ -380,23 +373,17 @@ for (const [atom, want] of ITER_READS) {
  * which needed a capability that did not exist: a keyed request whose OUTER is another keyed OPERATION, so the
  * walk's twelve reads can issue from inside the delivery of the operation they belong to.
  *
- * js_obj_to_desc is what remains, reached through the C [[GetOwnProperty]] HOOK. THAT CLAIM USED TO SAY routing
- * JSON.stringify and for-in would remove it. Both are routed now and it is still reachable, so the claim was
- * WRONG and is corrected here rather than quietly left standing:
+ * IT IS ZERO NOW, and how it got there is the point. The count was 13 = js_obj_to_desc's twelve (six fields x
+ * HasProperty + Get) plus one `enumerable` read; the note here twice predicted which conversion would remove the
+ * twelve and was twice WRONG, because js_obj_to_desc's last caller was not a consumer at all — it was the C
+ * [[GetOwnProperty]] HOOK, reachable only from C. What removed it was DELETING that hook's BODY, which the armed
+ * DFAILs had already proven unreachable across the whole corpus. A count that will not fall to a conversion may be
+ * waiting on a deletion instead.
  *
- *     var inner = new Proxy({q:1}, {getOwnPropertyDescriptor(t,k){ <loop>; return Reflect.getOwnPropertyDescriptor(t,k) }});
- *     Object.getOwnPropertyDescriptor(new Proxy(inner, {getOwnPropertyDescriptor(t,k){...}}), "q")
- *
- * aborts today. The consumer IS routed — the outer trap runs on the chain — but 10.5.5 steps 10 and 12 are
- * `target.[[GetOwnProperty]](P)` and `IsExtensible(target)`, and js_proxy_gopd_pre performs BOTH from C. When
- * the target is itself a Proxy those are its traps. Every other proxy invariant has the same shape, which is
- * why the count below is over the whole family and not over this one function.
- *
- * 13 = js_obj_to_desc's twelve (six fields x HasProperty + Get) plus ONE `enumerable` read, shared by both
- * enumerable-key walks through js_desc_object_is_enumerable. That one is safe by construction — every
- * GP_GETOWNPROP delivery rebuilds the record through js_desc_to_object — and asserts it with
- * js_read_is_page_code rather than claiming it in a comment. A second walk needing the same read is a reason to
- * share the site, never to raise this. It may only go down. */
+ * The ONE that remains is the `enumerable` read shared by both enumerable-key walks through
+ * js_desc_object_is_enumerable, which is safe by construction — every GP_GETOWNPROP delivery rebuilds the record
+ * through js_desc_to_object — and asserts it with js_read_is_page_code rather than claiming it in a comment. A
+ * second walk needing the same read is a reason to share the site, never to raise this. It may only go down. */
 /* THE UNROUTED CONSUMERS behind those twelve, counted rather than described. An own-keys walk with
  * JS_GPN_ENUM_ONLY has to ask each key's ENUMERABILITY, which on a Proxy is the `getOwnPropertyDescriptor`
  * trap — so every C caller that passes that flag runs the trap from C and never reaches the routed walk.
@@ -524,9 +511,9 @@ if (enumOnlyCallers !== 2) {
 const gopdFromC =
   (src.match(/JS_GetOwnPropertyInternal\(/g) || []).length
   - (src.match(/static int JS_GetOwnPropertyInternal\(/g) || []).length;
-if (gopdFromC !== 10) {
-  console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 10.`);
-  console.error(gopdFromC > 10
+if (gopdFromC !== 8) {
+  console.error(`C-side [[GetOwnProperty]] call sites: ${gopdFromC}, expected 8.`);
+  console.error(gopdFromC > 8
     ? `  A new C caller can reach a Proxy's getOwnPropertyDescriptor trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
@@ -561,9 +548,9 @@ if (gopdFromC !== 10) {
  * 14 = the call sites, excluding the definition. */
 const extFromC = (src.match(/JS_IsExtensible\(/g) || []).length
   - (src.match(/^int JS_IsExtensible\(/gm) || []).length;
-if (extFromC !== 14) {
-  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 14.`);
-  console.error(extFromC > 14
+if (extFromC !== 8) {
+  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 8.`);
+  console.error(extFromC > 8
     ? `  A new C caller can reach a Proxy's isExtensible trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
@@ -670,8 +657,28 @@ if (extFromC !== 14) {
  *   [[OwnPropertyKeys]] — 27.1.3.4 Iterator.zipKeyed's injected getOwnPropertyKeys helper.
  *
  * All of those are fixed, and the DFAILs LAND: the whole 43222-test corpus now runs with all seven armed and fires
- * none, which is a far stronger statement than any of the per-site comments that used to say a site was safe. Two
- * lessons worth keeping:
+ * none, which is a far stronger statement than any of the per-site comments that used to say a site was safe.
+ *
+ * AND THEN THE SEVEN BODIES WENT. An armed DFAIL that never fires across the whole corpus is not the end state —
+ * it is the PROOF that the code under it is unreachable, and unreachable page-code-running C is exactly what this
+ * project deletes. Each hook is now its DFAIL plus a visible InternalError for release, where the DFAIL compiles
+ * out and there is deliberately nothing to fall back to; answering from the proxy's own empty shape would be a
+ * WRONG answer, which is worse than a missing capability. What went with them, none of it reachable and all of it
+ * running the page's code from an activation with no flow base:
+ *   js_proxy_ownkeys_check   10.5.11 steps 5-11, including CreateListFromArrayLike on the TRAP RESULT
+ *   js_proxy_gopd_check/_pre 10.5.5 steps 9-17 with the target's facts read from C
+ *   js_obj_to_desc           6.2.6.5 ToPropertyDescriptor: six HasProperty/Get PAIRS on a page object
+ *   js_proxy_has/_delete/_set/_define_invariant  four invariants over descriptors read from C
+ * The routed path keeps every INVARIANT it shares (js_proxy_gopd_post and its three, js_proxy_get_check and its
+ * siblings, js_proxy_get_invariant), so what was deleted is a WAY OF ASKING and never a check.
+ *
+ * The ratchets moved accordingly, and one of them says something the notes beside it had got wrong twice:
+ * ToPropertyDescriptor C reads 13 -> 1, C-side [[GetOwnProperty]] 10 -> 8, [[IsExtensible]] 14 -> 8,
+ * [[HasProperty]] 10 -> 3. The descriptor count had twice been predicted to fall to a CONVERSION (JSON.stringify,
+ * then for-in); both were routed and it did not move, because js_obj_to_desc's last caller was not a consumer at
+ * all. A count that will not fall to a conversion may be waiting on a DELETION instead.
+ *
+ * Two lessons worth keeping:
  *
  *   THE ANSWER WAS USUALLY A WALKER, NOT A SITE. tramp_proto_proxy / tramp_accessor_getter / tramp_accessor_setter
  *   were each guarded at their ~18 call sites by `JS_VALUE_GET_TAG(x) == JS_TAG_OBJECT`, and that one guard,
@@ -875,6 +882,13 @@ if (extFromC !== 14) {
  * global Environment Record's operations are the machine's now, and NONE of the global object's own reads is
  * a claim any more — each is an own-property answer on a receiver a DCHECK asserts is not a Proxy. 13 -> 11.
  *
+ * 10 -> 4. js_obj_to_desc's SIX HasProperty reads went with it when the C [[GetOwnProperty]] hook's body was
+ * deleted — the ratchet had them listed as "reach only ENGINE-BUILT objects... and go when those do", and that is
+ * exactly what happened, though by DELETION rather than by the conversion the note expected. What is left is the
+ * import-attributes record, the two regexp `groups` reads and js_proxy_has's own forward, all of which go when the
+ * remaining hook bodies do — and 4 -> 3 the moment they did, with js_proxy_has's own forward to the target. What
+ * is left reaches only ENGINE-BUILT records: the import-attributes record and the two regexp `groups` reads.
+ *
  * 11 -> 10. JS_TryGetPropertyInt64 — the has-then-get pair every array builtin used to walk a sparse source —
  * had lost its last caller when those builtins became step machines over step_hasidx_run and step_getidx_run, and
  * the body kept compiling. A superseded body that still compiles is the fallback this file forbids whether or not
@@ -888,18 +902,18 @@ if (extFromC !== 14) {
  * 10 = the call sites, excluding the definition. */
 const hasFromC = (src.match(/JS_HasProperty\(/g) || []).length
   - (src.match(/^int JS_HasProperty\(/gm) || []).length;
-if (hasFromC !== 10) {
-  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 10.`);
-  console.error(hasFromC > 10
+if (hasFromC !== 3) {
+  console.error(`C-side [[HasProperty]] call sites: ${hasFromC}, expected 3.`);
+  console.error(hasFromC > 3
     ? `  A new C caller can reach a Proxy's has trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
 }
 
 const descReads = (src.match(/JS_(Get|Has)Property\(ctx, desc, /g) || []).length;
-if (descReads !== 13) {
-  console.error(`ToPropertyDescriptor C-side reads: ${descReads}, expected 13.`);
-  console.error(descReads > 13
+if (descReads !== 1) {
+  console.error(`ToPropertyDescriptor C-side reads: ${descReads}, expected 1.`);
+  console.error(descReads > 1
     ? `  A descriptor walk is reading fields from C again. It is the page's code — run it through JSDescCursor.`
     : `  js_obj_to_desc shrank: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
