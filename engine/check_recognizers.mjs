@@ -1612,6 +1612,19 @@ if (extFromC !== 7) {
  *      index it names) passes on both trees. The case for the conversion is the razor's, not a bug report: each
  *      replay's correctness rested on an unstated purity property of that opcode's prologue that nothing checked.
  *      Recording it that way matters because the opposite claim was written into a commit message first.
+ *      AND HOISTING THE UNARY FAMILY EXPOSED THREE OPERATORS THE TRAMP NEVER REACHED AT ALL: ++x, --x and
+ *      x += v on a LOCAL. They are not stack operators — inc_loc/dec_loc ran js_unary_arith_slow over `&op1 + 1`,
+ *      a one-element stack in the C FRAME, and add_loc handed js_add_slow a two-element `ops` array in the same
+ *      place — so 13.4.4.1's and 13.15.3's ToPrimitive ran from C on an operand that could not be parked even in
+ *      principle. `var x = {valueOf(){ for(;;){} }}; ++x;` aborted with the no-flow-base @WHY. All three now put
+ *      the local's value on the REAL operand stack and share the family's coercion, and add_loc's separate
+ *      string-concatenation arm goes with them: js_add_slow performs a string left operand by the same 13.15.3
+ *      steps, so keeping that arm would have been a second implementation, not an optimisation.
+ *      NEITHER THE LOCAL'S INDEX NOR THE OPERATOR IS CARRIED IN A C LOCAL across the suspension. `pc` is restored
+ *      from sf->cur_pc and points past the operand byte on both the direct and the resumed entry, so the index is
+ *      pc[-1] and the opcode byte pc[-2] — read from the bytecode, which is what it is for. That is the general
+ *      answer to the hazard the tp_op_byte segfault demonstrated: a resume needs no hand-picked register when the
+ *      value is already addressable from state that survives.
  *      AND THE LEDGER ENTRY FOR THIS WAS ALMOST LOST: the edit that should have added it failed on a stale
  *      anchor while the commit and push in the same command ran anyway, because they were joined by && to a
  *      python block whose AssertionError did not stop the shell line. A ledger edit and its commit belong in
