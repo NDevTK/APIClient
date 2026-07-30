@@ -1024,10 +1024,23 @@ if (extFromC !== 7) {
  *   move() or use() on the very stack being disposed — reachable from script. The machine STEALS the list at
  *   stage 0 (the stack keeps nothing) and its fini releases the tail, so re-entrancy has nothing to disturb and an
  *   abandoned flow leaks nothing. DisposableStack 28 -> 4, corpus 725 -> 684, 0/43222.
- *   STILL C-DRIVEN, and it is the SAME algorithm: AsyncDisposableStack 29. disposeAsync builds its await chain
- *   eagerly out of js_async_dispose_step closures, so two call sites remain — the first (synchronous) dispose
- *   inside the builtin, and the JS_Call inside each closure. The closure one needs no new capability:
- *   JSCFunctionDataRecord carries a step_def and promise_closure_set_step is how a reaction declares one.
+ *   THE ASYNC HALF WENT WITH IT, in the same shape: js_dispose_async_def for the builtin (its FIRST dispose call
+ *   is synchronous — the Await comes after it and test262 observes the difference, so it cannot be folded into
+ *   the chain) and js_async_dispose_link_def for each chain closure, declared through promise_closure_set_step.
+ *   Both C bodies are DFAILs. AsyncDisposableStack 29 -> 8, corpus 684 -> 653.
+ *   AND THEN THE FORCING FUNCTION FIRED, which is the part worth keeping. With the outer loop finally a request,
+ *   the very first fixture aborted: "loop preempted in a NON-coroutine activation". js_sync_dispose_wrapper —
+ *   GetDisposeMethod's sync fallback on an async stack — was calling the object's %Symbol.dispose% with JS_Call
+ *   from C. It had been doing that all along and NOTHING could see it, because the loop that reached it was
+ *   itself a drive-to-completion; a second one nested inside the first is invisible to a counter that only knows
+ *   "a bytecode body was entered by C recursion". Converting the outer is what made the inner nameable. It is a
+ *   step machine now (js_sync_dispose_wrap_def), and its two construction sites collapsed into one
+ *   js_new_sync_dispose_wrapper, because building the closure IS declaring it a machine and a second site is a
+ *   second chance to forget. 653 -> 610.
+ *   THE GENERAL FORM: a drive-to-completion HIDES the ones below it. Converting a loop does not only remove its
+ *   own count, it exposes the calls it was masking — so a directory's number going down by less than expected
+ *   after a conversion is the signal to look for what the conversion revealed, not evidence the conversion was
+ *   partial.
  *
  *   Promise 66, Map 39, RegExp 33, Set 27 — not yet localised past the directory. AsyncDisposableStack
  *   29 / DisposableStack 28 ARE localised: js_disposable_stack_dispose drives each resource's dispose method with
