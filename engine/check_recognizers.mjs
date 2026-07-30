@@ -1318,6 +1318,13 @@ if (extFromC !== 7) {
  * path and js_call_function (with the tramp_is_call_function call-site reshape that exists only for it) with it —
  * so the counter reaching 0 and the last recognizer disappearing are the same diff.
  *
+ * THERE IS NO INLINE JS_IteratorClose LEFT IN THE ENGINE EITHER. The last one was in js_map_constructor's
+ * `fail:` label, on an `iter` that could never be an object — residue of the deleted C acquire, together with
+ * 24.1.1.1 step 6's `? Get(map, "set")` read and the iterator locals. All of it sat DOWNSTREAM of the DFAIL for
+ * an unrouted construct shape: the adder read ran first, but only on a path that then aborts. Being unreachable
+ * is not being absent — a second copy of a step whose real implementation lives on the consume machine is the
+ * legacy twin the ban is about, and the way it survived is that a teardown label kept it compiling.
+ *
  * THERE IS NO C-DRIVEN PROXY TRAP LEFT IN THE ENGINE. Every one of the thirteen internal methods is a DFAIL plus a
  * visible release failure, and the only implementation is the routed one.
  *
