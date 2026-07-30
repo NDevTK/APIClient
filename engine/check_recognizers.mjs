@@ -1065,6 +1065,19 @@ if (extFromC !== 7) {
  *   js_create_from_ctor -> JS_GetProperty(newTarget, "prototype"), the same 10.1.14 [[Get]] the TypedArray view
  *   constructor's conversion built step_proto_from_ctor_run for. NINETEEN js_create_from_ctor call sites remain;
  *   the seven passing JS_UNDEFINED read nothing (10.1.14 takes the intrinsic), so twelve are real.
+ *   BUILT: both constructors are CREATECTOR_DEF_FULL declarations now (js_disposable_ctor_def /
+ *   js_async_disposable_ctor_def, one per class because the class id rides `arg`), with a precheck for step 1's
+ *   "Constructor requires 'new'" — which the machine runs BEFORE anything is created and therefore before the
+ *   prototype read. JS_NewGlobalCConstructorStep is the two-line registration sibling of
+ *   JS_NewGlobalCConstructor/Magic; only the cproto differs. DisposableStack 4 -> 2, AsyncDisposableStack 8 -> 6.
+ *   AND IT LEAKED ON THE FIRST TRY, which is the part to keep. The post-create body CONSUMES the object
+ *   js_creatector_step made — its return value IS the machine's result — and the new body opened with
+ *   `JSValue obj = js_dup(obj_)`, so every construction leaked the step's own reference. Nothing failed: the
+ *   corpus stayed 0/43222 and both suites stayed green. The gc_obj_list walk in JS_FreeRuntime is what caught it,
+ *   as a wall of [gcleak] lines under the ASan fixture run. Two lessons: READ the ownership contract at the site
+ *   you are joining (js_weakref_ctor_body says `JSValue obj = (JSValue)obj_;` and that cast IS the contract), and
+ *   a passing suite proves nothing about ownership — only the leak walk does, so it is not optional.
+ *
  *   CORRECTING WHAT THIS FILE SAID ONE ENTRY AGO — "what this one needs is a step CONSTRUCTOR registration, and
  *   JS_NewGlobalCConstructorMagic has no step-ctor form yet" is wrong, and the way it is wrong is the lesson.
  *   CREATECTOR_DEF / CREATECTOR_DEF_FULL already ARE the generic OrdinaryCreateFromConstructor machine
