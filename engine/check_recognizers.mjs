@@ -1524,9 +1524,13 @@ if (extFromC !== 7) {
  *      That is the retracted argument verbatim.
  *   2. tp_retry_pc / value_tonum_toprim (19718, 23416) — the OPERAND-mode half of the same thing: the opcode
  *      byte is stored so the interpreter can run it again once the slot holds a primitive.
- *   3. CONT_ARRAY_LEN / AL_REISSUED (19196-19213, 27725) — coerces V and RE-ISSUES the whole keyed write,
- *      re-entering do_getprop_tramp and re-walking the object. Its soundness note is again "the re-run's own
- *      conversions are of a number and invoke nothing".
+ *   3. CONT_ARRAY_LEN / AL_REISSUED — REMOVED. It coerced V and re-issued the whole keyed write, re-entering
+ *      do_getprop_tramp and re-walking the prototype chain, the proxy checks and the accessor checks that had
+ *      already resolved the arm. The sequence PERFORMS step 6 itself now: the walk resolved the target once, and
+ *      this is that walk's continuation rather than a second one. The arm's own condition guarantees the
+ *      operation is GP_SET or GP_DEFINE and it parks the receiver as the object itself, so the remaining step is
+ *      exactly one call — which is why no label was needed in the end, only the recognition that re-issuing was
+ *      never doing anything the state could not do directly.
  * A SIXTH WAS ABOUT TO BE BUILT ON TOP OF (3): the typed-array define's coercion, designed in the entries above
  * as one more AL_ phase feeding that same re-issue. That design is WITHDRAWN. Extending a replay is worse than
  * leaving the drive-to-completion in place, because it spends the conversion budget entrenching the shape that
