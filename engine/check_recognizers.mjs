@@ -930,13 +930,26 @@ if (extFromC !== 7) {
  *   FLOW. That is the "module support in JS_FlowNew" gap this file has named since the sixth sweep, and it is the
  *   one root that needs a new mechanism rather than a conversion.
  *
- *   TypedArrayConstructors 265 — js_typed_array_constructor: three JS_ToIndex calls (the element length, the
- *   byteOffset, the length-with-buffer) plus js_create_from_ctor's `prototype` read, in a body with three
- *   delegating arms (js_typed_array_constructor_ta and _obj each perform that read too). NOTE FOR WHOEVER TAKES
- *   IT: the engine coerces BEFORE js_create_from_ctor, while 23.2.5.1 step 3 puts AllocateTypedArray — and so the
- *   `prototype` read — first. That ordering is a separate fidelity question and must not ride along with the
- *   routing; the tail's own comment ("Re-validate buffer after js_create_from_ctor which may have run JS code")
- *   is the acknowledgement that the read is user code.
+ *   TypedArrayConstructors 265 — and an ATTEMPT AT IT WAS REVERTED, which is worth more than the count. What the
+ *   probe measures is 23.2.5.1 step 6.b's ToIndex on the byteOffset and the length, in the ARRAY BUFFER branch
+ *   (`new Uint8Array(buf, {valueOf(){…}})`); the element-count form's argument is already primitive by the time
+ *   the body sees it, because an object takes a different branch.
+ *   THE WRONG SHAPE, tried and reverted: a step-ctor declaration in FRONT of the whole constructor. Its object
+ *   branches are ALREADY fully routed — the constructor carries a native-machine declaration (ITERCONS_TA_CTOR_BASE
+ *   -> do_ta_consume_tramp, gated by ta_consume_ready) and js_typed_array_constructor_obj is a PURE DFAIL — so a
+ *   machine in front intercepts object arguments the dispatch owns and re-enters that DFAIL. Converting the callee
+ *   also changes its CALL form: `Uint8Array()` without new stopped throwing at the constructor_magic check and
+ *   reached js_call_c_function's declared-consume DFAIL instead.
+ *   WHAT IS NOT THE OBSTACLE, since it looked like one: native_machine and the STEPDEF magic are SEPARATE fields,
+ *   so a callee can carry both declarations. The obstacle is that the coercions belong to ONE BRANCH, and a
+ *   declaration on the callee cannot say "only when the first argument is a buffer".
+ *   THE SHAPE THAT FITS: the buffer branch's two coercions belong to the machine the constructor ALREADY declares
+ *   — do_ta_consume_tramp gains a buffer-first-argument entry, with ta_consume_ready widened to admit it — rather
+ *   than to a second machine wrapped around everything. One declaration, one driver.
+ *   SEPARATELY: js_create_from_ctor's `prototype` read is still C-side in all three branches, and the engine
+ *   coerces BEFORE it while 23.2.5.1 step 3 puts AllocateTypedArray first. That ordering is its own fidelity
+ *   question and must not ride along with the routing; the tail's comment ("Re-validate buffer after
+ *   js_create_from_ctor which may have run JS code") is the acknowledgement that the read is user code.
  *
  *   String 46 — js_str_replace_prologue: check_regexp_g_flag's IsRegExp (@@match) and `flags` reads, and step 2's
  *   `? GetMethod(searchValue, @@replace)`, all performed with JS_GetProperty from C inside a machine that already
