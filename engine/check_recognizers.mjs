@@ -1042,13 +1042,24 @@ if (extFromC !== 7) {
  *   survive until the fallback has consulted it, which is the opposite of freeing it as soon as the proto
  *   arrives.
  *   WHAT KILLED IT: a LEAK, hundreds of objects across built-ins/Promise, found by the gc_obj_list walk with the
- *   suite at 0/640 and the corpus at 0/43222. The suspect is the ABANDON path — the new kind was added to the
- *   shared fall-through case group whose body was not read, and a JSPromiseExec torn down as another struct is
- *   exactly the "hand-copied list" failure this file already records for construct-abandon. NEXT ATTEMPT STARTS
- *   BY READING THAT CASE BODY, not by re-deriving the design, which is sound.
- *   THE PROCESS POINT: a new continuation kind costs SIX places (in-place delivery, suspended delivery, abrupt,
- *   abandon, two DCHECK lists) and the abandon is the one whose body must be read rather than pattern-matched —
- *   the other five are dispatch, this one is a TEARDOWN and it is per-struct.
+ *   suite at 0/640 and the corpus at 0/43222.
+ *   THE FIRST SUSPECT WAS WRONG AND IS RETRACTED. This file said the shared fall-through case group the new kind
+ *   was added to must be a per-struct teardown, and that a JSPromiseExec freed as another struct was the cause.
+ *   It is not: that switch is cont_kinds_are_distinct, which exists ONLY to be compiled — it turns a duplicate
+ *   CONT_* constant into "duplicate case value" at build time and has no body at all. Adding the kind there was
+ *   correct and cannot leak anything. Recording a suspect as if it were a finding is the failure here; a
+ *   backtrace or a read is what makes a cause, and neither had been done.
+ *   SO A NEW KIND COSTS FIVE DISPATCH PLACES PLUS ONE COMPILE-TIME REGISTRATION, and none of them is a teardown.
+ *   WHERE THE LEAK IS NOT, established by reading the reverted diff against the paths it replaced: the abandon
+ *   registration (above), the delivery arms (identical in shape to CONT_PROMISE_ALL_RESOLVE's, which is green),
+ *   and js_promise_init_from_obj (the create simply moved out of it).
+ *   WHAT IS STILL UNREAD, and where the next attempt should look FIRST: promise_exec_state_abort against the
+ *   original promise_exec_abort. The original ran BEFORE the state existed, so pe_outer was still an interpreter
+ *   register and the machine that requested the construct was never abandoned; on the new path that requester
+ *   has moved to s->outer and is likewise not abandoned — but now there is a state holding it. The class-id
+ *   histogram of the leak (bulk class_id 1/12/13 plus 234 var_refs) is whole closures being retained, which is
+ *   what an un-abandoned requester looks like. Read js_construct_requester_abandon and the CONT_PROMISE_EXEC
+ *   arm of the exception unwind before touching anything else.
  *   THE OBSTACLE IS THE REGISTERS, and it is the same one that shaped the Promise.all setup: pe_ntgt,
  *   pe_super_ref, pe_executor_own, pe_outer and the call shape are all interpreter locals consumed into
  *   JSPromiseExec AFTER js_promise_new returns, and none of them survives a suspension. The state has to be
