@@ -714,6 +714,37 @@ if (extFromC !== 7) {
  * Proxy or carry an accessor). The routed path reads a trap through CONT_TRAP_GET, which is that read as a request.
  * C-side [[IsExtensible]] 8 -> 7 with it.
  *
+ * A SIXTH sweep, and the first one whose subject is not the Proxy: THE DRIVE-TO-COMPLETION OF AN ORDINARY BYTECODE
+ * BODY. The only forcing function for one was the back-edge preempt DFAIL, which fires exactly when the body
+ * happens to contain a LOOP — so a getter, a callback or an eval'd program with no back-edge ran to completion in
+ * silence. g_sync_drive_to_completion is the same bulk detector g_drive_to_completion already is, one level wider,
+ * and the harness reports it beside that one.
+ *
+ * Its condition is STRUCTURAL rather than a list of callers: the tramp never re-enters JS_CallInternal (it pushes a
+ * heap frame and `goto restart`s), and the flow base enters through the JS_CALL_FLAG_GENERATOR branch, so ANY
+ * arrival at the ordinary bytecode entry while a flow exists is a C-recursive drive by construction.
+ *
+ * THE FIRST VERSION OF THAT CONDITION WAS WRONG and the correction is the lesson: it also required
+ * rt->current_stack_frame != NULL, which reads like "only count nested ones" and actually writes in an EXEMPTION
+ * FOR THE HOST BOUNDARY — as if JS_Eval were allowed to run page code to completion. It is not. A host entry that
+ * wants to run page code creates a flow (JS_FlowNew / JS_FlowResume) and runs it there, which is what
+ * fork_preempt_eval does; only g_flow_base_gen == NULL is exempt, and that is baseline setup before any flow
+ * exists. Dropping the extra condition took the whole-corpus count from 3926 to 4924 — UP, because the smaller
+ * number was wrong, the same way the [[IsExtensible]] count moved up when it started asking the right question.
+ *
+ * FIXED first, because the detector named it immediately: OP_apply_eval's DIRECT eval ran the eval'd program with
+ * JS_EvalObject's own JS_CallFree while `eval(x)` a few opcodes away compiled to a closure and ran it on the tramp.
+ * One operation answering differently by how it was written, invisible unless the eval'd program had a loop in it.
+ * Both spellings now share eval_direct_closure, which also puts the body-entry ASSERT in one place instead of one
+ * per spelling — the ratchet on tramp_body_is_plain is what insisted on that rather than a second copy.
+ *
+ * NAMED, with its backtrace: js_bytecode_eval — the SELF-HOSTED builtins (Array.fromAsync, Iterator.zip,
+ * Iterator.zipKeyed) are compiled bytecode run through JS_EvalFunction -> JS_CallFree from C, reached from
+ * js_bytecode_autoinit, i.e. from a lazy property READ that can happen at any depth inside a flow. The body is
+ * engine-authored, which is why it has never mattered — but "engine-authored" is a claim, and the read that
+ * triggers it is the page's. Routing it means an AUTOINIT that can park, which is the mechanism to build.
+ * The 4924 is the honest size of the surface; it is a ratchet to drive down, not a number to explain away.
+ *
  * THERE IS NO C-DRIVEN PROXY TRAP LEFT IN THE ENGINE. Every one of the thirteen internal methods is a DFAIL plus a
  * visible release failure, and the only implementation is the routed one.
  *
