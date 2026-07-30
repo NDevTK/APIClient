@@ -1652,6 +1652,20 @@ if (extFromC !== 7) {
  *      it extended a replay; CONT_ARRAY_LEN no longer re-issues, so it can be redone against the current shape.
  *      The forcing function is a DCHECK at JS_SetPropertyValue's typed-array path asserting V needs no
  *      coercion — it names every unrouted caller at once, so it lands WITH the routing and not before it.
+ *      AND THE GUARD DOES NOT BELONG AT THE CALLERS. Array.prototype.fill writes through step_setidx_run ->
+ *      step_setprop_run -> the keyed entry's GP_SET, which is the ONE convergence point for [[Set]]; the
+ *      TypedArray constructors reach the same entry. So the arm goes THERE, beside arr_len_write_needs_toprim,
+ *      and OP_put_array_el's own inline ta_write_needs_toprim guard is deleted with it — one place asking, not
+ *      one per caller. That also settles which predicate: the entry holds an ATOM, so the question is
+ *      is_typed_array(target) && JS_AtomIsNumericIndex(atom) > 0, and the value-form predicate's key-to-atom
+ *      conversion disappears with its last interpreter caller.
+ *      THE OBSTACLE THE NEXT ATTEMPT STARTS FROM, found by reading do_array_len_start rather than assuming:
+ *      JSArrayLen does not carry gp_recv, and a TypedArray element write NEEDS it — 10.4.5.5 step 1 applies
+ *      TypedArraySetElement only when SameValue(O, Receiver), so the receiver decides whether V is coerced at
+ *      all, where 10.4.2.4's `length` write has no such gate and that is why the carrier never needed it. The
+ *      carrier gains the receiver, the arm's predicate includes the SameValue test, and the AL_TA_PRIM phase
+ *      performs the write itself with the primitive V rather than re-issuing the request — re-issuing is what
+ *      AL_REISSUED was deleted for.
  *      AND THE LEDGER ENTRY FOR THIS WAS ALMOST LOST: the edit that should have added it failed on a stale
  *      anchor while the commit and push in the same command ran anyway, because they were joined by && to a
  *      python block whose AssertionError did not stop the shell line. A ledger edit and its commit belong in
