@@ -1783,6 +1783,37 @@ if (extFromC !== 7) {
  *          Array(-3) / Array(2.7) and threw RangeError where the spec yields [] and a length-2 array.
  *      Math.floor is passed IN to the closure rather than reached through the global, so a page replacing
  *      Math.floor cannot change what the builtin computes — the rule the other four injected intrinsics follow.
+ *      THE PORT ITSELF IS BUILT AND MEASURED BUT NOT LANDED — 18/95 fromAsync files fail, so it stays out of the
+ *      tree; the WIP is at scratchpad/fromasync_port_wip.c. What it PROVES is the part worth keeping: with
+ *      Array.fromAsync a step machine the directory's SyncDriveToCompletion goes 190 -> 0, which confirms the
+ *      autoinit really was the whole of it.
+ *      THE SHAPE THAT WORKS: the builtin requests a CAPABILITY (16), builds a state ARRAY, and runs the spec's
+ *      closure; the loop state lives in that array because a step machine's own state dies when it returns, and
+ *      every Await is a fresh machine instance reached through a reaction closure that carries the array — the
+ *      shape disposeAsync's chain already uses. An AWAIT is THREE phases, not a C-side PromiseResolve: resolving
+ *      with a THENABLE makes the resolving function READ `.then`, which is page code, and its C entry DFAILs on
+ *      exactly that. So: request the capability, issue resolve(value) as a CALL, then PerformPromiseThen, which
+ *      is the only part that runs nothing. The settle at the end is a CALL for the same reason.
+ *      FOUR DEFECTS FOUND AND FIXED GETTING THERE, three of them named by the engine's own DFAILs:
+ *        - a two-phase step_*_run must be RE-ENTERED AT THE SAME CALL SITE, so a phase that performs one KEEPS
+ *          its phase until it returns 0 and threads `in` into it; only an explicit request code (3/4/16)
+ *          advances the phase. Advancing in both cases made @@asyncIterator's parked read get answered at the
+ *          @@iterator call site, which consumed it as its own. That was the hang.
+ *        - the builtin driver had no stage past its build step, so every request delivery rebuilt the state at
+ *          phase 0 forever.
+ *        - the async-from-sync wrapper's TWO deliveries and the async-generator drive's had no arm for a
+ *          CONT_STEP caller; all three DFAILs said "add its arm here".
+ *        - JS_CreateAsyncFromSyncIterator BORROWS sync_iter and transfers only next_method. Treating it as
+ *          consuming both leaked a C function, and a leaked C function pins its realm: 750 live objects for a
+ *          two-element call, and ONLY on the sync-iterable branch, which is what isolated it.
+ *      WHAT IS LEFT, in three classes the 18 failures name: (1) an abrupt completion must REJECT, and some paths
+ *      still let it escape synchronously; (2) a CALL delivery needs a JS_IsException(in) check before the value
+ *      is used — a throwing mapfn currently reads the exception as a value and hangs; (3) step 12's
+ *      IfAbruptCloseAsyncIterator is not implemented at all, which is what the close-iterator files check.
+ *      AND THE RATCHET CAUGHT A FIFTH DEFECT the tests did not: the sync-wrap path read `next` off the freshly
+ *      built wrapper with JS_GetProperty, which trips the iterator-protocol C-read ceiling. The wrapper is
+ *      engine-made so that read invokes nothing, but the ceiling is a SHAPE ratchet and the shape is the banned
+ *      one — CreateAsyncFromSyncIterator should hand its next method back rather than be asked for it.
  *
  *   3d. AND THE OTHER BIG BLOCK IS ONE ROOT TOO, measured the same way: language/expressions 28 (async-generator
  *      8 + class 16 + object 4), AsyncFromSyncIteratorPrototype 7 and AsyncGeneratorPrototype 3 are all
