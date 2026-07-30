@@ -702,12 +702,32 @@ if (extFromC !== 14) {
  * arm — the machine is built first, because everything it takes from the smc_* registers is pure state assignment
  * and those registers do not survive the reads.
  *
- * NEXT, and named the same way: build_arg_list — 19.2.3.1 CreateListFromArrayLike, which
- * `f.apply(t, arrayLike)` / `Reflect.apply` / a spread reach from JS_CallInternal. Step 3 is
- * `? LengthOfArrayLike(obj)` and step 5 is `? Get(obj, index)` per element, and js_get_length32 plus a
- * JS_GetPropertyUint32 loop perform ALL of them from C — so an arrayLike that is a Proxy, or that has an accessor
- * `length`, runs the page's code with no flow base. It is a LOOP rather than a fixed number of reads, which makes
- * it the first of these to need a per-element cursor in its continuation rather than a phase.
+ * FIXED, the same turn: the APPLY trampoline's build_arg_list — 19.2.3.1 CreateListFromArrayLike, whose step 3 is
+ * `? LengthOfArrayLike(obj)` and step 5 a `? Get(obj, index)` PER ELEMENT. CONT_ARG_LIST is the first of these
+ * sequences whose length is unknown when it starts, so it carries a CURSOR and the half-built list, and it drives
+ * THREE request kinds (the `length` read, that value's ToPrimitive, and one read per element). The three
+ * build_arg_list calls inside do_apply_tramp collapse into ONE, hoisted ABOVE the question of what kind of target
+ * this is: the list is an operand, so nothing about the callee decides how to read it.
+ *
+ * A FAST ARRAY still builds its list in C, and that is not a fallback — arg_list_is_fast asks whether the OPERAND
+ * can answer without invoking anything (a fast array's `length` is an own data slot equal to its element count and
+ * every element is a slot read), so the C loop reaches the same answer with no request rather than standing in for
+ * a routed path. The test is on the operand, not on the callee, which is the difference between a capability
+ * question and a recognizer.
+ *
+ * A correction the fixture forced, worth keeping because the earlier wording here had it wrong: the SPREAD is NOT
+ * this operation. `f(...x)` is GetIterator-based, so an array-like with no @@iterator is not spreadable at all;
+ * only .apply / Reflect.apply and the construct argument LIST take CreateListFromArrayLike.
+ *
+ * FIXED beside it, found by the same armed run: 23.1.3.9 step 5.b's `? Get(O, Pk)` in
+ * find/findIndex/findLast/findLastIndex. Its CALLBACK was already routed and its ELEMENT READ was not, which is
+ * the residue to expect in an already-converted machine — the loop had one JS_GetPropertyValue left in it.
+ *
+ * NEXT, named: SIX build_arg_list callers remain, all of them argument LISTS rather than the apply shape —
+ * Reflect.construct's (three sites in the construct dispatch), OP_apply_eval's, and the C bodies of
+ * js_function_apply and its Reflect twin, which the step machine JSFuncApply already supersedes for the value
+ * spelling. The sequence they need EXISTS now (CONT_ARG_LIST); what each needs is its own resumption point, the
+ * way do_apply_tramp got one.
  * The other js_create_from_ctor callers
  * (Object, RegExp, Map/Set, DisposableStack, Promise, the two TypedArray constructors) were not reached by the
  * armed corpus, which is evidence and not proof: each is a C constructor that would fire the moment a test
