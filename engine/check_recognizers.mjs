@@ -1123,6 +1123,24 @@ if (extFromC !== 7) {
  *   THE SPLIT IS LANDED: js_promise_init_from_obj is steps 4-8 with the object already created, and
  *   js_promise_new is the entry that still performs step 3 itself. That half of the reverted diff was right and
  *   is now in on its own, green, so the routing diff is smaller by exactly that much.
+ *   THE ROUTING WAS WRITTEN AND REVERTED, AND IT GOT FURTHER THAN THE LAST ATTEMPT. The arm parks a JSCtorProto
+ *   with a new `resume_arm` field (CTOR_RESUME_PROMISE_EXEC) so the delivery jumps to a do_promise_exec_arm
+ *   label placed AFTER the arm's predicate — a real suspend/resume, with the arm chosen before the read and not
+ *   re-tested after it — and the body takes the delivered prototype through a pe_proto register plus 10.1.13's
+ *   realm fallback instead of calling js_create_from_ctor. It builds, and `new Promise(fn)`, `class S extends
+ *   Promise`, and Reflect.construct with a custom-prototype new.target ALL PASS.
+ *   WHAT IT TRIPS is a step-builtin DFAIL — "the step builtin `toString` was invoked outside the interpreter's
+ *   dispatch" — somewhere in built-ins/Promise that none of those three shapes reaches. The message says what is
+ *   wrong: the resume lands with a CALL SHAPE the arm's body does not own. do_promise_exec_arm sits inside the
+ *   `if (cmach == NATIVE_PROMISE_EXEC && …)` block, so jumping in from the delivery enters a block whose other
+ *   locals (cmach, and whatever the surrounding dispatch had established) are indeterminate on that path — the
+ *   same class of mistake as reading `s` after jumping into do_promise_all_finalize, which was caught there only
+ *   by re-deriving it from cont_st.
+ *   SO THE NEXT ATTEMPT MOVES THE LABEL OUT OF THAT BLOCK rather than jumping into it, and re-derives every
+ *   register the arm's body reads from the parked JSCtorProto — pe_* are already derived from con_*, so the
+ *   question is only which con_* the delivery restores and whether tramp_first / con_pop are among them.
+ *   Bisect from the shapes that PASS: the failure is not the plain, subclass, or custom-proto construct.
+ *
  *   AND THE ASSERT THAT NAMES THE GAP WAS WRITTEN, FIRED, AND HELD BACK ON PURPOSE. `DCHECK(new_target is
  *   undefined or the Promise constructor)` in js_promise_new fires immediately: do_promise_exec_tramp is the one
  *   caller passing a subclass NewTarget, which is the gap, confirmed rather than inferred. Arming it before the
