@@ -1088,9 +1088,14 @@ if (extFromC !== 7) {
  *   dispatch so a re-entry cannot re-read it), and JSCtorProto BORROWS func and ntgt, which is the ownership the
  *   reverted diff got wrong. js_promise_new still splits into js_promise_init_from_obj plus a create — that half
  *   of the reverted diff was right and is worth keeping.
- *   EVERY OTHER NATIVE-MACHINE ARM IN THAT DISPATCH IS THE SAME QUESTION, unasked: they all sit above the read
- *   and any that performs js_create_from_ctor has the identical gap. That is the sweep to measure next, not one
- *   more single site.
+ *   THE SWEEP IS MEASURED AND IT IS ONE SITE. Every native-machine arm above the read was checked, and both
+ *   consume arms already route it: do_setmap_consume_tramp issues `gp_obj = sc->ntgt; gp_atom =
+ *   JS_ATOM_prototype` itself, and do_ta_consume_tramp's comments have js_create_from_ctor in the PAST tense
+ *   along with the two teardown bugs that conversion cost. NATIVE_PROMISE_EXEC is the only arm left performing
+ *   10.1.13 step 2 from C — so the mechanical edit above does not open a family, it closes one.
+ *   THE CHEAPER ORDER, worth keeping: this took one awk over the dispatch and one grep per arm. Doing it BEFORE
+ *   the reverted diff would have found CONT_CTOR_PROTO immediately, because the setmap arm issues that exact
+ *   request four screens above where the invented one was written.
  *   FOURTH TIME: reach for the existing machine before writing one. CREATECTOR_DEF, STRRECV, js_creatector_step,
  *   and now CONT_CTOR_PROTO — every one of them found AFTER building or half-building a replacement. The check
  *   costs one grep for the operation's name and it has never once come back empty.
