@@ -1209,8 +1209,18 @@ if (extFromC !== 7) {
  *   TYPEDARRAYCONSTRUCTORS 37: JS_DefineProperty -> JS_SetPropertyValue -> JS_ToBigInt64Free -> ToPrimitive ->
  *   the page's valueOf, from the GP_DEFINE arm at quickjs.c:28010. A typed-array ELEMENT WRITE coerces its
  *   value, and for a BigInt64Array that coercion is ToBigInt — the page's code, run from C inside the define.
- *   This is not a builtin to convert: it is the element-write path itself, so the coercion has to be hoisted out
- *   of JS_SetPropertyValue and issued as a request before the write, the way every other operand coercion is.
+ *   AND THE MECHANISM ALREADY EXISTS, checked BEFORE writing anything this time. ta_write_needs_toprim() is
+ *   exactly this question — "is this a typed-array element write whose value is an object?" — over (target, key,
+ *   val), and OP_put_array_el already consults it and jumps to value_tonum_toprim, coercing the value as a
+ *   request and re-executing the write with the primitive in place. The SET spelling is routed; the DEFINE
+ *   spelling is not, which is the whole of the remaining gap.
+ *   So the edit is: in the GP_DEFINE arm, ask ta_write_needs_toprim(ctx, gp_obj, key, gp_val) before calling
+ *   JS_DefineProperty, and on true issue the TOPRIM and re-issue the define with the primitive — the same
+ *   coerce-then-re-execute the put path uses, which is sound here for the same reason it is there: a typed-array
+ *   element write coerces its value ONCE, so a substituted primitive stands for the original (the case where it
+ *   does not is `length`, which is why arr_len_write_needs_toprim takes the other route).
+ *   One predicate, two spellings, and only one of them consults it — the same shape as every "a call site was
+ *   not routed" finding in this file.
  *   Both are named with their line numbers because both are one site, not a directory.
  *
  *   THE HONEST HISTOGRAM at 725 (built-ins, then language): Array 204, Promise 65, TypedArrayConstructors 49,
