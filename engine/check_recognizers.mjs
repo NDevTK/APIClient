@@ -1060,11 +1060,25 @@ if (extFromC !== 7) {
  *   AND THEY ARE ON PATHS THAT PASS. built-ins/Promise was 0/640 WITH the leak present, so whatever retains
  *   those closures happens on ordinary successful construction, not on an error path — which rules out
  *   promise_exec_state_abort, the arm the previous note pointed at, as well.
- *   WHAT IS LEFT is the success path's own bookkeeping, and the one asymmetry in it: the state is now allocated
- *   BEFORE the promise exists, so between the allocation and the resume label it holds `ntgt` and UNDEFINED in
- *   `promise`/`resolving_funcs`, and every teardown that can run in that window must free exactly that shape.
- *   The finish arm at do_promise_exec_finish was NOT given the ntgt free the abrupt arm got — harmless only
- *   while ntgt is always UNDEFINED by then, which is an invariant nothing asserts. Start by DCHECKing it.
+ *   AND THEN THE WHOLE DESIGN TURNED OUT TO BE A DUPLICATE. CONT_CTOR_PROTO (65) ALREADY IS this read:
+ *   "10.2.2 [[Construct]] step 5's OrdinaryCreateFromConstructor, whose step 2 is `? Get(newTarget,
+ *   "prototype")`", issued UNCONDITIONALLY from the base-class construct, with JSCtorProto parking exactly the
+ *   con_* registers the suspension would lose and the non-object fallback already taking the CONSTRUCTOR'S REALM.
+ *   Every problem the reverted diff solved from scratch — where to park the registers, what the realm fallback
+ *   must be, that the read cannot be skipped for an ordinary new.target — is solved there, in a comment that
+ *   says so.
+ *   IT ALSO EXPLAINS THE LEAK, or is the best candidate yet: JSCtorProto BORROWS the callee and new.target
+ *   ("whatever owns them across the construct owns them across this suspension too"), and the reverted diff
+ *   dup'd new.target onto its own state instead. Two ownership models for one read is exactly the seam this file
+ *   keeps recording, and `new Promise(fn)` issues that read on EVERY construction — which is the volume needed
+ *   to leak hundreds across one suite.
+ *   SO THE NEXT ATTEMPT DELETES CONT_PROMISE_EXEC_PROTO AND ROUTES do_promise_exec_tramp THROUGH CONT_CTOR_PROTO.
+ *   The question to answer first is why the NATIVE_PROMISE_EXEC arm is reached without that read having happened:
+ *   the generic base-class construct issues it, and the promise-exec arm is taken instead of, not after, that
+ *   path. Either the arm consumes the proto CONT_CTOR_PROTO already delivered, or it is moved to after it.
+ *   FOURTH TIME: reach for the existing machine before writing one. CREATECTOR_DEF, STRRECV, js_creatector_step,
+ *   and now CONT_CTOR_PROTO — every one of them found AFTER building or half-building a replacement. The check
+ *   costs one grep for the operation's name and it has never once come back empty.
  *   THE LESSON THAT ACTUALLY PAID: one ASan run on one file discriminated "mine" from "pre-existing" in a single
  *   command, after two written-down suspects had both been wrong. Measure the OLD tree before theorising about
  *   the new one.
