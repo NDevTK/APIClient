@@ -868,14 +868,47 @@ if (extFromC !== 7) {
  * teeth check found it — the fixture runs green on the new build and fails on the old one with that TypeError.
  * A generator's own abrupt completion makes it `completed`, and the teardown is what owes that.
  *
+ * ITERATOR.ZIPKEYED FOLLOWED, and it cost far less than Iterator.zip did — all 44 tests passed on the first run,
+ * because the hard part was already built. Its zipper is the SAME record and the SAME drive; the only difference
+ * is that the record carries KEYS, and its presence is what makes each tuple a null-prototype object keyed by them
+ * instead of an Array indexed by position (zip_put_result is the one place that asks). Its setup differs in three
+ * ways and every one of them is a request the self-hosted version performed from C: [[OwnPropertyKeys]] on the
+ * argument, a per-key [[GetOwnProperty]] for own-enumerability, and — for `longest` — a per-key `? Get(padding,
+ * key)` rather than an iterator walk. Iterator's SyncDriveToCompletion went 90 -> 2 and the corpus 2050 -> 1960.
+ *
+ * THE GATE CAUGHT THE ONE DEFECT, which is the point of having it. The own-enumerability probe first asked for the
+ * descriptor OBJECT and read `enumerable` back off it — a ToPropertyDescriptor walk performed from C, the exact
+ * shape the descReads ratchet forbids, in code written minutes after the rule was reaffirmed. The request already
+ * has a RECORD answer shape (hdr.desc_facts) for precisely this: the step wants ONE attribute bit, so no descriptor
+ * object need be built at all. A ratchet that only ever counted old code would have been decoration.
+ *
+ * TWO DELETIONS FOLLOWED THE BLOB. js_hasOwnEnumProperty had already gone; what was left was HOE_ARGS, the
+ * own-enum machine's SECOND operand shape, whose only caller was builtin-iterator-zip-keyed.js. A mode nothing
+ * selects is the fallback this file forbids, so it went with the blob rather than staying as a shape with no
+ * consumer — HOE_THIS (propertyIsEnumerable) is now the machine's only form and the `from_this` branch is gone.
+ *
+ * A CONTAINER-LEVEL SCARE worth recording as PROCESS. Mid-diff the local checkouts had reverted to an older
+ * snapshot: main at 1c54288, the submodule at e563763, and this session's base commit 8be22e0 not even an object.
+ * The rule held — check the tree, never assume — and the FIRST command was `git ls-remote`, not a reset: origin had
+ * main = f54fc9f and apiclient-v2 = 44e000b, both this session's. `merge-base --is-ancestor` then proved local was
+ * STRICTLY BEHIND and `origin/main..main` was empty, so `reset --hard` could not discard anything. Nothing was
+ * lost. The lesson is the ORDER: establish what the remote has and prove the ancestry BEFORE any destructive
+ * command, because "my work is gone" and "this checkout is stale" look identical from the working tree and have
+ * opposite remedies.
+ *
  * KNOWN FIDELITY GAP, carried forward deliberately and NOT introduced here: the zipper's `next` and `return` are
  * OWN, enumerable properties of the instance, which is what the object-literal the self-hosted version returned
  * produced. The spec's CreateIteratorFromClosure result takes them from %IteratorHelperPrototype% (which IS the
  * zipper's [[Prototype]] — result-is-iterator.js pins that and passes). Closing it means teaching the iterdrive
  * machinery about an N-source generator, which is a fidelity change with its own tests and must not be bundled
- * into a JS->C conversion. NEXT: Iterator.zipKeyed over the same record (Iterator 90 of the residual 2050), then
- * Array.fromAsync, which is the hardest — an await inside a loop — and takes js_bytecode_eval,
- * js_bytecode_autoinit and JS_AUTOINIT_ID_BYTECODE with it.
+ * into a JS->C conversion. It now covers BOTH zippers, so the fidelity fix is one change to one drive.
+ *
+ * ONE SELF-HOSTED BUILTIN REMAINS: builtin-array-fromasync.js, and it is the whole of the residual 1960. It is the
+ * hardest of the three — an `await` inside a loop and a try/finally — so it needs a C step machine that AWAITS,
+ * which no builtin here does yet (.finally chains reactions; that is the nearest precedent). Building it takes
+ * js_bytecode_eval, js_bytecode_autoinit, JS_AUTOINIT_ID_BYTECODE, the qjsc blob rule, the JS_ReadObject-at-init
+ * path and js_call_function (with the tramp_is_call_function call-site reshape that exists only for it) with it —
+ * so the counter reaching 0 and the last recognizer disappearing are the same diff.
  *
  * THERE IS NO C-DRIVEN PROXY TRAP LEFT IN THE ENGINE. Every one of the thirteen internal methods is a DFAIL plus a
  * visible release failure, and the only implementation is the routed one.
