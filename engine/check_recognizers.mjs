@@ -1560,6 +1560,11 @@ if (extFromC !== 7) {
  *      NEW value rather than a repetition. Two labels, not one, because to_propkey2's null check on sp[-2]
  *      runs BEFORE the key coercion and must not run again — which is precisely the work the retry was
  *      repeating. Nine left.
+ *      OP_in AND OP_delete CONVERTED (TPR_IN / TPR_DELETE), the two easiest of the family: the key coercion
+ *      is the FIRST thing each opcode does, so everything after the label is the operation itself and there
+ *      is nothing above it that could re-execute. Seven left, and they are the hard ones — the two
+ *      OP_get_array_el spellings, OP_get_super_value, OP_put_super_value, OP_put_ref_value, and
+ *      OP_put_array_el's key and value pair, all of which sit below fast paths.
  *      AND THE KEYED ONES ARE WORSE THAN THE ARITHMETIC ONE WAS, which is the finding that matters here. Their
  *      retry does not re-run a tag test: OP_get_array_el and OP_put_array_el open with FAST PATHS — the
  *      int-index array element, the append-at-count case, the typed-array store — and the retry re-enters all of
