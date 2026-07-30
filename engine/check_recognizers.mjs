@@ -1747,8 +1747,25 @@ if (extFromC !== 7) {
  *      exposed — so that path is a CALL too; (3) JS_RegExpExec deletes, and its ONE caller,
  *      js_regexp_string_iterator_next, becomes a machine — which is the same work as the
  *      RegExpStringIteratorPrototype 16 already on this list, so the two are one job and not two.
- *      Reverted rather than landed half-built: with the C body gone the two callers do not compile, and with it
- *      kept they are the dual system. There is no intermediate state worth pushing.
+ *      DONE, 314 -> 288, built exactly as recorded: RegExp 33 -> 3, RegExpStringIteratorPrototype 16 -> 0. The
+ *      earlier revert was wrong to call the callers a blocker — they are the SECOND HALF of the same diff, and
+ *      what actually resolves them is that 22.2.7.1 step 4's "perform RegExpBuiltinExec directly" becomes a
+ *      CALL against an intrinsic exec the context holds and never exposes. With that, step_reexec_run's
+ *      def-pointer test deletes (it was a predicate selecting a C fallback), JS_RegExpExec deletes outright,
+ *      and its ONE caller — the RegExp string iterator's `next` — becomes the machine that was already on this
+ *      list as RegExpStringIteratorPrototype's 16. The two items were one job.
+ *      `next` also stops being a JS_CFUNC_iterator_next: that cproto answers through a (value, *pdone)
+ *      out-parameter so a for-of can skip building the result object, and a machine has no out-parameter. It
+ *      builds the IteratorResult itself, which is what the spec says `next` returns.
+ *      WHAT THE FIXTURE CORRECTED ABOUT THE PLAN: `lastIndex` is a NON-CONFIGURABLE data property (22.2.6.1),
+ *      so step 3's Get can never be an accessor — the page-code sites are step 4's ToLength on the value it
+ *      holds and the step-12.a/15/18 Set, which throws when the property has been made non-writable. Routing
+ *      the Get is still right (it is a [[Get]] and the entry owns those), but the note that called it "an
+ *      accessor if the page redefined it" was wrong and is corrected here.
+ *      AND THE UAF THE SPLIT PREDICTED IS REAL AND FIXED: the C body kept `re_bytecode` in a local across
+ *      JS_SetProperty, so a `lastIndex` setter calling `re.compile(…)` freed the matcher under the group-name
+ *      walk. The state holds the JSString for exactly as long as the result is built from it, and the fixture
+ *      pins it — a valueOf that recompiles mid-run still yields the recompiled pattern's groups.
  *
  *   3d. AND THE OTHER BIG BLOCK IS ONE ROOT TOO, measured the same way: language/expressions 28 (async-generator
  *      8 + class 16 + object 4), AsyncFromSyncIteratorPrototype 7 and AsyncGeneratorPrototype 3 are all
