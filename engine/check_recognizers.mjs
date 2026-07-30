@@ -548,9 +548,9 @@ if (gopdFromC !== 8) {
  * 14 = the call sites, excluding the definition. */
 const extFromC = (src.match(/JS_IsExtensible\(/g) || []).length
   - (src.match(/^int JS_IsExtensible\(/gm) || []).length;
-if (extFromC !== 8) {
-  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 8.`);
-  console.error(extFromC > 8
+if (extFromC !== 7) {
+  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 7.`);
+  console.error(extFromC > 7
     ? `  A new C caller can reach a Proxy's isExtensible trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
@@ -706,7 +706,16 @@ if (extFromC !== 8) {
  *   method's (Reflect.setPrototypeOf yields the same boolean instead). Discarding it made `__proto__ = cycle` and
  *   a non-extensible receiver silently succeed; set-cycle.js and set-non-extensible.js caught it.
  *
- * ALL THIRTEEN Proxy C entries are now armed and the whole corpus fires none of them.
+ * ALL THIRTEEN Proxy C entries are now armed and the whole corpus fires none of them — so by the rule the seventh
+ * through thirteenth established, THE OTHER SIX BODIES WENT TOO. What that removed, none of it reachable:
+ * 10.5.1-10.5.4's four object-level traps with their invariants, 10.5.12/10.5.13's `apply` and `construct` traps
+ * with the argument arrays they are handed, and proxy_resolve_trapless — the shared prologue of every C-driven
+ * Proxy internal method, whose revoked check and TRAP READ are themselves the page's code (a handler can be a
+ * Proxy or carry an accessor). The routed path reads a trap through CONT_TRAP_GET, which is that read as a request.
+ * C-side [[IsExtensible]] 8 -> 7 with it.
+ *
+ * THERE IS NO C-DRIVEN PROXY TRAP LEFT IN THE ENGINE. Every one of the thirteen internal methods is a DFAIL plus a
+ * visible release failure, and the only implementation is the routed one.
  *
  * Two lessons worth keeping:
  *
