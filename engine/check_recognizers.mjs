@@ -1577,6 +1577,41 @@ if (extFromC !== 7) {
  *      the slow path with the primitive key in the slot, which is where the suspending pass was going anyway.
  *      OP_put_array_el needs TWO (key at 34852, value at 34855) and their order is observable, so it is the one
  *      to do last.
+ *      ZERO LEFT. THE LEGACY retry_pc FIELD AND THE `pc = rpc` ARM ARE DELETED, and the delivery's fall-through
+ *      is now a DFAIL: an operand-mode coercion that completes with TPR_NONE names a site that was never given a
+ *      resume point. The local is renamed tp_op_byte, which is what it always was — the byte the delivery
+ *      RESTORES `opcode` from, never a pc to jump to.
+ *      THREE FAMILIES HAD TO BE HOISTED FIRST, and that is the transferable finding: a resume must land at ONE
+ *      place, and the unary operators (7 copies of the slow call, one per opcode arm), the comparison operators
+ *      (8 macro expansions, so a label inside the macro would be 8 labels) and the bitwise/shift pair had no such
+ *      place. Re-entering the opcode was not merely the chosen mechanism, it was the ONLY way back into a slow
+ *      path written out per-opcode. So each family got ONE slow label owning its coercion AND its slow call
+ *      (unary_arith_slow, cmp_slow, binary_logic_slow's existing one), with the per-opcode part — which C
+ *      operator, which slow function, which hint — derived from the restored opcode at that label. OP_CMP lost
+ *      two macro parameters outright. A duplicated tail is not a style problem; it is what makes suspension
+ *      impossible.
+ *      cmp_slow's resume lands at the TOP of the slow path, not at the operation, because 7.2.13 coerces BOTH
+ *      operands: one delivered primitive can still leave an object on the other side, so "is there another
+ *      operand to coerce" must be re-asked. That is a decision about the values as they NOW are, which is what a
+ *      continuation is for — the retry's sin was re-running the both-int fast path above it. The first attempt
+ *      put a `goto cmp_slow` under an object test BELOW the dispatch instead, and strict equality (which coerces
+ *      nothing, so its objects never go away) spun forever. Each coercion strictly removes one object, which is
+ *      why re-entering at the top cannot cycle and re-entering below it can.
+ *      AND A CONVERTED SITE THAT FORGETS tp_op_byte USED TO INHERIT THE PREVIOUS COERCION'S — a sticky C local
+ *      read but never reset. Dropping `tp_retry_pc = pc - 1` from the first two converted sites made the
+ *      delivery jump through a NULL/stale byte and segfault a whole fixture directory, with the gdb backtrace
+ *      landing in an unrelated async-module assert. It is now read+reset with a DCHECK at do_toprim_tramp, so a
+ *      site that forgets crashes at the site instead of somewhere else later.
+ *      THE PER-LABEL "the operand is a primitive now" ASSERT IS WRONG and was removed after it fired: every
+ *      resume label is ALSO fallen into on the non-coercing path, where an object operand is legitimate
+ *      (`o[k] = {}` reaches do_put_array_el_after_value with an object V and always did). The assert that IS
+ *      right sits at the delivery, on ToPrimitive's own result, once for every site.
+ *      WHAT THE CONVERSION DID NOT FIND: a case where the replay produced a WRONG ANSWER. The fast paths re-read
+ *      the object's CURRENT state, so re-entering them after a coercion that mutated the receiver is a different
+ *      ROUTE, not a different result — a fixture built for exactly that (a toString that shrinks the array whose
+ *      index it names) passes on both trees. The case for the conversion is the razor's, not a bug report: each
+ *      replay's correctness rested on an unstated purity property of that opcode's prologue that nothing checked.
+ *      Recording it that way matters because the opposite claim was written into a commit message first.
  *      AND THE LEDGER ENTRY FOR THIS WAS ALMOST LOST: the edit that should have added it failed on a stale
  *      anchor while the commit and push in the same command ran anyway, because they were joined by && to a
  *      python block whose AssertionError did not stop the shell line. A ledger edit and its commit belong in
