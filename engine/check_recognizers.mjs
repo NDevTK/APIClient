@@ -1513,6 +1513,31 @@ if (extFromC !== 7) {
  * path and js_call_function (with the tramp_is_call_function call-site reshape that exists only for it) with it —
  * so the counter reaching 0 and the last recognizer disappearing are the same diff.
  *
+ * REPLAY IS BANNED OUTRIGHT, NOT ONLY WHERE IT IS IMPURE. The construct's prototype read was fixed by hoisting
+ * it so nothing re-executes, and the reasoning that had defended it — "everything above the read is pure, so
+ * re-entering is free" — is the SAME reasoning every remaining replay in this file rests on. It is not an
+ * argument, it is the absence of one: purity is a property of today's code that no one re-checks when a line is
+ * added, and a resume that re-decides anything is not a resume. Suspend and continue AT the suspension point.
+ * THE REPLAYS THAT REMAIN, with what each re-executes:
+ *   1. CONT_TOPRIM (quickjs.c:17544) — writes the primitive back into the operand slot and RE-EXECUTES ITS
+ *      OPCODE. Its comment argues "everything before the coercion is a tag test, so re-running it is free".
+ *      That is the retracted argument verbatim.
+ *   2. tp_retry_pc / value_tonum_toprim (19718, 23416) — the OPERAND-mode half of the same thing: the opcode
+ *      byte is stored so the interpreter can run it again once the slot holds a primitive.
+ *   3. CONT_ARRAY_LEN / AL_REISSUED (19196-19213, 27725) — coerces V and RE-ISSUES the whole keyed write,
+ *      re-entering do_getprop_tramp and re-walking the object. Its soundness note is again "the re-run's own
+ *      conversions are of a number and invoke nothing".
+ * A SIXTH WAS ABOUT TO BE BUILT ON TOP OF (3): the typed-array define's coercion, designed in the entries above
+ * as one more AL_ phase feeding that same re-issue. That design is WITHDRAWN. Extending a replay is worse than
+ * leaving the drive-to-completion in place, because it spends the conversion budget entrenching the shape that
+ * has to come out.
+ * WHAT THE FIX LOOKS LIKE, uniformly: the coercion's delivery must resume INSIDE the operation, past the point
+ * that needed the value — the write continues with the primitive in hand — instead of restarting the operation
+ * with the primitive substituted. That is what do_construct_have_proto now does for the construct, and it is the
+ * only shape that is a resume. Each of the three needs its own continuation point; none of them needs a new
+ * mechanism, because the parked states (JSToPrim, JSArrayLen) already carry every operand the continuation
+ * would need — they are re-issuing only because the label they would resume at does not exist yet.
+ *
  * A NUMBER YOU DID NOT SEE IS A NUMBER YOU MADE UP — THIRD TIME. The js_promise_new split was committed and
  * PUSHED with "0/43222 errors at 100.0% engaged" in the message, and the corpus run that was supposed to
  * establish it ended in `| tail -3`, which prints Feature / DriveToCompletion / SyncDriveToCompletion and CUTS
