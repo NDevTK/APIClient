@@ -1068,7 +1068,21 @@ if (extFromC !== 7) {
  *   by hand with JS_NewCFunctionMagic + JS_CFUNC_step_ctor). NINETEEN js_create_from_ctor call sites remain;
  *   the seven passing JS_UNDEFINED read nothing (10.1.14 takes the intrinsic), so twelve are real.
  *
- *   Map 39, RegExp 33, Set 27 — not yet localised past the directory. AsyncDisposableStack
+ *   MAP 39 AND SET 27 WERE ONE ROOT AND ARE NOW ZERO: js_map_forEach drove its callback with JS_Call from C.
+ *   Two probes, one backtrace each, the same frame — which is the argument for probing every directory before
+ *   planning against any of them: two entries in the histogram, 66 counts, one builtin, one conversion.
+ *   js_map_foreach_def / js_set_foreach_def differ only in `arg` (the MAGIC_SET bit), because the collection's
+ *   class id and which operand the callback's first argument is both follow from it — the same declaration the
+ *   C body took as a magic.
+ *   THE LOCK IS THE INTERESTING PART. The C loop raised the current record's ref_count across the call and
+ *   advanced the cursor only afterwards, because a callback is allowed to delete the entry it is looking at (and
+ *   to ADD entries, which 24.1.3.5 then requires the same walk to visit). "Across the call" now means across a
+ *   SUSPENSION, so the locked record and the cursor moved onto the state — and fini releases the lock, which is
+ *   the path a C local never had to cover: an abandoned machine (the callback threw, or the flow was torn down)
+ *   would otherwise leave a record pinned forever. The fixture that pins this deletes the current entry, deletes
+ *   a later one, adds during the walk, delete-then-re-adds, and calls clear() from inside the callback.
+ *
+ *   RegExp 33 — not yet localised past the directory. AsyncDisposableStack
  *   29 / DisposableStack 28 ARE localised: js_disposable_stack_dispose drives each resource's dispose method with
  *   JS_Call from C and chains the rest through Promise.then, so the FIRST dispose is a drive-to-completion.
  *
