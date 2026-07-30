@@ -1625,6 +1625,33 @@ if (extFromC !== 7) {
  *      pc[-1] and the opcode byte pc[-2] — read from the bytecode, which is what it is for. That is the general
  *      answer to the hazard the tp_op_byte segfault demonstrated: a resume needs no hand-picked register when the
  *      value is already addressable from state that survives.
+ *      AND THE CONT_TOPRIM CONTRACT COMMENT STILL DESCRIBED THE REPLAY as the mechanism ("RE-EXECUTES its
+ *      opcode ... re-running it is free"). A contract comment that documents a deleted mechanism is worse than
+ *      none: it is what the next reader will build against. Corrected in the same diff the mechanism died in.
+ *
+ *   3b. WHERE THE REMAINING SyncDriveToCompletion ACTUALLY COMES FROM — measured, not guessed, because the
+ *      per-directory histogram names a directory and not a cause. Two roots carry almost all of it, and BOTH
+ *      were mis-attributed in the earlier notes:
+ *      Array/fromAsync 190 is NOT fromAsync's algorithm running under a C driver. The backtrace is
+ *      JS_GetPropertyInternal -> JS_AutoInitProperty -> js_bytecode_autoinit -> js_bytecode_eval ->
+ *      JS_EvalFunctionInternal -> JS_CallFree: it is the LAZY INITIALISATION of the property evaluating the
+ *      self-hosted module's top-level PROGRAM from C, once per test that touches Array.fromAsync. One drive per
+ *      first read, and fromAsync's own body never appears. So the root is that a self-hosted builtin exists at
+ *      all — Array.fromAsync is the last one, and JS_AUTOINIT_ID_BYTECODE has exactly one user. Porting it to C
+ *      deletes js_bytecode_autoinit, js_bytecode_eval, JS_AUTOINIT_ID_BYTECODE, JS_BUILTIN_ARRAY_FROMASYNC and
+ *      builtin-array-fromasync.{js,h} with it. Routing the autoinit onto the tramp instead would be transition
+ *      scaffolding for a system that is about to have no users — build the port, not the route.
+ *      The self-hosted JS also has real spec deviations to NOT carry over: it defines each element with
+ *      Object.defineProperty and no `enumerable: true` (CreateDataPropertyOrThrow makes them enumerable), and it
+ *      computes the array-like length as `+length || 0` rather than LengthOfArrayLike.
+ *      Array/prototype/fill 12 and most of TypedArrayConstructors 37 are ONE root: JS_SetPropertyValue coerces
+ *      V from C when the target is a TypedArray (JS_ToInt32Free -> JS_ToNumberFree -> JS_ToPrimitiveFree ->
+ *      JS_CallFree). The interpreter's OP_put_array_el guards exactly this with ta_write_needs_toprim before it
+ *      writes; the C callers do not, so a `valueOf` with a loop in it preempts with no flow base. The earlier
+ *      design for this (AL_TA_START/AL_TA_PRIM phases feeding CONT_ARRAY_LEN's re-issue) was withdrawn because
+ *      it extended a replay; CONT_ARRAY_LEN no longer re-issues, so it can be redone against the current shape.
+ *      The forcing function is a DCHECK at JS_SetPropertyValue's typed-array path asserting V needs no
+ *      coercion — it names every unrouted caller at once, so it lands WITH the routing and not before it.
  *      AND THE LEDGER ENTRY FOR THIS WAS ALMOST LOST: the edit that should have added it failed on a stale
  *      anchor while the commit and push in the same command ran anyway, because they were joined by && to a
  *      python block whose AssertionError did not stop the shell line. A ledger edit and its commit belong in
