@@ -1061,15 +1061,19 @@ if (extFromC !== 7) {
  *   THE THIRD IS NAMED, AND SO IS THE WAY IT FAILED, because the failure is the whole of what the next attempt
  *   needs. promise_all_err inside the CONT_PROMISE_ALL step dispatch differs from the other two in what follows
  *   the close: not a teardown but the FINALIZE drive (fin_arg/fin_is_reject/finalizing, then st = 2).
- *   IT WAS BUILT AND REVERTED. The state grew a close_then_step flag, do_iter_close_finish routed on it, and the
- *   resume went to do_promise_all_step — which is WRONG and cost five tests
- *   (Promise/{all,allSettled,any,race}/invoke-then-get-error-*, all "$DONE() not called"). `finalizing` makes
- *   js_promise_all_step return DONE immediately, so re-entering the STEP skips the finalize drive entirely and
- *   the aggregate never settles. The drive is a block INSIDE the dispatch reached by falling through with st==2,
- *   and there is no label on it; the resume needs one there, not at do_promise_all_step. That is the whole fix,
- *   and it is a change to the dispatch's control flow rather than to the close.
- *   The flag itself was right and so was the saved_exc handling (UNINITIALIZED, because the completion is
- *   already parked in fin_arg and 7.4.9 discards the close's own throw under an abrupt completion).
+ *   IT WAS BUILT, REVERTED, AND THEN BUILT CORRECTLY — Promise is 57 -> 53 and all three closes are on the
+ *   chain. The first attempt resumed at do_promise_all_step and cost five tests
+ *   (Promise/{all,allSettled,any,race}/invoke-then-get-error-*, all "$DONE() not called"): `finalizing` makes
+ *   js_promise_all_step return DONE immediately, so re-entering the STEP skips the finalize drive and the
+ *   aggregate never settles. The fix is a label ON THE DRIVE (do_promise_all_finalize) — a change to the
+ *   dispatch's control flow, not to the close. The flag and the saved_exc handling were right first time
+ *   (UNINITIALIZED, because the rejection is already parked in fin_arg and 7.4.9 discards the close's own throw
+ *   under an abrupt completion).
+ *   ONE MORE THING THE SECOND ATTEMPT GOT WRONG AND THE TESTS DID NOT CATCH: the finalize block reads `s`, a
+ *   LOCAL of the dispatch block, and the new jump enters that block from outside — so `s` was indeterminate on
+ *   the new path. It passed anyway, because the register happened to still hold it. A goto INTO a block must
+ *   re-derive every local it lands on; the label now does `s = (JSPromiseAll *)cont_st`, which is what every
+ *   other entry sets. A test passing is not evidence that a jump is well-defined.
  *
  *   (was: PROMISE 65 IS LOCALISED, and it is NOT a builtin that needs converting — it is one line of the
  *   interpreter.)
