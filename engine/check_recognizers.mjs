@@ -1652,13 +1652,18 @@ if (extFromC !== 7) {
  *      it extended a replay; CONT_ARRAY_LEN no longer re-issues, so it can be redone against the current shape.
  *      The forcing function is a DCHECK at JS_SetPropertyValue's typed-array path asserting V needs no
  *      coercion — it names every unrouted caller at once, so it lands WITH the routing and not before it.
- *      AND THE GUARD DOES NOT BELONG AT THE CALLERS. Array.prototype.fill writes through step_setidx_run ->
- *      step_setprop_run -> the keyed entry's GP_SET, which is the ONE convergence point for [[Set]]; the
- *      TypedArray constructors reach the same entry. So the arm goes THERE, beside arr_len_write_needs_toprim,
- *      and OP_put_array_el's own inline ta_write_needs_toprim guard is deleted with it — one place asking, not
- *      one per caller. That also settles which predicate: the entry holds an ATOM, so the question is
- *      is_typed_array(target) && JS_AtomIsNumericIndex(atom) > 0, and the value-form predicate's key-to-atom
- *      conversion disappears with its last interpreter caller.
+ *      THE GUARD BELONGS AT THE KEYED ENTRY, NOT AT THE CALLERS: Array.prototype.fill writes through
+ *      step_setidx_run -> step_setprop_run -> GP_SET, and the TypedArray constructors reach the same entry, so
+ *      the arm goes beside arr_len_write_needs_toprim and covers every C caller at once. The entry holds an
+ *      ATOM, so the question there is is_typed_array(target) && JS_AtomIsNumericIndex(atom) > 0.
+ *      BUT IT IS NOT THE ONLY WRITE PATH, and the first version of this note claimed it was. OP_put_array_el
+ *      does NOT route its ordinary write through the keyed entry — after the proxy and accessor checks it calls
+ *      JS_SetPropertyValue directly — so its inline ta_write_needs_toprim guard is guarding a DIFFERENT path
+ *      and does not go with the new arm. Two guards for two write paths is a duplicate question, so the real
+ *      end state is that OP_put_array_el's direct tail becomes a GP_SET request like every other write and the
+ *      interpreter's copy dies then. That is the ordering: keyed-entry arm first (it unblocks fill and the
+ *      TypedArray constructors on their own), the interpreter tail second, the value-form predicate deleted
+ *      with it.
  *      THE OBSTACLE THE NEXT ATTEMPT STARTS FROM, found by reading do_array_len_start rather than assuming:
  *      JSArrayLen does not carry gp_recv, and a TypedArray element write NEEDS it — 10.4.5.5 step 1 applies
  *      TypedArraySetElement only when SameValue(O, Receiver), so the receiver decides whether V is coerced at
