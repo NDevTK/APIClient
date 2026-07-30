@@ -1088,7 +1088,21 @@ if (extFromC !== 7) {
  *   would otherwise leave a record pinned forever. The fixture that pins this deletes the current entry, deletes
  *   a later one, adds during the walk, delete-then-re-adds, and calls clear() from inside the callback.
  *
- *   RegExp 33 — not yet localised past the directory. AsyncDisposableStack
+ *   REGEXP 33 IS LOCALISED, and every directory in the histogram now is. The probe's chain is
+ *   JS_ToLengthFree -> JS_ToNumberFree -> JS_ToPrimitiveFree -> JS_CallFree -> JS_CallInternal: an argument
+ *   coercion run from C, so a `lastIndex` whose valueOf contains a loop has no flow base. 22.2.7.2 step 4 is
+ *   `? ToLength(? Get(R, "lastIndex"))` and lastIndex is an ORDINARY WRITABLE PROPERTY, so the page can put any
+ *   object there — this is not an exotic case.
+ *   THREE SITES, all the same read: js_regexp_exec (73788), JS_RegExpDelete (74016) and
+ *   js_regexp_string_iterator_next (74367). The engine already has step_toint64_run for exactly this, so like
+ *   the create-from-ctor sites these are declarations of an existing sub-sequence rather than a build — but
+ *   unlike those, the three callers are not yet step machines, which is the actual work.
+ *   NOTE ON THE PROBE ITSELF: the backtrace gdb printed stopped at JS_ToInt64SatFree and never named the
+ *   caller — the frame that matters. `bt` alone was not enough here; the next probe of a coercion chain should
+ *   ask for `bt 25`. The three sites above were found by grepping JS_ToLengthFree in the RegExp range instead,
+ *   which worked because the coercion is rare in C by now; that will not stay true.
+ *
+ * AsyncDisposableStack
  *   29 / DisposableStack 28 ARE localised: js_disposable_stack_dispose drives each resource's dispose method with
  *   JS_Call from C and chains the rest through Promise.then, so the FIRST dispose is a drive-to-completion.
  *
