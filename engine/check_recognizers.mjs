@@ -687,12 +687,18 @@ if (extFromC !== 14) {
  *   from C and ran it before the TypeError 6.2.5.5 step 3.a raises. The C entry does its own steps in its own
  *   order; routing is what forces the spec's.
  *
- * ONE caller of js_create_from_ctor is NAMED AND UNFIXED, so the next attempt starts from building it: the
- * TypedArray CONSUME arm in JS_CallInternal (23.2.5.1 step 6.a.i, `new Int8Array(iterable)` with a Proxy
- * new_target — `s->ta_target = js_create_from_ctor(ctx, ntgt, ta_classid)`). It is not in test262's reach but a
- * fixture in this tree hits it, so the landed DFAIL aborts there BY NAME, which is the correct state and the work
- * queue rather than a regression. What it needs is a continuation that parks the consume SETUP across the
- * `prototype` read, the way CONT_CTOR_PROTO parks the whole construct. The other js_create_from_ctor callers
+ * FIXED, the turn after it was named: the TypedArray CONSUME arm's js_create_from_ctor (23.2.5.1 step 6.a.i,
+ * `new Int8Array(iterable)` with a Proxy new_target). CONT_TA_TARGET parks the consume SETUP across the
+ * `prototype` read, which is what naming it as "a continuation like CONT_CTOR_PROTO with a different resumption
+ * point" had already worked out. The machine's own setup moves ABOVE the read — it is pure state assignment with
+ * nothing observable in it — so the state carries only the machine, new_target, the probed @@iterator and the
+ * class id, and the abandon path is the machine's OWN teardown (it holds the argument list and the requester).
+ *
+ * NEXT, and named the same way: the Map/Set CONSUME arm (do_setmap_consume_tramp) runs TWO of the page's
+ * operations from C — js_map_constructor's `prototype` read, and then 24.1.1.1 step 5's `Get(map, "add"/"set")`,
+ * which a subclass can make an accessor. It is a two-read sequence rather than a copy of CONT_TA_TARGET, so it
+ * gets its own continuation with a phase, and the second read is the one CONT_TA_TARGET has no analogue for.
+ * The other js_create_from_ctor callers
  * (Object, RegExp, Map/Set, DisposableStack, Promise, the two TypedArray constructors) were not reached by the
  * armed corpus, which is evidence and not proof: each is a C constructor that would fire the moment a test
  * constructs it with a Proxy new.target, and each is converted the way Boolean was — the create-from-ctor
