@@ -1115,6 +1115,17 @@ if (extFromC !== 7) {
  *   compute arm. The body loses its coercion and DCHECKs that it is handed a string. The same DCHECK went onto
  *   js_string_toWellFormed_body, which was re-coercing a value its own machine had already coerced — harmless
  *   only because the value was always a string, and a live C coercion the instant anything handed it an object.
+ *   CREATEHTML WENT WITH THEM, and it carried a FIDELITY BUG no test could have found. B.2.2.2.1 step 4.a is
+ *   `? ToString(value)` — a PLAIN ToString — and the C body used JS_ToStringCheckObject, so `"x".fontcolor()`
+ *   threw a TypeError where V8 returns <font color="undefined">x</font>, and `"x".anchor(null)` likewise. annexB
+ *   is not in test262.conf, so the suite was never going to say so; the SPEC is the oracle and reading it while
+ *   converting the site is what caught it. Thirteen contiguous STEPDEF ids (JS_CFUNC_STEP_DEF spends the
+ *   builtin's magic on the step id, so the tag has to come from the id) over one js_str_html_defs array, and one
+ *   STRRECV_HTML_HAS_ATTR bitmask rather than a second copy of the defs table — two tables that must agree are
+ *   two chances to disagree.
+ *   ONE JS_ToStringCheckObject CALL SITE REMAINS IN THE ENGINE, inside JS_ToQuotedString (JSON's own output
+ *   path, whose input is already a string).
+ *
  *   THE PATTERN, THIRD TIME NOW: reach for the existing machine before writing one. The create-from-ctor sites
  *   needed CREATECTOR_DEF, these needed STRRECV, and in both cases the first instinct was to build.
  *
