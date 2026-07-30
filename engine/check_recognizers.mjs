@@ -1233,6 +1233,14 @@ if (extFromC !== 7) {
  *   and cannot be reused from a request, so the TA arm needs a TOPRIM whose delivery RE-ISSUES the define with
  *   the primitive — which is exactly what do_array_len_start does for `length`, one arm above. Read that
  *   sequence's re-issue rather than inventing a second one.
+ *   READ IT, AND IT IS THE WHOLE ANSWER: JSArrayLen already parks the ENTIRE keyed write — obj, val, atom, op,
+ *   no_throw, getter, setter, dflags, and the requester — coerces V, and re-issues. It is not a `length` state
+ *   despite the name; it is "park a keyed write, coerce its value, re-issue it", and `length` is simply the case
+ *   that needs TWO coercions, which is what its `phase` chain expresses. The typed-array case is the same
+ *   sequence with ONE: a phase that does ToPrimitive(number) and goes straight to the re-issue.
+ *   So there is no new state, no new continuation kind, and no second re-issue — one predicate call in the arm
+ *   above the define and one phase in a sequence that already exists. Fifth time the machine was already there;
+ *   this time it was found before a line was written, which is the only difference that matters.
  *   Both are named with their line numbers because both are one site, not a directory.
  *
  *   THE HONEST HISTOGRAM at 725 (built-ins, then language): Array 204, Promise 65, TypedArrayConstructors 49,
