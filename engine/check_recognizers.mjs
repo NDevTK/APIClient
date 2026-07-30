@@ -1554,6 +1554,12 @@ if (extFromC !== 7) {
  *      which is also how 13.15.3's left-then-right order is kept. Its op1/op2 are C locals and are RELOADED
  *      from the stack at the label - reloading is restoring; the retry was re-entering the fast paths above
  *      with operands the suspending pass never had. Eleven left.
+ *      OP_to_propkey AND OP_to_propkey2 CONVERTED (TPR_PROPKEY / TPR_PROPKEY2). Their resume lands on the
+ *      tag SWITCH, and that switch has to stay: a coerced value that is an INT is left alone, because
+ *      element access wants the int and not its string atom, so the classification is a decision about the
+ *      NEW value rather than a repetition. Two labels, not one, because to_propkey2's null check on sp[-2]
+ *      runs BEFORE the key coercion and must not run again — which is precisely the work the retry was
+ *      repeating. Nine left.
  *      AND THE KEYED ONES ARE WORSE THAN THE ARITHMETIC ONE WAS, which is the finding that matters here. Their
  *      retry does not re-run a tag test: OP_get_array_el and OP_put_array_el open with FAST PATHS — the
  *      int-index array element, the append-at-count case, the typed-array store — and the retry re-enters all of
