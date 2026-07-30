@@ -1101,7 +1101,17 @@ if (extFromC !== 7) {
  *   would otherwise leave a record pinned forever. The fixture that pins this deletes the current entry, deletes
  *   a later one, adds during the walk, delete-then-re-adds, and calls clear() from inside the callback.
  *
- *   STRING 34 IS LOCALISED and it is INSIDE the machine the last conversion touched, one stage further on.
+ *   STRING 34 -> 32, BUILT: the replacer's ToString is a request. 22.1.3.19 states the step as
+ *   `? ToString(? Call(replaceValue, undefined, «searched, position, string»))` and the CALL became a request
+ *   when the walk became a machine, leaving JS_ToString on its RESULT in C — so a replacer returning an object
+ *   with a toString ran that toString below the live flow, once per match. js_str_replace_step now takes out_cb
+ *   and cb_pending says WHICH of the two requests is outstanding (1 = the call, 2 = the ToString), because both
+ *   suspend and the walk has to resume into the right one.
+ *   IT WAS ONLY 2 OF THE 34, which is the useful part of the number: the directory's residual is somewhere else
+ *   again, and "the probe named this directory" never meant "this is all of it". A DFAIL names the FIRST caller
+ *   the run reaches, and re-probing after each conversion is the only way to see the next.
+ *
+ *   (was: STRING 34 IS LOCALISED and it is INSIDE the machine the last conversion touched, one stage further on.)
  *   Backtrace (String/prototype/replaceAll/replaceValue-call-tostring-abrupt.js): js_str_replace_step ->
  *   JS_ToString -> JS_ToPrimitiveFree -> JS_CallFree. 22.1.3.19 is
  *   `? ToString(? Call(replaceValue, undefined, «searched, position, string»))` — the CALL became a request when
