@@ -1719,6 +1719,36 @@ if (extFromC !== 7) {
  *      the success and failure paths perform, each of which is a [[Set]] on a possibly-exotic receiver. It is
  *      the same shape flags just took, one stage per piece of page code, and Symbol.replace's and
  *      Symbol.match's residue is the same body reached through them.
+ *      ATTEMPTED AND REVERTED, with the design and the blocker recorded so the next attempt starts from them
+ *      rather than rediscovering them. The machine itself is straightforward and was written: six stages —
+ *      ToString(string) (22.2.6.2 step 3, which the coercion prologue used to own and which must move INTO the
+ *      machine when js_primargs_step stops driving exec), Get lastIndex, ToLength, the matcher, the lastIndex
+ *      Set, then the result build. A new step_tolength_run sub-sequence is needed beside step_toint64_run: a
+ *      saturating ToInt64 cannot stand in for 7.1.20, which CLAMPS a negative to 0. The body splits cleanly at
+ *      exactly those three points because everything else it does — the matcher, and building the result array,
+ *      `groups` and `indices` — touches only objects the call itself creates, so no define in it can reach a
+ *      trap; js_regexp_build_result is that half, a plain C body taking (bytecode, str_val, capture).
+ *      AND THE SPLIT FOUND A USE-AFTER-FREE IN THE C BODY, which is the reason to do it beyond the drive count:
+ *      js_regexp_exec keeps `re_bytecode` in a C LOCAL across JS_SetProperty(R, "lastIndex", …), so a lastIndex
+ *      SETTER that calls `re.compile(…)` frees the matcher out from under the lre_get_groupnames walk that
+ *      follows it. The machine must HOLD a reference to the JSString bytecode (refcounted, not a JSValue —
+ *      JSRegExp::bytecode is a JSString *) for exactly as long as the result is built from it.
+ *      THE BLOCKER IS THE TWO INTERNAL CALLERS, and their justification is now measurably FALSE. Both
+ *      step_reexec_run and JS_RegExpExec special-case the unpatched built-in exec and run its C body directly,
+ *      defended by "with a STRING subject there is nothing left in it to coerce, so it runs here directly — the
+ *      same computation with no observable step". Exec's body has THREE page-code sites regardless of the
+ *      subject, so that claim is wrong and the `tramp_step_def_of(…) != &js_regexp_exec_def` test is the
+ *      recognizer shape in its usual costume: a predicate selecting a C fallback. It must go WITH the
+ *      conversion, not after it.
+ *      WHAT THAT NEEDS, precisely: (1) step_reexec_run drops the special case and issues its CALL request for
+ *      any callable exec, built-in included — the call dispatch then drives the machine like any other; (2) the
+ *      NON-callable path (22.2.7.1 step 4 performs RegExpBuiltinExec directly, with no function object to call)
+ *      needs an intrinsic exec function object held on the context — created in JS_AddIntrinsicRegExp, never
+ *      exposed — so that path is a CALL too; (3) JS_RegExpExec deletes, and its ONE caller,
+ *      js_regexp_string_iterator_next, becomes a machine — which is the same work as the
+ *      RegExpStringIteratorPrototype 16 already on this list, so the two are one job and not two.
+ *      Reverted rather than landed half-built: with the C body gone the two callers do not compile, and with it
+ *      kept they are the dual system. There is no intermediate state worth pushing.
  *      THE OBSTACLE THE NEXT ATTEMPT STARTS FROM, found by reading do_array_len_start rather than assuming:
  *      JSArrayLen does not carry gp_recv, and a TypedArray element write NEEDS it — 10.4.5.5 step 1 applies
  *      TypedArraySetElement only when SameValue(O, Receiver), so the receiver decides whether V is coerced at
