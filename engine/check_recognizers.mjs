@@ -1119,8 +1119,16 @@ if (extFromC !== 7) {
  *       }
  *   `con_proto` is the register that carries the answer back (UNINITIALIZED = not yet read, read+reset in the
  *   dispatch so a re-entry cannot re-read it), and JSCtorProto BORROWS func and ntgt, which is the ownership the
- *   reverted diff got wrong. js_promise_new still splits into js_promise_init_from_obj plus a create — that half
- *   of the reverted diff was right and is worth keeping.
+ *   reverted diff got wrong.
+ *   THE SPLIT IS LANDED: js_promise_init_from_obj is steps 4-8 with the object already created, and
+ *   js_promise_new is the entry that still performs step 3 itself. That half of the reverted diff was right and
+ *   is now in on its own, green, so the routing diff is smaller by exactly that much.
+ *   AND THE ASSERT THAT NAMES THE GAP WAS WRITTEN, FIRED, AND HELD BACK ON PURPOSE. `DCHECK(new_target is
+ *   undefined or the Promise constructor)` in js_promise_new fires immediately: do_promise_exec_tramp is the one
+ *   caller passing a subclass NewTarget, which is the gap, confirmed rather than inferred. Arming it before the
+ *   routing exists would only turn a green corpus red without moving the capability, so it belongs in the diff
+ *   that routes the arm — and the comment there says exactly that, so the next attempt re-adds it as its last
+ *   line rather than rediscovering it.
  *   THE SWEEP IS MEASURED AND IT IS ONE SITE. Every native-machine arm above the read was checked, and both
  *   consume arms already route it: do_setmap_consume_tramp issues `gp_obj = sc->ntgt; gp_atom =
  *   JS_ATOM_prototype` itself, and do_ta_consume_tramp's comments have js_create_from_ctor in the PAST tense
