@@ -1814,6 +1814,18 @@ if (extFromC !== 7) {
  *      built wrapper with JS_GetProperty, which trips the iterator-protocol C-read ceiling. The wrapper is
  *      engine-made so that read invokes nothing, but the ceiling is a SHAPE ratchet and the shape is the banned
  *      one — CreateAsyncFromSyncIterator should hand its next method back rather than be asked for it.
+ *      THE FIRST OF THOSE IS NOW A DCHECK, and it is the one that cost the most. The two-phase contract — a
+ *      sub-sequence parks on its first call and answers on its second, so the second must be the SAME call site
+ *      — lived only in the shape of the code. step_getprop_done and step_setprop_run now take the key the
+ *      caller is asking about and assert it is the key that was parked, so a machine that advances its phase
+ *      early crashes naming the mistake instead of consuming another read's value forever. The corpus proves
+ *      every existing machine already obeys it: 0/43222 with the assert live. The INDEX forms pass JS_ATOM_NULL
+ *      (recomputing their atom on the answering path would allocate for a DCHECK), so they keep only the
+ *      weaker "one is in flight" half.
+ *      WHAT IS STILL MISSING IS step_await_run. Every await in a step machine is hand-built as capability ->
+ *      CALL resolve(v) -> PerformPromiseThen, three phases, plus an out-of-band carrier for the state, because
+ *      a machine's own state dies when it returns. That is the seam every async builtin will re-invent; it has
+ *      one user waiting (fromAsync) and should be built with it, not before.
  *
  *   3d. AND THE OTHER BIG BLOCK IS ONE ROOT TOO, measured the same way: language/expressions 28 (async-generator
  *      8 + class 16 + object 4), AsyncFromSyncIteratorPrototype 7 and AsyncGeneratorPrototype 3 are all
