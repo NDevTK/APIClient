@@ -1531,6 +1531,17 @@ if (extFromC !== 7) {
  * as one more AL_ phase feeding that same re-issue. That design is WITHDRAWN. Extending a replay is worse than
  * leaving the drive-to-completion in place, because it spends the conversion budget entrenching the shape that
  * has to come out.
+ * THE RESUME POINT FOR (3) IS LOCATED. The arr_len_write_needs_toprim arm does not sit before the object walk —
+ * it sits in the keyed entry's TERMINAL if/else chain, after the walk has already resolved the target (the same
+ * chain whose other branches are the bare [[Delete]], the GP_SET and the GP_DEFINE). So the walk is pure
+ * repetition: re-issuing through do_getprop_tramp re-does the prototype chain, the proxy checks and the accessor
+ * checks that had already produced this arm.
+ * The resume therefore lands at the TOP OF THAT CHAIN with gp_val = al->coerced, not at do_getprop_tramp. Every
+ * register the chain reads is already on the state — obj, atom, op, no_throw, getter, setter, dflags — and `fwd`
+ * needs nothing, because the arm already folds it into gp_obj (`if (fwd) gp_obj = gp_fwd;`) before it parks, so
+ * the resume sets fwd = 0. What is missing is only the label, which is the same thing that was missing for the
+ * construct: the states were re-issuing because the point they should continue at had no name.
+ *
  * WHAT THE FIX LOOKS LIKE, uniformly: the coercion's delivery must resume INSIDE the operation, past the point
  * that needed the value — the write continues with the primitive in hand — instead of restarting the operation
  * with the primitive substituted. That is what do_construct_have_proto now does for the construct, and it is the
