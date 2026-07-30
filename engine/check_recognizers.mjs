@@ -1049,7 +1049,22 @@ if (extFromC !== 7) {
  *   after a conversion is the signal to look for what the conversion revealed, not evidence the conversion was
  *   partial.
  *
- *   PROMISE 65 IS LOCALISED, and it is NOT a builtin that needs converting — it is one line of the interpreter.
+ *   PROMISE 65 -> 57, TWO OF ITS THREE CLOSES ROUTED. 27.2.4.1's IfAbruptCloseIterator runs the iterator's
+ *   `return` — the page's code — and three sites ran it with JS_IteratorClose by C recursion. Two are now parked
+ *   on the chain exactly the way an async-from-sync close is (JSIterClose with outer_kind CONT_PROMISE_ALL, the
+ *   pending completion as its saved exception) and land on ONE new do_promise_all_reject label, which both the
+ *   no-close path and do_iter_close_finish reach. The generator-throw teardown reuses that label verbatim,
+ *   because its close and its reject were the same two steps written twice.
+ *   WHY THE DEFERRED-CLOSE QUEUE COULD NOT SERVE THIS, since that was the obvious idea: its drain is the
+ *   interpreter's exception label, and neither arm goes there — Promise.all(x) RETURNS a rejected promise rather
+ *   than raising. A close whose caller does not unwind needs a CONTINUATION, not a deferral.
+ *   THE THIRD IS NAMED: promise_all_err inside the CONT_PROMISE_ALL step dispatch. It differs from the other two
+ *   in what follows the close — not a teardown but the FINALIZE drive (fin_arg/fin_is_reject/finalizing, then
+ *   st = 2) — so it cannot share do_promise_all_reject. It needs the state to carry which continuation the close
+ *   owes, and do_iter_close_finish to re-enter the step dispatch rather than the reject label.
+ *
+ *   (was: PROMISE 65 IS LOCALISED, and it is NOT a builtin that needs converting — it is one line of the
+ *   interpreter.)
  *   Backtrace (Promise/all/invoke-resolve-error-close.js): JS_CallInternal's CONT_PROMISE_ALL abrupt arm ->
  *   JS_IteratorClose -> JS_CallFree -> JS_CallInternal. The arm runs 27.2.4.1's IfAbruptCloseIterator INLINE,
  *   so the iterator's `return` method — the page's code — is entered by C recursion below the live flow.
