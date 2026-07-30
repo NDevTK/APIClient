@@ -919,6 +919,38 @@ if (extFromC !== 7) {
  * invokes nothing, so each body keeps its whole algorithm and takes the coerced string. String 48 -> 46,
  * corpus 1944 -> 1942. Small, and the point of doing it is that a note naming a gap is not the gap being closed.
  *
+ * THE SURVEY AS IT STANDS, so the next pass starts from BUILDING rather than re-measuring. Each root below has a
+ * backtrace and a shape; the counts are per-directory from the current build (corpus 1942).
+ *
+ *   language/ 1095 — js_inner_module_linking's `JS_Call(m->func_obj, JS_TRUE, 0, NULL)`, the module graph's
+ *   "initialize the global variables" pass, run from C once per module. CONFIRMED SHAPE: the module body's
+ *   compiled prologue is `OP_push_this; OP_if_false <body>` (instantiate_hoisted_definitions), so `this === true`
+ *   runs the hoisted-definition pass and returns. This is NOT a caller fix: js_link_module is a C DFS and
+ *   JS_FlowEvalModule drives compile -> link -> evaluate from C, so routing it means module evaluation becomes a
+ *   FLOW. That is the "module support in JS_FlowNew" gap this file has named since the sixth sweep, and it is the
+ *   one root that needs a new mechanism rather than a conversion.
+ *
+ *   TypedArrayConstructors 265 — js_typed_array_constructor: three JS_ToIndex calls (the element length, the
+ *   byteOffset, the length-with-buffer) plus js_create_from_ctor's `prototype` read, in a body with three
+ *   delegating arms (js_typed_array_constructor_ta and _obj each perform that read too). NOTE FOR WHOEVER TAKES
+ *   IT: the engine coerces BEFORE js_create_from_ctor, while 23.2.5.1 step 3 puts AllocateTypedArray — and so the
+ *   `prototype` read — first. That ordering is a separate fidelity question and must not ride along with the
+ *   routing; the tail's own comment ("Re-validate buffer after js_create_from_ctor which may have run JS code")
+ *   is the acknowledgement that the read is user code.
+ *
+ *   String 46 — js_str_replace_prologue: check_regexp_g_flag's IsRegExp (@@match) and `flags` reads, and step 2's
+ *   `? GetMethod(searchValue, @@replace)`, all performed with JS_GetProperty from C inside a machine that already
+ *   has stages. Bounded, but it renumbers an existing stage chain.
+ *
+ *   Array 204, Promise 66, Map 39, RegExp 33, Set 27 — not yet localised past the directory. AsyncDisposableStack
+ *   29 / DisposableStack 28 ARE localised: js_disposable_stack_dispose drives each resource's dispose method with
+ *   JS_Call from C and chains the rest through Promise.then, so the FIRST dispose is a drive-to-completion.
+ *
+ * WHY THIS LIST IS WORTH MORE THAN ONE MORE CONVERSION: the histogram is cheap (a bulk counter run per directory)
+ * and a DFAIL names ONE caller, so the expensive part is the pairing, and it decays as soon as anything lands.
+ * Recording it with the shapes is what keeps the next pass from re-deriving it — and re-deriving it is exactly the
+ * mistake that produced the wrong "the residual is all Array.fromAsync" claim earlier in this file.
+ *
  * A CONTAINER-LEVEL SCARE worth recording as PROCESS. Mid-diff the local checkouts had reverted to an older
  * snapshot: main at 1c54288, the submodule at e563763, and this session's base commit 8be22e0 not even an object.
  * The rule held — check the tree, never assume — and the FIRST command was `git ls-remote`, not a reset: origin had
