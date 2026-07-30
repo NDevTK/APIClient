@@ -1680,6 +1680,13 @@ if (extFromC !== 7) {
  *          AND NOTHING ELSE — JS_SetPropertyValue on a PRIMITIVE V is exactly that, including the
  *          out-of-bounds no-op. This is the same lesson the ToPrimitive replay taught, in a place where the
  *          re-executed prefix was NOT pure: re-asking a question the spec already answered is not free.
+ *      AND THE INTERPRETER'S COPY IS GONE, which was the second half of the ordering. OP_put_array_el's
+ *      `ta[i] = obj` is now the keyed entry's GP_SET request — the same shape the `length` spelling beside it
+ *      already used — so the inline ta_write_needs_toprim guard, the value_tonum_toprim label and
+ *      TPR_PUT_ARRAY_EL_VAL all delete. One place asks whether a TypedArray element write coerces V, and the
+ *      opcode's direct JS_SetPropertyValue tail no longer reaches that case at all. The value-form predicate
+ *      survives with one caller (ta_elem_set, which holds an int index and no atom) and is not a duplicate of
+ *      the atom form: they answer the same question from the two shapes it is actually asked in.
  *      THE OBSTACLE THE NEXT ATTEMPT STARTS FROM, found by reading do_array_len_start rather than assuming:
  *      JSArrayLen does not carry gp_recv, and a TypedArray element write NEEDS it — 10.4.5.5 step 1 applies
  *      TypedArraySetElement only when SameValue(O, Receiver), so the receiver decides whether V is coerced at
