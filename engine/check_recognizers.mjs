@@ -1144,7 +1144,17 @@ if (extFromC !== 7) {
  *   was feeding. The prologue conversion took String 46 -> 34 and the residual is the very next line of the same
  *   algorithm.
  *
- *   TYPEDARRAYCONSTRUCTORS 49 IS THE PROTOTYPE READ IN THE THIRD BRANCH. js_typed_array_constructor_ta ->
+ *   THE THIRD BRANCH IS ROUTED (49 -> 37) AND IT DID NOT GET AN ARM OF ITS OWN. ta_buffer_ctor_ready was
+ *   WIDENED to accept a typed-array source, so the one entry now covers the element-count, buffer-view and
+ *   typed-array-copy forms and the machine's own tag test picks between them — which is the rule this file
+ *   already states for selectors, applied to a predicate rather than to a legacy body. A second predicate beside
+ *   the first would be the same question asked twice, and every shape one of them failed to answer would have
+ *   gone silently to the C body. js_typed_array_constructor_ta split into js_ta_copy_finish (everything after
+ *   the object exists, which invokes nothing) plus a create, exactly as the view branch split.
+ *   The source's element count is read BEFORE the `prototype` getter runs, where the C body read it, and the
+ *   existing re-validation after the read is what catches a getter that detached the source.
+ *
+ *   (was: TYPEDARRAYCONSTRUCTORS 49 IS THE PROTOTYPE READ IN THE THIRD BRANCH.) js_typed_array_constructor_ta ->
  *   js_create_from_ctor: 23.2.5.1 step 6.b's TYPED-ARRAY source arm. The view arm was routed (the split into
  *   js_ta_view_plan / js_ta_view_finish) and the CONSUME arm before it; this is the copy-from-another-typed-array
  *   branch, which has its own js_create_from_ctor and was never in either. Three branches, three separate reads —
