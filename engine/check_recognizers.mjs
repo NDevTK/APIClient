@@ -1095,8 +1095,21 @@ if (extFromC !== 7) {
  *   read, with the arm already chosen and its operands already captured, the way do_promise_all_have_cap resumes
  *   after its capability Construct rather than re-entering the combinator's dispatch. CONT_CTOR_PROTO is still
  *   the right REQUEST; what cannot be reused is its delivery's re-entry.
- *   AND THE BASE-CLASS ARM'S OWN REPLAY IS NOW A NAMED DEBT: it works only because its prologue is pure today,
- *   which nothing asserts and no one will re-check when a line is added to that block.
+ *   AND THE BASE-CLASS ARM'S RE-ENTRY IS NOW ASSERTED RATHER THAN ASSUMED. It re-executes the prologue — the
+ *   bytecode header, is_derived_class_constructor, narg_alloc — before reaching the read, which is a REBUILD and
+ *   is only sound while every one of those is a pure function of state JSCtorProto parked. That was a comment;
+ *   it is a DCHECK now: the park captures arg_count and is_derived, the resume recomputes them and crashes if
+ *   they differ. A line added to that block that reads mutable state turns the rebuild into a replay, and the
+ *   assert names it at the origin instead of letting a construct silently decide differently the second time.
+ *   THE ASSERT FIRED ON ITS FIRST RUN AND THE CAUSE WAS MINE, WHICH IS THE POINT OF WRITING IT: CONT_CTOR_PROTO
+ *   has TWO delivery sites — the in-place arm and the suspended one — and only the first had been given the
+ *   captured values, so every resume through the second compared against zero. The same hand-copied-list failure
+ *   this file records for construct-abandon, caught this time in one run by an assertion rather than in three
+ *   turns by a leak. A new field on a parked state is an obligation at every delivery, not just the one being
+ *   looked at.
+ *   The fixture that exercises it makes the getter mutate everything it can reach — the argument array, the
+ *   constructor's `length`, a re-entrant construct — and the rebuild recomputes identically through all of it,
+ *   so the purity claim is now measured rather than asserted in prose.
  *
  *   (superseded, kept so the retraction has something to point at) THE SHAPE — no new kind, no new state:
  *       if (cmach == NATIVE_PROMISE_EXEC && promise_exec_ready(...)) {
