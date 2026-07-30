@@ -791,12 +791,15 @@ if (extFromC !== 7) {
  * pointed three greps and a `git diff` at THAT file. A path is only a tree-check if you know which root it is
  * under; `git -C <dir>` and an absolute path are, a bare filename after a `cd` is not. The stray file is deleted.
  *
- * THE ASSERT MACROS ARE NAMED CHECK / CHECK_FAIL, not QJS_CHECK_FAIL. The submodule mirrors engine/host/check.h
- * because it cannot include it, and it had spelled the always-fatal half with a prefix and given it no CONDITIONAL
- * form at all — so the first invariant that needed one got a SECOND coined name (QJS_CHECK) rather than the
- * established one. Two spellings of one mechanism across two files is exactly the coinage CLAUDE.md forbids, and
- * the tell is that the second name invites a third. There is no collision in the submodule's sources, so the
- * prefix was never buying anything. Only the EMIT differs between the two files, which is the part that has to.
+ * THE ASSERT MACROS ARE CHECK / CHECK_FAIL / DCHECK / DFAIL — all four, in all three mirrors. DCHECK and DFAIL
+ * have been the pair they are since 81d3a2c, and engine/host/check.h and extension/check.js have always spelled
+ * the always-fatal pair CHECK / CHECK_FAIL; a4ae809 added a prefixed QJS_CHECK_FAIL to quickjs.c alone, with no
+ * conditional half. The failure mode is what makes this worth writing down: reaching that missing half, the
+ * reflex was to COIN THE MATCHING PREFIX (QJS_CHECK) rather than to ask why the prefix was there at all. It was
+ * there for nothing — no CHECK or CHECK_FAIL identifier exists anywhere in the submodule's sources to collide
+ * with. One mechanism, three files, one spelling; only the EMIT differs, which is the part that has to. A
+ * divergent name is not cosmetic: it is what makes a missing half look like something to extend instead of
+ * something to fix, and the extension then legitimises the divergence.
  *
  * NAMED, and it is not a routing problem: THE THREE SELF-HOSTED BUILTINS. The residual 2128 is all of it —
  * Array.fromAsync (Array 204 + Function 6) and Iterator.zip/zipKeyed (Iterator 166) — and the fix is not an
