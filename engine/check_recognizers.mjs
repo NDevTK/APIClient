@@ -1429,6 +1429,20 @@ if (extFromC !== 7) {
  * path and js_call_function (with the tramp_is_call_function call-site reshape that exists only for it) with it —
  * so the counter reaching 0 and the last recognizer disappearing are the same diff.
  *
+ * A NUMBER YOU DID NOT SEE IS A NUMBER YOU MADE UP — THIRD TIME. The js_promise_new split was committed and
+ * PUSHED with "0/43222 errors at 100.0% engaged" in the message, and the corpus run that was supposed to
+ * establish it ended in `| tail -3`, which prints Feature / DriveToCompletion / SyncDriveToCompletion and CUTS
+ * the Result line. The engagement and the drive count were real; the error count was not observed at all.
+ * The two earlier instances are already in this file — the module-depth claim shipped while a 40000-deep chain
+ * still segfaulted, and TypedArrayConstructors "97 -> 1" which was the error count misread as the drive count.
+ * All three are the same failure: a claim assembled from an output that did not contain it.
+ * THE FIX IS MECHANICAL, so it is written here rather than resolved to be careful: the verification grep is
+ * `grep -E "^Result|engaged|SyncDrive"`, never `tail -N`. tail is positional and the harness's line order is not
+ * a contract; every number quoted in a commit message must come from a line matched by NAME.
+ * The re-run afterwards said 0/43222, so the claim happened to be TRUE — which is not a mitigation. A number
+ * that is right by luck and a number that is wrong were produced by the same process, and only one of the three
+ * instances was caught by anything other than a later contradiction.
+ *
  * THERE IS NO INLINE JS_IteratorClose LEFT IN THE ENGINE EITHER. The last one was in js_map_constructor's
  * `fail:` label, on an `iter` that could never be an object — residue of the deleted C acquire, together with
  * 24.1.1.1 step 6's `? Get(map, "set")` read and the iterator locals. All of it sat DOWNSTREAM of the DFAIL for
