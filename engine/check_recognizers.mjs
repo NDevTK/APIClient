@@ -966,7 +966,14 @@ if (extFromC !== 7) {
  *   on a graph the page is entitled to have. Both are Tarjan walks; `index`, the dfs/ancestor indices and the
  *   per-child bookkeeping are threaded exactly where the recursion threaded them, with the pre-order, per-child
  *   and post-order halves split into functions so the frame stack can sit between them.
- * A 6000-deep chain is the fixture; it is 12x the depth at which the old build failed and runs in 14s.
+ * A FIFTH walk was found by pushing the fixture deeper, and it is the reason to push a fixture past the point it
+ * passes: js_resolve_export1 forwards an INDIRECT export (`export { v } from "m"`) with a TAIL call, so a chain of
+ * N re-exports was N C frames — and the chain fixture is exactly that shape, so at 40000 it still segfaulted after
+ * the other four were flattened. A tail call is a loop; the star-export case beside it is a real branching walk and
+ * stays recursive. The resolve state already carries the visited set, so the cycle guard is untouched.
+ * THE LESSON IS ABOUT THE FIXTURE, not the walk: 6000 passed with four of the five fixed, and stopping there would
+ * have shipped the claim "the module graph's depth is not the C stack's business" with a counter-example one
+ * order of magnitude away. A depth fixture that passes proves nothing until it is raised until it fails.
  *
  * WHAT THIS DOES NOT DO, stated so it is not mistaken for done: the linker still performs step 9's
  * `JS_Call(m->func_obj, JS_TRUE)` from C, and SyncDriveToCompletion is unchanged at 1942. Routing that call needs
