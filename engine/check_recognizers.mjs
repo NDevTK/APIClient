@@ -943,9 +943,16 @@ if (extFromC !== 7) {
  *   WHAT IS NOT THE OBSTACLE, since it looked like one: native_machine and the STEPDEF magic are SEPARATE fields,
  *   so a callee can carry both declarations. The obstacle is that the coercions belong to ONE BRANCH, and a
  *   declaration on the callee cannot say "only when the first argument is a buffer".
- *   THE SHAPE THAT FITS: the buffer branch's two coercions belong to the machine the constructor ALREADY declares
- *   — do_ta_consume_tramp gains a buffer-first-argument entry, with ta_consume_ready widened to admit it — rather
- *   than to a second machine wrapped around everything. One declaration, one driver.
+ *   THE SHAPE THAT FITS, AND IS NOW BUILT: a SECOND ENTRY under the declaration the constructor already carries.
+ *   ta_consume_ready declines a buffer (its own comment called that "a separate unbuilt piece"), and the arm below
+ *   it asks ta_buffer_ctor_ready and drives a small coercion machine by POINTER — no STEPDEF id, the way a
+ *   DELEGATE names its inner machine. So the callee keeps ONE declaration, the spec's own step 6 branch test picks
+ *   which entry runs, the constructor stays a constructor_magic (its call form unchanged), and the coercion
+ *   machine is reachable ONLY with a buffer first argument — which a DCHECK at its prologue asserts, so the object
+ *   branches the consume walk owns can never arrive there. TypedArrayConstructors 265 -> 97, corpus 1942 -> 1774.
+ *   The general lesson: when a callee already declares a walk, a new branch of the same builtin is another ENTRY
+ *   under that declaration, never a machine wrapped around the whole thing — the wrapper cannot see which branch
+ *   applies, and the dispatch already can.
  *   SEPARATELY: js_create_from_ctor's `prototype` read is still C-side in all three branches, and the engine
  *   coerces BEFORE it while 23.2.5.1 step 3 puts AllocateTypedArray first. That ordering is its own fidelity
  *   question and must not ride along with the routing; the tail's comment ("Re-validate buffer after
