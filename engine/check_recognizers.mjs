@@ -1771,6 +1771,18 @@ if (extFromC !== 7) {
  *      never silent (the test still fails), but the message sent the reader hunting a hang instead of reading
  *      the assertion, which is exactly what it did here: several minutes bisecting a "hang" in Array.fromAsync
  *      that was a failing assertion all along. run-test262 keeps the message now and reports it.
+ *      AND THE PROBE FOUND FOUR SPEC BUGS IN THE SELF-HOSTED Array.fromAsync, two of which THROW. They are
+ *      fixed at their source, which is the .js — the port supersedes that file, but wrong behaviour does not
+ *      wait for the port, and the header regenerates reproducibly from it (verified byte-identical before
+ *      touching anything, so the .js really is the source and not a stale copy).
+ *        - CreateDataPropertyOrThrow yields {writable, enumerable, configurable} all true; the descriptor was
+ *          written without `enumerable`, so EVERY element was non-enumerable. Object.keys returned "", and
+ *          for-in and spread saw nothing. All 95 test262 fromAsync files pass either way — nothing in the
+ *          corpus checks an element's descriptor.
+ *        - LengthOfArrayLike is 7.1.20 ToLength, not `+x || 0`. `{length:-3}` and `{length:2.7}` reached
+ *          Array(-3) / Array(2.7) and threw RangeError where the spec yields [] and a length-2 array.
+ *      Math.floor is passed IN to the closure rather than reached through the global, so a page replacing
+ *      Math.floor cannot change what the builtin computes — the rule the other four injected intrinsics follow.
  *
  *   3d. AND THE OTHER BIG BLOCK IS ONE ROOT TOO, measured the same way: language/expressions 28 (async-generator
  *      8 + class 16 + object 4), AsyncFromSyncIteratorPrototype 7 and AsyncGeneratorPrototype 3 are all
