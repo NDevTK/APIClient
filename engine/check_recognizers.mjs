@@ -1372,6 +1372,24 @@ if (extFromC !== 7) {
  *   prologue, so `JSON.parse({toString(){…}})` drove that body off the tramp — it is a step_tostring_run stage
  *   before the prologue now, and js_json_reviver_init DCHECKs that what it is handed is already a string.
  *
+ *   THE TWO ITERATOR-PROTOTYPE DISPOSALS (AsyncIteratorPrototype 3 -> 0, Iterator 2 -> 0, corpus 24 -> 20).
+ *   %IteratorPrototype%[@@dispose] and %AsyncIteratorPrototype%[@@asyncDispose] are both `GetMethod(O,"return")`
+ *   then `Call(return, O)`, and both ran BOTH from C — JS_GetProperty and JS_Call/JS_CallFree — so an iterator
+ *   whose `return` is an accessor, or whose body loops, had no flow base. One machine over two defs, `arg`
+ *   saying which; the async one carries catches_abrupt because steps 4/6.b/7.b are IfAbruptRejectPromise.
+ *   NEW SHARED PRIMITIVE: step_promiseresolve_run, PromiseResolve(%Promise%, x) as a sub-sequence. TWO of its
+ *   steps are page code and js_promise_resolve_native does both from C — the `constructor` READ on an x that is
+ *   already a promise (return-suspendedStart-broken-promise.js defines an accessor for exactly that), and the
+ *   capability's RESOLVE, which reads `.then` off a THENABLE. That C route stays for callers with nowhere to
+ *   suspend, and its comment names them; a machine uses the sub-sequence.
+ *   TWO BUGS, and both are about WHAT SURVIVES A PARKED REQUEST. (1) `pout` was written at the point the promise
+ *   is BUILT, which is before the resolve request parks — so the caller's local held it across a suspension and
+ *   lost it, and perform_promise_then segfaulted on a NULL JSPromiseData. The promise lives in the caller's cb[]
+ *   buffer instead, and `pout` is a single write on the return-0 exit, which is what every other sub-sequence
+ *   already promises. (2) the machine did not check JS_IsException on a delivery, so a throwing `return` was
+ *   handed to PromiseResolve as a value and the test hung — the same class as fromAsync's, and the reason the
+ *   FIRST thing a catches_abrupt machine does is test its delivery.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
