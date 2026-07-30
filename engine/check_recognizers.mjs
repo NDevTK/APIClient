@@ -1072,10 +1072,25 @@ if (extFromC !== 7) {
  *   dup'd new.target onto its own state instead. Two ownership models for one read is exactly the seam this file
  *   keeps recording, and `new Promise(fn)` issues that read on EVERY construction — which is the volume needed
  *   to leak hundreds across one suite.
- *   SO THE NEXT ATTEMPT DELETES CONT_PROMISE_EXEC_PROTO AND ROUTES do_promise_exec_tramp THROUGH CONT_CTOR_PROTO.
- *   The question to answer first is why the NATIVE_PROMISE_EXEC arm is reached without that read having happened:
- *   the generic base-class construct issues it, and the promise-exec arm is taken instead of, not after, that
- *   path. Either the arm consumes the proto CONT_CTOR_PROTO already delivered, or it is moved to after it.
+ *   THE NEXT ATTEMPT IS NOW A MECHANICAL EDIT, and the question the last note posed is answered by reading two
+ *   places. The construct dispatch tests the native-machine arms FIRST (NATIVE_PROMISE_EXEC at the top) and only
+ *   the generic BASE-CLASS BYTECODE arm below them issues the read — which is why the promise arm is reached
+ *   instead of after it. And the read's delivery is generic: the CONT_CTOR_PROTO arm restores every con_*
+ *   register from JSCtorProto and `goto do_construct_tramp`, replaying the dispatch with `con_proto` set. It
+ *   assumes nothing about the callee, so a C callee replays exactly as a bytecode one does.
+ *   THE SHAPE, THEREFORE — no new kind, no new state, no ownership model to invent:
+ *       if (cmach == NATIVE_PROMISE_EXEC && promise_exec_ready(...)) {
+ *           if (JS_IsUninitialized(con_proto)) { ...park a JSCtorProto exactly as the base-class arm does...
+ *                                                goto do_getprop_tramp; }
+ *           ...existing body, taking con_proto instead of calling js_create_from_ctor...
+ *       }
+ *   `con_proto` is the register that carries the answer back (UNINITIALIZED = not yet read, read+reset in the
+ *   dispatch so a re-entry cannot re-read it), and JSCtorProto BORROWS func and ntgt, which is the ownership the
+ *   reverted diff got wrong. js_promise_new still splits into js_promise_init_from_obj plus a create — that half
+ *   of the reverted diff was right and is worth keeping.
+ *   EVERY OTHER NATIVE-MACHINE ARM IN THAT DISPATCH IS THE SAME QUESTION, unasked: they all sit above the read
+ *   and any that performs js_create_from_ctor has the identical gap. That is the sweep to measure next, not one
+ *   more single site.
  *   FOURTH TIME: reach for the existing machine before writing one. CREATECTOR_DEF, STRRECV, js_creatector_step,
  *   and now CONT_CTOR_PROTO — every one of them found AFTER building or half-building a replacement. The check
  *   costs one grep for the operation's name and it has never once come back empty.
