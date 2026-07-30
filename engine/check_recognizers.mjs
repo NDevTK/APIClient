@@ -957,6 +957,26 @@ if (extFromC !== 7) {
  *   coerces BEFORE it while 23.2.5.1 step 3 puts AllocateTypedArray first. That ordering is its own fidelity
  *   question and must not ride along with the routing; the tail's comment ("Re-validate buffer after
  *   js_create_from_ctor which may have run JS code") is the acknowledgement that the read is user code.
+ *   THAT READ IS NOW ROUTED TOO (TypedArrayConstructors 97 -> 1, corpus 1774 -> 1726), and the ONE test that
+ *   failed while it was being built is the whole lesson:
+ *   throw-type-error-before-custom-proto-access.js — `Reflect.construct(TA, [Symbol()], newTarget)` must throw
+ *   ToIndex's TypeError BEFORE new.target's `prototype` getter runs. So the read cannot simply be lifted to the
+ *   front of the body; the body had to SPLIT at the AllocateTypedArray boundary. js_ta_view_plan is everything
+ *   23.2.5.1 orders before 10.1.14 (both ToIndex calls, the detached checks, the offset/length range checks, the
+ *   buffer allocation) and it returns int; js_ta_view_finish is the tail that takes the created object,
+ *   re-validates the buffer the getter may have detached or resized, and initialises the view. The plan is held
+ *   ON THE MACHINE across the suspension (JSTAViewPlan, with a `planned` flag so js_ta_ctor_fini releases the
+ *   buffer it owns if the read throws), and the finish takes it. The unrouted C entry calls the same two halves
+ *   with js_create_from_ctor between them, so there is ONE implementation of each half, not a twin.
+ *   TWO BUGS THIS SHAPE PRODUCED, both worth keeping: (1) the `have_length` fall-through label is ALSO where a
+ *   resume lands, so its unconditional `cb_result = JS_UNDEFINED` reset discarded the value the prototype read
+ *   had just delivered and 10.1.14's realm fallback then handed back the intrinsic prototype —
+ *   `Reflect.construct(BigInt64Array, [], customProto)` silently ignored the custom one. State that must survive
+ *   a suspension cannot be re-initialised on the path the suspension returns to; the reset is now guarded by the
+ *   stage. (2) the two halves are defined after the machine that calls them, so with no forward declaration C
+ *   implicitly declared them as non-static int-returning — which is exactly the two errors the build gave, and
+ *   neither of them named the real cause. A split that moves a definition below its caller needs the
+ *   declaration in the same diff.
  *
  *   String 46 — js_str_replace_prologue: check_regexp_g_flag's IsRegExp (@@match) and `flags` reads, and step 2's
  *   `? GetMethod(searchValue, @@replace)`, all performed with JS_GetProperty from C inside a machine that already
