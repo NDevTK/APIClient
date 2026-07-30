@@ -1241,6 +1241,13 @@ if (extFromC !== 7) {
  *   So there is no new state, no new continuation kind, and no second re-issue — one predicate call in the arm
  *   above the define and one phase in a sequence that already exists. Fifth time the machine was already there;
  *   this time it was found before a line was written, which is the only difference that matters.
+ *   THE PHASE CHAIN, transcribed so the edit is mechanical: AL_TA_START issues the ToPrimitive on gp_val and
+ *   sets AL_TA_PRIM; AL_TA_PRIM takes ret_val as `coerced`, sets AL_REISSUED, and falls into the SAME re-issue
+ *   tail AL_COMPARE already uses (gp_obj/gp_atom/gp_op/gp_val = al->coerced, gp_outer = al with
+ *   CONT_ARRAY_LEN). The tail's own comment is the soundness argument, unchanged: the re-run's conversions are
+ *   of a primitive, so they invoke nothing and cannot match the predicate that sent it there. The state BORROWS
+ *   every operand and stays alive as their owner — handing ownership to the registers is what leaked the array
+ *   and the atom on every length write, and would leak the same way here.
  *   Both are named with their line numbers because both are one site, not a directory.
  *
  *   THE HONEST HISTOGRAM at 725 (built-ins, then language): Array 204, Promise 65, TypedArrayConstructors 49,
