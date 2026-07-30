@@ -1010,6 +1010,21 @@ if (extFromC !== 7) {
  *   root" skipped that step. Probe the top of the histogram BEFORE planning against it — the probe is one sed
  *   and one gdb run, and here it deleted the work item instead of scoping it.
  *
+ *   AT 451, TWO NEW ROOTS, both in the INTERPRETER rather than in a builtin — which is where this sweep has
+ *   been heading since the Map/Set forEach conversion.
+ *   PROMISE 53: `s->promise_resolve = JS_GetProperty(ctx, thisv, JS_ATOM_resolve)` in the combinator's setup
+ *   (quickjs.c:29544, test Promise/all/invoke-resolve-get-error-reject.js). 27.2.4.1 step 4 is
+ *   `? Get(constructor, "resolve")` and on a subclass that is an accessor or a Proxy trap. Every other read the
+ *   combinator makes is already a GETPROP request; this one sits in the block that BUILDS the state, before the
+ *   machine has a stage to suspend in — which is the same shape js_str_replace_prologue had, and the same fix:
+ *   the setup becomes a stage.
+ *   TYPEDARRAYCONSTRUCTORS 37: JS_DefineProperty -> JS_SetPropertyValue -> JS_ToBigInt64Free -> ToPrimitive ->
+ *   the page's valueOf, from the GP_DEFINE arm at quickjs.c:28010. A typed-array ELEMENT WRITE coerces its
+ *   value, and for a BigInt64Array that coercion is ToBigInt — the page's code, run from C inside the define.
+ *   This is not a builtin to convert: it is the element-write path itself, so the coercion has to be hoisted out
+ *   of JS_SetPropertyValue and issued as a request before the write, the way every other operand coercion is.
+ *   Both are named with their line numbers because both are one site, not a directory.
+ *
  *   THE HONEST HISTOGRAM at 725 (built-ins, then language): Array 204, Promise 65, TypedArrayConstructors 49,
  *   String 46, Map 39, RegExp 33, AsyncDisposableStack 29, DisposableStack 28, Set 27, RegExpStringIterator 16,
  *   Uint8Array 9, AsyncFromSyncIterator 7; language/statements 69, language/expressions 28.
