@@ -1423,6 +1423,28 @@ if (extFromC !== 7) {
  *   of the async generator's awaits, and this. js_promise_resolve_native's remaining callers are all settles
  *   with no page-code read left in them.
  *
+ *   AND THE ASYNC FUNCTION'S AWAIT, THE LAST OF THE THREE (for-await-of 4 -> 0, Symbol 2 -> 0, corpus 12 -> 6).
+ *   js_async_function_post_prepare performed step 1's PromiseResolve — the `constructor` read included — and
+ *   handed out only the resolve CALL. js_async_await_def is the whole of 27.7.5.3, driven the same two ways as
+ *   the generator's; the async function's state rides func_data as one of its own resolving-FUNCTION objects,
+ *   which is the engine's existing JSValue handle for a JSAsyncFunctionData (refcounting and GC marking already
+ *   right), and js_async_function_resolve_one is that factory split out. JSAsyncSettle's `post` field and
+ *   do_async_settled's finish went with the half they belonged to.
+ *   Symbol.for went along for the ride: `? ToString(key)` was JS_ToString from C.
+ *
+ *   TWO PROCESS FAILURES IN THIS ONE, both worth more than the conversion.
+ *   (1) I READ SILENCE AS A PASS. The corpus grep was `^Result` and the run's summary came out as
+ *   `test262/teResult: 228/43222 errors` — a partially-flushed line from another thread, so the anchor did not
+ *   match and the Result line looked ABSENT. I noted it as odd and moved on. 228 failures then sat undetected
+ *   through a release build, an aliasing build and an ASan run, every one of which passed. THE GREP IS PART OF
+ *   THE TEST: anchor on `Result:` (no `^`), and a summary line that does not appear is a FAILURE to investigate,
+ *   never a quiet pass. This is the second time in this file's history that a filtered pipeline hid a red run.
+ *   (2) THE 228 WERE ONE WRONG RETURN VALUE. js_async_function_resume_as_flow returns TRUE for "the resume did
+ *   what it owed"; my new AWAIT branch returned FALSE on the SUCCESS path, so js_execute_async_module took its
+ *   `fail` branch on every ordinary top-level await and 221 module tests went red. A directory's own run was
+ *   green because the failure only shows where the boolean is consumed. When a conversion changes what a
+ *   function RETURNS on a path, read every caller's use of that return before running anything.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
