@@ -738,11 +738,16 @@ if (extFromC !== 14) {
  * exact LINE RANGES with an assertion on both endpoints. A destructive edit needs its endpoints asserted, not
  * matched.
  *
- * NEXT, named: THREE build_arg_list callers remain, all argument LISTS reached from the interpreter —
- * `new C(...arr)`'s construct-spread list, and the two generator-resume shapes
- * (`g.next.apply(gen, args)` / `Reflect.apply(g.next, gen, args)`), which read the whole list faithfully even
- * though a generator consumes only argument 0. The sequence they need EXISTS now (CONT_ARG_LIST); what each needs
- * is its own resumption point, the way do_apply_tramp got one.
+ * The construct-spread list followed, and it is what turned CONT_ARG_LIST into a shared sequence rather than the
+ * apply trampoline's own: the RESUMPTION POINT became a field on the state (ARGL_TO_APPLY / ARGL_TO_CONSTRUCT)
+ * instead of a second continuation. That is the right shape because the list is an OPERAND — reading it is the
+ * same algorithm whoever asked for it, and only where the finished list goes differs.
+ *
+ * NEXT, named: TWO build_arg_list callers remain, both the generator-resume shape
+ * (`g.next.apply(gen, args)` and `Reflect.apply(g.next, gen, args)`), which read the WHOLE list faithfully — every
+ * element getter fires — even though a generator consumes only argument 0. They need a third resumption kind
+ * (ARGL_TO_GEN) that lands at do_generator_tramp with the resume value taken from element 0, plus the operand
+ * reshape those two sites perform after the read. Nothing new has to be invented for them.
  * The other js_create_from_ctor callers
  * (Object, RegExp, Map/Set, DisposableStack, Promise, the two TypedArray constructors) were not reached by the
  * armed corpus, which is evidence and not proof: each is a C constructor that would fire the moment a test
