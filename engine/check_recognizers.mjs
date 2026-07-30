@@ -1545,7 +1545,22 @@ if (extFromC !== 7) {
  *      ONE THING THE RESUME NEEDS THAT THE RETRY DID NOT: `opcode` is a C local and does not survive a
  *      suspension, so it is RESTORED from a parked op_byte. Reading a parked byte is restoring state; the retry
  *      was re-executing the instruction it points at, which is not the same thing and is the whole distinction.
- *      TWELVE SITES LEFT on the legacy retry_pc, which stays only until they are converted.
+ *      TWELVE SITES LEFT on the legacy retry_pc, which stays only until they are converted. Enumerated with their
+ *      opcodes so the next family is not re-derived: OP_get_super (32686), OP_set_proto (34414), OP_get_array_el
+ *      (34569 and 34653 — two spellings), OP_get_ref_value (34755), OP_put_array_el (34852 key, 34855 VALUE),
+ *      OP_put_ref_value (34976), OP_add (35146).
+ *      AND THE KEYED ONES ARE WORSE THAN THE ARITHMETIC ONE WAS, which is the finding that matters here. Their
+ *      retry does not re-run a tag test: OP_get_array_el and OP_put_array_el open with FAST PATHS — the
+ *      int-index array element, the append-at-count case, the typed-array store — and the retry re-enters all of
+ *      them with a key that is now a primitive, so it takes a DIFFERENT route than the pass that suspended. That
+ *      is dispatch work being redone, exactly like CONT_ARRAY_LEN re-walking the prototype chain, and the comment
+ *      at key_toprim defending it ("on the retry the key is a primitive, so the atom conversion runs nothing")
+ *      is answering a question nobody asked — the cost is not the atom conversion, it is the fast-path dispatch
+ *      above it.
+ *      SO EACH KEYED SITE NEEDS ITS LABEL BELOW ITS FAST PATHS, not at the opcode's byte: the resume continues at
+ *      the slow path with the primitive key in the slot, which is where the suspending pass was going anyway.
+ *      OP_put_array_el needs TWO (key at 34852, value at 34855) and their order is observable, so it is the one
+ *      to do last.
  *      AND THE LEDGER ENTRY FOR THIS WAS ALMOST LOST: the edit that should have added it failed on a stale
  *      anchor while the commit and push in the same command ran anyway, because they were joined by && to a
  *      python block whose AssertionError did not stop the shell line. A ledger edit and its commit belong in
