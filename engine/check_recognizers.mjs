@@ -1531,6 +1531,13 @@ if (extFromC !== 7) {
  *      operation is GP_SET or GP_DEFINE and it parks the receiver as the object itself, so the remaining step is
  *      exactly one call — which is why no label was needed in the end, only the recognition that re-issuing was
  *      never doing anything the state could not do directly.
+ *      THE COMMIT THAT REMOVED IT CLAIMED "AL_REISSUED and its unwrap go with it" AND THEY DID NOT — the enum
+ *      member, the phase comment and the delivery arm were all still compiling. Caught by grepping the symbol
+ *      straight after pushing, which is the only reason it was not left as residue of a system that no longer
+ *      exists. They are deleted now, and the delivery arm is replaced by a DCHECK that the sequence can never be
+ *      handed a keyed answer, because it issues no second request. Saying a thing is gone is not the same as
+ *      grepping for it; the grep is one command and this file has now recorded the same lesson for a dangling
+ *      pointer, a helper with no callers, and an enum member.
  * A SIXTH WAS ABOUT TO BE BUILT ON TOP OF (3): the typed-array define's coercion, designed in the entries above
  * as one more AL_ phase feeding that same re-issue. That design is WITHDRAWN. Extending a replay is worse than
  * leaving the drive-to-completion in place, because it spends the conversion budget entrenching the shape that
