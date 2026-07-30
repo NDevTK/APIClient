@@ -1537,6 +1537,19 @@ if (extFromC !== 7) {
  *      at all (the walk is not a tag test).
  *      THE COUNT IS THE POINT: this was one line in a comment defending itself as free, and it is fourteen
  *      opcodes deep.
+ *      THE ARITHMETIC FAMILY IS CONVERTED, and the shape it establishes is `resume_at`: an enum on JSToPrim
+ *      naming a label placed immediately AFTER each coercion, exactly as resume_arm names one for the construct.
+ *      TWO labels here, not one, because the retry was doing real WORK and not just repeating a tag test — the
+ *      re-run is how ToNumeric(lhs)-then-ToNumeric(rhs) was sequenced, so the left coercion resumes at the
+ *      right-operand test and the right resumes at the operation.
+ *      ONE THING THE RESUME NEEDS THAT THE RETRY DID NOT: `opcode` is a C local and does not survive a
+ *      suspension, so it is RESTORED from a parked op_byte. Reading a parked byte is restoring state; the retry
+ *      was re-executing the instruction it points at, which is not the same thing and is the whole distinction.
+ *      TWELVE SITES LEFT on the legacy retry_pc, which stays only until they are converted.
+ *      AND THE LEDGER ENTRY FOR THIS WAS ALMOST LOST: the edit that should have added it failed on a stale
+ *      anchor while the commit and push in the same command ran anyway, because they were joined by && to a
+ *      python block whose AssertionError did not stop the shell line. A ledger edit and its commit belong in
+ *      separate steps, or the commit claims a record that is not there.
  *   3. CONT_ARRAY_LEN / AL_REISSUED — REMOVED. It coerced V and re-issued the whole keyed write, re-entering
  *      do_getprop_tramp and re-walking the prototype chain, the proxy checks and the accessor checks that had
  *      already resolved the arm. The sequence PERFORMS step 6 itself now: the walk resolved the target once, and
