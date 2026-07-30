@@ -745,6 +745,63 @@ if (extFromC !== 7) {
  * triggers it is the page's. Routing it means an AUTOINIT that can park, which is the mechanism to build.
  * The 4924 is the honest size of the surface; it is a ratchet to drive down, not a number to explain away.
  *
+ * A SEVENTH sweep, driven by that number: 4924 -> 2128, and the survey that produced it is worth keeping as a
+ * METHOD. A bulk counter can be run PER DIRECTORY, so the surface has a histogram before a single line changes —
+ * TypedArray 1053, Function 423, Array 422, Iterator 344 — and the DFAIL probe then only has to name the top of
+ * each column instead of the whole list. That is strictly better than reading call sites: it ranks the work.
+ *
+ * INDIRECT EVAL was the banned shape in its plainest form. `tramp_is_global_eval(call_argv[-1]) && argc >= 1 &&
+ * JS_IsString(argv[0]) && js_same_value(callee, ctx->eval_obj)` sat at OP_call/OP_tail_call — a recognizer at a
+ * CALL SITE, so `eval.call(null,src)`, `eval.apply`, `Reflect.apply(eval,…)`, a bound eval, an eval behind a
+ * trapless Proxy and `[eval][0](src)` all missed it and drove the program to completion. Every clause of it was a
+ * silent fallback, including a comment that declared the narrowing on purpose: "Same-realm only ... a cross-realm
+ * (0,evalFromOtherRealm)(src) must keep the C path". js_global_eval is a step machine now, the callee carries the
+ * capability, and step_realm supplies the realm the C body used to get from js_call_c_function — so the clause the
+ * comment defended does not exist to narrow. The recognizer is deleted; 0/0 recognizers still holds.
+ *
+ * CreateDynamicFunction was declared PRIMARGS_DEF, and that declaration was FALSE. A coerce-then-compute
+ * declaration asserts one thing — with its arguments primitive the body has no user code left to reach — and this
+ * body then evaluated the synthesized `(function anonymous(…){…})` source (a BYTECODE BODY, by C recursion) and
+ * finished with GetPrototypeFromConstructor's `Get(newTarget,"prototype")` (a [[Get]] a Proxy new.target traps).
+ * The lesson is about the declarations themselves: a capability declared at a definition is a CLAIM about that
+ * body, and a wrong one hides exactly as much as a fallback does. It is a machine over three requests now, and
+ * built-ins/Function's 423 went to 6, TypedArrayConstructors' 283 and GeneratorFunction/AsyncFunction/
+ * AsyncGeneratorFunction's 341 to 0 — all of them were the harness building subclasses with `new Function`.
+ *
+ * step_program_run is the sub-sequence both of them perform, which is why neither is a stage that re-spells it:
+ * "evaluate this source as a program" is one operation, and a program's body is a body like any other.
+ *
+ * 10.1.14 GetPrototypeFromConstructor came OUT of step_create_from_ctor_run. 10.1.13 is 10.1.14 followed by
+ * OrdinaryObjectCreate, and a dynamic function is created by the PARSER while still ending in the same read — two
+ * callers of the read, one of which does not want the object, is what makes it its own sub-sequence.
+ *
+ * JS_SpeciesConstructor is DELETED. step_speciesctor_run has been the implementation of 7.3.22 for some time and
+ * %TypedArray%.prototype.slice was the last site still performing the two reads from C — under a comment that said
+ * "keep the observable reads where the spec puts them", which was true about their ORDER and silent about the fact
+ * that both of them ran the page's getter off the tramp. TypedArray 1053 -> 0.
+ *
+ * Iterator.concat read `@@iterator` on every argument from C. Its conversion has the shape to expect from any
+ * per-argument walk: 27.1.2.1 step 3 INTERLEAVES the object check with the read, so argument 1 is checked only
+ * after argument 0 has been read, and a machine that validated all arguments up front would be observably wrong.
+ * The cursor is (i, checked) for that reason and not a loop over a pre-validated vector.
+ *
+ * A PROCESS FAILURE worth more than any of the above. `git diff`/grep after a surprising result is the rule, and
+ * it was followed — and it still reported that a deletion had not happened, because a STRAY COPY of quickjs.c had
+ * been committed at the repo ROOT in an earlier turn (82ba30b) and a `cd` to the parent for the gate silently
+ * pointed three greps and a `git diff` at THAT file. A path is only a tree-check if you know which root it is
+ * under; `git -C <dir>` and an absolute path are, a bare filename after a `cd` is not. The stray file is deleted.
+ *
+ * NAMED, and it is not a routing problem: THE THREE SELF-HOSTED BUILTINS. The residual 2128 is all of it —
+ * Array.fromAsync (Array 204 + Function 6) and Iterator.zip/zipKeyed (Iterator 166) — and the fix is not an
+ * autoinit that can park, which is what the sixth sweep's note guessed. It is CLAUDE.md's architecture line:
+ * "Don't code browser features in JavaScript. Browser features are C engine components." builtin-array-fromasync.js,
+ * builtin-iterator-zip.js and builtin-iterator-zip-keyed.js are three browser features written in JavaScript, and
+ * every mechanism around them — js_bytecode_eval, js_bytecode_autoinit, JS_AUTOINIT_ID_BYTECODE, the qjsc blobs —
+ * exists only to run them. Eager instantiation does NOT fix it either: `$262.createRealm` (an iframe) builds a
+ * realm from page JS, so context setup itself happens below a live flow. Iterator.zip is the one to do first: it is
+ * synchronous, and JS_CLASS_ITERATOR_CONCAT with STEPDEF_ITER_CONCAT_NEXT/RETURN is already the exact pattern its
+ * result object needs. Array.fromAsync is the hardest (an await inside a loop) and comes last.
+ *
  * THERE IS NO C-DRIVEN PROXY TRAP LEFT IN THE ENGINE. Every one of the thirteen internal methods is a DFAIL plus a
  * visible release failure, and the only implementation is the routed one.
  *
