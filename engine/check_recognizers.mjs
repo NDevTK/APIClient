@@ -652,6 +652,52 @@ if (extFromC !== 14) {
  *   the Symbol constructor      — ToString(description) from C. Now the coerce-then-compute declaration, with
  *                                20.4.1.1 step 1's NewTarget test as the leading validation.
  *
+ * A FOURTH sweep, and the first one whose METHOD is a DFAIL rather than reading code: a `DFAIL` at the entry of
+ * each of the SEVEN Proxy exotic hooks (js_proxy_get / _set / _has / _delete_property / _get_own_property /
+ * _define_own_property / _get_own_property_names), which are the only places the page's traps can be invoked from a
+ * C activation with no flow base. Because the abort names the internal method and a gdb backtrace names the caller,
+ * each firing IS a work item; because the corpus aborts at the FIRST one, the survey ran per-directory so the whole
+ * queue was visible at once. Eight directories fired, five distinct internal methods, and the queue was:
+ *
+ *   [[DefineOwnProperty]] — 25.5.1.1 InternalizeJSONProperty's CreateDataProperty (a reviver runs bottom-up with
+ *     `this` bound to the holder, so it can plant a Proxy on a key the walk has not reached); 15.7.10 DefineField
+ *     (a class field's receiver is whatever the base constructor returned); B.2.2.2/3 __defineGetter__/Setter.
+ *   [[Get]] — 10.1.13 step 2's `Get(newTarget, "prototype")` from js_create_from_ctor, reached from the
+ *     interpreter's BASE-class construct and from the C constructors; 23.2.3.26.1 step 6.b's array-like source
+ *     read in TypedArray.prototype.set; OP_get_length, which had no route AT ALL; and every PRIMITIVE-base read.
+ *   [[Set]] — every PRIMITIVE-base write.
+ *   [[GetOwnProperty]] — the error-stack accessor's setter; 20.1.3.4 propertyIsEnumerable.
+ *   [[OwnPropertyKeys]] — 27.1.3.4 Iterator.zipKeyed's injected getOwnPropertyKeys helper.
+ *
+ * All of those are fixed, and the DFAILs LAND: the whole 43222-test corpus now runs with all seven armed and fires
+ * none, which is a far stronger statement than any of the per-site comments that used to say a site was safe. Two
+ * lessons worth keeping:
+ *
+ *   THE ANSWER WAS USUALLY A WALKER, NOT A SITE. tramp_proto_proxy / tramp_accessor_getter / tramp_accessor_setter
+ *   were each guarded at their ~18 call sites by `JS_VALUE_GET_TAG(x) == JS_TAG_OBJECT`, and that one guard,
+ *   repeated, is what left EVERY primitive-base read and write running the page's code from C. The fix was to give
+ *   the walkers the base VALUE and one tramp_walk_base — and the first attempt, which routed the two write opcodes
+ *   explicitly instead, was wrong for exactly the case tramp_walk_base exists to state: a String primitive answers
+ *   its own canonical indices and `length` ITSELF, so starting the walk at String.prototype would let a Proxy above
+ *   it answer for a character the string owns. A per-site guard is not a small duplication; it is the gap.
+ *
+ *   AN ORDERING BUG TRAVELS WITH THE C CALL. Three of these callers had the spec's order wrong as well as the
+ *   activation: propertyIsEnumerable coerced the key AFTER ToObject, and both array-element opcodes let a NULLISH
+ *   base fall through to a C entry that coerces the KEY first — so `u[{toString(){…}}] = 1` ran the page's toString
+ *   from C and ran it before the TypeError 6.2.5.5 step 3.a raises. The C entry does its own steps in its own
+ *   order; routing is what forces the spec's.
+ *
+ * ONE caller of js_create_from_ctor is NAMED AND UNFIXED, so the next attempt starts from building it: the
+ * TypedArray CONSUME arm in JS_CallInternal (23.2.5.1 step 6.a.i, `new Int8Array(iterable)` with a Proxy
+ * new_target — `s->ta_target = js_create_from_ctor(ctx, ntgt, ta_classid)`). It is not in test262's reach but a
+ * fixture in this tree hits it, so the landed DFAIL aborts there BY NAME, which is the correct state and the work
+ * queue rather than a regression. What it needs is a continuation that parks the consume SETUP across the
+ * `prototype` read, the way CONT_CTOR_PROTO parks the whole construct. The other js_create_from_ctor callers
+ * (Object, RegExp, Map/Set, DisposableStack, Promise, the two TypedArray constructors) were not reached by the
+ * armed corpus, which is evidence and not proof: each is a C constructor that would fire the moment a test
+ * constructs it with a Proxy new.target, and each is converted the way Boolean was — the create-from-ctor
+ * DECLARATION, whose CREATECTOR_WRAP bit now also states the wrapper kind whose CALL form answers with a primitive.
+ *
  * A THIRD sweep, over OPERATOR and SYNTAX surfaces (destructuring, spread, optional chaining, `in`/`delete`
  * through a proxy chain, private brands, tagged templates, class heritage, labelled break with a proxied
  * `return`), found four. All four are fixed — each was NAMED here first, with its backtrace, so the attempt
