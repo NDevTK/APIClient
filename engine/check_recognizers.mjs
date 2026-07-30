@@ -1664,6 +1664,22 @@ if (extFromC !== 7) {
  *      interpreter's copy dies then. That is the ordering: keyed-entry arm first (it unblocks fill and the
  *      TypedArray constructors on their own), the interpreter tail second, the value-form predicate deleted
  *      with it.
+ *      DONE, 434 -> 386. The arm lands at the keyed entry with the carrier gaining the receiver and two phases
+ *      (AL_TA_PRIM/AL_TA_WRITE), and Array/prototype/fill's 12 and TypedArrayConstructors' 37 both go to 0.
+ *      TWO SPEC ORDERINGS DECIDE THE SHAPE, and the first version got the second one wrong — it parked the
+ *      coercion the moment the predicate matched and then re-ran the whole write with the primitive, which four
+ *      TypedArrayConstructors tests caught:
+ *      (a) 10.4.5.3 steps 1.b-1.e reject a descriptor BEFORE step 1.f reaches TypedArraySetElement, so a
+ *          non-configurable / non-enumerable / non-writable / accessor descriptor must never run V's valueOf.
+ *          That is ta_define_reaches_set, and it is part of the ARM'S PREDICATE rather than a check after the
+ *          coercion — a question answered late is a valueOf already run.
+ *      (b) step 1.a (IsValidIntegerIndex) is answered BEFORE the coercion and its answer STAYS answered. A
+ *          valueOf that detaches the buffer does not retroactively make 1.a false, so the define returns TRUE
+ *          with the store skipped by TypedArraySetElement step 2. Re-running the define after the coercion read
+ *          1.a a second time, saw the detached buffer, and reported failure. So the finish performs steps 2-3
+ *          AND NOTHING ELSE — JS_SetPropertyValue on a PRIMITIVE V is exactly that, including the
+ *          out-of-bounds no-op. This is the same lesson the ToPrimitive replay taught, in a place where the
+ *          re-executed prefix was NOT pure: re-asking a question the spec already answered is not free.
  *      THE OBSTACLE THE NEXT ATTEMPT STARTS FROM, found by reading do_array_len_start rather than assuming:
  *      JSArrayLen does not carry gp_recv, and a TypedArray element write NEEDS it — 10.4.5.5 step 1 applies
  *      TypedArraySetElement only when SameValue(O, Receiver), so the receiver decides whether V is coerced at
