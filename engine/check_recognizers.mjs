@@ -1049,7 +1049,26 @@ if (extFromC !== 7) {
  *   after a conversion is the signal to look for what the conversion revealed, not evidence the conversion was
  *   partial.
  *
- *   Promise 66, Map 39, RegExp 33, Set 27 — not yet localised past the directory. AsyncDisposableStack
+ *   PROMISE 65 IS LOCALISED, and it is NOT a builtin that needs converting — it is one line of the interpreter.
+ *   Backtrace (Promise/all/invoke-resolve-error-close.js): JS_CallInternal's CONT_PROMISE_ALL abrupt arm ->
+ *   JS_IteratorClose -> JS_CallFree -> JS_CallInternal. The arm runs 27.2.4.1's IfAbruptCloseIterator INLINE,
+ *   so the iterator's `return` method — the page's code — is entered by C recursion below the live flow.
+ *   THE OBSTACLE, named so the next attempt starts from it: iter_close_defer (the deferred-close QUEUE that
+ *   already exists for exactly this) will NOT work here unmodified. Its drain is the interpreter's exception
+ *   label, and this arm does not take the exception path — it rejects the aggregate and continues (BREAK /
+ *   do_return), because Promise.all(x) RETURNS a rejected promise rather than raising. So the close has to run
+ *   on the tramp and the REJECT has to happen after it: a two-step continuation, not a deferral. The pieces are
+ *   CONT_ITER_CLOSE / CONT_ITER_CLOSE_CALL / do_iter_close_deliver, which already express "drive a close on the
+ *   chain and come back"; what is missing is that arm handing them its own follow-up.
+ *
+ *   ASYNCDISPOSABLESTACK'S RESIDUAL 8 IS THE PROTOTYPE READ AGAIN — js_disposable_stack_constructor ->
+ *   js_create_from_ctor -> JS_GetProperty(newTarget, "prototype"), the same 10.1.14 [[Get]] the TypedArray view
+ *   constructor's conversion built step_proto_from_ctor_run for. The primitive exists; what this one needs is a
+ *   step CONSTRUCTOR registration, and JS_NewGlobalCConstructorMagic has no step-ctor form yet (Array's is built
+ *   by hand with JS_NewCFunctionMagic + JS_CFUNC_step_ctor). NINETEEN js_create_from_ctor call sites remain;
+ *   the seven passing JS_UNDEFINED read nothing (10.1.14 takes the intrinsic), so twelve are real.
+ *
+ *   Map 39, RegExp 33, Set 27 — not yet localised past the directory. AsyncDisposableStack
  *   29 / DisposableStack 28 ARE localised: js_disposable_stack_dispose drives each resource's dispose method with
  *   JS_Call from C and chains the rest through Promise.then, so the FIRST dispose is a drive-to-completion.
  *
