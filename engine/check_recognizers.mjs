@@ -1147,7 +1147,16 @@ if (extFromC !== 7) {
  *   locals (cmach, and whatever the surrounding dispatch had established) are indeterminate on that path — the
  *   same class of mistake as reading `s` after jumping into do_promise_all_finalize, which was caught there only
  *   by re-deriving it from cont_st.
- *   THE HOIST JUST SETTLED WHAT SHAPE IT SHOULD TAKE. do_construct_tramp now reads BEFORE its block and resumes
+ *   BUILT, AND THE PROMISE CONSTRUCTOR'S STEP 3 IS NOW A REQUEST. 37 -> 36 in built-ins/Promise, corpus 435 ->
+ *   434, and the shape is the hoist's: the arm parks a JSCtorProto carrying resume_arm and the delivery resumes
+ *   at do_promise_exec_arm — a label at the SAME NESTING as do_construct_tramp, not inside the arm's condition.
+ *   That one placement is the whole difference from the attempt that failed: jumping into the if-block entered a
+ *   scope whose other locals were indeterminate, which surfaced as a step-builtin DFAIL nowhere near the cause.
+ *   The body takes the delivered prototype through pe_proto with 10.1.13 step 3's fallback to the CONSTRUCTOR's
+ *   realm — the bug proto-from-ctor-realm.js caught the first time — and js_promise_new keeps its C entry only
+ *   for the two callers that pass new_target = undefined and read nothing.
+ *
+ *   (superseded) THE HOIST SETTLED WHAT SHAPE IT SHOULD TAKE. do_construct_tramp now reads BEFORE its block and resumes
  *   at do_construct_have_proto past it; the promise arm copies exactly that, with its resume label OUTSIDE the
  *   `if (cmach == NATIVE_PROMISE_EXEC && …)` block rather than inside it:
  *       if (cmach == NATIVE_PROMISE_EXEC && promise_exec_ready(…)) {
