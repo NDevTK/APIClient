@@ -951,6 +951,28 @@ if (extFromC !== 7) {
  * Recording it with the shapes is what keeps the next pass from re-deriving it — and re-deriving it is exactly the
  * mistake that produced the wrong "the residual is all Array.fromAsync" claim earlier in this file.
  *
+ * THE MODULE GRAPH'S DEPTH IS NO LONGER THE C STACK'S. Four separate walks over that graph recursed in C, and
+ * going after the largest drive-to-completion root is what found them — the walk that performs it could never be
+ * suspended while it was C recursion, so flattening is that conversion's PREREQUISITE and not a substitute for it.
+ * Each had a different failure mode, which is why one fixture found them one at a time:
+ *   js_resolve_module — recurses OUT through the embedder's loader and back in (resolve loads, the loader
+ *   compiles, compiling resolves), so it blew FIRST, at depth 473, and surfaced as the PARSER's "Maximum call
+ *   stack size exceeded" — an error naming nothing to do with modules. It is a frame stack now, and the
+ *   re-entrant call the loader makes is a no-op: the outer walk sees the loaded module through rme->module and
+ *   descends at exactly the point the recursion did, so the load ORDER is unchanged.
+ *   js_create_module_function — NO overflow guard at all. 32649 frames and then a SEGFAULT inside malloc. Worse
+ *   than a bound: a crash.
+ *   js_inner_module_linking and js_inner_module_evaluation — js_check_stack_overflow, i.e. a synthetic RangeError
+ *   on a graph the page is entitled to have. Both are Tarjan walks; `index`, the dfs/ancestor indices and the
+ *   per-child bookkeeping are threaded exactly where the recursion threaded them, with the pre-order, per-child
+ *   and post-order halves split into functions so the frame stack can sit between them.
+ * A 6000-deep chain is the fixture; it is 12x the depth at which the old build failed and runs in 14s.
+ *
+ * WHAT THIS DOES NOT DO, stated so it is not mistaken for done: the linker still performs step 9's
+ * `JS_Call(m->func_obj, JS_TRUE)` from C, and SyncDriveToCompletion is unchanged at 1942. Routing that call needs
+ * module evaluation to be a FLOW; what changed is that the walk around it can now hold a cursor instead of a C
+ * frame, which is the thing that made routing impossible before.
+ *
  * A CONTAINER-LEVEL SCARE worth recording as PROCESS. Mid-diff the local checkouts had reverted to an older
  * snapshot: main at 1c54288, the submodule at e563763, and this session's base commit 8be22e0 not even an object.
  * The rule held — check the tree, never assume — and the FIRST command was `git ls-remote`, not a reset: origin had
