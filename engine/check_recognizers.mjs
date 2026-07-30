@@ -1107,6 +1107,17 @@ if (extFromC !== 7) {
  *   with a toString ran that toString below the live flow, once per match. js_str_replace_step now takes out_cb
  *   and cb_pending says WHICH of the two requests is outstanding (1 = the call, 2 = the ToString), because both
  *   suspend and the walk has to resume into the right one.
+ *   STRING IS NOW 0. The residual 32 was js_string_toLowerCase's own receiver coercion —
+ *   JS_ToStringCheckObject(this_val) from C, so `String.prototype.toUpperCase.call({toString(){for(;;){}}})`
+ *   preempted with no flow base — across all four registrations (toLowerCase/toUpperCase and the locale pair).
+ *   NOTHING WAS BUILT FOR IT: js_str_recv_step already owns "coerce the receiver to a string, optionally coerce
+ *   an argument, then compute" for eighteen String methods, so this is two more STRRECV modes and a three-line
+ *   compute arm. The body loses its coercion and DCHECKs that it is handed a string. The same DCHECK went onto
+ *   js_string_toWellFormed_body, which was re-coercing a value its own machine had already coerced — harmless
+ *   only because the value was always a string, and a live C coercion the instant anything handed it an object.
+ *   THE PATTERN, THIRD TIME NOW: reach for the existing machine before writing one. The create-from-ctor sites
+ *   needed CREATECTOR_DEF, these needed STRRECV, and in both cases the first instinct was to build.
+ *
  *   IT WAS ONLY 2 OF THE 34, which is the useful part of the number: the directory's residual is somewhere else
  *   again, and "the probe named this directory" never meant "this is all of it". A DFAIL names the FIRST caller
  *   the run reaches, and re-probing after each conversion is the only way to see the next.
