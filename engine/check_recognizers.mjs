@@ -1409,6 +1409,20 @@ if (extFromC !== 7) {
  *   JSAgenSettle's `post` and `s` fields. That path routed the resolve CALL and left the READ before it in C —
  *   half a conversion, which is exactly the shape that keeps a count alive while looking done.
  *
+ *   AND THE SAME READ, ONE MORE CALLER (AsyncFromSyncIteratorPrototype 3 -> 0, for-await-of 6 -> 4, corpus
+ *   17 -> 12). js_async_from_sync_continuation's step 5 is the same PromiseResolve, so it is the same machine
+ *   shape a third time: js_afs_cont_def, with step_promiseresolve_run for the page-visible half and everything
+ *   after it (the unwrap closure, the onRejected closure, PerformPromiseThen) a plain C tail.
+ *   ITS RESULT IS THE INTERESTING PART: 27.1.4.4 step 6 says an abrupt step 5 requires IteratorClose FIRST, and
+ *   the close belongs to the interpreter (for a GENERATOR sync iterator it runs a coroutine body that must
+ *   suspend). So the machine ANSWERS what the caller still owes — TRUE for "close first", undefined for
+ *   "nothing" — with the exception left LIVE for the close's saved completion, and a -1 for the plain
+ *   IfAbruptRejectPromise. A machine whose caller owes a step it cannot take is not a reason to leave the whole
+ *   algorithm in C; it is a reason for the machine to say so in its result.
+ *   THREE CONVERSIONS OFF ONE SUB-SEQUENCE: step_promiseresolve_run now serves the async-iterator disposal, both
+ *   of the async generator's awaits, and this. js_promise_resolve_native's remaining callers are all settles
+ *   with no page-code read left in them.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
