@@ -1548,7 +1548,12 @@ if (extFromC !== 7) {
  *      TWELVE SITES LEFT on the legacy retry_pc, which stays only until they are converted. Enumerated with their
  *      opcodes so the next family is not re-derived: OP_get_super (32686), OP_set_proto (34414), OP_get_array_el
  *      (34569 and 34653 — two spellings), OP_get_ref_value (34755), OP_put_array_el (34852 key, 34855 VALUE),
- *      OP_put_ref_value (34976), OP_add (35146).
+ *      OP_put_ref_value (34976), OP_add (35146 - CONVERTED, TPR_ADD_AFTER_COERCE).
+ *      OP_add went first of these because its resume point is the clearest: add_slow_case already sits below
+ *      all the numeric fast paths, so the label goes at its top and BOTH operand coercions resume there,
+ *      which is also how 13.15.3's left-then-right order is kept. Its op1/op2 are C locals and are RELOADED
+ *      from the stack at the label - reloading is restoring; the retry was re-entering the fast paths above
+ *      with operands the suspending pass never had. Eleven left.
  *      AND THE KEYED ONES ARE WORSE THAN THE ARITHMETIC ONE WAS, which is the finding that matters here. Their
  *      retry does not re-run a tag test: OP_get_array_el and OP_put_array_el open with FAST PATHS — the
  *      int-index array element, the append-at-count case, the typed-array store — and the retry re-enters all of
