@@ -1390,6 +1390,25 @@ if (extFromC !== 7) {
  *   handed to PromiseResolve as a value and the test hung — the same class as fromAsync's, and the reason the
  *   FIRST thing a catches_abrupt machine does is test its delivery.
  *
+ *   THE ASYNC GENERATOR'S TWO AWAITS (AsyncGeneratorPrototype 3 -> 0, corpus 20 -> 17). This file named the
+ *   `constructor` read inside js_promise_resolve_native as unbuilt for several sessions, and said converting it
+ *   meant "js_async_generator_pre itself becomes suspendable, which is a change to the drive loop's shape".
+ *   THAT WAS THE WRONG DIAGNOSIS, and it is the reason it sat. Neither await runs a generator BODY — `pre`
+ *   settles the completed-return case and returns, and `post` hands the body's AWAIT out — so each is a SELF
+ *   CONTAINED algorithm that either driver can simply RUN. The pump never had to suspend.
+ *   js_agen_await_ret_def / js_agen_await_def are one body over two defs (`arg` picks the attach: 27.6.3.2's
+ *   resume-next resolving functions or 27.6.3.8's own), sharing step_promiseresolve_run for the page-visible
+ *   half. The generator rides FUNC_DATA rather than `this`, because the two routes into the machine differ in
+ *   the receiver they can supply — one construction site, js_new_agen_await_ret, so they cannot disagree.
+ *   TWO ROUTES, NOT TWO IMPLEMENTATIONS, which is the split the async generator already documents for its body
+ *   run: the interpreter's drive instantiates the machine on its chain (do_agen_await_ret_start, ONE label for
+ *   both awaits) and the promise-reaction driver, which has no tramp chain, runs the same closure as a
+ *   CALL-ROOT FLOW through js_settle_as_flow.
+ *   AND THE SUPERSEDED HALF WENT WITH IT: js_async_generator_await_prepare, js_async_generator_await_finish,
+ *   the AGEN_AWAIT_CALL protocol, do_agen_settled, the CONT_AGEN_SETTLE kind and its four delivery arms, and
+ *   JSAgenSettle's `post` and `s` fields. That path routed the resolve CALL and left the READ before it in C —
+ *   half a conversion, which is exactly the shape that keeps a count alive while looking done.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
