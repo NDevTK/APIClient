@@ -1359,6 +1359,19 @@ if (extFromC !== 7) {
  *   that has to be bumped for a guarantee nothing needs is scaffolding for a deleted system — and it made adding
  *   three option atoms look like a wire-format change.
  *
+ *   A KEYED REQUEST WHOSE BASE IS A PRIMITIVE NEVER ROUTED ITS ACCESSOR (JSON 4 -> 0, Object 1 -> 0, corpus
+ *   32 -> 24). The whole accessor lookup at do_getprop_tramp sat inside `if the base is an object`, so a read or
+ *   write through a NUMBER, STRING or BIGINT walked that primitive's intrinsic prototype in
+ *   JS_GetPropertyInternal / JS_SetPropertyInternal2 and ran whatever accessor it found there from C — with the
+ *   primitive as the receiver, which is exactly the spec's 10.1.8.1. A page can put one there:
+ *   `Object.defineProperty(BigInt.prototype, "toJSON", {get(){…}})` is a test262 case, and JSON.stringify's
+ *   toJSON read off a BigInt is what named it. One `else if` on the same test, over JS_GetPrototypePrimitive.
+ *   THIS IS THE KIND OF GAP A HISTOGRAM FINDS AND A DIRECTORY DOES NOT: it is not a builtin to convert, it is a
+ *   CASE the one convergence point did not answer for, and it was reachable from every step machine's GP_GET.
+ *   JSON.PARSE'S OWN step 1 went with it: `? ToString(text)` was JS_ToCStringLen from C in both branches of the
+ *   prologue, so `JSON.parse({toString(){…}})` drove that body off the tramp — it is a step_tostring_run stage
+ *   before the prologue now, and js_json_reviver_init DCHECKs that what it is handed is already a string.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
