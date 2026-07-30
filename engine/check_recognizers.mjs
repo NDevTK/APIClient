@@ -678,6 +678,36 @@ if (extFromC !== 8) {
  * then for-in); both were routed and it did not move, because js_obj_to_desc's last caller was not a consumer at
  * all. A count that will not fall to a conversion may be waiting on a DELETION instead.
  *
+ * A FIFTH sweep armed the SIX Proxy entries the fourth had left alone, because they are not in the exotic-methods
+ * table and so were never in that survey's reach: js_proxy_getPrototypeOf / _setPrototypeOf / _isExtensible /
+ * _preventExtensions, which JS_GetPrototype / JS_SetPrototypeInternal / JS_IsExtensible / JS_PreventExtensions
+ * dispatch to on class_id, and js_proxy_call / _call_constructor. Five of the six never fired. THE ONE THAT DID
+ * named two callers, both in the Object prototype and both with the same shape — an accessor or a walk performing
+ * an internal method on its RECEIVER:
+ *
+ *   B.2.2.1 Object.prototype.__proto__, BOTH halves. One machine, `arg` naming the internal method. It had to be
+ *   installed WHERE THE INTRINSIC IS BUILT rather than in js_object_proto_funcs, because an accessor table entry
+ *   can name ONE step id (JS_DEF_CGETSET_STEP, the setter's) and giving it a second would put another data field
+ *   in a union that already holds function pointers — the strict-aliasing trap recorded further down this file.
+ *   An accessor holds function OBJECTS, and a step-machine function object is reached through
+ *   tramp_accessor_getter / _setter like any other callable, so nothing else had to change.
+ *
+ *   20.1.3.3 isPrototypeOf, a WALK of `? V.[[GetPrototypeOf]]()` — the page's code once per link, run as a C loop.
+ *   Its C body also carried a js_poll_interrupts guard commented "avoid infinite loop (possible with proxies)",
+ *   which is a BOUND: a proxy chain that keeps answering is unbounded work the scheduler preempts and pages, not
+ *   something a builtin cuts short. Routing the read removed the reason the guard existed.
+ *
+ * TWO defects the conversion surfaced, neither of them in the machines:
+ *   A step machine reached AS AN ACCESSOR by another request's GP_GET/GP_SET has its chain's outer set to
+ *   CONT_GETPROP, and do_getprop_abandon's teardown walked that chain with tramp_step_chain_free, which does not
+ *   own that kind — its DCHECK fired on a throwing `setPrototypeOf` trap under the new setter. The teardown now
+ *   unwinds one more level through its own label. This is the shape to expect from every future accessor machine.
+ *   B.2.2.1.2 step 5 — a FALSE status from [[SetPrototypeOf]] is the ACCESSOR's TypeError, not the internal
+ *   method's (Reflect.setPrototypeOf yields the same boolean instead). Discarding it made `__proto__ = cycle` and
+ *   a non-extensible receiver silently succeed; set-cycle.js and set-non-extensible.js caught it.
+ *
+ * ALL THIRTEEN Proxy C entries are now armed and the whole corpus fires none of them.
+ *
  * Two lessons worth keeping:
  *
  *   THE ANSWER WAS USUALLY A WALKER, NOT A SITE. tramp_proto_proxy / tramp_accessor_getter / tramp_accessor_setter
