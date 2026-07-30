@@ -1707,6 +1707,18 @@ if (extFromC !== 7) {
  *      anchor while the commit and push joined to it by && ran anyway, so the engine landed without its
  *      record — the SECOND time, after the rule was written. A ledger edit and its commit are separate steps,
  *      and a python block that can AssertionError must not be joined by && to anything that publishes.
+ *      WHAT IS LEFT OF THE 33, MEASURED AFTER: RegExp/prototype/exec 9, Symbol.replace 3, Symbol.match 1, and
+ *      the flags/toString 20 are gone. All of the remainder is ONE root, RegExpBuiltinExec (22.2.7.2), and the
+ *      backtrace names it exactly: js_regexp_exec is the plain C BODY that js_primargs_step calls once its
+ *      arguments are primitives, and inside that body step 3's `Get(R, "lastIndex")` is a JS_GetProperty from C
+ *      and step 4's ToLength on the result reaches JS_ToPrimitiveFree from C. Both are the page's code — a
+ *      lastIndex accessor and a valueOf on the object it returns.
+ *      SO js_primargs_step IS THE WRONG DRIVER FOR IT: that machine's contract is "coerce the arguments, then
+ *      run a body that invokes nothing", and exec's body invokes plenty. The next step is exec's own machine —
+ *      Get lastIndex, ToLength (parking the ToPrimitive), the match itself, then the two Sets of lastIndex that
+ *      the success and failure paths perform, each of which is a [[Set]] on a possibly-exotic receiver. It is
+ *      the same shape flags just took, one stage per piece of page code, and Symbol.replace's and
+ *      Symbol.match's residue is the same body reached through them.
  *      THE OBSTACLE THE NEXT ATTEMPT STARTS FROM, found by reading do_array_len_start rather than assuming:
  *      JSArrayLen does not carry gp_recv, and a TypedArray element write NEEDS it — 10.4.5.5 step 1 applies
  *      TypedArraySetElement only when SameValue(O, Receiver), so the receiver decides whether V is coerced at
