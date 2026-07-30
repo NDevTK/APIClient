@@ -1766,6 +1766,11 @@ if (extFromC !== 7) {
  *      JS_SetProperty, so a `lastIndex` setter calling `re.compile(…)` freed the matcher under the group-name
  *      walk. The state holds the JSString for exactly as long as the result is built from it, and the fixture
  *      pins it — a valueOf that recompiles mid-run still yields the recompiled pattern's groups.
+ *      AND THE HARNESS WAS MISREPORTING EVERY ASYNC FAILURE. `$DONE(err)` sets async_done to 2, and the check
+ *      that follows tests `!= 1` and reports "$DONE() not called" — which is not what happened. Failures were
+ *      never silent (the test still fails), but the message sent the reader hunting a hang instead of reading
+ *      the assertion, which is exactly what it did here: several minutes bisecting a "hang" in Array.fromAsync
+ *      that was a failing assertion all along. run-test262 keeps the message now and reports it.
  *
  *   3d. AND THE OTHER BIG BLOCK IS ONE ROOT TOO, measured the same way: language/expressions 28 (async-generator
  *      8 + class 16 + object 4), AsyncFromSyncIteratorPrototype 7 and AsyncGeneratorPrototype 3 are all
