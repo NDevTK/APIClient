@@ -1078,7 +1078,27 @@ if (extFromC !== 7) {
  *   instead of after it. And the read's delivery is generic: the CONT_CTOR_PROTO arm restores every con_*
  *   register from JSCtorProto and `goto do_construct_tramp`, replaying the dispatch with `con_proto` set. It
  *   assumes nothing about the callee, so a C callee replays exactly as a bytecode one does.
- *   THE SHAPE, THEREFORE — no new kind, no new state, no ownership model to invent:
+ *   RETRACTED: THE SHAPE BELOW IS A REPLAY, AND REPLAY IS NOT RESUME. CONT_CTOR_PROTO's delivery restores the
+ *   con_* registers and `goto do_construct_tramp` — it re-enters a block from the TOP and re-decides with a
+ *   discriminator (`JS_IsUninitialized(con_proto)`). For the base-class arm that is survivable, because what it
+ *   re-executes is pure prologue: the bytecode header, is_derived_class_constructor, narg_alloc. Nothing
+ *   observable.
+ *   IT IS NOT SURVIVABLE FOR A NATIVE-MACHINE ARM. Those arms live in do_construct_dispatch, ABOVE the read, so
+ *   a resume that re-enters there re-tests promise_exec_ready(ctx, con_args, con_argc) — and every arm beside it
+ *   — AFTER the page's `prototype` getter has run. That getter can mutate the args, so the second pass can
+ *   select a DIFFERENT ARM than the first. A resume that can take a different branch than the suspension did is
+ *   not byte-identical, which is the razor this file already states for flows: a yield you cannot prove is
+ *   lossless is a cap. Re-deciding from re-read operands is exactly the thing the scheduler forbids, and the
+ *   fact that it appears here as an interpreter goto rather than as a scheduler policy does not change what it
+ *   is.
+ *   SO THE ARM MUST SUSPEND AND RESUME, NOT PARK-AND-REPLAY: its continuation resumes at the point AFTER the
+ *   read, with the arm already chosen and its operands already captured, the way do_promise_all_have_cap resumes
+ *   after its capability Construct rather than re-entering the combinator's dispatch. CONT_CTOR_PROTO is still
+ *   the right REQUEST; what cannot be reused is its delivery's re-entry.
+ *   AND THE BASE-CLASS ARM'S OWN REPLAY IS NOW A NAMED DEBT: it works only because its prologue is pure today,
+ *   which nothing asserts and no one will re-check when a line is added to that block.
+ *
+ *   (superseded, kept so the retraction has something to point at) THE SHAPE — no new kind, no new state:
  *       if (cmach == NATIVE_PROMISE_EXEC && promise_exec_ready(...)) {
  *           if (JS_IsUninitialized(con_proto)) { ...park a JSCtorProto exactly as the base-class arm does...
  *                                                goto do_getprop_tramp; }
