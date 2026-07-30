@@ -723,11 +723,26 @@ if (extFromC !== 14) {
  * find/findIndex/findLast/findLastIndex. Its CALLBACK was already routed and its ELEMENT READ was not, which is
  * the residue to expect in an already-converted machine — the loop had one JS_GetPropertyValue left in it.
  *
- * NEXT, named: SIX build_arg_list callers remain, all of them argument LISTS rather than the apply shape —
- * Reflect.construct's (three sites in the construct dispatch), OP_apply_eval's, and the C bodies of
- * js_function_apply and its Reflect twin, which the step machine JSFuncApply already supersedes for the value
- * spelling. The sequence they need EXISTS now (CONT_ARG_LIST); what each needs is its own resumption point, the
- * way do_apply_tramp got one.
+ * THREE of the six went as SUPERSEDED BODIES rather than as conversions, which is the other way a C caller of the
+ * page's code disappears: js_function_apply, js_reflect_apply (which only forwarded to it) and
+ * js_reflect_construct were all unregistered — Function.prototype.apply, Reflect.apply and Reflect.construct are
+ * step machines — and every one of them still built its argument list with build_arg_list. A body nothing is meant
+ * to reach is not harmless while it compiles: js_function_apply had ONE live use left, the OP_apply residue, and
+ * through it a `length` getter that loops preempted with no flow base. That residue is two throws in spec order
+ * (19.2.3.6 step 1's IsCallable, then 19.2.3.1 step 2's "not a object"), so the opcode performs them itself and
+ * the body could go.
+ *
+ * A PROCESS note, because it cost the file: deleting a function by regex-matching its signature down to the next
+ * `\n{\n` matched a FORWARD DECLARATION and deleted 418 lines across unrelated functions. `git checkout` put it
+ * back — the tree was at a pushed commit, which is the only reason nothing was lost — and the redo anchored on
+ * exact LINE RANGES with an assertion on both endpoints. A destructive edit needs its endpoints asserted, not
+ * matched.
+ *
+ * NEXT, named: THREE build_arg_list callers remain, all argument LISTS reached from the interpreter —
+ * `new C(...arr)`'s construct-spread list, and the two generator-resume shapes
+ * (`g.next.apply(gen, args)` / `Reflect.apply(g.next, gen, args)`), which read the whole list faithfully even
+ * though a generator consumes only argument 0. The sequence they need EXISTS now (CONT_ARG_LIST); what each needs
+ * is its own resumption point, the way do_apply_tramp got one.
  * The other js_create_from_ctor callers
  * (Object, RegExp, Map/Set, DisposableStack, Promise, the two TypedArray constructors) were not reached by the
  * armed corpus, which is evidence and not proof: each is a C constructor that would fire the moment a test
