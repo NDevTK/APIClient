@@ -1063,10 +1063,16 @@ if (extFromC !== 7) {
  *
  *   ASYNCDISPOSABLESTACK'S RESIDUAL 8 IS THE PROTOTYPE READ AGAIN — js_disposable_stack_constructor ->
  *   js_create_from_ctor -> JS_GetProperty(newTarget, "prototype"), the same 10.1.14 [[Get]] the TypedArray view
- *   constructor's conversion built step_proto_from_ctor_run for. The primitive exists; what this one needs is a
- *   step CONSTRUCTOR registration, and JS_NewGlobalCConstructorMagic has no step-ctor form yet (Array's is built
- *   by hand with JS_NewCFunctionMagic + JS_CFUNC_step_ctor). NINETEEN js_create_from_ctor call sites remain;
+ *   constructor's conversion built step_proto_from_ctor_run for. NINETEEN js_create_from_ctor call sites remain;
  *   the seven passing JS_UNDEFINED read nothing (10.1.14 takes the intrinsic), so twelve are real.
+ *   CORRECTING WHAT THIS FILE SAID ONE ENTRY AGO — "what this one needs is a step CONSTRUCTOR registration, and
+ *   JS_NewGlobalCConstructorMagic has no step-ctor form yet" is wrong, and the way it is wrong is the lesson.
+ *   CREATECTOR_DEF / CREATECTOR_DEF_FULL already ARE the generic OrdinaryCreateFromConstructor machine
+ *   (js_creatector_step): the class id and the body's declared argument count ride `arg`, the post-create body is
+ *   a plain C function, `precheck` carries a leading validation such as "Constructor requires 'new'", and
+ *   new.target UNDEFINED is already handled as the call form. Array declares it. So each of the twelve is a
+ *   DECLARATION, not a build — and writing "needs a new form" without grepping for the existing one is how a
+ *   solved mechanism gets re-invented. Check whether the primitive exists before recording that it does not.
  *
  *   MAP 39 AND SET 27 WERE ONE ROOT AND ARE NOW ZERO: js_map_forEach drove its callback with JS_Call from C.
  *   Two probes, one backtrace each, the same frame — which is the argument for probing every directory before
