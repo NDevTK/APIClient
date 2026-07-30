@@ -790,6 +790,9 @@ if (extFromC !== 7) {
  * been committed at the repo ROOT in an earlier turn (82ba30b) and a `cd` to the parent for the gate silently
  * pointed three greps and a `git diff` at THAT file. A path is only a tree-check if you know which root it is
  * under; `git -C <dir>` and an absolute path are, a bare filename after a `cd` is not. The stray file is deleted.
+ * IT THEN HAPPENED A SECOND TIME, mid-edit, and the edit landed on the OLD file — which is why the routine is now
+ * to check `git log --oneline -1` before an edit batch and `git ls-remote` after every push. The revert is the
+ * environment's, not the repository's: origin has always held the real history.
  *
  * THE ASSERT MACROS ARE CHECK / CHECK_FAIL / DCHECK / DFAIL — all four, in all three mirrors. DCHECK and DFAIL
  * have been the pair they are since 81d3a2c, and engine/host/check.h and extension/check.js have always spelled
@@ -898,6 +901,17 @@ if (extFromC !== 7) {
  * That is the widening rule working as designed: each missing arm announced itself, none of them was predictable
  * from reading the call sites, and the fix for each was the shape the frame delivery already had. The tell that a
  * conversion is not finished is a delivery chain whose last arm is a DCHECK rather than a route.
+ *
+ * THE INCLUDES FAMILY (includes / startsWith / endsWith) HAS FOUR page-visible steps, not the one the backtrace
+ * showed. The probe named JS_ToInt32Clamp on the position; reading the body found the receiver's ToString, IsRegExp's
+ * `? Get(searchString, @@match)` — js_is_regexp performs that [[Get]] from C — and the search string's own ToString
+ * beside it. Their ORDER is observable, so the stages ARE that order, and the string compare that follows is its own
+ * function taking both strings already coerced. String 63 -> 48, corpus 1959 -> 1944.
+ *
+ * ITS ONE BUG IS A NAMING LESSON: the three builtins were registered as `STEPDEF_STR_INCLUDES + magic`, and the
+ * enum's order is not the magic's — endsWith(2) landed on the STARTSWITH slot and the two swapped semantics, which
+ * 15 tests reported as `"word".endsWith("d")` being false. An id computed by arithmetic from an unrelated number is
+ * a coincidence waiting to break; each builtin names its own id now.
  *
  * A CONTAINER-LEVEL SCARE worth recording as PROCESS. Mid-diff the local checkouts had reverted to an older
  * snapshot: main at 1c54288, the submodule at e563763, and this session's base commit 8be22e0 not even an object.
