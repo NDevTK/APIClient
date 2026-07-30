@@ -1687,6 +1687,26 @@ if (extFromC !== 7) {
  *      opcode's direct JS_SetPropertyValue tail no longer reaches that case at all. The value-form predicate
  *      survives with one caller (ta_elem_set, which holds an int index and no atom) and is not a duplicate of
  *      the atom form: they answer the same question from the two shapes it is actually asked in.
+ *
+ *   3c. A STEP MACHINE ON THE GETTER HALF OF AN ACCESSOR — RegExp.prototype.flags, 386 -> 366 with toString.
+ *      22.2.6.4 performs a Get for each of the eight flag names in a fixed order, and on a subclass or a Proxy
+ *      every one is the page's code; js_regexp_get_flags did all eight with JS_GetPropertyStr from C. The
+ *      capability was already there: __proto__'s GETTER is a step machine too. What is missing is only the
+ *      TABLE macro — JS_DEF_CGETSET_STEP names one step id and it is the setter's — so a step getter is
+ *      installed by building the accessor where the intrinsic is, which is exactly why __proto__'s pair is
+ *      built there.
+ *      AND THE CONVERSION IMMEDIATELY NAMED ITS OWN NEXT STEP, which is what the backstop DFAIL is for:
+ *      `get flags` was invoked outside the dispatch by RegExp.prototype.toString, which read `source` and
+ *      `flags` with JS_GetProperty from C. Not a regression and not a reason to narrow — the failure IS the
+ *      work queue, and 22.2.6.13 became a five-stage machine (Get source, ToString, Get flags, ToString,
+ *      assemble) in the same diff.
+ *      The eight flag NAMES are interned per stage with JS_NewAtom rather than added to quickjs-atom.h:
+ *      interning a string runs no page code, and appending to the atom table would shift the world a
+ *      precompiled bytecode header is built against for no gain.
+ *      AND THIS ENTRY WAS ALMOST LOST THE SAME WAY THE LAST ONE WAS: the edit adding it failed on a stale
+ *      anchor while the commit and push joined to it by && ran anyway, so the engine landed without its
+ *      record — the SECOND time, after the rule was written. A ledger edit and its commit are separate steps,
+ *      and a python block that can AssertionError must not be joined by && to anything that publishes.
  *      THE OBSTACLE THE NEXT ATTEMPT STARTS FROM, found by reading do_array_len_start rather than assuming:
  *      JSArrayLen does not carry gp_recv, and a TypedArray element write NEEDS it — 10.4.5.5 step 1 applies
  *      TypedArraySetElement only when SameValue(O, Receiver), so the receiver decides whether V is coerced at
