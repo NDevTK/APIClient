@@ -887,6 +887,18 @@ if (extFromC !== 7) {
  * selects is the fallback this file forbids, so it went with the blob rather than staying as a shape with no
  * consumer — HOE_THIS (propertyIsEnumerable) is now the machine's only form and the `from_this` branch is gone.
  *
+ * STRING.PROTOTYPE[@@ITERATOR] IS A STEP MACHINE, and the interesting part is not the 1 it took off the counter —
+ * it is that converting ONE method surfaced THREE unbuilt delivery arms, because it is the first step machine ever
+ * to be a consumer's or a loop's @@ITERATOR. GetIterator step 4's Call has four acquire shapes and each one had a
+ * delivery written for a returned heap FRAME with no step-machine twin: CONT_CONSUME_GETITER's completion (the
+ * DCHECK "unknown sequence kind" named it, and gdb gave the kind as 19), CONT_CONSUME_GETITER's ABRUPT arrival via
+ * js_toprim_abandon — a chain ending in a requester that walk does not own, parked for the exception label through
+ * the slot that already exists for exactly that — and CONT_FOROF_ACQUIRE / CONT_FORAWAIT_WRAP both ways, which an
+ * EXISTING fixture found as `for (var c of "abc")` failing with "not a function".
+ * That is the widening rule working as designed: each missing arm announced itself, none of them was predictable
+ * from reading the call sites, and the fix for each was the shape the frame delivery already had. The tell that a
+ * conversion is not finished is a delivery chain whose last arm is a DCHECK rather than a route.
+ *
  * A CONTAINER-LEVEL SCARE worth recording as PROCESS. Mid-diff the local checkouts had reverted to an older
  * snapshot: main at 1c54288, the submodule at e563763, and this session's base commit 8be22e0 not even an object.
  * The rule held — check the tree, never assume — and the FIRST command was `git ls-remote`, not a reset: origin had
@@ -903,7 +915,17 @@ if (extFromC !== 7) {
  * machinery about an N-source generator, which is a fidelity change with its own tests and must not be bundled
  * into a JS->C conversion. It now covers BOTH zippers, so the fidelity fix is one change to one drive.
  *
- * ONE SELF-HOSTED BUILTIN REMAINS: builtin-array-fromasync.js, and it is the whole of the residual 1960. It is the
+ * THAT CLAIM WAS WRONG AND MEASURING IT IS THE LESSON. "The residual is all Array.fromAsync" was written from ONE
+ * backtrace and never checked; re-deriving the per-directory histogram showed language/ at 1095, then
+ * TypedArrayConstructors 265, Array 204, Promise 66, String 64, Map 39, RegExp 33, AsyncDisposableStack 29 —
+ * fromAsync is a MINORITY of it. A bulk counter gives a number and a DFAIL gives ONE caller; only the histogram
+ * gives a distribution, and the earlier sweeps had that discipline while this sentence did not. The named roots
+ * now, each with a backtrace: js_inner_module_linking's `JS_Call(m->func_obj, JS_TRUE)` (the module graph's
+ * "initialize the global variables" pass, run from C for every module — the 1095), js_typed_array_constructor's
+ * JS_ToIndex on its length argument, js_string_includes's JS_ToInt32Clamp on its position, and the
+ * AsyncDisposableStack disposal loop's JS_Call on each dispose method.
+ *
+ * ONE SELF-HOSTED BUILTIN REMAINS: builtin-array-fromasync.js. It is the
  * hardest of the three — an `await` inside a loop and a try/finally — so it needs a C step machine that AWAITS,
  * which no builtin here does yet (.finally chains reactions; that is the nearest precedent). Building it takes
  * js_bytecode_eval, js_bytecode_autoinit, JS_AUTOINIT_ID_BYTECODE, the qjsc blob rule, the JS_ReadObject-at-init
