@@ -1769,6 +1769,36 @@ if (extFromC !== 7) {
  *      else the block needs (sync_iter, drive_arg, deliver, close_on_rejection) is already on the state, and
  *      `sp` is live at do_async_from_sync_step exactly as it is at the entry, so the drive's operand pushes move
  *      unchanged.
+ *      DONE, 366 -> 314. The resume label lives INSIDE the entry block, not at do_async_from_sync_step — the
+ *      rest of the operation pushes the drive's operands onto THIS frame's stack, and resuming at the step
+ *      label ran those pushes at a different point in the loop, which surfaced as a segfault in OP_get_var_ref0.
+ *      A delivery therefore routes on the phase: res_ph 3 goes to the entry's label, everything else to the
+ *      step. BOTH deliveries had to be patched — the in-place one and the SUSPENDED one — and patching only the
+ *      first left an accessor `return` (a bytecode getter, so it always suspends) resuming in the wrong phase
+ *      and never settling the wrapper's promise. The read also needs `sf->cur_pc = pc` before it: a request
+ *      that can suspend must leave the frame naming where it continues, and without it the resumed frame
+ *      restarted at a stale pc and the promise never settled either.
+ *
+ *   3e. AND IT EXPOSED A LATENT USE-AFTER-FREE IN THE TRAMPOLINE ITSELF, which is the real value of the diff.
+ *      A TrampFrame BORROWS its callee: `sf->cur_func` is valid because the caller's operand owns it for the
+ *      whole call. That is true of every call shape except one — an OWNED invocation list (a bound or spread
+ *      call, whose [this, f, args...] lives on the heap) is released the moment the args are copied out, and
+ *      call_argv[-1] IS the callee, so on that path the list was the SOLE owner and `cur_func` dangled for the
+ *      rest of the call. The frame rebuild then read np->u.func.var_refs out of freed memory. It had simply
+ *      never been reached before: it needs a bound/spread call arriving through a RESUMED request, which is
+ *      exactly what routing the async-from-sync GetMethod created. ASan named it in one run; the fix is that
+ *      the frame takes its own reference on that path (owns_func) and releases it at every teardown.
+ *      TWO FOLLOW-ON BUGS CAME FROM THE FLAG ITSELF, and both are the same lesson:
+ *      (a) TrampFrame is js_malloc'd at NINE sites, so `owns_func` was a stale malloc byte at the six I did not
+ *          touch and the teardown freed a random JSValue — a crash far from the allocation, present at -O1 and
+ *          ABSENT under ASan at -O0, which is the signature of uninitialised memory rather than freed memory.
+ *          Nine initialisation sites is nine chances to forget; the fix is one constructor, tramp_frame_new.
+ *      (b) clone_deep_flow copies the frame struct wholesale, which copies the FLAG — so the clone had to
+ *          duplicate the REFERENCE too, or two frames release one ref.
+ *      THE FIXTURE FOUND ALL OF THIS AND THE CORPUS FOUND NONE OF IT. Every directory was green at 0 errors
+ *      with the drive count down while the use-after-free was live; the crash needed an accessor `return` on a
+ *      sync iterator delegated to by `yield*`, which no test262 file writes. A passing suite proves nothing it
+ *      did not exercise.
  *      THE OBSTACLE THE NEXT ATTEMPT STARTS FROM, found by reading do_array_len_start rather than assuming:
  *      JSArrayLen does not carry gp_recv, and a TypedArray element write NEEDS it — 10.4.5.5 step 1 applies
  *      TypedArraySetElement only when SameValue(O, Receiver), so the receiver decides whether V is coerced at
