@@ -1053,13 +1053,21 @@ if (extFromC !== 7) {
  *   WHERE THE LEAK IS NOT, established by reading the reverted diff against the paths it replaced: the abandon
  *   registration (above), the delivery arms (identical in shape to CONT_PROMISE_ALL_RESOLVE's, which is green),
  *   and js_promise_init_from_obj (the create simply moved out of it).
- *   WHAT IS STILL UNREAD, and where the next attempt should look FIRST: promise_exec_state_abort against the
- *   original promise_exec_abort. The original ran BEFORE the state existed, so pe_outer was still an interpreter
- *   register and the machine that requested the construct was never abandoned; on the new path that requester
- *   has moved to s->outer and is likewise not abandoned — but now there is a state holding it. The class-id
- *   histogram of the leak (bulk class_id 1/12/13 plus 234 var_refs) is whole closures being retained, which is
- *   what an un-abandoned requester looks like. Read js_construct_requester_abandon and the CONT_PROMISE_EXEC
- *   arm of the exception unwind before touching anything else.
+ *   THE ABORT PATH IS RULED OUT, by measurement rather than by reading. On the CURRENT (reverted) tree, both
+ *   `Reflect.construct(Promise, [fn], ntWithThrowingPrototypeGetter)` and the suite's own
+ *   proto-from-ctor-realm.js run with ZERO leaked GC objects — so the throwing-getter shape does not leak today,
+ *   and the hundreds of objects were introduced by the reverted diff.
+ *   AND THEY ARE ON PATHS THAT PASS. built-ins/Promise was 0/640 WITH the leak present, so whatever retains
+ *   those closures happens on ordinary successful construction, not on an error path — which rules out
+ *   promise_exec_state_abort, the arm the previous note pointed at, as well.
+ *   WHAT IS LEFT is the success path's own bookkeeping, and the one asymmetry in it: the state is now allocated
+ *   BEFORE the promise exists, so between the allocation and the resume label it holds `ntgt` and UNDEFINED in
+ *   `promise`/`resolving_funcs`, and every teardown that can run in that window must free exactly that shape.
+ *   The finish arm at do_promise_exec_finish was NOT given the ntgt free the abrupt arm got — harmless only
+ *   while ntgt is always UNDEFINED by then, which is an invariant nothing asserts. Start by DCHECKing it.
+ *   THE LESSON THAT ACTUALLY PAID: one ASan run on one file discriminated "mine" from "pre-existing" in a single
+ *   command, after two written-down suspects had both been wrong. Measure the OLD tree before theorising about
+ *   the new one.
  *   THE OBSTACLE IS THE REGISTERS, and it is the same one that shaped the Promise.all setup: pe_ntgt,
  *   pe_super_ref, pe_executor_own, pe_outer and the call shape are all interpreter locals consumed into
  *   JSPromiseExec AFTER js_promise_new returns, and none of them survives a suspension. The state has to be
