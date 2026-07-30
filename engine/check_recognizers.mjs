@@ -1012,12 +1012,31 @@ if (extFromC !== 7) {
  *
  *   AT 451, TWO NEW ROOTS, both in the INTERPRETER rather than in a builtin — which is where this sweep has
  *   been heading since the Map/Set forEach conversion.
- *   PROMISE 53: `s->promise_resolve = JS_GetProperty(ctx, thisv, JS_ATOM_resolve)` in the combinator's setup
- *   (quickjs.c:29544, test Promise/all/invoke-resolve-get-error-reject.js). 27.2.4.1 step 4 is
- *   `? Get(constructor, "resolve")` and on a subclass that is an accessor or a Proxy trap. Every other read the
- *   combinator makes is already a GETPROP request; this one sits in the block that BUILDS the state, before the
- *   machine has a stage to suspend in — which is the same shape js_str_replace_prologue had, and the same fix:
- *   the setup becomes a stage.
+ *   PROMISE 53 -> 37, BUILT. 27.2.4.1 step 4's `? Get(constructor, "resolve")` was a JS_GetProperty in the
+ *   block that BUILDS the machine's state — no stage to suspend in, the same shape js_str_replace_prologue had.
+ *   The block splits at the read: do_promise_all_have_cap issues a GP_GET with the new CONT_PROMISE_ALL_RESOLVE
+ *   kind and do_promise_all_have_resolve takes the delivered method. Four dispatch arms (in-place delivery,
+ *   suspended delivery, abrupt, abandon) plus the two DCHECK lists — a new getprop kind costs exactly those six
+ *   places, which is worth knowing before adding another.
+ *   The ABRUPT arm needed no body of its own: it lands on the same label with UNDEFINED as the method it never
+ *   got and the exception still pending, and the setup-failed branch already synthesizes GetPromiseResolve's
+ *   TypeError when nothing is pending — so a throwing getter and a non-callable `resolve` take one path.
+ *   `tramp_iter_getiter` had to stay on the state across the request; it is an interpreter register and does not
+ *   survive a suspension, which is the same reason the acquire's method moved onto the state for the capability
+ *   Construct two lines above.
+ *
+ *   AND THE FIXTURE FOUND A DIFFERENT UNROUTED ROOT ON ITS FIRST RUN: `Promise.all.call(new Proxy(Promise, …))`
+ *   aborts in js_proxy_get's DFAIL, because js_promise_new -> js_create_from_ctor reads `prototype` off
+ *   new.target from C (quickjs.c:80589). That is the create-from-ctor family again, in the Promise constructor,
+ *   and CREATECTOR_DEF is what it wants. It predates this diff — nothing in the corpus constructs a promise
+ *   through a proxied constructor — and it is why that case is commented out of the fixture rather than passing.
+ *
+ *   THREE FIXTURE BUGS COST MORE THAN THE DIFF DID, all the same mistake: asserting on state that a SUBCLASS
+ *   keeps mutating. `.then` on a subclass instance runs the subclass constructor again, so an `order` array
+ *   grows past what the assertion expected; and an assertion that throws inside an onFulfilled is not caught by
+ *   the onRejected passed to the SAME .then, so the failure surfaced as "$DONE() not called" rather than as the
+ *   assertion. Both cost a debugging cycle each against an engine that was already correct. Assert on a PREFIX,
+ *   and put assertions in their own .then.
  *   TYPEDARRAYCONSTRUCTORS 37: JS_DefineProperty -> JS_SetPropertyValue -> JS_ToBigInt64Free -> ToPrimitive ->
  *   the page's valueOf, from the GP_DEFINE arm at quickjs.c:28010. A typed-array ELEMENT WRITE coerces its
  *   value, and for a BigInt64Array that coercion is ToBigInt — the page's code, run from C inside the define.
