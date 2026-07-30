@@ -694,10 +694,20 @@ if (extFromC !== 14) {
  * nothing observable in it — so the state carries only the machine, new_target, the probed @@iterator and the
  * class id, and the abandon path is the machine's OWN teardown (it holds the argument list and the requester).
  *
- * NEXT, and named the same way: the Map/Set CONSUME arm (do_setmap_consume_tramp) runs TWO of the page's
- * operations from C — js_map_constructor's `prototype` read, and then 24.1.1.1 step 5's `Get(map, "add"/"set")`,
- * which a subclass can make an accessor. It is a two-read sequence rather than a copy of CONT_TA_TARGET, so it
- * gets its own continuation with a phase, and the second read is the one CONT_TA_TARGET has no analogue for.
+ * FIXED, the same turn: the Map/Set CONSUME arm ran TWO of the page's operations from C — js_map_constructor's
+ * `prototype` read and 24.1.1.1 step 5's `Get(map, "add"/"set")`, which a subclass can make an accessor.
+ * CONT_SETMAP_CTOR is that two-read sequence with a phase, and building it needed the [[MapData]] slot to become
+ * its own function (js_map_state_init): the routed path creates the object from a routed read, so the allocator
+ * and the slot could no longer be one line inside js_create_from_ctor's caller. Same shape as the TypedArray
+ * arm — the machine is built first, because everything it takes from the smc_* registers is pure state assignment
+ * and those registers do not survive the reads.
+ *
+ * NEXT, and named the same way: build_arg_list — 19.2.3.1 CreateListFromArrayLike, which
+ * `f.apply(t, arrayLike)` / `Reflect.apply` / a spread reach from JS_CallInternal. Step 3 is
+ * `? LengthOfArrayLike(obj)` and step 5 is `? Get(obj, index)` per element, and js_get_length32 plus a
+ * JS_GetPropertyUint32 loop perform ALL of them from C — so an arrayLike that is a Proxy, or that has an accessor
+ * `length`, runs the page's code with no flow base. It is a LOOP rather than a fixed number of reads, which makes
+ * it the first of these to need a per-element cursor in its continuation rather than a phase.
  * The other js_create_from_ctor callers
  * (Object, RegExp, Map/Set, DisposableStack, Promise, the two TypedArray constructors) were not reached by the
  * armed corpus, which is evidence and not proof: each is a C constructor that would fire the moment a test
