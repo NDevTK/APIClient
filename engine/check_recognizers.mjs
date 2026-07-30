@@ -791,6 +791,13 @@ if (extFromC !== 7) {
  * pointed three greps and a `git diff` at THAT file. A path is only a tree-check if you know which root it is
  * under; `git -C <dir>` and an absolute path are, a bare filename after a `cd` is not. The stray file is deleted.
  *
+ * THE ASSERT MACROS ARE NAMED CHECK / CHECK_FAIL, not QJS_CHECK_FAIL. The submodule mirrors engine/host/check.h
+ * because it cannot include it, and it had spelled the always-fatal half with a prefix and given it no CONDITIONAL
+ * form at all — so the first invariant that needed one got a SECOND coined name (QJS_CHECK) rather than the
+ * established one. Two spellings of one mechanism across two files is exactly the coinage CLAUDE.md forbids, and
+ * the tell is that the second name invites a third. There is no collision in the submodule's sources, so the
+ * prefix was never buying anything. Only the EMIT differs between the two files, which is the part that has to.
+ *
  * NAMED, and it is not a routing problem: THE THREE SELF-HOSTED BUILTINS. The residual 2128 is all of it —
  * Array.fromAsync (Array 204 + Function 6) and Iterator.zip/zipKeyed (Iterator 166) — and the fix is not an
  * autoinit that can park, which is what the sixth sweep's note guessed. It is CLAUDE.md's architecture line:
@@ -801,6 +808,22 @@ if (extFromC !== 7) {
  * realm from page JS, so context setup itself happens below a live flow. Iterator.zip is the one to do first: it is
  * synchronous, and JS_CLASS_ITERATOR_CONCAT with STEPDEF_ITER_CONCAT_NEXT/RETURN is already the exact pattern its
  * result object needs. Array.fromAsync is the hardest (an await inside a loop) and comes last.
+ *
+ * ITS FIRST ORDERED SUBPROBLEM IS BUILT: ctx->pending_close_iter is a STACK (pending_close_iters). Six sites
+ * deferred an IfAbruptCloseIterator to the interpreter's exception label and every one of them asserted the slot
+ * was free with the same message — "a nested IfAbruptCloseIterator needs a queue" — which is a gap DOCUMENTED six
+ * times instead of fixed once. 7.4.11 IteratorCloseAll closes `in reverse List order`, so a site that owes several
+ * (Iterator.zip's IfAbruptCloseIterators over « inputIter » ++ iters) pushes them last-first and the drain pops.
+ * The drain needs no loop: every route ends by re-entering the exception label, and each close under an abrupt
+ * completion discards its own throw, so the completion the drain restores stays the one the first failure raised.
+ * The queue is also MARKED by JS_MarkContext now — it was the one context-held value that was not, so a cycle
+ * through an iterator awaiting its deferred close could not be collected while the unwind was in flight (safe,
+ * because an unmarked reference reads as a root, but a missed collection all the same).
+ *
+ * The multiplicity has NO consumer until Iterator.zip lands, and that is stated rather than hidden: what this diff
+ * proves is that the queue is behaviour-identical on the single-entry path the whole corpus exercises, and what it
+ * removes is six identical assertions of an unbuilt capability. A fixture for the multi-entry path arrives with the
+ * IteratorCloseAll that needs it.
  *
  * THERE IS NO C-DRIVEN PROXY TRAP LEFT IN THE ENGINE. Every one of the thirteen internal methods is a DFAIL plus a
  * visible release failure, and the only implementation is the routed one.
