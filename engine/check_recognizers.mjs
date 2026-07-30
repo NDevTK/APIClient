@@ -1012,6 +1012,23 @@ if (extFromC !== 7) {
  *   live flow that read the property. Routing the autoinit would be the shortcut; the root is that a builtin is
  *   written in JavaScript at all.
  *
+ *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
+ *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
+ *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
+ *   is why DisposeResources was still a JS_Call loop: 27.3.3.3 step 3.d folds each throwing dispose method into a
+ *   SuppressedError and keeps disposing, which is precisely "the throw is a value to this algorithm". The arm now
+ *   exists at the call unwind, drops the DRIVE's own operands the way the async-from-sync and combinator arms
+ *   above it do, and re-enters step() with JS_EXCEPTION live.
+ *   Its first consumer is js_dispose_sync_def, and the conversion found a bug the count would never have shown:
+ *   the old loop iterated ds->resources IN PLACE while calling the page's code, and a dispose method can call
+ *   move() or use() on the very stack being disposed — reachable from script. The machine STEALS the list at
+ *   stage 0 (the stack keeps nothing) and its fini releases the tail, so re-entrancy has nothing to disturb and an
+ *   abandoned flow leaks nothing. DisposableStack 28 -> 4, corpus 725 -> 684, 0/43222.
+ *   STILL C-DRIVEN, and it is the SAME algorithm: AsyncDisposableStack 29. disposeAsync builds its await chain
+ *   eagerly out of js_async_dispose_step closures, so two call sites remain — the first (synchronous) dispose
+ *   inside the builtin, and the JS_Call inside each closure. The closure one needs no new capability:
+ *   JSCFunctionDataRecord carries a step_def and promise_closure_set_step is how a reaction declares one.
+ *
  *   Promise 66, Map 39, RegExp 33, Set 27 — not yet localised past the directory. AsyncDisposableStack
  *   29 / DisposableStack 28 ARE localised: js_disposable_stack_dispose drives each resource's dispose method with
  *   JS_Call from C and chains the rest through Promise.then, so the FIRST dispose is a drive-to-completion.
