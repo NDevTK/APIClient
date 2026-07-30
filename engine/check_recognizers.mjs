@@ -1032,6 +1032,23 @@ if (extFromC !== 7) {
  *   IT IS NOT A CREATECTOR_DEF, despite being the same read: the caller is do_promise_exec_tramp, an INTERPRETER
  *   LABEL, not a builtin with a declaration to carry. So it wants a GP_GET on pe_ntgt with a new continuation
  *   kind and a resume label, the way the combinator's `resolve` read just got one.
+ *   BUILT AND REVERTED — the SECOND revert in this area, and what it cost is worth more than the count. The
+ *   whole shape worked: CONT_PROMISE_EXEC_PROTO, the state allocated first with every pe_* register parked on
+ *   it, js_promise_new split into js_promise_init_from_obj plus a create, a promise_exec_state_abort for the
+ *   throwing-getter path (10.1.14 PROPAGATES — `new Promise(fn)` with a throwing `prototype` getter RAISES, it
+ *   does not evaluate to a rejected promise), and built-ins/Promise went to 0/640 with 37 -> 36. ONE test caught
+ *   a real bug on the way: proto-from-ctor-realm.js, because the non-object fallback must take
+ *   `? GetFunctionRealm(constructor)`'s intrinsic and not the RUNNING realm's — new.target therefore has to
+ *   survive until the fallback has consulted it, which is the opposite of freeing it as soon as the proto
+ *   arrives.
+ *   WHAT KILLED IT: a LEAK, hundreds of objects across built-ins/Promise, found by the gc_obj_list walk with the
+ *   suite at 0/640 and the corpus at 0/43222. The suspect is the ABANDON path — the new kind was added to the
+ *   shared fall-through case group whose body was not read, and a JSPromiseExec torn down as another struct is
+ *   exactly the "hand-copied list" failure this file already records for construct-abandon. NEXT ATTEMPT STARTS
+ *   BY READING THAT CASE BODY, not by re-deriving the design, which is sound.
+ *   THE PROCESS POINT: a new continuation kind costs SIX places (in-place delivery, suspended delivery, abrupt,
+ *   abandon, two DCHECK lists) and the abandon is the one whose body must be read rather than pattern-matched —
+ *   the other five are dispatch, this one is a TEARDOWN and it is per-struct.
  *   THE OBSTACLE IS THE REGISTERS, and it is the same one that shaped the Promise.all setup: pe_ntgt,
  *   pe_super_ref, pe_executor_own, pe_outer and the call shape are all interpreter locals consumed into
  *   JSPromiseExec AFTER js_promise_new returns, and none of them survives a suspension. The state has to be
