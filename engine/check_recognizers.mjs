@@ -913,6 +913,12 @@ if (extFromC !== 7) {
  * 15 tests reported as `"word".endsWith("d")` being false. An id computed by arithmetic from an unrelated number is
  * a coincidence waiting to break; each builtin names its own id now.
  *
+ * isWellFormed / toWellFormed followed for one reason: they are the ZERO-ARGUMENT case step_thisstring_run's own
+ * note already named ("even a ZERO-ARGUMENT one could not stay a C body"), and they had stayed one. Their only
+ * page-visible step is the receiver's RequireObjectCoercible + ToString; the scan after it sees a JSString and
+ * invokes nothing, so each body keeps its whole algorithm and takes the coerced string. String 48 -> 46,
+ * corpus 1944 -> 1942. Small, and the point of doing it is that a note naming a gap is not the gap being closed.
+ *
  * A CONTAINER-LEVEL SCARE worth recording as PROCESS. Mid-diff the local checkouts had reverted to an older
  * snapshot: main at 1c54288, the submodule at e563763, and this session's base commit 8be22e0 not even an object.
  * The rule held — check the tree, never assume — and the FIRST command was `git ls-remote`, not a reset: origin had
