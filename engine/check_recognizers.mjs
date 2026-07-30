@@ -983,9 +983,16 @@ if (extFromC !== 7) {
  *   neither of them named the real cause. A split that moves a definition below its caller needs the
  *   declaration in the same diff.
  *
- *   String 46 — js_str_replace_prologue: check_regexp_g_flag's IsRegExp (@@match) and `flags` reads, and step 2's
- *   `? GetMethod(searchValue, @@replace)`, all performed with JS_GetProperty from C inside a machine that already
- *   has stages. Bounded, but it renumbers an existing stage chain.
+ *   String 46 -> 34, BUILT. js_str_replace_prologue is deleted and its four reads are stages SR_MATCH ..
+ *   SR_REPLACER: IsRegExp's `? Get(searchValue, %Symbol.match%)`, replaceAll's `? Get(searchValue, "flags")`, the
+ *   ToString on THAT result (a second suspension point, so the value rides the state as flags_val rather than a C
+ *   local), and `? GetMethod(searchValue, %Symbol.replace%)`. check_regexp_g_flag went with it — a helper whose
+ *   only caller became stages is not a helper, it is the old implementation, and leaving it compiled is the
+ *   legacy-twin shape however dead it looks.
+ *   THE ORDER IS THE SPEC AND IT IS OBSERVABLE, which is why the stages are in it: the flags read precedes the
+ *   @@replace read, RequireObjectCoercible(flags) precedes it too, a falsy @@match skips the flags read entirely,
+ *   and String.prototype.replace performs no IsRegExp check at all — only replaceAll does. A prologue that ran
+ *   all four in one C call could not have been suspended between any of them.
  *
  *   THE 1095 ATTRIBUTED TO MODULE LINKING WAS NOT REAL, AND FINDING THAT OUT WAS WORTH MORE THAN ROUTING IT.
  *   The DFAIL probe on `JS_Call(m->func_obj, JS_TRUE)` fired, and the BACKTRACE had no JS_FlowResume frame in it
