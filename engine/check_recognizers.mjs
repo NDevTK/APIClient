@@ -1297,6 +1297,35 @@ if (extFromC !== 7) {
  *   realm holds the intrinsic (built member by member instead of from a JSCFunctionListEntry list, because a
  *   list cannot hand a member back); and the ratchet's receiver pattern is widened so the zero stays honest.
  *
+ *   PROMISE 36 -> 0, AND IT WAS TWO ROOTS. (a) THE AGGREGATE'S REJECT. 27.2.4.1's IfAbruptRejectPromise is
+ *   reached three ways — the acquire's GetIterator/`next` threw, the setup (GetPromiseResolve, the values array)
+ *   failed, a post-retrieval throw after its IfAbruptCloseIterator — and each site called the capability's reject
+ *   with a JS_Call from C. `Promise.all.call(SubClass, x)` makes that reject the subclass's own bytecode, so it
+ *   had no flow base. do_promise_all_settle / do_promise_all_settled are the ONE settle, exactly the shape
+ *   do_promise_try_finish already had, with the four delivery arms every settle needs (a C reject called in
+ *   place, a step-machine reject — the NATIVE resolving function is one — a bytecode reject returning, and the
+ *   unwind where a throwing reject propagates because IfAbruptRejectPromise's Call is a `?` step).
+ *   (b) js_promise_withResolvers ran NewPromiseCapability from C, which Constructs the receiver — a subclass
+ *   constructor, bytecode. It is a two-stage machine now whose only request is the capability; everything after
+ *   it is three CreateDataProperty writes onto a fresh ordinary object and invokes nothing.
+ *   THE FIXTURE IS WHAT PROVES IT, not the directory: promise_cap_subclass_loop.js puts a LOOP in a Promise
+ *   subclass constructor and reaches it through withResolvers, resolve, reject, .then's SpeciesConstructor and a
+ *   rejected P.all aggregate — five spellings of the same capability, counted, so a route that regresses to a C
+ *   Construct is a failing assert rather than a number nobody reads.
+ *
+ *   GETDISPOSEMETHOD'S READS ARE REQUESTS (language/statements 17 -> 0, corpus 60 -> 49). js_op_using_check ran
+ *   27.3.1.1's one-or-two [[Get]]s with JS_GetProperty from C, so `get [Symbol.dispose]()` — an accessor, or a
+ *   Proxy get trap — had no flow base; Symbol.asyncDispose-getter.js is what the probe named. The helper is
+ *   DELETED: the reads are a CONT_USING_GET request pair at the opcode (do_using_check_read /
+ *   do_using_check_step) and everything else it did — the null/undefined skip, the two TypeErrors, the
+ *   sync-fallback wrap — sits at the opcode and its delivery, where the operand stack is.
+ *   FOUR DELIVERY POINTS, NOT TWO, and the two that were missed each failed differently: the in-place answer and
+ *   the suspended answer are the obvious pair, but a trap or accessor with NO FRAME to unwind answers at a third
+ *   (the DCHECK list at the reshaped-call delivery is what said so, by aborting the whole directory), and an
+ *   in-place THROW answers at getprop_throw rather than at do_getprop_abandon. A new keyed-request consumer owes
+ *   all four, and the DCHECK lists are what enumerate them — adding a kind and running one directory is the
+ *   check, not reading the two arms that look like the whole story.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
