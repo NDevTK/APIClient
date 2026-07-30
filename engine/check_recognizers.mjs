@@ -957,8 +957,13 @@ if (extFromC !== 7) {
  *   coerces BEFORE it while 23.2.5.1 step 3 puts AllocateTypedArray first. That ordering is its own fidelity
  *   question and must not ride along with the routing; the tail's comment ("Re-validate buffer after
  *   js_create_from_ctor which may have run JS code") is the acknowledgement that the read is user code.
- *   THAT READ IS NOW ROUTED TOO (TypedArrayConstructors 97 -> 1, corpus 1774 -> 1726), and the ONE test that
+ *   THAT READ IS NOW ROUTED TOO (TypedArrayConstructors 97 -> 49, corpus 1774 -> 1726), and the ONE test that
  *   failed while it was being built is the whole lesson:
+ *   THE COMMIT THAT LANDED IT SAYS "97 -> 1" AND THAT IS WRONG — the 1 was the ERROR count on the run before the
+ *   fix, not the drive count. The corpus delta of 48 was sitting right beside it and disagrees with 96. A number
+ *   copied out of a run without checking it against the other number in the same output is a fabricated claim;
+ *   the arithmetic check (per-directory delta must equal the corpus delta) is free and was skipped.
+ *
  *   throw-type-error-before-custom-proto-access.js — `Reflect.construct(TA, [Symbol()], newTarget)` must throw
  *   ToIndex's TypeError BEFORE new.target's `prototype` getter runs. So the read cannot simply be lifted to the
  *   front of the body; the body had to SPLIT at the AllocateTypedArray boundary. js_ta_view_plan is everything
@@ -982,7 +987,32 @@ if (extFromC !== 7) {
  *   `? GetMethod(searchValue, @@replace)`, all performed with JS_GetProperty from C inside a machine that already
  *   has stages. Bounded, but it renumbers an existing stage chain.
  *
- *   Array 204, Promise 66, Map 39, RegExp 33, Set 27 — not yet localised past the directory. AsyncDisposableStack
+ *   THE 1095 ATTRIBUTED TO MODULE LINKING WAS NOT REAL, AND FINDING THAT OUT WAS WORTH MORE THAN ROUTING IT.
+ *   The DFAIL probe on `JS_Call(m->func_obj, JS_TRUE)` fired, and the BACKTRACE had no JS_FlowResume frame in it
+ *   at all: JS_FlowEvalModule <- eval_buf <- run_test_buf, straight off the harness thread. So the module link
+ *   was reading a g_flow_base_gen belonging to a flow that had already been FREED — the harness evaluates the
+ *   test's includes as script flows first, and JS_FlowFree never cleared the global. JS_FlowResume leaves the
+ *   base installed on purpose (so the post-eval job drain is still measured), and that is sound only while the
+ *   flow is alive; nothing ended it. Two consequences, and the metric was the lesser one: every read after the
+ *   free was of freed memory, and `gen_state == g_flow_base_gen` is a POINTER IDENTITY test, so the first
+ *   JSAsyncFunctionState the allocator places at that address answers TRUE and preempts as if it were the base
+ *   the pump is driving. Clearing it in JS_FlowFree took the corpus 1726 -> 725.
+ *   THE PROCESS LESSON, which is the point: 1095 had been sitting at the top of this histogram for several
+ *   sweeps as "the one root that needs a new mechanism", and the mechanism was never the problem. A count is not
+ *   evidence about its cause until a backtrace has named the cause; "the biggest number, therefore the biggest
+ *   root" skipped that step. Probe the top of the histogram BEFORE planning against it — the probe is one sed
+ *   and one gdb run, and here it deleted the work item instead of scoping it.
+ *
+ *   THE HONEST HISTOGRAM at 725 (built-ins, then language): Array 204, Promise 65, TypedArrayConstructors 49,
+ *   String 46, Map 39, RegExp 33, AsyncDisposableStack 29, DisposableStack 28, Set 27, RegExpStringIterator 16,
+ *   Uint8Array 9, AsyncFromSyncIterator 7; language/statements 69, language/expressions 28.
+ *   Array 204 IS localised now, and it is what the earlier sweep guessed and could not prove: js_bytecode_autoinit
+ *   -> js_bytecode_eval -> JS_EvalFunction -> JS_CallFree on qjsc_builtin_array_fromasync. Array.fromAsync is the
+ *   last SELF-HOSTED builtin, so first touch of the property runs a compiled bytecode PROGRAM from C, below the
+ *   live flow that read the property. Routing the autoinit would be the shortcut; the root is that a builtin is
+ *   written in JavaScript at all.
+ *
+ *   Promise 66, Map 39, RegExp 33, Set 27 — not yet localised past the directory. AsyncDisposableStack
  *   29 / DisposableStack 28 ARE localised: js_disposable_stack_dispose drives each resource's dispose method with
  *   JS_Call from C and chains the rest through Promise.then, so the FIRST dispose is a drive-to-completion.
  *
