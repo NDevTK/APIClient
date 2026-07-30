@@ -1095,7 +1095,18 @@ if (extFromC !== 7) {
  *   read, with the arm already chosen and its operands already captured, the way do_promise_all_have_cap resumes
  *   after its capability Construct rather than re-entering the combinator's dispatch. CONT_CTOR_PROTO is still
  *   the right REQUEST; what cannot be reused is its delivery's re-entry.
- *   AND THE BASE-CLASS ARM'S RE-ENTRY IS NOW ASSERTED RATHER THAN ASSUMED. It re-executes the prologue — the
+ *   THE REPLAY IS GONE, NOT ASSERTED. Asserting it was the wrong answer and stood for one commit: a DCHECK that
+ *   a replay is currently harmless still leaves a replay, and "sound while every line above the read stays pure"
+ *   is not a property anyone can maintain. 10.1.13 step 2's read is HOISTED out of do_construct_tramp to just
+ *   above it, and the deliveries resume at a new do_construct_have_proto label PAST it. The frame setup is now
+ *   entered exactly once per construct; nothing in it is ever re-executed, so there is no prologue to be pure
+ *   and no discriminator to re-decide with. The purity check and the chk_arg_count/chk_is_derived fields it
+ *   needed are DELETED — the state they asserted about can no longer arise, which is what completing a primitive
+ *   is supposed to do to its workaround.
+ *   The two DCHECKs that remain are the real invariants and cost nothing: a derived constructor is never handed
+ *   a prototype (its `this` comes from super()), and a base one never reaches the setup without one.
+ *
+ *   (superseded) AND THE BASE-CLASS ARM'S RE-ENTRY IS ASSERTED RATHER THAN ASSUMED. It re-executes the prologue — the
  *   bytecode header, is_derived_class_constructor, narg_alloc — before reaching the read, which is a REBUILD and
  *   is only sound while every one of those is a pure function of state JSCtorProto parked. That was a comment;
  *   it is a DCHECK now: the park captures arg_count and is_derived, the resume recomputes them and crashes if
