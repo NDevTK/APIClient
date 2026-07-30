@@ -1027,9 +1027,20 @@ if (extFromC !== 7) {
  *
  *   AND THE FIXTURE FOUND A DIFFERENT UNROUTED ROOT ON ITS FIRST RUN: `Promise.all.call(new Proxy(Promise, …))`
  *   aborts in js_proxy_get's DFAIL, because js_promise_new -> js_create_from_ctor reads `prototype` off
- *   new.target from C (quickjs.c:80589). That is the create-from-ctor family again, in the Promise constructor,
- *   and CREATECTOR_DEF is what it wants. It predates this diff — nothing in the corpus constructs a promise
+ *   new.target from C (quickjs.c:80589). It predates this diff — nothing in the corpus constructs a promise
  *   through a proxied constructor — and it is why that case is commented out of the fixture rather than passing.
+ *   IT IS NOT A CREATECTOR_DEF, despite being the same read: the caller is do_promise_exec_tramp, an INTERPRETER
+ *   LABEL, not a builtin with a declaration to carry. So it wants a GP_GET on pe_ntgt with a new continuation
+ *   kind and a resume label, the way the combinator's `resolve` read just got one.
+ *   THE OBSTACLE IS THE REGISTERS, and it is the same one that shaped the Promise.all setup: pe_ntgt,
+ *   pe_super_ref, pe_executor_own, pe_outer and the call shape are all interpreter locals consumed into
+ *   JSPromiseExec AFTER js_promise_new returns, and none of them survives a suspension. The state has to be
+ *   ALLOCATED FIRST with promise = UNDEFINED, every register parked on it, and only then the request issued —
+ *   which is what the combinator's comment already says about its own capability Construct. js_promise_new then
+ *   splits into "create from a given proto" plus the state init, the way js_ta_view_plan/_finish and
+ *   js_ta_copy_finish split.
+ *   Cost, measured on the read just built: SIX places per new getprop kind — the in-place delivery, the
+ *   suspended delivery, the abrupt arm, the abandon switch, and the two DCHECK lists.
  *
  *   THREE FIXTURE BUGS COST MORE THAN THE DIFF DID, all the same mistake: asserting on state that a SUBCLASS
  *   keeps mutating. `.then` on a subclass instance runs the subclass constructor again, so an `order` array
