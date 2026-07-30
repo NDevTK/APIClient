@@ -743,11 +743,30 @@ if (extFromC !== 14) {
  * instead of a second continuation. That is the right shape because the list is an OPERAND — reading it is the
  * same algorithm whoever asked for it, and only where the finished list goes differs.
  *
- * NEXT, named: TWO build_arg_list callers remain, both the generator-resume shape
- * (`g.next.apply(gen, args)` and `Reflect.apply(g.next, gen, args)`), which read the WHOLE list faithfully — every
- * element getter fires — even though a generator consumes only argument 0. They need a third resumption kind
- * (ARGL_TO_GEN) that lands at do_generator_tramp with the resume value taken from element 0, plus the operand
- * reshape those two sites perform after the read. Nothing new has to be invented for them.
+ * build_arg_list IS DELETED, and the last three callers went three DIFFERENT ways, which is the point worth
+ * keeping: a C caller of the page's code does not always become a conversion.
+ *
+ *   TWO were UNREACHABLE. The generator-via-apply reshapes (`g.next.apply(gen, args)` and
+ *   `Reflect.apply(g.next, gen, args)`) sat below the general `.apply` / `Reflect.apply` routes, which test the
+ *   SAME operand shapes and jump to do_apply_tramp first — so nothing could fall that far. They had been added
+ *   because deleting the general routes broke a generator target; the general routes stayed, and these became
+ *   residue nobody noticed. Reachability was settled by DELETING them and running the corpus and every fixture,
+ *   not by reading the control flow twice.
+ *
+ *   ONE was a DRIVE-TO-COMPLETION hiding behind the list. OP_apply_eval's `eval` that resolves to something else
+ *   is an ordinary call with a spread argument list, and it ran that callee with JS_Call FROM C — a bytecode
+ *   body's loop preempted with no flow base, a step-machine callee reached its C entry. Routing it to
+ *   do_apply_tramp fixes both halves at once, because that label already knows how to read a list. The reachable
+ *   spelling in BOTH modes is replacing the GLOBAL binding (`var eval = f` is a SyntaxError in strict code), which
+ *   is what the fixture had to be rewritten to use.
+ *
+ *   The DIRECT-eval half keeps its C read and ASSERTS why it may: the operand is the spread's own array, which the
+ *   compiler emits, so arg_list_is_fast must hold. A DCHECK says so in dev and a visible InternalError says so in
+ *   release — never a silent fall-back to a routed read, because if that assert ever fires the right answer is to
+ *   give this site a resumption kind, not to paper over it.
+ *
+ * That leaves CreateListFromArrayLike existing EXACTLY ONCE in the engine, as CONT_ARG_LIST plus the
+ * arg_list_is_fast / arg_list_fast_build pair for the compiler-built lists that invoke nothing.
  * The other js_create_from_ctor callers
  * (Object, RegExp, Map/Set, DisposableStack, Promise, the two TypedArray constructors) were not reached by the
  * armed corpus, which is evidence and not proof: each is a C constructor that would fire the moment a test
