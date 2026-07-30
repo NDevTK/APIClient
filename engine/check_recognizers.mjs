@@ -348,11 +348,17 @@ if (modeWrites < MODE_REGISTER_WRITES) {
  * Counted as JS_GetProperty/JS_HasProperty against the atom, which is the shape every one of them had. This used
  * to EXCLUDE js_obj_to_desc by body, because that function's `value` is a property DESCRIPTOR's rather than an
  * iterator result's — a live C-side page-code read, but one belonging to ToPropertyDescriptor. js_obj_to_desc is
- * DELETED, so the exclusion is gone and the count is over the whole file again, which is strictly stronger. */
+ * DELETED, so the exclusion is gone and the count is over the whole file again, which is strictly stronger.
+ *
+ * The RECEIVER is matched as anything up to the atom, not as an identifier. The identifier-only pattern let two
+ * real reads through for free — `JS_GetProperty(ctx, sp[-1], JS_ATOM_next)` in the for-await acquire and
+ * `JS_GetProperty(ctx, ctx->class_proto[...], JS_ATOM_next)` at realm setup — because a subscript is not an
+ * identifier. Both are gone (CreateAsyncFromSyncIterator hands back the whole Iterator Record now), so widening
+ * the match costs nothing today and is what keeps the zero honest. */
 const iterSrc = src;
 const ITER_READS = [['JS_ATOM_done', 0], ['JS_ATOM_value', 0], ['JS_ATOM_next', 0]];
 for (const [atom, want] of ITER_READS) {
-  const got = (iterSrc.match(new RegExp(`JS_(Get|Has)Property\\(ctx, [A-Za-z_0-9>.\\-]+, ${atom}\\)`, 'g')) || []).length;
+  const got = (iterSrc.match(new RegExp(`JS_(Get|Has)Property\\(ctx, [^;()]*?, ${atom}\\)`, 'g')) || []).length;
   if (got > want) {
     console.error(`C-side iterator-protocol reads of ${atom}: ${got} > ceiling ${want}.`);
     console.error(`  A consumer is performing 7.4.4 / 7.4.5 / GetIterator's read from C again. It is the page's`);
@@ -1258,6 +1264,38 @@ if (extFromC !== 7) {
  *   last SELF-HOSTED builtin, so first touch of the property runs a compiled bytecode PROGRAM from C, below the
  *   live flow that read the property. Routing the autoinit would be the shortcut; the root is that a builtin is
  *   written in JavaScript at all.
+ *
+ *   ARRAY.FROMASYNC IS AN ENGINE COMPONENT AND SELF-HOSTING IS GONE. js_array_fromasync_def is the builtin,
+ *   js_fromasync_def each promise-reaction resumption; both C entries are DFAILs. The whole machinery went with
+ *   it in the same diff — JS_AUTOINIT_ID_BYTECODE, JS_BUILTIN_ARRAY_FROMASYNC, js_bytecode_eval,
+ *   js_bytecode_autoinit, the autoinit-table entry, the .js/.h pair and the Makefile/meson/amalgam codegen path
+ *   (already stale for the two zip blobs). fromAsync 190 -> 0, corpus 288 -> 96, 0/43222 and 0 leaked objects.
+ *   THE SHAPE, because an async builtin is not a longer sync one: a step machine cannot suspend on a promise —
+ *   its state is freed when it returns — so the loop state lives in an engine-private ARRAY that the reaction
+ *   closures share by reference, and the machine is one PHASE per resumption point. That is the shape
+ *   disposeAsync's chain already uses; the array never escapes, so every read and write of it invokes nothing.
+ *   FOUR BUGS, and three of them were seams between the algorithm and the driver rather than mistakes in either:
+ *   (1) catches_abrupt was declared for a keyed request at the SUSPENDED unwind only. Array.fromAsync's
+ *   `Get(null, @@asyncIterator)` throws before anything suspends, so the IN-PLACE label (getprop_throw) freed the
+ *   chain and propagated — the builtin THREW where the spec rejects its promise. WHERE a read threw is not
+ *   something an algorithm can observe, so both labels had to answer the one question the same way.
+ *   (2) an abrupt delivery never released the header's in-flight KEY, so the next two-phase sub-sequence the
+ *   machine ran found get_phase already GOT and answered at the wrong call site. step_hdr_request_abandon is the
+ *   other way a request ends, sitting beside step_getprop_done. The two-phase contract DCHECK is what named it.
+ *   (3) the CAPABILITY delivery stored over a live record. fromAsync asks once per Await, and a leaked resolving
+ *   function pins everything it can reach: `Array.fromAsync([])` alone left 376 live objects. The header holds
+ *   ONE capability and the requester TAKES it — now a DCHECK at the delivery.
+ *   (4) IfAbruptCloseAsyncIterator was simply missing. It is five phases (7.4.14), and WHAT AN ABRUPT MEANS is a
+ *   value the algorithm carries (FA_ONABRUPT, a phase) rather than a property of the request that threw — the
+ *   spec says it step by step: loop steps 3-8 are plain `?`, 9.b/9.d/12 close first, and inside the close step 4
+ *   discards everything. The same slot deleted the is-this-the-rejection-half flag: an Await declares BOTH
+ *   continuation phases, because its two halves do not always differ by a boolean.
+ *   AND THE LAST C-SIDE READ OF JS_ATOM_NEXT WENT WITH IT. CreateAsyncFromSyncIterator returns an Iterator
+ *   RECORD, not an object, and both callers were performing step 3's `! Get(asyncIterator, "next")` themselves —
+ *   provably not page code, but syntactically indistinguishable from a consumer running the protocol from C, and
+ *   both were invisible to the ratchet because `sp[-1]` is not an identifier. The AO hands the record back; the
+ *   realm holds the intrinsic (built member by member instead of from a JSCFunctionListEntry list, because a
+ *   list cannot hand a member back); and the ratchet's receiver pattern is widened so the zero stays honest.
  *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
