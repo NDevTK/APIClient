@@ -49,3 +49,25 @@ function twice() { return new Error("x").stack; }
 var host = { one: twice, two: twice };
 assert.sameValue(frame(host.one()), "    at Object.twice",
                  "an ambiguous property search adds nothing rather than guessing");
+
+/* A CONTINUATION-HOLDING BUILTIN IS ON THE STACK, and until now it was on no stack trace. `Array.prototype.map`
+   is a step machine in this engine — it pushes no JSStackFrame, because it is driven from the interpreter's
+   own activation — so its callback's frame linked straight past it to the caller and the builtin vanished.
+   V8 reports `at Array.map`, and that is the truthful answer: the builtin really is between the two. */
+function fromCallback() { return [1, 2, 3].map(function () { return new Error("x").stack; })[0]; }
+var mapped = fromCallback().split("\n").map(function (l) { return l.replace(/ \(.*/, ""); });
+assert.sameValue(mapped[0], "    at <anonymous>", "the callback is innermost");
+assert.sameValue(mapped[1], "    at Array.map", "and the builtin driving it is named, with its receiver's type");
+assert.sameValue(mapped[2], "    at fromCallback", "then the caller");
+
+/* The receiver of a C builtin is not boxed — no ToObject happens — so a primitive one is named directly
+   rather than by allocating a wrapper to read its class back off. */
+var replaced = "abc".replace(/b/, function () { return new Error("x").stack.split("\n")[1]; });
+assert.sameValue(replaced, "a    at String.replace (native)c",
+                 "a builtin on a primitive names the primitive's type, and has no position of its own");
+
+/* The machine BUILDING a trace must never name itself: `new Error()` inside a callback reports the callback,
+   not `Function.Error`. That is what the skip-first-level flag has always meant, and it applies to the step
+   machine's own frame now that the machine has one. */
+assert.sameValue(new Error("x").stack.split("\n")[0].slice(0, 12), "    at <eval",
+                 "the Error constructor is not the origin of the error");
