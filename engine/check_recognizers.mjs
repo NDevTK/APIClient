@@ -1470,6 +1470,31 @@ if (extFromC !== 7) {
  *   NUMBERED captures are already coerced as a stage in js_re_rep_step, so this is the one branch of that
  *   walk left in C, and it is shared with String.prototype.replace's non-callable form.
  *
+ *   THE COUNTER IS NOT A PROOF, AND NOW THERE IS A STATIC ONE BESIDE IT — engine/check_recursion.mjs.
+ *   SyncDriveToCompletion answers ONE question: was a BYTECODE BODY entered by C recursion while a flow existed.
+ *   It is silent about C-to-C recursion that never re-enters the interpreter, and it only sees what a test
+ *   actually runs. Neither limitation is fixable by running more tests, so driving it to zero was never going to
+ *   prove "the C stack is flat".
+ *   The new checker reads LLVM IR and reports every cycle in the DIRECT call graph — direct calls only, no
+ *   indirect edges and no signature guessing, so every cycle it names provably exists with zero false positives.
+ *   Two ratcheted populations: the INTERPRETER CYCLE (421 functions, a transitive artifact of
+ *   JS_CallInternal -> JS_ToPrimitiveFree -> JS_CallFree -> JS_CallInternal, whose SIZE shrinks as each
+ *   C-driven path is deleted) and 19 SELF-CONTAINED recursions over 65 functions, which are the honest work
+ *   queue. Several have PAGE-CONTROLLED depth and are therefore stack-overflow vectors, not just untidy: the
+ *   recursive-descent PARSER (28), the bytecode reader/writer object walks (11 and 9), js_is_array through a
+ *   PROXY CHAIN (2), json_parse_value, string_rope_get / hash_string_rope /
+ *   js_rebalance_string_rope_rec (a rope's depth is chosen by the page's concatenations), and the module-graph
+ *   walks that were never flattened (js_resolve_export1, get_exported_names, gather_available_ancestors,
+ *   js_get_local_export_var_ref1).
+ *   WHAT IT CANNOT SEE is a cycle that closes through a FUNCTION POINTER. That is tractable here — this engine
+ *   funnels indirect calls through a few declared tables, so the edges can be resolved exactly rather than
+ *   guessed — but it is not modelled yet and the tool does not pretend otherwise.
+ *   RUNNING IT ALREADY PAID: clang refused to compile what gcc's `-w` had been swallowing. `struct JSStepHdr`
+ *   was first named inside JSTrampStepDef's function-pointer PARAMETER LIST, where a struct tag's scope ends
+ *   with the prototype — so the field's type and the real JSStepHdr were DIFFERENT types and every precheck
+ *   assigned to it was an incompatible-function-pointer initialisation. Four prechecks were also non-const. The
+ *   ABI matched, so nothing had ever failed; a file-scope forward declaration and four `const`s fix it.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
