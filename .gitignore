@@ -22,3 +22,9 @@ engine/.work/liblexbor_asan.a
 engine/.work/liblexbor_clang.a
 engine/.work/test_asan.exe
 engine/.recursion-ir/
+# V8's mjsunit corpus, FETCHED at run time by engine/v8mjsunit.mjs, plus the harness directory and the
+# per-file scratch each run produces. The harness says nothing is vendored; twenty of V8's test files had
+# been committed under the old corpus's work directory, which made that false. They are gone and the
+# directory is ignored, so it stays true.
+engine/.work/v8regexp/
+engine/.work/v8mjsunit/
