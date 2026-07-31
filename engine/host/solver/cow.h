@@ -50,6 +50,10 @@ void      cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key
    as an undo-log entry (apply replays it, unapply inverts it), completing cow_capture_map_add's add-only capture
    so ALL shared Set/Map mutations are per-flow isolated. op is JS_MAP_MUTATE_OVERWRITE / _DELETE. */
 void      cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op);
+/* Install as JSTimeTravelHooks.async_settle: capture a shared promise's settlement (state + result + pending
+   reactions) or a resolving-function pair's already_resolved latch before this flow changes it, so each arm of
+   a fork settles a pre-fork promise on its OWN timeline. */
+void      cow_capture_async_settle(JSContext *ctx, JSValueConst obj);
 
 /* Record a per-flow GENERATOR-STATE swap into delta `d` (JSTimeTravelHooks.gen_fork): the shared generator
    object `genobj` must resolve to `cur_gd` (a per-flow clone `d` OWNS) while `d` runs and to `base_gd` (its

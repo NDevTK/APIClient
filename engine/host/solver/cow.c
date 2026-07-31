@@ -19,11 +19,17 @@
    restores map_old), DELETE (apply deletes, unapply re-adds map_old). Entries replay forward on apply and invert
    in reverse on unapply, so a sequence of mutations to the same key reconstructs correctly with NO dedup and no
    SameValueZero key-hashing. Never slot-keyed (kept out of the hash index, like gendata). */
+/* A FIFTH entry kind (is_async=1) is a shared ASYNC object's SETTLEMENT: obj is the promise (or the resolving
+   function whose already_resolved latch it is), a_base the baseline settlement this flow found, a_cur the
+   settlement this flow produced (saved at unapply, replayed at apply) — the same base/cur shape as a property
+   slot, over state that lives in internal slots no property hook can see. Not slot-keyed (kept out of the hash
+   index, like gendata and map): a promise settles once per flow, so there is nothing to dedup. */
 #define COW_MAP_ADD       0
 #define COW_MAP_OVERWRITE 1
 #define COW_MAP_DELETE    2
 typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; void *vref;
-                 int is_gendata; void *g0; void *g1; int is_map; int map_op; JSValue map_old; } CowEntry;
+                 int is_gendata; void *g0; void *g1; int is_map; int map_op; JSValue map_old;
+                 int is_async; void *a_base; void *a_cur; } CowEntry;
 
 /* forked = has this flow snapshot-forked a sibling yet? Until it has, every object it CREATED (flow_local) is
    truly private — no other flow can observe it — so capturing its mutations is pure waste (keeps the delta
@@ -59,7 +65,7 @@ static void cow_hash_rebuild(CowDelta *d) {   /* size to >= 2*n (power of two), 
     d->hash = realloc(d->hash, (size_t)d->hash_cap * sizeof(int));
     CHECK(d->hash, "cow: OOM hash index");
     memset(d->hash, 0, (size_t)d->hash_cap * sizeof(int));
-    for (int i = 0; i < d->n; i++) if (!d->e[i].is_gendata) cow_hash_put(d, i);   /* gendata swaps aren't slot-keyed */
+    for (int i = 0; i < d->n; i++) if (!d->e[i].is_gendata && !d->e[i].is_async) cow_hash_put(d, i);   /* gendata/async aren't slot-keyed */
 }
 /* Record entry (d->n-1) in the hash, growing/rebuilding the table when it would exceed half-full. */
 static void cow_hash_add_last(CowDelta *d) {
@@ -120,6 +126,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->cur_valid = 0;
     e->vref = NULL;
     e->is_gendata = 0;
+    e->is_async = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
@@ -150,6 +157,7 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
     e->vref = NULL;
     e->is_gendata = 0;
+    e->is_async = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
     cow_hash_add_last(d);   /* in the index so a later OVERWRITE of this index dedups to the append entry */
     g_capturing = 0;
@@ -177,6 +185,7 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
     e->cur_valid = 1;
     e->vref = NULL;
     e->is_gendata = 0;
+    e->is_async = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 1;                     /* not slot-keyed — kept out of the hash index, like gendata */
     e->map_op = COW_MAP_ADD; e->map_old = JS_UNDEFINED;
     g_capturing = 0;
@@ -204,9 +213,49 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     e->cur_valid = 1;
     e->vref = NULL;
     e->is_gendata = 0;
+    e->is_async = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 1;
     e->map_op = (op == JS_MAP_MUTATE_DELETE) ? COW_MAP_DELETE : COW_MAP_OVERWRITE;
     e->map_old = JS_DupValue(ctx, old_val);   /* the prior value, restored on unapply */
+    g_capturing = 0;
+}
+
+/* Capture a shared async object's SETTLEMENT before this flow changes it (JSTimeTravelHooks.async_settle). A
+   promise created before a fork is baseline state whose settle is a write no property hook can see, and the
+   resolving function's already_resolved latch is the other half of it: without capturing the latch, the first
+   arm to call the shared `resolve` wins and every sibling's call returns silently, so a value that differs per
+   arm is lost rather than isolated. Flow-private promises (created after the fork) are skipped by the same
+   generational test as every other capture — nothing else can observe them. */
+void cow_capture_async_settle(JSContext *ctx, JSValueConst obj) {
+    if (g_capturing || !g_current) return;
+    CowDelta *d = g_current;
+    if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
+    g_capturing = 1;
+    void *blob = JS_AsyncStateSave(ctx, obj);
+    /* The hook fires only for an object that HAS settlement state, so a NULL here is either that contract
+       broken or an allocation failure — and both mean this flow's settle goes uncaptured and leaks into every
+       sibling, which is a corrupted frontier rather than a degraded one. */
+    CHECK(blob, "cow: a shared async object's settlement could not be captured — the flow's timeline would leak");
+    for (int i = 0; i < d->n; i++)                  /* one entry per object: the FIRST baseline is the baseline */
+        if (d->e[i].is_async && JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) {
+            JS_AsyncStateFree(JS_GetRuntime(ctx), blob);
+            g_capturing = 0;
+            return;
+        }
+    if (d->n >= d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 32;
+        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
+        CHECK(d->e, "cow: OOM growing delta (async_settle) — a lost settlement leaks a flow's timeline");
+        cow_hash_rebuild(d);
+    }
+    CowEntry *e = &d->e[d->n++];
+    e->obj = JS_DupValue(ctx, obj);
+    e->atom = JS_ATOM_NULL; e->existed = 0;
+    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->vref = NULL;
+    e->is_gendata = 0; e->g0 = e->g1 = NULL;
+    e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
+    e->is_async = 1; e->a_base = blob; e->a_cur = NULL;
     g_capturing = 0;
 }
 
@@ -226,6 +275,7 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
     e->vref = vref;                      /* the cell is kept alive by the shared function object */
     e->is_gendata = 0;
+    e->is_async = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
@@ -253,7 +303,8 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
     e->obj = JS_DupValue(ctx, genobj);
     e->atom = JS_ATOM_NULL; e->existed = 0; e->base = JS_UNDEFINED;
     e->cur = JS_UNDEFINED; e->cur_valid = 0; e->vref = NULL;
-    e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;   /* adopts cur_gd's creation ref (freed on delta free) */
+    e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;
+    e->is_async = 0; e->a_base = e->a_cur = NULL;   /* adopts cur_gd's creation ref (freed on delta free) */
     e->is_map = 0;
 }
 
@@ -263,6 +314,12 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
     for (int i = d->n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
         CowEntry *e = &d->e[i];
         if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g0); continue; }   /* restore the object-owned original */
+        if (e->is_async) {   /* async settlement: save what THIS flow settled to, then rewind to the baseline */
+            JS_AsyncStateFree(JS_GetRuntime(ctx), e->a_cur);
+            e->a_cur = JS_AsyncStateSave(ctx, e->obj);
+            JS_AsyncStateRestore(ctx, e->obj, e->a_base);
+            continue;
+        }
         if (e->is_map) {   /* invert the flow's record mutation: ADD->delete, OVERWRITE/DELETE->restore old value */
             if (e->map_op == COW_MAP_ADD) JS_MapDeleteRecord(ctx, e->obj, e->base);
             else JS_MapAddRecord(ctx, e->obj, e->base, e->map_old);
@@ -298,6 +355,7 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
     for (int i = 0; i < d->n; i++) {   /* forward: replay the flow's writes over the pristine baseline */
         CowEntry *e = &d->e[i];
         if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g1); continue; }   /* install this flow's generator clone */
+        if (e->is_async) { JS_AsyncStateRestore(ctx, e->obj, e->a_cur); continue; }   /* re-settle as this flow did */
         if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
             if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, e->base);
             else JS_MapAddRecord(ctx, e->obj, e->base, e->cur);
@@ -329,18 +387,32 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     g_capturing = 1;
     for (int i = 0; i < src->n; i++) {
         CowEntry *se = &src->e[i], *de = &d->e[i];
+        /* ZEROED FIRST, so a branch below states only the fields ITS kind uses. Each branch used to spell out
+           every field of every other kind, which made adding one an obligation at four sites — and the fifth
+           kind's flag was left as malloc garbage at two of them, so a plain property slot was replayed as an
+           async settlement and dereferenced a wild blob. A zeroed JSValue is the integer 0, which is
+           non-refcounted and safe to free, so this is a valid empty entry and not just a memset. */
+        memset(de, 0, sizeof *de);
         if (se->is_gendata) {   /* generator swap: the sibling shares the SAME per-flow clone (a ref), same toggle */
             de->obj = JS_DupValue(ctx, se->obj);
-            de->atom = JS_ATOM_NULL; de->existed = 0; de->base = JS_UNDEFINED;
-            de->cur = JS_UNDEFINED; de->cur_valid = 0; de->vref = NULL;
             de->is_gendata = 1; de->g0 = se->g0; de->g1 = se->g1;
             JS_GenDataRef(se->g1);   /* the copy holds its own ownership ref on the clone */
             continue;
         }
-        if (se->is_map) {   /* Set/Map record mutation: the sibling inherits the same reversible undo-log entry */
-            de->is_gendata = 0; de->is_map = 1; de->vref = NULL;
+        if (se->is_async) {   /* async settlement: the sibling inherits its OWN copy of both blobs — the two
+                                 deltas must share no mutable state, and a blob is mutable (unapply rewrites cur) */
             de->obj = JS_DupValue(ctx, se->obj);
-            de->atom = JS_ATOM_NULL; de->existed = 0;
+            de->is_async = 1;
+            de->a_base = JS_AsyncStateClone(ctx, se->a_base);
+            /* the sibling's restore point is the branch-point settlement, which is LIVE right now (src's delta
+               is applied at a fork) — read it rather than copying src's cur, which is only valid after an
+               unapply has written it. */
+            de->a_cur = JS_AsyncStateSave(ctx, se->obj);
+            continue;
+        }
+        if (se->is_map) {   /* Set/Map record mutation: the sibling inherits the same reversible undo-log entry */
+            de->is_map = 1;
+            de->obj = JS_DupValue(ctx, se->obj);
             de->base = JS_DupValue(ctx, se->base);   /* key */
             de->cur = JS_DupValue(ctx, se->cur);     /* new value */
             de->cur_valid = 1;
@@ -348,8 +420,6 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
             de->map_old = JS_DupValue(ctx, se->map_old);   /* prior value (OVERWRITE/DELETE) */
             continue;
         }
-        de->is_gendata = 0;
-        de->is_map = 0;
         de->obj = JS_DupValue(ctx, se->obj);
         de->atom = JS_DupAtom(ctx, se->atom);
         de->existed = se->existed;
@@ -371,6 +441,12 @@ void cow_delta_free(JSContext *ctx, CowDelta *d) {
     if (!d) return;
     for (int i = 0; i < d->n; i++) {
         if (d->e[i].is_gendata) { JS_FreeValue(ctx, d->e[i].obj); JS_GenDataUnref(ctx, d->e[i].g1); continue; }
+        if (d->e[i].is_async) {
+            JS_FreeValue(ctx, d->e[i].obj);
+            JS_AsyncStateFree(JS_GetRuntime(ctx), d->e[i].a_base);
+            JS_AsyncStateFree(JS_GetRuntime(ctx), d->e[i].a_cur);
+            continue;
+        }
         if (d->e[i].is_map) {   /* obj + key(base) + new(cur) + old(map_old); atom is NULL */
             JS_FreeValue(ctx, d->e[i].obj);
             JS_FreeValue(ctx, d->e[i].base);
