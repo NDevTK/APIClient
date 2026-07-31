@@ -26,6 +26,13 @@ const OUT = join(HOST, "out");
   const r = spawnSync(process.execPath, [join(ENGINE, "check_recognizers.mjs")], { stdio: "inherit" });
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
+/* The step-machine ownership declarations are paired with their state structs by editing pattern, in batches.
+   That pairing is a type error C cannot see — a visit attached to the wrong struct compiles and passes the
+   fixture — so it is asserted before anything is compiled, for the reason the ratchet above is. */
+{
+  const r = spawnSync(process.execPath, [join(ENGINE, "check_step_visits.mjs")], { stdio: "inherit" });
+  if (r.status !== 0) process.exit(r.status ?? 1);
+}
 const WORK = join(ENGINE, ".work");
 const EMSDK = join(WORK, "emsdk");
 const EMCC = join(EMSDK, "upstream", "emscripten", process.platform === "win32" ? "emcc.bat" : "emcc");
