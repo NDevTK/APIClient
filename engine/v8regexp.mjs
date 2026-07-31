@@ -103,13 +103,17 @@ for (const f of files) {
   writeFileSync(join(one, f), readFileSync(join(TESTS, f), "utf8"));
   const r = spawnSync(bin, ["-c", "test262.conf", "-d", one], {
     cwd: QJS, encoding: "utf8", maxBuffer: 1 << 28,
-    /* Generous, and the reason is the fork's: V8's bounds are what keep some of these files quick there.
-       regexp.js builds `("a?" x 100000) + "a"` and matches it against "a" — V8 REFUSES to compile it ("regexp
-       too large") and this engine does not, because refusing is a bound. So the engine attempts an exponential
-       match with a backtracking stack in the hundreds of thousands, and on a small machine the OOM killer wins.
-       That is the physical RAM floor, not a bug, and it is what the host scheduler's paging tier is for — but
-       run-test262 has no scheduler, so the file is expected to be heavy here and is reported honestly rather
-       than trimmed to make the number look better. */
+    /* Generous, because this engine has no bounds and some of these files are quick in V8 only because V8 has
+       them: regexp.js compiles `("a?" x 100000) + "a"` and matches it against "a", which V8 REFUSES to compile
+       ("regexp too large") and this engine does not, so the engine really does attempt the exponential match.
+       That is the physical RAM floor and it is what the host scheduler's paging tier is for; run-test262 has
+       no scheduler, so a heavy file is reported honestly rather than trimmed to make the number look better.
+       This comment used to say the RAM floor was why three files were killed. It was not. They were killed by
+       an infinite recursion through Error.prepareStackTrace — mjsunit's formatter re-reads error.stack from
+       inside itself to reach the default rendering, which V8 gives it and this engine did not — so the engine
+       called the hook again, and with the calls on the heap there was no overflow to stop it. Every file
+       finishes now. The lesson is the one this corpus keeps teaching: "too slow" was a story, and the measured
+       cause was a defect. */
     env: { ...process.env, FORK_PREEMPT: "1" }, timeout: 900_000,
   });
   const out = (r.stdout || "") + (r.stderr || "");
@@ -134,9 +138,10 @@ for (const f of files) {
 console.log(`\n[v8regexp] ${got - failed - aborted - slow}/${got} clean, ${failed} failing, ${slow} unfinished,`
   + ` ${aborted} ABORTING`);
 /* An abort is an unrouted C entry — the thing this corpus exists to surface — so it is the only hard failure.
-   A FAIL is a spec/feature difference to read. A SLOW is neither: it is a pattern this engine runs and V8
-   prunes. regexp-capture-3.js is the clearest case — it builds `/(((.*)*)*x)\u0100/` and asserts NO HANG,
-   which V8 gets from a static filter (a node whose class cannot match any code unit of a Latin1 subject is
-   dead, so the loop is removed before execution) and this engine does not have. regexp.js is the other: it
-   compiles `("a?" x 100000) + "a"` and matches it against "a", which V8 refuses to compile at all. */
+   A FAIL is a spec difference to read; the two error-message texts still reported are not spec, and matching
+   V8's wording would be matching Chrome rather than the spec. A SLOW is neither: it is a pattern this engine
+   runs and V8 prunes. regexp-capture-3.js used to be the example — `/(((.*)*)*x)\u0100/` with an assertion
+   of NO HANG, which V8 answers with a static filter (a node whose class cannot match any code unit of a
+   Latin1 subject is dead, so the loop goes before execution). That filter exists here now and the file is
+   clean, which is the whole point of running someone else's twenty years of regressions. */
 process.exit(aborted ? 1 : 0);
