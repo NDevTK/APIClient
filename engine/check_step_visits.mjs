@@ -113,5 +113,96 @@ for (const m of src.matchAll(/step_(setprop|defidx)_run\s*\(([\s\S]{0,400}?)\)\s
   bad++;
 }
 
+/* AN ARRAY'S DECLARED CAPACITY IS WHAT IT WAS ALLOCATED WITH, never how much of it is live. The `array`
+ * operation takes both because they differ: the clone must hand the sibling a block of the same SIZE, or the
+ * sibling's next append sees `n != cap`, skips its realloc, and writes past the end. Four landed visits passed
+ * the live count for both — Iterator.zip's inputs and its pads, Object.defineProperties' descriptor list,
+ * JSON.stringify's PropertyList — each a heap overflow on a fork taken mid-collection, and none of them
+ * something C or a test could notice, because the state is only wrong on the CLONE and only once it grows.
+ *
+ * So the allocation and the declaration are paired by NAME: for every (state struct, field) the file allocates,
+ * take the element-count expression out of the allocation, and require the visit's `cap` argument to be it.
+ * Scoping by struct is load-bearing rather than tidiness — half a dozen machines call their request buffer `cb`,
+ * and a field-name-only map merges their sizes into one set that matches nothing.
+ * A size expression that is only a `sizeof` allocates ONE element; that is what the pointer-to-one-object
+ * fields (an enum-keys cursor) are, and they declare a capacity of 1 or 0. */
+{
+  const norm = (t) => t.replace(/\(\s*(?:size_t|int|uint32_t|int64_t|uint64_t|unsigned)\s*\)/g, '')
+                       .replace(/sizeof\s*\([^)]*\)/g, '')
+                       .replace(/[\s*]/g, '')
+                       .replace(/^\(([^()]*)\)$/, '$1')
+                       /* `E>0?E:1` and `E` are the SAME capacity: the operation's own dup allocates
+                          `cap > 0 ? cap : 1`, so a machine writing that guard into its malloc and passing the
+                          bare count to the visit has stated one number twice, not two numbers. */
+                       .replace(/^(.+)>0\?\1:1$/, '$1');
+  /* which C variable names denote which state struct, per function body */
+  const FUNC = /^static [^\n]*?\b(\w+)\s*\([^)]*\)\s*\n\{/gm;
+  const bounds = [];
+  for (const m of src.matchAll(FUNC)) bounds.push(m.index);
+  bounds.push(src.length);
+  const allocCap = new Map();   // "JSIterZip.iters" -> Set(size expressions)
+  const capOf = (struct, field) => allocCap.get(struct + '.' + field);
+  for (let b = 0; b + 1 < bounds.length; b++) {
+    const body = src.slice(bounds[b], bounds[b + 1]);
+    const vars = new Map();
+    for (const d of body.matchAll(/\b(JS\w+)\s*\*\s*(\w+)\s*(?:=\s*st\b|[,)])/g)) vars.set(d[2], d[1]);
+    /* every `x->f = <expr>;` in this function, normalised — a machine that allocates N elements and then records
+       N in a field is stating the SAME capacity by another name, and that name is what the visit will use. */
+    const named = new Map();   // normalised expression -> Set("s->ncb")
+    for (const w of body.matchAll(/\b(\w+)->(\w+)\s*=\s*([^;=][^;]*?);/g)) {
+      if (!vars.has(w[1])) continue;
+      const e = norm(w[3]);
+      if (!e) continue;
+      if (!named.has(e)) named.set(e, new Set());
+      named.get(e).add(w[1] + '->' + w[2]);
+    }
+    /* EVERY allocation in this function, with the field it ends up in. Three shapes, and the third is the one
+       that matters: the GROWTH idiom assigns js_realloc's result to a LOCAL, checks it, and only then stores it
+       into the field — so a rule that only reads `x->f = js_realloc(...)` is blind to exactly the arrays that
+       grow, which is to say to exactly the arrays whose live count and capacity differ. */
+    const record = (st, field, sizeExpr) => {
+      const k = st + '.' + field, e = norm(sizeExpr) || '1';
+      if (!allocCap.has(k)) allocCap.set(k, new Set());
+      allocCap.get(k).add(e);
+      for (const alias of (named.get(e) || [])) allocCap.get(k).add(norm(alias));
+    };
+    /* Three INDEPENDENT patterns rather than one alternation, because a single regex that has to match the
+       assignment TARGET misses the growth idiom's second realloc — `nn = js_realloc(ctx, s->nexts, …)` has no
+       type word in front of it, so an alternation anchored on one silently skips the statement entirely, and a
+       gate that skips the shape it exists to check is worse than no gate. */
+    for (const a of body.matchAll(/\b(\w+)->(\w+)\s*=\s*js_(?:m|re)alloc[a-z_]*\(\s*ctx\s*,(?:\s*[\w>.-]+\s*,)?([^;]*?)\);/g))
+      if (vars.get(a[1])) record(vars.get(a[1]), a[2], a[3]);
+    /* a REALLOC of x->f keeps living in x->f, whatever local it lands in first */
+    for (const a of body.matchAll(/js_realloc[a-z_]*\(\s*ctx\s*,\s*(\w+)->(\w+)\s*,([^;]*?)\);/g))
+      if (vars.get(a[1])) record(vars.get(a[1]), a[2], a[3]);
+    /* a MALLOC into a local, stored into the field afterwards */
+    for (const a of body.matchAll(/\b(\w+)\s*=\s*js_malloc[a-z_]*\(\s*ctx\s*,([^;]*?)\);/g)) {
+      const st2 = new RegExp('\\b(\\w+)->(\\w+)\\s*=\\s*' + a[1] + '\\s*;').exec(body);
+      if (st2 && vars.get(st2[1])) record(vars.get(st2[1]), st2[2], a[2]);
+    }
+  }
+  const CALL = /v->array\(\s*ctx\s*,\s*\(void \*\*\)&(\w+)->(\w+)\s*,([^;]*?)\);/g;
+  for (let b = 0; b + 1 < bounds.length; b++) {
+    const body = src.slice(bounds[b], bounds[b + 1]);
+    const vars = new Map();
+    for (const d of body.matchAll(/\b(JS\w+)\s*\*\s*(\w+)\s*(?:=\s*st\b|[,)])/g)) vars.set(d[2], d[1]);
+    for (const m of body.matchAll(CALL)) {
+      const st = vars.get(m[1]);
+      if (!st) continue;
+      const sizes = capOf(st, m[2]);
+      if (!sizes) continue;                     // allocated where this cannot see it: not reported
+      const args = m[3].split(',');
+      if (args.length < 4) continue;
+      const cap = norm(args[args.length - 2]) || '1';
+      if ([...sizes].some(e => e === cap)) continue;
+      const line = src.slice(0, bounds[b] + m.index).split('\n').length;
+      console.error(`[step-visits] quickjs.c:${line}: ${st}.${m[2]} is declared with capacity \`${cap}\` but ` +
+                    `allocated with \`${[...sizes].join(' | ')}\` — a clone given the smaller block overflows ` +
+                    `it on the next append`);
+      bad++;
+    }
+  }
+}
+
 if (bad) process.exit(1);
 console.log(`[step-visits] ${checked} declarations, each paired with exactly one state struct`);
