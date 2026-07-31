@@ -1557,6 +1557,12 @@ if (extFromC !== 7) {
  *   do_step_tramp for EVERY machine rather than only on a yield. Then a machine is always frame-resident, YIELD
  *   is just `goto do_preempt`, and there is no second way for a machine to be parked — which is the rule this
  *   file applies to everything else. It is the larger diff and the correct one.
+ *   THE RESUME ARM, located: the DEEP-resume block in JS_CallInternal (the `if (s->tramp_top)` branch) ends in
+ *   `b = dp->u.func.function_bytecode; ... goto restart` — it assumes the deepest frame HAS BYTECODE. A parked
+ *   step machine has none, so it cannot `goto restart`; its arm must pop the yield frame, restore b/ctx/sf/
+ *   local_buf/stack_buf from the frame BELOW it (the same reconstruction do_return performs), set cont_st from
+ *   the frame's cont_state and `goto do_step_step`. That is the fourth and last unknown; the push site, this
+ *   arm, the exception unwind and clone_deep_flow are the complete edit set.
  *
  *   THE ROPE CYCLES ARE MEASURED, NOT ASSUMED, AND THEY ARE NOT THE VECTOR. string_rope_get, hash_string_rope
  *   and js_rebalance_string_rope_rec were listed here as page-controlled depth on the reasoning that a rope's
