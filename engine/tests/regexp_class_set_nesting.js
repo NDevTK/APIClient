@@ -35,3 +35,18 @@ assert.sameValue(/[^[a-c]]/v.test("b"), false);
 assert.throws(SyntaxError, function () { new RegExp("[[a--[b]", "v"); });
 assert.throws(SyntaxError, function () { new RegExp("[[a]--", "v"); });
 assert.throws(SyntaxError, function () { new RegExp("[" + "[a--[b]]".repeat(1) + "&&", "v"); });
+
+/* 22.2.1: MayContainStrings is a STATIC property of the productions, not a question about what survived. The
+   intersection of two string disjunctions is empty, and negating it is still an early error — reading
+   n_strings instead let this one through, which is the gap the code's own XXX had named. */
+assert.throws(SyntaxError, function () { new RegExp("[^\\q{foo}&&\\q{bar}]", "v"); });
+assert.throws(SyntaxError, function () { new RegExp("[^\\q{foo}--\\q{bar}]", "v"); });
+assert.throws(SyntaxError, function () { new RegExp("[^\\q{foo}]", "v"); });
+assert.throws(SyntaxError, function () { new RegExp("[^\\q{}]", "v"); });        /* the empty string is a string */
+assert.throws(SyntaxError, function () { new RegExp("[^[\\q{foo}]]", "v"); });
+
+/* …and the same shapes UNnegated stay valid, including the one whose strings all cancel */
+assert.sameValue(new RegExp("[\\q{foo}&&\\q{bar}]", "v").test("foo"), false);
+assert.sameValue(new RegExp("[\\q{foo}&&\\q{foo}]", "v").test("foo"), true);
+assert.sameValue(new RegExp("[\\q{foo}--\\q{bar}]", "v").test("foo"), true);
+assert.sameValue(new RegExp("[^\\q{a}]", "v").test("b"), true);   /* a one-character \q is not a string */
