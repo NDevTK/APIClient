@@ -47,6 +47,15 @@ const r = spawnSync(bin, args, { cwd: QJS, encoding: "utf8", maxBuffer: 1 << 30,
   env: { ...process.env, FORK_PREEMPT: "1" }, timeout: 590_000 });
 const out = (r.stdout || "") + (r.stderr || "");
 const m = out.match(/Result: (\d+)\/(\d+) errors/);
+/* WHAT WAS NOT RUN. test262.conf carries an [exclude] list inherited from upstream (intl402, and staging as
+   "frequently broken"), and `features` gates the rest — so a "0/43222 errors" summary was printed while
+   4786 files were excluded and 5417 skipped, and it read as "the corpus is green" when it meant "the part
+   of the corpus we chose is green". Running the excluded staging directory is how four capability gaps
+   were found in one sitting: a C-side proxy [[Get]] on a handler, a JSON cycle stack that walked
+   Array.prototype, an assert about argc that was simply false, and a TypedArray write coercing from C.
+   The numbers are printed so that gap is visible rather than inferred. */
+const excl = out.match(/errors?, (\d+) excluded/);
+const skip = out.match(/(\d+) skipped/);
 const leaks = (out.match(/\[gcleak\]/g) || []).length;
 /* FEATURE ENGAGEMENT: a passing result does NOT prove time-travel ran on the test logic. The engine reports
    preempt-requested vs fired; requested>fired means the feature was gated somewhere (nested async/generator
@@ -65,7 +74,11 @@ if (!m) { console.log("  DID-NOT-COMPLETE — a HARD crash before the summary (s
   console.log("---- last 60 lines of captured output ----\n" + out.split(/\r?\n/).slice(-60).join("\n"));
   console.log(`---- child signal=${r.signal} status=${r.status}` +
     (r.status === 3221225477 ? " (0xC0000005 ACCESS_VIOLATION — memory bug: run under ASan)" : "") + " ----"); }
-else    console.log(`  ${m[1]}/${m[2]} errors, ${leaks} leaks   (errors = spec-wrong under time-travel; bisect vs d0c2272)`);
+else {  console.log(`  ${m[1]}/${m[2]} errors, ${leaks} leaks   (errors = spec-wrong under time-travel; bisect vs d0c2272)`);
+        if ((excl && +excl[1] > 0) || (skip && +skip[1] > 0))
+          console.log(`  NOT RUN: ${excl ? excl[1] : 0} excluded by test262.conf, ${skip ? skip[1] : 0} skipped ` +
+                      `for unlisted features — the count above is over what remained`);
+     }
 if (notEngaged) {
   console.log("  feature: NOT ENGAGED (0 back-edges)  <-- proves NOTHING: no loop ever suspended/resumed in this run");
 } else if (f) {
