@@ -47,3 +47,18 @@ function namedCaller() { return eval("grab()"); }
 origin = namedCaller();
 assert.sameValue(origin.slice(0, 20), "eval at namedCaller ", "the origin names the calling function: " + origin);
 assert(origin.indexOf(":") > 0, "and its position: " + origin);
+
+/* AND THE DEFAULT RENDERING SAYS IT TOO. A frame from eval'd code has a file name of `<input>` and a line of
+   1; on its own that says nothing, and the origin is the only thing tying the frame back to the page. It goes
+   inside the same parentheses, before the position, which is where V8's stack-traces.js looks for it. */
+Error.prepareStackTrace = undefined;
+function outerFn() { return eval("(function inEval() { return new Error('x').stack; })()"); }
+var line = outerFn().split("\n")[0];
+assert.sameValue(line.slice(0, 32), "    at inEval (eval at outerFn (",
+                 "an eval frame is located by where the eval was: " + line);
+
+/* An eval called from eval'd code carries the whole chain, by the same composition. */
+function outermost() { return eval("(function mid() { return eval('new Error(\"x\").stack'); })()"); }
+var nested = outermost().split("\n")[0];
+assert(nested.indexOf("eval at mid (eval at outermost (") >= 0,
+       "a nested eval names both evals: " + nested);
