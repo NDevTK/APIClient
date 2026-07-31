@@ -1,30 +1,47 @@
-/* THE C STACK MUST BE FLAT — checked STATICALLY, not inferred from a green test run.
+/* THE C STACK MUST BE FLAT — checked STATICALLY, over the WHOLE PROGRAM, not inferred from a green test run.
  *
- * SyncDriveToCompletion, the counter this project has been driving to zero, answers one question: was a BYTECODE
- * BODY entered by C recursion while a flow existed. It is silent about C-to-C recursion that never re-enters the
- * interpreter (a prototype walk, a parser descent, the module-graph walks that were flattened by hand), and it
- * only sees what a test actually executes. Neither limitation is fixable by running more tests.
+ * SyncDriveToCompletion, the counter this project drove to zero, answers one question: was a BYTECODE BODY
+ * entered by C recursion while a flow existed. It is silent about C-to-C recursion that never re-enters the
+ * interpreter, and it only sees what a test actually executes. Neither limitation is fixable by running more
+ * tests.
  *
- * This is the other half: every SELF-CONTAINED CYCLE in the DIRECT call graph of quickjs.c. Direct calls only —
- * no indirect edges, no signature guessing, no reachability heuristic — so every cycle it reports is recursion
- * that provably exists in the binary, with zero false positives. What it cannot see is recursion that closes
- * through a function POINTER; that is the next layer and is tractable here precisely because this engine already
- * funnels indirect calls through a few declared tables, but it is not modelled yet and this file does not
- * pretend otherwise.
+ * This reports every SELF-CONTAINED CYCLE in the DIRECT call graph. Direct calls only — no indirect edges, no
+ * signature guessing — so every cycle it names provably exists in the binary, with zero false positives.
  *
- * Input is LLVM IR, because the IR names direct callees unambiguously where a source-text scan cannot:
+ * IT USED TO READ ONLY quickjs.c, AND THAT WAS THE BIGGEST THING WRONG WITH IT. The build compiles fifteen
+ * translation units; checking one hid six cycles, among them libregexp's recursive-descent PATTERN parser
+ * (re_parse_disjunction / re_parse_alternative / re_parse_term), whose depth `new RegExp("(".repeat(n))` picks.
+ * A checker that silently covers a fraction of the program is worse than none, because its zero is believed.
+ * So COVERAGE IS ITSELF CHECKED: every unit the build compiles is listed below, and one that is not in the
+ * linked module is a reported failure, never a quiet omission.
+ *
+ * Build the input with engine/check_recursion.sh, or by hand:
  *   clang -O0 -w -S -emit-llvm -DNDEBUG -D_GNU_SOURCE -DCONFIG_VERSION='"t262"' -DAPICLIENT_DEV=1 \
- *         -I. quickjs.c -o quickjs.ll
- * Usage: node engine/check_recursion.mjs <quickjs.ll>
+ *         -Iengine/qjs -Iengine/host -Iengine/host/browser -Iengine/lexbor/source <unit>.c -o <unit>.ll
+ *   llvm-link -S *.ll -o all.ll
+ * Usage: node engine/check_recursion.mjs all.ll
+ *
+ * WHAT IT STILL CANNOT SEE is a cycle that closes through a FUNCTION POINTER. That is tractable here — the
+ * engine funnels indirect calls through a few declared tables, so those edges can be resolved exactly rather
+ * than guessed — but it is not modelled, and this file does not pretend otherwise.
  */
 import { readFileSync } from 'node:fs'
 
-const path = process.argv[2]
-if (!path) {
-  console.error('usage: node engine/check_recursion.mjs <quickjs.ll>')
+const paths = process.argv.slice(2).filter(a => a.endsWith('.ll'))
+if (!paths.length) {
+  console.error('usage: node engine/check_recursion.mjs <linked.ll> [more.ll ...]')
   process.exit(2)
 }
-const ir = readFileSync(path, 'utf8')
+const ir = paths.map(p => readFileSync(p, 'utf8')).join('\n')
+
+/* COVERAGE IS THE DRIVER'S JOB, because it is the one that knows what compiled: engine/check_recursion.sh
+   builds every unit engine/build.mjs builds, fails hard on any that will not compile, and passes the count it
+   linked. A mismatch here means the module is a FRACTION of the program, and a ceiling met over a fraction is
+   not a result. Probing the linked module for witness function names instead was guesswork that reported units
+   uncovered when they were present. */
+const EXPECTED_UNITS = 15
+const uIdx = process.argv.indexOf('--units')
+const linkedUnits = uIdx > 0 ? Number(process.argv[uIdx + 1]) : -1
 
 /* One node per DEFINED function; a declaration (an libc import) has no body to recurse through. */
 const edges = new Map()
@@ -97,14 +114,21 @@ const own = sccs.filter((_, i) => i !== MAIN)
 const ownFuncs = own.reduce((n, c) => n + c.length, 0)
 
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
-const CEILING_OWN = 17       /* self-contained recursions */
-const CEILING_OWN_FUNCS = 62 /* functions in them */
+const CEILING_OWN = 23       /* self-contained recursions */
+const CEILING_OWN_FUNCS = 74 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
 console.log(`self-contained recursion: ${own.length} cycles over ${ownFuncs} functions`)
 
 let bad = false
+/* COVERAGE FIRST: a ceiling met over part of the program means nothing. */
+if (linkedUnits !== EXPECTED_UNITS) {
+  console.error(`COVERAGE: ${linkedUnits} translation units linked, expected ${EXPECTED_UNITS}.`)
+  console.error(`  Run engine/check_recursion.sh, which builds every unit engine/build.mjs builds and fails on`)
+  console.error(`  any it cannot compile. A ceiling met over part of the program is not a result.`)
+  bad = true
+}
 const check = (name, got, want, what) => {
   if (got > want) { console.error(`${name}: ${got} > ceiling ${want}. ${what}`); bad = true }
   else if (got < want) {

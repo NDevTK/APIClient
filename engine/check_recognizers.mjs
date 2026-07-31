@@ -1515,7 +1515,28 @@ if (extFromC !== 7) {
  *   there is no continuation to model — the descent simply IS a stack and is written as one. Reaching for the
  *   step machinery here would have been ceremony around a `while`.
  *   json_free_parse_record is still recursive over the SAME tree, so the error path with a reviver is only
- *   half-flattened; it is one of the remaining 17 and is named here rather than left to be rediscovered.
+ *   half-flattened; it is named here rather than left to be rediscovered.
+ *
+ *   CORRECTION, AND IT MATTERS MORE THAN THE DIFF: that entry said "nothing about JSON parsing suspends, so
+ *   there is no continuation to model — reaching for the step machinery would have been ceremony around a
+ *   while". THAT IS WRONG. A JSON.parse of a large document IS a long-running loop, and CLAUDE.md's scheduler
+ *   line admits no exception: every code flow at ANY depth suspends and resumes, never drives to completion.
+ *   The frame stack makes the parser non-recursive, which is the PREREQUISITE — a C-recursive parser cannot be
+ *   parked at all, because its state is on a stack the scheduler does not own — but it is not the goal. The
+ *   goal is that the parse state lives on a heap state the scheduler can PARK MID-PARSE and resume at the exact
+ *   point, with no re-parse. The same is owed to libregexp: its pattern parser AND its backtracking executor.
+ *   The claim was convenient, which is why it should have been suspicious: it licensed the smaller diff.
+ *
+ *   AND THE CHECKER WAS READING ONE FILE OUT OF FIFTEEN. Every number this ledger quoted from it — 19, 18, 17
+ *   cycles — was quickjs.c alone. Over the whole program it is 23 cycles across 74 functions, and the six it
+ *   could not see include libregexp's recursive-descent PATTERN parser (re_parse_disjunction /
+ *   re_parse_alternative / re_parse_term), whose depth `new RegExp("(".repeat(n))` chooses; re_parse_nested_class
+ *   and parse_class_string_disjunction; libunicode's lre_case_conv trio, to_nfd_rec and unicode_sequence_prop1.
+ *   A checker that silently covers a fraction of the program is WORSE THAN NONE, because its zero is believed —
+ *   so coverage is now a checked property: engine/check_recursion.sh compiles every unit engine/build.mjs
+ *   compiles, FAILS HARD on any it cannot, and passes the count; a mismatch is a reported failure before any
+ *   ceiling is even considered. Six units need engine/lexbor, which is not checked out here, so the driver
+ *   currently exits 1 rather than printing a number over a fraction. That is the correct behaviour.
  *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
