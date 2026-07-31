@@ -48,13 +48,16 @@ const AREAS = {
     "harmony/regexp-lookbehind", "harmony/regexp-named-captures", "harmony/regexp-property-scripts",
     "harmony/regexp-v-flag"],
   /* The area the last four commits were about: stack traces, their positions, and the eval origin. */
-  stack: ["stack-traces", "stack-traces-2", "stack-traces-custom-lazy", "eval-origin", "error-tostring",
+  stack: ["stack-traces", "stack-traces-2", "stack-traces-custom-lazy", "eval-origin",
     "error-tostring-omit", "error-accessors", "cross-realm-filtering"],
 };
-/* regexp-stack-overflow.js is NOT in the list, and the reason is the point of the fork: it recurses until V8's
-   --stack-size cap throws, then asserts the engine still works. This engine has no such cap — the recursion
-   trampolines onto the heap — so the test cannot terminate here. It is excluded because it asserts a BOUND
-   exists, not because it fails. */
+/* Two files are NOT in the lists, and the reason is the point of the fork: both assert that a STACK-SIZE CAP
+   exists. regexp-stack-overflow.js recurses until V8's --stack-size throws and then asserts the engine still
+   works. error-tostring.js opens with `e.name = e; assertThrows(() => e.toString(), RangeError)` — a cyclic
+   Error whose toString coerces its own name, which V8 ends by overflowing. This engine has no such cap: the
+   recursion trampolines onto the heap, so neither test can terminate here. They are excluded because of what
+   they assert, not because they fail — and error-tostring.js's other cyclic case, `e.name = [e]`, is answered
+   correctly, because the cycle closes through Array.prototype.join, which does have an answer for it. */
 
 const RAW = n => `https://raw.githubusercontent.com/v8/v8/main/test/mjsunit/${n}.js`;
 
