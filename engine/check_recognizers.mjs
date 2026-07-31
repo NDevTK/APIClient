@@ -1522,6 +1522,24 @@ if (extFromC !== 7) {
  *   post-order walk over an explicit stack now, and its allocation failure is a CHECK — a teardown that cannot
  *   allocate has no completion to fall back to.
  *
+ *   THE REGEXP CONVERSION, MAPPED BEFORE IT IS STARTED, because the JSON bug is exactly the trap it sets.
+ *   `new RegExp("(".repeat(100000) + "a" + ")".repeat(100000))` currently throws SyntaxError — libregexp has its
+ *   own depth guard, the same wrong-but-safe shape json_parse_value had. So flattening ONE of its cycles would
+ *   again turn a safe error into a crash. The checker names THREE, all in the pattern parser, and they must go
+ *   together:
+ *     re_parse_disjunction / re_parse_alternative / re_parse_term   (group nesting)
+ *     re_parse_class_set_operand / re_parse_nested_class            (class-set nesting)
+ *     get_class_atom / parse_class_string_disjunction               (\q{...} string disjunctions)
+ *   `[`-nesting already parses at 100k, so the class path is only partly guarded — which means the guard is not
+ *   uniform and the depths are not equivalent. lre_exec is NOT in the cycle list: the backtracking executor
+ *   already runs on an explicit stack, so execution is not part of this.
+ *   AND FLATTENING IS ONLY HALF OF WHAT IS OWED. Suspend/resume needs a second thing neither parser has: a step
+ *   code meaning "I have more work, preempt me if you want", plus a driver arm that can park a machine with NO
+ *   CALLEE and re-enter do_step_step on resume. Bytecode gets this from g_flow_control.preempt() at a back-edge
+ *   into do_preempt; a step machine has no equivalent, so today a JSON parse of any size still runs to
+ *   completion inside one opcode. The frame stacks are the substrate that makes that change small; they are not
+ *   the feature. Build the YIELD first, then convert the regexp parser's three cycles as one diff.
+ *
  *   CORRECTION, AND IT MATTERS MORE THAN THE DIFF: that entry said "nothing about JSON parsing suspends, so
  *   there is no continuation to model — reaching for the step machinery would have been ceremony around a
  *   while". THAT IS WRONG. A JSON.parse of a large document IS a long-running loop, and CLAUDE.md's scheduler
