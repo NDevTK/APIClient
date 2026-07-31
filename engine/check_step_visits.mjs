@@ -193,6 +193,10 @@ for (const m of src.matchAll(/step_(setprop|defidx)_run\s*\(([\s\S]{0,400}?)\)\s
       if (!sizes) continue;                     // allocated where this cannot see it: not reported
       const args = m[3].split(',');
       if (args.length < 4) continue;
+      /* the rule is about the ELEMENT COUNT, so it can only be checked when the element SIZE is a plain
+         sizeof(T). A flexible-array record is ONE element that states its extent in the size argument instead —
+         Iterator.concat's (iterator, method) pairs are that — and there is no count there to pair. */
+      if (!/^\s*sizeof\s*\([^()]*\)\s*$/.test(args[0])) continue;   // no nested parens: a lone sizeof, nothing added to it
       const cap = norm(args[args.length - 2]) || '1';
       if ([...sizes].some(e => e === cap)) continue;
       const line = src.slice(0, bounds[b] + m.index).split('\n').length;
