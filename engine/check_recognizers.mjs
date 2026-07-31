@@ -1540,6 +1540,24 @@ if (extFromC !== 7) {
  *   completion inside one opcode. The frame stacks are the substrate that makes that change small; they are not
  *   the feature. Build the YIELD first, then convert the regexp parser's three cycles as one diff.
  *
+ *   THE YIELD PRIMITIVE, DESIGNED — and the reason it is not a small diff, which was not obvious until looked at.
+ *   The shape is a step code meaning "I have more work": do_step_step consults g_flow_control.preempt(), and when
+ *   it says no the machine is simply re-entered (ret_val UNDEFINED, goto do_step_step), which costs one predicted
+ *   call at a back-edge. That half is trivial. The PARK is not.
+ *   A step machine reached through do_step_tramp lives in `cont_st`, an INTERPRETER LOCAL. It survives today's
+ *   suspensions only because a request pushes a frame for its CALLEE and the machine hangs off that frame's
+ *   cont_state — with no callee there is no frame, and do_preempt would lose it.
+ *   THE BODYLESS TrampFrame DOES NOT ALREADY SERVE. Every `b = NULL` frame in the file (async, generator,
+ *   async-generator drive) is bodyless because a COROUTINE owns its buffers through a func_state; not one of them
+ *   is a bare continuation whose resume re-enters a label. So the park needs a new frame kind, and its rebuild
+ *   arm has to be added to the same set of sites this session's owns_func use-after-free and the step-state
+ *   double-free lived in: the JS_FlowResume tramp_top walk, the exception unwind, clone_deep_flow, and the
+ *   teardown.
+ *   THE BETTER SHAPE, recorded because the special case is the tempting one: push that continuation frame in
+ *   do_step_tramp for EVERY machine rather than only on a yield. Then a machine is always frame-resident, YIELD
+ *   is just `goto do_preempt`, and there is no second way for a machine to be parked — which is the rule this
+ *   file applies to everything else. It is the larger diff and the correct one.
+ *
  *   THE ROPE CYCLES ARE MEASURED, NOT ASSUMED, AND THEY ARE NOT THE VECTOR. string_rope_get, hash_string_rope
  *   and js_rebalance_string_rope_rec were listed here as page-controlled depth on the reasoning that a rope's
  *   shape follows the page's concatenations. Measured: 500,000 left-nested AND right-nested concatenations, then
