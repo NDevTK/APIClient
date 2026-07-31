@@ -15,9 +15,11 @@ void    endpoint_suppress(int on);   /* 1 during a candidate/verify re-run: its 
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. */
 void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url);
 
-/* Serialize the @H surface directly to a malloc'd JSON string (caller frees) — findings are C data, so the
-   emit is C, never a JS-object round-trip. { "fetchCallSites":[ {"method":..,"url":..}, ... ] }. */
-char   *endpoint_json(void);
+/* The @H surface as a malloc'd JSON ARRAY (caller frees) — findings are C data, so the emit is C, never a
+   JS-object round-trip. `[ {"method":..,"url":..,"params":[..]}, ... ]`. It is an array and not a document
+   because the DOCUMENT is one thing the host reads once (result.h): a surface that wrapped itself could not
+   be composed with the others without a host-side splice, which is the host owning structure again. */
+char   *endpoint_json_array(void);
 
 int     endpoint_count(void);
 

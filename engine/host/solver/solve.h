@@ -22,8 +22,9 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg);
    REAL program (`rerun`), and record the first that FIRES as the replay-verified PoC. */
 void solve_verify(JSContext *ctx, char *const *bodies, int n);
 
-/* @S findings as JSON: { "securitySinks":[ {"sink":..,"source":..,"poc":..}, ... ] } (caller frees). */
-char *solve_json(void);
+/* The @S findings as a JSON ARRAY (caller frees): `[ {"sink":..,"source":..,"poc":..}, ... ]`. An array for
+   the same reason the @H surface is one — result.h owns the document. */
+char *solve_json_array(void);
 int   solve_count(void);
 
 #endif

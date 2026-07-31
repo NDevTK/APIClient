@@ -189,6 +189,11 @@ static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
     }
 }
 
+/* Context switches performed by the dispatch loop, for the result document (result.h). Cumulative for the
+   life of this engine — one wasm instance is one document, so that is the document's count. */
+static int g_switches = 0;
+int engine_switch_count(void) { return g_switches; }
+
 static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot its solver state, restore baseline */
     f->dec_blob = decide_suspend();
     f->pin_blob = concolic_pins_suspend();
@@ -265,6 +270,12 @@ static void run_scheduler(JSContext *ctx, char *const *bodies, int n, int forkin
             flow_switch_in(ctx, best);
             best->visits++;
             cur = best;
+            /* COUNTED, and it leaves in the result document. A scheduler that interleaves and one that runs
+               its flows FIFO produce the same endpoints on an easy page and diverge on every hard one, so
+               "does it actually switch" cannot be inferred from the findings — it has to be reported. The
+               host's WFQ reads it for exactly that. Cumulative across steps: the host wants the document's
+               total, not the last slice's. */
+            g_switches++;
         }
         flow_age_running(1);   /* this step burned CPU; flow_credit_emit resets it when the flow emits value */
         if (flow_step(ctx, cur, bodies, n)) { flow_finish(ctx, cur); cur = NULL; }

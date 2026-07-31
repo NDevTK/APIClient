@@ -25,6 +25,21 @@ static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
 static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; g_fired = 1; return JS_UNDEFINED; }
 
+/* THE FIRE. A sink executes attacker-shaped code — `eval(s)`, a `javascript:` navigation, an auto-firing event
+   handler in re-parsed HTML — and that code is the PAGE's, so it can hold a loop, an await, a recursion. Running
+   it with JS_Eval from C entered a bytecode body below the live candidate flow, where it cannot suspend: the
+   engine's own DFAIL named it a drive-to-completion, and the whole @S verification was built on one.
+   The sunk code is simply MORE CODE IN THIS FLOW — the same thing a lazy chunk is — so it is queued as another
+   program of the running flow and the ONE BFS runs it, preemptible and parkable like every other. The candidate
+   re-run drains its queue before finishing, so `g_fired` still answers by the time solve_verify reads it. */
+static void fire_js(const char *src, size_t len) {
+    char *body = malloc(len + 1);
+    CHECK(body, "solve: OOM queueing a fired PoC body");
+    memcpy(body, src, len); body[len] = 0;
+    engine_queue_script(body);
+    free(body);
+}
+
 void solve_init(JSContext *ctx) {
     g_pending = NULL; g_pending_n = g_pending_cap = 0;
     g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
@@ -81,8 +96,8 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
     if (g_verifying) {                          /* candidate run: the arg is the injected+wrapped CONCRETE code */
         if (concolic_is(arg)) return;           /* injection didn't reach this read -> not our candidate */
         const char *code = JS_ToCString(ctx, arg);
-        if (code) { JSValue r = JS_Eval(ctx, code, strlen(code), "<poc>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(ctx, r); JS_FreeCString(ctx, code); }
-        return;                                 /* g_fired now reflects whether the PoC executed */
+        if (code) { fire_js(code, strlen(code)); JS_FreeCString(ctx, code); }
+        return;                                 /* g_fired reflects the PoC once this flow drains its queue */
     }
     if (!concolic_is(arg)) return;              /* detection: not an attacker source -> not a sink */
     const char *shape = concolic_shape_c(arg);
@@ -101,7 +116,7 @@ static void html_fire_walk(JSContext *ctx, lxb_dom_node_t *node) {
             for (int h = 0; H[h]; h++) {
                 size_t vl = 0;
                 const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)H[h], strlen(H[h]), &vl);
-                if (v && vl) { JSValue r = JS_Eval(ctx, (const char *)v, vl, "<handler>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(ctx, r); }
+                if (v && vl) fire_js((const char *)v, vl);
             }
         }
         if (n->first_child) html_fire_walk(ctx, n->first_child);
@@ -123,7 +138,7 @@ static void url_fire(JSContext *ctx, const char *url) {
     while (*url == ' ' || *url == '\t' || *url == '\n') url++;   /* leading whitespace is ignored by the URL parser */
     if (!strncasecmp(url, "javascript:", 11)) {
         const char *js = url + 11;
-        JSValue r = JS_Eval(ctx, js, strlen(js), "<js-url>", JS_EVAL_TYPE_GLOBAL); JS_FreeValue(ctx, r);
+        fire_js(js, strlen(js));
     }
 }
 /* location = arg (or el.href = arg): a URL-context sink. */
@@ -189,9 +204,9 @@ static void buf_json_str(Buf *b, const char *s) {
         else { buf_ensure(b, 1); b->b[b->n++] = (char)c; } }
     buf_ensure(b, 1); b->b[b->n++] = '"';
 }
-char *solve_json(void) {
+char *solve_json_array(void) {
     Buf b = { 0 };
-    buf_puts(&b, "{\"securitySinks\":[");
+    buf_puts(&b, "[");
     for (int i = 0; i < g_sinks_n; i++) {
         if (i) buf_puts(&b, ",");
         buf_puts(&b, "{\"sink\":"); buf_json_str(&b, g_sinks[i].sink);
@@ -199,7 +214,7 @@ char *solve_json(void) {
         buf_puts(&b, ",\"poc\":"); buf_json_str(&b, g_sinks[i].poc);
         buf_puts(&b, "}");
     }
-    buf_puts(&b, "]}");
+    buf_puts(&b, "]");
     buf_ensure(&b, 1); b.b[b.n] = 0;
     return b.b;
 }

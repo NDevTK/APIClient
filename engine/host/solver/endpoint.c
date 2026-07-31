@@ -107,9 +107,9 @@ static void buf_json_str(Buf *b, const char *s) {
     }
     buf_ensure(b, 1); b->b[b->n++] = '"';
 }
-char *endpoint_json(void) {
+char *endpoint_json_array(void) {
     Buf b = { 0 };
-    buf_puts(&b, "{\"fetchCallSites\":[");
+    buf_puts(&b, "[");
     for (int i = 0; i < g_eps_n; i++) {
         Endpoint *e = &g_eps[i];
         if (i) buf_puts(&b, ",");
@@ -125,7 +125,7 @@ char *endpoint_json(void) {
         }
         buf_puts(&b, "]}");
     }
-    buf_puts(&b, "]}");
+    buf_puts(&b, "]");
     buf_ensure(&b, 1); b.b[b.n] = 0;
     return b.b;
 }

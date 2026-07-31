@@ -9,6 +9,7 @@
 #include "solver/cow.h"
 #include "core/loader/document_scripts.h"
 #include "solver/endpoint.h"
+#include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/dom_cow.h"   /* dom_attr_capture — the DOM write host-edge records into the per-flow DOM delta */
 #include <lexbor/html/html.h>
@@ -303,7 +304,7 @@ int main(void) {
     /* concolic VALUE propagation stays installed across BOTH scheduling and verification (taint must flow during
        verify too): `+` builds URL shapes, == / === forks on equality gates + concretizes-on-pin. The exploration
        hooks (branch/fork/preempt) are owned + scoped by the scheduler (engine_run), not installed here. */
-    static const JSConcolicHooks CONCOLIC = { .add = concolic_add_hook, .cmp = concolic_cmp_hook };
+    static const JSConcolicHooks CONCOLIC = { .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is };
     JS_SetConcolicHooks(&CONCOLIC);
 
     /* Browser layer: parse the document with the real Lexbor HTML parser, then extract its executable inline
@@ -319,8 +320,11 @@ int main(void) {
     doc_scripts_free(&scripts);
     lxb_html_document_destroy(dom);
 
-    /* emit the deduped @H surface — serialized DIRECTLY from the C findings (no JS-object round-trip) */
-    char *js = endpoint_json();
+    /* ONE result document — both surfaces and the scheduler's interleave count, serialized DIRECTLY from the
+       C findings (no JS-object round-trip). The host does one JSON.parse of this line and relays it; it used
+       to be two lines here, which meant whoever consumed them assembled the document, and assembling is
+       structure. The assertions below read the same string, so they cover the composed shape. */
+    char *js = result_json();
     printf("@RESULT %s\n", js);
 
     int has_uid_param = strstr(js, "\"/api/u\"") && strstr(js, "\"uid\"") && strstr(js, "{state}.id");
@@ -454,9 +458,9 @@ int main(void) {
     printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d mapmutfork=%d afsfork=%d paffork=%d paf2fork=%d redfork=%d gcallfork=%d gapplyfork=%d grefapplyfork=%d)\n",
            h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt, mapmutfork_tt, afsfork_tt, paffork_tt, paf2fork_tt, redfork_tt, gcallfork_tt, gapplyfork_tt, grefapplyfork_tt);
 
-    /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified */
-    char *ss = solve_json();
-    printf("@SEC %s\n", ss);
+    /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
+       ONE document above — there is no second line to keep in step with it. */
+    const char *ss = js;
     /* @S JS: single-quote-context breakout fire-verified. @S HTML: innerHTML sink fire-verified via Lexbor re-parse. */
     int s_eval = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "';X9();//");
     int s_html = strstr(ss, "\"sink\":\"innerHTML\"") && strstr(ss, "{state}.html") && strstr(ss, "<svg onload=X9()>");
@@ -467,7 +471,6 @@ int main(void) {
         ? "PASS: @H merge AND @S eval + innerHTML + location — 3 sink contexts, all SEARCHED + fire-verified"
         : "FAIL: @H or @S incorrect");
 
-    free(ss);
     free(js);
     solve_free();
     endpoint_free();

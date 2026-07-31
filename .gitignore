@@ -28,3 +28,8 @@ engine/.recursion-ir/
 # directory is ignored, so it stays true.
 engine/.work/v8regexp/
 engine/.work/v8mjsunit/
+# lexbor fetched + compiled locally to build the new-world engine natively (the cached liblexbor.o is a WASM
+# object, and emcc is not always present). Regenerable; never committed.
+engine/.work/lexbor-src/
+engine/.work/lxnat/
+engine/.work/lxlist

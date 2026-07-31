@@ -39,4 +39,9 @@ void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst val
    onto the new sibling's COW delta (so the shared generator object resolves per-flow). */
 void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
 
+/* How many times the dispatch loop CONTEXT-SWITCHED between flows. The result document reports it because the
+   findings cannot: an interleaving scheduler and a FIFO one agree on an easy page and disagree on every hard
+   one, so the interleave has to be observable on its own. */
+int  engine_switch_count(void);
+
 #endif
