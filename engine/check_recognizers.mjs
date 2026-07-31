@@ -1540,6 +1540,18 @@ if (extFromC !== 7) {
  *   completion inside one opcode. The frame stacks are the substrate that makes that change small; they are not
  *   the feature. Build the YIELD first, then convert the regexp parser's three cycles as one diff.
  *
+ *   THE ROPE CYCLES ARE MEASURED, NOT ASSUMED, AND THEY ARE NOT THE VECTOR. string_rope_get, hash_string_rope
+ *   and js_rebalance_string_rope_rec were listed here as page-controlled depth on the reasoning that a rope's
+ *   shape follows the page's concatenations. Measured: 500,000 left-nested AND right-nested concatenations, then
+ *   charAt at both ends, .length, and use as a property key — all four walks return, none overflows. Rebalancing
+ *   keeps the depth manageable, so these three rank BELOW the parser cycles rather than beside them. Probing
+ *   before converting is the rule the JSON segfault paid for; it cuts both ways, and here it says do not spend
+ *   the diff.
+ *   WHAT REMAINS PAGE-CONTROLLED AND UNMEASURED: the bytecode reader/writer object walks (11 and 9 functions,
+ *   reachable only through JS_ReadObject on qjsc output, so not page-reachable in the browser fork) and the four
+ *   module-graph walks. The recursive-descent SOURCE parser (28) is the largest and is page-controlled through
+ *   nesting depth in eval'd text.
+ *
  *   CORRECTION, AND IT MATTERS MORE THAN THE DIFF: that entry said "nothing about JSON parsing suspends, so
  *   there is no continuation to model — reaching for the step machinery would have been ceremony around a
  *   while". THAT IS WRONG. A JSON.parse of a large document IS a long-running loop, and CLAUDE.md's scheduler
