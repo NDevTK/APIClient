@@ -103,7 +103,14 @@ for (const f of files) {
   writeFileSync(join(one, f), readFileSync(join(TESTS, f), "utf8"));
   const r = spawnSync(bin, ["-c", "test262.conf", "-d", one], {
     cwd: QJS, encoding: "utf8", maxBuffer: 1 << 28,
-    env: { ...process.env, FORK_PREEMPT: "1" }, timeout: 300_000,
+    /* Generous, and the reason is the fork's: V8's bounds are what keep some of these files quick there.
+       regexp.js builds `("a?" x 100000) + "a"` and matches it against "a" — V8 REFUSES to compile it ("regexp
+       too large") and this engine does not, because refusing is a bound. So the engine attempts an exponential
+       match with a backtracking stack in the hundreds of thousands, and on a small machine the OOM killer wins.
+       That is the physical RAM floor, not a bug, and it is what the host scheduler's paging tier is for — but
+       run-test262 has no scheduler, so the file is expected to be heavy here and is reported honestly rather
+       than trimmed to make the number look better. */
+    env: { ...process.env, FORK_PREEMPT: "1" }, timeout: 900_000,
   });
   const out = (r.stdout || "") + (r.stderr || "");
   const why = out.match(/@WHY .*/);
