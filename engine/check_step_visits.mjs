@@ -24,9 +24,12 @@
  * then freed NOTHING, and the whole corpus leaked 41,820 objects while reporting zero errors. tramp_step_visit_free
  * now DCHECKs the declaration so that state aborts instead of leaking; this check is why it never has to.
  *
- * What this does NOT check, stated so it is not mistaken for more than it is: a machine that carries NO
- * declaration and whose teardown does not read one is not an error here. That is the state every machine starts
- * in, and it already fails loudly and precisely — at the fork, with a DCHECK naming the machine.
+ * And a FOURTH, which only became assertable when the last machine was converted: EVERY definition declares
+ * one. While the series was in flight "no declaration" was the state a machine started in, and the fork's own
+ * DCHECK was the right place to catch it; now that all 131 state structs carry one, letting the next machine
+ * start undeclared is letting the ratchet slip. A machine that cannot be forked cannot be explored, and a
+ * solver whose flows silently stop forking inside a builtin is the failure this whole series exists to remove.
+ * The fork's DCHECK stays as the backstop for a state the build can no longer produce.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -70,12 +73,13 @@ let checked = 0, bad = 0;
 for (const d of defs(src)) {
   const visit = d.body.match(/\.visit\s*=\s*(\w+)/);
   if (!visit) {
-    if (readsDecl.has(d.fini)) {
-      console.error(`[step-visits] a ${d.struct} definition declares no ownership, but ${d.fini} releases ` +
-                    `through the declaration — that teardown frees NOTHING and every field the machine owns leaks`);
-      bad++;
-    }
-    continue;                                  // undeclared with its own teardown: the fork's DCHECK owns that case
+    console.error(readsDecl.has(d.fini)
+      ? `[step-visits] a ${d.struct} definition declares no ownership, but ${d.fini} releases through the ` +
+        `declaration — that teardown frees NOTHING and every field the machine owns leaks`
+      : `[step-visits] a ${d.struct} definition declares no ownership — it cannot be forked, so a concolic ` +
+        `branch inside it aborts the fork instead of exploring both arms`);
+    bad++;
+    continue;
   }
   checked++;
   if (!byStruct.has(d.struct)) byStruct.set(d.struct, new Set());
