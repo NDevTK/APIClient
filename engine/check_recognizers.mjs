@@ -1445,6 +1445,31 @@ if (extFromC !== 7) {
  *   green because the failure only shows where the boolean is consumed. When a conversion changes what a
  *   function RETURNS on a path, read every caller's use of that return before running anything.
  *
+ *   A TYPED-ARRAY ELEMENT WRITE REACHED THROUGH THE PROTOTYPE CHAIN (TypedArrayConstructors 1 -> 0).
+ *   ta_atom_write_needs_toprim looked only at the IMMEDIATE object, but 10.1.9.2 step 3 forwards a [[Set]] to
+ *   the PARENT — so `Reflect.set(Object.create(ta), 100, v, ta)` put the typed array one hop up and its
+ *   ToNumber of V ran inside JS_SetPropertyInternal2 from C. tramp_proto_typed_array is the fourth walker beside
+ *   the proxy and the two accessor ones, with the same stopping rule.
+ *   THE PREDICATE NOW ANSWERS WITH THE OBJECT, not a boolean, and that is the part worth keeping: the
+ *   coercion's re-issue has to target the typed array the spec's step i names, because re-issuing against the
+ *   object the request started from would run step i with the wrong receiver, fail SameValue and SILENTLY SKIP
+ *   THE STORE — a bug the failing test could not have shown, since it only counts valueOf calls. A predicate
+ *   that resolves something should hand back what it resolved.
+ *   `forwards` distinguishes [[Set]] from [[DefineOwnProperty]], which is never forwarded and must keep looking
+ *   at the immediate object only.
+ *
+ *   REGEXP.PROTOTYPE.COMPILE (annexB 2 -> 0). RegExpInitialize coerces BOTH arguments — `? ToString(pattern)`
+ *   then `? ToString(flags)` — and the C body ran the first with JS_ToString and the second inside
+ *   js_compile_regexp's JS_ToCStringLen. Two step_tostring_run stages; the receiver is RE-VALIDATED after them,
+ *   because a `toString` is the page's code and the object it was handed may no longer have the slots.
+ *
+ *   THE LAST THREE ARE ONE SITE, NAMED SO THE NEXT ATTEMPT STARTS FROM IT: GetSubstitution's `$<name>` path.
+ *   js_string___GetSubstitution runs `Get(namedCaptures, groupName)` and the `? ToString(capture)` that follows
+ *   from C (through string_buffer_concat_value_free), so a named-group object with an ACCESSOR, or a capture
+ *   whose toString loops, has no flow base. RegExp/prototype/Symbol.replace is where the count lives; the
+ *   NUMBERED captures are already coerced as a stage in js_re_rep_step, so this is the one branch of that
+ *   walk left in C, and it is shared with String.prototype.replace's non-callable form.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
