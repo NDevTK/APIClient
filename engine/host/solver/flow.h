@@ -52,6 +52,12 @@ typedef struct Flow {
                                           after its scripts under its live COW (correct ordering, per-flow isolated) */
     FlowPending *pending; int npend, pendcap;   /* FETCH-AWAIT: this flow's OWN live (pending) fetches, resolved when
                                                    the flow's scripts+microtasks stall (the network completing). */
+    /* THE PARKED CONTINUATION, swapped with everything else on a context switch. A forced preempt inside
+       job-driven code parks an async activation in the RUNTIME's one slot; that activation belongs to THIS
+       flow's timeline and resumes under THIS flow's delta, so leaving it in the runtime while a sibling runs
+       would either resume it against the wrong heap or drop it outright. Empty (park_fn NULL) for a flow with
+       nothing parked, which is every flow that has not preempted inside a reaction. */
+    void *park_ctx; void *park_fn; void *park_opaque;
 } Flow;
 
 void  flow_registry_init(void);

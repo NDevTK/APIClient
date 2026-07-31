@@ -158,6 +158,12 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
 
 static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
     for (;;) {
+        /* THE PARKED CONTINUATION OUTRANKS EVERYTHING ELSE THIS FLOW COULD DO — that is the park's whole
+           contract: a forced preempt must be transparent to observable ordering, so the flow resumes BEFORE any
+           job it has queued. Yielding after one resume keeps the scheduler in charge of fairness; the park (if
+           it parks again immediately) rides the switch-out with the flow. Without this the solver host never
+           pumped the slot at all: the continuation sat there until a second flow parked and asserted. */
+        if (JS_ResumeParkedFlow(JS_GetRuntime(ctx))) return 0;
         if (!f->frame) {
             const char *body;
             if (f->script_i < n) body = bodies[f->script_i];
@@ -196,6 +202,14 @@ static int g_switches = 0;
 int engine_switch_count(void) { return g_switches; }
 
 static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot its solver state, restore baseline */
+    /* the PARKED CONTINUATION travels with the flow, for the reason the delta does: it resumes a suspended
+       async activation of THIS flow, under THIS flow's heap. Left in the runtime it would be resumed by
+       whichever flow the scheduler picked next — against the wrong delta — or, if that flow parked too, hit
+       JS_ParkFlow's one-slot assertion, which is exactly what the smoke test was aborting on. */
+    { JSContext *pc; JSFlowParkFn *pf; void *po;
+      if (JS_TakeParkedFlow(JS_GetRuntime(ctx), &pc, &pf, &po)) {
+          f->park_ctx = pc; f->park_fn = (void *)pf; f->park_opaque = po;
+      } }
     f->dec_blob = decide_suspend();
     f->pin_blob = concolic_pins_suspend();
     cow_unapply(ctx, (CowDelta *)f->delta);
@@ -207,6 +221,8 @@ static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot it
 }
 
 static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply its delta + solver state */
+    JS_PutParkedFlow(JS_GetRuntime(ctx), (JSContext *)f->park_ctx, (JSFlowParkFn *)f->park_fn, f->park_opaque);
+    f->park_ctx = NULL; f->park_fn = NULL; f->park_opaque = NULL;
     if (!f->delta) f->delta = cow_delta_new();
     cow_set_current((CowDelta *)f->delta);
     cow_apply(ctx, (CowDelta *)f->delta);
@@ -222,6 +238,11 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
 }
 
 static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */
+    /* "all scripts, chunks, jobs and fetches are done" cannot be true with a continuation still parked — the
+       loop above resumes one before it can answer that. Asserting it here is what keeps the park inside the
+       no-work-item-is-ever-dropped rule rather than merely intending to. */
+    DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->park_fn == NULL,
+           "a flow finished with a continuation still parked — that flow's async activation is dropped");
     decide_leave(ctx);
     cow_unapply(ctx, (CowDelta *)f->delta); cow_set_current(NULL);
     cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;
