@@ -1495,6 +1495,17 @@ if (extFromC !== 7) {
  *   assigned to it was an incompatible-function-pointer initialisation. Four prechecks were also non-const. The
  *   ABI matched, so nothing had ever failed; a file-scope forward declaration and four `const`s fix it.
  *
+ *   AND ITS FIRST CYCLE IS FLATTENED — IsArray (19 cycles -> 18, 65 functions -> 63). 7.2.2 step 3.c is
+ *   `Return ? IsArray(proxyTarget)`: TAIL recursion, so it is a WALK, and js_is_array / js_proxy_isArray ran it
+ *   as C recursion with ONE FRAME PER PROXY HOP and the depth chosen by the page. What stood in for an answer
+ *   was a js_check_stack_overflow that threw RangeError — a BOUND in an error's clothes, for a question the
+ *   spec always answers. A 200k-deep `new Proxy(new Proxy(...))` over an array reported
+ *   "Maximum call stack size exceeded"; it now reports true, and a revoked proxy anywhere on the chain still
+ *   gives step 3.a's TypeError. js_proxy_isArray is deleted: it existed only to be the other half of the cycle.
+ *   NO TEST HAD EVER FAILED. The corpus does not build a chain that deep and never would have; the checker
+ *   named the two-function cycle and the fixture was written FROM the cycle, not from a failure. That is the
+ *   argument for the tool in one line — a dynamic counter can only report what someone thought to execute.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That

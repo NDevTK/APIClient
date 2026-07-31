@@ -97,8 +97,8 @@ const own = sccs.filter((_, i) => i !== MAIN)
 const ownFuncs = own.reduce((n, c) => n + c.length, 0)
 
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
-const CEILING_OWN = 19       /* self-contained recursions */
-const CEILING_OWN_FUNCS = 65 /* functions in them */
+const CEILING_OWN = 18       /* self-contained recursions */
+const CEILING_OWN_FUNCS = 63 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
