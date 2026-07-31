@@ -6,6 +6,7 @@
 #include "solver/cow.h"
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "check.h"
+#include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -254,14 +255,48 @@ static const JSFlowControlHooks FC_EXPLORE = { .branch = solver_decide, .fork = 
 static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook };   /* candidate re-fire: no fork, still preemptible */
 static const JSFlowControlHooks FC_OFF     = { 0 };
 
-static void run_scheduler(JSContext *ctx, char *const *bodies, int n, int forking) {
+/* The quantum's wall clock. CLOCK_MONOTONIC, because the slice is about elapsed thread time and a wall-clock
+   adjustment must not shorten or extend it. */
+static int64_t engine_now_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+/* THE SESSION. The dispatch loop is not a function that drains — it is a state machine its HOST steps, because
+   the cooperative-quantum yield in CLAUDE.md's §scheduler is exactly that: after a bounded wall-clock slice the
+   scheduler RETURNS so the one thread pumps its message port, streams findings, interleaves other documents,
+   and then resumes the byte-identical frontier. A `for(;;)` that runs to exhaustion cannot do any of it, and in
+   the extension it freezes the worker outright. The state that used to be the loop's C locals lives here so a
+   return between two iterations costs nothing to resume from. */
+static JSContext *g_sess_ctx;
+static char *const *g_sess_bodies;
+static int g_sess_n;
+static Flow *g_sess_cur;
+static int g_sess_live;
+
+void engine_sched_begin(JSContext *ctx, char *const *bodies, int n, int forking) {
+    DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
+    g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
     g_dom_capture = 1;                       /* record DOM writes into the running flow's delta (twin of FlowLocalMark) */
     JS_SetFlowControlHooks(forking ? &FC_EXPLORE : &FC_VERIFY);   /* preempt ALWAYS on; fork only when exploring */
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
-    Flow *cur = NULL;
+}
+
+/* One QUANTUM. Returns ENGINE_STEP_DONE when the frontier is empty (the session is closed and its hooks are
+   uninstalled) and ENGINE_STEP_YIELD when the slice expired with the frontier intact. The slice is wall-clock
+   and it is NOT a cap: nothing is dropped, starved, reordered or forgotten across it — the next call resumes the
+   same top flow on the same frontier, which is the razor §scheduler states. */
+int engine_sched_step(void) {
+    JSContext *ctx = g_sess_ctx;
+    char *const *bodies = g_sess_bodies;
+    int n = g_sess_n;
+    Flow *cur = g_sess_cur;
+    int64_t deadline = engine_now_ms() + ENGINE_QUANTUM_MS;
+    DCHECK(g_sess_live, "engine_sched_step with no live session");
     for (;;) {
         Flow *best = flow_best();           /* WFQ: highest value-of-information — a fresh fork (UCB) can preempt */
         if (!best) break;
@@ -279,7 +314,12 @@ static void run_scheduler(JSContext *ctx, char *const *bodies, int n, int forkin
         }
         flow_age_running(1);   /* this step burned CPU; flow_credit_emit resets it when the flow emits value */
         if (flow_step(ctx, cur, bodies, n)) { flow_finish(ctx, cur); cur = NULL; }
+        if (engine_now_ms() >= deadline) {   /* THREAD-SHARING, not value: hand the thread back, keep the frontier */
+            g_sess_cur = cur;
+            return ENGINE_STEP_YIELD;
+        }
     }
+    g_sess_cur = cur;
     /* ASYNC-AS-FLOW forcing function: every flow has run to completion, so NO microtask/promise reaction may
        still be queued. If one is, the scheduler DROPPED it — the not-yet-built async-as-flow capability (a
        reaction must become a first-class scheduler flow carrying the queuing flow's COW, which needs a fork
@@ -290,6 +330,17 @@ static void run_scheduler(JSContext *ctx, char *const *bodies, int n, int forkin
     JS_SetFlowControlHooks(&FC_OFF);
     JS_SetFlowLocalMark(0);
     g_dom_capture = 0;
+    g_sess_live = 0;
+    return ENGINE_STEP_DONE;
+}
+
+/* A host that has nothing else to do between quanta — the node smoke test — drives the SAME steps in a loop.
+   That is a HOST's loop over the one scheduler, not a second scheduler: the state machine is unchanged and a
+   quantum boundary is invisible to it. */
+static void run_scheduler(JSContext *ctx, char *const *bodies, int n, int forking) {
+    engine_sched_begin(ctx, bodies, n, forking);
+    while (engine_sched_step() != ENGINE_STEP_DONE)
+        ;
 }
 
 /* EXPLORE: seed boot + drain the frontier, forking at every concolic branch. */

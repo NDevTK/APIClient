@@ -29,6 +29,18 @@ void engine_prepare_fork(void *dec_blob, void *pin_blob);
    per-flow COW delta, and drain the frontier by WFQ order. */
 void engine_run(JSContext *ctx, char *const *bodies, int n);
 
+/* THE SESSION — the same dispatch loop, stepped by its HOST instead of drained. The extension's host has other
+   work between quanta (its message port, other documents' engines, streaming findings), and CLAUDE.md's
+   cooperative-quantum yield says the scheduler RETURNS for exactly that and then resumes the byte-identical
+   frontier. engine_run is a host with nothing else to do, so it is these two in a loop — one scheduler either
+   way. ENGINE_STEP_YIELD leaves the session live and every flow where it was; ENGINE_STEP_DONE means the
+   frontier is empty and the session's hooks are uninstalled. */
+#define ENGINE_STEP_DONE   0
+#define ENGINE_STEP_YIELD  2   /* the value the extension bridge's qjs_step already speaks */
+#define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it */
+void engine_sched_begin(JSContext *ctx, char *const *bodies, int n, int forking);
+int  engine_sched_step(void);
+
 /* FETCH-AWAIT: a host fetch that returns a PENDING promise registers its resolve capability + the value it will
    deliver. A flow that awaits it parks; when the frontier stalls, engine_run resolves these and un-parks (the
    network completing). Called from a live-fetch host-edge that models an asynchronous GET. */
