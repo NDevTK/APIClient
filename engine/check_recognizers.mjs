@@ -1514,8 +1514,13 @@ if (extFromC !== 7) {
  *   IT IS A FRAME STACK, NOT A STEP MACHINE, and the difference matters: nothing about JSON parsing suspends, so
  *   there is no continuation to model — the descent simply IS a stack and is written as one. Reaching for the
  *   step machinery here would have been ceremony around a `while`.
- *   json_free_parse_record is still recursive over the SAME tree, so the error path with a reviver is only
- *   half-flattened; it is named here rather than left to be rediscovered.
+ *   AND FLATTENING ONLY THE PARSER SHIPPED A SEGFAULT. json_free_parse_record walks the SAME tree at the SAME
+ *   page-controlled depth, so once the parser accepted 200k levels the teardown crashed freeing them — where
+ *   before, the parser's stack-overflow guard had rejected the input early. A half-conversion turned
+ *   wrong-but-safe into a crash, and it was recorded as a known remainder in a commit message instead of being
+ *   treated as what it was: the other half of the same recursion. BOTH HALVES OR NEITHER. The teardown is a
+ *   post-order walk over an explicit stack now, and its allocation failure is a CHECK — a teardown that cannot
+ *   allocate has no completion to fall back to.
  *
  *   CORRECTION, AND IT MATTERS MORE THAN THE DIFF: that entry said "nothing about JSON parsing suspends, so
  *   there is no continuation to model — reaching for the step machinery would have been ceremony around a
