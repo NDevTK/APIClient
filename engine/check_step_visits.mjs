@@ -97,5 +97,21 @@ for (const [visit, structs] of byVisit)
     bad++;
   }
 
+/* A KEYED WRITE'S VALUE IS BORROWED. step_setprop_run and step_defidx_run place (obj, value) in the header's
+ * request buffer and take NO reference to either — the machine holds them in its own slots across the
+ * suspension, which is what makes the teardown's list complete. A caller that hands one a `js_dup(...)` creates
+ * a reference nobody frees, and because the value is normally reachable from the page's graph, that one leaked
+ * reference pins the whole runtime: RegExp.prototype[Symbol.search] restoring an OBJECT-valued lastIndex leaked
+ * 383 objects per test file, and reported nothing else wrong. C cannot object — js_dup returns a JSValue and
+ * the parameter is a JSValueConst — so the pairing is asserted here, exactly like the two above.
+ * A NON-refcounted immediate (js_int32/js_int64/js_uint32/JS_UNDEFINED) is not a reference and is fine. */
+for (const m of src.matchAll(/step_(setprop|defidx)_run\s*\(([\s\S]{0,400}?)\)\s*;/g)) {
+  if (!/js_dup\s*\(/.test(m[2])) continue;
+  const line = src.slice(0, m.index).split('\n').length;
+  console.error(`[step-visits] quickjs.c:${line}: step_${m[1]}_run is handed a js_dup — a keyed write's value ` +
+                `is BORROWED, so that reference is leaked and pins everything it reaches`);
+  bad++;
+}
+
 if (bad) process.exit(1);
 console.log(`[step-visits] ${checked} declarations, each paired with exactly one state struct`);
