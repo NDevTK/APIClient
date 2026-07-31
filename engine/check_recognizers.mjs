@@ -1506,6 +1506,17 @@ if (extFromC !== 7) {
  *   named the two-function cycle and the fixture was written FROM the cycle, not from a failure. That is the
  *   argument for the tool in one line — a dynamic counter can only report what someone thought to execute.
  *
+ *   SECOND CYCLE: JSON's value grammar (18 -> 17 cycles, 63 -> 62 functions). json_parse_value descended one C
+ *   frame per nesting level with the depth chosen by the INPUT, and its js_check_stack_overflow turned that into
+ *   a RangeError — the same bound-in-an-error's-clothes IsArray had, for a grammar that has an answer at every
+ *   depth. `JSON.parse("[".repeat(200000) + "1" + "]".repeat(200000))` threw; it parses now, and so does the
+ *   object spelling, the reviver's per-level parse record, and a SyntaxError buried 200k deep.
+ *   IT IS A FRAME STACK, NOT A STEP MACHINE, and the difference matters: nothing about JSON parsing suspends, so
+ *   there is no continuation to model — the descent simply IS a stack and is written as one. Reaching for the
+ *   step machinery here would have been ceremony around a `while`.
+ *   json_free_parse_record is still recursive over the SAME tree, so the error path with a reviver is only
+ *   half-flattened; it is one of the remaining 17 and is named here rather than left to be rediscovered.
+ *
  *   BUILT NEXT, AND THE CAPABILITY MATTERED MORE THAN THE COUNT: `catches_abrupt` on a CALL request.
  *   It existed only for a GETPROP (one arm, at the property-read unwind), so an algorithm that CATCHES a call's
  *   throw had no way to be a step machine at all — the machine was torn down before its step could see it. That
