@@ -6,6 +6,7 @@
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static void *decide_fork_blob(int cursor, int arm);   /* the sibling's hot decision state (defined below) */
 
@@ -79,6 +80,21 @@ static void *decide_fork_blob(int cursor, int arm) {
     return b;
 }
 
+/* THE PREDICATE'S IDENTITY, which is what the flow's constraint is keyed by. A bare truthiness test is about
+   the SOURCE, so the source path is the whole key; a comparison is about a source AND what it was compared
+   against, so `x === "a"` and `x === "b"` must stay independent facts. The separator is a control character no
+   field path contains, so the two key spaces cannot collide. Returns 0 when the condition has no source
+   identity to constrain — uncertainty, which keeps both arms. */
+static int decide_key(JSValueConst cond, char *buf, size_t n) {
+    const char *src = NULL, *tok = NULL;
+    int op = concolic_cmp(cond, &src, &tok);
+    if (!src) src = concolic_src_c(cond);
+    if (!src) return 0;
+    if (op == OPCMP_NONE) snprintf(buf, n, "%s", src);
+    else snprintf(buf, n, "%s\x01%d\x01%s", src, op, tok ? tok : "");
+    return 1;
+}
+
 int solver_decide(JSContext *ctx, JSValueConst cond) {
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
@@ -87,16 +103,41 @@ int solver_decide(JSContext *ctx, JSValueConst cond) {
     const char *src = NULL, *tok = NULL;
     int op = concolic_cmp(cond, &src, &tok);
 
+    char key[256];
+    int keyed = decide_key(cond, key, sizeof key);
+
     int arm, forked = 0;
     if (g_c < g_dec_n) {                 /* REPLAY: this run is re-reaching a recorded decision — take that arm */
         arm = g_dec[g_c] ? 1 : 0;
         g_c++;
+    } else if (keyed && concolic_branch_decided(key) >= 0) {
+        /* FEASIBLE REFINEMENT. This flow has already decided this exact predicate, so the other arm is
+           CONTRADICTED: same unknown input, same test, one answer. Forking it again would add a flow that
+           explores nothing and still carries a COW delta, and a bundle testing one flag in twenty places would
+           cost a million of them.
+           It is checked HERE and not earlier, which is the whole of its correctness. A branch with a RECORDED
+           decision owns a slot in the vector — it was a real fork when it was first taken — and answering it
+           from the constraint instead would leave the cursor behind, so the NEXT branch would read that slot as
+           its own answer. That is exactly what it did: the false-arm sibling of `cfg.admin` replayed the admin
+           decision as its `state.beta` decision and one of the four combinations vanished. A constraint decides
+           only a branch that would OTHERWISE BE A NEW FORK, and it consumes no slot precisely because it adds
+           no decision — it is a consequence of the ones already recorded, and it re-derives identically on
+           every resume from the constraint that rides the flow beside that vector. */
+        arm = concolic_branch_decided(key);
     } else {
         /* NEW decision -> FRAME-SNAPSHOT FORK: prepare the FALSE sibling's hot state (its decision vector +
-           the current pins), and signal the interpreter (0x100 bit) to CLONE this frame at the branch. The
+           the current constraint), and signal the interpreter (0x100 bit) to CLONE this frame at the branch. The
            sibling resumes AT the branch and replays FALSE — it does NOT re-run from the start. This flow takes
            TRUE. No re-run vector, no fallback. */
-        engine_prepare_fork(decide_fork_blob(g_c, 0), concolic_pins_suspend());
+        void *dblob = decide_fork_blob(g_c, 0);
+        /* the sibling's constraint must already say FALSE when its snapshot is taken — it is the arm the
+           sibling IS, so a later test of the same predicate over there is decided too. Recorded, snapshotted,
+           then overwritten with this flow's arm; the two orders are one statement apart and getting them
+           backwards hands the sibling this flow's answer. */
+        if (keyed) concolic_constrain_branch(key, 0);
+        void *pblob = concolic_pins_suspend();
+        if (keyed) concolic_constrain_branch(key, 1);
+        engine_prepare_fork(dblob, pblob);
         dec_ensure(g_c + 1);
         g_dec[g_c] = 1;                  /* this flow: TRUE arm */
         g_dec_n = g_c + 1;
@@ -104,6 +145,9 @@ int solver_decide(JSContext *ctx, JSValueConst cond) {
         arm = 1;
         forked = 1;
     }
+    if (keyed && !forked) concolic_constrain_branch(key, arm);   /* a REPLAYED arm narrows this flow just the same */
+    DCHECK(g_c <= g_dec_n, "the decision cursor ran past the vector — a branch answered without consuming its "
+                           "recorded slot, so the next one will read that slot as its own");
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))

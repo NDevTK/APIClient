@@ -15,40 +15,78 @@ typedef struct {
     char *cmp_tok;      /* the concrete side of the comparison */
 } Concolic;
 
-/* per-flow PIN map: an EQ gate pins a source to a concrete value on its true arm, so later reads compute the
-   REAL @H value (`/api/admin`, not `/api/{state}.role`). Cleared per flow by the scheduler. */
-typedef struct { char *src; char *val; } Pin;
-static Pin *g_pins = NULL; static int g_pins_n = 0, g_pins_cap = 0;
-void concolic_pin(const char *src, const char *val) {
-    for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].src, src)) { free(g_pins[i].val); g_pins[i].val = strdup(val); return; }
-    if (g_pins_n >= g_pins_cap) { g_pins_cap = g_pins_cap ? g_pins_cap * 2 : 8; g_pins = realloc(g_pins, (size_t)g_pins_cap * sizeof(Pin)); CHECK(g_pins, "concolic: OOM pins"); }
-    g_pins[g_pins_n].src = strdup(src); g_pins[g_pins_n].val = strdup(val); g_pins_n++;
+/* THE PER-FLOW PATH CONSTRAINT. One map, keyed by SOURCE IDENTITY, carrying every fact this flow has learned
+   about the unknown input it read — which is the whole of what a DART/SAGE-lineage constraint is here, because
+   concrete execution grounds all shared and interprocedural state and only the INPUT variables are ever
+   symbolic. Two facts, because two things narrow a domain:
+     val   — an EQ gate PINNED the source to a concrete value on its true arm, so later reads compute the REAL
+              @H value (`/api/admin`, never `/api/{state}.role`). CONCRETIZE-ON-PIN.
+     truth — a PREDICATE over this source was already decided in this flow. `if (cfg.admin)` is not an equality
+              and pins nothing, yet taking its true arm still says the value is truthy FOR THIS FLOW — and a
+              bundle branches on the same flag over and over. Without this every one of those branches forked
+              again, so N tests of one flag cost 2^N flows and the frontier is exponential in a quantity that
+              carries no information: the sibling arms are CONTRADICTED, they explore nothing, and each still
+              drags a COW delta. Deciding them is feasible-refinement, the thing that makes forced multi-path
+              execution tractable, and it is sound-only — it prunes a branch on the SAME predicate the flow has
+              already fixed, never one whose domain still permits both outcomes.
+   Both are per-flow and travel together, which is why they are ONE entry rather than two maps that a fork,
+   a suspend and a resume would each have to remember to carry. */
+typedef struct { char *key; char *val; signed char truth; } Cons;
+static Cons *g_pins = NULL; static int g_pins_n = 0, g_pins_cap = 0;
+static Cons *cons_entry(const char *key) {
+    for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].key, key)) return &g_pins[i];
+    if (g_pins_n >= g_pins_cap) { g_pins_cap = g_pins_cap ? g_pins_cap * 2 : 8; g_pins = realloc(g_pins, (size_t)g_pins_cap * sizeof(Cons)); CHECK(g_pins, "concolic: OOM path constraint"); }
+    g_pins[g_pins_n].key = strdup(key); CHECK(g_pins[g_pins_n].key, "concolic: OOM constraint key");
+    g_pins[g_pins_n].val = NULL; g_pins[g_pins_n].truth = -1;
+    return &g_pins[g_pins_n++];
 }
-void concolic_clear_pins(void) { for (int i = 0; i < g_pins_n; i++) { free(g_pins[i].src); free(g_pins[i].val); } g_pins_n = 0; }
+void concolic_pin(const char *src, const char *val) {
+    Cons *c = cons_entry(src);
+    free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
+}
+void concolic_constrain_branch(const char *key, int truth) {
+    cons_entry(key)->truth = (signed char)(truth ? 1 : 0);
+}
+int concolic_branch_decided(const char *key) {
+    for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].key, key)) return g_pins[i].truth;
+    return -1;
+}
+void concolic_clear_pins(void) { for (int i = 0; i < g_pins_n; i++) { free(g_pins[i].key); free(g_pins[i].val); } g_pins_n = 0; }
 
-/* Per-flow pin state is swappable so interleaved flows keep their OWN concretizations: suspend snapshots the
-   live map (deep copy), resume replaces the live map with a snapshot. A blob is one flow's pins parked while
-   another runs. */
-typedef struct { Pin *pins; int n; } PinBlob;
+/* Per-flow constraint state is swappable so interleaved flows keep their OWN narrowing: suspend snapshots the
+   live map (deep copy), resume replaces the live map with a snapshot. A blob is one flow's constraint parked
+   while another runs — and the blob a FORK takes is the sibling's whole starting knowledge. */
+typedef struct { Cons *pins; int n; } PinBlob;
 void *concolic_pins_suspend(void) {
-    PinBlob *b = malloc(sizeof *b); CHECK(b, "concolic: OOM pin blob");
+    PinBlob *b = malloc(sizeof *b); CHECK(b, "concolic: OOM constraint blob");
     b->n = g_pins_n;
-    b->pins = g_pins_n ? malloc((size_t)g_pins_n * sizeof(Pin)) : NULL;
-    if (g_pins_n) CHECK(b->pins, "concolic: OOM pin blob copy");
-    for (int i = 0; i < g_pins_n; i++) { b->pins[i].src = strdup(g_pins[i].src); b->pins[i].val = strdup(g_pins[i].val); }
+    b->pins = g_pins_n ? malloc((size_t)g_pins_n * sizeof(Cons)) : NULL;
+    if (g_pins_n) CHECK(b->pins, "concolic: OOM constraint blob copy");
+    for (int i = 0; i < g_pins_n; i++) {
+        b->pins[i].key = strdup(g_pins[i].key); CHECK(b->pins[i].key, "concolic: OOM constraint blob key");
+        b->pins[i].val = g_pins[i].val ? strdup(g_pins[i].val) : NULL;
+        b->pins[i].truth = g_pins[i].truth;
+    }
     return b;
 }
 void concolic_pins_resume(void *blob) {
     concolic_clear_pins();                 /* free the live map before overwriting it */
     PinBlob *b = blob;
-    for (int i = 0; i < b->n; i++) concolic_pin(b->pins[i].src, b->pins[i].val);   /* re-add (dedups + strdups) */
+    for (int i = 0; i < b->n; i++) {
+        Cons *c = cons_entry(b->pins[i].key);
+        c->val = b->pins[i].val ? strdup(b->pins[i].val) : NULL;
+        c->truth = b->pins[i].truth;
+    }
 }
 void concolic_pins_blob_free(void *blob) {
     PinBlob *b = blob; if (!b) return;
-    for (int i = 0; i < b->n; i++) { free(b->pins[i].src); free(b->pins[i].val); }
+    for (int i = 0; i < b->n; i++) { free(b->pins[i].key); free(b->pins[i].val); }
     free(b->pins); free(b);
 }
-static const char *pin_of(const char *src) { for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].src, src)) return g_pins[i].val; return NULL; }
+static const char *pin_of(const char *src) {
+    for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].key, src)) return g_pins[i].val;
+    return NULL;
+}
 
 static JSClassID g_concolic_class = 0;   /* runtime-allocated; 0 until concolic_init */
 

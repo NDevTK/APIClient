@@ -44,7 +44,16 @@ JSValue     concolic_new_cmp(JSContext *ctx, const char *src, int op, const char
 int         concolic_cmp(JSValueConst v, const char **psrc, const char **ptok);          /* OPCMP_* of a cmp result */
 int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);                   /* == / === propagation (JSConcolicCmpHook) */
 void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
-void        concolic_clear_pins(void);                        /* per-flow: clear all pins */
+/* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
+   `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
+   branch records its outcome under `key` (the source path for a bare truthiness test, the source plus its
+   operator and token for a comparison, so two different predicates over one source stay independent) and a
+   later branch on the SAME key is DECIDED rather than forked. That is feasible-refinement — sound-only, since
+   it prunes an arm the flow's own constraint already contradicts, never one whose domain permits both — and it
+   is what keeps N tests of one flag from costing 2^N flows. -1 = not yet decided in this flow. */
+void        concolic_constrain_branch(const char *key, int truth);
+int         concolic_branch_decided(const char *key);
+void        concolic_clear_pins(void);                        /* per-flow: clear the whole constraint */
 /* Swap the per-flow pin map when the scheduler interleaves flows: suspend snapshots it, resume restores it. */
 void       *concolic_pins_suspend(void);
 void        concolic_pins_resume(void *blob);
