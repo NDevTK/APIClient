@@ -226,8 +226,13 @@ if (constructSitePredicates !== CONSTRUCT_CONVERGENCE_POINTS) {
    was written. `new`, `super()`, the spread, a step machine's own Construct and Reflect.construct all reach
    do_construct_dispatch now, and the arms there rewrite a bound or trapless-proxy target and re-enter. */
 const strayCall = [
-  ['js_tramp_proxy_apply(', 3, 'proxy [[Call]] reshaped anywhere but the ONE arm at do_generic_callee ' +
-                               '(the count is its declaration, its definition and that arm)'],
+  /* Proxy [[Call]] no longer has a C reshape to count: 10.5.12 is a step machine (js_proxy_call_def), reached
+     through the one step entry. The probe that stood here ratcheted the reshape down to a single arm — the
+     right shape while a C copy existed, and obsolete the moment the last one went, because what it counted is
+     the thing that should be zero. `get_proxy_method` is the C read the machine replaced, so the invariant is
+     now that NO call path reads the apply trap from C: the atom appears only at the machine's own request. */
+  ['JS_ATOM_apply,', 1, 'the `apply` trap read from C — 10.5.12 step 3 is the page\'s [[Get]] on the handler ' +
+                        'and belongs on the tramp (the one occurrence is the step machine\'s own request)'],
   /* The async-generator drive is asked in exactly TWO places: its definition and the call convergence point.
      4 -> 2. The two extra were the iterator-protocol opcodes (OP_iterator_next and OP_iterator_call), which
      recognized the receiver themselves so they could hand the drive an OPERAND SHAPE — and a shape enum is a
