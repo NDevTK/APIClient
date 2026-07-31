@@ -81,9 +81,10 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
         if (src && sl) continue;
         int is_mod; if (!script_is_exec(el, &is_mod)) continue;
         size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
-        if (txt && tl) {
+        if (txt && tl && tl < (size_t)-1) {
             char *b = malloc(tl + 1);
-            if (b) { memcpy(b, txt, tl); b[tl] = 0; ds.bodies[ds.n++] = b; }
+            if (!b) { lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt); free(c.els); return ds; }
+            memcpy(b, txt, tl); b[tl] = 0; ds.bodies[ds.n++] = b;
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
