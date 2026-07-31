@@ -71,3 +71,15 @@ assert.sameValue(replaced, "a    at String.replace (native)c",
    machine's own frame now that the machine has one. */
 assert.sameValue(new Error("x").stack.split("\n")[0].slice(0, 12), "    at <eval",
                  "the Error constructor is not the origin of the error");
+
+/* A BUILTIN THAT THROWS BEFORE IT CALLS ANYTHING is still on the stack when it throws, and the trace has to be
+   taken THEN. quickjs defers the capture when the innermost frame is a bytecode one, because that frame's
+   program counter is only synced at the unwind — but when a step machine is running, the innermost activation
+   is the builtin, and the frame below it already had its pc stored by the call opcode that invoked the
+   builtin. Deferring there bought nothing and cost the builtin: the machine had returned by the time the
+   unwind captured, so `[1,2,3].map(1)` named the caller of map and never map. */
+var threw = null;
+function callsMap() { [1, 2, 3].map(1); }
+try { callsMap(); } catch (e) { threw = e.stack.split("\n").map(function (l) { return l.replace(/ \(.*/, ""); }); }
+assert.sameValue(threw[0], "    at Array.map", "the builtin that threw is the innermost frame");
+assert.sameValue(threw[1], "    at callsMap", "and its caller is below it");
