@@ -435,12 +435,10 @@ static char *const *g_sess_bodies;
 static int g_sess_n;
 static Flow *g_sess_cur;
 static int g_sess_live;
-static int g_cands_seeded;   /* the candidate flows are seeded once per session */
 
 void engine_sched_begin(JSContext *ctx, char *const *bodies, int n, int forking) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
     g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
-    g_cands_seeded = 0;
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
@@ -521,12 +519,13 @@ int engine_sched_step(void) {
     g_sess_cur = cur;
     /* The exploration found sinks; each breakout is a FLOW on this same frontier, seeded once the exploring
        flows are done so a candidate never re-fires against a half-explored page. Seeding adds members, so the
-       loop above has more to do — hence before the exhausted answer, not after it. */
-    if (!g_cands_seeded) {
-        g_cands_seeded = 1;
-        solve_seed_candidates(ctx);
-        if (flow_best()) return ENGINE_STEP_YIELD;
-    }
+       loop above has more to do — hence before the exhausted answer, not after it.
+       ASKED EVERY TIME THE FRONTIER DRAINS, not once. A sink inside a lazily-imported chunk or an injected
+       <script src> is discovered AFTER the first drain, because the code holding it had not arrived yet; a
+       one-shot latch left every such sink unsearched, which bounded verification by when a sink was found. The
+       seeding is per-sink and idempotent, so asking again costs a scan and adds only what is new. */
+    if (solve_seed_candidates(ctx) && flow_best())
+        return ENGINE_STEP_YIELD;
     /* STALLED, not exhausted: the run-queue is empty but flows are parked on something only the host can
        supply. Ask the one seam BEFORE closing — the session and every parked snapshot stay live, and the host
        steps again once it has provided. */

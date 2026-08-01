@@ -22,7 +22,11 @@ static int *fired_slot(void)     { Flow *f = flow_running(); return f ? &f->cand
 static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand_verifying; }
 static void set_fired(void)      { int *p = fired_slot(); if (p) *p = 1; }
 
-typedef struct { char *src; int sink; } Cand;   /* a detected sink awaiting fire-verification */
+/* A detected sink awaiting fire-verification. `seeded` is per SINK, not per session: a sink discovered late —
+   inside a lazily-imported chunk, inside an injected <script src> — is discovered after the frontier has already
+   drained once, and a one-shot "the candidates are seeded" latch meant it never got any. That latch was a cap:
+   it bounded verification by WHEN a sink was found rather than by whether it had been searched. */
+typedef struct { char *src; int sink; int seeded; } Cand;
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 
 typedef struct { char *sink; char *source; char *poc; } Finding;   /* verified PoCs only */
@@ -85,7 +89,12 @@ static const char **cand_set(int sink) {
 static void add_pending(const char *src, int sink) {
     for (int i = 0; i < g_pending_n; i++) if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return;   /* dedup */
     if (g_pending_n >= g_pending_cap) { g_pending_cap = g_pending_cap ? g_pending_cap * 2 : 8; g_pending = realloc(g_pending, (size_t)g_pending_cap * sizeof(Cand)); CHECK(g_pending, "solve: OOM pending"); }
-    g_pending[g_pending_n].src = strdup(src); g_pending[g_pending_n].sink = sink; g_pending_n++;
+    /* EVERY field, because the array is realloc'd and never zeroed: leaving `seeded` as whatever the allocator
+       held made a sink look already-searched and it got no candidate at all. */
+    g_pending[g_pending_n].src = strdup(src);
+    g_pending[g_pending_n].sink = sink;
+    g_pending[g_pending_n].seeded = 0;
+    g_pending_n++;
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
 }
 
@@ -181,9 +190,16 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
 /* SEED the candidate flows: one per (detected sink, breakout), each an ordinary member of the ONE frontier.
    The scheduler runs them preemptibly and parkably like every other flow, which is what §solver requires — a
    driver that runs a candidate start-to-finish cannot park an unbounded loop inside it. */
-void solve_seed_candidates(JSContext *ctx) {
+/* Seed a candidate flow per (sink, breakout) for every sink NOT YET SEEDED, and answer how many were added.
+   Idempotent by construction, so the scheduler can ask again every time the frontier drains — which is what a
+   sink found by code that only loaded after the first drain needs. */
+int solve_seed_candidates(JSContext *ctx) {
+    int added = 0;
     for (int i = 0; i < g_pending_n; i++) {
-        const char **cands = cand_set(g_pending[i].sink);
+        const char **cands;
+        if (g_pending[i].seeded) continue;
+        g_pending[i].seeded = 1;
+        cands = cand_set(g_pending[i].sink);
         const char *sink_name = g_pending[i].sink == SINK_HTML ? "innerHTML"
                               : g_pending[i].sink == SINK_URL  ? "location" : "eval";
         for (int c = 0; cands[c]; c++) {
@@ -192,8 +208,10 @@ void solve_seed_candidates(JSContext *ctx) {
             f->cand_payload = strdup(cands[c]);
             f->cand_sink    = sink_name;
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
+            added++;
         }
     }
+    return added;
 }
 
 /* Bracket the substitution around THIS flow's dispatch. The candidate is live only while its own flow runs, so

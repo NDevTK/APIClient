@@ -25,6 +25,7 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "core/fetch/fetch.h"
+#include "core/fetch/response.h"
 
 /* The id JS_RegisterStepDef handed this runtime, and the two IDL attribute names the machine reads by. Atoms
    belong to a runtime, and SECURITY.md gives this build one WASM instance per DOCUMENT — one runtime — so these
@@ -53,9 +54,31 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
 /* Park the request on the FLOW that issued it: the URL the trusted host must fetch, and the capability that
    delivers the body into this flow's continuation. There is ONE pending register and it is the flow's own —
    a second one beside it cannot resolve into the flow that owns the reaction, which is the whole point. */
+/* THE REPLY BECOMES A RESPONSE HERE, in the component that promised one. The flow's pending register delivers
+   the host's bytes and knows nothing about the Fetch API; this closure sits between them, so `fetch()` keeps its
+   contract (a Promise<Response>) without the scheduler learning what a Response is. func_data = [resolve, url]. */
+static JSValue fetch_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                             int magic, JSValueConst *func_data)
+{
+    const char *u = JS_ToCString(ctx, func_data[1]);
+    const char *body = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
+    JSValue resp, r;
+
+    (void)this_val; (void)magic;
+    resp = response_new(ctx, u ? u : "", body ? body : "");
+    if (u) JS_FreeCString(ctx, u);
+    if (body) JS_FreeCString(ctx, body);
+    if (JS_IsException(resp))
+        return resp;
+    r = JS_Call(ctx, func_data[0], JS_UNDEFINED, 1, (JSValueConst *)&resp);
+    JS_FreeValue(ctx, resp);
+    return r;
+}
+
 static JSValue fetch_park(JSContext *ctx, JSValueConst url)
 {
-    JSValue promise, resolving[2];
+    JSValue promise, resolving[2], deliver;
+    JSValueConst data[2];
     const char *u;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
@@ -63,7 +86,15 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url)
         return promise;
     u = JS_ToCString(ctx, url);
     if (u) {
-        engine_pending_fetch_url(ctx, resolving[0], JS_UNDEFINED, u);
+        JSValue uv = JS_NewString(ctx, u);
+        data[0] = resolving[0];
+        data[1] = uv;
+        deliver = JS_NewCFunctionData(ctx, fetch_deliver, 1, 0, 2, data);
+        JS_FreeValue(ctx, uv);
+        if (!JS_IsException(deliver)) {
+            engine_pending_fetch_url(ctx, deliver, JS_UNDEFINED, u);
+            JS_FreeValue(ctx, deliver);
+        }
         JS_FreeCString(ctx, u);
     }
     JS_FreeValue(ctx, resolving[0]);
@@ -141,6 +172,7 @@ void fetch_install(JSContext *ctx, JSValueConst global)
            "instance is one document");
     if (g_fetch_stepid < 0) {
         g_fetch_rt    = rt;
+        response_init(ctx);
         g_atom_method = JS_NewAtom(ctx, "method");
         g_atom_url    = JS_NewAtom(ctx, "url");
         g_fetch_stepid = JS_RegisterStepDef(rt, &js_fetch_def);

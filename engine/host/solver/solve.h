@@ -23,7 +23,7 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg);
    REAL program (`rerun`), and record the first that FIRES as the replay-verified PoC. */
 /* SEED one candidate flow per (detected sink, breakout) onto the ONE frontier — the re-fire is a FLOW, never a
    driver that runs the program to completion beside the BFS. */
-void solve_seed_candidates(JSContext *ctx);
+int  solve_seed_candidates(JSContext *ctx);   /* seeds the not-yet-seeded sinks; returns how many flows it added */
 void solve_flow_begin(struct Flow *f);
 void solve_flow_end(struct Flow *f);
 
