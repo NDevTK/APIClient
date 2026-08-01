@@ -77,7 +77,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         .prop_write = cow_capture_hook, .cell_write = cow_capture_varref,
         .arr_append = cow_capture_arr_append, .gen_fork = engine_gen_fork,
         .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
-        .async_settle = cow_capture_async_settle };
+        .async_settle = cow_capture_async_settle, .module_eval = cow_capture_module_eval };
     JS_SetTimeTravelHooks(&TIME_TRAVEL);
     /* Concolic VALUE propagation stays installed across scheduling AND verification — taint must flow during a
        candidate re-fire too. The exploration hooks (branch/fork/preempt) are owned and scoped by the scheduler. */

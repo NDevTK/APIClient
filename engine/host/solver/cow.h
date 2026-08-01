@@ -55,6 +55,12 @@ void      cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst 
    a fork settles a pre-fork promise on its OWN timeline. */
 void      cow_capture_async_settle(JSContext *ctx, JSValueConst obj);
 
+/* Install as JSTimeTravelHooks.module_eval: capture a MODULE record's evaluation state (status + capability +
+   cycle fields) before this flow changes it. Its BINDINGS are closure cells cell_write already captures; this is
+   the state that decides whether a flow evaluates the module at all, so without it the first flow to import a
+   chunk left it EVALUATED for every sibling and the siblings read its exports as TDZ. */
+void      cow_capture_module_eval(JSContext *ctx, void *mod);
+
 /* Record a per-flow GENERATOR-STATE swap into delta `d` (JSTimeTravelHooks.gen_fork): the shared generator
    object `genobj` must resolve to `cur_gd` (a per-flow clone `d` OWNS) while `d` runs and to `base_gd` (its
    object-owned original) otherwise. Applied/unapplied like any other slot on context-switch. Dedup-REPLACES an

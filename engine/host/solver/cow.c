@@ -19,17 +19,21 @@
    restores map_old), DELETE (apply deletes, unapply re-adds map_old). Entries replay forward on apply and invert
    in reverse on unapply, so a sequence of mutations to the same key reconstructs correctly with NO dedup and no
    SameValueZero key-hashing. Never slot-keyed (kept out of the hash index, like gendata). */
-/* A FIFTH entry kind (is_async=1) is a shared ASYNC object's SETTLEMENT: obj is the promise (or the resolving
-   function whose already_resolved latch it is), a_base the baseline settlement this flow found, a_cur the
-   settlement this flow produced (saved at unapply, replayed at apply) — the same base/cur shape as a property
-   slot, over state that lives in internal slots no property hook can see. Not slot-keyed (kept out of the hash
-   index, like gendata and map): a promise settles once per flow, so there is nothing to dedup. */
+/* A FIFTH entry kind (is_async=1) is an opaque STATE BLOB over internal fields no property hook can see:
+   a_base is the baseline state this flow found, a_cur the state this flow produced (saved at unapply, replayed
+   at apply) — the same base/cur shape as a property slot. TWO TARGETS share it because they are one concept,
+   "the state of this thing before this flow changed it": a shared ASYNC object's settlement (mod == NULL, obj
+   is the promise or the resolving function whose already_resolved latch it is) and a MODULE record's EVALUATION
+   state (mod != NULL, obj unused — a module is not a JSObject). A module's bindings are closure cells that
+   cell_write already captures; what was missing is the state deciding whether a flow evaluates AT ALL, so the
+   first flow to import a chunk left it EVALUATED for every sibling and the siblings read TDZ exports.
+   Not slot-keyed (kept out of the hash index, like gendata and map): each settles once per flow, nothing to dedup. */
 #define COW_MAP_ADD       0
 #define COW_MAP_OVERWRITE 1
 #define COW_MAP_DELETE    2
 typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; JSValue map_old;
-                 int is_async; void *a_base; void *a_cur; } CowEntry;
+                 int is_async; void *mod; void *a_base; void *a_cur; } CowEntry;
 
 /* forked = has this flow snapshot-forked a sibling yet? Until it has, every object it CREATED (flow_local) is
    truly private — no other flow can observe it — so capturing its mutations is pure waste (keeps the delta
@@ -97,6 +101,22 @@ CowDelta *cow_delta_new(void) {
 
 void cow_set_current(CowDelta *d) { g_current = d; }
 
+/* The is_async entry's four operations, dispatched by TARGET. One mechanism, two things it captures — the
+   alternative was a sixth entry kind whose unapply/apply/fork/free arms would be the same four lines again. */
+static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
+    return e->mod ? JS_ModuleEvalStateSave(ctx, e->mod) : JS_AsyncStateSave(ctx, e->obj);
+}
+static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
+    if (e->mod) JS_ModuleEvalStateRestore(ctx, e->mod, blob);
+    else JS_AsyncStateRestore(ctx, e->obj, blob);
+}
+static void *cow_state_clone(JSContext *ctx, const CowEntry *e, void *blob) {
+    return e->mod ? JS_ModuleEvalStateClone(ctx, blob) : JS_AsyncStateClone(ctx, blob);
+}
+static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
+    if (e->mod) JS_ModuleEvalStateFree(rt, blob); else JS_AsyncStateFree(rt, blob);
+}
+
 void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (g_capturing || !g_current) return;
     CowDelta *d = g_current;
@@ -126,7 +146,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->cur_valid = 0;
     e->vref = NULL;
     e->is_gendata = 0;
-    e->is_async = 0; e->a_base = e->a_cur = NULL;
+    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
@@ -157,7 +177,7 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
     e->vref = NULL;
     e->is_gendata = 0;
-    e->is_async = 0; e->a_base = e->a_cur = NULL;
+    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
     cow_hash_add_last(d);   /* in the index so a later OVERWRITE of this index dedups to the append entry */
     g_capturing = 0;
@@ -185,7 +205,7 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
     e->cur_valid = 1;
     e->vref = NULL;
     e->is_gendata = 0;
-    e->is_async = 0; e->a_base = e->a_cur = NULL;
+    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
     e->is_map = 1;                     /* not slot-keyed — kept out of the hash index, like gendata */
     e->map_op = COW_MAP_ADD; e->map_old = JS_UNDEFINED;
     g_capturing = 0;
@@ -213,7 +233,7 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     e->cur_valid = 1;
     e->vref = NULL;
     e->is_gendata = 0;
-    e->is_async = 0; e->a_base = e->a_cur = NULL;
+    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
     e->is_map = 1;
     e->map_op = (op == JS_MAP_MUTATE_DELETE) ? COW_MAP_DELETE : COW_MAP_OVERWRITE;
     e->map_old = JS_DupValue(ctx, old_val);   /* the prior value, restored on unapply */
@@ -255,7 +275,39 @@ void cow_capture_async_settle(JSContext *ctx, JSValueConst obj) {
     e->vref = NULL;
     e->is_gendata = 0; e->g0 = e->g1 = NULL;
     e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
-    e->is_async = 1; e->a_base = blob; e->a_cur = NULL;
+    e->is_async = 1; e->mod = NULL; e->a_base = blob; e->a_cur = NULL;
+    g_capturing = 0;
+}
+
+/* Capture a MODULE's evaluation state before this flow changes it (JSTimeTravelHooks.module_eval). Each flow is
+   a possible world and evaluates the module once in it — the record's status/capability decide whether a flow
+   evaluates at all, so leaving them baseline let the FIRST flow's evaluation stand for every sibling while the
+   bindings it wrote stayed private to it. The sibling then read exports nothing had written in its world. There
+   is no flow-private skip here: a module record is reachable from the realm's module map the moment it loads, so
+   it is shared state whoever created it. */
+void cow_capture_module_eval(JSContext *ctx, void *mod) {
+    if (g_capturing || !g_current || !mod) return;
+    CowDelta *d = g_current;
+    for (int i = 0; i < d->n; i++)                  /* one entry per module: the FIRST baseline is the baseline */
+        if (d->e[i].is_async && d->e[i].mod == mod) return;
+    g_capturing = 1;
+    void *blob = JS_ModuleEvalStateSave(ctx, mod);
+    CHECK(blob, "cow: a module's evaluation state could not be captured — a sibling flow would inherit this "
+                "flow's evaluation and read exports it never wrote");
+    if (d->n >= d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 32;
+        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
+        CHECK(d->e, "cow: OOM growing delta (module_eval)");
+        cow_hash_rebuild(d);
+    }
+    CowEntry *e = &d->e[d->n++];
+    e->obj = JS_UNDEFINED;
+    e->atom = JS_ATOM_NULL; e->existed = 0;
+    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->vref = NULL;
+    e->is_gendata = 0; e->g0 = e->g1 = NULL;
+    e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
+    e->is_async = 1; e->mod = mod; e->a_base = blob; e->a_cur = NULL;
     g_capturing = 0;
 }
 
@@ -275,7 +327,7 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
     e->vref = vref;                      /* the cell is kept alive by the shared function object */
     e->is_gendata = 0;
-    e->is_async = 0; e->a_base = e->a_cur = NULL;
+    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
@@ -304,7 +356,7 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
     e->atom = JS_ATOM_NULL; e->existed = 0; e->base = JS_UNDEFINED;
     e->cur = JS_UNDEFINED; e->cur_valid = 0; e->vref = NULL;
     e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;
-    e->is_async = 0; e->a_base = e->a_cur = NULL;   /* adopts cur_gd's creation ref (freed on delta free) */
+    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;   /* adopts cur_gd's creation ref (freed on delta free) */
     e->is_map = 0;
 }
 
@@ -314,10 +366,10 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
     for (int i = d->n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
         CowEntry *e = &d->e[i];
         if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g0); continue; }   /* restore the object-owned original */
-        if (e->is_async) {   /* async settlement: save what THIS flow settled to, then rewind to the baseline */
-            JS_AsyncStateFree(JS_GetRuntime(ctx), e->a_cur);
-            e->a_cur = JS_AsyncStateSave(ctx, e->obj);
-            JS_AsyncStateRestore(ctx, e->obj, e->a_base);
+        if (e->is_async) {   /* blob state: save what THIS flow produced, then rewind to the baseline */
+            cow_state_free(JS_GetRuntime(ctx), e, e->a_cur);
+            e->a_cur = cow_state_save(ctx, e);
+            cow_state_restore(ctx, e, e->a_base);
             continue;
         }
         if (e->is_map) {   /* invert the flow's record mutation: ADD->delete, OVERWRITE/DELETE->restore old value */
@@ -355,7 +407,7 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
     for (int i = 0; i < d->n; i++) {   /* forward: replay the flow's writes over the pristine baseline */
         CowEntry *e = &d->e[i];
         if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g1); continue; }   /* install this flow's generator clone */
-        if (e->is_async) { JS_AsyncStateRestore(ctx, e->obj, e->a_cur); continue; }   /* re-settle as this flow did */
+        if (e->is_async) { cow_state_restore(ctx, e, e->a_cur); continue; }   /* re-install what this flow produced */
         if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
             if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, e->base);
             else JS_MapAddRecord(ctx, e->obj, e->base, e->cur);
@@ -399,15 +451,16 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
             JS_GenDataRef(se->g1);   /* the copy holds its own ownership ref on the clone */
             continue;
         }
-        if (se->is_async) {   /* async settlement: the sibling inherits its OWN copy of both blobs — the two
-                                 deltas must share no mutable state, and a blob is mutable (unapply rewrites cur) */
+        if (se->is_async) {   /* blob state: the sibling inherits its OWN copy of both blobs — the two deltas
+                                 must share no mutable state, and a blob is mutable (unapply rewrites cur) */
             de->obj = JS_DupValue(ctx, se->obj);
             de->is_async = 1;
-            de->a_base = JS_AsyncStateClone(ctx, se->a_base);
-            /* the sibling's restore point is the branch-point settlement, which is LIVE right now (src's delta
-               is applied at a fork) — read it rather than copying src's cur, which is only valid after an
-               unapply has written it. */
-            de->a_cur = JS_AsyncStateSave(ctx, se->obj);
+            de->mod = se->mod;
+            de->a_base = cow_state_clone(ctx, se, se->a_base);
+            /* the sibling's restore point is the branch-point state, which is LIVE right now (src's delta is
+               applied at a fork) — read it rather than copying src's cur, which is only valid after an unapply
+               has written it. */
+            de->a_cur = cow_state_save(ctx, de);
             continue;
         }
         if (se->is_map) {   /* Set/Map record mutation: the sibling inherits the same reversible undo-log entry */
@@ -443,8 +496,8 @@ void cow_delta_free(JSContext *ctx, CowDelta *d) {
         if (d->e[i].is_gendata) { JS_FreeValue(ctx, d->e[i].obj); JS_GenDataUnref(ctx, d->e[i].g1); continue; }
         if (d->e[i].is_async) {
             JS_FreeValue(ctx, d->e[i].obj);
-            JS_AsyncStateFree(JS_GetRuntime(ctx), d->e[i].a_base);
-            JS_AsyncStateFree(JS_GetRuntime(ctx), d->e[i].a_cur);
+            cow_state_free(JS_GetRuntime(ctx), &d->e[i], d->e[i].a_base);
+            cow_state_free(JS_GetRuntime(ctx), &d->e[i], d->e[i].a_cur);
             continue;
         }
         if (d->e[i].is_map) {   /* obj + key(base) + new(cur) + old(map_old); atom is NULL */
