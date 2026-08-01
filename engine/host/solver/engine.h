@@ -22,6 +22,9 @@ void engine_queue_script(const char *body);
 /* Park the running flow on an injected <script src>: the host fetches it, and the reply becomes this flow's next
    program rather than a promise's value. */
 void engine_pending_script_url(JSContext *ctx, const char *url);
+/* Park the running flow on the document's OWN external <script src> at position `script_i`: classic scripts run
+   in document order, so the flow waits there, and the reply fills the shared slot every flow reads. */
+void engine_pending_docscript(JSContext *ctx, const char *url, int script_i);
 
 /* solver_decide calls this at a forking branch to stash the sibling's hot decision + pins; the interpreter's
    fork hook (engine_fork_finalize) assembles the sibling from the frame clone + these. */
@@ -29,7 +32,7 @@ void engine_prepare_fork(void *dec_blob, void *pin_blob);
 
 /* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
    per-flow COW delta, and drain the frontier by WFQ order. */
-void engine_run(JSContext *ctx, char *const *bodies, int n);
+void engine_run(JSContext *ctx, char **bodies, char **srcs, int n);
 
 /* THE SESSION — the same dispatch loop, stepped by its HOST instead of drained. The extension's host has other
    work between quanta (its message port, other documents' engines, streaming findings), and CLAUDE.md's
@@ -51,7 +54,7 @@ void engine_run(JSContext *ctx, char *const *bodies, int n);
    what a reply is, and the host holds no idea of what a flow is. */
 void engine_set_stall_hook(int (*owed)(void));
 
-void engine_sched_begin(JSContext *ctx, char *const *bodies, int n, int forking);
+void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking);
 int  engine_sched_step(void);
 
 /* FETCH-AWAIT: a host fetch that returns a PENDING promise registers its resolve capability + the value it will

@@ -45,3 +45,4 @@ engine/.work/unicorn-js/
 engine/.work/z3/
 # the Web Platform Tests checkout (engine/wpt.mjs) — the browser half's oracle, cloned on demand like the corpus
 engine/.work/wpt/
+engine/.work/wpt-gaps.json

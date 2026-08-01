@@ -1,5 +1,6 @@
 /* The dispatch loop — see engine.h. */
 #include "solver/engine.h"
+#include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/flow.h"
 #include "solver/decide.h"
@@ -40,7 +41,33 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     CHECK(!url || f->pending[f->npend].url, "engine: OOM recording a pending fetch's URL");
     f->pending[f->npend].have_value = (url == NULL);
     f->pending[f->npend].kind = FLOW_PENDING_RESOLVE;
+    f->pending[f->npend].script_i = -1;
     f->npend++;
+}
+
+/* PARK ON AN EXTERNAL DOCUMENT SCRIPT. Registered at most once per flow per slot — the flow is asked again on
+   every scheduler pass while it waits, and a second registration would make the host owe the same URL twice. */
+void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
+    Flow *f = flow_running();
+    DCHECK(f != NULL, "an external document script was awaited outside a running flow");
+    DCHECK(url != NULL && *url, "an external document script entry carries no URL");
+    for (int i = 0; i < f->npend; i++)
+        if (f->pending[i].kind == FLOW_PENDING_DOCSCRIPT && f->pending[i].script_i == script_i)
+            return;
+    if (f->npend >= f->pendcap) {
+        f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
+        f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
+        CHECK(f->pending, "engine: OOM growing the flow's pending list");
+    }
+    f->pending[f->npend].resolve = JS_UNDEFINED;
+    f->pending[f->npend].value = JS_UNDEFINED;
+    f->pending[f->npend].url = strdup(url);
+    CHECK(f->pending[f->npend].url, "engine: OOM recording an external script's URL");
+    f->pending[f->npend].have_value = 0;
+    f->pending[f->npend].kind = FLOW_PENDING_DOCSCRIPT;
+    f->pending[f->npend].script_i = script_i;
+    f->npend++;
+    (void)ctx;
 }
 
 /* PARK ON AN INJECTED SCRIPT. `document.body.appendChild(s)` with `s.src` set is the other way a page loads code
@@ -63,9 +90,16 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
     CHECK(f->pending[f->npend].url, "engine: OOM recording an injected script's URL");
     f->pending[f->npend].have_value = 0;
     f->pending[f->npend].kind = FLOW_PENDING_SCRIPT;
+    f->pending[f->npend].script_i = -1;
     f->npend++;
     (void)ctx;
 }
+
+/* THE SESSION'S SCRIPT SEQUENCE — the document's own scripts in order. Entry i is inline (bodies[i] is its text)
+   or external (srcs[i] is its URL and bodies[i] is filled when the host replies). Declared here because the
+   pending DRAIN writes into it: an external script's text is the DOCUMENT's, shared by every flow. */
+static char **g_sess_bodies;
+static char **g_sess_srcs;
 
 /* THE URLS THE HOST OWES, newline-joined across every live flow, or "" — one register, the flows' own. The
    buffer is this function's and is valid until the next call. */
@@ -137,7 +171,16 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
     for (int i = 0; i < f->npend; i++) {
         FlowPending *p = &f->pending[i];
         if (!p->have_value) { f->pending[keep++] = *p; continue; }   /* the host still owes this one */
-        if (p->kind == FLOW_PENDING_SCRIPT) {
+        if (p->kind == FLOW_PENDING_DOCSCRIPT) {
+            /* the DOCUMENT's text, shared by every flow: fill the slot once and all waiters proceed in order */
+            if (!g_sess_bodies[p->script_i]) {
+                const char *body = JS_ToCString(ctx, p->value);
+                DCHECK(body != NULL, "an external document script's body did not arrive as text");
+                g_sess_bodies[p->script_i] = body ? strdup(body) : strdup("");
+                CHECK(g_sess_bodies[p->script_i], "engine: OOM storing an external document script");
+                if (body) JS_FreeCString(ctx, body);
+            }
+        } else if (p->kind == FLOW_PENDING_SCRIPT) {
             /* the reply is PROGRAM: it joins this flow's script sequence, and the one BFS runs it */
             const char *body = JS_ToCString(ctx, p->value);
             DCHECK(body != NULL, "an injected script's body did not arrive as text");
@@ -288,7 +331,7 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
     free(j.argv);
 }
 
-static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
+static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
     for (;;) {
         /* THE PARKED CONTINUATION OUTRANKS EVERYTHING ELSE THIS FLOW COULD DO — that is the park's whole
            contract: a forced preempt must be transparent to observable ordering, so the flow resumes BEFORE any
@@ -298,7 +341,22 @@ static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
         if (JS_ResumeParkedFlow(JS_GetRuntime(ctx))) return 0;
         if (!f->frame) {
             const char *body;
-            if (f->script_i < n) body = bodies[f->script_i];
+            if (f->script_i < n) {
+                body = bodies[f->script_i];
+                if (!body) {
+                    /* AN EXTERNAL DOCUMENT SCRIPT whose text has not arrived. Classic scripts run in document
+                       order, so the flow WAITS here rather than skipping ahead — running what comes after a
+                       bundle before the bundle is a different program. The text is the DOCUMENT's, not the
+                       flow's: every flow runs the same bytes, so the reply fills the shared slot and every
+                       waiting flow proceeds. */
+                    /* A reply that has already arrived is delivered FIRST — this branch returns before the
+                       drain below, so parking without checking would leave the flow owed forever on a URL the
+                       host had already answered. */
+                    if (flow_pending_ready(f)) { flow_drain_pending(ctx, f); continue; }
+                    engine_pending_docscript(ctx, g_sess_srcs[f->script_i], f->script_i);
+                    return FLOW_STEP_OWED;
+                }
+            }
             else if (f->script_i - n < f->dyn_n) body = f->dyn[f->script_i - n];
             else if (f->njob > 0) { flow_run_one_job(ctx, f); return 0; }   /* scripts done -> drain a microtask, yield */
             else if (f->npend > 0 && !flow_pending_ready(f))
@@ -323,6 +381,13 @@ static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
                taken and released here — never DISCARDED by the engine, which would hide a live value from the host. */
             JSValue cv = JS_UNDEFINED;
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
+            /* A SCRIPT THAT THREW names a capability the page needed and this engine does not have. Ending the
+               flow there is intentional; losing WHICH capability was not. */
+            if (JS_IsException(cv)) {
+                JSValue e = JS_GetException(ctx);
+                result_page_error_value(ctx, e);
+                JS_FreeValue(ctx, e);
+            }
             JS_FreeValue(ctx, cv);
             if (r == 1) return 0;   /* quantum yield — more work, resume later */
             if (r == JS_FLOW_DETACHED) {
@@ -431,14 +496,13 @@ static int64_t engine_now_ms(void) {
    the extension it freezes the worker outright. The state that used to be the loop's C locals lives here so a
    return between two iterations costs nothing to resume from. */
 static JSContext *g_sess_ctx;
-static char *const *g_sess_bodies;
 static int g_sess_n;
 static Flow *g_sess_cur;
 static int g_sess_live;
 
-void engine_sched_begin(JSContext *ctx, char *const *bodies, int n, int forking) {
+void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
-    g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
+    g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_srcs = srcs; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
@@ -464,7 +528,7 @@ double engine_top_weight(void) {
 
 int engine_sched_step(void) {
     JSContext *ctx = g_sess_ctx;
-    char *const *bodies = g_sess_bodies;
+    char **bodies = g_sess_bodies;
     int n = g_sess_n;
     Flow *cur = g_sess_cur;
     int64_t deadline = engine_now_ms() + ENGINE_QUANTUM_MS;
@@ -548,12 +612,12 @@ int engine_sched_step(void) {
 /* A host that has nothing else to do between quanta — the node smoke test — drives the SAME steps in a loop.
    That is a HOST's loop over the one scheduler, not a second scheduler: the state machine is unchanged and a
    quantum boundary is invisible to it. */
-static void run_scheduler(JSContext *ctx, char *const *bodies, int n, int forking) {
-    engine_sched_begin(ctx, bodies, n, forking);
+static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
+    engine_sched_begin(ctx, bodies, srcs, n, forking);
     while (engine_sched_step() != ENGINE_STEP_DONE)
         ;
 }
 
 /* EXPLORE: seed boot + drain the frontier, forking at every concolic branch. */
-void engine_run(JSContext *ctx, char *const *bodies, int n) { run_scheduler(ctx, bodies, n, 1); }
+void engine_run(JSContext *ctx, char **bodies, char **srcs, int n) { run_scheduler(ctx, bodies, srcs, n, 1); }
 

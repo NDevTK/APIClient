@@ -20,11 +20,15 @@ int script_is_importmap(lxb_dom_element_t *el);   /* 1 if <script type="importma
    bodies), a pure DOM scan that runs NO script. The frontier key the host reads synchronously. */
 unsigned document_bundle_id(lxb_html_document_t *dom);
 
-/* The document's OWN inline executable scripts, each as its OWN program body (document order) — NEVER
-   concatenated (that would leak per-<script> let/const scope and cannot represent scripts loaded later). The
-   scheduler runs each as its own code flow, sharing globals through the COW baseline. Caller frees via
-   doc_scripts_free. This is browser-layer script inventory feeding the one flow executor; there is no boot. */
-typedef struct { char **bodies; int n; } DocScripts;
+/* The document's OWN executable scripts IN DOCUMENT ORDER, each its own program body — NEVER concatenated (that
+   would leak per-<script> let/const scope and cannot represent scripts loaded later). Entry i is EITHER inline
+   (bodies[i] is its text, srcs[i] NULL) OR external (srcs[i] is its URL, bodies[i] NULL until the host supplies
+   it). External scripts used to be skipped outright, with a comment calling the fetch "later" — which meant a
+   real page's own bundle, always a <script src>, was never run at all: the engine explored whatever inline glue
+   the page happened to have and reported that as the page's surface. They occupy their POSITION here because
+   classic scripts run in document order, and an external one between two inline ones must not be reordered.
+   Caller frees via doc_scripts_free. */
+typedef struct { char **bodies; char **srcs; int n; } DocScripts;
 DocScripts document_exec_scripts(lxb_html_document_t *dom);
 void       doc_scripts_free(DocScripts *ds);
 

@@ -13,11 +13,24 @@
  */
 #ifndef ENGINE_HOST_SOLVER_RESULT_H
 #define ENGINE_HOST_SOLVER_RESULT_H
+#include "quickjs.h"
 
 /* The whole document as a malloc'd JSON string (caller frees):
  *   { "fetchCallSites":[…], "securitySinks":[…], "_switches":N }
  * `_switches` is the scheduler's context-switch count — the host's WFQ reads it as the observable that the ONE
  * BFS actually interleaves rather than running its flows FIFO. */
 char *result_json(void);
+
+/* AN UNCAUGHT ERROR FROM ONE OF THE PAGE'S OWN SCRIPTS. A page's throw ending its script is intentional — it is
+   the forcing function that names an unbuilt capability — but the name was invisible: the flow simply stopped
+   and the document reported the surface it had reached, with nothing to say a script had died. Recording it
+   makes the capability the page needed READABLE, which is the difference between "this page yields little" and
+   "this page needs Element.matches". Deduped; the document carries them as `pageErrors`. */
+void result_page_error(const char *msg);
+/* The same, from the thrown VALUE. It runs NO page code: `toString` on an Error is the page's (and in this
+   engine a step builtin the interpreter must dispatch), so this reads the own `name`/`message` slots and uses
+   them only when they are already strings. A diagnostic that runs the page's code to describe the page's crash
+   is a second crash. */
+void result_page_error_value(JSContext *ctx, JSValueConst err);
 
 #endif

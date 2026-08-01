@@ -317,7 +317,7 @@ int main(void) {
     lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
-    engine_run(ctx, scripts.bodies, scripts.n);         /* @H + @S detection */
+    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.n);         /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
     doc_scripts_free(&scripts);
     lxb_html_document_destroy(dom);

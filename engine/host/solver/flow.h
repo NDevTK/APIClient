@@ -30,8 +30,9 @@ typedef struct { JSJobFunc *fn; int argc; JSValue *argv; } FlowJob;
    script the one BFS runs. The kind is on the entry because it is the entry's business: the register, the
    dedup and the stall accounting are identical either way, and only the delivery differs. */
 #define FLOW_PENDING_RESOLVE 0   /* fetch(): call `resolve` with the reply */
-#define FLOW_PENDING_SCRIPT  1   /* <script src>: queue the reply as this flow's next program */
-typedef struct { JSValue resolve; JSValue value; char *url; int have_value; int kind; } FlowPending;
+#define FLOW_PENDING_SCRIPT  1   /* injected <script src>: queue the reply as this flow's next program */
+#define FLOW_PENDING_DOCSCRIPT 2 /* the document's OWN <script src>: the reply fills script slot `script_i` */
+typedef struct { JSValue resolve; JSValue value; char *url; int have_value; int kind; int script_i; } FlowPending;
 
 /* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
    work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one
