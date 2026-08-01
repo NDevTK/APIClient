@@ -23,6 +23,7 @@
 #include "quickjs.h"
 #include "browser/core/fetch/fetch.h"
 #include "browser/core/loader/document_scripts.h"
+#include "browser/core/loader/module_loader.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/endpoint.h"
@@ -97,6 +98,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     {
         JSValue g = JS_GetGlobalObject(g_ctx);
         fetch_install(g_ctx, g);
+        module_loader_install(g_rt);
         JS_FreeValue(g_ctx, g);
     }
 
@@ -191,7 +193,7 @@ QJS_EXPORT const char *qjs_pending(void)
 QJS_EXPORT const char *qjs_chunks(void)
 {
     DCHECK(g_begun, "qjs_chunks was asked of an engine that never ran");
-    return "";
+    return module_loader_chunks();
 }
 
 QJS_EXPORT void qjs_provide(const char *url, const char *body)
@@ -203,6 +205,12 @@ QJS_EXPORT void qjs_provide(const char *url, const char *body)
         JSValue v = body ? JS_NewString(g_ctx, body) : JS_UNDEFINED;
         int n = engine_provide(g_ctx, url, v);
         JS_FreeValue(g_ctx, v);
+        if (n == 0 && *module_loader_chunks() != '\0')
+            DFAIL("a body was provided for a URL no flow is parked on, and this engine has discovered lazy "
+                  "chunks — so it is probably a CHUNK body, and there is nowhere to deliver it: "
+                  "JSModuleLoaderFunc is synchronous C with no point to park at, and re-running the importing "
+                  "scope once the body arrives is a REPLAY. Build the parking loader: record, suspend the flow "
+                  "the way core/fetch does, and resume it with the compiled module");
         if (n == 0)
         DFAIL("a body was provided for a URL no flow is parked on — the host's pending/provide pairing is off, "
               "and resolving nothing would leave the flow that IS parked waiting forever");
