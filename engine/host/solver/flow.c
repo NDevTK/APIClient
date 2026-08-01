@@ -60,6 +60,7 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n) {
     f->fn = JS_DupValue(ctx, fn);
     f->dec = dec; f->dec_n = dec_n;
     f->val = 0.0; f->cpu = 0; f->visits = 0;
+    f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
     g_flows[g_flows_n++] = f;
     g_gen++;   /* frontier changed */
     return f;

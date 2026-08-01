@@ -230,6 +230,12 @@ void concolic_init(JSContext *ctx) {
 void concolic_free(JSContext *ctx) { (void)ctx; /* class lives with the runtime; per-value state freed by the finalizer */ }
 
 JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example) {
+    /* A CANDIDATE RUN substitutes one source with a breakout. The check lived only in the field-read path, so a
+       source installed as a plain property value — location.hash, document.cookie — was minted once at install
+       and never passed through it: its candidate could not be delivered and the sink never fired. Minting is
+       the one place every source goes through, whichever way it is reached. */
+    if (g_cand_src && src && !strcmp(src, g_cand_src))
+        return JS_NewString(ctx, g_cand_payload ? g_cand_payload : "");
     DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
     JSValue obj = JS_NewObjectClass(ctx, g_concolic_class);
     if (JS_IsException(obj)) { JS_FreeValue(ctx, example); return obj; }

@@ -75,6 +75,18 @@ static void loc_split(const char *url, LocParts *p)
     }
 }
 
+static JSValue js_loc_get_search(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    return concolic_new(ctx, "{location.search}", "location.search", JS_UNDEFINED);
+}
+
+static JSValue js_loc_get_hash(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    return concolic_new(ctx, "{location.hash}", "location.hash", JS_UNDEFINED);
+}
+
 void location_install(JSContext *ctx, JSValueConst global, const char *url)
 {
     LocParts p;
@@ -97,10 +109,16 @@ void location_install(JSContext *ctx, JSValueConst global, const char *url)
     /* Attacker input, separate identities because the browser encodes them by different sets. Example-free:
        nothing about the address tells this engine what an attacker WILL put there, and inventing one would be
        a fabricated observation. */
-    search = concolic_new(ctx, "{location.search}", "location.search", JS_UNDEFINED);
-    hash   = concolic_new(ctx, "{location.hash}",   "location.hash",   JS_UNDEFINED);
-    JS_SetPropertyStr(ctx, loc, "search", search);
-    JS_SetPropertyStr(ctx, loc, "hash",   hash);
+    /* GETTERS, not values. A candidate run substitutes a source with a breakout at MINT time, so a source that
+       is minted once at install can never receive one — its sink would be detected and never fire-verified.
+       Reading it per access also matches the interface: location.hash is whatever the address says NOW. */
+    JS_DefinePropertyGetSet(ctx, loc, JS_NewAtom(ctx, "search"),
+                            JS_NewCFunction(ctx, js_loc_get_search, "get search", 0), JS_UNDEFINED,
+                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_DefinePropertyGetSet(ctx, loc, JS_NewAtom(ctx, "hash"),
+                            JS_NewCFunction(ctx, js_loc_get_hash, "get hash", 0), JS_UNDEFINED,
+                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    (void)search; (void)hash;
 
     /* href is origin + pathname + the two attacker parts. Built by the interpreter's own concatenation, so the
        concolic halves propagate into it the way every other `+` propagates them — no special case. */

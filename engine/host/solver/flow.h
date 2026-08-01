@@ -45,6 +45,14 @@ typedef struct Flow {
     /* INTERLEAVING STATE — persisted while this flow is PAUSED so the scheduler can run another flow and come
        back. A flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW
        delta, decision cursor, and pins all swap with it (see engine.c). Zero-initialized by flow_add. */
+    /* A CANDIDATE SESSION. This flow re-runs the page with one attacker payload substituted for one source, to
+       see whether it FIRES at the sink. It is not a different KIND of flow — same scripts, same scheduler, same
+       preemption — it just carries the substitution, which is why the candidate lives here rather than in a
+       driver that runs the program start-to-finish beside the BFS. NULL for an ordinary flow. */
+    char *cand_src;        /* the source identity the payload replaces (owned) */
+    char *cand_payload;    /* the breakout to try (owned) */
+    const char *cand_sink; /* the sink name to record if it fires (static) */
+
     int   started;         /* decide_enter has run (fresh) — else resume from the blobs below */
     void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */
     int   script_i;        /* position in the script sequence: static [0,n), then this flow's dyn chunks [n, n+dyn_n) */
