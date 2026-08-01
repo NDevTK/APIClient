@@ -46,7 +46,11 @@ mkdirSync(OUT, { recursive: true });
    so build it ONCE into a cached static archive (liblexbor.a) and link that; rebuilds
    of the engine (quickjs + main.c) then stay fast. Rebuild the archive with
    `node engine/build.mjs lexbor`. */
-const LEXBOR_SRC = join(ENGINE, "lexbor", "source");
+/* The vendored checkout lives beside its build product in .work, which is where it actually is and where
+   liblexbor.o was compiled from. It used to be named at engine/lexbor/source — a second, git-ignored location
+   that is empty in a fresh container, so the build died on a missing <lexbor/html/html.h> while the headers sat
+   in .work. One location, no fallback. */
+const LEXBOR_SRC = join(WORK, "lexbor-src", "source");
 const LEXBOR_LIB = join(WORK, "liblexbor.o");   // relocatable partial-link object (emcc -o .a doesn't archive from .c)
 const LEXBOR_INC = LEXBOR_SRC;
 function findC(dir, out) {
