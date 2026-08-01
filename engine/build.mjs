@@ -107,6 +107,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "frame", "window.c"),                         // Window: which browsing context this is, and window.name as attacker input
     join(HOST, "browser", "core", "timing", "timer.c"),                         // Timers: the timer task source, each expiry a flow
     join(HOST, "browser", "core", "dom", "document.c"),                         // Document: parsed facts concrete, cookie/referrer input
+    join(HOST, "browser", "core", "dom", "node.c"),                             // Node: identity, the tree, and the CharacterData nodes
     join(HOST, "browser", "core", "dom", "element.c"),
     join(HOST, "browser", "core", "events", "event_target.c"),                  // EventTarget: listeners + the load event                          // Element: node identity, taint-carrying attributes, innerHTML sink
     // THE ENTRY. `abi` builds the production qjs_* surface the extension bridge drives; the default builds

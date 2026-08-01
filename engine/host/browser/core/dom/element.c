@@ -27,16 +27,16 @@
 #include "solver/engine.h"
 #include "solver/solve.h"
 #include "core/dom/element.h"
+#include "core/dom/node.h"
 
-static JSClassID g_element_class;
-
-typedef struct { lxb_dom_element_t *el; JSValue obj; } ElemEntry;
-static ElemEntry *g_wraps;
-static int        g_wrap_n, g_wrap_cap;
-
+/* IDENTITY AND THE TREE BASE LIVE IN node.c — one wrapper table for every node kind, because a tree whose only
+   node kind is Element cannot represent the document it just parsed. This file is what makes a node an ELEMENT:
+   attributes, tagName, innerHTML, the reflected properties. */
 static lxb_dom_element_t *elem_of(JSValueConst v)
 {
-    return JS_GetOpaque(v, g_element_class);
+    lxb_dom_node_t *n = node_of(v);
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
+    return lxb_dom_interface_element(n);
 }
 
 static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -299,46 +299,9 @@ static void element_prepare_script(JSContext *ctx, lxb_dom_element_t *el)
     }
 }
 
-/* 4.2.3 appendChild / removeChild. The tree mutation a page performs after createElement — without them a built
-   subtree never joined the document and every query after it answered null. Both are the per-flow chokepoints,
-   and both return the node the spec returns (pages chain on it: `p.appendChild(c).setAttribute(...)`). */
-static JSValue js_el_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    lxb_dom_element_t *el = elem_of(this_val), *child;
-
-    if (!el || argc < 1) return JS_UNDEFINED;
-    child = elem_of(argv[0]);
-    DCHECK(child != NULL, "appendChild was given something that is not an element wrapper — a Text/Comment node "
-                          "has no wrapper class yet, and inserting nothing would leave the page's tree short "
-                          "of what it built");
-    if (!child) return JS_UNDEFINED;
-    dom_cow_append_child(lxb_dom_interface_node(el), lxb_dom_interface_node(child));
-    element_prepare_script(ctx, child);
-    return JS_DupValue(ctx, argv[0]);
-}
-
-static JSValue js_el_remove_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    lxb_dom_element_t *el = elem_of(this_val), *child;
-
-    if (!el || argc < 1) return JS_UNDEFINED;
-    child = elem_of(argv[0]);
-    DCHECK(child != NULL, "removeChild was given something that is not an element wrapper");
-    if (!child) return JS_UNDEFINED;
-    /* 4.2.3: removing a node that is not a child throws NotFoundError. It IS a DOMException now, so the page
-       gets the throw the spec promises instead of an assert standing in for one — a WPT test that checks the
-       throw was previously a document that stopped. */
-    if (lxb_dom_interface_node(child)->parent != lxb_dom_interface_node(el))
-        return JS_ThrowDOMException(ctx, "NotFoundError", "the node to remove is not a child of this node");
-    dom_cow_remove_child(lxb_dom_interface_node(child));
-    return JS_DupValue(ctx, argv[0]);
-}
-
 static const JSCFunctionListEntry js_element_proto[] = {
     JS_CFUNC_DEF("getAttribute", 1, js_el_get_attribute),
     JS_CFUNC_DEF("setAttribute", 2, js_el_set_attribute),
-    JS_CFUNC_DEF("appendChild", 1, js_el_append_child),
-    JS_CFUNC_DEF("removeChild", 1, js_el_remove_child),
     JS_CGETSET_DEF("tagName", js_el_get_tag, NULL),
     JS_CGETSET_DEF("innerHTML", NULL, js_el_set_inner_html),
     JS_CGETSET_DEF("textContent", js_el_get_text_content, js_el_set_text_content),
@@ -349,51 +312,36 @@ static const JSCFunctionListEntry js_element_proto[] = {
     JS_CGETSET_MAGIC_DEF("content", js_el_reflect_get, js_el_reflect_set, 4),
 };
 
-static void element_finalizer(JSRuntime *rt, JSValue val) { (void)rt; (void)val; }
+
+/* node.c calls this when it builds a wrapper for an ELEMENT node — it owns identity and the Node base; this
+   owns what makes the node an Element. */
+static void element_install_members(JSContext *ctx, JSValueConst obj)
+{
+    JS_SetPropertyFunctionList(ctx, (JSValue)obj, js_element_proto,
+                               (int)(sizeof(js_element_proto) / sizeof(js_element_proto[0])));
+}
+
+/* HTML 4.12.1: a <script> that has just been inserted is PREPARED. node.c asks for this on every insertion so
+   it does not have to know what a script is. */
+static void element_on_inserted(JSContext *ctx, lxb_dom_node_t *n)
+{
+    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT)
+        element_prepare_script(ctx, lxb_dom_interface_element(n));
+}
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
 {
-    JSValue obj;
-    int i;
-
-    if (!el)
-        return JS_NULL;
-    for (i = 0; i < g_wrap_n; i++)
-        if (g_wraps[i].el == el)
-            return JS_DupValue(ctx, g_wraps[i].obj);
-
-    obj = JS_NewObjectClass(ctx, g_element_class);
-    if (JS_IsException(obj))
-        return obj;
-    JS_SetOpaque(obj, el);
-    JS_SetPropertyFunctionList(ctx, obj, js_element_proto,
-                               (int)(sizeof(js_element_proto) / sizeof(js_element_proto[0])));
-
-    if (g_wrap_n == g_wrap_cap) {
-        int c = g_wrap_cap ? g_wrap_cap * 2 : 16;
-        ElemEntry *a = realloc(g_wraps, sizeof(*a) * (size_t)c);
-        CHECK(a != NULL, "the element wrapper table allocation failed: a dropped wrapper breaks node identity, "
-                         "and every `el === other` the page makes after it is silently false");
-        g_wraps = a; g_wrap_cap = c;
-    }
-    g_wraps[g_wrap_n].el = el;
-    g_wraps[g_wrap_n].obj = JS_DupValue(ctx, obj);
-    g_wrap_n++;
-    return obj;
+    return node_wrap(ctx, el ? lxb_dom_interface_node(el) : NULL);
 }
 
 void element_init(JSContext *ctx)
 {
-    JSClassDef def = { "Element", .finalizer = element_finalizer };
-    JS_NewClassID(JS_GetRuntime(ctx), &g_element_class);
-    JS_NewClass(JS_GetRuntime(ctx), g_element_class, &def);
+    node_init(ctx);
+    node_set_element_installer(element_install_members);
+    node_set_inserted_hook(element_on_inserted);
 }
 
 void element_free(JSContext *ctx)
 {
-    int i;
-    for (i = 0; i < g_wrap_n; i++)
-        JS_FreeValue(ctx, g_wraps[i].obj);
-    free(g_wraps);
-    g_wraps = NULL; g_wrap_n = g_wrap_cap = 0;
+    node_free(ctx);
 }

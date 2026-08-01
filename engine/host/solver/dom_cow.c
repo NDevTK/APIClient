@@ -121,6 +121,29 @@ void dom_cow_remove_child(lxb_dom_node_t *node) {
     lxb_dom_node_remove(node);
 }
 
+/* A CHARACTER-DATA node's VALUE (§4.10 `data`). The third thing a flow can change about the tree, after an
+   attribute and a node's presence: `text.data = x` mutates bytes the baseline owns, in place, on a node whose
+   IDENTITY must survive the write — so it cannot be modelled as a remove+insert of a replacement node the way
+   textContent legitimately is. Same shape as the attribute entry, over the node instead of the element. */
+void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
+    lxb_dom_character_data_t *cd;
+    if (!node) return;
+    DCHECK(node->type == LXB_DOM_NODE_TYPE_TEXT || node->type == LXB_DOM_NODE_TYPE_COMMENT,
+           "dom_cow_set_text on a node that holds no character data");
+    cd = lxb_dom_interface_character_data(node);
+    if (g_dom_capture) {
+        DomUndo u; memset(&u, 0, sizeof u);
+        u.kind = 3; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
+        u.had = 1; u.old_len = cd->data.length;
+        u.old = malloc(u.old_len ? u.old_len : 1);
+        CHECK(u.old != NULL, "dom-cow-oom: the character-data baseline snapshot failed — unapply would lose the "
+                             "text the baseline had");
+        memcpy(u.old, cd->data.data, u.old_len);
+        dom_undo_push(u);
+    }
+    lxb_dom_character_data_replace(cd, (const lxb_char_t *)val, val_len, 0, cd->data.length);
+}
+
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
     dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
     lxb_dom_node_insert_child(parent, child);
@@ -136,6 +159,10 @@ void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (
             shadow_restore(u->el, u->slot, u->name, u->sh_old, u->sh_had);
             if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); }
             free(u->name); free(u->old); free(u->cur);
+        } else if (u->kind == 3) {   /* character data: put the baseline's text back */
+            lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(u->node);
+            lxb_dom_character_data_replace(cd, u->old, u->old_len, 0, cd->data.length);
+            free(u->old); free(u->cur);
         } else if (u->kind == 1 && !u->detached) {   /* inserted node: detach it (baseline had none) */
             lxb_dom_node_remove(u->node);
         } else if (u->kind == 2 && !u->reinserted) {   /* removed node: the baseline HAD it — put it back */
@@ -162,6 +189,14 @@ static void dom_unapply_entry(DomUndo *u) {
             else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
         }
         shadow_restore(u->el, u->slot, u->name, u->sh_old, u->sh_had);   /* restore the baseline taint */
+    } else if (u->kind == 3) {
+        lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(u->node);
+        free(u->cur); u->cur_len = cd->data.length; u->cur_had = 1;       /* stash the flow's text */
+        u->cur = malloc(u->cur_len ? u->cur_len : 1);
+        CHECK(u->cur != NULL, "dom-cow-oom: the parked character-data snapshot failed — apply would lose the "
+                              "flow's text write");
+        memcpy(u->cur, cd->data.data, u->cur_len);
+        lxb_dom_character_data_replace(cd, u->old, u->old_len, 0, cd->data.length);   /* baseline back */
     } else if (u->kind == 1 && !u->detached) {
         u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
         u->next = lxb_dom_interface_node(u->node)->next;
@@ -181,6 +216,9 @@ static void dom_apply_entry(DomUndo *u) {
             else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
         }
         shadow_restore(u->el, u->slot, u->name, u->sh_cur, u->sh_cur_had);   /* restore the flow's taint */
+    } else if (u->kind == 3 && u->cur_had) {
+        lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(u->node);
+        lxb_dom_character_data_replace(cd, u->cur, u->cur_len, 0, cd->data.length);   /* the flow's text back */
     } else if (u->kind == 2 && u->reinserted) {
         /* resuming the flow: it had removed this node, so take it back out. */
         lxb_dom_node_remove(u->node); u->reinserted = 0;

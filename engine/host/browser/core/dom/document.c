@@ -20,6 +20,7 @@
 #include "solver/engine.h"
 #include "core/events/event_target.h"
 #include "core/dom/document.h"
+#include "core/dom/node.h"
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
 
@@ -193,6 +194,40 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
    REPORTING of documents whose tests had all already run.
    Lexbor carries the namespace on the element, so this is its create with the namespace resolved, not a
    createElement in disguise: `el.namespaceURI` is what the page asked for. */
+/* 4.5.1 createTextNode / createComment. The two non-element nodes a page builds by hand, and without them a
+   page could not put TEXT into the tree at all: testharness.js's make_dom_single does
+   `output_document.createTextNode(template[i])` for every string in a template. Detached, like createElement —
+   nothing is observable until appendChild, which IS the per-flow write. */
+static JSValue js_doc_create_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *s;
+    size_t len = 0;
+    lxb_dom_text_t *t;
+
+    (void)this_val;
+    s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
+    if (!s) return JS_EXCEPTION;
+    t = lxb_dom_document_create_text_node(lxb_dom_interface_document(g_doc), (const lxb_char_t *)s, len);
+    JS_FreeCString(ctx, s);
+    DCHECK(t != NULL, "createTextNode produced no node — a page building its DOM would silently build nothing");
+    return node_wrap(ctx, lxb_dom_interface_node(t));
+}
+
+static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *s;
+    size_t len = 0;
+    lxb_dom_comment_t *c;
+
+    (void)this_val;
+    s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
+    if (!s) return JS_EXCEPTION;
+    c = lxb_dom_document_create_comment(lxb_dom_interface_document(g_doc), (const lxb_char_t *)s, len);
+    JS_FreeCString(ctx, s);
+    DCHECK(c != NULL, "createComment produced no node — a page building its DOM would silently build nothing");
+    return node_wrap(ctx, lxb_dom_interface_node(c));
+}
+
 /* DOM 4.5.3 "validate and extract" — the whole of it, because every one of its failures is a DOMException the
    spec names and a page catches. `""` MEANS NULL: a namespace of the empty string is set to null before
    anything else, and skipping that step handed Lexbor a zero-length namespace it refuses, which is what made
@@ -351,6 +386,10 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
                       JS_NewCFunction(ctx, js_doc_get_elements_by_tag_name, "getElementsByTagName", 1));
     JS_SetPropertyStr(ctx, doc, "createElement",
                       JS_NewCFunction(ctx, js_doc_create_element, "createElement", 1));
+    JS_SetPropertyStr(ctx, doc, "createTextNode",
+                      JS_NewCFunction(ctx, js_doc_create_text, "createTextNode", 1));
+    JS_SetPropertyStr(ctx, doc, "createComment",
+                      JS_NewCFunction(ctx, js_doc_create_comment, "createComment", 1));
     JS_SetPropertyStr(ctx, doc, "createElementNS",
                       JS_NewCFunction(ctx, js_doc_create_element_ns, "createElementNS", 2));
     element_doc_set(dom);
