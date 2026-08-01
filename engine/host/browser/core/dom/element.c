@@ -213,7 +213,7 @@ static JSValue js_el_set_text_content(JSContext *ctx, JSValueConst this_val, JSV
    that answers something its attribute does not say, which is exactly what `script.src` did: with no reflection
    it became an ordinary JS property, the element carried no src attribute, and the injected script named a URL
    nothing would ever fetch. */
-static const char *const EL_REFLECT[] = { "id", "class", "src" };
+static const char *const EL_REFLECT[] = { "id", "class", "src", "name", "content" };
 
 static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -328,6 +328,8 @@ static const JSCFunctionListEntry js_element_proto[] = {
     JS_CGETSET_MAGIC_DEF("id", js_el_reflect_get, js_el_reflect_set, 0),
     JS_CGETSET_MAGIC_DEF("className", js_el_reflect_get, js_el_reflect_set, 1),
     JS_CGETSET_MAGIC_DEF("src", js_el_reflect_get, js_el_reflect_set, 2),
+    JS_CGETSET_MAGIC_DEF("name", js_el_reflect_get, js_el_reflect_set, 3),
+    JS_CGETSET_MAGIC_DEF("content", js_el_reflect_get, js_el_reflect_set, 4),
 };
 
 static void element_finalizer(JSRuntime *rt, JSValue val) { (void)rt; (void)val; }
