@@ -203,6 +203,20 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     return 1;
 }
 
+/* `typeof` an unknown is UNKNOWN. A concolic is a real object of a host class, and that class is callable so
+   `document.cookie.indexOf(...)` works — which made typeof report "function" and a bundle testing
+   `typeof x === "function"` take an arm decided by the solver's representation rather than the value. The
+   answer is a concolic STRING carrying the same source, so the comparison after it forks like every other gate
+   over an unknown. */
+JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
+    const char *src;
+    char shape[192];
+    if (!concolic_is(v)) return JS_UNINITIALIZED;
+    src = concolic_src_c(v);
+    snprintf(shape, sizeof shape, "typeof %s", src ? src : "{}");
+    return concolic_new(ctx, shape, shape, JS_UNDEFINED);
+}
+
 /* `x in concolic` / property existence: a concolic collection "has" any key (so a membership gate still runs). */
 static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     (void)ctx; (void)atom;

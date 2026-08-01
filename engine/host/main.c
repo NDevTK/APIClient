@@ -83,7 +83,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
        candidate re-fire too. The exploration hooks (branch/fork/preempt) are owned and scoped by the scheduler. */
     static const JSConcolicHooks CONCOLIC = {
         .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
-        .absent = absent_global_hook, .rel = concolic_rel_hook };
+        .absent = absent_global_hook, .rel = concolic_rel_hook, .type_of = concolic_typeof_hook };
     JS_SetConcolicHooks(&CONCOLIC);
 
     g_dom = lxb_html_document_create();

@@ -44,7 +44,9 @@ JSValue     concolic_new_cmp(JSContext *ctx, const char *src, int op, const char
 int         concolic_cmp(JSValueConst v, const char **psrc, const char **ptok);          /* OPCMP_* of a cmp result */
 int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);
 /* JSConcolicHooks.rel for < <= > >= — the ordering twin of cmp. */
-int         concolic_rel_hook(JSContext *ctx, JSValue *sp, int op);                   /* == / === propagation (JSConcolicCmpHook) */
+int         concolic_rel_hook(JSContext *ctx, JSValue *sp, int op);
+/* JSConcolicHooks.type_of — `typeof` an unknown is an unknown string, so the comparison forks. */
+JSValue     concolic_typeof_hook(JSContext *ctx, JSValueConst v);   /* JS_UNINITIALIZED = not concolic, run the real typeof */
 void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
